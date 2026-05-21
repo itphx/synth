@@ -135,11 +135,31 @@ export interface ProviderInfo {
 }
 
 export interface ModelInfo {
+  id: string
   name: string
   provider: string
+  description?: string
   enabled: boolean
+  isDefault: boolean
   context_window?: number
+  context_source?: string
   max_tokens?: number
+  input_price?: number
+  output_price?: number
+  cache_read_price?: number
+  cache_write_price?: number
+}
+
+export interface ProviderGroupInfo {
+  name: string
+  type: string
+  icon: string
+  defaultModel: string
+}
+
+export interface ModelGroup {
+  provider: ProviderGroupInfo
+  models: ModelInfo[]
 }
 
 export const synthApi = {
@@ -356,8 +376,8 @@ export const synthApi = {
     return { providers: data.providers || [], default_provider: data.default_provider }
   },
 
-  async getModels(): Promise<{ models: ModelInfo[]; default_model: string }> {
-    const data = await fetchJSON<{ models: ModelInfo[]; default_model: string }>(`${BASE_URL}/models`)
-    return { models: data.models || [], default_model: data.default_model }
+  async getModels(): Promise<ModelGroup[]> {
+    const data = await fetchJSON<{ groups: ModelGroup[] }>(`${BASE_URL}/models`)
+    return data.groups || []
   },
 }

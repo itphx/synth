@@ -11,6 +11,30 @@ export class AnthropicProvider extends BaseProvider {
     return this.name;
   }
 
+  async listModels(): Promise<string[]> {
+    const baseUrl = this.url.replace(/\/v1\/messages\/?$/, '').replace(/\/+$/, '');
+    const modelsUrl = `${baseUrl}/v1/models`;
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
+
+      const resp = await fetch(modelsUrl, {
+        headers: this._getHeaders(),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (resp.ok) {
+        const data = await resp.json() as { data?: Array<{ id: string }> };
+        return (data.data || []).map((m) => m.id).filter(Boolean);
+      }
+    } catch {
+      // fall through
+    }
+    return [];
+  }
+
   async chat(
     messages: LLMMessage[],
     systemPrompt?: string,

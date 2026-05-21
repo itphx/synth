@@ -1,9 +1,10 @@
 import { create } from 'zustand'
-import { synthApi, type ProviderInfo, type ModelInfo } from '@/lib/api/synthApi'
+import { synthApi, type ProviderInfo, type ModelInfo, type ModelGroup } from '@/lib/api/synthApi'
 import { api, type UserPreferences } from '@/lib/api/client'
 
 interface ProvidersStore {
   providers: ProviderInfo[]
+  modelGroups: ModelGroup[]
   models: ModelInfo[]
   loading: boolean
   error: string | null
@@ -23,6 +24,7 @@ interface ProvidersStore {
 
 export const useProvidersStore = create<ProvidersStore>((set, get) => ({
   providers: [],
+  modelGroups: [],
   models: [],
   loading: false,
   error: null,
@@ -52,10 +54,25 @@ export const useProvidersStore = create<ProvidersStore>((set, get) => ({
 
   loadModels: async () => {
     try {
-      const { models, default_model } = await synthApi.getModels()
-      set({ models })
-      if (!get().selectedModelName && default_model) {
-        set({ selectedModelName: default_model })
+      const groups = await synthApi.getModels()
+      const allModels: ModelInfo[] = []
+      let defaultModel = ''
+      for (const g of groups) {
+        for (const m of g.models) {
+          if (m.enabled) {
+            allModels.push(m)
+            if (m.isDefault && !defaultModel) {
+              defaultModel = m.name
+            }
+          }
+        }
+      }
+      set({
+        modelGroups: groups,
+        models: allModels,
+      })
+      if (!get().selectedModelName && defaultModel) {
+        set({ selectedModelName: defaultModel })
       }
     } catch {
       // ignore

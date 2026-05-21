@@ -44,20 +44,30 @@ export class JsonStore<T> {
   }
 
   async list(): Promise<T[]> {
-    const dir = this._dir();
-    let files: string[];
-    try {
-      files = await readdir(dir);
-    } catch {
-      return [];
-    }
     const items: T[] = [];
-    for (const f of files) {
-      if (!f.endsWith('.json')) continue;
-      const item = await this.load(f.replace('.json', ''));
-      if (item) items.push(item);
-    }
+    await this._collectItems(this._dir(), items);
     return items;
+  }
+
+  private async _collectItems(dir: string, items: T[]): Promise<void> {
+    let entries: string[];
+    try {
+      entries = await readdir(dir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry);
+      if (entry.endsWith('.json')) {
+        const key = full
+          .slice(this._dir().length + 1)
+          .replace(/\.json$/, '');
+        const item = await this.load(key);
+        if (item) items.push(item);
+      } else {
+        await this._collectItems(full, items);
+      }
+    }
   }
 
   async exists(key: string): Promise<boolean> {

@@ -1,27 +1,105 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
-import type { ModelConfig, ProviderConfig } from '@synth/shared';
+import type { ModelConfig, ProviderConfig, ContextSource } from '@synth/shared';
+import { lookupContextWindow } from '@synth/shared';
+import { ProviderFactory } from '@synth/core';
+
+interface ModelGroupResponse {
+  provider: {
+    name: string;
+    type: string;
+    icon: string;
+    defaultModel: string;
+  };
+  models: Array<{
+    id: string;
+    name: string;
+    provider: string;
+    description?: string;
+    enabled: boolean;
+    isDefault: boolean;
+    contextWindow?: number;
+    contextSource?: ContextSource;
+    maxOutputTokens?: number;
+    inputPrice?: number;
+    outputPrice?: number;
+    cacheReadPrice?: number;
+    cacheWritePrice?: number;
+  }>;
+}
 
 export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfig>, providerStore: JsonStore<ProviderConfig>): Hono {
   const app = new Hono();
 
-  // GET /api/v2/models — список моделей
+  // GET /api/v2/models — сгруппированный список моделей
   app.get('/', kit.requireAuth, async (c) => {
-    const provider = c.req.query('provider');
-    const models = await modelStore.list();
-    const filtered = provider ? models.filter((m) => m.provider === provider) : models;
-    const defaultModel = filtered.find((m) => m.isDefault) || filtered[0];
-    return c.json({
-      models: filtered.map((m) => ({
-        name: m.name,
-        provider: m.provider,
-        enabled: m.enabled,
-        context_window: m.contextWindow,
-        max_tokens: m.maxOutputTokens,
-      })),
-      default_model: defaultModel?.name || '',
+    const filterProvider = c.req.query('provider');
+    const onlyEnabled = c.req.query('enabled_only') === 'true' || c.req.query('enabled_only') === '1';
+
+    const [models, providers] = await Promise.all([modelStore.list(), providerStore.list()]);
+
+    // Собираем информацию о провайдерах
+    const providerMap = new Map<string, ProviderConfig>();
+    for (const p of providers) {
+      providerMap.set(p.name, p);
+    }
+
+    // Группируем модели по провайдеру (пропускаем модели от несуществующих провайдеров)
+    const groups = new Map<string, ModelConfig[]>();
+    for (const m of models) {
+      if (filterProvider && m.provider !== filterProvider) continue;
+      if (onlyEnabled && !m.enabled) continue;
+      if (!providerMap.has(m.provider)) continue;
+
+      const group = groups.get(m.provider) || [];
+      group.push(m);
+      groups.set(m.provider, group);
+    }
+
+    // Добавляем пустые группы для провайдеров без моделей
+    for (const p of providers) {
+      if (!groups.has(p.name)) {
+        groups.set(p.name, []);
+      }
+    }
+
+    // Сортируем группы по имени провайдера
+    const sortedProviderNames = [...groups.keys()].sort((a, b) => a.localeCompare(b, 'ru'));
+
+    const result: ModelGroupResponse[] = sortedProviderNames.map((providerName) => {
+      const groupModels = groups.get(providerName)!;
+      const provider = providerMap.get(providerName);
+
+      // Сортируем модели по имени
+      groupModels.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+
+      return {
+        provider: {
+          name: providerName,
+          type: provider?.type || 'openai',
+          icon: provider?.icon || '',
+          defaultModel: provider?.defaultModel || '',
+        },
+        models: groupModels.map((m) => ({
+          id: m.id,
+          name: m.name,
+          provider: m.provider,
+          description: m.description,
+          enabled: m.enabled,
+          isDefault: m.isDefault || provider?.defaultModel === m.name,
+          contextWindow: m.contextWindow,
+          contextSource: m.contextSource || 'unknown',
+          maxOutputTokens: m.maxOutputTokens,
+          inputPrice: m.inputPrice,
+          outputPrice: m.outputPrice,
+          cacheReadPrice: m.cacheReadPrice,
+          cacheWritePrice: m.cacheWritePrice,
+        })),
+      };
     });
+
+    return c.json({ groups: result });
   });
 
   // POST /api/v2/models — создать/обновить модель (admin)
@@ -33,52 +111,117 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
     }
 
     const existing = await modelStore.load(modelId);
+    const provider = body.provider || existing?.provider || '';
+
     const model: ModelConfig = {
       id: modelId,
       name: body.name || existing?.name || modelId,
-      provider: body.provider || existing?.provider || '',
+      provider,
+      description: body.description ?? existing?.description ?? '',
       enabled: body.enabled ?? existing?.enabled ?? true,
       isDefault: body.is_default ?? body.isDefault ?? existing?.isDefault ?? false,
       contextWindow: body.context_window ?? body.contextWindow ?? existing?.contextWindow,
+      contextSource: body.context_source ?? body.contextSource ?? existing?.contextSource ?? (body.context_window ? 'manual' : 'unknown'),
       maxOutputTokens: body.max_output_tokens ?? body.maxOutputTokens ?? existing?.maxOutputTokens,
+      inputPrice: body.input_price ?? body.inputPrice ?? existing?.inputPrice,
+      outputPrice: body.output_price ?? body.outputPrice ?? existing?.outputPrice,
+      cacheReadPrice: body.cache_read_price ?? body.cacheReadPrice ?? existing?.cacheReadPrice,
+      cacheWritePrice: body.cache_write_price ?? body.cacheWritePrice ?? existing?.cacheWritePrice,
     };
+
     await modelStore.save(modelId, model);
+
+    // Если set_as_default — обновить провайдера
+    if (body.set_as_default && provider) {
+      const prov = await providerStore.load(provider);
+      if (prov) {
+        prov.defaultModel = model.name;
+        await providerStore.save(provider, prov);
+
+        // Снять isDefault с других моделей того же провайдера
+        const allModels = await modelStore.list();
+        for (const m of allModels) {
+          if (m.provider === provider && m.id !== modelId && m.isDefault) {
+            m.isDefault = false;
+            await modelStore.save(m.id, m);
+          }
+        }
+      }
+    }
+
     return c.json(model, existing ? 200 : 201);
   });
 
   // POST /api/v2/models/fetch — синхронизировать модели с провайдеров (admin)
   app.post('/fetch', kit.requireAdmin, async (c) => {
+    const providerFilter = c.req.query('provider');
     const providers = await providerStore.list();
-    const fetched: ModelConfig[] = [];
+    const enabledProviders = providers.filter((p) =>
+      p.enabled !== false && (!providerFilter || p.name === providerFilter)
+    );
 
-    for (const p of providers) {
-      if (!p.baseUrl) continue;
+    let totalFetched = 0;
+    let totalNew = 0;
+    let totalEnriched = 0;
+    let errors: string[] = [];
+
+    for (const provider of enabledProviders) {
+      const providerConfig = {
+        type: provider.type,
+        name: provider.name,
+        url: provider.baseUrl || '',
+        apiKey: provider.apiKey || '',
+        model: provider.defaultModel || '',
+        timeout: 30,
+      };
+
+      if (!providerConfig.url) continue;
+
       try {
-        const modelsUrl = p.baseUrl.replace(/\/v1\/chat\/completions\/?$/, '/v1/models');
-        const resp = await fetch(modelsUrl, {
-          headers: p.apiKey ? { Authorization: `Bearer ${p.apiKey}` } : {},
-          signal: AbortSignal.timeout(10000),
-        });
-        if (!resp.ok) continue;
-        const data = await resp.json() as { data?: Array<{ id: string }> };
-        const modelIds: string[] = data?.data?.map((m) => m.id) || [];
-        for (const mid of modelIds) {
-          const mc: ModelConfig = {
-            id: `${p.name}/${mid}`,
-            name: mid,
-            provider: p.name,
-            enabled: true,
-            isDefault: false,
-          };
-          await modelStore.save(mc.id, mc);
-          fetched.push(mc);
+        const instance = ProviderFactory.create(provider.name, providerConfig);
+        const modelIds = await instance.listModels();
+
+        for (const modelId of modelIds) {
+          const fullId = `${provider.name}/${modelId}`;
+          const existing = await modelStore.load(fullId);
+          const { window, source } = lookupContextWindow(modelId);
+
+          if (!existing) {
+            // Новая модель
+            await modelStore.save(fullId, {
+              id: fullId,
+              name: modelId,
+              provider: provider.name,
+              description: '',
+              enabled: true,
+              isDefault: false,
+              contextWindow: window,
+              contextSource: source !== 'unknown' ? source : 'unknown',
+            });
+            totalNew++;
+            totalFetched++;
+          } else if ((existing.contextWindow ?? 0) === 0 && window > 0) {
+            // Обогащаем существующую модель справочными данными
+            existing.contextWindow = window;
+            existing.contextSource = source;
+            await modelStore.save(fullId, existing);
+            totalEnriched++;
+            totalFetched++;
+          } else {
+            totalFetched++;
+          }
         }
-      } catch {
-        // skip failed providers
+      } catch (err) {
+        errors.push(`${provider.name}: ${err instanceof Error ? err.message : 'ошибка'}`);
       }
     }
 
-    return c.json({ fetched: fetched.length, models: fetched.map((m) => m.name) });
+    return c.json({
+      fetched: totalFetched,
+      new: totalNew,
+      enriched: totalEnriched,
+      errors: errors.length ? errors : undefined,
+    });
   });
 
   // DELETE /api/v2/models/:id — удалить (admin)

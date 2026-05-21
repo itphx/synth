@@ -235,14 +235,22 @@ export interface ProviderConfig {
   icon?: string;
 }
 
+export type ContextSource = 'api' | 'reference' | 'manual' | 'unknown';
+
 export interface ModelConfig {
   id: string;
   name: string;
   provider: string;
+  description?: string;
   enabled: boolean;
   isDefault?: boolean;
   contextWindow?: number;
+  contextSource?: ContextSource;
   maxOutputTokens?: number;
+  inputPrice?: number;
+  outputPrice?: number;
+  cacheReadPrice?: number;
+  cacheWritePrice?: number;
 }
 
 // --- LLM ---
