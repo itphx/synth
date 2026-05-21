@@ -41,13 +41,16 @@ tmp/
 # Покрытие тестов
 coverage/
 
-# Инструкции для AI-агентов
+# Инструкции для AI-агентов (чужих)
 AGENTS.md
 CLAUDE.md
 .clinerules
 .cursorrules
 .windsurfrules
 .codex
+
+# Но наши собственные AGENTS.md в пакетах — разрешены
+!/packages/*/AGENTS.md
 
 # Python (synth-legacy)
 __pycache__/
