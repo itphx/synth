@@ -66,6 +66,11 @@ interface UIStore {
   settingsPage: string
   setSettingsPage: (page: string) => void
 
+  isAdminSettingsOpen: boolean
+  setAdminSettingsOpen: (open: boolean) => void
+  adminPage: string
+  setAdminPage: (page: string) => void
+
   theme: string
   setTheme: (theme: string) => void
   themeMode: ThemeMode
@@ -176,6 +181,11 @@ export const useUIStore = create<UIStore>()(
       setSettingsDialogOpen: (open) => set({ isSettingsDialogOpen: open }),
       settingsPage: 'appearance',
       setSettingsPage: (page) => set({ settingsPage: page }),
+
+      isAdminSettingsOpen: false,
+      setAdminSettingsOpen: (open) => set({ isAdminSettingsOpen: open }),
+      adminPage: 'dashboard',
+      setAdminPage: (page) => set({ adminPage: page }),
 
       theme: 'flexoki',
       setTheme: (theme) => {

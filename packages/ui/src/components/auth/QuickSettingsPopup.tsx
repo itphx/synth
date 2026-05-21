@@ -14,7 +14,7 @@ interface QuickSettingsPopupProps {
 export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps) => {
   const { t, setLocale: setI18nLocale } = useI18n()
   const { user, profile } = useAuthStore()
-  const { themeMode, setThemeMode, locale: uiLocale, setLocale: setUILocale } = useUIStore()
+  const { themeMode, setThemeMode, locale: uiLocale, setLocale: setUILocale, setAdminSettingsOpen } = useUIStore()
   const { setThemeMode: setThemeSystemMode } = useThemeSystem()
   const [isOpen, setIsOpen] = useState(false)
   const [locales, setLocales] = useState<Array<{ value: string; label: string }>>([])
@@ -177,6 +177,22 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
               <Icon name="settings" className="size-4" />
               {t('auth.openSettings')}
             </button>
+            {user?.roles?.includes('ADMIN') && (
+              <button
+                onClick={() => {
+                  setAdminSettingsOpen(true)
+                  setIsOpen(false)
+                }}
+                className={cn(
+                  "w-full flex items-center gap-2 px-3 py-2 text-sm text-left",
+                  "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
+                  "transition-colors"
+                )}
+              >
+                <Icon name="admin" className="size-4" />
+                Администрирование
+              </button>
+            )}
             <button
               onClick={() => {
                 setIsOpen(false)

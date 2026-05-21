@@ -4,13 +4,14 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
+import { ProviderIcon } from '@/components/admin/ProviderIcon'
 import { Icon } from '../icon/Icon'
 import { OverlayScrollbar } from '../ui/OverlayScrollbar'
 import type { ModelInfo, ProviderInfo } from '@/lib/api/synthApi'
 
 type DropdownItem =
   | { type: 'empty'; text: string; id: string }
-  | { type: 'label'; text: string; icon: string; id: string; isProvider?: boolean; collapsed?: boolean }
+  | { type: 'label'; text: string; icon: string; id: string; isProvider?: boolean; collapsed?: boolean; providerUrl?: string }
   | { type: 'separator'; id: string }
   | { type: 'model'; model: ModelInfo; provider: ProviderInfo; isFavorite: boolean; id: string }
 
@@ -195,10 +196,11 @@ export function ModelSelector({ compact = false, sessionId }: { compact?: boolea
         items.push({
           type: 'label',
           text: provider.name,
-          icon: provider.icon || 'cpu',
+          icon: provider.icon || '',
           id: `label-${provider.name}`,
           isProvider: true,
           collapsed,
+          providerUrl: provider.url,
         })
         if (!collapsed) {
           for (const model of pModels) {
@@ -402,7 +404,7 @@ export function ModelSelector({ compact = false, sessionId }: { compact?: boolea
                           onClick={() => toggleCollapse(item.text)}
                           className="flex items-center gap-2 px-2 py-1.5 border-b border-border/30 cursor-pointer hover:bg-interactive-hover/50 rounded-none"
                         >
-                          <Icon name={iconName} className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          <ProviderIcon icon={item.icon} baseUrl={item.providerUrl} size={16} />
                           <span className="font-semibold text-xs text-foreground flex-1">{item.text}</span>
                           <Icon
                             name={item.collapsed ? 'arrow-right-s' : 'arrow-down-s'}

@@ -1,10 +1,11 @@
-import type { LLMChunk, LLMResponse } from '@synth/shared';
+import type { TokenUsage, LLMChunk, LLMResponse } from '@synth/shared';
+import type { DebugCollector } from '../debug.js';
 
 export interface LLMMessage {
   id: string;
   role: string;
   content: string;
-  usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+  usage: TokenUsage;
   debug?: Record<string, unknown>;
   model?: string;
   summaryOf?: number[];
@@ -20,7 +21,14 @@ export interface LLMMessage {
   agentRole?: string;
 }
 
-export interface ProviderParams {
+export interface CancellationToken {
+  cancelled: boolean;
+  cancel: () => void;
+}
+
+export interface ProviderConfig {
+  type?: string;
+  name?: string;
   url: string;
   apiKey: string;
   model: string;
@@ -38,10 +46,20 @@ export abstract class BaseProvider {
   temperature: number;
   topP?: number;
   topK?: number;
-  abstract name: string;
-  abstract type: string;
+  name: string;
+  type: string;
 
-  constructor(params: ProviderParams) {
+  constructor(params: {
+    url: string;
+    apiKey: string;
+    model: string;
+    timeout?: number;
+    temperature?: number;
+    topP?: number;
+    topK?: number;
+    name?: string;
+    type?: string;
+  }) {
     this.url = params.url;
     this.apiKey = params.apiKey;
     this.model = params.model;
@@ -49,6 +67,8 @@ export abstract class BaseProvider {
     this.temperature = params.temperature ?? 0.7;
     this.topP = params.topP;
     this.topK = params.topK;
+    this.name = params.name ?? 'unknown';
+    this.type = params.type ?? 'generic';
   }
 
   abstract chat(
@@ -56,15 +76,15 @@ export abstract class BaseProvider {
     systemPrompt?: string,
     tools?: Record<string, unknown>[],
     stream?: boolean,
-    debugCollector?: (data: Record<string, unknown>) => void,
+    debugCollector?: DebugCollector,
   ): Promise<LLMResponse>;
 
   abstract chatAsync(
     messages: LLMMessage[],
     systemPrompt?: string,
     tools?: Record<string, unknown>[],
-    debugCollector?: (data: Record<string, unknown>) => void,
-    cancellationToken?: { cancelled: boolean },
+    debugCollector?: DebugCollector,
+    cancellationToken?: CancellationToken,
   ): AsyncGenerator<LLMChunk>;
 
   abstract getProviderName(): string;
@@ -78,50 +98,83 @@ export abstract class BaseProvider {
   }
 }
 
-/**
- * ProviderFactory — регистрирует и создаёт провайдеров.
- */
 export class ProviderFactory {
-  private static _providers = new Map<string, new (params: ProviderParams) => BaseProvider>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private static _providers = new Map<string, new (params: any) => BaseProvider>();
 
-  static register(name: string, providerClass: new (params: ProviderParams) => BaseProvider): void {
-    this._providers.set(name, providerClass);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  static register(name: string, providerClass: new (params: any) => BaseProvider): void {
+    this._providers.set(name.toLowerCase(), providerClass);
   }
 
   static create(
     name: string,
-    params: ProviderParams,
+    config: ProviderConfig,
     temperature?: number,
     topP?: number,
     topK?: number,
   ): BaseProvider {
-    const ProviderClass = this._providers.get(name);
-    if (!ProviderClass) {
-      throw new Error(`Unknown provider: ${name}`);
+    let providerType = (config.type || name).toLowerCase();
+    const url = config.url || '';
+    const apiKey = config.apiKey || '';
+    const model = config.model || '';
+    const timeout = config.timeout ?? 120;
+
+    if (!this._providers.has(providerType)) {
+      providerType = this._detectProviderType(url, providerType);
     }
-    const merged = { ...params };
-    if (temperature !== undefined) merged.temperature = temperature;
-    if (topP !== undefined) merged.topP = topP;
-    if (topK !== undefined) merged.topK = topK;
-    return new ProviderClass(merged);
+
+    if (!this._providers.has(providerType)) {
+      throw new Error(`Неизвестный тип провайдера: ${providerType}`);
+    }
+
+    const ProviderClass = this._providers.get(providerType)!;
+    const normalizedUrl = this._normalizeUrl(url, providerType);
+
+    return new ProviderClass({
+      url: normalizedUrl,
+      apiKey,
+      model,
+      timeout,
+      temperature: temperature ?? 0.7,
+      topP,
+      topK,
+      name: config.name || name,
+      type: providerType,
+    });
   }
 
   static getRegistered(): string[] {
     return [...this._providers.keys()];
   }
 
-  static detectProviderType(url: string): string {
+  static _detectProviderType(url: string, providerType: string): string {
     const lower = url.toLowerCase();
-    if (lower.includes('openai.com')) return 'openai';
-    if (lower.includes('anthropic.com')) return 'anthropic';
-    if (lower.includes('api/chat') || lower.includes(':11434')) return 'ollama';
-    return 'generic';
+
+    if (!providerType || providerType === 'generic') {
+      if (lower.includes('anthropic.com') || lower.includes('minimaxi.com')) return 'anthropic';
+      if (lower.includes('ollama.com') || lower.includes(':11434')) return 'ollama';
+      if (lower.includes('openai.com') || lower.includes('azure.com')) return 'openai';
+      return 'generic';
+    }
+
+    return providerType;
   }
 
-  static normalizeUrl(url: string, type: string): string {
-    if (type === 'openai' && !url.endsWith('/v1/chat/completions')) {
-      return url.replace(/\/?$/, '/v1/chat/completions');
+  static _normalizeUrl(url: string, providerType: string): string {
+    const trimmed = url.replace(/\/+$/, '');
+
+    if (providerType === 'ollama' && !trimmed.endsWith('/api/chat')) {
+      return `${trimmed}/api/chat`;
     }
-    return url;
+    if (providerType === 'anthropic' && !trimmed.endsWith('/v1/messages')) {
+      return `${trimmed}/v1/messages`;
+    }
+    if ((providerType === 'openai' || providerType === 'generic') && !trimmed.includes('/chat/completions')) {
+      if (trimmed.includes('/v1')) return `${trimmed}/chat/completions`;
+      return `${trimmed}/v1/chat/completions`;
+    }
+
+    return trimmed;
   }
 }

@@ -6,5 +6,30 @@ export type { StorageConfig } from './storage/file-store.js';
 export { SessionManager } from './sessions/manager.js';
 export { EventBus, sseEventStream } from './events/bus.js';
 export { QueueProcessor, QueueProcessorManager, enqueueUserMessage } from './queue/processor.js';
-export { BaseProvider, ProviderFactory } from './providers/base.js';
-export type { LLMMessage, ProviderParams } from './providers/base.js';
+
+export {
+  ProviderFactory,
+  BaseProvider,
+  OpenAIProvider,
+  AnthropicProvider,
+  OllamaProvider,
+  ProviderError,
+  ContextLengthExceededError,
+  RateLimitError,
+} from './providers/index.js';
+export type { LLMMessage, CancellationToken, ProviderConfig } from './providers/index.js';
+
+export {
+  debug,
+  info,
+  warning,
+  error,
+  critical,
+  setLevelForGroup,
+  getAllGroups,
+  setAllGroups,
+  resetGroupOverrides,
+  LOG_LEVEL_NAMES,
+} from './logger.js';
+
+export { DebugCollector } from './debug.js';

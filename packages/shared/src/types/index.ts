@@ -231,6 +231,8 @@ export interface ProviderConfig {
   apiKey?: string;
   defaultModel?: string;
   timeout?: number;
+  enabled?: boolean;
+  icon?: string;
 }
 
 export interface ModelConfig {

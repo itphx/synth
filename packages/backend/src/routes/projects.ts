@@ -1,0 +1,94 @@
+import { Hono } from 'hono';
+import type { AuthKit } from '../auth/middleware.js';
+import type { ProjectStore } from '../storage/project-store.js';
+import { serializeProject } from '../lib/serialize.js';
+
+export function createProjectRoutes(kit: AuthKit, store: ProjectStore): Hono {
+  const app = new Hono();
+
+  // GET /api/v2/projects — список проектов
+  app.get('/', kit.requireAuth, async (c) => {
+    const user = kit.getCurrentUser(c)!;
+    const projects = await store.list(user.id);
+    return c.json(projects.map(serializeProject));
+  });
+
+  // POST /api/v2/projects — создать
+  app.post('/', kit.requireAuth, async (c) => {
+    const user = kit.getCurrentUser(c)!;
+    const body = await c.req.json().catch(() => ({}));
+
+    const name = body.name?.trim();
+    if (!name) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'name обязателен' } }, 400);
+    }
+
+    const project = store.create(name, user.id, {
+      description: body.description,
+      icon: body.icon,
+      color: body.color,
+      workspace: body.workspace,
+    });
+    await store.save(project);
+
+    return c.json(serializeProject(project), 201);
+  });
+
+  // GET /api/v2/projects/:id — получить
+  app.get('/:id', kit.requireAuth, async (c) => {
+    const project = await store.load(c.req.param('id'));
+    if (!project) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Проект не найден' } }, 404);
+    }
+    return c.json(serializeProject(project));
+  });
+
+  // PUT /api/v2/projects/:id — обновить
+  app.put('/:id', kit.requireAuth, async (c) => {
+    const project = await store.load(c.req.param('id'));
+    if (!project) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Проект не найден' } }, 404);
+    }
+    const body = await c.req.json().catch(() => ({}));
+
+    if (body.name !== undefined) project.name = body.name;
+    if (body.description !== undefined) project.description = body.description;
+    if (body.current_task !== undefined) project.currentTask = body.current_task;
+    if (body.invariants !== undefined) project.invariants = body.invariants;
+    if (body.icon !== undefined) project.icon = body.icon;
+    if (body.color !== undefined) project.color = body.color;
+    if (body.workspace !== undefined) project.workspace = body.workspace;
+    project.updatedAt = new Date().toISOString();
+
+    await store.save(project);
+    return c.json(serializeProject(project));
+  });
+
+  // DELETE /api/v2/projects/:id — удалить
+  app.delete('/:id', kit.requireAuth, async (c) => {
+    const project = await store.load(c.req.param('id'));
+    if (!project) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Проект не найден' } }, 404);
+    }
+    await store.delete(project.id);
+    return c.body(null, 204);
+  });
+
+  // GET /api/v2/projects/:id/stats
+  app.get('/:id/stats', kit.requireAuth, async (c) => {
+    const project = await store.load(c.req.param('id'));
+    if (!project) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Проект не найден' } }, 404);
+    }
+    const st = await store.stats(project.id);
+    return c.json({
+      total_sessions: st.totalSessions,
+      total_input_tokens: st.totalInputTokens,
+      total_output_tokens: st.totalOutputTokens,
+      total_tokens: st.totalTokens,
+      total_messages: st.totalMessages,
+    });
+  });
+
+  return app;
+}
