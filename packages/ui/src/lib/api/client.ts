@@ -1,0 +1,144 @@
+export interface User {
+  id: string
+  username: string
+  email: string | null
+  roles: string[]
+  preferred_language?: string
+  team_role?: string
+  notes?: string
+  created_at?: string
+  interview_completed?: boolean
+}
+
+export interface UserPreferences {
+  locale?: 'en' | 'ru'
+  themeMode?: 'system' | 'light' | 'dark'
+  theme?: string
+  avatar?: string | null
+  favoriteModels?: string[]
+  recentModels?: string[]
+  [key: string]: unknown
+}
+
+export interface Profile extends User {
+  team_roles?: string[]
+  is_active?: boolean
+  preferences?: UserPreferences
+  display_name?: string | null
+  created_at?: string
+  updated_at?: string
+  last_login?: string | null
+}
+
+export interface AuthStatus {
+  oidc_enabled: boolean
+  debug_mode: boolean
+  authenticated: boolean
+  user: User | null
+}
+
+export interface AuthUsers {
+  users: Array<{
+    id: string
+    username: string
+  }>
+}
+
+export interface SPALoginRequest {
+  api_key: string
+  username?: string
+}
+
+export interface SPALoginResponse {
+  user: User
+  token: string
+}
+
+const BASE_URL = '/auth'
+
+async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    ...options,
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...options?.headers,
+    },
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Request failed' }))
+    throw new Error(error.detail || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+export const api = {
+  async getStatus(): Promise<AuthStatus> {
+    return fetchJSON<AuthStatus>(`${BASE_URL}/status`)
+  },
+
+  async getUsers(): Promise<AuthUsers> {
+    return fetchJSON<AuthUsers>(`${BASE_URL}/users`)
+  },
+
+  async spaLogin(request: SPALoginRequest): Promise<SPALoginResponse> {
+    return fetchJSON<SPALoginResponse>(`${BASE_URL}/spa-login`, {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
+  },
+
+  async logout(): Promise<void> {
+    await fetch(`${BASE_URL}/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+  },
+
+  async getMe(): Promise<User> {
+    return fetchJSON<User>(`${BASE_URL}/me`)
+  },
+
+  async getSession(): Promise<SPALoginResponse> {
+    return fetchJSON<SPALoginResponse>(`${BASE_URL}/session`)
+  },
+
+  async getProfile(): Promise<Profile> {
+    return fetchJSON<Profile>(`${BASE_URL}/profile`)
+  },
+
+  async updateProfile(data: Partial<Profile>): Promise<Profile> {
+    return fetchJSON<Profile>(`${BASE_URL}/profile`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+  },
+
+  async updatePreferences(data: Partial<UserPreferences>): Promise<{ status: string; preferences: UserPreferences }> {
+    return fetchJSON<{ status: string; preferences: UserPreferences }>(`${BASE_URL}/profile/preferences`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })
+  },
+
+  async deletePreferences(): Promise<{ status: string; preferences: UserPreferences }> {
+    return fetchJSON<{ status: string; preferences: UserPreferences }>(`${BASE_URL}/profile/preferences`, {
+      method: 'DELETE',
+    })
+  },
+
+  async getDefaults(): Promise<UserPreferences> {
+    return fetchJSON<UserPreferences>(`${BASE_URL}/defaults`)
+  },
+
+  async updateDefaults(data: Partial<UserPreferences>): Promise<{ status: string; defaults: UserPreferences }> {
+    return fetchJSON<{ status: string; defaults: UserPreferences }>(`${BASE_URL}/defaults`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+  },
+
+  async getLocales(): Promise<{ locales: Array<{ code: string; name: string; native_name: string }>; default: string }> {
+    return fetchJSON<{ locales: Array<{ code: string; name: string; native_name: string }>; default: string }>(`${BASE_URL}/locales`)
+  },
+}

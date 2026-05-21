@@ -1,0 +1,145 @@
+import { useRef, useCallback, useState, useEffect } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { ChatMessage } from './ChatMessage'
+import { StreamingPlaceholder } from './StreamingPlaceholder'
+import { ScrollToBottomButton } from './ScrollToBottomButton'
+import { ScrollableOverlay } from '../ui/ScrollableOverlay'
+import type { MessageData, StreamState } from '@/stores/chatStore'
+
+interface MessageListProps {
+  messages: MessageData[]
+  streams: Record<string, StreamState>
+  onCopy: (msg: MessageData) => void
+  onToggle: (msg: MessageData) => void
+  onPin: (msg: MessageData) => void
+  onDelete: (msg: MessageData) => void
+  onRetry: (msg: MessageData) => void
+  onReturn: (msg: MessageData) => void
+  onDebug: (msg: MessageData) => void
+}
+
+const VIRTUALIZE_THRESHOLD = 15
+const OVERSCAN = 6
+
+export function MessageList({
+  messages,
+  streams,
+  onCopy,
+  onToggle,
+  onPin,
+  onDelete,
+  onRetry,
+  onReturn,
+  onDebug,
+}: MessageListProps) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [autoScroll, setAutoScroll] = useState(true)
+  const [showScrollBtn, setShowScrollBtn] = useState(false)
+
+  const streamEntries = Object.values(streams).filter((s) => s.isStreaming)
+  const totalItems = messages.length + streamEntries.length
+
+  const virtualizer = useVirtualizer({
+    count: totalItems > VIRTUALIZE_THRESHOLD ? messages.length : messages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 120,
+    overscan: OVERSCAN,
+  })
+
+  const scrollToBottom = useCallback((smooth = true) => {
+    if (!scrollRef.current) return
+    scrollRef.current.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: smooth ? 'smooth' : 'instant',
+    })
+    setAutoScroll(true)
+    setShowScrollBtn(false)
+  }, [])
+
+  const handleScroll = useCallback(() => {
+    if (!scrollRef.current) return
+    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
+    const atBottom = scrollHeight - scrollTop - clientHeight < 60
+    setAutoScroll(atBottom)
+    setShowScrollBtn(!atBottom && scrollHeight > clientHeight + 100)
+  }, [])
+
+  useEffect(() => {
+    if (autoScroll && scrollRef.current) {
+      scrollToBottom(false)
+    }
+  }, [messages, streamEntries.length, autoScroll, scrollToBottom])
+
+  const createHandler = (handler: (msg: MessageData) => void) => (msg: MessageData) => {
+    return () => handler(msg)
+  }
+
+  const shouldVirtualize = messages.length > VIRTUALIZE_THRESHOLD
+  const virtualItems = virtualizer.getVirtualItems()
+
+  return (
+    <div className="relative flex-1 overflow-hidden">
+      <ScrollableOverlay
+        ref={scrollRef as unknown as React.Ref<HTMLElement>}
+        outerClassName="h-full"
+        className="overflow-y-auto overflow-x-hidden"
+        onScroll={handleScroll}
+      >
+        <div
+          className="relative w-full"
+          style={{
+            height: shouldVirtualize ? `${virtualizer.getTotalSize()}px` : 'auto',
+          }}
+        >
+          {shouldVirtualize ? (
+            <div
+              className="absolute top-0 left-0 w-full"
+              style={{
+                transform: `translateY(${virtualItems[0]?.start ?? 0}px)`,
+              }}
+            >
+              {virtualItems.map((vi) => {
+                const msg = messages[vi.index]
+                if (!msg) return null
+                return (
+                  <div key={msg.index} data-index={vi.index} ref={virtualizer.measureElement}>
+                    <ChatMessage
+                      message={msg}
+                      onCopy={createHandler(onCopy)(msg)}
+                      onToggle={createHandler(onToggle)(msg)}
+                      onPin={createHandler(onPin)(msg)}
+                      onDelete={createHandler(onDelete)(msg)}
+                      onRetry={createHandler(onRetry)(msg)}
+                      onReturn={createHandler(onReturn)(msg)}
+                      onDebug={createHandler(onDebug)(msg)}
+                    />
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            messages.map((msg) => (
+              <ChatMessage
+                key={`${msg.role}-${msg.index}-${msg.created_at}`}
+                message={msg}
+                onCopy={createHandler(onCopy)(msg)}
+                onToggle={createHandler(onToggle)(msg)}
+                onPin={createHandler(onPin)(msg)}
+                onDelete={createHandler(onDelete)(msg)}
+                onRetry={createHandler(onRetry)(msg)}
+                onReturn={createHandler(onReturn)(msg)}
+                onDebug={createHandler(onDebug)(msg)}
+              />
+            ))
+          )}
+
+          {streamEntries.map((stream) => (
+            <StreamingPlaceholder key={stream.streamId} stream={stream} />
+          ))}
+        </div>
+      </ScrollableOverlay>
+
+      <ScrollToBottomButton visible={showScrollBtn} onClick={() => scrollToBottom()} />
+    </div>
+  )
+}

@@ -1,0 +1,184 @@
+import { useState, useEffect, useMemo } from 'react'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import { useAgentsStore } from '@/stores/agentsStore'
+import { useI18n } from '@/lib/i18n'
+import { synthApi } from '@/lib/api/synthApi'
+import { Icon } from '../icon/Icon'
+import { ScrollableOverlay } from '../ui/ScrollableOverlay'
+
+function resolveColor(cssVar: string | null): string | undefined {
+  if (!cssVar) return undefined
+  if (cssVar.startsWith('--')) {
+    return `var(${cssVar})`
+  }
+  return cssVar
+}
+
+interface AgentModeSelectorProps {
+  sessionId: string
+}
+
+export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
+  const { agents, activeAgentId, setActiveAgentId, loadAgents } = useAgentsStore()
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+
+  useEffect(() => {
+    loadAgents(sessionId)
+  }, [sessionId])
+
+  const activeAgent = agents.find((a) => a.id === activeAgentId)
+  const defaultAgent = agents.find((a) => a.id === 'assistant')
+
+  const sortedAgents = useMemo(() => {
+    const list = [...agents]
+    const assistantIdx = list.findIndex((a) => a.id === 'assistant')
+    if (assistantIdx > -1) {
+      const [assistant] = list.splice(assistantIdx, 1)
+      list.unshift(assistant)
+    }
+    return list
+  }, [agents])
+
+  const filtered = searchQuery.trim()
+    ? sortedAgents.filter((a) => {
+        const q = searchQuery.toLowerCase()
+        return (
+          a.display_name.toLowerCase().includes(q) ||
+          a.id.toLowerCase().includes(q) ||
+          (a.description && a.description.toLowerCase().includes(q))
+        )
+      })
+    : sortedAgents
+
+  return (
+    <DropdownMenu.Root open={open} onOpenChange={setOpen}>
+      <DropdownMenu.Trigger asChild>
+        <button className="model-selector-trigger flex items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0">
+          {activeAgent?.icon ? (
+            <Icon
+              name={activeAgent.icon}
+              className="size-3.5 shrink-0"
+              style={activeAgent.color ? { color: resolveColor(activeAgent.color) } : undefined}
+            />
+          ) : (
+            <div
+              className="h-2 w-2 rounded-full shrink-0"
+              style={activeAgent?.color ? { backgroundColor: resolveColor(activeAgent.color) } : undefined}
+            />
+          )}
+          <span className="font-medium text-xs text-foreground whitespace-nowrap max-w-[200px] truncate">
+            {activeAgent?.display_name || activeAgentId || 'Agent'}
+          </span>
+        </button>
+      </DropdownMenu.Trigger>
+
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          side="top"
+          sideOffset={4}
+          className="w-[min(280px,calc(100vw-2rem))] p-0 flex flex-col bg-popover border border-border rounded-lg shadow-lg z-50"
+          align="end"
+          alignOffset={-40}
+        >
+          <div className="p-2 border-b border-border/40">
+            <div className="relative">
+              <Icon name="search" className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <input
+                type="text"
+                placeholder={t('chat.modelControls.searchAgents')}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-8 h-8 w-full text-xs bg-background border border-border rounded-md px-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                autoFocus
+              />
+            </div>
+          </div>
+
+          <ScrollableOverlay
+            outerClassName="max-h-[min(800px,calc(100dvh-12rem))] flex-1"
+            className="p-1"
+          >
+            {!searchQuery.trim() && defaultAgent && activeAgentId !== defaultAgent.id && (
+              <>
+                <DropdownMenu.Item
+                  onClick={() => {
+                    setActiveAgentId(defaultAgent.id)
+                    synthApi.updateSession(sessionId, { settings: { agent_role: defaultAgent.id } }).catch(() => {})
+                    setOpen(false)
+                    setSearchQuery('')
+                  }}
+                  className="text-xs flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer hover:bg-interactive-hover/50 data-[highlighted]:bg-interactive-selection outline-none"
+                >
+                  <Icon name="arrow-go-back" className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="font-medium">{t('chat.modelControls.resetToDefault')}</span>
+                </DropdownMenu.Item>
+                <DropdownMenu.Separator className="my-1 border-t border-border/30" />
+              </>
+            )}
+
+            {filtered.length === 0 && (
+              <div className="px-2 py-4 text-center text-xs text-muted-foreground">
+                {t('chat.modelControls.noAgentsFound')}
+              </div>
+            )}
+
+            {filtered.map((agent) => {
+              const disabled = !agent.available
+              const item = (
+                <DropdownMenu.Item
+                  key={agent.id}
+                  disabled={disabled}
+                  onClick={() => {
+                    if (disabled) return
+                    setActiveAgentId(agent.id)
+                    synthApi.updateSession(sessionId, { settings: { agent_role: agent.id } }).catch(() => {})
+                    setOpen(false)
+                    setSearchQuery('')
+                  }}
+                  className={`text-xs group flex flex-col gap-0.5 px-2 py-1.5 rounded-md outline-none ${
+                    disabled
+                      ? 'opacity-40 cursor-not-allowed'
+                      : 'cursor-pointer hover:bg-interactive-hover/50 data-[highlighted]:bg-interactive-selection data-[highlighted]:text-foreground'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5">
+                    {agent.icon ? (
+                      <Icon
+                        name={agent.icon}
+                        className="h-3.5 w-3.5 shrink-0"
+                        style={agent.color ? { color: resolveColor(agent.color) } : undefined}
+                      />
+                    ) : (
+                      <div
+                        className="h-1 w-1 rounded-full shrink-0"
+                        style={agent.color ? { backgroundColor: resolveColor(agent.color) } : undefined}
+                      />
+                    )}
+                    <span className="font-medium truncate">{agent.display_name}</span>
+                    {activeAgentId === agent.id && (
+                      <Icon name="check" className="h-3.5 w-3.5 text-primary shrink-0" />
+                    )}
+                  </div>
+                  {agent.description && (
+                    <span className="text-[10px] text-muted-foreground max-w-[200px] ml-[22px] break-words leading-tight">
+                      {agent.description}
+                    </span>
+                  )}
+                </DropdownMenu.Item>
+              )
+              return disabled ? (
+                <div key={agent.id} title={t('chat.modelControls.agentProjectOnly')}>
+                  {item}
+                </div>
+              ) : (
+                item
+              )
+            })}
+          </ScrollableOverlay>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  )
+}
