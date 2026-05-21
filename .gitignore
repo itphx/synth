@@ -1,0 +1,66 @@
+# Зависимости
+node_modules/
+.pnpm-store/
+
+# Сборка
+dist/
+build/
+.next/
+out/
+
+# Runtime данные
+data/
+
+# Переменные окружения
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Логи
+*.log
+logs/
+tmp/
+
+# Кэш
+.tsbuildinfo
+*.tsbuildinfo
+.cache/
+.turbo/
+
+# Покрытие тестов
+coverage/
+
+# Инструкции для AI-агентов
+AGENTS.md
+CLAUDE.md
+.clinerules
+.cursorrules
+.windsurfrules
+.codex
+
+# Python (synth-legacy)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Kubernetes / Helm
+*.tgz
+charts/
+
+# Секреты
+*.pem
+*.key
+secrets/
