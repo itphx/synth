@@ -14,7 +14,7 @@
   "scripts": {
     "dev": "tsx src/main.ts",
     "start": "node dist/main.js",
-    "build": "tsc",
+    "build": "tsc && cp -r prompts dist/prompts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "clean": "rm -rf dist"

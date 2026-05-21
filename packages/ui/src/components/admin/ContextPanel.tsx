@@ -6,8 +6,16 @@ import { cn } from '@/lib/utils'
 interface ContextFileItem {
   name: string
   category: string
+  is_system: boolean
+  is_overridden: boolean
   enabled: boolean
   size: number
+}
+
+interface EditFileState {
+  name: string
+  content: string
+  category: string
 }
 
 const CATEGORIES = [
@@ -21,9 +29,10 @@ export const ContextPanel = () => {
   const [files, setFiles] = useState<ContextFileItem[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('user')
-  const [editFile, setEditFile] = useState<{ name: string; content: string } | null>(null)
+  const [editFile, setEditFile] = useState<EditFileState | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [newFile, setNewFile] = useState({ name: '', content: '', category: 'user' })
+  const [status, setStatus] = useState<string | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -32,29 +41,39 @@ export const ContextPanel = () => {
         `/api/v2/context/files?category=${activeTab}`,
       )
       setFiles(data.files || [])
-    } finally {
-      setLoading(false)
-    }
+    } catch { setFiles([]) }
+    finally { setLoading(false) }
   }
 
   useEffect(() => { load() }, [activeTab])
 
+  const switchTab = (tab: string) => {
+    if (tab === activeTab) return
+    setLoading(true)
+    setActiveTab(tab)
+  }
+
   const handleToggle = async (name: string) => {
     try {
-      await synthApi.fetchJSON(`/api/v2/context/files/${encodeURIComponent(name)}`, {
-        method: 'POST',
-        body: JSON.stringify({ action: 'toggle', category: activeTab }),
-      })
-      await load()
+      const result = await synthApi.fetchJSON<{ name: string; enabled: boolean }>(
+        `/api/v2/context/files/${encodeURIComponent(name)}`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ action: 'toggle' }),
+        },
+      )
+      setFiles(prev => prev.map(f =>
+        f.name === name && f.category === 'user' ? { ...f, enabled: result.enabled } : f,
+      ))
     } catch { /* ignore */ }
   }
 
-  const handleEdit = async (name: string) => {
+  const handleEdit = async (name: string, category: string) => {
     try {
       const data = await synthApi.fetchJSON<{ name: string; content: string }>(
-        `/api/v2/context/files/${encodeURIComponent(name)}`,
+        `/api/v2/context/files/${encodeURIComponent(name)}?category=${encodeURIComponent(category)}`,
       )
-      setEditFile(data)
+      setEditFile({ name: data.name, content: data.content, category })
     } catch { /* ignore */ }
   }
 
@@ -63,9 +82,11 @@ export const ContextPanel = () => {
     try {
       await synthApi.fetchJSON(`/api/v2/context/files/${encodeURIComponent(editFile.name)}`, {
         method: 'POST',
-        body: JSON.stringify({ content: editFile.content, category: activeTab }),
+        body: JSON.stringify({ content: editFile.content, category: editFile.category }),
       })
       setEditFile(null)
+      setStatus('Сохранено')
+      setTimeout(() => setStatus(null), 1500)
       await load()
     } catch { /* ignore */ }
   }
@@ -79,15 +100,33 @@ export const ContextPanel = () => {
       })
       setShowCreate(false)
       setNewFile({ name: '', content: '', category: 'user' })
+      if (newFile.category === activeTab) await load()
+      setStatus('Файл создан')
+      setTimeout(() => setStatus(null), 1500)
+    } catch { /* ignore */ }
+  }
+
+  const handleDelete = async (name: string, category: string) => {
+    if (!confirm(`Удалить файл «${name}»?`)) return
+    try {
+      await synthApi.fetchJSON(
+        `/api/v2/context/files/${encodeURIComponent(name)}?category=${encodeURIComponent(category)}`,
+        { method: 'DELETE' },
+      )
       await load()
     } catch { /* ignore */ }
   }
 
-  const handleDelete = async (name: string) => {
-    if (!confirm(`Удалить файл «${name}»?`)) return
+  const handleRestore = async (name: string, category: string) => {
+    if (!confirm(`Сбросить «${name}» к системному значению?`)) return
     try {
-      await synthApi.fetchJSON(`/api/v2/context/files/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      await synthApi.fetchJSON(
+        `/api/v2/context/files/${encodeURIComponent(name)}/restore_to_default?category=${encodeURIComponent(category)}`,
+        { method: 'POST' },
+      )
       await load()
+      setStatus('Восстановлен системный вариант')
+      setTimeout(() => setStatus(null), 1500)
     } catch { /* ignore */ }
   }
 
@@ -98,7 +137,7 @@ export const ContextPanel = () => {
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-semibold">Контекст</h3>
-          <p className="text-muted-foreground text-sm">{filtered.length} файлов</p>
+          <p className="text-muted-foreground text-sm">{filtered.length} файлов{status && <span className="ml-2 text-blue-600">— {status}</span>}</p>
         </div>
         <button onClick={() => setShowCreate(!showCreate)} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">
           <Icon name="add" className="size-3.5" />Добавить
@@ -109,7 +148,7 @@ export const ContextPanel = () => {
         {CATEGORIES.map((cat) => (
           <button
             key={cat.id}
-            onClick={() => setActiveTab(cat.id)}
+            onClick={() => switchTab(cat.id)}
             className={cn(
               "flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors",
               activeTab === cat.id
@@ -125,20 +164,11 @@ export const ContextPanel = () => {
       {showCreate && (
         <div className="bg-background rounded-lg border p-4 space-y-3">
           <h4 className="font-medium text-sm">Новый файл</h4>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-xs text-muted-foreground">Имя файла</label>
-              <input type="text" value={newFile.name} onChange={e => setNewFile({ ...newFile, name: e.target.value })}
-                placeholder="ABOUT.md"
-                className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground">Категория</label>
-              <select value={newFile.category} onChange={e => setNewFile({ ...newFile, category: e.target.value })}
-                className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                {CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
-              </select>
-            </div>
+          <div>
+            <label className="text-xs text-muted-foreground">Имя файла</label>
+            <input type="text" value={newFile.name} onChange={e => setNewFile({ ...newFile, name: e.target.value })}
+              placeholder="ABOUT.md"
+              className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
           </div>
           <div>
             <label className="text-xs text-muted-foreground">Содержимое</label>
@@ -155,7 +185,7 @@ export const ContextPanel = () => {
 
       {editFile && (
         <div className="bg-background rounded-lg border p-4 space-y-3">
-          <h4 className="font-medium text-sm">Редактирование: {editFile.name}</h4>
+          <h4 className="font-medium text-sm">Редактирование: {editFile.name} <span className="text-xs text-muted-foreground">({CATEGORIES.find(c => c.id === editFile.category)?.label || editFile.category})</span></h4>
           <textarea value={editFile.content} onChange={e => setEditFile({ ...editFile, content: e.target.value })}
             rows={8}
             className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring font-mono" />
@@ -177,17 +207,38 @@ export const ContextPanel = () => {
           {filtered.map((f) => (
             <div key={f.name} className="flex items-center justify-between bg-background rounded-lg border px-4 py-2.5">
               <div className="flex items-center gap-3">
-                <input type="checkbox" checked={f.enabled} onChange={() => handleToggle(f.name)}
-                  className="size-4 rounded accent-blue-600" />
+                {f.category === 'user' ? (
+                  <input type="checkbox" checked={f.enabled} onChange={() => handleToggle(f.name)}
+                    className="size-4 rounded accent-blue-600" />
+                ) : (
+                  <div className="size-4" />
+                )}
                 <Icon name="file-text" className="size-4 text-muted-foreground" />
                 <span className="text-sm font-medium">{f.name}</span>
+                {f.is_overridden && (
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300">
+                    изменён
+                  </span>
+                )}
+                {f.is_system && (
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                    системный
+                  </span>
+                )}
                 <span className="text-xs text-muted-foreground">{f.size} B</span>
               </div>
               <div className="flex gap-1">
-                <button onClick={() => handleEdit(f.name)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">Изменить</button>
-                <button onClick={() => handleDelete(f.name)} className="p-1 rounded text-muted-foreground hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950">
-                  <Icon name="delete-bin" className="size-3.5" />
-                </button>
+                <button onClick={() => handleEdit(f.name, f.category)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">Изменить</button>
+                {f.is_overridden && (
+                  <button onClick={() => handleRestore(f.name, f.category)} className="px-2 py-1 rounded text-xs text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950">
+                    Сбросить
+                  </button>
+                )}
+                {f.category === 'user' && (
+                  <button onClick={() => handleDelete(f.name, f.category)} className="p-1 rounded text-muted-foreground hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950">
+                    <Icon name="delete-bin" className="size-3.5" />
+                  </button>
+                )}
               </div>
             </div>
           ))}

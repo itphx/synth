@@ -5,7 +5,10 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import type { ProviderConfig, ModelConfig, AgentDefinition } from '@synth/shared';
-import { FileStore, SessionManager, EventBus, QueueProcessorManager } from '@synth/core';
+import {
+  FileStore, SessionManager, EventBus, QueueProcessorManager,
+  ContextConfig, FileProfileStore,
+} from '@synth/core';
 import { nowISO } from '@synth/shared';
 import { loadAuthConfig } from './auth/config.js';
 import { createAuthMiddleware } from './auth/middleware.js';
@@ -50,7 +53,8 @@ const projectStore = new ProjectStore({ dataDir });
 const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
 const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
 const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
-const contextStore = new JsonStore<{ name: string; content: string; category: string; enabled: boolean }>({ dataDir, subdir: 'context' });
+const contextConfig = new ContextConfig({ userDataDir: `${dataDir}/context` });
+const profilesStore = new FileProfileStore({ dataDir });
 const eventBus = new EventBus();
 const queueManager = new QueueProcessorManager();
 
@@ -85,7 +89,7 @@ app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore));
 app.route('/api/v2/agents', createAgentRoutes(auth, agentStore));
 
 // Context routes
-app.route('/api/v2/context', createContextRoutes(auth, contextStore));
+app.route('/api/v2/context', createContextRoutes(auth, contextConfig));
 
   // Admin routes
 app.get('/admin/sessions/blocked', auth.requireAdmin, (c) => c.json({ sessions: [], count: 0 }));
