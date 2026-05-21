@@ -288,19 +288,30 @@ export class ContextConfig {
 
   // --- Специализированные загрузчики ---
 
-  getRolePrompt(agentId: string, language = 'ru'): string | null {
-    const baseStem = agentId.toUpperCase();
-    const contextFile = `${baseStem}.md`;
+  getRolePrompt(agentId: string, contextFileOverride?: string, language = 'ru'): string | null {
+    const contextFile = contextFileOverride || `${agentId.toUpperCase()}.md`;
 
+    // 1. Проверяем пользовательский override в roles/
     const userRolePath = this._resolveOverridePath('role', contextFile);
     if (this._readFile(userRolePath)) return this._readFile(userRolePath);
 
-    const userLocalized = this._getLocalizedPath(userRolePath, baseStem, language);
+    const stem = contextFile.replace(/\.md$/, '');
+    const userLocalized = this._getLocalizedPath(userRolePath, stem, language);
     if (userLocalized && this._readFile(userLocalized)) return this._readFile(userLocalized);
 
+    // 2. fallback: user/ категория (только при явном contextFileOverride)
+    if (contextFileOverride) {
+      const userPath = this._resolveOverridePath('user', contextFile);
+      const content = this._readFile(userPath);
+      if (content) return content;
+      const userLoc = this._getLocalizedPath(userPath, stem, language);
+      if (userLoc && this._readFile(userLoc)) return this._readFile(userLoc);
+    }
+
+    // 3. Системный prompts/roles/
     const systemDir = this._resolveSystemPath('role');
     const basePath = join(systemDir, contextFile);
-    const localized = this._getLocalizedPath(basePath, baseStem, language);
+    const localized = this._getLocalizedPath(basePath, stem, language);
     if (localized) {
       const content = this._readFile(localized);
       if (content) return content;

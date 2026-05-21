@@ -106,6 +106,12 @@ export interface AgentInfo {
   color: string | null
   description: string | null
   available: boolean
+  mode: 'simple' | 'orchestrator'
+  provider: string | null
+  model: string | null
+  context_file: string | null
+  is_builtin: boolean
+  is_overridden: boolean
 }
 
 export interface AgentsListResponse {

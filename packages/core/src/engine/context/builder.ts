@@ -8,6 +8,7 @@ import type { DebugCollector } from '../../debug.js';
 
 export interface BuildSystemPromptParams {
   agentRole?: string;
+  agentContextFile?: string;
   historyMessages?: Message[];
   userId?: string;
   projectName?: string;
@@ -53,7 +54,7 @@ export class ContextBuilder {
 
     // 1. Role prompt
     if (agentRole) {
-      const rolePrompt = this._config.getRolePrompt(agentRole, lang);
+      const rolePrompt = this._config.getRolePrompt(agentRole, params.agentContextFile, lang);
       if (rolePrompt) {
         parts.push(rolePrompt);
         this._debugAdd('role', { agentRole, loaded: true, language: lang });
