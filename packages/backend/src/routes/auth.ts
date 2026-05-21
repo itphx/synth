@@ -170,7 +170,10 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig): Hono {
   // GET /auth/locales
   app.get('/locales', (c) => {
     return c.json({
-      locales: ['ru', 'en'],
+      locales: [
+        { code: 'ru', name: 'Russian', native_name: 'Русский' },
+        { code: 'en', name: 'English', native_name: 'English' },
+      ],
       default: 'ru',
     });
   });
