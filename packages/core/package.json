@@ -20,11 +20,12 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@synth/shared": "workspace:*"
+    "@synth/shared": "workspace:*",
+    "commander": "^14.0.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.8.0",
-    "tsx": "^4.0.0"
+    "tsx": "^4.0.0",
+    "typescript": "^5.8.0"
   }
 }

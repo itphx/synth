@@ -9,8 +9,8 @@ import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, FileProfileStore,
 } from '@synth/core';
-import { nowISO } from '@synth/shared';
-import { loadAuthConfig } from './auth/config.js';
+import { nowISO, ensureDataDir } from '@synth/shared';
+import { loadBackendConfig } from './lib/app-config.js';
 import { createAuthMiddleware } from './auth/middleware.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createProjectRoutes } from './routes/projects.js';
@@ -37,15 +37,16 @@ app.use(cors({ origin: '*', credentials: true }));
 app.get('/health', (c) => c.json({ status: 'healthy', version: '0.1.0', time: nowISO() }));
 app.get('/api/v2/health', (c) => c.json({ status: 'healthy', version: '0.1.0', time: nowISO() }));
 
-// Auth system
-const config = loadAuthConfig();
-const auth = createAuthMiddleware(config);
+// Конфигурация
+const backendConfig = await loadBackendConfig();
+const auth = createAuthMiddleware(backendConfig.auth);
 
 // Прикрепляем пользователя ко всем запросам
 app.use('*', auth.attachUser);
 
 // Хранилища
-const dataDir = process.env.SYNTH_DATA_DIR || 'data';
+const dataDir = backendConfig.dataDir;
+await ensureDataDir(dataDir);
 const fileStore = new FileStore({ dataDir });
 const sessionManager = new SessionManager(fileStore);
 const projectStore = new ProjectStore({ dataDir });
@@ -56,11 +57,11 @@ const contextConfig = new ContextConfig({ userDataDir: `${dataDir}/context` });
 const profilesStore = new FileProfileStore({ dataDir });
 
 // Auth routes (после profilesStore)
-app.route('/auth', createAuthRoutes(auth, config, profilesStore));
+app.route('/auth', createAuthRoutes(auth, backendConfig.auth, profilesStore));
 
 // Сидирование тестовых пользователей (debug mode)
-if (config.debugMode && config.testUsers) {
-  for (const tu of config.testUsers) {
+if (backendConfig.auth.debugMode && backendConfig.auth.testUsers) {
+  for (const tu of backendConfig.auth.testUsers) {
     profilesStore.getOrCreateProfile({
       username: tu.username,
       roles: tu.roles,
@@ -127,7 +128,7 @@ app.notFound((c) => {
   }, 404);
 });
 
-const port = parseInt(process.env.PORT || '5000', 10);
+const port = backendConfig.port;
 
 // Вспомогательная функция для конвертации Node Request в Web Request
 function toWebRequest(req: IncomingMessage): Request {
@@ -238,10 +239,11 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 console.log(`synth-backend starting on http://localhost:${port}`);
-console.log(`  debug mode: ${config.debugMode}`);
-if (config.debugMode) {
+console.log(`  data dir: ${dataDir}`);
+console.log(`  debug mode: ${backendConfig.auth.debugMode}`);
+if (backendConfig.auth.debugMode) {
   console.log('  test users:');
-  config.testUsers?.forEach((u) => {
+  backendConfig.auth.testUsers?.forEach((u) => {
     console.log(`    ${u.username} [${u.roles.join(', ')}] → key: ${u.apiKey.slice(0, 8)}...`);
   });
 }
