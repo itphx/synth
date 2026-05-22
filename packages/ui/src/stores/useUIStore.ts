@@ -252,9 +252,6 @@ export const useUIStore = create<UIStore>()(
     {
       name: 'synth-ui-settings',
       partialize: (state) => ({
-        theme: state.theme,
-        themeMode: state.themeMode,
-        locale: state.locale,
         leftPanelWidth: state.leftPanel.width,
         rightPanelWidth: state.rightPanel.width,
         leftPanelIsOpen: state.leftPanel.isOpen,
@@ -268,7 +265,6 @@ export const useUIStore = create<UIStore>()(
         const p = persisted as Record<string, unknown> | undefined
         return {
           ...current,
-          ...p,
           leftPanel: {
             ...current.leftPanel,
             width: (p?.leftPanelWidth as number) ?? current.leftPanel.width,

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { ToastContainer } from 'react-toastify'
 import { useUIStore } from '@/stores/useUIStore'
 import { useI18nStore } from '@/lib/i18n/store'
@@ -16,12 +16,12 @@ import { profileService } from '@/lib/api/profileService'
 import { useAuthStore } from '@/stores/authStore'
 
 function DefaultsSync() {
-  const { isAuthenticated } = useAuthStore()
-  const prevAuthenticatedRef = useRef<boolean | null>(null)
+  const { isAuthenticated, isInitialized } = useAuthStore()
 
   useEffect(() => {
-    const wasAuth = prevAuthenticatedRef.current
-    prevAuthenticatedRef.current = isAuthenticated
+    if (!isInitialized) {
+      return
+    }
 
     if (!isAuthenticated) {
       useUIStore.setState({
@@ -30,10 +30,6 @@ function DefaultsSync() {
         locale: DEFAULT_LOCALE,
       })
       useI18nStore.getState().setLocale(DEFAULT_LOCALE)
-      return
-    }
-
-    if (wasAuth === true) {
       return
     }
 
@@ -51,7 +47,7 @@ function DefaultsSync() {
       }
     }
     apply()
-  }, [isAuthenticated])
+  }, [isAuthenticated, isInitialized])
 
   return null
 }

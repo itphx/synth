@@ -1,12 +1,7 @@
 import { useEffect, useState } from 'react'
-import { api } from '@/lib/api/client'
+import { synthApi, type UserInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
-
-interface SimpleUser {
-  id: string
-  username: string
-}
 
 const ROLE_COLORS: Record<string, string> = {
   ADMIN: 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300',
@@ -15,34 +10,218 @@ const ROLE_COLORS: Record<string, string> = {
   AUDITOR: 'bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-300',
 }
 
+const ROLES = ['ADMIN', 'USER', 'LEAD', 'AUDITOR'] as const
+
+interface UserForm {
+  username: string
+  email: string
+  display_name: string
+  roles: string[]
+  is_active: boolean
+  notes: string
+}
+
+const emptyForm = (): UserForm => ({
+  username: '', email: '', display_name: '', roles: ['USER'], is_active: true, notes: '',
+})
+
+function buildForm(u: UserInfo): UserForm {
+  return {
+    username: u.username,
+    email: u.email || '',
+    display_name: u.display_name || '',
+    roles: u.roles || [],
+    is_active: u.is_active,
+    notes: u.notes || '',
+  }
+}
+
 export const UsersPanel = () => {
-  const [users, setUsers] = useState<SimpleUser[]>([])
+  const [users, setUsers] = useState<UserInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [form, setForm] = useState<UserForm>(emptyForm())
+  const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const data = await api.getUsers()
-        setUsers(data.users || [])
-      } catch {
-        setError('Список пользователей доступен только в debug-режиме')
-      } finally {
-        setLoading(false)
-      }
+  const load = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const data = await synthApi.getUsers()
+      setUsers(data.users || [])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка загрузки пользователей')
+    } finally {
+      setLoading(false)
     }
-    load()
-  }, [])
+  }
+
+  useEffect(() => { load() }, [])
+
+  const handleCreate = () => {
+    setForm(emptyForm())
+    setCreating(true)
+    setError('')
+  }
+
+  const handleEdit = async (u: UserInfo) => {
+    setError('')
+    try {
+      const detail = await synthApi.getUser(u.id)
+      setForm(buildForm(detail))
+    } catch {
+      setForm(buildForm(u))
+    }
+    setExpanded(u.id)
+    setCreating(false)
+  }
+
+  const handleCancel = () => {
+    setExpanded(null)
+    setCreating(false)
+    setError('')
+  }
+
+  const handleSave = async () => {
+    if (!form.username.trim()) { setError('Имя пользователя обязательно'); return }
+    setSaving(true)
+    setError('')
+    try {
+      const body: Record<string, unknown> = {
+        username: form.username.trim(),
+        email: form.email || undefined,
+        display_name: form.display_name || undefined,
+        roles: form.roles,
+        is_active: form.is_active,
+        notes: form.notes,
+      }
+      if (expanded) {
+        await synthApi.updateUser(expanded, body)
+      } else {
+        await synthApi.createUser(body)
+      }
+      setExpanded(null)
+      setCreating(false)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка сохранения')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleToggleActive = async (u: UserInfo) => {
+    try {
+      await synthApi.updateUser(u.id, { is_active: !u.is_active })
+      await load()
+    } catch { /* ignore */ }
+  }
+
+  const handleDelete = async (u: UserInfo) => {
+    if (!confirm(`Удалить пользователя «${u.username}»?`)) return
+    try {
+      await synthApi.deleteUser(u.id)
+      await load()
+    } catch { /* ignore */ }
+  }
+
+  const toggleRole = (role: string) => {
+    setForm((f) => ({
+      ...f,
+      roles: f.roles.includes(role)
+        ? f.roles.filter((r) => r !== role)
+        : [...f.roles, role],
+    }))
+  }
+
+  const renderForm = () => (
+    <div className="bg-background rounded-lg border p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h4 className="font-medium text-sm">{expanded ? `Изменить: ${form.username}»` : 'Новый пользователь'}</h4>
+        <div className="flex gap-2">
+          <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
+            {saving ? 'Сохранение...' : 'Сохранить'}
+          </button>
+          <button onClick={handleCancel} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">Отмена</button>
+        </div>
+      </div>
+
+      {error && <p className="text-xs text-red-500">{error}</p>}
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-muted-foreground">Имя пользователя</label>
+          <input type="text" value={form.username}
+            onChange={(e) => setForm({ ...form, username: e.target.value })}
+            disabled={!!expanded}
+            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" />
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground">Отображаемое имя</label>
+          <input type="text" value={form.display_name}
+            onChange={(e) => setForm({ ...form, display_name: e.target.value })}
+            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+        </div>
+        <div className="col-span-2">
+          <label className="text-xs text-muted-foreground">Email</label>
+          <input type="email" value={form.email}
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
+            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+        </div>
+      </div>
+
+      <div>
+        <label className="text-xs text-muted-foreground mb-1 block">Роли</label>
+        <div className="flex flex-wrap gap-1.5">
+          {ROLES.map((role) => (
+            <button key={role} type="button" onClick={() => toggleRole(role)} className={cn(
+              'px-2.5 py-1 rounded text-xs transition-colors',
+              form.roles.includes(role)
+                ? `${ROLE_COLORS[role]} font-medium`
+                : 'bg-muted text-muted-foreground hover:bg-interactive-hover',
+            )}>{role}</button>
+          ))}
+        </div>
+      </div>
+
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" checked={form.is_active}
+          onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
+          className="rounded" />
+        <span className="text-sm">Активен</span>
+      </label>
+
+      <div>
+        <label className="text-xs text-muted-foreground mb-1 block">Заметки</label>
+        <textarea value={form.notes}
+          onChange={(e) => setForm({ ...form, notes: e.target.value })}
+          rows={3}
+          className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-y" />
+      </div>
+    </div>
+  )
 
   return (
     <div className="space-y-4">
-      <h3 className="text-lg font-semibold">Пользователи</h3>
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-semibold">Пользователи</h3>
+          <p className="text-muted-foreground text-sm">{users.length} пользователей</p>
+        </div>
+        <button onClick={handleCreate} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">
+          <Icon name="add" className="size-3.5" />Добавить
+        </button>
+      </div>
 
-      {error && (
+      {error && !creating && !expanded && (
         <div className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-lg p-4 text-sm text-amber-700 dark:text-amber-300">
           {error}
         </div>
       )}
+
+      {(creating || expanded) && renderForm()}
 
       {loading ? (
         <div className="space-y-2">
@@ -59,12 +238,57 @@ export const UsersPanel = () => {
       ) : (
         <div className="space-y-2">
           {users.map((u) => (
-            <div key={u.id} className="bg-background rounded-lg border px-4 py-3">
-              <div className="flex items-center gap-3">
-                <div className="size-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-sm font-medium">
-                  {u.username.charAt(0).toUpperCase()}
+            <div key={u.id}>
+              <div className={cn(
+                'bg-background rounded-lg border p-4',
+                !u.is_active && 'opacity-50',
+              )}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="size-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-sm font-medium shrink-0">
+                      {u.display_name?.charAt(0) || u.username.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium text-sm truncate">{u.display_name || u.username}</span>
+                        <code className="text-[10px] text-muted-foreground shrink-0">{u.username}</code>
+                      </div>
+                      {u.email && (
+                        <p className="text-xs text-muted-foreground truncate">{u.email}</p>
+                      )}
+                    </div>
+                  </div>
+                  <button onClick={() => handleToggleActive(u)} className={cn(
+                    'relative w-9 h-5 rounded-full transition-colors shrink-0',
+                    u.is_active ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600',
+                  )}>
+                    <span className={cn(
+                      'absolute top-0.5 size-4 rounded-full bg-white transition-all shadow-sm',
+                      u.is_active ? 'right-0.5' : 'left-0.5',
+                    )} />
+                  </button>
                 </div>
-                <span className="text-sm font-medium">{u.username}</span>
+
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {u.roles.length === 0 && (
+                    <span className="text-[10px] text-muted-foreground">нет ролей</span>
+                  )}
+                  {u.roles.map((r) => (
+                    <span key={r} className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium', ROLE_COLORS[r] || 'bg-slate-100 text-slate-600')}>
+                      {r}
+                    </span>
+                  ))}
+                  {u.last_login && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                      был: {new Date(u.last_login).toLocaleDateString('ru')}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex gap-1">
+                  <button onClick={() => handleEdit(u)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">Изменить</button>
+                  <button onClick={() => handleDelete(u)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950">Удалить</button>
+                </div>
               </div>
             </div>
           ))}

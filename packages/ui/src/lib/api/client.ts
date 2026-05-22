@@ -108,10 +108,11 @@ export const api = {
   },
 
   async updateProfile(data: Partial<Profile>): Promise<Profile> {
-    return fetchJSON<Profile>(`${BASE_URL}/profile`, {
+    const res = await fetchJSON<{ status: string; profile: Profile }>(`${BASE_URL}/profile`, {
       method: 'PUT',
       body: JSON.stringify(data),
     })
+    return res.profile
   },
 
   async updatePreferences(data: Partial<UserPreferences>): Promise<{ status: string; preferences: UserPreferences }> {

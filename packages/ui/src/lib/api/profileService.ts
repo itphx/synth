@@ -64,6 +64,15 @@ export const profileService = {
   async syncToProfile(key: string, value: unknown): Promise<void> {
     try {
       await api.updatePreferences({ [key]: value })
+      const state = useAuthStore.getState()
+      if (state.profile) {
+        useAuthStore.setState({
+          profile: {
+            ...state.profile,
+            preferences: { ...(state.profile.preferences || {}), [key]: value } as UserPreferences,
+          },
+        })
+      }
     } catch (err) {
       console.error(`Failed to sync ${key} to profile:`, err)
     }

@@ -23,6 +23,7 @@ import { createModelRoutes } from './routes/models.js';
 import { createAgentRoutes } from './routes/agents.js';
 import { createContextRoutes } from './routes/context.js';
 import { createDebugRoutes } from './routes/debug.js';
+import { createUserRoutes } from './routes/users.js';
 import { ProjectStore } from './storage/project-store.js';
 import { JsonStore } from './storage/json-store.js';
 
@@ -42,9 +43,6 @@ const auth = createAuthMiddleware(config);
 // Прикрепляем пользователя ко всем запросам
 app.use('*', auth.attachUser);
 
-// Auth routes
-app.route('/auth', createAuthRoutes(auth, config));
-
 // Хранилища
 const dataDir = process.env.SYNTH_DATA_DIR || 'data';
 const fileStore = new FileStore({ dataDir });
@@ -55,6 +53,20 @@ const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
 const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
 const contextConfig = new ContextConfig({ userDataDir: `${dataDir}/context` });
 const profilesStore = new FileProfileStore({ dataDir });
+
+// Auth routes (после profilesStore)
+app.route('/auth', createAuthRoutes(auth, config, profilesStore));
+
+// Сидирование тестовых пользователей (debug mode)
+if (config.debugMode && config.testUsers) {
+  for (const tu of config.testUsers) {
+    profilesStore.getOrCreateProfile({
+      username: tu.username,
+      roles: tu.roles,
+    }).catch((e: unknown) => console.warn('seed: failed to create profile for', tu.username, e));
+  }
+}
+
 const eventBus = new EventBus();
 const queueManager = new QueueProcessorManager();
 
@@ -91,7 +103,10 @@ app.route('/api/v2/agents', createAgentRoutes(auth, agentStore));
 // Context routes
 app.route('/api/v2/context', createContextRoutes(auth, contextConfig));
 
-  // Admin routes
+// User admin routes
+app.route('/api/v2/users', createUserRoutes(auth, profilesStore));
+
+// Admin routes
 app.get('/admin/sessions/blocked', auth.requireAdmin, (c) => c.json({ sessions: [], count: 0 }));
 app.route('/api/v2/admin/debug', createDebugRoutes(auth));
 

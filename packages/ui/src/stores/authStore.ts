@@ -68,7 +68,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   logout: async () => {
     set({ isLoading: true })
     try {
-      await profileService.resetPreferences()
       await api.logout()
     } finally {
       localStorage.removeItem('synth-ui.i18n.v1')

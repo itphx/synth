@@ -1,8 +1,11 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import type { AuthConfig, User } from '@synth/shared';
+import type { ProfileStore } from '@synth/shared';
+import { setCookie } from 'hono/cookie';
+import { nowISO } from '@synth/shared';
 
-export function createAuthRoutes(kit: AuthKit, config: AuthConfig): Hono {
+export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: ProfileStore): Hono {
   const app = new Hono();
 
   // GET /auth/status — статус аутентификации
@@ -118,21 +121,30 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig): Hono {
   });
 
   // GET /auth/profile
-  app.get('/profile', (c) => {
+  app.get('/profile', async (c) => {
     const user = kit.getCurrentUser(c);
     if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
     }
+
+    let profile = null;
+    if (profiles) {
+      profile = await profiles.getProfileByUsername(user.username);
+    }
+
     return c.json({
       id: user.id,
       username: user.username,
-      email: user.email,
-      roles: user.roles,
+      email: profile?.email ?? user.email,
+      roles: profile?.roles ?? user.roles,
       preferred_language: user.preferredLanguage,
-      team_role: user.teamRole,
-      notes: user.notes,
+      team_role: profile?.teamRoles?.[0] ?? user.teamRole,
+      notes: profile?.notes ?? user.notes,
       interview_completed: user.interviewCompleted,
-      created_at: user.createdAt,
+      display_name: profile?.displayName ?? null,
+      is_active: profile?.isActive ?? true,
+      created_at: profile?.createdAt ?? user.createdAt,
+      preferences: (profile?.preferences as Record<string, unknown>) ?? {},
     });
   });
 
@@ -143,11 +155,43 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig): Hono {
       return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
     }
     const body = await c.req.json();
-    // In-memory обновление (для debug mode)
+
+    // In-memory обновление
     if (body.preferred_language) user.preferredLanguage = body.preferred_language;
     if (body.team_role) user.teamRole = body.team_role;
     if (body.notes !== undefined) user.notes = body.notes;
     if (body.interview_completed !== undefined) user.interviewCompleted = body.interview_completed;
+
+    // Persist в FileProfileStore
+    if (profiles) {
+      const profile = await profiles.getOrCreateProfile({
+        username: user.username,
+        roles: user.roles,
+      });
+      if (body.notes !== undefined) profile.notes = body.notes;
+      if (body.team_role) profile.teamRoles = [body.team_role];
+      if (body.display_name) profile.displayName = body.display_name;
+      if (body.preferences !== undefined) {
+        profile.preferences = { ...(profile.preferences || {}), ...body.preferences };
+      }
+      if (body.email !== undefined) profile.email = body.email;
+      await profiles.saveProfile(profile);
+
+      return c.json({
+        status: 'ok',
+        profile: {
+          id: user.id,
+          username: user.username,
+          roles: user.roles,
+          email: profile.email,
+          display_name: profile.displayName,
+          notes: profile.notes,
+          team_role: profile.teamRoles?.[0],
+          preferences: profile.preferences,
+        },
+      });
+    }
+
     return c.json({ status: 'ok', user: { id: user.id, username: user.username, roles: user.roles } });
   });
 
@@ -158,12 +202,37 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig): Hono {
       return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
     }
     const body = await c.req.json();
-    // Сохраняем предпочтения (in-memory)
+
+    if (profiles) {
+      const profile = await profiles.getOrCreateProfile({
+        username: user.username,
+        roles: user.roles,
+      });
+      profile.preferences = { ...(profile.preferences || {}), ...body };
+      await profiles.saveProfile(profile);
+      return c.json({ status: 'ok', preferences: profile.preferences });
+    }
+
     return c.json({ status: 'ok', preferences: body });
   });
 
   // DELETE /auth/profile/preferences
-  app.delete('/profile/preferences', (c) => {
+  app.delete('/profile/preferences', async (c) => {
+    const user = kit.getCurrentUser(c);
+    if (!user) {
+      return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
+    }
+
+    if (profiles) {
+      const profile = await profiles.getProfileByUsername(user.username);
+      if (profile) {
+        const avatar = (profile.preferences as Record<string, unknown>)?.avatar;
+        profile.preferences = avatar ? { avatar } : {};
+        await profiles.saveProfile(profile);
+        return c.json({ status: 'ok', preferences: profile.preferences });
+      }
+    }
+
     return c.json({ status: 'ok', preferences: {} });
   });
 
