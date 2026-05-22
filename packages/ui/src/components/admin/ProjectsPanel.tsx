@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { synthApi, type ProjectData } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
+import { useI18n } from '@/lib/i18n'
 
 export const ProjectsPanel = () => {
+  const { t } = useI18n()
   const [projects, setProjects] = useState<ProjectData[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
@@ -23,7 +25,7 @@ export const ProjectsPanel = () => {
 
   const handleCreate = async () => {
     if (!name.trim()) {
-      setError('Название обязательно')
+      setError(t('admin.projects.nameRequired'))
       return
     }
     try {
@@ -33,12 +35,12 @@ export const ProjectsPanel = () => {
       setError('')
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка создания')
+      setError(err instanceof Error ? err.message : t('admin.projects.createError'))
     }
   }
 
   const handleDelete = async (id: string, projectName: string) => {
-    if (!confirm(`Удалить проект «${projectName}»?`)) return
+    if (!confirm(t('admin.projects.confirmDelete', { name: projectName }))) return
     try {
       await synthApi.deleteProject(id)
       await load()
@@ -51,26 +53,26 @@ export const ProjectsPanel = () => {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold">Проекты</h3>
-          <p className="text-muted-foreground text-sm">{projects.length} проектов</p>
+          <h3 className="text-lg font-semibold">{t('admin.projects.title')}</h3>
+          <p className="text-muted-foreground text-sm">{t('admin.projects.count', { count: projects.length })}</p>
         </div>
         <button
           onClick={() => setShowCreate(!showCreate)}
           className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700"
         >
           <Icon name="add" className="size-3.5" />
-          Создать
+          {t('admin.projects.create')}
         </button>
       </div>
 
       {showCreate && (
         <div className="bg-background rounded-lg border p-4 space-y-3">
-          <h4 className="font-medium text-sm">Новый проект</h4>
+          <h4 className="font-medium text-sm">{t('admin.projects.new')}</h4>
           <input
             type="text"
             value={name}
             onChange={(e) => { setName(e.target.value); setError('') }}
-            placeholder="Название проекта"
+            placeholder={t('admin.projects.namePlaceholder')}
             className="w-full px-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
           />
@@ -80,13 +82,13 @@ export const ProjectsPanel = () => {
               onClick={handleCreate}
               className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700"
             >
-              Создать
+              {t('admin.projects.create')}
             </button>
             <button
               onClick={() => { setShowCreate(false); setName(''); setError('') }}
               className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover"
             >
-              Отмена
+              {t('admin.projects.cancel')}
             </button>
           </div>
         </div>
@@ -103,7 +105,7 @@ export const ProjectsPanel = () => {
         </div>
       ) : projects.length === 0 ? (
         <div className="bg-background rounded-xl border p-8 text-center text-muted-foreground">
-          Нет проектов
+          {t('admin.projects.empty')}
         </div>
       ) : (
         <div className="space-y-2">
@@ -114,8 +116,8 @@ export const ProjectsPanel = () => {
                   <h4 className="font-medium text-sm truncate">{p.name}</h4>
                   <div className="flex gap-3 text-xs text-muted-foreground mt-1">
                     <code className="font-mono">{p.id.slice(0, 12)}...</code>
-                    <span>{Object.keys(p.members || {}).length} участников</span>
-                    <span>{p.status_messages?.length || 0} статусов</span>
+                    <span>{t('admin.projects.memberCount', { count: Object.keys(p.members || {}).length })}</span>
+                    <span>{t('admin.projects.statusCount', { count: p.status_messages?.length || 0 })}</span>
                   </div>
                   {p.description && (
                     <p className="text-xs text-muted-foreground mt-1">{p.description}</p>

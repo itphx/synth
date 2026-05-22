@@ -1,0 +1,13 @@
+{
+  "id": "developer",
+  "displayName": { "en": "Developer", "ru": "Разработчик" },
+  "description": {
+    "en": "Code development and refactoring",
+    "ru": "Разработка и рефакторинг кода"
+  },
+  "capabilities": ["file_read", "file_search", "file_write", "git_read", "git_write", "code_review"],
+  "icon": "code-s-slash",
+  "color": "--status-info",
+  "mode": "simple",
+  "contextFile": "DEVELOPER.md"
+}

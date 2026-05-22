@@ -21,6 +21,7 @@ export interface ContextBuilderOptions {
   profilesStore?: ProfileStore;
   projectDataDir?: string;
   debugCollector?: DebugCollector;
+  defaultLanguage?: string;
 }
 
 export class ContextBuilder {
@@ -28,12 +29,14 @@ export class ContextBuilder {
   private readonly _profiles?: ProfileStore;
   private readonly _projectDataDir?: string;
   private readonly _debug?: DebugCollector;
+  private readonly _defaultLanguage: string;
 
   constructor(config: ContextConfig, options?: ContextBuilderOptions) {
     this._config = config;
     this._profiles = options?.profilesStore;
     this._projectDataDir = options?.projectDataDir;
     this._debug = options?.debugCollector;
+    this._defaultLanguage = options?.defaultLanguage || 'ru';
   }
 
   async buildSystemPrompt(params: BuildSystemPromptParams): Promise<string> {
@@ -122,8 +125,8 @@ export class ContextBuilder {
     return result;
   }
 
-  private _getLanguage(userId?: string): string {
-    return 'ru';
+  private _getLanguage(_userId?: string): string {
+    return this._defaultLanguage;
   }
 
   private _debugAdd(key: string, data: Record<string, unknown>): void {

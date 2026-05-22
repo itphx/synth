@@ -24,6 +24,7 @@ import { createAgentRoutes } from './routes/agents.js';
 import { createContextRoutes } from './routes/context.js';
 import { createDebugRoutes } from './routes/debug.js';
 import { createUserRoutes } from './routes/users.js';
+import { t, getTranslations } from './lib/i18n.js';
 import { ProjectStore } from './storage/project-store.js';
 import { JsonStore } from './storage/json-store.js';
 
@@ -72,9 +73,15 @@ const queueManager = new QueueProcessorManager();
 
 // API-заглушки для UI
 app.get('/api/config/themes', (c) => c.json({ themes: [] }));
-app.get('/api/v2/i18n/current', (c) => c.json({ language: 'ru', locale: 'ru' }));
-app.get('/api/v2/i18n/translations/ru', (c) => c.json({}));
-app.get('/api/v2/i18n/translations/en', (c) => c.json({}));
+
+// i18n endpoints
+app.get('/api/v2/i18n/current', (c) => {
+  const header = c.req.header('Accept-Language');
+  const lang = header?.split(',')[0]?.trim()?.slice(0, 2) === 'en' ? 'en' : 'ru';
+  return c.json({ language: lang, locale: lang });
+});
+app.get('/api/v2/i18n/translations/ru', (c) => c.json(getTranslations('ru')));
+app.get('/api/v2/i18n/translations/en', (c) => c.json(getTranslations('en')));
 
 // Projects routes
 app.route('/api/v2/projects', createProjectRoutes(auth, projectStore));
@@ -112,7 +119,12 @@ app.route('/api/v2/admin/debug', createDebugRoutes(auth));
 
 // 404
 app.notFound((c) => {
-  return c.json({ error: { code: 'NOT_FOUND', message: `Не найдено: ${c.req.method} ${c.req.path}` } }, 404);
+  return c.json({
+    error: {
+      code: 'NOT_FOUND',
+      message: t('errors.notFound.route', { method: c.req.method, path: c.req.path }, c),
+    },
+  }, 404);
 });
 
 const port = parseInt(process.env.PORT || '5000', 10);

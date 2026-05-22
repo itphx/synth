@@ -1,0 +1,13 @@
+{
+  "id": "auditor",
+  "displayName": { "en": "Security Auditor", "ru": "Аудитор Безопасности" },
+  "description": {
+    "en": "Security audit and vulnerability assessment",
+    "ru": "Аудит безопасности и уязвимостей"
+  },
+  "capabilities": ["file_read", "code_review", "security_analysis"],
+  "icon": "shield-keyhole",
+  "color": "--status-success",
+  "mode": "orchestrator",
+  "contextFile": "AUDITOR.md"
+}

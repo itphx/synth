@@ -1,0 +1,13 @@
+{
+  "id": "devops",
+  "displayName": { "en": "DevOps Engineer", "ru": "DevOps Инженер" },
+  "description": {
+    "en": "Infrastructure, deployment, CI/CD",
+    "ru": "Инфраструктура, деплой, CI/CD"
+  },
+  "capabilities": ["file_read", "git_read", "deployment", "infrastructure"],
+  "icon": "server",
+  "color": "--status-info",
+  "mode": "orchestrator",
+  "contextFile": "DEVOPS.md"
+}

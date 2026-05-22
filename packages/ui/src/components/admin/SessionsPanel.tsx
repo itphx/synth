@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useI18n } from '@/lib/i18n'
 import { synthApi, type SessionData } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
@@ -11,6 +12,7 @@ const TSM_COLORS: Record<string, string> = {
 }
 
 export const SessionsPanel = () => {
+  const { t } = useI18n()
   const [sessions, setSessions] = useState<SessionData[]>([])
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -43,15 +45,15 @@ export const SessionsPanel = () => {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold">Сессии</h3>
-          <p className="text-muted-foreground text-sm">{sessions.length} сессий</p>
+          <h3 className="text-lg font-semibold">{t('admin.sessions.title')}</h3>
+          <p className="text-muted-foreground text-sm">{t('admin.sessions.count', { count: sessions.length })}</p>
         </div>
         <button
           onClick={load}
           className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
         >
           <Icon name="refresh" className="size-3.5" />
-          Обновить
+          {t('admin.sessions.refresh')}
         </button>
       </div>
 
@@ -66,7 +68,7 @@ export const SessionsPanel = () => {
         </div>
       ) : sessions.length === 0 ? (
         <div className="bg-background rounded-xl border p-8 text-center text-muted-foreground">
-          Нет сессий
+          {t('admin.sessions.empty')}
         </div>
       ) : (
         <div className="space-y-2">
@@ -95,12 +97,12 @@ export const SessionsPanel = () => {
                         </span>
                         {isBlocked && (
                           <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300">
-                            заблокирована
+                            {t('admin.sessions.blocked')}
                           </span>
                         )}
                       </div>
                       <div className="flex gap-3 text-xs text-muted-foreground mt-1">
-                        <span>{s.messages?.length || 0} сообщений</span>
+                        <span>{t('admin.sessions.messageCount', { count: s.messages?.length || 0 })}</span>
                         <span>IN: {s.input_tokens || 0}</span>
                         <span>OUT: {s.output_tokens || 0}</span>
                       </div>
@@ -112,14 +114,14 @@ export const SessionsPanel = () => {
                       onClick={() => setExpandedId(isExpanded ? null : s.id)}
                       className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover"
                     >
-                      {isExpanded ? 'Скрыть' : 'Детали'}
+                      {isExpanded ? t('admin.sessions.hide') : t('admin.sessions.details')}
                     </button>
                     {isBlocked && (
                       <button
                         onClick={() => handleUnlock(s.id)}
                         className="px-2 py-1 rounded text-xs bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900 dark:text-amber-300"
                       >
-                        Разблокировать
+                        {t('admin.sessions.unlock')}
                       </button>
                     )}
                   </div>
@@ -127,15 +129,15 @@ export const SessionsPanel = () => {
 
                 {isExpanded && (
                   <div className="border-t border-border px-4 py-3 bg-slate-50 dark:bg-slate-900 space-y-2 text-xs">
-                    <div><span className="text-muted-foreground">ID:</span> <code>{s.id}</code></div>
-                    <div><span className="text-muted-foreground">Движок:</span> {s.engine}</div>
-                    <div><span className="text-muted-foreground">Project:</span> {s.project_id || '—'}</div>
-                    <div><span className="text-muted-foreground">Создана:</span> {new Date(s.created_at).toLocaleString('ru')}</div>
-                    <div><span className="text-muted-foreground">Обновлена:</span> {new Date(s.updated_at).toLocaleString('ru')}</div>
-                    <div><span className="text-muted-foreground">Pending:</span> {s.pending_messages?.length || 0}</div>
+                    <div><span className="text-muted-foreground">{t('admin.sessions.id')}</span> <code>{s.id}</code></div>
+                    <div><span className="text-muted-foreground">{t('admin.sessions.engine')}</span> {s.engine}</div>
+                    <div><span className="text-muted-foreground">{t('admin.sessions.project')}</span> {s.project_id || '—'}</div>
+                    <div><span className="text-muted-foreground">{t('admin.sessions.created')}</span> {new Date(s.created_at).toLocaleString('ru')}</div>
+                    <div><span className="text-muted-foreground">{t('admin.sessions.updated')}</span> {new Date(s.updated_at).toLocaleString('ru')}</div>
+                    <div><span className="text-muted-foreground">{t('admin.sessions.pending')}</span> {s.pending_messages?.length || 0}</div>
                     {isBlocked && (
                       <div className="text-red-600 dark:text-red-400">
-                        <span className="text-muted-foreground">Заблокирована:</span> {s.status.blocked}
+                        <span className="text-muted-foreground">{t('admin.sessions.blockedStatus')}</span> {s.status.blocked}
                       </div>
                     )}
                   </div>

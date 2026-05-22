@@ -72,7 +72,7 @@ export function SessionSettingsTab() {
         setSaving(false)
       }
     } else {
-      notify({ text: 'Сессия не загружена', type: 'warning', category: 'error', sessionId: sessionId || undefined })
+      notify({ text: t('sessionSettings.notLoaded'), type: 'warning', category: 'error', sessionId: sessionId || undefined })
     }
   }
 

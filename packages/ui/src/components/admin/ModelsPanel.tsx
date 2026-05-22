@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { synthApi, type ModelGroup, type ModelInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/lib/i18n'
 import { ProviderIcon } from './ProviderIcon'
 
 type EditingPrices = Record<string, {
@@ -12,6 +13,7 @@ type EditingPrices = Record<string, {
 }>
 
 export const ModelsPanel = () => {
+  const { t } = useI18n()
   const [groups, setGroups] = useState<ModelGroup[]>([])
   const [loading, setLoading] = useState(true)
   const [filterProvider, setFilterProvider] = useState('')
@@ -54,16 +56,16 @@ export const ModelsPanel = () => {
       const data = await synthApi.fetchJSON<{ fetched: number; new: number; enriched: number; errors?: string[] }>(
         url, { method: 'POST' },
       )
-      const parts = [`Синхронизировано ${data.fetched} моделей`]
-      if (data.new > 0) parts.push(`${data.new} новых`)
-      if (data.enriched > 0) parts.push(`${data.enriched} обогащено`)
+        const parts = [t('admin.models.syncResult', { fetched: data.fetched })]
+        if (data.new > 0) parts.push(t('admin.models.newModels', { count: data.new }))
+        if (data.enriched > 0) parts.push(t('admin.models.enriched', { count: data.enriched }))
       setFetchMsg(parts.join(', '))
       if (data.errors?.length) {
         setFetchError(data.errors.join('; '))
       }
       await load()
     } catch (err) {
-      setFetchError(err instanceof Error ? err.message : 'Ошибка синхронизации')
+        setFetchError(err instanceof Error ? err.message : t('admin.models.syncError'))
     } finally {
       setFetching(null)
     }
@@ -188,7 +190,7 @@ export const ModelsPanel = () => {
   }
 
   const handleDelete = async (modelId: string) => {
-    if (!confirm(`Удалить модель «${modelId}»?`)) return
+    if (!confirm(t('admin.models.confirmDelete', { id: modelId }))) return
     try {
       await synthApi.fetchJSON(`/api/v2/models/${encodeURIComponent(modelId)}`, { method: 'DELETE' })
       await load()
@@ -198,7 +200,7 @@ export const ModelsPanel = () => {
   const handleAddModel = async () => {
     setAddError('')
     if (!addProvider || !addName.trim()) {
-      setAddError('Выберите провайдера и введите название модели')
+      setAddError(t('admin.models.selectProviderAndName'))
       return
     }
     setAddSaving(true)
@@ -228,7 +230,7 @@ export const ModelsPanel = () => {
       setAddOutPrice('')
       await load()
     } catch (err) {
-      setAddError(err instanceof Error ? err.message : 'Ошибка создания')
+      setAddError(err instanceof Error ? err.message : t('admin.models.createError'))
     } finally {
       setAddSaving(false)
     }
@@ -267,9 +269,9 @@ export const ModelsPanel = () => {
       {/* Заголовок */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold">Модели</h3>
+          <h3 className="text-lg font-semibold">{t('admin.models.title')}</h3>
           <p className="text-muted-foreground text-sm">
-            {visibleCount} / {totalModels} моделей в {enabledProviders.length} провайдерах
+            {t('admin.models.count', { visible: visibleCount, total: totalModels, providers: enabledProviders.length })}
           </p>
         </div>
         <div className="flex gap-2">
@@ -279,7 +281,7 @@ export const ModelsPanel = () => {
             className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
           >
             <Icon name="refresh" className={cn("size-3.5", fetching === 'all' && "animate-spin")} />
-            Синхронизировать всё
+            {t('admin.models.syncAll')}
           </button>
         </div>
       </div>
@@ -303,7 +305,7 @@ export const ModelsPanel = () => {
           onChange={(e) => setFilterProvider(e.target.value)}
           className="px-3 py-1.5 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
         >
-          <option value="">Все провайдеры</option>
+          <option value="">{t('admin.models.allProviders')}</option>
           {allProviders.map((p) => (
             <option key={p} value={p}>{p}</option>
           ))}
@@ -314,21 +316,21 @@ export const ModelsPanel = () => {
             checked={onlyEnabled}
             onChange={(e) => setOnlyEnabled(e.target.checked)}
           />
-          Только включённые
+          {t('admin.models.onlyEnabled')}
         </label>
         <button
           onClick={() => setShowAddForm(true)}
           className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border border-dashed hover:border-solid hover:bg-muted transition-colors"
         >
           <Icon name="add" className="size-3.5" />
-          Добавить модель
+          {t('admin.models.add')}
         </button>
       </div>
 
       {/* Форма добавления */}
       {showAddForm && (
         <div className="bg-background rounded-lg border p-4 space-y-3">
-          <div className="text-sm font-medium">Добавить модель вручную</div>
+          <div className="text-sm font-medium">{t('admin.models.addManual')}</div>
           {addError && (
             <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded p-2 text-xs text-red-700 dark:text-red-300">
               {addError}
@@ -336,7 +338,7 @@ export const ModelsPanel = () => {
           )}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div>
-              <label className="text-[11px] text-muted-foreground block mb-1">Провайдер</label>
+              <label className="text-[11px] text-muted-foreground block mb-1">{t('admin.models.provider')}</label>
               <select
                 value={addProvider}
                 onChange={(e) => setAddProvider(e.target.value)}
@@ -349,7 +351,7 @@ export const ModelsPanel = () => {
               </select>
             </div>
             <div>
-              <label className="text-[11px] text-muted-foreground block mb-1">Название</label>
+              <label className="text-[11px] text-muted-foreground block mb-1">{t('admin.models.name')}</label>
               <input
                 type="text"
                 value={addName}
@@ -360,7 +362,7 @@ export const ModelsPanel = () => {
               />
             </div>
             <div>
-              <label className="text-[11px] text-muted-foreground block mb-1">Контекст (K)</label>
+              <label className="text-[11px] text-muted-foreground block mb-1">{t('admin.models.contextK')}</label>
               <input
                 type="number"
                 value={addCtx}
@@ -373,7 +375,7 @@ export const ModelsPanel = () => {
             </div>
             <div className="grid grid-cols-2 gap-1">
               <div>
-                <label className="text-[11px] text-muted-foreground block mb-1">$ in/1M</label>
+                <label className="text-[11px] text-muted-foreground block mb-1">{t('admin.models.priceIn')}</label>
                 <input
                   type="number"
                   value={addInPrice}
@@ -385,7 +387,7 @@ export const ModelsPanel = () => {
                 />
               </div>
               <div>
-                <label className="text-[11px] text-muted-foreground block mb-1">$ out/1M</label>
+                <label className="text-[11px] text-muted-foreground block mb-1">{t('admin.models.priceOut')}</label>
                 <input
                   type="number"
                   value={addOutPrice}
@@ -404,13 +406,13 @@ export const ModelsPanel = () => {
               disabled={addSaving}
               className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
             >
-              {addSaving ? '...' : 'Добавить'}
+              {addSaving ? '...' : t('admin.models.addButton')}
             </button>
             <button
               onClick={() => { setShowAddForm(false); setAddError('') }}
               className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-muted"
             >
-              Отмена
+              {t('admin.models.cancel')}
             </button>
           </div>
         </div>
@@ -432,7 +434,7 @@ export const ModelsPanel = () => {
         </div>
       ) : filteredGroups.length === 0 ? (
         <div className="bg-background rounded-xl border p-8 text-center text-muted-foreground">
-          Нет моделей. Нажмите «Синхронизировать всё» для загрузки.
+          {t('admin.models.empty')}
         </div>
       ) : (
         <div className="space-y-2">
@@ -458,11 +460,11 @@ export const ModelsPanel = () => {
                   />
                   <span className="font-medium text-sm">{group.provider.name}</span>
                   <span className="text-xs text-muted-foreground">
-                    ({group.models.length} моделей)
+                    {t('admin.models.modelsCount', { count: group.models.length })}
                   </span>
                   {group.provider.defaultModel && (
                     <span className="text-xs text-muted-foreground ml-auto mr-2">
-                      по умолчанию: <span className="font-medium text-foreground">{group.provider.defaultModel}</span>
+                      {t('admin.models.defaultModel', { model: group.provider.defaultModel })}
                     </span>
                   )}
                   <button
@@ -474,7 +476,7 @@ export const ModelsPanel = () => {
                       name="refresh"
                       className={cn("size-3", fetching === group.provider.name && "animate-spin")}
                     />
-                    Обновить
+                    {t('admin.models.refresh')}
                   </button>
                 </div>
 
@@ -483,17 +485,17 @@ export const ModelsPanel = () => {
                   <div>
                     {/* Шапка таблицы */}
                     <div className="grid grid-cols-[1fr_80px_140px_70px_40px_32px] gap-2 px-4 py-2 text-[11px] font-medium text-muted-foreground border-b">
-                      <span className="pl-1">Модель</span>
-                      <span className="text-center">Контекст</span>
-                      <span className="text-center">Цены ($/1M)</span>
-                      <span className="text-center">Вкл</span>
-                      <span className="text-center">★</span>
+                      <span className="pl-1">{t('admin.models.model')}</span>
+                      <span className="text-center">{t('admin.models.context')}</span>
+                      <span className="text-center">{t('admin.models.prices')}</span>
+                      <span className="text-center">{t('admin.models.enabledCol')}</span>
+                      <span className="text-center">{t('admin.models.defaultCol')}</span>
                       <span />
                     </div>
 
                     {group.models.length === 0 ? (
                       <div className="px-4 py-3 text-sm text-muted-foreground">
-                        Нет моделей, удовлетворяющих фильтру
+                        {t('admin.models.filterEmpty')}
                       </div>
                     ) : (
                       group.models.map((model) => {
@@ -531,7 +533,16 @@ export const ModelsPanel = () => {
                                   model.context_source === 'reference' && "italic text-muted-foreground italic",
                                 )}
                                 title={model.context_window
-                                  ? `${(model.context_window / 1000).toFixed(0)}K токенов${model.context_source === 'reference' ? ' (справочник)' : model.context_source === 'api' ? ' (API)' : model.context_source === 'manual' ? ' (вручную)' : ''}`
+                                  ? t('admin.models.contextTitle', {
+                                      k: (model.context_window / 1000).toFixed(0),
+                                      source: model.context_source === 'reference'
+                                        ? t('admin.models.contextRef')
+                                        : model.context_source === 'api'
+                                          ? t('admin.models.contextApi')
+                                          : model.context_source === 'manual'
+                                            ? t('admin.models.contextManual')
+                                            : '',
+                                    })
                                   : ''}
                               />
                             </div>
@@ -547,7 +558,7 @@ export const ModelsPanel = () => {
                                 onChange={(e) => updatePriceField(model.id, 'inputPrice', e.target.value)}
                                 onFocus={() => !editing && startEditPrice(model)}
                                 className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-ring"
-                                title="Входная цена $/1M токенов"
+                                title={t('admin.models.priceInTitle')}
                               />
                               <input
                                 type="number"
@@ -558,7 +569,7 @@ export const ModelsPanel = () => {
                                 onChange={(e) => updatePriceField(model.id, 'outputPrice', e.target.value)}
                                 onFocus={() => !editing && startEditPrice(model)}
                                 className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-ring"
-                                title="Выходная цена $/1M токенов"
+                                title={t('admin.models.priceOutTitle')}
                               />
                               <input
                                 type="number"
@@ -569,7 +580,7 @@ export const ModelsPanel = () => {
                                 onChange={(e) => updatePriceField(model.id, 'cacheReadPrice', e.target.value)}
                                 onFocus={() => !editing && startEditPrice(model)}
                                 className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-ring"
-                                title="Цена чтения кэша $/1M токенов"
+                                title={t('admin.models.priceCrTitle')}
                               />
                               <input
                                 type="number"
@@ -580,7 +591,7 @@ export const ModelsPanel = () => {
                                 onChange={(e) => updatePriceField(model.id, 'cacheWritePrice', e.target.value)}
                                 onFocus={() => !editing && startEditPrice(model)}
                                 className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-ring"
-                                title="Цена записи кэша $/1M токенов"
+                                title={t('admin.models.priceCwTitle')}
                               />
                             </div>
 
@@ -594,9 +605,9 @@ export const ModelsPanel = () => {
                                     ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900 dark:text-emerald-300'
                                     : 'bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400'
                                 )}
-                                title={model.enabled ? 'Выключить модель' : 'Включить модель'}
+                                title={model.enabled ? t('admin.models.disableModel') : t('admin.models.enableModel')}
                               >
-                                {model.enabled ? 'ВКЛ' : 'ВЫКЛ'}
+                                {model.enabled ? t('common.on').toUpperCase() : t('common.off').toUpperCase()}
                               </button>
                             </div>
 
@@ -610,7 +621,7 @@ export const ModelsPanel = () => {
                                     ? 'text-amber-500 hover:text-amber-600'
                                     : 'text-muted-foreground/30 hover:text-amber-400'
                                 )}
-                                title={model.isDefault ? 'Модель по умолчанию' : 'Сделать моделью по умолчанию'}
+                                title={model.isDefault ? t('admin.models.defaultModelTitle') : t('admin.models.makeDefault')}
                               >
                                 <Icon name={model.isDefault ? 'star-fill' : 'star'} className="size-3.5" />
                               </button>
@@ -621,7 +632,7 @@ export const ModelsPanel = () => {
                               <button
                                 onClick={() => handleDelete(model.id)}
                                 className="p-0.5 rounded text-muted-foreground/40 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"
-                                title="Удалить модель"
+                                title={t('admin.models.deleteModel')}
                               >
                                 <Icon name="delete-bin" className="size-3.5" />
                               </button>

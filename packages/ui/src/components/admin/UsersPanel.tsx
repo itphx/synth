@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { synthApi, type UserInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/lib/i18n'
 
 const ROLE_COLORS: Record<string, string> = {
   ADMIN: 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300',
@@ -37,6 +38,7 @@ function buildForm(u: UserInfo): UserForm {
 }
 
 export const UsersPanel = () => {
+  const { t } = useI18n()
   const [users, setUsers] = useState<UserInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -52,7 +54,7 @@ export const UsersPanel = () => {
       const data = await synthApi.getUsers()
       setUsers(data.users || [])
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка загрузки пользователей')
+      setError(err instanceof Error ? err.message : t('admin.users.loadError'))
     } finally {
       setLoading(false)
     }
@@ -85,7 +87,7 @@ export const UsersPanel = () => {
   }
 
   const handleSave = async () => {
-    if (!form.username.trim()) { setError('Имя пользователя обязательно'); return }
+    if (!form.username.trim()) { setError(t('admin.users.nameRequired')); return }
     setSaving(true)
     setError('')
     try {
@@ -106,7 +108,7 @@ export const UsersPanel = () => {
       setCreating(false)
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка сохранения')
+      setError(err instanceof Error ? err.message : t('admin.users.saveError'))
     } finally {
       setSaving(false)
     }
@@ -120,7 +122,7 @@ export const UsersPanel = () => {
   }
 
   const handleDelete = async (u: UserInfo) => {
-    if (!confirm(`Удалить пользователя «${u.username}»?`)) return
+    if (!confirm(t('admin.users.confirmDelete', { username: u.username }))) return
     try {
       await synthApi.deleteUser(u.id)
       await load()
@@ -139,12 +141,12 @@ export const UsersPanel = () => {
   const renderForm = () => (
     <div className="bg-background rounded-lg border p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <h4 className="font-medium text-sm">{expanded ? `Изменить: ${form.username}»` : 'Новый пользователь'}</h4>
+        <h4 className="font-medium text-sm">{expanded ? t('admin.users.editUser', { username: form.username }) : t('admin.users.newUser')}</h4>
         <div className="flex gap-2">
           <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
-            {saving ? 'Сохранение...' : 'Сохранить'}
+            {saving ? t('admin.users.saving') : t('admin.users.save')}
           </button>
-          <button onClick={handleCancel} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">Отмена</button>
+          <button onClick={handleCancel} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.users.cancel')}</button>
         </div>
       </div>
 
@@ -152,20 +154,20 @@ export const UsersPanel = () => {
 
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="text-xs text-muted-foreground">Имя пользователя</label>
+          <label className="text-xs text-muted-foreground">{t('admin.users.username')}</label>
           <input type="text" value={form.username}
             onChange={(e) => setForm({ ...form, username: e.target.value })}
             disabled={!!expanded}
             className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" />
         </div>
         <div>
-          <label className="text-xs text-muted-foreground">Отображаемое имя</label>
+          <label className="text-xs text-muted-foreground">{t('admin.users.displayName')}</label>
           <input type="text" value={form.display_name}
             onChange={(e) => setForm({ ...form, display_name: e.target.value })}
             className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
         </div>
         <div className="col-span-2">
-          <label className="text-xs text-muted-foreground">Email</label>
+          <label className="text-xs text-muted-foreground">{t('admin.users.email')}</label>
           <input type="email" value={form.email}
             onChange={(e) => setForm({ ...form, email: e.target.value })}
             className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
@@ -173,7 +175,7 @@ export const UsersPanel = () => {
       </div>
 
       <div>
-        <label className="text-xs text-muted-foreground mb-1 block">Роли</label>
+        <label className="text-xs text-muted-foreground mb-1 block">{t('admin.users.roles')}</label>
         <div className="flex flex-wrap gap-1.5">
           {ROLES.map((role) => (
             <button key={role} type="button" onClick={() => toggleRole(role)} className={cn(
@@ -190,11 +192,11 @@ export const UsersPanel = () => {
         <input type="checkbox" checked={form.is_active}
           onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
           className="rounded" />
-        <span className="text-sm">Активен</span>
+        <span className="text-sm">{t('admin.users.active')}</span>
       </label>
 
       <div>
-        <label className="text-xs text-muted-foreground mb-1 block">Заметки</label>
+        <label className="text-xs text-muted-foreground mb-1 block">{t('admin.users.notes')}</label>
         <textarea value={form.notes}
           onChange={(e) => setForm({ ...form, notes: e.target.value })}
           rows={3}
@@ -207,11 +209,11 @@ export const UsersPanel = () => {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold">Пользователи</h3>
-          <p className="text-muted-foreground text-sm">{users.length} пользователей</p>
+          <h3 className="text-lg font-semibold">{t('admin.users.title')}</h3>
+          <p className="text-muted-foreground text-sm">{t('admin.users.count', { count: users.length })}</p>
         </div>
         <button onClick={handleCreate} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">
-          <Icon name="add" className="size-3.5" />Добавить
+          <Icon name="add" className="size-3.5" />{t('admin.users.add')}
         </button>
       </div>
 
@@ -233,7 +235,7 @@ export const UsersPanel = () => {
         </div>
       ) : users.length === 0 ? (
         <div className="bg-background rounded-xl border p-8 text-center text-muted-foreground">
-          Нет пользователей
+          {t('admin.users.empty')}
         </div>
       ) : (
         <div className="space-y-2">
@@ -271,7 +273,7 @@ export const UsersPanel = () => {
 
                 <div className="flex flex-wrap gap-1 mb-2">
                   {u.roles.length === 0 && (
-                    <span className="text-[10px] text-muted-foreground">нет ролей</span>
+                    <span className="text-[10px] text-muted-foreground">{t('admin.users.noRoles')}</span>
                   )}
                   {u.roles.map((r) => (
                     <span key={r} className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium', ROLE_COLORS[r] || 'bg-slate-100 text-slate-600')}>
@@ -280,14 +282,14 @@ export const UsersPanel = () => {
                   ))}
                   {u.last_login && (
                     <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
-                      был: {new Date(u.last_login).toLocaleDateString('ru')}
+                      {t('admin.users.wasLastLogin', { date: new Date(u.last_login).toLocaleDateString('ru') })}
                     </span>
                   )}
                 </div>
 
                 <div className="flex gap-1">
-                  <button onClick={() => handleEdit(u)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">Изменить</button>
-                  <button onClick={() => handleDelete(u)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950">Удалить</button>
+                  <button onClick={() => handleEdit(u)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.users.edit')}</button>
+                  <button onClick={() => handleDelete(u)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950">{t('admin.users.delete')}</button>
                 </div>
               </div>
             </div>

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import { getAllGroups, setAllGroups, LOG_LEVEL_NAMES } from '@synth/core';
+import { t } from '../lib/i18n.js';
 
 export function createDebugRoutes(kit: AuthKit): Hono {
   const app = new Hono();
@@ -17,7 +18,7 @@ export function createDebugRoutes(kit: AuthKit): Hono {
   app.post('/config', kit.requireAdmin, async (c) => {
     const body = await c.req.json<{ groups?: Record<string, string> }>().catch(() => ({ groups: undefined }));
     if (!body.groups) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'groups обязательны' } }, 400);
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.groupsRequired', undefined, c) } }, 400);
     }
 
     try {
@@ -25,7 +26,7 @@ export function createDebugRoutes(kit: AuthKit): Hono {
       return c.json({ status: 'saved' });
     } catch (err) {
       return c.json({
-        error: { code: 'VALIDATION_ERROR', message: err instanceof Error ? err.message : 'Ошибка' },
+        error: { code: 'VALIDATION_ERROR', message: err instanceof Error ? err.message : t('errors.generic', undefined, c) },
       }, 400);
     }
   });

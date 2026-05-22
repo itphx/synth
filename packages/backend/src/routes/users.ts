@@ -3,6 +3,7 @@ import type { AuthKit } from '../auth/middleware.js';
 import type { ProfileStore, ProfileData } from '@synth/shared';
 import { nowISO } from '@synth/shared';
 import { randomUUID } from 'node:crypto';
+import { t } from '../lib/i18n.js';
 
 export function createUserRoutes(kit: AuthKit, profiles: ProfileStore): Hono {
   const app = new Hono();
@@ -33,7 +34,7 @@ export function createUserRoutes(kit: AuthKit, profiles: ProfileStore): Hono {
     const id = c.req.param('id');
     const p = await profiles.loadProfile(id);
     if (!p) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Пользователь не найден' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.user', undefined, c) } }, 404);
     }
     return c.json({
       id: p.id,
@@ -55,18 +56,18 @@ export function createUserRoutes(kit: AuthKit, profiles: ProfileStore): Hono {
     const body = await c.req.json().catch(() => ({}));
     const username = body.username?.trim();
     if (!username) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'username обязателен' } }, 400);
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.usernameRequired', undefined, c) } }, 400);
     }
 
     const existing = await profiles.getProfileByUsername(username);
     if (existing) {
-      return c.json({ error: { code: 'CONFLICT', message: 'Пользователь с таким именем уже существует' } }, 409);
+      return c.json({ error: { code: 'CONFLICT', message: t('errors.conflict.usernameExists', undefined, c) } }, 409);
     }
 
     if (body.email) {
       const byEmail = await profiles.getProfileByEmail(body.email);
       if (byEmail) {
-        return c.json({ error: { code: 'CONFLICT', message: 'Пользователь с таким email уже существует' } }, 409);
+        return c.json({ error: { code: 'CONFLICT', message: t('errors.conflict.emailExists', undefined, c) } }, 409);
       }
     }
 
@@ -96,19 +97,19 @@ export function createUserRoutes(kit: AuthKit, profiles: ProfileStore): Hono {
     const p = await profiles.loadProfile(id);
 
     if (!p) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Пользователь не найден' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.user', undefined, c) } }, 404);
     }
 
     if (body.username !== undefined && body.username !== p.username) {
       const byUser = await profiles.getProfileByUsername(body.username);
       if (byUser && byUser.id !== id) {
-        return c.json({ error: { code: 'CONFLICT', message: 'Имя занято' } }, 409);
+        return c.json({ error: { code: 'CONFLICT', message: t('errors.conflict.usernameTaken', undefined, c) } }, 409);
       }
     }
     if (body.email !== undefined && body.email !== p.email) {
       const byEmail = await profiles.getProfileByEmail(body.email);
       if (byEmail && byEmail.id !== id) {
-        return c.json({ error: { code: 'CONFLICT', message: 'Email занят' } }, 409);
+        return c.json({ error: { code: 'CONFLICT', message: t('errors.conflict.emailTaken', undefined, c) } }, 409);
       }
     }
 
@@ -131,7 +132,7 @@ export function createUserRoutes(kit: AuthKit, profiles: ProfileStore): Hono {
     const id = c.req.param('id');
     const deleted = await profiles.deleteProfile(id);
     if (!deleted) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Пользователь не найден' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.user', undefined, c) } }, 404);
     }
     return c.json({ status: 'deleted' });
   });

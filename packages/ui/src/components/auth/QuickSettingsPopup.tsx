@@ -63,9 +63,9 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
   }
 
   const themeOptions: Array<{ value: 'system' | 'light' | 'dark'; label: string; title: string }> = [
-    { value: 'system', label: t('settings.appearance.themeMode.system'), title: 'Автоматическая' },
-    { value: 'light', label: t('settings.appearance.themeMode.light'), title: 'Светлая' },
-    { value: 'dark', label: t('settings.appearance.themeMode.dark'), title: 'Тёмная' },
+    { value: 'system', label: t('settings.appearance.themeMode.system'), title: t('settings.appearance.themeMode.system') },
+    { value: 'light', label: t('settings.appearance.themeMode.light'), title: t('settings.appearance.themeMode.light') },
+    { value: 'dark', label: t('settings.appearance.themeMode.dark'), title: t('settings.appearance.themeMode.dark') },
   ]
 
   return (
@@ -190,7 +190,7 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
                 )}
               >
                 <Icon name="admin" className="size-4" />
-                Администрирование
+                {t('auth.admin')}
               </button>
             )}
             <button

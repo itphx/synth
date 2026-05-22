@@ -1,6 +1,7 @@
 import type { AuthConfig, User } from '@synth/shared';
 import { createMiddleware } from 'hono/factory';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
+import { t } from '../lib/i18n.js';
 
 const SESSION_COOKIE = 'user_session';
 
@@ -85,7 +86,7 @@ export function createAuthMiddleware(config: AuthConfig) {
   const requireAuth = createMiddleware(async (c, next) => {
     const user = getCurrentUser(c);
     if (!user) {
-      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Требуется аутентификация' } }, 401);
+      return c.json({ error: { code: 'UNAUTHORIZED', message: t('auth.unauthorized', undefined, c) } }, 401);
     }
     c.set('user', user);
     await next();
@@ -95,7 +96,7 @@ export function createAuthMiddleware(config: AuthConfig) {
   const requireAdmin = createMiddleware(async (c, next) => {
     const user = c.get('user') as User | undefined;
     if (!user || !user.roles.includes('ADMIN')) {
-      return c.json({ error: { code: 'FORBIDDEN', message: 'Доступ запрещён' } }, 403);
+      return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
     }
     await next();
   });

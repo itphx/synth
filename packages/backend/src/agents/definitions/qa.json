@@ -1,0 +1,13 @@
+{
+  "id": "qa",
+  "displayName": { "en": "QA Engineer", "ru": "QA Инженер" },
+  "description": {
+    "en": "Testing and quality assurance",
+    "ru": "Тестирование и контроль качества"
+  },
+  "capabilities": ["file_read", "testing", "code_review"],
+  "icon": "test-tube",
+  "color": "--chart-4",
+  "mode": "orchestrator",
+  "contextFile": "QA.md"
+}

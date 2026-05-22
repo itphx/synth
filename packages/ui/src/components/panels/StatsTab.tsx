@@ -76,7 +76,7 @@ export const StatsTab: React.FC = () => {
       {activeSessionId && (
         <div>
           <h4 className="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wide">
-            Активная сессия
+            {t('rightPanel.stats.activeSession')}
           </h4>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <span className="flex items-center gap-1">

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/lib/i18n'
 
 interface ContextFileItem {
   name: string
@@ -19,13 +20,21 @@ interface EditFileState {
 }
 
 const CATEGORIES = [
-  { id: 'user', label: 'Пользовательские' },
-  { id: 'role', label: 'Роли' },
-  { id: 'system', label: 'Системные' },
-  { id: 'tsm', label: 'TSM' },
+  { id: 'user' },
+  { id: 'role' },
+  { id: 'system' },
+  { id: 'tsm' },
 ] as const
 
+const CATEGORY_LABEL_KEYS: Record<string, string> = {
+  user: 'admin.context.userFiles',
+  role: 'admin.context.rolesFiles',
+  system: 'admin.context.systemFiles',
+  tsm: 'admin.context.tsmFiles',
+}
+
 export const ContextPanel = () => {
+  const { t } = useI18n()
   const [files, setFiles] = useState<ContextFileItem[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('user')
@@ -85,7 +94,7 @@ export const ContextPanel = () => {
         body: JSON.stringify({ content: editFile.content, category: editFile.category }),
       })
       setEditFile(null)
-      setStatus('Сохранено')
+      setStatus(t('admin.context.saved'))
       setTimeout(() => setStatus(null), 1500)
       await load()
     } catch { /* ignore */ }
@@ -101,13 +110,13 @@ export const ContextPanel = () => {
       setShowCreate(false)
       setNewFile({ name: '', content: '', category: 'user' })
       if (newFile.category === activeTab) await load()
-      setStatus('Файл создан')
+      setStatus(t('admin.context.fileCreated'))
       setTimeout(() => setStatus(null), 1500)
     } catch { /* ignore */ }
   }
 
   const handleDelete = async (name: string, category: string) => {
-    if (!confirm(`Удалить файл «${name}»?`)) return
+    if (!confirm(t('admin.context.confirmDelete', { name }))) return
     try {
       await synthApi.fetchJSON(
         `/api/v2/context/files/${encodeURIComponent(name)}?category=${encodeURIComponent(category)}`,
@@ -118,14 +127,14 @@ export const ContextPanel = () => {
   }
 
   const handleRestore = async (name: string, category: string) => {
-    if (!confirm(`Сбросить «${name}» к системному значению?`)) return
+    if (!confirm(t('admin.context.confirmReset', { name }))) return
     try {
       await synthApi.fetchJSON(
         `/api/v2/context/files/${encodeURIComponent(name)}/restore_to_default?category=${encodeURIComponent(category)}`,
         { method: 'POST' },
       )
       await load()
-      setStatus('Восстановлен системный вариант')
+      setStatus(t('admin.context.restoredSystem'))
       setTimeout(() => setStatus(null), 1500)
     } catch { /* ignore */ }
   }
@@ -136,11 +145,14 @@ export const ContextPanel = () => {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold">Контекст</h3>
-          <p className="text-muted-foreground text-sm">{filtered.length} файлов{status && <span className="ml-2 text-blue-600">— {status}</span>}</p>
+          <h3 className="text-lg font-semibold">{t('admin.context.title')}</h3>
+          <p className="text-muted-foreground text-sm">
+            {t('admin.context.count', { count: filtered.length, status: '' })}
+            {status && <span className="ml-2 text-blue-600">— {status}</span>}
+          </p>
         </div>
         <button onClick={() => setShowCreate(!showCreate)} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">
-          <Icon name="add" className="size-3.5" />Добавить
+          <Icon name="add" className="size-3.5" />{t('admin.context.add')}
         </button>
       </div>
 
@@ -156,42 +168,42 @@ export const ContextPanel = () => {
                 : "text-muted-foreground hover:text-foreground"
             )}
           >
-            {cat.label}
+            {t(CATEGORY_LABEL_KEYS[cat.id])}
           </button>
         ))}
       </div>
 
       {showCreate && (
         <div className="bg-background rounded-lg border p-4 space-y-3">
-          <h4 className="font-medium text-sm">Новый файл</h4>
+          <h4 className="font-medium text-sm">{t('admin.context.newFile')}</h4>
           <div>
-            <label className="text-xs text-muted-foreground">Имя файла</label>
+            <label className="text-xs text-muted-foreground">{t('admin.context.fileName')}</label>
             <input type="text" value={newFile.name} onChange={e => setNewFile({ ...newFile, name: e.target.value })}
               placeholder="ABOUT.md"
               className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground">Содержимое</label>
+            <label className="text-xs text-muted-foreground">{t('admin.context.content')}</label>
             <textarea value={newFile.content} onChange={e => setNewFile({ ...newFile, content: e.target.value })}
               rows={4}
               className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring font-mono" />
           </div>
           <div className="flex gap-2">
-            <button onClick={handleCreate} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">Создать</button>
-            <button onClick={() => setShowCreate(false)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">Отмена</button>
+            <button onClick={handleCreate} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">{t('admin.context.create')}</button>
+            <button onClick={() => setShowCreate(false)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.context.cancel')}</button>
           </div>
         </div>
       )}
 
       {editFile && (
         <div className="bg-background rounded-lg border p-4 space-y-3">
-          <h4 className="font-medium text-sm">Редактирование: {editFile.name} <span className="text-xs text-muted-foreground">({CATEGORIES.find(c => c.id === editFile.category)?.label || editFile.category})</span></h4>
+          <h4 className="font-medium text-sm">{t('admin.context.editing', { name: editFile.name })} <span className="text-xs text-muted-foreground">({t(CATEGORY_LABEL_KEYS[editFile.category] || editFile.category)})</span></h4>
           <textarea value={editFile.content} onChange={e => setEditFile({ ...editFile, content: e.target.value })}
             rows={8}
             className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring font-mono" />
           <div className="flex gap-2">
-            <button onClick={handleSave} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">Сохранить</button>
-            <button onClick={() => setEditFile(null)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">Отмена</button>
+            <button onClick={handleSave} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">{t('admin.context.save')}</button>
+            <button onClick={() => setEditFile(null)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.context.cancel')}</button>
           </div>
         </div>
       )}
@@ -200,7 +212,7 @@ export const ContextPanel = () => {
         <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="bg-background rounded-lg border p-3 animate-pulse"><div className="h-4 bg-muted rounded w-48" /></div>)}</div>
       ) : filtered.length === 0 ? (
         <div className="bg-background rounded-xl border p-8 text-center text-muted-foreground">
-          Нет файлов в категории «{CATEGORIES.find(c => c.id === activeTab)?.label}». Добавьте новый файл.
+          {t('admin.context.empty', { category: t(CATEGORY_LABEL_KEYS[activeTab] || activeTab) })}
         </div>
       ) : (
         <div className="space-y-1">
@@ -217,21 +229,21 @@ export const ContextPanel = () => {
                 <span className="text-sm font-medium">{f.name}</span>
                 {f.is_overridden && (
                   <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300">
-                    изменён
+                    {t('admin.context.modified')}
                   </span>
                 )}
                 {f.is_system && (
                   <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
-                    системный
+                    {t('admin.context.system')}
                   </span>
                 )}
                 <span className="text-xs text-muted-foreground">{f.size} B</span>
               </div>
               <div className="flex gap-1">
-                <button onClick={() => handleEdit(f.name, f.category)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">Изменить</button>
+                <button onClick={() => handleEdit(f.name, f.category)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.context.edit')}</button>
                 {f.is_overridden && (
                   <button onClick={() => handleRestore(f.name, f.category)} className="px-2 py-1 rounded text-xs text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950">
-                    Сбросить
+                    {t('admin.context.reset')}
                   </button>
                 )}
                 {f.category === 'user' && (

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { synthApi, type ProviderInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/lib/i18n'
 import { ProviderIcon, PROVIDER_RI_ICONS, PROVIDER_BRAND_NAMES } from './ProviderIcon'
 
 interface FetchIconResult {
@@ -27,6 +28,7 @@ const IconPickerSection = ({ title, children }: { title: string; children: React
 }
 
 export const ProvidersPanel = () => {
+  const { t } = useI18n()
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -69,7 +71,7 @@ export const ProvidersPanel = () => {
   const handleEdit = (p: ProviderInfo) => resetForm(p)
 
   const handleSave = async () => {
-    if (!form.name.trim()) { setError('Название обязательно'); return }
+    if (!form.name.trim()) { setError(t('common.nameRequired')); return }
     try {
       const body: Record<string, unknown> = {
         name: form.name.trim(),
@@ -85,12 +87,12 @@ export const ProvidersPanel = () => {
       setShowForm(false)
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка сохранения')
+      setError(err instanceof Error ? err.message : t('common.saveError'))
     }
   }
 
   const handleDelete = async (name: string) => {
-    if (!confirm(`Удалить провайдера «${name}»?`)) return
+    if (!confirm(t('admin.providers.confirmDelete', { name }))) return
     try {
       await synthApi.fetchJSON(`/api/v2/providers/${encodeURIComponent(name)}`, { method: 'DELETE' })
       await load()
@@ -144,27 +146,27 @@ export const ProvidersPanel = () => {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold">Провайдеры</h3>
-          <p className="text-muted-foreground text-sm">{providers.length} провайдеров</p>
+          <h3 className="text-lg font-semibold">{t('admin.providers.title')}</h3>
+          <p className="text-muted-foreground text-sm">{t('admin.providers.count', { count: providers.length })}</p>
         </div>
         <button onClick={handleCreate} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">
-          <Icon name="add" className="size-3.5" />Добавить
+          <Icon name="add" className="size-3.5" />{t('admin.providers.add')}
         </button>
       </div>
 
       {showForm && (
         <div className="bg-background rounded-lg border p-4 space-y-4">
           <div className="flex items-center justify-between">
-            <h4 className="font-medium text-sm">{editName ? 'Изменить' : 'Новый'} провайдер</h4>
+            <h4 className="font-medium text-sm">{editName ? t('admin.providers.edit') : t('admin.providers.new')}</h4>
             <div className="flex gap-2">
-              <button onClick={handleSave} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">Сохранить</button>
-              <button onClick={() => setShowForm(false)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">Отмена</button>
+              <button onClick={handleSave} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">{t('admin.providers.save')}</button>
+              <button onClick={() => setShowForm(false)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.providers.cancel')}</button>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs text-muted-foreground">Название</label>
+              <label className="text-xs text-muted-foreground">{t('admin.providers.name')}</label>
               <input
                 type="text" value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -173,7 +175,7 @@ export const ProvidersPanel = () => {
               />
             </div>
             <div>
-              <label className="text-xs text-muted-foreground">Тип API</label>
+              <label className="text-xs text-muted-foreground">{t('admin.providers.type')}</label>
               <select
                 value={form.type}
                 onChange={(e) => setForm({ ...form, type: e.target.value })}
@@ -185,7 +187,7 @@ export const ProvidersPanel = () => {
               </select>
             </div>
             <div className="col-span-2">
-              <label className="text-xs text-muted-foreground">URL</label>
+              <label className="text-xs text-muted-foreground">{t('admin.providers.url')}</label>
               <input
                 type="text" value={form.base_url}
                 onChange={(e) => setForm({ ...form, base_url: e.target.value })}
@@ -194,16 +196,16 @@ export const ProvidersPanel = () => {
               />
             </div>
             <div>
-              <label className="text-xs text-muted-foreground">API Key</label>
+              <label className="text-xs text-muted-foreground">{t('admin.providers.apiKey')}</label>
               <input
                 type="password" value={form.api_key}
                 onChange={(e) => setForm({ ...form, api_key: e.target.value })}
-                placeholder={editName ? '(не изменять)' : 'sk-...'}
+                placeholder={editName ? t('admin.providers.notChange') : 'sk-...'}
                 className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
             <div>
-              <label className="text-xs text-muted-foreground">Модель по умолчанию</label>
+              <label className="text-xs text-muted-foreground">{t('admin.providers.defaultModel')}</label>
               <input
                 type="text" value={form.default_model}
                 onChange={(e) => setForm({ ...form, default_model: e.target.value })}
@@ -218,38 +220,38 @@ export const ProvidersPanel = () => {
               onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
               className="rounded"
             />
-            <span className="text-sm">Провайдер включён</span>
+            <span className="text-sm">{t('admin.providers.enabled')}</span>
           </label>
 
           {/* Иконка */}
           <div className="border-t border-border pt-3">
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs text-muted-foreground">Иконка</label>
+              <label className="text-xs text-muted-foreground">{t('admin.providers.icon')}</label>
               <div className="flex items-center gap-2">
                 <ProviderIcon icon={form.icon} baseUrl={form.base_url} size={20} />
                 {form.icon && (
-                  <button onClick={resetIcon} className="text-[11px] text-muted-foreground hover:text-red-500">
-                    Сбросить
-                  </button>
+                    <button onClick={resetIcon} className="text-[11px] text-muted-foreground hover:text-red-500">
+                      {t('admin.providers.reset')}
+                    </button>
                 )}
               </div>
             </div>
 
-            <IconPickerSection title="Авто-определение (favicon)">
+            <IconPickerSection title={t('admin.providers.autoDetectFavicon')}>
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleFetchIcon}
                   disabled={fetchingIcon || !form.base_url}
                   className="px-3 py-1 rounded-md text-xs bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
                 >
-                  {fetchingIcon ? 'Поиск...' : 'Определить'}
+                  {fetchingIcon ? t('admin.providers.searchIcon') : t('admin.providers.detect')}
                 </button>
                 {fetchedIcon?.icon && (
                   <>
                     <img src={fetchedIcon.icon} width={20} height={20} className="rounded" alt="" />
-                    <span className="text-xs text-emerald-600 dark:text-emerald-400">Найден</span>
+                    <span className="text-xs text-emerald-600 dark:text-emerald-400">{t('admin.providers.found')}</span>
                     <button onClick={applyFetchedIcon} className="px-2 py-0.5 rounded text-xs bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300 hover:bg-emerald-200">
-                      Использовать
+                      {t('admin.providers.use')}
                     </button>
                   </>
                 )}
@@ -279,7 +281,7 @@ export const ProvidersPanel = () => {
               </div>
             </IconPickerSection>
 
-            <IconPickerSection title="Брендовые">
+            <IconPickerSection title={t('admin.providers.brand')}>
               <div className="flex flex-wrap gap-1">
                 {PROVIDER_BRAND_NAMES.map((brand) => (
                   <button
@@ -302,8 +304,8 @@ export const ProvidersPanel = () => {
 
           {error && <p className="text-xs text-red-500">{error}</p>}
           <div className="flex gap-2">
-            <button onClick={handleSave} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">Сохранить</button>
-            <button onClick={() => setShowForm(false)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">Отмена</button>
+            <button onClick={handleSave} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">{t('admin.providers.save')}</button>
+            <button onClick={() => setShowForm(false)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.providers.cancel')}</button>
           </div>
         </div>
       )}
@@ -320,14 +322,17 @@ export const ProvidersPanel = () => {
             <span className="font-medium">{testResult.id}</span>
             <button onClick={() => setTestResult(null)} className="text-current opacity-50 hover:opacity-100"><Icon name="close" className="size-4" /></button>
           </div>
-          {testResult.status === 'testing' && <p className="mt-1">Тестирование...</p>}
+          {testResult.status === 'testing' && <p className="mt-1">{t('admin.providers.testing')}</p>}
           {testResult.status === 'ok' && (
             <div className="mt-1">
-              <p>Подключение успешно</p>
-              {testResult.models && <p className="text-xs mt-1">Модели: {testResult.models.slice(0, 10).join(', ')}{testResult.models.length > 10 ? ` + ещё ${testResult.models.length - 10}` : ''}</p>}
+              <p>{t('admin.providers.connectedSuccess')}</p>
+              {testResult.models && (() => {
+                const modelsPart = testResult.models.slice(0, 10).join(', ') + (testResult.models.length > 10 ? t('admin.providers.moreModels', { count: testResult.models.length - 10 }) : '')
+                return <p className="text-xs mt-1">{t('admin.providers.modelsList', { list: modelsPart })}</p>
+              })()}
             </div>
           )}
-          {testResult.status === 'disabled' && <p className="mt-1">Провайдер отключён</p>}
+          {testResult.status === 'disabled' && <p className="mt-1">{t('admin.providers.providerDisabled')}</p>}
           {testResult.status === 'error' && <p className="mt-1">{testResult.error}</p>}
         </div>
       )}
@@ -335,7 +340,7 @@ export const ProvidersPanel = () => {
       {loading ? (
         <div className="space-y-2">{[1,2].map(i => <div key={i} className="bg-background rounded-lg border p-4 animate-pulse"><div className="h-4 bg-muted rounded w-48" /></div>)}</div>
       ) : providers.length === 0 ? (
-        <div className="bg-background rounded-xl border p-8 text-center text-muted-foreground">Нет провайдеров</div>
+        <div className="bg-background rounded-xl border p-8 text-center text-muted-foreground">{t('admin.providers.noProviders')}</div>
       ) : (
         <div className="space-y-2">
           {providers.map((p) => (
@@ -347,16 +352,16 @@ export const ProvidersPanel = () => {
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-sm">{p.name}</span>
                       <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">{p.type}</span>
-                      {p.is_default && <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">default</span>}
+                      {p.is_default && <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">{t('admin.providers.default_2')}</span>}
                       {p.enabled === false && (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">выкл</span>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">{t('admin.providers.off')}</span>
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1 truncate max-w-md">{p.url}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  <button onClick={() => handleTest(p.name)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">Тест</button>
+                  <button onClick={() => handleTest(p.name)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.providers.test')}</button>
                   <button onClick={() => handleEdit(p)} className="p-1 rounded text-muted-foreground hover:bg-interactive-hover"><Icon name="edit-2" className="size-3.5" /></button>
                   <button onClick={() => handleDelete(p.name)} className="p-1 rounded text-muted-foreground hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"><Icon name="delete-bin" className="size-3.5" /></button>
                 </div>

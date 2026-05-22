@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js",
-    "build": "tsc",
+    "build": "tsc && cp -r src/agents/definitions dist/agents/definitions",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "test": "echo 'no tests yet'",

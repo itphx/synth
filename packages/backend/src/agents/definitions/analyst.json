@@ -1,0 +1,13 @@
+{
+  "id": "analyst",
+  "displayName": { "en": "Analyst", "ru": "Аналитик" },
+  "description": {
+    "en": "Code analysis, research, documentation",
+    "ru": "Анализ кода, исследование, документация"
+  },
+  "capabilities": ["file_read", "research", "documentation"],
+  "icon": "search-eye",
+  "color": "--status-warning",
+  "mode": "orchestrator",
+  "contextFile": "ANALYST.md"
+}

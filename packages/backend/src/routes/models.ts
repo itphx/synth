@@ -4,6 +4,7 @@ import { JsonStore } from '../storage/json-store.js';
 import type { ModelConfig, ProviderConfig, ContextSource } from '@synth/shared';
 import { lookupContextWindow } from '@synth/shared';
 import { ProviderFactory } from '@synth/core';
+import { t } from '../lib/i18n.js';
 
 interface ModelGroupResponse {
   provider: {
@@ -107,7 +108,7 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
     const body = await c.req.json().catch(() => ({}));
     const modelId = body.id?.trim() || body.name?.trim();
     if (!modelId) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'id обязателен' } }, 400);
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.idRequired', undefined, c) } }, 400);
     }
 
     const existing = await modelStore.load(modelId);
@@ -212,7 +213,7 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
           }
         }
       } catch (err) {
-        errors.push(`${provider.name}: ${err instanceof Error ? err.message : 'ошибка'}`);
+        errors.push(`${provider.name}: ${err instanceof Error ? err.message : t('errors.generic', undefined, c)}`);
       }
     }
 
@@ -228,7 +229,7 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
   app.delete('/:id', kit.requireAdmin, async (c) => {
     const id = c.req.param('id');
     if (!(await modelStore.exists(id))) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Модель не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.model', undefined, c) } }, 404);
     }
     await modelStore.delete(id);
     return c.body(null, 204);

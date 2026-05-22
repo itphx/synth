@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Icon, type IconName } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/lib/i18n'
 
 const ICONS: IconName[] = [
   'admin', 'robot-2', 'code-s-slash', 'code-box', 'search-eye', 'server',
@@ -24,6 +25,7 @@ interface IconPickerProps {
 }
 
 export const IconPicker = ({ value, onChange }: IconPickerProps) => {
+  const { t } = useI18n()
   const [search, setSearch] = useState('')
 
   const filtered = search
@@ -34,7 +36,7 @@ export const IconPicker = ({ value, onChange }: IconPickerProps) => {
     <div className="space-y-2">
       <input
         type="text"
-        placeholder="Поиск иконки..."
+        placeholder={t('admin.iconPicker.searchPlaceholder')}
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         className="w-full px-2.5 py-1 rounded-md border bg-background text-xs focus:outline-none focus:ring-2 focus:ring-ring"
