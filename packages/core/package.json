@@ -3,22 +3,28 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "scripts": {
     "dev": "tsx src/main.ts",
     "start": "node dist/main.js",
-    "build": "tsc",
+    "build": "tsc && cp -r prompts dist/prompts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@synth/shared": "workspace:*",
-    "hono": "^4.9.0",
-    "zod": "^3.24.0"
+    "@synth/shared": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "tsx": "^4.0.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "tsx": "^4.0.0"
   }
 }

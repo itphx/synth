@@ -13,12 +13,16 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@hono/node-server": "^1.18.0",
+    "@synth/core": "workspace:*",
     "@synth/shared": "workspace:*",
     "hono": "^4.9.0",
+    "ws": "^8.20.1",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.0.0",
     "typescript": "^5.8.0"
   }

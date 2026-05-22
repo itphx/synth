@@ -1,0 +1,55 @@
+@import "tailwindcss";
+@import "./design-system.css";
+
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+@layer base {
+  :root,
+  :root body,
+  :root #root {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+    overscroll-behavior-y: none;
+  }
+}
+
+@layer utilities {
+  @keyframes notification-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.2; }
+  }
+  .animate-notification-blink {
+    animation: notification-blink 1.2s ease-in-out infinite;
+  }
+}
+
+.synth-toast {
+  background: var(--card) !important;
+  color: var(--card-foreground) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+}
+
+.synth-toast.Toastify__toast--success {
+  border-left: 4px solid var(--toastify-color-success) !important;
+}
+
+.synth-toast.Toastify__toast--warning {
+  border-left: 4px solid var(--toastify-color-warning) !important;
+}
+
+.synth-toast.Toastify__toast--error {
+  border-left: 4px solid var(--toastify-color-error) !important;
+}
+
+.synth-toast.Toastify__toast--info {
+  border-left: 4px solid var(--toastify-color-info) !important;
+}
+
+.synth-toast .Toastify__close-button {
+  color: var(--card-foreground) !important;
+  opacity: 0.5;
+}

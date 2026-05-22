@@ -1,14 +1,19 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
+import { StrictMode } from "react"
+import { createRoot } from "react-dom/client"
+import App from "./App"
+import { ThemeSystemProvider } from "./contexts/ThemeSystemContext"
+import { I18nProvider, initializeLocale } from "./lib/i18n"
+import "react-toastify/dist/ReactToastify.css"
+import "./styles/index.css"
 
-const App: React.FC = () => (
-  <div style={{ padding: '2rem', fontFamily: 'system-ui' }}>
-    <h1>Synth UI</h1>
-    <p>Synth UI package placeholder. Будет перенесён из synth-ui/.</p>
-  </div>
-);
+initializeLocale()
 
-const root = document.getElementById('root');
-if (root) {
-  ReactDOM.createRoot(root).render(<App />);
-}
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <I18nProvider>
+      <ThemeSystemProvider>
+        <App />
+      </ThemeSystemProvider>
+    </I18nProvider>
+  </StrictMode>,
+)

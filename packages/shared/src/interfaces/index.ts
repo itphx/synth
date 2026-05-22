@@ -60,6 +60,26 @@ export interface ModelStore {
   getDefault(provider?: string): Promise<ModelConfig | null>;
 }
 
+import type { ProfileData } from '../types/index.js';
+
+export interface CreateProfileParams {
+  username: string;
+  email?: string;
+  roles?: string[];
+  teamRoles?: string[];
+}
+
+export interface ProfileStore {
+  loadProfile(id: string): Promise<ProfileData | null>;
+  saveProfile(profile: ProfileData): Promise<void>;
+  listProfiles(): Promise<ProfileData[]>;
+  deleteProfile(id: string): Promise<boolean>;
+  getProfileByUsername(username: string): Promise<ProfileData | null>;
+  getProfileByEmail(email: string): Promise<ProfileData | null>;
+  getOrCreateProfile(params: CreateProfileParams): Promise<ProfileData>;
+  updateLastLogin(id: string): Promise<void>;
+}
+
 // Re-export BusEvent for convenience
 import type { BusEvent } from '../types/index.js';
 export type { BusEvent };

@@ -231,16 +231,75 @@ export interface ProviderConfig {
   apiKey?: string;
   defaultModel?: string;
   timeout?: number;
+  enabled?: boolean;
+  icon?: string;
+}
+
+export type ContextSource = 'api' | 'reference' | 'manual' | 'unknown';
+
+export type ContextCategory = 'user' | 'role' | 'system' | 'tsm';
+
+export interface ContextFileInfo {
+  filename: string;
+  isSystem: boolean;
+  isOverridden: boolean;
+  category: ContextCategory;
+  size: number;
+  modifiedAt?: number;
+  enabled?: boolean;
+}
+
+export interface ContextFileContent {
+  filename: string;
+  content: string;
+  isSystem: boolean;
+  isOverridden: boolean;
+  category: ContextCategory;
+}
+
+export interface ProfileData {
+  id: string;
+  username: string;
+  email?: string;
+  roles: string[];
+  teamRoles: string[];
+  isActive: boolean;
+  preferences: Record<string, unknown>;
+  notes: string;
+  displayName?: string;
+  createdAt: string;
+  updatedAt: string;
+  lastLogin?: string;
+}
+
+export interface InterviewQuestion {
+  id: string;
+  question: string;
+  order: number;
+}
+
+export interface InterviewStatus {
+  inProgress: boolean;
+  completed: boolean;
+  currentQuestion?: InterviewQuestion;
+  totalQuestions: number;
+  answered: number;
 }
 
 export interface ModelConfig {
   id: string;
   name: string;
   provider: string;
+  description?: string;
   enabled: boolean;
   isDefault?: boolean;
   contextWindow?: number;
+  contextSource?: ContextSource;
   maxOutputTokens?: number;
+  inputPrice?: number;
+  outputPrice?: number;
+  cacheReadPrice?: number;
+  cacheWritePrice?: number;
 }
 
 // --- LLM ---

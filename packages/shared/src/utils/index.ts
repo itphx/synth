@@ -43,3 +43,32 @@ export async function atomicWrite(
   await writeFile(tmpPath, data);
   await rename(tmpPath, targetPath);
 }
+
+// Асинхронный Mutex
+
+export class AsyncLock {
+  private _locked = false;
+  private _waiting: Array<() => void> = [];
+
+  async acquire(): Promise<void> {
+    if (!this._locked) {
+      this._locked = true;
+      return;
+    }
+    return new Promise((resolve) => {
+      this._waiting.push(() => {
+        this._locked = true;
+        resolve();
+      });
+    });
+  }
+
+  release(): void {
+    if (this._waiting.length > 0) {
+      const next = this._waiting.shift()!;
+      next();
+    } else {
+      this._locked = false;
+    }
+  }
+}

@@ -1,0 +1,309 @@
+import type { LLMChunk, LLMResponse, TokenUsage } from '@synth/shared';
+import { BaseProvider, type LLMMessage, type CancellationToken } from './base.js';
+import { info, warning } from '../logger.js';
+import type { DebugCollector } from '../debug.js';
+import { ContextLengthExceededError, RateLimitError } from './exceptions.js';
+
+export class OpenAIProvider extends BaseProvider {
+  getProviderName(): string {
+    return this.name;
+  }
+
+  async chat(
+    messages: LLMMessage[],
+    systemPrompt?: string,
+    tools?: Record<string, unknown>[],
+    stream?: boolean,
+    debugCollector?: DebugCollector,
+  ): Promise<LLMResponse> {
+    info('OPENAI', `чат: model=${this.model}, сообщений=${messages.length}`);
+
+    const formattedMessages = this._formatMessages(messages, systemPrompt);
+    const body: Record<string, unknown> = {
+      model: this.model,
+      messages: formattedMessages,
+      temperature: this.temperature,
+    };
+    if (this.topP !== undefined) body.top_p = this.topP;
+    if (this.topK !== undefined) body.top_k = this.topK;
+    if (tools?.length) body.tools = tools;
+    if (stream) body.stream = true;
+
+    const headers = this._getHeaders();
+    debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
+
+    try {
+      const resp = await fetch(this.url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!resp.ok) {
+        const errorText = await resp.text();
+        this._handleErrors(resp.status, errorText);
+        throw new Error(`OpenAI API error ${resp.status}: ${errorText}`);
+      }
+
+      const data = await resp.json() as Record<string, unknown>;
+      debugCollector?.captureApiResponse(data);
+      debugCollector?.captureRawModelResponse(JSON.stringify(data));
+
+      return this._parseResponse(data);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async *chatAsync(
+    messages: LLMMessage[],
+    systemPrompt?: string,
+    tools?: Record<string, unknown>[],
+    debugCollector?: DebugCollector,
+    cancellationToken?: CancellationToken,
+  ): AsyncGenerator<LLMChunk> {
+    info('OPENAI', `чатAsync: model=${this.model}, сообщений=${messages.length}`);
+
+    const formattedMessages = this._formatMessages(messages, systemPrompt);
+    const body: Record<string, unknown> = {
+      model: this.model,
+      messages: formattedMessages,
+      temperature: this.temperature,
+      stream: true,
+    };
+    if (this.topP !== undefined) body.top_p = this.topP;
+    if (this.topK !== undefined) body.top_k = this.topK;
+    if (tools?.length) body.tools = tools;
+
+    const headers = this._getHeaders();
+    debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
+
+    let accumulatedContent = '';
+    let accumulatedReasoning = '';
+    let accumulatedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    const accumulatedToolCalls: Record<string, unknown>[] = [];
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
+
+    try {
+      const resp = await fetch(this.url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!resp.ok) {
+        const errorText = await resp.text();
+        this._handleErrors(resp.status, errorText);
+        throw new Error(`OpenAI API error ${resp.status}: ${errorText}`);
+      }
+
+      if (!resp.body) throw new Error('Нет тела ответа');
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      try {
+        while (true) {
+          if (cancellationToken?.cancelled) {
+            reader.cancel();
+            break;
+          }
+
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith('data:')) continue;
+
+            const dataStr = trimmed.slice(5).trim();
+            if (dataStr === '[DONE]') break;
+
+            try {
+              const chunkData = JSON.parse(dataStr) as Record<string, unknown>;
+              debugCollector?.captureRawModelResponse(dataStr);
+
+              const choices = chunkData.choices as Array<Record<string, unknown>> | undefined;
+              const delta = choices?.[0]?.delta as Record<string, unknown> | undefined;
+
+              if (delta) {
+                if (delta.reasoning_content && typeof delta.reasoning_content === 'string') {
+                  if (delta.reasoning_content === '.' || delta.reasoning_content === '.\n') continue;
+                  accumulatedReasoning += delta.reasoning_content;
+                  yield {
+                    content: '',
+                    isFinal: false,
+                    usage: accumulatedUsage,
+                    reasoning: accumulatedReasoning,
+                  };
+                }
+
+                if (delta.content && typeof delta.content === 'string') {
+                  accumulatedContent += delta.content;
+                  yield {
+                    content: delta.content,
+                    isFinal: false,
+                    usage: accumulatedUsage,
+                    toolCalls: accumulatedToolCalls.length ? accumulatedToolCalls : undefined,
+                    reasoning: accumulatedReasoning || undefined,
+                  };
+                }
+
+                if (delta.tool_calls) {
+                  accumulatedToolCalls.push(...(delta.tool_calls as Record<string, unknown>[]));
+                }
+              }
+
+              if (chunkData.usage) {
+                const usage = chunkData.usage as Record<string, number>;
+                accumulatedUsage = {
+                  inputTokens: usage.prompt_tokens || 0,
+                  outputTokens: usage.completion_tokens || 0,
+                  totalTokens: usage.total_tokens || 0,
+                };
+              }
+            } catch {
+              continue;
+            }
+          }
+        }
+      } catch (e) {
+        info('OPENAI', `Стрим прерван: ${e}`);
+      } finally {
+        reader.releaseLock();
+      }
+
+      if (!cancellationToken?.cancelled) {
+        debugCollector?.captureApiResponse({
+          usage: accumulatedUsage,
+          model: this.model,
+          tool_calls: accumulatedToolCalls.length ? accumulatedToolCalls : undefined,
+        });
+
+        const finalContent = accumulatedContent || accumulatedReasoning || '';
+        yield {
+          content: finalContent,
+          isFinal: true,
+          usage: accumulatedUsage,
+          toolCalls: accumulatedToolCalls.length ? accumulatedToolCalls : undefined,
+          reasoning: accumulatedReasoning || undefined,
+          model: this.model,
+        };
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async listModels(): Promise<string[]> {
+    const baseUrl = this.url.replace(/\/chat\/completions\/?$/, '').replace(/\/+$/, '');
+    const modelsUrl = `${baseUrl}/models`;
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
+
+      const resp = await fetch(modelsUrl, {
+        headers: this._getHeaders(),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (resp.ok) {
+        const data = await resp.json() as { data?: Array<{ id: string }> };
+        return (data.data || []).map((m) => m.id).filter(Boolean);
+      }
+    } catch {
+      // fall trough
+    }
+
+    return [];
+  }
+
+  private _formatMessages(
+    messages: LLMMessage[],
+    systemPrompt?: string,
+  ): Array<Record<string, unknown>> {
+    const formatted: Array<Record<string, unknown>> = [];
+
+    if (systemPrompt) {
+      formatted.push({
+        role: 'system',
+        content: [{ type: 'text', text: systemPrompt }],
+      });
+    }
+
+    for (const msg of messages) {
+      if (msg.disabled) continue;
+      if (msg.role === 'info' || msg.role === 'model') continue;
+
+      const entry: Record<string, unknown> = {
+        role: msg.role,
+        content: msg.content,
+      };
+
+      if (msg.toolUse) entry.tool_calls = msg.toolUse;
+      if (msg.toolCallId) entry.tool_call_id = msg.toolCallId;
+
+      formatted.push(entry);
+    }
+
+    return formatted;
+  }
+
+  private _getHeaders(): Record<string, string> {
+    return {
+      Authorization: `Bearer ${this.apiKey}`,
+      'Content-Type': 'application/json',
+    };
+  }
+
+  private _parseResponse(data: Record<string, unknown>): LLMResponse {
+    const choices = data.choices as Array<Record<string, unknown>> | undefined;
+    const message = choices?.[0]?.message as Record<string, unknown> | undefined;
+    const content = String(message?.content ?? '');
+    const toolCalls = message?.tool_calls as Record<string, unknown>[] | undefined;
+    const reasoning = message?.reasoning_content as string | undefined;
+
+    const usage = data.usage as Record<string, number> | undefined;
+    const parsedUsage: TokenUsage = {
+      inputTokens: usage?.prompt_tokens || 0,
+      outputTokens: usage?.completion_tokens || 0,
+      totalTokens: usage?.total_tokens || 0,
+    };
+
+    return {
+      content,
+      model: this.model,
+      usage: parsedUsage,
+      toolCalls,
+      reasoning: reasoning || undefined,
+    };
+  }
+
+  private _handleErrors(statusCode: number, errorText: string): void {
+    if (statusCode === 400) {
+      const lower = errorText.toLowerCase();
+      if (lower.includes('context') || lower.includes('length') || lower.includes('token')) {
+        throw new ContextLengthExceededError();
+      }
+      throw new Error(`Bad request: ${errorText}`);
+    }
+    if (statusCode === 429) {
+      throw new RateLimitError();
+    }
+    warning('OPENAI', `HTTP ${statusCode}: ${errorText}`);
+  }
+}
