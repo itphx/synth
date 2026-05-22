@@ -258,6 +258,7 @@ export const dict = {
   'chat.queue.return': 'Return to input',
   'chat.queue.cleared': 'Queue cleared',
   'chat.queue.resumed': 'Queue processing resumed',
+  'chat.queue.returned': 'Queue returned',
 
   'chat.error.rateLimit': 'Rate limit exceeded. Pause {sec}s...',
   'chat.error.retryCount': 'Attempt {current}/{max}',
@@ -265,9 +266,11 @@ export const dict = {
   'chat.error.resumeQueue': 'Failed to resume queue',
   'chat.error.clearQueue': 'Failed to clear queue',
   'chat.error.sendFailed': 'Send failed:',
+  'chat.error.returnQueue': 'Failed to return queue',
 
   'chat.message.sent': 'Message sent',
 
+  'chat.debug.noData': 'No debug data',
   'chat.queue.returnInDev': 'Return queue — in development',
 
   // Chat input footer

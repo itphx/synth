@@ -6,6 +6,7 @@ export type { StorageConfig } from './storage/file-store.js';
 export { SessionManager } from './sessions/manager.js';
 export { EventBus, sseEventStream } from './events/bus.js';
 export { QueueProcessor, QueueProcessorManager, enqueueUserMessage } from './queue/processor.js';
+export type { ProcessMessageFn } from './queue/processor.js';
 
 export {
   ProviderFactory,
@@ -36,4 +37,10 @@ export { DebugCollector } from './debug.js';
 
 export { ContextConfig, ContextBuilder, InterviewManager } from './engine/context/index.js';
 export type { BuildSystemPromptParams, ContextBuilderOptions } from './engine/context/index.js';
+
+export { StatusParser } from './engine/status-parser.js';
+export type { ParsedStatus } from './engine/status-parser.js';
+export { ChatOrchestrator } from './engine/orchestrator.js';
+export type { OrchestratorOptions, ProcessMessageResult } from './engine/orchestrator.js';
+
 export { FileProfileStore } from './storage/profile-store.js';

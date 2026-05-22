@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 
+export type DebugData = Record<string, unknown>;
+
 export interface MessageData {
   index: number
   role: string
@@ -58,11 +60,19 @@ export interface QueueState {
   isStalled: boolean
 }
 
+export interface QueuedMessage {
+  content: string
+  agentRole?: string | null
+}
+
 interface ChatStore {
   messagesBySession: Record<string, MessageData[]>
   streamingBySession: Record<string, Record<string, StreamState>>
   queueBySession: Record<string, QueueState>
+  pendingBySession: Record<string, QueuedMessage[]>
   errorBySession: Record<string, StreamError | null>
+  debugModalSessionId: string | null
+  debugModalMessageIndex: number | null
 
   setMessages: (sessionId: string, messages: MessageData[]) => void
   startStream: (sessionId: string, streamId: string, agentRole: string | null) => void
@@ -72,16 +82,22 @@ interface ChatStore {
   addStreamError: (sessionId: string, error: StreamError) => void
   clearStreamError: (sessionId: string) => void
   addMessage: (sessionId: string, message: MessageData) => void
+  setPendingMessages: (sessionId: string, pending: QueuedMessage[]) => void
   setQueueStalled: (sessionId: string, pendingCount: number) => void
   clearQueueState: (sessionId: string) => void
   clearSession: (sessionId: string) => void
+  openDebugModal: (sessionId: string, messageIndex: number) => void
+  closeDebugModal: () => void
 }
 
 export const useChatStore = create<ChatStore>((set) => ({
   messagesBySession: {},
   streamingBySession: {},
   queueBySession: {},
+  pendingBySession: {},
   errorBySession: {},
+  debugModalSessionId: null,
+  debugModalMessageIndex: null,
 
   setMessages: (sessionId, messages) =>
     set((s) => ({
@@ -122,12 +138,11 @@ export const useChatStore = create<ChatStore>((set) => ({
 
       if (!metadata.cancelled && streamState.content) {
         const msgs = [...(s.messagesBySession[sessionId] || [])]
-        const nextIndex =
-          metadata.message_index ??
-          (msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 0 : 0)
+        const nextIndex = metadata.message_index
+        const existingIdx = nextIndex != null ? msgs.findIndex((m) => m.index === nextIndex) : -1
 
         const newMsg: MessageData = {
-          index: nextIndex,
+          index: nextIndex ?? (msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 0 : 0),
           role: 'assistant',
           content: streamState.content,
           agent_role: streamState.agentRole || undefined,
@@ -141,10 +156,17 @@ export const useChatStore = create<ChatStore>((set) => ({
           created_at: new Date().toISOString(),
         }
 
+        if (existingIdx >= 0) {
+          // merge: update existing message with stream content (server has cleaned version)
+          msgs[existingIdx] = { ...msgs[existingIdx]!, content: streamState.content, reasoning: streamState.reasoning || undefined, debug_data: metadata.debug_info || undefined }
+        } else {
+          msgs.push(newMsg)
+        }
+
         delete sessionStreams[streamId]
         return {
           streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
-          messagesBySession: { ...s.messagesBySession, [sessionId]: [...msgs, newMsg] },
+          messagesBySession: { ...s.messagesBySession, [sessionId]: msgs },
         }
       }
 
@@ -178,6 +200,11 @@ export const useChatStore = create<ChatStore>((set) => ({
       }
     }),
 
+  setPendingMessages: (sessionId, pending) =>
+    set((s) => ({
+      pendingBySession: { ...s.pendingBySession, [sessionId]: pending },
+    })),
+
   setQueueStalled: (sessionId, pendingCount) =>
     set((s) => ({
       queueBySession: {
@@ -201,8 +228,16 @@ export const useChatStore = create<ChatStore>((set) => ({
       delete streamingBySession[sessionId]
       const queueBySession = { ...s.queueBySession }
       delete queueBySession[sessionId]
+      const pendingBySession = { ...s.pendingBySession }
+      delete pendingBySession[sessionId]
       const errorBySession = { ...s.errorBySession }
       delete errorBySession[sessionId]
-      return { messagesBySession, streamingBySession, queueBySession, errorBySession }
+      return { messagesBySession, streamingBySession, queueBySession, pendingBySession, errorBySession }
     }),
+
+  openDebugModal: (sessionId, messageIndex) =>
+    set({ debugModalSessionId: sessionId, debugModalMessageIndex: messageIndex }),
+
+  closeDebugModal: () =>
+    set({ debugModalSessionId: null, debugModalMessageIndex: null }),
 }))

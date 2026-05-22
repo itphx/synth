@@ -7,9 +7,10 @@ import { logger } from 'hono/logger';
 import type { ProviderConfig, ModelConfig, AgentDefinition } from '@synth/shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
-  ContextConfig, FileProfileStore,
+  ContextConfig, ContextBuilder, ChatOrchestrator, FileProfileStore,
+  enqueueUserMessage,
 } from '@synth/core';
-import { nowISO, ensureDataDir } from '@synth/shared';
+import { nowISO, ensureDataDir, MessageRole } from '@synth/shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import { createAuthMiddleware } from './auth/middleware.js';
 import { createAuthRoutes } from './routes/auth.js';
@@ -72,6 +73,37 @@ if (backendConfig.auth.debugMode && backendConfig.auth.testUsers) {
 const eventBus = new EventBus();
 const queueManager = new QueueProcessorManager();
 
+// Context builder
+const contextBuilder = new ContextBuilder(contextConfig, {
+  profilesStore,
+  projectDataDir: `${dataDir}/projects`,
+  defaultLanguage: 'ru',
+});
+
+// Provider loader
+const providerLoader = (name: string): ProviderConfig | null => {
+  // При старте загружаем все конфиги — JsonStore.list() не подходит для быстрого lookup
+  // поэтому кешируем провайдеров в Map
+  return providerCache.get(name) ?? null;
+};
+
+// Кеш провайдеров (заполняется при старте)
+const providerCache = new Map<string, ProviderConfig>();
+(await providerStore.list()).forEach((p) => {
+  providerCache.set(p.name, p);
+});
+
+// Orchestrator
+const orchestrator = new ChatOrchestrator({
+  sessionManager,
+  eventBus,
+  contextBuilder,
+  providerLoader,
+  dataDir,
+});
+
+const processMessage = orchestrator.createProcessMessage();
+
 // API-заглушки для UI
 app.get('/api/config/themes', (c) => c.json({ themes: [] }));
 
@@ -88,13 +120,13 @@ app.get('/api/v2/i18n/translations/en', (c) => c.json(getTranslations('en')));
 app.route('/api/v2/projects', createProjectRoutes(auth, projectStore));
 
 // Sessions routes
-app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager));
+app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator));
 
 // Messages routes
 app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager));
 
 // Queue routes
-app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager));
+app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage));
 
 // FS routes
 app.route('/api/v2/fs', createFsRoutes(auth));
@@ -198,6 +230,17 @@ server.on('upgrade', (request, socket, head) => {
     wss.handleUpgrade(request, socket, head, (ws) => {
       const clientId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+      // Подписка на события сессии через EventBus
+      const unsub = eventBus.subscribe(sessionId, (event) => {
+        try {
+          if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify(event));
+          }
+        } catch {
+          // ignore send errors
+        }
+      });
+
       ws.send(JSON.stringify({
         type: 'connected',
         session_id: sessionId,
@@ -205,19 +248,75 @@ server.on('upgrade', (request, socket, head) => {
         engine: 'synth',
       }));
 
+      // Late subscriber: отдать буферизованные чанки активного стрима
+      (async () => {
+        const session = await sessionManager.getSession(sessionId);
+        if (session?.currentStream && !session.currentStream.cancelled) {
+          const streamId = session.currentStream.streamId;
+          const chunks = queueManager.getRingBuffer(streamId);
+          if (chunks) {
+            for (const chunk of chunks) {
+              if (ws.readyState === ws.OPEN) {
+                ws.send(JSON.stringify({
+                  type: 'stream.chunk',
+                  sessionId,
+                  data: chunk,
+                  timestamp: new Date().toISOString(),
+                }));
+              }
+            }
+          }
+        }
+      })().catch(() => {});
+
       ws.on('message', async (raw) => {
         try {
           const msg = JSON.parse(raw.toString());
           if (msg.type === 'ping') {
             ws.send(JSON.stringify({ type: 'pong' }));
           } else if (msg.type === 'send_message') {
-            // Заглушка обработки через SSE-паттерн
-            ws.send(JSON.stringify({
-              type: 'message.queued',
-              stream_id: msg.stream_id || `ws-${Date.now()}`,
-              pending_count: 0,
-              message: msg.content,
-            }));
+            if (!msg.content?.trim()) return;
+
+            const session = await sessionManager.getSession(sessionId);
+            if (!session) {
+              ws.send(JSON.stringify({ type: 'error', session_id: sessionId, data: { error: 'Session not found' }, timestamp: nowISO() }));
+              return;
+            }
+
+            const message = {
+              role: MessageRole.USER,
+              content: msg.content.trim(),
+              createdAt: nowISO(),
+              disabled: false,
+              pinned: false,
+              hidden: false,
+              author: msg.author || 'unknown',
+              agentRole: msg.agent_role || session.settings.agentRole,
+              provider: msg.provider || session.settings.provider,
+              model: msg.model || session.settings.model,
+              metadata: { stream_id: msg.stream_id || `ws-${Date.now()}` },
+            };
+
+            const result = await enqueueUserMessage(
+              sessionManager, eventBus, sessionId, message, queueManager, processMessage,
+            );
+
+            if (!result) {
+              ws.send(JSON.stringify({
+                type: 'queue.stalled',
+                session_id: sessionId,
+                data: { pending_count: session.pendingMessages.length },
+                timestamp: nowISO(),
+              }));
+            }
+          } else if (msg.type === 'cancel') {
+            const session = await sessionManager.getSession(sessionId);
+            if (session?.currentStream) {
+              orchestrator.cancel(session.currentStream.streamId);
+              session.currentStream.cancelled = true;
+              await sessionManager.updateSession(session);
+            }
+            queueManager.stop(sessionId);
           }
         } catch {
           ws.send(JSON.stringify({ type: 'error', error: 'Invalid message format' }));
@@ -225,11 +324,11 @@ server.on('upgrade', (request, socket, head) => {
       });
 
       ws.on('close', () => {
-        // unsubscribe
+        unsub();
       });
 
       ws.on('error', () => {
-        // ignore
+        unsub();
       });
     });
   } else {

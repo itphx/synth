@@ -257,6 +257,7 @@ export const dict = {
   'chat.queue.return': 'Вернуть в поле ввода',
   'chat.queue.cleared': 'Очередь очищена',
   'chat.queue.resumed': 'Обработка очереди возобновлена',
+  'chat.queue.returned': 'Очередь возвращена',
 
   'chat.error.rateLimit': 'Превышен лимит запросов. Пауза {sec}с...',
   'chat.error.retryCount': 'Попытка {current}/{max}',
@@ -264,9 +265,11 @@ export const dict = {
   'chat.error.resumeQueue': 'Ошибка возобновления очереди',
   'chat.error.clearQueue': 'Ошибка очистки очереди',
   'chat.error.sendFailed': 'Ошибка отправки:',
+  'chat.error.returnQueue': 'Ошибка возврата очереди',
 
   'chat.message.sent': 'Сообщение отправлено',
 
+  'chat.debug.noData': 'Нет отладочных данных',
   'chat.queue.returnInDev': 'Вернуть в поле ввода — в разработке',
 
   'common.inDevelopment': 'В разработке',

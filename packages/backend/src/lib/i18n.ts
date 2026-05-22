@@ -48,6 +48,9 @@ const en: Dictionary = {
   // Locales
   'locales.ru.nativeName': 'Russian',
 
+  // Chat
+  'errors.chat.queueFull': 'Queue is full (max {max} messages)',
+
   // Stub
   'stub.llmNotConnected': '[Stub] You said: "{content}". LLM engine is not connected yet.',
 };
@@ -96,6 +99,9 @@ const ru: Dictionary = {
 
   // Locales
   'locales.ru.nativeName': 'Русский',
+
+  // Chat
+  'errors.chat.queueFull': 'Очередь переполнена (максимум {max} сообщений)',
 
   // Stub
   'stub.llmNotConnected': '[Заглушка] Вы сказали: "{content}". LLM-движок ещё не подключён.',

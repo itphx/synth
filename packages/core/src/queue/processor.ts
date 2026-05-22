@@ -2,7 +2,6 @@ import type { Message, Session } from '@synth/shared';
 import { nowISO, generateStreamId } from '@synth/shared';
 import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
-import type { FileStore } from '../storage/file-store.js';
 
 const MAX_RETRIES = 3;
 const MAX_PENDING = 5;
@@ -10,6 +9,13 @@ const MAX_PENDING = 5;
 interface RetryDelays {
   [streamId: string]: number;
 }
+
+export type ProcessMessageFn = (
+  session: Session,
+  message: Message,
+  signal: AbortSignal,
+  publishChunk: (event: string, data: Record<string, unknown>) => void,
+) => Promise<{ error?: string; errorType?: string; canRetry?: boolean }>;
 
 /**
  * QueueProcessor — фоновый обработчик очереди сообщений для одной сессии.
@@ -25,12 +31,7 @@ export class QueueProcessor {
     private sessionId: string,
     private sessionManager: SessionManager,
     private eventBus: EventBus,
-    private processMessage: (
-      session: Session,
-      message: Message,
-      signal: AbortSignal,
-      publishChunk: (event: string, data: Record<string, unknown>) => void,
-    ) => Promise<{ error?: string; errorType?: string; canRetry?: boolean }>,
+    private processMessage: ProcessMessageFn,
   ) {}
 
   get isRunning(): boolean {
@@ -220,14 +221,12 @@ export class QueueProcessorManager {
     sessionId: string,
     sessionManager: SessionManager,
     eventBus: EventBus,
-    processMessage: QueueProcessor['processMessage'] extends (_: unknown, __: unknown, ___: infer S, ____: infer P) => infer R
-      ? (s: Session, m: Message, sig: AbortSignal, pub: (e: string, d: Record<string, unknown>) => void) => ReturnType<typeof processMessage>
-      : never,
+    processMessage: ProcessMessageFn,
   ): QueueProcessor {
     const existing = this._processors.get(sessionId);
     if (existing && existing.isRunning) return existing;
 
-    const processor = new QueueProcessor(sessionId, sessionManager, eventBus, processMessage as never);
+    const processor = new QueueProcessor(sessionId, sessionManager, eventBus, processMessage);
     this._processors.set(sessionId, processor);
 
     processor.start().catch(() => {});
@@ -262,9 +261,7 @@ export async function enqueueUserMessage(
   sessionId: string,
   message: Message,
   processorManager: QueueProcessorManager,
-  processMessage: QueueProcessor['processMessage'] extends (_: unknown, __: unknown, ___: infer S, ____: infer P) => infer R
-    ? (s: Session, m: Message, sig: AbortSignal, pub: (e: string, d: Record<string, unknown>) => void) => ReturnType<typeof processMessage>
-    : never,
+  processMessage: ProcessMessageFn,
 ): Promise<Session | null> {
   if (!message.metadata) message.metadata = {};
   if (!message.metadata.stream_id) message.metadata.stream_id = generateStreamId();
@@ -280,7 +277,7 @@ export async function enqueueUserMessage(
     author: message.author,
   });
 
-  processorManager.createProcessor(sessionId, sessionManager, eventBus, processMessage as never);
+  processorManager.createProcessor(sessionId, sessionManager, eventBus, processMessage);
 
   return session;
 }
