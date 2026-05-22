@@ -6,7 +6,7 @@
 
 | Компонент | Назначение | Стек |
 |-----------|------------|------|
-| **@synth/shared** | Общие типы, интерфейсы, Zod-схемы, протоколы | TypeScript |
+| **@synth/shared** | Типы, интерфейсы, схемы, протоколы, конфигурация | TypeScript |
 | **@synth/core** | Общая реализация: сессии, очередь, LLM, TSM, HTTP API v2, CLI | TypeScript, Hono |
 | **@synth/backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC | TypeScript, Hono |
 | **@synth/ui** | Пользовательский интерфейс + админка | TypeScript, React 19 |
@@ -59,6 +59,59 @@ synth-core (ПК сотрудника, как раннер + клиент)
 - Сессии и аудит — централизованы на корпоративном бэкенде
 - API-ключи провайдеров хранятся только на сервере
 
+## Конфигурация
+
+Единый конфигурационный слой `@synth/shared/config` (AD-023).
+
+### Приоритет
+
+```
+CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
+```
+
+### config.yaml
+
+Каскадный поиск: `--config` / `SYNTH_CONFIG` → `./synth.config.yaml` → `./config.yaml` → `~/.config/synth/config.yaml` → `/etc/synth/config.yaml`
+
+```yaml
+server:
+  port: 5000
+storage:
+  dataDir: "/var/synth/data"     # каталог данных вне репозитория
+llm:
+  defaultProvider: ""             # пусто — админ настраивает сам
+  defaultModel: ""
+core:
+  port: 4300
+  apiKey: ""
+runner:
+  port: 5200
+  backendUrl: "http://localhost:5000"
+ui:
+  port: 5002
+  backendUrl: "http://localhost:5000"
+```
+
+### Переменные окружения
+
+| Переменная | Назначение | По умолчанию |
+|-----------|------------|--------------|
+| `SYNTH_DATA_DIR` | Каталог данных | `/var/synth/data` |
+| `SYNTH_CONFIG` | Путь к `config.yaml` | каскадный поиск |
+| `SYNTH_PORT` | Порт бэкенда | `5000` |
+| `SYNTH_CORE_PORT` | Порт core | `4300` |
+| `SYNTH_RUNNER_PORT` | Порт раннера | `5200` |
+| `SYNTH_AUTH_DEBUG` | Режим отладки auth | `false` |
+| `SYNTH_API_KEY` | API-ключ | — |
+| `SYNTH_BACKEND_URL` | URL бэкенда | `http://localhost:5000` |
+| `VITE_BACKEND_URL` | URL бэкенда (UI proxy) | `http://localhost:5000` |
+| `VITE_PORT` | Порт UI dev-сервера | `5002` |
+
+### Первый запуск
+
+`ensureDataDir()` создаёт структуру подкаталогов в `dataDir`.
+`createDefaultConfig()` опционально пишет `config.yaml` с дефолтами.
+
 ## Ключевые возможности
 
 - **Оркестрация движков** — opencode, cline и собственный synth-core в одном интерфейсе
@@ -71,32 +124,33 @@ synth-core (ПК сотрудника, как раннер + клиент)
 - **i18n** — русский и английский интерфейс
 - **Темы** — 60+ цветовых схем (светлые и тёмные)
 
-## Запуск (dev)
+## Запуск
 
 ```bash
 # Установка зависимостей
 pnpm install
 
-# synth-backend (API)
+# synth-backend (API, :5000)
 pnpm --filter @synth/backend dev
 
-# synth-ui (React SPA)
+# synth-ui (React SPA, :5002)
 pnpm --filter @synth/ui dev
 
-# synth-core (standalone)
+# synth-core (standalone server)
 pnpm --filter @synth/core build
-node packages/core/dist/cli.js serve --api-key "dev-key"
+node packages/core/dist/main.js serve --api-key "dev-key"
 
-# synth-core (CLI)
-node packages/core/dist/cli.js chat "привет"
+# synth-core (CLI команды)
+node packages/core/dist/main.js chat "привет"
+node packages/core/dist/main.js config
 
 # synth-runner
-pnpm --filter @synth/runner dev -- --backend http://localhost:5000
+pnpm --filter @synth/runner build
+node packages/runner/dist/main.js --backend http://localhost:5000
 ```
 
-## Архитектура
+## Документация
 
-Подробная документация:
 - `AGENTS.md` — архитектурные решения, соглашения
 - `rbac-design.md` — аутентификация, роли, разрешения
 - `SPEC.md` — спецификация функциональности

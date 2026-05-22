@@ -29,6 +29,10 @@
     "./utils": {
       "types": "./dist/utils/index.d.ts",
       "import": "./dist/utils/index.js"
+    },
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "import": "./dist/config/index.js"
     }
   },
   "scripts": {
@@ -37,9 +41,11 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "js-yaml": "^4.1.1",
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
     "typescript": "^5.8.0"
   }
