@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
 import { api } from '@/lib/api/client'
 import { Icon } from '@/components/icon/Icon'
@@ -12,6 +13,7 @@ interface Stats {
 }
 
 export const DashboardPanel = () => {
+  const { t } = useI18n()
   const [stats, setStats] = useState<Stats>({ totalSessions: 0, totalProjects: 0, totalUsers: 0, version: '0.1.0' })
   const [loading, setLoading] = useState(true)
 
@@ -37,16 +39,16 @@ export const DashboardPanel = () => {
   }, [])
 
   const cards = [
-    { label: 'Всего сессий', value: stats.totalSessions, icon: 'chat-new', color: 'text-blue-600 dark:text-blue-400' },
-    { label: 'Проектов', value: stats.totalProjects, icon: 'briefcase', color: 'text-emerald-600 dark:text-emerald-400' },
-    { label: 'Пользователей', value: stats.totalUsers, icon: 'user-smile', color: 'text-purple-600 dark:text-purple-400' },
-    { label: 'Версия', value: stats.version, icon: 'rocket', color: 'text-amber-600 dark:text-amber-400' },
+    { label: t('admin.dashboard.totalSessions'), value: stats.totalSessions, icon: 'chat-new', color: 'text-blue-600 dark:text-blue-400' },
+    { label: t('admin.dashboard.projects'), value: stats.totalProjects, icon: 'briefcase', color: 'text-emerald-600 dark:text-emerald-400' },
+    { label: t('admin.dashboard.users'), value: stats.totalUsers, icon: 'user-smile', color: 'text-purple-600 dark:text-purple-400' },
+    { label: t('admin.dashboard.version'), value: stats.version, icon: 'rocket', color: 'text-amber-600 dark:text-amber-400' },
   ]
 
   return (
     <div className="space-y-6">
-      <h3 className="text-lg font-semibold">Дашборд</h3>
-      <p className="text-muted-foreground text-sm">Обзор системы Synth</p>
+      <h3 className="text-lg font-semibold">{t('admin.dashboard.title')}</h3>
+      <p className="text-muted-foreground text-sm">{t('admin.dashboard.subtitle')}</p>
 
       {loading ? (
         <div className="grid grid-cols-2 gap-4">

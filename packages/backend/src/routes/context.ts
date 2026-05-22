@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import type { ContextConfig } from '@synth/core';
 import type { ContextCategory } from '@synth/shared';
+import { t } from '../lib/i18n.js';
 
 const VALID_CATEGORIES = new Set<string>(['user', 'role', 'system', 'tsm']);
 
@@ -38,7 +39,7 @@ export function createContextRoutes(kit: AuthKit, config: ContextConfig): Hono {
     const category = parseCategory(c.req.query('category'));
     const file = config.getFile(name, category);
     if (!file) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Файл не найден' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.file', undefined, c) } }, 404);
     }
     return c.json({
       name: file.filename,
@@ -99,7 +100,7 @@ export function createContextRoutes(kit: AuthKit, config: ContextConfig): Hono {
       config.setEnabledFiles(body.files);
       return c.json({ enabled: config.getEnabledFiles() });
     }
-    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'expected { files: string[] }' } }, 400);
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.expectedFilesArray', undefined, c) } }, 400);
   });
 
   return app;

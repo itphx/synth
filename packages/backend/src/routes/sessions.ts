@@ -3,6 +3,7 @@ import type { AuthKit } from '../auth/middleware.js';
 import type { SessionManager } from '@synth/core';
 import { MessageRole, generateStreamId, nowISO } from '@synth/shared';
 import { serializeSession } from '../lib/serialize.js';
+import { t } from '../lib/i18n.js';
 
 export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager): Hono {
   const app = new Hono();
@@ -40,7 +41,7 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
   app.get('/:id', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
     return c.json(serializeSession(session));
   });
@@ -49,7 +50,7 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
   app.patch('/:id', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
     const body = await c.req.json().catch(() => ({}));
 
@@ -69,7 +70,7 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
   app.delete('/:id', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
     await sessionManager.deleteSession(session.id);
     return c.body(null, 204);
@@ -79,7 +80,7 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
   app.get('/:id/status', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
     return c.json({
       blocked: !!session.status.blocked,
@@ -94,12 +95,12 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
     const content = body.content?.trim();
 
     if (!content) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'content обязателен' } }, 400);
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.contentRequired', undefined, c) } }, 400);
     }
 
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
 
     const streamId = body.messageId || generateStreamId();
@@ -134,7 +135,7 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
           send('stream.start', { stream_id: streamId });
 
           // Заглушка ответа
-          const reply = `[Заглушка] Вы сказали: "${content.slice(0, 200)}". LLM-движок ещё не подключён.`;
+          const reply = t('stub.llmNotConnected', { content: content.slice(0, 200) }, c);
           send('stream.chunk', {
             stream_id: streamId,
             content: reply,
@@ -184,7 +185,7 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
   app.get('/:id/messages', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
     const { serializeMessage } = await import('../lib/serialize.js');
     return c.json({
@@ -198,7 +199,7 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
   app.post('/:id/abort', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
 
     if (session.currentStream) {

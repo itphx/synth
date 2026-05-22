@@ -1,91 +1,100 @@
 import { Hono } from 'hono';
+import { readFileSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
 import type { AgentDefinition } from '@synth/shared';
+import { t } from '../lib/i18n.js';
+import { getDefaultLang, resolveDisplayName, resolveDescription } from '../lib/i18n-config.js';
 
 const BUILTIN_IDS = new Set([
   'developer', 'assistant', 'devops', 'analyst',
   'admin', 'auditor', 'pm', 'qa',
 ]);
 
-const BUILTIN_AGENTS: AgentDefinition[] = [
-  {
-    id: 'developer', displayName: 'Разработчик',
-    contextFile: 'DEVELOPER.md',
-    capabilities: ['file_read', 'file_search', 'file_write', 'git_read', 'git_write', 'code_review'],
-    enabled: true, mode: 'simple', sshKeys: [], isOverridden: false,
-    temperature: 0.3, topP: 0.9,
-    icon: 'code-s-slash', color: '--status-info',
-    description: 'Разработка и рефакторинг кода',
-  },
-  {
-    id: 'assistant', displayName: 'Ассистент',
-    contextFile: 'ASSISTANT.md',
-    capabilities: [],
-    enabled: true, mode: 'simple', sshKeys: [], isOverridden: false,
-    icon: 'robot-2', color: '--primary',
-    description: 'Универсальный ассистент для любых задач',
-  },
-  {
-    id: 'devops', displayName: 'DevOps Инженер',
-    contextFile: 'DEVOPS.md',
-    capabilities: ['file_read', 'git_read', 'deployment', 'infrastructure'],
-    enabled: true, mode: 'orchestrator', sshKeys: [], isOverridden: false,
-    icon: 'server', color: '--status-info',
-    description: 'Инфраструктура, деплой, CI/CD',
-  },
-  {
-    id: 'analyst', displayName: 'Аналитик',
-    contextFile: 'ANALYST.md',
-    capabilities: ['file_read', 'research', 'documentation'],
-    enabled: true, mode: 'orchestrator', sshKeys: [], isOverridden: false,
-    icon: 'search-eye', color: '--status-warning',
-    description: 'Анализ кода, исследование, документация',
-  },
-  {
-    id: 'admin', displayName: 'Администратор',
-    contextFile: 'ADMIN.md',
-    capabilities: ['file_read', 'file_write', 'git_read', 'git_write', 'system_admin'],
-    enabled: true, mode: 'orchestrator', sshKeys: [], isOverridden: false,
-    icon: 'admin', color: '--status-success',
-    description: 'Системное администрирование, управление git',
-  },
-  {
-    id: 'auditor', displayName: 'Аудитор Безопасности',
-    contextFile: 'AUDITOR.md',
-    capabilities: ['file_read', 'code_review', 'security_analysis'],
-    enabled: true, mode: 'orchestrator', sshKeys: [], isOverridden: false,
-    icon: 'shield-keyhole', color: '--status-success',
-    description: 'Аудит безопасности и уязвимостей',
-  },
-  {
-    id: 'pm', displayName: 'Проектный Менеджер',
-    contextFile: 'PM.md',
-    capabilities: ['file_read', 'research', 'planning'],
-    enabled: true, mode: 'orchestrator', sshKeys: [], isOverridden: false,
-    icon: 'task', color: '--chart-1',
-    description: 'Управление проектом, планирование',
-  },
-  {
-    id: 'qa', displayName: 'QA Инженер',
-    contextFile: 'QA.md',
-    capabilities: ['file_read', 'testing', 'code_review'],
-    enabled: true, mode: 'orchestrator', sshKeys: [], isOverridden: false,
-    icon: 'test-tube', color: '--chart-4',
-    description: 'Тестирование и контроль качества',
-  },
-];
+interface AgentDefFile {
+  id: string;
+  displayName: Record<string, string>;
+  description: Record<string, string>;
+  capabilities: string[];
+  icon: string;
+  color: string;
+  mode: 'simple' | 'orchestrator';
+  contextFile: string;
+}
+
+const AGENTS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'agents', 'definitions');
+
+function loadAgentDef(id: string): AgentDefFile {
+  const path = join(AGENTS_DIR, `${id}.json`);
+  if (!existsSync(path)) {
+    throw new Error(`Agent definition not found: ${id}`);
+  }
+  return JSON.parse(readFileSync(path, 'utf-8')) as AgentDefFile;
+}
+
+let _cachedDefs: AgentDefFile[] | null = null;
+
+function getAgentDefs(): AgentDefFile[] {
+  if (!_cachedDefs) {
+    _cachedDefs = [...BUILTIN_IDS].map((id) => loadAgentDef(id));
+  }
+  return _cachedDefs;
+}
+
+function getBuiltInAgents(agentStore: JsonStore<AgentDefinition>): AgentDefinition[] {
+  const defs = getAgentDefs();
+  const lang = getDefaultLang();
+
+  const overrides = new Map<string, AgentDefinition>();
+  // Синхронная загрузка оверрайдов невозможна через JsonStore (асинхронный).
+  // Оверрайды применяются при сборке ответа в роутах.
+
+  return defs.map((def) => ({
+    id: def.id,
+    displayName: resolveDisplayName(def.displayName),
+    contextFile: def.contextFile,
+    capabilities: def.capabilities,
+    enabled: true,
+    mode: def.mode,
+    sshKeys: [],
+    isOverridden: false,
+    temperature: 0.3,
+    topP: 0.9,
+    icon: def.icon,
+    color: def.color,
+    description: resolveDescription(def.description),
+  }));
+}
+
+async function mergeWithOverride(
+  builtin: AgentDefinition,
+  agentStore: JsonStore<AgentDefinition>,
+): Promise<AgentDefinition> {
+  const override = await agentStore.load(builtin.id);
+  if (!override) return builtin;
+
+  const def = getAgentDefs().find((d) => d.id === builtin.id)!;
+  return {
+    ...builtin,
+    ...override,
+    displayName: resolveDisplayName(def.displayName, override.displayName),
+    description: resolveDescription(def.description, override.description),
+    isOverridden: true,
+  };
+}
 
 export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefinition>): Hono {
   const app = new Hono();
 
   // GET /api/v2/agents — список агентов
   app.get('/', kit.requireAuth, async (c) => {
+    const builtins = getBuiltInAgents(agentStore);
     const overridden = await agentStore.list();
-    const agents = BUILTIN_AGENTS.map((a) => {
-      const override = overridden.find((o) => o.id === a.id);
-      return override ? { ...a, ...override, isOverridden: true } : a;
-    });
+
+    const agents = await Promise.all(builtins.map((a) => mergeWithOverride(a, agentStore)));
+
     // Add custom (non-builtin) agents
     for (const o of overridden) {
       if (!BUILTIN_IDS.has(o.id)) {
@@ -118,10 +127,11 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
     const body = await c.req.json().catch(() => ({}));
     const id = body.id?.trim();
     if (!id) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'id обязателен' } }, 400);
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.idRequired', undefined, c) } }, 400);
     }
 
-    const builtin = BUILTIN_AGENTS.find((a) => a.id === id);
+    const builtins = getBuiltInAgents(agentStore);
+    const builtin = builtins.find((a) => a.id === id);
     const existing = await agentStore.load(id);
 
     const agent: AgentDefinition = {
@@ -150,9 +160,10 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
   app.get('/:id', kit.requireAdmin, async (c) => {
     const id = c.req.param('id');
     const override = await agentStore.load(id);
-    const builtin = BUILTIN_AGENTS.find((a) => a.id === id);
+    const builtins = getBuiltInAgents(agentStore);
+    const builtin = builtins.find((a) => a.id === id);
     if (!override && !builtin) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Агент не найден' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.agent', undefined, c) } }, 404);
     }
     const agent = override ? { ...builtin, ...override } : builtin;
     return c.json(agent);
@@ -169,14 +180,14 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
         await agentStore.delete(id);
         return c.json({ status: 'reset' });
       }
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Override не найден' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.agentOverride', undefined, c) } }, 404);
     }
 
     if (exists) {
       await agentStore.delete(id);
       return c.json({ status: 'deleted' });
     }
-    return c.json({ error: { code: 'NOT_FOUND', message: 'Агент не найден' } }, 404);
+    return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.agent', undefined, c) } }, 404);
   });
 
   // PATCH /api/v2/agents/:id/enabled — переключить enabled (admin)
@@ -185,11 +196,12 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
     const body = await c.req.json().catch(() => ({}));
     const enabled = body.enabled ?? true;
 
-    const builtin = BUILTIN_AGENTS.find((a) => a.id === id);
+    const builtins = getBuiltInAgents(agentStore);
+    const builtin = builtins.find((a) => a.id === id);
     const existing = await agentStore.load(id);
 
     if (!builtin && !existing) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Агент не найден' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.agent', undefined, c) } }, 404);
     }
 
     const agent: AgentDefinition = existing

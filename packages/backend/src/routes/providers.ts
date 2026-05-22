@@ -3,6 +3,7 @@ import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
 import type { ProviderConfig } from '@synth/shared';
 import { ProviderFactory } from '@synth/core';
+import { t } from '../lib/i18n.js';
 
 function getFaviconUrl(baseUrl?: string): string | undefined {
   if (!baseUrl) return undefined;
@@ -46,7 +47,7 @@ export function createProviderRoutes(kit: AuthKit, store: JsonStore<ProviderConf
     const body = await c.req.json().catch(() => ({}));
     const name = body.name?.trim();
     if (!name) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'name обязателен' } }, 400);
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.nameRequired', undefined, c) } }, 400);
     }
 
     const existing = await store.load(name);
@@ -68,7 +69,7 @@ export function createProviderRoutes(kit: AuthKit, store: JsonStore<ProviderConf
   app.delete('/:name', kit.requireAdmin, async (c) => {
     const name = c.req.param('name');
     if (!(await store.exists(name))) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Провайдер не найден' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.provider', undefined, c) } }, 404);
     }
     await store.delete(name);
     return c.body(null, 204);
@@ -78,7 +79,7 @@ export function createProviderRoutes(kit: AuthKit, store: JsonStore<ProviderConf
   app.get('/:name', kit.requireAdmin, async (c) => {
     const provider = await store.load(c.req.param('name'));
     if (!provider) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Провайдер не найден' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.provider', undefined, c) } }, 404);
     }
     return c.json(provider);
   });
@@ -87,15 +88,15 @@ export function createProviderRoutes(kit: AuthKit, store: JsonStore<ProviderConf
   app.post('/:name/test', kit.requireAdmin, async (c) => {
     const provider = await store.load(c.req.param('name'));
     if (!provider) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Провайдер не найден' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.provider', undefined, c) } }, 404);
     }
 
     if (provider.enabled === false) {
-      return c.json({ status: 'disabled', message: 'Провайдер отключён' });
+      return c.json({ status: 'disabled', message: t('errors.providerDisabled', undefined, c) });
     }
 
     if (!provider.baseUrl) {
-      return c.json({ status: 'error', error: 'URL не указан' }, 400);
+      return c.json({ status: 'error', error: t('errors.validation.urlRequired', undefined, c) }, 400);
     }
 
     try {
@@ -122,7 +123,7 @@ export function createProviderRoutes(kit: AuthKit, store: JsonStore<ProviderConf
     } catch (err) {
       return c.json({
         status: 'error',
-        error: err instanceof Error ? err.message : 'Ошибка подключения',
+        error: err instanceof Error ? err.message : t('errors.connectionError', undefined, c),
       });
     }
   });
@@ -132,14 +133,14 @@ export function createProviderRoutes(kit: AuthKit, store: JsonStore<ProviderConf
     const body = await c.req.json().catch(() => ({}));
     const url = body.url?.trim();
     if (!url) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'url обязателен' } }, 400);
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.urlRequired', undefined, c) } }, 400);
     }
 
     let origin: string;
     try {
       origin = new URL(url).origin;
     } catch {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Некорректный URL' } }, 400);
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidUrl', undefined, c) } }, 400);
     }
 
     try {
@@ -196,11 +197,11 @@ export function createProviderRoutes(kit: AuthKit, store: JsonStore<ProviderConf
         }
       }
 
-      return c.json({ icon: null, error: 'Favicon не найден' });
+      return c.json({ icon: null, error: t('errors.notFound.favicon', undefined, c) });
     } catch (err) {
       return c.json({
         icon: null,
-        error: err instanceof Error ? err.message : 'Ошибка получения favicon',
+        error: err instanceof Error ? err.message : t('errors.faviconFetchError', undefined, c),
       });
     }
   });

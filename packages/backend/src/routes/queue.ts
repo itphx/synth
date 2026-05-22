@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import type { SessionManager } from '@synth/core';
+import { t } from '../lib/i18n.js';
 
 export function createQueueRoutes(kit: AuthKit, sessionManager: SessionManager): Hono {
   const app = new Hono();
@@ -10,7 +11,7 @@ export function createQueueRoutes(kit: AuthKit, sessionManager: SessionManager):
     const sessionId = c.req.param('sessionId');
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
 
     const count = session.pendingMessages.length;
@@ -25,7 +26,7 @@ export function createQueueRoutes(kit: AuthKit, sessionManager: SessionManager):
     const sessionId = c.req.param('sessionId');
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
 
     const texts: string[] = session.pendingMessages.map((m) => m.content);
@@ -40,7 +41,7 @@ export function createQueueRoutes(kit: AuthKit, sessionManager: SessionManager):
     const sessionId = c.req.param('sessionId');
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
 
     // Разблокировать

@@ -2,6 +2,7 @@ import * as React from "react"
 import { Dialog as BaseDialog } from "@base-ui/react/dialog"
 import { cn } from "@/lib/utils"
 import { Icon } from "@/components/icon/Icon"
+import { useI18n } from "@/lib/i18n"
 
 let openDialogCount = 0
 
@@ -65,6 +66,7 @@ function DialogContent({
   showCloseButton = true,
   ...props
 }: DialogContentProps) {
+  const { t } = useI18n()
   return (
     <BaseDialog.Portal>
       <DialogOverlay />
@@ -87,7 +89,7 @@ function DialogContent({
               className="absolute top-2 right-2 rounded-lg p-1.5 opacity-70 transition-opacity hover:opacity-100 hover:bg-interactive-hover text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             >
               <Icon name="close" className="size-4" />
-              <span className="sr-only">Закрыть</span>
+              <span className="sr-only">{t('common.close')}</span>
             </BaseDialog.Close>
           )}
         </BaseDialog.Popup>

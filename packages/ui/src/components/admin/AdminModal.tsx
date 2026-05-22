@@ -2,6 +2,7 @@ import { Dialog, DialogContent } from "../ui/dialog"
 import { Icon } from "../icon/Icon"
 import { useUIStore } from "../../stores/useUIStore"
 import { cn } from "@/lib/utils"
+import { useI18n } from "@/lib/i18n"
 import { DashboardPanel } from "./DashboardPanel"
 import { SessionsPanel } from "./SessionsPanel"
 import { ProjectsPanel } from "./ProjectsPanel"
@@ -14,19 +15,20 @@ import { DefaultsPanel } from "./DefaultsPanel"
 import { DebugPanel } from "./DebugPanel"
 
 const SECTIONS = [
-  { id: "dashboard", label: "Дашборд", icon: "home" },
-  { id: "sessions", label: "Сессии", icon: "chat-new" },
-  { id: "projects", label: "Проекты", icon: "briefcase" },
-  { id: "providers", label: "Провайдеры", icon: "server" },
-  { id: "models", label: "Модели", icon: "cpu" },
-  { id: "agents", label: "Агенты", icon: "robot-2" },
-  { id: "context", label: "Контекст", icon: "book-open" },
-  { id: "users", label: "Пользователи", icon: "user-smile" },
-  { id: "defaults", label: "Настройки", icon: "settings-3" },
-  { id: "debug", label: "Отладка", icon: "bug" },
+  { id: "dashboard", label: "admin.section.dashboard", icon: "home" },
+  { id: "sessions", label: "admin.section.sessions", icon: "chat-new" },
+  { id: "projects", label: "admin.section.projects", icon: "briefcase" },
+  { id: "providers", label: "admin.section.providers", icon: "server" },
+  { id: "models", label: "admin.section.models", icon: "cpu" },
+  { id: "agents", label: "admin.section.agents", icon: "robot-2" },
+  { id: "context", label: "admin.section.context", icon: "book-open" },
+  { id: "users", label: "admin.section.users", icon: "user-smile" },
+  { id: "defaults", label: "admin.section.defaults", icon: "settings-3" },
+  { id: "debug", label: "admin.section.debug", icon: "bug" },
 ] as const
 
 export const AdminModal = () => {
+  const { t } = useI18n()
   const { isAdminSettingsOpen, setAdminSettingsOpen, adminPage, setAdminPage } = useUIStore()
 
   return (
@@ -40,7 +42,7 @@ export const AdminModal = () => {
           <div className="w-56 border-r border-border flex flex-col shrink-0">
             <div className="flex items-center gap-2 px-4 h-12 border-b border-border">
               <Icon name="admin" className="size-4 text-muted-foreground" />
-              <span className="font-medium text-sm">Админ-панель</span>
+              <span className="font-medium text-sm">{t('admin.title')}</span>
             </div>
             <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
               {SECTIONS.map((s) => (
@@ -55,7 +57,7 @@ export const AdminModal = () => {
                   )}
                 >
                   <Icon name={s.icon} className="size-4 shrink-0" />
-                  {s.label}
+                  {t(s.label as Parameters<typeof t>[0])}
                 </button>
               ))}
             </nav>
@@ -65,7 +67,7 @@ export const AdminModal = () => {
           <div className="flex-1 overflow-y-auto">
             <div className="flex items-center justify-between px-6 h-12 border-b border-border shrink-0 bg-background">
               <h2 className="font-medium text-sm">
-                {SECTIONS.find((s) => s.id === adminPage)?.label || "Админ-панель"}
+                {SECTIONS.find((s) => s.id === adminPage) ? t(SECTIONS.find((s) => s.id === adminPage)!.label as Parameters<typeof t>[0]) : t('admin.title')}
               </h2>
               <button
                 onClick={() => setAdminSettingsOpen(false)}

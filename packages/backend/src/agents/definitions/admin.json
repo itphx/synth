@@ -1,0 +1,13 @@
+{
+  "id": "admin",
+  "displayName": { "en": "Administrator", "ru": "Администратор" },
+  "description": {
+    "en": "System administration, git management",
+    "ru": "Системное администрирование, управление git"
+  },
+  "capabilities": ["file_read", "file_write", "git_read", "git_write", "system_admin"],
+  "icon": "admin",
+  "color": "--status-success",
+  "mode": "orchestrator",
+  "contextFile": "ADMIN.md"
+}

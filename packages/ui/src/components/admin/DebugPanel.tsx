@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
+import { useI18n } from '@/lib/i18n'
 
 interface DebugConfig {
   groups: Record<string, string>
@@ -17,6 +18,7 @@ const LEVEL_COLORS: Record<string, string> = {
 }
 
 export const DebugPanel = () => {
+  const { t } = useI18n()
   const [config, setConfig] = useState<DebugConfig | null>(null)
   const [levels, setLevels] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
@@ -48,9 +50,9 @@ export const DebugPanel = () => {
         method: 'POST',
         body: JSON.stringify({ groups: levels }),
       })
-      setStatus('Сохранено')
+      setStatus(t('admin.debug.saved'))
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'Ошибка сохранения')
+      setStatus(err instanceof Error ? err.message : t('admin.debug.saveError'))
     } finally {
       setSaving(false)
     }
@@ -59,7 +61,7 @@ export const DebugPanel = () => {
   const grouped = config?.groups
     ? Object.entries(config.groups).reduce(
         (acc, [key, value]) => {
-          const category = key === 'DEBUG' || key === 'ROUTES' || key === 'STORAGE' || key === 'WEBSOCKET' ? 'СЕРВИС' : 'AI'
+          const category = key === 'DEBUG' || key === 'ROUTES' || key === 'STORAGE' || key === 'WEBSOCKET' ? t('admin.debug.service') : t('admin.debug.ai')
           if (!acc[category]) acc[category] = []
           acc[category].push({ group: key, level: value })
           return acc
@@ -71,9 +73,9 @@ export const DebugPanel = () => {
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
-        <h3 className="text-lg font-semibold">Отладка</h3>
+        <h3 className="text-lg font-semibold">{t('admin.debug.title')}</h3>
         <p className="text-muted-foreground text-sm mt-1">
-          Уровни логирования по группам. Изменения применяются сразу.
+          {t('admin.debug.description')}
         </p>
       </div>
 
@@ -119,16 +121,16 @@ export const DebugPanel = () => {
             >
               {saving ? (
                 <>
-                  <Icon name="refresh-cw" className="w-4 h-4 animate-spin" /> Сохранение...
+                  <Icon name="refresh-cw" className="w-4 h-4 animate-spin" /> {t('admin.debug.saving')}
                 </>
               ) : (
                 <>
-                  <Icon name="save" className="w-4 h-4" /> Сохранить
+                  <Icon name="save" className="w-4 h-4" /> {t('admin.debug.save')}
                 </>
               )}
             </button>
             {status && (
-              <span className={cn('text-sm', status === 'Сохранено' ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500')}>
+              <span className={cn('text-sm', status === t('admin.debug.saved') ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500')}>
                 {status}
               </span>
             )}

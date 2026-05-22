@@ -72,3 +72,10 @@ export class AsyncLock {
     }
   }
 }
+
+// i18n: выбор локализованного значения из Record<string, V>
+// Пример: pickLocalized({ en: 'Developer', ru: 'Разработчик' }, 'en') → 'Developer'
+
+export function pickLocalized<V>(record: Record<string, V>, lang: string, fallbackLang = 'ru'): V | undefined {
+  return record[lang] ?? record[fallbackLang] ?? undefined;
+}

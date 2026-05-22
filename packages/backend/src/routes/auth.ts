@@ -4,6 +4,8 @@ import type { AuthConfig, User } from '@synth/shared';
 import type { ProfileStore } from '@synth/shared';
 import { setCookie } from 'hono/cookie';
 import { nowISO } from '@synth/shared';
+import { t } from '../lib/i18n.js';
+import { getDefaultLang, setDefaultLang, type Lang } from '../lib/i18n-config.js';
 
 export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: ProfileStore): Hono {
   const app = new Hono();
@@ -60,7 +62,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
     const apiKey: string | undefined = body.api_key || body.apiKey;
 
     if (!apiKey) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'api_key обязателен' } }, 400);
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.apiKeyRequired', undefined, c) } }, 400);
     }
 
     let user: User | null = null;
@@ -94,7 +96,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
     }
 
     if (!user) {
-      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Неверный API-ключ' } }, 401);
+      return c.json({ error: { code: 'UNAUTHORIZED', message: t('auth.invalidApiKey', undefined, c) } }, 401);
     }
 
     const sessionId = kit.createSession(user);
@@ -240,7 +242,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
   app.get('/locales', (c) => {
     return c.json({
       locales: [
-        { code: 'ru', name: 'Russian', native_name: 'Русский' },
+        { code: 'ru', name: 'Russian', native_name: t('locales.ru.nativeName', undefined, c) },
         { code: 'en', name: 'English', native_name: 'English' },
       ],
       default: 'ru',
@@ -261,12 +263,18 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
 
   // GET /auth/defaults
   app.get('/defaults', (c) => {
-    return c.json({ locale: 'ru', themeMode: 'dark', theme: 'flexoki' });
+    const lang = getDefaultLang();
+    return c.json({ locale: lang, themeMode: 'dark', theme: 'flexoki' });
   });
 
   // PUT /auth/defaults
   app.put('/defaults', async (c) => {
-    return c.json({ status: 'ok', defaults: await c.req.json() });
+    const body = await c.req.json();
+    const locale = body.locale || body.language;
+    if (locale === 'en' || locale === 'ru') {
+      setDefaultLang(locale as Lang);
+    }
+    return c.json({ status: 'ok', defaults: { ...body, locale: getDefaultLang() } });
   });
 
   return app;

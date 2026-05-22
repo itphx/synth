@@ -1,0 +1,13 @@
+{
+  "id": "assistant",
+  "displayName": { "en": "Assistant", "ru": "Ассистент" },
+  "description": {
+    "en": "Universal assistant for any task",
+    "ru": "Универсальный ассистент для любых задач"
+  },
+  "capabilities": [],
+  "icon": "robot-2",
+  "color": "--primary",
+  "mode": "simple",
+  "contextFile": "ASSISTANT.md"
+}
