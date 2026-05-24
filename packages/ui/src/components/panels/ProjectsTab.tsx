@@ -58,6 +58,7 @@ export const ProjectsTab: React.FC = () => {
       const { renameSession, loadSessions } = useSessionsStore.getState()
       await renameSession(renamingSessionId, renameValue.trim())
       await loadSessions()
+      useUIStore.getState().updateTabTitle(`chat-${renamingSessionId}`, renameValue.trim())
     }
     setRenamingSessionId(null)
     setRenameValue('')
@@ -597,7 +598,7 @@ function SessionItem({
       openTab({
         id: `chat-${session.id}`,
         type: 'chat',
-        title: session.id,
+        title: session.name || session.id,
         data: { sessionId: session.id, projectId: session.project_id || undefined },
       })
     }
@@ -657,7 +658,7 @@ function SessionItem({
           </div>
         ) : (
           <>
-            <span className={`truncate text-sm ${hasUnread ? 'text-orange-400' : 'text-foreground'}`} title={session.id}>{session.id}</span>
+            <span className={`truncate text-sm ${hasUnread ? 'text-orange-400' : 'text-foreground'}`} title={session.name || session.id}>{session.name || session.id}</span>
             <span className="text-[0.65rem] text-muted-foreground leading-none">{timeLabel}</span>
           </>
         )}
@@ -675,7 +676,7 @@ function SessionItem({
               </button>
             }
             items={[
-              { label: t('leftPanel.rename'), icon: 'pencil-ai', onClick: () => { onStartRename(session.id, session.id) } },
+              { label: t('leftPanel.rename'), icon: 'pencil-ai', onClick: () => { onStartRename(session.id, session.name || session.id) } },
               { label: t('leftPanel.configure'), icon: 'settings-3', onClick: () => { closeMenu() } },
               'separator',
               { label: t('leftPanel.delete'), icon: 'delete-bin', onClick: handleDelete, destructive: true },

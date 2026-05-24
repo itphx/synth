@@ -42,6 +42,7 @@ export interface ProjectData {
 
 export interface SessionData {
   id: string
+  name: string | null
   user_id: string | null
   owner_id: string | null
   project_id: string | null

@@ -93,12 +93,7 @@ export class ContextBuilder {
     const project = this._getProjectPrompt(params.projectName);
     if (project) parts.push(project);
 
-    // 6. Status prompt (TSM)
-    const tsmMode = params.tsmMode || 'simple';
-    const status = this._config.getStatusPrompt(tsmMode, lang);
-    if (status) parts.push(status);
-
-    // 7. Interview prompt
+    // 6. Interview prompt
     if (showInterview && params.userId && this._profiles) {
       const profile = await this._profiles.loadProfile(params.userId);
       const intManager = new InterviewManager(this._profiles, this._config);

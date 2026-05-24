@@ -38,8 +38,6 @@ export { DebugCollector } from './debug.js';
 export { ContextConfig, ContextBuilder, InterviewManager } from './engine/context/index.js';
 export type { BuildSystemPromptParams, ContextBuilderOptions } from './engine/context/index.js';
 
-export { StatusParser } from './engine/status-parser.js';
-export type { ParsedStatus } from './engine/status-parser.js';
 export { ChatOrchestrator } from './engine/orchestrator.js';
 export type { OrchestratorOptions, ProcessMessageResult } from './engine/orchestrator.js';
 

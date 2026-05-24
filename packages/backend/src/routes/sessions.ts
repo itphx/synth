@@ -36,6 +36,7 @@ export function createSessionRoutes(
     const body = await c.req.json().catch(() => ({}));
 
     const session = await sessionManager.createSession({
+      title: body.name || body.title || undefined,
       projectId: body.project_id || body.projectId || undefined,
       engine: body.engine || 'synth',
       settings: body.settings,
@@ -68,6 +69,8 @@ export function createSessionRoutes(
     if (body.project_id !== undefined || body.projectId !== undefined) {
       session.projectId = body.project_id ?? body.projectId;
     }
+    if (body.name !== undefined) session.title = body.name;
+    if (body.title !== undefined) session.title = body.title;
     if (body.engine !== undefined) session.engine = body.engine;
     if (body.settings !== undefined) {
       session.settings = { ...session.settings, ...(body.settings as Partial<typeof session.settings>) };

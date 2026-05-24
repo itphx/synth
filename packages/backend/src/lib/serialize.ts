@@ -3,6 +3,7 @@ import type { Session, Message, Project, StatusMessage } from '@synth/shared';
 export function serializeSession(session: Session) {
   return {
     id: session.id,
+    name: session.title || null,
     user_id: session.userId || null,
     owner_id: session.ownerId || null,
     project_id: session.projectId || null,

@@ -320,11 +320,6 @@ export class ContextConfig {
     return this._readFile(basePath);
   }
 
-  getStatusPrompt(mode: string, language = 'ru'): string {
-    const baseStem = mode === 'orchestrator' ? 'ORCHESTRATOR' : 'SIMPLE';
-    return this._readPrompt(baseStem, 'tsm', language) ?? '';
-  }
-
   getRolesDescription(language = 'ru'): string {
     return this._readPrompt('ROLES_DESCRIPTION', 'system', language) ?? '';
   }

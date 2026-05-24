@@ -53,7 +53,6 @@ export function DebugModal({ debug, onClose }: DebugModalProps) {
   const apiRequest = debug.api_request as Record<string, unknown> | undefined;
   const apiResponse = debug.api_response as Record<string, unknown> | undefined;
   const rawResponse = debug.raw_model_response as string | undefined;
-  const status = debug.status as Record<string, unknown> | undefined;
   const reasoning = debug.reasoning as string | undefined;
   const systemPromptParts = debug.system_prompt_parts as Record<string, unknown> | undefined;
   const contextFiles = debug.context_files as Array<Record<string, unknown>> | undefined;
@@ -142,13 +141,6 @@ export function DebugModal({ debug, onClose }: DebugModalProps) {
           {rawResponse && (
             <Section title="Сырой ответ модели">
               <JsonBlock data={rawResponse} />
-            </Section>
-          )}
-
-          {/* Status Block */}
-          {status && (
-            <Section title="JSON-блок (статус)">
-              <JsonBlock data={status} />
             </Section>
           )}
 

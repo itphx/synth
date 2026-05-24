@@ -7,8 +7,6 @@ import { ProviderFactory } from '../providers/base.js';
 import type { LLMMessage, CancellationToken, ProviderConfig as CoreProviderConfig } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import type { ContextConfig } from './context/config.js';
-import { StatusParser } from './status-parser.js';
-import type { ParsedStatus } from './status-parser.js';
 import { info, warning } from '../logger.js';
 
 export interface OrchestratorOptions {
@@ -191,7 +189,7 @@ export class ChatOrchestrator {
         return {};
       }
 
-      // 7. Parse status and save
+      // 7. Save assistant message
       const savedContent = await this._saveAssistantMessage(
         session.id, accumulatedContent, streamId, effectiveAgentRole,
         finalUsage, finalModel, accumulatedReasoning, debugCollector, false,
@@ -317,24 +315,10 @@ export class ChatOrchestrator {
     debugCollector: DebugCollector,
     isCancelled: boolean,
   ): Promise<string> {
-    let finalContent: string;
-    let parsedStatus: ParsedStatus | null = null;
+    const finalContent = content;
 
     if (!isCancelled && content) {
-      const statusParser = new StatusParser(debugCollector);
-      const result = statusParser.parse(content);
-      parsedStatus = result.parsed;
-      finalContent = result.cleaned;
-
-      if (parsedStatus) {
-        debugCollector.captureRawModelResponse(content);
-        debugCollector.captureStatus(parsedStatus as unknown as Record<string, unknown>);
-        await this._applyParsedStatus(sessionId, parsedStatus);
-      } else {
-        debugCollector.captureRawModelResponse(content);
-      }
-    } else {
-      finalContent = content;
+      debugCollector.captureRawModelResponse(content);
     }
 
     if (debugCollector.enabled) {
@@ -374,28 +358,6 @@ export class ChatOrchestrator {
     }
 
     return finalContent;
-  }
-
-  private async _applyParsedStatus(sessionId: string, parsed: ParsedStatus): Promise<void> {
-    await this._sessionManager.safeUpdate(sessionId, async (session) => {
-      const status = session.status;
-
-      if (parsed.taskName) status.taskName = parsed.taskName;
-      if (parsed.state) {
-        try {
-          await this._sessionManager.updateTsmState(sessionId, parsed.state as never);
-        } catch {
-          // ignore invalid transitions
-        }
-      }
-      if (parsed.progress !== undefined) status.progress = parsed.progress;
-      if (parsed.project) status.project = parsed.project;
-      if (parsed.currentTaskInfo) status.currentTaskInfo = parsed.currentTaskInfo;
-      if (parsed.updatedProjectInfo) status.updatedProjectInfo = parsed.updatedProjectInfo;
-      if (parsed.approvedPlan) status.approvedPlan = parsed.approvedPlan;
-      if (parsed.alreadyDone) status.alreadyDone = parsed.alreadyDone;
-      if (parsed.currentlyDoing) status.currentlyDoing = parsed.currentlyDoing;
-    });
   }
 
   private _classifyError(errMsg: string): string {

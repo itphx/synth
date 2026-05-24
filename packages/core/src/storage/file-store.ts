@@ -37,6 +37,7 @@ interface SerializedMessage {
 
 interface SerializedSession {
   id: string;
+  title?: string;
   user_id?: string;
   owner_id?: string;
   project_id?: string;
@@ -120,6 +121,7 @@ function deserializeMessage(data: SerializedMessage): Message {
 function serializeSession(session: Session): SerializedSession {
   return {
     id: session.id,
+    title: session.title,
     user_id: session.userId,
     owner_id: session.ownerId,
     project_id: session.projectId,
@@ -156,6 +158,7 @@ function serializeSession(session: Session): SerializedSession {
 function deserializeSession(data: SerializedSession): Session {
   return {
     id: data.id,
+    title: data.title,
     userId: data.user_id,
     ownerId: data.owner_id,
     projectId: data.project_id,
