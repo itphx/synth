@@ -50,9 +50,10 @@ export class SessionManager {
     return this.store.load(sessionId);
   }
 
-  async createSession(data: { projectId?: string; engine?: string; settings?: Partial<SessionSettings> } = {}): Promise<Session> {
+  async createSession(data: { title?: string; projectId?: string; engine?: string; settings?: Partial<SessionSettings> } = {}): Promise<Session> {
     const session: Session = {
       id: generateId(),
+      title: data.title,
       userId: '',
       projectId: data.projectId,
       engine: (data.engine || 'synth') as Session['engine'],

@@ -8,7 +8,6 @@ export class DebugCollector {
   private _apiResponse: Record<string, unknown> | null = null;
   private _rawModelResponse: string | null = null;
   private _reasoning: string | null = null;
-  private _status: Record<string, unknown> | null = null;
   private _sessionInfo: Record<string, unknown> | null = null;
   private _subagents: Array<Record<string, unknown>> = [];
   private _mcpCalls: Array<Record<string, unknown>> = [];
@@ -60,11 +59,6 @@ export class DebugCollector {
   captureReasoning(reasoning: string | undefined): void {
     if (!this._enabled || !reasoning) return;
     this._reasoning = reasoning;
-  }
-
-  captureStatus(status: Record<string, unknown> | undefined): void {
-    if (!this._enabled || !status) return;
-    this._status = status;
   }
 
   captureSessionInfo(
@@ -158,7 +152,6 @@ export class DebugCollector {
     if (this._apiResponse) result.api_response = this._apiResponse;
     if (this._rawModelResponse) result.raw_model_response = this._rawModelResponse;
     if (this._reasoning) result.reasoning = this._reasoning;
-    if (this._status) result.status = this._status;
     if (this._sessionInfo) result.session = this._sessionInfo;
     if (this._subagents.length) result.subagents = this._subagents;
     if (this._mcpCalls.length) result.mcp_calls = this._mcpCalls;
@@ -174,7 +167,6 @@ export class DebugCollector {
     this._apiResponse = null;
     this._rawModelResponse = null;
     this._reasoning = null;
-    this._status = null;
     this._sessionInfo = null;
     this._subagents = [];
     this._mcpCalls = [];

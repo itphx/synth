@@ -1,11 +1,22 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import type { SessionManager } from '@synth/core';
+import type { EventBus } from '@synth/core';
+import type { QueueProcessorManager } from '@synth/core';
+import type { ChatOrchestrator } from '@synth/core';
 import { MessageRole, generateStreamId, nowISO } from '@synth/shared';
+import { enqueueUserMessage, sseEventStream } from '@synth/core';
 import { serializeSession } from '../lib/serialize.js';
 import { t } from '../lib/i18n.js';
 
-export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager): Hono {
+export function createSessionRoutes(
+  kit: AuthKit,
+  sessionManager: SessionManager,
+  eventBus: EventBus,
+  queueManager: QueueProcessorManager,
+  processMessage: ReturnType<ChatOrchestrator['createProcessMessage']>,
+  orchestrator: ChatOrchestrator,
+): Hono {
   const app = new Hono();
 
   // GET /api/v2/sessions — список сессий
@@ -25,6 +36,7 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
     const body = await c.req.json().catch(() => ({}));
 
     const session = await sessionManager.createSession({
+      title: body.name || body.title || undefined,
       projectId: body.project_id || body.projectId || undefined,
       engine: body.engine || 'synth',
       settings: body.settings,
@@ -57,6 +69,8 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
     if (body.project_id !== undefined || body.projectId !== undefined) {
       session.projectId = body.project_id ?? body.projectId;
     }
+    if (body.name !== undefined) session.title = body.name;
+    if (body.title !== undefined) session.title = body.title;
     if (body.engine !== undefined) session.engine = body.engine;
     if (body.settings !== undefined) {
       session.settings = { ...session.settings, ...(body.settings as Partial<typeof session.settings>) };
@@ -73,6 +87,7 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
     await sessionManager.deleteSession(session.id);
+    queueManager.stop(session.id);
     return c.body(null, 204);
   });
 
@@ -85,10 +100,50 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
     return c.json({
       blocked: !!session.status.blocked,
       pending_count: session.pendingMessages.length,
+      processor_running: queueManager.isRunning(session.id),
     });
   });
 
-  // POST /api/v2/sessions/:id/prompt — отправить сообщение (SSE)
+  // GET /api/v2/sessions/:id/events — SSE подписка на события сессии
+  app.get('/:id/events', kit.requireAuth, async (c) => {
+    const sessionId = c.req.param('id');
+    const session = await sessionManager.getSession(sessionId);
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+
+    const signal = c.req.raw.signal;
+
+    return new Response(
+      new ReadableStream({
+        async start(controller) {
+          const encoder = new TextEncoder();
+
+          try {
+            for await (const event of sseEventStream(eventBus, sessionId, signal)) {
+              const line = `data: ${JSON.stringify(event)}\n\n`;
+              controller.enqueue(encoder.encode(line));
+            }
+          } catch {
+            // client disconnected
+          } finally {
+            try { controller.close(); } catch { /* already closed */ }
+          }
+        },
+      }),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no',
+        },
+      },
+    );
+  });
+
+  // POST /api/v2/sessions/:id/prompt — отправить сообщение (очередь + SSE-стрим)
   app.post('/:id/prompt', kit.requireAuth, async (c) => {
     const user = kit.getCurrentUser(c)!;
     const body = await c.req.json().catch(() => ({}));
@@ -98,15 +153,14 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
       return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.contentRequired', undefined, c) } }, 400);
     }
 
-    const session = await sessionManager.getSession(c.req.param('id'));
+    const sessionId = c.req.param('id');
+    const session = await sessionManager.getSession(sessionId);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
 
     const streamId = body.messageId || generateStreamId();
-    const msgIndex = session.messages.length;
 
-    // Создать сообщение
     const message = {
       role: MessageRole.USER,
       content,
@@ -115,59 +169,52 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
       pinned: false,
       hidden: false,
       author: user.username,
-      agentRole: body.agent,
+      agentRole: body.agent || session.settings.agentRole,
+      provider: body.provider || session.settings.provider,
+      model: body.model || session.settings.model,
       metadata: { ...(body.metadata || {}), stream_id: streamId },
-      model: body.model,
-      provider: body.provider,
     };
 
-    await sessionManager.addMessage(session.id, message);
+    // Ставим в очередь
+    const result = await enqueueUserMessage(
+      sessionManager, eventBus, sessionId, message, queueManager, processMessage,
+    );
 
-    // SSE-стрим (заглушка — без реального LLM)
+    if (!result) {
+      return c.json({
+        error: {
+          code: 'QUEUE_FULL',
+          message: t('errors.chat.queueFull', { max: 5 }, c),
+        },
+      }, 429);
+    }
+
+    // Возвращаем SSE-стрим, подписанный на EventBus
+    const signal = c.req.raw.signal;
+
     return new Response(
       new ReadableStream({
         async start(controller) {
           const encoder = new TextEncoder();
-          const send = (event: string, data: Record<string, unknown>) => {
-            controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-          };
 
-          send('stream.start', { stream_id: streamId });
+          try {
+            for await (const event of sseEventStream(eventBus, sessionId, signal)) {
+              const line = `data: ${JSON.stringify(event)}\n\n`;
+              controller.enqueue(encoder.encode(line));
 
-          // Заглушка ответа
-          const reply = t('stub.llmNotConnected', { content: content.slice(0, 200) }, c);
-          send('stream.chunk', {
-            stream_id: streamId,
-            content: reply,
-            is_final: false,
-          });
-          send('stream.chunk', {
-            stream_id: streamId,
-            content: '',
-            is_final: true,
-          });
-          send('stream.done', {
-            stream_id: streamId,
-            content: reply,
-            message_index: msgIndex + 1,
-            pending_count: session.pendingMessages.length,
-          });
-
-          // Сохранить ответ как assistant-сообщение
-          const assistantMsg = {
-            role: MessageRole.ASSISTANT,
-            content: reply,
-            createdAt: nowISO(),
-            disabled: false,
-            pinned: false,
-            hidden: false,
-            author: user.username,
-            agentRole: body.agent,
-            metadata: { ...(body.metadata || {}), stream_id: streamId },
-          };
-          await sessionManager.addMessage(session.id, assistantMsg);
-
-          controller.close();
+              // Останавливаемся после stream.done или stream.error для этого streamId
+              if (
+                (event.type === 'stream.done' || event.type === 'stream.error' || event.type === 'stream.cancelled')
+                && event.data.stream_id === streamId
+              ) {
+                break;
+              }
+            }
+          } catch {
+            // client disconnected
+          } finally {
+            try { controller.close(); } catch { /* already closed */ }
+          }
         },
       }),
       {
@@ -176,6 +223,7 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
           'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no',
         },
       },
     );
@@ -203,9 +251,12 @@ export function createSessionRoutes(kit: AuthKit, sessionManager: SessionManager
     }
 
     if (session.currentStream) {
+      orchestrator.cancel(session.currentStream.streamId);
       session.currentStream.cancelled = true;
       await sessionManager.updateSession(session);
     }
+
+    queueManager.stop(session.id);
 
     return c.json({ status: 'aborted' });
   });

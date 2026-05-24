@@ -125,6 +125,7 @@ export interface Checkpoint {
 
 export interface Session {
   id: string;
+  title?: string;
   userId?: string;
   ownerId?: string;
   projectId?: string;

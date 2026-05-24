@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState } from 'react'
 import { Icon } from '@/components/icon/Icon'
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { useSessionsTreeStore } from '@/stores/useSessionsTreeStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
@@ -27,39 +28,6 @@ export const ProjectsTabToolbar: React.FC = () => {
   const [sessionName, setSessionName] = useState('')
   const [sessionProjectId, setSessionProjectId] = useState<string | null>(null)
 
-  const projectInputRef = useRef<HTMLInputElement>(null)
-  const sessionInputRef = useRef<HTMLInputElement>(null)
-  const projectRef = useRef<HTMLDivElement>(null)
-  const sessionRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (popover === 'project') {
-      setProjectName('')
-      setTimeout(() => projectInputRef.current?.focus(), 0)
-    }
-    if (popover === 'session') {
-      setSessionName('')
-      setSessionProjectId(null)
-      setTimeout(() => sessionInputRef.current?.focus(), 0)
-    }
-  }, [popover])
-
-  useEffect(() => {
-    if (!popover) return
-    const handler = (e: MouseEvent) => {
-      const target = e.target as HTMLElement
-      const inProject = projectRef.current?.contains(target)
-      const inSession = sessionRef.current?.contains(target)
-      const inSelect = target.closest('[data-slot="select-content"]') !== null || target.closest('[data-slot="select-item"]') !== null
-      if (!inProject && !inSession && !inSelect) setPopover(null)
-    }
-    const id = setTimeout(() => document.addEventListener('mousedown', handler), 0)
-    return () => {
-      clearTimeout(id)
-      document.removeEventListener('mousedown', handler)
-    }
-  }, [popover])
-
   const handleCreateProject = async () => {
     const name = projectName.trim()
     if (!name) return
@@ -73,8 +41,15 @@ export const ProjectsTabToolbar: React.FC = () => {
     if (result) setPopover(null)
   }
 
-  const togglePopover = (type: PopoverType) => {
-    setPopover(popover === type ? null : type)
+  const handleOpenChange = (type: PopoverType) => (open: boolean) => {
+    if (open) {
+      setProjectName('')
+      setSessionName('')
+      setSessionProjectId(null)
+      setPopover(type)
+    } else {
+      setPopover(null)
+    }
   }
 
   const handleToggleAll = () => {
@@ -103,89 +78,97 @@ export const ProjectsTabToolbar: React.FC = () => {
         <Icon name={allCollapsed ? 'arrow-down-s' : 'arrow-up-s'} className="h-4 w-4" />
       </button>
       <div className="mx-0.5 h-4 w-px bg-sidebar-border" />
-      <div className="relative" ref={projectRef}>
-        <button
-          onClick={() => togglePopover('project')}
-          className={`flex h-6 w-6 items-center justify-center rounded transition-colors ${
-            popover === 'project'
-              ? 'bg-interactive-hover text-foreground'
-              : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'
-          }`}
-          title={t('leftPanel.newProject')}
+      <Popover open={popover === 'project'} onOpenChange={handleOpenChange('project')}>
+        <PopoverTrigger asChild>
+          <button
+            className={`flex h-6 w-6 items-center justify-center rounded transition-colors ${
+              popover === 'project'
+                ? 'bg-interactive-hover text-foreground'
+                : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'
+            }`}
+            title={t('leftPanel.newProject')}
+          >
+            <Icon name="folder-add" className="h-4 w-4" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          className="w-56 p-3"
+          onOpenAutoFocus={(e) => e.preventDefault()}
         >
-          <Icon name="folder-add" className="h-4 w-4" />
-        </button>
-        {popover === 'project' && (
-          <div className="absolute right-0 top-full mt-1 z-50 w-56 rounded-lg border bg-background shadow-md p-3">
-            <form
-              onSubmit={(e) => { e.preventDefault(); handleCreateProject() }}
-              className="flex flex-col gap-2"
-            >
-              <input
-                ref={projectInputRef}
-                type="text"
-                value={projectName}
-                onChange={(e) => setProjectName(e.target.value)}
-                placeholder={t('leftPanel.projectName')}
-                className="rounded bg-interactive px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground outline-none w-full"
-                onKeyDown={(e) => { if (e.key === 'Escape') setPopover(null) }}
-              />
-              <button type="submit" className="self-end rounded px-3 py-1 text-xs text-primary hover:bg-primary/10">
-                {t('common.create')}
-              </button>
-            </form>
-          </div>
-        )}
-      </div>
+          <form
+            onSubmit={(e) => { e.preventDefault(); handleCreateProject() }}
+            className="flex flex-col gap-2"
+          >
+            <input
+              autoFocus
+              type="text"
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              placeholder={t('leftPanel.projectName')}
+              className="rounded bg-interactive px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground outline-none w-full"
+            />
+            <button type="submit" className="self-end rounded px-3 py-1 text-xs text-primary hover:bg-primary/10">
+              {t('common.create')}
+            </button>
+          </form>
+        </PopoverContent>
+      </Popover>
 
-      <div className="relative" ref={sessionRef}>
-        <button
-          onClick={() => togglePopover('session')}
-          className={`flex h-6 w-6 items-center justify-center rounded transition-colors ${
-            popover === 'session'
-              ? 'bg-interactive-hover text-foreground'
-              : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'
-          }`}
-          title={t('leftPanel.newSession')}
+      <Popover open={popover === 'session'} onOpenChange={handleOpenChange('session')}>
+        <PopoverTrigger asChild>
+          <button
+            className={`flex h-6 w-6 items-center justify-center rounded transition-colors ${
+              popover === 'session'
+                ? 'bg-interactive-hover text-foreground'
+                : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'
+            }`}
+            title={t('leftPanel.newSession')}
+          >
+            <Icon name="chat-new" className="h-4 w-4" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          className="w-56 p-3"
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          onInteractOutside={(e) => {
+            const target = e.target as HTMLElement
+            if (target.closest('[data-slot="select-content"]') || target.closest('[data-slot="select-item"]')) {
+              e.preventDefault()
+            }
+          }}
         >
-          <Icon name="chat-new" className="h-4 w-4" />
-        </button>
-        {popover === 'session' && (
-          <div className="absolute right-0 top-full mt-1 z-50 w-56 rounded-lg border bg-background shadow-md p-3">
-            <form
-              onSubmit={(e) => { e.preventDefault(); handleCreateSession() }}
-              className="flex flex-col gap-2"
-            >
-              <input
-                ref={sessionInputRef}
-                type="text"
-                value={sessionName}
-                onChange={(e) => setSessionName(e.target.value)}
-                placeholder={t('leftPanel.sessionName')}
-                className="rounded bg-interactive px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground outline-none w-full"
-                onKeyDown={(e) => { if (e.key === 'Escape') setPopover(null) }}
-              />
-              <Select value={sessionProjectId ?? ''} onValueChange={(v) => setSessionProjectId(v || null)}>
-                <SelectTrigger size="sm" className="w-full text-xs border-0 bg-interactive rounded">
-                  <span className="truncate flex-1 text-left">
-                    {sessionProjectId ? (projects.find(p => p.id === sessionProjectId)?.name ?? sessionProjectId) : t('leftPanel.noProject')}
-                  </span>
-                  <Icon name="arrow-down-s" className="size-3.5 opacity-50 shrink-0" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="">{t('leftPanel.noProject')}</SelectItem>
-                  {projects.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <button type="submit" className="self-end rounded px-3 py-1 text-xs text-primary hover:bg-primary/10">
-                {t('common.create')}
-              </button>
-            </form>
-          </div>
-        )}
-      </div>
+          <form
+            onSubmit={(e) => { e.preventDefault(); handleCreateSession() }}
+            className="flex flex-col gap-2"
+          >
+            <input
+              autoFocus
+              type="text"
+              value={sessionName}
+              onChange={(e) => setSessionName(e.target.value)}
+              placeholder={t('leftPanel.sessionName')}
+              className="rounded bg-interactive px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground outline-none w-full"
+            />
+            <Select value={sessionProjectId ?? ''} onValueChange={(v) => setSessionProjectId(v || null)}>
+              <SelectTrigger size="sm" className="w-full text-xs border-0 bg-interactive rounded">
+                <span className="truncate flex-1 text-left">
+                  {sessionProjectId ? (projects.find(p => p.id === sessionProjectId)?.name ?? sessionProjectId) : t('leftPanel.noProject')}
+                </span>
+                <Icon name="arrow-down-s" className="size-3.5 opacity-50 shrink-0" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">{t('leftPanel.noProject')}</SelectItem>
+                {projects.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <button type="submit" className="self-end rounded px-3 py-1 text-xs text-primary hover:bg-primary/10">
+              {t('common.create')}
+            </button>
+          </form>
+        </PopoverContent>
+      </Popover>
 
       <div className="mx-0.5 h-4 w-px bg-sidebar-border" />
       <button

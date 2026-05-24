@@ -82,6 +82,7 @@ interface UIStore {
   centerTabs: CenterTab[]
   activeCenterTabId: string | null
   openTab: (tab: CenterTab) => void
+  updateTabTitle: (tabId: string, newTitle: string) => void
   closeTab: (tabId: string) => void
   setActiveCenterTab: (tabId: string) => void
 
@@ -209,15 +210,24 @@ export const useUIStore = create<UIStore>()(
 
       openTab: (tab) =>
         set((state) => {
-          const existing = state.centerTabs.find((t) => t.id === tab.id)
-          if (existing) {
-            return { activeCenterTabId: tab.id }
+          const existingIdx = state.centerTabs.findIndex((t) => t.id === tab.id)
+          if (existingIdx >= 0) {
+            const nextTabs = [...state.centerTabs]
+            nextTabs[existingIdx] = { ...nextTabs[existingIdx], title: tab.title }
+            return { centerTabs: nextTabs, activeCenterTabId: tab.id }
           }
           return {
             centerTabs: [...state.centerTabs, tab],
             activeCenterTabId: tab.id,
           }
         }),
+
+      updateTabTitle: (tabId, newTitle) =>
+        set((state) => ({
+          centerTabs: state.centerTabs.map((t) =>
+            t.id === tabId ? { ...t, title: newTitle } : t
+          ),
+        })),
 
       closeTab: (tabId) =>
         set((state) => {

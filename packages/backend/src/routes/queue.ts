@@ -1,27 +1,32 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import type { SessionManager } from '@synth/core';
+import type { SessionManager, QueueProcessorManager, ChatOrchestrator, EventBus } from '@synth/core';
+import { enqueueUserMessage } from '@synth/core';
 import { t } from '../lib/i18n.js';
 
-export function createQueueRoutes(kit: AuthKit, sessionManager: SessionManager): Hono {
+export function createQueueRoutes(
+  kit: AuthKit,
+  sessionManager: SessionManager,
+  queueManager: QueueProcessorManager,
+  eventBus: EventBus,
+  processMessage: ReturnType<ChatOrchestrator['createProcessMessage']>,
+): Hono {
   const app = new Hono();
 
   // POST /api/v2/queue/:sessionId/clear — очистить очередь
   app.post('/:sessionId/clear', kit.requireAuth, async (c) => {
     const sessionId = c.req.param('sessionId');
-    const session = await sessionManager.getSession(sessionId);
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
-    }
 
-    const count = session.pendingMessages.length;
-    session.pendingMessages = [];
-    await sessionManager.updateSession(session);
+    await sessionManager.safeUpdate(sessionId, async (session) => {
+      session.pendingMessages = [];
+    });
 
-    return c.json({ cleared: count });
+    queueManager.stop(sessionId);
+
+    return c.json({ cleared: true });
   });
 
-  // POST /api/v2/queue/:sessionId/return — вернуть очередь в input
+  // POST /api/v2/queue/:sessionId/return — вернуть очередь (тексты сообщений)
   app.post('/:sessionId/return', kit.requireAuth, async (c) => {
     const sessionId = c.req.param('sessionId');
     const session = await sessionManager.getSession(sessionId);
@@ -29,9 +34,11 @@ export function createQueueRoutes(kit: AuthKit, sessionManager: SessionManager):
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
 
-    const texts: string[] = session.pendingMessages.map((m) => m.content);
-    session.pendingMessages = [];
-    await sessionManager.updateSession(session);
+    const texts = session.pendingMessages.map((m) => m.content);
+    await sessionManager.safeUpdate(sessionId, async (s) => {
+      s.pendingMessages = [];
+    });
+    queueManager.stop(sessionId);
 
     return c.json({ texts });
   });
@@ -44,10 +51,21 @@ export function createQueueRoutes(kit: AuthKit, sessionManager: SessionManager):
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
 
-    // Разблокировать
-    session.status.blocked = undefined;
-    session.status.blockedAt = undefined;
-    await sessionManager.updateSession(session);
+    if (session.pendingMessages.length === 0) {
+      return c.json({ resumed: true, pending_count: 0 });
+    }
+
+    // Разблокировать и запустить процессор заново
+    await sessionManager.forceReleaseLock(sessionId);
+
+    const nextMsg = session.pendingMessages[0];
+    if (nextMsg) {
+      await enqueueUserMessage(
+        sessionManager, eventBus, sessionId,
+        { ...nextMsg, metadata: { ...nextMsg.metadata, is_resume: true } },
+        queueManager, processMessage as never,
+      );
+    }
 
     return c.json({ resumed: true, pending_count: session.pendingMessages.length });
   });

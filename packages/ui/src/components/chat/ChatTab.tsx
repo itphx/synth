@@ -10,6 +10,8 @@ import { useNotification } from '@/hooks/useNotification'
 import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { QueueBanner } from './QueueBanner'
+import { DebugModal } from './DebugModal'
+import { QueueChips } from './QueueChips'
 import type { CenterTab } from '@/stores/useUIStore'
 
 interface ChatTabProps {
@@ -24,7 +26,10 @@ export function ChatTab({ tab }: ChatTabProps) {
     messagesBySession,
     streamingBySession,
     queueBySession,
+    pendingBySession,
     errorBySession,
+    debugModalSessionId,
+    debugModalMessageIndex,
     setMessages,
     startStream,
     updateStreamChunk,
@@ -34,19 +39,27 @@ export function ChatTab({ tab }: ChatTabProps) {
     addStreamError,
     setQueueStalled,
     clearQueueState,
+    setPendingMessages,
+    openDebugModal,
+    closeDebugModal,
   } = useChatStore()
 
   const sessionId = tab.data.sessionId || tab.id
   const messages = messagesBySession[sessionId] || []
   const streams = streamingBySession[sessionId] || {}
   const queue = queueBySession[sessionId]
+  const pending = pendingBySession[sessionId] || []
   const streamError = errorBySession[sessionId]
   const isStreaming = Object.values(streams).some((s) => s.isStreaming)
+  const debugMessage = debugModalSessionId && debugModalMessageIndex != null
+    ? messages.find((m) => m.index === debugModalMessageIndex) ?? null
+    : null
 
   const connectionRef = useRef<ChatConnection | null>(null)
   const agentsRef = useRef<AgentInfo[]>([])
   const protocolModeRef = useRef(protocolMode[sessionId] || 'ws')
   const initializingRef = useRef(true)
+  const sseActiveRef = useRef(false)
   protocolModeRef.current = protocolMode[sessionId] || 'ws'
 
   const dispatchEvent = useCallback(
@@ -166,6 +179,15 @@ export function ChatTab({ tab }: ChatTabProps) {
               }))
             }
           }
+          // Загрузить очередь ожидающих сообщений
+          const sessData = session as unknown as Record<string, unknown>
+          const pendingMsgs = sessData.pending_messages as MessageData[] | undefined
+          if (pendingMsgs && pendingMsgs.length > 0) {
+            setPendingMessages(sessionId, pendingMsgs.map((pm) => ({
+              content: pm.content,
+              agentRole: pm.agent_role || null,
+            })))
+          }
         } catch {
           // session not found or not accessible — use defaults
         }
@@ -182,7 +204,10 @@ export function ChatTab({ tab }: ChatTabProps) {
     }, 3000)
 
     const conn = new ChatConnection({
-      onEvent: dispatchEvent,
+      onEvent: (event) => {
+        if (sseActiveRef.current) return;
+        dispatchEvent(event);
+      },
       onConnect: () => {
         notify({ text: t('connection.ws'), type: 'success', category: 'connection', sessionId })
       },
@@ -219,6 +244,18 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   const handleSend = useCallback(
     async (text: string, agentRole?: string) => {
+      // Оптимистично добавляем user-сообщение в UI
+      addMessage(sessionId, {
+        index: messages.length + Object.values(streams).length,
+        role: 'user',
+        content: text,
+        agent_role: agentRole || null,
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        created_at: new Date().toISOString(),
+      });
+
       try {
         const conn = connectionRef.current
         const mode = protocolModeRef.current
@@ -235,6 +272,7 @@ export function ChatTab({ tab }: ChatTabProps) {
           })
           if (stream) {
             setConnectionStatus(sessionId, 'sse')
+            sseActiveRef.current = true;
             const reader = stream.getReader()
             const decoder = new TextDecoder()
             let buffer = ''
@@ -262,6 +300,8 @@ export function ChatTab({ tab }: ChatTabProps) {
                 }
               } catch {
                 // stream ended
+              } finally {
+                sseActiveRef.current = false;
               }
             }
             processChunk()
@@ -271,7 +311,7 @@ export function ChatTab({ tab }: ChatTabProps) {
         notify({ text: `${t('chat.error.sendFailed')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
       }
     },
-    [sessionId, dispatchEvent, notify, setConnectionStatus, t]
+    [sessionId, dispatchEvent, notify, setConnectionStatus, t, addMessage, messages.length]
   )
 
   const handleStop = useCallback(async () => {
@@ -324,17 +364,30 @@ export function ChatTab({ tab }: ChatTabProps) {
   )
 
   const handleReturn = useCallback(
-    (_msg: MessageData) => {
-      notify({ text: t('common.inDevelopment'), type: 'info', category: 'system', sessionId })
+    async (_msg: MessageData) => {
+      try {
+        const resp = await synthApi.returnQueue(sessionId)
+        const texts = resp as { texts?: string[] } | undefined
+        if (texts?.texts && texts.texts.length > 0) {
+          setPendingMessages(sessionId, [])
+          notify({ text: texts.texts.join('\n'), type: 'info', category: 'queue', sessionId })
+        }
+      } catch {
+        notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
+      }
     },
-    [notify, t, sessionId]
+    [sessionId, setPendingMessages, notify, t]
   )
 
   const handleDebug = useCallback(
-    (_msg: MessageData) => {
-      notify({ text: t('common.inDevelopment'), type: 'info', category: 'system', sessionId })
+    (msg: MessageData) => {
+      if (msg.debug_data && Object.keys(msg.debug_data as object).length > 0) {
+        openDebugModal(sessionId, msg.index)
+      } else {
+        notify({ text: t('chat.debug.noData'), type: 'info', category: 'system', sessionId })
+      }
     },
-    [notify, t, sessionId]
+    [openDebugModal, notify, t, sessionId]
   )
 
   const handleResumeQueue = useCallback(async () => {
@@ -359,11 +412,17 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   const handleReturnQueue = useCallback(async () => {
     try {
-      notify({ text: t('chat.queue.returnInDev'), type: 'info', category: 'queue', sessionId })
+      const resp = await synthApi.returnQueue(sessionId)
+      const data = resp as { texts?: string[] }
+      if (data?.texts && data.texts.length > 0) {
+        setPendingMessages(sessionId, [])
+        clearQueueState(sessionId)
+        notify({ text: t('chat.queue.returned'), type: 'success', category: 'queue', sessionId })
+      }
     } catch {
-      // ignore
+      notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
     }
-  }, [notify, t, sessionId])
+  }, [sessionId, setPendingMessages, clearQueueState, notify, t])
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-background w-full">
@@ -408,6 +467,21 @@ export function ChatTab({ tab }: ChatTabProps) {
         onSend={handleSend}
         onStop={handleStop}
       />
+
+      {pending.length > 0 && (
+        <QueueChips
+          pending={pending}
+          onClear={handleClearQueue}
+          onReturn={handleReturnQueue}
+        />
+      )}
+
+      {debugMessage?.debug_data && Object.keys(debugMessage.debug_data).length > 0 && (
+        <DebugModal
+          debug={debugMessage.debug_data as import('@/stores/chatStore').DebugData}
+          onClose={closeDebugModal}
+        />
+      )}
     </div>
   )
 }

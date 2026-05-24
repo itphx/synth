@@ -54,6 +54,8 @@ export const tsmStatusSchema = z.object({
 });
 
 export const sessionCreateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  title: z.string().min(1).max(200).optional(),
   projectId: z.string().optional(),
   engine: z.enum(['synth', 'opencode', 'cline']).default('synth'),
   settings: sessionSettingsSchema.optional(),
