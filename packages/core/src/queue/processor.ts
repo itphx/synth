@@ -96,6 +96,8 @@ export class QueueProcessor {
         this.eventBus.publish(this.sessionId, 'stream.start', {
           stream_id: streamId,
           agent_role: message.agentRole,
+          provider: message.provider,
+          model: message.model,
         });
       } else {
         // Повторная попытка: обновляем startedAt у currentStream

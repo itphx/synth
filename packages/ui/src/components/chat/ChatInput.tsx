@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { Icon } from '../icon/Icon'
 import { OverlayScrollbar } from '../ui/OverlayScrollbar'
 import { useI18n } from '@/lib/i18n'
+import { useChatStore } from '@/stores/chatStore'
 import { MentionPopup } from './MentionPopup'
 import { ModelSelector } from './ModelSelector'
 import { AgentModeSelector } from './AgentModeSelector'
@@ -25,6 +26,7 @@ const CHAT_INPUT_RADIUS = 'var(--radius-xl)'
 export function ChatInput({ sessionId, agents, isStreaming, onSend, onStop }: ChatInputProps) {
   const { t } = useI18n()
   const [value, setValue] = useState('')
+  const retryText = useChatStore((s) => s.retryInputBySession[sessionId])
   const [mentionState, setMentionState] = useState<{
     query: string
     start: number
@@ -43,6 +45,14 @@ export function ChatInput({ sessionId, agents, isStreaming, onSend, onStop }: Ch
   useEffect(() => {
     autoResize()
   }, [value, autoResize])
+
+  useEffect(() => {
+    if (retryText) {
+      setValue(retryText)
+      useChatStore.getState().clearRetryInput(sessionId)
+      setTimeout(() => textareaRef.current?.focus(), 0)
+    }
+  }, [retryText, sessionId])
 
   const parseMentions = (text: string): ParsedMessage[] => {
     const parts: ParsedMessage[] = []

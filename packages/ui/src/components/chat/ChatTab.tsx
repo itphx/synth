@@ -4,6 +4,7 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useChatStore, type MessageData } from '@/stores/chatStore'
 import { useTransportStore } from '@/stores/transportStore'
+import { useAuthStore } from '@/stores/authStore'
 import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
 import { useNotification } from '@/hooks/useNotification'
 import { MessageList } from './MessageList'
@@ -29,11 +30,13 @@ export function ChatTab({ tab }: ChatTabProps) {
     debugModalSessionId,
     debugModalMessageIndex,
     setMessages,
+    updateMessage,
     addMessage,
     clearQueueState,
     setPendingMessages,
     openDebugModal,
     closeDebugModal,
+    setRetryInput,
   } = useChatStore()
 
   const sessionId = tab.data.sessionId || tab.id
@@ -88,11 +91,16 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   const handleSend = useCallback(
     async (text: string, agentRole?: string) => {
+      const { user, profile } = useAuthStore.getState()
+      const author = profile?.display_name || user?.username || ''
+      const { activeAgentId } = useAgentsStore.getState()
+      const effectiveAgentRole = agentRole || activeAgentId || undefined
       addMessage(sessionId, {
         index: messages.length + Object.values(streams).length,
         role: 'user',
         content: text,
-        agent_role: agentRole || null,
+        author,
+        agent_role: effectiveAgentRole || null,
         disabled: false,
         pinned: false,
         hidden: false,
@@ -101,7 +109,7 @@ export function ChatTab({ tab }: ChatTabProps) {
 
       try {
         const { selectedModelName, selectedProviderName } = useProvidersStore.getState()
-        await useTransportStore.getState().sendMessage(sessionId, text, agentRole, selectedProviderName || undefined, selectedModelName || undefined)
+        await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined)
         notify({ text: t('chat.message.sent'), type: 'info', category: 'message', sessionId })
       } catch (e) {
         notify({ text: `${t('chat.error.sendFailed')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
@@ -128,47 +136,70 @@ export function ChatTab({ tab }: ChatTabProps) {
   )
 
   const handleToggle = useCallback(
-    (_msg: MessageData) => {
-      notify({ text: t('common.inDevelopment'), type: 'info', category: 'system', sessionId })
+    async (msg: MessageData) => {
+      try {
+        const result = await synthApi.toggleMessage(sessionId, msg.index)
+        updateMessage(sessionId, msg.index, { disabled: result.disabled })
+        notify({
+          text: result.disabled ? t('chat.message.disabled') : t('chat.message.enabled'),
+          type: 'info',
+          category: 'message',
+          sessionId,
+        })
+      } catch {
+        notify({ text: t('chat.error.toggleMessage'), type: 'error', category: 'error', sessionId })
+      }
     },
-    [notify, t, sessionId]
+    [sessionId, updateMessage, notify, t]
   )
 
   const handlePin = useCallback(
-    (_msg: MessageData) => {
-      notify({ text: t('common.inDevelopment'), type: 'info', category: 'system', sessionId })
+    async (msg: MessageData) => {
+      try {
+        const result = await synthApi.pinMessage(sessionId, msg.index)
+        updateMessage(sessionId, msg.index, { pinned: result.pinned })
+        notify({
+          text: result.pinned ? t('chat.message.pinned') : t('chat.message.unpinned'),
+          type: 'info',
+          category: 'message',
+          sessionId,
+        })
+      } catch {
+        notify({ text: t('chat.error.pinMessage'), type: 'error', category: 'error', sessionId })
+      }
     },
-    [notify, t, sessionId]
+    [sessionId, updateMessage, notify, t]
   )
 
   const handleDelete = useCallback(
-    (_msg: MessageData) => {
-      notify({ text: t('common.inDevelopment'), type: 'info', category: 'system', sessionId })
+    async (msg: MessageData) => {
+      if (!window.confirm(t('chat.actions.deleteConfirm'))) return
+      try {
+        await synthApi.deleteMessage(sessionId, msg.index)
+        const result = await synthApi.getSessionMessages(sessionId)
+        setMessages(sessionId, result.messages)
+        notify({ text: t('chat.message.deleted'), type: 'info', category: 'message', sessionId })
+      } catch {
+        notify({ text: t('chat.error.deleteMessage'), type: 'error', category: 'error', sessionId })
+      }
     },
-    [notify, t, sessionId]
+    [sessionId, setMessages, notify, t]
   )
 
   const handleRetry = useCallback(
-    (_msg: MessageData) => {
-      notify({ text: t('common.inDevelopment'), type: 'info', category: 'system', sessionId })
-    },
-    [notify, t, sessionId]
-  )
-
-  const handleReturn = useCallback(
-    async (_msg: MessageData) => {
+    async (msg: MessageData) => {
+      if (!window.confirm(t('chat.actions.retryConfirm'))) return
       try {
-        const resp = await synthApi.returnQueue(sessionId)
-        const texts = resp as { texts?: string[] } | undefined
-        if (texts?.texts && texts.texts.length > 0) {
-          setPendingMessages(sessionId, [])
-          notify({ text: texts.texts.join('\n'), type: 'info', category: 'queue', sessionId })
-        }
+        const result = await synthApi.retryMessage(sessionId, msg.index)
+        const reloadResult = await synthApi.getSessionMessages(sessionId)
+        setMessages(sessionId, reloadResult.messages)
+        setRetryInput(sessionId, result.content)
+        notify({ text: t('chat.message.retrying'), type: 'info', category: 'message', sessionId })
       } catch {
-        notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
+        notify({ text: t('chat.error.retryMessage'), type: 'error', category: 'error', sessionId })
       }
     },
-    [sessionId, setPendingMessages, notify, t]
+    [sessionId, setMessages, setRetryInput, notify, t]
   )
 
   const handleDebug = useCallback(
@@ -248,8 +279,8 @@ export function ChatTab({ tab }: ChatTabProps) {
         onPin={handlePin}
         onDelete={handleDelete}
         onRetry={handleRetry}
-        onReturn={handleReturn}
         onDebug={handleDebug}
+        onStop={handleStop}
       />
 
       <ChatInput

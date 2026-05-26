@@ -151,6 +151,8 @@ export class ChatOrchestrator {
             reasoning: chunk.reasoning,
             is_final: chunk.isFinal,
             agent_role: effectiveAgentRole,
+            model: finalModel,
+            provider: providerName,
           });
         }
       } catch (e) {
@@ -159,7 +161,7 @@ export class ChatOrchestrator {
 
         // Save partial response
         if (accumulatedContent) {
-          await this._saveAssistantMessage(session.id, accumulatedContent, streamId, effectiveAgentRole, finalUsage, finalModel, accumulatedReasoning, debugCollector, true);
+          await this._saveAssistantMessage(session.id, accumulatedContent, streamId, effectiveAgentRole, finalUsage, finalModel, accumulatedReasoning, debugCollector, true, providerName);
         }
 
         return {
@@ -172,7 +174,7 @@ export class ChatOrchestrator {
       // 6. Handle cancellation
       if (cancelToken.cancelled) {
         if (accumulatedContent) {
-          await this._saveAssistantMessage(session.id, accumulatedContent, streamId, effectiveAgentRole, finalUsage, finalModel, accumulatedReasoning, debugCollector, true);
+          await this._saveAssistantMessage(session.id, accumulatedContent, streamId, effectiveAgentRole, finalUsage, finalModel, accumulatedReasoning, debugCollector, true, providerName);
         }
 
         publishChunk('stream.cancelled', {
@@ -187,7 +189,7 @@ export class ChatOrchestrator {
       // 7. Save assistant message
       const savedContent = await this._saveAssistantMessage(
         session.id, accumulatedContent, streamId, effectiveAgentRole,
-        finalUsage, finalModel, accumulatedReasoning, debugCollector, false,
+        finalUsage, finalModel, accumulatedReasoning, debugCollector, false, providerName,
       );
 
       // Получаем актуальную сессию после сохранения
@@ -199,6 +201,7 @@ export class ChatOrchestrator {
         message_index: (updatedSession?.messages.length ?? session.messages.length + 1) - 1,
         pending_count: Math.max(0, (updatedSession?.pendingMessages.length ?? 1) - 1),
         model: finalModel,
+        provider: providerName,
         usage: finalUsage,
       };
 
@@ -309,6 +312,7 @@ export class ChatOrchestrator {
     reasoning: string | undefined,
     debugCollector: DebugCollector,
     isCancelled: boolean,
+    provider?: string,
   ): Promise<string> {
     const finalContent = content;
 
@@ -330,7 +334,7 @@ export class ChatOrchestrator {
       pinned: false,
       hidden: false,
       model,
-      provider: '',
+      provider: provider || '',
       usage,
       reasoning,
       agentRole,
@@ -348,6 +352,7 @@ export class ChatOrchestrator {
         role: 'assistant',
         content: finalContent.slice(0, 500),
         model,
+        provider: provider || '',
         agent_role: agentRole,
       });
     }

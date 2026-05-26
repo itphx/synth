@@ -32,6 +32,7 @@ export interface StreamState {
   reasoning: string
   isStreaming: boolean
   model?: string
+  provider?: string
   usage?: { input_tokens: number; output_tokens: number; total_tokens: number }
 }
 
@@ -76,8 +77,9 @@ interface ChatStore {
   debugModalMessageIndex: number | null
 
   setMessages: (sessionId: string, messages: MessageData[]) => void
-  startStream: (sessionId: string, streamId: string, agentRole: string | null) => void
-  updateStreamChunk: (sessionId: string, streamId: string, content: string, reasoning: string) => void
+  updateMessage: (sessionId: string, index: number, changes: Partial<MessageData>) => void
+  startStream: (sessionId: string, streamId: string, agentRole: string | null, model?: string, provider?: string) => void
+  updateStreamChunk: (sessionId: string, streamId: string, content: string, reasoning: string, model?: string, provider?: string) => void
   finishStream: (sessionId: string, streamId: string, metadata: StreamDoneMetadata) => void
   cancelStream: (sessionId: string, streamId: string) => void
   addStreamError: (sessionId: string, error: StreamError) => void
@@ -89,6 +91,10 @@ interface ChatStore {
   clearSession: (sessionId: string) => void
   openDebugModal: (sessionId: string, messageIndex: number) => void
   closeDebugModal: () => void
+
+  retryInputBySession: Record<string, string>
+  setRetryInput: (sessionId: string, text: string) => void
+  clearRetryInput: (sessionId: string) => void
 }
 
 export const useChatStore = create<ChatStore>((set) => ({
@@ -99,13 +105,23 @@ export const useChatStore = create<ChatStore>((set) => ({
   errorBySession: {},
   debugModalSessionId: null,
   debugModalMessageIndex: null,
+  retryInputBySession: {},
 
   setMessages: (sessionId, messages) =>
     set((s) => ({
       messagesBySession: { ...s.messagesBySession, [sessionId]: messages },
     })),
 
-  startStream: (sessionId, streamId, agentRole) =>
+  updateMessage: (sessionId, index, changes) =>
+    set((s) => {
+      const msgs = [...(s.messagesBySession[sessionId] || [])]
+      const msgIdx = msgs.findIndex((m) => m.index === index)
+      if (msgIdx === -1) return s
+      msgs[msgIdx] = { ...msgs[msgIdx]!, ...changes }
+      return { messagesBySession: { ...s.messagesBySession, [sessionId]: msgs } }
+    }),
+
+  startStream: (sessionId, streamId, agentRole, model, provider) =>
     set((s) => {
       const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
       sessionStreams[streamId] = {
@@ -114,11 +130,13 @@ export const useChatStore = create<ChatStore>((set) => ({
         content: '',
         reasoning: '',
         isStreaming: true,
+        model,
+        provider,
       }
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
 
-  updateStreamChunk: (sessionId, streamId, content, reasoning) =>
+  updateStreamChunk: (sessionId, streamId, content, reasoning, model, provider) =>
     set((s) => {
       const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
       const existing = sessionStreams[streamId]
@@ -127,6 +145,8 @@ export const useChatStore = create<ChatStore>((set) => ({
         ...existing,
         content: existing.content + content,
         reasoning: reasoning || existing.reasoning,
+        model: model || existing.model,
+        provider: provider || existing.provider,
       }
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
@@ -148,6 +168,7 @@ export const useChatStore = create<ChatStore>((set) => ({
           content: metadata.content || streamState.content,
           agent_role: streamState.agentRole || undefined,
           model: metadata.model,
+          provider: streamState.provider || undefined,
           usage: metadata.usage || undefined,
           reasoning: streamState.reasoning || undefined,
           debug_data: metadata.debug_info || undefined,
@@ -159,7 +180,7 @@ export const useChatStore = create<ChatStore>((set) => ({
 
         if (existingIdx >= 0) {
           // merge: update existing message with server content
-          msgs[existingIdx] = { ...msgs[existingIdx]!, content: metadata.content || streamState.content, reasoning: streamState.reasoning || undefined, debug_data: metadata.debug_info || undefined }
+          msgs[existingIdx] = { ...msgs[existingIdx]!, content: metadata.content || streamState.content, reasoning: streamState.reasoning || undefined, debug_data: metadata.debug_info || undefined, provider: streamState.provider || msgs[existingIdx]!.provider }
         } else {
           msgs.push(newMsg)
         }
@@ -241,4 +262,16 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   closeDebugModal: () =>
     set({ debugModalSessionId: null, debugModalMessageIndex: null }),
+
+  setRetryInput: (sessionId, text) =>
+    set((s) => ({
+      retryInputBySession: { ...s.retryInputBySession, [sessionId]: text },
+    })),
+
+  clearRetryInput: (sessionId) =>
+    set((s) => {
+      const retryInputBySession = { ...s.retryInputBySession }
+      delete retryInputBySession[sessionId]
+      return { retryInputBySession }
+    }),
 }))

@@ -12,6 +12,8 @@ import { ContextMenu } from '@/components/ui/contextMenu'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { BulkActionBar } from './BulkActionBar'
 import { formatRelativeTime, parseISODate } from '@/lib/formatDate'
+import { synthApi } from '@/lib/api/synthApi'
+import { useNotification } from '@/hooks/useNotification'
 import type { ProjectData, SessionData } from '@/lib/api/synthApi'
 
 const MAX_VISIBLE_SESSIONS = 5
@@ -596,6 +598,19 @@ function SessionItem({
     }
   }
 
+  const handleClear = async () => {
+    closeMenu()
+    if (!window.confirm(t('leftPanel.confirmClearSession'))) return
+    try {
+      await synthApi.clearSession(session.id)
+      useChatStore.getState().clearSession(session.id)
+      const result = await synthApi.getSessionMessages(session.id)
+      useChatStore.getState().setMessages(session.id, result.messages)
+    } catch {
+      // silently ignore
+    }
+  }
+
   const handleClick = () => {
     if (selectionMode) {
       toggleSelected(session.id)
@@ -684,6 +699,7 @@ function SessionItem({
             items={[
               { label: t('leftPanel.rename'), icon: 'pencil-ai', onClick: () => { onStartRename(session.id, session.name || session.id) } },
               { label: t('leftPanel.configure'), icon: 'settings-3', onClick: () => { closeMenu() } },
+              { label: t('leftPanel.clearSession'), icon: 'close', onClick: handleClear },
               'separator',
               { label: t('leftPanel.delete'), icon: 'delete-bin', onClick: handleDelete, destructive: true },
             ]}

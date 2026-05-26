@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import type { SessionData } from '@/lib/api/synthApi'
 import { synthApi } from '@/lib/api/synthApi'
+import { useUIStore } from './useUIStore'
+import { useChatStore } from './chatStore'
 
 interface SessionsStore {
   sessions: SessionData[]
@@ -73,11 +75,20 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
 
   async deleteSession(sessionId: string) {
     try {
-      await fetch(`/api/v2/sessions/${encodeURIComponent(sessionId)}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      })
+      await synthApi.deleteSession(sessionId)
       set((s) => ({ sessions: s.sessions.filter((sess) => sess.id !== sessionId) }))
+
+      // Закрываем вкладку, если сессия была открыта
+      const tabId = `chat-${sessionId}`
+      const uiState = useUIStore.getState()
+      const tab = uiState.centerTabs.find((t) => t.id === tabId)
+      if (tab) {
+        uiState.closeTab(tabId)
+      }
+
+      // Очищаем данные из chatStore
+      useChatStore.getState().clearSession(sessionId)
+
       return true
     } catch (e) {
       set({ error: (e as Error).message })

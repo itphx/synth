@@ -68,7 +68,10 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
               style={activeAgent?.color ? { backgroundColor: resolveColor(activeAgent.color) } : undefined}
             />
           )}
-          <span className="font-medium text-xs text-foreground whitespace-nowrap max-w-[200px] truncate">
+          <span
+            className={`font-medium text-xs whitespace-nowrap max-w-[200px] truncate ${activeAgent?.color ? '' : 'text-foreground'}`}
+            style={activeAgent?.color ? { color: resolveColor(activeAgent.color) } : undefined}
+          >
             {activeAgent?.display_name || activeAgentId || 'Agent'}
           </span>
         </button>

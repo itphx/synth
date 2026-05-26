@@ -14,8 +14,8 @@ interface MessageListProps {
   onPin: (msg: MessageData) => void
   onDelete: (msg: MessageData) => void
   onRetry: (msg: MessageData) => void
-  onReturn: (msg: MessageData) => void
   onDebug: (msg: MessageData) => void
+  onStop: () => void
 }
 
 const VIRTUALIZE_THRESHOLD = 15
@@ -29,8 +29,8 @@ export function MessageList({
   onPin,
   onDelete,
   onRetry,
-  onReturn,
   onDebug,
+  onStop,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
@@ -113,7 +113,6 @@ export function MessageList({
                       onPin={createHandler(onPin)(msg)}
                       onDelete={createHandler(onDelete)(msg)}
                       onRetry={createHandler(onRetry)(msg)}
-                      onReturn={createHandler(onReturn)(msg)}
                       onDebug={createHandler(onDebug)(msg)}
                     />
                   </div>
@@ -130,14 +129,13 @@ export function MessageList({
                 onPin={createHandler(onPin)(msg)}
                 onDelete={createHandler(onDelete)(msg)}
                 onRetry={createHandler(onRetry)(msg)}
-                onReturn={createHandler(onReturn)(msg)}
                 onDebug={createHandler(onDebug)(msg)}
               />
             ))
           )}
 
           {streamEntries.map((stream) => (
-            <StreamingPlaceholder key={stream.streamId} stream={stream} />
+            <StreamingPlaceholder key={stream.streamId} stream={stream} onStop={onStop} />
           ))}
         </div>
       </ScrollableOverlay>

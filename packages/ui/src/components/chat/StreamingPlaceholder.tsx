@@ -1,58 +1,88 @@
 import { Icon } from '../icon/Icon'
-import { useI18n } from '@/lib/i18n'
-import type { StreamState } from '@/stores/chatStore'
+import { useAgentsStore } from '@/stores/agentsStore'
+import { useProvidersStore } from '@/stores/providersStore'
+import { ProviderIcon } from '@/components/admin/ProviderIcon'
+import { ReasoningBlock } from './ReasoningBlock'
 import { MarkdownContent } from './MarkdownContent'
+import type { StreamState } from '@/stores/chatStore'
 
 interface StreamingPlaceholderProps {
   stream: StreamState
+  onStop: () => void
 }
 
-export function StreamingPlaceholder({ stream }: StreamingPlaceholderProps) {
-  const { t } = useI18n()
+function resolveColor(cssVar: string | null): string | undefined {
+  if (!cssVar) return undefined
+  if (cssVar.startsWith('--')) {
+    return `var(${cssVar})`
+  }
+  return cssVar
+}
+
+export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderProps) {
+  const agents = useAgentsStore((s) => s.agents)
+  const providers = useProvidersStore((s) => s.providers)
+
+  const agentInfo = stream.agentRole
+    ? agents.find((a) => a.id === stream.agentRole)
+    : undefined
+  const agentColor = resolveColor(agentInfo?.color ?? null)
+
+  const providerIcon = stream.provider
+    ? providers.find((p) => p.name === stream.provider)?.icon || ''
+    : ''
+  const providerUrl = stream.provider
+    ? providers.find((p) => p.name === stream.provider)?.url
+    : undefined
 
   return (
-    <div className="flex flex-col gap-1 px-4 py-3">
-      <div className="flex items-center gap-2">
-        {stream.agentRole && (
-          <span className="inline-flex items-center gap-0.5 rounded-sm bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">
-            <Icon name="user-smile" className="size-3" />
-            <span>{stream.agentRole}</span>
-          </span>
-        )}
-        {stream.model && (
-          <span className="inline-flex items-center gap-0.5 rounded-sm bg-muted px-1.5 py-0.5 text-[11px]">
-            <Icon name="cpu" className="size-3" />
-            <span>{stream.model}</span>
-          </span>
-        )}
-        <BusyDots />
-      </div>
+    <div className="flex flex-col px-4 py-3 group items-start">
+      <div className="max-w-[85%] rounded-lg px-4 py-3 bg-card border border-border/50 text-foreground rounded-bl-sm">
+        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70 mb-1">
+          {stream.agentRole && (
+            <span
+              className={`inline-flex items-center gap-1 rounded-sm py-0.5 ${agentColor ? '' : 'text-primary'}`}
+              style={agentColor ? { color: agentColor } : undefined}
+            >
+              <Icon name={agentInfo?.icon || 'user-smile'} className="size-3" />
+              <span>{agentInfo?.display_name || stream.agentRole}</span>
+            </span>
+          )}
 
-      {stream.reasoning && (
-        <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-2 mt-1">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground/70 mb-1">
-            <Icon name="brain" className="size-3.5" />
-            <span>{t('chat.reasoning.show')}</span>
-          </div>
-          <MarkdownContent content={stream.reasoning} className="text-xs text-muted-foreground/60" />
+          {stream.model && (
+            <span className="inline-flex items-center gap-0.5 rounded-sm bg-muted px-1.5 py-0.5">
+              <ProviderIcon icon={providerIcon} baseUrl={providerUrl} size={12} className="shrink-0" />
+              <span>{stream.model}</span>
+            </span>
+          )}
+
+          <span className="ml-auto inline-flex gap-0.5">
+            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
+            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
+            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
+          </span>
         </div>
-      )}
 
-      {stream.content && (
-        <div className="mt-1">
+        {stream.reasoning && (
+          <ReasoningBlock reasoning={stream.reasoning} />
+        )}
+
+        {stream.content && (
           <MarkdownContent content={stream.content} />
-        </div>
-      )}
-    </div>
-  )
-}
+        )}
 
-function BusyDots() {
-  return (
-    <span className="inline-flex gap-0.5 ml-1">
-      <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
-      <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
-      <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
-    </span>
+        {stream.isStreaming && (
+          <div className="flex items-center gap-0.5 mt-2 pt-1.5 border-t border-border/30">
+            <button
+              onClick={onStop}
+              title="Стоп"
+              className="rounded p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+            >
+              <Icon name="stop" className="size-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
   )
 }

@@ -155,6 +155,8 @@ export const dict = {
   'leftPanel.rename': 'Переименовать',
   'leftPanel.configure': 'Настроить',
   'leftPanel.delete': 'Удалить',
+  'leftPanel.clearSession': 'Очистить',
+  'leftPanel.confirmClearSession': 'Очистить все сообщения в сессии?',
   'leftPanel.streaming': 'Идёт генерация',
   'leftPanel.attentionNeeded': 'Требуется внимание',
   'leftPanel.answerReady': 'Ответ готов',
@@ -232,14 +234,22 @@ export const dict = {
   'chat.actions.pin': 'Закрепить',
   'chat.actions.unpin': 'Открепить',
   'chat.actions.delete': 'Удалить',
+  'chat.actions.deleteConfirm': 'Удалить сообщение?',
   'chat.actions.retry': 'Повторить',
+  'chat.actions.retryConfirm': 'Повторить? Это и последующие сообщения будут отключены.',
   'chat.actions.return': 'Вернуть в поле ввода',
   'chat.actions.debug': 'Отладка',
 
   'chat.message.copied': 'Скопировано',
   'chat.message.disabled': 'Сообщение выключено',
+  'chat.message.enabled': 'Сообщение включено',
   'chat.message.pinned': 'Закреплено',
+  'chat.message.unpinned': 'Откреплено',
+  'chat.message.deleted': 'Сообщение удалено',
+  'chat.message.retrying': 'Возвращено в поле ввода',
   'chat.message.empty': 'Пустое сообщение',
+
+  'chat.session.cleared': 'Сессия очищена',
 
   'chat.reasoning.show': 'Размышления',
   'chat.reasoning.hide': 'Скрыть',
@@ -269,6 +279,11 @@ export const dict = {
   'chat.error.clearQueue': 'Ошибка очистки очереди',
   'chat.error.sendFailed': 'Ошибка отправки:',
   'chat.error.returnQueue': 'Ошибка возврата очереди',
+  'chat.error.toggleMessage': 'Ошибка переключения сообщения',
+  'chat.error.pinMessage': 'Ошибка закрепления сообщения',
+  'chat.error.deleteMessage': 'Ошибка удаления сообщения',
+  'chat.error.retryMessage': 'Ошибка повтора сообщения',
+  'chat.error.clearSession': 'Ошибка очистки сессии',
 
   'chat.message.sent': 'Сообщение отправлено',
 

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
 import type { AgentDefinition } from '@synth/shared';
+import type { SessionManager } from '@synth/core';
 import { t } from '../lib/i18n.js';
 import { getDefaultLang, resolveDisplayName, resolveDescription } from '../lib/i18n-config.js';
 
@@ -85,7 +86,7 @@ async function mergeWithOverride(
   };
 }
 
-export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefinition>): Hono {
+export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefinition>, sessionManager?: SessionManager): Hono {
   const app = new Hono();
 
   // GET /api/v2/agents — список агентов
@@ -101,6 +102,36 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
         agents.push({ ...o, isOverridden: true });
       }
     }
+
+    // Если передан session_id и сессия без проекта — только assistant
+    const sessionId = c.req.query('session_id');
+    if (sessionId && sessionManager) {
+      const session = await sessionManager.getSession(sessionId);
+      if (session && !session.projectId) {
+        return c.json({
+          agents: agents
+            .filter((a) => a.id === 'assistant')
+            .map((a) => ({
+              id: a.id,
+              display_name: a.displayName,
+              capabilities: a.capabilities,
+              enabled: a.enabled,
+              icon: a.icon || null,
+              color: a.color || null,
+              description: a.description || null,
+              available: true,
+              mode: a.mode,
+              provider: a.provider || null,
+              model: a.model || null,
+              context_file: a.contextFile || null,
+              is_builtin: BUILTIN_IDS.has(a.id),
+              is_overridden: a.isOverridden,
+            })),
+          default_agent: 'assistant',
+        });
+      }
+    }
+
     return c.json({
       agents: agents.map((a) => ({
         id: a.id,

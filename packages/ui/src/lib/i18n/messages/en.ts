@@ -162,6 +162,8 @@ export const dict = {
   'leftPanel.rename': 'Rename',
   'leftPanel.configure': 'Configure',
   'leftPanel.delete': 'Delete',
+  'leftPanel.clearSession': 'Clear',
+  'leftPanel.confirmClearSession': 'Clear all messages in session?',
   'leftPanel.streaming': 'Streaming',
   'leftPanel.attentionNeeded': 'Attention needed',
   'leftPanel.answerReady': 'Answer ready',
@@ -233,14 +235,22 @@ export const dict = {
   'chat.actions.pin': 'Pin',
   'chat.actions.unpin': 'Unpin',
   'chat.actions.delete': 'Delete',
+  'chat.actions.deleteConfirm': 'Delete message?',
   'chat.actions.retry': 'Retry',
+  'chat.actions.retryConfirm': 'Retry? This and subsequent messages will be disabled.',
   'chat.actions.return': 'Return to input',
   'chat.actions.debug': 'Debug',
 
   'chat.message.copied': 'Copied',
   'chat.message.disabled': 'Message disabled',
+  'chat.message.enabled': 'Message enabled',
   'chat.message.pinned': 'Pinned',
+  'chat.message.unpinned': 'Unpinned',
+  'chat.message.deleted': 'Message deleted',
+  'chat.message.retrying': 'Returned to input',
   'chat.message.empty': 'Empty message',
+
+  'chat.session.cleared': 'Session cleared',
 
   'chat.reasoning.show': 'Reasoning',
   'chat.reasoning.hide': 'Hide',
@@ -270,6 +280,11 @@ export const dict = {
   'chat.error.clearQueue': 'Failed to clear queue',
   'chat.error.sendFailed': 'Send failed:',
   'chat.error.returnQueue': 'Failed to return queue',
+  'chat.error.toggleMessage': 'Failed to toggle message',
+  'chat.error.pinMessage': 'Failed to pin message',
+  'chat.error.deleteMessage': 'Failed to delete message',
+  'chat.error.retryMessage': 'Failed to retry message',
+  'chat.error.clearSession': 'Failed to clear session',
 
   'chat.message.sent': 'Message sent',
 
