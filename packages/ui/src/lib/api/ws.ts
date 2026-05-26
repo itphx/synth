@@ -1,6 +1,7 @@
 export interface WSEvent {
   type: string
-  session_id: string
+  session_id?: string
+  sessionId?: string
   data?: Record<string, unknown>
 }
 
@@ -30,16 +31,33 @@ export class ChatConnection {
   private reconnectAttempts = 0
   private sseFailCount = 0
   private forceSSE = false
+  private manualSSE = false
   private intentionalClose = false
   private pendingSends: Map<string, { resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }> = new Map()
   private streamIdCounter = 0
+  private globalMode = false
+  private eventsWanted = true
 
   constructor(callbacks: ChatConnectionCallbacks) {
     this.callbacks = callbacks
   }
 
-  connect(sessionId: string): void {
+  connect(sessionId: string, opts?: { events?: boolean }): void {
     this.sessionId = sessionId
+    this.globalMode = false
+    this.eventsWanted = opts?.events !== false
+    this.intentionalClose = false
+    this.connectWS()
+  }
+
+  setSessionId(id: string): void {
+    this.sessionId = id
+  }
+
+  connectGlobal(): void {
+    this.globalMode = true
+    this.eventsWanted = true
+    this.sessionId = null
     this.intentionalClose = false
     this.connectWS()
   }
@@ -58,11 +76,13 @@ export class ChatConnection {
   setForceSSE(force: boolean): void {
     this.forceSSE = force
     if (force) {
+      this.manualSSE = true
       this.callbacks.onTransportSwitch?.('sse')
       this.cleanupTransport()
       this.transport = 'disconnected'
       this.fallbackToSSE()
     } else {
+      this.manualSSE = false
       this.cleanupTransport()
       this.transport = 'disconnected'
       this.connectWS()
@@ -106,6 +126,33 @@ export class ChatConnection {
     }
   }
 
+  sendSubscribe(sessionId: string): void {
+    if (this.globalMode && this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'subscribe', session_id: sessionId }))
+    }
+  }
+
+  sendUnsubscribe(sessionId: string): void {
+    if (this.globalMode && this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'unsubscribe', session_id: sessionId }))
+    }
+  }
+
+  private getWSURL(): string {
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const host = location.host
+
+    if (this.globalMode) {
+      return `${protocol}//${host}/ws/user`
+    }
+
+    const params = new URLSearchParams({ session_id: this.sessionId! })
+    if (!this.eventsWanted) {
+      params.set('events', 'false')
+    }
+    return `${protocol}//${host}/ws/chat?${params.toString()}`
+  }
+
   private connectWS(): void {
     this.cleanupTransport()
 
@@ -114,18 +161,20 @@ export class ChatConnection {
       return
     }
 
-    const params = new URLSearchParams({ session_id: this.sessionId! })
+    if (this.globalMode) {
+      // Глобальный режим — нет sessionId для SSE фоллбека
+    } else if (!this.sessionId) {
+      return
+    }
 
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const host = location.host
-    const url = `${protocol}//${host}/ws/chat?${params.toString()}`
+    const url = this.getWSURL()
     console.debug('[WS] Connecting:', url)
 
     try {
       this.ws = new WebSocket(url)
 
       this.ws.onopen = () => {
-        console.debug('[WS] Connected')
+        console.debug('[WS] Connected', this.globalMode ? '(global)' : '')
         this.reconnectAttempts = 0
         this.sseFailCount = 0
         this.transport = 'ws'
@@ -140,7 +189,15 @@ export class ChatConnection {
         this.rejectPendingSends(new Error('WebSocket closed'))
         if (!this.intentionalClose) {
           this.callbacks.onDisconnect?.(`WS closed: ${e.code}`)
-          this.fallbackToSSE()
+          if (!this.globalMode) {
+            if (this.eventsWanted) {
+              this.fallbackToSSE()
+            } else {
+              this.scheduleReconnect()
+            }
+          } else {
+            this.scheduleReconnect()
+          }
         }
       }
 
@@ -171,18 +228,32 @@ export class ChatConnection {
         }
       }
     } catch {
-      this.fallbackToSSE()
+      if (!this.globalMode && this.eventsWanted) {
+        this.fallbackToSSE()
+      } else {
+        this.scheduleReconnect()
+      }
     }
   }
 
   private fallbackToSSE(): void {
+    if (this.globalMode) {
+      // Глобальный режим не поддерживает SSE фоллбек
+      this.scheduleReconnect()
+      return
+    }
+
     if (this.transport === 'sse') return
     this.cleanupTransport()
 
     if (!this.sessionId) return
 
     const url = `/api/v2/sessions/${encodeURIComponent(this.sessionId)}/events`
-    console.debug('[SSE] Falling back to:', url)
+    if (this.manualSSE) {
+      console.debug('[SSE] Manually activated:', url)
+    } else {
+      console.debug('[SSE] Falling back to:', url)
+    }
 
     try {
       this.sseSource = new EventSource(url)

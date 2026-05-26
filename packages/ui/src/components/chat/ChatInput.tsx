@@ -5,7 +5,6 @@ import { useI18n } from '@/lib/i18n'
 import { MentionPopup } from './MentionPopup'
 import { ModelSelector } from './ModelSelector'
 import { AgentModeSelector } from './AgentModeSelector'
-import { ConnectionIndicator } from '../layout/ConnectionIndicator'
 import type { AgentInfo } from '@/lib/api/synthApi'
 
 interface ChatInputProps {
@@ -184,7 +183,6 @@ export function ChatInput({ sessionId, agents, isStreaming, onSend, onStop }: Ch
           </div>
 
           <div className="flex items-center gap-3">
-            <ConnectionIndicator sessionId={sessionId} />
             <ModelSelector sessionId={sessionId} />
             <AgentModeSelector sessionId={sessionId} />
 

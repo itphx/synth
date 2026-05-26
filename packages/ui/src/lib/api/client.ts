@@ -14,6 +14,7 @@ export interface UserPreferences {
   locale?: 'en' | 'ru'
   themeMode?: 'system' | 'light' | 'dark'
   theme?: string
+  transportMode?: 'auto' | 'ws' | 'sse'
   avatar?: string | null
   favoriteModels?: string[]
   recentModels?: string[]

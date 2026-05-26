@@ -163,6 +163,9 @@ export const dict = {
   'leftPanel.configure': 'Configure',
   'leftPanel.delete': 'Delete',
   'leftPanel.streaming': 'Streaming',
+  'leftPanel.attentionNeeded': 'Attention needed',
+  'leftPanel.answerReady': 'Answer ready',
+  'leftPanel.blocked': 'Blocked',
   'leftPanel.notifications': '{count} notif.',
   'leftPanel.showMore': 'Show {count} more',
   'leftPanel.showFewer': 'Show fewer',
@@ -284,6 +287,14 @@ export const dict = {
   'connection.ws': 'WebSocket connected',
   'connection.sse': 'SSE mode (WebSocket unavailable)',
   'connection.disconnected': 'Backend unavailable',
+
+  // Transport modes
+  'transport.auto': 'Auto',
+  'transport.ws': 'WebSocket',
+  'transport.sse': 'SSE',
+  'transport.autoDesc': 'Auto: WS, fallback to SSE',
+  'transport.wsDesc': 'WebSocket only',
+  'transport.sseDesc': 'SSE only',
 
   // Session settings
   'sessionSettings.provider': 'Provider',

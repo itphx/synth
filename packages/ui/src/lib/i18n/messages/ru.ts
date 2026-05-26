@@ -156,6 +156,9 @@ export const dict = {
   'leftPanel.configure': 'Настроить',
   'leftPanel.delete': 'Удалить',
   'leftPanel.streaming': 'Идёт генерация',
+  'leftPanel.attentionNeeded': 'Требуется внимание',
+  'leftPanel.answerReady': 'Ответ готов',
+  'leftPanel.blocked': 'Заблокировано',
   'leftPanel.notifications': '{count} уведом.',
   'leftPanel.showMore': 'Показать ещё {count}',
   'leftPanel.showFewer': 'Свернуть',
@@ -285,6 +288,14 @@ export const dict = {
   'connection.ws': 'WebSocket подключен',
   'connection.sse': 'SSE режим (WebSocket недоступен)',
   'connection.disconnected': 'Бэкенд недоступен',
+
+  // Transport modes
+  'transport.auto': 'Авто',
+  'transport.ws': 'WebSocket',
+  'transport.sse': 'SSE',
+  'transport.autoDesc': 'Автоматически: WS, при ошибке — SSE',
+  'transport.wsDesc': 'Только WebSocket',
+  'transport.sseDesc': 'Только SSE',
 
   // Session settings
   'sessionSettings.provider': 'Провайдер',

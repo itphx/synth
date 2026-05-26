@@ -176,6 +176,19 @@ export class QueueProcessor {
         this.eventBus.publish(this.sessionId, 'queue.stalled', {
           pending_count: session.pendingMessages.length,
         });
+
+        const nextMsg = session.pendingMessages[0];
+        if (nextMsg) {
+          const content = nextMsg.content;
+          const isQuestion = content?.includes('?') || content?.includes('？');
+          if (isQuestion || nextMsg.role === 'assistant') {
+            this.eventBus.publish(this.sessionId, 'question.asked', {
+              message: content?.slice(0, 200),
+              agent_role: nextMsg.agentRole,
+              pending_count: session.pendingMessages.length,
+            });
+          }
+        }
       }
     } catch {
       // ignore
