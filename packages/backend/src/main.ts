@@ -10,7 +10,7 @@ import {
   ContextConfig, ContextBuilder, ChatOrchestrator, FileProfileStore,
   enqueueUserMessage,
 } from '@synth/core';
-import { nowISO, ensureDataDir, MessageRole } from '@synth/shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId } from '@synth/shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import { createAuthMiddleware } from './auth/middleware.js';
 import { createAuthRoutes } from './routes/auth.js';
@@ -28,6 +28,8 @@ import { createUserRoutes } from './routes/users.js';
 import { t, getTranslations } from './lib/i18n.js';
 import { ProjectStore } from './storage/project-store.js';
 import { JsonStore } from './storage/json-store.js';
+import { EventHub } from './events/hub.js';
+import type { EventClient } from './events/hub.js';
 
 const app = new Hono();
 
@@ -104,6 +106,9 @@ const orchestrator = new ChatOrchestrator({
 
 const processMessage = orchestrator.createProcessMessage();
 
+// EventHub — центральный диспетчер подписок
+const eventHub = new EventHub(eventBus, sessionManager);
+
 // API-заглушки для UI
 app.get('/api/config/themes', (c) => c.json({ themes: [] }));
 
@@ -120,7 +125,7 @@ app.get('/api/v2/i18n/translations/en', (c) => c.json(getTranslations('en')));
 app.route('/api/v2/projects', createProjectRoutes(auth, projectStore));
 
 // Sessions routes
-app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator));
+app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub));
 
 // Messages routes
 app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager));
@@ -145,6 +150,63 @@ app.route('/api/v2/context', createContextRoutes(auth, contextConfig));
 
 // User admin routes
 app.route('/api/v2/users', createUserRoutes(auth, profilesStore));
+
+// Глобальный SSE-хаб для всех сессий пользователя
+app.get('/api/v2/events', auth.requireAuth, async (c) => {
+  const user = auth.getCurrentUser(c)!;
+  const signal = c.req.raw.signal;
+
+  return new Response(
+    new ReadableStream({
+      async start(controller) {
+        const encoder = new TextEncoder();
+        const unsubs: (() => void)[] = [];
+
+        try {
+          const userSessions = await sessionManager.listSessions({ userId: user.id });
+          console.log(`[SSE /api/v2/events] Client connected: user=${user.username} sessions=${userSessions.length}`);
+
+          for (const s of userSessions) {
+            const unsub = eventBus.subscribe(s.id, (event) => {
+              try {
+                const line = `data: ${JSON.stringify(event)}\n\n`;
+                controller.enqueue(encoder.encode(line));
+              } catch {
+                // client disconnected
+              }
+            });
+            unsubs.push(unsub);
+          }
+
+          signal.addEventListener('abort', () => {
+            for (const unsub of unsubs) unsub();
+            try { controller.close(); } catch { /* already closed */ }
+          }, { once: true });
+
+          // Держим соединение открытым до abort
+          await new Promise<void>((resolve) => {
+            if (signal.aborted) { resolve(); return; }
+            signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+        } catch (err) {
+          console.error('[SSE /api/v2/events] Error:', err);
+        } finally {
+          for (const unsub of unsubs) unsub();
+          try { controller.close(); } catch { /* already closed */ }
+        }
+      },
+    }),
+    {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    },
+  );
+});
 
 // Admin routes
 app.get('/admin/sessions/blocked', auth.requireAdmin, (c) => c.json({ sessions: [], count: 0 }));
@@ -216,125 +278,158 @@ const server = createServer(async (req, res) => {
 // WebSocket /ws/chat
 const wss = new WebSocketServer({ noServer: true });
 
+// Адаптер для auth.getCurrentUser из сырого IncomingMessage
+function reqAdapter(req: IncomingMessage) {
+  const headers = new Headers();
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (v) headers.set(k, Array.isArray(v) ? v.join(', ') : v);
+  }
+  return {
+    req: {
+      header(name: string): string | undefined {
+        const h = req.headers[name.toLowerCase()];
+        if (!h) return undefined;
+        return Array.isArray(h) ? h[0] : h;
+      },
+      raw: { headers },
+    },
+  };
+}
+
 server.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url || '', `http://${request.headers.host}`);
 
-  if (url.pathname === '/ws/chat') {
-    const sessionId = url.searchParams.get('session_id');
-    if (!sessionId) {
-      socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+  // Глобальный event-хаб для всех сессий пользователя
+  if (url.pathname === '/ws/events') {
+    const user = auth.getCurrentUser(reqAdapter(request));
+    if (!user) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return;
     }
 
     wss.handleUpgrade(request, socket, head, (ws) => {
-      const clientId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const clientId = `ws-events-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-      // Подписка на события сессии через EventBus
-      const unsub = eventBus.subscribe(sessionId, (event) => {
-        try {
-          if (ws.readyState === ws.OPEN) {
-            ws.send(JSON.stringify(event));
+      const client: EventClient = {
+        userId: user.id,
+        username: user.username,
+        send(event) {
+          try {
+            if (ws.readyState === ws.OPEN) {
+              ws.send(JSON.stringify(event));
+            }
+          } catch {
+            // ignore send errors
           }
-        } catch {
-          // ignore send errors
-        }
+        },
+      };
+
+      eventHub.registerClient(client).then(() => {
+        console.log(`[WS /ws/events] Connected: client=${clientId} user=${user.username}`);
+        ws.send(JSON.stringify({
+          type: 'connected',
+          client_id: clientId,
+          engine: 'synth',
+        }));
+      }).catch(() => {
+        ws.send(JSON.stringify({
+          type: 'error',
+          data: { error: 'Failed to register client' },
+          timestamp: nowISO(),
+        }));
       });
 
-      ws.send(JSON.stringify({
-        type: 'connected',
-        session_id: sessionId,
-        client_id: clientId,
-        engine: 'synth',
-      }));
-
-      // Late subscriber: отдать буферизованные чанки активного стрима
-      (async () => {
-        const session = await sessionManager.getSession(sessionId);
-        if (session?.currentStream && !session.currentStream.cancelled) {
-          const streamId = session.currentStream.streamId;
-          const chunks = queueManager.getRingBuffer(streamId);
-          if (chunks) {
-            for (const chunk of chunks) {
-              if (ws.readyState === ws.OPEN) {
-                ws.send(JSON.stringify({
-                  type: 'stream.chunk',
-                  sessionId,
-                  data: chunk,
-                  timestamp: new Date().toISOString(),
-                }));
-              }
-            }
-          }
-        }
-      })().catch(() => {});
-
-      ws.on('message', async (raw) => {
+      ws.on('message', (raw) => {
         try {
           const msg = JSON.parse(raw.toString());
           if (msg.type === 'ping') {
             ws.send(JSON.stringify({ type: 'pong' }));
           } else if (msg.type === 'send_message') {
-            if (!msg.content?.trim()) return;
+            const sid = msg.session_id;
+            if (!sid || !msg.content?.trim()) return;
 
-            const session = await sessionManager.getSession(sessionId);
-            if (!session) {
-              ws.send(JSON.stringify({ type: 'error', session_id: sessionId, data: { error: 'Session not found' }, timestamp: nowISO() }));
-              return;
-            }
+            const streamId = msg.stream_id || generateStreamId();
 
-            const message = {
-              role: MessageRole.USER,
-              content: msg.content.trim(),
-              createdAt: nowISO(),
-              disabled: false,
-              pinned: false,
-              hidden: false,
-              author: msg.author || 'unknown',
-              agentRole: msg.agent_role || session.settings.agentRole,
-              provider: msg.provider || session.settings.provider,
-              model: msg.model || session.settings.model,
-              metadata: { stream_id: msg.stream_id || `ws-${Date.now()}` },
-            };
+            ws.send(JSON.stringify({
+              type: 'queued',
+              session_id: sid,
+              stream_id: streamId,
+              timestamp: nowISO(),
+            }));
 
-            const result = await enqueueUserMessage(
-              sessionManager, eventBus, sessionId, message, queueManager, processMessage,
-            );
+            (async () => {
+              const session = await sessionManager.getSession(sid);
+              if (!session) {
+                ws.send(JSON.stringify({
+                  type: 'error',
+                  session_id: sid,
+                  data: { error: 'Session not found' },
+                  timestamp: nowISO(),
+                }));
+                return;
+              }
 
-            if (!result) {
-              ws.send(JSON.stringify({
-                type: 'queue.stalled',
-                session_id: sessionId,
-                data: { pending_count: session.pendingMessages.length },
-                timestamp: nowISO(),
-              }));
-            }
+              const message = {
+                role: MessageRole.USER,
+                content: msg.content.trim(),
+                createdAt: nowISO(),
+                disabled: false,
+                pinned: false,
+                hidden: false,
+                author: user.username,
+                agentRole: msg.agent_role || session.settings.agentRole,
+                provider: msg.provider || session.settings.provider,
+                model: msg.model || session.settings.model,
+                metadata: { stream_id: streamId },
+              };
+
+              const result = await enqueueUserMessage(
+                sessionManager, eventBus, sid, message, queueManager, processMessage,
+              );
+
+              if (!result) {
+                ws.send(JSON.stringify({
+                  type: 'queue.stalled',
+                  session_id: sid,
+                  data: { pending_count: session.pendingMessages.length },
+                  timestamp: nowISO(),
+                }));
+              }
+            })().catch(() => {});
           } else if (msg.type === 'cancel') {
-            const session = await sessionManager.getSession(sessionId);
-            if (session?.currentStream) {
-              orchestrator.cancel(session.currentStream.streamId);
-              session.currentStream.cancelled = true;
-              await sessionManager.updateSession(session);
-            }
-            queueManager.stop(sessionId);
+            const sid = msg.session_id;
+            if (!sid) return;
+
+            (async () => {
+              const session = await sessionManager.getSession(sid);
+              if (session?.currentStream) {
+                orchestrator.cancel(session.currentStream.streamId);
+                session.currentStream.cancelled = true;
+                await sessionManager.updateSession(session);
+              }
+              queueManager.stop(sid);
+            })().catch(() => {});
           }
         } catch {
-          ws.send(JSON.stringify({ type: 'error', error: 'Invalid message format' }));
+          // ignore parse errors
         }
       });
 
       ws.on('close', () => {
-        unsub();
+        console.log(`[WS /ws/events] Disconnected: client=${clientId}`);
+        eventHub.unregisterClient(client);
       });
 
       ws.on('error', () => {
-        unsub();
+        eventHub.unregisterClient(client);
       });
     });
-  } else {
-    socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
-    socket.destroy();
+    return;
   }
+
+  socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+  socket.destroy();
 });
 
 console.log(`synth-backend starting on http://localhost:${port}`);

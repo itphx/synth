@@ -57,6 +57,9 @@ export const profileService = {
     if (prefs.theme) {
       useUIStore.setState({ theme: prefs.theme })
     }
+    if (prefs.transportMode) {
+      useUIStore.setState({ transportMode: prefs.transportMode })
+    }
 
     useProvidersStore.getState().loadFavoritesFromProfile(prefs)
   },
@@ -88,6 +91,10 @@ export const profileService = {
 
   async syncThemeToProfile(theme: string): Promise<void> {
     await this.syncToProfile('theme', theme)
+  },
+
+  async syncTransportModeToProfile(mode: 'auto' | 'ws' | 'sse'): Promise<void> {
+    await this.syncToProfile('transportMode', mode)
   },
 
   async syncAvatarToProfile(avatar: string | null): Promise<void> {

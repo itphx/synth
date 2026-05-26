@@ -3,6 +3,7 @@ import { useUIStore } from '../../stores/useUIStore'
 import { useI18n } from '@/lib/i18n'
 import { QuickSettingsPopup } from '../auth/QuickSettingsPopup'
 import { NotificationPopup } from './NotificationPopup'
+import { GlobalTransportIndicator } from './GlobalTransportIndicator'
 
 interface HeaderProps {
   onSettingsClick: () => void
@@ -28,6 +29,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
       </div>
 
       <div className="flex items-center gap-2">
+        <GlobalTransportIndicator />
         <NotificationPopup />
         <QuickSettingsPopup onSettingsClick={onSettingsClick} />
 

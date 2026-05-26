@@ -33,9 +33,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         user: session.user,
         isAuthenticated: true,
         isLoading: false,
-        isInitialized: true,
       })
       await profileService.initialize()
+      set({ isInitialized: true })
     } catch {
       const status = await api.getStatus()
       set({
@@ -57,10 +57,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         isLoading: false,
       })
       await profileService.initialize()
+      set({ isInitialized: true })
     } catch (err) {
       set({
         error: err instanceof Error ? err.message : 'Login failed',
         isLoading: false,
+        isInitialized: true,
       })
     }
   },

@@ -3,6 +3,8 @@ import { persist } from 'zustand/middleware'
 import type { ThemeMode, Locale } from '../lib/theme/themes'
 import { profileService } from '@/lib/api/profileService'
 
+export type TransportMode = 'auto' | 'ws' | 'sse'
+
 const LEFT_PANEL_MIN_WIDTH = 280
 const LEFT_PANEL_MAX_WIDTH = 500
 const RIGHT_PANEL_MIN_WIDTH = 280
@@ -86,10 +88,8 @@ interface UIStore {
   closeTab: (tabId: string) => void
   setActiveCenterTab: (tabId: string) => void
 
-  connectionStatus: Record<string, 'ws' | 'sse' | 'disconnected'>
-  protocolMode: Record<string, 'ws' | 'sse'>
-  setConnectionStatus: (sessionId: string, status: 'ws' | 'sse' | 'disconnected') => void
-  toggleProtocolMode: (sessionId: string) => void
+  transportMode: TransportMode
+  setTransportMode: (mode: TransportMode) => void
 }
 
 export const useUIStore = create<UIStore>()(
@@ -232,6 +232,7 @@ export const useUIStore = create<UIStore>()(
       closeTab: (tabId) =>
         set((state) => {
           const idx = state.centerTabs.findIndex((t) => t.id === tabId)
+          const tabToClose = state.centerTabs[idx]
           const nextTabs = state.centerTabs.filter((t) => t.id !== tabId)
           let nextActive = state.activeCenterTabId
           if (state.activeCenterTabId === tabId) {
@@ -247,17 +248,11 @@ export const useUIStore = create<UIStore>()(
 
       setActiveCenterTab: (tabId) => set({ activeCenterTabId: tabId }),
 
-      connectionStatus: {} as Record<string, 'ws' | 'sse' | 'disconnected'>,
-      protocolMode: {} as Record<string, 'ws' | 'sse'>,
-      setConnectionStatus: (sessionId, status) =>
-        set((state) => ({
-          connectionStatus: { ...state.connectionStatus, [sessionId]: status },
-        })),
-      toggleProtocolMode: (sessionId) =>
-        set((state) => {
-          const current = state.protocolMode[sessionId] || 'ws'
-          return { protocolMode: { ...state.protocolMode, [sessionId]: current === 'ws' ? 'sse' : 'ws' } }
-        }),
+      transportMode: 'auto',
+      setTransportMode: (mode: TransportMode) => {
+        set({ transportMode: mode })
+        profileService.syncTransportModeToProfile(mode)
+      },
     }),
     {
       name: 'synth-ui-settings',

@@ -1,52 +1,55 @@
 export interface WSEvent {
   type: string
-  session_id: string
+  session_id?: string
+  sessionId?: string
   data?: Record<string, unknown>
 }
 
 export type TransportKind = 'ws' | 'sse' | 'disconnected'
 
-export interface ChatConnectionCallbacks {
+export interface TransportClientCallbacks {
   onEvent: (event: WSEvent) => void
   onConnect?: () => void
   onDisconnect?: (reason: string) => void
   onTransportSwitch?: (transport: TransportKind) => void
+  onBackendReady?: () => void
 }
 
 const HEARTBEAT_INTERVAL = 25_000
 const INITIAL_RECONNECT_DELAY = 1_000
 const MAX_RECONNECT_DELAY = 30_000
 const SEND_TIMEOUT = 10_000
-const MAX_SSE_FAILURES = 3
 
-export class ChatConnection {
-  private sessionId: string | null = null
+export class TransportClient {
   private ws: WebSocket | null = null
   private sseSource: EventSource | null = null
   private transport: TransportKind = 'disconnected'
-  private callbacks: ChatConnectionCallbacks
+  private callbacks: TransportClientCallbacks
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectAttempts = 0
-  private sseFailCount = 0
-  private forceSSE = false
   private intentionalClose = false
-  private pendingSends: Map<string, { resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }> = new Map()
-  private streamIdCounter = 0
+  private counter = 0
+  private backendReady = false
+  private pending = new Map<string, { resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
 
-  constructor(callbacks: ChatConnectionCallbacks) {
+  constructor(callbacks: TransportClientCallbacks) {
     this.callbacks = callbacks
   }
 
-  connect(sessionId: string): void {
-    this.sessionId = sessionId
+  connect(mode: 'ws' | 'sse'): void {
     this.intentionalClose = false
-    this.connectWS()
+    if (mode === 'sse') {
+      this.connectSSE()
+    } else {
+      this.connectWS()
+    }
   }
 
   disconnect(): void {
     this.intentionalClose = true
-    this.cleanup()
+    this.cleanupTransport()
+    this.rejectPending(new Error('Disconnected'))
     this.transport = 'disconnected'
     this.callbacks.onDisconnect?.('manual')
   }
@@ -55,70 +58,44 @@ export class ChatConnection {
     return this.transport
   }
 
-  setForceSSE(force: boolean): void {
-    this.forceSSE = force
-    if (force) {
-      this.callbacks.onTransportSwitch?.('sse')
-      this.cleanupTransport()
-      this.transport = 'disconnected'
-      this.fallbackToSSE()
-    } else {
-      this.cleanupTransport()
-      this.transport = 'disconnected'
-      this.connectWS()
-    }
+  isBackendReady(): boolean {
+    return this.backendReady
   }
 
-  async sendMessage(
-    content: string,
-    agentRole?: string,
-    provider?: string,
-    model?: string,
-  ): Promise<string> {
-    const streamId = `stream-${++this.streamIdCounter}-${Date.now()}`
-    const message: Record<string, unknown> = {
-      type: 'send_message',
-      content,
-      stream_id: streamId,
-      stream: true,
-      agent_role: agentRole,
-      provider,
-      model,
+  async sendMessage(sessionId: string, text: string, agentRole?: string, provider?: string, model?: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error('WebSocket not connected')
     }
-
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      return new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          this.pendingSends.delete(streamId)
-          reject(new Error('Send timeout'))
-        }, SEND_TIMEOUT)
-        this.pendingSends.set(streamId, { resolve: () => resolve(streamId), reject, timer })
-        this.ws!.send(JSON.stringify(message))
-      })
-    }
-
-    return streamId
+    const streamId = `stream-${++this.counter}-${Date.now()}`
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(streamId)
+        reject(new Error('Send timeout'))
+      }, SEND_TIMEOUT)
+      this.pending.set(streamId, { resolve, reject, timer })
+      this.ws!.send(JSON.stringify({
+        type: 'send_message',
+        session_id: sessionId,
+        content: text,
+        stream_id: streamId,
+        agent_role: agentRole,
+        provider,
+        model,
+      }))
+    })
   }
 
-  cancel(): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: 'cancel' }))
-    }
+  cancel(sessionId: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    this.ws.send(JSON.stringify({ type: 'cancel', session_id: sessionId }))
   }
 
   private connectWS(): void {
     this.cleanupTransport()
-
-    if (this.forceSSE) {
-      this.fallbackToSSE()
-      return
-    }
-
-    const params = new URLSearchParams({ session_id: this.sessionId! })
+    this.transport = 'ws'
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const host = location.host
-    const url = `${protocol}//${host}/ws/chat?${params.toString()}`
+    const url = `${protocol}//${location.host}/ws/events`
     console.debug('[WS] Connecting:', url)
 
     try {
@@ -127,25 +104,25 @@ export class ChatConnection {
       this.ws.onopen = () => {
         console.debug('[WS] Connected')
         this.reconnectAttempts = 0
-        this.sseFailCount = 0
         this.transport = 'ws'
         this.startHeartbeat()
+        this.backendReady = false
         this.callbacks.onTransportSwitch?.('ws')
         this.callbacks.onConnect?.()
       }
 
       this.ws.onclose = (e) => {
-        console.debug('[WS] Closed:', e.code, e.reason)
+        console.debug('[WS] Closed: code=', e.code, 'reason=', e.reason, 'wasClean=', e.wasClean)
         this.stopHeartbeat()
-        this.rejectPendingSends(new Error('WebSocket closed'))
+        this.rejectPending(new Error('WebSocket closed'))
         if (!this.intentionalClose) {
           this.callbacks.onDisconnect?.(`WS closed: ${e.code}`)
-          this.fallbackToSSE()
+          this.scheduleReconnect()
         }
       }
 
-      this.ws.onerror = () => {
-        console.debug('[WS] Error')
+      this.ws.onerror = (e) => {
+        console.debug('[WS] Error:', e)
       }
 
       this.ws.onmessage = (e) => {
@@ -153,14 +130,20 @@ export class ChatConnection {
           const data = JSON.parse(e.data)
           if (data.type === 'pong') return
 
-          if (data.type === 'message_queued' || data.type === 'queued') {
-            const streamId = data.data?.stream_id || data.stream_id
+          if (data.type === 'connected') {
+            this.backendReady = true
+            this.callbacks.onBackendReady?.()
+            return
+          }
+
+          if (data.type === 'queued' || data.type === 'message_queued') {
+            const streamId = (data.stream_id as string) || (data.data?.stream_id as string)
             if (streamId) {
-              const pending = this.pendingSends.get(streamId as string)
+              const pending = this.pending.get(streamId)
               if (pending) {
                 clearTimeout(pending.timer)
                 pending.resolve()
-                this.pendingSends.delete(streamId as string)
+                this.pending.delete(streamId)
               }
             }
           }
@@ -171,18 +154,16 @@ export class ChatConnection {
         }
       }
     } catch {
-      this.fallbackToSSE()
+      this.scheduleReconnect()
     }
   }
 
-  private fallbackToSSE(): void {
-    if (this.transport === 'sse') return
+  private connectSSE(): void {
     this.cleanupTransport()
+    this.transport = 'sse'
 
-    if (!this.sessionId) return
-
-    const url = `/api/v2/sessions/${encodeURIComponent(this.sessionId)}/events`
-    console.debug('[SSE] Falling back to:', url)
+    const url = '/api/v2/events'
+    console.debug('[SSE] Connecting:', url)
 
     try {
       this.sseSource = new EventSource(url)
@@ -190,7 +171,6 @@ export class ChatConnection {
       this.sseSource.onopen = () => {
         console.debug('[SSE] Connected')
         this.reconnectAttempts = 0
-        this.sseFailCount = 0
         this.transport = 'sse'
         this.callbacks.onTransportSwitch?.('sse')
         this.callbacks.onConnect?.()
@@ -205,17 +185,9 @@ export class ChatConnection {
         }
       }
 
-      this.sseSource.onerror = () => {
-        console.debug('[SSE] Error, failCount:', this.sseFailCount + 1)
+      this.sseSource.onerror = (e) => {
+        console.debug('[SSE] Error:', e.type)
         if (!this.intentionalClose) {
-          this.sseFailCount++
-          if (this.sseFailCount >= MAX_SSE_FAILURES) {
-            console.debug('[SSE] Max failures reached, giving up')
-            this.transport = 'disconnected'
-            this.callbacks.onTransportSwitch?.('disconnected')
-            this.callbacks.onDisconnect?.('SSE failed repeatedly')
-            return
-          }
           this.callbacks.onDisconnect?.('SSE error')
           this.scheduleReconnect()
         }
@@ -228,15 +200,15 @@ export class ChatConnection {
 
   private scheduleReconnect(): void {
     if (this.intentionalClose) return
-    if (this.forceSSE) {
-      this.fallbackToSSE()
-      return
-    }
     const delay = Math.min(INITIAL_RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts), MAX_RECONNECT_DELAY)
     this.reconnectAttempts++
-    console.debug('[WS] Reconnect in', delay, 'ms (attempt', this.reconnectAttempts, ')')
+    console.debug('[Transport] Reconnect in', delay, 'ms (attempt', this.reconnectAttempts, ')')
     this.reconnectTimer = setTimeout(() => {
-      this.connectWS()
+      if (this.sseSource) {
+        this.connectSSE()
+      } else {
+        this.connectWS()
+      }
     }, delay)
   }
 
@@ -256,12 +228,12 @@ export class ChatConnection {
     }
   }
 
-  private rejectPendingSends(error: Error): void {
-    for (const [, pending] of this.pendingSends) {
+  private rejectPending(error: Error): void {
+    for (const [, pending] of this.pending) {
       clearTimeout(pending.timer)
       pending.reject(error)
     }
-    this.pendingSends.clear()
+    this.pending.clear()
   }
 
   private cleanupTransport(): void {
@@ -283,12 +255,6 @@ export class ChatConnection {
       this.sseSource.close()
       this.sseSource = null
     }
-  }
-
-  private cleanup(): void {
-    this.intentionalClose = true
-    this.rejectPendingSends(new Error('Connection closed'))
-    this.cleanupTransport()
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null

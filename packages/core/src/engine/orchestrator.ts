@@ -132,11 +132,6 @@ export class ChatOrchestrator {
       let finalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       let finalModel: string | undefined;
 
-      publishChunk('stream.start', {
-        stream_id: streamId,
-        agent_role: effectiveAgentRole,
-      });
-
       try {
         for await (const chunk of provider.chatAsync(llmMessages, systemPrompt, undefined, debugCollector, cancelToken)) {
           if (cancelToken.cancelled) break;

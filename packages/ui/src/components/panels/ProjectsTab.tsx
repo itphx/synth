@@ -539,6 +539,7 @@ function SessionItem({
   const { openTab } = useUIStore()
   const { selectionMode, selectedIds, toggleSelected } = useSessionsTreeStore()
   const streamingBySession = useChatStore((s) => s.streamingBySession)
+  const queueBySession = useChatStore((s) => s.queueBySession)
   const sessionUnread = useNotificationStore((s) => s.sessionUnread)
   const clearSessionUnread = useNotificationStore((s) => s.clearSessionUnread)
   const menuKey = `session:${session.id}`
@@ -552,6 +553,11 @@ function SessionItem({
     const streams = streamingBySession[session.id]
     return streams && Object.keys(streams).length > 0
   }, [streamingBySession, session.id])
+
+  const queueInfo = queueBySession[session.id]
+  const isStalled = queueInfo?.isStalled
+  const pendingCount = queueInfo?.pendingCount || session.pending_messages?.length || 0
+  const isBlocked = session.status?.blocked != null
 
   const unreadCount = sessionUnread[session.id] || 0
   const hasUnread = unreadCount > 0
@@ -688,6 +694,15 @@ function SessionItem({
 
       {isStreaming && (
         <span className="ml-auto h-2 w-2 shrink-0 rounded-full bg-syntax-keyword animate-notification-blink" title={t('leftPanel.streaming')} />
+      )}
+      {isBlocked && !isStreaming && (
+        <span className="ml-auto h-2 w-2 shrink-0 rounded-full bg-destructive" title={t('leftPanel.blocked')} />
+      )}
+      {isStalled && !isStreaming && !isBlocked && (
+        <span className="ml-auto h-2 w-2 shrink-0 rounded-full bg-syntax-element animate-notification-blink" title={t('leftPanel.attentionNeeded')} />
+      )}
+      {!isStreaming && !isStalled && !isBlocked && pendingCount > 0 && (
+        <span className="ml-auto h-2 w-2 shrink-0 rounded-full bg-syntax-accent" title={t('leftPanel.answerReady')} />
       )}
     </div>
   )

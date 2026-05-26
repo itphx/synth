@@ -347,6 +347,35 @@ export const synthApi = {
     return response.body
   },
 
+  // API v2: отправить сообщение без чтения SSE-стрима (для SSE-режима)
+  async enqueueMessage(sessionId: string, message: string, options?: {
+    agentRole?: string
+    streamId?: string
+    provider?: string
+    model?: string
+  }): Promise<void> {
+    const body: Record<string, unknown> = {
+      content: message,
+      stream: true,
+      agent: options?.agentRole,
+      provider: options?.provider,
+      model: options?.model,
+      messageId: options?.streamId || `stream-${Date.now()}`,
+    }
+
+    const response = await fetch(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/prompt`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Enqueue failed' }))
+      throw new Error(error.detail || `HTTP ${response.status}`)
+    }
+  },
+
   // API v2: abort
   async stopGeneration(sessionId: string): Promise<void> {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/abort`, {

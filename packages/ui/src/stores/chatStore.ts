@@ -37,6 +37,7 @@ export interface StreamState {
 
 export interface StreamDoneMetadata {
   model?: string
+  content?: string
   usage?: { input_tokens: number; output_tokens: number; total_tokens: number }
   debug_info?: Record<string, unknown> | null
   message_index?: number
@@ -136,7 +137,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       const streamState = sessionStreams[streamId]
       if (!streamState) return s
 
-      if (!metadata.cancelled && streamState.content) {
+      if (!metadata.cancelled && (streamState.content || metadata.content)) {
         const msgs = [...(s.messagesBySession[sessionId] || [])]
         const nextIndex = metadata.message_index
         const existingIdx = nextIndex != null ? msgs.findIndex((m) => m.index === nextIndex) : -1
@@ -144,7 +145,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         const newMsg: MessageData = {
           index: nextIndex ?? (msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 0 : 0),
           role: 'assistant',
-          content: streamState.content,
+          content: metadata.content || streamState.content,
           agent_role: streamState.agentRole || undefined,
           model: metadata.model,
           usage: metadata.usage || undefined,
@@ -157,8 +158,8 @@ export const useChatStore = create<ChatStore>((set) => ({
         }
 
         if (existingIdx >= 0) {
-          // merge: update existing message with stream content (server has cleaned version)
-          msgs[existingIdx] = { ...msgs[existingIdx]!, content: streamState.content, reasoning: streamState.reasoning || undefined, debug_data: metadata.debug_info || undefined }
+          // merge: update existing message with server content
+          msgs[existingIdx] = { ...msgs[existingIdx]!, content: metadata.content || streamState.content, reasoning: streamState.reasoning || undefined, debug_data: metadata.debug_info || undefined }
         } else {
           msgs.push(newMsg)
         }
