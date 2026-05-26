@@ -10,7 +10,7 @@ import {
   ContextConfig, ContextBuilder, ChatOrchestrator, FileProfileStore,
   enqueueUserMessage,
 } from '@synth/core';
-import { nowISO, ensureDataDir, MessageRole } from '@synth/shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId } from '@synth/shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import { createAuthMiddleware } from './auth/middleware.js';
 import { createAuthRoutes } from './routes/auth.js';
@@ -28,6 +28,8 @@ import { createUserRoutes } from './routes/users.js';
 import { t, getTranslations } from './lib/i18n.js';
 import { ProjectStore } from './storage/project-store.js';
 import { JsonStore } from './storage/json-store.js';
+import { EventHub } from './events/hub.js';
+import type { EventClient } from './events/hub.js';
 
 const app = new Hono();
 
@@ -104,6 +106,9 @@ const orchestrator = new ChatOrchestrator({
 
 const processMessage = orchestrator.createProcessMessage();
 
+// EventHub — центральный диспетчер подписок
+const eventHub = new EventHub(eventBus, sessionManager);
+
 // API-заглушки для UI
 app.get('/api/config/themes', (c) => c.json({ themes: [] }));
 
@@ -120,7 +125,7 @@ app.get('/api/v2/i18n/translations/en', (c) => c.json(getTranslations('en')));
 app.route('/api/v2/projects', createProjectRoutes(auth, projectStore));
 
 // Sessions routes
-app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator));
+app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub));
 
 // Messages routes
 app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager));
@@ -145,6 +150,63 @@ app.route('/api/v2/context', createContextRoutes(auth, contextConfig));
 
 // User admin routes
 app.route('/api/v2/users', createUserRoutes(auth, profilesStore));
+
+// Глобальный SSE-хаб для всех сессий пользователя
+app.get('/api/v2/events', auth.requireAuth, async (c) => {
+  const user = auth.getCurrentUser(c)!;
+  const signal = c.req.raw.signal;
+
+  return new Response(
+    new ReadableStream({
+      async start(controller) {
+        const encoder = new TextEncoder();
+        const unsubs: (() => void)[] = [];
+
+        try {
+          const userSessions = await sessionManager.listSessions({ userId: user.id });
+          console.log(`[SSE /api/v2/events] Client connected: user=${user.username} sessions=${userSessions.length}`);
+
+          for (const s of userSessions) {
+            const unsub = eventBus.subscribe(s.id, (event) => {
+              try {
+                const line = `data: ${JSON.stringify(event)}\n\n`;
+                controller.enqueue(encoder.encode(line));
+              } catch {
+                // client disconnected
+              }
+            });
+            unsubs.push(unsub);
+          }
+
+          signal.addEventListener('abort', () => {
+            for (const unsub of unsubs) unsub();
+            try { controller.close(); } catch { /* already closed */ }
+          }, { once: true });
+
+          // Держим соединение открытым до abort
+          await new Promise<void>((resolve) => {
+            if (signal.aborted) { resolve(); return; }
+            signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+        } catch (err) {
+          console.error('[SSE /api/v2/events] Error:', err);
+        } finally {
+          for (const unsub of unsubs) unsub();
+          try { controller.close(); } catch { /* already closed */ }
+        }
+      },
+    }),
+    {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    },
+  );
+});
 
 // Admin routes
 app.get('/admin/sessions/blocked', auth.requireAdmin, (c) => c.json({ sessions: [], count: 0 }));
@@ -237,8 +299,8 @@ function reqAdapter(req: IncomingMessage) {
 server.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url || '', `http://${request.headers.host}`);
 
-  // Глобальная подписка на все сессии пользователя
-  if (url.pathname === '/ws/user') {
+  // Глобальный event-хаб для всех сессий пользователя
+  if (url.pathname === '/ws/events') {
     const user = auth.getCurrentUser(reqAdapter(request));
     if (!user) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
@@ -247,40 +309,33 @@ server.on('upgrade', (request, socket, head) => {
     }
 
     wss.handleUpgrade(request, socket, head, (ws) => {
-      const clientId = `ws-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const sessionUnsubs = new Map<string, () => void>();
-      console.log(`[WS /ws/user] Connected: client=${clientId} user=${user.username}`);
+      const clientId = `ws-events-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-      // Загружаем сессии пользователя и подписываемся на каждую
-      (async () => {
-        const userSessions = await sessionManager.listSessions({ userId: user.id });
-        console.log(`[WS /ws/user] Initial subscribe: client=${clientId} sessions=${userSessions.length}`);
-
-        for (const s of userSessions) {
-          const unsub = eventBus.subscribe(s.id, (event) => {
-            try {
-              if (ws.readyState === ws.OPEN) {
-                ws.send(JSON.stringify(event));
-              }
-            } catch {
-              // ignore send errors
+      const client: EventClient = {
+        userId: user.id,
+        username: user.username,
+        send(event) {
+          try {
+            if (ws.readyState === ws.OPEN) {
+              ws.send(JSON.stringify(event));
             }
-          });
-          sessionUnsubs.set(s.id, unsub);
-        }
+          } catch {
+            // ignore send errors
+          }
+        },
+      };
 
+      eventHub.registerClient(client).then(() => {
+        console.log(`[WS /ws/events] Connected: client=${clientId} user=${user.username}`);
         ws.send(JSON.stringify({
           type: 'connected',
           client_id: clientId,
           engine: 'synth',
-          mode: 'global',
-          subscribed_sessions: userSessions.map(s => s.id),
-          session_count: userSessions.length,
         }));
-      })().catch(() => {
+      }).catch(() => {
         ws.send(JSON.stringify({
           type: 'error',
-          data: { error: 'Failed to load sessions' },
+          data: { error: 'Failed to register client' },
           timestamp: nowISO(),
         }));
       });
@@ -290,188 +345,84 @@ server.on('upgrade', (request, socket, head) => {
           const msg = JSON.parse(raw.toString());
           if (msg.type === 'ping') {
             ws.send(JSON.stringify({ type: 'pong' }));
-          } else if (msg.type === 'subscribe') {
-            const sid = (msg.session_id as string) || (msg.sessionId as string);
-            if (sid && !sessionUnsubs.has(sid)) {
-              const unsub = eventBus.subscribe(sid, (event) => {
-                try {
-                  if (ws.readyState === ws.OPEN) {
-                    ws.send(JSON.stringify(event));
-                  }
-                } catch {
-                  // ignore send errors
-                }
-              });
-              sessionUnsubs.set(sid, unsub);
-              console.log(`[WS /ws/user] Subscribed: client=${clientId} session=${sid} (total=${sessionUnsubs.size})`);
-              ws.send(JSON.stringify({
-                type: 'subscribed',
-                session_id: sid,
-                timestamp: nowISO(),
-              }));
-            }
-          } else if (msg.type === 'unsubscribe') {
-            const sid = (msg.session_id as string) || (msg.sessionId as string);
-            if (sid) {
-              const unsub = sessionUnsubs.get(sid);
-              if (unsub) {
-                unsub();
-                sessionUnsubs.delete(sid);
-                console.log(`[WS /ws/user] Unsubscribed: client=${clientId} session=${sid} (total=${sessionUnsubs.size})`);
+          } else if (msg.type === 'send_message') {
+            const sid = msg.session_id;
+            if (!sid || !msg.content?.trim()) return;
+
+            const streamId = msg.stream_id || generateStreamId();
+
+            ws.send(JSON.stringify({
+              type: 'queued',
+              session_id: sid,
+              stream_id: streamId,
+              timestamp: nowISO(),
+            }));
+
+            (async () => {
+              const session = await sessionManager.getSession(sid);
+              if (!session) {
+                ws.send(JSON.stringify({
+                  type: 'error',
+                  session_id: sid,
+                  data: { error: 'Session not found' },
+                  timestamp: nowISO(),
+                }));
+                return;
               }
-            }
+
+              const message = {
+                role: MessageRole.USER,
+                content: msg.content.trim(),
+                createdAt: nowISO(),
+                disabled: false,
+                pinned: false,
+                hidden: false,
+                author: user.username,
+                agentRole: msg.agent_role || session.settings.agentRole,
+                provider: msg.provider || session.settings.provider,
+                model: msg.model || session.settings.model,
+                metadata: { stream_id: streamId },
+              };
+
+              const result = await enqueueUserMessage(
+                sessionManager, eventBus, sid, message, queueManager, processMessage,
+              );
+
+              if (!result) {
+                ws.send(JSON.stringify({
+                  type: 'queue.stalled',
+                  session_id: sid,
+                  data: { pending_count: session.pendingMessages.length },
+                  timestamp: nowISO(),
+                }));
+              }
+            })().catch(() => {});
+          } else if (msg.type === 'cancel') {
+            const sid = msg.session_id;
+            if (!sid) return;
+
+            (async () => {
+              const session = await sessionManager.getSession(sid);
+              if (session?.currentStream) {
+                orchestrator.cancel(session.currentStream.streamId);
+                session.currentStream.cancelled = true;
+                await sessionManager.updateSession(session);
+              }
+              queueManager.stop(sid);
+            })().catch(() => {});
           }
-          // Клиент-сообщения (send_message, cancel) не обрабатываем —
-          // для этого используется per-session /ws/chat
         } catch {
           // ignore parse errors
         }
       });
 
       ws.on('close', () => {
-        console.log(`[WS /ws/user] Disconnected: client=${clientId} sessions=${sessionUnsubs.size}`);
-        for (const unsub of sessionUnsubs.values()) {
-          unsub();
-        }
-        sessionUnsubs.clear();
+        console.log(`[WS /ws/events] Disconnected: client=${clientId}`);
+        eventHub.unregisterClient(client);
       });
 
       ws.on('error', () => {
-        for (const unsub of sessionUnsubs.values()) {
-          unsub();
-        }
-        sessionUnsubs.clear();
-      });
-    });
-    return;
-  }
-
-  // Per-session чат
-  if (url.pathname === '/ws/chat') {
-    const sessionId = url.searchParams.get('session_id');
-    const wantsEvents = url.searchParams.get('events') !== 'false';
-    if (!sessionId) {
-      socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
-      socket.destroy();
-      return;
-    }
-
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      const clientId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-      // Подписка на события сессии (опционально)
-      let unsub: (() => void) | null = null;
-      if (wantsEvents) {
-        unsub = eventBus.subscribe(sessionId, (event) => {
-          try {
-            if (ws.readyState === ws.OPEN) {
-              ws.send(JSON.stringify(event));
-            }
-          } catch {
-            // ignore send errors
-          }
-        });
-      }
-
-      ws.send(JSON.stringify({
-        type: 'connected',
-        session_id: sessionId,
-        client_id: clientId,
-        engine: 'synth',
-        events: wantsEvents,
-      }));
-
-      // Late subscriber: отдать буферизованные чанки активного стрима (только если events=true)
-      if (wantsEvents) {
-        (async () => {
-          const session = await sessionManager.getSession(sessionId);
-          if (session?.currentStream && !session.currentStream.cancelled) {
-            const streamId = session.currentStream.streamId;
-            const chunks = queueManager.getRingBuffer(streamId);
-            if (chunks) {
-              for (const chunk of chunks) {
-                if (ws.readyState === ws.OPEN) {
-                  ws.send(JSON.stringify({
-                    type: 'stream.chunk',
-                    sessionId,
-                    data: chunk,
-                    timestamp: new Date().toISOString(),
-                  }));
-                }
-              }
-            }
-          }
-        })().catch(() => {});
-      }
-
-      ws.on('message', async (raw) => {
-        try {
-          const msg = JSON.parse(raw.toString());
-          if (msg.type === 'ping') {
-            ws.send(JSON.stringify({ type: 'pong' }));
-          } else if (msg.type === 'send_message') {
-            if (!msg.content?.trim()) return;
-
-            // Мгновенный ack — не ждём блокировок при enqueueUserMessage
-            const streamId = msg.stream_id || `ws-${Date.now()}`;
-            ws.send(JSON.stringify({
-              type: 'queued',
-              data: { stream_id: streamId },
-              timestamp: nowISO(),
-            }));
-
-            const session = await sessionManager.getSession(sessionId);
-            if (!session) {
-              ws.send(JSON.stringify({ type: 'error', session_id: sessionId, data: { error: 'Session not found' }, timestamp: nowISO() }));
-              return;
-            }
-
-            const message = {
-              role: MessageRole.USER,
-              content: msg.content.trim(),
-              createdAt: nowISO(),
-              disabled: false,
-              pinned: false,
-              hidden: false,
-              author: msg.author || 'unknown',
-              agentRole: msg.agent_role || session.settings.agentRole,
-              provider: msg.provider || session.settings.provider,
-              model: msg.model || session.settings.model,
-              metadata: { stream_id: streamId },
-            };
-
-            const result = await enqueueUserMessage(
-              sessionManager, eventBus, sessionId, message, queueManager, processMessage,
-            );
-
-            if (!result) {
-              ws.send(JSON.stringify({
-                type: 'queue.stalled',
-                session_id: sessionId,
-                data: { pending_count: session.pendingMessages.length },
-                timestamp: nowISO(),
-              }));
-            }
-          } else if (msg.type === 'cancel') {
-            const session = await sessionManager.getSession(sessionId);
-            if (session?.currentStream) {
-              orchestrator.cancel(session.currentStream.streamId);
-              session.currentStream.cancelled = true;
-              await sessionManager.updateSession(session);
-            }
-            queueManager.stop(sessionId);
-          }
-        } catch {
-          ws.send(JSON.stringify({ type: 'error', error: 'Invalid message format' }));
-        }
-      });
-
-      ws.on('close', () => {
-        unsub?.();
-      });
-
-      ws.on('error', () => {
-        unsub?.();
+        eventHub.unregisterClient(client);
       });
     });
     return;

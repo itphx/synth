@@ -1,5 +1,5 @@
 import { useUIStore } from '@/stores/useUIStore'
-import { useConnectionStore } from '@/stores/connectionStore'
+import { useTransportStore } from '@/stores/transportStore'
 import { useI18n } from '@/lib/i18n'
 
 const MODE_ORDER: Array<'auto' | 'ws' | 'sse'> = ['auto', 'ws', 'sse']
@@ -7,7 +7,7 @@ const MODE_ORDER: Array<'auto' | 'ws' | 'sse'> = ['auto', 'ws', 'sse']
 export function GlobalTransportIndicator() {
   const { t } = useI18n()
   const { transportMode, setTransportMode } = useUIStore()
-  const userConnected = useConnectionStore((s) => s.userConnected)
+  const connected = useTransportStore((s) => s.connected)
 
   const label = t(`transport.${transportMode}` as never)
   const tooltip = t(`transport.${transportMode}Desc` as never)
@@ -15,14 +15,14 @@ export function GlobalTransportIndicator() {
   const dotColor =
     transportMode === 'sse'
       ? 'bg-yellow-400'
-      : userConnected
+      : connected
         ? 'bg-green-400'
         : 'bg-red-400'
 
   const labelColor =
     transportMode === 'sse'
       ? 'text-yellow-400'
-      : userConnected
+      : connected
         ? 'text-green-400'
         : 'text-red-400'
 

@@ -8,6 +8,7 @@ import { MessageRole, generateStreamId, nowISO } from '@synth/shared';
 import { enqueueUserMessage, sseEventStream } from '@synth/core';
 import { serializeSession } from '../lib/serialize.js';
 import { t } from '../lib/i18n.js';
+import type { EventHub } from '../events/hub.js';
 
 export function createSessionRoutes(
   kit: AuthKit,
@@ -16,6 +17,7 @@ export function createSessionRoutes(
   queueManager: QueueProcessorManager,
   processMessage: ReturnType<ChatOrchestrator['createProcessMessage']>,
   orchestrator: ChatOrchestrator,
+  eventHub: EventHub,
 ): Hono {
   const app = new Hono();
 
@@ -45,6 +47,11 @@ export function createSessionRoutes(
     session.userId = user.id;
     session.ownerId = user.id;
     await sessionManager.updateSession(session);
+
+    // Автоматически подписываем активных клиентов на новую сессию
+    eventHub.subscribeToSession(user.id, session.id).catch((e: unknown) =>
+      console.warn('subscribeToSession failed:', e),
+    );
 
     return c.json(serializeSession(session), 201);
   });
@@ -88,6 +95,11 @@ export function createSessionRoutes(
     }
     await sessionManager.deleteSession(session.id);
     queueManager.stop(session.id);
+
+    // Отписываем клиентов от удалённой сессии
+    const user = kit.getCurrentUser(c)!;
+    eventHub.unsubscribeFromSession(user.id, session.id);
+
     return c.body(null, 204);
   });
 
@@ -102,45 +114,6 @@ export function createSessionRoutes(
       pending_count: session.pendingMessages.length,
       processor_running: queueManager.isRunning(session.id),
     });
-  });
-
-  // GET /api/v2/sessions/:id/events — SSE подписка на события сессии
-  app.get('/:id/events', kit.requireAuth, async (c) => {
-    const sessionId = c.req.param('id');
-    const session = await sessionManager.getSession(sessionId);
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
-    }
-
-    const signal = c.req.raw.signal;
-
-    return new Response(
-      new ReadableStream({
-        async start(controller) {
-          const encoder = new TextEncoder();
-
-          try {
-            for await (const event of sseEventStream(eventBus, sessionId, signal)) {
-              const line = `data: ${JSON.stringify(event)}\n\n`;
-              controller.enqueue(encoder.encode(line));
-            }
-          } catch {
-            // client disconnected
-          } finally {
-            try { controller.close(); } catch { /* already closed */ }
-          }
-        },
-      }),
-      {
-        status: 200,
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          'X-Accel-Buffering': 'no',
-        },
-      },
-    );
   });
 
   // POST /api/v2/sessions/:id/prompt — отправить сообщение (очередь + SSE-стрим)

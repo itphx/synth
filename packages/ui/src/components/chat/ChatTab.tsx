@@ -1,9 +1,9 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { useI18n } from '@/lib/i18n'
-import { useUIStore } from '@/stores/useUIStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useChatStore, type MessageData } from '@/stores/chatStore'
+import { useTransportStore } from '@/stores/transportStore'
 import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
 import { useNotification } from '@/hooks/useNotification'
 import { MessageList } from './MessageList'
@@ -101,11 +101,7 @@ export function ChatTab({ tab }: ChatTabProps) {
 
       try {
         const { selectedModelName, selectedProviderName } = useProvidersStore.getState()
-        await synthApi.enqueueMessage(sessionId, text, {
-          agentRole,
-          model: selectedModelName || undefined,
-          provider: selectedProviderName || undefined,
-        })
+        await useTransportStore.getState().sendMessage(sessionId, text, agentRole, selectedProviderName || undefined, selectedModelName || undefined)
         notify({ text: t('chat.message.sent'), type: 'info', category: 'message', sessionId })
       } catch (e) {
         notify({ text: `${t('chat.error.sendFailed')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
@@ -116,7 +112,7 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   const handleStop = useCallback(async () => {
     try {
-      await synthApi.stopGeneration(sessionId)
+      useTransportStore.getState().cancel(sessionId)
     } catch {
       // ignore
     }
