@@ -12,6 +12,7 @@ export interface TransportClientCallbacks {
   onConnect?: () => void
   onDisconnect?: (reason: string) => void
   onTransportSwitch?: (transport: TransportKind) => void
+  onBackendReady?: () => void
 }
 
 const HEARTBEAT_INTERVAL = 25_000
@@ -29,6 +30,7 @@ export class TransportClient {
   private reconnectAttempts = 0
   private intentionalClose = false
   private counter = 0
+  private backendReady = false
   private pending = new Map<string, { resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
 
   constructor(callbacks: TransportClientCallbacks) {
@@ -54,6 +56,10 @@ export class TransportClient {
 
   getTransport(): TransportKind {
     return this.transport
+  }
+
+  isBackendReady(): boolean {
+    return this.backendReady
   }
 
   async sendMessage(sessionId: string, text: string, agentRole?: string, provider?: string, model?: string): Promise<void> {
@@ -100,6 +106,7 @@ export class TransportClient {
         this.reconnectAttempts = 0
         this.transport = 'ws'
         this.startHeartbeat()
+        this.backendReady = false
         this.callbacks.onTransportSwitch?.('ws')
         this.callbacks.onConnect?.()
       }
@@ -122,6 +129,12 @@ export class TransportClient {
         try {
           const data = JSON.parse(e.data)
           if (data.type === 'pong') return
+
+          if (data.type === 'connected') {
+            this.backendReady = true
+            this.callbacks.onBackendReady?.()
+            return
+          }
 
           if (data.type === 'queued' || data.type === 'message_queued') {
             const streamId = (data.stream_id as string) || (data.data?.stream_id as string)

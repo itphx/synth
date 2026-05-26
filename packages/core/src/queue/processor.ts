@@ -70,8 +70,11 @@ export class QueueProcessor {
       const message = session.pendingMessages[0]!;
       const streamId = message.metadata?.stream_id as string || generateStreamId();
 
-      // Phase 1 — блокировка и сохранение user-сообщения
-      try {
+      // Проверяем, не повторная ли это попытка
+      const isRetry = streamId in this._retryDelays;
+
+      if (!isRetry) {
+        // Phase 1 — блокировка и сохранение user-сообщения (только при первом запуске)
         session = await this.sessionManager.withLock(this.sessionId, async (s) => {
           s.status.blocked = this.sessionId;
           s.status.blockedAt = nowISO();
@@ -94,7 +97,19 @@ export class QueueProcessor {
           stream_id: streamId,
           agent_role: message.agentRole,
         });
+      } else {
+        // Повторная попытка: обновляем startedAt у currentStream
+        session = await this.sessionManager.withLock(this.sessionId, async (s) => {
+          if (s.currentStream) {
+            s.currentStream.startedAt = nowISO();
+          }
+          await this.sessionManager.saveSession(s);
+          return s;
+        });
+        if (!session) break;
+      }
 
+      try {
         // Phase 2 — вызов LLM через processMessage
         const abortController = new AbortController();
 
@@ -127,6 +142,9 @@ export class QueueProcessor {
               if (msg) {
                 msg.metadata = { ...msg.metadata, last_error: result.error };
               }
+              s.status.blocked = undefined;
+              s.status.blockedAt = undefined;
+              s.currentStream = undefined;
               await this.sessionManager.saveSession(s);
             });
 
@@ -137,6 +155,9 @@ export class QueueProcessor {
               retry_count: retryCount,
               can_retry: false,
             });
+
+            delete this._retryDelays[streamId];
+            continue;
           } else {
             // Recoverable — повторить через backoff
             const delay = this._calcBackoff(retryCount);
@@ -165,6 +186,7 @@ export class QueueProcessor {
           error_type: 'internal',
           can_retry: false,
         });
+        delete this._retryDelays[streamId];
         break;
       }
     }

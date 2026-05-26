@@ -155,9 +155,20 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     const client = new TransportClient({
       onEvent: dispatcher,
       onConnect: () => {
+        if (actualMode === 'sse') {
+          transportReady = true
+          set({ connected: true, activeTransport: 'sse' })
+          console.debug('[TransportStore] Connected (SSE):', client.getTransport())
+        } else {
+          // WS: сокет открыт, но backend ещё не зарегистрировал клиента
+          set({ connected: true })
+          console.debug('[TransportStore] WS socket open, waiting for backend ready...')
+        }
+      },
+      onBackendReady: () => {
         transportReady = true
-        set({ connected: true, activeTransport: client.getTransport() })
-        console.debug('[TransportStore] Connected:', client.getTransport())
+        set({ connected: true, activeTransport: 'ws' })
+        console.debug('[TransportStore] Backend ready:', client.getTransport())
       },
       onDisconnect: (reason) => {
         transportReady = false

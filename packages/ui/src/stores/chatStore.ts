@@ -137,7 +137,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       const streamState = sessionStreams[streamId]
       if (!streamState) return s
 
-      if (!metadata.cancelled && streamState.content) {
+      if (!metadata.cancelled && (streamState.content || metadata.content)) {
         const msgs = [...(s.messagesBySession[sessionId] || [])]
         const nextIndex = metadata.message_index
         const existingIdx = nextIndex != null ? msgs.findIndex((m) => m.index === nextIndex) : -1

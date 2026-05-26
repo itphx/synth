@@ -38,6 +38,7 @@ export function MessageList({
 
   const streamEntries = Object.values(streams).filter((s) => s.isStreaming)
   const totalItems = messages.length + streamEntries.length
+  const streamContentSize = streamEntries.reduce((sum, s) => sum + s.content.length + s.reasoning.length, 0)
 
   const virtualizer = useVirtualizer({
     count: totalItems > VIRTUALIZE_THRESHOLD ? messages.length : messages.length,
@@ -66,9 +67,11 @@ export function MessageList({
 
   useEffect(() => {
     if (autoScroll && scrollRef.current) {
-      scrollToBottom(false)
+      requestAnimationFrame(() => {
+        scrollToBottom(false)
+      })
     }
-  }, [messages, streamEntries.length, autoScroll, scrollToBottom])
+  }, [messages, streamContentSize, autoScroll, scrollToBottom])
 
   const createHandler = (handler: (msg: MessageData) => void) => (msg: MessageData) => {
     return () => handler(msg)
