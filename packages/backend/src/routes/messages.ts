@@ -69,6 +69,31 @@ export function createMessageRoutes(kit: AuthKit, sessionManager: SessionManager
     return c.json({ success: true });
   });
 
+  // POST /api/v2/messages/:sessionId/:index/retry — отключить сообщения от index и вернуть текст
+  app.post('/:sessionId/:index/retry', kit.requireAuth, async (c) => {
+    const sessionId = c.req.param('sessionId');
+    const index = parseInt(c.req.param('index'), 10);
+
+    const session = await sessionManager.getSession(sessionId);
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+    if (index < 0 || index >= session.messages.length) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.message', undefined, c) } }, 404);
+    }
+
+    const msg = session.messages[index]!;
+    const content = msg.content;
+
+    for (let i = index; i < session.messages.length; i++) {
+      session.messages[i]!.disabled = true;
+    }
+    session.pendingMessages = [];
+    await sessionManager.updateSession(session);
+
+    return c.json({ content, success: true });
+  });
+
   // GET /api/v2/messages/:sessionId/:index/debug
   app.get('/:sessionId/:index/debug', kit.requireAuth, async (c) => {
     const sessionId = c.req.param('sessionId');

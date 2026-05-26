@@ -14,7 +14,6 @@ interface ChatMessageProps {
   onPin: () => void
   onDelete: () => void
   onRetry: () => void
-  onReturn: () => void
   onDebug: () => void
 }
 
@@ -25,7 +24,6 @@ export function ChatMessage({
   onPin,
   onDelete,
   onRetry,
-  onReturn,
   onDebug,
 }: ChatMessageProps) {
   const isUser = message.role === 'user'
@@ -33,7 +31,7 @@ export function ChatMessage({
   const isError = message.role === 'error'
   const isInfo = message.role === 'info'
   const isSummary = message.role === 'summary'
-  const canRetry = (message.metadata?.can_retry as boolean) || false
+  const canRetry = isUser
   const hasDebug = !!message.debug_data && Object.keys(message.debug_data).length > 0
 
   const containerClass = cn(
@@ -127,7 +125,6 @@ export function ChatMessage({
             onPin={onPin}
             onDelete={onDelete}
             onRetry={onRetry}
-            onReturn={onReturn}
             onDebug={onDebug}
           />
         )}

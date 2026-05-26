@@ -51,6 +51,7 @@ function createDispatcher(): EventDispatcher {
           agent_role: payload.agent_role as string | undefined,
           author: payload.author as string | undefined,
           model: payload.model as string | undefined,
+          provider: payload.provider as string | undefined,
           disabled: false,
           pinned: false,
           hidden: false,
@@ -62,7 +63,7 @@ function createDispatcher(): EventDispatcher {
 
       case 'stream_start':
       case 'stream.start': {
-        startStream(sid, payload.stream_id as string, (payload.agent_role as string) || null)
+        startStream(sid, payload.stream_id as string, (payload.agent_role as string) || null, payload.model as string | undefined, payload.provider as string | undefined)
         break
       }
 
@@ -73,6 +74,8 @@ function createDispatcher(): EventDispatcher {
           payload.stream_id as string,
           (payload.content as string) || '',
           (payload.reasoning as string) || '',
+          payload.model as string | undefined,
+          payload.provider as string | undefined,
         )
         break
       }

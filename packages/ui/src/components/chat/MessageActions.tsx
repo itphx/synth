@@ -13,7 +13,6 @@ interface MessageActionsProps {
   onPin: () => void
   onDelete: () => void
   onRetry: () => void
-  onReturn: () => void
   onDebug: () => void
 }
 
@@ -28,7 +27,6 @@ export function MessageActions({
   onPin,
   onDelete,
   onRetry,
-  onReturn,
   onDebug,
 }: MessageActionsProps) {
   const { t } = useI18n()
@@ -56,10 +54,6 @@ export function MessageActions({
 
       {isUser && canRetry && (
         <ActionBtn onClick={onRetry} title={t('chat.actions.retry')} icon="refresh" />
-      )}
-
-      {isUser && (
-        <ActionBtn onClick={onReturn} title={t('chat.actions.return')} icon="arrow-go-back" />
       )}
 
       {!isUser && hasDebug && (

@@ -308,6 +308,18 @@ export const synthApi = {
     })
   },
 
+  async retryMessage(sessionId: string, messageIndex: number): Promise<{ content: string; success: boolean }> {
+    return fetchJSON(`${BASE_URL}/messages/${encodeURIComponent(sessionId)}/${messageIndex}/retry`, {
+      method: 'POST',
+    })
+  },
+
+  async clearSession(sessionId: string): Promise<SessionData> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/clear`, {
+      method: 'POST',
+    })
+  },
+
   async getMessageDebug(sessionId: string, messageIndex: number): Promise<Record<string, unknown>> {
     return fetchJSON(`${BASE_URL}/messages/${encodeURIComponent(sessionId)}/${messageIndex}/debug`)
   },

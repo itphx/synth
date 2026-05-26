@@ -216,6 +216,23 @@ export function createSessionRoutes(
     });
   });
 
+  // POST /api/v2/sessions/:id/clear — очистить все сообщения
+  app.post('/:id/clear', kit.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+
+    session.messages = session.messages.filter((m) => m.pinned);
+    session.pendingMessages = [];
+    session.inputTokens = 0;
+    session.outputTokens = 0;
+    session.totalTokens = 0;
+    await sessionManager.updateSession(session);
+
+    return c.json(serializeSession(session));
+  });
+
   // POST /api/v2/sessions/:id/abort — отменить генерацию
   app.post('/:id/abort', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));

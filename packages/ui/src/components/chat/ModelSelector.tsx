@@ -65,7 +65,7 @@ export function ModelSelector({ compact = false, sessionId }: { compact?: boolea
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
           <button className="model-selector-trigger flex items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0">
-            <Icon name="cpu" className="size-3.5 text-muted-foreground shrink-0" />
+            <ProviderIcon icon={currentProvider?.icon ?? ''} baseUrl={currentProvider?.url} size={14} className="text-muted-foreground shrink-0" />
             <span className="font-medium text-foreground text-xs truncate">
               {selectedModelName || currentProvider?.model || '—'}
             </span>
@@ -78,7 +78,9 @@ export function ModelSelector({ compact = false, sessionId }: { compact?: boolea
             className="min-w-[200px] p-1 bg-popover border border-border rounded-lg shadow-lg z-50"
             align="end"
           >
-            {models.filter((m) => m.enabled).slice(0, 10).map((m) => (
+            {models.filter((m) => m.enabled).slice(0, 10).map((m) => {
+              const p = providers.find((pv) => pv.name === m.provider)
+              return (
               <DropdownMenu.Item
                 key={`${m.provider}:${m.name}`}
                 onClick={() => {
@@ -87,13 +89,13 @@ export function ModelSelector({ compact = false, sessionId }: { compact?: boolea
                 }}
                 className="text-xs flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer hover:bg-interactive-hover/50 data-[highlighted]:bg-interactive-selection outline-none"
               >
-                <Icon name="cpu" className="size-3.5 text-muted-foreground shrink-0" />
+                <ProviderIcon icon={p?.icon ?? ''} baseUrl={p?.url} size={14} className="text-muted-foreground shrink-0" />
                 <span className="font-medium truncate flex-1">{m.name}</span>
                 {selectedModelName === m.name && (
                   <Icon name="check" className="size-3.5 text-primary shrink-0" />
                 )}
               </DropdownMenu.Item>
-            ))}
+            )})}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
@@ -280,7 +282,7 @@ export function ModelSelector({ compact = false, sessionId }: { compact?: boolea
     <DropdownMenu.Root open={open} onOpenChange={setOpen}>
       <DropdownMenu.Trigger asChild>
         <button className="model-selector-trigger flex items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0">
-          <Icon name="cpu" className="size-3.5 text-muted-foreground shrink-0" />
+          <ProviderIcon icon={currentProvider?.icon ?? ''} baseUrl={currentProvider?.url} size={14} className="text-muted-foreground shrink-0" />
           <span className="font-medium text-xs text-foreground whitespace-nowrap max-w-[200px] truncate">
             {selectedModelName || currentProvider?.model || '—'}
           </span>
@@ -469,6 +471,7 @@ interface ModelRowProps {
 
 const VirtualModelRow = memo(function VirtualModelRow({
   model,
+  provider,
   isSelected,
   isFavorite,
   onToggleFavorite,
@@ -479,7 +482,7 @@ const VirtualModelRow = memo(function VirtualModelRow({
       onClick={onSelect}
       className="text-xs group flex items-center gap-2 pl-4 pr-2 py-1.5 rounded-md cursor-pointer hover:bg-interactive-hover/50 outline-none"
     >
-      <Icon name="cpu" className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      <ProviderIcon icon={provider.icon || ''} baseUrl={provider.url} size={14} className="text-muted-foreground shrink-0" />
       <span className="font-medium truncate flex-1">{model.name}</span>
       {isSelected && <Icon name="check" className="h-3.5 w-3.5 text-primary shrink-0" />}
       {model.context_window != null && model.context_window > 0 && (

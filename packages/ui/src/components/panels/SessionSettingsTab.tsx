@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
+import { useChatStore } from '@/stores/chatStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useNotification } from '@/hooks/useNotification'
 import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
@@ -75,6 +76,20 @@ export function SessionSettingsTab() {
       notify({ text: t('sessionSettings.notLoaded'), type: 'warning', category: 'error', sessionId: sessionId || undefined })
     }
   }
+
+  const handleClearSession = useCallback(async () => {
+    if (!sessionId) return
+    if (!window.confirm(t('leftPanel.confirmClearSession'))) return
+    try {
+      await synthApi.clearSession(sessionId)
+      useChatStore.getState().clearSession(sessionId)
+      const result = await synthApi.getSessionMessages(sessionId)
+      useChatStore.getState().setMessages(sessionId, result.messages)
+      notify({ text: t('chat.session.cleared'), type: 'success', category: 'queue', sessionId })
+    } catch {
+      notify({ text: t('chat.error.clearSession'), type: 'error', category: 'error', sessionId })
+    }
+  }, [sessionId, notify, t])
 
   if (!session) {
     return (
@@ -163,13 +178,19 @@ export function SessionSettingsTab() {
         )}
       </div>
 
-      <div className="shrink-0 border-t border-border p-4">
+      <div className="shrink-0 border-t border-border p-4 space-y-2">
         <button
           onClick={handleSave}
           disabled={saving}
           className="w-full rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
         >
           {saving ? t('sessionSettings.saving') : t('common.save')}
+        </button>
+        <button
+          onClick={handleClearSession}
+          className="w-full rounded-lg border border-destructive/30 px-4 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
+        >
+          {t('leftPanel.clearSession')}
         </button>
       </div>
     </div>
