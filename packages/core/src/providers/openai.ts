@@ -167,11 +167,13 @@ export class OpenAIProvider extends BaseProvider {
               }
 
               if (chunkData.usage) {
-                const usage = chunkData.usage as Record<string, number>;
+                const usage = chunkData.usage as Record<string, unknown>;
+                const details = usage.completion_tokens_details as Record<string, number> | undefined;
                 accumulatedUsage = {
-                  inputTokens: usage.prompt_tokens || 0,
-                  outputTokens: usage.completion_tokens || 0,
-                  totalTokens: usage.total_tokens || 0,
+                  inputTokens: (usage.prompt_tokens as number) || 0,
+                  outputTokens: (usage.completion_tokens as number) || 0,
+                  totalTokens: (usage.total_tokens as number) || 0,
+                  reasoningTokens: details?.reasoning_tokens || 0,
                 };
               }
             } catch {
@@ -277,11 +279,13 @@ export class OpenAIProvider extends BaseProvider {
     const toolCalls = message?.tool_calls as Record<string, unknown>[] | undefined;
     const reasoning = message?.reasoning_content as string | undefined;
 
-    const usage = data.usage as Record<string, number> | undefined;
+    const usage = data.usage as Record<string, unknown> | undefined;
+    const details = usage?.completion_tokens_details as Record<string, number> | undefined;
     const parsedUsage: TokenUsage = {
-      inputTokens: usage?.prompt_tokens || 0,
-      outputTokens: usage?.completion_tokens || 0,
-      totalTokens: usage?.total_tokens || 0,
+      inputTokens: (usage?.prompt_tokens as number) || 0,
+      outputTokens: (usage?.completion_tokens as number) || 0,
+      totalTokens: (usage?.total_tokens as number) || 0,
+      reasoningTokens: details?.reasoning_tokens || 0,
     };
 
     return {

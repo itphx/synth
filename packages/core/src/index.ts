@@ -36,9 +36,10 @@ export {
 export { DebugCollector } from './debug.js';
 
 export { ContextConfig, ContextBuilder, InterviewManager } from './engine/context/index.js';
-export type { BuildSystemPromptParams, ContextBuilderOptions } from './engine/context/index.js';
+export { ContextOptimizer } from './engine/context/index.js';
+export type { BuildSystemPromptParams, ContextBuilderOptions, SummarizationResult, SlidingWindowResult } from './engine/context/index.js';
 
 export { ChatOrchestrator } from './engine/orchestrator.js';
-export type { OrchestratorOptions, ProcessMessageResult } from './engine/orchestrator.js';
+export type { OrchestratorOptions, ProcessMessageResult, ModelPricing } from './engine/orchestrator.js';
 
 export { FileProfileStore } from './storage/profile-store.js';

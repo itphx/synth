@@ -12,6 +12,9 @@ interface SerializedUsage {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  reasoning_tokens?: number;
 }
 
 interface SerializedMessage {
@@ -33,6 +36,7 @@ interface SerializedMessage {
   author?: string;
   agent_role?: string;
   metadata?: Record<string, unknown>;
+  summary_of?: number[];
 }
 
 interface SerializedSession {
@@ -48,12 +52,29 @@ interface SerializedSession {
   settings: Record<string, unknown>;
   branches: unknown[];
   checkpoints: SerializedCheckpoint[];
+  sticky_notes: StickyNoteData[];
   current_stream?: Record<string, unknown>;
+  summarization_pending: boolean;
+  input_cost: number;
+  output_cost: number;
+  cache_read_cost: number;
+  cache_write_cost: number;
   created_at: string;
   updated_at: string;
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+}
+
+interface StickyNoteData {
+  id: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+  disabled: boolean;
 }
 
 interface SerializedCheckpoint {
@@ -82,12 +103,16 @@ function serializeMessage(msg: Message): SerializedMessage {
     input_tokens: msg.usage.inputTokens,
     output_tokens: msg.usage.outputTokens,
     total_tokens: msg.usage.totalTokens,
+    cache_read_tokens: msg.usage.cacheReadTokens,
+    cache_write_tokens: msg.usage.cacheWriteTokens,
+    reasoning_tokens: msg.usage.reasoningTokens,
   } : undefined,
     reasoning: msg.reasoning,
     source: msg.source,
     author: msg.author,
     agent_role: msg.agentRole,
     metadata: msg.metadata,
+    summary_of: msg.summaryOf,
   };
 }
 
@@ -109,12 +134,16 @@ function deserializeMessage(data: SerializedMessage): Message {
     inputTokens: data.usage.input_tokens,
     outputTokens: data.usage.output_tokens,
     totalTokens: data.usage.total_tokens,
+    cacheReadTokens: data.usage.cache_read_tokens,
+    cacheWriteTokens: data.usage.cache_write_tokens,
+    reasoningTokens: data.usage.reasoning_tokens,
   } : undefined,
     reasoning: data.reasoning,
     source: data.source as Message['source'],
     author: data.author,
     agentRole: data.agent_role,
     metadata: data.metadata,
+    summaryOf: data.summary_of,
   };
 }
 
@@ -138,6 +167,13 @@ function serializeSession(session: Session): SerializedSession {
       tsm_state: c.tsmState,
       created_at: c.createdAt,
     })),
+    sticky_notes: session.stickyNotes.map((n) => ({
+      id: n.id,
+      content: n.content,
+      created_at: n.createdAt,
+      updated_at: n.updatedAt,
+      disabled: n.disabled,
+    })),
     current_stream: session.currentStream
       ? {
           stream_id: session.currentStream.streamId,
@@ -147,11 +183,19 @@ function serializeSession(session: Session): SerializedSession {
           cancelled: session.currentStream.cancelled,
         }
       : undefined,
+    summarization_pending: session.summarizationPending,
+    input_cost: session.inputCost,
+    output_cost: session.outputCost,
+    cache_read_cost: session.cacheReadCost,
+    cache_write_cost: session.cacheWriteCost,
     created_at: session.createdAt,
     updated_at: session.updatedAt,
     input_tokens: session.inputTokens,
     output_tokens: session.outputTokens,
     total_tokens: session.totalTokens,
+    cache_read_tokens: session.cacheReadTokens,
+    cache_write_tokens: session.cacheWriteTokens,
+    reasoning_tokens: session.reasoningTokens,
   };
 }
 
@@ -175,6 +219,13 @@ function deserializeSession(data: SerializedSession): Session {
       tsmState: c.tsm_state as TsmState,
       createdAt: c.created_at,
     })),
+    stickyNotes: (data.sticky_notes || []).map((n: StickyNoteData) => ({
+      id: n.id,
+      content: n.content,
+      createdAt: n.created_at,
+      updatedAt: n.updated_at,
+      disabled: n.disabled,
+    })),
     currentStream: data.current_stream
       ? {
           streamId: data.current_stream.stream_id as string,
@@ -184,14 +235,21 @@ function deserializeSession(data: SerializedSession): Session {
           cancelled: data.current_stream.cancelled as boolean,
         }
       : undefined,
+    summarizationPending: data.summarization_pending ?? false,
+    inputCost: data.input_cost ?? 0,
+    outputCost: data.output_cost ?? 0,
+    cacheReadCost: data.cache_read_cost ?? 0,
+    cacheWriteCost: data.cache_write_cost ?? 0,
     createdAt: data.created_at,
     updatedAt: data.updated_at,
     inputTokens: data.input_tokens,
     outputTokens: data.output_tokens,
     totalTokens: data.total_tokens,
+    cacheReadTokens: data.cache_read_tokens ?? 0,
+    cacheWriteTokens: data.cache_write_tokens ?? 0,
+    reasoningTokens: data.reasoning_tokens ?? 0,
   };
 }
-
 export class FileStore {
   private _sessionLocks = new Map<string, AsyncLock>();
 

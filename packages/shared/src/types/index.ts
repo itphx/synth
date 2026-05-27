@@ -56,6 +56,7 @@ export interface Message {
   author?: string;
   agentRole?: string;
   metadata?: Record<string, unknown>;
+  summaryOf?: number[];
 }
 
 // --- Session ---
@@ -93,6 +94,9 @@ export interface SessionSettings {
   summarizeAfterN: number;
   summarizeAfterMinutes: number;
   summarizeContextPercent: number;
+  summarizationHeadMessages: number;
+  summarizationTailMessages: number;
+  contextWindowThreshold: number;
   stickyNotesLimit: number;
   showInterview: boolean;
   websocketEnabled: boolean;
@@ -123,6 +127,14 @@ export interface Checkpoint {
   createdAt: string;
 }
 
+export interface StickyNote {
+  id: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+  disabled: boolean;
+}
+
 export interface Session {
   id: string;
   title?: string;
@@ -136,12 +148,21 @@ export interface Session {
   settings: SessionSettings;
   branches: Branch[];
   checkpoints: Checkpoint[];
+  stickyNotes: StickyNote[];
   currentStream?: StreamInfo;
+  summarizationPending: boolean;
   createdAt: string;
   updatedAt: string;
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  inputCost: number;
+  outputCost: number;
+  cacheReadCost: number;
+  cacheWriteCost: number;
 }
 
 // --- Project ---
@@ -308,6 +329,9 @@ export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
 }
 
 export interface LLMChunk {
@@ -353,6 +377,14 @@ export type EventType =
   | 'permission.replied'
   | 'question.asked'
   | 'question.replied'
+  | 'context.summarization_pending'
+  | 'context.summarized'
+  | 'context.sliding_window_applied'
+  | 'context.sticky_note_added'
+  | 'context.sticky_note_updated'
+  | 'context.sticky_note_deleted'
+  | 'summary.chunk'
+  | 'summary.done'
   | 'error';
 
 export interface BusEvent {

@@ -38,6 +38,7 @@ export function ChatMessage({
     'flex flex-col px-4 py-3 group',
     isUser && 'items-end',
     isAssistant && 'items-start',
+    isSummary && 'items-center',
     (isError || isInfo) && 'items-center'
   )
 
@@ -45,14 +46,14 @@ export function ChatMessage({
     'max-w-[85%] rounded-lg px-4 py-3',
     isUser && 'bg-primary/10 text-foreground rounded-br-sm',
     isAssistant && 'bg-card border border-border/50 text-foreground rounded-bl-sm',
-    isSummary && 'bg-yellow-500/5 border border-yellow-500/20 rounded-bl-sm',
+    isSummary && 'bg-yellow-500/5 border border-yellow-500/20 text-foreground',
     isError && 'bg-destructive/10 border border-destructive/30 text-destructive rounded-lg',
     isInfo && 'bg-muted/30 border border-border/30 text-muted-foreground rounded-lg text-xs',
     message.disabled && 'opacity-50 line-through',
     message.pinned && 'ring-1 ring-primary/30',
   )
 
-  const showActions = isUser || isAssistant
+  const showActions = isUser || isAssistant || isSummary
 
   const subagents = hasDebug
     ? ((message.debug_data?.subagents as Array<{
@@ -84,6 +85,10 @@ export function ChatMessage({
           <MessageHeader message={message} />
         )}
 
+        {isSummary && (
+          <MessageHeader message={message} />
+        )}
+
         {isAssistant && message.reasoning && (
           <ReasoningBlock reasoning={message.reasoning} />
         )}
@@ -106,10 +111,6 @@ export function ChatMessage({
           ) : (
             <MarkdownContent content={message.content} />
           )
-        )}
-
-        {isSummary && (
-          <MessageHeader message={message} />
         )}
 
         {showActions && (

@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import type { ProjectStore } from '../storage/project-store.js';
+import type { SessionManager } from '@synth/core';
 import { serializeProject } from '../lib/serialize.js';
 import { t } from '../lib/i18n.js';
 
-export function createProjectRoutes(kit: AuthKit, store: ProjectStore): Hono {
+export function createProjectRoutes(kit: AuthKit, store: ProjectStore, sessionManager: SessionManager): Hono {
   const app = new Hono();
 
   // GET /api/v2/projects — список проектов
@@ -81,13 +82,32 @@ export function createProjectRoutes(kit: AuthKit, store: ProjectStore): Hono {
     if (!project) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.project', undefined, c) } }, 404);
     }
-    const st = await store.stats(project.id);
+    const sessions = await sessionManager.listSessions({ projectId: project.id });
+    let totalInput = 0;
+    let totalOutput = 0;
+    let totalTotal = 0;
+    let totalCacheRead = 0;
+    let totalCacheWrite = 0;
+    let totalReasoning = 0;
+    let totalMessages = 0;
+    for (const s of sessions) {
+      totalInput += s.inputTokens;
+      totalOutput += s.outputTokens;
+      totalTotal += s.totalTokens;
+      totalCacheRead += s.cacheReadTokens;
+      totalCacheWrite += s.cacheWriteTokens;
+      totalReasoning += s.reasoningTokens;
+      totalMessages += s.messages.length;
+    }
     return c.json({
-      total_sessions: st.totalSessions,
-      total_input_tokens: st.totalInputTokens,
-      total_output_tokens: st.totalOutputTokens,
-      total_tokens: st.totalTokens,
-      total_messages: st.totalMessages,
+      total_sessions: sessions.length,
+      total_input_tokens: totalInput,
+      total_output_tokens: totalOutput,
+      total_tokens: totalTotal,
+      total_messages: totalMessages,
+      total_cache_read_tokens: totalCacheRead,
+      total_cache_write_tokens: totalCacheWrite,
+      total_reasoning_tokens: totalReasoning,
     });
   });
 

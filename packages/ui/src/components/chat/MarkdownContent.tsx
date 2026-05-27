@@ -11,7 +11,8 @@ export function MarkdownContent({ content, className = '' }: MarkdownContentProp
   const html = useMemo(() => {
     if (!content) return ''
     try {
-      const raw = marked.parse(content, { async: false }) as string
+      const tokens = marked.lexer(content)
+      const raw = marked.parser(tokens)
       return DOMPurify.sanitize(raw, {
         ALLOWED_TAGS: [
           'p', 'br', 'strong', 'em', 'u', 's', 'del', 'code', 'pre',
@@ -23,7 +24,8 @@ export function MarkdownContent({ content, className = '' }: MarkdownContentProp
         ],
         ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class', 'id', 'type', 'checked', 'disabled'],
       })
-    } catch {
+    } catch (e) {
+      console.warn('[MarkdownContent] marked failed, falling back to plain text:', e)
       return DOMPurify.sanitize(content)
     }
   }, [content])

@@ -66,4 +66,10 @@ export const defaultConfig: SynthConfig = {
   context: {
     enabledFiles: ['SOUL.md', 'COMPANY.md', 'ABOUT.md'],
   },
+  summarization: {
+    provider: '',
+    model: '',
+    temperature: 0.3,
+    promptFile: 'SUMMARIZER',
+  },
 };

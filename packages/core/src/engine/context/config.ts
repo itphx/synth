@@ -343,4 +343,8 @@ export class ContextConfig {
   getCompressedDialogTemplate(language = 'ru'): string {
     return this._readPrompt('COMPRESSED_DIALOG', 'system', language) ?? '';
   }
+
+  getStickyNotesTemplate(language = 'ru'): string {
+    return this._readPrompt('STICKY_NOTES', 'system', language) ?? '';
+  }
 }

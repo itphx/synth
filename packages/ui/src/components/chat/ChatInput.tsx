@@ -14,6 +14,7 @@ interface ChatInputProps {
   isStreaming: boolean
   onSend: (text: string, agentRole?: string) => void
   onStop: () => void
+  onCreateNote: (text: string) => void
 }
 
 interface ParsedMessage {
@@ -23,7 +24,7 @@ interface ParsedMessage {
 
 const CHAT_INPUT_RADIUS = 'var(--radius-xl)'
 
-export function ChatInput({ sessionId, agents, isStreaming, onSend, onStop }: ChatInputProps) {
+export function ChatInput({ sessionId, agents, isStreaming, onSend, onStop, onCreateNote }: ChatInputProps) {
   const { t } = useI18n()
   const [value, setValue] = useState('')
   const retryText = useChatStore((s) => s.retryInputBySession[sessionId])
@@ -136,6 +137,16 @@ export function ChatInput({ sessionId, agents, isStreaming, onSend, onStop }: Ch
     }
   }
 
+  const handleCreateNote = () => {
+    const text = value.trim()
+    if (!text) return
+    onCreateNote(text)
+    setValue('')
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+    }
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -205,15 +216,24 @@ export function ChatInput({ sessionId, agents, isStreaming, onSend, onStop }: Ch
                 <Icon name="stop" className="size-5" />
               </button>
             ) : (
-              <button
-                onClick={handleSend}
-                disabled={!value.trim()}
-                className="rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                title={t('chat.input.send')}
-              >
-                <Icon name="send-plane" className="size-5" />
-              </button>
-            )}
+              <>
+                <button
+                  onClick={handleCreateNote}
+                  disabled={!value.trim()}
+                  className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  title={t('chat.input.createNote')}
+                >
+                  <Icon name="pushpin" className="size-5" />
+                </button>
+                <button
+                  onClick={handleSend}
+                  disabled={!value.trim()}
+                  className="rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  title={t('chat.input.send')}
+                >
+                  <Icon name="send-plane" className="size-5" />
+                </button>
+              </>)}
           </div>
         </div>
       </div>

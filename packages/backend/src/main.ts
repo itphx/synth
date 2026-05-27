@@ -7,9 +7,10 @@ import { logger } from 'hono/logger';
 import type { ProviderConfig, ModelConfig, AgentDefinition } from '@synth/shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
-  ContextConfig, ContextBuilder, ChatOrchestrator, FileProfileStore,
+  ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator, FileProfileStore,
   enqueueUserMessage,
 } from '@synth/core';
+import type { SummarizationConfig } from '@synth/shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId } from '@synth/shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import { createAuthMiddleware } from './auth/middleware.js';
@@ -95,12 +96,43 @@ const providerCache = new Map<string, ProviderConfig>();
   providerCache.set(p.name, p);
 });
 
+// Кеш моделей (заполняется при старте)
+const modelCache = new Map<string, ModelConfig>();
+(await modelStore.list()).forEach((m) => {
+  modelCache.set(m.id, m);
+});
+
+// ContextOptimizer
+const summarizationConfig: SummarizationConfig = backendConfig.synth.summarization;
+const contextOptimizer = new ContextOptimizer(contextConfig, providerLoader, summarizationConfig);
+
+// Set ContextOptimizer on QueueProcessorManager
+queueManager.setContextOptimizer(contextOptimizer);
+
+// Model price loader
+const modelPriceLoader = (modelName: string) => {
+  // Поиск по имени модели в кэше (сначала по полному ID, потом по name)
+  for (const m of modelCache.values()) {
+    if (m.name === modelName || m.id === modelName) {
+      return {
+        inputPrice: m.inputPrice,
+        outputPrice: m.outputPrice,
+        cacheReadPrice: m.cacheReadPrice,
+        cacheWritePrice: m.cacheWritePrice,
+      };
+    }
+  }
+  return null;
+};
+
 // Orchestrator
 const orchestrator = new ChatOrchestrator({
   sessionManager,
   eventBus,
   contextBuilder,
   providerLoader,
+  contextOptimizer,
+  modelPriceLoader,
   dataDir,
 });
 
@@ -122,10 +154,10 @@ app.get('/api/v2/i18n/translations/ru', (c) => c.json(getTranslations('ru')));
 app.get('/api/v2/i18n/translations/en', (c) => c.json(getTranslations('en')));
 
 // Projects routes
-app.route('/api/v2/projects', createProjectRoutes(auth, projectStore));
+app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager));
 
 // Sessions routes
-app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub));
+app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer));
 
 // Messages routes
 app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager));

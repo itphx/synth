@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { StickyNoteData } from '@/lib/api/synthApi'
 
 export type DebugData = Record<string, unknown>;
 
@@ -15,11 +16,12 @@ export interface MessageData {
   model?: string | null
   provider?: string | null
   provider_type?: string | null
-  usage?: { input_tokens: number; output_tokens: number; total_tokens: number } | null
+  usage?: { input_tokens: number; output_tokens: number; total_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number } | null
   reasoning?: string | null
   source?: string | null
   author?: string | null
   agent_role?: string | null
+  summary_of?: number[] | null
   metadata?: Record<string, unknown> | null
   created_at: string
   timestamp?: string
@@ -33,13 +35,13 @@ export interface StreamState {
   isStreaming: boolean
   model?: string
   provider?: string
-  usage?: { input_tokens: number; output_tokens: number; total_tokens: number }
+  usage?: { input_tokens: number; output_tokens: number; total_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number }
 }
 
 export interface StreamDoneMetadata {
   model?: string
   content?: string
-  usage?: { input_tokens: number; output_tokens: number; total_tokens: number }
+  usage?: { input_tokens: number; output_tokens: number; total_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number }
   debug_info?: Record<string, unknown> | null
   message_index?: number
   cancelled?: boolean
@@ -73,6 +75,7 @@ interface ChatStore {
   queueBySession: Record<string, QueueState>
   pendingBySession: Record<string, QueuedMessage[]>
   errorBySession: Record<string, StreamError | null>
+  stickyNotesBySession: Record<string, StickyNoteData[]>
   debugModalSessionId: string | null
   debugModalMessageIndex: number | null
 
@@ -89,6 +92,10 @@ interface ChatStore {
   setQueueStalled: (sessionId: string, pendingCount: number) => void
   clearQueueState: (sessionId: string) => void
   clearSession: (sessionId: string) => void
+  setStickyNotes: (sessionId: string, notes: StickyNoteData[]) => void
+  addStickyNote: (sessionId: string, note: StickyNoteData) => void
+  updateStickyNote: (sessionId: string, noteId: string, changes: Partial<StickyNoteData>) => void
+  deleteStickyNote: (sessionId: string, noteId: string) => void
   openDebugModal: (sessionId: string, messageIndex: number) => void
   closeDebugModal: () => void
 
@@ -103,6 +110,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   queueBySession: {},
   pendingBySession: {},
   errorBySession: {},
+  stickyNotesBySession: {},
   debugModalSessionId: null,
   debugModalMessageIndex: null,
   retryInputBySession: {},
@@ -255,6 +263,35 @@ export const useChatStore = create<ChatStore>((set) => ({
       const errorBySession = { ...s.errorBySession }
       delete errorBySession[sessionId]
       return { messagesBySession, streamingBySession, queueBySession, pendingBySession, errorBySession }
+    }),
+
+  setStickyNotes: (sessionId, notes) =>
+    set((s) => ({
+      stickyNotesBySession: { ...s.stickyNotesBySession, [sessionId]: notes },
+    })),
+
+  addStickyNote: (sessionId, note) =>
+    set((s) => {
+      const notes = [...(s.stickyNotesBySession[sessionId] || [])]
+      if (notes.find((n) => n.id === note.id)) return s
+      return {
+        stickyNotesBySession: { ...s.stickyNotesBySession, [sessionId]: [...notes, note] },
+      }
+    }),
+
+  updateStickyNote: (sessionId, noteId, changes) =>
+    set((s) => {
+      const notes = [...(s.stickyNotesBySession[sessionId] || [])]
+      const idx = notes.findIndex((n) => n.id === noteId)
+      if (idx === -1) return s
+      notes[idx] = { ...notes[idx]!, ...changes }
+      return { stickyNotesBySession: { ...s.stickyNotesBySession, [sessionId]: notes } }
+    }),
+
+  deleteStickyNote: (sessionId, noteId) =>
+    set((s) => {
+      const notes = (s.stickyNotesBySession[sessionId] || []).filter((n) => n.id !== noteId)
+      return { stickyNotesBySession: { ...s.stickyNotesBySession, [sessionId]: notes } }
     }),
 
   openDebugModal: (sessionId, messageIndex) =>

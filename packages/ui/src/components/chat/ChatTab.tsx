@@ -12,6 +12,7 @@ import { ChatInput } from './ChatInput'
 import { QueueBanner } from './QueueBanner'
 import { DebugModal } from './DebugModal'
 import { QueueChips } from './QueueChips'
+import { StickyNotesPanel } from './StickyNotesPanel'
 import type { CenterTab } from '@/stores/useUIStore'
 
 interface ChatTabProps {
@@ -27,6 +28,7 @@ export function ChatTab({ tab }: ChatTabProps) {
     queueBySession,
     pendingBySession,
     errorBySession,
+    stickyNotesBySession,
     debugModalSessionId,
     debugModalMessageIndex,
     setMessages,
@@ -34,6 +36,7 @@ export function ChatTab({ tab }: ChatTabProps) {
     addMessage,
     clearQueueState,
     setPendingMessages,
+    setStickyNotes,
     openDebugModal,
     closeDebugModal,
     setRetryInput,
@@ -44,6 +47,7 @@ export function ChatTab({ tab }: ChatTabProps) {
   const streams = streamingBySession[sessionId] || {}
   const queue = queueBySession[sessionId]
   const pending = pendingBySession[sessionId] || []
+  const stickyNotes = stickyNotesBySession[sessionId] || []
   const streamError = errorBySession[sessionId]
   const isStreaming = Object.values(streams).some((s) => s.isStreaming)
   const debugMessage = debugModalSessionId && debugModalMessageIndex != null
@@ -78,6 +82,9 @@ export function ChatTab({ tab }: ChatTabProps) {
               content: pm.content,
               agentRole: pm.agent_role || null,
             })))
+          }
+          if (session.sticky_notes) {
+            setStickyNotes(sessionId, session.sticky_notes)
           }
         } catch {
           // session not found or not accessible — use defaults
@@ -247,6 +254,43 @@ export function ChatTab({ tab }: ChatTabProps) {
     }
   }, [sessionId, setPendingMessages, clearQueueState, notify, t])
 
+  const handleCreateNote = useCallback(async (text: string) => {
+    try {
+      const result = await synthApi.addStickyNote(sessionId, text)
+      setStickyNotes(sessionId, result.notes)
+      notify({ text: t('chat.message.sent'), type: 'info', category: 'message', sessionId })
+    } catch {
+      notify({ text: t('common.saveError'), type: 'error', category: 'error', sessionId })
+    }
+  }, [sessionId, setStickyNotes, notify, t])
+
+  const handleUpdateNote = useCallback(async (noteId: string, content: string) => {
+    try {
+      const result = await synthApi.updateStickyNote(sessionId, noteId, { content })
+      setStickyNotes(sessionId, result.notes)
+    } catch {
+      notify({ text: t('common.saveError'), type: 'error', category: 'error', sessionId })
+    }
+  }, [sessionId, setStickyNotes, notify, t])
+
+  const handleToggleNote = useCallback(async (noteId: string, disabled: boolean) => {
+    try {
+      const result = await synthApi.updateStickyNote(sessionId, noteId, { disabled })
+      setStickyNotes(sessionId, result.notes)
+    } catch {
+      // ignore
+    }
+  }, [sessionId, setStickyNotes])
+
+  const handleDeleteNote = useCallback(async (noteId: string) => {
+    try {
+      const result = await synthApi.deleteStickyNote(sessionId, noteId)
+      setStickyNotes(sessionId, result.notes)
+    } catch {
+      notify({ text: t('common.saveError'), type: 'error', category: 'error', sessionId })
+    }
+  }, [sessionId, setStickyNotes, notify, t])
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-background w-full">
       {queue && queue.isStalled && queue.pendingCount > 0 && (
@@ -271,6 +315,15 @@ export function ChatTab({ tab }: ChatTabProps) {
         </div>
       ) : null}
 
+      {stickyNotes.length > 0 && (
+        <StickyNotesPanel
+          notes={stickyNotes}
+          onUpdate={handleUpdateNote}
+          onToggle={handleToggleNote}
+          onDelete={handleDeleteNote}
+        />
+      )}
+
       <MessageList
         messages={messages}
         streams={streams}
@@ -289,6 +342,7 @@ export function ChatTab({ tab }: ChatTabProps) {
         isStreaming={isStreaming}
         onSend={handleSend}
         onStop={handleStop}
+        onCreateNote={handleCreateNote}
       />
 
       {pending.length > 0 && (

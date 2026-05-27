@@ -3,13 +3,13 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 import { StatsTab } from './StatsTab'
-import { SummarizationTab } from './SummarizationTab'
+import { ContextTab } from './ContextTab'
 import { SessionSettingsTab } from './SessionSettingsTab'
 
 const RIGHT_TABS = [
   { id: 'stats', icon: 'bar-chart-2' as const, labelKey: 'rightPanel.tab.stats' },
   { id: 'params', icon: 'settings-3' as const, labelKey: 'rightPanel.tab.params' },
-  { id: 'summarization', icon: 'file-text' as const, labelKey: 'rightPanel.tab.summarization' },
+  { id: 'context', icon: 'file-text' as const, labelKey: 'rightPanel.tab.context' },
   { id: 'scheduler', icon: 'calendar-schedule' as const, labelKey: 'rightPanel.tab.scheduler' },
 ] as const
 
@@ -44,7 +44,7 @@ export const RightPanel: React.FC = () => {
       <div className="flex-1 overflow-y-auto">
         {rightPanelTab === 'stats' && <StatsTab />}
         {rightPanelTab === 'params' && <SessionSettingsTab />}
-        {rightPanelTab === 'summarization' && <SummarizationTab />}
+        {rightPanelTab === 'context' && <ContextTab />}
         {rightPanelTab === 'scheduler' && (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
             {t('rightPanel.scheduler.placeholder')}

@@ -2,6 +2,7 @@ import type { Message, Session } from '@synth/shared';
 import { nowISO, generateStreamId } from '@synth/shared';
 import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
+import type { ContextOptimizer } from '../engine/context/optimizer.js';
 
 const MAX_RETRIES = 3;
 const MAX_PENDING = 5;
@@ -32,6 +33,7 @@ export class QueueProcessor {
     private sessionManager: SessionManager,
     private eventBus: EventBus,
     private processMessage: ProcessMessageFn,
+    private contextOptimizer?: ContextOptimizer,
   ) {}
 
   get isRunning(): boolean {
@@ -66,6 +68,47 @@ export class QueueProcessor {
       }
 
       if (!session || session.pendingMessages.length === 0) break;
+
+      // Проверка: ожидается ли суммаризация перед следующим сообщением?
+      if (this.contextOptimizer && session.summarizationPending) {
+        try {
+          session = await this.sessionManager.withLock(this.sessionId, async (s) => {
+            const summaryMsg = await this.contextOptimizer!.summarize(s);
+            s.messages.push(summaryMsg);
+
+            // Отключить засуммаризированные сообщения (кроме pinned)
+            for (const idx of summaryMsg.summaryOf || []) {
+              if (idx >= 0 && idx < s.messages.length && !s.messages[idx]!.pinned) {
+                s.messages[idx]!.disabled = true;
+              }
+            }
+
+            s.summarizationPending = false;
+            await this.sessionManager.saveSession(s);
+            return s;
+          });
+
+          this.eventBus.publish(this.sessionId, 'context.summarized', {
+            summary_index: session.messages.length - 1,
+            message_count: session.messages.length,
+          });
+
+          // Цикл продолжается — сообщение всё ещё в очереди, обработается дальше
+        } catch (err) {
+          this.eventBus.publish(this.sessionId, 'stream.error', {
+            stream_id: '',
+            error: String(err),
+            error_type: 'context.summarization_failed',
+            can_retry: false,
+          });
+
+          // Снять флаг, чтобы не блокировать очередь навсегда
+          await this.sessionManager.withLock(this.sessionId, async (s) => {
+            s.summarizationPending = false;
+            await this.sessionManager.saveSession(s);
+          });
+        }
+      }
 
       const message = session.pendingMessages[0]!;
       const streamId = message.metadata?.stream_id as string || generateStreamId();
@@ -253,6 +296,11 @@ export class QueueProcessor {
  */
 export class QueueProcessorManager {
   private _processors = new Map<string, QueueProcessor>();
+  private _contextOptimizer?: ContextOptimizer;
+
+  setContextOptimizer(optimizer: ContextOptimizer): void {
+    this._contextOptimizer = optimizer;
+  }
 
   createProcessor(
     sessionId: string,
@@ -263,7 +311,7 @@ export class QueueProcessorManager {
     const existing = this._processors.get(sessionId);
     if (existing && existing.isRunning) return existing;
 
-    const processor = new QueueProcessor(sessionId, sessionManager, eventBus, processMessage);
+    const processor = new QueueProcessor(sessionId, sessionManager, eventBus, processMessage, this._contextOptimizer);
     this._processors.set(sessionId, processor);
 
     processor.start().catch(() => {});
@@ -305,6 +353,19 @@ export async function enqueueUserMessage(
 
   const session = await sessionManager.addPendingMessage(sessionId, message, MAX_PENDING);
   if (!session) return null;
+
+  // Синхронизируем настройки провайдера/модели с последним сообщением
+  const newProvider = message.provider;
+  const newModel = message.model;
+  if (newProvider && newModel) {
+    if (session.settings.provider !== newProvider || session.settings.model !== newModel) {
+      await sessionManager.withLock(sessionId, async (s) => {
+        s.settings.provider = newProvider;
+        s.settings.model = newModel;
+        await sessionManager.saveSession(s);
+      });
+    }
+  }
 
   eventBus.publish(sessionId, 'message.queued', {
     stream_id: message.metadata.stream_id,

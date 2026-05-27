@@ -86,6 +86,13 @@ export const contextConfigSchema = z.object({
   enabledFiles: z.array(z.string()).default(['SOUL.md', 'COMPANY.md', 'ABOUT.md']),
 });
 
+export const summarizationConfigSchema = z.object({
+  provider: z.string().default(''),
+  model: z.string().default(''),
+  temperature: z.number().min(0).max(2).default(0.3),
+  promptFile: z.string().default('SUMMARIZER'),
+});
+
 export const synthConfigSchema = z.object({
   server: serverConfigSchema.default({}),
   storage: storageConfigSchema.default({}),
@@ -98,6 +105,7 @@ export const synthConfigSchema = z.object({
   logging: loggingConfigSchema.default({}),
   tsm: tsmConfigSchema.default({}),
   context: contextConfigSchema.default({}),
+  summarization: summarizationConfigSchema.default({}),
 });
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>;
@@ -111,4 +119,5 @@ export type I18nConfig = z.infer<typeof i18nConfigSchema>;
 export type LoggingConfig = z.infer<typeof loggingConfigSchema>;
 export type TsmConfig = z.infer<typeof tsmConfigSchema>;
 export type ContextConfigSchema = z.infer<typeof contextConfigSchema>;
+export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
 export type SynthConfig = z.infer<typeof synthConfigSchema>;

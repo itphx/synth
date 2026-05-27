@@ -224,6 +224,8 @@ export class AnthropicProvider extends BaseProvider {
                     inputTokens: usage.input_tokens || 0,
                     outputTokens: usage.output_tokens || 0,
                     totalTokens: (usage.input_tokens || 0) + (usage.output_tokens || 0),
+                    cacheReadTokens: usage.cache_read_input_tokens || 0,
+                    cacheWriteTokens: usage.cache_creation_input_tokens || 0,
                   };
                 }
               }
@@ -359,6 +361,8 @@ export class AnthropicProvider extends BaseProvider {
       inputTokens: usage?.input_tokens || 0,
       outputTokens: usage?.output_tokens || 0,
       totalTokens: (usage?.input_tokens || 0) + (usage?.output_tokens || 0),
+      cacheReadTokens: usage?.cache_read_input_tokens || 0,
+      cacheWriteTokens: usage?.cache_creation_input_tokens || 0,
     };
 
     return {

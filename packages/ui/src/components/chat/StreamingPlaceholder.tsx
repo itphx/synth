@@ -1,3 +1,4 @@
+import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useProvidersStore } from '@/stores/providersStore'
@@ -23,7 +24,9 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
   const agents = useAgentsStore((s) => s.agents)
   const providers = useProvidersStore((s) => s.providers)
 
-  const agentInfo = stream.agentRole
+  const isSummary = stream.agentRole === 'summary'
+
+  const agentInfo = !isSummary && stream.agentRole
     ? agents.find((a) => a.id === stream.agentRole)
     : undefined
   const agentColor = resolveColor(agentInfo?.color ?? null)
@@ -36,10 +39,25 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
     : undefined
 
   return (
-    <div className="flex flex-col px-4 py-3 group items-start">
-      <div className="max-w-[85%] rounded-lg px-4 py-3 bg-card border border-border/50 text-foreground rounded-bl-sm">
+    <div className={cn(
+      'flex flex-col px-4 py-3 group',
+      isSummary ? 'items-center' : 'items-start',
+    )}>
+      <div className={cn(
+        'max-w-[85%] rounded-lg px-4 py-3 text-foreground',
+        isSummary
+          ? 'bg-yellow-500/5 border border-yellow-500/20'
+          : 'bg-card border border-border/50 rounded-bl-sm',
+      )}>
         <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70 mb-1">
-          {stream.agentRole && (
+          {isSummary && (
+            <span className="inline-flex items-center gap-1 rounded-sm py-0.5 text-primary">
+              <Icon name="subtract" className="size-3" />
+              <span>Summary</span>
+            </span>
+          )}
+
+          {!isSummary && stream.agentRole && (
             <span
               className={`inline-flex items-center gap-1 rounded-sm py-0.5 ${agentColor ? '' : 'text-primary'}`}
               style={agentColor ? { color: agentColor } : undefined}

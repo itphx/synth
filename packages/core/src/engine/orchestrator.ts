@@ -1,4 +1,4 @@
-import type { Message, Session, ProviderConfig as SharedProviderConfig } from '@synth/shared';
+import type { Message, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@synth/shared';
 import { MessageRole, nowISO } from '@synth/shared';
 import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
@@ -7,13 +7,23 @@ import { ProviderFactory } from '../providers/base.js';
 import type { LLMMessage, CancellationToken, ProviderConfig as CoreProviderConfig } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import type { ContextConfig } from './context/config.js';
+import { ContextOptimizer } from './context/optimizer.js';
 import { info, warning } from '../logger.js';
+
+export interface ModelPricing {
+  inputPrice?: number;
+  outputPrice?: number;
+  cacheReadPrice?: number;
+  cacheWritePrice?: number;
+}
 
 export interface OrchestratorOptions {
   sessionManager: SessionManager;
   eventBus: EventBus;
   contextBuilder: ContextBuilder;
   providerLoader: (name: string) => SharedProviderConfig | null;
+  contextOptimizer?: ContextOptimizer;
+  modelPriceLoader?: (modelName: string) => ModelPricing | null;
   dataDir?: string;
 }
 
@@ -43,6 +53,8 @@ export class ChatOrchestrator {
   private readonly _eventBus: EventBus;
   private readonly _contextBuilder: ContextBuilder;
   private readonly _providerLoader: (name: string) => SharedProviderConfig | null;
+  private readonly _optimizer: ContextOptimizer | null;
+  private readonly _modelPriceLoader: ((modelName: string) => ModelPricing | null) | null;
   private readonly _cancellationTokens = new Map<string, CancellationToken>();
 
   constructor(options: OrchestratorOptions) {
@@ -50,6 +62,8 @@ export class ChatOrchestrator {
     this._eventBus = options.eventBus;
     this._contextBuilder = options.contextBuilder;
     this._providerLoader = options.providerLoader;
+    this._optimizer = options.contextOptimizer ?? null;
+    this._modelPriceLoader = options.modelPriceLoader ?? null;
   }
 
   /**
@@ -108,10 +122,14 @@ export class ChatOrchestrator {
           tsmMode: session.settings.tsmMode,
           language: session.settings.language,
           showInterview: session.settings.showInterview,
+          stickyNotes: session.stickyNotes,
         });
 
-      // 3. Convert messages for LLM
-      const llmMessages = ChatOrchestrator._sessionMessagesToLlm(session.messages, effectiveAgentRole, author);
+      // 3. Convert messages for LLM (with context optimization)
+      const optimizedMessages = this._optimizer
+        ? this._optimizer.getMessagesForLlm(session)
+        : session.messages;
+      const llmMessages = ChatOrchestrator._sessionMessagesToLlm(optimizedMessages, effectiveAgentRole, author);
 
       // 4. Create cancellation token
       const cancelToken: CancellationToken = {
@@ -212,6 +230,46 @@ export class ChatOrchestrator {
 
       publishChunk('stream.done', doneData);
 
+      // 8. Check context optimization triggers
+      if (this._optimizer && updatedSession) {
+        const optSession = updatedSession;
+
+        // Проверить скользящее окно
+        if (optSession.settings.contextOptimization === 'sliding_window') {
+          const swResult = this._optimizer.shouldApplySlidingWindow(optSession);
+          if (swResult.triggered) {
+            let disabledIndices: number[] = [];
+            await this._sessionManager.withLock(optSession.id, async (s) => {
+              const applied = this._optimizer!.applySlidingWindow(s);
+              disabledIndices = applied.disabledIndices;
+              await this._sessionManager.saveSession(s);
+            });
+            this._eventBus.publish(optSession.id, 'context.sliding_window_applied', {
+              reason: swResult.reason,
+              trigger_type: swResult.reason,
+              disabled_indices: disabledIndices,
+            });
+          }
+        }
+
+        // Проверить суммаризацию
+        if (optSession.settings.contextOptimization === 'summarization') {
+          const sumResult = this._optimizer.shouldSummarize(optSession);
+          if (sumResult.triggered) {
+            await this._sessionManager.withLock(optSession.id, async (s) => {
+              s.summarizationPending = true;
+              await this._sessionManager.saveSession(s);
+            });
+            this._eventBus.publish(optSession.id, 'context.summarization_pending', {
+              reason: sumResult.reason,
+              current_tokens: sumResult.currentTokens,
+              threshold: sumResult.threshold,
+              user_count: sumResult.userCount,
+            });
+          }
+        }
+      }
+
       this._cancellationTokens.delete(streamId);
       return {};
     } catch (e) {
@@ -262,7 +320,7 @@ export class ChatOrchestrator {
       if (msg.disabled || msg.hidden) continue;
 
       const role = msg.role;
-      if (role === MessageRole.INFO || role === MessageRole.SUMMARY) continue;
+      if (role === MessageRole.INFO) continue;
 
       const isOwnMessage =
         (role === MessageRole.ASSISTANT && msg.agentRole === currentAgentRole) ||
@@ -271,7 +329,10 @@ export class ChatOrchestrator {
       let content: string;
       let llmRole: string;
 
-      if (isOwnMessage) {
+      if (role === MessageRole.SUMMARY) {
+        content = `[Резюме предыдущего диалога]\n${msg.content}`;
+        llmRole = 'system';
+      } else if (isOwnMessage) {
         content = msg.content;
         llmRole = role;
       } else {
@@ -307,7 +368,7 @@ export class ChatOrchestrator {
     content: string,
     streamId: string,
     agentRole: string | undefined,
-    usage: { inputTokens: number; outputTokens: number; totalTokens: number },
+    usage: TokenUsage,
     model: string | undefined,
     reasoning: string | undefined,
     debugCollector: DebugCollector,
@@ -343,6 +404,36 @@ export class ChatOrchestrator {
     };
 
     await this._sessionManager.addMessage(sessionId, assistantMsg);
+
+    // Accumulate session token counters and costs
+    if (usage) {
+      await this._sessionManager.withLock(sessionId, async (s) => {
+        s.inputTokens += usage.inputTokens || 0;
+        s.outputTokens += usage.outputTokens || 0;
+        s.totalTokens += usage.totalTokens || 0;
+        s.cacheReadTokens += usage.cacheReadTokens || 0;
+        s.cacheWriteTokens += usage.cacheWriteTokens || 0;
+        s.reasoningTokens += usage.reasoningTokens || 0;
+
+        const effectiveModel = model || assistantMsg.model;
+        if (effectiveModel && this._modelPriceLoader) {
+          const pricing = this._modelPriceLoader(effectiveModel);
+          if (pricing) {
+            const div = 1_000_000;
+            s.inputCost += ((usage.inputTokens || 0) * (pricing.inputPrice ?? 0)) / div;
+            s.outputCost += ((usage.outputTokens || 0) * (pricing.outputPrice ?? 0)) / div;
+            if (usage.cacheReadTokens && pricing.cacheReadPrice) {
+              s.cacheReadCost += (usage.cacheReadTokens * pricing.cacheReadPrice) / div;
+            }
+            if (usage.cacheWriteTokens && pricing.cacheWritePrice) {
+              s.cacheWriteCost += (usage.cacheWriteTokens * pricing.cacheWritePrice) / div;
+            }
+          }
+        }
+        s.updatedAt = nowISO();
+        await this._sessionManager.saveSession(s);
+      });
+    }
 
     // Publish message.added for UI
     const session = await this._sessionManager.getSession(sessionId);

@@ -3,6 +3,7 @@ import { TransportClient, type WSEvent, type TransportKind } from '@/lib/api/tra
 import { useChatStore } from './chatStore'
 import type { TransportMode } from './useUIStore'
 import type { StreamDoneMetadata, MessageData } from './chatStore'
+import type { StickyNoteData } from '@/lib/api/synthApi'
 import { synthApi } from '@/lib/api/synthApi'
 
 type EventDispatcher = (event: WSEvent) => void
@@ -39,6 +40,9 @@ function createDispatcher(): EventDispatcher {
       cancelStream,
       addStreamError,
       setQueueStalled,
+      addStickyNote,
+      updateStickyNote,
+      deleteStickyNote,
     } = useChatStore.getState()
 
     switch (type) {
@@ -85,7 +89,16 @@ function createDispatcher(): EventDispatcher {
         const metadata: StreamDoneMetadata = {
           model: payload.model as string | undefined,
           content: payload.content as string | undefined,
-          usage: payload.usage as StreamDoneMetadata['usage'],
+          usage: payload.usage
+            ? {
+                input_tokens: (payload.usage as Record<string, number>).input_tokens || 0,
+                output_tokens: (payload.usage as Record<string, number>).output_tokens || 0,
+                total_tokens: (payload.usage as Record<string, number>).total_tokens || 0,
+                cache_read_tokens: (payload.usage as Record<string, number>).cache_read_tokens,
+                cache_write_tokens: (payload.usage as Record<string, number>).cache_write_tokens,
+                reasoning_tokens: (payload.usage as Record<string, number>).reasoning_tokens,
+              }
+            : undefined,
           debug_info: payload.debug_info as Record<string, unknown> | undefined,
           message_index: payload.message_index as number | undefined,
           cancelled: payload.cancelled as boolean | undefined,
@@ -130,6 +143,39 @@ function createDispatcher(): EventDispatcher {
         const pendingCount = (payload.pending_count as number) || 0
         if (pendingCount > 0) {
           setQueueStalled(sid, pendingCount)
+        }
+        break
+      }
+
+      case 'context.sticky_note_added': {
+        const noteId = payload.note_id as string | undefined
+        if (noteId) {
+          synthApi.getStickyNotes(sid).then((r) => {
+            useChatStore.getState().setStickyNotes(sid, r.notes)
+          }).catch(() => {})
+        }
+        break
+      }
+
+      case 'context.sticky_note_updated':
+      case 'context.sticky_note_deleted': {
+        synthApi.getStickyNotes(sid).then((r) => {
+          useChatStore.getState().setStickyNotes(sid, r.notes)
+        }).catch(() => {})
+        break
+      }
+
+      case 'context.sliding_window_applied': {
+        const indices = payload.disabled_indices as number[] | undefined
+        if (indices && Array.isArray(indices) && indices.length > 0) {
+          const { updateMessage } = useChatStore.getState()
+          for (const idx of indices) {
+            updateMessage(sid, idx, { disabled: true })
+          }
+        } else {
+          synthApi.getSessionMessages(sid).then((r) => {
+            useChatStore.getState().setMessages(sid, r.messages)
+          }).catch(() => {})
         }
         break
       }

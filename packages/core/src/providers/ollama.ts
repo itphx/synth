@@ -170,7 +170,6 @@ export class OllamaProvider extends BaseProvider {
               }
               if (typeof chunkData.eval_count === 'number') {
                 accumulatedUsage.outputTokens += chunkData.eval_count;
-                accumulatedUsage.totalTokens = accumulatedUsage.inputTokens + accumulatedUsage.outputTokens;
               }
             } catch {
               continue;
@@ -274,7 +273,7 @@ export class OllamaProvider extends BaseProvider {
     const parsedUsage: TokenUsage = {
       inputTokens: (data.prompt_eval_count as number) || 0,
       outputTokens: (data.eval_count as number) || 0,
-      totalTokens: ((data.prompt_eval_count as number) || 0) + ((data.eval_count as number) || 0),
+      totalTokens: 0,
     };
 
     return { content, model: this.model, usage: parsedUsage, toolCalls, reasoning };

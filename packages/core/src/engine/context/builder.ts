@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Message, ProfileData } from '@synth/shared';
+import type { Message, ProfileData, StickyNote } from '@synth/shared';
 import type { ProfileStore } from '@synth/shared';
 import { ContextConfig } from './config.js';
 import { InterviewManager } from './interview.js';
@@ -15,6 +15,7 @@ export interface BuildSystemPromptParams {
   tsmMode?: 'simple' | 'orchestrator';
   language?: string;
   showInterview?: boolean;
+  stickyNotes?: StickyNote[];
 }
 
 export interface ContextBuilderOptions {
@@ -67,15 +68,19 @@ export class ContextBuilder {
         this._debugAdd('role', { agentRole, loaded: false, language: lang });
       }
 
-      // 2. Participants notice
-      if (params.historyMessages && this._hasMultipleParticipants(params.historyMessages)) {
-        const notice = this._config.getParticipantsNotice(lang);
-        if (notice) {
-          parts.push(notice);
-          this._debugAdd('participants_notice', { loaded: true, language: lang });
-        }
+    // 2. Participants notice
+    if (params.historyMessages && this._hasMultipleParticipants(params.historyMessages)) {
+      const notice = this._config.getParticipantsNotice(lang);
+      if (notice) {
+        parts.push(notice);
+        this._debugAdd('participants_notice', { loaded: true, language: lang });
       }
-    } else {
+    }
+
+    // 2.5. Sticky notes (если есть активные)
+    const notesPart = this._getStickyNotesPart(params.stickyNotes, lang);
+    if (notesPart) parts.push(notesPart);
+  } else {
       const desc = this._config.getRolesDescription(lang);
       if (desc) parts.push(desc);
       this._debugAdd('role', { agentRole: null, descriptionUsed: true });
@@ -226,6 +231,22 @@ export class ContextBuilder {
     }
 
     return agents.size > 1 || users.size > 1;
+  }
+
+  private _getStickyNotesPart(stickyNotes: StickyNote[] | undefined, language: string): string | null {
+    if (!stickyNotes || stickyNotes.length === 0) return null;
+
+    const activeNotes = stickyNotes.filter((n) => !n.disabled);
+    if (activeNotes.length === 0) return null;
+
+    const template = this._config.getStickyNotesTemplate(language);
+    if (!template) return null;
+
+    const notesText = activeNotes.map((n) => n.content).join('\n\n---\n\n');
+    const content = template.replace('{notes}', notesText);
+
+    this._debugAdd('sticky_notes', { count: activeNotes.length, language });
+    return `\n\n${content}\n`;
   }
 
   private _getAnsweredCount(notes: string): number {

@@ -20,6 +20,7 @@ export {
   type LoggingConfig,
   type TsmConfig,
   type ContextConfigSchema,
+  type SummarizationConfig,
 } from './config/index.js';
 export { defaultConfig, loadConfig } from './config/index.js';
 export { resolveDataDir, resolvePort, ensureDataDir, createDefaultConfig } from './config/index.js';

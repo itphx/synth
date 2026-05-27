@@ -30,6 +30,7 @@ export function MessageHeader({ message }: MessageHeaderProps) {
 
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
+  const isSummary = message.role === 'summary'
 
   const agents = useAgentsStore((s) => s.agents)
   const providers = useProvidersStore((s) => s.providers)
@@ -55,7 +56,14 @@ export function MessageHeader({ message }: MessageHeaderProps) {
         </span>
       )}
 
-      {!isUser && message.agent_role && (
+      {isSummary && (
+        <span className="inline-flex items-center gap-1 rounded-sm py-0.5 text-primary">
+          <Icon name="subtract" className="size-3" />
+          <span>Summary</span>
+        </span>
+      )}
+
+      {!isUser && !isSummary && message.agent_role && (
         isAssistant && agentInfo ? (
           <span
             className={`inline-flex items-center gap-1 rounded-sm py-0.5 ${agentColor ? '' : 'text-primary'}`}

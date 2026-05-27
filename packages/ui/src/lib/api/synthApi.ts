@@ -63,12 +63,25 @@ export interface SessionData {
     blocked: string | null
   }
   settings: Record<string, unknown>
+  sticky_notes: StickyNoteData[]
+  summarization_pending: boolean
   input_tokens: number
   output_tokens: number
   total_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens: number
   processor_running: boolean | null
   created_at: string
   updated_at: string
+}
+
+export interface StickyNoteData {
+  id: string
+  content: string
+  created_at: string
+  updated_at: string
+  disabled: boolean
 }
 
 export interface FileEntry {
@@ -96,6 +109,9 @@ export interface ProjectStats {
   total_output_tokens: number
   total_tokens: number
   total_messages: number
+  total_cache_read_tokens: number
+  total_cache_write_tokens: number
+  total_reasoning_tokens: number
 }
 
 export interface UserInfo {
@@ -473,6 +489,105 @@ export const synthApi = {
 
   async deleteUser(id: string): Promise<void> {
     return fetchJSON<void>(`${BASE_URL}/users/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  // Оптимизация контекста
+  async getOptimization(sessionId: string): Promise<{
+    context_optimization: string
+    sliding_window_type: string
+    sliding_window_limit: number
+    summarization_enabled: boolean
+    summarize_after_n: number
+    summarize_context_percent: number
+    summarization_head_messages: number
+    summarization_tail_messages: number
+    context_window_threshold: number
+  }> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/optimization`)
+  },
+
+  async updateOptimization(
+    sessionId: string,
+    data: {
+      context_optimization?: string
+      sliding_window_type?: string
+      sliding_window_limit?: number
+      summarization_enabled?: boolean
+      summarize_after_n?: number
+      summarize_context_percent?: number
+      summarization_head_messages?: number
+      summarization_tail_messages?: number
+      context_window_threshold?: number
+    },
+  ): Promise<SessionData> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/optimization`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })
+  },
+
+  async summarizeSession(sessionId: string): Promise<{
+    summary: string
+    disabled_count: number
+    summary_index: number
+  }> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/summarize`, {
+      method: 'POST',
+    })
+  },
+
+  async summarizeSessionStream(sessionId: string): Promise<ReadableStream<Uint8Array> | null> {
+    const response = await fetch(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/summarize`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Summarize failed' }))
+      throw new Error(error.detail || `HTTP ${response.status}`)
+    }
+    return response.body
+  },
+
+  async checkOptimization(sessionId: string): Promise<{
+    sliding_window: { triggered: boolean; reason: string }
+    summarization: { triggered: boolean; reason: string }
+    summarization_pending: boolean
+  }> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/optimization/check`, {
+      method: 'POST',
+    })
+  },
+
+  // Sticky notes
+  async addStickyNote(sessionId: string, content: string): Promise<{
+    note: StickyNoteData
+    notes: StickyNoteData[]
+  }> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/notes`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    })
+  },
+
+  async getStickyNotes(sessionId: string): Promise<{ notes: StickyNoteData[] }> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/notes`)
+  },
+
+  async updateStickyNote(sessionId: string, noteId: string, data: {
+    content?: string
+    disabled?: boolean
+  }): Promise<{ notes: StickyNoteData[] }> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/notes/${encodeURIComponent(noteId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })
+  },
+
+  async deleteStickyNote(sessionId: string, noteId: string): Promise<{ notes: StickyNoteData[] }> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/notes/${encodeURIComponent(noteId)}`, {
       method: 'DELETE',
     })
   },
