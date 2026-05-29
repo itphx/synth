@@ -12,6 +12,7 @@ import {
 } from '@synth/core';
 import type { SummarizationConfig } from '@synth/shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId } from '@synth/shared';
+import type { BusEvent } from '@synth/shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import { createAuthMiddleware } from './auth/middleware.js';
 import { createAuthRoutes } from './routes/auth.js';
@@ -160,7 +161,7 @@ app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionMan
 app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer));
 
 // Messages routes
-app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager));
+app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager, contextOptimizer, eventBus));
 
 // Queue routes
 app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage));
@@ -192,30 +193,24 @@ app.get('/api/v2/events', auth.requireAuth, async (c) => {
     new ReadableStream({
       async start(controller) {
         const encoder = new TextEncoder();
-        const unsubs: (() => void)[] = [];
+        const sseClient: EventClient = {
+          userId: user.id,
+          username: user.username,
+          send(event: BusEvent) {
+            try {
+              const line = `data: ${JSON.stringify(event)}\n\n`;
+              controller.enqueue(encoder.encode(line));
+            } catch {
+              // client disconnected
+            }
+          },
+        };
 
         try {
-          const userSessions = await sessionManager.listSessions({ userId: user.id });
-          console.log(`[SSE /api/v2/events] Client connected: user=${user.username} sessions=${userSessions.length}`);
+          console.log(`[SSE /api/v2/events] Connected: user=${user.username}`);
+          await eventHub.registerClient(sseClient);
 
-          for (const s of userSessions) {
-            const unsub = eventBus.subscribe(s.id, (event) => {
-              try {
-                const line = `data: ${JSON.stringify(event)}\n\n`;
-                controller.enqueue(encoder.encode(line));
-              } catch {
-                // client disconnected
-              }
-            });
-            unsubs.push(unsub);
-          }
-
-          signal.addEventListener('abort', () => {
-            for (const unsub of unsubs) unsub();
-            try { controller.close(); } catch { /* already closed */ }
-          }, { once: true });
-
-          // Держим соединение открытым до abort
+          // Keep connection alive until abort or disconnect
           await new Promise<void>((resolve) => {
             if (signal.aborted) { resolve(); return; }
             signal.addEventListener('abort', () => resolve(), { once: true });
@@ -223,7 +218,7 @@ app.get('/api/v2/events', auth.requireAuth, async (c) => {
         } catch (err) {
           console.error('[SSE /api/v2/events] Error:', err);
         } finally {
-          for (const unsub of unsubs) unsub();
+          eventHub.unregisterClient(sseClient);
           try { controller.close(); } catch { /* already closed */ }
         }
       },

@@ -46,6 +46,7 @@ export interface StreamDoneMetadata {
   message_index?: number
   cancelled?: boolean
   pending_count?: number
+  metadata?: { type?: string; indices?: number[] }
 }
 
 export interface StreamError {
@@ -76,6 +77,7 @@ interface ChatStore {
   pendingBySession: Record<string, QueuedMessage[]>
   errorBySession: Record<string, StreamError | null>
   stickyNotesBySession: Record<string, StickyNoteData[]>
+  summarizationPendingBySession: Record<string, boolean>
   debugModalSessionId: string | null
   debugModalMessageIndex: number | null
 
@@ -98,6 +100,7 @@ interface ChatStore {
   deleteStickyNote: (sessionId: string, noteId: string) => void
   openDebugModal: (sessionId: string, messageIndex: number) => void
   closeDebugModal: () => void
+  setSummarizationPending: (sessionId: string, pending: boolean) => void
 
   retryInputBySession: Record<string, string>
   setRetryInput: (sessionId: string, text: string) => void
@@ -111,6 +114,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   pendingBySession: {},
   errorBySession: {},
   stickyNotesBySession: {},
+  summarizationPendingBySession: {},
   debugModalSessionId: null,
   debugModalMessageIndex: null,
   retryInputBySession: {},
@@ -163,7 +167,30 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((s) => {
       const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
       const streamState = sessionStreams[streamId]
-      if (!streamState) return s
+      if (!streamState) {
+        console.warn(`[chatStore] finishStream: no stream state for ${streamId} in session ${sessionId}, adding message from metadata`)
+        if (metadata.content && !metadata.cancelled) {
+          const msgs = [...(s.messagesBySession[sessionId] || [])]
+          const fallbackIndex = metadata.message_index ?? (msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 1 : 0)
+          msgs.push({
+            index: fallbackIndex,
+            role: 'assistant',
+            content: metadata.content,
+            model: metadata.model || undefined,
+            usage: metadata.usage || undefined,
+            debug_data: metadata.debug_info || undefined,
+            disabled: false,
+            pinned: false,
+            hidden: false,
+            created_at: new Date().toISOString(),
+          })
+          return {
+            messagesBySession: { ...s.messagesBySession, [sessionId]: msgs },
+            streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
+          }
+        }
+        return s
+      }
 
       if (!metadata.cancelled && (streamState.content || metadata.content)) {
         const msgs = [...(s.messagesBySession[sessionId] || [])]
@@ -172,7 +199,9 @@ export const useChatStore = create<ChatStore>((set) => ({
 
         const newMsg: MessageData = {
           index: nextIndex ?? (msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 0 : 0),
-          role: 'assistant',
+          role: metadata.metadata?.type === 'summary' ? 'summary'
+            : metadata.metadata?.type === 'debug_system_message' ? 'debug'
+            : 'assistant',
           content: metadata.content || streamState.content,
           agent_role: streamState.agentRole || undefined,
           model: metadata.model,
@@ -180,6 +209,7 @@ export const useChatStore = create<ChatStore>((set) => ({
           usage: metadata.usage || undefined,
           reasoning: streamState.reasoning || undefined,
           debug_data: metadata.debug_info || undefined,
+          summary_of: metadata.metadata?.indices || null,
           disabled: false,
           pinned: false,
           hidden: false,
@@ -188,9 +218,19 @@ export const useChatStore = create<ChatStore>((set) => ({
 
         if (existingIdx >= 0) {
           // merge: update existing message with server content
-          msgs[existingIdx] = { ...msgs[existingIdx]!, content: metadata.content || streamState.content, reasoning: streamState.reasoning || undefined, debug_data: metadata.debug_info || undefined, provider: streamState.provider || msgs[existingIdx]!.provider }
+          msgs[existingIdx] = { ...msgs[existingIdx]!, content: metadata.content || streamState.content, reasoning: streamState.reasoning || undefined, debug_data: metadata.debug_info || undefined, model: metadata.model || msgs[existingIdx]!.model, provider: streamState.provider || msgs[existingIdx]!.provider, usage: metadata.usage || msgs[existingIdx]!.usage, summary_of: metadata.metadata?.indices || msgs[existingIdx]!.summary_of }
         } else {
           msgs.push(newMsg)
+        }
+
+        // Disable summarized messages from indices
+        if (metadata.metadata?.indices && Array.isArray(metadata.metadata.indices)) {
+          for (const idx of metadata.metadata.indices) {
+            const msgIdx = msgs.findIndex((m) => m.index === idx)
+            if (msgIdx >= 0 && msgs[msgIdx] && !msgs[msgIdx]!.pinned) {
+              msgs[msgIdx] = { ...msgs[msgIdx]!, disabled: true }
+            }
+          }
         }
 
         delete sessionStreams[streamId]
@@ -299,6 +339,11 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   closeDebugModal: () =>
     set({ debugModalSessionId: null, debugModalMessageIndex: null }),
+
+  setSummarizationPending: (sessionId, pending) =>
+    set((s) => ({
+      summarizationPendingBySession: { ...s.summarizationPendingBySession, [sessionId]: pending },
+    })),
 
   setRetryInput: (sessionId, text) =>
     set((s) => ({

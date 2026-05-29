@@ -59,19 +59,7 @@ export function CenterTabs() {
   const windowPercent = contextWindow > 0 ? Math.round((lastInputTokens / contextWindow) * 100) : 0
   const [summarizing, setSummarizing] = useState(false)
 
-  const canSummarize = useMemo(() => {
-    const msgs = sessionId ? messagesBySession[sessionId] || [] : []
-    const active = msgs.filter((m) => !m.disabled && !m.hidden && m.role !== 'info' && m.role !== 'summary')
-    if (active.length < 3) return false
-    const lastSummaryIdx = active.reduceRight(
-      (lastIdx, m, i) => (lastIdx >= 0 ? lastIdx : (m.role === 'summary' ? i : -1)), -1,
-    )
-    if (lastSummaryIdx < 0) return true
-    const activeAfter = active.slice(lastSummaryIdx + 1).filter(
-      (m) => m.role !== 'summary',
-    )
-    return activeAfter.length >= 3
-  }, [messagesBySession, sessionId])
+  const canSummarize = activeSession?.can_summarize ?? false
 
   const handleClearSession = useCallback(async () => {
     if (!activeTab?.data?.sessionId) return
@@ -92,77 +80,11 @@ export function CenterTabs() {
     if (!activeTab?.data?.sessionId) return
     const sid = activeTab.data.sessionId
     setSummarizing(true)
-    notify({ text: t('rightPanel.context.summarizationStarted'), type: 'info', category: 'queue', sessionId: sid })
     try {
-      const body = await synthApi.summarizeSessionStream(sid)
-      if (!body) throw new Error('No response body')
-      const reader = body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      const streamId = `summary-${sid}`
-      const store = useChatStore.getState()
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          try {
-            const parsed = JSON.parse(line.slice(6))
-            if (parsed.type === 'chunk') {
-              const s = useChatStore.getState()
-              if (!s.streamingBySession[sid]?.[streamId]) {
-                s.startStream(sid, streamId, 'summary', parsed.model || undefined, parsed.provider || undefined)
-              }
-              s.updateStreamChunk(sid, streamId, parsed.content || '', '', parsed.model || undefined, parsed.provider || undefined)
-            } else if (parsed.type === 'done') {
-              const s = useChatStore.getState()
-              const streamState = s.streamingBySession[sid]?.[streamId]
-              const content = parsed.content || streamState?.content || ''
-              const model = parsed.model || undefined
-              const provider = parsed.provider || undefined
-              const usage = parsed.usage
-
-              // Remove stream state
-              useChatStore.setState((st) => {
-                const sessionStreams = { ...(st.streamingBySession[sid] || {}) }
-                delete sessionStreams[streamId]
-                return { streamingBySession: { ...st.streamingBySession, [sid]: sessionStreams } }
-              })
-
-              // Add summary message
-              const msgs = s.messagesBySession[sid] || []
-              const newMsg = {
-                index: msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 1 : 0,
-                role: 'summary',
-                content,
-                model: model || null,
-                provider: provider || null,
-                usage: usage ? { input_tokens: usage.input_tokens || 0, output_tokens: usage.output_tokens || 0, total_tokens: usage.total_tokens || 0 } : null,
-                disabled: false,
-                pinned: false,
-                hidden: false,
-                created_at: new Date().toISOString(),
-              }
-              useChatStore.getState().addMessage(sid, newMsg)
-
-              // Disable summarized messages
-              if (Array.isArray(parsed.indices)) {
-                const u = useChatStore.getState()
-                for (const idx of parsed.indices) {
-                  u.updateMessage(sid, idx, { disabled: true })
-                }
-              }
-            }
-          } catch { /* skip malformed */ }
-        }
-      }
-      notify({ text: t('rightPanel.context.summarized'), type: 'success', category: 'queue', sessionId: sid })
-    } catch {
-      notify({ text: t('rightPanel.context.summarizeError'), type: 'error', category: 'error', sessionId: activeTab.data.sessionId })
+      await synthApi.summarizeSession(sid)
+      notify({ text: t('rightPanel.context.summarizeEnqueued'), type: 'info', category: 'queue', sessionId: sid })
+    } catch (e) {
+      notify({ text: `${t('rightPanel.context.summarizeError')}: ${(e as Error).message}`, type: 'error', category: 'error', sessionId: sid })
     } finally {
       setSummarizing(false)
     }

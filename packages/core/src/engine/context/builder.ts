@@ -16,6 +16,7 @@ export interface BuildSystemPromptParams {
   language?: string;
   showInterview?: boolean;
   stickyNotes?: StickyNote[];
+  summaryContent?: string;
 }
 
 export interface ContextBuilderOptions {
@@ -84,6 +85,14 @@ export class ContextBuilder {
       const desc = this._config.getRolesDescription(lang);
       if (desc) parts.push(desc);
       this._debugAdd('role', { agentRole: null, descriptionUsed: true });
+    }
+
+    // 2.6. Compressed dialog (summary)
+    if (params.summaryContent) {
+      const template = this._config.getCompressedDialogTemplate(lang);
+      const summaryPart = template.replace('{content}', params.summaryContent);
+      parts.push(summaryPart);
+      this._debugAdd('summary', { included: true, language: lang });
     }
 
     // 3. Additional context (enabled user files)

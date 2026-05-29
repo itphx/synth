@@ -15,6 +15,7 @@ export class EventBus {
       this._subscribers.set(sessionId, new Set());
     }
     this._subscribers.get(sessionId)!.add(handler);
+    console.debug(`[EventBus] subscribe session=${sessionId}, handlers=${this._subscribers.get(sessionId)!.size}`);
 
     return () => {
       this.unsubscribe(sessionId, handler);

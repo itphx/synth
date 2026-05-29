@@ -65,6 +65,7 @@ export interface SessionData {
   settings: Record<string, unknown>
   sticky_notes: StickyNoteData[]
   summarization_pending: boolean
+  can_summarize: boolean
   input_tokens: number
   output_tokens: number
   total_tokens: number
@@ -416,6 +417,13 @@ export const synthApi = {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/status`)
   },
 
+  // API v2: отправить отладочное системное сообщение
+  async sendDebugSystemMessage(sessionId: string): Promise<{ status: string; stream_id: string }> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/debug-system-message`, {
+      method: 'POST',
+    })
+  },
+
   // Очередь (API v2 — /queue/:sessionId)
   async clearQueue(sessionId: string): Promise<void> {
     return fetchJSON(`${BASE_URL}/queue/${encodeURIComponent(sessionId)}/clear`, {
@@ -529,26 +537,12 @@ export const synthApi = {
   },
 
   async summarizeSession(sessionId: string): Promise<{
-    summary: string
-    disabled_count: number
-    summary_index: number
+    status: string
+    stream_id: string
   }> {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/summarize`, {
       method: 'POST',
     })
-  },
-
-  async summarizeSessionStream(sessionId: string): Promise<ReadableStream<Uint8Array> | null> {
-    const response = await fetch(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/summarize`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-    })
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Summarize failed' }))
-      throw new Error(error.detail || `HTTP ${response.status}`)
-    }
-    return response.body
   },
 
   async checkOptimization(sessionId: string): Promise<{
@@ -557,6 +551,12 @@ export const synthApi = {
     summarization_pending: boolean
   }> {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/optimization/check`, {
+      method: 'POST',
+    })
+  },
+
+  async cancelSummarization(sessionId: string): Promise<{ success: boolean }> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/optimization/cancel-summarization`, {
       method: 'POST',
     })
   },

@@ -92,6 +92,14 @@ export class ChatOrchestrator {
 
     const debugCollector = new DebugCollector(session.settings.debugEnabled);
 
+    // --- Обработка системных сообщений (суммаризация, шедулер, etc.) ---
+    if (message.role === MessageRole.SYSTEM && message.metadata?.type === 'summarization_request') {
+      return this._handleSummarization(session, message, signal, publishChunk, debugCollector, streamId);
+    }
+    if (message.role === MessageRole.SYSTEM && message.metadata?.type === 'debug_system_message') {
+      return this._handleDebugSystemMessage(session, message, signal, publishChunk, debugCollector, streamId);
+    }
+
     try {
       // 1. Get provider
       const providerName = message.provider || session.settings.provider || '';
@@ -112,7 +120,16 @@ export class ChatOrchestrator {
         context_optimization: session.settings.contextOptimization,
       });
 
-      // 2. Build context
+      // 2. Build context (сначала получить summary из сообщений)
+      const optimizedMessages = this._optimizer
+        ? this._optimizer.getMessagesForLlm(session)
+        : session.messages;
+
+      const summaryContent = optimizedMessages
+        .filter((m) => m.role === MessageRole.SUMMARY)
+        .map((m) => m.content)
+        .join('\n\n');
+
       const systemPrompt = session.settings.systemPrompt
         || await this._contextBuilder.buildSystemPrompt({
           agentRole: effectiveAgentRole,
@@ -123,13 +140,12 @@ export class ChatOrchestrator {
           language: session.settings.language,
           showInterview: session.settings.showInterview,
           stickyNotes: session.stickyNotes,
+          summaryContent: summaryContent || undefined,
         });
 
-      // 3. Convert messages for LLM (with context optimization)
-      const optimizedMessages = this._optimizer
-        ? this._optimizer.getMessagesForLlm(session)
-        : session.messages;
-      const llmMessages = ChatOrchestrator._sessionMessagesToLlm(optimizedMessages, effectiveAgentRole, author);
+      // 3. Convert messages for LLM (без summary — они уже в system prompt)
+      const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
+      const llmMessages = ChatOrchestrator._sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author);
 
       // 4. Create cancellation token
       const cancelToken: CancellationToken = {
@@ -268,6 +284,31 @@ export class ChatOrchestrator {
             });
           }
         }
+
+        // Обновить canSummarize после всех мутаций
+        await this._sessionManager.withLock(optSession.id, async (s) => {
+          s.canSummarize = this._optimizer!.canSummarize(s);
+          await this._sessionManager.saveSession(s);
+        });
+
+        // Уведомить UI об изменении сессии
+        const updatedSession2 = await this._sessionManager.getSession(optSession.id);
+        if (updatedSession2) {
+          this._eventBus.publish(optSession.id, 'session.updated', {
+            session_id: optSession.id,
+            can_summarize: updatedSession2.canSummarize,
+            input_tokens: updatedSession2.inputTokens,
+            output_tokens: updatedSession2.outputTokens,
+            total_tokens: updatedSession2.totalTokens,
+            cache_read_tokens: updatedSession2.cacheReadTokens,
+            cache_write_tokens: updatedSession2.cacheWriteTokens,
+            reasoning_tokens: updatedSession2.reasoningTokens,
+            input_cost: updatedSession2.inputCost,
+            output_cost: updatedSession2.outputCost,
+            cache_read_cost: updatedSession2.cacheReadCost,
+            cache_write_cost: updatedSession2.cacheWriteCost,
+          });
+        }
       }
 
       this._cancellationTokens.delete(streamId);
@@ -286,6 +327,250 @@ export class ChatOrchestrator {
   cancel(streamId: string): void {
     const token = this._cancellationTokens.get(streamId);
     if (token) token.cancel();
+  }
+
+  private async _handleDebugSystemMessage(
+    session: Session,
+    message: Message,
+    signal: AbortSignal,
+    publishChunk: (event: string, data: Record<string, unknown>) => void,
+    debugCollector: DebugCollector,
+    streamId: string,
+  ): Promise<ProcessMessageResult> {
+    const providerName = (message.provider as string) || session.settings.provider || '';
+    const provider = this._getProvider(providerName, session);
+    if (!provider) {
+      return {
+        error: `Провайдер ${providerName || 'не указан'} не найден или не настроен`,
+        errorType: 'provider_not_found',
+        canRetry: false,
+      };
+    }
+
+    debugCollector.captureSessionInfo(session.id, provider.model, providerName, {
+      provider_type: provider.type,
+      debug_enabled: session.settings.debugEnabled,
+      context_optimization: 'debug_system_message',
+    });
+
+    const lang = session.settings.language || 'ru';
+    const systemPrompt = lang === 'ru'
+      ? 'Ты получил отладочное системное сообщение. Ответь коротко, подтвердив, что ты его получил и обработал. Опиши свою текущую роль и модель.'
+      : 'You received a debug system message. Respond briefly, confirming you received and processed it. Describe your current role and model.';
+
+    const llmMessages: LLMMessage[] = [
+      { id: '', role: 'system', content: systemPrompt, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, disabled: false, pinned: false, branchId: '' },
+      { id: '', role: 'user', content: lang === 'ru' ? 'Привет! Это отладочное системное сообщение. Как ты здесь оказался?' : 'Hi! This is a debug system message. How did you get here?', usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, disabled: false, pinned: false, branchId: '' },
+    ];
+
+    let accumulatedContent = '';
+    let accumulatedReasoning = '';
+    let finalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    let finalModel: string | undefined;
+
+    const cancelToken: CancellationToken = {
+      cancelled: false,
+      cancel: () => { cancelToken.cancelled = true; },
+    };
+    this._cancellationTokens.set(streamId, cancelToken);
+
+    signal.addEventListener('abort', () => cancelToken.cancel(), { once: true });
+
+    try {
+      for await (const chunk of provider.chatAsync(llmMessages, systemPrompt, undefined, debugCollector, cancelToken)) {
+        if (cancelToken.cancelled) break;
+        if (chunk.isFinal) accumulatedContent = chunk.content;
+        else accumulatedContent += chunk.content;
+        if (chunk.usage) finalUsage = chunk.usage;
+        if (chunk.model) finalModel = chunk.model;
+        if (chunk.reasoning) accumulatedReasoning = chunk.reasoning;
+
+        publishChunk('stream.chunk', {
+          stream_id: streamId,
+          content: chunk.content,
+          reasoning: chunk.reasoning,
+          is_final: chunk.isFinal,
+          agent_role: 'debug',
+          model: finalModel,
+          provider: providerName,
+        });
+      }
+    } catch (e) {
+      warning('ORCHESTRATOR', `Debug system message stream error: ${e}`);
+      return { error: String(e), errorType: this._classifyError(String(e)), canRetry: this._isRecoverable(String(e)) };
+    }
+
+    if (cancelToken.cancelled) {
+      publishChunk('stream.cancelled', { stream_id: streamId, content: accumulatedContent });
+      this._cancellationTokens.delete(streamId);
+      return {};
+    }
+
+    // Сохранить debug-сообщение (без message.added — UI получит его через stream.done)
+
+    await this._saveAssistantMessage(
+      session.id, accumulatedContent, streamId, 'debug',
+      finalUsage, finalModel, accumulatedReasoning, debugCollector, false, providerName,
+      MessageRole.DEBUG, undefined, true,
+    );
+
+    const updatedSession = await this._sessionManager.getSession(session.id);
+
+    publishChunk('stream.done', {
+      stream_id: streamId,
+      content: accumulatedContent,
+      message_index: (updatedSession?.messages.length ?? session.messages.length + 1) - 1,
+      pending_count: Math.max(0, (updatedSession?.pendingMessages.length ?? 1) - 1),
+      model: finalModel,
+      provider: providerName,
+      usage: finalUsage,
+      metadata: { type: 'debug_system_message' },
+    });
+
+    this._cancellationTokens.delete(streamId);
+    return {};
+  }
+
+  private async _handleSummarization(
+    session: Session,
+    message: Message,
+    signal: AbortSignal,
+    publishChunk: (event: string, data: Record<string, unknown>) => void,
+    debugCollector: DebugCollector,
+    streamId: string,
+  ): Promise<ProcessMessageResult> {
+    if (!this._optimizer) {
+      return { error: 'ContextOptimizer not available', errorType: 'internal', canRetry: false };
+    }
+
+    const lang = session.settings.language || 'ru';
+
+    let prep: {
+      provider: import('../providers/base.js').BaseProvider;
+      llmMessages: import('../providers/base.js').LLMMessage[];
+      summarizerPrompt: string;
+      messagesToSummarize: Message[];
+      indices: number[];
+    };
+
+    try {
+      prep = this._optimizer.prepareSummarizationForOrchestrator(session, lang);
+    } catch (e) {
+      return { error: String(e), errorType: 'summarization_prep_failed', canRetry: false };
+    }
+
+    const provider = prep.provider;
+    const providerName = (message.provider as string) || session.settings.provider || '';
+
+    debugCollector.captureSessionInfo(session.id, provider.model, providerName, {
+      provider_type: provider.type,
+      debug_enabled: session.settings.debugEnabled,
+      context_optimization: 'summarization',
+    });
+
+    // Стрим от LLM суммаризатора
+    let accumulatedContent = '';
+    let accumulatedReasoning = '';
+    let finalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    let finalModel: string | undefined;
+
+    const cancelToken: import('../providers/base.js').CancellationToken = {
+      cancelled: false,
+      cancel: () => { cancelToken.cancelled = true; },
+    };
+    this._cancellationTokens.set(streamId, cancelToken);
+
+    signal.addEventListener('abort', () => cancelToken.cancel(), { once: true });
+
+    try {
+      for await (const chunk of provider.chatAsync(prep.llmMessages, prep.summarizerPrompt, undefined, debugCollector, cancelToken)) {
+        if (cancelToken.cancelled) break;
+        if (chunk.isFinal) accumulatedContent = chunk.content;
+        else accumulatedContent += chunk.content;
+        if (chunk.usage) finalUsage = chunk.usage;
+        if (chunk.model) finalModel = chunk.model;
+        if (chunk.reasoning) accumulatedReasoning = chunk.reasoning;
+
+        publishChunk('stream.chunk', {
+          stream_id: streamId,
+          content: chunk.content,
+          reasoning: chunk.reasoning,
+          is_final: chunk.isFinal,
+          agent_role: 'summary',
+          model: finalModel,
+          provider: providerName,
+        });
+      }
+    } catch (e) {
+      warning('ORCHESTRATOR', `Summarization stream error: ${e}`);
+      return { error: String(e), errorType: this._classifyError(String(e)), canRetry: this._isRecoverable(String(e)) };
+    }
+
+    if (cancelToken.cancelled) {
+      publishChunk('stream.cancelled', { stream_id: streamId, content: accumulatedContent });
+      this._cancellationTokens.delete(streamId);
+      return {};
+    }
+
+    // Сохранить summary-сообщение (без message.added — UI получит его через stream.done)
+    await this._saveAssistantMessage(
+      session.id, accumulatedContent, streamId, 'summary',
+      finalUsage, finalModel, accumulatedReasoning, debugCollector, false, providerName,
+      MessageRole.SUMMARY, prep.indices, true,
+    );
+
+    // Отключить засуммаризированные сообщения
+    await this._sessionManager.withLock(session.id, async (s) => {
+      for (const idx of prep.indices) {
+        if (idx >= 0 && idx < s.messages.length && !s.messages[idx]!.pinned) {
+          s.messages[idx]!.disabled = true;
+        }
+      }
+      await this._sessionManager.saveSession(s);
+    });
+
+    const updatedSession = await this._sessionManager.getSession(session.id);
+
+    const doneData: Record<string, unknown> = {
+      stream_id: streamId,
+      content: accumulatedContent,
+      message_index: (updatedSession?.messages.length ?? session.messages.length + 1) - 1,
+      pending_count: Math.max(0, (updatedSession?.pendingMessages.length ?? 1) - 1),
+      model: finalModel,
+      provider: providerName,
+      usage: finalUsage,
+      metadata: { type: 'summary', indices: prep.indices },
+    };
+
+    publishChunk('stream.done', doneData);
+
+    // Обновить canSummarize
+    if (updatedSession) {
+      await this._sessionManager.withLock(session.id, async (s) => {
+        s.canSummarize = this._optimizer!.canSummarize(s);
+        await this._sessionManager.saveSession(s);
+      });
+
+      const freshSession = await this._sessionManager.getSession(session.id);
+
+      this._eventBus.publish(session.id, 'session.updated', {
+        session_id: session.id,
+        can_summarize: freshSession?.canSummarize ?? false,
+        input_tokens: freshSession?.inputTokens ?? 0,
+        output_tokens: freshSession?.outputTokens ?? 0,
+        total_tokens: freshSession?.totalTokens ?? 0,
+        cache_read_tokens: freshSession?.cacheReadTokens ?? 0,
+        cache_write_tokens: freshSession?.cacheWriteTokens ?? 0,
+        reasoning_tokens: freshSession?.reasoningTokens ?? 0,
+        input_cost: freshSession?.inputCost ?? 0,
+        output_cost: freshSession?.outputCost ?? 0,
+        cache_read_cost: freshSession?.cacheReadCost ?? 0,
+        cache_write_cost: freshSession?.cacheWriteCost ?? 0,
+      });
+    }
+
+    this._cancellationTokens.delete(streamId);
+    return {};
   }
 
   private _getProvider(providerName: string, session: Session) {
@@ -329,10 +614,7 @@ export class ChatOrchestrator {
       let content: string;
       let llmRole: string;
 
-      if (role === MessageRole.SUMMARY) {
-        content = `[Резюме предыдущего диалога]\n${msg.content}`;
-        llmRole = 'system';
-      } else if (isOwnMessage) {
+      if (isOwnMessage) {
         content = msg.content;
         llmRole = role;
       } else {
@@ -374,6 +656,9 @@ export class ChatOrchestrator {
     debugCollector: DebugCollector,
     isCancelled: boolean,
     provider?: string,
+    role: MessageRole = MessageRole.ASSISTANT,
+    summaryOf?: number[],
+    skipEvent = false,
   ): Promise<string> {
     const finalContent = content;
 
@@ -387,8 +672,8 @@ export class ChatOrchestrator {
 
     const debugInfo = debugCollector.getDebugInfo();
 
-    const assistantMsg: Message = {
-      role: MessageRole.ASSISTANT,
+    const msg: Message = {
+      role,
       content: finalContent,
       createdAt: nowISO(),
       disabled: false,
@@ -401,9 +686,10 @@ export class ChatOrchestrator {
       agentRole,
       debugData: debugInfo ?? undefined,
       metadata: { stream_id: streamId },
+      ...(summaryOf ? { summaryOf } : {}),
     };
 
-    await this._sessionManager.addMessage(sessionId, assistantMsg);
+    await this._sessionManager.addMessage(sessionId, msg);
 
     // Accumulate session token counters and costs
     if (usage) {
@@ -415,7 +701,7 @@ export class ChatOrchestrator {
         s.cacheWriteTokens += usage.cacheWriteTokens || 0;
         s.reasoningTokens += usage.reasoningTokens || 0;
 
-        const effectiveModel = model || assistantMsg.model;
+        const effectiveModel = model || msg.model;
         if (effectiveModel && this._modelPriceLoader) {
           const pricing = this._modelPriceLoader(effectiveModel);
           if (pricing) {
@@ -436,16 +722,18 @@ export class ChatOrchestrator {
     }
 
     // Publish message.added for UI
-    const session = await this._sessionManager.getSession(sessionId);
-    if (session) {
-      this._eventBus.publish(sessionId, 'message.added', {
-        message_index: session.messages.length - 1,
-        role: 'assistant',
-        content: finalContent.slice(0, 500),
-        model,
-        provider: provider || '',
-        agent_role: agentRole,
-      });
+    if (!skipEvent) {
+      const session = await this._sessionManager.getSession(sessionId);
+      if (session) {
+        this._eventBus.publish(sessionId, 'message.added', {
+          message_index: session.messages.length - 1,
+          role: msg.role,
+          content: finalContent.slice(0, 500),
+          model,
+          provider: provider || '',
+          agent_role: agentRole,
+        });
+      }
     }
 
     return finalContent;

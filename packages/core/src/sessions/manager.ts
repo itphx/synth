@@ -94,6 +94,7 @@ export class SessionManager {
       checkpoints: [],
       stickyNotes: [],
       summarizationPending: false,
+      canSummarize: false,
       inputCost: 0,
       outputCost: 0,
       cacheReadCost: 0,

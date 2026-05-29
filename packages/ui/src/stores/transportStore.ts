@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { TransportClient, type WSEvent, type TransportKind } from '@/lib/api/transport'
 import { useChatStore } from './chatStore'
+import { useSessionsStore } from './sessionsStore'
 import type { TransportMode } from './useUIStore'
 import type { StreamDoneMetadata, MessageData } from './chatStore'
 import type { StickyNoteData } from '@/lib/api/synthApi'
@@ -25,6 +26,7 @@ interface TransportState {
 
 function createDispatcher(): EventDispatcher {
   return (event: WSEvent) => {
+    try {
     const type = event.type
     const payload = (event.data || event) as Record<string, unknown>
     const sid = (event.sessionId as string)
@@ -40,6 +42,7 @@ function createDispatcher(): EventDispatcher {
       cancelStream,
       addStreamError,
       setQueueStalled,
+      setSummarizationPending,
       addStickyNote,
       updateStickyNote,
       deleteStickyNote,
@@ -67,7 +70,19 @@ function createDispatcher(): EventDispatcher {
 
       case 'stream_start':
       case 'stream.start': {
-        startStream(sid, payload.stream_id as string, (payload.agent_role as string) || null, payload.model as string | undefined, payload.provider as string | undefined)
+        const agentRole = (payload.agent_role as string) || null
+        const metadata = payload.metadata as Record<string, unknown> | undefined
+        startStream(sid, payload.stream_id as string, agentRole, payload.model as string | undefined, payload.provider as string | undefined)
+        if (metadata?.type === 'summary') {
+          // Установить agentRole как summary для корректного рендеринга
+          const s = useChatStore.getState()
+          const sessionStreams = { ...(s.streamingBySession[sid] || {}) }
+          const streamId = payload.stream_id as string
+          if (sessionStreams[streamId]) {
+            sessionStreams[streamId] = { ...sessionStreams[streamId]!, agentRole: 'summary' }
+            useChatStore.setState({ streamingBySession: { ...s.streamingBySession, [sid]: sessionStreams } })
+          }
+        }
         break
       }
 
@@ -91,18 +106,19 @@ function createDispatcher(): EventDispatcher {
           content: payload.content as string | undefined,
           usage: payload.usage
             ? {
-                input_tokens: (payload.usage as Record<string, number>).input_tokens || 0,
-                output_tokens: (payload.usage as Record<string, number>).output_tokens || 0,
-                total_tokens: (payload.usage as Record<string, number>).total_tokens || 0,
-                cache_read_tokens: (payload.usage as Record<string, number>).cache_read_tokens,
-                cache_write_tokens: (payload.usage as Record<string, number>).cache_write_tokens,
-                reasoning_tokens: (payload.usage as Record<string, number>).reasoning_tokens,
+                input_tokens: (payload.usage as Record<string, number>).inputTokens || 0,
+                output_tokens: (payload.usage as Record<string, number>).outputTokens || 0,
+                total_tokens: (payload.usage as Record<string, number>).totalTokens || 0,
+                cache_read_tokens: (payload.usage as Record<string, number>).cacheReadTokens,
+                cache_write_tokens: (payload.usage as Record<string, number>).cacheWriteTokens,
+                reasoning_tokens: (payload.usage as Record<string, number>).reasoningTokens,
               }
             : undefined,
           debug_info: payload.debug_info as Record<string, unknown> | undefined,
           message_index: payload.message_index as number | undefined,
           cancelled: payload.cancelled as boolean | undefined,
           pending_count: payload.pending_count as number | undefined,
+          metadata: payload.metadata as { type?: string; indices?: number[] } | undefined,
         }
         finishStream(sid, payload.stream_id as string, metadata)
         if ((payload.pending_count as number) && (payload.pending_count as number) > 0) {
@@ -165,6 +181,24 @@ function createDispatcher(): EventDispatcher {
         break
       }
 
+      case 'session.updated': {
+        const patch = payload as Record<string, unknown>
+        useSessionsStore.setState((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sess.id === sid ? { ...sess, ...patch } : sess,
+          ),
+        }))
+        if (patch.summarization_pending === false) {
+          setSummarizationPending(sid, false)
+        }
+        break
+      }
+
+      case 'context.summarization_pending': {
+        setSummarizationPending(sid, true)
+        break
+      }
+
       case 'context.sliding_window_applied': {
         const indices = payload.disabled_indices as number[] | undefined
         if (indices && Array.isArray(indices) && indices.length > 0) {
@@ -179,6 +213,9 @@ function createDispatcher(): EventDispatcher {
         }
         break
       }
+    }
+    } catch (e) {
+      console.error('[TransportStore] Dispatcher error:', e, event)
     }
   }
 }

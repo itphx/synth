@@ -24,6 +24,7 @@ export function serializeSession(session: Session) {
       disabled: n.disabled,
     })),
     summarization_pending: session.summarizationPending,
+    can_summarize: session.canSummarize,
     input_tokens: session.inputTokens,
     output_tokens: session.outputTokens,
     total_tokens: session.totalTokens,

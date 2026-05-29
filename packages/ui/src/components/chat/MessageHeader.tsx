@@ -81,7 +81,7 @@ export function MessageHeader({ message }: MessageHeaderProps) {
       )}
 
       {!isUser && message.model && (
-        <span className="inline-flex items-center gap-0.5 rounded-sm bg-muted px-1.5 py-0.5">
+        <span className="inline-flex items-center gap-0.5 rounded-sm px-1.5 py-0.5">
           <ProviderIcon icon={providerIcon} baseUrl={providerUrl} size={12} className="shrink-0" />
           <span>{message.model}</span>
         </span>

@@ -102,7 +102,7 @@ export class FileProfileStore implements ProfileStore {
         if (profile) profiles.push(profile);
       }
       return profiles.sort((a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       );
     } catch {
       return [];

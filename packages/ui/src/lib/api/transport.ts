@@ -149,8 +149,8 @@ export class TransportClient {
           }
 
           this.callbacks.onEvent(data as WSEvent)
-        } catch {
-          // ignore parse errors
+        } catch (e) {
+          console.error('[TransportClient] WS message error:', e)
         }
       }
     } catch {
@@ -180,8 +180,8 @@ export class TransportClient {
         try {
           const data = JSON.parse(e.data)
           this.callbacks.onEvent(data as WSEvent)
-        } catch {
-          // ignore
+        } catch (e) {
+          console.error('[TransportClient] SSE message error:', e)
         }
       }
 

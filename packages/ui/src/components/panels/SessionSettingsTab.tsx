@@ -25,6 +25,9 @@ export function SessionSettingsTab() {
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [debugEnabled, setDebugEnabled] = useState(false)
   const [saving, setSaving] = useState(false)
+  const debugSystemMessages = useUIStore((s) => s.debugSystemMessages)
+  const setDebugSystemMessages = useUIStore((s) => s.setDebugSystemMessages)
+  const [sendingDebug, setSendingDebug] = useState(false)
 
   const activeTabId = useUIStore((s) => s.activeCenterTabId)
   const centerTabs = useUIStore((s) => s.centerTabs)
@@ -163,6 +166,52 @@ export function SessionSettingsTab() {
             <span className="text-xs text-foreground">{debugEnabled ? t('sessionSettings.debugOn') : t('sessionSettings.debugOff')}</span>
           </label>
         </Section>
+
+        <div className="rounded-lg border border-border bg-interactive p-3">
+          <h4 className="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            {t('rightPanel.debug.title')}
+          </h4>
+          <div className="space-y-2">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <button
+                role="switch"
+                aria-checked={debugSystemMessages}
+                onClick={() => setDebugSystemMessages(!debugSystemMessages)}
+                className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                  debugSystemMessages ? 'bg-primary' : 'bg-muted'
+                }`}
+              >
+                <span
+                  className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+                    debugSystemMessages ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                  }`}
+                />
+              </button>
+              <span className="text-xs text-foreground">
+                {debugSystemMessages ? t('sessionSettings.debugOn') : t('sessionSettings.debugOff')}{' '}
+                {t('rightPanel.debug.systemMessages')}
+              </span>
+            </label>
+            <button
+              onClick={async () => {
+                if (!sessionId) return
+                setSendingDebug(true)
+                try {
+                  await synthApi.sendDebugSystemMessage(sessionId)
+                  notify({ text: t('rightPanel.debug.sent'), type: 'success', category: 'system', sessionId })
+                } catch (e) {
+                  notify({ text: `${t('chat.error.sendFailed')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
+                } finally {
+                  setSendingDebug(false)
+                }
+              }}
+              disabled={sendingDebug}
+              className="w-full rounded bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition-colors disabled:opacity-50"
+            >
+              {sendingDebug ? t('sessionSettings.saving') : t('rightPanel.debug.sendSystemMessage')}
+            </button>
+          </div>
+        </div>
 
         {agents.length > 0 && (
           <Section title={t('rightPanel.params.agents')}>

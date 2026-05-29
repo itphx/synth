@@ -5,6 +5,7 @@ export enum MessageRole {
   ASSISTANT = 'assistant',
   TOOL = 'tool',
   SUMMARY = 'summary',
+  DEBUG = 'debug',
   INFO = 'info',
   ERROR = 'error',
 }
@@ -151,6 +152,7 @@ export interface Session {
   stickyNotes: StickyNote[];
   currentStream?: StreamInfo;
   summarizationPending: boolean;
+  canSummarize: boolean;
   createdAt: string;
   updatedAt: string;
   inputTokens: number;
@@ -383,8 +385,6 @@ export type EventType =
   | 'context.sticky_note_added'
   | 'context.sticky_note_updated'
   | 'context.sticky_note_deleted'
-  | 'summary.chunk'
-  | 'summary.done'
   | 'error';
 
 export interface BusEvent {

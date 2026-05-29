@@ -2,15 +2,10 @@ import { useState, useEffect } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
+import { useChatStore } from '@/stores/chatStore'
 import { useNotification } from '@/hooks/useNotification'
 import { synthApi } from '@/lib/api/synthApi'
-
-const OPTIMIZATION_MODES = [
-  { value: 'none', labelKey: 'rightPanel.context.optimization.none' },
-  { value: 'sliding_window', labelKey: 'rightPanel.context.optimization.sliding_window' },
-  { value: 'summarization', labelKey: 'rightPanel.context.optimization.summarization' },
-  { value: 'sticky_notes', labelKey: 'rightPanel.context.optimization.sticky_notes' },
-] as const
+import { Icon } from '../icon/Icon'
 
 const WINDOW_TYPES = [
   { value: 'messages', labelKey: 'rightPanel.context.windowType.messages' },
@@ -21,34 +16,34 @@ export function ContextTab() {
   const { t } = useI18n()
   const { notify } = useNotification()
   const { sessions } = useSessionsStore()
+  const { stickyNotesBySession, setStickyNotes } = useChatStore()
 
   const activeTabId = useUIStore((s) => s.activeCenterTabId)
   const centerTabs = useUIStore((s) => s.centerTabs)
   const activeTab = centerTabs.find((t) => t.id === activeTabId)
   const sessionId = activeTab?.data?.sessionId
+  const stickyNotes = sessionId ? stickyNotesBySession[sessionId] || [] : []
 
-  const session = sessions.find((s) => s.id === sessionId)
-
-  const [mode, setMode] = useState<string>('none')
+  const [windowEnabled, setWindowEnabled] = useState(false)
+  const [sumEnabled, setSumEnabled] = useState(false)
   const [windowType, setWindowType] = useState<string>('messages')
   const [windowLimit, setWindowLimit] = useState(10)
-  const [sumEnabled, setSumEnabled] = useState(false)
   const [afterN, setAfterN] = useState(10)
   const [contextPercent, setContextPercent] = useState(50)
   const [headMessages, setHeadMessages] = useState(2)
   const [tailMessages, setTailMessages] = useState(3)
   const [windowThreshold, setWindowThreshold] = useState(80)
   const [saving, setSaving] = useState(false)
-  const [summarizing, setSummarizing] = useState(false)
 
   useEffect(() => {
     if (!sessionId) return
     synthApi.getOptimization(sessionId)
       .then((data) => {
-        setMode(data.context_optimization)
+        const mode = data.context_optimization
+        setWindowEnabled(mode === 'sliding_window')
+        setSumEnabled(mode === 'summarization')
         setWindowType(data.sliding_window_type)
         setWindowLimit(data.sliding_window_limit)
-        setSumEnabled(data.summarization_enabled)
         setAfterN(data.summarize_after_n)
         setContextPercent(data.summarize_context_percent)
         setHeadMessages(data.summarization_head_messages)
@@ -58,21 +53,28 @@ export function ContextTab() {
       .catch(() => {})
   }, [sessionId])
 
-  const handleSave = async () => {
+  const mode = sumEnabled ? 'summarization' : windowEnabled ? 'sliding_window' : 'none'
+
+  const handleSave = async (newMode: string) => {
     if (!sessionId) return
     setSaving(true)
     try {
-      await synthApi.updateOptimization(sessionId, {
-        context_optimization: mode,
+      const result = await synthApi.updateOptimization(sessionId, {
+        context_optimization: newMode,
         sliding_window_type: windowType,
         sliding_window_limit: windowLimit,
-        summarization_enabled: sumEnabled,
+        summarization_enabled: true,
         summarize_after_n: afterN,
         summarize_context_percent: contextPercent,
         summarization_head_messages: headMessages,
         summarization_tail_messages: tailMessages,
         context_window_threshold: windowThreshold,
       })
+      useSessionsStore.setState((s) => ({
+        sessions: s.sessions.map((sess) =>
+          sess.id === sessionId ? { ...sess, ...result } : sess,
+        ),
+      }))
       notify({ text: t('rightPanel.context.saved'), type: 'success', category: 'system', sessionId })
     } catch {
       notify({ text: t('rightPanel.context.saveError'), type: 'error', category: 'error', sessionId })
@@ -81,37 +83,39 @@ export function ContextTab() {
     }
   }
 
-  const handleSummarize = async () => {
+  const toggleWindow = async () => {
     if (!sessionId) return
-    setSummarizing(true)
+    const next = !windowEnabled
+    setWindowEnabled(next)
+    if (next) setSumEnabled(false)
+    const newMode = next ? 'sliding_window' : sumEnabled ? 'summarization' : 'none'
+    await handleSave(newMode)
+  }
+
+  const toggleSum = async () => {
+    if (!sessionId) return
+    const next = !sumEnabled
+    setSumEnabled(next)
+    if (next) setWindowEnabled(false)
+    const newMode = next ? 'summarization' : windowEnabled ? 'sliding_window' : 'none'
+    await handleSave(newMode)
+  }
+
+  const handleNoteDelete = async (noteId: string) => {
+    if (!sessionId) return
     try {
-      const result = await synthApi.summarizeSession(sessionId)
-      notify({
-        text: t('rightPanel.context.summarized'),
-        type: 'success',
-        category: 'system',
-        sessionId,
-      })
+      const result = await synthApi.deleteStickyNote(sessionId, noteId)
+      setStickyNotes(sessionId, result.notes)
     } catch {
-      notify({ text: t('rightPanel.context.summarizeError'), type: 'error', category: 'error', sessionId })
-    } finally {
-      setSummarizing(false)
+      notify({ text: t('common.saveError'), type: 'error', category: 'error', sessionId })
     }
   }
 
-  const handleCheck = async () => {
+  const handleNoteToggle = async (noteId: string, disabled: boolean) => {
     if (!sessionId) return
     try {
-      const result = await synthApi.checkOptimization(sessionId)
-      const sw = result.sliding_window.triggered ? '✓' : '—'
-      const sum = result.summarization.triggered ? '✓' : '—'
-      const extra = result.summarization_pending ? ' (pending)' : ''
-      notify({
-        text: `SW=${sw} SUM=${sum}${extra}`,
-        type: 'info',
-        category: 'system',
-        sessionId,
-      })
+      const result = await synthApi.updateStickyNote(sessionId, noteId, { disabled })
+      setStickyNotes(sessionId, result.notes)
     } catch {
       // ignore
     }
@@ -127,144 +131,165 @@ export function ContextTab() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* Режим оптимизации */}
-        <Section title={t('rightPanel.context.sectionOptimization')}>
-          <select
-            value={mode}
-            onChange={(e) => setMode(e.target.value)}
-            className="w-full rounded border border-border bg-input px-2 py-1.5 text-xs text-foreground"
-          >
-            {OPTIMIZATION_MODES.map((o) => (
-              <option key={o.value} value={o.value}>{t(o.labelKey)}</option>
-            ))}
-          </select>
-        </Section>
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {/* Заметки */}
+        <Block title={t('rightPanel.context.optimization.sticky_notes')} alwaysOpen>
+          {stickyNotes.length === 0 ? (
+            <p className="text-xs text-muted-foreground">Нет заметок</p>
+          ) : (
+            stickyNotes.map((note) => (
+              <div key={note.id} className="flex items-center gap-2 rounded bg-interactive px-2 py-1">
+                <span className="flex-1 text-xs text-foreground truncate">
+                  {note.disabled && <span className="text-muted-foreground line-through">[откл] </span>}
+                  {note.content.slice(0, 60)}
+                </span>
+                <button
+                  onClick={() => handleNoteToggle(note.id, !note.disabled)}
+                  className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  title={note.disabled ? 'Включить' : 'Отключить'}
+                >
+                  <Icon name={note.disabled ? 'eye-off' : 'eye'} className="size-3" />
+                </button>
+                <button
+                  onClick={() => handleNoteDelete(note.id)}
+                  className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-destructive"
+                  title="Удалить"
+                >
+                  <Icon name="close" className="size-3" />
+                </button>
+              </div>
+            ))
+          )}
+        </Block>
 
         {/* Скользящее окно */}
-        {mode === 'sliding_window' && (
-          <Section title={t('rightPanel.context.sectionSlidingWindow')}>
-            <select
-              value={windowType}
-              onChange={(e) => setWindowType(e.target.value)}
-              className="w-full rounded border border-border bg-input px-2 py-1.5 text-xs text-foreground"
-            >
-              {WINDOW_TYPES.map((wt) => (
-                <option key={wt.value} value={wt.value}>{t(wt.labelKey)}</option>
-              ))}
-            </select>
-            <NumberSetting
-              label={t('rightPanel.context.windowLimit')}
-              value={windowLimit}
-              onChange={setWindowLimit}
-              min={1}
-              max={windowType === 'tokens' ? 200000 : 200}
-            />
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              {t('rightPanel.context.hint.slidingWindow')}
-            </p>
-          </Section>
-        )}
+        <Block
+          title={t('rightPanel.context.optimization.sliding_window')}
+          enabled={windowEnabled}
+          onToggle={toggleWindow}
+        >
+          <select
+            value={windowType}
+            onChange={(e) => { setWindowType(e.target.value); handleSave(mode) }}
+            className="w-full rounded border border-border bg-input px-2 py-1.5 text-xs text-foreground"
+          >
+            {WINDOW_TYPES.map((wt) => (
+              <option key={wt.value} value={wt.value}>{t(wt.labelKey)}</option>
+            ))}
+          </select>
+          <NumberSetting
+            label={t('rightPanel.context.windowLimit')}
+            value={windowLimit}
+            onChange={(v) => { setWindowLimit(v); handleSave(mode) }}
+            min={1}
+            max={windowType === 'tokens' ? 200000 : 200}
+          />
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            {t('rightPanel.context.hint.slidingWindow')}
+          </p>
+        </Block>
 
         {/* Суммаризация */}
-        {mode === 'summarization' && (
-          <Section title={t('rightPanel.context.sectionSummarization')}>
-            <ToggleSetting
-              label={t('rightPanel.context.summarizationEnabled')}
-              enabled={sumEnabled}
-              onChange={setSumEnabled}
-            />
-            <NumberSetting
-              label={t('rightPanel.context.afterN')}
-              value={afterN}
-              onChange={setAfterN}
-              min={1}
-              max={200}
-            />
-            <NumberSetting
-              label={t('rightPanel.context.contextPercent')}
-              value={contextPercent}
-              onChange={setContextPercent}
-              min={1}
-              max={100}
-              suffix="%"
-            />
-            <NumberSetting
-              label={t('rightPanel.context.headMessages')}
-              value={headMessages}
-              onChange={setHeadMessages}
-              min={1}
-              max={20}
-            />
-            <NumberSetting
-              label={t('rightPanel.context.tailMessages')}
-              value={tailMessages}
-              onChange={setTailMessages}
-              min={1}
-              max={20}
-            />
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              {t('rightPanel.context.hint.summarization')}
-            </p>
-          </Section>
-        )}
-
-        {/* Заметки */}
-        {mode === 'sticky_notes' && (
+        <Block
+          title={t('rightPanel.context.optimization.summarization')}
+          enabled={sumEnabled}
+          onToggle={toggleSum}
+        >
+          <NumberSetting
+            label={t('rightPanel.context.afterN')}
+            value={afterN}
+            onChange={(v) => { setAfterN(v); handleSave(mode) }}
+            min={1}
+            max={200}
+          />
+          <NumberSetting
+            label={t('rightPanel.context.contextPercent')}
+            value={contextPercent}
+            onChange={(v) => { setContextPercent(v); handleSave(mode) }}
+            min={1}
+            max={100}
+            suffix="%"
+          />
+          <NumberSetting
+            label={t('rightPanel.context.headMessages')}
+            value={headMessages}
+            onChange={(v) => { setHeadMessages(v); handleSave(mode) }}
+            min={1}
+            max={20}
+          />
+          <NumberSetting
+            label={t('rightPanel.context.tailMessages')}
+            value={tailMessages}
+            onChange={(v) => { setTailMessages(v); handleSave(mode) }}
+            min={1}
+            max={20}
+          />
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Заметки сессии попадают в системный промпт и доступны через панель в верхней части чата.
+            {t('rightPanel.context.hint.summarization')}
           </p>
-        )}
+        </Block>
 
-        {/* Общие настройки */}
-        {(mode === 'sliding_window' || mode === 'summarization') && (
-          <Section title={t('rightPanel.context.sectionCommon')}>
+        {/* Общий порог окна */}
+        {(windowEnabled || sumEnabled) && (
+          <Block title={t('rightPanel.context.sectionCommon')} alwaysOpen>
             <NumberSetting
               label={t('rightPanel.context.windowThreshold')}
               value={windowThreshold}
-              onChange={setWindowThreshold}
+              onChange={(v) => { setWindowThreshold(v); handleSave(mode) }}
               min={10}
               max={100}
               suffix="%"
             />
-          </Section>
+          </Block>
         )}
       </div>
 
-      {/* Кнопки */}
       <div className="shrink-0 border-t border-border p-4 space-y-2">
         <button
-          onClick={handleSave}
+          onClick={() => handleSave(mode)}
           disabled={saving}
           className="w-full rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
         >
           {saving ? t('rightPanel.context.saving') : t('common.save')}
-        </button>
-        {mode === 'summarization' && (
-          <button
-            onClick={handleSummarize}
-            disabled={summarizing}
-            className="w-full rounded-lg border border-border px-4 py-2 text-xs font-medium text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
-          >
-            {summarizing ? t('rightPanel.context.summarizing') : t('rightPanel.context.summarizeNow')}
-          </button>
-        )}
-        <button
-          onClick={handleCheck}
-          className="w-full rounded-lg border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:bg-interactive-hover hover:text-foreground transition-colors"
-        >
-          {t('rightPanel.context.checkTriggers')}
         </button>
       </div>
     </div>
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Block({
+  title,
+  children,
+  enabled,
+  onToggle,
+  alwaysOpen,
+}: {
+  title: string
+  children: React.ReactNode
+  enabled?: boolean
+  onToggle?: () => void
+  alwaysOpen?: boolean
+}) {
   return (
-    <div>
-      <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wide mb-2">{title}</div>
-      <div className="space-y-2">{children}</div>
+    <div className="rounded-lg border border-border p-3">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-medium text-foreground">{title}</span>
+        {onToggle && enabled !== undefined && (
+          <button
+            onClick={onToggle}
+            className={`relative h-5 w-9 rounded-full transition-colors ${
+              enabled ? 'bg-primary' : 'bg-interactive'
+            }`}
+          >
+            <div
+              className={`absolute top-0.5 h-4 w-4 rounded-full bg-card shadow-sm transition-transform ${
+                enabled ? 'translate-x-4' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
+        )}
+      </div>
+      {children && <div className="space-y-2">{children}</div>}
     </div>
   )
 }
@@ -310,34 +335,6 @@ function NumberSetting({
           +
         </button>
       </div>
-    </div>
-  )
-}
-
-function ToggleSetting({
-  label,
-  enabled,
-  onChange,
-}: {
-  label: string
-  enabled: boolean
-  onChange: (v: boolean) => void
-}) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-xs text-foreground">{label}</span>
-      <button
-        onClick={() => onChange(!enabled)}
-        className={`relative h-5 w-9 rounded-full transition-colors ${
-          enabled ? 'bg-primary' : 'bg-interactive'
-        }`}
-      >
-        <div
-          className={`absolute top-0.5 h-4 w-4 rounded-full bg-background transition-transform ${
-            enabled ? 'translate-x-4' : 'translate-x-0.5'
-          }`}
-        />
-      </button>
     </div>
   )
 }

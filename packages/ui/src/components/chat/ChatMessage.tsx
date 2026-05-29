@@ -31,6 +31,7 @@ export function ChatMessage({
   const isError = message.role === 'error'
   const isInfo = message.role === 'info'
   const isSummary = message.role === 'summary'
+  const isDebug = message.role === 'debug'
   const canRetry = isUser
   const hasDebug = !!message.debug_data && Object.keys(message.debug_data).length > 0
 
@@ -39,6 +40,7 @@ export function ChatMessage({
     isUser && 'items-end',
     isAssistant && 'items-start',
     isSummary && 'items-center',
+    isDebug && 'items-center',
     (isError || isInfo) && 'items-center'
   )
 
@@ -47,13 +49,14 @@ export function ChatMessage({
     isUser && 'bg-primary/10 text-foreground rounded-br-sm',
     isAssistant && 'bg-card border border-border/50 text-foreground rounded-bl-sm',
     isSummary && 'bg-yellow-500/5 border border-yellow-500/20 text-foreground',
+    isDebug && 'bg-amber-500/5 border border-amber-500/30 text-amber-600 dark:text-amber-400 rounded-lg',
     isError && 'bg-destructive/10 border border-destructive/30 text-destructive rounded-lg',
     isInfo && 'bg-muted/30 border border-border/30 text-muted-foreground rounded-lg text-xs',
     message.disabled && 'opacity-50 line-through',
     message.pinned && 'ring-1 ring-primary/30',
   )
 
-  const showActions = isUser || isAssistant || isSummary
+  const showActions = isUser || isAssistant || isSummary || isDebug
 
   const subagents = hasDebug
     ? ((message.debug_data?.subagents as Array<{
@@ -89,7 +92,11 @@ export function ChatMessage({
           <MessageHeader message={message} />
         )}
 
-        {isAssistant && message.reasoning && (
+        {isDebug && (
+          <MessageHeader message={message} />
+        )}
+
+        {(isAssistant || isSummary || isDebug) && message.reasoning && (
           <ReasoningBlock reasoning={message.reasoning} />
         )}
 

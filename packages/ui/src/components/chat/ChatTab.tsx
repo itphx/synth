@@ -14,6 +14,7 @@ import { DebugModal } from './DebugModal'
 import { QueueChips } from './QueueChips'
 import { StickyNotesPanel } from './StickyNotesPanel'
 import type { CenterTab } from '@/stores/useUIStore'
+import { useUIStore } from '@/stores/useUIStore'
 
 interface ChatTabProps {
   tab: CenterTab
@@ -29,6 +30,7 @@ export function ChatTab({ tab }: ChatTabProps) {
     pendingBySession,
     errorBySession,
     stickyNotesBySession,
+    summarizationPendingBySession,
     debugModalSessionId,
     debugModalMessageIndex,
     setMessages,
@@ -37,6 +39,7 @@ export function ChatTab({ tab }: ChatTabProps) {
     clearQueueState,
     setPendingMessages,
     setStickyNotes,
+    setSummarizationPending,
     openDebugModal,
     closeDebugModal,
     setRetryInput,
@@ -49,6 +52,7 @@ export function ChatTab({ tab }: ChatTabProps) {
   const pending = pendingBySession[sessionId] || []
   const stickyNotes = stickyNotesBySession[sessionId] || []
   const streamError = errorBySession[sessionId]
+  const summarizationPending = summarizationPendingBySession[sessionId] || false
   const isStreaming = Object.values(streams).some((s) => s.isStreaming)
   const debugMessage = debugModalSessionId && debugModalMessageIndex != null
     ? messages.find((m) => m.index === debugModalMessageIndex) ?? null
@@ -102,19 +106,29 @@ export function ChatTab({ tab }: ChatTabProps) {
       const author = profile?.display_name || user?.username || ''
       const { activeAgentId } = useAgentsStore.getState()
       const effectiveAgentRole = agentRole || activeAgentId || undefined
-      addMessage(sessionId, {
-        index: messages.length + Object.values(streams).length,
-        role: 'user',
-        content: text,
-        author,
-        agent_role: effectiveAgentRole || null,
-        disabled: false,
-        pinned: false,
-        hidden: false,
-        created_at: new Date().toISOString(),
-      });
+
+      // Не добавлять сообщение оптимистично при ожидании суммаризации —
+      // оно появится когда бэкенд обработает его после system-сообщения
+      if (!summarizationPending) {
+        addMessage(sessionId, {
+          index: messages.length + Object.values(streams).length,
+          role: 'user',
+          content: text,
+          author,
+          agent_role: effectiveAgentRole || null,
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          created_at: new Date().toISOString(),
+        })
+      }
 
       try {
+        const { debugSystemMessages } = useUIStore.getState()
+        if (debugSystemMessages) {
+          await synthApi.sendDebugSystemMessage(sessionId)
+        }
+
         const { selectedModelName, selectedProviderName } = useProvidersStore.getState()
         await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined)
         notify({ text: t('chat.message.sent'), type: 'info', category: 'message', sessionId })
@@ -122,7 +136,7 @@ export function ChatTab({ tab }: ChatTabProps) {
         notify({ text: `${t('chat.error.sendFailed')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
       }
     },
-    [sessionId, notify, t, addMessage, messages.length, streams]
+    [sessionId, notify, t, addMessage, messages.length, streams, summarizationPending]
   )
 
   const handleStop = useCallback(async () => {
@@ -220,6 +234,26 @@ export function ChatTab({ tab }: ChatTabProps) {
     [openDebugModal, notify, t, sessionId]
   )
 
+  const handleSummarizeNow = useCallback(async () => {
+    try {
+      await synthApi.summarizeSession(sessionId)
+      setSummarizationPending(sessionId, false)
+      notify({ text: t('rightPanel.context.summarizeEnqueued'), type: 'info', category: 'queue', sessionId })
+    } catch {
+      notify({ text: t('rightPanel.context.summarizeError'), type: 'error', category: 'error', sessionId })
+    }
+  }, [sessionId, setSummarizationPending, notify, t])
+
+  const handleCancelSummarization = useCallback(async () => {
+    try {
+      await synthApi.cancelSummarization(sessionId)
+      setSummarizationPending(sessionId, false)
+      notify({ text: t('rightPanel.context.summarizationCancelled'), type: 'info', category: 'system', sessionId })
+    } catch {
+      // ignore
+    }
+  }, [sessionId, setSummarizationPending, notify, t])
+
   const handleResumeQueue = useCallback(async () => {
     try {
       await synthApi.resumeQueue(sessionId)
@@ -300,6 +334,26 @@ export function ChatTab({ tab }: ChatTabProps) {
           onClear={handleClearQueue}
           onReturn={handleReturnQueue}
         />
+      )}
+
+      {summarizationPending && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-yellow-500/10 border-b border-yellow-500/20">
+          <span className="text-xs text-yellow-600 dark:text-yellow-400 flex-1">
+            {t('rightPanel.context.summarizationPendingBanner')}
+          </span>
+          <button
+            onClick={handleSummarizeNow}
+            className="rounded px-2 py-0.5 text-xs font-medium text-yellow-600 hover:bg-yellow-500/10 transition-colors"
+          >
+            {t('rightPanel.context.summarizeNow')}
+          </button>
+          <button
+            onClick={handleCancelSummarization}
+            className="rounded px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
+          >
+            {t('common.cancel')}
+          </button>
+        </div>
       )}
 
       {streamError && streamError.canRetry && streamError.retryIn ? (

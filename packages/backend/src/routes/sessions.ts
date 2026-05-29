@@ -257,7 +257,7 @@ export function createSessionRoutes(
     return c.json({ status: 'aborted' });
   });
 
-  // POST /api/v2/sessions/:id/summarize — ручная суммаризация (SSE-стрим)
+  // POST /api/v2/sessions/:id/summarize — запросить суммаризацию (через очередь)
   app.post('/:id/summarize', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
@@ -273,77 +273,61 @@ export function createSessionRoutes(
     }
 
     // Проверка на минимальное количество активных сообщений
-    const lastSummaryIdx = session.messages.reduceRight(
-      (lastIdx, m, i) => (lastIdx >= 0 ? lastIdx : (m.role === 'summary' ? i : -1)), -1,
-    );
-    const startIdx = lastSummaryIdx >= 0 ? lastSummaryIdx + 1 : 0;
-    const activeSinceLast = session.messages
-      .slice(startIdx)
-      .filter((m) => !m.disabled && !m.hidden && m.role !== 'info' && m.role !== 'summary');
-    if (activeSinceLast.length < 3) {
-      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Need at least 3 active messages since last summary' } }, 400);
+    if (!contextOptimizer.canSummarize(session)) {
+      return c.json({
+        error: { code: 'INVALID_REQUEST', message: 'Need at least 3 active messages since last summary' },
+      }, 400);
     }
 
-    const signal = c.req.raw.signal;
+    const user = kit.getCurrentUser(c)!;
+    const streamId = generateStreamId();
 
-    return new Response(
-      new ReadableStream({
-        async start(controller) {
-          const encoder = new TextEncoder();
+    const sysMsg: import('@synth/shared').Message = {
+      role: MessageRole.SYSTEM,
+      content: '',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      author: user.username,
+      metadata: { type: 'summarization_request', reason: 'manual', stream_id: streamId },
+    };
 
-          try {
-            for await (const event of contextOptimizer!.summarizeStream(session)) {
-              if (signal.aborted) break;
+    const result = await enqueueUserMessage(sessionManager, eventBus, session.id, sysMsg, queueManager, processMessage);
+    if (!result) {
+      return c.json({ error: { code: 'QUEUE_FULL', message: 'Queue is full' } }, 429);
+    }
 
-              const sseLine = `data: ${JSON.stringify(event)}\n\n`;
-              controller.enqueue(encoder.encode(sseLine));
+    return c.json({ status: 'enqueued', stream_id: streamId });
+  });
 
-              if (event.type === 'done') {
-                await sessionManager.withLock(session.id, async (s) => {
-                  const msg = {
-                    role: MessageRole.SUMMARY,
-                    content: event.content,
-                    createdAt: nowISO(),
-                    disabled: false,
-                    pinned: false,
-                    hidden: false,
-                    summaryOf: event.indices,
-                    model: event.model,
-                    usage: event.usage,
-                    metadata: { type: 'auto_summary' },
-                  };
-                  s.messages.push(msg);
+  // POST /api/v2/sessions/:id/debug-system-message — отправить отладочное системное сообщение
+  app.post('/:id/debug-system-message', kit.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
 
-                  for (const idx of event.indices) {
-                    if (idx >= 0 && idx < s.messages.length && !s.messages[idx]!.pinned) {
-                      s.messages[idx]!.disabled = true;
-                    }
-                  }
+    const user = kit.getCurrentUser(c)!;
+    const streamId = generateStreamId();
 
-                  await sessionManager.saveSession(s);
-                });
-                break;
-              }
+    const sysMsg: import('@synth/shared').Message = {
+      role: MessageRole.SYSTEM,
+      content: '',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      author: user.username,
+      metadata: { type: 'debug_system_message', reason: 'manual', stream_id: streamId },
+    };
 
-              if (event.type === 'error') break;
-            }
-          } catch {
-            // client disconnected
-          } finally {
-            try { controller.close(); } catch { /* already closed */ }
-          }
-        },
-      }),
-      {
-        status: 200,
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          'X-Accel-Buffering': 'no',
-        },
-      },
-    );
+    const result = await enqueueUserMessage(sessionManager, eventBus, session.id, sysMsg, queueManager, processMessage);
+    if (!result) {
+      return c.json({ error: { code: 'QUEUE_FULL', message: 'Queue is full' } }, 429);
+    }
+
+    return c.json({ status: 'enqueued', stream_id: streamId });
   });
 
   // GET /api/v2/sessions/:id/optimization — настройки оптимизации
@@ -406,6 +390,31 @@ export function createSessionRoutes(
       summarization: sumResult,
       summarization_pending: session.summarizationPending,
     });
+  });
+
+  // POST /api/v2/sessions/:id/optimization/cancel-summarization — отменить ожидающую суммаризацию
+  app.post('/:id/optimization/cancel-summarization', kit.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+
+    await sessionManager.withLock(session.id, async (s) => {
+      s.summarizationPending = false;
+      await sessionManager.saveSession(s);
+    });
+
+    if (contextOptimizer) {
+      const updated = await sessionManager.getSession(session.id);
+      const can = contextOptimizer.canSummarize(updated!);
+      eventBus.publish(session.id, 'session.updated', {
+        session_id: session.id,
+        can_summarize: can,
+        summarization_pending: false,
+      });
+    }
+
+    return c.json({ success: true });
   });
 
   // ===== Sticky Notes =====

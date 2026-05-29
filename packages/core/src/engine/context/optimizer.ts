@@ -68,7 +68,9 @@ export class ContextOptimizer {
       case 'sticky_notes':
         return this._getMessagesForStickyNotes(session);
       default:
-        return this._getAllActiveMessages(session);
+        return session.messages.filter(
+          (m) => !m.disabled && !m.hidden && m.role !== MessageRole.INFO,
+        );
     }
   }
 
@@ -534,5 +536,39 @@ export class ContextOptimizer {
       warning('CONTEXT', `Failed to create summarization provider: ${e}`);
       return null;
     }
+  }
+
+  /**
+   * Проверяет, можно ли выполнить суммаризацию в текущей сессии.
+   * Должно быть ≥3 активных не-summary сообщений с последнего summary.
+   */
+  canSummarize(session: Session): boolean {
+    if (!session.settings.provider || !session.settings.model) return false;
+
+    const lastSummaryIdx = this._findLastSummaryIndex(session.messages);
+    const startIdx = lastSummaryIdx >= 0 ? lastSummaryIdx + 1 : 0;
+    const activeSinceLast = session.messages.slice(startIdx)
+      .filter((m) => !m.disabled && !m.hidden && m.role !== MessageRole.INFO && m.role !== MessageRole.SUMMARY);
+
+    return activeSinceLast.length >= 3;
+  }
+
+  /**
+   * Подготавливает суммаризацию и возвращает данные для processMessage.
+   * Вызывается оркестратором для system-сообщений типа summarization_request.
+   */
+  prepareSummarizationForOrchestrator(
+    session: Session,
+    lang: string,
+  ): {
+    provider: BaseProvider;
+    llmMessages: LLMMessage[];
+    summarizerPrompt: string;
+    messagesToSummarize: Message[];
+    indices: number[];
+  } {
+    const headCount = session.settings.summarizationHeadMessages;
+    const tailCount = session.settings.summarizationTailMessages;
+    return this._prepareSummarization(session, lang, headCount, tailCount);
   }
 }

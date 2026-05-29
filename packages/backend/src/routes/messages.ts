@@ -1,10 +1,53 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import type { SessionManager } from '@synth/core';
+import type { SessionManager, ContextOptimizer, EventBus } from '@synth/core';
 import { t } from '../lib/i18n.js';
 
-export function createMessageRoutes(kit: AuthKit, sessionManager: SessionManager): Hono {
+export function createMessageRoutes(
+  kit: AuthKit,
+  sessionManager: SessionManager,
+  contextOptimizer: ContextOptimizer | null,
+  eventBus: EventBus,
+): Hono {
   const app = new Hono();
+
+  async function recalcCanSummarize(sessionId: string): Promise<void> {
+    if (!contextOptimizer) return;
+    const s = await sessionManager.getSession(sessionId);
+    if (!s) return;
+    const can = contextOptimizer.canSummarize(s);
+
+    // Перепроверить флаг summarizationPending при toggle/pin/delete
+    let shouldClearPending = false;
+    if (s.summarizationPending && s.settings.summarizationEnabled) {
+      const sumResult = contextOptimizer.shouldSummarize(s);
+      if (!sumResult.triggered) {
+        shouldClearPending = true;
+      }
+    }
+
+    await sessionManager.withLock(sessionId, async (locked) => {
+      locked.canSummarize = can;
+      if (shouldClearPending) locked.summarizationPending = false;
+      await sessionManager.saveSession(locked);
+    });
+
+    eventBus.publish(sessionId, 'session.updated', {
+      session_id: sessionId,
+      can_summarize: can,
+      summarization_pending: shouldClearPending ? false : undefined,
+      input_tokens: s.inputTokens,
+      output_tokens: s.outputTokens,
+      total_tokens: s.totalTokens,
+      cache_read_tokens: s.cacheReadTokens,
+      cache_write_tokens: s.cacheWriteTokens,
+      reasoning_tokens: s.reasoningTokens,
+      input_cost: s.inputCost,
+      output_cost: s.outputCost,
+      cache_read_cost: s.cacheReadCost,
+      cache_write_cost: s.cacheWriteCost,
+    });
+  }
 
   // PATCH /api/v2/messages/:sessionId/:index/toggle — переключить disabled
   app.patch('/:sessionId/:index/toggle', kit.requireAuth, async (c) => {
@@ -21,6 +64,7 @@ export function createMessageRoutes(kit: AuthKit, sessionManager: SessionManager
 
     session.messages[index]!.disabled = !session.messages[index]!.disabled;
     await sessionManager.updateSession(session);
+    recalcCanSummarize(sessionId);
 
     return c.json({
       disabled: session.messages[index]!.disabled,
@@ -43,6 +87,7 @@ export function createMessageRoutes(kit: AuthKit, sessionManager: SessionManager
 
     session.messages[index]!.pinned = !session.messages[index]!.pinned;
     await sessionManager.updateSession(session);
+    recalcCanSummarize(sessionId);
 
     return c.json({
       pinned: session.messages[index]!.pinned,
@@ -65,6 +110,7 @@ export function createMessageRoutes(kit: AuthKit, sessionManager: SessionManager
 
     session.messages.splice(index, 1);
     await sessionManager.updateSession(session);
+    recalcCanSummarize(sessionId);
 
     return c.json({ success: true });
   });
@@ -90,6 +136,7 @@ export function createMessageRoutes(kit: AuthKit, sessionManager: SessionManager
     }
     session.pendingMessages = [];
     await sessionManager.updateSession(session);
+    recalcCanSummarize(sessionId);
 
     return c.json({ content, success: true });
   });

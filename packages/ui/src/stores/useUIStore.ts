@@ -90,6 +90,9 @@ interface UIStore {
 
   transportMode: TransportMode
   setTransportMode: (mode: TransportMode) => void
+
+  debugSystemMessages: boolean
+  setDebugSystemMessages: (enabled: boolean) => void
 }
 
 export const useUIStore = create<UIStore>()(
@@ -253,6 +256,9 @@ export const useUIStore = create<UIStore>()(
         set({ transportMode: mode })
         profileService.syncTransportModeToProfile(mode)
       },
+
+      debugSystemMessages: false,
+      setDebugSystemMessages: (enabled) => set({ debugSystemMessages: enabled }),
     }),
     {
       name: 'synth-ui-settings',

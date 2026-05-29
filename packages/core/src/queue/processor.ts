@@ -1,5 +1,5 @@
 import type { Message, Session } from '@synth/shared';
-import { nowISO, generateStreamId } from '@synth/shared';
+import { nowISO, generateStreamId, MessageRole } from '@synth/shared';
 import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
 import type { ContextOptimizer } from '../engine/context/optimizer.js';
@@ -73,27 +73,24 @@ export class QueueProcessor {
       if (this.contextOptimizer && session.summarizationPending) {
         try {
           session = await this.sessionManager.withLock(this.sessionId, async (s) => {
-            const summaryMsg = await this.contextOptimizer!.summarize(s);
-            s.messages.push(summaryMsg);
-
-            // Отключить засуммаризированные сообщения (кроме pinned)
-            for (const idx of summaryMsg.summaryOf || []) {
-              if (idx >= 0 && idx < s.messages.length && !s.messages[idx]!.pinned) {
-                s.messages[idx]!.disabled = true;
-              }
-            }
-
+            // Вставить системное сообщение в начало очереди вместо блокирующего вызова
+            const sysMsg: Message = {
+              role: MessageRole.SYSTEM,
+              content: '',
+              createdAt: nowISO(),
+              disabled: false,
+              pinned: false,
+              hidden: false,
+              metadata: { type: 'summarization_request', reason: 'auto' },
+            };
+            s.pendingMessages.unshift(sysMsg);
             s.summarizationPending = false;
             await this.sessionManager.saveSession(s);
             return s;
           });
 
-          this.eventBus.publish(this.sessionId, 'context.summarized', {
-            summary_index: session.messages.length - 1,
-            message_count: session.messages.length,
-          });
-
-          // Цикл продолжается — сообщение всё ещё в очереди, обработается дальше
+          // Продолжить цикл — системное сообщение обработается следующим
+          continue;
         } catch (err) {
           this.eventBus.publish(this.sessionId, 'stream.error', {
             stream_id: '',
@@ -102,7 +99,6 @@ export class QueueProcessor {
             can_retry: false,
           });
 
-          // Снять флаг, чтобы не блокировать очередь навсегда
           await this.sessionManager.withLock(this.sessionId, async (s) => {
             s.summarizationPending = false;
             await this.sessionManager.saveSession(s);
@@ -117,7 +113,8 @@ export class QueueProcessor {
       const isRetry = streamId in this._retryDelays;
 
       if (!isRetry) {
-        // Phase 1 — блокировка и сохранение user-сообщения (только при первом запуске)
+        // Phase 1 — блокировка и сохранение сообщения (только при первом запуске)
+        const isSystemMessage = message.role === MessageRole.SYSTEM;
         session = await this.sessionManager.withLock(this.sessionId, async (s) => {
           s.status.blocked = this.sessionId;
           s.status.blockedAt = nowISO();
@@ -128,7 +125,10 @@ export class QueueProcessor {
             startedAt: nowISO(),
             cancelled: false,
           };
-          s.messages.push(message);
+          // Системные сообщения НЕ пушить в историю (не user-сообщения)
+          if (!isSystemMessage) {
+            s.messages.push(message);
+          }
           s.updatedAt = nowISO();
           await this.sessionManager.saveSession(s);
           return s;
@@ -138,7 +138,9 @@ export class QueueProcessor {
 
         this.eventBus.publish(this.sessionId, 'stream.start', {
           stream_id: streamId,
-          agent_role: message.agentRole,
+          agent_role: isSystemMessage
+            ? (message.metadata?.type === 'debug_system_message' ? 'debug' : 'summary')
+            : message.agentRole,
           provider: message.provider,
           model: message.model,
         });

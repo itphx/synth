@@ -71,7 +71,7 @@ export function MessageList({
         scrollToBottom(false)
       })
     }
-  }, [messages, streamContentSize, autoScroll, scrollToBottom])
+  }, [messages, streamContentSize, streamEntries.length, autoScroll, scrollToBottom])
 
   const createHandler = (handler: (msg: MessageData) => void) => (msg: MessageData) => {
     return () => handler(msg)

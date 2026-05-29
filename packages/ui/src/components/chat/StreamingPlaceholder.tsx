@@ -25,8 +25,9 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
   const providers = useProvidersStore((s) => s.providers)
 
   const isSummary = stream.agentRole === 'summary'
+  const isDebug = stream.agentRole === 'debug'
 
-  const agentInfo = !isSummary && stream.agentRole
+  const agentInfo = !isSummary && !isDebug && stream.agentRole
     ? agents.find((a) => a.id === stream.agentRole)
     : undefined
   const agentColor = resolveColor(agentInfo?.color ?? null)
@@ -41,13 +42,15 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
   return (
     <div className={cn(
       'flex flex-col px-4 py-3 group',
-      isSummary ? 'items-center' : 'items-start',
+      (isSummary || isDebug) ? 'items-center' : 'items-start',
     )}>
       <div className={cn(
         'max-w-[85%] rounded-lg px-4 py-3 text-foreground',
         isSummary
           ? 'bg-yellow-500/5 border border-yellow-500/20'
-          : 'bg-card border border-border/50 rounded-bl-sm',
+          : isDebug
+            ? 'bg-amber-500/5 border border-amber-500/30 text-amber-600 dark:text-amber-400'
+            : 'bg-card border border-border/50 rounded-bl-sm',
       )}>
         <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70 mb-1">
           {isSummary && (
@@ -57,7 +60,14 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
             </span>
           )}
 
-          {!isSummary && stream.agentRole && (
+          {isDebug && (
+            <span className="inline-flex items-center gap-1 rounded-sm py-0.5 text-amber-600 dark:text-amber-400">
+              <Icon name="laptop" className="size-3" />
+              <span>Debug</span>
+            </span>
+          )}
+
+          {!isSummary && !isDebug && stream.agentRole && (
             <span
               className={`inline-flex items-center gap-1 rounded-sm py-0.5 ${agentColor ? '' : 'text-primary'}`}
               style={agentColor ? { color: agentColor } : undefined}
@@ -68,7 +78,7 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
           )}
 
           {stream.model && (
-            <span className="inline-flex items-center gap-0.5 rounded-sm bg-muted px-1.5 py-0.5">
+            <span className="inline-flex items-center gap-0.5 rounded-sm px-1.5 py-0.5">
               <ProviderIcon icon={providerIcon} baseUrl={providerUrl} size={12} className="shrink-0" />
               <span>{stream.model}</span>
             </span>

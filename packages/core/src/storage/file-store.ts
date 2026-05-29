@@ -55,6 +55,7 @@ interface SerializedSession {
   sticky_notes: StickyNoteData[];
   current_stream?: Record<string, unknown>;
   summarization_pending: boolean;
+  can_summarize: boolean;
   input_cost: number;
   output_cost: number;
   cache_read_cost: number;
@@ -184,6 +185,7 @@ function serializeSession(session: Session): SerializedSession {
         }
       : undefined,
     summarization_pending: session.summarizationPending,
+    can_summarize: session.canSummarize,
     input_cost: session.inputCost,
     output_cost: session.outputCost,
     cache_read_cost: session.cacheReadCost,
@@ -236,6 +238,7 @@ function deserializeSession(data: SerializedSession): Session {
         }
       : undefined,
     summarizationPending: data.summarization_pending ?? false,
+    canSummarize: data.can_summarize ?? false,
     inputCost: data.input_cost ?? 0,
     outputCost: data.output_cost ?? 0,
     cacheReadCost: data.cache_read_cost ?? 0,
