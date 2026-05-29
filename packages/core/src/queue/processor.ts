@@ -136,6 +136,18 @@ export class QueueProcessor {
 
         if (!session) break;
 
+        // Для пользовательских сообщений — уведомить UI о появлении сообщения
+        if (!isSystemMessage) {
+          const userMsgIndex = session.messages.length - 1;
+          this.eventBus.publish(this.sessionId, 'message.added', {
+            message_index: userMsgIndex,
+            role: message.role,
+            content: message.content.slice(0, 500),
+            author: message.author,
+            agent_role: message.agentRole,
+          });
+        }
+
         this.eventBus.publish(this.sessionId, 'stream.start', {
           stream_id: streamId,
           agent_role: isSystemMessage

@@ -35,7 +35,6 @@ export function ChatTab({ tab }: ChatTabProps) {
     debugModalMessageIndex,
     setMessages,
     updateMessage,
-    addMessage,
     clearQueueState,
     setPendingMessages,
     setStickyNotes,
@@ -107,21 +106,8 @@ export function ChatTab({ tab }: ChatTabProps) {
       const { activeAgentId } = useAgentsStore.getState()
       const effectiveAgentRole = agentRole || activeAgentId || undefined
 
-      // Не добавлять сообщение оптимистично при ожидании суммаризации —
-      // оно появится когда бэкенд обработает его после system-сообщения
-      if (!summarizationPending) {
-        addMessage(sessionId, {
-          index: messages.length + Object.values(streams).length,
-          role: 'user',
-          content: text,
-          author,
-          agent_role: effectiveAgentRole || null,
-          disabled: false,
-          pinned: false,
-          hidden: false,
-          created_at: new Date().toISOString(),
-        })
-      }
+      // Сообщение пользователя появляется в чате только когда сервер
+      // начинает его обработку (event message.added из QueueProcessor)
 
       try {
         const { debugSystemMessages } = useUIStore.getState()
@@ -136,7 +122,7 @@ export function ChatTab({ tab }: ChatTabProps) {
         notify({ text: `${t('chat.error.sendFailed')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
       }
     },
-    [sessionId, notify, t, addMessage, messages.length, streams, summarizationPending]
+    [sessionId, notify, t]
   )
 
   const handleStop = useCallback(async () => {
