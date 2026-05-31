@@ -2,7 +2,7 @@ import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import type { Session, SessionFilter, Message, TsmState, TsmStatus, SessionSettings } from '@synth/shared';
-import { atomicWrite, generateId, safeJsonParse, AsyncLock } from '@synth/shared';
+import { atomicWrite, safeJsonParse, AsyncLock } from '@synth/shared';
 
 export interface StorageConfig {
   dataDir: string;
@@ -309,9 +309,12 @@ export class FileStore {
     const lock = this._getLock(sessionId);
     await lock.acquire();
     try {
-      await unlink(path).catch(() => {});
+      await unlink(path).catch((err) => {
+        console.warn(`[FileStore] Не удалось удалить файл сессии ${sessionId}: ${String(err)}`);
+      });
     } finally {
       lock.release();
+      this._sessionLocks.delete(sessionId);
     }
   }
 

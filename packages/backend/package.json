@@ -9,7 +9,8 @@
     "build": "tsc && mkdir -p dist/agents && cp -r src/agents/definitions dist/agents/definitions",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
-    "test": "echo 'no tests yet'",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "clean": "rm -rf dist"
   },
   "dependencies": {

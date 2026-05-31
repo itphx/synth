@@ -17,6 +17,8 @@
     "build": "tsc && cp -r prompts dist/prompts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "clean": "rm -rf dist"
   },
   "dependencies": {

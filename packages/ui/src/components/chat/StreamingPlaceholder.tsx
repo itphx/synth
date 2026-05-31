@@ -5,6 +5,7 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { ProviderIcon } from '@/components/admin/ProviderIcon'
 import { ReasoningBlock } from './ReasoningBlock'
 import { MarkdownContent } from './MarkdownContent'
+import { useI18n } from '@/lib/i18n'
 import type { StreamState } from '@/stores/chatStore'
 
 interface StreamingPlaceholderProps {
@@ -23,6 +24,7 @@ function resolveColor(cssVar: string | null): string | undefined {
 export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderProps) {
   const agents = useAgentsStore((s) => s.agents)
   const providers = useProvidersStore((s) => s.providers)
+  const { t } = useI18n()
 
   const isSummary = stream.agentRole === 'summary'
   const isDebug = stream.agentRole === 'debug'
@@ -103,7 +105,7 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
           <div className="flex items-center gap-0.5 mt-2 pt-1.5 border-t border-border/30">
             <button
               onClick={onStop}
-              title="Стоп"
+              title={t('chat.input.stop')}
               className="rounded p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
             >
               <Icon name="stop" className="size-3.5" />

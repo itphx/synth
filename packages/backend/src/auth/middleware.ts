@@ -8,6 +8,16 @@ const SESSION_COOKIE = 'user_session';
 // In-memory хранилище сессий (для debug mode)
 const sessions = new Map<string, { user: User; expiresAt: number }>();
 
+// Очистка истёкших сессий каждые 5 минут
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, session] of sessions) {
+    if (session.expiresAt <= now) {
+      sessions.delete(id);
+    }
+  }
+}, 300_000);
+
 function extractBearerToken(h: string | undefined): string | null {
   if (!h) return null;
   if (h.startsWith('Bearer ')) return h.slice(7);

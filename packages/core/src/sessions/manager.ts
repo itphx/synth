@@ -1,4 +1,4 @@
-import type { Session, TsmState, Message, TsmStatus, SessionSettings, Checkpoint } from '@synth/shared';
+import type { Session, TsmState, Message, SessionSettings, Checkpoint } from '@synth/shared';
 import { TsmState as TsmStateEnum } from '@synth/shared';
 import { nowISO, generateId } from '@synth/shared';
 import type { FileStore } from '../storage/file-store.js';
@@ -12,7 +12,6 @@ const VALID_TSM_TRANSITIONS: Record<TsmState, TsmState[]> = {
 
 export class SessionManager {
   private _locks = new Map<string, Promise<void>>();
-  private _lockResolvers = new Map<string, Array<() => void>>();
 
   constructor(private store: FileStore) {}
 

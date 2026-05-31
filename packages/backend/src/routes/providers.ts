@@ -21,6 +21,36 @@ function renderIcon(icon?: string, baseUrl?: string): { icon: string; icon_url?:
   return { icon: '', icon_url: fav };
 }
 
+const INTERNAL_HOSTS = new Set([
+  'localhost',
+  '127.0.0.1',
+  '0.0.0.0',
+  '::1',
+]);
+
+const INTERNAL_CIDR_PATTERNS = [
+  /^10\.\d+\.\d+\.\d+$/,
+  /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/,
+  /^192\.168\.\d+\.\d+$/,
+  /^169\.254\.\d+\.\d+$/,
+  /^fe80:/i,
+];
+
+function isInternalOrigin(origin: string): boolean {
+  try {
+    const u = new URL(origin);
+    const hostname = u.hostname.toLowerCase();
+    if (INTERNAL_HOSTS.has(hostname)) return true;
+    if (hostname === '[::1]') return true;
+    for (const pattern of INTERNAL_CIDR_PATTERNS) {
+      if (pattern.test(hostname)) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 export function createProviderRoutes(kit: AuthKit, store: JsonStore<ProviderConfig>): Hono {
   const app = new Hono();
 
@@ -75,13 +105,16 @@ export function createProviderRoutes(kit: AuthKit, store: JsonStore<ProviderConf
     return c.body(null, 204);
   });
 
-  // GET /api/v2/providers/:name — получить одного
+  // GET /api/v2/providers/:name — получить одного (apiKey маскирован)
   app.get('/:name', kit.requireAdmin, async (c) => {
     const provider = await store.load(c.req.param('name'));
     if (!provider) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.provider', undefined, c) } }, 404);
     }
-    return c.json(provider);
+    return c.json({
+      ...provider,
+      apiKey: provider.apiKey ? `${provider.apiKey.slice(0, 3)}...${provider.apiKey.slice(-4)}` : '',
+    });
   });
 
   // POST /api/v2/providers/:name/test — тест подключения (admin)
@@ -140,6 +173,10 @@ export function createProviderRoutes(kit: AuthKit, store: JsonStore<ProviderConf
     try {
       origin = new URL(url).origin;
     } catch {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidUrl', undefined, c) } }, 400);
+    }
+
+    if (isInternalOrigin(origin)) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidUrl', undefined, c) } }, 400);
     }
 

@@ -1,4 +1,5 @@
 import type { QueuedMessage } from '../../stores/chatStore';
+import { useI18n } from '@/lib/i18n';
 
 interface QueueChipsProps {
   pending: QueuedMessage[];
@@ -7,16 +8,18 @@ interface QueueChipsProps {
 }
 
 export function QueueChips({ pending, onClear, onReturn }: QueueChipsProps) {
+  const { t } = useI18n();
+
   if (pending.length === 0) return null;
 
   return (
     <div className="px-4 pb-2 space-y-1">
       <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-        <span>В очереди: {pending.length}</span>
+        <span>{t('chat.queue.pending', { count: pending.length })}</span>
         <button
           onClick={onClear}
           className="hover:text-destructive px-1"
-          title="Очистить очередь"
+          title={t('chat.queue.clear')}
         >
           ✕
         </button>
@@ -36,7 +39,7 @@ export function QueueChips({ pending, onClear, onReturn }: QueueChipsProps) {
             <button
               onClick={onReturn}
               className="text-muted-foreground hover:text-foreground shrink-0 px-1"
-              title="Вернуть в поле ввода"
+              title={t('chat.queue.return')}
             >
               ↩
             </button>
