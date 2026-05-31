@@ -203,7 +203,7 @@ export function ChatInput({ sessionId, agents, isStreaming, onSend, onStop, onCr
             <FooterBtn icon="shield-check" title={t('chat.footer.approve')} />
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 pr-1">
             <ModelSelector sessionId={sessionId} />
             <AgentModeSelector sessionId={sessionId} />
 
@@ -217,10 +217,11 @@ export function ChatInput({ sessionId, agents, isStreaming, onSend, onStop, onCr
               </button>
             ) : (
               <>
+              <div className="flex items-center gap-0.5">
                 <button
                   onClick={handleCreateNote}
                   disabled={!value.trim()}
-                  className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="rounded-lg p-1.5 text-amber-600/70 dark:text-amber-400/70 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-amber-500/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                   title={t('chat.input.createNote')}
                 >
                   <Icon name="pushpin" className="size-5" />
@@ -233,6 +234,7 @@ export function ChatInput({ sessionId, agents, isStreaming, onSend, onStop, onCr
                 >
                   <Icon name="send-plane" className="size-5" />
                 </button>
+              </div>
               </>)}
           </div>
         </div>

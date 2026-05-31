@@ -10,31 +10,30 @@ interface StickyNotesPanelProps {
 }
 
 export function StickyNotesPanel({ notes, onUpdate, onToggle, onDelete }: StickyNotesPanelProps) {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(true)
   const activeNotes = notes.filter((n) => !n.disabled)
-  const disabledNotes = notes.filter((n) => n.disabled)
 
   if (notes.length === 0) return null
 
   return (
-    <div className="shrink-0 border-b border-border/60 bg-surface-subtle/50">
+    <div className="shrink-0 mx-2 mt-2 rounded-lg border border-border/60 bg-surface-subtle/50">
       <div className="flex items-center justify-between px-3 py-1.5">
         <button
           onClick={() => setCollapsed(!collapsed)}
           className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
         >
-          <Icon name="pushpin" className="size-3.5" />
-          <span>Заметки ({activeNotes.length})</span>
           <Icon
-            name={collapsed ? 'add' : 'subtract'}
+            name={collapsed ? 'arrow-right-s' : 'arrow-down-s'}
             className="size-3"
           />
+          <Icon name="pushpin" className="size-3.5 text-amber-600/70 dark:text-amber-400/70" />
+          <span>Заметки ({activeNotes.length})</span>
         </button>
       </div>
 
       {!collapsed && (
-        <div className="px-3 pb-2 space-y-1.5">
-          {activeNotes.map((note) => (
+        <div className="px-3 pb-2 space-y-1">
+          {notes.map((note) => (
             <StickyNoteItem
               key={note.id}
               note={note}
@@ -43,22 +42,6 @@ export function StickyNotesPanel({ notes, onUpdate, onToggle, onDelete }: Sticky
               onDelete={onDelete}
             />
           ))}
-          {disabledNotes.length > 0 && (
-            <div className="pt-1">
-              <div className="text-[10px] text-muted-foreground/50 mb-1">
-                Отключены ({disabledNotes.length})
-              </div>
-              {disabledNotes.map((note) => (
-                <StickyNoteItem
-                  key={note.id}
-                  note={note}
-                  onUpdate={onUpdate}
-                  onToggle={onToggle}
-                  onDelete={onDelete}
-                />
-              ))}
-            </div>
-          )}
         </div>
       )}
     </div>
@@ -102,7 +85,7 @@ function StickyNoteItem({
     <div
       className={`flex items-start gap-1.5 rounded px-2 py-1 text-xs group ${
         note.disabled
-          ? 'opacity-40 line-through'
+          ? 'opacity-40'
           : 'bg-interactive/50'
       }`}
     >
@@ -118,8 +101,11 @@ function StickyNoteItem({
         />
       ) : (
         <span
-          className="flex-1 cursor-pointer whitespace-pre-wrap break-words"
+          className={`flex-1 cursor-pointer whitespace-pre-wrap break-words ${
+            note.disabled ? 'line-through' : ''
+          }`}
           onDoubleClick={() => {
+            if (note.disabled) return
             setDraft(note.content)
             setEditing(true)
           }}
@@ -133,7 +119,7 @@ function StickyNoteItem({
           className="p-0.5 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground"
           title={note.disabled ? 'Включить' : 'Отключить'}
         >
-          <Icon name={note.disabled ? 'eye' : 'close'} className="size-3" />
+          <Icon name={note.disabled ? 'eye-off' : 'eye'} className="size-3" />
         </button>
         <button
           onClick={() => onDelete(note.id)}

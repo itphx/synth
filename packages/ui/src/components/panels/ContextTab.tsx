@@ -5,8 +5,8 @@ import { useSessionsStore } from '@/stores/sessionsStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useNotification } from '@/hooks/useNotification'
 import { synthApi } from '@/lib/api/synthApi'
-import { Icon } from '../icon/Icon'
 import { Toggle } from '../ui/Toggle'
+import { Icon } from '../icon/Icon'
 
 export function ContextTab() {
   const { t } = useI18n()
@@ -131,15 +131,14 @@ export function ContextTab() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {/* Заметки — alwaysOpen, всегда видны */}
+        {/* Заметки — alwaysOpen */}
         <Block title={t('rightPanel.context.optimization.sticky_notes')} alwaysOpen>
           {stickyNotes.length === 0 ? (
             <p className="text-xs text-muted-foreground">{t('rightPanel.context.noStickyNotes')}</p>
           ) : (
             stickyNotes.map((note) => (
               <div key={note.id} className="flex items-center gap-2 rounded bg-interactive py-1">
-                <span className="flex-1 text-xs text-foreground truncate" title={note.content}>
-                  {note.disabled && <span className="text-muted-foreground line-through">[откл] </span>}
+                <span className={`flex-1 text-xs truncate ${note.disabled ? 'text-muted-foreground line-through' : 'text-foreground'}`} title={note.content}>
                   {note.content}
                 </span>
                 <button
