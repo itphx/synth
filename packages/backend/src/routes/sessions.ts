@@ -339,14 +339,15 @@ export function createSessionRoutes(
 
     return c.json({
       context_optimization: session.settings.contextOptimization,
-      sliding_window_type: session.settings.slidingWindowType,
-      sliding_window_limit: session.settings.slidingWindowLimit,
+      sliding_window_mode: session.settings.slidingWindowMode,
+      sliding_window_message_limit: session.settings.slidingWindowMessageLimit,
+      sliding_window_token_threshold: session.settings.slidingWindowTokenThreshold,
       summarization_enabled: session.settings.summarizationEnabled,
+      summarization_trigger_mode: session.settings.summarizationTriggerMode,
       summarize_after_n: session.settings.summarizeAfterN,
-      summarize_context_percent: session.settings.summarizeContextPercent,
+      summarize_token_threshold: session.settings.summarizeTokenThreshold,
       summarization_head_messages: session.settings.summarizationHeadMessages,
       summarization_tail_messages: session.settings.summarizationTailMessages,
-      context_window_threshold: session.settings.contextWindowThreshold,
     });
   });
 
@@ -356,14 +357,15 @@ export function createSessionRoutes(
 
     await sessionManager.withLock(c.req.param('id'), async (s) => {
       if (body.context_optimization !== undefined) s.settings.contextOptimization = body.context_optimization;
-      if (body.sliding_window_type !== undefined) s.settings.slidingWindowType = body.sliding_window_type;
-      if (body.sliding_window_limit !== undefined) s.settings.slidingWindowLimit = body.sliding_window_limit;
+      if (body.sliding_window_mode !== undefined) s.settings.slidingWindowMode = body.sliding_window_mode;
+      if (body.sliding_window_message_limit !== undefined) s.settings.slidingWindowMessageLimit = body.sliding_window_message_limit;
+      if (body.sliding_window_token_threshold !== undefined) s.settings.slidingWindowTokenThreshold = body.sliding_window_token_threshold;
       if (body.summarization_enabled !== undefined) s.settings.summarizationEnabled = body.summarization_enabled;
+      if (body.summarization_trigger_mode !== undefined) s.settings.summarizationTriggerMode = body.summarization_trigger_mode;
       if (body.summarize_after_n !== undefined) s.settings.summarizeAfterN = body.summarize_after_n;
-      if (body.summarize_context_percent !== undefined) s.settings.summarizeContextPercent = body.summarize_context_percent;
+      if (body.summarize_token_threshold !== undefined) s.settings.summarizeTokenThreshold = body.summarize_token_threshold;
       if (body.summarization_head_messages !== undefined) s.settings.summarizationHeadMessages = body.summarization_head_messages;
       if (body.summarization_tail_messages !== undefined) s.settings.summarizationTailMessages = body.summarization_tail_messages;
-      if (body.context_window_threshold !== undefined) s.settings.contextWindowThreshold = body.context_window_threshold;
       await sessionManager.saveSession(s);
     });
 

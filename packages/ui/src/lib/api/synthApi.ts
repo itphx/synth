@@ -504,14 +504,15 @@ export const synthApi = {
   // Оптимизация контекста
   async getOptimization(sessionId: string): Promise<{
     context_optimization: string
-    sliding_window_type: string
-    sliding_window_limit: number
+    sliding_window_mode: string
+    sliding_window_message_limit: number
+    sliding_window_token_threshold: number
     summarization_enabled: boolean
+    summarization_trigger_mode: string
     summarize_after_n: number
-    summarize_context_percent: number
+    summarize_token_threshold: number
     summarization_head_messages: number
     summarization_tail_messages: number
-    context_window_threshold: number
   }> {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/optimization`)
   },
@@ -520,14 +521,15 @@ export const synthApi = {
     sessionId: string,
     data: {
       context_optimization?: string
-      sliding_window_type?: string
-      sliding_window_limit?: number
+      sliding_window_mode?: string
+      sliding_window_message_limit?: number
+      sliding_window_token_threshold?: number
       summarization_enabled?: boolean
+      summarization_trigger_mode?: string
       summarize_after_n?: number
-      summarize_context_percent?: number
+      summarize_token_threshold?: number
       summarization_head_messages?: number
       summarization_tail_messages?: number
-      context_window_threshold?: number
     },
   ): Promise<SessionData> {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/optimization`, {

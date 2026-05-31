@@ -6,6 +6,7 @@ import { useChatStore } from '@/stores/chatStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useNotification } from '@/hooks/useNotification'
 import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
+import { Toggle } from '../ui/Toggle'
 
 export function SessionSettingsTab() {
   const { t } = useI18n()
@@ -149,20 +150,7 @@ export function SessionSettingsTab() {
 
         <Section title={t('sessionSettings.debug')}>
           <label className="flex items-center gap-3 cursor-pointer">
-            <button
-              role="switch"
-              aria-checked={debugEnabled}
-              onClick={() => setDebugEnabled(!debugEnabled)}
-              className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
-                debugEnabled ? 'bg-primary' : 'bg-muted'
-              }`}
-            >
-              <span
-                className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
-                  debugEnabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
-                }`}
-              />
-            </button>
+            <Toggle enabled={debugEnabled} onToggle={() => setDebugEnabled(!debugEnabled)} />
             <span className="text-xs text-foreground">{debugEnabled ? t('sessionSettings.debugOn') : t('sessionSettings.debugOff')}</span>
           </label>
         </Section>
@@ -173,20 +161,7 @@ export function SessionSettingsTab() {
           </h4>
           <div className="space-y-2">
             <label className="flex items-center gap-3 cursor-pointer">
-              <button
-                role="switch"
-                aria-checked={debugSystemMessages}
-                onClick={() => setDebugSystemMessages(!debugSystemMessages)}
-                className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
-                  debugSystemMessages ? 'bg-primary' : 'bg-muted'
-                }`}
-              >
-                <span
-                  className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
-                    debugSystemMessages ? 'translate-x-[18px]' : 'translate-x-[3px]'
-                  }`}
-                />
-              </button>
+              <Toggle enabled={debugSystemMessages} onToggle={() => setDebugSystemMessages(!debugSystemMessages)} />
               <span className="text-xs text-foreground">
                 {debugSystemMessages ? t('sessionSettings.debugOn') : t('sessionSettings.debugOff')}{' '}
                 {t('rightPanel.debug.systemMessages')}

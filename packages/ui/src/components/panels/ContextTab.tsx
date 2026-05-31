@@ -6,11 +6,7 @@ import { useChatStore } from '@/stores/chatStore'
 import { useNotification } from '@/hooks/useNotification'
 import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '../icon/Icon'
-
-const WINDOW_TYPES = [
-  { value: 'messages', labelKey: 'rightPanel.context.windowType.messages' },
-  { value: 'tokens', labelKey: 'rightPanel.context.windowType.tokens' },
-] as const
+import { Toggle } from '../ui/Toggle'
 
 export function ContextTab() {
   const { t } = useI18n()
@@ -26,13 +22,14 @@ export function ContextTab() {
 
   const [windowEnabled, setWindowEnabled] = useState(false)
   const [sumEnabled, setSumEnabled] = useState(false)
-  const [windowType, setWindowType] = useState<string>('messages')
-  const [windowLimit, setWindowLimit] = useState(10)
+  const [swMode, setSwMode] = useState<'messages' | 'tokens'>('messages')
+  const [swMessageLimit, setSwMessageLimit] = useState(10)
+  const [swTokenThreshold, setSwTokenThreshold] = useState(80)
+  const [sumMode, setSumMode] = useState<'messages' | 'tokens'>('messages')
   const [afterN, setAfterN] = useState(10)
-  const [contextPercent, setContextPercent] = useState(50)
+  const [tokenThreshold, setTokenThreshold] = useState(50)
   const [headMessages, setHeadMessages] = useState(2)
   const [tailMessages, setTailMessages] = useState(3)
-  const [windowThreshold, setWindowThreshold] = useState(80)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -42,13 +39,14 @@ export function ContextTab() {
         const mode = data.context_optimization
         setWindowEnabled(mode === 'sliding_window')
         setSumEnabled(mode === 'summarization')
-        setWindowType(data.sliding_window_type)
-        setWindowLimit(data.sliding_window_limit)
+        setSwMode((data.sliding_window_mode as 'messages' | 'tokens') || 'messages')
+        setSwMessageLimit(data.sliding_window_message_limit)
+        setSwTokenThreshold(data.sliding_window_token_threshold)
+        setSumMode((data.summarization_trigger_mode as 'messages' | 'tokens') || 'messages')
         setAfterN(data.summarize_after_n)
-        setContextPercent(data.summarize_context_percent)
+        setTokenThreshold(data.summarize_token_threshold)
         setHeadMessages(data.summarization_head_messages)
         setTailMessages(data.summarization_tail_messages)
-        setWindowThreshold(data.context_window_threshold)
       })
       .catch(() => {})
   }, [sessionId])
@@ -61,14 +59,15 @@ export function ContextTab() {
     try {
       const result = await synthApi.updateOptimization(sessionId, {
         context_optimization: newMode,
-        sliding_window_type: windowType,
-        sliding_window_limit: windowLimit,
+        sliding_window_mode: swMode,
+        sliding_window_message_limit: swMessageLimit,
+        sliding_window_token_threshold: swTokenThreshold,
         summarization_enabled: true,
+        summarization_trigger_mode: sumMode,
         summarize_after_n: afterN,
-        summarize_context_percent: contextPercent,
+        summarize_token_threshold: tokenThreshold,
         summarization_head_messages: headMessages,
         summarization_tail_messages: tailMessages,
-        context_window_threshold: windowThreshold,
       })
       useSessionsStore.setState((s) => ({
         sessions: s.sessions.map((sess) =>
@@ -132,16 +131,16 @@ export function ContextTab() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {/* Заметки */}
+        {/* Заметки — alwaysOpen, всегда видны */}
         <Block title={t('rightPanel.context.optimization.sticky_notes')} alwaysOpen>
           {stickyNotes.length === 0 ? (
-            <p className="text-xs text-muted-foreground">Нет заметок</p>
+            <p className="text-xs text-muted-foreground">{t('rightPanel.context.noStickyNotes')}</p>
           ) : (
             stickyNotes.map((note) => (
-              <div key={note.id} className="flex items-center gap-2 rounded bg-interactive px-2 py-1">
-                <span className="flex-1 text-xs text-foreground truncate">
+              <div key={note.id} className="flex items-center gap-2 rounded bg-interactive py-1">
+                <span className="flex-1 text-xs text-foreground truncate" title={note.content}>
                   {note.disabled && <span className="text-muted-foreground line-through">[откл] </span>}
-                  {note.content.slice(0, 60)}
+                  {note.content}
                 </span>
                 <button
                   onClick={() => handleNoteToggle(note.id, !note.disabled)}
@@ -160,6 +159,9 @@ export function ContextTab() {
               </div>
             ))
           )}
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            {t('rightPanel.context.hint.stickyNotes')}
+          </p>
         </Block>
 
         {/* Скользящее окно */}
@@ -168,21 +170,24 @@ export function ContextTab() {
           enabled={windowEnabled}
           onToggle={toggleWindow}
         >
-          <select
-            value={windowType}
-            onChange={(e) => { setWindowType(e.target.value); handleSave(mode) }}
-            className="w-full rounded border border-border bg-input px-2 py-1.5 text-xs text-foreground"
-          >
-            {WINDOW_TYPES.map((wt) => (
-              <option key={wt.value} value={wt.value}>{t(wt.labelKey)}</option>
-            ))}
-          </select>
-          <NumberSetting
-            label={t('rightPanel.context.windowLimit')}
-            value={windowLimit}
-            onChange={(v) => { setWindowLimit(v); handleSave(mode) }}
+          <SectionHeader label={t('rightPanel.context.sectionWindowSize')} />
+          <RadioSetting
+            label={t('rightPanel.context.windowMessages')}
+            value={swMessageLimit}
+            onChange={(v) => { setSwMessageLimit(v); handleSave(mode) }}
             min={1}
-            max={windowType === 'tokens' ? 200000 : 200}
+            max={200}
+            selected={swMode === 'messages'}
+            onSelect={() => { setSwMode('messages'); handleSave(mode) }}
+          />
+          <RadioSetting
+            label={t('rightPanel.context.windowTokens')}
+            value={swTokenThreshold}
+            onChange={(v) => { setSwTokenThreshold(v); handleSave(mode) }}
+            min={10}
+            max={100}
+            selected={swMode === 'tokens'}
+            onSelect={() => { setSwMode('tokens'); handleSave(mode) }}
           />
           <p className="text-xs text-muted-foreground leading-relaxed">
             {t('rightPanel.context.hint.slidingWindow')}
@@ -195,21 +200,26 @@ export function ContextTab() {
           enabled={sumEnabled}
           onToggle={toggleSum}
         >
-          <NumberSetting
+          <SectionHeader label={t('rightPanel.context.triggersGroup')} />
+          <RadioSetting
             label={t('rightPanel.context.afterN')}
             value={afterN}
             onChange={(v) => { setAfterN(v); handleSave(mode) }}
             min={1}
             max={200}
+            selected={sumMode === 'messages'}
+            onSelect={() => { setSumMode('messages'); handleSave(mode) }}
           />
-          <NumberSetting
-            label={t('rightPanel.context.contextPercent')}
-            value={contextPercent}
-            onChange={(v) => { setContextPercent(v); handleSave(mode) }}
-            min={1}
+          <RadioSetting
+            label={t('rightPanel.context.tokenThreshold')}
+            value={tokenThreshold}
+            onChange={(v) => { setTokenThreshold(v); handleSave(mode) }}
+            min={10}
             max={100}
-            suffix="%"
+            selected={sumMode === 'tokens'}
+            onSelect={() => { setSumMode('tokens'); handleSave(mode) }}
           />
+          <SectionHeader label={t('rightPanel.context.compressionGroup')} />
           <NumberSetting
             label={t('rightPanel.context.headMessages')}
             value={headMessages}
@@ -228,20 +238,6 @@ export function ContextTab() {
             {t('rightPanel.context.hint.summarization')}
           </p>
         </Block>
-
-        {/* Общий порог окна */}
-        {(windowEnabled || sumEnabled) && (
-          <Block title={t('rightPanel.context.sectionCommon')} alwaysOpen>
-            <NumberSetting
-              label={t('rightPanel.context.windowThreshold')}
-              value={windowThreshold}
-              onChange={(v) => { setWindowThreshold(v); handleSave(mode) }}
-              min={10}
-              max={100}
-              suffix="%"
-            />
-          </Block>
-        )}
       </div>
 
       <div className="shrink-0 border-t border-border p-4 space-y-2">
@@ -253,6 +249,14 @@ export function ContextTab() {
           {saving ? t('rightPanel.context.saving') : t('common.save')}
         </button>
       </div>
+    </div>
+  )
+}
+
+function SectionHeader({ label }: { label: string }) {
+  return (
+    <div className="pt-1 pb-0">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">{label}</span>
     </div>
   )
 }
@@ -275,21 +279,72 @@ function Block({
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-medium text-foreground">{title}</span>
         {onToggle && enabled !== undefined && (
-          <button
-            onClick={onToggle}
-            className={`relative h-5 w-9 rounded-full transition-colors ${
-              enabled ? 'bg-primary' : 'bg-interactive'
-            }`}
-          >
-            <div
-              className={`absolute top-0.5 h-4 w-4 rounded-full bg-card shadow-sm transition-transform ${
-                enabled ? 'translate-x-4' : 'translate-x-0.5'
-              }`}
-            />
-          </button>
+          <Toggle enabled={enabled} onToggle={onToggle} />
         )}
       </div>
-      {children && <div className="space-y-2">{children}</div>}
+      {children && <div className="space-y-1.5">{children}</div>}
+    </div>
+  )
+}
+
+function RadioSetting({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+  suffix = '',
+  selected,
+  onSelect,
+}: {
+  label: string
+  value: number
+  onChange: (v: number) => void
+  min: number
+  max: number
+  suffix?: string
+  selected: boolean
+  onSelect: () => void
+}) {
+  return (
+    <div className={`flex items-center justify-between gap-2 ${selected ? '' : 'opacity-40'}`}>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={onSelect}
+          className={`flex items-center justify-center size-4 rounded-full border-2 transition-colors shrink-0 ${
+            selected ? 'border-primary bg-primary' : 'border-border bg-transparent'
+          }`}
+        >
+          {selected && <span className="size-1.5 rounded-full bg-primary-foreground" />}
+        </button>
+        <span className="text-xs text-muted-foreground">{label}</span>
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => selected && onChange(Math.max(min, value - 1))}
+          disabled={!selected}
+          className="flex h-5 w-5 items-center justify-center rounded text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground disabled:pointer-events-none disabled:opacity-0"
+        >
+          −
+        </button>
+        <input
+          type="number"
+          value={value}
+          onChange={(e) => { if (selected) onChange(Math.min(max, Math.max(min, parseInt(e.target.value) || 0))) }}
+          disabled={!selected}
+          className="w-12 rounded bg-interactive px-1 py-0.5 text-center text-xs text-foreground outline-none tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none [-moz-appearance:textfield] disabled:pointer-events-none"
+          min={min}
+          max={max}
+        />
+        {suffix && <span className="text-xs text-muted-foreground">{suffix}</span>}
+        <button
+          onClick={() => selected && onChange(Math.min(max, value + 1))}
+          disabled={!selected}
+          className="flex h-5 w-5 items-center justify-center rounded text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground disabled:pointer-events-none disabled:opacity-0"
+        >
+          +
+        </button>
+      </div>
     </div>
   )
 }
@@ -323,11 +378,11 @@ function NumberSetting({
           type="number"
           value={value}
           onChange={(e) => onChange(Math.min(max, Math.max(min, parseInt(e.target.value) || 0)))}
-          className="w-12 rounded bg-interactive px-1 py-0.5 text-center text-xs text-foreground outline-none tabular-nums"
+          className="w-12 rounded bg-interactive px-1 py-0.5 text-center text-xs text-foreground outline-none tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none [-moz-appearance:textfield]"
           min={min}
           max={max}
         />
-        <span className="text-xs text-muted-foreground">{suffix}</span>
+        {suffix && <span className="text-xs text-muted-foreground">{suffix}</span>}
         <button
           onClick={() => onChange(Math.min(max, value + 1))}
           className="flex h-5 w-5 items-center justify-center rounded text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground"

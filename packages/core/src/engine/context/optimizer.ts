@@ -80,22 +80,20 @@ export class ContextOptimizer {
 
   shouldApplySlidingWindow(session: Session): SlidingWindowResult {
     const model = session.settings.model;
-    const windowType = session.settings.slidingWindowType;
-    const limit = session.settings.slidingWindowLimit;
-    const threshold = session.settings.contextWindowThreshold;
+    const mode = session.settings.slidingWindowMode;
 
-    // Триггер по токенам — использовать inputTokens последнего ответа
-    const lastRequestTokens = this._getLastRequestTokens(session);
-    const contextWindow = this.getContextWindow(model);
-    if (contextWindow > 0 && lastRequestTokens > 0) {
-      const tokenThreshold = Math.floor(contextWindow * (threshold / 100));
-      if (lastRequestTokens >= tokenThreshold) {
-        return { triggered: true, reason: 'tokens', currentTokens: lastRequestTokens, threshold: tokenThreshold };
+    if (mode === 'tokens') {
+      const threshold = session.settings.slidingWindowTokenThreshold;
+      const lastRequestTokens = this._getLastRequestTokens(session);
+      const contextWindow = this.getContextWindow(model);
+      if (contextWindow > 0 && lastRequestTokens > 0) {
+        const tokenThreshold = Math.floor(contextWindow * (threshold / 100));
+        if (lastRequestTokens >= tokenThreshold) {
+          return { triggered: true, reason: 'tokens', currentTokens: lastRequestTokens, threshold: tokenThreshold };
+        }
       }
-    }
-
-    // Триггер по количеству сообщений
-    if (windowType === 'messages') {
+    } else {
+      const limit = session.settings.slidingWindowMessageLimit;
       const userMessages = this._getActiveUserMessages(session.messages);
       if (userMessages.length > limit) {
         return { triggered: true, reason: 'messages', userCount: userMessages.length, limit };
@@ -107,8 +105,7 @@ export class ContextOptimizer {
 
   applySlidingWindow(session: Session): { session: Session; disabledIndices: number[]; disabledCount: number } {
     const model = session.settings.model;
-    const windowType = session.settings.slidingWindowType;
-    const limit = session.settings.slidingWindowLimit;
+    const mode = session.settings.slidingWindowMode;
     const disabledIndices: number[] = [];
     let disabledCount = 0;
 
@@ -123,10 +120,10 @@ export class ContextOptimizer {
     const summaryMessages = session.messages.filter((m) => m.role === MessageRole.SUMMARY && !m.disabled);
     const summarySet = new Set(summaryMessages);
 
-    if (windowType === 'tokens') {
+    if (mode === 'tokens') {
+      const threshold = session.settings.slidingWindowTokenThreshold;
       const contextWindow = this.getContextWindow(model);
-      const maxTokens = contextWindow > 0 ? Math.floor(contextWindow * (limit / 100 > 1 ? limit / 100 : limit > 1000 ? limit : limit)) : limit;
-      // limit в токенах — идём с конца
+      const maxTokens = contextWindow > 0 ? Math.floor(contextWindow * (threshold / 100)) : 128000;
       const active = this._getAllActiveMessages(session);
       let cumulative = 0;
       const windowMessages: Message[] = [];
@@ -142,7 +139,7 @@ export class ContextOptimizer {
       }
       keepMessages = windowMessages;
     } else {
-      // По количеству user-сообщений
+      const limit = session.settings.slidingWindowMessageLimit;
       const userMessages = this._getActiveUserMessages(session.messages);
       if (userMessages.length <= limit) {
         return { session, disabledIndices, disabledCount };
@@ -186,23 +183,24 @@ export class ContextOptimizer {
     }
 
     const model = session.settings.model;
-    const threshold = session.settings.contextWindowThreshold;
-    const afterN = session.settings.summarizeAfterN;
+    const mode = session.settings.summarizationTriggerMode;
 
-    // Триггер по токенам — использовать inputTokens последнего ответа
-    const lastRequestTokens = this._getLastRequestTokens(session);
-    const contextWindow = this.getContextWindow(model);
-    if (contextWindow > 0 && lastRequestTokens > 0) {
-      const tokenThreshold = Math.floor(contextWindow * (threshold / 100));
-      if (lastRequestTokens >= tokenThreshold) {
-        return { triggered: true, reason: 'tokens', currentTokens: lastRequestTokens, threshold: tokenThreshold };
+    if (mode === 'tokens') {
+      const threshold = session.settings.summarizeTokenThreshold;
+      const lastRequestTokens = this._getLastRequestTokens(session);
+      const contextWindow = this.getContextWindow(model);
+      if (contextWindow > 0 && lastRequestTokens > 0) {
+        const tokenThreshold = Math.floor(contextWindow * (threshold / 100));
+        if (lastRequestTokens >= tokenThreshold) {
+          return { triggered: true, reason: 'tokens', currentTokens: lastRequestTokens, threshold: tokenThreshold };
+        }
       }
-    }
-
-    // Триггер по количеству user-сообщений с последнего summary
-    const userCount = this._countUserMessagesSinceSummary(session);
-    if (userCount >= afterN) {
-      return { triggered: true, reason: 'messages', userCount, limit: afterN };
+    } else {
+      const afterN = session.settings.summarizeAfterN;
+      const userCount = this._countUserMessagesSinceSummary(session);
+      if (userCount >= afterN) {
+        return { triggered: true, reason: 'messages', userCount, limit: afterN };
+      }
     }
 
     return { triggered: false, reason: 'none' };
@@ -448,13 +446,13 @@ export class ContextOptimizer {
     const allActive = this._getAllActiveMessages(session);
     const pinnedActive = session.messages.filter((m) => m.pinned && !m.disabled && !m.hidden);
     const summaryActive = session.messages.filter((m) => m.role === MessageRole.SUMMARY && !m.disabled && !m.hidden);
-    const windowType = session.settings.slidingWindowType;
-    const limit = session.settings.slidingWindowLimit;
+    const mode = session.settings.slidingWindowMode;
 
     let windowMessages: Message[];
-    if (windowType === 'tokens') {
+    if (mode === 'tokens') {
+      const threshold = session.settings.slidingWindowTokenThreshold;
       const contextWindow = this.getContextWindow(session.settings.model);
-      const maxTokens = contextWindow > 0 ? Math.floor(contextWindow * (0.8)) : 128000;
+      const maxTokens = contextWindow > 0 ? Math.floor(contextWindow * (threshold / 100)) : 128000;
       windowMessages = [];
       let cumulative = 0;
       for (let i = allActive.length - 1; i >= 0; i--) {
@@ -468,6 +466,7 @@ export class ContextOptimizer {
         }
       }
     } else {
+      const limit = session.settings.slidingWindowMessageLimit;
       const userMessages = this._getActiveUserMessages(allActive);
       if (userMessages.length <= limit) return [...allActive, ...summaryActive];
       const cutoff = userMessages[userMessages.length - limit]!;
@@ -502,7 +501,7 @@ export class ContextOptimizer {
 
   private _getMessagesForStickyNotes(session: Session): Message[] {
     const active = this._getAllActiveMessages(session);
-    const limit = session.settings.stickyNotesLimit;
+    const limit = 6;
     const summaryActive = session.messages.filter((m) => m.role === MessageRole.SUMMARY && !m.disabled && !m.hidden);
 
     if (active.length <= limit) return [...active, ...summaryActive];
