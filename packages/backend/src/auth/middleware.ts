@@ -131,8 +131,8 @@ export function createAuthMiddleware(config: AuthConfig) {
   const setSessionCookie = (c: Parameters<typeof setCookie>[0], sessionId: string): void => {
     setCookie(c, SESSION_COOKIE, sessionId, {
       path: '/',
-      httpOnly: false, // SPA должно видеть куку для проверки
-      secure: false,
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
       sameSite: 'Lax',
       maxAge: config.sessionMaxAgeMinutes * 60,
     });

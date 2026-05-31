@@ -1,4 +1,5 @@
 import { Icon } from '../icon/Icon'
+import { memo } from 'react'
 import type { MessageData } from '@/stores/chatStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useAgentsStore } from '@/stores/agentsStore'
@@ -22,7 +23,7 @@ function resolveAuthor(): string {
   return profile?.display_name || user?.username || ''
 }
 
-export function MessageHeader({ message }: MessageHeaderProps) {
+function MessageHeaderInner({ message }: MessageHeaderProps) {
   const time = message.timestamp || message.created_at
   const formatted = time
     ? new Date(time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
@@ -93,3 +94,5 @@ export function MessageHeader({ message }: MessageHeaderProps) {
     </div>
   )
 }
+
+export const MessageHeader = memo(MessageHeaderInner);

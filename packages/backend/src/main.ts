@@ -32,11 +32,12 @@ import { ProjectStore } from './storage/project-store.js';
 import { JsonStore } from './storage/json-store.js';
 import { EventHub } from './events/hub.js';
 import type { EventClient } from './events/hub.js';
+import { createRateLimiter } from './middleware/rate-limiter.js';
 
 const app = new Hono();
 
 app.use(logger());
-app.use(cors({ origin: '*', credentials: true }));
+// CORS настраивается после загрузки конфига
 
 // Health (без auth)
 app.get('/health', (c) => c.json({ status: 'healthy', version: '0.1.0', time: nowISO() }));
@@ -44,6 +45,16 @@ app.get('/api/v2/health', (c) => c.json({ status: 'healthy', version: '0.1.0', t
 
 // Конфигурация
 const backendConfig = await loadBackendConfig();
+
+app.use(cors({
+  origin: backendConfig.synth.server.corsOrigin || 'http://localhost:5002',
+  credentials: true,
+}));
+
+// Rate limiting на API и auth эндпоинты
+app.use('/api/v2/*', createRateLimiter());
+app.use('/auth/*', createRateLimiter());
+
 const auth = createAuthMiddleware(backendConfig.auth);
 
 // Прикрепляем пользователя ко всем запросам
@@ -210,11 +221,24 @@ app.get('/api/v2/events', auth.requireAuth, async (c) => {
           console.log(`[SSE /api/v2/events] Connected: user=${user.username}`);
           await eventHub.registerClient(sseClient);
 
+          // Keepalive: раз в 30 секунд отправляем комментарий для предотвращения разрыва
+          const keepalive = setInterval(() => {
+            try {
+              controller.enqueue(encoder.encode(':keepalive\n\n'));
+            } catch {
+              clearInterval(keepalive);
+            }
+          }, 30_000);
+
           // Keep connection alive until abort or disconnect
-          await new Promise<void>((resolve) => {
-            if (signal.aborted) { resolve(); return; }
-            signal.addEventListener('abort', () => resolve(), { once: true });
-          });
+          try {
+            await new Promise<void>((resolve) => {
+              if (signal.aborted) { resolve(); return; }
+              signal.addEventListener('abort', () => resolve(), { once: true });
+            });
+          } finally {
+            clearInterval(keepalive);
+          }
         } catch (err) {
           console.error('[SSE /api/v2/events] Error:', err);
         } finally {

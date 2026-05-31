@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils'
+import { memo } from 'react'
 import { MarkdownContent } from './MarkdownContent'
 import { MessageHeader } from './MessageHeader'
 import { MessageActions } from './MessageActions'
@@ -17,7 +18,7 @@ interface ChatMessageProps {
   onDebug: () => void
 }
 
-export function ChatMessage({
+function ChatMessageInner({
   message,
   onCopy,
   onToggle,
@@ -140,3 +141,5 @@ export function ChatMessage({
     </div>
   )
 }
+
+export const ChatMessage = memo(ChatMessageInner);

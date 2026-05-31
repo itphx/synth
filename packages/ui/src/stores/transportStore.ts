@@ -223,6 +223,15 @@ function createDispatcher(): EventDispatcher {
 let transport: TransportClient | null = null
 let transportReady = false
 
+// Очистка при HMR (hot module replacement)
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    transport?.disconnect();
+    transport = null;
+    transportReady = false;
+  });
+}
+
 export const useTransportStore = create<TransportState>()((set, get) => ({
   transportMode: 'auto',
   activeTransport: 'disconnected',

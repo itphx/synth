@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
+import { writeFile, rename, mkdir, unlink } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ContextFileInfo, ContextFileContent, ContextCategory } from '@synth/shared';

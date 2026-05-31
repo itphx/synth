@@ -328,15 +328,17 @@ export class FileStore {
       return [];
     }
 
+    const jsonFiles = files.filter((f) => f.endsWith('.json'));
     const sessions: Session[] = [];
-    for (const file of files) {
-      if (!file.endsWith('.json')) continue;
-      const session = await this.load(file.replace('.json', ''));
+
+    // Параллельная загрузка всех файлов
+    const loaded = await Promise.all(jsonFiles.map((file) => this.load(file.replace('.json', ''))));
+
+    for (const session of loaded) {
       if (!session) continue;
       if (filter?.projectId && session.projectId !== filter.projectId) continue;
       if (filter?.search) {
         const search = filter.search.toLowerCase();
-        // Simple search in messages content
         const matchMsg = session.messages.some(
           (m) => m.content.toLowerCase().includes(search),
         );

@@ -114,11 +114,9 @@ export class ContextOptimizer {
 
     // Всегда сохраняем pinned
     const pinnedMessages = session.messages.filter((m) => m.pinned && !m.disabled);
-    const pinnedSet = new Set(pinnedMessages);
 
     // Всегда сохраняем summary-сообщения
     const summaryMessages = session.messages.filter((m) => m.role === MessageRole.SUMMARY && !m.disabled);
-    const summarySet = new Set(summaryMessages);
 
     if (mode === 'tokens') {
       const threshold = session.settings.slidingWindowTokenThreshold;

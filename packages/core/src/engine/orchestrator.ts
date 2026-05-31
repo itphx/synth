@@ -6,9 +6,8 @@ import { DebugCollector } from '../debug.js';
 import { ProviderFactory } from '../providers/base.js';
 import type { LLMMessage, CancellationToken, ProviderConfig as CoreProviderConfig } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
-import type { ContextConfig } from './context/config.js';
 import { ContextOptimizer } from './context/optimizer.js';
-import { info, warning } from '../logger.js';
+import { warning } from '../logger.js';
 
 export interface ModelPricing {
   inputPrice?: number;

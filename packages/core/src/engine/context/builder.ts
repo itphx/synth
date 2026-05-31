@@ -1,6 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Message, ProfileData, StickyNote } from '@synth/shared';
+import type { Message, StickyNote } from '@synth/shared';
 import type { ProfileStore } from '@synth/shared';
 import { ContextConfig } from './config.js';
 import { InterviewManager } from './interview.js';
@@ -104,7 +103,7 @@ export class ContextBuilder {
     if (profile) parts.push(profile);
 
     // 5. Project prompt
-    const project = this._getProjectPrompt(params.projectName);
+    const project = await this._getProjectPrompt(params.projectName);
     if (project) parts.push(project);
 
     // 6. Interview prompt
@@ -209,15 +208,14 @@ export class ContextBuilder {
     return `\n\n${content}\n`;
   }
 
-  private _getProjectPrompt(projectName: string | undefined): string | null {
+  private async _getProjectPrompt(projectName: string | undefined): Promise<string | null> {
     if (!projectName || !this._projectDataDir) return null;
 
     const infoPath = join(this._projectDataDir, projectName, 'info.md');
-
-    if (!existsSync(infoPath)) return null;
+    const { readFile } = await import('node:fs/promises');
 
     try {
-      const content = readFileSync(infoPath, 'utf-8');
+      const content = await readFile(infoPath, 'utf-8');
       this._debugAdd('project', { projectName, found: true });
       return `\n\n[ПРОЕКТ: ${projectName}]\n${content}\n`;
     } catch {
