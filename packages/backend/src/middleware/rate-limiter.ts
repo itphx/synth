@@ -2,12 +2,11 @@ import { createMiddleware } from 'hono/factory';
 
 /**
  * In-memory rate limiter.
- * Ограничивает количество запросов с одного IP за интервал.
+ * Ключ — Authorization header (уникален для каждого пользователя/ключа).
  */
 export function createRateLimiter(maxRequests = 20, windowMs = 60_000) {
   const hits = new Map<string, { count: number; resetAt: number }>();
 
-  // Периодическая очистка истёкших записей
   setInterval(() => {
     const now = Date.now();
     for (const [key, entry] of hits) {
@@ -16,7 +15,9 @@ export function createRateLimiter(maxRequests = 20, windowMs = 60_000) {
   }, windowMs);
 
   return createMiddleware(async (c, next) => {
-    const key = c.req.header('x-forwarded-for') || 'anonymous';
+    const key = c.req.header('Authorization')
+      || c.req.header('x-forwarded-for')
+      || 'anonymous';
     const now = Date.now();
 
     let entry = hits.get(key);

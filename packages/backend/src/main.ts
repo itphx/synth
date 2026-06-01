@@ -32,7 +32,6 @@ import { ProjectStore } from './storage/project-store.js';
 import { JsonStore } from './storage/json-store.js';
 import { EventHub } from './events/hub.js';
 import type { EventClient } from './events/hub.js';
-import { createRateLimiter } from './middleware/rate-limiter.js';
 
 const app = new Hono();
 
@@ -50,10 +49,6 @@ app.use(cors({
   origin: backendConfig.synth.server.corsOrigin || 'http://localhost:5002',
   credentials: true,
 }));
-
-// Rate limiting на API и auth эндпоинты
-app.use('/api/v2/*', createRateLimiter());
-app.use('/auth/*', createRateLimiter());
 
 const auth = createAuthMiddleware(backendConfig.auth);
 
@@ -73,7 +68,7 @@ const contextConfig = new ContextConfig({ userDataDir: `${dataDir}/context` });
 const profilesStore = new FileProfileStore({ dataDir });
 
 // Auth routes (после profilesStore)
-app.route('/auth', createAuthRoutes(auth, backendConfig.auth, profilesStore));
+app.route('/auth', createAuthRoutes(auth, backendConfig.auth, profilesStore, dataDir));
 
 // Сидирование тестовых пользователей (debug mode)
 if (backendConfig.auth.debugMode && backendConfig.auth.testUsers) {

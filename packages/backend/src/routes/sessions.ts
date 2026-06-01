@@ -6,6 +6,7 @@ import type { QueueProcessorManager } from '@synth/core';
 import type { ChatOrchestrator } from '@synth/core';
 import type { ContextOptimizer } from '@synth/core';
 import { MessageRole, generateStreamId, nowISO } from '@synth/shared';
+import { createRateLimiter } from '../middleware/rate-limiter.js';
 import { enqueueUserMessage, sseEventStream } from '@synth/core';
 import { serializeSession } from '../lib/serialize.js';
 import { t } from '../lib/i18n.js';
@@ -119,7 +120,7 @@ export function createSessionRoutes(
   });
 
   // POST /api/v2/sessions/:id/prompt — отправить сообщение (очередь + SSE-стрим)
-  app.post('/:id/prompt', kit.requireAuth, async (c) => {
+  app.post('/:id/prompt', kit.requireAuth, createRateLimiter(30, 60_000), async (c) => {
     const user = kit.getCurrentUser(c)!;
     const body = await c.req.json().catch(() => ({}));
     const content = body.content?.trim();

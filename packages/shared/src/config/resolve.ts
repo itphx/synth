@@ -11,6 +11,7 @@ const DATA_SUBDIRS = [
   'agents',
   'context/user',
   'context/roles',
+  'auth/avatars',
   'auth/profiles',
   'auth/sessions',
   'auth/states',

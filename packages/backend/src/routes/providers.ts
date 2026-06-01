@@ -4,6 +4,7 @@ import { JsonStore } from '../storage/json-store.js';
 import type { ProviderConfig } from '@synth/shared';
 import { ProviderFactory } from '@synth/core';
 import { t } from '../lib/i18n.js';
+import { createRateLimiter } from '../middleware/rate-limiter.js';
 
 function getFaviconUrl(baseUrl?: string): string | undefined {
   if (!baseUrl) return undefined;
@@ -118,7 +119,7 @@ export function createProviderRoutes(kit: AuthKit, store: JsonStore<ProviderConf
   });
 
   // POST /api/v2/providers/:name/test — тест подключения (admin)
-  app.post('/:name/test', kit.requireAdmin, async (c) => {
+  app.post('/:name/test', kit.requireAdmin, createRateLimiter(5, 60_000), async (c) => {
     const provider = await store.load(c.req.param('name'));
     if (!provider) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.provider', undefined, c) } }, 404);
@@ -162,7 +163,7 @@ export function createProviderRoutes(kit: AuthKit, store: JsonStore<ProviderConf
   });
 
   // POST /api/v2/providers/fetch-icon — получить favicon с домена (admin)
-  app.post('/fetch-icon', kit.requireAdmin, async (c) => {
+  app.post('/fetch-icon', kit.requireAdmin, createRateLimiter(10, 60_000), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const url = body.url?.trim();
     if (!url) {
