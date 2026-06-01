@@ -1,0 +1,64 @@
+import { describe, it, expect } from 'vitest';
+import { lookupContextWindow, KNOWN_MODEL_WINDOWS } from './model-metadata.js';
+
+describe('lookupContextWindow', () => {
+  it('находит точное совпадение по ID модели', () => {
+    const result = lookupContextWindow('gpt-4o');
+    expect(result).toEqual({ window: 128_000, source: 'reference' });
+  });
+
+  it('игнорирует регистр', () => {
+    const result = lookupContextWindow('GPT-4O');
+    expect(result).toEqual({ window: 128_000, source: 'reference' });
+  });
+
+  it('отрезает префикс провайдера (openai/gpt-4o)', () => {
+    const result = lookupContextWindow('openai/gpt-4o');
+    expect(result).toEqual({ window: 128_000, source: 'reference' });
+  });
+
+  it('отрезает двойной префикс (openrouter/openai/gpt-4o)', () => {
+    const result = lookupContextWindow('openrouter/openai/gpt-4o');
+    expect(result).toEqual({ window: 128_000, source: 'reference' });
+  });
+
+  it('отсекает суффиксы дат через :', () => {
+    const result = lookupContextWindow('gpt-4o:2024-08-06');
+    expect(result).toEqual({ window: 128_000, source: 'reference' });
+  });
+
+  it('находит по префиксу (claude-sonnet-4 → claude-sonnet-4-20250514)', () => {
+    const result = lookupContextWindow('claude-sonnet-4');
+    expect(result).toEqual({ window: 200_000, source: 'reference' });
+  });
+
+  it('возвращает unknown для неизвестной модели', () => {
+    const result = lookupContextWindow('my-fictional-model-v999');
+    expect(result).toEqual({ window: 0, source: 'unknown' });
+  });
+
+  it('находит gemini модели', () => {
+    const result = lookupContextWindow('gemini-2.5-pro');
+    expect(result.window).toBe(1_048_576);
+    expect(result.source).toBe('reference');
+  });
+
+  it('находит deepseek модели', () => {
+    const result = lookupContextWindow('deepseek-v3');
+    expect(result.window).toBe(128_000);
+  });
+
+  it('находит mistral модели', () => {
+    const result = lookupContextWindow('codestral-latest');
+    expect(result.window).toBe(256_000);
+  });
+
+  it('находит llama модели', () => {
+    const result = lookupContextWindow('llama-3.3-70b');
+    expect(result.window).toBe(128_000);
+  });
+
+  it('KNOWN_MODEL_WINDOWS содержит хотя бы 50 записей', () => {
+    expect(Object.keys(KNOWN_MODEL_WINDOWS).length).toBeGreaterThanOrEqual(50);
+  });
+});

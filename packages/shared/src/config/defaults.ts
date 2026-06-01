@@ -4,6 +4,7 @@ export const defaultConfig: SynthConfig = {
   server: {
     host: '0.0.0.0',
     port: 5000,
+    corsOrigin: 'http://localhost:5002',
   },
   storage: {
     dataDir: '/var/synth/data',

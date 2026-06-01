@@ -2,7 +2,7 @@ import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import type { Session, SessionFilter, Message, TsmState, TsmStatus, SessionSettings } from '@synth/shared';
-import { atomicWrite, generateId, safeJsonParse, AsyncLock } from '@synth/shared';
+import { atomicWrite, safeJsonParse, AsyncLock } from '@synth/shared';
 
 export interface StorageConfig {
   dataDir: string;
@@ -309,9 +309,12 @@ export class FileStore {
     const lock = this._getLock(sessionId);
     await lock.acquire();
     try {
-      await unlink(path).catch(() => {});
+      await unlink(path).catch((err) => {
+        console.warn(`[FileStore] Не удалось удалить файл сессии ${sessionId}: ${String(err)}`);
+      });
     } finally {
       lock.release();
+      this._sessionLocks.delete(sessionId);
     }
   }
 
@@ -325,15 +328,17 @@ export class FileStore {
       return [];
     }
 
+    const jsonFiles = files.filter((f) => f.endsWith('.json'));
     const sessions: Session[] = [];
-    for (const file of files) {
-      if (!file.endsWith('.json')) continue;
-      const session = await this.load(file.replace('.json', ''));
+
+    // Параллельная загрузка всех файлов
+    const loaded = await Promise.all(jsonFiles.map((file) => this.load(file.replace('.json', ''))));
+
+    for (const session of loaded) {
       if (!session) continue;
       if (filter?.projectId && session.projectId !== filter.projectId) continue;
       if (filter?.search) {
         const search = filter.search.toLowerCase();
-        // Simple search in messages content
         const matchMsg = session.messages.some(
           (m) => m.content.toLowerCase().includes(search),
         );

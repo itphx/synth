@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import { atomicWrite } from '@synth/shared';
+import { atomicWrite, AsyncLock } from '@synth/shared';
 
 export interface JsonStoreConfig {
   dataDir: string;
@@ -8,9 +8,25 @@ export interface JsonStoreConfig {
 }
 
 export class JsonStore<T> {
+  private _locks = new Map<string, AsyncLock>();
+
   constructor(private config: JsonStoreConfig) {}
 
+  private _getLock(key: string): AsyncLock {
+    if (!this._locks.has(key)) {
+      this._locks.set(key, new AsyncLock());
+    }
+    return this._locks.get(key)!;
+  }
+
+  private _validateKey(key: string): void {
+    if (key.includes('..') || key.includes('/') || key.includes('\\')) {
+      throw new Error(`Недопустимый ключ: ${key}`);
+    }
+  }
+
   private _filePath(key: string): string {
+    this._validateKey(key);
     return join(this.config.dataDir, this.config.subdir, `${key}.json`);
   }
 
@@ -29,17 +45,25 @@ export class JsonStore<T> {
 
   async save(key: string, value: T): Promise<void> {
     const path = this._filePath(key);
-    await mkdir(dirname(path), { recursive: true });
-    const data = JSON.stringify(value, null, 2);
-    await atomicWrite(
-      (p, d) => writeFile(p, d, 'utf-8'),
-      (o, n) => rename(o, n),
-      path,
-      data,
-    );
+    const lock = this._getLock(key);
+
+    await lock.acquire();
+    try {
+      await mkdir(dirname(path), { recursive: true });
+      const data = JSON.stringify(value, null, 2);
+      await atomicWrite(
+        (p, d) => writeFile(p, d, 'utf-8'),
+        (o, n) => rename(o, n),
+        path,
+        data,
+      );
+    } finally {
+      lock.release();
+    }
   }
 
   async delete(key: string): Promise<void> {
+    this._validateKey(key);
     await unlink(this._filePath(key)).catch(() => {});
   }
 

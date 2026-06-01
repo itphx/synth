@@ -11,13 +11,14 @@ const DATA_SUBDIRS = [
   'agents',
   'context/user',
   'context/roles',
+  'auth/avatars',
   'auth/profiles',
   'auth/sessions',
   'auth/states',
 ];
 
 export function resolveDataDir(config: SynthConfig, env?: NodeJS.ProcessEnv): string {
-  const envDir = env?.SYNTH_DATA_DIR || process.env.SYNTH_DATA_DIR;
+  const envDir = env !== undefined ? env.SYNTH_DATA_DIR : process.env.SYNTH_DATA_DIR;
   return envDir || config.storage.dataDir;
 }
 
@@ -27,7 +28,7 @@ export function resolvePort(
   configFallback: number,
   env?: NodeJS.ProcessEnv,
 ): number {
-  const envVal = env?.[envKey] || process.env[envKey];
+  const envVal = env !== undefined ? env[envKey] : process.env[envKey];
   if (envVal) {
     const num = parseInt(envVal, 10);
     if (!isNaN(num)) return num;

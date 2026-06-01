@@ -88,7 +88,10 @@ export async function* sseEventStream(
   });
 
   signal?.addEventListener('abort', () => {
-    unsubscribe();
+    if (resolve) {
+      resolve(null as unknown as BusEvent);
+      resolve = null;
+    }
   }, { once: true });
 
   try {
@@ -97,7 +100,9 @@ export async function* sseEventStream(
         yield events.shift()!;
       } else {
         const event = await new Promise<BusEvent>((res) => { resolve = res; });
-        yield event;
+        if (!signal?.aborted) {
+          yield event;
+        }
       }
     }
   } finally {

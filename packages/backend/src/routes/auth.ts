@@ -3,12 +3,16 @@ import type { AuthKit } from '../auth/middleware.js';
 import type { AuthConfig, User } from '@synth/shared';
 import type { ProfileStore } from '@synth/shared';
 import { setCookie } from 'hono/cookie';
+import { createRateLimiter } from '../middleware/rate-limiter.js';
 import { nowISO } from '@synth/shared';
 import { t } from '../lib/i18n.js';
 import { getDefaultLang, setDefaultLang, type Lang } from '../lib/i18n-config.js';
+import { readFile, writeFile, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
 
-export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: ProfileStore): Hono {
+export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: ProfileStore, dataDir?: string): Hono {
   const app = new Hono();
+  const avatarsDir = dataDir ? join(dataDir, 'auth', 'avatars') : null;
 
   // GET /auth/status — статус аутентификации
   app.get('/status', (c) => {
@@ -57,7 +61,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
   });
 
   // POST /auth/spa-login — SPA-логин
-  app.post('/spa-login', async (c) => {
+  app.post('/spa-login', createRateLimiter(5, 60_000), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const apiKey: string | undefined = body.api_key || body.apiKey;
 
@@ -275,6 +279,56 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
       setDefaultLang(locale as Lang);
     }
     return c.json({ status: 'ok', defaults: { ...body, locale: getDefaultLang() } });
+  });
+
+  // GET /auth/profile/avatar — отдаёт файл аватара
+  app.get('/profile/avatar', async (c) => {
+    const user = kit.getCurrentUser(c);
+    if (!user) return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
+    if (!avatarsDir) return c.body(null, 404);
+
+    const avatarPath = join(avatarsDir, `${user.username}.png`);
+    try {
+      const data = await readFile(avatarPath);
+      return new Response(data, {
+        headers: { 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=3600' },
+      });
+    } catch {
+      return c.body(null, 404);
+    }
+  });
+
+  // POST /auth/profile/avatar — сохраняет аватар (binary)
+  app.post('/profile/avatar', async (c) => {
+    const user = kit.getCurrentUser(c);
+    if (!user) return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
+    if (!avatarsDir) return c.json({ error: { code: 'INTERNAL_ERROR' } }, 500);
+
+    try {
+      const buffer = await c.req.arrayBuffer();
+      if (buffer.byteLength === 0) {
+        // Удаление аватара
+        await unlink(join(avatarsDir, `${user.username}.png`)).catch(() => {});
+        if (profiles) {
+          const profile = await profiles.getOrCreateProfile({ username: user.username, roles: user.roles });
+          const prefs = { ...(profile.preferences as Record<string, unknown> || {}), avatar: '' };
+          profile.preferences = prefs;
+          await profiles.saveProfile(profile);
+        }
+        return c.json({ status: 'ok' });
+      }
+      const avatarPath = join(avatarsDir, `${user.username}.png`);
+      await writeFile(avatarPath, Buffer.from(buffer));
+      if (profiles) {
+        const profile = await profiles.getOrCreateProfile({ username: user.username, roles: user.roles });
+        const prefs = { ...(profile.preferences as Record<string, unknown> || {}), avatar: true };
+        profile.preferences = prefs;
+        await profiles.saveProfile(profile);
+      }
+      return c.json({ status: 'ok' });
+    } catch (err) {
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: String(err) } }, 500);
+    }
   });
 
   return app;

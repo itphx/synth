@@ -5,6 +5,7 @@ import type { ModelConfig, ProviderConfig, ContextSource } from '@synth/shared';
 import { lookupContextWindow } from '@synth/shared';
 import { ProviderFactory } from '@synth/core';
 import { t } from '../lib/i18n.js';
+import { createRateLimiter } from '../middleware/rate-limiter.js';
 
 interface ModelGroupResponse {
   provider: {
@@ -154,7 +155,7 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
   });
 
   // POST /api/v2/models/fetch — синхронизировать модели с провайдеров (admin)
-  app.post('/fetch', kit.requireAdmin, async (c) => {
+  app.post('/fetch', kit.requireAdmin, createRateLimiter(3, 120_000), async (c) => {
     const providerFilter = c.req.query('provider');
     const providers = await providerStore.list();
     const enabledProviders = providers.filter((p) =>

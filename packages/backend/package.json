@@ -9,7 +9,8 @@
     "build": "tsc && mkdir -p dist/agents && cp -r src/agents/definitions dist/agents/definitions",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
-    "test": "echo 'no tests yet'",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "clean": "rm -rf dist"
   },
   "dependencies": {
@@ -17,6 +18,7 @@
     "@synth/core": "workspace:*",
     "@synth/shared": "workspace:*",
     "hono": "^4.9.0",
+    "hono-rate-limiter": "^0.5.3",
     "ws": "^8.20.1",
     "zod": "^3.24.0"
   },

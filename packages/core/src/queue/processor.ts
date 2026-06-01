@@ -238,7 +238,9 @@ export class QueueProcessor {
         delete this._retryDelays[streamId];
       } catch (err) {
         // Непредвиденная ошибка — чистим и выходим
-        await this.sessionManager.forceReleaseLock(this.sessionId).catch(() => {});
+        await this.sessionManager.forceReleaseLock(this.sessionId).catch((err) => {
+          console.warn(`[QueueProcessor] Не удалось снять блокировку ${this.sessionId}: ${String(err)}`);
+        });
         this.eventBus.publish(this.sessionId, 'stream.error', {
           stream_id: streamId,
           error: String(err),
@@ -328,7 +330,9 @@ export class QueueProcessorManager {
     const processor = new QueueProcessor(sessionId, sessionManager, eventBus, processMessage, this._contextOptimizer);
     this._processors.set(sessionId, processor);
 
-    processor.start().catch(() => {});
+    processor.start().catch((err) => {
+      console.error(`[QueueProcessorManager] Ошибка старта процессора ${sessionId}: ${String(err)}`);
+    });
 
     return processor;
   }

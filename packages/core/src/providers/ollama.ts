@@ -76,7 +76,6 @@ export class OllamaProvider extends BaseProvider {
     const headers = { 'Content-Type': 'application/json' };
     debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
 
-    let accumulatedContent = '';
     let accumulatedReasoning = '';
     const accumulatedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     const accumulatedToolCalls: Record<string, unknown>[] = [];
@@ -129,7 +128,6 @@ export class OllamaProvider extends BaseProvider {
               const msg = chunkData.message as Record<string, unknown> | undefined;
 
               if (msg?.content && typeof msg.content === 'string') {
-                accumulatedContent += msg.content;
                 const hasReasoning = !!accumulatedReasoning;
                 yield {
                   content: msg.content,
