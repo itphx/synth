@@ -269,11 +269,12 @@ export const dict = {
   'statusBar.hideHistory': 'Hide history',
 
   // Chat
-  'chat.input.placeholder': 'Type a message...',
+  'chat.input.placeholder': 'Type a message... Use @ to mention an agent',
   'chat.input.send': 'Send',
   'chat.input.createNote': 'Create note',
   'chat.input.stop': 'Stop',
   'chat.input.mentionHint': 'Mention an agent with @',
+  'chat.input.enqueue': 'Enqueue',
 
   'chat.actions.copy': 'Copy',
   'chat.actions.toggleOff': 'Disable',
@@ -311,7 +312,7 @@ export const dict = {
 
   'chat.subagent.title': 'Subagent',
 
-  'chat.queue.stalled': 'Queue stalled: {count} messages',
+  'chat.queue.stalled': 'Processing stopped: {count} messages',
   'chat.queue.pending': 'In queue: {count}',
   'chat.queue.resume': 'Resume',
   'chat.queue.clear': 'Clear',

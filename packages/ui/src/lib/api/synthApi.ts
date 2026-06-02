@@ -431,8 +431,10 @@ export const synthApi = {
     })
   },
 
-  async returnQueue(sessionId: string): Promise<{ texts: string[] }> {
-    return fetchJSON(`${BASE_URL}/queue/${encodeURIComponent(sessionId)}/return`, {
+  async returnQueue(sessionId: string, index?: number): Promise<{ texts: string[] }> {
+    const base = `${BASE_URL}/queue/${encodeURIComponent(sessionId)}/return`
+    const url = index !== undefined ? `${base}?index=${index}` : base
+    return fetchJSON(url, {
       method: 'POST',
     })
   },

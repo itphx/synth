@@ -268,11 +268,12 @@ export const dict = {
   'statusBar.hideHistory': 'Скрыть историю',
 
   // Chat
-  'chat.input.placeholder': 'Введите сообщение...',
+  'chat.input.placeholder': 'Введите сообщение... Используйте @ для обращения к агенту',
   'chat.input.send': 'Отправить',
   'chat.input.createNote': 'Создать заметку',
   'chat.input.stop': 'Стоп',
   'chat.input.mentionHint': 'Упомяните агента через @',
+  'chat.input.enqueue': 'Добавить в очередь',
 
   'chat.actions.copy': 'Копировать',
   'chat.actions.toggleOff': 'Выключить',
@@ -310,7 +311,7 @@ export const dict = {
 
   'chat.subagent.title': 'Сабагент',
 
-  'chat.queue.stalled': 'Очередь зависла: {count} сообщ.',
+  'chat.queue.stalled': 'Обработка остановлена: {count} сообщ.',
   'chat.queue.pending': 'В очереди: {count}',
   'chat.queue.resume': 'Продолжить',
   'chat.queue.clear': 'Очистить',

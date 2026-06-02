@@ -9,7 +9,8 @@ interface QueuePanelProps {
   pendingCount: number
   onResume: () => void
   onClear: () => void
-  onReturn: () => void
+  onReturnAll: () => void
+  onReturnMsg: (index: number) => void
 }
 
 export function QueuePanel({
@@ -18,7 +19,8 @@ export function QueuePanel({
   pendingCount,
   onResume,
   onClear,
-  onReturn,
+  onReturnAll,
+  onReturnMsg,
 }: QueuePanelProps) {
   const { t } = useI18n()
   const [collapsed, setCollapsed] = useState(!isStalled)
@@ -64,7 +66,7 @@ export function QueuePanel({
             </button>
           )}
           <button
-            onClick={onReturn}
+            onClick={onReturnAll}
             className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
           >
             {t('chat.queue.return')}
@@ -97,7 +99,7 @@ export function QueuePanel({
               </span>
               <div className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
-                  onClick={onReturn}
+                  onClick={() => onReturnMsg(i)}
                   className="text-muted-foreground hover:text-foreground px-1"
                   title={t('chat.queue.return')}
                 >

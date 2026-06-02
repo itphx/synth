@@ -46,9 +46,22 @@ function createDispatcher(): EventDispatcher {
       addStickyNote,
       updateStickyNote,
       deleteStickyNote,
+      updateQueueCount,
+      addPendingMessage,
+      removeFirstPending,
     } = useChatStore.getState()
 
     switch (type) {
+      case 'message_queued':
+      case 'message.queued': {
+        const content = (payload.message as string) || ''
+        const agentRole = payload.agent_role as string | undefined
+        const pendingCount = (payload.pending_count as number) || 1
+        addPendingMessage(sid, { content, agentRole: agentRole || null })
+        updateQueueCount(sid, pendingCount)
+        break
+      }
+
       case 'message_added':
       case 'message.added': {
         const msg: MessageData = {
@@ -59,6 +72,7 @@ function createDispatcher(): EventDispatcher {
           author: payload.author as string | undefined,
           model: payload.model as string | undefined,
           provider: payload.provider as string | undefined,
+          reasoning: (payload.reasoning as string) || undefined,
           disabled: false,
           pinned: false,
           hidden: false,
@@ -74,7 +88,6 @@ function createDispatcher(): EventDispatcher {
         const metadata = payload.metadata as Record<string, unknown> | undefined
         startStream(sid, payload.stream_id as string, agentRole, payload.model as string | undefined, payload.provider as string | undefined)
         if (metadata?.type === 'summary') {
-          // Установить agentRole как summary для корректного рендеринга
           const s = useChatStore.getState()
           const sessionStreams = { ...(s.streamingBySession[sid] || {}) }
           const streamId = payload.stream_id as string
@@ -82,6 +95,17 @@ function createDispatcher(): EventDispatcher {
             sessionStreams[streamId] = { ...sessionStreams[streamId]!, agentRole: 'summary' }
             useChatStore.setState({ streamingBySession: { ...s.streamingBySession, [sid]: sessionStreams } })
           }
+        }
+
+        const qs = useChatStore.getState().queueBySession[sid]
+        if (qs && qs.pendingCount > 0) {
+          removeFirstPending(sid)
+          useChatStore.setState((s) => ({
+            queueBySession: {
+              ...s.queueBySession,
+              [sid]: { ...qs, isStalled: false },
+            },
+          }))
         }
         break
       }
@@ -121,8 +145,12 @@ function createDispatcher(): EventDispatcher {
           metadata: payload.metadata as { type?: string; indices?: number[] } | undefined,
         }
         finishStream(sid, payload.stream_id as string, metadata)
-        if ((payload.pending_count as number) && (payload.pending_count as number) > 0) {
-          setQueueStalled(sid, payload.pending_count as number)
+
+        const pendingCount = payload.pending_count as number | undefined
+        if (pendingCount !== undefined && pendingCount > 0) {
+          updateQueueCount(sid, pendingCount)
+        } else if (pendingCount === 0) {
+          useChatStore.getState().clearQueueState(sid)
         }
         break
       }
@@ -158,7 +186,12 @@ function createDispatcher(): EventDispatcher {
       case 'permission.asked': {
         const pendingCount = (payload.pending_count as number) || 0
         if (pendingCount > 0) {
-          setQueueStalled(sid, pendingCount)
+          const hasStream = Object.values(useChatStore.getState().streamingBySession[sid] || {}).some((s) => s.isStreaming)
+          if (!hasStream) {
+            setQueueStalled(sid, pendingCount)
+          } else {
+            updateQueueCount(sid, pendingCount)
+          }
         }
         break
       }

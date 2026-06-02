@@ -93,6 +93,10 @@ interface ChatStore {
   setPendingMessages: (sessionId: string, pending: QueuedMessage[]) => void
   setQueueStalled: (sessionId: string, pendingCount: number) => void
   clearQueueState: (sessionId: string) => void
+  resetQueueStalled: (sessionId: string) => void
+  updateQueueCount: (sessionId: string, pendingCount: number) => void
+  addPendingMessage: (sessionId: string, msg: QueuedMessage) => void
+  removeFirstPending: (sessionId: string) => void
   clearSession: (sessionId: string) => void
   setStickyNotes: (sessionId: string, notes: StickyNoteData[]) => void
   addStickyNote: (sessionId: string, note: StickyNoteData) => void
@@ -285,9 +289,47 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   clearQueueState: (sessionId) =>
     set((s) => {
-      const next = { ...s.queueBySession }
-      delete next[sessionId]
-      return { queueBySession: next }
+      const queueBySession = { ...s.queueBySession }
+      delete queueBySession[sessionId]
+      const pendingBySession = { ...s.pendingBySession }
+      delete pendingBySession[sessionId]
+      return { queueBySession, pendingBySession }
+    }),
+
+  resetQueueStalled: (sessionId) =>
+    set((s) => {
+      const prev = s.queueBySession[sessionId]
+      if (!prev) return s
+      return {
+        queueBySession: {
+          ...s.queueBySession,
+          [sessionId]: { ...prev, isStalled: false },
+        },
+      }
+    }),
+
+  updateQueueCount: (sessionId, pendingCount) =>
+    set((s) => {
+      const prev = s.queueBySession[sessionId]
+      return {
+        queueBySession: {
+          ...s.queueBySession,
+          [sessionId]: { pendingCount, isStalled: prev?.isStalled ?? false },
+        },
+      }
+    }),
+
+  addPendingMessage: (sessionId, msg) =>
+    set((s) => {
+      const pending = [...(s.pendingBySession[sessionId] || []), msg]
+      return { pendingBySession: { ...s.pendingBySession, [sessionId]: pending } }
+    }),
+
+  removeFirstPending: (sessionId) =>
+    set((s) => {
+      const pending = [...(s.pendingBySession[sessionId] || [])]
+      pending.shift()
+      return { pendingBySession: { ...s.pendingBySession, [sessionId]: pending } }
     }),
 
   clearSession: (sessionId) =>

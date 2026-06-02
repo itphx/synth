@@ -1,4 +1,4 @@
-import { cn } from '@/lib/utils'
+import { cn, resolveColor } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useProvidersStore } from '@/stores/providersStore'
@@ -11,14 +11,6 @@ import type { StreamState } from '@/stores/chatStore'
 interface StreamingPlaceholderProps {
   stream: StreamState
   onStop: () => void
-}
-
-function resolveColor(cssVar: string | null): string | undefined {
-  if (!cssVar) return undefined
-  if (cssVar.startsWith('--')) {
-    return `var(${cssVar})`
-  }
-  return cssVar
 }
 
 export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderProps) {
