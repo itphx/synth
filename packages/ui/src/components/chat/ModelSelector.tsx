@@ -29,6 +29,7 @@ export function ModelSelector({ compact = false, sessionId }: { compact?: boolea
     loadProviders,
     loadModels,
     loading,
+    error,
   } = useProvidersStore()
   const { t } = useI18n()
   const [searchQuery, setSearchQuery] = useState('')
@@ -42,7 +43,7 @@ export function ModelSelector({ compact = false, sessionId }: { compact?: boolea
     if (providers.length === 0 || models.length === 0) {
       Promise.all([loadProviders(), loadModels()])
     }
-  }, [])
+  }, [providers.length, models.length])
 
   const handleRefresh = () => {
     Promise.all([loadProviders(), loadModels()])
@@ -219,7 +220,11 @@ export function ModelSelector({ compact = false, sessionId }: { compact?: boolea
     }
 
     if (items.length === 0) {
-      items.push({ type: 'empty', text: t('chat.modelControls.noModelsFound'), id: 'empty' })
+      if (error && providers.length === 0 && models.length === 0) {
+        items.push({ type: 'empty', text: error, id: 'error' })
+      } else {
+        items.push({ type: 'empty', text: t('chat.modelControls.noModelsFound'), id: 'empty' })
+      }
     }
 
     return items

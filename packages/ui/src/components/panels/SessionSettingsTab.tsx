@@ -49,7 +49,7 @@ export function SessionSettingsTab() {
   }, [sessionId])
 
   useEffect(() => {
-    if (session && !selectedProviderName && session.settings) {
+    if (session && session.settings) {
       const sp = session.settings.provider as string | undefined
       const sm = session.settings.model as string | undefined
       if (sp) setSelectedProvider(sp)

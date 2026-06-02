@@ -147,10 +147,11 @@ export function MessageList({
             ))
           )}
 
+        </div>
+
           {streamEntries.map((stream) => (
             <StreamingPlaceholder key={stream.streamId} stream={stream} onStop={onStop} />
           ))}
-        </div>
       </ScrollableOverlay>
 
       <ScrollToBottomButton visible={showScrollBtn} onClick={() => scrollToBottom()} />

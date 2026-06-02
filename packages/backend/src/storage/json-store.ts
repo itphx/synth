@@ -20,7 +20,7 @@ export class JsonStore<T> {
   }
 
   private _validateKey(key: string): void {
-    if (key.includes('..') || key.includes('/') || key.includes('\\')) {
+    if (key.includes('..') || key.includes('\\')) {
       throw new Error(`Недопустимый ключ: ${key}`);
     }
   }
