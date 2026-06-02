@@ -6,14 +6,18 @@ import { cn } from "@/lib/utils"
 import { AppearanceSettings } from "./AppearanceSettings"
 import { ProfileSettings } from "./ProfileSettings"
 import { NotificationSettings } from "./NotificationSettings"
+import { ProvidersPanel } from "../admin/ProvidersPanel"
+import { ModelsPanel } from "../admin/ModelsPanel"
+import { AgentsPanel } from "../admin/AgentsPanel"
 
 const CATEGORIES = [
-  { id: "profile", labelKey: "settings.category.profile" as const, icon: "user" },
+  { id: "profile", labelKey: "settings.category.profile" as const, icon: "user-smile" },
   { id: "appearance", labelKey: "settings.category.appearance" as const, icon: "palette" },
   { id: "notifications", labelKey: "settings.category.notifications" as const, icon: "alert" },
-  { id: "chat", labelKey: "settings.category.chat" as const, icon: "chat" },
+  { id: "chat", labelKey: "settings.category.chat" as const, icon: "chat-new" },
   { id: "providers", labelKey: "settings.category.providers" as const, icon: "server" },
-  { id: "agents", labelKey: "settings.category.agents" as const, icon: "bot" },
+  { id: "models", labelKey: "settings.category.models" as const, icon: "cpu" },
+  { id: "agents", labelKey: "settings.category.agents" as const, icon: "robot-2" },
 ]
 
 export const SettingsModal = () => {
@@ -23,7 +27,7 @@ export const SettingsModal = () => {
   return (
     <Dialog open={isSettingsDialogOpen} onOpenChange={setSettingsDialogOpen}>
       <DialogContent
-        className="p-0 gap-0 max-w-3xl w-[90vw] h-[85vh] max-h-[85vh]"
+        className="p-0 gap-0 max-w-5xl w-[95vw] h-[90vh] max-h-[90vh]"
         showCloseButton={false}
       >
         <div className="flex h-full overflow-hidden">
@@ -57,6 +61,14 @@ export const SettingsModal = () => {
             {settingsPage === "profile" && <ProfileSettings />}
             {settingsPage === "appearance" && <AppearanceSettings />}
             {settingsPage === "notifications" && <NotificationSettings />}
+            {settingsPage === "chat" && (
+              <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+                {t("settings.category.chat")}
+              </div>
+            )}
+            {settingsPage === "providers" && <ProvidersPanel />}
+            {settingsPage === "models" && <ModelsPanel />}
+            {settingsPage === "agents" && <AgentsPanel />}
           </div>
         </div>
       </DialogContent>

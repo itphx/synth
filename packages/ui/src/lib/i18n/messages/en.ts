@@ -85,6 +85,7 @@ export const dict = {
   'settings.category.appearance': 'Appearance',
   'settings.category.chat': 'Chat',
   'settings.category.providers': 'Providers',
+  'settings.category.models': 'Models',
   'settings.category.agents': 'Agents',
   'settings.category.notifications': 'Notifications',
 
@@ -360,7 +361,7 @@ export const dict = {
   'transport.sseDesc': 'SSE only',
 
   // Session settings
-  'sessionSettings.provider': 'Provider',
+  'sessionSettings.providerModel': 'Provider & Model',
   'sessionSettings.model': 'Model',
   'sessionSettings.debug': 'Debug',
   'sessionSettings.debugOn': 'On',
