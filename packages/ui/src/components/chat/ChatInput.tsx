@@ -12,8 +12,9 @@ interface ChatInputProps {
   sessionId: string
   agents: AgentInfo[]
   isStreaming: boolean
-  onSend: (text: string, agentRole?: string) => void
+  onSend: (text: string, agentRole?: string) => Promise<void>
   onStop: () => void
+  onStopQueue?: () => void
   onCreateNote: (text: string) => void
 }
 
@@ -113,6 +114,7 @@ export function ChatInput({
   isStreaming,
   onSend,
   onStop,
+  onStopQueue,
   onCreateNote,
 }: ChatInputProps) {
   const { t } = useI18n()
@@ -203,9 +205,14 @@ export function ChatInput({
     }
   }
 
-  const handleSend = () => {
+  const handleSend = useCallback(async () => {
     const text = value.trim()
-    if (!text || isStreaming) return
+    if (!text) return
+
+    setValue('')
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+    }
 
     const parts = splitMessageWithTags(text, agents)
 
@@ -216,18 +223,39 @@ export function ChatInput({
     }
 
     if (!parts) {
-      onSend(text)
+      await onSend(text)
     } else {
       for (const part of parts) {
-        onSend(part.text, part.agentRole)
+        await onSend(part.text, part.agentRole)
       }
     }
+  }, [value, agents, onSend])
+
+  const handleEnqueue = useCallback(async () => {
+    const text = value.trim()
+    if (!text) return
 
     setValue('')
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
-  }
+
+    const parts = splitMessageWithTags(text, agents)
+
+    if (parts && parts.length > MAX_TAGS) {
+      void window.confirm(
+        `Слишком много тегов (${parts.length}). Максимум: ${MAX_TAGS}. Отправить все равно?`
+      )
+    }
+
+    if (!parts) {
+      await onSend(text)
+    } else {
+      for (const part of parts) {
+        await onSend(part.text, part.agentRole)
+      }
+    }
+  }, [value, agents, onSend])
 
   const handleCreateNote = () => {
     const text = value.trim()
@@ -252,9 +280,20 @@ export function ChatInput({
       return
     }
 
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      onStop()
+      onStopQueue?.()
+      return
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handleSend()
+      if (isStreaming) {
+        handleEnqueue()
+      } else {
+        handleSend()
+      }
     }
   }
 
@@ -310,13 +349,23 @@ export function ChatInput({
             <AgentModeSelector sessionId={sessionId} />
 
             {isStreaming ? (
-              <button
-                onClick={onStop}
-                className="rounded-lg p-1.5 text-destructive hover:bg-destructive/10 transition-colors"
-                title={t('chat.input.stop')}
-              >
-                <Icon name="stop" className="size-5" />
-              </button>
+              <div className="flex items-center gap-0.5">
+                <button
+                  onClick={handleEnqueue}
+                  disabled={!value.trim()}
+                  className="rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  title={t('chat.input.enqueue')}
+                >
+                  <Icon name="arrow-up" className="size-5" />
+                </button>
+                <button
+                  onClick={onStop}
+                  className="rounded-lg p-1.5 text-destructive hover:bg-destructive/10 transition-colors"
+                  title={t('chat.input.stop')}
+                >
+                  <Icon name="stop" className="size-5" />
+                </button>
+              </div>
             ) : (
               <>
               <div className="flex items-center gap-0.5">

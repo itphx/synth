@@ -274,6 +274,7 @@ export const dict = {
   'chat.input.createNote': 'Create note',
   'chat.input.stop': 'Stop',
   'chat.input.mentionHint': 'Mention an agent with @',
+  'chat.input.enqueue': 'Enqueue',
 
   'chat.actions.copy': 'Copy',
   'chat.actions.toggleOff': 'Disable',

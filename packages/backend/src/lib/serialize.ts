@@ -11,6 +11,14 @@ export function serializeSession(session: Session) {
     messages: session.messages.map((m, i) => serializeMessage(m, i)),
     pending_messages: session.pendingMessages.map((m, i) => serializeMessage(m, i)),
     pending_count: session.pendingMessages.length,
+    current_stream: session.currentStream
+      ? {
+          stream_id: session.currentStream.streamId,
+          message: session.currentStream.message,
+          agent_role: session.currentStream.agentRole || null,
+          cancelled: session.currentStream.cancelled,
+        }
+      : null,
     status: {
       state: session.status.state,
       blocked: session.status.blocked || null,

@@ -273,6 +273,7 @@ export const dict = {
   'chat.input.createNote': 'Создать заметку',
   'chat.input.stop': 'Стоп',
   'chat.input.mentionHint': 'Упомяните агента через @',
+  'chat.input.enqueue': 'Добавить в очередь',
 
   'chat.actions.copy': 'Копировать',
   'chat.actions.toggleOff': 'Выключить',
