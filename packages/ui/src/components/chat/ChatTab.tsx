@@ -9,9 +9,8 @@ import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
 import { useNotification } from '@/hooks/useNotification'
 import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
-import { QueueBanner } from './QueueBanner'
 import { DebugModal } from './DebugModal'
-import { QueueChips } from './QueueChips'
+import { QueuePanel } from './QueuePanel'
 import { StickyNotesPanel } from './StickyNotesPanel'
 import type { CenterTab } from '@/stores/useUIStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -313,15 +312,6 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-background w-full">
-      {queue && queue.isStalled && queue.pendingCount > 0 && (
-        <QueueBanner
-          pendingCount={queue.pendingCount}
-          onResume={handleResumeQueue}
-          onClear={handleClearQueue}
-          onReturn={handleReturnQueue}
-        />
-      )}
-
       {summarizationPending && (
         <div className="flex items-center gap-2 px-4 py-2 bg-yellow-500/10 border-b border-yellow-500/20">
           <span className="text-xs text-yellow-600 dark:text-yellow-400 flex-1">
@@ -376,6 +366,15 @@ export function ChatTab({ tab }: ChatTabProps) {
         onStop={handleStop}
       />
 
+      <QueuePanel
+        pending={pending}
+        isStalled={queue?.isStalled ?? false}
+        pendingCount={queue?.pendingCount ?? 0}
+        onResume={handleResumeQueue}
+        onClear={handleClearQueue}
+        onReturn={handleReturnQueue}
+      />
+
       <ChatInput
         sessionId={sessionId}
         agents={agentsRef.current}
@@ -384,14 +383,6 @@ export function ChatTab({ tab }: ChatTabProps) {
         onStop={handleStop}
         onCreateNote={handleCreateNote}
       />
-
-      {pending.length > 0 && (
-        <QueueChips
-          pending={pending}
-          onClear={handleClearQueue}
-          onReturn={handleReturnQueue}
-        />
-      )}
 
       {debugMessage?.debug_data && Object.keys(debugMessage.debug_data).length > 0 && (
         <DebugModal

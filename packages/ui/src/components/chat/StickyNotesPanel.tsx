@@ -27,7 +27,7 @@ export function StickyNotesPanel({ notes, onUpdate, onToggle, onDelete }: Sticky
             className="size-3"
           />
           <Icon name="pushpin" className="size-3.5 text-amber-600/70 dark:text-amber-400/70" />
-          <span>Заметки ({activeNotes.length})</span>
+          <span>Заметки: {activeNotes.length}</span>
         </button>
       </div>
 
@@ -86,7 +86,7 @@ function StickyNoteItem({
       className={`flex items-start gap-1.5 rounded px-2 py-1 text-xs group ${
         note.disabled
           ? 'opacity-40'
-          : 'bg-interactive/50'
+          : 'bg-muted/30 border border-border/20'
       }`}
     >
       {editing ? (
