@@ -268,7 +268,7 @@ export const dict = {
   'statusBar.hideHistory': 'Скрыть историю',
 
   // Chat
-  'chat.input.placeholder': 'Введите сообщение...',
+  'chat.input.placeholder': 'Введите сообщение... Используйте @ для обращения к агенту',
   'chat.input.send': 'Отправить',
   'chat.input.createNote': 'Создать заметку',
   'chat.input.stop': 'Стоп',

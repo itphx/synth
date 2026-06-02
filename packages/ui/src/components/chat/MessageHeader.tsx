@@ -5,17 +5,10 @@ import { useAuthStore } from '@/stores/authStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { ProviderIcon } from '@/components/admin/ProviderIcon'
+import { resolveColor } from '@/lib/utils'
 
 interface MessageHeaderProps {
   message: MessageData
-}
-
-function resolveColor(cssVar: string | null): string | undefined {
-  if (!cssVar) return undefined
-  if (cssVar.startsWith('--')) {
-    return `var(${cssVar})`
-  }
-  return cssVar
 }
 
 function resolveAuthor(): string {

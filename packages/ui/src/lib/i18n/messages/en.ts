@@ -269,7 +269,7 @@ export const dict = {
   'statusBar.hideHistory': 'Hide history',
 
   // Chat
-  'chat.input.placeholder': 'Type a message...',
+  'chat.input.placeholder': 'Type a message... Use @ to mention an agent',
   'chat.input.send': 'Send',
   'chat.input.createNote': 'Create note',
   'chat.input.stop': 'Stop',

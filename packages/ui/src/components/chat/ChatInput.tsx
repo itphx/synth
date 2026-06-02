@@ -17,14 +17,104 @@ interface ChatInputProps {
   onCreateNote: (text: string) => void
 }
 
-interface ParsedMessage {
+interface TagPart {
   text: string
-  agentRole?: string
+  agentRole: string
 }
 
+const TAG_REGEX = /@(\w+)/g
+const MAX_TAGS = 3
 const CHAT_INPUT_RADIUS = 'var(--radius-xl)'
 
-export function ChatInput({ sessionId, agents, isStreaming, onSend, onStop, onCreateNote }: ChatInputProps) {
+function splitMessageWithTags(message: string, agents: AgentInfo[]): TagPart[] | null {
+  const tagsWithPositions: { tag: string; start: number; end: number }[] = []
+  let match: RegExpExecArray | null
+
+  while ((match = TAG_REGEX.exec(message)) !== null) {
+    tagsWithPositions.push({
+      tag: match[1],
+      start: match.index,
+      end: match.index + match[0].length,
+    })
+  }
+
+  if (tagsWithPositions.length === 0) {
+    return null
+  }
+
+  const firstTag = tagsWithPositions[0]
+  const commonPrefix =
+    firstTag.start > 0 ? message.substring(0, firstTag.start).trim() : ''
+
+  const parts: TagPart[] = []
+  let i = 0
+
+  while (i < tagsWithPositions.length) {
+    const currentTag = tagsWithPositions[i]
+
+    if (i + 1 < tagsWithPositions.length) {
+      const textBetween = message
+        .substring(currentTag.end, tagsWithPositions[i + 1].start)
+        .trim()
+
+      if (textBetween === '') {
+        let groupEnd = i + 1
+        while (groupEnd + 1 < tagsWithPositions.length) {
+          const afterGroup = message
+            .substring(tagsWithPositions[groupEnd].end, tagsWithPositions[groupEnd + 1].start)
+            .trim()
+          if (afterGroup === '') {
+            groupEnd++
+          } else {
+            break
+          }
+        }
+
+        const segmentText = message
+          .substring(tagsWithPositions[groupEnd].end)
+          .trim()
+
+        for (let k = i; k <= groupEnd; k++) {
+          const agent = agents.find((a) => a.id === tagsWithPositions[k].tag && a.enabled)
+          if (agent) {
+            const fullMessage = commonPrefix
+              ? `${commonPrefix} ${segmentText}`
+              : segmentText
+            parts.push({ text: fullMessage, agentRole: tagsWithPositions[k].tag })
+          }
+        }
+        i = groupEnd + 1
+        continue
+      }
+    }
+
+    const segmentEnd =
+      i + 1 < tagsWithPositions.length ? tagsWithPositions[i + 1].start : message.length
+
+    const segmentText = message.substring(currentTag.end, segmentEnd).trim()
+    const agent = agents.find((a) => a.id === currentTag.tag && a.enabled)
+
+    if (agent) {
+      const fullMessage = commonPrefix
+        ? `${commonPrefix} ${segmentText}`
+        : segmentText
+      parts.push({ text: fullMessage, agentRole: currentTag.tag })
+    }
+
+    i++
+  }
+
+  return parts.length > 0 ? parts : null
+}
+
+export function ChatInput({
+  sessionId,
+  agents,
+  isStreaming,
+  onSend,
+  onStop,
+  onCreateNote,
+}: ChatInputProps) {
   const { t } = useI18n()
   const [value, setValue] = useState('')
   const retryText = useChatStore((s) => s.retryInputBySession[sessionId])
@@ -54,34 +144,6 @@ export function ChatInput({ sessionId, agents, isStreaming, onSend, onStop, onCr
       setTimeout(() => textareaRef.current?.focus(), 0)
     }
   }, [retryText, sessionId])
-
-  const parseMentions = (text: string): ParsedMessage[] => {
-    const parts: ParsedMessage[] = []
-    const regex = /@(\S+)/g
-    let match: RegExpExecArray | null
-
-    while ((match = regex.exec(text)) !== null) {
-      if (match.index > 0) {
-        const before = text.slice(0, match.index).trim()
-        if (before) parts.push({ text: before })
-      }
-      const agentId = match[1]
-      const agent = agents.find((a) => a.id === agentId && a.enabled)
-      const remainingText = text.slice(match.index + match[0].length).trim()
-      if (agent) {
-        parts.push({ text: remainingText, agentRole: agent.id })
-      } else {
-        parts.push({ text: `@${agentId} ${remainingText}` })
-      }
-      break
-    }
-
-    if (parts.length === 0) {
-      parts.push({ text: text.trim() })
-    }
-
-    return parts.filter((p) => p.text)
-  }
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value
@@ -117,15 +179,45 @@ export function ChatInput({ sessionId, agents, isStreaming, onSend, onStop, onCr
     textareaRef.current.focus()
   }
 
+  const handleMouseUp = () => {
+    const el = textareaRef.current
+    if (!el || mentionState) return
+    const cursorPos = el.selectionStart
+
+    let match: RegExpExecArray | null
+    while ((match = TAG_REGEX.exec(value)) !== null) {
+      if (cursorPos >= match.index && cursorPos <= match.index + match[0].length) {
+        const tagName = match[1]
+        const agent = agents.find((a) => a.id === tagName && a.enabled)
+        if (agent) {
+          const rect = el.getBoundingClientRect()
+          setMentionState({
+            query: tagName,
+            start: match.index,
+            end: match.index + match[0].length,
+            position: { top: rect.height + 8, left: 0 },
+          })
+        }
+        return
+      }
+    }
+  }
+
   const handleSend = () => {
     const text = value.trim()
     if (!text || isStreaming) return
 
-    const parts = parseMentions(text)
+    const parts = splitMessageWithTags(text, agents)
 
-    if (parts.length === 1) {
-      onSend(parts[0].text, parts[0].agentRole)
-    } else if (parts.length > 1) {
+    if (parts && parts.length > MAX_TAGS) {
+      void window.confirm(
+        `Слишком много тегов (${parts.length}). Максимум: ${MAX_TAGS}. Отправить все равно?`
+      )
+    }
+
+    if (!parts) {
+      onSend(text)
+    } else {
       for (const part of parts) {
         onSend(part.text, part.agentRole)
       }
@@ -148,12 +240,21 @@ export function ChatInput({ sessionId, agents, isStreaming, onSend, onStop, onCr
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (mentionState) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        return
+      }
+      if (e.key === 'Escape') {
+        setMentionState(null)
+        return
+      }
+      return
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
-    }
-    if (e.key === 'Escape' && mentionState) {
-      setMentionState(null)
     }
   }
 
@@ -176,6 +277,7 @@ export function ChatInput({ sessionId, agents, isStreaming, onSend, onStop, onCr
             value={value}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
+            onMouseUp={handleMouseUp}
           />
           <OverlayScrollbar
             containerRef={textareaRef as React.RefObject<HTMLElement>}

@@ -3,16 +3,9 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
+import { resolveColor } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { ScrollableOverlay } from '../ui/ScrollableOverlay'
-
-function resolveColor(cssVar: string | null): string | undefined {
-  if (!cssVar) return undefined
-  if (cssVar.startsWith('--')) {
-    return `var(${cssVar})`
-  }
-  return cssVar
-}
 
 interface AgentModeSelectorProps {
   sessionId: string
