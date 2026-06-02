@@ -311,7 +311,7 @@ export const dict = {
 
   'chat.subagent.title': 'Сабагент',
 
-  'chat.queue.stalled': 'Очередь зависла: {count} сообщ.',
+  'chat.queue.stalled': 'Обработка остановлена: {count} сообщ.',
   'chat.queue.pending': 'В очереди: {count}',
   'chat.queue.resume': 'Продолжить',
   'chat.queue.clear': 'Очистить',

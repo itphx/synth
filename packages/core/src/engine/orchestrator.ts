@@ -193,7 +193,7 @@ export class ChatOrchestrator {
         warning('ORCHESTRATOR', `LLM stream error: ${errMsg}`);
 
         // Save partial response
-        if (accumulatedContent) {
+        if (accumulatedContent || accumulatedReasoning) {
           await this._saveAssistantMessage(session.id, accumulatedContent, streamId, effectiveAgentRole, finalUsage, finalModel, accumulatedReasoning, debugCollector, true, providerName);
         }
 
@@ -206,7 +206,7 @@ export class ChatOrchestrator {
 
       // 6. Handle cancellation
       if (cancelToken.cancelled) {
-        if (accumulatedContent) {
+        if (accumulatedContent || accumulatedReasoning) {
           await this._saveAssistantMessage(session.id, accumulatedContent, streamId, effectiveAgentRole, finalUsage, finalModel, accumulatedReasoning, debugCollector, true, providerName);
         }
 

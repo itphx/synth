@@ -27,18 +27,42 @@ export function createQueueRoutes(
   });
 
   // POST /api/v2/queue/:sessionId/return — вернуть очередь (тексты сообщений)
+  // ?index=N — вернуть только одно сообщение
   app.post('/:sessionId/return', kit.requireAuth, async (c) => {
     const sessionId = c.req.param('sessionId');
+    const indexStr = c.req.query('index');
+    const index = indexStr !== undefined ? parseInt(indexStr, 10) : undefined;
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
 
-    const texts = session.pendingMessages.map((m) => m.content);
-    await sessionManager.safeUpdate(sessionId, async (s) => {
-      s.pendingMessages = [];
-    });
-    queueManager.stop(sessionId);
+    let texts: string[];
+    if (index !== undefined && !isNaN(index)) {
+      const msg = session.pendingMessages[index];
+      if (!msg) {
+        return c.json({ error: { code: 'NOT_FOUND', message: 'Message not found at index' } }, 404);
+      }
+      texts = [msg.content];
+      await sessionManager.safeUpdate(sessionId, async (s) => {
+        s.pendingMessages = s.pendingMessages.filter((_, i) => i !== index);
+      });
+    } else {
+      const hasActiveStream = session.currentStream != null
+      const msgs = hasActiveStream ? session.pendingMessages.slice(1) : session.pendingMessages
+      texts = msgs.map((m) => m.content);
+      await sessionManager.safeUpdate(sessionId, async (s) => {
+        if (hasActiveStream) {
+          s.pendingMessages = s.pendingMessages.slice(0, 1);
+        } else {
+          s.pendingMessages = [];
+        }
+      });
+    }
+
+    if (session.pendingMessages.length === 0) {
+      queueManager.stop(sessionId);
+    }
 
     return c.json({ texts });
   });

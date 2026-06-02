@@ -127,6 +127,8 @@ export function ChatInput({
     position: { top: number; left: number }
   } | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const valueRef = useRef(value)
+  valueRef.current = value
 
   const autoResize = useCallback(() => {
     const el = textareaRef.current
@@ -141,7 +143,8 @@ export function ChatInput({
 
   useEffect(() => {
     if (retryText) {
-      setValue(retryText)
+      const current = valueRef.current.trim()
+      setValue(current ? `${current}\n\n${retryText}` : retryText)
       useChatStore.getState().clearRetryInput(sessionId)
       setTimeout(() => textareaRef.current?.focus(), 0)
     }

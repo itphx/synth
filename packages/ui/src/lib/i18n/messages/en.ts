@@ -312,7 +312,7 @@ export const dict = {
 
   'chat.subagent.title': 'Subagent',
 
-  'chat.queue.stalled': 'Queue stalled: {count} messages',
+  'chat.queue.stalled': 'Processing stopped: {count} messages',
   'chat.queue.pending': 'In queue: {count}',
   'chat.queue.resume': 'Resume',
   'chat.queue.clear': 'Clear',

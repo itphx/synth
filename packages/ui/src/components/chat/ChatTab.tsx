@@ -283,6 +283,7 @@ export function ChatTab({ tab }: ChatTabProps) {
       const resp = await synthApi.returnQueue(sessionId)
       const data = resp as { texts?: string[] }
       if (data?.texts && data.texts.length > 0) {
+        setRetryInput(sessionId, data.texts.join('\n\n'))
         setPendingMessages(sessionId, [])
         clearQueueState(sessionId)
         notify({ text: t('chat.queue.returned'), type: 'success', category: 'queue', sessionId })
@@ -290,7 +291,32 @@ export function ChatTab({ tab }: ChatTabProps) {
     } catch {
       notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
     }
-  }, [sessionId, setPendingMessages, clearQueueState, notify, t])
+  }, [sessionId, setPendingMessages, clearQueueState, setRetryInput, notify, t])
+
+  const handleReturnMsg = useCallback(async (uiIndex: number) => {
+    try {
+      const hasActiveStream = Object.values(streamingBySession[sessionId] || {}).some((s) => s.isStreaming)
+      const backendIndex = hasActiveStream ? uiIndex + 1 : uiIndex
+      const resp = await synthApi.returnQueue(sessionId, backendIndex)
+      const data = resp as { texts?: string[] }
+      if (data?.texts && data.texts.length > 0) {
+        setRetryInput(sessionId, data.texts[0])
+        const cur = useChatStore.getState().pendingBySession[sessionId] || []
+        setPendingMessages(sessionId, cur.filter((_, i) => i !== uiIndex))
+        const qs = useChatStore.getState().queueBySession[sessionId]
+        if (qs && qs.pendingCount > 0) {
+          if (qs.pendingCount <= 1) {
+            useChatStore.getState().clearQueueState(sessionId)
+          } else {
+            useChatStore.getState().updateQueueCount(sessionId, qs.pendingCount - 1)
+          }
+        }
+        notify({ text: t('chat.queue.returned'), type: 'success', category: 'queue', sessionId })
+      }
+    } catch {
+      notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
+    }
+  }, [sessionId, streamingBySession, setPendingMessages, setRetryInput, notify, t])
 
   const handleCreateNote = useCallback(async (text: string) => {
     try {
@@ -391,7 +417,8 @@ export function ChatTab({ tab }: ChatTabProps) {
         pendingCount={queue?.pendingCount ?? 0}
         onResume={handleResumeQueue}
         onClear={handleClearQueue}
-        onReturn={handleReturnQueue}
+        onReturnAll={handleReturnQueue}
+        onReturnMsg={handleReturnMsg}
       />
 
       <ChatInput
