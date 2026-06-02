@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import type { SessionManager, QueueProcessorManager, ChatOrchestrator, EventBus } from '@synth/core';
-import { enqueueUserMessage } from '@synth/core';
+import { generateStreamId } from '@synth/shared';
 import { t } from '../lib/i18n.js';
 
 export function createQueueRoutes(
@@ -58,14 +58,25 @@ export function createQueueRoutes(
     // Разблокировать и запустить процессор заново
     await sessionManager.forceReleaseLock(sessionId);
 
-    const nextMsg = session.pendingMessages[0];
-    if (nextMsg) {
-      await enqueueUserMessage(
-        sessionManager, eventBus, sessionId,
-        { ...nextMsg, metadata: { ...nextMsg.metadata, is_resume: true } },
-        queueManager, processMessage as never,
-      );
+    // Сообщения уже в очереди — не переенквеиваем, иначе будет дубликат.
+    // Публикуем message.queued вручную и стартуем процессор.
+    const firstMsg = session.pendingMessages[0];
+    if (firstMsg) {
+      if (!firstMsg.metadata) firstMsg.metadata = {};
+      if (!firstMsg.metadata.stream_id) firstMsg.metadata.stream_id = generateStreamId();
+
+      eventBus.publish(sessionId, 'message.queued', {
+        stream_id: firstMsg.metadata.stream_id,
+        pending_count: session.pendingMessages.length,
+        message: firstMsg.content,
+        agent_role: firstMsg.agentRole,
+        author: firstMsg.author,
+      });
     }
+
+    queueManager.createProcessor(
+      sessionId, sessionManager, eventBus, processMessage as never,
+    );
 
     return c.json({ resumed: true, pending_count: session.pendingMessages.length });
   });
