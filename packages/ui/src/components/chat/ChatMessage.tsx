@@ -80,7 +80,7 @@ function ChatMessageInner({
     )
   }
 
-  if (!message.content && toolCalls.length === 0 && subagents.length === 0) return null
+  if (!message.content && !message.reasoning && toolCalls.length === 0 && subagents.length === 0) return null
 
   return (
     <div className={containerClass}>

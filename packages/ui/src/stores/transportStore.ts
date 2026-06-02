@@ -72,6 +72,7 @@ function createDispatcher(): EventDispatcher {
           author: payload.author as string | undefined,
           model: payload.model as string | undefined,
           provider: payload.provider as string | undefined,
+          reasoning: (payload.reasoning as string) || undefined,
           disabled: false,
           pinned: false,
           hidden: false,

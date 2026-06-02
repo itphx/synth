@@ -731,6 +731,7 @@ export class ChatOrchestrator {
           model,
           provider: provider || '',
           agent_role: agentRole,
+          reasoning: reasoning || null,
         });
       }
     }
