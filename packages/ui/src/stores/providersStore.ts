@@ -47,8 +47,8 @@ export const useProvidersStore = create<ProvidersStore>((set, get) => ({
           set({ selectedModelName: provider.model })
         }
       }
-    } catch {
-      set({ loading: false })
+    } catch (e) {
+      set({ loading: false, error: e instanceof Error ? e.message : 'Ошибка загрузки провайдеров' })
     }
   },
 
@@ -74,8 +74,8 @@ export const useProvidersStore = create<ProvidersStore>((set, get) => ({
       if (!get().selectedModelName && defaultModel) {
         set({ selectedModelName: defaultModel })
       }
-    } catch {
-      // ignore
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : 'Ошибка загрузки моделей' })
     }
   },
 

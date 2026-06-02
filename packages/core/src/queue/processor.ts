@@ -81,7 +81,7 @@ export class QueueProcessor {
               disabled: false,
               pinned: false,
               hidden: false,
-              metadata: { type: 'summarization_request', reason: 'auto' },
+              metadata: { type: 'summarization_request', reason: 'auto', stream_id: generateStreamId() },
             };
             s.pendingMessages.unshift(sysMsg);
             s.summarizationPending = false;
@@ -155,6 +155,9 @@ export class QueueProcessor {
             : message.agentRole,
           provider: message.provider,
           model: message.model,
+          ...(isSystemMessage && message.metadata?.type
+            ? { metadata: { type: message.metadata.type } }
+            : {}),
         });
       } else {
         // Повторная попытка: обновляем startedAt у currentStream

@@ -53,10 +53,6 @@ describe('JsonStore', () => {
     expect(() => store['_validateKey']('../../../etc/passwd')).toThrow('Недопустимый ключ');
   });
 
-  it('запрещает path traversal через /', () => {
-    expect(() => store['_validateKey']('etc/passwd')).toThrow('Недопустимый ключ');
-  });
-
   it('запрещает path traversal через \\', () => {
     expect(() => store['_validateKey']('etc\\passwd')).toThrow('Недопустимый ключ');
   });
@@ -65,5 +61,10 @@ describe('JsonStore', () => {
     expect(() => store['_validateKey']('normal-key')).not.toThrow();
     expect(() => store['_validateKey']('name.with.dots')).not.toThrow();
     expect(() => store['_validateKey']('test-123')).not.toThrow();
+  });
+
+  it('разрешает ключи с / (иерархические)', () => {
+    expect(() => store['_validateKey']('itphx/arena-model')).not.toThrow();
+    expect(() => store['_validateKey']('provider/model-name')).not.toThrow();
   });
 });

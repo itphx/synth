@@ -40,7 +40,7 @@ export class EventBus {
     const handlers = this._subscribers.get(sessionId);
     if (!handlers) {
       if (type.startsWith('stream.')) {
-        console.debug(`[EventBus] publish ${type} for ${sessionId}: 0 subscribers — EVENT LOST`);
+        console.warn(`[EventBus] publish ${type} for ${sessionId}: 0 subscribers — EVENT LOST`);
       }
       return;
     }

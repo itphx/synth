@@ -554,6 +554,7 @@ export class ChatOrchestrator {
 
       this._eventBus.publish(session.id, 'session.updated', {
         session_id: session.id,
+        summarization_pending: false,
         can_summarize: freshSession?.canSummarize ?? false,
         input_tokens: freshSession?.inputTokens ?? 0,
         output_tokens: freshSession?.outputTokens ?? 0,
