@@ -235,7 +235,6 @@ export const useUIStore = create<UIStore>()(
       closeTab: (tabId) =>
         set((state) => {
           const idx = state.centerTabs.findIndex((t) => t.id === tabId)
-          const tabToClose = state.centerTabs[idx]
           const nextTabs = state.centerTabs.filter((t) => t.id !== tabId)
           let nextActive = state.activeCenterTabId
           if (state.activeCenterTabId === tabId) {

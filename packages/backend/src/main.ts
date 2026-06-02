@@ -258,6 +258,64 @@ app.get('/api/v2/events', auth.requireAuth, async (c) => {
 app.get('/admin/sessions/blocked', auth.requireAdmin, (c) => c.json({ sessions: [], count: 0 }));
 app.route('/api/v2/admin/debug', createDebugRoutes(auth));
 
+let shuttingDown = false;
+
+async function gracefulShutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n[Shutdown] Получен сигнал ${signal}, начинаю graceful shutdown...`);
+
+  server.close((err) => {
+    if (err) console.error('[Shutdown] Server close error:', err);
+  });
+  console.log('[Shutdown] HTTP сервер больше не принимает соединения');
+
+  eventHub.shutdown();
+
+  wss.close((err) => {
+    if (err) console.error('[Shutdown] WSS close error:', err);
+  });
+  console.log('[Shutdown] WebSocket-сервер остановлен');
+
+  queueManager.stopAll();
+  console.log('[Shutdown] Очередь остановлена');
+
+  const drainTimeout = 10_000;
+  const activeSessions = await sessionManager.listActiveSessions();
+  if (activeSessions.length > 0) {
+    console.log(`[Shutdown] Ожидание завершения ${activeSessions.length} активных стримов...`);
+    await Promise.race([
+      waitForStreamsDrain(),
+      new Promise<void>((resolve) => {
+        setTimeout(() => {
+          console.log(`[Shutdown] Таймаут ${drainTimeout}ms истёк, завершаю принудительно`);
+          resolve();
+        }, drainTimeout);
+      }),
+    ]);
+  }
+
+  console.log('[Shutdown] Завершено. Выход.');
+  process.exit(0);
+}
+
+async function waitForStreamsDrain(): Promise<void> {
+  while (true) {
+    const active = await sessionManager.listActiveSessions();
+    if (active.length === 0) return;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
+
+// Graceful shutdown — POST /admin/shutdown (только ADMIN)
+app.post('/admin/shutdown', auth.requireAdmin, async (c) => {
+  void gracefulShutdown('API');
+  return c.json({ status: 'shutting_down' });
+});
+
+process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
+process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
+
 // 404
 app.notFound((c) => {
   return c.json({

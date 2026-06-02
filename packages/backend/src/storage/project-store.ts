@@ -1,5 +1,4 @@
 import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import type { Project } from '@synth/shared';
 import { ProjectRole, generateId, nowISO, AsyncLock, atomicWrite } from '@synth/shared';
@@ -103,7 +102,7 @@ export class ProjectStore {
     return project;
   }
 
-  async stats(projectId: string): Promise<{ totalSessions: number; totalInputTokens: number; totalOutputTokens: number; totalTokens: number; totalMessages: number }> {
+  async stats(_projectId: string): Promise<{ totalSessions: number; totalInputTokens: number; totalOutputTokens: number; totalTokens: number; totalMessages: number }> {
     return { totalSessions: 0, totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0, totalMessages: 0 };
   }
 }

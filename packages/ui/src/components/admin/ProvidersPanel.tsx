@@ -97,6 +97,7 @@ export const ProvidersPanel = () => {
       await synthApi.fetchJSON(`/api/v2/providers/${encodeURIComponent(name)}`, { method: 'DELETE' })
       await load()
     } catch {
+      // ignore
     }
   }
 

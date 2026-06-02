@@ -44,7 +44,19 @@ export class EventHub {
     if (arr.length === 0) this.clients.delete(client.userId);
 
     this._unsubscribeClientFromAll(client);
-    console.log(`[EventHub] Unregister client: user=${client.username} remaining=${arr.length}`);
+    const remaining = arr.length;
+    console.log(`[EventHub] Unregister client: user=${client.username} remaining=${remaining}`);
+  }
+
+  shutdown(): void {
+    console.log(`[EventHub] Shutting down: ${this.clients.size} users...`);
+    for (const clients of this.clients.values()) {
+      for (const client of clients) {
+        this._unsubscribeClientFromAll(client);
+      }
+    }
+    this.clients.clear();
+    console.log('[EventHub] All clients unregistered');
   }
 
   async subscribeToSession(userId: string, sessionId: string): Promise<void> {

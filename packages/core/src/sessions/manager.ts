@@ -120,6 +120,11 @@ export class SessionManager {
     return this.store.list(filter);
   }
 
+  async listActiveSessions(): Promise<Session[]> {
+    const sessions = await this.listSessions();
+    return sessions.filter((s) => s.status.blocked || s.currentStream);
+  }
+
   async updateSession(session: Session): Promise<void> {
     session.updatedAt = nowISO();
     await this.store.save(session);

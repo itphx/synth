@@ -4,7 +4,6 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useChatStore, type MessageData } from '@/stores/chatStore'
 import { useTransportStore } from '@/stores/transportStore'
-import { useAuthStore } from '@/stores/authStore'
 import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
 import { useNotification } from '@/hooks/useNotification'
 import { MessageList } from './MessageList'
@@ -109,8 +108,6 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   const handleSend = useCallback(
     async (text: string, agentRole?: string) => {
-      const { user, profile } = useAuthStore.getState()
-      const author = profile?.display_name || user?.username || ''
       const { activeAgentId } = useAgentsStore.getState()
       const effectiveAgentRole = agentRole || activeAgentId || undefined
 

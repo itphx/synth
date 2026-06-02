@@ -346,6 +346,12 @@ export class QueueProcessorManager {
     this._processors.delete(sessionId);
   }
 
+  stopAll(): void {
+    for (const sessionId of this._processors.keys()) {
+      this.stop(sessionId);
+    }
+  }
+
   getRingBuffer(streamId: string): Record<string, unknown>[] | null {
     for (const proc of this._processors.values()) {
       const buffer = proc.getRingBuffer(streamId);

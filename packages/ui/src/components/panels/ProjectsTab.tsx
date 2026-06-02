@@ -12,9 +12,7 @@ import { ContextMenu } from '@/components/ui/contextMenu'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { BulkActionBar } from './BulkActionBar'
 import { formatRelativeTime, parseISODate } from '@/lib/formatDate'
-import { synthApi } from '@/lib/api/synthApi'
-import { useNotification } from '@/hooks/useNotification'
-import type { ProjectData, SessionData } from '@/lib/api/synthApi'
+import { synthApi, type ProjectData, type SessionData } from '@/lib/api/synthApi'
 
 const MAX_VISIBLE_SESSIONS = 5
 

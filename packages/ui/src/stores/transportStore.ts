@@ -4,7 +4,6 @@ import { useChatStore } from './chatStore'
 import { useSessionsStore } from './sessionsStore'
 import type { TransportMode } from './useUIStore'
 import type { StreamDoneMetadata, MessageData } from './chatStore'
-import type { StickyNoteData } from '@/lib/api/synthApi'
 import { synthApi } from '@/lib/api/synthApi'
 
 type EventDispatcher = (event: WSEvent) => void
@@ -43,9 +42,6 @@ function createDispatcher(): EventDispatcher {
       addStreamError,
       setQueueStalled,
       setSummarizationPending,
-      addStickyNote,
-      updateStickyNote,
-      deleteStickyNote,
       updateQueueCount,
       addPendingMessage,
       removeFirstPending,
@@ -300,11 +296,13 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
       },
       onDisconnect: (reason) => {
         transportReady = false
+        const oldTransport = transport
         transport = null
         set({ connected: false })
         console.debug('[TransportStore] Disconnected:', reason)
         if (get().transportMode === 'auto' && reason !== 'manual') {
           console.debug('[TransportStore] Auto-fallback: switching to SSE')
+          oldTransport?.disconnect()
           get().connect('auto', 'sse')
         }
       },
