@@ -1,5 +1,7 @@
+import { useMemo } from 'react'
 import { Icon } from '../icon/Icon'
 import { useUIStore } from '../../stores/useUIStore'
+import { useProjectsStore } from '../../stores/projectsStore'
 import { useI18n } from '@/lib/i18n'
 import { QuickSettingsPopup } from '../auth/QuickSettingsPopup'
 import { NotificationPopup } from './NotificationPopup'
@@ -11,7 +13,15 @@ interface HeaderProps {
 
 export const Header = ({ onSettingsClick }: HeaderProps) => {
   const { t } = useI18n()
-  const { leftPanel, rightPanel, toggleLeftPanel, toggleRightPanel, setSettingsDialogOpen } = useUIStore()
+  const { leftPanel, rightPanel, toggleLeftPanel, toggleRightPanel, setSettingsDialogOpen, centerTabs, activeCenterTabId } = useUIStore()
+  const projects = useProjectsStore((s) => s.projects)
+
+  const headerTitle = useMemo(() => {
+    const activeTab = centerTabs.find((t) => t.id === activeCenterTabId)
+    if (!activeTab?.data.projectId) return 'Synth'
+    const project = projects.find((p) => p.id === activeTab.data.projectId)
+    return project?.name || 'Synth'
+  }, [centerTabs, activeCenterTabId, projects])
 
   return (
     <header className="flex h-9 items-center justify-between px-3 bg-background">
@@ -25,7 +35,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
             <Icon name="layout-left" className="h-5 w-5" />
           </button>
         )}
-        <span className="font-semibold text-foreground">Synth</span>
+        <span className="font-semibold text-foreground">{headerTitle}</span>
       </div>
 
       <div className="flex items-center gap-2">

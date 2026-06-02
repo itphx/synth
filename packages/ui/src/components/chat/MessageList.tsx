@@ -63,6 +63,19 @@ export function MessageList({
     const atBottom = scrollHeight - scrollTop - clientHeight < 60
     setAutoScroll(atBottom)
     setShowScrollBtn(!atBottom && scrollHeight > clientHeight + 100)
+
+    const hasTop = scrollTop > 1
+    const hasBottom = scrollHeight - scrollTop - clientHeight > 1
+    const el = scrollRef.current
+    if (hasTop && hasBottom) {
+      el.setAttribute('data-scroll-shadow', 'top-bottom')
+    } else if (hasTop) {
+      el.setAttribute('data-scroll-shadow', 'top')
+    } else if (hasBottom) {
+      el.setAttribute('data-scroll-shadow', 'bottom')
+    } else {
+      el.removeAttribute('data-scroll-shadow')
+    }
   }, [])
 
   useEffect(() => {
@@ -85,7 +98,7 @@ export function MessageList({
       <ScrollableOverlay
         ref={scrollRef as unknown as React.Ref<HTMLElement>}
         outerClassName="h-full"
-        className="overflow-y-auto overflow-x-hidden"
+        className="overflow-y-auto overflow-x-hidden chat-scroll-container"
         onScroll={handleScroll}
       >
         <div
