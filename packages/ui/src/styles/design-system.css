@@ -518,3 +518,60 @@
 .overlay-scrollbar__thumb--horizontal {
   height: 6px;
 }
+
+/* --- Scroll Shadow (mask-image fade at edges) --- */
+.chat-scroll-container {
+  --scroll-shadow-size: 48px;
+  mask-mode: alpha;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+}
+
+.chat-scroll-container[data-scroll-shadow="top-bottom"] {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 var(--scroll-shadow-size),
+    #000 calc(100% - var(--scroll-shadow-size)),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 var(--scroll-shadow-size),
+    #000 calc(100% - var(--scroll-shadow-size)),
+    transparent 100%
+  );
+}
+
+.chat-scroll-container[data-scroll-shadow="top"] {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 var(--scroll-shadow-size),
+    #000 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 var(--scroll-shadow-size),
+    #000 100%
+  );
+}
+
+.chat-scroll-container[data-scroll-shadow="bottom"] {
+  mask-image: linear-gradient(
+    to bottom,
+    #000 0%,
+    #000 calc(100% - var(--scroll-shadow-size)),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 0%,
+    #000 calc(100% - var(--scroll-shadow-size)),
+    transparent 100%
+  );
+}
