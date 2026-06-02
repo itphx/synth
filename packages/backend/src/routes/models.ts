@@ -165,7 +165,7 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
     let totalFetched = 0;
     let totalNew = 0;
     let totalEnriched = 0;
-    let errors: string[] = [];
+    const errors: string[] = [];
 
     for (const provider of enabledProviders) {
       const providerConfig = {

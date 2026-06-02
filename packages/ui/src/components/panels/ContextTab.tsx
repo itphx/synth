@@ -11,7 +11,6 @@ import { Icon } from '../icon/Icon'
 export function ContextTab() {
   const { t } = useI18n()
   const { notify } = useNotification()
-  const { sessions } = useSessionsStore()
   const { stickyNotesBySession, setStickyNotes } = useChatStore()
 
   const activeTabId = useUIStore((s) => s.activeCenterTabId)
@@ -132,7 +131,7 @@ export function ContextTab() {
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {/* Заметки — alwaysOpen */}
-        <Block title={t('rightPanel.context.optimization.sticky_notes')} alwaysOpen>
+        <Block title={t('rightPanel.context.optimization.sticky_notes')}>
           {stickyNotes.length === 0 ? (
             <p className="text-xs text-muted-foreground">{t('rightPanel.context.noStickyNotes')}</p>
           ) : (
@@ -265,13 +264,11 @@ function Block({
   children,
   enabled,
   onToggle,
-  alwaysOpen,
 }: {
   title: string
   children: React.ReactNode
   enabled?: boolean
   onToggle?: () => void
-  alwaysOpen?: boolean
 }) {
   return (
     <div className="rounded-lg border border-border p-3">

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api } from '@/lib/api/client'
 import { useUIStore } from '@/stores/useUIStore'
 import { Icon } from '@/components/icon/Icon'

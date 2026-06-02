@@ -7,7 +7,7 @@ import { JsonStore } from '../storage/json-store.js';
 import type { AgentDefinition } from '@synth/shared';
 import type { SessionManager } from '@synth/core';
 import { t } from '../lib/i18n.js';
-import { getDefaultLang, resolveDisplayName, resolveDescription } from '../lib/i18n-config.js';
+import { resolveDisplayName, resolveDescription } from '../lib/i18n-config.js';
 
 const BUILTIN_IDS = new Set([
   'developer', 'assistant', 'devops', 'analyst',
@@ -44,11 +44,8 @@ function getAgentDefs(): AgentDefFile[] {
   return _cachedDefs;
 }
 
-function getBuiltInAgents(agentStore: JsonStore<AgentDefinition>): AgentDefinition[] {
+function getBuiltInAgents(_agentStore: JsonStore<AgentDefinition>): AgentDefinition[] {
   const defs = getAgentDefs();
-  const lang = getDefaultLang();
-
-  const overrides = new Map<string, AgentDefinition>();
   // Синхронная загрузка оверрайдов невозможна через JsonStore (асинхронный).
   // Оверрайды применяются при сборке ответа в роутах.
 
