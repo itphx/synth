@@ -84,6 +84,7 @@ export const dict = {
   'settings.category.appearance': 'Внешний вид',
   'settings.category.chat': 'Чат',
   'settings.category.providers': 'Провайдеры',
+  'settings.category.models': 'Модели',
   'settings.category.agents': 'Агенты',
   'settings.category.notifications': 'Уведомления',
 
@@ -361,7 +362,7 @@ export const dict = {
   'transport.sseDesc': 'Только SSE',
 
   // Session settings
-  'sessionSettings.provider': 'Провайдер',
+  'sessionSettings.providerModel': 'Провайдер и модель',
   'sessionSettings.model': 'Модель',
   'sessionSettings.debug': 'Отладка',
   'sessionSettings.debugOn': 'Вкл',

@@ -7,14 +7,13 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { useNotification } from '@/hooks/useNotification'
 import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
 import { Toggle } from '../ui/Toggle'
+import { ModelSelector } from '../chat/ModelSelector'
 
 export function SessionSettingsTab() {
   const { t } = useI18n()
   const { notify } = useNotification()
   const { sessions } = useSessionsStore()
   const {
-    providers,
-    models,
     selectedProviderName,
     selectedModelName,
     setSelectedProvider,
@@ -112,40 +111,8 @@ export function SessionSettingsTab() {
           <Field label={t('rightPanel.params.engine')} value={session.engine} />
         </Section>
 
-        <Section title={t('sessionSettings.provider')}>
-          <select
-            value={selectedProviderName || ''}
-              onChange={(e) => {
-                const name = e.target.value
-                setSelectedProvider(name || null)
-                if (name) {
-                  const provider = providers.find((p) => p.name === name)
-                  setSelectedModel(provider?.model || null)
-                } else {
-                  setSelectedModel(null)
-                }
-              }}
-            className="w-full rounded border border-border bg-input px-2 py-1.5 text-xs text-foreground"
-          >
-            {providers.map((p) => (
-              <option key={p.name} value={p.name}>{p.name}</option>
-            ))}
-          </select>
-        </Section>
-
-        <Section title={t('sessionSettings.model')}>
-          <select
-            value={selectedModelName || ''}
-            onChange={(e) => setSelectedModel(e.target.value || null)}
-            className="w-full rounded border border-border bg-input px-2 py-1.5 text-xs text-foreground"
-          >
-            <option value="">—</option>
-            {models
-              .filter((m) => (!selectedProviderName || m.provider === selectedProviderName) && m.enabled)
-              .map((m) => (
-                <option key={`${m.provider}:${m.name}`} value={m.name}>{m.name}</option>
-              ))}
-          </select>
+        <Section title={t('sessionSettings.providerModel')}>
+          <ModelSelector sessionId={sessionId} />
         </Section>
 
         <Section title={t('sessionSettings.debug')}>
