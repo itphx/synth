@@ -140,6 +140,14 @@ export const FilesTab: React.FC = () => {
     const targetPath = parts.join('/')
     await moveEntry(projectId, entry.path, targetPath)
     setRenaming(null)
+    const oldTabId = `file-${projectId}/${entry.path}`
+    const newTabId = `file-${projectId}/${targetPath}`
+    const ui = useUIStore.getState()
+    const existing = ui.centerTabs.find((t) => t.id === oldTabId)
+    if (existing) {
+      ui.closeTab(oldTabId)
+      ui.openTab({ id: newTabId, type: 'file-viewer', title: newName, data: { filePath: targetPath, projectId } })
+    }
   }, [renameValue, moveEntry])
 
   const handleBulkDelete = useCallback(async () => {
@@ -191,12 +199,25 @@ export const FilesTab: React.FC = () => {
       if (srcProject === targetProjectId && srcPath === targetDirPath) return
       const name = srcPath.split('/').pop() || 'moved'
       const targetPath = targetDirPath ? `${targetDirPath}/${name}` : name
+      const ui = useUIStore.getState()
       if (srcProject === targetProjectId) {
         await moveEntry(targetProjectId, srcPath, targetPath)
+        const oldTabId = `file-${targetProjectId}/${srcPath}`
+        const newTabId = `file-${targetProjectId}/${targetPath}`
+        const existing = ui.centerTabs.find((t) => t.id === oldTabId)
+        if (existing) {
+          ui.closeTab(oldTabId)
+          ui.openTab({ id: newTabId, type: 'file-viewer', title: name, data: { filePath: targetPath, projectId: targetProjectId } })
+        }
       } else {
         // cross-project
         const { content } = await synthApi.readFile(srcProject, srcPath)
         await synthApi.writeFile(targetProjectId, targetPath, content)
+        await deleteEntry(srcProject, srcPath)
+        const oldTabId = `file-${srcProject}/${srcPath}`
+        if (ui.centerTabs.some((t) => t.id === oldTabId)) {
+          ui.closeTab(oldTabId)
+        }
         await deleteEntry(srcProject, srcPath)
       }
     } catch { /* ignore */ }
@@ -245,7 +266,7 @@ export const FilesTab: React.FC = () => {
           className={`group/entry flex items-center gap-1 rounded px-2 py-0.5 text-sm cursor-pointer transition-colors ${
             isSelected ? 'bg-primary/15' : 'hover:bg-interactive-hover'
           } ${dragState?.projectId === projectId && dragState?.path === entry.path ? 'opacity-40' : ''}`}
-          style={{ paddingLeft: `${8 + depth * 12}px` }}
+          style={{ paddingLeft: `${12 + depth * 12}px` }}
           onClick={() => !isRenaming && handleFileClick(projectId, entry)}
           draggable={!selectionMode && !isRenaming}
           onDragStart={(e) => handleDragStart(e, projectId, entry)}
@@ -291,7 +312,7 @@ export const FilesTab: React.FC = () => {
             <span className="truncate text-foreground">{entry.name}</span>
           )}
           {!entry.isDirectory && !selectionMode && !isRenaming && (
-            <span className="text-xs text-muted-foreground shrink-0 group-hover/entry:hidden">
+            <span className="ml-auto text-xs text-muted-foreground shrink-0 group-hover/entry:hidden">
               {entry.size > 1024 ? `${(entry.size / 1024).toFixed(1)}k` : `${entry.size}b`}
             </span>
           )}
@@ -347,7 +368,7 @@ export const FilesTab: React.FC = () => {
                   [projectId]: (prev[projectId] || MAX_VISIBLE_ENTRIES) + MAX_VISIBLE_ENTRIES,
                 }))}
                 className="w-full text-left rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-interactive-hover transition-colors"
-                style={{ paddingLeft: `${8 + (depth + 1) * 12}px` }}
+                style={{ paddingLeft: `${12 + (depth + 1) * 12}px` }}
               >
                 {t('files.showMore', { count: String((treesByProject[`${projectId}/${entry.path}`] || []).length - getEntryLimit(projectId)) })}
               </button>
@@ -428,7 +449,7 @@ export const FilesTab: React.FC = () => {
               </div>
 
               {isExpanded && (
-                <div className="ml-5 border-l border-sidebar-border pl-2">
+                <div className="ml-5 border-l border-sidebar-border">
                   <div className="flex items-center gap-1 px-2 py-0.5">
                     <Icon name="folder-3" className="h-3 w-3 shrink-0 text-muted-foreground/50" />
                     <span className="text-[11px] text-muted-foreground/60 truncate" title={project.workspace || ''}>
