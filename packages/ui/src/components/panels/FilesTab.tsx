@@ -397,7 +397,7 @@ export const FilesTab: React.FC = () => {
           return (
             <div key={project.id} className="group/project">
               <div
-                className="relative flex items-center gap-1.5 px-2 py-1.5 cursor-pointer transition-colors hover:bg-interactive-hover rounded-md mx-1"
+                className="relative flex items-center gap-1.5 px-2 py-1 cursor-pointer transition-colors hover:bg-interactive-hover rounded-md mx-1"
                 onClick={() => {
                   toggleProjectExpand(project.id)
                   setShowMoreLimits((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => k !== project.id)))
