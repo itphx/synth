@@ -6,8 +6,6 @@ import { useI18n } from '@/lib/i18n'
 import { Icon } from '../icon/Icon'
 import type { CenterTab } from '@/stores/useUIStore'
 
-type SaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
-
 interface FileEditorTabProps {
   tab: CenterTab
 }
@@ -15,12 +13,11 @@ interface FileEditorTabProps {
 export function FileEditorTab({ tab }: FileEditorTabProps) {
   const { t } = useI18n()
   const { writeFile } = useFilesStore()
-  const { closeTab } = useUIStore()
+  const { setTabEditingState } = useUIStore()
   const [content, setContent] = useState('')
   const [originalContent, setOriginalContent] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [saveState, setSaveState] = useState<SaveState>('idle')
   const [isBinary, setIsBinary] = useState(false)
   const [binarySize, setBinarySize] = useState(0)
 
@@ -57,37 +54,51 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
 
   const isDirty = content !== originalContent
 
-  const handleSave = useCallback(async () => {
+  const syncEditingState = useCallback((state: 'idle' | 'dirty' | 'saving' | 'saved' | 'error') => {
+    setTabEditingState(tab.id, state)
+  }, [tab.id, setTabEditingState])
+
+  useEffect(() => {
+    if (!loading && !isBinary) {
+      syncEditingState(isDirty ? 'dirty' : 'idle')
+    }
+  }, [isDirty, loading, isBinary, syncEditingState])
+
+  const doSave = useCallback(async () => {
     if (!projectId || !filePath || !isDirty) return
 
-    setSaveState('saving')
+    syncEditingState('saving')
     const ok = await writeFile(projectId, filePath, content)
     if (ok) {
       setOriginalContent(content)
-      setSaveState('saved')
-      setTimeout(() => setSaveState('idle'), 2000)
+      syncEditingState('saved')
+      setTimeout(() => syncEditingState('idle'), 2000)
     } else {
-      setSaveState('error')
+      syncEditingState('error')
     }
-  }, [projectId, filePath, content, originalContent, isDirty, writeFile])
-
-  const handleClose = useCallback(() => {
-    if (isDirty) {
-      if (!window.confirm(t('file.unsavedChanges'))) return
-    }
-    closeTab(tab.id)
-  }, [isDirty, tab.id, closeTab, t])
+  }, [projectId, filePath, content, isDirty, writeFile, syncEditingState])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault()
-        handleSave()
+        doSave()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handleSave])
+  }, [doSave])
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (detail?.tabId === tab.id) {
+        doSave()
+      }
+    }
+    window.addEventListener('synth:save-file', handler)
+    return () => window.removeEventListener('synth:save-file', handler)
+  }, [tab.id, doSave])
 
   if (loading) {
     return (
@@ -124,42 +135,11 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
-        <span className="text-xs font-mono text-muted-foreground truncate flex-1">
-          {filePath}
-        </span>
-        <div className="flex items-center gap-1">
-          <span className={`text-xs ${saveState === 'saving' ? 'text-yellow-500' : saveState === 'saved' ? 'text-green-500' : saveState === 'error' ? 'text-red-500' : isDirty ? 'text-yellow-500' : 'text-muted-foreground'}`}>
-            {saveState === 'saving' ? t('file.saving')
-              : saveState === 'saved' ? t('file.saved')
-              : saveState === 'error' ? t('file.saveError')
-              : isDirty ? t('common.modified')
-              : ''}
-          </span>
-          <button
-            onClick={handleSave}
-            disabled={!isDirty || saveState === 'saving'}
-            className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <Icon name="save" className="size-3" />
-            <span>{t('common.save')}</span>
-          </button>
-          <button
-            onClick={handleClose}
-            className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-foreground hover:bg-interactive-hover transition-colors"
-          >
-            <Icon name="x" className="size-3" />
-            <span>{t('file.close')}</span>
-          </button>
-        </div>
-      </div>
-
       <textarea
         className="flex-1 w-full resize-none bg-background p-4 text-sm font-mono text-foreground outline-none border-0 focus:ring-0"
         value={content}
         onChange={(e) => {
           setContent(e.target.value)
-          setSaveState('dirty')
         }}
         spellCheck={false}
       />

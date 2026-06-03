@@ -575,3 +575,60 @@
     transparent 100%
   );
 }
+
+/* --- Tab Scroll Shadow (horizontal) --- */
+.tab-scroll-container {
+  --tab-scroll-shadow-size: 36px;
+  mask-mode: alpha;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+}
+
+.tab-scroll-container[data-scroll-shadow="left-right"] {
+  mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    #000 var(--tab-scroll-shadow-size),
+    #000 calc(100% - var(--tab-scroll-shadow-size)),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    #000 var(--tab-scroll-shadow-size),
+    #000 calc(100% - var(--tab-scroll-shadow-size)),
+    transparent 100%
+  );
+}
+
+.tab-scroll-container[data-scroll-shadow="left"] {
+  mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    #000 var(--tab-scroll-shadow-size),
+    #000 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    #000 var(--tab-scroll-shadow-size),
+    #000 100%
+  );
+}
+
+.tab-scroll-container[data-scroll-shadow="right"] {
+  mask-image: linear-gradient(
+    to right,
+    #000 0%,
+    #000 calc(100% - var(--tab-scroll-shadow-size)),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to right,
+    #000 0%,
+    #000 calc(100% - var(--tab-scroll-shadow-size)),
+    transparent 100%
+  );
+}

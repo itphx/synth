@@ -261,6 +261,12 @@ export const dict = {
   'center.closeTab': 'Закрыть вкладку',
   'center.tab.viewing': 'Просмотр: {title}',
   'center.tab.editing': 'Редактор: {title}',
+  'center.tabTooltip.chat': 'Чат «{title}» — {project}',
+  'center.tabTooltip.fileViewer': 'Просмотр «{title}» — {project}',
+  'center.tabTooltip.fileEditor': 'Редактор «{title}» — {project}',
+  'center.tabTooltip.noProject.chat': 'Чат «{title}»',
+  'center.tabTooltip.noProject.fileViewer': 'Просмотр «{title}»',
+  'center.tabTooltip.noProject.fileEditor': 'Редактор «{title}»',
 
   // Files
   'file.binaryFile': 'Бинарный файл ({size} байт)',

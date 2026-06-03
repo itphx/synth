@@ -23,6 +23,7 @@ interface FilesStore {
   clearTree: (projectId: string) => void
 
   toggleProjectExpand: (projectId: string) => void
+  expandProject: (projectId: string) => void
   expandAll: () => void
   collapseAll: () => void
 
@@ -204,6 +205,15 @@ export const useFilesStore = create<FilesStore>((set, get) => {
         } else {
           next.add(projectId)
         }
+        return { expandedProjects: next }
+      })
+    },
+
+    expandProject: (projectId) => {
+      set((s) => {
+        if (s.expandedProjects.has(projectId)) return s
+        const next = new Set(s.expandedProjects)
+        next.add(projectId)
         return { expandedProjects: next }
       })
     },

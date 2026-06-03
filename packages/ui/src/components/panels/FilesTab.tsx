@@ -19,11 +19,13 @@ export const FilesTab: React.FC = () => {
   const { projects, loadProjects } = useProjectsStore()
   const {
     treesByProject, loadFileTree, loadSubDirectory, uploadFile, createDirectory, createFile, deleteEntry, moveEntry,
-    loading, expandedProjects, toggleProjectExpand,
+    loading, expandedProjects, toggleProjectExpand, expandProject,
     selectionMode, selectedPaths, toggleSelectionMode, toggleSelectedPath, clearSelection,
     deleteSelectedEntries,
   } = useFilesStore()
   const { openTab } = useUIStore()
+  const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
+  const centerTabs = useUIStore((s) => s.centerTabs)
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [showMoreLimits, setShowMoreLimits] = useState<Record<string, number>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -38,6 +40,14 @@ export const FilesTab: React.FC = () => {
   const workspacedProjects = useMemo(() => projects.filter((p) => p.workspace), [projects])
   const closeMenu = useCallback(() => setOpenMenuKey(null), [])
 
+  const openFilePathSet = useMemo(() => {
+    const activeTab = centerTabs.find((t) => t.id === activeCenterTabId)
+    if (activeTab?.data.projectId && activeTab?.data.filePath) {
+      return new Set([`${activeTab.data.projectId}::${activeTab.data.filePath}`])
+    }
+    return new Set<string>()
+  }, [centerTabs, activeCenterTabId])
+
   useEffect(() => {
     loadProjects()
   }, [loadProjects])
@@ -50,6 +60,45 @@ export const FilesTab: React.FC = () => {
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspacedProjects, expandedProjects])
+
+  const expandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    const activeTab = centerTabs.find((t) => t.id === activeCenterTabId)
+    if (!activeTab?.data.filePath || !activeTab?.data.projectId) return
+
+    const { projectId, filePath } = activeTab.data
+
+    expandProject(projectId)
+
+    if (expandTimerRef.current) clearTimeout(expandTimerRef.current)
+    expandTimerRef.current = setTimeout(() => {
+      const parts = filePath.split('/')
+      parts.pop()
+
+      setExpandedDirs((prev) => {
+        const next = new Set(prev)
+        let current = ''
+        parts.forEach((part) => {
+          current = current ? `${current}/${part}` : part
+          const key = `${projectId}/${current}`
+          if (!next.has(key)) {
+            next.add(key)
+            loadSubDirectory(projectId, current)
+          }
+        })
+        return next
+      })
+
+      setTimeout(() => {
+        const el = document.querySelector(`[data-file-entry="${projectId}::${filePath}"]`)
+        el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      }, 300)
+    }, 100)
+
+    return () => { if (expandTimerRef.current) clearTimeout(expandTimerRef.current) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCenterTabId])
 
   const toggleDir = (projectId: string, dirPath: string) => {
     setExpandedDirs((prev) => {
@@ -257,14 +306,16 @@ export const FilesTab: React.FC = () => {
     const isRenaming = renaming === entry.path
     const menuKey = `${projectId}::${entry.path}`
     const isMenuOpen = openMenuKey === menuKey
+    const isFileOpen = !entry.isDirectory && openFilePathSet.has(`${projectId}::${entry.path}`)
 
     if (hideOverflow && overflowIndex >= getEntryLimit(projectId)) return null
 
     return (
       <div key={`${projectId}::${entry.path}`}>
         <div
+          data-file-entry={`${projectId}::${entry.path}`}
           className={`group/entry flex items-center gap-1 rounded px-2 py-0.5 text-sm cursor-pointer transition-colors ${
-            isSelected ? 'bg-primary/15' : 'hover:bg-interactive-hover'
+            isSelected ? 'bg-primary/15' : isFileOpen ? 'bg-primary/10' : 'hover:bg-interactive-hover'
           } ${dragState?.projectId === projectId && dragState?.path === entry.path ? 'opacity-40' : ''}`}
           style={{ paddingLeft: `${8 + depth * 18}px` }}
           onClick={() => !isRenaming && handleFileClick(projectId, entry)}

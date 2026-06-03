@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { ToastContainer } from 'react-toastify'
+import { TooltipProvider } from './components/ui/tooltip'
 import { useUIStore } from '@/stores/useUIStore'
 import { useI18nStore } from '@/lib/i18n/store'
 import { DEFAULT_THEME, DEFAULT_THEME_MODE, DEFAULT_LOCALE } from '@/lib/defaults'
@@ -66,6 +67,7 @@ function App() {
       <DefaultsSync />
       <AuthGate>
         <BackendConnection />
+        <TooltipProvider>
         <div className="flex h-screen">
           <Sidebar
             side="left"
@@ -91,6 +93,7 @@ function App() {
             <RightPanel />
           </Sidebar>
         </div>
+        </TooltipProvider>
 
         <SettingsModal />
         <AdminModal />

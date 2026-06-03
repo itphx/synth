@@ -262,6 +262,12 @@ export const dict = {
   'center.closeTab': 'Close tab',
   'center.tab.viewing': 'Viewing: {title}',
   'center.tab.editing': 'Editing: {title}',
+  'center.tabTooltip.chat': 'Chat "{title}" — {project}',
+  'center.tabTooltip.fileViewer': 'Viewing "{title}" — {project}',
+  'center.tabTooltip.fileEditor': 'Editing "{title}" — {project}',
+  'center.tabTooltip.noProject.chat': 'Chat "{title}"',
+  'center.tabTooltip.noProject.fileViewer': 'Viewing "{title}"',
+  'center.tabTooltip.noProject.fileEditor': 'Editing "{title}"',
 
   // Files
   'file.binaryFile': 'Binary file ({size} bytes)',
