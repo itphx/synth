@@ -5,6 +5,7 @@ import { CenterTabs } from './CenterTabs'
 import { ChatTab } from '../chat/ChatTab'
 import { FileViewerTab } from '../chat/FileViewerTab'
 import { FileEditorTab } from '../chat/FileEditorTab'
+import { CommitDetailTab } from '../chat/CommitDetailTab'
 
 function EmptyState() {
   const { t } = useI18n()
@@ -37,6 +38,8 @@ export function CenterPanel() {
         return <FileViewerTab tab={activeTab} />
       case 'file-editor':
         return <FileEditorTab tab={activeTab} />
+      case 'commit-detail':
+        return <CommitDetailTab tab={activeTab} />
       default:
         return <EmptyState />
     }

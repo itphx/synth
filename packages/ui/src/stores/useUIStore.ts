@@ -24,7 +24,7 @@ interface RightPanelState {
   maxWidth: number
 }
 
-export type CenterTabType = 'chat' | 'file-viewer' | 'file-editor'
+export type CenterTabType = 'chat' | 'file-viewer' | 'file-editor' | 'commit-detail'
 
 export interface CenterTab {
   id: string
@@ -34,6 +34,8 @@ export interface CenterTab {
     sessionId?: string
     filePath?: string
     projectId?: string
+    commitHash?: string
+    repoPath?: string
   }
   editingState?: 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 }

@@ -10,6 +10,7 @@ import { LeftPanel } from './components/panels/LeftPanel'
 import { RightPanel } from './components/panels/RightPanel'
 import { ProjectsTabToolbar } from './components/panels/ProjectsTabToolbar'
 import { FilesTabToolbar } from './components/panels/FilesTabToolbar'
+import { GitTabToolbar } from './components/panels/GitTabToolbar'
 import { CenterPanel } from './components/layout/CenterPanel'
 import { BackendConnection } from './components/layout/BackendConnection'
 import { SettingsModal } from './components/settings/SettingsModal'
@@ -60,6 +61,7 @@ function App() {
 
   const leftHeaderActions = leftPanelTab === 'projects' ? <ProjectsTabToolbar />
     : leftPanelTab === 'files' ? <FilesTabToolbar />
+    : leftPanelTab === 'git' ? <GitTabToolbar />
     : undefined
 
   return (

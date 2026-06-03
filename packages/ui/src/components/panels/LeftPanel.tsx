@@ -2,6 +2,7 @@ import React from 'react'
 import { useUIStore } from '@/stores/useUIStore'
 import { ProjectsTab } from './ProjectsTab'
 import { FilesTab } from './FilesTab'
+import { GitTab } from './GitTab'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 
@@ -42,11 +43,7 @@ export const LeftPanel: React.FC = () => {
       <div className="flex-1 overflow-y-auto">
         {leftPanelTab === 'projects' && <ProjectsTab />}
         {leftPanelTab === 'files' && <FilesTab />}
-        {leftPanelTab === 'git' && (
-          <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-            {t('leftPanel.git.placeholder')}
-          </div>
-        )}
+        {leftPanelTab === 'git' && <GitTab />}
       </div>
     </div>
   )

@@ -26,6 +26,7 @@ const TAB_ICONS: Record<CenterTab['type'], string> = {
   chat: 'chat-new',
   'file-viewer': 'file-3',
   'file-editor': 'edit-2',
+  'commit-detail': 'git-commit',
 }
 
 const TAB_CONTENT_FLOOR = 160
@@ -46,6 +47,11 @@ function TabTooltipLabel({ tab }: { tab: CenterTab }) {
     return projectName
       ? t('center.tabTooltip.fileViewer', { title: tab.title, project: projectName })
       : t('center.tabTooltip.noProject.fileViewer', { title: tab.title })
+  }
+  if (tab.type === 'commit-detail') {
+    return projectName
+      ? t('center.tabTooltip.commitDetail', { title: tab.title, project: projectName })
+      : t('center.tabTooltip.noProject.commitDetail', { title: tab.title })
   }
   return projectName
     ? t('center.tabTooltip.fileEditor', { title: tab.title, project: projectName })

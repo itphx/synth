@@ -95,6 +95,7 @@ export function serializeProject(project: Project) {
     icon: project.icon || null,
     color: project.color || null,
     workspace: project.workspace || null,
+    repos: project.repos || null,
     status_messages: (project.statusMessages || []).map((sm: StatusMessage) => ({
       id: sm.id,
       text: sm.text,

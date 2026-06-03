@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Project } from '@synth/shared';
+import type { Project, GitRepoConfig } from '@synth/shared';
 import { ProjectRole, generateId, nowISO, AsyncLock, atomicWrite } from '@synth/shared';
 
 export interface ProjectStoreConfig {
@@ -83,7 +83,7 @@ export class ProjectStore {
     );
   }
 
-  create(name: string, ownerId: string, data?: { description?: string; icon?: string; color?: string; workspace?: string }): Project {
+  create(name: string, ownerId: string, data?: { description?: string; icon?: string; color?: string; workspace?: string; repos?: GitRepoConfig[] }): Project {
     const project: Project = {
       id: generateId(),
       name,
@@ -95,6 +95,7 @@ export class ProjectStore {
       icon: data?.icon,
       color: data?.color,
       workspace: data?.workspace,
+      repos: data?.repos,
       statusMessages: [],
       createdAt: nowISO(),
       updatedAt: nowISO(),

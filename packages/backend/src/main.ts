@@ -27,6 +27,7 @@ import { createAgentRoutes } from './routes/agents.js';
 import { createContextRoutes } from './routes/context.js';
 import { createDebugRoutes } from './routes/debug.js';
 import { createUserRoutes } from './routes/users.js';
+import { createGitRoutes } from './routes/git.js';
 import { t, getTranslations } from './lib/i18n.js';
 import { ProjectStore } from './storage/project-store.js';
 import { JsonStore } from './storage/json-store.js';
@@ -189,6 +190,9 @@ app.route('/api/v2/context', createContextRoutes(auth, contextConfig));
 
 // User admin routes
 app.route('/api/v2/users', createUserRoutes(auth, profilesStore));
+
+// Git routes
+app.route('/api/v2/git', createGitRoutes(auth, projectStore, backendConfig.workspacesRoot));
 
 // Глобальный SSE-хаб для всех сессий пользователя
 app.get('/api/v2/events', auth.requireAuth, async (c) => {
