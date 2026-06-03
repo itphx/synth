@@ -266,7 +266,7 @@ export const FilesTab: React.FC = () => {
           className={`group/entry flex items-center gap-1 rounded px-2 py-0.5 text-sm cursor-pointer transition-colors ${
             isSelected ? 'bg-primary/15' : 'hover:bg-interactive-hover'
           } ${dragState?.projectId === projectId && dragState?.path === entry.path ? 'opacity-40' : ''}`}
-          style={{ paddingLeft: `${12 + depth * 12}px` }}
+          style={{ paddingLeft: `${8 + depth * 20}px` }}
           onClick={() => !isRenaming && handleFileClick(projectId, entry)}
           draggable={!selectionMode && !isRenaming}
           onDragStart={(e) => handleDragStart(e, projectId, entry)}
@@ -368,7 +368,7 @@ export const FilesTab: React.FC = () => {
                   [projectId]: (prev[projectId] || MAX_VISIBLE_ENTRIES) + MAX_VISIBLE_ENTRIES,
                 }))}
                 className="w-full text-left rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-interactive-hover transition-colors"
-                style={{ paddingLeft: `${12 + (depth + 1) * 12}px` }}
+                style={{ paddingLeft: `${8 + (depth + 1) * 20}px` }}
               >
                 {t('files.showMore', { count: String((treesByProject[`${projectId}/${entry.path}`] || []).length - getEntryLimit(projectId)) })}
               </button>
@@ -449,7 +449,7 @@ export const FilesTab: React.FC = () => {
               </div>
 
               {isExpanded && (
-                <div className="ml-5 border-l border-sidebar-border">
+                <div className="ml-5 border-l border-sidebar-border pl-2">
                   <div className="flex items-center gap-1 px-2 py-0.5">
                     <Icon name="folder-3" className="h-3 w-3 shrink-0 text-muted-foreground/50" />
                     <span className="text-[11px] text-muted-foreground/60 truncate" title={project.workspace || ''}>
