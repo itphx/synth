@@ -55,12 +55,10 @@ function TabTooltipLabel({ tab }: { tab: CenterTab }) {
 function SortableTab({
   tab,
   isActive,
-  closing,
   onClose,
 }: {
   tab: CenterTab
   isActive: boolean
-  closing: boolean
   onClose: (id: string) => void
 }) {
   const { setActiveCenterTab } = useUIStore()
@@ -116,12 +114,10 @@ function SortableTab({
           data-tab-id={tab.id}
           className={cn(
             'group flex shrink items-center gap-1.5 rounded-t-md px-3 py-1.5 cursor-pointer select-none',
-            'transition-opacity duration-150',
             isActive
               ? 'bg-card text-foreground border-x border-t border-border'
               : 'text-muted-foreground hover:text-foreground hover:bg-interactive-hover',
             isDragging && 'opacity-50',
-            closing && 'opacity-0',
           )}
           onClick={() => setActiveCenterTab(tab.id)}
           onMouseDown={(e) => {
@@ -168,7 +164,6 @@ function DraggingTabOverlay({ tab }: { tab: CenterTab }) {
 export function CenterTabs() {
   const { centerTabs, activeCenterTabId, closeTab, reorderTabs } = useUIStore()
   const scrollRef = useRef<HTMLDivElement>(null)
-  const [closingId, setClosingId] = useState<string | null>(null)
   const [activeDragTab, setActiveDragTab] = useState<CenterTab | null>(null)
 
   const sensors = useSensors(
@@ -194,11 +189,7 @@ export function CenterTabs() {
   }, [centerTabs, reorderTabs])
 
   const handleClose = useCallback((tabId: string) => {
-    setClosingId(tabId)
-    setTimeout(() => {
-      closeTab(tabId)
-      setClosingId(null)
-    }, 150)
+    closeTab(tabId)
   }, [closeTab])
 
   const handleScroll = useCallback(() => {
@@ -262,7 +253,6 @@ export function CenterTabs() {
                 key={tab.id}
                 tab={tab}
                 isActive={tab.id === activeCenterTabId}
-                closing={closingId === tab.id}
                 onClose={handleClose}
               />
             ))}
