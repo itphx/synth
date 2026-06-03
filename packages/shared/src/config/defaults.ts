@@ -8,6 +8,7 @@ export const defaultConfig: SynthConfig = {
   },
   storage: {
     dataDir: '/var/synth/data',
+    workspacesRoot: '',
   },
   auth: {
     debugMode: false,

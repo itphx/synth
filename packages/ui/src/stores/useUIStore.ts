@@ -35,6 +35,7 @@ export interface CenterTab {
     filePath?: string
     projectId?: string
   }
+  editingState?: 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 }
 
 export type StatusType = 'info' | 'warning' | 'error' | 'success' | 'stream'
@@ -85,8 +86,10 @@ interface UIStore {
   activeCenterTabId: string | null
   openTab: (tab: CenterTab) => void
   updateTabTitle: (tabId: string, newTitle: string) => void
+  setTabEditingState: (tabId: string, editingState: CenterTab['editingState']) => void
   closeTab: (tabId: string) => void
   setActiveCenterTab: (tabId: string) => void
+  reorderTabs: (fromIndex: number, toIndex: number) => void
 
   transportMode: TransportMode
   setTransportMode: (mode: TransportMode) => void
@@ -232,6 +235,13 @@ export const useUIStore = create<UIStore>()(
           ),
         })),
 
+      setTabEditingState: (tabId, editingState) =>
+        set((state) => ({
+          centerTabs: state.centerTabs.map((t) =>
+            t.id === tabId ? { ...t, editingState } : t
+          ),
+        })),
+
       closeTab: (tabId) =>
         set((state) => {
           const idx = state.centerTabs.findIndex((t) => t.id === tabId)
@@ -249,6 +259,14 @@ export const useUIStore = create<UIStore>()(
         }),
 
       setActiveCenterTab: (tabId) => set({ activeCenterTabId: tabId }),
+
+      reorderTabs: (fromIndex, toIndex) =>
+        set((state) => {
+          const tabs = [...state.centerTabs]
+          const [moved] = tabs.splice(fromIndex, 1)
+          tabs.splice(toIndex, 0, moved!)
+          return { centerTabs: tabs }
+        }),
 
       transportMode: 'auto',
       setTransportMode: (mode: TransportMode) => {

@@ -12,7 +12,7 @@ import { ContextMenu } from '@/components/ui/contextMenu'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { BulkActionBar } from './BulkActionBar'
 import { formatRelativeTime, parseISODate } from '@/lib/formatDate'
-import { synthApi, type ProjectData, type SessionData } from '@/lib/api/synthApi'
+import { synthApi, type ProjectData, type SessionData, type FileEntry } from '@/lib/api/synthApi'
 
 const MAX_VISIBLE_SESSIONS = 5
 
@@ -731,6 +731,74 @@ function ProjectEditPopup({ project, onClose }: { project: ProjectData; onClose:
   const [color, setColor] = useState<string | null>(project.color)
   const [workspace, setWorkspace] = useState(project.workspace || '')
 
+  // Inline directory browser
+  const [dirEntries, setDirEntries] = useState<FileEntry[]>([])
+  const [dirPath, setDirPath] = useState('')
+  const [dirLoading, setDirLoading] = useState(false)
+  const [dirError, setDirError] = useState<string | null>(null)
+  const [dirShowHidden, setDirShowHidden] = useState(false)
+  const [dirNewFolderInput, setDirNewFolderInput] = useState(false)
+  const [dirNewFolderName, setDirNewFolderName] = useState('')
+
+  const loadDir = useCallback(async (path: string, showHidden: boolean) => {
+    setDirLoading(true)
+    setDirError(null)
+    try {
+      if (!path) {
+        const result = await synthApi.getWorkspaceRoot(showHidden)
+        setDirEntries(result.entries)
+      } else {
+        const result = await synthApi.browseWorkspaceRoot(path, showHidden)
+        setDirEntries(result.entries)
+      }
+    } catch (e) {
+      setDirError((e as Error).message)
+    } finally {
+      setDirLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (page === 'general') {
+      loadDir(dirPath, dirShowHidden)
+    }
+  }, [page, dirPath, dirShowHidden, loadDir])
+
+  const handleDirClick = (entry: FileEntry) => {
+    if (!entry.isDirectory) return
+    const newPath = dirPath ? `${dirPath}/${entry.name}` : entry.name
+    setDirPath(newPath)
+    setWorkspace(newPath)
+  }
+
+  const handleBreadcrumb = (index: number) => {
+    const parts = dirPath ? dirPath.split('/') : []
+    const newPath = parts.slice(0, index + 1).join('/')
+    setDirPath(newPath)
+    setWorkspace(newPath)
+  }
+
+  const handleCreateFolder = async () => {
+    if (!dirNewFolderName.trim()) {
+      setDirNewFolderInput(false)
+      setDirNewFolderName('')
+      return
+    }
+    const folderPath = dirPath
+      ? `${dirPath}/${dirNewFolderName.trim()}`
+      : dirNewFolderName.trim()
+    try {
+      await synthApi.createWorkspaceDirectory(folderPath)
+      setDirNewFolderInput(false)
+      setDirNewFolderName('')
+      await loadDir(dirPath, dirShowHidden)
+    } catch (e) {
+      setDirError((e as Error).message)
+    }
+  }
+
+  const breadcrumbParts = dirPath ? dirPath.split('/') : []
+
   const CATEGORIES = [
     { id: 'general' as const, labelKey: 'leftPanel.editProject.general' as const, icon: 'file-text' as const },
     { id: 'appearance' as const, labelKey: 'leftPanel.editProject.appearance' as const, icon: 'palette' as const },
@@ -797,13 +865,135 @@ function ProjectEditPopup({ project, onClose }: { project: ProjectData; onClose:
                   </div>
                   <div>
                     <label className="block mb-1.5 text-xs font-medium text-muted-foreground">{t('leftPanel.workspace')}</label>
-                    <input
-                      type="text"
-                      value={workspace}
-                      onChange={(e) => setWorkspace(e.target.value)}
-                      placeholder="/home/user/project"
-                      className="w-full rounded bg-interactive px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground"
-                    />
+                    {workspace ? (
+                      <div className="flex items-center gap-2 mb-2">
+                        <Icon name="folder" className="size-4 text-muted-foreground shrink-0" />
+                        <span className="font-mono text-xs text-foreground truncate">{workspace}</span>
+                        <button
+                          type="button"
+                          onClick={() => { setWorkspace(''); setDirPath('') }}
+                          className="rounded p-0.5 text-muted-foreground hover:bg-interactive-hover hover:text-destructive transition-colors shrink-0"
+                          title={t('workspace.clear')}
+                        >
+                          <Icon name="x" className="size-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground mb-2">{t('workspace.noneSelected')}</p>
+                    )}
+
+                    {/* Breadcrumbs */}
+                    <div className="flex items-center gap-1 text-[11px] text-muted-foreground mb-2 flex-wrap">
+                      <button
+                        onClick={() => { setDirPath(''); setWorkspace('') }}
+                        className="flex items-center gap-1 rounded px-1 py-0.5 hover:bg-interactive-hover hover:text-foreground transition-colors"
+                      >
+                        <Icon name="folder-3" className="size-3" />
+                      </button>
+                      {breadcrumbParts.map((part, i) => (
+                        <span key={i} className="flex items-center gap-1">
+                          <span className="text-muted-foreground/50">/</span>
+                          <button
+                            onClick={() => handleBreadcrumb(i)}
+                            className="rounded px-1 py-0.5 hover:bg-interactive-hover hover:text-foreground transition-colors"
+                          >
+                            {part}
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+
+                    {/* Toolbar */}
+                    <div className="flex items-center justify-between mb-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setDirNewFolderInput(true)}
+                        className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-foreground hover:bg-interactive-hover transition-colors"
+                      >
+                        <Icon name="folder-add" className="size-3" />
+                        <span>{t('file.newFolder')}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDirShowHidden((v) => !v)}
+                        className={`flex items-center justify-center h-6 w-6 rounded transition-colors ${
+                          dirShowHidden ? 'bg-interactive-hover text-primary' : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'
+                        }`}
+                        title={t('workspace.showHidden')}
+                      >
+                        <Icon name={dirShowHidden ? 'eye' : 'eye-off'} className="size-3.5" />
+                      </button>
+                    </div>
+
+                    {dirNewFolderInput && (
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <input
+                          autoFocus
+                          type="text"
+                          value={dirNewFolderName}
+                          onChange={(e) => setDirNewFolderName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleCreateFolder()
+                            if (e.key === 'Escape') { setDirNewFolderInput(false); setDirNewFolderName('') }
+                          }}
+                          placeholder={t('common.name')}
+                          className="flex-1 rounded bg-interactive px-2 py-1 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleCreateFolder}
+                          className="rounded px-2 py-1 text-xs text-foreground bg-interactive hover:bg-interactive-hover transition-colors"
+                        >
+                          {t('common.create')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setDirNewFolderInput(false); setDirNewFolderName('') }}
+                          className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-interactive-hover transition-colors"
+                        >
+                          {t('common.cancel')}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Directory list */}
+                    <div className="max-h-48 overflow-y-auto rounded border border-border bg-background">
+                      {dirLoading && (
+                        <div className="flex items-center justify-center py-6">
+                          <Icon name="loader-2" className="size-4 animate-spin text-muted-foreground" />
+                        </div>
+                      )}
+                      {dirError && (
+                        <div className="flex flex-col items-center gap-1.5 py-6 text-center">
+                          <Icon name="alert-triangle" className="size-5 text-red-500" />
+                          <p className="text-xs text-red-500">{dirError}</p>
+                        </div>
+                      )}
+                      {!dirLoading && !dirError && dirEntries.length === 0 && (
+                        <div className="flex flex-col items-center gap-1.5 py-6 text-center">
+                          <Icon name="folder-3" className="size-5 text-muted-foreground" />
+                          <p className="text-xs text-muted-foreground">{t('leftPanel.emptyDirectory')}</p>
+                        </div>
+                      )}
+                      {!dirLoading && !dirError && dirEntries.map((entry) => (
+                        <button
+                          key={entry.path}
+                          type="button"
+                          onClick={() => handleDirClick(entry)}
+                          className={`flex w-full items-center gap-2 rounded-none px-3 py-1.5 text-sm transition-colors text-left ${
+                            workspace === entry.path
+                              ? 'bg-primary/10 text-primary'
+                              : 'text-foreground hover:bg-interactive-hover'
+                          }`}
+                        >
+                          <Icon
+                            name="folder"
+                            className={`size-4 shrink-0 ${workspace === entry.path ? 'text-primary' : 'text-muted-foreground'}`}
+                          />
+                          <span className="truncate">{entry.name}</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}

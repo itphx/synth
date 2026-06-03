@@ -1,13 +1,26 @@
-import { useRef, useEffect, useCallback, useMemo, useState } from 'react'
+import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState } from 'react'
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragOverlay,
+  type DragStartEvent,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  horizontalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
+import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore, type CenterTab } from '@/stores/useUIStore'
-import { useChatStore } from '@/stores/chatStore'
-import { useSessionsStore } from '@/stores/sessionsStore'
-import { useProvidersStore } from '@/stores/providersStore'
-import { synthApi } from '@/lib/api/synthApi'
-import { useNotification } from '@/hooks/useNotification'
+import { useProjectsStore } from '@/stores/projectsStore'
 
 const TAB_ICONS: Record<CenterTab['type'], string> = {
   chat: 'chat-new',
@@ -15,11 +28,200 @@ const TAB_ICONS: Record<CenterTab['type'], string> = {
   'file-editor': 'edit-2',
 }
 
-export function CenterTabs() {
+const TAB_CONTENT_FLOOR = 160
+const TAB_MAX_WIDTH = 200
+
+function TabTooltipLabel({ tab }: { tab: CenterTab }) {
   const { t } = useI18n()
-  const { notify } = useNotification()
-  const { centerTabs, activeCenterTabId, setActiveCenterTab, closeTab } = useUIStore()
+  const projects = useProjectsStore((s) => s.projects)
+  const project = tab.data.projectId ? projects.find((p) => p.id === tab.data.projectId) : undefined
+  const projectName = project?.name
+
+  if (tab.type === 'chat') {
+    return projectName
+      ? t('center.tabTooltip.chat', { title: tab.title, project: projectName })
+      : t('center.tabTooltip.noProject.chat', { title: tab.title })
+  }
+  if (tab.type === 'file-viewer') {
+    return projectName
+      ? t('center.tabTooltip.fileViewer', { title: tab.title, project: projectName })
+      : t('center.tabTooltip.noProject.fileViewer', { title: tab.title })
+  }
+  return projectName
+    ? t('center.tabTooltip.fileEditor', { title: tab.title, project: projectName })
+    : t('center.tabTooltip.noProject.fileEditor', { title: tab.title })
+}
+
+function SortableTab({
+  tab,
+  isActive,
+  onClose,
+}: {
+  tab: CenterTab
+  isActive: boolean
+  onClose: (id: string) => void
+}) {
+  const { setActiveCenterTab } = useUIStore()
+  const { t } = useI18n()
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: tab.id,
+    disabled: isActive,
+  })
+
+  const measureRef = useRef<HTMLDivElement>(null)
+  const [effectiveMinWidth, setEffectiveMinWidth] = useState<number | undefined>(80)
+
+  const combinedRef = useCallback((el: HTMLDivElement | null) => {
+    setNodeRef(el)
+    if (el) measureRef.current = el
+  }, [setNodeRef])
+
+  useLayoutEffect(() => {
+    if (measureRef.current) {
+      const width = measureRef.current.scrollWidth
+      if (width > TAB_CONTENT_FLOOR) {
+        setEffectiveMinWidth(TAB_CONTENT_FLOOR)
+      } else {
+        setEffectiveMinWidth(undefined)
+      }
+    }
+  }, [tab.title, tab.type])
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    maxWidth: TAB_MAX_WIDTH,
+    minWidth: effectiveMinWidth,
+    flexBasis: 'auto',
+    flexShrink: 1,
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div
+          ref={combinedRef}
+          style={style}
+          {...attributes}
+          {...(isActive ? {} : listeners)}
+          data-tab-id={tab.id}
+          className={cn(
+            'group flex shrink items-center gap-1.5 rounded-t-md px-3 py-1.5 cursor-pointer select-none',
+            isActive
+              ? 'bg-card text-foreground border-x border-t border-border'
+              : 'text-muted-foreground hover:text-foreground hover:bg-interactive-hover',
+            isDragging && 'opacity-50',
+          )}
+          onClick={() => setActiveCenterTab(tab.id)}
+          onMouseDown={(e) => {
+            if (e.button === 1) {
+              e.preventDefault()
+              onClose(tab.id)
+            }
+          }}
+        >
+          <Icon name={TAB_ICONS[tab.type]} className="size-4 shrink-0" />
+          <span className="text-xs font-medium truncate">{tab.title}</span>
+          <button
+            className="ml-0.5 rounded-sm p-0.5 opacity-0 group-hover:opacity-100 hover:bg-interactive-hover transition-opacity shrink-0"
+            onClick={(e) => {
+              e.stopPropagation()
+              onClose(tab.id)
+            }}
+            title={t('center.closeTab')}
+          >
+            <Icon name="close" className="size-3" />
+          </button>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent>
+        <TabTooltipLabel tab={tab} />
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+function DraggingTabOverlay({ tab }: { tab: CenterTab }) {
+  return (
+    <div
+      className="flex shrink-0 items-center gap-1.5 rounded-t-md px-3 py-1.5 bg-card text-foreground border-x border-t border-border shadow-lg opacity-90"
+      style={{ maxWidth: TAB_MAX_WIDTH }}
+    >
+      <Icon name={TAB_ICONS[tab.type]} className="size-4 shrink-0" />
+      <span className="text-xs font-medium truncate">{tab.title}</span>
+      <Icon name="close" className="size-3 ml-0.5" />
+    </div>
+  )
+}
+
+export function CenterTabs() {
+  const { centerTabs, activeCenterTabId, closeTab, reorderTabs } = useUIStore()
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [activeDragTab, setActiveDragTab] = useState<CenterTab | null>(null)
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+  )
+
+  const tabIds = useMemo(() => centerTabs.map((t) => t.id), [centerTabs])
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    const tab = centerTabs.find((t) => t.id === event.active.id)
+    if (tab) setActiveDragTab(tab)
+  }, [centerTabs])
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    setActiveDragTab(null)
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIdx = centerTabs.findIndex((t) => t.id === active.id)
+    const newIdx = centerTabs.findIndex((t) => t.id === over.id)
+    if (oldIdx >= 0 && newIdx >= 0) {
+      reorderTabs(oldIdx, newIdx)
+    }
+  }, [centerTabs, reorderTabs])
+
+  const handleClose = useCallback((tabId: string) => {
+    closeTab(tabId)
+  }, [closeTab])
+
+  const handleScroll = useCallback(() => {
+    if (!scrollRef.current) return
+    const { scrollLeft, scrollWidth, clientWidth } = scrollRef.current
+    const hasLeft = scrollLeft > 1
+    const hasRight = scrollWidth - scrollLeft - clientWidth > 1
+    const el = scrollRef.current
+    if (hasLeft && hasRight) {
+      el.setAttribute('data-scroll-shadow', 'left-right')
+    } else if (hasLeft) {
+      el.setAttribute('data-scroll-shadow', 'left')
+    } else if (hasRight) {
+      el.setAttribute('data-scroll-shadow', 'right')
+    } else {
+      el.removeAttribute('data-scroll-shadow')
+    }
+  }, [])
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollLeft += e.deltaY
+    }
+  }, [])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    handleScroll()
+    el.addEventListener('scroll', handleScroll, { passive: true })
+    return () => el.removeEventListener('scroll', handleScroll)
+  }, [handleScroll])
 
   useEffect(() => {
     if (activeCenterTabId && scrollRef.current) {
@@ -28,143 +230,38 @@ export function CenterTabs() {
     }
   }, [activeCenterTabId])
 
-  const activeTab = centerTabs.find((t) => t.id === activeCenterTabId)
-  const isChatTab = activeTab?.type === 'chat'
-  const sessionId = activeTab?.data?.sessionId
-
-  const { messagesBySession } = useChatStore()
-  const sessions = useSessionsStore((s) => s.sessions)
-  const { selectedModelName, models: providersModels } = useProvidersStore()
-
-  const activeSession = sessionId ? sessions.find((s) => s.id === sessionId) : undefined
-  const sessionModelId = (activeSession?.settings as Record<string, unknown>)?.model as string | undefined
-  const effectiveModel = sessionModelId || selectedModelName
-
-  const contextWindow = useMemo(() => {
-    const m = providersModels.find((m) => m.id === effectiveModel || m.name === effectiveModel)
-    return m?.context_window ?? 200_000
-  }, [providersModels, effectiveModel])
-
-  const lastInputTokens = useMemo(() => {
-    const msgs = sessionId ? messagesBySession[sessionId] || [] : []
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i]!
-      if (m.role === 'assistant' && !m.disabled && !m.hidden) {
-        return m.usage?.input_tokens ?? 0
-      }
-    }
-    return 0
-  }, [messagesBySession, sessionId])
-
-  const windowPercent = contextWindow > 0 ? Math.round((lastInputTokens / contextWindow) * 100) : 0
-  const [summarizing, setSummarizing] = useState(false)
-
-  const canSummarize = activeSession?.can_summarize ?? false
-
-  const handleClearSession = useCallback(async () => {
-    if (!activeTab?.data?.sessionId) return
-    const sessionId = activeTab.data.sessionId
-    if (!window.confirm(t('leftPanel.confirmClearSession'))) return
-    try {
-      await synthApi.clearSession(sessionId)
-      useChatStore.getState().clearSession(sessionId)
-      const result = await synthApi.getSessionMessages(sessionId)
-      useChatStore.getState().setMessages(sessionId, result.messages)
-      notify({ text: t('chat.session.cleared'), type: 'success', category: 'queue', sessionId })
-    } catch {
-      notify({ text: t('chat.error.clearSession'), type: 'error', category: 'error', sessionId: activeTab.data.sessionId })
-    }
-  }, [activeTab, notify, t])
-
-  const handleSummarize = useCallback(async () => {
-    if (!activeTab?.data?.sessionId) return
-    const sid = activeTab.data.sessionId
-    setSummarizing(true)
-    try {
-      await synthApi.summarizeSession(sid)
-      notify({ text: t('rightPanel.context.summarizeEnqueued'), type: 'info', category: 'queue', sessionId: sid })
-    } catch (e) {
-      notify({ text: `${t('rightPanel.context.summarizeError')}: ${(e as Error).message}`, type: 'error', category: 'error', sessionId: sid })
-    } finally {
-      setSummarizing(false)
-    }
-  }, [activeTab, notify, t])
-
   if (centerTabs.length === 0) {
     return null
   }
 
   return (
     <div className="flex shrink-0 items-center border-b border-border bg-background px-1">
-      <div
-        ref={scrollRef}
-        className="flex flex-1 items-center gap-0.5 overflow-x-auto scrollbar-none"
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
       >
-        {centerTabs.map((tab) => {
-          const isActive = tab.id === activeCenterTabId
-          return (
-            <div
-              key={tab.id}
-              data-tab-id={tab.id}
-              className={`group flex shrink-0 items-center gap-1.5 rounded-t-md px-3 py-1.5 cursor-pointer transition-colors select-none ${
-                isActive
-                  ? 'bg-card text-foreground border-x border-t border-border'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-interactive-hover'
-              }`}
-              onClick={() => setActiveCenterTab(tab.id)}
-            >
-              <Icon name={TAB_ICONS[tab.type]} className="size-4 shrink-0" />
-              <span className="text-xs font-medium truncate max-w-[140px]">{tab.title}</span>
-              <button
-                className="ml-0.5 rounded-sm p-0.5 opacity-0 group-hover:opacity-100 hover:bg-interactive-hover transition-opacity shrink-0"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  closeTab(tab.id)
-                }}
-                title={t('center.closeTab')}
-              >
-                <Icon name="close" className="size-3" />
-              </button>
-            </div>
-          )
-        })}
-      </div>
-      {isChatTab && (
-        <>
+        <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
           <div
-            className="ml-1 flex shrink-0 items-center gap-1"
-            title={`${lastInputTokens.toLocaleString()} / ${contextWindow.toLocaleString()}`}
+            ref={scrollRef}
+            onWheel={handleWheel}
+            className="tab-scroll-container flex flex-1 items-center gap-0.5 overflow-x-auto scrollbar-none"
           >
-            <div className="h-1.5 w-12 rounded-full bg-foreground/10 overflow-hidden">
-              <div
-                className="h-1.5 rounded-full bg-primary transition-all"
-                style={{ width: `${Math.min(windowPercent, 100)}%` }}
+            {centerTabs.map((tab) => (
+              <SortableTab
+                key={tab.id}
+                tab={tab}
+                isActive={tab.id === activeCenterTabId}
+                onClose={handleClose}
               />
-            </div>
-            <span className="text-[10px] tabular-nums text-muted-foreground">{windowPercent}%</span>
+            ))}
           </div>
-          <button
-            onClick={handleSummarize}
-            disabled={!canSummarize || summarizing}
-            title={canSummarize ? t('rightPanel.context.summarizeNow') : t('rightPanel.context.notEnoughMessages')}
-            className={cn(
-              'ml-1.5 shrink-0 rounded p-1 transition-colors',
-              canSummarize && !summarizing
-                ? 'text-muted-foreground hover:text-foreground hover:bg-interactive-hover'
-                : 'text-muted-foreground opacity-30 cursor-default',
-            )}
-          >
-            <Icon name="subtract" className="size-3.5 text-amber-400" />
-          </button>
-          <button
-            onClick={handleClearSession}
-            title={t('leftPanel.clearSession')}
-            className="ml-0.5 shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
-          >
-            <Icon name="close" className="size-3.5 text-destructive" />
-          </button>
-        </>
-      )}
+        </SortableContext>
+        <DragOverlay>
+          {activeDragTab && <DraggingTabOverlay tab={activeDragTab} />}
+        </DragOverlay>
+      </DndContext>
     </div>
   )
 }

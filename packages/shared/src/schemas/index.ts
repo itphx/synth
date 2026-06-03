@@ -75,6 +75,7 @@ export const projectCreateSchema = z.object({
   description: z.string().default(''),
   icon: z.string().optional(),
   color: z.string().optional(),
+  workspace: z.string().optional(),
 });
 
 export const projectUpdateSchema = z.object({
@@ -84,6 +85,7 @@ export const projectUpdateSchema = z.object({
   invariants: z.string().optional(),
   icon: z.string().optional(),
   color: z.string().optional(),
+  workspace: z.string().optional(),
 });
 
 export const promptRequestSchema = z.object({
@@ -101,9 +103,49 @@ export const spaLoginSchema = z.object({
   username: z.string().optional(),
 });
 
+// --- File System schemas ---
+export const fsListQuerySchema = z.object({
+  project_id: z.string().min(1),
+  path: z.string().default(''),
+  maxDepth: z.coerce.number().int().min(1).max(10).optional(),
+  includeHidden: z.coerce.boolean().optional(),
+});
+
+export const fsReadQuerySchema = z.object({
+  project_id: z.string().min(1),
+  path: z.string().min(1),
+});
+
+export const fsWriteBodySchema = z.object({
+  projectId: z.string().min(1),
+  path: z.string().min(1),
+  content: z.string(),
+});
+
+export const fsDeleteQuerySchema = z.object({
+  project_id: z.string().min(1),
+  path: z.string().min(1),
+});
+
+export const fsMkdirBodySchema = z.object({
+  projectId: z.string().min(1),
+  path: z.string().min(1),
+});
+
+export const fsDownloadQuerySchema = z.object({
+  project_id: z.string().min(1),
+  path: z.string().min(1),
+});
+
 export type SessionCreateRequest = z.infer<typeof sessionCreateSchema>;
 export type SessionUpdateRequest = z.infer<typeof sessionUpdateSchema>;
 export type ProjectCreateRequest = z.infer<typeof projectCreateSchema>;
 export type ProjectUpdateRequest = z.infer<typeof projectUpdateSchema>;
 export type PromptRequest = z.infer<typeof promptRequestSchema>;
 export type SpaLoginRequest = z.infer<typeof spaLoginSchema>;
+export type FsListQuery = z.infer<typeof fsListQuerySchema>;
+export type FsReadQuery = z.infer<typeof fsReadQuerySchema>;
+export type FsWriteBody = z.infer<typeof fsWriteBodySchema>;
+export type FsDeleteQuery = z.infer<typeof fsDeleteQuerySchema>;
+export type FsMkdirBody = z.infer<typeof fsMkdirBodySchema>;
+export type FsDownloadQuery = z.infer<typeof fsDownloadQuerySchema>;

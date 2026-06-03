@@ -85,24 +85,9 @@ export interface StickyNoteData {
   disabled: boolean
 }
 
-export interface FileEntry {
-  name: string
-  path: string
-  isDirectory: boolean
-  size: number
-  modifiedAt: number
-}
+export type { FileEntry, DirectoryListResult, FileReadResult } from '@synth/shared'
 
-export interface DirectoryListResult {
-  path: string
-  entries: FileEntry[]
-}
-
-export interface FileReadResult {
-  path: string
-  content: string
-  size: number
-}
+import type { DirectoryListResult, FileReadResult, FileEntry } from '@synth/shared'
 
 export interface ProjectStats {
   total_sessions: number
@@ -455,6 +440,80 @@ export const synthApi = {
   async readFile(projectId: string, path: string): Promise<FileReadResult> {
     const params = new URLSearchParams({ project_id: projectId, path })
     return fetchJSON<FileReadResult>(`${BASE_URL}/fs/read?${params.toString()}`)
+  },
+
+  async writeFile(projectId: string, path: string, content: string): Promise<FileReadResult> {
+    return fetchJSON<FileReadResult>(`${BASE_URL}/fs/write`, {
+      method: 'POST',
+      body: JSON.stringify({ projectId, path, content }),
+    })
+  },
+
+  async uploadFile(projectId: string, dirPath: string, file: File): Promise<{ path: string; name: string }> {
+    const formData = new FormData()
+    formData.append('project_id', projectId)
+    formData.append('path', dirPath)
+    formData.append('file', file)
+    const response = await fetch(`${BASE_URL}/fs/upload`, {
+      method: 'POST',
+      body: formData,
+      credentials: 'include',
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Upload failed' }))
+      throw new Error(error.detail || error.error?.error || `HTTP ${response.status}`)
+    }
+    return response.json()
+  },
+
+  downloadFile(projectId: string, path: string): string {
+    const params = new URLSearchParams({ project_id: projectId, path })
+    return `${BASE_URL}/fs/download?${params.toString()}`
+  },
+
+  async createDirectory(projectId: string, path: string): Promise<{ created: boolean; path: string }> {
+    return fetchJSON(`${BASE_URL}/fs/mkdir`, {
+      method: 'POST',
+      body: JSON.stringify({ projectId, path }),
+    })
+  },
+
+  async deleteEntry(projectId: string, path: string): Promise<{ deleted: boolean; path: string }> {
+    const params = new URLSearchParams({ project_id: projectId, path })
+    return fetchJSON(`${BASE_URL}/fs?${params.toString()}`, {
+      method: 'DELETE',
+    })
+  },
+
+  async getWorkspaceRoot(includeHidden = false): Promise<{ root: string; entries: FileEntry[] }> {
+    const params = new URLSearchParams({ includeHidden: String(includeHidden) })
+    return fetchJSON(`${BASE_URL}/fs/workspace-root?${params.toString()}`)
+  },
+
+  async browseWorkspaceRoot(
+    path: string,
+    includeHidden = false,
+  ): Promise<{ root: string; path: string; entries: FileEntry[] }> {
+    const params = new URLSearchParams({ path, includeHidden: String(includeHidden) })
+    return fetchJSON(`${BASE_URL}/fs/workspace-root/browse?${params.toString()}`)
+  },
+
+  async createWorkspaceDirectory(rePath: string): Promise<{ created: boolean; path: string }> {
+    return fetchJSON(`${BASE_URL}/fs/workspace-root/mkdir`, {
+      method: 'POST',
+      body: JSON.stringify({ path: rePath }),
+    })
+  },
+
+  async moveEntry(
+    projectId: string,
+    sourcePath: string,
+    targetPath: string,
+  ): Promise<{ moved: boolean; sourcePath: string; targetPath: string }> {
+    return fetchJSON(`${BASE_URL}/fs/move`, {
+      method: 'POST',
+      body: JSON.stringify({ projectId, sourcePath, targetPath }),
+    })
   },
 
   // Агенты

@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { ToastContainer } from 'react-toastify'
+import { TooltipProvider } from './components/ui/tooltip'
 import { useUIStore } from '@/stores/useUIStore'
 import { useI18nStore } from '@/lib/i18n/store'
 import { DEFAULT_THEME, DEFAULT_THEME_MODE, DEFAULT_LOCALE } from '@/lib/defaults'
@@ -8,6 +9,7 @@ import { Header } from './components/layout/Header'
 import { LeftPanel } from './components/panels/LeftPanel'
 import { RightPanel } from './components/panels/RightPanel'
 import { ProjectsTabToolbar } from './components/panels/ProjectsTabToolbar'
+import { FilesTabToolbar } from './components/panels/FilesTabToolbar'
 import { CenterPanel } from './components/layout/CenterPanel'
 import { BackendConnection } from './components/layout/BackendConnection'
 import { SettingsModal } from './components/settings/SettingsModal'
@@ -56,13 +58,16 @@ function DefaultsSync() {
 function App() {
   const { leftPanel, rightPanel, setLeftPanelWidth, setRightPanelWidth, setSettingsDialogOpen, setSettingsPage, leftPanelTab } = useUIStore()
 
-  const leftHeaderActions = leftPanelTab === 'projects' ? <ProjectsTabToolbar /> : undefined
+  const leftHeaderActions = leftPanelTab === 'projects' ? <ProjectsTabToolbar />
+    : leftPanelTab === 'files' ? <FilesTabToolbar />
+    : undefined
 
   return (
     <>
       <DefaultsSync />
       <AuthGate>
         <BackendConnection />
+        <TooltipProvider>
         <div className="flex h-screen">
           <Sidebar
             side="left"
@@ -88,6 +93,7 @@ function App() {
             <RightPanel />
           </Sidebar>
         </div>
+        </TooltipProvider>
 
         <SettingsModal />
         <AdminModal />
