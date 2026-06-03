@@ -407,7 +407,7 @@ export const FilesTab: React.FC = () => {
               >
                 <Icon
                   name={isExpanded ? 'arrow-down-s' : 'arrow-right-s'}
-                  className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 group-hover/project:opacity-100 transition-opacity"
+                  className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
                 />
                 <Icon
                   name={project.icon ? project.icon : 'folder-3'}
