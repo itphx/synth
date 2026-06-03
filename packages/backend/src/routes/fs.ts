@@ -99,7 +99,7 @@ export function createFsRoutes(kit: AuthKit, projectStore: ProjectStore, workspa
       const maxDepth = query.maxDepth ?? 0;
       const includeHidden = query.includeHidden ?? false;
 
-      const entries = await listDirectoryRecursive(safePath, '', maxDepth, includeHidden, 0);
+      const entries = await listDirectoryRecursive(safePath, query.path || '', maxDepth, includeHidden, 0);
 
       const result: DirectoryListResult = {
         path: query.path || '/',
