@@ -161,7 +161,7 @@ app.get('/api/v2/i18n/translations/ru', (c) => c.json(getTranslations('ru')));
 app.get('/api/v2/i18n/translations/en', (c) => c.json(getTranslations('en')));
 
 // Projects routes
-app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager));
+app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, backendConfig.workspacesRoot));
 
 // Sessions routes
 app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer));
@@ -173,7 +173,7 @@ app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager, contextO
 app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage));
 
 // FS routes
-app.route('/api/v2/fs', createFsRoutes(auth));
+app.route('/api/v2/fs', createFsRoutes(auth, projectStore, backendConfig.workspacesRoot));
 
 // Providers routes
 app.route('/api/v2/providers', createProviderRoutes(auth, providerStore));

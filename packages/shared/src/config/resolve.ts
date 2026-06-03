@@ -15,6 +15,7 @@ const DATA_SUBDIRS = [
   'auth/profiles',
   'auth/sessions',
   'auth/states',
+  'workspaces',
 ];
 
 export function resolveDataDir(config: SynthConfig, env?: NodeJS.ProcessEnv): string {
@@ -34,6 +35,14 @@ export function resolvePort(
     if (!isNaN(num)) return num;
   }
   return configFallback;
+}
+
+export function resolveWorkspacesRoot(config: SynthConfig, env?: NodeJS.ProcessEnv): string {
+  const envVal = env !== undefined ? env.SYNTH_WORKSPACES_ROOT : process.env.SYNTH_WORKSPACES_ROOT;
+  if (envVal) return envVal;
+  if (config.storage.workspacesRoot) return config.storage.workspacesRoot;
+  const dataDir = resolveDataDir(config, env);
+  return `${dataDir}/workspaces`;
 }
 
 export async function ensureDataDir(dataDir: string): Promise<void> {

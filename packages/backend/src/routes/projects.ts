@@ -1,12 +1,46 @@
 import { Hono } from 'hono';
+import { resolve } from 'node:path';
+import { stat } from 'node:fs/promises';
 import type { AuthKit } from '../auth/middleware.js';
 import type { ProjectStore } from '../storage/project-store.js';
 import type { SessionManager } from '@synth/core';
 import { serializeProject } from '../lib/serialize.js';
 import { t } from '../lib/i18n.js';
+import { WorkspaceResolver } from '../lib/workspace-resolver.js';
 
-export function createProjectRoutes(kit: AuthKit, store: ProjectStore, sessionManager: SessionManager): Hono {
+export function createProjectRoutes(
+  kit: AuthKit,
+  store: ProjectStore,
+  sessionManager: SessionManager,
+  workspacesRoot: string,
+): Hono {
   const app = new Hono();
+  const wsResolver = new WorkspaceResolver(workspacesRoot,
+    (projectId) => store.load(projectId),
+  );
+
+  async function validateWorkspaceValue(workspace: string | undefined | null): Promise<string | null> {
+    if (!workspace) {
+      return null;
+    }
+
+    const pathError = wsResolver.validateWorkspacePath(workspace);
+    if (pathError) return pathError;
+
+    return await _checkDirectoryExists(resolve(workspacesRoot, workspace));
+  }
+
+  async function _checkDirectoryExists(wsPath: string): Promise<string | null> {
+    try {
+      const s = await stat(wsPath);
+      if (!s.isDirectory()) {
+        return 'Workspace не является директорией';
+      }
+      return null;
+    } catch {
+      return `Директория workspace не найдена: ${wsPath}`;
+    }
+  }
 
   // GET /api/v2/projects — список проектов
   app.get('/', kit.requireAuth, async (c) => {
@@ -25,11 +59,18 @@ export function createProjectRoutes(kit: AuthKit, store: ProjectStore, sessionMa
       return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.nameRequired', undefined, c) } }, 400);
     }
 
+    if (body.workspace) {
+      const wsError = await validateWorkspaceValue(body.workspace);
+      if (wsError) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: wsError } }, 422);
+      }
+    }
+
     const project = store.create(name, user.id, {
       description: body.description,
       icon: body.icon,
       color: body.color,
-      workspace: body.workspace,
+      workspace: body.workspace || undefined,
     });
     await store.save(project);
 
@@ -59,7 +100,15 @@ export function createProjectRoutes(kit: AuthKit, store: ProjectStore, sessionMa
     if (body.invariants !== undefined) project.invariants = body.invariants;
     if (body.icon !== undefined) project.icon = body.icon;
     if (body.color !== undefined) project.color = body.color;
-    if (body.workspace !== undefined) project.workspace = body.workspace;
+    if (body.workspace !== undefined) {
+      if (body.workspace !== null && body.workspace !== '') {
+        const wsError = await validateWorkspaceValue(body.workspace);
+        if (wsError) {
+          return c.json({ error: { code: 'VALIDATION_ERROR', message: wsError } }, 422);
+        }
+      }
+      project.workspace = body.workspace || undefined;
+    }
     project.updatedAt = new Date().toISOString();
 
     await store.save(project);

@@ -263,6 +263,42 @@ export const dict = {
   'center.tab.viewing': 'Viewing: {title}',
   'center.tab.editing': 'Editing: {title}',
 
+  // Files
+  'file.binaryFile': 'Binary file ({size} bytes)',
+  'file.upload': 'Upload file',
+  'file.download': 'Download',
+  'file.newFolder': 'New folder',
+  'file.confirmDelete': 'Delete file «{name}»?',
+  'file.loadError': 'File load error',
+  'file.saveError': 'Save error',
+  'file.unsavedChanges': 'Unsaved changes. Close anyway?',
+  'file.saving': 'Saving...',
+  'file.saved': 'Saved',
+  'file.edit': 'Edit',
+  'file.close': 'Close',
+
+  // Workspace picker
+  'workspace.selectDirectory': 'Select workspace directory',
+  'workspace.select': 'Select',
+  'workspace.selected': 'Selected: {path}',
+  'workspace.noneSelected': 'Nothing selected',
+  'workspace.showHidden': 'Show hidden',
+  'workspace.clear': 'Clear',
+
+  // Files tab
+  'files.toolbar.newFolder': 'New folder',
+  'files.toolbar.showHidden': 'Show hidden',
+  'files.toolbar.selectionMode': 'Select mode',
+  'files.toolbar.exitSelection': 'Exit selection',
+  'files.bulkSelectedCount': 'Selected: {count}',
+  'files.bulkDelete': 'Delete selected',
+  'files.confirmBulkDelete': 'Delete {count} selected items?',
+  'files.showMore': 'Show {count} more',
+  'files.showFewer': 'Show fewer',
+  'files.newFile': 'New file',
+  'files.rename': 'Rename',
+  'files.renamePrompt': 'New name:',
+
   // Status bar
   'statusBar.noMessages': 'No notifications',
   'statusBar.clearAll': 'Clear all',

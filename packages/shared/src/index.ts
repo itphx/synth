@@ -12,6 +12,7 @@ export {
   type SynthConfig,
   type ServerConfig,
   type StorageConfig,
+  type AuthConfig as SynthAuthConfig,
   type LLMConfig,
   type CoreConfig,
   type RunnerConfig,
@@ -23,4 +24,4 @@ export {
   type SummarizationConfig,
 } from './config/index.js';
 export { defaultConfig, loadConfig } from './config/index.js';
-export { resolveDataDir, resolvePort, ensureDataDir, createDefaultConfig } from './config/index.js';
+export { resolveDataDir, resolvePort, resolveWorkspacesRoot, ensureDataDir, createDefaultConfig } from './config/index.js';

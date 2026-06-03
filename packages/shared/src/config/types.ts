@@ -10,6 +10,7 @@ export const serverConfigSchema = z.object({
 
 export const storageConfigSchema = z.object({
   dataDir: z.string().default('/var/synth/data'),
+  workspacesRoot: z.string().default(''),
 });
 
 export const authConfigSchema = z.object({

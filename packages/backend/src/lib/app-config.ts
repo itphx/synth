@@ -1,5 +1,5 @@
 import type { AuthConfig, TestUser, SynthConfig } from '@synth/shared';
-import { loadConfig, resolveDataDir, resolvePort } from '@synth/shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveWorkspacesRoot } from '@synth/shared';
 import type { LoadConfigOptions } from '@synth/shared/config';
 
 const envStr = (key: string, fallback = ''): string => process.env[key] || fallback;
@@ -13,6 +13,7 @@ const envInt = (key: string, fallback: number): number => {
 export interface BackendConfig {
   synth: SynthConfig;
   dataDir: string;
+  workspacesRoot: string;
   port: number;
   auth: AuthConfig;
 }
@@ -73,7 +74,8 @@ export async function loadBackendConfig(options?: LoadConfigOptions): Promise<Ba
   const synth = await loadConfig(options);
   const auth = buildAuthConfig(synth.auth);
   const dataDir = resolveDataDir(synth);
+  const workspacesRoot = resolveWorkspacesRoot(synth);
   const port = resolvePort(synth, 'SYNTH_PORT', synth.server.port);
 
-  return { synth, dataDir, port, auth };
+  return { synth, dataDir, workspacesRoot, port, auth };
 }

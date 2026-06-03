@@ -262,6 +262,42 @@ export const dict = {
   'center.tab.viewing': 'Просмотр: {title}',
   'center.tab.editing': 'Редактор: {title}',
 
+  // Files
+  'file.binaryFile': 'Бинарный файл ({size} байт)',
+  'file.upload': 'Загрузить файл',
+  'file.download': 'Скачать',
+  'file.newFolder': 'Новая папка',
+  'file.confirmDelete': 'Удалить файл «{name}»?',
+  'file.loadError': 'Ошибка загрузки файла',
+  'file.saveError': 'Ошибка сохранения',
+  'file.unsavedChanges': 'Есть несохранённые изменения. Закрыть?',
+  'file.saving': 'Сохранение...',
+  'file.saved': 'Сохранено',
+  'file.edit': 'Редактировать',
+  'file.close': 'Закрыть',
+
+  // Workspace picker
+  'workspace.selectDirectory': 'Выбрать рабочую директорию',
+  'workspace.select': 'Выбрать',
+  'workspace.selected': 'Выбрано: {path}',
+  'workspace.noneSelected': 'Ничего не выбрано',
+  'workspace.showHidden': 'Показать скрытые',
+  'workspace.clear': 'Очистить',
+
+  // Files tab
+  'files.toolbar.newFolder': 'Новая папка',
+  'files.toolbar.showHidden': 'Показать скрытые',
+  'files.toolbar.selectionMode': 'Режим выбора',
+  'files.toolbar.exitSelection': 'Выйти из режима выбора',
+  'files.bulkSelectedCount': 'Выбрано: {count}',
+  'files.bulkDelete': 'Удалить выбранное',
+  'files.confirmBulkDelete': 'Удалить {count} выбранных элементов?',
+  'files.showMore': 'Показать ещё {count}',
+  'files.showFewer': 'Свернуть',
+  'files.newFile': 'Новый файл',
+  'files.rename': 'Переименовать',
+  'files.renamePrompt': 'Новое имя:',
+
   // Status bar
   'statusBar.noMessages': 'Нет уведомлений',
   'statusBar.clearAll': 'Очистить все',

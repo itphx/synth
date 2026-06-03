@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/main.ts",
+    "dev": "tsx src/main.ts",
     "start": "node dist/main.js",
     "build": "tsc && mkdir -p dist/agents && cp -r src/agents/definitions dist/agents/definitions",
     "typecheck": "tsc --noEmit",
