@@ -43,11 +43,22 @@ export const useFilesStore = create<FilesStore>((set, get) => ({
   selectedPaths: {},
 
   loadFileTree: async (projectId, path = '') => {
+    if (!path) {
+      set((s) => {
+        const filtered: Record<string, FileEntry[]> = {}
+        for (const key of Object.keys(s.treesByProject)) {
+          if (!key.startsWith(`${projectId}/`)) {
+            filtered[key] = s.treesByProject[key]
+          }
+        }
+        return { treesByProject: filtered }
+      })
+    }
     set({ loading: true, error: null })
     try {
       const result = await synthApi.listDirectory(projectId, path)
       set((s) => ({
-        treesByProject: { ...s.treesByProject, [projectId]: result.entries },
+        treesByProject: { ...s.treesByProject, [path ? `${projectId}/${path}` : projectId]: result.entries },
         loading: false,
       }))
     } catch (e) {

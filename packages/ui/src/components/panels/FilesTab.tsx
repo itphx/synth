@@ -16,7 +16,7 @@ type PopoverMode = null | { type: 'newFolder' | 'newFile'; projectId: string; pa
 
 export const FilesTab: React.FC = () => {
   const { t } = useI18n()
-  const { projects } = useProjectsStore()
+  const { projects, loadProjects } = useProjectsStore()
   const {
     treesByProject, loadFileTree, loadSubDirectory, uploadFile, createDirectory, createFile, deleteEntry, moveEntry,
     loading, expandedProjects, toggleProjectExpand,
@@ -39,12 +39,17 @@ export const FilesTab: React.FC = () => {
   const closeMenu = useCallback(() => setOpenMenuKey(null), [])
 
   useEffect(() => {
+    loadProjects()
+  }, [loadProjects])
+
+  useEffect(() => {
     workspacedProjects.forEach((p) => {
       if (expandedProjects.has(p.id) && !treesByProject[p.id]) {
         loadFileTree(p.id)
       }
     })
-  }, [workspacedProjects, expandedProjects, treesByProject, loadFileTree])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspacedProjects, expandedProjects])
 
   const toggleDir = (projectId: string, dirPath: string) => {
     setExpandedDirs((prev) => {
