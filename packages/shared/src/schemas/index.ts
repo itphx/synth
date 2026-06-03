@@ -70,12 +70,18 @@ export const sessionUpdateSchema = z.object({
   settings: sessionSettingsSchema.partial().optional(),
 });
 
+export const gitRepoConfigSchema = z.object({
+  path: z.string().min(1),
+  defaultBranch: z.string().optional(),
+});
+
 export const projectCreateSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().default(''),
   icon: z.string().optional(),
   color: z.string().optional(),
   workspace: z.string().optional(),
+  repos: z.array(gitRepoConfigSchema).optional(),
 });
 
 export const projectUpdateSchema = z.object({
@@ -86,6 +92,7 @@ export const projectUpdateSchema = z.object({
   icon: z.string().optional(),
   color: z.string().optional(),
   workspace: z.string().optional(),
+  repos: z.array(gitRepoConfigSchema).optional(),
 });
 
 export const promptRequestSchema = z.object({
@@ -137,6 +144,36 @@ export const fsDownloadQuerySchema = z.object({
   path: z.string().min(1),
 });
 
+// --- Git schemas ---
+export const gitScanBodySchema = z.object({
+  projectId: z.string().min(1),
+});
+
+export const gitInitBodySchema = z.object({
+  projectId: z.string().min(1),
+  path: z.string(),
+  defaultBranch: z.string().optional(),
+});
+
+export const gitCloneBodySchema = z.object({
+  projectId: z.string().min(1),
+  url: z.string().min(1),
+  path: z.string().optional(),
+  branch: z.string().optional(),
+});
+
+export const gitLogQuerySchema = z.object({
+  project_id: z.string().min(1),
+  repo_path: z.string().default(''),
+  max_count: z.coerce.number().int().min(1).max(100).optional(),
+});
+
+export const gitCommitQuerySchema = z.object({
+  project_id: z.string().min(1),
+  repo_path: z.string().default(''),
+  hash: z.string().min(1),
+});
+
 export type SessionCreateRequest = z.infer<typeof sessionCreateSchema>;
 export type SessionUpdateRequest = z.infer<typeof sessionUpdateSchema>;
 export type ProjectCreateRequest = z.infer<typeof projectCreateSchema>;
@@ -149,3 +186,8 @@ export type FsWriteBody = z.infer<typeof fsWriteBodySchema>;
 export type FsDeleteQuery = z.infer<typeof fsDeleteQuerySchema>;
 export type FsMkdirBody = z.infer<typeof fsMkdirBodySchema>;
 export type FsDownloadQuery = z.infer<typeof fsDownloadQuerySchema>;
+export type GitScanBody = z.infer<typeof gitScanBodySchema>;
+export type GitInitBody = z.infer<typeof gitInitBodySchema>;
+export type GitCloneBody = z.infer<typeof gitCloneBodySchema>;
+export type GitLogQuery = z.infer<typeof gitLogQuerySchema>;
+export type GitCommitQuery = z.infer<typeof gitCommitQuerySchema>;

@@ -71,6 +71,7 @@ export function createProjectRoutes(
       icon: body.icon,
       color: body.color,
       workspace: body.workspace || undefined,
+      repos: body.repos || undefined,
     });
     await store.save(project);
 
@@ -109,6 +110,7 @@ export function createProjectRoutes(
       }
       project.workspace = body.workspace || undefined;
     }
+    if (body.repos !== undefined) project.repos = body.repos;
     project.updatedAt = new Date().toISOString();
 
     await store.save(project);

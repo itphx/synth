@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ProjectData } from '@/lib/api/synthApi'
+import type { ProjectData, GitRepoConfigData } from '@/lib/api/synthApi'
 import { synthApi } from '@/lib/api/synthApi'
 
 interface ProjectsStore {
@@ -14,6 +14,7 @@ interface ProjectsStore {
     icon?: string | null
     color?: string | null
     workspace?: string | null
+    repos?: GitRepoConfigData[]
   }) => Promise<ProjectData | null>
   updateProject: (id: string, data: {
     name?: string
@@ -21,6 +22,7 @@ interface ProjectsStore {
     icon?: string | null
     color?: string | null
     workspace?: string | null
+    repos?: GitRepoConfigData[]
   }) => Promise<ProjectData | null>
   deleteProject: (id: string) => Promise<boolean>
 }

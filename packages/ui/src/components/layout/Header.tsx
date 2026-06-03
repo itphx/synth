@@ -38,6 +38,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   const isChatTab = activeTab?.type === 'chat'
   const isFileViewer = activeTab?.type === 'file-viewer'
   const isFileEditor = activeTab?.type === 'file-editor'
+  const isCommitDetail = activeTab?.type === 'commit-detail'
 
   // Chat tab context window calculation
   const { messagesBySession } = useChatStore()
@@ -129,6 +130,17 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   }, [activeTab, isEditorDirty, isSaving])
 
   const handleFileClose = useCallback(() => {
+    if (activeTab) closeTab(activeTab.id)
+  }, [activeTab, closeTab])
+
+  const handleCommitCopy = useCallback(() => {
+    if (activeTab?.data.commitHash) {
+      navigator.clipboard.writeText(activeTab.data.commitHash)
+      notify({ text: t('commit.copied'), type: 'info', category: 'connection' })
+    }
+  }, [activeTab, t, notify])
+
+  const handleCommitClose = useCallback(() => {
     if (activeTab) closeTab(activeTab.id)
   }, [activeTab, closeTab])
 
@@ -238,6 +250,29 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
             </button>
             <button
               onClick={handleFileClose}
+              className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
+              title={t('common.close')}
+            >
+              <Icon name="x" className="size-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Commit detail toolbar */}
+        {isCommitDetail && activeTab && (
+          <div className="flex items-center gap-1 ml-1">
+            <code className="text-[10px] font-mono text-muted-foreground bg-interactive rounded px-1.5 py-px">
+              {activeTab.data.commitHash?.slice(0, 7)}
+            </code>
+            <button
+              onClick={handleCommitCopy}
+              className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
+              title={t('commit.copy')}
+            >
+              <Icon name="file-copy" className="size-3.5" />
+            </button>
+            <button
+              onClick={handleCommitClose}
               className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
               title={t('common.close')}
             >

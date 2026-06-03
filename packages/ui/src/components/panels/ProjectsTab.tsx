@@ -13,6 +13,7 @@ import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { BulkActionBar } from './BulkActionBar'
 import { formatRelativeTime, parseISODate } from '@/lib/formatDate'
 import { synthApi, type ProjectData, type SessionData, type FileEntry } from '@/lib/api/synthApi'
+import type { RepoStatus } from '@synth/shared'
 
 const MAX_VISIBLE_SESSIONS = 5
 
@@ -725,11 +726,25 @@ function SessionItem({
 function ProjectEditPopup({ project, onClose }: { project: ProjectData; onClose: () => void }) {
   const { t } = useI18n()
   const { updateProject, deleteProject } = useProjectsStore()
-  const [page, setPage] = useState<'general' | 'appearance'>('general')
+  const [page, setPage] = useState<'general' | 'appearance' | 'repos'>('general')
   const [name, setName] = useState(project.name)
   const [icon, setIcon] = useState<string | null>(project.icon)
   const [color, setColor] = useState<string | null>(project.color)
   const [workspace, setWorkspace] = useState(project.workspace || '')
+
+  // Repos state
+  const [repos, setRepos] = useState<{ path: string; defaultBranch?: string }[]>(project.repos || [])
+  const [scanRepos, setScanRepos] = useState<RepoStatus[] | null>(null)
+  const [scanSelected, setScanSelected] = useState<Set<string>>(new Set())
+  const [scanning, setScanning] = useState(false)
+  const [cloneOpen, setCloneOpen] = useState(false)
+  const [cloneUrl, setCloneUrl] = useState('')
+  const [clonePath, setClonePath] = useState('')
+  const [cloneBranch, setCloneBranch] = useState('')
+  const [initOpen, setInitOpen] = useState(false)
+  const [initPath, setInitPath] = useState('')
+  const [initBranch, setInitBranch] = useState('main')
+  const [initError, setInitError] = useState<string | null>(null)
 
   // Inline directory browser
   const [dirEntries, setDirEntries] = useState<FileEntry[]>([])
@@ -802,6 +817,7 @@ function ProjectEditPopup({ project, onClose }: { project: ProjectData; onClose:
   const CATEGORIES = [
     { id: 'general' as const, labelKey: 'leftPanel.editProject.general' as const, icon: 'file-text' as const },
     { id: 'appearance' as const, labelKey: 'leftPanel.editProject.appearance' as const, icon: 'palette' as const },
+    { id: 'repos' as const, labelKey: 'leftPanel.editProject.repos' as const, icon: 'git-repository' as const },
   ]
 
   const handleSave = async () => {
@@ -810,6 +826,7 @@ function ProjectEditPopup({ project, onClose }: { project: ProjectData; onClose:
       icon,
       color,
       workspace: workspace || null,
+      repos,
     })
     onClose()
   }
@@ -1044,6 +1061,243 @@ function ProjectEditPopup({ project, onClose }: { project: ProjectData; onClose:
                       ))}
                     </div>
                   </div>
+                </div>
+              )}
+              {page === 'repos' && (
+                <div className="space-y-4">
+                  {/* Current repos list */}
+                  <div>
+                    <label className="block mb-1.5 text-xs font-medium text-muted-foreground">
+                      {t('git.repo')}
+                    </label>
+                    {repos.length > 0 ? (
+                      <div className="space-y-1">
+                        {repos.map((repo, idx) => (
+                          <div key={repo.path} className="flex items-center gap-2 rounded bg-interactive px-2 py-1.5 text-xs">
+                            <Icon name="git-repository" className="size-3.5 text-muted-foreground shrink-0" />
+                            <span className="text-foreground truncate flex-1 font-mono">
+                              {repo.path || '.'}
+                            </span>
+                            {repo.defaultBranch && (
+                              <span className="text-[0.6rem] text-muted-foreground font-mono">
+                                {repo.defaultBranch}
+                              </span>
+                            )}
+                            <button
+                              onClick={() => {
+                                const next = [...repos]
+                                next.splice(idx, 1)
+                                setRepos(next)
+                              }}
+                              className="flex items-center justify-center size-5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                              title={t('git.remove')}
+                            >
+                              <Icon name="x" className="size-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground py-2">{t('leftPanel.noRepos')}</p>
+                    )}
+
+                    {/* Add buttons */}
+                    <div className="flex items-center gap-1 mt-2">
+                      <button
+                        onClick={async () => {
+                          if (!project.workspace) return
+                          setScanning(true)
+                          setScanRepos(null)
+                          setScanSelected(new Set())
+                          try {
+                            const result = await synthApi.scanGitRepos(project.id)
+                            setScanRepos(result.repos.filter((r) => !repos.some((x) => x.path === r.path)))
+                          } catch {
+                            setScanRepos([])
+                          } finally {
+                            setScanning(false)
+                          }
+                        }}
+                        disabled={scanning}
+                        className="flex items-center gap-1 rounded bg-interactive px-2.5 py-1 text-xs text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
+                      >
+                        <Icon name={scanning ? 'loader-2' : 'git-branch'} className={`size-3 ${scanning ? 'animate-spin' : ''}`} />
+                        {t('git.scan')}
+                      </button>
+
+                      <button
+                        onClick={() => { setCloneOpen(true); setCloneUrl(''); setClonePath(''); setCloneBranch('') }}
+                        className="flex items-center gap-1 rounded bg-interactive px-2.5 py-1 text-xs text-foreground hover:bg-interactive-hover transition-colors"
+                      >
+                        <Icon name="download" className="size-3" />
+                        {t('git.cloneRepo')}
+                      </button>
+
+                      <button
+                        onClick={() => { setInitOpen(true); setInitPath(''); setInitBranch('main'); setInitError(null) }}
+                        className="flex items-center gap-1 rounded bg-interactive px-2.5 py-1 text-xs text-foreground hover:bg-interactive-hover transition-colors"
+                      >
+                        <Icon name="add" className="size-3" />
+                        {t('git.initRepo')}
+                      </button>
+                    </div>
+
+                    {/* Scan results */}
+                    {scanRepos !== null && (
+                      <div className="mt-2 rounded border border-border p-2 space-y-1">
+                        {scanRepos.length === 0 ? (
+                          <p className="text-xs text-muted-foreground text-center py-2">{t('git.noGitRepos')}</p>
+                        ) : (
+                          <>
+                            <p className="text-[0.65rem] text-muted-foreground mb-1">{t('git.selectToAdd')}</p>
+                            {scanRepos.map((r) => (
+                              <label key={r.path} className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-interactive-hover cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={scanSelected.has(r.path)}
+                                  onChange={() => {
+                                    const next = new Set(scanSelected)
+                                    if (next.has(r.path)) next.delete(r.path)
+                                    else next.add(r.path)
+                                    setScanSelected(next)
+                                  }}
+                                  className="size-3.5"
+                                />
+                                <Icon name="git-repository" className="size-3.5 text-muted-foreground" />
+                                <span className="font-mono text-foreground truncate">{r.path || '.'}</span>
+                                {r.currentBranch && (
+                                  <span className="text-[0.6rem] text-muted-foreground">{r.currentBranch}</span>
+                                )}
+                              </label>
+                            ))}
+                            <button
+                              onClick={() => {
+                                const added = scanRepos.filter((r) => scanSelected.has(r.path))
+                                setRepos([...repos, ...added.map((r) => ({ path: r.path }))])
+                                setScanRepos(null)
+                                setScanSelected(new Set())
+                              }}
+                              disabled={scanSelected.size === 0}
+                              className="w-full mt-1 rounded bg-primary/10 px-2 py-1 text-xs text-primary hover:bg-primary/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                            >
+                              {t('git.addRepo')}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Clone popover */}
+                  {cloneOpen && (
+                    <div className="rounded border border-border bg-background p-3 space-y-2">
+                      <div>
+                        <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.url')}</label>
+                        <input
+                          type="text"
+                          value={cloneUrl}
+                          onChange={(e) => setCloneUrl(e.target.value)}
+                          placeholder="https://github.com/..."
+                          autoFocus
+                          className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.path')}</label>
+                        <input
+                          type="text"
+                          value={clonePath}
+                          onChange={(e) => setClonePath(e.target.value)}
+                          placeholder={t('common.optional')}
+                          className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.branch')} ({t('common.optional')})</label>
+                        <input
+                          type="text"
+                          value={cloneBranch}
+                          onChange={(e) => setCloneBranch(e.target.value)}
+                          className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                        />
+                      </div>
+                      <div className="flex items-center gap-1 justify-end">
+                        <button
+                          onClick={() => setCloneOpen(false)}
+                          className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-interactive-hover transition-colors"
+                        >
+                          {t('common.cancel')}
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (!cloneUrl) return
+                            try {
+                              const repo = await synthApi.cloneGitRepo(project.id, cloneUrl, clonePath || undefined, cloneBranch || undefined)
+                              setRepos([...repos, { path: repo.path }])
+                              setCloneOpen(false)
+                            } catch (e) {
+                              setInitError((e as Error).message)
+                            }
+                          }}
+                          disabled={!cloneUrl}
+                          className="rounded bg-primary px-2 py-1 text-xs text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          {t('git.cloneRepo')}
+                        </button>
+                      </div>
+                      {initError && <p className="text-xs text-red-500">{initError}</p>}
+                    </div>
+                  )}
+
+                  {/* Init popover */}
+                  {initOpen && (
+                    <div className="rounded border border-border bg-background p-3 space-y-2">
+                      <div>
+                        <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.path')}</label>
+                        <input
+                          type="text"
+                          value={initPath}
+                          onChange={(e) => setInitPath(e.target.value)}
+                          placeholder=". (корень workspace)"
+                          autoFocus
+                          className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.defaultBranch')}</label>
+                        <input
+                          type="text"
+                          value={initBranch}
+                          onChange={(e) => setInitBranch(e.target.value)}
+                          placeholder={t('git.branchPlaceholder')}
+                          className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                        />
+                      </div>
+                      <div className="flex items-center gap-1 justify-end">
+                        <button
+                          onClick={() => setInitOpen(false)}
+                          className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-interactive-hover transition-colors"
+                        >
+                          {t('common.cancel')}
+                        </button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await synthApi.initGitRepo(project.id, initPath, initBranch || undefined)
+                              setRepos([...repos, { path: initPath, defaultBranch: initBranch || undefined }])
+                              setInitOpen(false)
+                            } catch (e) {
+                              setInitError((e as Error).message)
+                            }
+                          }}
+                          className="rounded bg-primary px-2 py-1 text-xs text-primary-foreground hover:bg-primary/90 transition-colors"
+                        >
+                          {t('git.initRepo')}
+                        </button>
+                      </div>
+                      {initError && <p className="text-xs text-red-500">{initError}</p>}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

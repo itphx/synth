@@ -13,7 +13,8 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   })
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Request failed' }))
-    throw new Error(error.detail || `HTTP ${response.status}`)
+    const msg = error.detail || error.error?.error || error.error?.message || `HTTP ${response.status}`
+    throw new Error(msg)
   }
   if (response.status === 204) return undefined as T
   return response.json()
@@ -30,6 +31,7 @@ export interface ProjectData {
   icon: string | null
   color: string | null
   workspace: string | null
+  repos: GitRepoConfigData[] | null
   status_messages: Array<{
     id: string
     text: string
@@ -87,7 +89,12 @@ export interface StickyNoteData {
 
 export type { FileEntry, DirectoryListResult, FileReadResult } from '@synth/shared'
 
-import type { DirectoryListResult, FileReadResult, FileEntry } from '@synth/shared'
+import type { DirectoryListResult, FileReadResult, FileEntry, RepoStatus, CommitInfo, CommitDetail } from '@synth/shared'
+
+export interface GitRepoConfigData {
+  path: string
+  defaultBranch?: string
+}
 
 export interface ProjectStats {
   total_sessions: number
@@ -225,6 +232,7 @@ export const synthApi = {
     icon?: string | null
     color?: string | null
     workspace?: string | null
+    repos?: GitRepoConfigData[] | null
   }): Promise<ProjectData> {
     return fetchJSON<ProjectData>(`${BASE_URL}/projects/${encodeURIComponent(id)}`, {
       method: 'PUT',
@@ -514,6 +522,39 @@ export const synthApi = {
       method: 'POST',
       body: JSON.stringify({ projectId, sourcePath, targetPath }),
     })
+  },
+
+  // Git
+  async scanGitRepos(projectId: string): Promise<{ repos: RepoStatus[] }> {
+    return fetchJSON(`${BASE_URL}/git/scan`, {
+      method: 'POST',
+      body: JSON.stringify({ projectId }),
+    })
+  },
+
+  async initGitRepo(projectId: string, path: string, defaultBranch?: string): Promise<RepoStatus> {
+    return fetchJSON(`${BASE_URL}/git/repos/init`, {
+      method: 'POST',
+      body: JSON.stringify({ projectId, path, defaultBranch }),
+    })
+  },
+
+  async cloneGitRepo(projectId: string, url: string, path?: string, branch?: string): Promise<RepoStatus> {
+    return fetchJSON(`${BASE_URL}/git/repos/clone`, {
+      method: 'POST',
+      body: JSON.stringify({ projectId, url, path, branch }),
+    })
+  },
+
+  async getCommitLog(projectId: string, repoPath?: string, maxCount?: number): Promise<{ commits: CommitInfo[] }> {
+    const params = new URLSearchParams({ project_id: projectId, repo_path: repoPath || '' })
+    if (maxCount) params.set('max_count', String(maxCount))
+    return fetchJSON(`${BASE_URL}/git/log?${params.toString()}`)
+  },
+
+  async getCommitDetail(projectId: string, repoPath: string, hash: string): Promise<{ commit: CommitDetail }> {
+    const params = new URLSearchParams({ project_id: projectId, repo_path: repoPath, hash })
+    return fetchJSON(`${BASE_URL}/git/commit?${params.toString()}`)
   },
 
   // Агенты

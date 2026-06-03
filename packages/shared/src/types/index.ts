@@ -166,6 +166,44 @@ export interface Session {
   cacheWriteCost: number;
 }
 
+// --- Git ---
+export interface GitRepoConfig {
+  path: string;
+  defaultBranch?: string;
+}
+
+export interface RepoStatus {
+  path: string;
+  isRepo: boolean;
+  currentBranch?: string;
+  lastCommitAt?: string;
+  lastCommitSubject?: string;
+}
+
+export interface CommitInfo {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  message: string;
+  author: string;
+  authorEmail: string;
+  date: string;
+  relativeDate: string;
+  branch: string;
+}
+
+export interface CommitFileInfo {
+  path: string;
+  status: 'added' | 'modified' | 'deleted' | 'renamed';
+  additions: number;
+  deletions: number;
+}
+
+export interface CommitDetail extends CommitInfo {
+  files: CommitFileInfo[];
+  diff: string;
+}
+
 // --- Project ---
 export interface StatusMessage {
   id: string;
@@ -185,6 +223,7 @@ export interface Project {
   icon?: string;
   color?: string;
   workspace?: string;
+  repos?: GitRepoConfig[];
   statusMessages: StatusMessage[];
   createdAt: string;
   updatedAt: string;
