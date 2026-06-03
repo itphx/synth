@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react'
+import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useFilesStore } from '@/stores/filesStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -35,7 +35,7 @@ export const FilesTab: React.FC = () => {
   const [popover, setPopover] = useState<PopoverMode>(null)
   const [popoverName, setPopoverName] = useState('')
 
-  const workspacedProjects = projects.filter((p) => p.workspace)
+  const workspacedProjects = useMemo(() => projects.filter((p) => p.workspace), [projects])
   const closeMenu = useCallback(() => setOpenMenuKey(null), [])
 
   useEffect(() => {
