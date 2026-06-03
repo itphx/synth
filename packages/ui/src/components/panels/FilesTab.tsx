@@ -397,7 +397,7 @@ export const FilesTab: React.FC = () => {
           return (
             <div key={project.id} className="group/project">
               <div
-                className="flex items-center gap-1.5 px-2 py-1.5 mx-1 rounded-md cursor-pointer hover:bg-interactive-hover transition-colors"
+                className="relative flex items-center gap-1.5 px-2 py-1.5 cursor-pointer transition-colors hover:bg-interactive-hover rounded-md mx-1"
                 onClick={() => {
                   toggleProjectExpand(project.id)
                   setShowMoreLimits((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => k !== project.id)))
@@ -405,10 +405,12 @@ export const FilesTab: React.FC = () => {
                 onDragOver={handleDragOver}
                 onDrop={(e) => handleDropOnProject(e, project.id)}
               >
-                <Icon
-                  name={isExpanded ? 'arrow-down-s' : 'arrow-right-s'}
-                  className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-                />
+                <span className="h-3.5 w-3.5 flex items-center justify-center text-muted-foreground">
+                  <Icon
+                    name={isExpanded ? 'arrow-down-s' : 'arrow-right-s'}
+                    className="h-3.5 w-3.5"
+                  />
+                </span>
                 <Icon
                   name={project.icon ? project.icon : 'folder-3'}
                   className="h-4 w-4 shrink-0"
