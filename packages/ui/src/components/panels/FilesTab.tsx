@@ -266,7 +266,7 @@ export const FilesTab: React.FC = () => {
           className={`group/entry flex items-center gap-1 rounded px-2 py-0.5 text-sm cursor-pointer transition-colors ${
             isSelected ? 'bg-primary/15' : 'hover:bg-interactive-hover'
           } ${dragState?.projectId === projectId && dragState?.path === entry.path ? 'opacity-40' : ''}`}
-          style={{ paddingLeft: `${8 + depth * 20}px` }}
+          style={{ paddingLeft: `${8 + depth * 18}px` }}
           onClick={() => !isRenaming && handleFileClick(projectId, entry)}
           draggable={!selectionMode && !isRenaming}
           onDragStart={(e) => handleDragStart(e, projectId, entry)}
@@ -368,7 +368,7 @@ export const FilesTab: React.FC = () => {
                   [projectId]: (prev[projectId] || MAX_VISIBLE_ENTRIES) + MAX_VISIBLE_ENTRIES,
                 }))}
                 className="w-full text-left rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-interactive-hover transition-colors"
-                style={{ paddingLeft: `${8 + (depth + 1) * 20}px` }}
+                style={{ paddingLeft: `${8 + (depth + 1) * 18}px` }}
               >
                 {t('files.showMore', { count: String((treesByProject[`${projectId}/${entry.path}`] || []).length - getEntryLimit(projectId)) })}
               </button>
