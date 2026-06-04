@@ -64,6 +64,8 @@ function App() {
     : leftPanelTab === 'git' ? <GitTabToolbar />
     : undefined
 
+  const panelContent = <LeftPanel />
+
   return (
     <>
       <DefaultsSync />
@@ -78,7 +80,7 @@ function App() {
             onWidthChange={setLeftPanelWidth}
             headerActions={leftHeaderActions}
           >
-            <LeftPanel />
+            {panelContent}
           </Sidebar>
 
           <div className="flex flex-col flex-1 min-w-0">

@@ -439,9 +439,10 @@ export const synthApi = {
   },
 
   // Файловая система (API v2 — /fs?project_id=&path=)
-  async listDirectory(projectId: string, path?: string): Promise<DirectoryListResult> {
+  async listDirectory(projectId: string, path?: string, includeHidden?: boolean): Promise<DirectoryListResult> {
     const params = new URLSearchParams({ project_id: projectId })
     if (path) params.set('path', path)
+    if (includeHidden) params.set('includeHidden', 'true')
     return fetchJSON<DirectoryListResult>(`${BASE_URL}/fs?${params.toString()}`)
   },
 

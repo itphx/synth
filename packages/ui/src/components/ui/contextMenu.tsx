@@ -19,6 +19,8 @@ interface ContextMenuProps {
   items: ContextMenuEntry[]
   align?: 'start' | 'center' | 'end'
   sideOffset?: number
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }
 
 export const ContextMenu: React.FC<ContextMenuProps> = ({
@@ -26,9 +28,11 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   items,
   align = 'end',
   sideOffset = 4,
+  open,
+  onOpenChange,
 }) => {
   return (
-    <PopoverPrimitive.Root>
+    <PopoverPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <PopoverPrimitive.Trigger asChild>
         {trigger}
       </PopoverPrimitive.Trigger>

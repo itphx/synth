@@ -41,7 +41,8 @@ export const useFilesStore = create<FilesStore>((set, get) => {
   }
 
   const reloadDir = async (projectId: string, dirPath: string) => {
-    const result = await synthApi.listDirectory(projectId, dirPath)
+    const { showHidden } = get()
+    const result = await synthApi.listDirectory(projectId, dirPath, showHidden)
     set((s) => ({
       treesByProject: {
         ...s.treesByProject,
@@ -75,7 +76,8 @@ export const useFilesStore = create<FilesStore>((set, get) => {
     loadFileTree: async (projectId, path = '') => {
       set({ loading: true, error: null })
       try {
-        const result = await synthApi.listDirectory(projectId, path)
+        const { showHidden } = get()
+        const result = await synthApi.listDirectory(projectId, path, showHidden)
         set((s) => ({
           treesByProject: {
             ...s.treesByProject,
@@ -90,7 +92,8 @@ export const useFilesStore = create<FilesStore>((set, get) => {
 
     loadSubDirectory: async (projectId, dirPath) => {
       try {
-        const result = await synthApi.listDirectory(projectId, dirPath)
+        const { showHidden } = get()
+        const result = await synthApi.listDirectory(projectId, dirPath, showHidden)
         set((s) => ({
           treesByProject: {
             ...s.treesByProject,
