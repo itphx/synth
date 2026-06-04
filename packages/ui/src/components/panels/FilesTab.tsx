@@ -21,7 +21,7 @@ export const FilesTab: React.FC = () => {
     treesByProject, loadFileTree, loadSubDirectory, uploadFile, createDirectory, createFile, deleteEntry, moveEntry,
     loading, expandedProjects, toggleProjectExpand, expandProject,
     selectionMode, selectedPaths, toggleSelectionMode, toggleSelectedPath, clearSelection,
-    deleteSelectedEntries,
+    deleteSelectedEntries, showHidden,
   } = useFilesStore()
   const { openTab } = useUIStore()
   const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
@@ -60,6 +60,15 @@ export const FilesTab: React.FC = () => {
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspacedProjects, expandedProjects])
+
+  useEffect(() => {
+    for (const p of workspacedProjects) {
+      if (expandedProjects.has(p.id) && treesByProject[p.id]) {
+        loadFileTree(p.id)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showHidden])
 
   const expandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 

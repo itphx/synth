@@ -18,7 +18,7 @@ type AddRepoMode = 'scan' | 'clone' | 'init' | null
 export function GitTab() {
   const { t } = useI18n()
   const { notify } = useNotification()
-  const { projects } = useProjectsStore()
+  const { projects, loadProjects } = useProjectsStore()
   const {
     reposByProject,
     commitsByRepo,
@@ -67,6 +67,10 @@ export function GitTab() {
     setInitPath('')
     setInitBranch('main')
   }, [])
+
+  useEffect(() => {
+    loadProjects()
+  }, [loadProjects])
 
   const handleDoScan = useCallback(async (projectId: string) => {
     setScanning(true)
