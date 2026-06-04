@@ -7,7 +7,6 @@ import { DEFAULT_THEME, DEFAULT_THEME_MODE, DEFAULT_LOCALE } from '@/lib/default
 import { Sidebar } from './components/layout/Sidebar'
 import { Header } from './components/layout/Header'
 import { LeftPanel } from './components/panels/LeftPanel'
-import { LeftPanelDebug } from './components/panels/LeftPanelDebug'
 import { RightPanel } from './components/panels/RightPanel'
 import { ProjectsTabToolbar } from './components/panels/ProjectsTabToolbar'
 import { FilesTabToolbar } from './components/panels/FilesTabToolbar'
@@ -19,10 +18,6 @@ import { AdminModal } from './components/admin/AdminModal'
 import { AuthGate } from './components/auth/AuthGate'
 import { profileService } from '@/lib/api/profileService'
 import { useAuthStore } from '@/stores/authStore'
-
-function useDebugTree(): [boolean, () => void] {
-  return [true, () => {}]
-}
 
 function DefaultsSync() {
   const { isAuthenticated, isInitialized } = useAuthStore()
@@ -63,14 +58,13 @@ function DefaultsSync() {
 
 function App() {
   const { leftPanel, rightPanel, setLeftPanelWidth, setRightPanelWidth, setSettingsDialogOpen, setSettingsPage, leftPanelTab } = useUIStore()
-  const [debugTree] = useDebugTree()
 
   const leftHeaderActions = leftPanelTab === 'projects' ? <ProjectsTabToolbar />
     : leftPanelTab === 'files' ? <FilesTabToolbar />
     : leftPanelTab === 'git' ? <GitTabToolbar />
     : undefined
 
-  const panelContent = debugTree ? <LeftPanelDebug /> : <LeftPanel />
+  const panelContent = <LeftPanel />
 
   return (
     <>
