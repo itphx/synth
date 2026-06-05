@@ -63,7 +63,6 @@ export const defaultConfig: SynthConfig = {
   tsm: {
     maxIterations: 50,
     validationTimeout: 30,
-    mode: 'simple',
   },
   context: {
     enabledFiles: ['SOUL.md', 'COMPANY.md', 'ABOUT.md'],

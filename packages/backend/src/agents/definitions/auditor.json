@@ -8,6 +8,5 @@
   "capabilities": ["file_read", "search"],
   "icon": "shield-check",
   "color": "--status-warning",
-  "mode": "orchestrator",
   "contextFile": "AUDITOR.md"
 }

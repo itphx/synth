@@ -11,9 +11,64 @@ function resolvePath(requestedPath: string, workingDir: string): string {
 
 function validatePath(resolvedPath: string, workingDir: string): void {
   const rel = relative(workingDir, resolvedPath);
-  if (rel.startsWith('..')) {
+  if (rel.startsWith('..') || !resolvedPath.startsWith(resolve(workingDir))) {
     throw new Error(`Доступ запрещён: путь "${resolvedPath}" выходит за пределы рабочей директории`);
   }
+}
+
+function generateUnifiedDiff(oldText: string, newText: string, filePath: string): string {
+  const oldLines = oldText.split('\n');
+  const newLines = newText.split('\n');
+  const result: string[] = [];
+
+  result.push(`--- a/${filePath}`);
+  result.push(`+++ b/${filePath}`);
+
+  const eq = longestCommonSubsequence(oldLines, newLines);
+  let oi = 0; let ni = 0;
+  for (let i = 0; i < eq.length; i++) {
+    const entry = eq[i]!;
+    const targetOld = entry[0];
+    const targetNew = entry[1];
+    if (oi < targetOld || ni < targetNew) {
+      result.push(`@@ -${oi + 1},${targetOld - oi} +${ni + 1},${targetNew - ni} @@`);
+      for (let j = oi; j < targetOld; j++) result.push(`-${oldLines[j]}`);
+      for (let j = ni; j < targetNew; j++) result.push(`+${newLines[j]}`);
+    }
+    result.push(` ${oldLines[targetOld]}`);
+    oi = targetOld + 1;
+    ni = targetNew + 1;
+  }
+  if (oi < oldLines.length || ni < newLines.length) {
+    result.push(`@@ -${oi + 1},${oldLines.length - oi} +${ni + 1},${newLines.length - ni} @@`);
+    for (let j = oi; j < oldLines.length; j++) result.push(`-${oldLines[j]}`);
+    for (let j = ni; j < newLines.length; j++) result.push(`+${newLines[j]}`);
+  }
+
+  return result.join('\n');
+}
+
+function longestCommonSubsequence(a: string[], b: string[]): [number, number][] {
+  const m = a.length; const n = b.length;
+  const dp: number[][] = [];
+  for (let i = 0; i <= m; i++) dp.push(new Array(n + 1).fill(0));
+
+  for (let i = 1; i <= m; i++) {
+    const row = dp[i]!;
+    const prevRow = dp[i - 1]!;
+    for (let j = 1; j <= n; j++) {
+      row[j] = a[i - 1] === b[j - 1] ? (prevRow[j - 1] ?? 0) + 1 : Math.max(prevRow[j] ?? 0, row[j - 1] ?? 0);
+    }
+  }
+
+  const result: [number, number][] = [];
+  let i = m; let j = n;
+  while (i > 0 && j > 0) {
+    if (a[i - 1] === b[j - 1]) { result.unshift([i - 1, j - 1]); i--; j--; }
+    else if ((dp[i - 1]![j] ?? 0) > (dp[i]![j - 1] ?? 0)) i--;
+    else j--;
+  }
+  return result;
 }
 
 export const writeFileTool: ToolDefinition = {
@@ -68,9 +123,11 @@ export const editFileTool: ToolDefinition = {
       }
       const newContent = content.replaceAll(params.old_string, params.new_string);
       await writeFile(resolvedPath, newContent, 'utf-8');
+
+      const diff = generateUnifiedDiff(content, newContent, params.file_path);
       return {
         content: `Файл изменён: ${params.file_path} (${count} замен)`,
-        metadata: { path: resolvedPath, replacements: count },
+        metadata: { path: resolvedPath, replacements: count, diff },
       };
     }
 
@@ -87,9 +144,11 @@ export const editFileTool: ToolDefinition = {
 
     const newContent = content.replace(params.old_string, params.new_string);
     await writeFile(resolvedPath, newContent, 'utf-8');
+
+    const diff = generateUnifiedDiff(content, newContent, params.file_path);
     return {
       content: `Файл изменён: ${params.file_path} (1 замена)`,
-      metadata: { path: resolvedPath, replacements: 1 },
+      metadata: { path: resolvedPath, replacements: 1, diff },
     };
   },
 };

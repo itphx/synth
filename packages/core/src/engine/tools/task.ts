@@ -94,12 +94,15 @@ export const taskTool: ToolDefinition = {
       let finalContent = '';
       let iteration = 0;
       const doomTracker = new Map<string, number>();
+      let subagentReasoning = '';
+      const subagentToolCalls: Array<{ name: string; args: Record<string, unknown>; result: string }> = [];
 
       while (iteration < MAX_SUBAGENT_TOOL_ITERATIONS) {
         if (cancelToken.cancelled) break;
 
         let accumulatedContent = '';
         let toolCalls: Record<string, unknown>[] | undefined = [];
+        let reasoning = '';
 
         try {
           for await (const chunk of extra.provider.chatAsync(
@@ -112,6 +115,7 @@ export const taskTool: ToolDefinition = {
             if (cancelToken.cancelled) break;
             if (chunk.isFinal) {
               accumulatedContent = chunk.content;
+              reasoning = (chunk as unknown as Record<string, unknown>).reasoning as string || reasoning;
             } else {
               accumulatedContent += chunk.content;
             }
@@ -132,7 +136,13 @@ export const taskTool: ToolDefinition = {
         // No tool calls — done
         if (!toolCalls || toolCalls.length === 0) {
           finalContent = accumulatedContent;
+          subagentReasoning = reasoning || accumulatedContent;
           break;
+        }
+
+        // Save reasoning before tool calls
+        if (accumulatedContent) {
+          subagentReasoning = accumulatedContent;
         }
 
         // Got tool calls — execute them
@@ -220,6 +230,12 @@ export const taskTool: ToolDefinition = {
             parent_call_id: parentCallId || undefined,
           });
 
+          subagentToolCalls.push({
+            name: toolName,
+            args: toolArgs,
+            result: toolResult.content,
+          });
+
           messages.push({
             id: '', role: 'tool',
             content: toolResult.content,
@@ -246,6 +262,8 @@ export const taskTool: ToolDefinition = {
           subagent_type: params.subagent_type,
           description: params.description,
           steps: iteration,
+          reasoning: subagentReasoning || undefined,
+          tool_calls: subagentToolCalls.length > 0 ? subagentToolCalls : undefined,
         },
       };
     } catch (err: unknown) {

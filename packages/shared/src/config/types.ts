@@ -81,7 +81,6 @@ export const loggingConfigSchema = z.object({
 export const tsmConfigSchema = z.object({
   maxIterations: z.number().int().min(1).default(50),
   validationTimeout: z.number().int().min(1).default(30),
-  mode: z.enum(['simple', 'orchestrator']).default('simple'),
 });
 
 export const contextConfigSchema = z.object({

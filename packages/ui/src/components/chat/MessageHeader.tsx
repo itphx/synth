@@ -45,7 +45,7 @@ function MessageHeaderInner({ message }: MessageHeaderProps) {
     <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70 mb-1">
       {isUser && (
         <span className="inline-flex items-center gap-1 rounded-sm py-0.5 text-primary">
-          <Icon name="brain" className="size-3" />
+          <Icon name="user-3" className="size-3" />
           <span>{resolveAuthor()}</span>
         </span>
       )}

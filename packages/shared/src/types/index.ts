@@ -88,7 +88,6 @@ export interface SessionSettings {
   systemPrompt?: string;
   debugEnabled: boolean;
   streamEnabled: boolean;
-  tsmMode: 'simple' | 'orchestrator';
   agentRole?: string;
   contextOptimization: 'none' | 'sliding_window' | 'summarization' | 'sticky_notes';
   slidingWindowMode: 'messages' | 'tokens';
@@ -279,7 +278,6 @@ export interface AgentDefinition {
   temperature?: number;
   topP?: number;
   topK?: number;
-  mode: 'simple' | 'orchestrator';
   agentMode?: 'primary' | 'subagent' | 'all';
   subagentPrompt?: string;
   maxSteps?: number;

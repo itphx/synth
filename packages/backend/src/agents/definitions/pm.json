@@ -7,7 +7,6 @@
   },
   "capabilities": ["file_read", "search", "web"],
   "icon": "clipboard",
-  "color": "--status-neutral",
-  "mode": "orchestrator",
+  "color": "--primary",
   "contextFile": "PM.md"
 }

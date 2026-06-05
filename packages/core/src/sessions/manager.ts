@@ -69,7 +69,6 @@ export class SessionManager {
         maxTokens: data.settings?.maxTokens ?? 4096,
         debugEnabled: data.settings?.debugEnabled ?? true,
         streamEnabled: data.settings?.streamEnabled ?? true,
-        tsmMode: data.settings?.tsmMode ?? 'simple',
         contextOptimization: data.settings?.contextOptimization ?? 'none',
         slidingWindowMode: data.settings?.slidingWindowMode ?? 'messages',
         slidingWindowMessageLimit: data.settings?.slidingWindowMessageLimit ?? 10,

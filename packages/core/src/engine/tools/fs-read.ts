@@ -10,7 +10,7 @@ function resolvePath(requestedPath: string, workingDir: string): string {
 
 function validatePath(resolvedPath: string, workingDir: string): void {
   const rel = relative(workingDir, resolvedPath);
-  if (rel.startsWith('..') || resolve(workingDir) !== resolve(workingDir)) {
+  if (rel.startsWith('..') || !resolvedPath.startsWith(resolve(workingDir))) {
     throw new Error(`Доступ запрещён: путь "${resolvedPath}" выходит за пределы рабочей директории`);
   }
 }

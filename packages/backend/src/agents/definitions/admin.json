@@ -8,6 +8,5 @@
   "capabilities": ["file_read", "file_write", "search", "shell", "git_read", "git_write", "task"],
   "icon": "shield-keyhole",
   "color": "--status-error",
-  "mode": "orchestrator",
   "contextFile": "ADMIN.md"
 }

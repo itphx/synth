@@ -11,7 +11,6 @@ export interface BuildSystemPromptParams {
   historyMessages?: Message[];
   userId?: string;
   projectName?: string;
-  tsmMode?: 'simple' | 'orchestrator';
   language?: string;
   showInterview?: boolean;
   stickyNotes?: StickyNote[];
@@ -51,7 +50,6 @@ export class ContextBuilder {
         agentRole: agentRole ?? null,
         userId: params.userId ?? null,
         projectName: params.projectName ?? null,
-        tsmMode: params.tsmMode ?? 'simple',
         language: lang,
       });
     }

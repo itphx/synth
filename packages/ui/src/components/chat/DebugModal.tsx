@@ -85,7 +85,6 @@ export function DebugModal({ debug, onClose }: DebugModalProps) {
               <KeyValue label="Model" value={sessionInfo.model as string} />
               <KeyValue label="Provider" value={sessionInfo.provider as string} />
               <KeyValue label="Provider type" value={sessionInfo.provider_type as string} />
-              <KeyValue label="TSM mode" value={sessionInfo.tsm_mode as string} />
               <KeyValue label="Debug enabled" value={String(sessionInfo.debug_enabled)} />
             </Section>
           )}

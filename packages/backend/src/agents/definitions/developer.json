@@ -8,6 +8,5 @@
   "capabilities": ["file_read", "file_write", "search", "shell", "git_read", "git_write"],
   "icon": "code-s-slash",
   "color": "--status-info",
-  "mode": "simple",
   "contextFile": "DEVELOPER.md"
 }

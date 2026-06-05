@@ -8,6 +8,5 @@
   "capabilities": ["file_read", "file_write", "search", "shell", "web", "git_read", "git_write", "task"],
   "icon": "robot-3",
   "color": "--status-success",
-  "mode": "simple",
   "contextFile": "ASSISTANT.md"
 }

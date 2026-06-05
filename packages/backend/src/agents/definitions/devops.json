@@ -2,12 +2,11 @@
   "id": "devops",
   "displayName": { "en": "DevOps", "ru": "DevOps" },
   "description": {
-    "en": "Infrastructure, deployment, CI/CD",
-    "ru": "Инфраструктура, деплой, CI/CD"
+    "en": "Infrastructure, CI/CD, deployment",
+    "ru": "Инфраструктура, CI/CD, деплоймент"
   },
   "capabilities": ["file_read", "file_write", "search", "shell", "git_read", "git_write"],
   "icon": "server",
-  "color": "--status-muted",
-  "mode": "orchestrator",
+  "color": "--syntax-type",
   "contextFile": "DEVOPS.md"
 }

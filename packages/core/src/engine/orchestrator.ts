@@ -127,7 +127,6 @@ export class ChatOrchestrator {
         provider_type: provider.type,
         debug_enabled: session.settings.debugEnabled,
         stream_enabled: session.settings.streamEnabled,
-        tsm_mode: session.settings.tsmMode,
         context_optimization: session.settings.contextOptimization,
       });
 
@@ -147,7 +146,6 @@ export class ChatOrchestrator {
           historyMessages: session.messages,
           userId: session.userId,
           projectName: session.projectId,
-          tsmMode: session.settings.tsmMode,
           language: session.settings.language,
           showInterview: session.settings.showInterview,
           stickyNotes: session.stickyNotes,

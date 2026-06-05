@@ -43,7 +43,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
           (a.description && a.description.toLowerCase().includes(q))
         )
       })
-    : sortedAgents
+    : sortedAgents.filter((a) => a.agent_mode !== 'subagent')
 
   return (
     <DropdownMenu.Root open={open} onOpenChange={setOpen}>

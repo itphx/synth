@@ -21,7 +21,6 @@ export const sessionSettingsSchema = z.object({
   systemPrompt: z.string().optional(),
   debugEnabled: z.boolean().default(true),
   streamEnabled: z.boolean().default(true),
-  tsmMode: z.enum(['simple', 'orchestrator']).default('simple'),
   agentRole: z.string().optional(),
   contextOptimization: z.enum(['none', 'sliding_window', 'summarization', 'sticky_notes']).default('none'),
   slidingWindowMode: z.enum(['messages', 'tokens']).default('messages'),

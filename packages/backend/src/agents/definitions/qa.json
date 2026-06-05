@@ -2,12 +2,11 @@
   "id": "qa",
   "displayName": { "en": "QA Engineer", "ru": "Тестировщик" },
   "description": {
-    "en": "Testing, quality control, code review",
-    "ru": "Тестирование, контроль качества, ревью кода"
+    "en": "Testing, quality assurance, bug reports",
+    "ru": "Тестирование, контроль качества, баг-репорты"
   },
   "capabilities": ["file_read", "file_write", "search", "shell", "git_read"],
   "icon": "bug",
-  "color": "--status-pending",
-  "mode": "orchestrator",
+  "color": "--syntax-number",
   "contextFile": "QA.md"
 }

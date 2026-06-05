@@ -23,7 +23,6 @@ interface AgentForm {
   temperature: number
   top_p: number
   top_k: number
-  mode: 'simple' | 'orchestrator'
   agent_mode: 'primary' | 'subagent' | 'all'
   context_file: string
   capabilities: string[]
@@ -35,7 +34,7 @@ interface AgentForm {
 
 const emptyForm = (): AgentForm => ({
   id: '', display_name: '', description: '', provider: '', model: '',
-  temperature: 0.7, top_p: 0, top_k: 0, mode: 'simple',
+  temperature: 0.7, top_p: 0, top_k: 0,
   agent_mode: 'primary', context_file: '',
   capabilities: [], subagent_prompt: '', max_steps: 10, icon: '', color: '',
 })
@@ -51,7 +50,6 @@ function buildForm(a: AgentInfo, detail?: Record<string, unknown> | null): Agent
     temperature: (detail?.temperature as number) ?? 0.7,
     top_p: (detail?.topP as number) ?? 0,
     top_k: (detail?.topK as number) ?? 0,
-    mode: a.mode || (detail?.mode as 'simple' | 'orchestrator') || 'simple',
     agent_mode: agentMode,
     context_file: a.context_file || (detail?.contextFile as string) || '',
     capabilities: (detail?.capabilities as string[]) || a.capabilities,
@@ -158,7 +156,8 @@ export const AgentsPanel = () => {
           temperature: form.temperature,
           top_p: form.top_p || undefined,
           top_k: form.top_k || undefined,
-          mode: form.mode,
+          // legacy mode, kept for backward compat — always "simple"
+          mode: 'simple',
           agent_mode: form.agent_mode,
           context_file: form.context_file || undefined,
           capabilities: form.capabilities,
@@ -258,16 +257,6 @@ export const AgentsPanel = () => {
             {AGENT_MODES.map((m) => (
               <option key={m} value={m}>{t(`admin.agents.agentMode.${m}`)}</option>
             ))}
-          </select>
-        </div>
-
-        {/* TSM mode */}
-        <div>
-          <label className="text-xs text-muted-foreground">{t('admin.agents.mode')}</label>
-          <select value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value as 'simple' | 'orchestrator' })}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-            <option value="simple">{t('admin.agents.mode.simple')}</option>
-            <option value="orchestrator">{t('admin.agents.mode.orchestrator')}</option>
           </select>
         </div>
 
@@ -466,14 +455,6 @@ export const AgentsPanel = () => {
                       {t('admin.agents.agentMode.primary')}
                     </span>
                   )}
-                  <span className={cn(
-                    'px-1.5 py-0.5 rounded text-[10px] font-medium',
-                    a.mode === 'orchestrator'
-                      ? 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300'
-                      : 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
-                  )}>
-                    {a.mode}
-                  </span>
                   {a.provider && (
                     <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">{a.provider}</span>
                   )}
