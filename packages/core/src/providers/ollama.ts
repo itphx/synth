@@ -77,6 +77,7 @@ export class OllamaProvider extends BaseProvider {
     debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
 
     let accumulatedReasoning = '';
+    let accumulatedContent = '';
     const accumulatedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     const accumulatedToolCalls: Record<string, unknown>[] = [];
 
@@ -129,6 +130,7 @@ export class OllamaProvider extends BaseProvider {
 
               if (msg?.content && typeof msg.content === 'string') {
                 const hasReasoning = !!accumulatedReasoning;
+                accumulatedContent += msg.content;
                 yield {
                   content: msg.content,
                   isFinal: false,
@@ -188,11 +190,11 @@ export class OllamaProvider extends BaseProvider {
         });
 
         yield {
-          content: '',
+          content: accumulatedContent,
           isFinal: true,
           usage: accumulatedUsage,
           toolCalls: accumulatedToolCalls.length ? accumulatedToolCalls : undefined,
-          reasoning: undefined,
+          reasoning: accumulatedReasoning || undefined,
           model: this.model,
         };
       }

@@ -392,8 +392,24 @@ export const dict = {
   'chat.stream.error': 'Error',
 
   'chat.toolCall.title': 'Tool call',
+
   'chat.toolCall.expand': 'Expand',
+
   'chat.toolCall.collapse': 'Collapse',
+
+  'chat.toolCall.running': 'Running:',
+
+  'chat.toolCall.done': 'Done:',
+
+  'chat.toolCall.error': 'Error:',
+
+  'chat.toolCall.result': 'Result',
+
+  'chat.toolCall.arguments': 'Arguments',
+
+  'chat.toolCall.debug': 'raw',
+
+  'chat.toolCall.iteration': 'Iteration {n}',
 
   'chat.subagent.title': 'Subagent',
 

@@ -109,6 +109,7 @@ export class AnthropicProvider extends BaseProvider {
     info('ANTHROPIC', `чатAsync: url=${this.url}, model=${this.model}`);
 
     let accumulatedReasoning = '';
+    let accumulatedContent = '';
     let accumulatedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     const accumulatedToolCalls: Record<string, unknown>[] = [];
 
@@ -205,6 +206,7 @@ export class AnthropicProvider extends BaseProvider {
                 } else if (deltaType === 'text_delta') {
                   const text = String(delta?.text ?? '');
                   if (text) {
+                    accumulatedContent += text;
                     yield {
                       content: text,
                       isFinal: false,
@@ -248,11 +250,11 @@ export class AnthropicProvider extends BaseProvider {
         });
 
         yield {
-          content: '',
+          content: accumulatedContent,
           isFinal: true,
           usage: accumulatedUsage,
           toolCalls: accumulatedToolCalls.length ? accumulatedToolCalls : undefined,
-          reasoning: undefined,
+          reasoning: accumulatedReasoning || undefined,
           model: this.model,
         };
       }

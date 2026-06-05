@@ -1,17 +1,24 @@
 import { z } from 'zod';
 import { ToolCapability } from '@synth/shared';
-import type { ToolDefinition } from '@synth/shared';
+import type { ToolDefinition, ToolResult } from '@synth/shared';
 import type { AgentRegistry } from '../agents/registry.js';
-import type { BaseProvider } from '../../providers/base.js';
+import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
+import type { ToolRegistry } from './registry.js';
 
 interface TaskExtra {
   provider: BaseProvider;
   agentRegistry: AgentRegistry;
+  toolRegistry?: ToolRegistry;
   sessionSettings?: {
     temperature?: number;
     maxTokens?: number;
   };
+  publish?: (type: string, data: Record<string, unknown>) => void;
+  streamId?: string;
+  sessionId?: string;
 }
+
+const MAX_SUBAGENT_TOOL_ITERATIONS = 10;
 
 export const taskTool: ToolDefinition = {
   name: 'task',
@@ -56,8 +63,10 @@ export const taskTool: ToolDefinition = {
     const systemPrompt = agentDef.subagentPrompt || '';
     const tools = extra.agentRegistry.getToolsForAgent(agentDef.id);
     const maxSteps = agentDef.maxSteps ?? 10;
+    const publish = extra.publish;
+    const parentCallId = ''; // base call
 
-    const messages = [
+    const messages: LLMMessage[] = [
       {
         id: '',
         role: 'system' as const,
@@ -78,24 +87,165 @@ export const taskTool: ToolDefinition = {
       },
     ];
 
-    try {
-      const response = await extra.provider.chat(
-        messages,
-        systemPrompt || undefined,
-        tools as Record<string, unknown>[] | undefined,
-        false,
-      );
+    const cancelToken: CancellationToken = { cancelled: false, cancel: () => { cancelToken.cancelled = true; } };
 
-      const output = response.content || '(пустой ответ сабагента)';
+    try {
+      // Simple tool loop within subagent
+      let finalContent = '';
+      let iteration = 0;
+      const doomTracker = new Map<string, number>();
+
+      while (iteration < MAX_SUBAGENT_TOOL_ITERATIONS) {
+        if (cancelToken.cancelled) break;
+
+        let accumulatedContent = '';
+        let toolCalls: Record<string, unknown>[] | undefined = [];
+
+        try {
+          for await (const chunk of extra.provider.chatAsync(
+            messages,
+            systemPrompt || undefined,
+            tools as Record<string, unknown>[] | undefined,
+            undefined, // no debug collector for subagents
+            cancelToken,
+          )) {
+            if (cancelToken.cancelled) break;
+            if (chunk.isFinal) {
+              accumulatedContent = chunk.content;
+            } else {
+              accumulatedContent += chunk.content;
+            }
+            if (chunk.toolCalls && chunk.toolCalls.length > 0) {
+              toolCalls = chunk.toolCalls;
+            }
+          }
+        } catch (err) {
+          return {
+            content: `Ошибка выполнения сабагента "${params.subagent_type}": ${String(err)}`,
+            isError: true,
+            metadata: { subagent_type: params.subagent_type },
+          };
+        }
+
+        if (cancelToken.cancelled) break;
+
+        // No tool calls — done
+        if (!toolCalls || toolCalls.length === 0) {
+          finalContent = accumulatedContent;
+          break;
+        }
+
+        // Got tool calls — execute them
+        iteration++;
+
+        messages.push({
+          id: '',
+          role: 'assistant',
+          content: accumulatedContent || '',
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          disabled: false,
+          pinned: false,
+          branchId: '',
+          toolUse: toolCalls,
+        });
+
+        for (const tc of toolCalls) {
+          const tcId = (tc.id as string) || `subcall_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          const func = tc.function as { name: string; arguments: string | Record<string, unknown> } | undefined;
+          if (!func?.name) continue;
+
+          const toolName = func.name;
+          let toolArgs: Record<string, unknown>;
+          if (typeof func.arguments === 'string') {
+            try { toolArgs = JSON.parse(func.arguments); } catch { toolArgs = {}; }
+          } else {
+            toolArgs = func.arguments || {};
+          }
+
+          const doomKey = `${toolName}:${JSON.stringify(toolArgs)}`;
+          const doomCount = (doomTracker.get(doomKey) || 0) + 1;
+          doomTracker.set(doomKey, doomCount);
+
+          if (doomCount >= 3) {
+            messages.push({
+              id: '', role: 'tool',
+              content: `Ошибка: инструмент "${toolName}" вызван ${doomCount} раз(а) с одинаковыми аргументами. Цикл прерван.`,
+              usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              disabled: false, pinned: false, branchId: '',
+              toolCallId: tcId,
+            });
+            continue;
+          }
+
+          publish?.('tool_call.started', {
+            stream_id: extra.streamId,
+            session_id: extra.sessionId,
+            call_id: tcId,
+            name: toolName,
+            arguments: toolArgs,
+            iteration,
+            parent_call_id: parentCallId || undefined,
+          });
+
+          const toolDef = extra.toolRegistry?.get(toolName);
+          let toolResult: ToolResult;
+
+          if (toolDef) {
+            try {
+              toolResult = await toolDef.execute(toolArgs, {
+                ...ctx,
+                abortSignal: ctx.abortSignal,
+                extra: extra as unknown as Record<string, unknown>,
+              });
+            } catch (execError) {
+              toolResult = {
+                content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
+                isError: true,
+              };
+            }
+          } else {
+            toolResult = {
+              content: `Инструмент "${toolName}" не найден`,
+              isError: true,
+            };
+          }
+
+          publish?.('tool_call.result', {
+            stream_id: extra.streamId,
+            session_id: extra.sessionId,
+            call_id: tcId,
+            name: toolName,
+            result: toolResult,
+            iteration,
+            parent_call_id: parentCallId || undefined,
+          });
+
+          messages.push({
+            id: '', role: 'tool',
+            content: toolResult.content,
+            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            disabled: false, pinned: false, branchId: '',
+            toolCallId: tcId,
+          });
+        }
+
+        publish?.('tool_call.loop', {
+          stream_id: extra.streamId,
+          session_id: extra.sessionId,
+          iteration,
+          total_tool_calls: toolCalls.length,
+          parent_call_id: parentCallId || undefined,
+        });
+      }
+
+      const output = finalContent || '(пустой ответ сабагента)';
 
       return {
         content: `<task_result>\n<summary>${params.description}</summary>\n\n${output}\n</task_result>`,
         metadata: {
           subagent_type: params.subagent_type,
           description: params.description,
-          steps: 1,
-          model: response.model,
-          usage: response.usage,
+          steps: iteration,
         },
       };
     } catch (err: unknown) {

@@ -58,6 +58,7 @@ export function DebugModal({ debug, onClose }: DebugModalProps) {
   const contextFiles = debug.context_files as Array<Record<string, unknown>> | undefined;
   const extraContext = debug.extra_context as Record<string, unknown> | undefined;
   const subagents = debug.subagents as Array<Record<string, unknown>> | undefined;
+  const toolCalls = debug.tool_calls as Array<Record<string, unknown>> | undefined;
 
   return (
     <div
@@ -180,6 +181,31 @@ export function DebugModal({ debug, onClose }: DebugModalProps) {
                         <span className="text-muted-foreground text-[10px] uppercase">Response</span>
                         <div className="whitespace-pre-wrap text-[11px]">{String(sa.response).slice(0, 500)}</div>
                       </div>
+                    )}
+                  </div>
+                </details>
+              ))}
+            </Section>
+          )}
+
+          {/* Tool Calls */}
+          {toolCalls && toolCalls.length > 0 && (
+            <Section title={`Инструменты (${toolCalls.length})`}>
+              {toolCalls.map((tc, i) => (
+                <details key={i} className="border border-border/20 rounded p-2 mb-1">
+                  <summary className="text-xs font-medium cursor-pointer">
+                    {String(tc.name || `Tool #${i}`)}
+                  </summary>
+                  <div className="mt-1 space-y-1">
+                    <details className="mt-1">
+                      <summary className="text-muted-foreground cursor-pointer text-[10px] uppercase">Arguments</summary>
+                      <JsonBlock data={tc.arguments} />
+                    </details>
+                    {tc.result != null && (
+                      <details className="mt-1">
+                        <summary className="text-muted-foreground cursor-pointer text-[10px] uppercase">Result</summary>
+                        <JsonBlock data={tc.result} />
+                      </details>
                     )}
                   </div>
                 </details>

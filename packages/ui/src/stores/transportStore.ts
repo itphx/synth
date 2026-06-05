@@ -45,6 +45,8 @@ function createDispatcher(): EventDispatcher {
       updateQueueCount,
       addPendingMessage,
       removeFirstPending,
+      addToolCall,
+      updateToolCallResult,
     } = useChatStore.getState()
 
     switch (type) {
@@ -115,6 +117,7 @@ function createDispatcher(): EventDispatcher {
           (payload.reasoning as string) || '',
           payload.model as string | undefined,
           payload.provider as string | undefined,
+          payload.iteration as number | undefined,
         )
         break
       }
@@ -139,6 +142,7 @@ function createDispatcher(): EventDispatcher {
           cancelled: payload.cancelled as boolean | undefined,
           pending_count: payload.pending_count as number | undefined,
           metadata: payload.metadata as { type?: string; indices?: number[] } | undefined,
+          reasoning_blocks: (payload.reasoning_blocks as Array<{ text: string; iteration: number }>) || undefined,
         }
         finishStream(sid, payload.stream_id as string, metadata)
 
@@ -220,6 +224,49 @@ function createDispatcher(): EventDispatcher {
         if (patch.summarization_pending === false) {
           setSummarizationPending(sid, false)
         }
+        break
+      }
+
+      case 'tool_call.started':
+      case 'tool_call_started': {
+        const streamId = payload.stream_id as string
+        if (!streamId) break
+        addToolCall(sid, streamId, {
+          callId: payload.call_id as string,
+          name: payload.name as string,
+          args: (payload.arguments as Record<string, unknown>) || {},
+          status: 'running',
+          startedAt: new Date().toISOString(),
+          iteration: (payload.iteration as number) || 0,
+          parentCallId: payload.parent_call_id as string | undefined,
+        })
+        break
+      }
+
+      case 'tool_call.result':
+      case 'tool_call_result': {
+        const streamId = payload.stream_id as string
+        if (!streamId) break
+        updateToolCallResult(sid, streamId, payload.call_id as string, {
+          content: (payload.result as Record<string, unknown>)?.content as string || '',
+          isError: (payload.result as Record<string, unknown>)?.isError as boolean,
+          metadata: (payload.result as Record<string, unknown>)?.metadata as Record<string, unknown> | undefined,
+        })
+        break
+      }
+
+      case 'tool_call.loop':
+      case 'tool_call_loop': {
+        const streamId = payload.stream_id as string
+        if (!streamId) break
+        const iteration = (payload.iteration as number) || 0
+        useChatStore.setState((s) => {
+          const sessionStreams = { ...(s.streamingBySession[sid] || {}) }
+          const existing = sessionStreams[streamId]
+          if (!existing) return s
+          sessionStreams[streamId] = { ...existing, toolIteration: iteration, content: '' }
+          return { streamingBySession: { ...s.streamingBySession, [sid]: sessionStreams } }
+        })
         break
       }
 

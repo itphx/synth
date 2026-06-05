@@ -187,9 +187,10 @@ export class ChatOrchestrator {
       const currentMessages: LLMMessage[] = [...baseLlmMessages];
       const doomLoopTracker: Map<string, number> = new Map();
       let finalContent = '';
-      let finalReasoning = '';
+      const allReasoning: Array<{ text: string; iteration: number }> = [];
       let finalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       let finalModel: string | undefined;
+      const allToolCalls: Array<Record<string, unknown>> = [];
 
       while (toolIteration < MAX_TOOL_ITERATIONS) {
         if (cancelToken.cancelled) break;
@@ -210,7 +211,7 @@ export class ChatOrchestrator {
             if (cancelToken.cancelled) break;
 
             if (chunk.isFinal) {
-              accumulatedContent = chunk.content;
+              accumulatedContent = chunk.content || accumulatedContent;
             } else {
               accumulatedContent += chunk.content;
             }
@@ -222,13 +223,24 @@ export class ChatOrchestrator {
               toolCalls = chunk.toolCalls;
             }
 
-            // Stream UI chunks (only on first iteration, tool loop internals are not streamed)
+            // Stream UI chunks (content from all iterations; reasoning always)
             if (toolIteration === 0) {
               publishChunk('stream.chunk', {
                 stream_id: streamId,
                 content: chunk.content,
                 reasoning: chunk.reasoning,
+                iteration: toolIteration,
                 is_final: chunk.isFinal,
+                agent_role: effectiveAgentRole,
+                model: chunkModel,
+                provider: providerName,
+              });
+            } else {
+              publishChunk('stream.chunk', {
+                stream_id: streamId,
+                content: chunk.content,
+                reasoning: chunk.reasoning,
+                iteration: toolIteration,
                 agent_role: effectiveAgentRole,
                 model: chunkModel,
                 provider: providerName,
@@ -273,15 +285,17 @@ export class ChatOrchestrator {
 
         finalModel = chunkModel ?? finalModel;
 
+        if (accumulatedReasoning) {
+          allReasoning.push({ text: accumulatedReasoning, iteration: toolIteration });
+        }
+
         // No tool calls — final response
         if (!toolCalls || toolCalls.length === 0) {
           finalContent = accumulatedContent;
-          finalReasoning = accumulatedReasoning;
           break;
         }
 
         // Tool calls detected — execute them
-        toolIteration++;
         debugCollector.captureRawModelResponse(
           `[tool_calls iteration ${toolIteration}]: ${JSON.stringify(toolCalls)}`,
         );
@@ -339,6 +353,8 @@ export class ChatOrchestrator {
             continue;
           }
 
+          const tcStartedAt = new Date().toISOString();
+
           publishChunk('tool_call.started', {
             stream_id: streamId,
             session_id: session.id,
@@ -367,6 +383,11 @@ export class ChatOrchestrator {
                     temperature: session.settings.temperature,
                     maxTokens: session.settings.maxTokens,
                   },
+                  publish: (type: string, data: Record<string, unknown>) =>
+                    publishChunk(type as never, data),
+                  streamId,
+                  sessionId: session.id,
+                  toolRegistry: this._toolRegistry,
                 },
               });
             } catch (execError) {
@@ -391,6 +412,18 @@ export class ChatOrchestrator {
             iteration: toolIteration,
           });
 
+          allToolCalls.push({
+            name: toolName,
+            args: toolArgs,
+            id: tcId,
+            result: toolResult,
+            started_at: tcStartedAt,
+            completed_at: new Date().toISOString(),
+            iteration: toolIteration,
+          });
+
+          debugCollector.captureToolCall(toolName, toolArgs, toolResult as Record<string, unknown>);
+
           currentMessages.push({
             id: '',
             role: 'tool',
@@ -409,6 +442,8 @@ export class ChatOrchestrator {
           iteration: toolIteration,
           total_tool_calls: toolCalls.length,
         });
+
+        toolIteration++;
       }
 
       // 7. Handle max iterations exceeded
@@ -417,9 +452,11 @@ export class ChatOrchestrator {
       }
 
       // 8. Save final assistant message
+      const reasoningJoined = allReasoning.map((r) => r.text).join('\n\n---\n\n');
       const savedContent = await this._saveAssistantMessage(
         session.id, finalContent, streamId, effectiveAgentRole,
-        finalUsage, finalModel, finalReasoning, debugCollector, false, providerName,
+        finalUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
+        MessageRole.ASSISTANT, undefined, false, allToolCalls,
       );
 
       // Получаем актуальную сессию после сохранения
@@ -433,6 +470,7 @@ export class ChatOrchestrator {
         model: finalModel,
         provider: providerName,
         usage: finalUsage,
+        reasoning_blocks: allReasoning.length > 0 ? allReasoning : undefined,
       };
 
       const debugInfo = debugCollector.getDebugInfo();
@@ -856,6 +894,7 @@ export class ChatOrchestrator {
     role: MessageRole = MessageRole.ASSISTANT,
     summaryOf?: number[],
     skipEvent = false,
+    toolResults?: Array<Record<string, unknown>>,
   ): Promise<string> {
     const finalContent = content;
 
@@ -868,6 +907,11 @@ export class ChatOrchestrator {
     }
 
     const debugInfo = debugCollector.getDebugInfo();
+
+    const metadata: Record<string, unknown> = { stream_id: streamId };
+    if (toolResults && toolResults.length > 0) {
+      metadata.tool_results = toolResults;
+    }
 
     const msg: Message = {
       role,
@@ -882,7 +926,7 @@ export class ChatOrchestrator {
       reasoning,
       agentRole,
       debugData: debugInfo ?? undefined,
-      metadata: { stream_id: streamId },
+      metadata,
       ...(summaryOf ? { summaryOf } : {}),
     };
 
@@ -930,6 +974,7 @@ export class ChatOrchestrator {
           provider: provider || '',
           agent_role: agentRole,
           reasoning: reasoning || null,
+          tool_calls: toolResults && toolResults.length > 0 ? toolResults : null,
         });
       }
     }

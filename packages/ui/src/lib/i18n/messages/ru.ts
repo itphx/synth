@@ -386,13 +386,25 @@ export const dict = {
   'chat.reasoning.show': 'Размышления',
   'chat.reasoning.hide': 'Скрыть',
 
-  'chat.stream.working': 'Генерация...',
-  'chat.stream.cancelled': 'Отменено',
-  'chat.stream.error': 'Ошибка',
-
   'chat.toolCall.title': 'Вызов инструмента',
+
   'chat.toolCall.expand': 'Развернуть',
+
   'chat.toolCall.collapse': 'Свернуть',
+
+  'chat.toolCall.running': 'Выполняется:',
+
+  'chat.toolCall.done': 'Завершён:',
+
+  'chat.toolCall.error': 'Ошибка:',
+
+  'chat.toolCall.result': 'Результат',
+
+  'chat.toolCall.arguments': 'Аргументы',
+
+  'chat.toolCall.debug': 'raw',
+
+  'chat.toolCall.iteration': 'Итерация {n}',
 
   'chat.subagent.title': 'Сабагент',
 
