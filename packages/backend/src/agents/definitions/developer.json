@@ -5,7 +5,7 @@
     "en": "Code development and refactoring",
     "ru": "Разработка и рефакторинг кода"
   },
-  "capabilities": ["file_read", "file_search", "file_write", "git_read", "git_write", "code_review"],
+  "capabilities": ["file_read", "file_write", "search", "shell", "git_read", "git_write"],
   "icon": "code-s-slash",
   "color": "--status-info",
   "mode": "simple",

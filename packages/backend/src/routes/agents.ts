@@ -4,7 +4,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
-import type { AgentDefinition } from '@synth/shared';
+import type { AgentDefinition, ToolCapability } from '@synth/shared';
 import type { SessionManager } from '@synth/core';
 import { t } from '../lib/i18n.js';
 import { resolveDisplayName, resolveDescription } from '../lib/i18n-config.js';
@@ -12,17 +12,21 @@ import { resolveDisplayName, resolveDescription } from '../lib/i18n-config.js';
 const BUILTIN_IDS = new Set([
   'developer', 'assistant', 'devops', 'analyst',
   'admin', 'auditor', 'pm', 'qa',
+  'general', 'explore',
 ]);
 
 interface AgentDefFile {
   id: string;
   displayName: Record<string, string>;
   description: Record<string, string>;
-  capabilities: string[];
+  capabilities: ToolCapability[];
   icon: string;
   color: string;
   mode: 'simple' | 'orchestrator';
   contextFile: string;
+  agentMode?: 'primary' | 'subagent' | 'all';
+  subagentPrompt?: string;
+  maxSteps?: number;
 }
 
 const AGENTS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'agents', 'definitions');
@@ -63,6 +67,9 @@ function getBuiltInAgents(_agentStore: JsonStore<AgentDefinition>): AgentDefinit
     icon: def.icon,
     color: def.color,
     description: resolveDescription(def.description),
+    agentMode: def.agentMode,
+    subagentPrompt: def.subagentPrompt,
+    maxSteps: def.maxSteps,
   }));
 }
 
@@ -118,6 +125,9 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
               description: a.description || null,
               available: true,
               mode: a.mode,
+              agent_mode: a.agentMode || null,
+              subagent_prompt: a.subagentPrompt || null,
+              max_steps: a.maxSteps || null,
               provider: a.provider || null,
               model: a.model || null,
               context_file: a.contextFile || null,
@@ -140,6 +150,9 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
         description: a.description || null,
         available: true,
         mode: a.mode,
+        agent_mode: a.agentMode || null,
+        subagent_prompt: a.subagentPrompt || null,
+        max_steps: a.maxSteps || null,
         provider: a.provider || null,
         model: a.model || null,
         context_file: a.contextFile || null,
@@ -179,6 +192,9 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
       icon: body.icon ?? existing?.icon,
       color: body.color ?? existing?.color,
       description: body.description ?? existing?.description,
+      agentMode: body.agent_mode ?? body.agentMode ?? existing?.agentMode ?? builtin?.agentMode,
+      subagentPrompt: body.subagent_prompt ?? body.subagentPrompt ?? existing?.subagentPrompt,
+      maxSteps: body.max_steps ?? body.maxSteps ?? existing?.maxSteps,
     };
     await agentStore.save(id, agent);
     return c.json(agent, existing ? 200 : 201);

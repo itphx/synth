@@ -60,6 +60,16 @@ export interface ModelStore {
   getDefault(provider?: string): Promise<ModelConfig | null>;
 }
 
+import type { ToolDefinition, ToolCapability } from '../types/index.js';
+
+export interface ToolRegistry {
+  register(tool: ToolDefinition): void;
+  get(name: string): ToolDefinition | undefined;
+  list(): ToolDefinition[];
+  toLLMFormat(): Array<{ type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } }>;
+  filterByCapabilities(capabilities: ToolCapability[]): Array<{ type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } }>;
+}
+
 import type { ProfileData } from '../types/index.js';
 
 export interface CreateProfileParams {

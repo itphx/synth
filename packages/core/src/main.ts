@@ -25,7 +25,7 @@ program
           port: parseInt(options.port, 10),
           apiKey: options.apiKey,
         },
-        storage: options.dataDir ? { dataDir: options.dataDir } : undefined,
+        storage: options.dataDir ? { dataDir: options.dataDir, workspacesRoot: '' } : undefined,
       },
     });
 

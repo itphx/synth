@@ -2,12 +2,12 @@
   "id": "analyst",
   "displayName": { "en": "Analyst", "ru": "Аналитик" },
   "description": {
-    "en": "Code analysis, research, documentation",
-    "ru": "Анализ кода, исследование, документация"
+    "en": "Code analysis, research and documentation",
+    "ru": "Анализ кода, исследование и документация"
   },
-  "capabilities": ["file_read", "research", "documentation"],
-  "icon": "search-eye",
-  "color": "--status-warning",
+  "capabilities": ["file_read", "search", "web"],
+  "icon": "chart-line",
+  "color": "--status-accent",
   "mode": "orchestrator",
   "contextFile": "ANALYST.md"
 }

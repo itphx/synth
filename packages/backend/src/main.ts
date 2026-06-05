@@ -8,7 +8,7 @@ import type { ProviderConfig, ModelConfig, AgentDefinition } from '@synth/shared
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator, FileProfileStore,
-  enqueueUserMessage,
+  enqueueUserMessage, createToolRegistry, createAgentRegistry,
 } from '@synth/core';
 import type { SummarizationConfig } from '@synth/shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId } from '@synth/shared';
@@ -134,6 +134,9 @@ const modelPriceLoader = (modelName: string) => {
 };
 
 // Orchestrator
+const toolRegistry = createToolRegistry();
+const agentRegistry = createAgentRegistry(toolRegistry);
+
 const orchestrator = new ChatOrchestrator({
   sessionManager,
   eventBus,
@@ -142,6 +145,8 @@ const orchestrator = new ChatOrchestrator({
   contextOptimizer,
   modelPriceLoader,
   dataDir,
+  toolRegistry,
+  agentRegistry,
 });
 
 const processMessage = orchestrator.createProcessMessage();

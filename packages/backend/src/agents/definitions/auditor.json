@@ -1,13 +1,13 @@
 {
   "id": "auditor",
-  "displayName": { "en": "Security Auditor", "ru": "Аудитор Безопасности" },
+  "displayName": { "en": "Security Auditor", "ru": "Аудитор безопасности" },
   "description": {
-    "en": "Security audit and vulnerability assessment",
-    "ru": "Аудит безопасности и уязвимостей"
+    "en": "Security audit and vulnerability search",
+    "ru": "Аудит безопасности и поиск уязвимостей"
   },
-  "capabilities": ["file_read", "code_review", "security_analysis"],
-  "icon": "shield-keyhole",
-  "color": "--status-success",
+  "capabilities": ["file_read", "search"],
+  "icon": "shield-check",
+  "color": "--status-warning",
   "mode": "orchestrator",
   "contextFile": "AUDITOR.md"
 }

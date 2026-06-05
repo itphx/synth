@@ -5,9 +5,9 @@
     "en": "Universal assistant for any task",
     "ru": "Универсальный ассистент для любых задач"
   },
-  "capabilities": [],
-  "icon": "robot-2",
-  "color": "--primary",
+  "capabilities": ["file_read", "file_write", "search", "shell", "web", "git_read", "git_write", "task"],
+  "icon": "robot-3",
+  "color": "--status-success",
   "mode": "simple",
   "contextFile": "ASSISTANT.md"
 }
