@@ -1,38 +1,333 @@
 import { useState } from 'react'
 import { Icon } from '../icon/Icon'
+import { getToolIcon, getToolDisplayName } from '@/lib/toolIcons'
 import { useI18n } from '@/lib/i18n'
 
-interface ToolCallPartProps {
-  toolCall: { name: string; args: Record<string, unknown>; id?: string }
+interface ToolCallData {
+  name: string
+  args: Record<string, unknown>
+  id?: string
+  callId?: string
+  status?: 'running' | 'done'
+  result?: {
+    content: string
+    isError?: boolean
+    metadata?: Record<string, unknown>
+  }
+  startedAt?: string
+  started_at?: string
+  completedAt?: string
+  completed_at?: string
+  iteration?: number
+  parentCallId?: string
 }
 
-export function ToolCallPart({ toolCall }: ToolCallPartProps) {
-  const { t } = useI18n()
-  const [expanded, setExpanded] = useState(false)
+interface ToolCallPartProps {
+  toolCall: ToolCallData
+  nested?: boolean
+}
+
+function formatDuration(started?: string, completed?: string): string {
+  const start = started || ''
+  const end = completed || ''
+  if (!start || !end) return ''
+  try {
+    const ms = new Date(end).getTime() - new Date(start).getTime()
+    if (ms < 0) return ''
+    if (ms < 1000) return `${ms}ms`
+    return `${(ms / 1000).toFixed(1)}s`
+  } catch {
+    return ''
+  }
+}
+
+function truncate(str: string, maxLen: number): string {
+  if (str.length <= maxLen) return str
+  return str.slice(0, maxLen) + '…'
+}
+
+interface DiffLine {
+  type: 'add' | 'remove' | 'context' | 'header'
+  text: string
+}
+
+function parseDiff(diffText: string): DiffLine[] {
+  const lines = diffText.split('\n')
+  return lines.map((line) => {
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) {
+      return { type: 'header' as const, text: line }
+    }
+    if (line.startsWith('+')) return { type: 'add' as const, text: line }
+    if (line.startsWith('-')) return { type: 'remove' as const, text: line }
+    return { type: 'context' as const, text: line }
+  })
+}
+
+function DiffView({ diff }: { diff: string }) {
+  const parsed = parseDiff(diff)
+  return (
+    <pre className="text-[11px] leading-relaxed overflow-x-auto font-mono m-0 p-0 bg-transparent">
+      {parsed.map((line, i) => (
+        <span
+          key={i}
+          className={
+            line.type === 'add'
+              ? 'diff-added block'
+              : line.type === 'remove'
+                ? 'diff-removed block'
+                : line.type === 'header'
+                  ? 'diff-header block'
+                  : 'block opacity-70'
+          }
+        >
+          {line.text || ' '}
+        </span>
+      ))}
+    </pre>
+  )
+}
+
+function SubagentResult({ result, toolCall }: { result: ToolCallData['result']; toolCall: ToolCallData }) {
+  const [showReasoning, setShowReasoning] = useState(false)
+  const [showToolCalls, setShowToolCalls] = useState(false)
+
+  if (!result?.metadata) return null
+
+  const reasoning = result.metadata.reasoning as string | undefined
+  const toolCalls = result.metadata.tool_calls as
+    | Array<{ name: string; args: Record<string, unknown>; result: string }>
+    | undefined
 
   return (
-    <div className="mb-2 rounded-md border border-border/50 overflow-hidden">
-      <button
-        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors bg-muted/30"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <Icon
-          name={expanded ? 'arrow-down-s' : 'arrow-right-s'}
-          className="size-3.5 transition-transform"
-        />
-        <Icon name="tools" className="size-3.5 text-blue-400" />
-        <span className="font-medium">{t('chat.toolCall.title')}: {toolCall.name}</span>
-        <span className="ml-auto text-[10px] opacity-50">
-          {expanded ? t('chat.toolCall.collapse') : t('chat.toolCall.expand')}
-        </span>
-      </button>
-      {expanded && (
-        <div className="p-3 border-t border-border/50 bg-muted/10">
-          <pre className="text-xs text-muted-foreground whitespace-pre-wrap overflow-x-auto font-mono">
-            {JSON.stringify(toolCall.args, null, 2)}
-          </pre>
+    <div className="space-y-2">
+      {reasoning && (
+        <div>
+          <button
+            onClick={() => setShowReasoning(!showReasoning)}
+            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors mb-1"
+          >
+            <Icon
+              name={showReasoning ? 'arrow-down-s' : 'arrow-right-s'}
+              className="size-3"
+            />
+            Рассуждения
+          </button>
+          {showReasoning && (
+            <div className="pl-4 text-xs text-muted-foreground whitespace-pre-wrap border-l-2 border-border/30">
+              {truncate(reasoning, 3000)}
+            </div>
+          )}
         </div>
       )}
+
+      {toolCalls && toolCalls.length > 0 && (
+        <div>
+          <button
+            onClick={() => setShowToolCalls(!showToolCalls)}
+            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors mb-1"
+          >
+            <Icon
+              name={showToolCalls ? 'arrow-down-s' : 'arrow-right-s'}
+              className="size-3"
+            />
+            Инструменты ({toolCalls.length})
+          </button>
+          {showToolCalls && (
+            <div className="pl-4 space-y-1">
+              {toolCalls.map((tc, i) => (
+                <div key={i} className="text-[11px] flex items-start gap-1.5">
+                  <Icon name={getToolIcon(tc.name)} className="size-3 shrink-0 mt-0.5 text-muted-foreground" />
+                  <div className="min-w-0">
+                    <span className="font-medium">{getToolDisplayName(tc.name)}</span>
+                    <span className="text-muted-foreground">
+                      {' '}
+                      {truncate(tc.result.slice(0, 120), 120)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function ToolCallPart({ toolCall, nested }: ToolCallPartProps) {
+  const { t } = useI18n()
+  const [expanded, setExpanded] = useState(false)
+  const [showDebug, setShowDebug] = useState(false)
+  const [viewMode, setViewMode] = useState<'args' | 'result'>('args')
+
+  const isError = toolCall.result?.isError
+  const isRunning = toolCall.status === 'running'
+  const isDone = toolCall.status === 'done' || (!isRunning && !!toolCall.result)
+  const started = toolCall.startedAt || toolCall.started_at
+  const completed = toolCall.completedAt || toolCall.completed_at
+  const duration = formatDuration(started, completed)
+  const hasResult = !!toolCall.result?.content
+  const isSubagent = toolCall.name === 'task'
+  const diff = toolCall.result?.metadata?.diff as string | undefined
+
+  const argsStr = JSON.stringify(toolCall.args, null, 2)
+  const resultStr = toolCall.result?.content || ''
+
+  const toolIcon = getToolIcon(toolCall.name)
+  const toolDisplayName = getToolDisplayName(toolCall.name)
+
+  const headerColor = isError
+    ? 'text-red-400'
+    : isRunning
+      ? ''
+      : isDone
+        ? ''
+        : ''
+
+  return (
+    <div className={nested ? 'mb-1 ml-3' : 'mb-2'}>
+      <div className="rounded-md border border-border/50 overflow-hidden">
+        <button
+          className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors bg-muted/30"
+          onClick={() => setExpanded(!expanded)}
+        >
+          <Icon
+            name={expanded ? 'arrow-down-s' : 'arrow-right-s'}
+            className="size-3.5 transition-transform shrink-0"
+          />
+          <Icon
+            name={toolIcon}
+            className={`size-3.5 shrink-0 ${headerColor}${isRunning ? ' animate-tool-pulse' : ''}`}
+          />
+          <span className={`font-mono font-medium truncate ${headerColor}`}>
+            {toolDisplayName}
+          </span>
+          {toolCall.iteration != null && (
+            <span className="text-[10px] opacity-40 shrink-0">
+              #{toolCall.iteration}
+            </span>
+          )}
+          {duration && (
+            <span className="text-[10px] opacity-40 shrink-0">
+              {duration}
+            </span>
+          )}
+          {isRunning && (
+            <span className="text-[10px] text-blue-400 shrink-0 animate-tool-pulse">
+              {t('chat.toolCall.running')}
+            </span>
+          )}
+          {isError && (
+            <span className="text-[10px] text-red-400 shrink-0">
+              {t('chat.toolCall.error')}
+            </span>
+          )}
+        </button>
+        {expanded && (
+          <div className="border-t border-border/50 bg-muted/10">
+            {hasResult && !isRunning && (
+              <div className="flex gap-0 border-b border-border/30">
+                <button
+                  className={`px-3 py-1 text-[11px] font-medium transition-colors ${
+                    viewMode === 'args'
+                      ? 'text-foreground border-b-2 border-primary'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  onClick={() => setViewMode('args')}
+                >
+                  {t('chat.toolCall.arguments')}
+                </button>
+                {!isSubagent && (
+                  <button
+                    className={`px-3 py-1 text-[11px] font-medium transition-colors ${
+                      viewMode === 'result'
+                        ? 'text-foreground border-b-2 border-primary'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                    onClick={() => setViewMode('result')}
+                  >
+                    {t('chat.toolCall.result')}
+                  </button>
+                )}
+                <button
+                  className={`ml-auto px-2 py-1 text-[10px] font-mono transition-colors ${
+                    showDebug
+                      ? 'text-amber-400'
+                      : 'text-muted-foreground/40 hover:text-muted-foreground'
+                  }`}
+                  onClick={() => setShowDebug(!showDebug)}
+                >
+                  {t('chat.toolCall.debug')}
+                </button>
+              </div>
+            )}
+            {isRunning && (
+              <div className="flex items-center gap-0 border-b border-border/30">
+                <div className="px-3 py-1 text-[11px] font-medium text-blue-400">
+                  {t('chat.toolCall.arguments')}
+                </div>
+                <button
+                  className={`ml-auto px-2 py-1 text-[10px] font-mono transition-colors ${
+                    showDebug
+                      ? 'text-amber-400'
+                      : 'text-muted-foreground/40 hover:text-muted-foreground'
+                  }`}
+                  onClick={() => setShowDebug(!showDebug)}
+                >
+                  {t('chat.toolCall.debug')}
+                </button>
+              </div>
+            )}
+            {showDebug && (
+              <div className="px-3 py-2 border-b border-amber-500/20 bg-amber-500/5">
+                <pre className="text-[11px] text-amber-600 dark:text-amber-400 whitespace-pre-wrap overflow-x-auto font-mono leading-relaxed">
+                  {JSON.stringify({
+                    name: toolCall.name,
+                    args: toolCall.args,
+                    status: toolCall.status,
+                    result: toolCall.result,
+                    startedAt: started,
+                    completedAt: completed,
+                    duration,
+                    iteration: toolCall.iteration,
+                    parentCallId: toolCall.parentCallId,
+                  }, null, 2)}
+                </pre>
+              </div>
+            )}
+            <div className="p-3">
+              {isSubagent && viewMode === 'result' && hasResult && (
+                <div className="space-y-3">
+                  <SubagentResult result={toolCall.result} toolCall={toolCall} />
+                  <div className="text-xs text-muted-foreground whitespace-pre-wrap">
+                    {truncate(resultStr, 4000)}
+                  </div>
+                </div>
+              )}
+              {viewMode === 'args' && (
+                <pre className="text-xs text-muted-foreground whitespace-pre-wrap overflow-x-auto font-mono">
+                  {truncate(argsStr, 4000)}
+                </pre>
+              )}
+              {!isSubagent && viewMode === 'result' && hasResult && diff && (
+                <DiffView diff={diff} />
+              )}
+              {!isSubagent && viewMode === 'result' && hasResult && !diff && (
+                <pre className={`text-xs whitespace-pre-wrap overflow-x-auto font-mono ${
+                  isError ? 'text-red-400' : 'text-muted-foreground'
+                }`}>
+                  {truncate(resultStr, 4000)}
+                </pre>
+              )}
+              {!hasResult && viewMode === 'result' && (
+                <div className="text-xs text-muted-foreground/50 italic">
+                  {t('common.empty')}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

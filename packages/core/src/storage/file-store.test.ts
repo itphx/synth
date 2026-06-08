@@ -39,7 +39,6 @@ describe('FileStore', () => {
         maxTokens: 4096,
         debugEnabled: true,
         streamEnabled: true,
-        tsmMode: 'simple' as const,
         contextOptimization: 'none' as const,
         slidingWindowMode: 'messages' as const,
         slidingWindowMessageLimit: 10,

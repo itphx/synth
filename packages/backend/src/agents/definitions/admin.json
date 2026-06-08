@@ -1,13 +1,12 @@
 {
   "id": "admin",
-  "displayName": { "en": "Administrator", "ru": "Администратор" },
+  "displayName": { "en": "Admin", "ru": "Админ" },
   "description": {
-    "en": "System administration, git management",
-    "ru": "Системное администрирование, управление git"
+    "en": "System administration and configuration",
+    "ru": "Системное администрирование и настройка"
   },
-  "capabilities": ["file_read", "file_write", "git_read", "git_write", "system_admin"],
-  "icon": "admin",
-  "color": "--status-success",
-  "mode": "orchestrator",
+  "capabilities": ["file_read", "file_write", "search", "shell", "git_read", "git_write", "task"],
+  "icon": "shield-keyhole",
+  "color": "--status-error",
   "contextFile": "ADMIN.md"
 }

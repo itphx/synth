@@ -1,13 +1,12 @@
 {
   "id": "qa",
-  "displayName": { "en": "QA Engineer", "ru": "QA Инженер" },
+  "displayName": { "en": "QA Engineer", "ru": "Тестировщик" },
   "description": {
-    "en": "Testing and quality assurance",
-    "ru": "Тестирование и контроль качества"
+    "en": "Testing, quality assurance, bug reports",
+    "ru": "Тестирование, контроль качества, баг-репорты"
   },
-  "capabilities": ["file_read", "testing", "code_review"],
-  "icon": "test-tube",
-  "color": "--chart-4",
-  "mode": "orchestrator",
+  "capabilities": ["file_read", "file_write", "search", "shell", "git_read"],
+  "icon": "bug",
+  "color": "--syntax-number",
   "contextFile": "QA.md"
 }

@@ -15,6 +15,7 @@ export class DebugCollector {
   private _contextFiles: Array<Record<string, unknown>> = [];
   private _systemPromptParts: Record<string, unknown> | null = null;
   private _extraContext: Record<string, Record<string, unknown>> = {};
+  private _toolCalls: Array<Record<string, unknown>> = [];
 
   constructor(enabled = false) {
     this._enabled = enabled;
@@ -140,6 +141,11 @@ export class DebugCollector {
     this._systemPromptParts = parts;
   }
 
+  captureToolCall(name: string, args: Record<string, unknown>, result: Record<string, unknown>): void {
+    if (!this._enabled) return;
+    this._toolCalls.push({ name, arguments: args, result });
+  }
+
   addContext(key: string, data: Record<string, unknown>): void {
     if (!this._enabled) return;
     this._extraContext[key] = data;
@@ -155,6 +161,7 @@ export class DebugCollector {
     if (this._sessionInfo) result.session = this._sessionInfo;
     if (this._subagents.length) result.subagents = this._subagents;
     if (this._mcpCalls.length) result.mcp_calls = this._mcpCalls;
+    if (this._toolCalls.length) result.tool_calls = this._toolCalls;
     if (this._ragInfo) result.rag_info = this._ragInfo;
     if (this._contextFiles.length) result.context_files = this._contextFiles;
     if (this._systemPromptParts) result.system_prompt_parts = this._systemPromptParts;
@@ -174,5 +181,6 @@ export class DebugCollector {
     this._contextFiles = [];
     this._systemPromptParts = null;
     this._extraContext = {};
+    this._toolCalls = [];
   }
 }

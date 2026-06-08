@@ -194,7 +194,7 @@ export class OpenAIProvider extends BaseProvider {
           tool_calls: accumulatedToolCalls.length ? accumulatedToolCalls : undefined,
         });
 
-        const finalContent = accumulatedContent || accumulatedReasoning || '';
+        const finalContent = accumulatedContent || '';
         yield {
           content: finalContent,
           isFinal: true,

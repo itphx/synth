@@ -392,8 +392,24 @@ export const dict = {
   'chat.stream.error': 'Error',
 
   'chat.toolCall.title': 'Tool call',
+
   'chat.toolCall.expand': 'Expand',
+
   'chat.toolCall.collapse': 'Collapse',
+
+  'chat.toolCall.running': 'Running:',
+
+  'chat.toolCall.done': 'Done:',
+
+  'chat.toolCall.error': 'Error:',
+
+  'chat.toolCall.result': 'Result',
+
+  'chat.toolCall.arguments': 'Arguments',
+
+  'chat.toolCall.debug': 'raw',
+
+  'chat.toolCall.iteration': 'Iteration {n}',
 
   'chat.subagent.title': 'Subagent',
 
@@ -666,7 +682,6 @@ export const dict = {
   'admin.agents.provider': 'Provider',
   'admin.agents.model': 'Model',
   'admin.agents.contextFile': 'Context file',
-  'admin.agents.mode': 'Mode',
   'admin.agents.temperature': 'Temperature: {value}',
   'admin.agents.topP': 'Top P',
   'admin.agents.topK': 'Top K',
@@ -685,27 +700,28 @@ export const dict = {
   'admin.agents.noCapabilities': 'no capabilities',
   'admin.agents.confirmReset': 'Reset agent «{name}» to default settings?',
   'admin.agents.confirmDelete': 'Delete agent «{name}»?',
-  'admin.agents.mode.simple': 'Simple',
-  'admin.agents.mode.orchestrator': 'Orchestrator',
   'admin.agents.cap.file_read': 'read',
   'admin.agents.cap.file_write': 'write',
-  'admin.agents.cap.file_search': 'search',
+  'admin.agents.cap.search': 'search',
   'admin.agents.cap.git_read': 'git:read',
   'admin.agents.cap.git_write': 'git:write',
-  'admin.agents.cap.code_review': 'review',
-  'admin.agents.cap.development': 'dev',
-  'admin.agents.cap.testing': 'tests',
-  'admin.agents.cap.deployment': 'deploy',
-  'admin.agents.cap.infrastructure': 'infra',
-  'admin.agents.cap.monitoring': 'monitor',
-  'admin.agents.cap.architecture': 'arch',
-  'admin.agents.cap.mentoring': 'mentor',
-  'admin.agents.cap.research': 'analysis',
-  'admin.agents.cap.documentation': 'docs',
-  'admin.agents.cap.planning': 'planning',
-  'admin.agents.cap.security_analysis': 'security',
-  'admin.agents.cap.system_admin': 'admin',
-  'admin.agents.cap.shell_exec': 'shell',
+  'admin.agents.cap.shell': 'shell',
+  'admin.agents.cap.web': 'web',
+  'admin.agents.cap.task': 'subagents',
+
+  // Subagent fields
+  'admin.agents.agentMode': 'Agent type',
+  'admin.agents.agentMode.primary': 'Primary',
+  'admin.agents.agentMode.subagent': 'Subagent',
+  'admin.agents.agentMode.all': 'Primary + Subagent',
+  'admin.agents.subagentPrompt': 'Subagent prompt',
+  'admin.agents.maxSteps': 'Max steps',
+
+  // Filter
+  'admin.agents.filter.all': 'All',
+  'admin.agents.filter.agents': 'Agents',
+  'admin.agents.filter.subagents': 'Subagents',
+  'admin.agents.filter.subagents_count': '{count} subagents',
 
   // Context
   'admin.context.title': 'Context',

@@ -106,6 +106,8 @@ ui:
 | `SYNTH_BACKEND_URL` | URL бэкенда | `http://localhost:5000` |
 | `VITE_BACKEND_URL` | URL бэкенда (UI proxy) | `http://localhost:5000` |
 | `VITE_PORT` | Порт UI dev-сервера | `5002` |
+| `VITE_ALLOWED_HOSTS` | Разрешённые хосты для Vite (`true` — все, `"host1,host2"` — список) | `true` |
+| `SYNTH_CORS_ORIGIN` | CORS origin бэкенда (приоритет выше `allowedOrigins` в конфиге) | — |
 
 ### Первый запуск
 

@@ -1,0 +1,131 @@
+import { readFile, readdir, stat, access } from 'node:fs/promises';
+import { resolve, relative, join } from 'node:path';
+import { z } from 'zod';
+import { ToolCapability } from '@synth/shared';
+import type { ToolDefinition } from '@synth/shared';
+
+function resolvePath(requestedPath: string, workingDir: string): string {
+  return resolve(workingDir, requestedPath);
+}
+
+function validatePath(resolvedPath: string, workingDir: string): void {
+  const rel = relative(workingDir, resolvedPath);
+  if (rel.startsWith('..') || !resolvedPath.startsWith(resolve(workingDir))) {
+    throw new Error(`Доступ запрещён: путь "${resolvedPath}" выходит за пределы рабочей директории`);
+  }
+}
+
+export const readFileTool: ToolDefinition = {
+  name: 'read_file',
+  description:
+    'Read contents of a file from the local filesystem. You can access any file directly by using this tool.',
+  parameters: z.object({
+    file_path: z.string().describe('Absolute path to the file to read'),
+    offset: z.number().int().min(0).optional().describe('Line offset to start reading from (0-based)'),
+    limit: z.number().int().min(1).optional().describe('Maximum number of lines to read'),
+  }),
+  capabilities: [ToolCapability.FILE_READ],
+  async execute(args, ctx) {
+    const params = args as { file_path: string; offset?: number; limit?: number };
+    const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
+    validatePath(resolvedPath, ctx.workingDir);
+
+    let content = await readFile(resolvedPath, 'utf-8');
+    const lines = content.split('\n');
+    const totalLines = lines.length;
+
+    const offset = params.offset ?? 0;
+    const limit = params.limit ?? totalLines;
+
+    if (offset > 0 || limit < totalLines) {
+      content = lines.slice(offset, offset + limit).join('\n');
+    }
+
+    let output = '';
+    for (let i = 0; i < lines.length; i++) {
+      output += `${i + 1}: ${lines[i]}\n`;
+    }
+
+    return {
+      content: output,
+      metadata: { path: resolvedPath, totalLines, offset, limit },
+    };
+  },
+};
+
+export const listDirectoryTool: ToolDefinition = {
+  name: 'list_directory',
+  description:
+    'List files and directories in a given path. Use this to explore the project structure.',
+  parameters: z.object({
+    path: z.string().describe('Absolute path to the directory to list'),
+  }),
+  capabilities: [ToolCapability.FILE_READ],
+  async execute(args, ctx) {
+    const params = args as { path: string };
+    const resolvedPath = resolvePath(params.path, ctx.workingDir);
+    validatePath(resolvedPath, ctx.workingDir);
+
+    const entries = await readdir(resolvedPath, { withFileTypes: true });
+    const lines: string[] = [];
+
+    for (const entry of entries.sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) return -1;
+      if (!a.isDirectory() && b.isDirectory()) return 1;
+      return a.name.localeCompare(b.name);
+    })) {
+      const fullPath = join(resolvedPath, entry.name);
+      try {
+        const info = await stat(fullPath);
+        const suffix = entry.isDirectory() ? '/' : '';
+        lines.push(`${entry.name}${suffix} (${info.size} bytes)`);
+      } catch {
+        lines.push(`${entry.name}${entry.isDirectory() ? '/' : ''}`);
+      }
+    }
+
+    return {
+      content: lines.join('\n') || '(пустая директория)',
+      metadata: { path: resolvedPath, count: entries.length },
+    };
+  },
+};
+
+export const globTool: ToolDefinition = {
+  name: 'glob',
+  description:
+    'Find files matching a glob pattern. Returns matching file paths sorted by modification time.',
+  parameters: z.object({
+    pattern: z.string().describe('Glob pattern to match files against (e.g., "src/**/*.ts")'),
+    path: z.string().optional().describe('Directory to search in (defaults to working directory)'),
+  }),
+  capabilities: [ToolCapability.FILE_READ, ToolCapability.SEARCH],
+  async execute(args, ctx) {
+    const params = args as { pattern: string; path?: string };
+    const searchDir = params.path ? resolvePath(params.path, ctx.workingDir) : ctx.workingDir;
+    validatePath(searchDir, ctx.workingDir);
+
+    const { glob } = await import('node:fs/promises');
+    const { relative: rel } = await import('node:path');
+
+    try {
+      const files = [];
+      const basePattern = join(searchDir, params.pattern);
+      for await (const file of glob(basePattern, { withFileTypes: false })) {
+        const relPath = rel(searchDir, file as string);
+        files.push(relPath);
+      }
+
+      return {
+        content: files.length > 0 ? files.join('\n') : '(файлы не найдены)',
+        metadata: { pattern: params.pattern, count: files.length },
+      };
+    } catch {
+      return {
+        content: '(ошибка поиска файлов)',
+        isError: true,
+        metadata: { pattern: params.pattern },
+      };
+    }
+  },
+};

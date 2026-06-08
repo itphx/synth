@@ -4,9 +4,98 @@ import { useAgentsStore } from '@/stores/agentsStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { ProviderIcon } from '@/components/admin/ProviderIcon'
 import { ReasoningBlock } from './ReasoningBlock'
+import { ToolCallPart } from './ToolCallPart'
 import { MarkdownContent } from './MarkdownContent'
 import { useI18n } from '@/lib/i18n'
-import type { StreamState } from '@/stores/chatStore'
+import { useMemo } from 'react'
+import type { StreamState, LiveToolCall, ReasoningBlockData } from '@/stores/chatStore'
+
+interface ToolCallNode {
+  call: LiveToolCall
+  children: ToolCallNode[]
+}
+
+function buildToolCallTree(calls: LiveToolCall[]): ToolCallNode[] {
+  const nodes = new Map<string, ToolCallNode>()
+  const roots: ToolCallNode[] = []
+
+  for (const call of calls) {
+    nodes.set(call.callId, { call, children: [] })
+  }
+
+  for (const call of calls) {
+    const node = nodes.get(call.callId)!
+    if (call.parentCallId && nodes.has(call.parentCallId)) {
+      nodes.get(call.parentCallId)!.children.push(node)
+    } else {
+      roots.push(node)
+    }
+  }
+
+  return roots
+}
+
+function ToolCallTreeNode({ node }: { node: ToolCallNode }) {
+  return (
+    <div>
+      <ToolCallPart
+        toolCall={{
+          name: node.call.name,
+          args: node.call.args,
+          id: node.call.callId,
+          callId: node.call.callId,
+          status: node.call.status,
+          result: node.call.result,
+          startedAt: node.call.startedAt,
+          completedAt: node.call.completedAt,
+          iteration: node.call.iteration,
+          parentCallId: node.call.parentCallId,
+        }}
+      />
+      {node.children.length > 0 && (
+        <div className="ml-3 border-l-2 border-muted/50 pl-2">
+          {node.children.map((child) => (
+            <ToolCallTreeNode key={child.call.callId} node={child} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface TimelineItem {
+  type: 'reasoning'
+  data: ReasoningBlockData
+}
+
+function buildTimeline(
+  reasoningBlocks: ReasoningBlockData[],
+  toolCalls: LiveToolCall[],
+  content: string,
+): Array<TimelineItem | { type: 'tool_calls'; calls: LiveToolCall[] } | { type: 'content' }> {
+  const items: Array<TimelineItem | { type: 'tool_calls'; calls: LiveToolCall[] } | { type: 'content' }> = []
+
+  const maxIter = Math.max(
+    0,
+    ...reasoningBlocks.map((r) => r.iteration),
+    ...toolCalls.map((tc) => tc.iteration),
+  )
+
+  for (let iter = 0; iter <= maxIter; iter++) {
+    for (const r of reasoningBlocks) {
+      if (r.iteration === iter) items.push({ type: 'reasoning', data: r })
+    }
+    const iterToolCalls = toolCalls.filter((tc) => tc.iteration === iter)
+    if (iterToolCalls.length > 0) {
+      items.push({ type: 'tool_calls', calls: iterToolCalls })
+    }
+  }
+
+  if (content) {
+    items.push({ type: 'content' })
+  }
+  return items
+}
 
 interface StreamingPlaceholderProps {
   stream: StreamState
@@ -85,13 +174,32 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
           </span>
         </div>
 
-        {stream.reasoning && (
-          <ReasoningBlock reasoning={stream.reasoning} />
-        )}
-
-        {stream.content && (
-          <MarkdownContent content={stream.content} />
-        )}
+        {(() => {
+          const timeline = buildTimeline(
+            stream.reasoningBlocks,
+            stream.toolCalls || [],
+            stream.content,
+          )
+          return timeline.map((item, i) => {
+            if (item.type === 'reasoning') {
+              return <ReasoningBlock key={`r${i}`} reasoning={item.data.text} />
+            }
+            if (item.type === 'tool_calls') {
+              const toolTree = buildToolCallTree(item.calls)
+              return (
+                <div key={`t${i}`} className="mb-2">
+                  {toolTree.map((node) => (
+                    <ToolCallTreeNode key={node.call.callId} node={node} />
+                  ))}
+                </div>
+              )
+            }
+            if (item.type === 'content') {
+              return <MarkdownContent key={`c${i}`} content={stream.content} />
+            }
+            return null
+          })
+        })()}
 
         {stream.isStreaming && (
           <div className="flex items-center gap-0.5 mt-2 pt-1.5 border-t border-border/30">

@@ -1,3 +1,5 @@
+import type { ToolCapability } from './tools.js';
+
 // Core enums
 export enum MessageRole {
   SYSTEM = 'system',
@@ -86,7 +88,6 @@ export interface SessionSettings {
   systemPrompt?: string;
   debugEnabled: boolean;
   streamEnabled: boolean;
-  tsmMode: 'simple' | 'orchestrator';
   agentRole?: string;
   contextOptimization: 'none' | 'sliding_window' | 'summarization' | 'sticky_notes';
   slidingWindowMode: 'messages' | 'tokens';
@@ -270,14 +271,16 @@ export interface AgentDefinition {
   id: string;
   displayName: string;
   contextFile?: string;
-  capabilities: string[];
+  capabilities: ToolCapability[];
   enabled: boolean;
   provider?: string;
   model?: string;
   temperature?: number;
   topP?: number;
   topK?: number;
-  mode: 'simple' | 'orchestrator';
+  agentMode?: 'primary' | 'subagent' | 'all';
+  subagentPrompt?: string;
+  maxSteps?: number;
   sshKeys: string[];
   isOverridden: boolean;
   icon?: string;
@@ -423,6 +426,9 @@ export type EventType =
   | 'context.sticky_note_added'
   | 'context.sticky_note_updated'
   | 'context.sticky_note_deleted'
+  | 'tool_call.started'
+  | 'tool_call.result'
+  | 'tool_call.loop'
   | 'error';
 
 export interface BusEvent {
@@ -481,3 +487,6 @@ export interface FsError {
   error: string;
   code: FsErrorCode;
 }
+
+// Tool types — re-exported from tools.ts
+export * from './tools.js';

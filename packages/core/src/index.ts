@@ -42,4 +42,7 @@ export type { BuildSystemPromptParams, ContextBuilderOptions, SummarizationResul
 export { ChatOrchestrator } from './engine/orchestrator.js';
 export type { OrchestratorOptions, ProcessMessageResult, ModelPricing } from './engine/orchestrator.js';
 
+export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
+export { createAgentRegistry, AgentRegistry } from './engine/agents/index.js';
+
 export { FileProfileStore } from './storage/profile-store.js';

@@ -8,7 +8,7 @@ import type { ProviderConfig, ModelConfig, AgentDefinition } from '@synth/shared
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator, FileProfileStore,
-  enqueueUserMessage,
+  enqueueUserMessage, createToolRegistry, createAgentRegistry,
 } from '@synth/core';
 import type { SummarizationConfig } from '@synth/shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId } from '@synth/shared';
@@ -46,8 +46,19 @@ app.get('/api/v2/health', (c) => c.json({ status: 'healthy', version: '0.1.0', t
 // Конфигурация
 const backendConfig = await loadBackendConfig();
 
+// Динамический CORS origin: если задан explicit ORIGIN через env var, использовать его;
+// если задан список allowedOrigins — проверять и эхо; если список пуст — разрешить все.
+const allowedOrigins: string[] = backendConfig.synth.server.allowedOrigins ?? [];
+const envCorsOrigin = process.env.SYNTH_CORS_ORIGIN;
+
 app.use(cors({
-  origin: backendConfig.synth.server.corsOrigin || 'http://localhost:5002',
+  origin: (origin) => {
+    if (envCorsOrigin) return envCorsOrigin;
+    if (!origin) return origin;
+    if (allowedOrigins.length === 0) return origin;
+    if (allowedOrigins.includes(origin)) return origin;
+    return allowedOrigins[0];
+  },
   credentials: true,
 }));
 
@@ -134,6 +145,9 @@ const modelPriceLoader = (modelName: string) => {
 };
 
 // Orchestrator
+const toolRegistry = createToolRegistry();
+const agentRegistry = createAgentRegistry(toolRegistry);
+
 const orchestrator = new ChatOrchestrator({
   sessionManager,
   eventBus,
@@ -142,6 +156,8 @@ const orchestrator = new ChatOrchestrator({
   contextOptimizer,
   modelPriceLoader,
   dataDir,
+  toolRegistry,
+  agentRegistry,
 });
 
 const processMessage = orchestrator.createProcessMessage();

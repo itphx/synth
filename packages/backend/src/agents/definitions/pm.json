@@ -1,13 +1,12 @@
 {
   "id": "pm",
-  "displayName": { "en": "Project Manager", "ru": "Проектный Менеджер" },
+  "displayName": { "en": "Project Manager", "ru": "Менеджер проекта" },
   "description": {
-    "en": "Project management, planning",
-    "ru": "Управление проектом, планирование"
+    "en": "Planning, requirements analysis, coordination",
+    "ru": "Планирование, анализ требований, координация"
   },
-  "capabilities": ["file_read", "research", "planning"],
-  "icon": "task",
-  "color": "--chart-1",
-  "mode": "orchestrator",
+  "capabilities": ["file_read", "search", "web"],
+  "icon": "clipboard",
+  "color": "--primary",
   "contextFile": "PM.md"
 }

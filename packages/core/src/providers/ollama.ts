@@ -24,7 +24,7 @@ export class OllamaProvider extends BaseProvider {
       stream: !!stream,
     };
     if (systemPrompt) body.system = systemPrompt;
-    if (tools?.length) body.tools = tools;
+    if (tools?.length) body.tools = this._formatTools(tools);
 
     const headers = { 'Content-Type': 'application/json' };
     debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
@@ -71,12 +71,13 @@ export class OllamaProvider extends BaseProvider {
       stream: true,
     };
     if (systemPrompt) body.system = systemPrompt;
-    if (tools?.length) body.tools = tools;
+    if (tools?.length) body.tools = this._formatTools(tools);
 
     const headers = { 'Content-Type': 'application/json' };
     debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
 
     let accumulatedReasoning = '';
+    let accumulatedContent = '';
     const accumulatedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     const accumulatedToolCalls: Record<string, unknown>[] = [];
 
@@ -129,6 +130,7 @@ export class OllamaProvider extends BaseProvider {
 
               if (msg?.content && typeof msg.content === 'string') {
                 const hasReasoning = !!accumulatedReasoning;
+                accumulatedContent += msg.content;
                 yield {
                   content: msg.content,
                   isFinal: false,
@@ -188,11 +190,11 @@ export class OllamaProvider extends BaseProvider {
         });
 
         yield {
-          content: '',
+          content: accumulatedContent,
           isFinal: true,
           usage: accumulatedUsage,
           toolCalls: accumulatedToolCalls.length ? accumulatedToolCalls : undefined,
-          reasoning: undefined,
+          reasoning: accumulatedReasoning || undefined,
           model: this.model,
         };
       }
@@ -232,8 +234,9 @@ export class OllamaProvider extends BaseProvider {
 
       if (msg.role === 'tool') {
         formatted.push({
-          role: 'user',
-          content: `[Tool result from ${msg.toolCallId}]: ${msg.content}`,
+          role: 'tool',
+          content: msg.content,
+          tool_call_id: msg.toolCallId,
         });
         continue;
       }
@@ -275,6 +278,20 @@ export class OllamaProvider extends BaseProvider {
     };
 
     return { content, model: this.model, usage: parsedUsage, toolCalls, reasoning };
+  }
+
+  private _formatTools(tools: Record<string, unknown>[]): Record<string, unknown>[] {
+    return tools.map((tool) => {
+      if (tool.type === 'function' && tool.function) return tool;
+      return {
+        type: 'function',
+        function: {
+          name: tool.name,
+          description: tool.description || '',
+          parameters: tool.parameters || tool.input_schema || {},
+        },
+      };
+    });
   }
 
   private _handleErrors(statusCode: number, errorText: string): void {

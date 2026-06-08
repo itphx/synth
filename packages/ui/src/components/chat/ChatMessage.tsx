@@ -6,7 +6,43 @@ import { MessageActions } from './MessageActions'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
 import { SubagentPart } from './SubagentPart'
-import type { MessageData } from '@/stores/chatStore'
+import type { MessageData, LiveToolCall, ReasoningBlockData } from '@/stores/chatStore'
+import { useEffect, useState } from 'react'
+
+function useToolCallData(toolCalls: MessageData['tool_calls']) {
+  const [data, setData] = useState<LiveToolCall[]>([])
+
+  useEffect(() => {
+    if (!toolCalls || toolCalls.length === 0) {
+      setData([])
+      return
+    }
+    setData(
+      toolCalls.map((tc) => ({
+        callId: tc.id || `tc_${Math.random().toString(36).slice(2, 8)}`,
+        name: tc.name,
+        args: tc.args,
+        status: 'done' as const,
+        result: tc.result,
+        startedAt: tc.started_at || '',
+        completedAt: tc.completed_at,
+        iteration: tc.iteration || 0,
+      })),
+    )
+  }, [toolCalls])
+
+  return data
+}
+
+function getReasoningBlocks(message: MessageData): ReasoningBlockData[] {
+  if (message.reasoning_blocks && message.reasoning_blocks.length > 0) {
+    return message.reasoning_blocks
+  }
+  if (message.reasoning) {
+    return message.reasoning.split('\n\n---\n\n').map((text, i) => ({ text, iteration: i }))
+  }
+  return []
+}
 
 interface ChatMessageProps {
   message: MessageData
@@ -69,18 +105,10 @@ function ChatMessageInner({
     : []
 
   const toolCalls = message.tool_calls || []
+  const liveToolCalls = useToolCallData(toolCalls)
+  const reasoningBlocks = getReasoningBlocks(message)
 
-  if ((isError || isInfo) && message.content) {
-    return (
-      <div className={containerClass}>
-        <div className={bubbleClass}>
-          <MarkdownContent content={message.content} />
-        </div>
-      </div>
-    )
-  }
-
-  if (!message.content && !message.reasoning && toolCalls.length === 0 && subagents.length === 0) return null
+  if (!message.content && !message.reasoning && liveToolCalls.length === 0 && subagents.length === 0 && reasoningBlocks.length === 0) return null
 
   return (
     <div className={containerClass}>
@@ -97,17 +125,49 @@ function ChatMessageInner({
           <MessageHeader message={message} />
         )}
 
-        {(isAssistant || isSummary || isDebug) && message.reasoning && (
-          <ReasoningBlock reasoning={message.reasoning} />
+        {(isAssistant || isSummary || isDebug) && (
+          (() => {
+            const items: Array<
+              | { type: 'reasoning'; data: ReasoningBlockData }
+              | { type: 'tool_calls'; calls: LiveToolCall[] }
+              | { type: 'subagents' }
+            > = []
+
+            const maxIter = Math.max(
+              0,
+              ...reasoningBlocks.map((r) => r.iteration),
+              ...liveToolCalls.map((tc) => tc.iteration),
+            )
+
+            for (let iter = 0; iter <= maxIter; iter++) {
+              for (const r of reasoningBlocks) {
+                if (r.iteration === iter) items.push({ type: 'reasoning', data: r })
+              }
+              const iterCalls = liveToolCalls.filter((tc) => tc.iteration === iter)
+              if (iterCalls.length > 0) {
+                items.push({ type: 'tool_calls', calls: iterCalls })
+              }
+            }
+            if (subagents.length > 0) items.push({ type: 'subagents' })
+
+            return items.map((item, i) => {
+              if (item.type === 'reasoning') {
+                return <ReasoningBlock key={`r${i}`} reasoning={item.data.text} />
+              }
+              if (item.type === 'tool_calls') {
+                return item.calls.map((tc, j) => (
+                  <ToolCallPart key={tc.callId || j} toolCall={tc} />
+                ))
+              }
+              if (item.type === 'subagents') {
+                return subagents.map((sa, j) => (
+                  <SubagentPart key={j} subagent={sa} />
+                ))
+              }
+              return null
+            })
+          })()
         )}
-
-        {isAssistant && toolCalls.map((tc, i) => (
-          <ToolCallPart key={tc.id || i} toolCall={tc} />
-        ))}
-
-        {isAssistant && subagents.map((sa, i) => (
-          <SubagentPart key={i} subagent={sa} />
-        ))}
 
         {isUser && (
           <MessageHeader message={message} />

@@ -6,6 +6,15 @@ import path from "node:path"
 const BACKEND_URL = process.env.VITE_BACKEND_URL || "http://localhost:5000"
 const PORT = parseInt(process.env.VITE_PORT || "5002", 10)
 
+function resolveAllowedHosts(): true | string[] {
+  const raw = process.env.VITE_ALLOWED_HOSTS
+  if (!raw) return true
+  const trimmed = raw.trim()
+  if (trimmed === "true" || trimmed === "1") return true
+  if (trimmed === "false" || trimmed === "0") return [".localhost", ".local"]
+  return trimmed.split(",").map((h) => h.trim()).filter(Boolean)
+}
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -14,6 +23,7 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: PORT,
+    allowedHosts: resolveAllowedHosts(),
     proxy: {
       "/api":    { target: BACKEND_URL, changeOrigin: true },
       "/ws":     { target: BACKEND_URL, ws: true, changeOrigin: true },

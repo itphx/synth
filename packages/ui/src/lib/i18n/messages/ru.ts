@@ -386,13 +386,25 @@ export const dict = {
   'chat.reasoning.show': 'Размышления',
   'chat.reasoning.hide': 'Скрыть',
 
-  'chat.stream.working': 'Генерация...',
-  'chat.stream.cancelled': 'Отменено',
-  'chat.stream.error': 'Ошибка',
-
   'chat.toolCall.title': 'Вызов инструмента',
+
   'chat.toolCall.expand': 'Развернуть',
+
   'chat.toolCall.collapse': 'Свернуть',
+
+  'chat.toolCall.running': 'Выполняется:',
+
+  'chat.toolCall.done': 'Завершён:',
+
+  'chat.toolCall.error': 'Ошибка:',
+
+  'chat.toolCall.result': 'Результат',
+
+  'chat.toolCall.arguments': 'Аргументы',
+
+  'chat.toolCall.debug': 'raw',
+
+  'chat.toolCall.iteration': 'Итерация {n}',
 
   'chat.subagent.title': 'Сабагент',
 
@@ -667,7 +679,6 @@ export const dict = {
   'admin.agents.provider': 'Провайдер',
   'admin.agents.model': 'Модель',
   'admin.agents.contextFile': 'Контекстный файл',
-  'admin.agents.mode': 'Режим',
   'admin.agents.temperature': 'Temperature: {value}',
   'admin.agents.topP': 'Top P',
   'admin.agents.topK': 'Top K',
@@ -686,27 +697,28 @@ export const dict = {
   'admin.agents.noCapabilities': 'нет возможностей',
   'admin.agents.confirmReset': 'Сбросить агента «{name}» к настройкам по умолчанию?',
   'admin.agents.confirmDelete': 'Удалить агента «{name}»?',
-  'admin.agents.mode.simple': 'Simple',
-  'admin.agents.mode.orchestrator': 'Orchestrator',
   'admin.agents.cap.file_read': 'чтение',
   'admin.agents.cap.file_write': 'запись',
-  'admin.agents.cap.file_search': 'поиск',
+  'admin.agents.cap.search': 'поиск',
   'admin.agents.cap.git_read': 'git:чтение',
   'admin.agents.cap.git_write': 'git:запись',
-  'admin.agents.cap.code_review': 'ревью',
-  'admin.agents.cap.development': 'разработка',
-  'admin.agents.cap.testing': 'тесты',
-  'admin.agents.cap.deployment': 'деплой',
-  'admin.agents.cap.infrastructure': 'инфра',
-  'admin.agents.cap.monitoring': 'мониторинг',
-  'admin.agents.cap.architecture': 'архитектура',
-  'admin.agents.cap.mentoring': 'менторство',
-  'admin.agents.cap.research': 'анализ',
-  'admin.agents.cap.documentation': 'документы',
-  'admin.agents.cap.planning': 'планирование',
-  'admin.agents.cap.security_analysis': 'безопасность',
-  'admin.agents.cap.system_admin': 'администр.',
-  'admin.agents.cap.shell_exec': 'shell',
+  'admin.agents.cap.shell': 'shell',
+  'admin.agents.cap.web': 'веб',
+  'admin.agents.cap.task': 'сабагенты',
+
+  // Subagent fields
+  'admin.agents.agentMode': 'Тип агента',
+  'admin.agents.agentMode.primary': 'Основной',
+  'admin.agents.agentMode.subagent': 'Сабагент',
+  'admin.agents.agentMode.all': 'Осн. + сабагент',
+  'admin.agents.subagentPrompt': 'Промпт сабагента',
+  'admin.agents.maxSteps': 'Макс. шагов',
+
+  // Filter
+  'admin.agents.filter.all': 'Все',
+  'admin.agents.filter.agents': 'Агенты',
+  'admin.agents.filter.subagents': 'Сабагенты',
+  'admin.agents.filter.subagents_count': '{count} сабагентов',
 
   // Context
   'admin.context.title': 'Контекст',

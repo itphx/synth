@@ -7,7 +7,13 @@ import { ProviderFactory } from '../providers/base.js';
 import type { LLMMessage, CancellationToken, ProviderConfig as CoreProviderConfig } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
+import type { ToolRegistry } from './tools/registry.js';
+import type { ToolForLLM } from '@synth/shared';
+import type { AgentRegistry } from './agents/registry.js';
 import { warning } from '../logger.js';
+
+const MAX_TOOL_ITERATIONS = 10;
+const MAX_DOOM_LOOP_COUNT = 3;
 
 export interface ModelPricing {
   inputPrice?: number;
@@ -24,6 +30,8 @@ export interface OrchestratorOptions {
   contextOptimizer?: ContextOptimizer;
   modelPriceLoader?: (modelName: string) => ModelPricing | null;
   dataDir?: string;
+  toolRegistry?: ToolRegistry;
+  agentRegistry?: AgentRegistry;
 }
 
 export interface ProcessMessageResult {
@@ -54,6 +62,8 @@ export class ChatOrchestrator {
   private readonly _providerLoader: (name: string) => SharedProviderConfig | null;
   private readonly _optimizer: ContextOptimizer | null;
   private readonly _modelPriceLoader: ((modelName: string) => ModelPricing | null) | null;
+  private readonly _toolRegistry: ToolRegistry | null;
+  private readonly _agentRegistry: AgentRegistry | null;
   private readonly _cancellationTokens = new Map<string, CancellationToken>();
 
   constructor(options: OrchestratorOptions) {
@@ -63,6 +73,8 @@ export class ChatOrchestrator {
     this._providerLoader = options.providerLoader;
     this._optimizer = options.contextOptimizer ?? null;
     this._modelPriceLoader = options.modelPriceLoader ?? null;
+    this._toolRegistry = options.toolRegistry ?? null;
+    this._agentRegistry = options.agentRegistry ?? null;
   }
 
   /**
@@ -115,7 +127,6 @@ export class ChatOrchestrator {
         provider_type: provider.type,
         debug_enabled: session.settings.debugEnabled,
         stream_enabled: session.settings.streamEnabled,
-        tsm_mode: session.settings.tsmMode,
         context_optimization: session.settings.contextOptimization,
       });
 
@@ -135,7 +146,6 @@ export class ChatOrchestrator {
           historyMessages: session.messages,
           userId: session.userId,
           projectName: session.projectId,
-          tsmMode: session.settings.tsmMode,
           language: session.settings.language,
           showInterview: session.settings.showInterview,
           stickyNotes: session.stickyNotes,
@@ -144,9 +154,20 @@ export class ChatOrchestrator {
 
       // 3. Convert messages for LLM (без summary — они уже в system prompt)
       const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
-      const llmMessages = ChatOrchestrator._sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author);
+      const baseLlmMessages = ChatOrchestrator._sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author);
 
-      // 4. Create cancellation token
+      // 4. Get tools from registry, filtered by agent capabilities
+      let tools: ToolForLLM[] | undefined;
+      if (this._toolRegistry) {
+        if (this._agentRegistry && effectiveAgentRole) {
+          tools = this._agentRegistry.getToolsForAgent(effectiveAgentRole);
+        }
+        if (!tools || tools.length === 0) {
+          tools = this._toolRegistry.toLLMFormat();
+        }
+      }
+
+      // 5. Create cancellation token
       const cancelToken: CancellationToken = {
         cancelled: false,
         cancel: () => {
@@ -159,70 +180,281 @@ export class ChatOrchestrator {
         cancelToken.cancel();
       }, { once: true });
 
-      // 5. Stream from provider
-      let accumulatedContent = '';
-      let accumulatedReasoning = '';
-      let finalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      // 6. Tool loop — stream LLM, execute tools, continue until no tool calls
+      let toolIteration = 0;
+      const currentMessages: LLMMessage[] = [...baseLlmMessages];
+      const doomLoopTracker: Map<string, number> = new Map();
+      let finalContent = '';
+      const allReasoning: Array<{ text: string; iteration: number }> = [];
+      let finalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       let finalModel: string | undefined;
+      const allToolCalls: Array<Record<string, unknown>> = [];
 
-      try {
-        for await (const chunk of provider.chatAsync(llmMessages, systemPrompt, undefined, debugCollector, cancelToken)) {
-          if (cancelToken.cancelled) break;
+      while (toolIteration < MAX_TOOL_ITERATIONS) {
+        if (cancelToken.cancelled) break;
 
-          if (chunk.isFinal) {
-            accumulatedContent = chunk.content;
-          } else {
-            accumulatedContent += chunk.content;
+        let accumulatedContent = '';
+        let accumulatedReasoning = '';
+        let toolCalls: Record<string, unknown>[] | undefined = [];
+        let chunkModel: string | undefined;
+
+        try {
+          for await (const chunk of provider.chatAsync(
+            currentMessages,
+            systemPrompt,
+            tools as Record<string, unknown>[] | undefined,
+            debugCollector,
+            cancelToken,
+          )) {
+            if (cancelToken.cancelled) break;
+
+            if (chunk.isFinal) {
+              accumulatedContent = chunk.content || accumulatedContent;
+            } else {
+              accumulatedContent += chunk.content;
+            }
+            if (chunk.reasoning) accumulatedReasoning = chunk.reasoning;
+            if (chunk.usage) finalUsage = chunk.usage;
+            if (chunk.model) chunkModel = chunk.model;
+
+            if (chunk.toolCalls && chunk.toolCalls.length > 0) {
+              toolCalls = chunk.toolCalls;
+            }
+
+            // Stream UI chunks (content from all iterations; reasoning always)
+            if (toolIteration === 0) {
+              publishChunk('stream.chunk', {
+                stream_id: streamId,
+                content: chunk.content,
+                reasoning: chunk.reasoning,
+                iteration: toolIteration,
+                is_final: chunk.isFinal,
+                agent_role: effectiveAgentRole,
+                model: chunkModel,
+                provider: providerName,
+              });
+            } else {
+              publishChunk('stream.chunk', {
+                stream_id: streamId,
+                content: chunk.content,
+                reasoning: chunk.reasoning,
+                iteration: toolIteration,
+                agent_role: effectiveAgentRole,
+                model: chunkModel,
+                provider: providerName,
+              });
+            }
           }
-          if (chunk.reasoning) accumulatedReasoning = chunk.reasoning;
-          if (chunk.usage) finalUsage = chunk.usage;
-          if (chunk.model) finalModel = chunk.model;
+        } catch (e) {
+          const errMsg = String(e);
+          warning('ORCHESTRATOR', `LLM stream error: ${errMsg}`);
 
-          publishChunk('stream.chunk', {
+          if (accumulatedContent || accumulatedReasoning) {
+            await this._saveAssistantMessage(
+              session.id, accumulatedContent, streamId, effectiveAgentRole,
+              finalUsage, chunkModel, accumulatedReasoning, debugCollector, true, providerName,
+            );
+          }
+
+          this._cancellationTokens.delete(streamId);
+          return {
+            error: errMsg,
+            errorType: this._classifyError(errMsg),
+            canRetry: this._isRecoverable(errMsg),
+          };
+        }
+
+        if (cancelToken.cancelled) {
+          if (accumulatedContent || accumulatedReasoning) {
+            await this._saveAssistantMessage(
+              session.id, accumulatedContent, streamId, effectiveAgentRole,
+              finalUsage, chunkModel, accumulatedReasoning, debugCollector, true, providerName,
+            );
+          }
+
+          publishChunk('stream.cancelled', {
             stream_id: streamId,
-            content: chunk.content,
-            reasoning: chunk.reasoning,
-            is_final: chunk.isFinal,
-            agent_role: effectiveAgentRole,
-            model: finalModel,
-            provider: providerName,
+            content: accumulatedContent,
           });
-        }
-      } catch (e) {
-        const errMsg = String(e);
-        warning('ORCHESTRATOR', `LLM stream error: ${errMsg}`);
 
-        // Save partial response
-        if (accumulatedContent || accumulatedReasoning) {
-          await this._saveAssistantMessage(session.id, accumulatedContent, streamId, effectiveAgentRole, finalUsage, finalModel, accumulatedReasoning, debugCollector, true, providerName);
+          this._cancellationTokens.delete(streamId);
+          return {};
         }
 
-        return {
-          error: errMsg,
-          errorType: this._classifyError(errMsg),
-          canRetry: this._isRecoverable(errMsg),
-        };
-      }
+        finalModel = chunkModel ?? finalModel;
 
-      // 6. Handle cancellation
-      if (cancelToken.cancelled) {
-        if (accumulatedContent || accumulatedReasoning) {
-          await this._saveAssistantMessage(session.id, accumulatedContent, streamId, effectiveAgentRole, finalUsage, finalModel, accumulatedReasoning, debugCollector, true, providerName);
+        if (accumulatedReasoning) {
+          allReasoning.push({ text: accumulatedReasoning, iteration: toolIteration });
         }
 
-        publishChunk('stream.cancelled', {
-          stream_id: streamId,
-          content: accumulatedContent,
+        // No tool calls — final response
+        if (!toolCalls || toolCalls.length === 0) {
+          finalContent = accumulatedContent;
+          break;
+        }
+
+        // Tool calls detected — execute them
+        debugCollector.captureRawModelResponse(
+          `[tool_calls iteration ${toolIteration}]: ${JSON.stringify(toolCalls)}`,
+        );
+
+        // Add assistant message with tool calls to currentMessages
+        currentMessages.push({
+          id: '',
+          role: 'assistant',
+          content: accumulatedContent || '',
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          disabled: false,
+          pinned: false,
+          branchId: '',
+          toolUse: toolCalls,
+          agentRole: effectiveAgentRole,
         });
 
-        this._cancellationTokens.delete(streamId);
-        return {};
+        // Execute each tool call
+        for (const tc of toolCalls) {
+          const tcId = (tc.id as string) || `call_${Date.now()}`;
+          const func = tc.function as { name: string; arguments: string | Record<string, unknown> } | undefined;
+
+          if (!func?.name) continue;
+
+          const toolName = func.name;
+          let toolArgs: Record<string, unknown>;
+
+          if (typeof func.arguments === 'string') {
+            try {
+              toolArgs = JSON.parse(func.arguments);
+            } catch {
+              toolArgs = {};
+            }
+          } else {
+            toolArgs = func.arguments || {};
+          }
+
+          // Doom loop detection
+          const doomKey = `${toolName}:${JSON.stringify(toolArgs)}`;
+          const doomCount = (doomLoopTracker.get(doomKey) || 0) + 1;
+          doomLoopTracker.set(doomKey, doomCount);
+
+          if (doomCount >= MAX_DOOM_LOOP_COUNT) {
+            warning('ORCHESTRATOR', `Doom loop detected: ${toolName} called ${doomCount} times with same args`);
+            currentMessages.push({
+              id: '',
+              role: 'tool',
+              content: `Ошибка: инструмент "${toolName}" вызван ${doomCount} раз(а) с одинаковыми аргументами. Цикл прерван.`,
+              usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              disabled: false,
+              pinned: false,
+              branchId: '',
+              toolCallId: tcId,
+            });
+            continue;
+          }
+
+          const tcStartedAt = new Date().toISOString();
+
+          publishChunk('tool_call.started', {
+            stream_id: streamId,
+            session_id: session.id,
+            call_id: tcId,
+            name: toolName,
+            arguments: toolArgs,
+            iteration: toolIteration,
+          });
+
+          const toolDef = this._toolRegistry?.get(toolName);
+          let toolResult: { content: string; isError?: boolean; metadata?: Record<string, unknown> };
+
+          if (toolDef) {
+            try {
+              toolResult = await toolDef.execute(toolArgs, {
+                sessionId: session.id,
+                messageId: (message.metadata?.stream_id as string) || streamId,
+                abortSignal: signal,
+                agentRole: effectiveAgentRole,
+                workingDir: '/home/eof/dev/Synth',
+                dataDir: this._modelPriceLoader ? undefined : undefined,
+                extra: {
+                  provider,
+                  agentRegistry: this._agentRegistry,
+                  sessionSettings: {
+                    temperature: session.settings.temperature,
+                    maxTokens: session.settings.maxTokens,
+                  },
+                  publish: (type: string, data: Record<string, unknown>) =>
+                    publishChunk(type as never, data),
+                  streamId,
+                  sessionId: session.id,
+                  toolRegistry: this._toolRegistry,
+                },
+              });
+            } catch (execError) {
+              toolResult = {
+                content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
+                isError: true,
+              };
+            }
+          } else {
+            toolResult = {
+              content: `Инструмент "${toolName}" не найден`,
+              isError: true,
+            };
+          }
+
+          publishChunk('tool_call.result', {
+            stream_id: streamId,
+            session_id: session.id,
+            call_id: tcId,
+            name: toolName,
+            result: toolResult,
+            iteration: toolIteration,
+          });
+
+          allToolCalls.push({
+            name: toolName,
+            args: toolArgs,
+            id: tcId,
+            result: toolResult,
+            started_at: tcStartedAt,
+            completed_at: new Date().toISOString(),
+            iteration: toolIteration,
+          });
+
+          debugCollector.captureToolCall(toolName, toolArgs, toolResult as Record<string, unknown>);
+
+          currentMessages.push({
+            id: '',
+            role: 'tool',
+            content: toolResult.content,
+            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            disabled: false,
+            pinned: false,
+            branchId: '',
+            toolCallId: tcId,
+          });
+        }
+
+        publishChunk('tool_call.loop', {
+          stream_id: streamId,
+          session_id: session.id,
+          iteration: toolIteration,
+          total_tool_calls: toolCalls.length,
+        });
+
+        toolIteration++;
       }
 
-      // 7. Save assistant message
+      // 7. Handle max iterations exceeded
+      if (toolIteration >= MAX_TOOL_ITERATIONS && !finalContent) {
+        finalContent = '(достигнут лимит итераций инструментов)';
+      }
+
+      // 8. Save final assistant message
+      const reasoningJoined = allReasoning.map((r) => r.text).join('\n\n---\n\n');
       const savedContent = await this._saveAssistantMessage(
-        session.id, accumulatedContent, streamId, effectiveAgentRole,
-        finalUsage, finalModel, accumulatedReasoning, debugCollector, false, providerName,
+        session.id, finalContent, streamId, effectiveAgentRole,
+        finalUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
+        MessageRole.ASSISTANT, undefined, false, allToolCalls,
       );
 
       // Получаем актуальную сессию после сохранения
@@ -236,6 +468,7 @@ export class ChatOrchestrator {
         model: finalModel,
         provider: providerName,
         usage: finalUsage,
+        reasoning_blocks: allReasoning.length > 0 ? allReasoning : undefined,
       };
 
       const debugInfo = debugCollector.getDebugInfo();
@@ -245,7 +478,7 @@ export class ChatOrchestrator {
 
       publishChunk('stream.done', doneData);
 
-      // 8. Check context optimization triggers
+      // 9. Check context optimization triggers
       if (this._optimizer && updatedSession) {
         const optSession = updatedSession;
 
@@ -659,6 +892,7 @@ export class ChatOrchestrator {
     role: MessageRole = MessageRole.ASSISTANT,
     summaryOf?: number[],
     skipEvent = false,
+    toolResults?: Array<Record<string, unknown>>,
   ): Promise<string> {
     const finalContent = content;
 
@@ -671,6 +905,11 @@ export class ChatOrchestrator {
     }
 
     const debugInfo = debugCollector.getDebugInfo();
+
+    const metadata: Record<string, unknown> = { stream_id: streamId };
+    if (toolResults && toolResults.length > 0) {
+      metadata.tool_results = toolResults;
+    }
 
     const msg: Message = {
       role,
@@ -685,7 +924,7 @@ export class ChatOrchestrator {
       reasoning,
       agentRole,
       debugData: debugInfo ?? undefined,
-      metadata: { stream_id: streamId },
+      metadata,
       ...(summaryOf ? { summaryOf } : {}),
     };
 
@@ -733,6 +972,7 @@ export class ChatOrchestrator {
           provider: provider || '',
           agent_role: agentRole,
           reasoning: reasoning || null,
+          tool_calls: toolResults && toolResults.length > 0 ? toolResults : null,
         });
       }
     }

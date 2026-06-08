@@ -136,6 +136,9 @@ export interface AgentInfo {
   description: string | null
   available: boolean
   mode: 'simple' | 'orchestrator'
+  agent_mode: 'primary' | 'subagent' | 'all' | null
+  subagent_prompt: string | null
+  max_steps: number | null
   provider: string | null
   model: string | null
   context_file: string | null

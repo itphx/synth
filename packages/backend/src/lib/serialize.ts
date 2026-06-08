@@ -78,7 +78,7 @@ export function serializeMessage(msg: Message, index: number) {
     timestamp: msg.createdAt,
     metadata: msg.metadata || null,
     source: msg.source || null,
-    tool_calls: msg.toolCalls || null,
+    tool_calls: (msg.metadata?.tool_results as Array<Record<string, unknown>>) || msg.toolCalls || null,
     tool_call_id: msg.toolCallId || null,
   };
 }

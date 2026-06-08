@@ -25,6 +25,27 @@
   .animate-notification-blink {
     animation: notification-blink 1.2s ease-in-out infinite;
   }
+
+  @keyframes tool-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+  .animate-tool-pulse {
+    animation: tool-pulse 1.8s ease-in-out infinite;
+  }
+
+  .diff-added {
+    background-color: rgba(0, 200, 83, 0.12);
+    color: rgb(0, 180, 80);
+  }
+  .diff-removed {
+    background-color: rgba(239, 68, 68, 0.12);
+    color: rgb(220, 60, 60);
+  }
+  .diff-header {
+    color: var(--muted-foreground);
+    font-weight: 600;
+  }
 }
 
 .synth-toast {
