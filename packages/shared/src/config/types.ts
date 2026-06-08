@@ -6,6 +6,7 @@ export const serverConfigSchema = z.object({
   host: z.string().default('0.0.0.0'),
   port: z.number().int().min(1).max(65535).default(5000),
   corsOrigin: z.string().default('http://localhost:5002'),
+  allowedOrigins: z.array(z.string()).default([]),
 });
 
 export const storageConfigSchema = z.object({
