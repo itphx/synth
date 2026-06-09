@@ -108,7 +108,8 @@ function ChatMessageInner({
   const liveToolCalls = useToolCallData(toolCalls)
   const reasoningBlocks = getReasoningBlocks(message)
 
-  if (!message.content && !message.reasoning && liveToolCalls.length === 0 && subagents.length === 0 && reasoningBlocks.length === 0) return null
+  const displayContent = message.content
+  if (!displayContent && !message.reasoning && liveToolCalls.length === 0 && subagents.length === 0 && reasoningBlocks.length === 0) return null
 
   return (
     <div className={containerClass}>
@@ -173,11 +174,11 @@ function ChatMessageInner({
           <MessageHeader message={message} />
         )}
 
-        {message.content && (
+        {displayContent && (
           isUser ? (
-            <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+            <p className="text-sm whitespace-pre-wrap">{displayContent}</p>
           ) : (
-            <MarkdownContent content={message.content} />
+            <MarkdownContent content={displayContent} />
           )
         )}
 

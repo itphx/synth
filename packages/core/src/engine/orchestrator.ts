@@ -223,20 +223,20 @@ export class ChatOrchestrator {
 
             // Stream UI chunks (content from all iterations; reasoning always)
             if (toolIteration === 0) {
-              publishChunk('stream.chunk', {
-                stream_id: streamId,
-                content: chunk.content,
-                reasoning: chunk.reasoning,
-                iteration: toolIteration,
-                is_final: chunk.isFinal,
-                agent_role: effectiveAgentRole,
-                model: chunkModel,
-                provider: providerName,
-              });
-            } else {
-              publishChunk('stream.chunk', {
-                stream_id: streamId,
-                content: chunk.content,
+                publishChunk('stream.chunk', {
+                  stream_id: streamId,
+                  content: chunk.isFinal ? '' : chunk.content,
+                  reasoning: chunk.reasoning,
+                  iteration: toolIteration,
+                  is_final: chunk.isFinal,
+                  agent_role: effectiveAgentRole,
+                  model: chunkModel,
+                  provider: providerName,
+                });
+              } else {
+                publishChunk('stream.chunk', {
+                  stream_id: streamId,
+                  content: chunk.isFinal ? '' : chunk.content,
                 reasoning: chunk.reasoning,
                 iteration: toolIteration,
                 agent_role: effectiveAgentRole,
@@ -366,33 +366,41 @@ export class ChatOrchestrator {
           let toolResult: { content: string; isError?: boolean; metadata?: Record<string, unknown> };
 
           if (toolDef) {
-            try {
-              toolResult = await toolDef.execute(toolArgs, {
-                sessionId: session.id,
-                messageId: (message.metadata?.stream_id as string) || streamId,
-                abortSignal: signal,
-                agentRole: effectiveAgentRole,
-                workingDir: '/home/eof/dev/Synth',
-                dataDir: this._modelPriceLoader ? undefined : undefined,
-                extra: {
-                  provider,
-                  agentRegistry: this._agentRegistry,
-                  sessionSettings: {
-                    temperature: session.settings.temperature,
-                    maxTokens: session.settings.maxTokens,
-                  },
-                  publish: (type: string, data: Record<string, unknown>) =>
-                    publishChunk(type as never, data),
-                  streamId,
-                  sessionId: session.id,
-                  toolRegistry: this._toolRegistry,
-                },
-              });
-            } catch (execError) {
+            const parsed = toolDef.parameters.safeParse(toolArgs);
+            if (!parsed.success) {
               toolResult = {
-                content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
+                content: `Ошибка аргументов инструмента "${toolName}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`,
                 isError: true,
               };
+            } else {
+              try {
+                toolResult = await toolDef.execute(parsed.data, {
+                  sessionId: session.id,
+                  messageId: (message.metadata?.stream_id as string) || streamId,
+                  abortSignal: signal,
+                  agentRole: effectiveAgentRole,
+                  workingDir: '/home/eof/dev/Synth',
+                  dataDir: this._modelPriceLoader ? undefined : undefined,
+                  extra: {
+                    provider,
+                    agentRegistry: this._agentRegistry,
+                    sessionSettings: {
+                      temperature: session.settings.temperature,
+                      maxTokens: session.settings.maxTokens,
+                    },
+                    publish: (type: string, data: Record<string, unknown>) =>
+                      publishChunk(type as never, data),
+                    streamId,
+                    sessionId: session.id,
+                    toolRegistry: this._toolRegistry,
+                  },
+                });
+              } catch (execError) {
+                toolResult = {
+                  content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
+                  isError: true,
+                };
+              }
             }
           } else {
             toolResult = {
@@ -619,7 +627,7 @@ export class ChatOrchestrator {
 
         publishChunk('stream.chunk', {
           stream_id: streamId,
-          content: chunk.content,
+          content: chunk.isFinal ? '' : chunk.content,
           reasoning: chunk.reasoning,
           is_final: chunk.isFinal,
           agent_role: 'debug',
@@ -725,7 +733,7 @@ export class ChatOrchestrator {
 
         publishChunk('stream.chunk', {
           stream_id: streamId,
-          content: chunk.content,
+          content: chunk.isFinal ? '' : chunk.content,
           reasoning: chunk.reasoning,
           is_final: chunk.isFinal,
           agent_role: 'summary',
@@ -841,6 +849,7 @@ export class ChatOrchestrator {
       if (role === MessageRole.INFO) continue;
 
       const isOwnMessage =
+        role === MessageRole.TOOL ||
         (role === MessageRole.ASSISTANT && msg.agentRole === currentAgentRole) ||
         (role === MessageRole.USER && msg.author === currentAuthor);
 
@@ -869,8 +878,8 @@ export class ChatOrchestrator {
         disabled: false,
         pinned: false,
         branchId: '',
-        toolUse: msg.toolCalls,
-        toolCallId: msg.toolCallId,
+        toolUse: isOwnMessage ? msg.toolCalls : undefined,
+        toolCallId: isOwnMessage ? msg.toolCallId : undefined,
         agentRole: msg.agentRole,
       });
     }

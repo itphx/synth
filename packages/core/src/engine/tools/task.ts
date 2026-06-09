@@ -35,7 +35,11 @@ export const taskTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.TASK],
   async execute(args, ctx) {
-    const params = args as { description: string; prompt: string; subagent_type: string; task_id?: string };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { description: string; prompt: string; subagent_type: string; task_id?: string };
     const extra = ctx.extra as TaskExtra | undefined;
 
     if (!extra?.provider || !extra?.agentRegistry) {
@@ -201,17 +205,25 @@ export const taskTool: ToolDefinition = {
           let toolResult: ToolResult;
 
           if (toolDef) {
-            try {
-              toolResult = await toolDef.execute(toolArgs, {
-                ...ctx,
-                abortSignal: ctx.abortSignal,
-                extra: extra as unknown as Record<string, unknown>,
-              });
-            } catch (execError) {
+            const parsed = toolDef.parameters.safeParse(toolArgs);
+            if (!parsed.success) {
               toolResult = {
-                content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
+                content: `Ошибка аргументов инструмента "${toolName}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`,
                 isError: true,
               };
+            } else {
+              try {
+                toolResult = await toolDef.execute(parsed.data, {
+                  ...ctx,
+                  abortSignal: ctx.abortSignal,
+                  extra: extra as unknown as Record<string, unknown>,
+                });
+              } catch (execError) {
+                toolResult = {
+                  content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
+                  isError: true,
+                };
+              }
             }
           } else {
             toolResult = {

@@ -7,7 +7,6 @@ import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
 import { MarkdownContent } from './MarkdownContent'
 import { useI18n } from '@/lib/i18n'
-import { useMemo } from 'react'
 import type { StreamState, LiveToolCall, ReasoningBlockData } from '@/stores/chatStore'
 
 interface ToolCallNode {
@@ -63,17 +62,17 @@ function ToolCallTreeNode({ node }: { node: ToolCallNode }) {
   )
 }
 
-interface TimelineItem {
-  type: 'reasoning'
-  data: ReasoningBlockData
-}
-
 function buildTimeline(
   reasoningBlocks: ReasoningBlockData[],
   toolCalls: LiveToolCall[],
-  content: string,
-): Array<TimelineItem | { type: 'tool_calls'; calls: LiveToolCall[] } | { type: 'content' }> {
-  const items: Array<TimelineItem | { type: 'tool_calls'; calls: LiveToolCall[] } | { type: 'content' }> = []
+): Array<
+  | { type: 'reasoning'; data: ReasoningBlockData }
+  | { type: 'tool_calls'; calls: LiveToolCall[] }
+> {
+  const items: Array<
+    | { type: 'reasoning'; data: ReasoningBlockData }
+    | { type: 'tool_calls'; calls: LiveToolCall[] }
+  > = []
 
   const maxIter = Math.max(
     0,
@@ -91,9 +90,6 @@ function buildTimeline(
     }
   }
 
-  if (content) {
-    items.push({ type: 'content' })
-  }
   return items
 }
 
@@ -121,6 +117,10 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
   const providerUrl = stream.provider
     ? providers.find((p) => p.name === stream.provider)?.url
     : undefined
+
+  const displayContent = stream.content
+
+  const timeline = buildTimeline(stream.reasoningBlocks, stream.toolCalls || [])
 
   return (
     <div className={cn(
@@ -174,32 +174,24 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
           </span>
         </div>
 
-        {(() => {
-          const timeline = buildTimeline(
-            stream.reasoningBlocks,
-            stream.toolCalls || [],
-            stream.content,
-          )
-          return timeline.map((item, i) => {
-            if (item.type === 'reasoning') {
-              return <ReasoningBlock key={`r${i}`} reasoning={item.data.text} />
-            }
-            if (item.type === 'tool_calls') {
-              const toolTree = buildToolCallTree(item.calls)
-              return (
-                <div key={`t${i}`} className="mb-2">
-                  {toolTree.map((node) => (
-                    <ToolCallTreeNode key={node.call.callId} node={node} />
-                  ))}
-                </div>
-              )
-            }
-            if (item.type === 'content') {
-              return <MarkdownContent key={`c${i}`} content={stream.content} />
-            }
-            return null
-          })
-        })()}
+        {timeline.map((item, i) => {
+          if (item.type === 'reasoning') {
+            return <ReasoningBlock key={`r${i}`} reasoning={item.data.text} />
+          }
+          if (item.type === 'tool_calls') {
+            const toolTree = buildToolCallTree(item.calls)
+            return (
+              <div key={`t${i}`} className="mb-2">
+                {toolTree.map((node) => (
+                  <ToolCallTreeNode key={node.call.callId} node={node} />
+                ))}
+              </div>
+            )
+          }
+          return null
+        })}
+
+        {displayContent && <MarkdownContent content={displayContent} />}
 
         {stream.isStreaming && (
           <div className="flex items-center gap-0.5 mt-2 pt-1.5 border-t border-border/30">

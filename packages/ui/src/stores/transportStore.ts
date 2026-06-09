@@ -264,7 +264,7 @@ function createDispatcher(): EventDispatcher {
           const sessionStreams = { ...(s.streamingBySession[sid] || {}) }
           const existing = sessionStreams[streamId]
           if (!existing) return s
-          sessionStreams[streamId] = { ...existing, toolIteration: iteration, content: '' }
+          sessionStreams[streamId] = { ...existing, toolIteration: iteration }
           return { streamingBySession: { ...s.streamingBySession, [sid]: sessionStreams } }
         })
         break

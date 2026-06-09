@@ -162,7 +162,28 @@ export class OpenAIProvider extends BaseProvider {
                 }
 
                 if (delta.tool_calls) {
-                  accumulatedToolCalls.push(...(delta.tool_calls as Record<string, unknown>[]));
+                  for (const tc of delta.tool_calls as Array<Record<string, unknown>>) {
+                    const tcIndex = tc.index as number;
+                    const func = tc.function as Record<string, unknown> | undefined;
+                    const existing = accumulatedToolCalls.find(
+                      (t) => (t.index as number) === tcIndex,
+                    );
+                    if (existing) {
+                      const ef = existing.function as Record<string, unknown>;
+                      if (func?.name) ef.name = func.name;
+                      ef.arguments = String(ef.arguments || '') + String(func?.arguments || '');
+                    } else {
+                      accumulatedToolCalls.push({
+                        index: tcIndex,
+                        id: tc.id,
+                        type: 'function',
+                        function: {
+                          name: func?.name || '',
+                          arguments: func?.arguments || '',
+                        },
+                      });
+                    }
+                  }
                 }
               }
 

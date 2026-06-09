@@ -112,6 +112,7 @@ export class AnthropicProvider extends BaseProvider {
     let accumulatedContent = '';
     let accumulatedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     const accumulatedToolCalls: Record<string, unknown>[] = [];
+    const toolCallByBlockIndex = new Map<number, number>();
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
@@ -176,12 +177,15 @@ export class AnthropicProvider extends BaseProvider {
                 if (block?.type === 'thinking') {
                   accumulatedReasoning = '';
                 } else if (block?.type === 'tool_use') {
+                  const blockIndex = chunkData.index as number;
+                  const tcIdx = accumulatedToolCalls.length;
+                  toolCallByBlockIndex.set(blockIndex, tcIdx);
                   accumulatedToolCalls.push({
                     id: block.id,
                     type: 'function',
                     function: {
                       name: block.name,
-                      arguments: block.input,
+                      arguments: '',
                     },
                   });
                 }
@@ -213,6 +217,16 @@ export class AnthropicProvider extends BaseProvider {
                       usage: accumulatedUsage,
                       reasoning: accumulatedReasoning || undefined,
                     };
+                  }
+                } else if (deltaType === 'input_json_delta') {
+                  const blockIndex = chunkData.index as number;
+                  const tcIdx = toolCallByBlockIndex.get(blockIndex);
+                  if (tcIdx !== undefined) {
+                    const tc = accumulatedToolCalls[tcIdx];
+                    if (tc) {
+                      const func = tc.function as Record<string, unknown>;
+                      func.arguments = String(func.arguments || '') + String(delta?.partial_json ?? '');
+                    }
                   }
                 }
               }

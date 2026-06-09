@@ -26,7 +26,11 @@ export const readFileTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.FILE_READ],
   async execute(args, ctx) {
-    const params = args as { file_path: string; offset?: number; limit?: number };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { file_path: string; offset?: number; limit?: number };
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
     validatePath(resolvedPath, ctx.workingDir);
 
@@ -62,7 +66,11 @@ export const listDirectoryTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.FILE_READ],
   async execute(args, ctx) {
-    const params = args as { path: string };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { path: string };
     const resolvedPath = resolvePath(params.path, ctx.workingDir);
     validatePath(resolvedPath, ctx.workingDir);
 
@@ -101,7 +109,11 @@ export const globTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.FILE_READ, ToolCapability.SEARCH],
   async execute(args, ctx) {
-    const params = args as { pattern: string; path?: string };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { pattern: string; path?: string };
     const searchDir = params.path ? resolvePath(params.path, ctx.workingDir) : ctx.workingDir;
     validatePath(searchDir, ctx.workingDir);
 
