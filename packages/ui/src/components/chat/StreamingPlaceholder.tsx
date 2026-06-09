@@ -7,8 +7,8 @@ import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
 import { MarkdownContent } from './MarkdownContent'
 import { useI18n } from '@/lib/i18n'
-import { useMemo } from 'react'
-import type { StreamState, LiveToolCall, ReasoningBlockData } from '@/stores/chatStore'
+import { useUIStore } from '@/stores/useUIStore'
+import type { StreamState, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData } from '@/stores/chatStore'
 
 interface ToolCallNode {
   call: LiveToolCall
@@ -63,21 +63,25 @@ function ToolCallTreeNode({ node }: { node: ToolCallNode }) {
   )
 }
 
-interface TimelineItem {
-  type: 'reasoning'
-  data: ReasoningBlockData
-}
-
 function buildTimeline(
   reasoningBlocks: ReasoningBlockData[],
+  intermediateTextBlocks: IntermediateTextBlockData[],
   toolCalls: LiveToolCall[],
-  content: string,
-): Array<TimelineItem | { type: 'tool_calls'; calls: LiveToolCall[] } | { type: 'content' }> {
-  const items: Array<TimelineItem | { type: 'tool_calls'; calls: LiveToolCall[] } | { type: 'content' }> = []
+): Array<
+  | { type: 'reasoning'; data: ReasoningBlockData }
+  | { type: 'intermediate_text'; data: IntermediateTextBlockData }
+  | { type: 'tool_calls'; calls: LiveToolCall[] }
+> {
+  const items: Array<
+    | { type: 'reasoning'; data: ReasoningBlockData }
+    | { type: 'intermediate_text'; data: IntermediateTextBlockData }
+    | { type: 'tool_calls'; calls: LiveToolCall[] }
+  > = []
 
   const maxIter = Math.max(
     0,
     ...reasoningBlocks.map((r) => r.iteration),
+    ...intermediateTextBlocks.map((it) => it.iteration),
     ...toolCalls.map((tc) => tc.iteration),
   )
 
@@ -85,15 +89,15 @@ function buildTimeline(
     for (const r of reasoningBlocks) {
       if (r.iteration === iter) items.push({ type: 'reasoning', data: r })
     }
+    for (const it of intermediateTextBlocks) {
+      if (it.iteration === iter) items.push({ type: 'intermediate_text', data: it })
+    }
     const iterToolCalls = toolCalls.filter((tc) => tc.iteration === iter)
     if (iterToolCalls.length > 0) {
       items.push({ type: 'tool_calls', calls: iterToolCalls })
     }
   }
 
-  if (content) {
-    items.push({ type: 'content' })
-  }
   return items
 }
 
@@ -106,6 +110,7 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
   const agents = useAgentsStore((s) => s.agents)
   const providers = useProvidersStore((s) => s.providers)
   const { t } = useI18n()
+  const intermediateTextMode = useUIStore((s) => s.intermediateTextDisplay)
 
   const isSummary = stream.agentRole === 'summary'
   const isDebug = stream.agentRole === 'debug'
@@ -121,6 +126,17 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
   const providerUrl = stream.provider
     ? providers.find((p) => p.name === stream.provider)?.url
     : undefined
+
+  const isInline = intermediateTextMode !== 'bottom'
+  const displayContent = isInline
+    ? stream.content.slice(stream._lastContentLen).replace(/^\n+|\n+$/g, '')
+    : stream.content
+
+  const timeline = buildTimeline(
+    stream.reasoningBlocks,
+    isInline ? stream.intermediateTextBlocks : [],
+    stream.toolCalls || [],
+  )
 
   return (
     <div className={cn(
@@ -174,32 +190,31 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
           </span>
         </div>
 
-        {(() => {
-          const timeline = buildTimeline(
-            stream.reasoningBlocks,
-            stream.toolCalls || [],
-            stream.content,
-          )
-          return timeline.map((item, i) => {
-            if (item.type === 'reasoning') {
-              return <ReasoningBlock key={`r${i}`} reasoning={item.data.text} />
-            }
-            if (item.type === 'tool_calls') {
-              const toolTree = buildToolCallTree(item.calls)
-              return (
-                <div key={`t${i}`} className="mb-2">
-                  {toolTree.map((node) => (
-                    <ToolCallTreeNode key={node.call.callId} node={node} />
-                  ))}
-                </div>
-              )
-            }
-            if (item.type === 'content') {
-              return <MarkdownContent key={`c${i}`} content={stream.content} />
-            }
-            return null
-          })
-        })()}
+        {timeline.map((item, i) => {
+          if (item.type === 'reasoning') {
+            return <ReasoningBlock key={`r${i}`} reasoning={item.data.text} />
+          }
+          if (item.type === 'intermediate_text') {
+            return (
+              <div key={`it${i}`} className="my-2 text-sm">
+                <MarkdownContent content={item.data.text} />
+              </div>
+            )
+          }
+          if (item.type === 'tool_calls') {
+            const toolTree = buildToolCallTree(item.calls)
+            return (
+              <div key={`t${i}`} className="mb-2">
+                {toolTree.map((node) => (
+                  <ToolCallTreeNode key={node.call.callId} node={node} />
+                ))}
+              </div>
+            )
+          }
+          return null
+        })}
+
+        {displayContent && <MarkdownContent content={displayContent} />}
 
         {stream.isStreaming && (
           <div className="flex items-center gap-0.5 mt-2 pt-1.5 border-t border-border/30">

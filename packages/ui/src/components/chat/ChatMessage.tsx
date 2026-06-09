@@ -5,8 +5,9 @@ import { MessageHeader } from './MessageHeader'
 import { MessageActions } from './MessageActions'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
-import { SubagentPart } from './SubagentPart'
-import type { MessageData, LiveToolCall, ReasoningBlockData } from '@/stores/chatStore'
+import { SubagentPart, type SubagentPartData } from './SubagentPart'
+import { useUIStore } from '@/stores/useUIStore'
+import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData } from '@/stores/chatStore'
 import { useEffect, useState } from 'react'
 
 function useToolCallData(toolCalls: MessageData['tool_calls']) {
@@ -40,6 +41,17 @@ function getReasoningBlocks(message: MessageData): ReasoningBlockData[] {
   }
   if (message.reasoning) {
     return message.reasoning.split('\n\n---\n\n').map((text, i) => ({ text, iteration: i }))
+  }
+  return []
+}
+
+function getIntermediateTextBlocks(message: MessageData): IntermediateTextBlockData[] {
+  if (message.intermediate_text_blocks && message.intermediate_text_blocks.length > 0) {
+    return message.intermediate_text_blocks
+  }
+  const fromMetadata = message.metadata?.intermediate_text_blocks as IntermediateTextBlockData[] | undefined
+  if (fromMetadata && fromMetadata.length > 0) {
+    return fromMetadata
   }
   return []
 }
@@ -95,20 +107,37 @@ function ChatMessageInner({
 
   const showActions = isUser || isAssistant || isSummary || isDebug
 
-  const subagents = hasDebug
-    ? ((message.debug_data?.subagents as Array<{
-        name: string
-        prompt?: string
-        messages?: Array<{ role: string; content: string }>
-        response?: string
-      }>) || [])
-    : []
-
   const toolCalls = message.tool_calls || []
   const liveToolCalls = useToolCallData(toolCalls)
   const reasoningBlocks = getReasoningBlocks(message)
+  const intermediateTextBlocks = getIntermediateTextBlocks(message)
+  const intermediateTextMode = useUIStore((s) => s.intermediateTextDisplay)
+  const isInline = intermediateTextMode !== 'bottom'
 
-  if (!message.content && !message.reasoning && liveToolCalls.length === 0 && subagents.length === 0 && reasoningBlocks.length === 0) return null
+  const getSubagentData = (tc: LiveToolCall) => {
+    const meta = tc.result?.metadata as Record<string, unknown> | undefined
+    if (!meta) return null
+    return {
+      name: (meta.subagent_type as string) || 'task',
+      prompt: tc.args?.prompt as string | undefined,
+      response: (meta.final_content as string) || (meta.description as string) || '',
+      reasoning_blocks: meta.reasoning_blocks as Array<{ text: string; iteration: number }> | undefined,
+      intermediate_text_blocks: meta.intermediate_text_blocks as Array<{ text: string; iteration: number }> | undefined,
+      tool_calls: meta.tool_calls as Array<{
+        name: string; args: Record<string, unknown>; id?: string;
+        result?: { content: string; isError?: boolean };
+        started_at?: string; completed_at?: string; iteration: number;
+      }> | undefined,
+      steps: meta.steps as number | undefined,
+      description: meta.description as string | undefined,
+    }
+  }
+
+  const bottomContent = !isInline && intermediateTextBlocks.length > 0
+    ? [...intermediateTextBlocks.map((it) => it.text), message.content].filter(Boolean).join('\n\n')
+    : null
+  const displayContent = bottomContent ?? message.content
+  if (!displayContent && !message.reasoning && liveToolCalls.length === 0 && reasoningBlocks.length === 0 && intermediateTextBlocks.length === 0) return null
 
   return (
     <div className={containerClass}>
@@ -129,13 +158,15 @@ function ChatMessageInner({
           (() => {
             const items: Array<
               | { type: 'reasoning'; data: ReasoningBlockData }
+              | { type: 'intermediate_text'; data: IntermediateTextBlockData }
+              | { type: 'subagent'; data: SubagentPartData }
               | { type: 'tool_calls'; calls: LiveToolCall[] }
-              | { type: 'subagents' }
             > = []
 
             const maxIter = Math.max(
               0,
               ...reasoningBlocks.map((r) => r.iteration),
+              ...intermediateTextBlocks.map((it) => it.iteration),
               ...liveToolCalls.map((tc) => tc.iteration),
             )
 
@@ -143,25 +174,46 @@ function ChatMessageInner({
               for (const r of reasoningBlocks) {
                 if (r.iteration === iter) items.push({ type: 'reasoning', data: r })
               }
+              if (isInline) {
+                for (const it of intermediateTextBlocks) {
+                  if (it.iteration === iter) items.push({ type: 'intermediate_text', data: it })
+                }
+              }
               const iterCalls = liveToolCalls.filter((tc) => tc.iteration === iter)
-              if (iterCalls.length > 0) {
-                items.push({ type: 'tool_calls', calls: iterCalls })
+              const regularCalls: LiveToolCall[] = []
+              for (const tc of iterCalls) {
+                if (tc.name === 'task') {
+                  const sa = getSubagentData(tc)
+                  if (sa) {
+                    items.push({ type: 'subagent', data: sa })
+                    continue
+                  }
+                }
+                if (tc.parentCallId) continue
+                regularCalls.push(tc)
+              }
+              if (regularCalls.length > 0) {
+                items.push({ type: 'tool_calls', calls: regularCalls })
               }
             }
-            if (subagents.length > 0) items.push({ type: 'subagents' })
 
             return items.map((item, i) => {
               if (item.type === 'reasoning') {
                 return <ReasoningBlock key={`r${i}`} reasoning={item.data.text} />
               }
+              if (item.type === 'intermediate_text') {
+                return (
+                  <div key={`it${i}`} className="my-2 text-sm">
+                    <MarkdownContent content={item.data.text} />
+                  </div>
+                )
+              }
+              if (item.type === 'subagent') {
+                return <SubagentPart key={`sa${i}`} subagent={item.data} />
+              }
               if (item.type === 'tool_calls') {
                 return item.calls.map((tc, j) => (
                   <ToolCallPart key={tc.callId || j} toolCall={tc} />
-                ))
-              }
-              if (item.type === 'subagents') {
-                return subagents.map((sa, j) => (
-                  <SubagentPart key={j} subagent={sa} />
                 ))
               }
               return null
@@ -173,11 +225,11 @@ function ChatMessageInner({
           <MessageHeader message={message} />
         )}
 
-        {message.content && (
+        {displayContent && (
           isUser ? (
-            <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+            <p className="text-sm whitespace-pre-wrap">{displayContent}</p>
           ) : (
-            <MarkdownContent content={message.content} />
+            <MarkdownContent content={displayContent} />
           )
         )}
 

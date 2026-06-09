@@ -81,7 +81,11 @@ export const writeFileTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.FILE_WRITE],
   async execute(args, ctx) {
-    const params = args as { file_path: string; content: string };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { file_path: string; content: string };
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
     validatePath(resolvedPath, ctx.workingDir);
 
@@ -109,7 +113,11 @@ export const editFileTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.FILE_WRITE],
   async execute(args, ctx) {
-    const params = args as { file_path: string; old_string: string; new_string: string; replace_all?: boolean };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { file_path: string; old_string: string; new_string: string; replace_all?: boolean };
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
     validatePath(resolvedPath, ctx.workingDir);
 
@@ -161,7 +169,11 @@ export const createDirectoryTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.FILE_WRITE],
   async execute(args, ctx) {
-    const params = args as { path: string };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { path: string };
     const resolvedPath = resolvePath(params.path, ctx.workingDir);
     validatePath(resolvedPath, ctx.workingDir);
 
@@ -181,7 +193,11 @@ export const deleteFileTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.FILE_WRITE],
   async execute(args, ctx) {
-    const params = args as { file_path: string };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { file_path: string };
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
     validatePath(resolvedPath, ctx.workingDir);
 

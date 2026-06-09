@@ -21,7 +21,11 @@ export const grepFilesTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.SEARCH],
   async execute(args, ctx) {
-    const params = args as { pattern: string; path?: string; include?: string };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { pattern: string; path?: string; include?: string };
     const searchDirRaw = params.path ?? ctx.workingDir;
     const searchDir = resolve(ctx.workingDir, searchDirRaw);
     validatePath(searchDir, ctx.workingDir);

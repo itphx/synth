@@ -407,6 +407,7 @@ export const dict = {
   'chat.toolCall.iteration': 'Итерация {n}',
 
   'chat.subagent.title': 'Сабагент',
+  'chat.subagent.steps': 'шагов',
 
   'chat.queue.stalled': 'Обработка остановлена: {count} сообщ.',
   'chat.queue.pending': 'В очереди: {count}',
@@ -468,6 +469,12 @@ export const dict = {
   'sessionSettings.saveError': 'Ошибка сохранения',
   'sessionSettings.saving': 'Сохранение...',
   'sessionSettings.notLoaded': 'Сессия не загружена',
+
+  // Chat settings
+  'chatSettings.intermediateTextDisplay': 'Промежуточные ответы',
+  'chatSettings.intermediateTextInline': 'Между блоками',
+  'chatSettings.intermediateTextBottom': 'Снизу',
+  'chatSettings.intermediateTextDescription': 'Как показывать ответы модели между вызовами инструментов.',
 
   // Model controls
   'chat.modelControls.searchModels': 'Поиск моделей...',

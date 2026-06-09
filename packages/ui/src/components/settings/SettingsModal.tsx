@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 import { AppearanceSettings } from "./AppearanceSettings"
 import { ProfileSettings } from "./ProfileSettings"
 import { NotificationSettings } from "./NotificationSettings"
+import { ChatSettings } from "./ChatSettings"
 import { ProvidersPanel } from "../admin/ProvidersPanel"
 import { ModelsPanel } from "../admin/ModelsPanel"
 import { AgentsPanel } from "../admin/AgentsPanel"
@@ -61,11 +62,7 @@ export const SettingsModal = () => {
             {settingsPage === "profile" && <ProfileSettings />}
             {settingsPage === "appearance" && <AppearanceSettings />}
             {settingsPage === "notifications" && <NotificationSettings />}
-            {settingsPage === "chat" && (
-              <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                {t("settings.category.chat")}
-              </div>
-            )}
+            {settingsPage === "chat" && <ChatSettings />}
             {settingsPage === "providers" && <ProvidersPanel />}
             {settingsPage === "models" && <ModelsPanel />}
             {settingsPage === "agents" && <AgentsPanel />}

@@ -60,6 +60,9 @@ export const profileService = {
     if (prefs.transportMode) {
       useUIStore.setState({ transportMode: prefs.transportMode })
     }
+    if (prefs.intermediateTextDisplay) {
+      useUIStore.setState({ intermediateTextDisplay: prefs.intermediateTextDisplay })
+    }
 
     useProvidersStore.getState().loadFavoritesFromProfile(prefs)
   },
@@ -95,6 +98,10 @@ export const profileService = {
 
   async syncTransportModeToProfile(mode: 'auto' | 'ws' | 'sse'): Promise<void> {
     await this.syncToProfile('transportMode', mode)
+  },
+
+  async syncIntermediateTextDisplayToProfile(mode: 'inline' | 'bottom'): Promise<void> {
+    await this.syncToProfile('intermediateTextDisplay', mode)
   },
 
   async syncAvatarToProfile(avatar: string | null): Promise<void> {

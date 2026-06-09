@@ -287,6 +287,10 @@ export class QueueProcessor {
       'model not found', 'model_not_found', 'does not exist',
       'invalid model', 'unknown model', 'invalid api key',
       'incorrect api key', '401', 'authentication', 'unauthorized',
+      'missing field', 'failed to deserialize', 'invalid type',
+      'unknown field', 'bad request', 'validation',
+      'err_invalid_arg_type', 'cannot read properties',
+      'is not a function', 'is not defined',
     ];
     return !unrecoverable.some((p) => lower.includes(p));
   }

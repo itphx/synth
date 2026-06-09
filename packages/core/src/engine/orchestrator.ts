@@ -186,6 +186,7 @@ export class ChatOrchestrator {
       const doomLoopTracker: Map<string, number> = new Map();
       let finalContent = '';
       const allReasoning: Array<{ text: string; iteration: number }> = [];
+      const allIntermediateTexts: Array<{ text: string; iteration: number }> = [];
       let finalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       let finalModel: string | undefined;
       const allToolCalls: Array<Record<string, unknown>> = [];
@@ -223,20 +224,20 @@ export class ChatOrchestrator {
 
             // Stream UI chunks (content from all iterations; reasoning always)
             if (toolIteration === 0) {
-              publishChunk('stream.chunk', {
-                stream_id: streamId,
-                content: chunk.content,
-                reasoning: chunk.reasoning,
-                iteration: toolIteration,
-                is_final: chunk.isFinal,
-                agent_role: effectiveAgentRole,
-                model: chunkModel,
-                provider: providerName,
-              });
-            } else {
-              publishChunk('stream.chunk', {
-                stream_id: streamId,
-                content: chunk.content,
+                publishChunk('stream.chunk', {
+                  stream_id: streamId,
+                  content: chunk.isFinal ? '' : chunk.content,
+                  reasoning: chunk.reasoning,
+                  iteration: toolIteration,
+                  is_final: chunk.isFinal,
+                  agent_role: effectiveAgentRole,
+                  model: chunkModel,
+                  provider: providerName,
+                });
+              } else {
+                publishChunk('stream.chunk', {
+                  stream_id: streamId,
+                  content: chunk.isFinal ? '' : chunk.content,
                 reasoning: chunk.reasoning,
                 iteration: toolIteration,
                 agent_role: effectiveAgentRole,
@@ -291,6 +292,10 @@ export class ChatOrchestrator {
         if (!toolCalls || toolCalls.length === 0) {
           finalContent = accumulatedContent;
           break;
+        }
+
+        if (accumulatedContent) {
+          allIntermediateTexts.push({ text: accumulatedContent, iteration: toolIteration });
         }
 
         // Tool calls detected — execute them
@@ -366,33 +371,41 @@ export class ChatOrchestrator {
           let toolResult: { content: string; isError?: boolean; metadata?: Record<string, unknown> };
 
           if (toolDef) {
-            try {
-              toolResult = await toolDef.execute(toolArgs, {
-                sessionId: session.id,
-                messageId: (message.metadata?.stream_id as string) || streamId,
-                abortSignal: signal,
-                agentRole: effectiveAgentRole,
-                workingDir: '/home/eof/dev/Synth',
-                dataDir: this._modelPriceLoader ? undefined : undefined,
-                extra: {
-                  provider,
-                  agentRegistry: this._agentRegistry,
-                  sessionSettings: {
-                    temperature: session.settings.temperature,
-                    maxTokens: session.settings.maxTokens,
-                  },
-                  publish: (type: string, data: Record<string, unknown>) =>
-                    publishChunk(type as never, data),
-                  streamId,
-                  sessionId: session.id,
-                  toolRegistry: this._toolRegistry,
-                },
-              });
-            } catch (execError) {
+            const parsed = toolDef.parameters.safeParse(toolArgs);
+            if (!parsed.success) {
               toolResult = {
-                content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
+                content: `Ошибка аргументов инструмента "${toolName}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`,
                 isError: true,
               };
+            } else {
+              try {
+                toolResult = await toolDef.execute(parsed.data, {
+                  sessionId: session.id,
+                  messageId: (message.metadata?.stream_id as string) || streamId,
+                  abortSignal: signal,
+                  agentRole: effectiveAgentRole,
+                  workingDir: '/home/eof/dev/Synth',
+                  dataDir: this._modelPriceLoader ? undefined : undefined,
+                  extra: {
+                    provider,
+                    agentRegistry: this._agentRegistry,
+                    sessionSettings: {
+                      temperature: session.settings.temperature,
+                      maxTokens: session.settings.maxTokens,
+                    },
+                    publish: (type: string, data: Record<string, unknown>) =>
+                      publishChunk(type as never, data),
+                    streamId,
+                    sessionId: session.id,
+                    toolRegistry: this._toolRegistry,
+                  },
+                });
+              } catch (execError) {
+                toolResult = {
+                  content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
+                  isError: true,
+                };
+              }
             }
           } else {
             toolResult = {
@@ -454,7 +467,7 @@ export class ChatOrchestrator {
       const savedContent = await this._saveAssistantMessage(
         session.id, finalContent, streamId, effectiveAgentRole,
         finalUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
-        MessageRole.ASSISTANT, undefined, false, allToolCalls,
+        MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
       );
 
       // Получаем актуальную сессию после сохранения
@@ -469,6 +482,7 @@ export class ChatOrchestrator {
         provider: providerName,
         usage: finalUsage,
         reasoning_blocks: allReasoning.length > 0 ? allReasoning : undefined,
+        intermediate_text_blocks: allIntermediateTexts.length > 0 ? allIntermediateTexts : undefined,
       };
 
       const debugInfo = debugCollector.getDebugInfo();
@@ -619,7 +633,7 @@ export class ChatOrchestrator {
 
         publishChunk('stream.chunk', {
           stream_id: streamId,
-          content: chunk.content,
+          content: chunk.isFinal ? '' : chunk.content,
           reasoning: chunk.reasoning,
           is_final: chunk.isFinal,
           agent_role: 'debug',
@@ -725,7 +739,7 @@ export class ChatOrchestrator {
 
         publishChunk('stream.chunk', {
           stream_id: streamId,
-          content: chunk.content,
+          content: chunk.isFinal ? '' : chunk.content,
           reasoning: chunk.reasoning,
           is_final: chunk.isFinal,
           agent_role: 'summary',
@@ -841,6 +855,7 @@ export class ChatOrchestrator {
       if (role === MessageRole.INFO) continue;
 
       const isOwnMessage =
+        role === MessageRole.TOOL ||
         (role === MessageRole.ASSISTANT && msg.agentRole === currentAgentRole) ||
         (role === MessageRole.USER && msg.author === currentAuthor);
 
@@ -869,8 +884,8 @@ export class ChatOrchestrator {
         disabled: false,
         pinned: false,
         branchId: '',
-        toolUse: msg.toolCalls,
-        toolCallId: msg.toolCallId,
+        toolUse: isOwnMessage ? msg.toolCalls : undefined,
+        toolCallId: isOwnMessage ? msg.toolCallId : undefined,
         agentRole: msg.agentRole,
       });
     }
@@ -893,6 +908,7 @@ export class ChatOrchestrator {
     summaryOf?: number[],
     skipEvent = false,
     toolResults?: Array<Record<string, unknown>>,
+    intermediateTextBlocks?: Array<{ text: string; iteration: number }>,
   ): Promise<string> {
     const finalContent = content;
 
@@ -909,6 +925,9 @@ export class ChatOrchestrator {
     const metadata: Record<string, unknown> = { stream_id: streamId };
     if (toolResults && toolResults.length > 0) {
       metadata.tool_results = toolResults;
+    }
+    if (intermediateTextBlocks && intermediateTextBlocks.length > 0) {
+      metadata.intermediate_text_blocks = intermediateTextBlocks;
     }
 
     const msg: Message = {
@@ -973,6 +992,7 @@ export class ChatOrchestrator {
           agent_role: agentRole,
           reasoning: reasoning || null,
           tool_calls: toolResults && toolResults.length > 0 ? toolResults : null,
+          intermediate_text_blocks: intermediateTextBlocks && intermediateTextBlocks.length > 0 ? intermediateTextBlocks : null,
         });
       }
     }

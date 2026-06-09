@@ -16,7 +16,11 @@ export const webFetchTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.WEB],
   async execute(args, _ctx) {
-    const params = args as { url: string; format?: 'text' | 'markdown' | 'html'; timeout?: number };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { url: string; format?: 'text' | 'markdown' | 'html'; timeout?: number };
 
     try {
       const controller = new AbortController();
@@ -80,7 +84,11 @@ export const webSearchTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.WEB],
   async execute(args, _ctx) {
-    const params = args as { query: string; max_results?: number };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { query: string; max_results?: number };
 
     return {
       content: `Веб-поиск не настроен. Провайдер поиска отсутствует.\nЗапрос: "${params.query}"\nДля настройки поиска обратитесь к администратору.`,

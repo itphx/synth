@@ -168,21 +168,26 @@ export function ToolCallPart({ toolCall, nested }: ToolCallPartProps) {
   const duration = formatDuration(started, completed)
   const hasResult = !!toolCall.result?.content
   const isSubagent = toolCall.name === 'task'
+  const subagentType = (toolCall.args as Record<string, unknown>)?.subagent_type as string | undefined
   const diff = toolCall.result?.metadata?.diff as string | undefined
 
   const argsStr = JSON.stringify(toolCall.args, null, 2)
   const resultStr = toolCall.result?.content || ''
 
-  const toolIcon = getToolIcon(toolCall.name)
+  const toolIcon = isSubagent ? 'robot-2' : getToolIcon(toolCall.name)
   const toolDisplayName = getToolDisplayName(toolCall.name)
 
   const headerColor = isError
     ? 'text-red-400'
-    : isRunning
-      ? ''
-      : isDone
+    : isSubagent
+      ? 'text-purple-400'
+      : isRunning
         ? ''
-        : ''
+        : isDone
+          ? ''
+          : ''
+
+  const nameColor = isError ? 'text-red-400' : ''
 
   return (
     <div className={nested ? 'mb-1 ml-3' : 'mb-2'}>
@@ -199,8 +204,10 @@ export function ToolCallPart({ toolCall, nested }: ToolCallPartProps) {
             name={toolIcon}
             className={`size-3.5 shrink-0 ${headerColor}${isRunning ? ' animate-tool-pulse' : ''}`}
           />
-          <span className={`font-mono font-medium truncate ${headerColor}`}>
-            {toolDisplayName}
+          <span className={`font-mono font-medium truncate ${nameColor}${isRunning ? ' animate-tool-pulse' : ''}`}>
+            {isSubagent && subagentType
+              ? `${t('chat.subagent.title')}: ${subagentType}`
+              : toolDisplayName}
           </span>
           {toolCall.iteration != null && (
             <span className="text-[10px] opacity-40 shrink-0">
@@ -210,16 +217,6 @@ export function ToolCallPart({ toolCall, nested }: ToolCallPartProps) {
           {duration && (
             <span className="text-[10px] opacity-40 shrink-0">
               {duration}
-            </span>
-          )}
-          {isRunning && (
-            <span className="text-[10px] text-blue-400 shrink-0 animate-tool-pulse">
-              {t('chat.toolCall.running')}
-            </span>
-          )}
-          {isError && (
-            <span className="text-[10px] text-red-400 shrink-0">
-              {t('chat.toolCall.error')}
             </span>
           )}
         </button>

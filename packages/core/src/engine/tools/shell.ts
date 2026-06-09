@@ -20,7 +20,11 @@ export const executeShellTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.SHELL],
   async execute(args, ctx) {
-    const params = args as { command: string; timeout?: number };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { command: string; timeout?: number };
     const timeout = params.timeout ?? DEFAULT_TIMEOUT;
 
     try {

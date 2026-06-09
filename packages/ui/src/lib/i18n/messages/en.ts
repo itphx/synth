@@ -412,6 +412,7 @@ export const dict = {
   'chat.toolCall.iteration': 'Iteration {n}',
 
   'chat.subagent.title': 'Subagent',
+  'chat.subagent.steps': 'steps',
 
   'chat.queue.stalled': 'Processing stopped: {count} messages',
   'chat.queue.pending': 'In queue: {count}',
@@ -471,6 +472,12 @@ export const dict = {
   'sessionSettings.saveError': 'Save error',
   'sessionSettings.saving': 'Saving...',
   'sessionSettings.notLoaded': 'Session not loaded',
+
+  // Chat settings
+  'chatSettings.intermediateTextDisplay': 'Intermediate responses',
+  'chatSettings.intermediateTextInline': 'Between blocks',
+  'chatSettings.intermediateTextBottom': 'At bottom',
+  'chatSettings.intermediateTextDescription': 'How to display model answers between tool calls.',
 
   // Model controls
   'chat.modelControls.searchModels': 'Search models...',

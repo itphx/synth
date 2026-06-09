@@ -18,7 +18,11 @@ export const gitStatusTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
-    const params = args as { path?: string };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { path?: string };
     const cwd = params.path || ctx.workingDir;
 
     try {
@@ -47,7 +51,11 @@ export const gitDiffTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
-    const params = args as { path?: string; staged?: boolean; commit?: string };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { path?: string; staged?: boolean; commit?: string };
     const cwd = params.path || ctx.workingDir;
 
     try {
@@ -82,7 +90,11 @@ export const gitLogTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
-    const params = args as { path?: string; max_count?: number };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { path?: string; max_count?: number };
     const cwd = params.path || ctx.workingDir;
 
     try {
@@ -114,7 +126,11 @@ export const gitCommitTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
-    const params = args as { path?: string; message: string; allow_empty?: boolean };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { path?: string; message: string; allow_empty?: boolean };
     const cwd = params.path || ctx.workingDir;
 
     try {
@@ -146,7 +162,11 @@ export const gitPushTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
-    const params = args as { path?: string; remote?: string; branch?: string };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { path?: string; remote?: string; branch?: string };
     const cwd = params.path || ctx.workingDir;
 
     try {
@@ -178,7 +198,11 @@ export const gitPullTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
-    const params = args as { path?: string; remote?: string; branch?: string };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { path?: string; remote?: string; branch?: string };
     const cwd = params.path || ctx.workingDir;
 
     try {
@@ -210,7 +234,11 @@ export const gitCheckoutTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
-    const params = args as { path?: string; target: string; create_branch?: boolean };
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+    }
+    const params = parsed.data as { path?: string; target: string; create_branch?: boolean };
     const cwd = params.path || ctx.workingDir;
 
     try {
