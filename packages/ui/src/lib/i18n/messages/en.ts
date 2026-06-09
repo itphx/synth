@@ -472,6 +472,12 @@ export const dict = {
   'sessionSettings.saving': 'Saving...',
   'sessionSettings.notLoaded': 'Session not loaded',
 
+  // Chat settings
+  'chatSettings.intermediateTextDisplay': 'Intermediate responses',
+  'chatSettings.intermediateTextInline': 'Between blocks',
+  'chatSettings.intermediateTextBottom': 'At bottom',
+  'chatSettings.intermediateTextDescription': 'How to display model answers between tool calls.',
+
   // Model controls
   'chat.modelControls.searchModels': 'Search models...',
   'chat.modelControls.favorites': 'Favorites',

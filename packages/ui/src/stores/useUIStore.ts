@@ -96,6 +96,9 @@ interface UIStore {
   transportMode: TransportMode
   setTransportMode: (mode: TransportMode) => void
 
+  intermediateTextDisplay: 'inline' | 'bottom'
+  setIntermediateTextDisplay: (mode: 'inline' | 'bottom') => void
+
   debugSystemMessages: boolean
   setDebugSystemMessages: (enabled: boolean) => void
 }
@@ -274,6 +277,12 @@ export const useUIStore = create<UIStore>()(
       setTransportMode: (mode: TransportMode) => {
         set({ transportMode: mode })
         profileService.syncTransportModeToProfile(mode)
+      },
+
+      intermediateTextDisplay: 'inline',
+      setIntermediateTextDisplay: (mode) => {
+        set({ intermediateTextDisplay: mode })
+        profileService.syncIntermediateTextDisplayToProfile(mode)
       },
 
       debugSystemMessages: false,

@@ -71,6 +71,7 @@ function createDispatcher(): EventDispatcher {
           model: payload.model as string | undefined,
           provider: payload.provider as string | undefined,
           reasoning: (payload.reasoning as string) || undefined,
+          intermediate_text_blocks: payload.intermediate_text_blocks as Array<{ text: string; iteration: number }> | undefined,
           disabled: false,
           pinned: false,
           hidden: false,
@@ -143,6 +144,7 @@ function createDispatcher(): EventDispatcher {
           pending_count: payload.pending_count as number | undefined,
           metadata: payload.metadata as { type?: string; indices?: number[] } | undefined,
           reasoning_blocks: (payload.reasoning_blocks as Array<{ text: string; iteration: number }>) || undefined,
+          intermediate_text_blocks: (payload.intermediate_text_blocks as Array<{ text: string; iteration: number }>) || undefined,
         }
         finishStream(sid, payload.stream_id as string, metadata)
 
@@ -264,7 +266,20 @@ function createDispatcher(): EventDispatcher {
           const sessionStreams = { ...(s.streamingBySession[sid] || {}) }
           const existing = sessionStreams[streamId]
           if (!existing) return s
-          sessionStreams[streamId] = { ...existing, toolIteration: iteration }
+
+          const segmentText = existing.content.slice(existing._lastContentLen)
+          const nextBlocks = segmentText.trim()
+            ? [...existing.intermediateTextBlocks, { text: segmentText, iteration: existing.toolIteration }]
+            : existing.intermediateTextBlocks
+
+          const prevLen = existing.content.length
+          sessionStreams[streamId] = {
+            ...existing,
+            content: existing.content + '\n\n',
+            intermediateTextBlocks: nextBlocks,
+            toolIteration: iteration,
+            _lastContentLen: prevLen + 2,
+          }
           return { streamingBySession: { ...s.streamingBySession, [sid]: sessionStreams } }
         })
         break

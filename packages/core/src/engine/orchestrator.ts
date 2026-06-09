@@ -186,6 +186,7 @@ export class ChatOrchestrator {
       const doomLoopTracker: Map<string, number> = new Map();
       let finalContent = '';
       const allReasoning: Array<{ text: string; iteration: number }> = [];
+      const allIntermediateTexts: Array<{ text: string; iteration: number }> = [];
       let finalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       let finalModel: string | undefined;
       const allToolCalls: Array<Record<string, unknown>> = [];
@@ -291,6 +292,10 @@ export class ChatOrchestrator {
         if (!toolCalls || toolCalls.length === 0) {
           finalContent = accumulatedContent;
           break;
+        }
+
+        if (accumulatedContent) {
+          allIntermediateTexts.push({ text: accumulatedContent, iteration: toolIteration });
         }
 
         // Tool calls detected — execute them
@@ -462,7 +467,7 @@ export class ChatOrchestrator {
       const savedContent = await this._saveAssistantMessage(
         session.id, finalContent, streamId, effectiveAgentRole,
         finalUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
-        MessageRole.ASSISTANT, undefined, false, allToolCalls,
+        MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
       );
 
       // Получаем актуальную сессию после сохранения
@@ -477,6 +482,7 @@ export class ChatOrchestrator {
         provider: providerName,
         usage: finalUsage,
         reasoning_blocks: allReasoning.length > 0 ? allReasoning : undefined,
+        intermediate_text_blocks: allIntermediateTexts.length > 0 ? allIntermediateTexts : undefined,
       };
 
       const debugInfo = debugCollector.getDebugInfo();
@@ -902,6 +908,7 @@ export class ChatOrchestrator {
     summaryOf?: number[],
     skipEvent = false,
     toolResults?: Array<Record<string, unknown>>,
+    intermediateTextBlocks?: Array<{ text: string; iteration: number }>,
   ): Promise<string> {
     const finalContent = content;
 
@@ -918,6 +925,9 @@ export class ChatOrchestrator {
     const metadata: Record<string, unknown> = { stream_id: streamId };
     if (toolResults && toolResults.length > 0) {
       metadata.tool_results = toolResults;
+    }
+    if (intermediateTextBlocks && intermediateTextBlocks.length > 0) {
+      metadata.intermediate_text_blocks = intermediateTextBlocks;
     }
 
     const msg: Message = {
@@ -982,6 +992,7 @@ export class ChatOrchestrator {
           agent_role: agentRole,
           reasoning: reasoning || null,
           tool_calls: toolResults && toolResults.length > 0 ? toolResults : null,
+          intermediate_text_blocks: intermediateTextBlocks && intermediateTextBlocks.length > 0 ? intermediateTextBlocks : null,
         });
       }
     }

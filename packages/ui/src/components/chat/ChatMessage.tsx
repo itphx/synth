@@ -6,7 +6,8 @@ import { MessageActions } from './MessageActions'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
 import { SubagentPart } from './SubagentPart'
-import type { MessageData, LiveToolCall, ReasoningBlockData } from '@/stores/chatStore'
+import { useUIStore } from '@/stores/useUIStore'
+import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData } from '@/stores/chatStore'
 import { useEffect, useState } from 'react'
 
 function useToolCallData(toolCalls: MessageData['tool_calls']) {
@@ -40,6 +41,17 @@ function getReasoningBlocks(message: MessageData): ReasoningBlockData[] {
   }
   if (message.reasoning) {
     return message.reasoning.split('\n\n---\n\n').map((text, i) => ({ text, iteration: i }))
+  }
+  return []
+}
+
+function getIntermediateTextBlocks(message: MessageData): IntermediateTextBlockData[] {
+  if (message.intermediate_text_blocks && message.intermediate_text_blocks.length > 0) {
+    return message.intermediate_text_blocks
+  }
+  const fromMetadata = message.metadata?.intermediate_text_blocks as IntermediateTextBlockData[] | undefined
+  if (fromMetadata && fromMetadata.length > 0) {
+    return fromMetadata
   }
   return []
 }
@@ -107,9 +119,15 @@ function ChatMessageInner({
   const toolCalls = message.tool_calls || []
   const liveToolCalls = useToolCallData(toolCalls)
   const reasoningBlocks = getReasoningBlocks(message)
+  const intermediateTextBlocks = getIntermediateTextBlocks(message)
+  const intermediateTextMode = useUIStore((s) => s.intermediateTextDisplay)
+  const isInline = intermediateTextMode !== 'bottom'
 
-  const displayContent = message.content
-  if (!displayContent && !message.reasoning && liveToolCalls.length === 0 && subagents.length === 0 && reasoningBlocks.length === 0) return null
+  const bottomContent = !isInline && intermediateTextBlocks.length > 0
+    ? [...intermediateTextBlocks.map((it) => it.text), message.content].filter(Boolean).join('\n\n')
+    : null
+  const displayContent = bottomContent ?? message.content
+  if (!displayContent && !message.reasoning && liveToolCalls.length === 0 && subagents.length === 0 && reasoningBlocks.length === 0 && intermediateTextBlocks.length === 0) return null
 
   return (
     <div className={containerClass}>
@@ -130,6 +148,7 @@ function ChatMessageInner({
           (() => {
             const items: Array<
               | { type: 'reasoning'; data: ReasoningBlockData }
+              | { type: 'intermediate_text'; data: IntermediateTextBlockData }
               | { type: 'tool_calls'; calls: LiveToolCall[] }
               | { type: 'subagents' }
             > = []
@@ -137,12 +156,18 @@ function ChatMessageInner({
             const maxIter = Math.max(
               0,
               ...reasoningBlocks.map((r) => r.iteration),
+              ...intermediateTextBlocks.map((it) => it.iteration),
               ...liveToolCalls.map((tc) => tc.iteration),
             )
 
             for (let iter = 0; iter <= maxIter; iter++) {
               for (const r of reasoningBlocks) {
                 if (r.iteration === iter) items.push({ type: 'reasoning', data: r })
+              }
+              if (isInline) {
+                for (const it of intermediateTextBlocks) {
+                  if (it.iteration === iter) items.push({ type: 'intermediate_text', data: it })
+                }
               }
               const iterCalls = liveToolCalls.filter((tc) => tc.iteration === iter)
               if (iterCalls.length > 0) {
@@ -154,6 +179,13 @@ function ChatMessageInner({
             return items.map((item, i) => {
               if (item.type === 'reasoning') {
                 return <ReasoningBlock key={`r${i}`} reasoning={item.data.text} />
+              }
+              if (item.type === 'intermediate_text') {
+                return (
+                  <div key={`it${i}`} className="my-2 text-sm">
+                    <MarkdownContent content={item.data.text} />
+                  </div>
+                )
               }
               if (item.type === 'tool_calls') {
                 return item.calls.map((tc, j) => (

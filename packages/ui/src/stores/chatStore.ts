@@ -8,6 +8,11 @@ export interface ReasoningBlockData {
   iteration: number
 }
 
+export interface IntermediateTextBlockData {
+  text: string
+  iteration: number
+}
+
 export interface MessageData {
   index: number
   role: string
@@ -32,6 +37,7 @@ export interface MessageData {
   usage?: { input_tokens: number; output_tokens: number; total_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number } | null
   reasoning?: string | null
   reasoning_blocks?: ReasoningBlockData[] | null
+  intermediate_text_blocks?: IntermediateTextBlockData[] | null
   source?: string | null
   author?: string | null
   agent_role?: string | null
@@ -58,12 +64,14 @@ export interface StreamState {
   agentRole: string | null
   content: string
   reasoningBlocks: ReasoningBlockData[]
+  intermediateTextBlocks: IntermediateTextBlockData[]
   isStreaming: boolean
   model?: string
   provider?: string
   usage?: { input_tokens: number; output_tokens: number; total_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number }
   toolCalls: LiveToolCall[]
   toolIteration: number
+  _lastContentLen: number
 }
 
 export interface StreamDoneMetadata {
@@ -76,6 +84,7 @@ export interface StreamDoneMetadata {
   pending_count?: number
   metadata?: { type?: string; indices?: number[] }
   reasoning_blocks?: ReasoningBlockData[]
+  intermediate_text_blocks?: IntermediateTextBlockData[]
 }
 
 export interface StreamError {
@@ -176,11 +185,13 @@ export const useChatStore = create<ChatStore>((set) => ({
         agentRole,
         content: '',
         reasoningBlocks: [],
+        intermediateTextBlocks: [],
         isStreaming: true,
         model,
         provider,
         toolCalls: [],
         toolIteration: 0,
+        _lastContentLen: 0,
       }
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
@@ -259,6 +270,8 @@ export const useChatStore = create<ChatStore>((set) => ({
             content: metadata.content,
             model: metadata.model || undefined,
             usage: metadata.usage || undefined,
+            intermediate_text_blocks: metadata.intermediate_text_blocks || null,
+            reasoning_blocks: metadata.reasoning_blocks || null,
             debug_data: metadata.debug_info || undefined,
             tool_calls: (metadata.debug_info?.tool_calls as Array<Record<string, unknown>>)?.map((tc: Record<string, unknown>) => ({
               name: tc.name as string,
@@ -293,6 +306,9 @@ export const useChatStore = create<ChatStore>((set) => ({
           ? reasoningBlocks.map((r) => r.text).join('\n\n---\n\n')
           : undefined
 
+        const intermediateTextBlocks = metadata.intermediate_text_blocks
+          || (streamState.intermediateTextBlocks.length > 0 ? streamState.intermediateTextBlocks : undefined)
+
         const newMsg: MessageData = {
           index: nextIndex ?? (msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 0 : 0),
           role: metadata.metadata?.type === 'summary' ? 'summary'
@@ -305,6 +321,7 @@ export const useChatStore = create<ChatStore>((set) => ({
           usage: metadata.usage || undefined,
           reasoning: reasoningJoined,
           reasoning_blocks: reasoningBlocks || null,
+          intermediate_text_blocks: intermediateTextBlocks || null,
           debug_data: metadata.debug_info || undefined,
           summary_of: metadata.metadata?.indices || null,
           tool_calls: streamState.toolCalls.length > 0
@@ -331,6 +348,7 @@ export const useChatStore = create<ChatStore>((set) => ({
             content: metadata.content || streamState.content,
             reasoning: reasoningJoined,
             reasoning_blocks: reasoningBlocks || msgs[existingIdx]!.reasoning_blocks,
+            intermediate_text_blocks: intermediateTextBlocks || msgs[existingIdx]!.intermediate_text_blocks,
             debug_data: metadata.debug_info || undefined,
             model: metadata.model || msgs[existingIdx]!.model,
             provider: streamState.provider || msgs[existingIdx]!.provider,

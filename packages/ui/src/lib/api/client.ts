@@ -18,6 +18,7 @@ export interface UserPreferences {
   avatar?: string | null
   favoriteModels?: string[]
   recentModels?: string[]
+  intermediateTextDisplay?: 'inline' | 'bottom'
   [key: string]: unknown
 }
 
