@@ -412,6 +412,7 @@ export const dict = {
   'chat.toolCall.iteration': 'Iteration {n}',
 
   'chat.subagent.title': 'Subagent',
+  'chat.subagent.steps': 'steps',
 
   'chat.queue.stalled': 'Processing stopped: {count} messages',
   'chat.queue.pending': 'In queue: {count}',

@@ -2,19 +2,64 @@ import { useState } from 'react'
 import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
 import { MarkdownContent } from './MarkdownContent'
+import { ReasoningBlock } from './ReasoningBlock'
+import { ToolCallPart } from './ToolCallPart'
+import type { ReasoningBlockData, IntermediateTextBlockData } from '@/stores/chatStore'
 
-interface SubagentPartProps {
-  subagent: {
-    name: string
-    prompt?: string
-    messages?: Array<{ role: string; content: string }>
-    response?: string
-  }
+export interface SubagentToolCall {
+  name: string
+  args: Record<string, unknown>
+  id?: string
+  result?: { content: string; isError?: boolean }
+  started_at?: string
+  completed_at?: string
+  iteration: number
 }
 
-export function SubagentPart({ subagent }: SubagentPartProps) {
+export interface SubagentPartData {
+  name: string
+  prompt?: string
+  response?: string
+  reasoning_blocks?: Array<{ text: string; iteration: number }>
+  intermediate_text_blocks?: Array<{ text: string; iteration: number }>
+  tool_calls?: SubagentToolCall[]
+  steps?: number
+  description?: string
+}
+
+export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
   const { t } = useI18n()
   const [expanded, setExpanded] = useState(false)
+
+  const reasoningBlocks: ReasoningBlockData[] = subagent.reasoning_blocks || []
+  const intermediateTextBlocks: IntermediateTextBlockData[] = subagent.intermediate_text_blocks || []
+  const toolCalls = subagent.tool_calls || []
+
+  const maxIter = Math.max(
+    0,
+    ...reasoningBlocks.map((r) => r.iteration),
+    ...intermediateTextBlocks.map((it) => it.iteration),
+    ...toolCalls.map((tc) => tc.iteration),
+  )
+
+  const items: Array<
+    | { type: 'reasoning'; data: ReasoningBlockData }
+    | { type: 'intermediate_text'; data: IntermediateTextBlockData }
+    | { type: 'tool_calls'; calls: typeof toolCalls }
+  > = []
+
+  for (let iter = 0; iter <= maxIter; iter++) {
+    for (const r of reasoningBlocks) {
+      if (r.iteration === iter) items.push({ type: 'reasoning', data: r })
+    }
+    for (const it of intermediateTextBlocks) {
+      if (it.iteration === iter) items.push({ type: 'intermediate_text', data: it })
+    }
+    const iterCalls = toolCalls.filter((tc) => tc.iteration === iter)
+    if (iterCalls.length > 0) {
+      items.push({ type: 'tool_calls', calls: iterCalls })
+    }
+  }
 
   return (
     <div className="mb-2 rounded-md border border-border/50 overflow-hidden">
@@ -28,6 +73,11 @@ export function SubagentPart({ subagent }: SubagentPartProps) {
         />
         <Icon name="robot-2" className="size-3.5 text-purple-400" />
         <span className="font-medium">{t('chat.subagent.title')}: {subagent.name}</span>
+        {subagent.steps != null && (
+          <span className="ml-auto text-[10px] text-muted-foreground/60">
+            {subagent.steps} {t('chat.subagent.steps')}
+          </span>
+        )}
       </button>
       {expanded && (
         <div className="p-3 border-t border-border/50 bg-muted/10 space-y-2">
@@ -37,17 +87,39 @@ export function SubagentPart({ subagent }: SubagentPartProps) {
               <MarkdownContent content={subagent.prompt} className="text-xs" />
             </div>
           )}
-          {subagent.messages && subagent.messages.length > 0 && (
-            <div>
-              <div className="text-[10px] text-muted-foreground/60 mb-1 uppercase tracking-wide">Messages</div>
-              {subagent.messages.map((msg, i) => (
-                <div key={i} className="text-xs mb-1 pl-2 border-l-2 border-muted">
-                  <span className="text-muted-foreground/60">{msg.role}: </span>
-                  <span className="text-muted-foreground">{msg.content.slice(0, 200)}{msg.content.length > 200 ? '...' : ''}</span>
+
+          {items.map((item, i) => {
+            if (item.type === 'reasoning') {
+              return <ReasoningBlock key={`r${i}`} reasoning={item.data.text} />
+            }
+            if (item.type === 'intermediate_text') {
+              return (
+                <div key={`it${i}`} className="my-2 text-sm">
+                  <MarkdownContent content={item.data.text} />
                 </div>
-              ))}
-            </div>
-          )}
+              )
+            }
+            if (item.type === 'tool_calls') {
+              return item.calls.map((call, j) => (
+                <ToolCallPart
+                  key={call.id || j}
+                  toolCall={{
+                    name: call.name,
+                    args: call.args,
+                    id: call.id,
+                    callId: call.id,
+                    status: 'done',
+                    result: call.result,
+                    startedAt: call.started_at,
+                    completedAt: call.completed_at,
+                    iteration: call.iteration,
+                  }}
+                />
+              ))
+            }
+            return null
+          })}
+
           {subagent.response && (
             <div>
               <div className="text-[10px] text-muted-foreground/60 mb-1 uppercase tracking-wide">Response</div>

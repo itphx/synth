@@ -407,6 +407,7 @@ export const dict = {
   'chat.toolCall.iteration': 'Итерация {n}',
 
   'chat.subagent.title': 'Сабагент',
+  'chat.subagent.steps': 'шагов',
 
   'chat.queue.stalled': 'Обработка остановлена: {count} сообщ.',
   'chat.queue.pending': 'В очереди: {count}',

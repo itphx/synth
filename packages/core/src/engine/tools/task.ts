@@ -101,6 +101,14 @@ export const taskTool: ToolDefinition = {
       let subagentReasoning = '';
       const subagentToolCalls: Array<{ name: string; args: Record<string, unknown>; result: string }> = [];
 
+      const allSubagentReasoning: Array<{ text: string; iteration: number }> = [];
+      const allSubagentIntermediateTexts: Array<{ text: string; iteration: number }> = [];
+      const allSubagentToolCalls: Array<{
+        name: string; args: Record<string, unknown>; id?: string;
+        result?: { content: string; isError?: boolean };
+        started_at?: string; completed_at?: string; iteration: number;
+      }> = [];
+
       while (iteration < MAX_SUBAGENT_TOOL_ITERATIONS) {
         if (cancelToken.cancelled) break;
 
@@ -137,16 +145,19 @@ export const taskTool: ToolDefinition = {
 
         if (cancelToken.cancelled) break;
 
+        if (reasoning) {
+          allSubagentReasoning.push({ text: reasoning, iteration });
+        }
+
         // No tool calls — done
         if (!toolCalls || toolCalls.length === 0) {
           finalContent = accumulatedContent;
-          subagentReasoning = reasoning || accumulatedContent;
+          if (reasoning) subagentReasoning = reasoning;
           break;
         }
 
-        // Save reasoning before tool calls
         if (accumulatedContent) {
-          subagentReasoning = accumulatedContent;
+          allSubagentIntermediateTexts.push({ text: accumulatedContent, iteration });
         }
 
         // Got tool calls — execute them
@@ -175,6 +186,8 @@ export const taskTool: ToolDefinition = {
           } else {
             toolArgs = func.arguments || {};
           }
+
+          const tcStartedAt = new Date().toISOString();
 
           const doomKey = `${toolName}:${JSON.stringify(toolArgs)}`;
           const doomCount = (doomTracker.get(doomKey) || 0) + 1;
@@ -248,6 +261,16 @@ export const taskTool: ToolDefinition = {
             result: toolResult.content,
           });
 
+          allSubagentToolCalls.push({
+            name: toolName,
+            args: toolArgs,
+            id: tcId,
+            result: { content: toolResult.content, isError: toolResult.isError },
+            started_at: tcStartedAt,
+            completed_at: new Date().toISOString(),
+            iteration,
+          });
+
           messages.push({
             id: '', role: 'tool',
             content: toolResult.content,
@@ -275,7 +298,10 @@ export const taskTool: ToolDefinition = {
           description: params.description,
           steps: iteration,
           reasoning: subagentReasoning || undefined,
-          tool_calls: subagentToolCalls.length > 0 ? subagentToolCalls : undefined,
+          reasoning_blocks: allSubagentReasoning.length > 0 ? allSubagentReasoning : undefined,
+          intermediate_text_blocks: allSubagentIntermediateTexts.length > 0 ? allSubagentIntermediateTexts : undefined,
+          tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
+          final_content: finalContent || undefined,
         },
       };
     } catch (err: unknown) {
