@@ -1,0 +1,32 @@
+services:
+  synth:
+    build: .
+    container_name: synth
+    ports:
+      - "4300:4300"
+    environment:
+      - SYNTH_API_KEY=my-secret-key
+      - SYNTH_PROVIDER_OLLAMA_API_KEY=
+      - SYNTH_PROVIDER_OLLAMA_URL=http://ollama:11434/v1
+      - SYNTH_PROVIDER_OLLAMA_MODEL=qwen3.5
+      - SYNTH_PROVIDER_OLLAMA_TYPE=ollama
+    volumes:
+      - synth-data:/var/synth/data
+    restart: unless-stopped
+
+  # Опционально: Ollama для локального запуска LLM
+  # Чтобы загрузить модель: docker compose exec ollama ollama pull qwen3.5
+  ollama:
+    image: ollama/ollama:latest
+    container_name: synth-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    profiles:
+      - ollama
+
+volumes:
+  synth-data:
+  ollama-data:

@@ -1,0 +1,52 @@
+{
+  "name": "@itphx/synth",
+  "version": "0.1.2",
+  "description": "AI-агентная платформа для командной разработки",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "synth": "./dist/cli.js"
+  },
+  "files": [
+    "dist/cli.js",
+    "prompts",
+    "ui",
+    "docs/resources"
+  ],
+  "scripts": {
+    "build": "tsup && cp -r ../../packages/core/prompts/* prompts/ && mkdir -p ui && cp -r ../../packages/ui/dist/* ui/ && mkdir -p docs/resources && cp ../../docs/resources/* docs/resources/ && cp ../../README.md README.md",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.18.0",
+    "commander": "^14.0.3",
+    "hono": "^4.9.0",
+    "ws": "^8.20.1",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@synth/core": "workspace:*",
+    "@synth/shared": "workspace:*",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "tsup": "^8.0.0",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://gitverse.ru/itphx/synth"
+  },
+  "keywords": [
+    "ai",
+    "assistant",
+    "cli",
+    "coding",
+    "developer",
+    "llm",
+    "synth"
+  ]
+}
