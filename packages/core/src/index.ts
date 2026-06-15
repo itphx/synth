@@ -46,3 +46,12 @@ export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
 export { createAgentRegistry, AgentRegistry } from './engine/agents/index.js';
 
 export { FileProfileStore } from './storage/profile-store.js';
+export { JsonStore } from './storage/json-store.js';
+export type { JsonStoreConfig } from './storage/json-store.js';
+export { ProjectStore } from './storage/project-store.js';
+export type { ProjectStoreConfig } from './storage/project-store.js';
+export { createLocalAuth } from './auth/local.js';
+export type { AuthKit, LocalAuthConfig } from './auth/local.js';
+export { createStandaloneApp } from './server/app.js';
+export type { StandaloneConfig } from './server/app.js';
+export { serializeSession, serializeMessage, serializeProject } from './server/serialize.js';

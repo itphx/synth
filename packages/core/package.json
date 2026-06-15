@@ -9,6 +9,30 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./server/app.js": {
+      "types": "./dist/server/app.d.ts",
+      "import": "./dist/server/app.js"
+    },
+    "./server/chat.js": {
+      "types": "./dist/server/chat.d.ts",
+      "import": "./dist/server/chat.js"
+    },
+    "./server/serialize.js": {
+      "types": "./dist/server/serialize.d.ts",
+      "import": "./dist/server/serialize.js"
+    },
+    "./storage/json-store.js": {
+      "types": "./dist/storage/json-store.d.ts",
+      "import": "./dist/storage/json-store.js"
+    },
+    "./storage/project-store.js": {
+      "types": "./dist/storage/project-store.d.ts",
+      "import": "./dist/storage/project-store.js"
+    },
+    "./auth/local.js": {
+      "types": "./dist/auth/local.d.ts",
+      "import": "./dist/auth/local.js"
     }
   },
   "scripts": {
@@ -22,12 +46,16 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@hono/node-server": "^1.18.0",
     "@synth/shared": "workspace:*",
     "commander": "^14.0.3",
+    "hono": "^4.9.0",
+    "ws": "^8.20.1",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.0.0",
     "typescript": "^5.8.0"
   }

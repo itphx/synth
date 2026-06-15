@@ -1,0 +1,153 @@
+import type { SynthConfig } from '@synth/shared';
+import { ensureDataDir } from '@synth/shared';
+import {
+  FileStore, SessionManager, EventBus, QueueProcessorManager,
+  ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
+  createToolRegistry, createAgentRegistry,
+} from '../index.js';
+import { JsonStore } from '../storage/json-store.js';
+import type { ProviderConfig, ModelConfig, AgentDefinition, SummarizationConfig } from '@synth/shared';
+import type { Message } from '@synth/shared';
+import { MessageRole, nowISO, generateId } from '@synth/shared';
+
+export interface SingleChatOptions {
+  message: string;
+  model?: string;
+  provider?: string;
+  agent?: string;
+  dataDir: string;
+  config: SynthConfig;
+}
+
+export async function runSingleChat(options: SingleChatOptions): Promise<void> {
+  const dataDir = options.dataDir;
+  const fileStore = new FileStore({ dataDir });
+  const sessionManager = new SessionManager(fileStore);
+  const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
+  const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
+  const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
+
+  const providerCache = new Map<string, ProviderConfig>();
+  (await providerStore.list()).forEach((p) => providerCache.set(p.name, p));
+  const modelCache = new Map<string, ModelConfig>();
+  (await modelStore.list()).forEach((m) => modelCache.set(m.id, m));
+
+  const providerName = options.provider || options.config.llm.defaultProvider;
+  const modelName = options.model || options.config.llm.defaultModel;
+
+  if (!providerName || !modelName) {
+    console.error('Ошибка: не указан провайдер и/или модель.');
+    console.error('Укажите через --provider и --model или настройте конфигурацию.');
+    process.exit(1);
+  }
+
+  const providerConfig = providerCache.get(providerName);
+  if (!providerConfig) {
+    console.error(`Ошибка: провайдер "${providerName}" не найден.`);
+    console.error('Настройте провайдера через: synth config provider add');
+    process.exit(1);
+  }
+
+  const eventBus = new EventBus();
+  const contextConfig = new ContextConfig({ userDataDir: `${dataDir}/context` });
+  const contextBuilder = new ContextBuilder(contextConfig, {
+    projectDataDir: `${dataDir}/projects`,
+    defaultLanguage: 'ru',
+  });
+
+  const providerLoader = (name: string): ProviderConfig | null => providerCache.get(name) ?? null;
+
+  const summarizationConfig: SummarizationConfig = {
+    provider: providerName,
+    model: modelName,
+    temperature: 0.3,
+    promptFile: 'SUMMARIZER',
+  };
+  const contextOptimizer = new ContextOptimizer(contextConfig, providerLoader, summarizationConfig);
+
+  const modelPriceLoader = (mn: string) => {
+    for (const m of modelCache.values()) {
+      if (m.name === mn || m.id === mn) {
+        return {
+          inputPrice: m.inputPrice,
+          outputPrice: m.outputPrice,
+          cacheReadPrice: m.cacheReadPrice,
+          cacheWritePrice: m.cacheWritePrice,
+        };
+      }
+    }
+    return null;
+  };
+
+  const toolRegistry = createToolRegistry();
+  const agentRegistry = createAgentRegistry(toolRegistry);
+
+  const orchestrator = new ChatOrchestrator({
+    sessionManager,
+    eventBus,
+    contextBuilder,
+    providerLoader,
+    contextOptimizer,
+    modelPriceLoader,
+    dataDir,
+    toolRegistry,
+    agentRegistry,
+  });
+
+  // Создаём временную сессию
+  const session = await sessionManager.createSession({
+    title: undefined,
+    engine: 'synth',
+    settings: {
+      provider: providerName,
+      model: modelName,
+      agentRole: options.agent || 'developer',
+    },
+  });
+  session.userId = 'local';
+  session.ownerId = 'local';
+  await sessionManager.updateSession(session);
+
+  const message: Message = {
+    role: MessageRole.USER,
+    content: options.message,
+    createdAt: nowISO(),
+    disabled: false,
+    pinned: false,
+    hidden: false,
+    author: 'user',
+    metadata: { stream_id: generateId() },
+  };
+
+  session.messages.push(message);
+  await sessionManager.updateSession(session);
+
+  const processMessage = orchestrator.createProcessMessage();
+  const abortController = new AbortController();
+
+  try {
+    const result = await processMessage(
+      session,
+      message,
+      abortController.signal,
+      (event: string, data: Record<string, unknown>) => {
+        if (event === 'stream.chunk' && data.content) {
+          process.stdout.write(String(data.content));
+        }
+      },
+    );
+
+    if (result.error) {
+      console.error('\nОшибка:', result.error);
+      process.exit(1);
+    }
+  } catch (err) {
+    console.error('\nОшибка:', err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  } finally {
+    // Удаляем временную сессию
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+
+  console.log(); // завершающий перевод строки
+}
