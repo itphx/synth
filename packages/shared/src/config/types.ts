@@ -95,6 +95,22 @@ export const summarizationConfigSchema = z.object({
   promptFile: z.string().default('SUMMARIZER'),
 });
 
+export const mcpServerConfigSchema = z.object({
+  type: z.enum(['stdio', 'sse']),
+  command: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  url: z.string().optional(),
+  enabled: z.boolean().optional(),
+  enabledByDefault: z.boolean().optional(),
+  timeout: z.number().int().min(1).optional(),
+  connectTimeout: z.number().int().min(1).optional(),
+});
+
+export const mcpConfigSchema = z.object({
+  servers: z.record(z.string(), mcpServerConfigSchema).default({}),
+});
+
 export const synthConfigSchema = z.object({
   server: serverConfigSchema.default({}),
   storage: storageConfigSchema.default({}),
@@ -108,6 +124,7 @@ export const synthConfigSchema = z.object({
   tsm: tsmConfigSchema.default({}),
   context: contextConfigSchema.default({}),
   summarization: summarizationConfigSchema.default({}),
+  mcp: mcpConfigSchema.default({}),
 });
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>;
@@ -122,4 +139,6 @@ export type LoggingConfig = z.infer<typeof loggingConfigSchema>;
 export type TsmConfig = z.infer<typeof tsmConfigSchema>;
 export type ContextConfigSchema = z.infer<typeof contextConfigSchema>;
 export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
+export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
+export type McpConfig = z.infer<typeof mcpConfigSchema>;
 export type SynthConfig = z.infer<typeof synthConfigSchema>;

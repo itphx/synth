@@ -8,7 +8,7 @@ import { useI18n } from '@/lib/i18n'
 
 const CAP_KEYS = [
   'file_read', 'file_write', 'search', 'shell',
-  'git_read', 'git_write', 'web', 'task',
+  'git_read', 'git_write', 'web', 'task', 'mcp',
 ]
 
 const AGENT_MODES = ['primary', 'subagent', 'all'] as const
@@ -162,7 +162,7 @@ export const AgentsPanel = () => {
           context_file: form.context_file || undefined,
           capabilities: form.capabilities,
           subagent_prompt: form.agent_mode !== 'primary' ? form.subagent_prompt : undefined,
-          max_steps: form.agent_mode !== 'primary' ? form.max_steps : undefined,
+          max_steps: form.max_steps,
           icon: form.icon || undefined,
           color: form.color || undefined,
         }),
@@ -314,23 +314,23 @@ export const AgentsPanel = () => {
             className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
         </div>
 
+        {/* Max steps — для всех режимов */}
+        <div>
+          <label className="text-xs text-muted-foreground">{t('admin.agents.maxSteps')}</label>
+          <input type="number" min={1} max={50} step={1} value={form.max_steps}
+            onChange={(e) => setForm({ ...form, max_steps: parseInt(e.target.value) || 10 })}
+            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+        </div>
+
         {/* Subagent-specific fields */}
         {showSubagentFields && (
-          <>
-            <div className="col-span-2">
-              <label className="text-xs text-muted-foreground">{t('admin.agents.subagentPrompt')}</label>
-              <textarea value={form.subagent_prompt}
-                onChange={(e) => setForm({ ...form, subagent_prompt: e.target.value })}
-                rows={6}
-                className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-y font-mono text-xs" />
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground">{t('admin.agents.maxSteps')}</label>
-              <input type="number" min={1} max={50} step={1} value={form.max_steps}
-                onChange={(e) => setForm({ ...form, max_steps: parseInt(e.target.value) || 10 })}
-                className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-            </div>
-          </>
+          <div className="col-span-2">
+            <label className="text-xs text-muted-foreground">{t('admin.agents.subagentPrompt')}</label>
+            <textarea value={form.subagent_prompt}
+              onChange={(e) => setForm({ ...form, subagent_prompt: e.target.value })}
+              rows={6}
+              className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-y font-mono text-xs" />
+          </div>
         )}
       </div>
 

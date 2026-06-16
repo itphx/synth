@@ -9,6 +9,7 @@ export const ToolCapability = {
   GIT_READ: 'git_read',
   GIT_WRITE: 'git_write',
   TASK: 'task',
+  MCP: 'mcp',
 } as const;
 
 export type ToolCapability = (typeof ToolCapability)[keyof typeof ToolCapability];
@@ -22,6 +23,7 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   [ToolCapability.GIT_READ]: { label: 'Чтение Git', description: 'git_status, git_diff, git_log, git_branch_list' },
   [ToolCapability.GIT_WRITE]: { label: 'Запись Git', description: 'git_commit, git_push, git_pull, git_checkout, etc.' },
   [ToolCapability.TASK]: { label: 'Запуск сабагентов', description: 'task' },
+  [ToolCapability.MCP]: { label: 'MCP-инструменты', description: 'внешние MCP-серверы' },
 };
 
 export interface ToolContext {

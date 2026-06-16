@@ -8,10 +8,10 @@ import type { ProviderConfig, ModelConfig, AgentDefinition } from '@synth/shared
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator, FileProfileStore,
-  enqueueUserMessage, createToolRegistry, createAgentRegistry,
+  enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
 } from '@synth/core';
 import type { SummarizationConfig } from '@synth/shared';
-import { nowISO, ensureDataDir, MessageRole, generateStreamId } from '@synth/shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId, findConfigPath } from '@synth/shared';
 import type { BusEvent } from '@synth/shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import { createAuthMiddleware } from './auth/middleware.js';
@@ -28,6 +28,8 @@ import { createContextRoutes } from './routes/context.js';
 import { createDebugRoutes } from './routes/debug.js';
 import { createUserRoutes } from './routes/users.js';
 import { createGitRoutes } from './routes/git.js';
+import { createMcpRoutes } from './routes/mcp.js';
+import { YamlMcpConfigStore } from './lib/mcp-config-store.js';
 import { t, getTranslations } from './lib/i18n.js';
 import { ProjectStore } from './storage/project-store.js';
 import { JsonStore } from './storage/json-store.js';
@@ -78,6 +80,13 @@ const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
 const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
 const contextConfig = new ContextConfig({ userDataDir: `${dataDir}/context` });
 const profilesStore = new FileProfileStore({ dataDir });
+
+// MCP
+const configPath = findConfigPath() || './config.yaml';
+const mcpConfigStore = new YamlMcpConfigStore(configPath);
+await mcpConfigStore.load();
+const mcpManager = new McpManager();
+mcpManager.setConfig(mcpConfigStore.getServers());
 
 // Auth routes (после profilesStore)
 app.route('/auth', createAuthRoutes(auth, backendConfig.auth, profilesStore, dataDir));
@@ -158,6 +167,7 @@ const orchestrator = new ChatOrchestrator({
   dataDir,
   toolRegistry,
   agentRegistry,
+  mcpManager,
 });
 
 const processMessage = orchestrator.createProcessMessage();
@@ -209,6 +219,9 @@ app.route('/api/v2/users', createUserRoutes(auth, profilesStore));
 
 // Git routes
 app.route('/api/v2/git', createGitRoutes(auth, projectStore, backendConfig.workspacesRoot));
+
+// MCP routes
+app.route('/api/v2/mcp', createMcpRoutes(auth, mcpConfigStore, mcpManager, sessionManager));
 
 // Глобальный SSE-хаб для всех сессий пользователя
 app.get('/api/v2/events', auth.requireAuth, async (c) => {

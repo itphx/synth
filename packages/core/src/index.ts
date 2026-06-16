@@ -44,6 +44,8 @@ export type { OrchestratorOptions, ProcessMessageResult, ModelPricing } from './
 
 export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
 export { createAgentRegistry, AgentRegistry } from './engine/agents/index.js';
+export { McpClient, McpManager } from './engine/mcp/index.js';
+export type { McpToolDef, McpToolResult } from './engine/mcp/index.js';
 
 export { FileProfileStore } from './storage/profile-store.js';
 export { JsonStore } from './storage/json-store.js';

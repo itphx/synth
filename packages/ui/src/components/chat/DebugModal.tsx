@@ -59,6 +59,7 @@ export function DebugModal({ debug, onClose }: DebugModalProps) {
   const extraContext = debug.extra_context as Record<string, unknown> | undefined;
   const subagents = debug.subagents as Array<Record<string, unknown>> | undefined;
   const toolCalls = debug.tool_calls as Array<Record<string, unknown>> | undefined;
+  const mcpCalls = debug.mcp_calls as Array<Record<string, unknown>> | undefined;
 
   return (
     <div
@@ -209,6 +210,39 @@ export function DebugModal({ debug, onClose }: DebugModalProps) {
                   </div>
                 </details>
               ))}
+            </Section>
+          )}
+
+          {/* MCP Calls */}
+          {mcpCalls && mcpCalls.length > 0 && (
+            <Section title={`MCP-вызовы (${mcpCalls.length})`}>
+              {mcpCalls.map((mc, i) => {
+                const isError = Boolean(mc.is_error)
+                return (
+                <details key={i} className={`border rounded p-2 mb-1 ${isError ? 'border-red-500/40 bg-red-500/5' : 'border-border/20'}`}>
+                  <summary className="text-xs font-medium cursor-pointer">
+                    {isError && <span className="text-red-500 mr-1">✗</span>}
+                    {String(mc.tool || `MCP Call #${i}`)}
+                  </summary>
+                  <div className="mt-1 space-y-1">
+                    <details className="mt-1">
+                      <summary className="text-muted-foreground cursor-pointer text-[10px] uppercase">Arguments</summary>
+                      <JsonBlock data={mc.arguments} />
+                    </details>
+                    {mc.result != null && (
+                      <details className="mt-1">
+                        <summary className="text-muted-foreground cursor-pointer text-[10px] uppercase">Result</summary>
+                        <div className="whitespace-pre-wrap text-[11px] bg-muted/30 rounded p-2 max-h-64 overflow-auto">
+                          {typeof mc.result === 'string' && mc.result.length > 1000
+                            ? mc.result.slice(0, 1000) + '\n...(обрезано)'
+                            : String(mc.result)}
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                </details>
+                )
+              })}
             </Section>
           )}
 

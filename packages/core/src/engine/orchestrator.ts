@@ -1,5 +1,5 @@
 import type { Message, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@synth/shared';
-import { MessageRole, nowISO } from '@synth/shared';
+import { MessageRole, nowISO, ToolCapability } from '@synth/shared';
 import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
 import { DebugCollector } from '../debug.js';
@@ -10,6 +10,7 @@ import { ContextOptimizer } from './context/optimizer.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { ToolForLLM } from '@synth/shared';
 import type { AgentRegistry } from './agents/registry.js';
+import type { McpManager } from './mcp/manager.js';
 import { warning } from '../logger.js';
 
 const MAX_TOOL_ITERATIONS = 10;
@@ -32,6 +33,7 @@ export interface OrchestratorOptions {
   dataDir?: string;
   toolRegistry?: ToolRegistry;
   agentRegistry?: AgentRegistry;
+  mcpManager?: McpManager;
 }
 
 export interface ProcessMessageResult {
@@ -64,6 +66,7 @@ export class ChatOrchestrator {
   private readonly _modelPriceLoader: ((modelName: string) => ModelPricing | null) | null;
   private readonly _toolRegistry: ToolRegistry | null;
   private readonly _agentRegistry: AgentRegistry | null;
+  private readonly _mcpManager: McpManager | null;
   private readonly _cancellationTokens = new Map<string, CancellationToken>();
 
   constructor(options: OrchestratorOptions) {
@@ -75,6 +78,7 @@ export class ChatOrchestrator {
     this._modelPriceLoader = options.modelPriceLoader ?? null;
     this._toolRegistry = options.toolRegistry ?? null;
     this._agentRegistry = options.agentRegistry ?? null;
+    this._mcpManager = options.mcpManager ?? null;
   }
 
   /**
@@ -156,14 +160,36 @@ export class ChatOrchestrator {
       const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
       const baseLlmMessages = ChatOrchestrator._sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author);
 
+      // 3.5. Load MCP tools for the session
+      const activeMcpServers = session.settings.mcpServers || [];
+
+      // Сначала очищаем ВСЕ MCP-инструменты из предыдущей обработки
+      if (this._toolRegistry) {
+        this._toolRegistry.deregisterByCapability(ToolCapability.MCP);
+      }
+
+      if (this._mcpManager && this._toolRegistry && activeMcpServers.length > 0) {
+        try {
+          await this._mcpManager.ensureToolsLoaded(activeMcpServers, this._toolRegistry);
+        } catch (err) {
+          warning(`ORCHESTRATOR`, `Ошибка загрузки MCP-инструментов: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
       // 4. Get tools from registry, filtered by agent capabilities
       let tools: ToolForLLM[] | undefined;
       if (this._toolRegistry) {
         if (this._agentRegistry && effectiveAgentRole) {
           tools = this._agentRegistry.getToolsForAgent(effectiveAgentRole);
         }
-        if (!tools || tools.length === 0) {
-          tools = this._toolRegistry.toLLMFormat();
+        if (tools === undefined) {
+          // Агент не найден в реестре — отдаём только встроенные инструменты (без MCP)
+          const allNonMcp = Object.values(ToolCapability).filter(
+            (c) => c !== ToolCapability.MCP,
+          );
+          tools = this._toolRegistry.filterByCapabilities(allNonMcp);
+        } else if (tools.length === 0) {
+          tools = [];
         }
       }
 

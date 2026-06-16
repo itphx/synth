@@ -5,9 +5,6 @@ export class ToolRegistry {
   private readonly _tools = new Map<string, ToolDefinition>();
 
   register(tool: ToolDefinition): void {
-    if (this._tools.has(tool.name)) {
-      throw new Error(`Инструмент с именем "${tool.name}" уже зарегистрирован`);
-    }
     this._tools.set(tool.name, tool);
   }
 
@@ -15,6 +12,27 @@ export class ToolRegistry {
     for (const tool of tools) {
       this.register(tool);
     }
+  }
+
+  deregister(name: string): boolean {
+    return this._tools.delete(name);
+  }
+
+  deregisterAll(names: string[]): void {
+    for (const name of names) {
+      this._tools.delete(name);
+    }
+  }
+
+  deregisterByCapability(capability: ToolCapability): number {
+    let count = 0;
+    for (const [name, tool] of this._tools) {
+      if (tool.capabilities.includes(capability)) {
+        this._tools.delete(name);
+        count++;
+      }
+    }
+    return count;
   }
 
   get(name: string): ToolDefinition | undefined {

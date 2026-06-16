@@ -10,6 +10,7 @@ import { ChatSettings } from "./ChatSettings"
 import { ProvidersPanel } from "../admin/ProvidersPanel"
 import { ModelsPanel } from "../admin/ModelsPanel"
 import { AgentsPanel } from "../admin/AgentsPanel"
+import { McpSettings } from "./McpSettings"
 
 const CATEGORIES = [
   { id: "profile", labelKey: "settings.category.profile" as const, icon: "user-smile" },
@@ -19,6 +20,7 @@ const CATEGORIES = [
   { id: "providers", labelKey: "settings.category.providers" as const, icon: "server" },
   { id: "models", labelKey: "settings.category.models" as const, icon: "cpu" },
   { id: "agents", labelKey: "settings.category.agents" as const, icon: "robot-2" },
+  { id: "mcp", labelKey: "settings.category.mcp" as const, icon: "wrench" },
 ]
 
 export const SettingsModal = () => {
@@ -66,6 +68,7 @@ export const SettingsModal = () => {
             {settingsPage === "providers" && <ProvidersPanel />}
             {settingsPage === "models" && <ModelsPanel />}
             {settingsPage === "agents" && <AgentsPanel />}
+            {settingsPage === "mcp" && <McpSettings />}
           </div>
         </div>
       </DialogContent>
