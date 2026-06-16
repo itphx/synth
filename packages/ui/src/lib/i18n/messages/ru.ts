@@ -809,6 +809,8 @@ export const dict = {
   'mcp.noServers': 'Нет настроенных MCP-серверов. Добавьте сервер для расширения возможностей моделей.',
   'mcp.serverName': 'Имя сервера',
   'mcp.type': 'Тип подключения',
+  'mcp.type.stdio': 'stdio (процесс)',
+  'mcp.type.sse': 'Streamable HTTP',
   'mcp.command': 'Команда',
   'mcp.args': 'Аргументы',
   'mcp.env': 'Переменные окружения',

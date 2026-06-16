@@ -812,6 +812,8 @@ export const dict = {
   'mcp.noServers': 'No MCP servers configured. Add a server to extend model capabilities.',
   'mcp.serverName': 'Server Name',
   'mcp.type': 'Connection Type',
+  'mcp.type.stdio': 'stdio (process)',
+  'mcp.type.sse': 'Streamable HTTP',
   'mcp.command': 'Command',
   'mcp.args': 'Arguments',
   'mcp.env': 'Environment Variables',

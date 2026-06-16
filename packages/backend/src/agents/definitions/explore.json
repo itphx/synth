@@ -5,7 +5,7 @@
     "en": "Fast codebase exploration and search (read-only)",
     "ru": "Быстрый поиск и исследование кодовой базы (только чтение)"
   },
-  "capabilities": ["file_read", "search", "web"],
+  "capabilities": ["file_read", "search", "web", "mcp"],
   "icon": "search-eye",
   "color": "--syntax-keyword",
   "contextFile": "",

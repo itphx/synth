@@ -182,8 +182,14 @@ export class ChatOrchestrator {
         if (this._agentRegistry && effectiveAgentRole) {
           tools = this._agentRegistry.getToolsForAgent(effectiveAgentRole);
         }
-        if (!tools || tools.length === 0) {
-          tools = this._toolRegistry.toLLMFormat();
+        if (tools === undefined) {
+          // Агент не найден в реестре — отдаём только встроенные инструменты (без MCP)
+          const allNonMcp = Object.values(ToolCapability).filter(
+            (c) => c !== ToolCapability.MCP,
+          );
+          tools = this._toolRegistry.filterByCapabilities(allNonMcp);
+        } else if (tools.length === 0) {
+          tools = [];
         }
       }
 

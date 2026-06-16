@@ -140,10 +140,10 @@ export const McpSettings = () => {
               <select
                 value={formConfig.type}
                 onChange={(e) => updateConfig({ type: e.target.value as 'stdio' | 'sse' })}
-                className="w-full px-3 py-2 rounded-lg bg-interactive-input border border-border text-sm focus:outline-none focus:border-interactive-accent"
+                className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               >
-                <option value="stdio">stdio (процесс)</option>
-                <option value="sse">SSE (HTTP)</option>
+                <option value="stdio">{t('mcp.type.stdio')}</option>
+                <option value="sse">{t('mcp.type.sse')}</option>
               </select>
             </div>
 

@@ -18,6 +18,7 @@ export interface McpToolResult {
 
 const DEFAULT_TOOL_TIMEOUT = 120_000;
 const DEFAULT_CONNECT_TIMEOUT = 60_000;
+const MAX_TOOL_RESULT = 30_000;
 
 export class McpClient {
   private _name: string;
@@ -107,8 +108,13 @@ export class McpClient {
           .filter((c) => c.type === 'text' && c.text)
           .map((c) => c.text!);
 
+        let content = textParts.join('\n') || 'Инструмент выполнен (пустой результат)';
+        if (content.length > MAX_TOOL_RESULT) {
+          content = content.slice(0, MAX_TOOL_RESULT) + `\n\n...(усечено, полный размер: ${content.length} символов)`;
+        }
+
         return {
-          content: textParts.join('\n') || 'Инструмент выполнен (пустой результат)',
+          content,
           isError: false,
         };
       })();
