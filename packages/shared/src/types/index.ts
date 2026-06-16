@@ -89,6 +89,7 @@ export interface SessionSettings {
   debugEnabled: boolean;
   streamEnabled: boolean;
   agentRole?: string;
+  mcpServers?: string[];
   contextOptimization: 'none' | 'sliding_window' | 'summarization' | 'sticky_notes';
   slidingWindowMode: 'messages' | 'tokens';
   slidingWindowMessageLimit: number;
@@ -147,6 +148,7 @@ export interface Session {
   pendingMessages: Message[];
   status: TsmStatus;
   settings: SessionSettings;
+  mcpServers?: string[];
   branches: Branch[];
   checkpoints: Checkpoint[];
   stickyNotes: StickyNote[];

@@ -74,4 +74,7 @@ export const defaultConfig: SynthConfig = {
     temperature: 0.3,
     promptFile: 'SUMMARIZER',
   },
+  mcp: {
+    servers: {},
+  },
 };

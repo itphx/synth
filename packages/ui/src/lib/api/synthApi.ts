@@ -699,4 +699,65 @@ export const synthApi = {
       method: 'DELETE',
     })
   },
+
+  // --- MCP ---
+  async getMcpServers(): Promise<Record<string, McpServerEntry>> {
+    return fetchJSON(`${BASE_URL}/mcp/servers`)
+  },
+
+  async addMcpServer(name: string, config: McpServerConfig): Promise<McpServerEntry> {
+    return fetchJSON(`${BASE_URL}/mcp/servers`, {
+      method: 'POST',
+      body: JSON.stringify({ name, config }),
+    })
+  },
+
+  async updateMcpServer(name: string, config: McpServerConfig): Promise<McpServerEntry> {
+    return fetchJSON(`${BASE_URL}/mcp/servers/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    })
+  },
+
+  async deleteMcpServer(name: string): Promise<{ success: boolean }> {
+    return fetchJSON(`${BASE_URL}/mcp/servers/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  async testMcpServer(name: string, config?: McpServerConfig): Promise<{ success: boolean; toolCount?: number; tools?: Array<{ name: string; description: string }>; error?: string }> {
+    return fetchJSON(`${BASE_URL}/mcp/servers/${encodeURIComponent(name)}/test`, {
+      method: 'POST',
+      body: config ? JSON.stringify({ config }) : undefined,
+    })
+  },
+
+  async getSessionMcp(sessionId: string): Promise<{ mcpServers: string[]; allServers: Array<{ name: string; active: boolean }> }> {
+    return fetchJSON(`${BASE_URL}/mcp/session/${encodeURIComponent(sessionId)}`)
+  },
+
+  async setSessionMcp(sessionId: string, mcpServers: string[]): Promise<{ mcpServers: string[]; allServers: Array<{ name: string; active: boolean }> }> {
+    return fetchJSON(`${BASE_URL}/mcp/session/${encodeURIComponent(sessionId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ mcpServers }),
+    })
+  },
+}
+
+export interface McpServerConfig {
+  type: 'stdio' | 'sse'
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  url?: string
+  enabled?: boolean
+  enabledByDefault?: boolean
+  timeout?: number
+  connectTimeout?: number
+}
+
+export interface McpServerEntry {
+  name: string
+  config: McpServerConfig
+  connected: boolean
 }

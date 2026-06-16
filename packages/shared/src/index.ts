@@ -1,6 +1,17 @@
 // @synth/shared — общие типы, интерфейсы, схемы, протоколы, конфигурация
 
 export * from './types/index.js';
+export {
+  type ToolDefinition,
+  type ToolForLLM,
+  type ToolContext,
+  type ToolResult,
+  type ToolExecutor,
+  type PendingToolCall,
+  type CompletedToolCall,
+  ToolCapability,
+  TOOL_CAPABILITY_META,
+} from './types/tools.js';
 export * from './interfaces/index.js';
 export * from './schemas/index.js';
 export * from './protocols/index.js';
@@ -22,6 +33,8 @@ export {
   type TsmConfig,
   type ContextConfigSchema,
   type SummarizationConfig,
+  type McpServerConfig,
+  type McpConfig,
 } from './config/index.js';
 export { defaultConfig, loadConfig } from './config/index.js';
 export { resolveDataDir, resolvePort, resolveWorkspacesRoot, ensureDataDir, createDefaultConfig, resolveDeployMode, findConfigPath, defaultConfigPath, ensureConfigFile, ensureFirstRun } from './config/index.js';

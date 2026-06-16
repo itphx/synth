@@ -92,6 +92,7 @@ export const dict = {
   'settings.category.providers': 'Providers',
   'settings.category.models': 'Models',
   'settings.category.agents': 'Agents',
+  'settings.category.mcp': 'MCP Servers',
   'settings.category.notifications': 'Notifications',
 
   // Appearance settings
@@ -715,6 +716,7 @@ export const dict = {
   'admin.agents.cap.shell': 'shell',
   'admin.agents.cap.web': 'web',
   'admin.agents.cap.task': 'subagents',
+  'admin.agents.cap.mcp': 'MCP',
 
   // Subagent fields
   'admin.agents.agentMode': 'Agent type',
@@ -800,4 +802,20 @@ export const dict = {
 
   // Icon picker
   'admin.iconPicker.searchPlaceholder': 'Search icon...',
+
+  // MCP
+  'mcp.title': 'MCP Servers',
+  'mcp.description': 'Manage external MCP servers. Server tools become available to AI models as tool calls.',
+  'mcp.addServer': 'Add Server',
+  'mcp.newServer': 'New Server',
+  'mcp.editServer': 'Edit Server',
+  'mcp.noServers': 'No MCP servers configured. Add a server to extend model capabilities.',
+  'mcp.serverName': 'Server Name',
+  'mcp.type': 'Connection Type',
+  'mcp.command': 'Command',
+  'mcp.args': 'Arguments',
+  'mcp.env': 'Environment Variables',
+  'mcp.url': 'URL',
+  'mcp.enabledByDefault': 'Enabled by default for new sessions',
+  'mcp.testConnection': 'Test Connection',
 };

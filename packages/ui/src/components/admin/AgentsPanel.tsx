@@ -8,7 +8,7 @@ import { useI18n } from '@/lib/i18n'
 
 const CAP_KEYS = [
   'file_read', 'file_write', 'search', 'shell',
-  'git_read', 'git_write', 'web', 'task',
+  'git_read', 'git_write', 'web', 'task', 'mcp',
 ]
 
 const AGENT_MODES = ['primary', 'subagent', 'all'] as const

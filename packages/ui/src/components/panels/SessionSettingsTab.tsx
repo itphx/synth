@@ -29,6 +29,9 @@ export function SessionSettingsTab() {
   const setDebugSystemMessages = useUIStore((s) => s.setDebugSystemMessages)
   const [sendingDebug, setSendingDebug] = useState(false)
 
+  const [mcpServers, setMcpServers] = useState<Array<{ name: string; active: boolean }>>([])
+  const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([])
+
   const activeTabId = useUIStore((s) => s.activeCenterTabId)
   const centerTabs = useUIStore((s) => s.centerTabs)
   const activeTab = centerTabs.find((t) => t.id === activeTabId)
@@ -44,6 +47,10 @@ export function SessionSettingsTab() {
   useEffect(() => {
     if (sessionId) {
       synthApi.getAgents(sessionId).then((r) => setAgents(r.agents)).catch(() => {})
+      synthApi.getSessionMcp(sessionId).then((r) => {
+        setMcpServers(r.allServers)
+        setSelectedMcpServers(r.mcpServers || [])
+      }).catch(() => {})
     }
   }, [sessionId])
 
@@ -51,32 +58,35 @@ export function SessionSettingsTab() {
     if (session && session.settings) {
       const sp = session.settings.provider as string | undefined
       const sm = session.settings.model as string | undefined
+      const de = session.settings.debugEnabled as boolean | undefined
       if (sp) setSelectedProvider(sp)
       if (sm) setSelectedModel(sm)
+      if (de !== undefined) setDebugEnabled(de)
     }
   }, [session])
 
   const handleSave = async () => {
     if (!sessionId) return
-    if (session?.settings?.debug !== undefined) {
-      setSaving(true)
-      try {
-        await synthApi.updateSession(sessionId, {
-          settings: {
-            ...(session.settings as Record<string, unknown>),
-            provider: selectedProviderName,
-            model: selectedModelName,
-            debug: debugEnabled,
-          },
-        })
-        notify({ text: t('sessionSettings.saved'), type: 'success', category: 'system', sessionId: sessionId || undefined })
-      } catch {
-        notify({ text: t('sessionSettings.saveError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
-      } finally {
-        setSaving(false)
-      }
-    } else {
+    if (!session) {
       notify({ text: t('sessionSettings.notLoaded'), type: 'warning', category: 'error', sessionId: sessionId || undefined })
+      return
+    }
+    setSaving(true)
+    try {
+      await synthApi.updateSession(sessionId, {
+        settings: {
+          ...(session.settings as Record<string, unknown>),
+          provider: selectedProviderName,
+          model: selectedModelName,
+          debugEnabled: debugEnabled,
+          mcpServers: selectedMcpServers,
+        },
+      })
+      notify({ text: t('sessionSettings.saved'), type: 'success', category: 'system', sessionId: sessionId || undefined })
+    } catch {
+      notify({ text: t('sessionSettings.saveError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -154,6 +164,30 @@ export function SessionSettingsTab() {
             </button>
           </div>
         </div>
+
+        {mcpServers.length > 0 && (
+          <Section title={t('mcp.title')}>
+            <div className="flex flex-col gap-1.5">
+              {mcpServers.map((srv) => (
+                <label key={srv.name} className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selectedMcpServers.includes(srv.name)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedMcpServers((prev) => [...prev, srv.name])
+                      } else {
+                        setSelectedMcpServers((prev) => prev.filter((n) => n !== srv.name))
+                      }
+                    }}
+                    className="rounded size-3"
+                  />
+                  <span className="text-xs text-foreground">{srv.name}</span>
+                </label>
+              ))}
+            </div>
+          </Section>
+        )}
 
         {agents.length > 0 && (
           <Section title={t('rightPanel.params.agents')}>

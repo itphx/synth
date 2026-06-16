@@ -91,6 +91,7 @@ export const dict = {
   'settings.category.providers': 'Провайдеры',
   'settings.category.models': 'Модели',
   'settings.category.agents': 'Агенты',
+  'settings.category.mcp': 'MCP-серверы',
   'settings.category.notifications': 'Уведомления',
 
   // Appearance settings
@@ -712,6 +713,7 @@ export const dict = {
   'admin.agents.cap.shell': 'shell',
   'admin.agents.cap.web': 'веб',
   'admin.agents.cap.task': 'сабагенты',
+  'admin.agents.cap.mcp': 'MCP',
 
   // Subagent fields
   'admin.agents.agentMode': 'Тип агента',
@@ -797,4 +799,20 @@ export const dict = {
 
   // Icon picker
   'admin.iconPicker.searchPlaceholder': 'Поиск иконки...',
+
+  // MCP
+  'mcp.title': 'MCP-серверы',
+  'mcp.description': 'Управление внешними MCP-серверами. Инструменты серверов становятся доступны моделям ИИ как вызовы инструментов (tool calls).',
+  'mcp.addServer': 'Добавить сервер',
+  'mcp.newServer': 'Новый сервер',
+  'mcp.editServer': 'Редактирование сервера',
+  'mcp.noServers': 'Нет настроенных MCP-серверов. Добавьте сервер для расширения возможностей моделей.',
+  'mcp.serverName': 'Имя сервера',
+  'mcp.type': 'Тип подключения',
+  'mcp.command': 'Команда',
+  'mcp.args': 'Аргументы',
+  'mcp.env': 'Переменные окружения',
+  'mcp.url': 'URL',
+  'mcp.enabledByDefault': 'Включён по умолчанию для новых сессий',
+  'mcp.testConnection': 'Проверить подключение',
 };
