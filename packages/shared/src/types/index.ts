@@ -282,7 +282,7 @@ export interface AgentDefinition {
   topK?: number;
   agentMode?: 'primary' | 'subagent' | 'all';
   subagentPrompt?: string;
-  maxSteps?: number;
+  maxSteps?: number; // 0 = без ограничений, undefined = default (0 для primary, 15 для subagent)
   sshKeys: string[];
   isOverridden: boolean;
   icon?: string;

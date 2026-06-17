@@ -722,6 +722,8 @@ export const dict = {
   'admin.agents.agentMode.all': 'Осн. + сабагент',
   'admin.agents.subagentPrompt': 'Промпт сабагента',
   'admin.agents.maxSteps': 'Макс. шагов',
+  'admin.agents.stepsCount': 'Количество шагов',
+  'admin.agents.unlimited': 'неограничено',
 
   // Filter
   'admin.agents.filter.all': 'Все',

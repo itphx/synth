@@ -725,6 +725,8 @@ export const dict = {
   'admin.agents.agentMode.all': 'Primary + Subagent',
   'admin.agents.subagentPrompt': 'Subagent prompt',
   'admin.agents.maxSteps': 'Max steps',
+  'admin.agents.stepsCount': 'Steps',
+  'admin.agents.unlimited': 'unlimited',
 
   // Filter
   'admin.agents.filter.all': 'All',
