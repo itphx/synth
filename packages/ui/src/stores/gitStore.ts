@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
 import { synthApi } from '@/lib/api/synthApi'
 import type { RepoStatus, CommitInfo, CommitDetail } from '@synth/shared'
 
@@ -33,7 +34,9 @@ function repoKey(projectId: string, repoPath: string): string {
   return `${projectId}::${repoPath}`
 }
 
-export const useGitStore = create<GitStore>((set, get) => ({
+export const useGitStore = create<GitStore>()(
+  persist(
+    (set, get) => ({
   reposByProject: {},
   commitsByRepo: {},
   loading: false,
@@ -181,4 +184,25 @@ export const useGitStore = create<GitStore>((set, get) => ({
       showMoreLimits: { ...s.showMoreLimits, [key]: limit },
     }))
   },
-}))
+    }),
+    {
+      name: 'synth-ui-git',
+      partialize: (state) => ({
+        expandedProjects: [...state.expandedProjects],
+        expandedRepos: [...state.expandedRepos],
+      }),
+      merge: (persisted, current) => {
+        const p = persisted as Record<string, unknown> | undefined
+        return {
+          ...current,
+          expandedProjects: Array.isArray(p?.expandedProjects)
+            ? new Set(p.expandedProjects as string[])
+            : current.expandedProjects,
+          expandedRepos: Array.isArray(p?.expandedRepos)
+            ? new Set(p.expandedRepos as string[])
+            : current.expandedRepos,
+        }
+      },
+    }
+  )
+)

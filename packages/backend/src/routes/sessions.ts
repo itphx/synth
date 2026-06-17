@@ -56,6 +56,9 @@ export function createSessionRoutes(
       console.warn('subscribeToSession failed:', e),
     );
 
+    // Оповещаем клиентов о новой сессии
+    eventBus.publish(session.id, 'session.created', serializeSession(session));
+
     return c.json(serializeSession(session), 201);
   });
 
@@ -99,8 +102,11 @@ export function createSessionRoutes(
     await sessionManager.deleteSession(session.id);
     queueManager.stop(session.id);
 
-    // Отписываем клиентов от удалённой сессии
+    // Оповещаем клиентов об удалении сессии
     const user = kit.getCurrentUser(c)!;
+    eventBus.publish(session.id, 'session.deleted', { session_id: session.id });
+
+    // Отписываем клиентов от удалённой сессии
     eventHub.unsubscribeFromSession(user.id, session.id);
 
     return c.body(null, 204);

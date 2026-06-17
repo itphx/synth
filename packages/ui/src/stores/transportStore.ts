@@ -2,9 +2,11 @@ import { create } from 'zustand'
 import { TransportClient, type WSEvent, type TransportKind } from '@/lib/api/transport'
 import { useChatStore } from './chatStore'
 import { useSessionsStore } from './sessionsStore'
+import { useUIStore } from './useUIStore'
 import type { TransportMode } from './useUIStore'
 import type { StreamDoneMetadata, MessageData } from './chatStore'
 import { synthApi } from '@/lib/api/synthApi'
+import type { SessionData } from '@/lib/api/synthApi'
 
 type EventDispatcher = (event: WSEvent) => void
 
@@ -226,6 +228,25 @@ function createDispatcher(): EventDispatcher {
         if (patch.summarization_pending === false) {
           setSummarizationPending(sid, false)
         }
+        break
+      }
+
+      case 'session.created': {
+        const session = payload as unknown as SessionData
+        if (session.id) {
+          useSessionsStore.setState((s) => ({
+            sessions: [...s.sessions, session],
+          }))
+        }
+        break
+      }
+
+      case 'session.deleted': {
+        const deletedId = (payload.session_id as string) || sid
+        useSessionsStore.setState((s) => ({
+          sessions: s.sessions.filter((sess) => sess.id !== deletedId),
+        }))
+        useUIStore.getState().closeTab(`chat-${deletedId}`)
         break
       }
 

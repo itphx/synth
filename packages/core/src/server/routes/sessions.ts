@@ -38,6 +38,7 @@ export function createSessionRoutes(
     session.userId = LOCAL_USER_ID;
     session.ownerId = LOCAL_USER_ID;
     await sessionManager.updateSession(session);
+    eventBus.publish(session.id, 'session.created', serializeSession(session));
     return c.json(serializeSession(session), 201);
   });
 
@@ -73,6 +74,7 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
     }
+    eventBus.publish(session.id, 'session.deleted', { session_id: session.id });
     await sessionManager.deleteSession(session.id);
     queueManager.stop(session.id);
     return c.body(null, 204);
