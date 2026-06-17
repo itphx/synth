@@ -44,6 +44,12 @@ export class McpManager {
     return this._config[name];
   }
 
+  getServerTools(name: string): Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> | null {
+    const entry = this._servers.get(name);
+    if (!entry) return null;
+    return entry.client.tools;
+  }
+
   async connectServer(name: string): Promise<void> {
     const config = this._config[name];
     if (!config) {

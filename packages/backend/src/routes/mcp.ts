@@ -165,7 +165,7 @@ export function createMcpRoutes(
   });
 
   // --- Список инструментов сервера ---
-  app.get('/servers/:name/tools', kit.requireAuth, (c) => {
+  app.get('/servers/:name/tools', kit.requireAuth, async (c) => {
     const name = c.req.param('name');
     const config = configStore.getServer(name);
     if (!config) {
@@ -176,14 +176,21 @@ export function createMcpRoutes(
       return c.json({ tools: [] });
     }
 
-    const server = mcpManager.getConfiguredServers().find((s) => s.name === name);
-    if (!server?.connected) {
-      return c.json({ server: name, tools: [], connected: false });
+    const entry = mcpManager.getConfiguredServers().find((s) => s.name === name);
+    if (!entry?.connected) {
+      try {
+        const tools = await mcpManager.probeServer(name);
+        return c.json({ server: name, tools, connected: false, probed: true });
+      } catch (err) {
+        return c.json({ server: name, tools: [], connected: false, probed: true, error: err instanceof Error ? err.message : String(err) });
+      }
     }
+
+    const tools = mcpManager.getServerTools(name) ?? [];
 
     return c.json({
       server: name,
-      tools: [],
+      tools,
       connected: true,
     });
   });

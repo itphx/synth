@@ -1,0 +1,24 @@
+{
+  "id": "admin",
+  "displayName": {
+    "en": "Admin",
+    "ru": "Админ"
+  },
+  "description": {
+    "en": "System administration and configuration",
+    "ru": "Системное администрирование и настройка"
+  },
+  "capabilities": [
+    "file_read",
+    "file_write",
+    "search",
+    "shell",
+    "git_read",
+    "git_write",
+    "task",
+    "mcp"
+  ],
+  "icon": "shield-keyhole",
+  "color": "--status-error",
+  "contextFile": "ADMIN.md"
+}

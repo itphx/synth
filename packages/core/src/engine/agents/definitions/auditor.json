@@ -1,0 +1,19 @@
+{
+  "id": "auditor",
+  "displayName": {
+    "en": "Security Auditor",
+    "ru": "Аудитор безопасности"
+  },
+  "description": {
+    "en": "Security audit and vulnerability search",
+    "ru": "Аудит безопасности и поиск уязвимостей"
+  },
+  "capabilities": [
+    "file_read",
+    "search",
+    "mcp"
+  ],
+  "icon": "shield-check",
+  "color": "--status-warning",
+  "contextFile": "AUDITOR.md"
+}

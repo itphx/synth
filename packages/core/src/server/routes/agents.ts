@@ -1,44 +1,15 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import { JsonStore } from '../../storage/json-store.js';
-import type { AgentDefinition, ToolCapability } from '@synth/shared';
-
-const BUILTIN_AGENTS: AgentDefinition[] = [
-  {
-    id: 'developer',
-    displayName: 'Разработчик',
-    contextFile: 'developer',
-    capabilities: ['file_read', 'file_write', 'shell', 'search', 'web', 'git_read', 'git_write', 'task'] as ToolCapability[],
-    enabled: true,
-    sshKeys: [],
-    isOverridden: false,
-    temperature: 0.3,
-    topP: 0.9,
-    icon: 'code',
-    color: '#3b82f6',
-    description: 'Пишет код, выполняет рефакторинг, исправляет ошибки',
-  },
-  {
-    id: 'assistant',
-    displayName: 'Ассистент',
-    contextFile: 'assistant',
-    capabilities: ['file_read', 'search', 'web'] as ToolCapability[],
-    enabled: true,
-    sshKeys: [],
-    isOverridden: false,
-    temperature: 0.3,
-    topP: 0.9,
-    icon: 'message-circle',
-    color: '#10b981',
-    description: 'Отвечает на вопросы, помогает с анализом',
-  },
-];
+import type { AgentDefinition } from '@synth/shared';
+import { loadSystemAgentDefinitions } from '../../engine/agents/index.js';
 
 export function createAgentRoutes(
   auth: AuthKit,
   agentStore: JsonStore<AgentDefinition>,
 ): Hono {
   const app = new Hono();
+  const BUILTIN_AGENTS = loadSystemAgentDefinitions();
 
   app.get('/', auth.requireAuth, async (c) => {
     const overrides = await agentStore.list();

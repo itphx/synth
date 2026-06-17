@@ -2,7 +2,7 @@
 
 ## Назначение
 
-API Hub системы Synth. Связующее звено между synth-ui, synth-runner и synth-engine.
+API Hub системы Synth. Связующее звено между synth-ui, synth-runner и synth-core.
 
 **Что делает:**
 - Аутентификация / авторизация (cookie-based + API key + OIDC Keycloak)
@@ -64,6 +64,7 @@ packages/backend/
 │   │   ├── context.ts       # /api/v2/context/*
 │   │   ├── users.ts         # /api/v2/users/* (admin)
 │   │   ├── profile.ts       # /api/v2/profile/*
+│   │   ├── mcp.ts           # /api/v2/mcp/*
 │   │   └── runner.ts        # /api/v2/runner/* (внутренний)
 │   ├── ws/
 │   │   ├── hub.ts           # WebSocket сервер (Hono upgrade)
@@ -102,6 +103,8 @@ packages/backend/
 │   │   └── config.ts        # ContextConfig
 │   ├── agents/
 │   │   └── registry.ts      # AgentRegistry
+│   ├── lib/
+│   │   └── mcp-config-store.ts  # YamlMcpConfigStore (чтение/запись MCP-конфигурации в config.yaml)
 │   ├── debug.ts             # DebugCollector (per-session)
 │   └── logger.ts            # Структурированное логирование
 ├── data/                    # runtime данные (gitignore)
@@ -392,6 +395,44 @@ data: {"content": "...", "model": "...", "usage": {...}, "message_index": 5}
 | `POST` | `/admin/sessions/cleanup` | Очистка stale locks |
 | `GET` | `/admin/debug/config` | Конфигурация логирования |
 | `POST` | `/admin/debug/config` | Обновить конфигурацию |
+
+---
+
+### 15. MCP-серверы (`/api/v2/mcp`)
+
+Управление MCP-серверами (Model Context Protocol). Чтение доступно всем авторизованным, запись — ADMIN.
+
+| Метод | Путь | Назначение | RBAC |
+|-------|------|------------|------|
+| `GET` | `/mcp/servers` | Список сконфигурированных серверов | все |
+| `POST` | `/mcp/servers` | Добавить/обновить сервер | ADMIN |
+| `GET` | `/mcp/servers/:name` | Конфигурация сервера | все |
+| `PUT` | `/mcp/servers/:name` | Обновить сервер | ADMIN |
+| `DELETE` | `/mcp/servers/:name` | Удалить сервер | ADMIN |
+| `POST` | `/mcp/servers/:name/test` | Проверить подключение | ADMIN |
+| `GET` | `/mcp/servers/:name/tools` | Список инструментов сервера | все |
+
+**Управление MCP-серверами в сессии:**
+
+| Метод | Путь | Назначение |
+|-------|------|------------|
+| `GET` | `/mcp/session/:sessionId` | Получить список активных серверов сессии |
+| `PUT` | `/mcp/session/:sessionId` | Установить активные серверы для сессии |
+
+**Формат конфигурации сервера:**
+
+```typescript
+interface McpServerConfig {
+  type: 'stdio' | 'sse';           // тип подключения
+  command?: string;                 // команда для stdio
+  args?: string[];                  // аргументы для stdio
+  env?: Record<string, string>;     // переменные окружения
+  url?: string;                     // URL для SSE
+  enabledByDefault?: boolean;       // включён по умолчанию для новых сессий
+  timeout?: number;                 // таймаут вызова инструмента (сек)
+  connectTimeout?: number;          // таймаут подключения (сек)
+}
+```
 
 ---
 

@@ -43,7 +43,7 @@ export { ChatOrchestrator } from './engine/orchestrator.js';
 export type { OrchestratorOptions, ProcessMessageResult, ModelPricing } from './engine/orchestrator.js';
 
 export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
-export { createAgentRegistry, AgentRegistry } from './engine/agents/index.js';
+export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions } from './engine/agents/index.js';
 export { McpClient, McpManager } from './engine/mcp/index.js';
 export type { McpToolDef, McpToolResult } from './engine/mcp/index.js';
 

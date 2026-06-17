@@ -86,17 +86,6 @@ synth-legacy/                 # Python/FastAPI бэкенд (заморожен,
 @synth/runner — импортируется in-process из @synth/core
 (Engine Manager, адаптеры opencode/cline, локальный LLM-прокси)
 ```
-synth/                            # монорепо (TypeScript, pnpm workspaces)
-├── packages/
-│   ├── shared/    @synth/shared  # Типы, интерфейсы, Zod-схемы, протоколы
-│   ├── backend/   @synth/backend # Hono API Hub: auth, сессии, проекты, runner registry,
-│   │                             #   LLM Proxy (аудит), SessionEventBus, очередь
-│   │                             #   БЕЗ встроенного LLM-движка, БЕЗ HTML-шаблонов
-│   ├── ui/        @synth/ui      # React 19 SPA + админка (рендеринг по ролям)
-│   ├── runner/    @synth/runner  # Gateway: оркестратор движков, LLM Proxy, фаловый API
-│   └── engine/    @synth/engine  # Автономный движок: TSM, MCP, CLI.
-│                                 #   Два режима: standalone + managed
-synth-legacy/                 # Python/FastAPI бэкенд (заморожен, справочный)
 ```
 
 ### Монорепозиторий
@@ -115,7 +104,7 @@ synth/
     ├── backend/  → @synth/backend  # Hono API Hub
     ├── ui/       → @synth/ui       # React SPA + админка
     ├── runner/   → @synth/runner   # Gateway, оркестратор движков
-    └── engine/   → @synth/engine   # Автономный движок + CLI
+    └── core/     → @synth/core     # Ядро: движок, MCP, CLI, HTTP API v2
 ```
 
 ### Соответствие старого → нового
@@ -673,15 +662,15 @@ sendMessage: (...) => {
 - Протоколы: WS-сообщения, Engine HTTP API, Runner Protocol
 - Утилиты: nanoid, форматирование дат
 
-### Фаза 2: synth-core — общая реализация
-- LLM Provider abstraction + factory
-- SessionManager, QueueProcessor, ProjectManager
-- SessionEventBus, ContextBuilder, ContextOptimizer
-- TSM, AgentRegistry, инструменты, MCP интеграция
-- FileStore (JSON files)
-- HTTP API v2 (Hono routes)
-- CLI: `synth chat`, `synth serve`
-- Локальная auth (один API-ключ)
+### Фаза 2: @synth/core — общая реализация (частично ✓)
+- LLM Provider abstraction + factory ✓
+- SessionManager, QueueProcessor, ProjectManager ✓
+- SessionEventBus, ContextBuilder, ContextOptimizer ✓
+- TSM, AgentRegistry, инструменты, MCP интеграция ✓
+- FileStore (JSON files) ✓
+- HTTP API v2 (Hono routes) ✓
+- CLI: `synth chat`, `synth serve` ✓
+- Локальная auth (один API-ключ) ✓
 
 ### Фаза 3: synth-backend — облачные функции
 - OIDC-клиент (Keycloak), RBAC middleware
@@ -871,10 +860,10 @@ node packages/core/dist/cli.js serve --backend http://localhost:5000
 
 ### Документация компонентов
 
-- `synth/packages/backend/AGENTS.md` — Hono API, конвенции, спецификация API v2
+- `synth/packages/backend/AGENTS.md` — Hono API, конвенции, спецификация API v2 (включая MCP API)
 - `synth/packages/ui/AGENTS.md` — React UI требования (будет создан)
 - `synth/packages/runner/AGENTS.md` — Runner архитектура (будет создан)
-- `synth/packages/core/AGENTS.md` — Движок, CLI, локальный API (будет создан)
+- `synth/packages/core/AGENTS.md` — Движок, CLI, локальный API, MCP-подсистема
 - `synth-legacy/AGENTS.md` — Python бэкенд (архивный)
 
 ---
