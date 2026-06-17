@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Icon } from '../icon/Icon'
-import { Toggle } from '../ui/Toggle'
 import { useMcpStore } from '../../stores/mcpStore'
 import { useI18n } from '@/lib/i18n'
+import { cn } from '@/lib/utils'
 import type { McpServerConfig } from '../../lib/api/synthApi'
 
 const EMPTY_CONFIG: McpServerConfig = { type: 'stdio' }
@@ -60,6 +60,10 @@ export const McpSettings = () => {
     await deleteServer(name)
   }
 
+  const handleToggle = async (name: string, currentConfig: McpServerConfig) => {
+    await updateServer(name, { ...currentConfig, enabled: !currentConfig.enabled })
+  }
+
   const handleTest = async () => {
     if (!formName.trim()) return
     setTesting(true)
@@ -92,20 +96,23 @@ export const McpSettings = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold">{t('mcp.title')}</h2>
-          <p className="text-sm text-muted-foreground mt-1">{t('mcp.description')}</p>
+          {servers && (
+            <p className="text-muted-foreground text-sm">{t('mcp.count', { count: Object.keys(servers).length })}</p>
+          )}
         </div>
         <button
           onClick={openAdd}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 transition-opacity"
+          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 transition-colors"
         >
-          <Icon name="plug" className="size-4" />
-          {t('mcp.addServer')}
+          <Icon name="add" className="size-3.5" />
+          {t('common.add')}
         </button>
       </div>
+      <p className="text-sm text-muted-foreground">{t('mcp.description')}</p>
 
       {error && (
         <div className="p-3 rounded-lg bg-red-900/20 text-red-400 text-sm">{error}</div>
@@ -281,14 +288,22 @@ export const McpSettings = () => {
           {Object.entries(servers).map(([name, entry]) => (
             <div
               key={name}
-              className="flex items-center gap-3 p-3 rounded-lg border border-border hover:border-interactive-accent/50 transition-colors"
+              className={cn(
+                "flex items-center gap-3 p-3 rounded-lg border border-border hover:border-interactive-accent/50 transition-colors",
+                entry.config.enabled === false && "opacity-50"
+              )}
             >
-              <div
-                className={`size-2 rounded-full shrink-0 ${
-                  entry.connected ? 'bg-green-500' : 'bg-gray-500'
-                }`}
-                title={entry.connected ? 'Подключён' : 'Не подключён'}
-              />
+              <span
+                title={entry.config.enabledByDefault ? 'Включён по умолчанию' : 'Не включён по умолчанию'}
+              >
+                <Icon
+                  name="checkbox"
+                  className={cn(
+                    "size-4 shrink-0",
+                    entry.config.enabledByDefault ? "text-green-500" : "text-gray-500"
+                  )}
+                />
+              </span>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate">{name}</div>
                 <div className="text-xs text-muted-foreground">
@@ -296,14 +311,34 @@ export const McpSettings = () => {
                     ? `stdio: ${entry.config.command || '?'}`
                     : `sse: ${entry.config.url || '?'}`}
                   {entry.config.enabledByDefault && ' · авто'}
-                  {entry.connected && ' · подключён'}
                 </div>
               </div>
               <button
+                onClick={() => handleToggle(name, entry.config)}
+                className={cn(
+                  "relative w-9 h-5 rounded-full transition-colors shrink-0",
+                  entry.config.enabled !== false ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
+                )}
+                title={entry.config.enabled !== false ? 'Отключить' : 'Включить'}
+              >
+                <span className={cn(
+                  "absolute top-0.5 size-4 rounded-full bg-white transition-all shadow-sm",
+                  entry.config.enabled !== false ? 'right-0.5' : 'left-0.5'
+                )} />
+              </button>
+              <button
                 onClick={() => openEdit(name)}
                 className="p-1.5 rounded-lg hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
+                title="Редактировать"
               >
-                <Icon name="edit" className="size-4" />
+                <Icon name="edit-2" className="size-4" />
+              </button>
+              <button
+                onClick={() => handleDelete(name)}
+                className="p-1.5 rounded-lg hover:bg-red-900/20 text-muted-foreground hover:text-red-400 transition-colors"
+                title="Удалить"
+              >
+                <Icon name="delete-bin" className="size-4" />
               </button>
             </div>
           ))}

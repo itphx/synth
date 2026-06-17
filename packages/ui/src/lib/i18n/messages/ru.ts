@@ -803,6 +803,7 @@ export const dict = {
   // MCP
   'mcp.title': 'MCP-серверы',
   'mcp.description': 'Управление внешними MCP-серверами. Инструменты серверов становятся доступны моделям ИИ как вызовы инструментов (tool calls).',
+  'mcp.count': '{count} серверов',
   'mcp.addServer': 'Добавить сервер',
   'mcp.newServer': 'Новый сервер',
   'mcp.editServer': 'Редактирование сервера',
