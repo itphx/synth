@@ -806,6 +806,7 @@ export const dict = {
   // MCP
   'mcp.title': 'MCP Servers',
   'mcp.description': 'Manage external MCP servers. Server tools become available to AI models as tool calls.',
+  'mcp.count': '{count} servers',
   'mcp.addServer': 'Add Server',
   'mcp.newServer': 'New Server',
   'mcp.editServer': 'Edit Server',

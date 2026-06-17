@@ -20,7 +20,7 @@ const CATEGORIES = [
   { id: "providers", labelKey: "settings.category.providers" as const, icon: "server" },
   { id: "models", labelKey: "settings.category.models" as const, icon: "cpu" },
   { id: "agents", labelKey: "settings.category.agents" as const, icon: "robot-2" },
-  { id: "mcp", labelKey: "settings.category.mcp" as const, icon: "wrench" },
+  { id: "mcp", labelKey: "settings.category.mcp" as const, icon: "tools" },
 ]
 
 export const SettingsModal = () => {
