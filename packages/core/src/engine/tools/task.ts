@@ -18,7 +18,7 @@ interface TaskExtra {
   sessionId?: string;
 }
 
-const MAX_SUBAGENT_TOOL_ITERATIONS = 10;
+const DEFAULT_SUBAGENT_MAX_STEPS = 15;
 
 export const taskTool: ToolDefinition = {
   name: 'task',
@@ -66,7 +66,10 @@ export const taskTool: ToolDefinition = {
 
     const systemPrompt = agentDef.subagentPrompt || '';
     const tools = extra.agentRegistry.getToolsForAgent(agentDef.id);
-    const maxSteps = agentDef.maxSteps ?? 10;
+    const maxSteps = agentDef.maxSteps ?? DEFAULT_SUBAGENT_MAX_STEPS;
+    const effectiveMaxSteps = (maxSteps === 0)
+      ? Number.POSITIVE_INFINITY
+      : maxSteps;
     const publish = extra.publish;
     const parentCallId = ''; // base call
 
@@ -109,7 +112,7 @@ export const taskTool: ToolDefinition = {
         started_at?: string; completed_at?: string; iteration: number;
       }> = [];
 
-      while (iteration < MAX_SUBAGENT_TOOL_ITERATIONS) {
+      while (iteration < effectiveMaxSteps) {
         if (cancelToken.cancelled) break;
 
         let accumulatedContent = '';

@@ -13,8 +13,8 @@ import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
 import { warning } from '../logger.js';
 
-const MAX_TOOL_ITERATIONS = 10;
 const MAX_DOOM_LOOP_COUNT = 3;
+const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
 
 export interface ModelPricing {
   inputPrice?: number;
@@ -104,6 +104,12 @@ export class ChatOrchestrator {
     const streamId = (message.metadata?.stream_id as string) || 'unknown';
     const effectiveAgentRole = message.agentRole || session.settings.agentRole;
     const author = message.author || 'unknown';
+
+    const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
+    const agentMaxSteps = agentDef?.maxSteps;
+    const maxIterations = (agentMaxSteps !== undefined && agentMaxSteps > 0)
+      ? agentMaxSteps
+      : DEFAULT_MAX_ITERATIONS;
 
     const debugCollector = new DebugCollector(session.settings.debugEnabled);
 
@@ -217,7 +223,7 @@ export class ChatOrchestrator {
       let finalModel: string | undefined;
       const allToolCalls: Array<Record<string, unknown>> = [];
 
-      while (toolIteration < MAX_TOOL_ITERATIONS) {
+      while (toolIteration < maxIterations) {
         if (cancelToken.cancelled) break;
 
         let accumulatedContent = '';
@@ -484,7 +490,7 @@ export class ChatOrchestrator {
       }
 
       // 7. Handle max iterations exceeded
-      if (toolIteration >= MAX_TOOL_ITERATIONS && !finalContent) {
+      if (toolIteration >= maxIterations && !finalContent) {
         finalContent = '(достигнут лимит итераций инструментов)';
       }
 

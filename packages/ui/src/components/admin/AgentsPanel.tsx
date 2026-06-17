@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { synthApi, type AgentInfo, type ProviderInfo, type ModelGroup } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { IconPicker } from './IconPicker'
@@ -36,7 +36,7 @@ const emptyForm = (): AgentForm => ({
   id: '', display_name: '', description: '', provider: '', model: '',
   temperature: 0.7, top_p: 0, top_k: 0,
   agent_mode: 'primary', context_file: '',
-  capabilities: [], subagent_prompt: '', max_steps: 10, icon: '', color: '',
+  capabilities: [], subagent_prompt: '', max_steps: 0, icon: '', color: '',
 })
 
 function buildForm(a: AgentInfo, detail?: Record<string, unknown> | null): AgentForm {
@@ -54,7 +54,7 @@ function buildForm(a: AgentInfo, detail?: Record<string, unknown> | null): Agent
     context_file: a.context_file || (detail?.contextFile as string) || '',
     capabilities: (detail?.capabilities as string[]) || a.capabilities,
     subagent_prompt: (a.subagent_prompt || (detail?.subagentPrompt as string) || ''),
-    max_steps: (a.max_steps || (detail?.maxSteps as number) || 10),
+    max_steps: (a.max_steps ?? (detail?.maxSteps as number) ?? 0),
     icon: a.icon || (detail?.icon as string) || '',
     color: a.color || (detail?.color as string) || '',
   }
@@ -73,6 +73,7 @@ export const AgentsPanel = () => {
   const [models, setModels] = useState<{ provider: string; models: { id: string; name: string }[] }[]>([])
   const [contextFiles, setContextFiles] = useState<string[]>([])
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
+  const formRef = useRef<HTMLDivElement>(null)
 
   const filteredAgents = useMemo(() => {
     if (filterMode === 'all') return agents
@@ -120,6 +121,7 @@ export const AgentsPanel = () => {
     setForm(emptyForm())
     setCreating(true)
     setError('')
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
   }
 
   const handleEdit = async (a: AgentInfo) => {
@@ -132,6 +134,7 @@ export const AgentsPanel = () => {
     }
     setExpanded(a.id)
     setCreating(false)
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
   }
 
   const handleCancel = () => {
@@ -214,7 +217,7 @@ export const AgentsPanel = () => {
   const showSubagentFields = form.agent_mode === 'subagent' || form.agent_mode === 'all'
 
   const renderForm = () => (
-    <div className="bg-background rounded-lg border p-4 space-y-3">
+    <div ref={formRef} className="bg-background rounded-lg border p-4 space-y-3">
       <div className="flex items-center justify-between">
         <h4 className="font-medium text-sm">{expanded ? t('admin.agents.edit', { id: form.id }) : t('admin.agents.new')}</h4>
         <div className="flex gap-2">
@@ -314,12 +317,20 @@ export const AgentsPanel = () => {
             className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
         </div>
 
-        {/* Max steps — для всех режимов */}
+        {/* Max steps — для всех режимов, 0 = без ограничений */}
         <div>
           <label className="text-xs text-muted-foreground">{t('admin.agents.maxSteps')}</label>
-          <input type="number" min={1} max={50} step={1} value={form.max_steps}
-            onChange={(e) => setForm({ ...form, max_steps: parseInt(e.target.value) || 10 })}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+          <div className="flex items-center gap-2">
+            <input type="number" min={0} step={1} value={form.max_steps}
+              onChange={(e) => {
+                const v = parseInt(e.target.value);
+                setForm({ ...form, max_steps: isNaN(v) ? 0 : v });
+              }}
+              className="w-24 px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+            {form.max_steps === 0 && (
+              <span className="text-xs text-muted-foreground">{t('admin.agents.unlimited')}</span>
+            )}
+          </div>
         </div>
 
         {/* Subagent-specific fields */}
@@ -487,16 +498,18 @@ export const AgentsPanel = () => {
                   )}
                 </div>
 
-                {/* Subagent info */}
-                {(a.agent_mode === 'subagent' || a.agent_mode === 'all') && (
-                  <div className="flex gap-1 mb-2">
-                    {a.max_steps != null && (
-                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
-                        max {a.max_steps} steps
-                      </span>
-                    )}
-                  </div>
-                )}
+                {/* Agent steps info */}
+                <div className="flex gap-1 mb-2">
+                  {a.max_steps === 0 || a.max_steps == null ? (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300">
+                      {t('admin.agents.stepsCount')}: {t('admin.agents.unlimited')}
+                    </span>
+                  ) : (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                      {t('admin.agents.stepsCount')}: ≤{a.max_steps}
+                    </span>
+                  )}
+                </div>
 
                 {/* Actions */}
                 <div className="flex gap-1">

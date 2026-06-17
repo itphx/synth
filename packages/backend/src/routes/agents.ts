@@ -127,7 +127,7 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
               mode: 'simple' as const,
               agent_mode: a.agentMode || null,
               subagent_prompt: a.subagentPrompt || null,
-              max_steps: a.maxSteps || null,
+              max_steps: a.maxSteps ?? null,
               provider: a.provider || null,
               model: a.model || null,
               context_file: a.contextFile || null,

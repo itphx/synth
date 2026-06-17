@@ -44,6 +44,41 @@ const GENERAL_PROMPT = `Ты — универсальный помощник д�
 
 Работай автономно, не задавай уточняющих вопросов если контекст достаточен.`;
 
+export const PRIMARY_AGENT_DEFINITIONS: AgentDefinition[] = [
+  {
+    id: 'developer',
+    displayName: 'Разработчик',
+    description: 'Пишет код, выполняет рефакторинг, исправляет ошибки',
+    capabilities: ['file_read', 'file_write', 'shell', 'search', 'web', 'git_read', 'git_write', 'task'],
+    enabled: true,
+    agentMode: 'primary',
+    maxSteps: 0,
+    sshKeys: [],
+    isOverridden: false,
+    temperature: 0.3,
+    topP: 0.9,
+    icon: 'code',
+    color: '#3b82f6',
+    contextFile: 'developer',
+  },
+  {
+    id: 'assistant',
+    displayName: 'Ассистент',
+    description: 'Отвечает на вопросы, помогает с анализом',
+    capabilities: ['file_read', 'search', 'web'],
+    enabled: true,
+    agentMode: 'primary',
+    maxSteps: 0,
+    sshKeys: [],
+    isOverridden: false,
+    temperature: 0.3,
+    topP: 0.9,
+    icon: 'message-circle',
+    color: '#10b981',
+    contextFile: 'assistant',
+  },
+];
+
 export const SUBAGENT_DEFINITIONS: AgentDefinition[] = [
   {
     id: 'explore',
