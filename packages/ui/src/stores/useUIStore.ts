@@ -299,6 +299,7 @@ export const useUIStore = create<UIStore>()(
         rightPanelTab: state.rightPanelTab,
         centerTabs: state.centerTabs,
         activeCenterTabId: state.activeCenterTabId,
+        collapsedProjects: [...state.collapsedProjects],
       }),
       merge: (persisted, current) => {
         const p = persisted as Record<string, unknown> | undefined
@@ -318,6 +319,7 @@ export const useUIStore = create<UIStore>()(
           rightPanelTab: (p?.rightPanelTab as string) ?? current.rightPanelTab,
           centerTabs: (p?.centerTabs as CenterTab[]) ?? current.centerTabs,
           activeCenterTabId: (p?.activeCenterTabId as string | null) ?? current.activeCenterTabId,
+          collapsedProjects: new Set(p?.collapsedProjects as string[] ?? []),
         }
       },
     }

@@ -75,6 +75,16 @@ function ProjectsTab() {
 
   useEffect(() => { loadProjects(); loadSessions() }, [loadProjects, loadSessions])
 
+  useEffect(() => {
+    if (projects.length === 0) return
+    const validIds = new Set(projects.map((p) => p.id))
+    validIds.add('__none__')
+    const next = new Set([...collapsedProjects].filter((id) => validIds.has(id)))
+    if (next.size !== collapsedProjects.size) {
+      useUIStore.setState({ collapsedProjects: next })
+    }
+  }, [projects])
+
   const sessionsByProject = useMemo(() => {
     const map: Record<string, any[]> = {}
     const sortFn = sortMode === 'date'
@@ -126,8 +136,6 @@ function ProjectsTab() {
     const session = sessions.find((s) => s.id === sessionId)
     if (!session) return
     const pid = session.project_id || '__none__'
-    const expandKey = pid && pid !== '__none__' ? `project:${pid}` : `group:__none__`
-
     const uiState = useUIStore.getState()
     if (pid && pid !== '__none__' && uiState.collapsedProjects.has(pid)) {
       uiState.toggleProjectCollapse(pid)
@@ -135,12 +143,6 @@ function ProjectsTab() {
     if (pid === '__none__' && uiState.collapsedProjects.has('__none__')) {
       uiState.toggleProjectCollapse('__none__')
     }
-    setExpandedGroups(prev => {
-      if (prev.has(expandKey)) return prev
-      const next = new Set(prev)
-      next.add(expandKey)
-      return next
-    })
   }, [activeCenterTabId])
 
   const handleProjectSave = async () => {
@@ -426,9 +428,8 @@ function GroupNode({
 function FilesTab() {
   const { t } = useI18n()
   const { projects, loadProjects } = useProjectsStore()
-  const { treesByProject, loadFileTree, loadSubDirectory, expandedProjects, toggleProjectExpand, createFile, createDirectory, moveEntry, deleteEntry, uploadFile } = useFilesStore()
+  const { treesByProject, loadFileTree, loadSubDirectory, expandedProjects, expandedDirs, toggleProjectExpand, toggleDirExpand, ensureDirExpanded, createFile, createDirectory, moveEntry, deleteEntry, uploadFile } = useFilesStore()
   const { openTab, centerTabs, activeCenterTabId } = useUIStore()
-  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [renamingProject, setRenamingProject] = useState<string | null>(null)
@@ -490,13 +491,7 @@ function FilesTab() {
     let partial = ''
     for (const seg of segments.slice(0, -1)) {
       partial = partial ? `${partial}/${seg}` : seg
-      const key = `${projectId}/${partial}`
-      setExpandedDirs(prev => {
-        if (prev.has(key)) return prev
-        const next = new Set(prev)
-        next.add(key)
-        return next
-      })
+      useFilesStore.getState().ensureDirExpanded(projectId, partial)
     }
   }, [activeTabData])
 
@@ -518,12 +513,7 @@ function FilesTab() {
   }, [expandedDirs])
 
   const toggleDir = (projectId: string, dirPath: string) => {
-    const key = `${projectId}/${dirPath}`
-    setExpandedDirs((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) { next.delete(key) } else { next.add(key); loadSubDirectory(projectId, dirPath) }
-      return next
-    })
+    toggleDirExpand(projectId, dirPath)
   }
 
   const fileIconName = (name: string): 'file-text' | 'file-code' | 'image' | 'file-music' => {
@@ -896,6 +886,18 @@ function GitTab() {
       if (!reposByProject[p.id] && p.repos) loadRepos(p.id, p.repos)
     }
   }, [workspacedProjects, reposByProject, loadRepos])
+
+  useEffect(() => {
+    expandedRepos.forEach((key) => {
+      if (commitsByRepo[key]) return
+      const parts = key.split('::')
+      const projectId = parts[0]
+      const repoPath = parts.slice(1).join('::')
+      if (projectId && repoPath) {
+        loadCommitLog(projectId, repoPath)
+      }
+    })
+  }, [expandedRepos])
 
   const commitTabOpenSet = useMemo(() => {
     const set = new Set<string>()
