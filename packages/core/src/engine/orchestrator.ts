@@ -67,6 +67,7 @@ export class ChatOrchestrator {
   private readonly _toolRegistry: ToolRegistry | null;
   private readonly _agentRegistry: AgentRegistry | null;
   private readonly _mcpManager: McpManager | null;
+  private readonly _loadedMcpServers = new Set<string>();
   private readonly _cancellationTokens = new Map<string, CancellationToken>();
 
   constructor(options: OrchestratorOptions) {
@@ -166,19 +167,31 @@ export class ChatOrchestrator {
       const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
       const baseLlmMessages = ChatOrchestrator._sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author);
 
-      // 3.5. Load MCP tools for the session
+      // 3.5. Load MCP tools for the session (дифференциально — только изменившиеся серверы)
       const activeMcpServers = session.settings.mcpServers || [];
+      const active = new Set(activeMcpServers);
 
-      // Сначала очищаем ВСЕ MCP-инструменты из предыдущей обработки
-      if (this._toolRegistry) {
-        this._toolRegistry.deregisterByCapability(ToolCapability.MCP);
-      }
+      if (this._mcpManager && this._toolRegistry) {
+        const toRemove = [...this._loadedMcpServers].filter((s) => !active.has(s));
+        const toAdd = activeMcpServers.filter((s) => !this._loadedMcpServers.has(s));
 
-      if (this._mcpManager && this._toolRegistry && activeMcpServers.length > 0) {
-        try {
-          await this._mcpManager.ensureToolsLoaded(activeMcpServers, this._toolRegistry);
-        } catch (err) {
-          warning(`ORCHESTRATOR`, `Ошибка загрузки MCP-инструментов: ${err instanceof Error ? err.message : String(err)}`);
+        for (const name of toRemove) {
+          try {
+            await this._mcpManager.deregisterTools(name, this._toolRegistry);
+            this._loadedMcpServers.delete(name);
+          } catch (err) {
+            warning(`ORCHESTRATOR`, `Ошибка отключения MCP-сервера "${name}": ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+
+        for (const name of toAdd) {
+          try {
+            await this._mcpManager.connectServer(name);
+            await this._mcpManager.registerTools(name, this._toolRegistry);
+            this._loadedMcpServers.add(name);
+          } catch (err) {
+            warning(`ORCHESTRATOR`, `Ошибка загрузки MCP-сервера "${name}": ${err instanceof Error ? err.message : String(err)}`);
+          }
         }
       }
 

@@ -64,7 +64,7 @@ synth serve --backend http://synth-backend:5000 --token <runner-token>
 ## Структура проекта
 
 ```
-packages/engine/
+packages/core/
 ├── package.json
 ├── tsconfig.json
 ├── bin/
@@ -99,6 +99,10 @@ packages/engine/
 │   │   ├── context/
 │   │   │   ├── builder.ts    # ContextBuilder
 │   │   │   └── optimizer.ts  # ContextOptimizer
+│   │   ├── mcp/
+│   │   │   ├── index.ts      # MCP-подсистема (реэкспорт)
+│   │   │   ├── client.ts     # McpClient (подключение к MCP-серверам)
+│   │   │   └── manager.ts    # McpManager (жизненный цикл, Circuit Breaker)
 │   │   └── tools/
 │   │       ├── index.ts      # Реестр инструментов
 │   │       ├── fs.ts         # Файловые операции
@@ -330,7 +334,16 @@ class TSM {
 - `git_diff` / `git_status` / `git_commit` — Git-операции
 
 MCP-интеграция (подключаемые):
-- Внешние MCP-серверы через `@modelcontextprotocol/sdk`
+- **McpClient** (`src/engine/mcp/client.ts`) — обёртка вокруг `@modelcontextprotocol/sdk`
+  - Поддержка stdio (`StdioClientTransport`) и Streamable HTTP (`StreamableHTTPClientTransport`)
+  - Таймауты: подключение (60с), вызов инструмента (120с), усечение результата до 30k символов
+- **McpManager** (`src/engine/mcp/manager.ts`) — управление жизненным циклом серверов
+  - `connectServer()` / `disconnectServer()` / `disconnectAll()`
+  - `probeServer()` — проверка подключения без регистрации инструментов
+  - `registerTools()` / `deregisterTools()` / `ensureToolsLoaded()`
+  - **Circuit Breaker** — 5 ошибок → блокировка на 60 сек
+  - Инструменты регистрируются с префиксом `{serverName}_{toolName}` и capability `ToolCapability.MCP`
+  - `callTool()` — вызов инструмента по полному имени (разбирает префикс)
 
 ```typescript
 // src/engine/tools/index.ts
@@ -394,7 +407,7 @@ interface MessageQueue {
 ## Запуск (dev)
 
 ```bash
-cd synth-engine
+cd synth/packages/core
 pnpm install
 pnpm run build
 

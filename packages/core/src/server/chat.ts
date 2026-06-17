@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import type { SynthConfig } from '@synth/shared';
 import { ensureDataDir } from '@synth/shared';
 import {
@@ -80,7 +81,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   };
 
   const toolRegistry = createToolRegistry();
-  const agentRegistry = createAgentRegistry(toolRegistry);
+  const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
   const orchestrator = new ChatOrchestrator({
     sessionManager,

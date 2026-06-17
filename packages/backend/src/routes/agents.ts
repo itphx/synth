@@ -1,76 +1,15 @@
 import { Hono } from 'hono';
-import { readFileSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
-import type { AgentDefinition, ToolCapability } from '@synth/shared';
+import type { AgentDefinition } from '@synth/shared';
+import { loadSystemAgentDefinitions } from '@synth/core';
 import type { SessionManager } from '@synth/core';
 import { t } from '../lib/i18n.js';
-import { resolveDisplayName, resolveDescription } from '../lib/i18n-config.js';
 
-const BUILTIN_IDS = new Set([
-  'developer', 'assistant', 'devops', 'analyst',
-  'admin', 'auditor', 'pm', 'qa',
-  'general', 'explore',
-]);
+const BUILTIN_IDS = new Set(loadSystemAgentDefinitions().map((a: AgentDefinition) => a.id));
 
-interface AgentDefFile {
-  id: string;
-  displayName: Record<string, string>;
-  description: Record<string, string>;
-  capabilities: ToolCapability[];
-  icon: string;
-  color: string;
-  mode: 'simple' | 'orchestrator';
-  contextFile: string;
-  agentMode?: 'primary' | 'subagent' | 'all';
-  subagentPrompt?: string;
-  maxSteps?: number;
-}
-
-const AGENTS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'agents', 'definitions');
-
-function loadAgentDef(id: string): AgentDefFile {
-  const path = join(AGENTS_DIR, `${id}.json`);
-  if (!existsSync(path)) {
-    throw new Error(`Agent definition not found: ${id}`);
-  }
-  return JSON.parse(readFileSync(path, 'utf-8')) as AgentDefFile;
-}
-
-let _cachedDefs: AgentDefFile[] | null = null;
-
-function getAgentDefs(): AgentDefFile[] {
-  if (!_cachedDefs) {
-    _cachedDefs = [...BUILTIN_IDS].map((id) => loadAgentDef(id));
-  }
-  return _cachedDefs;
-}
-
-function getBuiltInAgents(_agentStore: JsonStore<AgentDefinition>): AgentDefinition[] {
-  const defs = getAgentDefs();
-  // Синхронная загрузка оверрайдов невозможна через JsonStore (асинхронный).
-  // Оверрайды применяются при сборке ответа в роутах.
-
-  return defs.map((def) => ({
-    id: def.id,
-    displayName: resolveDisplayName(def.displayName),
-    contextFile: def.contextFile,
-    capabilities: def.capabilities,
-    enabled: true,
-    mode: def.mode,
-    sshKeys: [],
-    isOverridden: false,
-    temperature: 0.3,
-    topP: 0.9,
-    icon: def.icon,
-    color: def.color,
-    description: resolveDescription(def.description),
-    agentMode: def.agentMode,
-    subagentPrompt: def.subagentPrompt,
-    maxSteps: def.maxSteps,
-  }));
+function getBuiltInAgents(): AgentDefinition[] {
+  return loadSystemAgentDefinitions();
 }
 
 async function mergeWithOverride(
@@ -79,15 +18,7 @@ async function mergeWithOverride(
 ): Promise<AgentDefinition> {
   const override = await agentStore.load(builtin.id);
   if (!override) return builtin;
-
-  const def = getAgentDefs().find((d) => d.id === builtin.id)!;
-  return {
-    ...builtin,
-    ...override,
-    displayName: resolveDisplayName(def.displayName, override.displayName),
-    description: resolveDescription(def.description, override.description),
-    isOverridden: true,
-  };
+  return { ...builtin, ...override, isOverridden: true };
 }
 
 export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefinition>, sessionManager?: SessionManager): Hono {
@@ -95,7 +26,7 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
 
   // GET /api/v2/agents — список агентов
   app.get('/', kit.requireAuth, async (c) => {
-    const builtins = getBuiltInAgents(agentStore);
+    const builtins = getBuiltInAgents();
     const overridden = await agentStore.list();
 
     const agents = await Promise.all(builtins.map((a) => mergeWithOverride(a, agentStore)));
@@ -152,7 +83,7 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
         mode: 'simple' as const,
         agent_mode: a.agentMode || null,
         subagent_prompt: a.subagentPrompt || null,
-        max_steps: a.maxSteps || null,
+        max_steps: a.maxSteps ?? null,
         provider: a.provider || null,
         model: a.model || null,
         context_file: a.contextFile || null,
@@ -171,7 +102,7 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
       return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.idRequired', undefined, c) } }, 400);
     }
 
-    const builtins = getBuiltInAgents(agentStore);
+    const builtins = getBuiltInAgents();
     const builtin = builtins.find((a) => a.id === id);
     const existing = await agentStore.load(id);
 
@@ -203,7 +134,7 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
   app.get('/:id', kit.requireAdmin, async (c) => {
     const id = c.req.param('id');
     const override = await agentStore.load(id);
-    const builtins = getBuiltInAgents(agentStore);
+    const builtins = getBuiltInAgents();
     const builtin = builtins.find((a) => a.id === id);
     if (!override && !builtin) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.agent', undefined, c) } }, 404);
@@ -239,7 +170,7 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
     const body = await c.req.json().catch(() => ({}));
     const enabled = body.enabled ?? true;
 
-    const builtins = getBuiltInAgents(agentStore);
+    const builtins = getBuiltInAgents();
     const builtin = builtins.find((a) => a.id === id);
     const existing = await agentStore.load(id);
 

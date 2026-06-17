@@ -233,7 +233,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   };
 
   const toolRegistry = createToolRegistry();
-  const agentRegistry = createAgentRegistry(toolRegistry);
+  const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
   const orchestrator = new ChatOrchestrator({
     sessionManager,

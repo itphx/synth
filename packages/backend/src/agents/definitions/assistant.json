@@ -1,11 +1,24 @@
 {
   "id": "assistant",
-  "displayName": { "en": "Assistant", "ru": "Ассистент" },
+  "displayName": {
+    "en": "Assistant",
+    "ru": "Ассистент"
+  },
   "description": {
     "en": "Universal assistant for any task",
     "ru": "Универсальный ассистент для любых задач"
   },
-  "capabilities": ["file_read", "file_write", "search", "shell", "web", "git_read", "git_write", "task"],
+  "capabilities": [
+    "file_read",
+    "file_write",
+    "search",
+    "shell",
+    "web",
+    "git_read",
+    "git_write",
+    "task",
+    "mcp"
+  ],
   "icon": "robot-3",
   "color": "--status-success",
   "contextFile": "ASSISTANT.md"
