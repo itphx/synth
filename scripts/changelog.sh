@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 VERSION=$(node -e "console.log(require('./packages/synth/package.json').version)")
 echo "Версия: $VERSION"
 
-PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n '2p')
 
 if [ -z "$PREV_TAG" ]; then
   echo "Предыдущий тег не найден — первый релиз"
