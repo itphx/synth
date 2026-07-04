@@ -6,7 +6,7 @@ import {
   createToolRegistry, createAgentRegistry,
 } from '../index.js';
 import { JsonStore } from '../storage/json-store.js';
-import type { ProviderConfig, ModelConfig, AgentDefinition, SummarizationConfig } from '@synth/shared';
+import type { ProviderConfig, ModelConfig, SummarizationConfig } from '@synth/shared';
 import type { Message } from '@synth/shared';
 import { MessageRole, nowISO, generateId } from '@synth/shared';
 
