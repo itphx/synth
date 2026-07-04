@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITVERSE_TOKEN || secrets.GITVERSE_API_KEY }}
+          token: ${{ secrets.GV_TOKEN }}
 
       - name: Установка pnpm
         run: npm install -g pnpm@latest
@@ -276,7 +276,7 @@ jobs:
 
       - name: Публикация в GitVerse Package Registry
         run: |
-          npm config set "//npm.gitverse.ru/:_authToken" "${{ secrets.GITVERSE_NPM_TOKEN }}"
+          npm config set "//npm.gitverse.ru/:_authToken" "${{ secrets.GV_TOKEN }}"
           cd packages/synth
           npm publish --access public --registry https://npm.gitverse.ru
 
@@ -307,7 +307,7 @@ jobs:
 
       - name: Публикация Docker образа
         run: |
-          echo "${{ secrets.GITVERSE_DOCKER_TOKEN }}" | docker login registry.gitverse.ru --username itphx --password-stdin
+          echo "${{ secrets.GV_TOKEN }}" | docker login registry.gitverse.ru --username itphx --password-stdin
           docker push registry.gitverse.ru/itphx/synth:${{ steps.docker_tags.outputs.version }}
           docker push registry.gitverse.ru/itphx/synth:latest
 
@@ -339,7 +339,7 @@ jobs:
       - name: Создать релиз
         uses: actions/create-release@v1
         with:
-          api_key: ${{ secrets.GITVERSE_API_KEY }}
+          api_key: ${{ secrets.GV_TOKEN }}
           title: Release v${{ steps.version.outputs.version }}
           body: |
             ## Установка
