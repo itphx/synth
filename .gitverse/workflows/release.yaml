@@ -215,9 +215,9 @@ jobs:
 
       - name: Публикация в GitVerse Package Registry
         run: |
-          npm config set "//npm.gitverse.ru/:_authToken" "${{ secrets.GV_TOKEN }}"
+          npm config set "//gitverse.ru/api/packages/itphx/npm/:_authToken" "${{ secrets.GV_TOKEN }}"
           cd packages/synth
-          npm publish --access public --registry https://npm.gitverse.ru
+          npm publish --access public --registry https://gitverse.ru/api/packages/itphx/npm/
 
   # --- Публикация Docker ---
   build-docker:
@@ -239,16 +239,27 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITVERSE_OUTPUT"
 
-      - name: Сборка Docker образа
+      - name: Авторизация для Docker Registry
         run: |
-          docker build -t registry.gitverse.ru/itphx/synth:${{ steps.docker_tags.outputs.version }} .
-          docker tag registry.gitverse.ru/itphx/synth:${{ steps.docker_tags.outputs.version }} registry.gitverse.ru/itphx/synth:latest
+          mkdir -p "${{ gitverse.workspace }}/.docker"
+          AUTH=$(echo -n "itphx:${{ secrets.GV_TOKEN }}" | base64 -w0)
+          cat > "${{ gitverse.workspace }}/.docker/config.json" <<'DOCKEREOF'
+          {"auths":{"gitverse.ru":{"auth":"CHANGEME"}}}
+          DOCKEREOF
+          sed -i "s/CHANGEME/$AUTH/" "${{ gitverse.workspace }}/.docker/config.json"
+          chmod 600 "${{ gitverse.workspace }}/.docker/config.json"
 
-      - name: Публикация Docker образа
-        run: |
-          echo "${{ secrets.GV_TOKEN }}" | docker login registry.gitverse.ru --username itphx --password-stdin
-          docker push registry.gitverse.ru/itphx/synth:${{ steps.docker_tags.outputs.version }}
-          docker push registry.gitverse.ru/itphx/synth:latest
+      - name: Сборка и публикация Docker образа (kaniko)
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=Dockerfile
+            --destination=gitverse.ru/itphx/synth:${{ steps.docker_tags.outputs.version }}
+            --destination=gitverse.ru/itphx/synth:latest
+            --verbosity=info
 
   # --- GitVerse Release ---
   create-release:
@@ -285,7 +296,7 @@ jobs:
 
             ```bash
             npm install -g @itphx/synth@${{ steps.version.outputs.version }}
-            docker run -p 4300:4300 registry.gitverse.ru/itphx/synth:${{ steps.version.outputs.version }}
+            docker run -p 4300:4300 gitverse.ru/itphx/synth:${{ steps.version.outputs.version }}
             ```
           files: |
             packages/synth/dist/cli.js
