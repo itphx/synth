@@ -16,6 +16,7 @@ export * from './interfaces/index.js';
 export * from './schemas/index.js';
 export * from './protocols/index.js';
 export * from './utils/index.js';
+export { SYNTH_VERSION } from './version.js';
 export * from './model-metadata.js';
 
 // Конфигурация — выборочный экспорт (избегаем конфликта AuthConfig/TestUser)

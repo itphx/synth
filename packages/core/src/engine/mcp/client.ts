@@ -3,6 +3,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { McpServerConfig } from '@synth/shared';
+import { SYNTH_VERSION } from '@synth/shared';
 import { info, warning, error } from '../../logger.js';
 
 export interface McpToolDef {
@@ -140,7 +141,7 @@ export class McpClient {
     });
 
     const client = new Client(
-      { name: 'synth-core', version: '0.1.0' },
+      { name: 'synth-core', version: SYNTH_VERSION },
       { capabilities: {} },
     );
 
@@ -158,7 +159,7 @@ export class McpClient {
     const transport = new StreamableHTTPClientTransport(new URL(url));
 
     const client = new Client(
-      { name: 'synth-core', version: '0.1.0' },
+      { name: 'synth-core', version: SYNTH_VERSION },
       { capabilities: {} },
     );
 

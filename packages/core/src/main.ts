@@ -1,12 +1,12 @@
 import { Command } from 'commander';
-import { loadConfig, resolveDataDir, resolvePort, ensureDataDir, defaultConfig } from '@synth/shared';
+import { loadConfig, resolveDataDir, resolvePort, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@synth/shared';
 
 const program = new Command();
 
 program
   .name('synth')
   .description('Synth Core — автономный AI-движок')
-  .version('0.1.0');
+  .version(SYNTH_VERSION);
 
 program
   .command('serve')

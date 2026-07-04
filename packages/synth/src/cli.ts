@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { existsSync } from 'node:fs';
-import { loadConfig, resolveDataDir, resolvePort, defaultConfig, ensureFirstRun, ensureDataDir } from '@synth/shared';
+import { loadConfig, resolveDataDir, resolvePort, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@synth/shared';
 import { createStandaloneApp } from '@synth/core/server/app.js';
 import { runSingleChat } from '@synth/core/server/chat.js';
 import { JsonStore } from '@synth/core/storage/json-store.js';
@@ -14,7 +14,7 @@ const program = new Command();
 program
   .name('synth')
   .description('AI-агентная платформа для командной разработки')
-  .version('0.1.0');
+  .version(SYNTH_VERSION);
 
 program
   .command('serve')

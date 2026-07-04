@@ -1,0 +1,380 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+        description: 'Тип версии (по SemVer)'
+      pre_release:
+        type: boolean
+        default: false
+        description: 'Предварительный релиз (pre-release)'
+      dry_run:
+        type: boolean
+        default: false
+        description: 'Проверка без публикации (dry-run)'
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+env:
+  NODE_VERSION: '22'
+  DOCKER_REGISTRY: registry.gitverse.ru
+
+jobs:
+  # --- Ручной bump версии (только для workflow_dispatch) ---
+  version-bump:
+    name: Bump версии
+    if: ${{ gitverse.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.new_version }}
+      prev_version: ${{ steps.bump.outputs.current_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITVERSE_TOKEN || secrets.GITVERSE_API_KEY }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Вычислить новую версию
+        id: bump
+        run: |
+          CURRENT=$(node -e "console.log(require('./packages/synth/package.json').version)")
+          BUMP="${{ inputs.bump || 'patch' }}"
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          case "$BUMP" in
+            major) NEW="$((MAJOR + 1)).0.0" ;;
+            minor) NEW="$MAJOR.$((MINOR + 1)).0" ;;
+            *)     NEW="$MAJOR.$MINOR.$((PATCH + 1))" ;;
+          esac
+
+          echo "Текущая: $CURRENT → Новая: $NEW"
+          echo "current_version=$CURRENT" >> "$GITVERSE_OUTPUT"
+          echo "new_version=$NEW" >> "$GITVERSE_OUTPUT"
+
+      - name: Обновить version.ts
+        run: |
+          NEW="${{ steps.bump.outputs.new_version }}"
+          sed -i "s/export const SYNTH_VERSION = '[^']*';/export const SYNTH_VERSION = '$NEW';/" packages/shared/src/version.ts
+
+      - name: Обновить package.json
+        run: |
+          NEW="${{ steps.bump.outputs.new_version }}"
+          for pkg_dir in packages/shared packages/core packages/backend packages/ui packages/runner packages/synth; do
+            node -e "
+              const fs = require('fs');
+              const p = require('./$pkg_dir/package.json');
+              p.version = '$NEW';
+              fs.writeFileSync('./$pkg_dir/package.json', JSON.stringify(p, null, 2) + '\n');
+            "
+          done
+          echo "Все package.json обновлены до $NEW"
+
+      - name: Коммит + тег
+        if: ${{ !inputs.dry_run }}
+        run: |
+          NEW="${{ steps.bump.outputs.new_version }}"
+          git config user.name "synth-bot"
+          git config user.email "bot@synth.dev"
+          git add packages/shared/src/version.ts packages/*/package.json
+          git commit -m "chore: bump version to v$NEW"
+          git tag -a "v$NEW" -m "Release v$NEW"
+          git push --follow-tags
+
+  # --- CI проверки ---
+  lint-and-test:
+    name: CI проверки
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Установка pnpm
+        run: corepack enable && corepack prepare pnpm@latest --activate
+
+      - name: Установка зависимостей
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript (typecheck)
+        run: pnpm typecheck
+
+      - name: ESLint
+        run: pnpm lint
+
+      - name: Сборка + тесты
+        run: |
+          pnpm --filter @synth/shared build
+          pnpm --filter @synth/core build
+          pnpm test
+
+  # --- Сборка ---
+  build:
+    name: Сборка релизных артефактов
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Установка pnpm
+        run: corepack enable && corepack prepare pnpm@latest --activate
+
+      - name: Сборка всех пакетов
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @synth/shared build
+          pnpm --filter @synth/core build
+          pnpm --filter @synth/ui build
+          pnpm --filter @itphx/synth build
+
+      - name: Загрузить бандл как артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: synth-bundle
+          path: packages/synth/dist/cli.js
+
+      - name: Загрузить UI как артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: synth-ui
+          path: packages/ui/dist/
+
+  # --- Генерация CHANGELOG ---
+  changelog:
+    name: Генерация CHANGELOG
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      changelog_content: ${{ steps.changelog.outputs.content }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Сгенерировать CHANGELOG
+        id: changelog
+        run: |
+          # Определяем предыдущий тег
+          if [ "${{ gitverse.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ needs.version-bump.outputs.version }}"
+            PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+            PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n '2p')
+          fi
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "Первый релиз — CHANGELOG не генерируется."
+            echo "content=## $VERSION — Первый релиз" >> "$GITVERSE_OUTPUT"
+            exit 0
+          fi
+
+          echo "Коммиты между $PREV_TAG..HEAD:"
+          echo ""
+
+          {
+            echo "## $VERSION ($(date +%Y-%m-%d))"
+            echo ""
+            echo "### Новые возможности"
+            git log "$PREV_TAG..HEAD" --no-merges --format="- %s" --grep="^feat[:(]" || echo "  (нет)"
+            echo ""
+            echo "### Исправления"
+            git log "$PREV_TAG..HEAD" --no-merges --format="- %s" --grep="^fix[:(]" || echo "  (нет)"
+            echo ""
+            echo "### Рефакторинг"
+            git log "$PREV_TAG..HEAD" --no-merges --format="- %s" --grep="^refactor[:(]" || echo "  (нет)"
+            echo ""
+            echo "### Документация"
+            git log "$PREV_TAG..HEAD" --no-merges --format="- %s" --grep="^docs[:(]" || echo "  (нет)"
+            echo ""
+            echo "### Прочее"
+            git log "$PREV_TAG..HEAD" --no-merges --format="- %s" --grep="^chore[:(]" || echo "  (нет)"
+          } > changelog-partial.md
+
+          CONTENT=$(cat changelog-partial.md)
+          # Экранируем для GITVERSE_OUTPUT
+          echo "content<<EOF" >> "$GITVERSE_OUTPUT"
+          echo "$CONTENT" >> "$GITVERSE_OUTPUT"
+          echo "EOF" >> "$GITVERSE_OUTPUT"
+
+      - name: Обновить CHANGELOG.md в репозитории
+        if: ${{ !inputs.dry_run }}
+        run: |
+          if [ -f CHANGELOG.md ]; then
+            # Добавляем новую секцию сверху
+            printf '%s\n\n%s\n' "$(cat changelog-partial.md)" "$(cat CHANGELOG.md)" > CHANGELOG.md.new
+            mv CHANGELOG.md.new CHANGELOG.md
+          else
+            cp changelog-partial.md CHANGELOG.md
+          fi
+
+          git config user.name "synth-bot"
+          git config user.email "bot@synth.dev"
+          git add CHANGELOG.md
+          git commit -m "docs: обновлён CHANGELOG.md для v$VERSION" || echo "Нет изменений для коммита"
+          git push || echo "Push не требуется"
+
+      - name: Загрузить CHANGELOG как артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: changelog
+          path: changelog-partial.md
+
+  # --- Публикация npm ---
+  publish-npmjs:
+    name: npmjs.org
+    needs: [build, changelog]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Установка + сборка
+        run: |
+          corepack enable && corepack prepare pnpm@latest --activate
+          pnpm install --frozen-lockfile
+          pnpm --filter @synth/shared build
+          pnpm --filter @synth/core build
+          pnpm --filter @synth/ui build
+          pnpm --filter @itphx/synth build
+
+      - name: Публикация в npmjs.org
+        run: |
+          cd packages/synth
+          npm publish --access public --registry https://registry.npmjs.org
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-gitverse-npm:
+    name: GitVerse Package Registry
+    needs: [build, changelog]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Установка + сборка
+        run: |
+          corepack enable && corepack prepare pnpm@latest --activate
+          pnpm install --frozen-lockfile
+          pnpm --filter @synth/shared build
+          pnpm --filter @synth/core build
+          pnpm --filter @synth/ui build
+          pnpm --filter @itphx/synth build
+
+      - name: Публикация в GitVerse Package Registry
+        run: |
+          cd packages/synth
+          npm publish --access public --registry https://npm.gitverse.ru
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITVERSE_NPM_TOKEN }}
+
+  # --- Публикация Docker ---
+  build-docker:
+    name: Docker образ
+    needs: [build, changelog]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Определить теги
+        id: docker_tags
+        run: |
+          if [ "${{ gitverse.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ needs.version-bump.outputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$VERSION" >> "$GITVERSE_OUTPUT"
+          echo "tags=${{ env.DOCKER_REGISTRY }}/itphx/synth:$VERSION,${{ env.DOCKER_REGISTRY }}/itphx/synth:latest" >> "$GITVERSE_OUTPUT"
+
+      - name: Сборка Docker образа
+        run: |
+          docker build -t ${{ env.DOCKER_REGISTRY }}/itphx/synth:${{ steps.docker_tags.outputs.version }} .
+          docker tag ${{ env.DOCKER_REGISTRY }}/itphx/synth:${{ steps.docker_tags.outputs.version }} ${{ env.DOCKER_REGISTRY }}/itphx/synth:latest
+
+      - name: Публикация Docker образа
+        run: |
+          echo "${{ secrets.GITVERSE_DOCKER_TOKEN }}" | docker login ${{ env.DOCKER_REGISTRY }} --username itphx --password-stdin
+          docker push ${{ env.DOCKER_REGISTRY }}/itphx/synth:${{ steps.docker_tags.outputs.version }}
+          docker push ${{ env.DOCKER_REGISTRY }}/itphx/synth:latest
+
+  # --- GitVerse Release ---
+  create-release:
+    name: GitVerse Release
+    needs: [build, changelog, publish-npmjs]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Определить версию
+        id: version
+        run: |
+          if [ "${{ gitverse.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ needs.version-bump.outputs.version }}" >> "$GITVERSE_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITVERSE_OUTPUT"
+          fi
+
+      - name: Скачать CHANGELOG
+        uses: actions/download-artifact@v4
+        with:
+          name: changelog
+
+      - name: Создать релиз
+        uses: actions/create-release@v1
+        with:
+          api_key: ${{ secrets.GITVERSE_API_KEY }}
+          title: Release v${{ steps.version.outputs.version }}
+          body: |
+            ## Установка
+
+            ```bash
+            # Глобальная установка из npm
+            npm install -g @itphx/synth@${{ steps.version.outputs.version }}
+
+            # Или через Docker
+            docker run -p 4300:4300 registry.gitverse.ru/itphx/synth:${{ steps.version.outputs.version }}
+            ```
+
+            $(cat changelog-partial.md)
+          files: |
+            packages/synth/dist/cli.js
+          pre_release: ${{ inputs.pre_release || false }}
