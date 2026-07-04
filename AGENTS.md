@@ -219,11 +219,136 @@ $SYNTH_DATA_DIR/
 
 ---
 
+## Сборка и публикация
+
+### Скрипты (в корне `/Agent/dev/Synth/`)
+
+| Скрипт | Назначение |
+|--------|------------|
+| `build.sh` | Полная сборка: shared → core → ui → synth. Опции: `--clean`, `--check`, `--docker`, `--docker-tag=X` |
+| `publish.sh` | Публикация в npm. Опции: `--dry-run`, `--no-build`, `--registry=both\|npmjs\|gitverse`, `--docker` |
+| `version-bump.sh` | Bump версии: `./version-bump.sh patch\|minor\|major\|X.Y.Z`. Обновляет `version.ts` + все `package.json` |
+| `dev.sh` | Dev-запуск: backend (:5000) + UI (:5002). Аргументы: `backend\|ui\|core\|all` |
+
+### Версионирование
+
+Единая константа `SYNTH_VERSION` в `packages/shared/src/version.ts`.
+Текущая версия: из `packages/synth/package.json`.
+
+При bump-е версии обновляются:
+1. `packages/shared/src/version.ts` — константа `SYNTH_VERSION`
+2. `packages/*/package.json` — поле `version` во всех 6 пакетах
+
+Все hardcoded строки версии в коде заменены на импорт `SYNTH_VERSION` из `@synth/shared`.
+
+### Публикация npm
+
+Публикуемый пакет: `@itphx/synth` (из `packages/synth/`).
+Два реестра:
+- `https://registry.npmjs.org` — токен `NPM_TOKEN`
+- `https://npm.gitverse.ru` — токен `GV_TOKEN` (единый для всего GitVerse)
+
+### Docker
+
+Образ: `registry.gitverse.ru/itphx/synth:<version>` (latest).
+Токен: `GV_TOKEN`.
+
+---
+
+## CI/CD (GitVerse)
+
+### Workflow-файлы
+
+| Файл | Назначение | Триггер |
+|------|------------|---------|
+| `.gitverse/workflows/ci.yaml` | CI: typecheck, lint, тесты | `push`, `pull_request` |
+| `.gitverse/workflows/release.yaml` | Релиз: bump, сборка, npm, Docker, Release | `workflow_dispatch`, `push tags v*` |
+
+### Секреты (настроены в репозитории)
+
+| Secret | Назначение |
+|--------|------------|
+| `NPM_TOKEN` | Публикация в npmjs.org |
+| `GV_TOKEN` | Единый токен GitVerse (API, Docker Registry, npm registry, git push от бота) |
+
+**Важно:** префикс `GITVERSE_` запрещён в именах секретов GitVerse. Использовать `GV_`.
+
+### Особенности GitVerse CI
+
+1. **`actions/setup-node@v4`** — не использовать. Вместо этого: `npm install -g pnpm@latest`
+2. **`${{ env.VAR }}`** — не работает, резолвится в Go-строку `%!t(string=...)`. Значения хардкодить.
+3. **`${...}` в inline bash** — GitVerse парсит как Go-шаблон, скрипт падает. Выносить сложный bash в отдельный файл (см. `scripts/changelog.sh`).
+4. **`${GITHUB_REF_NAME}`** — синтаксис GitHub, в GitVerse: `echo "${{ gitverse.ref }}" | sed 's|refs/tags/v||'`
+5. Версия Node.js в раннере: 22 (предустановлена).
+
+### Порядок сборки в CI
+
+```
+pnpm install --frozen-lockfile
+pnpm --filter @synth/shared build    # обязательно перед typecheck!
+pnpm --filter @synth/core build      # нужно для backend и runner
+pnpm typecheck                       # рекурсивно по всем пакетам
+pnpm lint
+pnpm test
+```
+
+Без сборки `shared` и `core` перед `typecheck` — `@synth/runner` и `@synth/backend` не найдут типы.
+
+### Запуск релиза
+
+1. Dry-run: `workflow_dispatch` с `dry_run: true` — проверка без публикации
+2. Реальная публикация: `workflow_dispatch` с `dry_run: false`
+3. Или вручную: создать тег `vX.Y.Z` и запушить — workflow запустится автоматически
+
+### Локальная проверка перед пушем
+
+```bash
+pnpm typecheck && pnpm lint && pnpm test
+```
+
+---
+
+## GitVerse MCP
+
+### Подключение к opencode
+
+Конфигурация в `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
+"mcp": {
+  "gitverse": {
+    "type": "remote",
+    "url": "https://mcp.gitverse.ru",
+    "headers": {
+      "Authorization": "Bearer <токен>"
+    },
+    "oauth": false,
+    "enabled": true
+  }
+}
+```
+
+**Важно:** `"oauth": false` обязательно для GitVerse MCP (не поддерживает OAuth flow).
+Изменения в `opencode.jsonc` требуют перезапуска opencode.
+
+### Токен
+
+Получить: `https://gitverse.ru/settings/tokens`
+Права: для read-only достаточно «Чтение», для записи — «Запись».
+
+### Доступные инструменты (37 шт.)
+
+Группы: репозитории, файлы, коммиты, релизы, PR, CI/CD, пользователи, команды, звёзды.
+Подробнее: `https://gitverse.ru/docs/ai/mcp/gitverse-mcp-tools`
+
+---
+
 ## Документация
 
 | Файл | Назначение |
 |------|------------|
 | `AGENTS.md` | Архитектурные соглашения (этот файл) |
+| `plan.md` | План дальнейших работ |
 | `archive/AGENTS_OLD.md` | Архив: deprecated AD, Python/FastAPI стек |
 | `SPEC.md` | Спецификация функциональности |
 | `rbac-design.md` | Дизайн RBAC |
