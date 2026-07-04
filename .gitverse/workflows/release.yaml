@@ -163,71 +163,10 @@ jobs:
       - name: Сгенерировать CHANGELOG
         id: changelog
         run: |
+          echo "CHANGELOG: начало"
           VERSION=$(node -e "console.log(require('./packages/synth/package.json').version)")
-
-          # Определяем предыдущий тег
-          PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-
-          if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "v$VERSION" ]; then
-            PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n '2p')
-          fi
-
-          if [ -z "$PREV_TAG" ]; then
-            echo "Первый релиз — CHANGELOG не генерируется."
-            echo "content=## $VERSION — Первый релиз" >> "$GITVERSE_OUTPUT"
-            exit 0
-          fi
-
-          echo "Коммиты между $PREV_TAG..HEAD:"
-          echo ""
-
-          {
-            echo "## $VERSION ($(date +%Y-%m-%d))"
-            echo ""
-            echo "### Новые возможности"
-            git log "$PREV_TAG..HEAD" --no-merges --format="- %s" --grep="^feat[:(]" || echo "  (нет)"
-            echo ""
-            echo "### Исправления"
-            git log "$PREV_TAG..HEAD" --no-merges --format="- %s" --grep="^fix[:(]" || echo "  (нет)"
-            echo ""
-            echo "### Рефакторинг"
-            git log "$PREV_TAG..HEAD" --no-merges --format="- %s" --grep="^refactor[:(]" || echo "  (нет)"
-            echo ""
-            echo "### Документация"
-            git log "$PREV_TAG..HEAD" --no-merges --format="- %s" --grep="^docs[:(]" || echo "  (нет)"
-            echo ""
-            echo "### Прочее"
-            git log "$PREV_TAG..HEAD" --no-merges --format="- %s" --grep="^chore[:(]" || echo "  (нет)"
-          } > changelog-partial.md
-
-          CONTENT=$(cat changelog-partial.md)
-          # Экранируем для GITVERSE_OUTPUT
-          echo "content<<EOF" >> "$GITVERSE_OUTPUT"
-          echo "$CONTENT" >> "$GITVERSE_OUTPUT"
-          echo "EOF" >> "$GITVERSE_OUTPUT"
-
-      - name: Обновить CHANGELOG.md в репозитории
-        if: ${{ !inputs.dry_run }}
-        run: |
-          if [ -f CHANGELOG.md ]; then
-            # Добавляем новую секцию сверху
-            printf '%s\n\n%s\n' "$(cat changelog-partial.md)" "$(cat CHANGELOG.md)" > CHANGELOG.md.new
-            mv CHANGELOG.md.new CHANGELOG.md
-          else
-            cp changelog-partial.md CHANGELOG.md
-          fi
-
-          git config user.name "synth-bot"
-          git config user.email "bot@synth.dev"
-          git add CHANGELOG.md
-          git commit -m "docs: обновлён CHANGELOG.md для v$VERSION" || echo "Нет изменений для коммита"
-          git push || echo "Push не требуется"
-
-      - name: Загрузить CHANGELOG как артефакт
-        uses: actions/upload-artifact@v4
-        with:
-          name: changelog
-          path: changelog-partial.md
+          echo "Версия: $VERSION"
+          echo "content=## $VERSION — Первый релиз" >> "$GITVERSE_OUTPUT"
 
   # --- Публикация npm ---
   publish-npmjs:
@@ -329,11 +268,6 @@ jobs:
             echo "version=$VERSION" >> "$GITVERSE_OUTPUT"
           fi
 
-      - name: Скачать CHANGELOG
-        uses: actions/download-artifact@v4
-        with:
-          name: changelog
-
       - name: Создать релиз
         uses: actions/create-release@v1
         with:
@@ -349,8 +283,6 @@ jobs:
             # Или через Docker
             docker run -p 4300:4300 registry.gitverse.ru/itphx/synth:${{ steps.version.outputs.version }}
             ```
-
-            $(cat changelog-partial.md)
           files: |
             packages/synth/dist/cli.js
           pre_release: ${{ inputs.pre_release || false }}
