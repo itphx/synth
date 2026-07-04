@@ -242,11 +242,13 @@ jobs:
       - name: Авторизация для Docker Registry
         run: |
           mkdir -p "${{ gitverse.workspace }}/.docker"
-          AUTH=$(echo -n "itphx:${{ secrets.GV_TOKEN }}" | base64 -w0)
-          cat > "${{ gitverse.workspace }}/.docker/config.json" <<'DOCKEREOF'
-          {"auths":{"gitverse.ru":{"auth":"CHANGEME"}}}
-          DOCKEREOF
-          sed -i "s/CHANGEME/$AUTH/" "${{ gitverse.workspace }}/.docker/config.json"
+          node -e "
+            const fs = require('fs');
+            const cred = 'itphx:' + '${{ secrets.GV_TOKEN }}';
+            const auth = Buffer.from(cred).toString('base64');
+            const config = { auths: { 'gitverse.ru': { auth } } };
+            fs.writeFileSync('${{ gitverse.workspace }}/.docker/config.json', JSON.stringify(config));
+          "
           chmod 600 "${{ gitverse.workspace }}/.docker/config.json"
 
       - name: Сборка и публикация Docker образа (kaniko)
