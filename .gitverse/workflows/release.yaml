@@ -261,6 +261,8 @@ jobs:
             --dockerfile=Dockerfile
             --destination=gitverse.ru/itphx/synth:${{ steps.docker_tags.outputs.version }}
             --destination=gitverse.ru/itphx/synth:latest
+            --snapshot-mode=redo
+            --push-retry=3
             --verbosity=info
 
   # --- GitVerse Release ---
