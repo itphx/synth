@@ -1,5 +1,7 @@
 import { Command } from 'commander';
 import { loadConfig, resolveDataDir, resolvePort, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@synth/shared';
+import { spawn } from 'node:child_process';
+import { checkForUpdatesBackground } from './update-checker.js';
 
 const program = new Command();
 
@@ -72,6 +74,11 @@ program
     server.listen(port, () => {
       console.log(`\n  Откройте http://localhost:${port} в браузере`);
       console.log(`  API-ключ: ${apiKey.slice(0, 8)}...`);
+
+      checkForUpdatesBackground(dataDir, (info) => {
+        console.log(`\n  Доступна новая версия ${info.latestVersion} (текущая: ${info.currentVersion})`);
+        console.log(`  Выполните synth update --apply для обновления.`);
+      });
     });
   });
 
@@ -96,6 +103,11 @@ program
     const synth = await loadConfig({ configPath: options.config });
     const dataDir = options.dataDir || resolveDataDir(synth);
     await ensureDataDir(dataDir);
+
+    checkForUpdatesBackground(dataDir, (info) => {
+      console.log(`\n  Доступна новая версия ${info.latestVersion} (текущая: ${info.currentVersion})`);
+      console.log(`  Выполните synth update --apply для обновления.\n`);
+    });
 
     const { runSingleChat } = await import('./server/chat.js');
     await runSingleChat({
@@ -239,5 +251,64 @@ async function startRepl(options: Record<string, unknown>) {
   rl.close();
   console.log('До свидания!');
 }
+
+program
+  .command('update')
+  .description('Проверить наличие обновлений и установить')
+  .option('--apply', 'установить обновление')
+  .option('-y, --yes', 'пропустить подтверждение')
+  .option('--data-dir <path>', 'каталог данных')
+  .action(async (options) => {
+    const { checkForUpdates } = await import('./update-checker.js');
+    const synth = await loadConfig({});
+    const dataDir = options.dataDir || resolveDataDir(synth);
+    await ensureDataDir(dataDir);
+
+    const info = await checkForUpdates(dataDir);
+
+    console.log(`Текущая версия: ${info.currentVersion}`);
+    console.log(`Последняя версия: ${info.latestVersion}`);
+
+    if (!info.hasUpdate) {
+      console.log('Обновления не найдены.');
+      return;
+    }
+
+    console.log(`\nДоступна новая версия ${info.latestVersion}!\n`);
+
+    if (!options.apply) {
+      console.log('Для установки выполните: synth update --apply');
+      return;
+    }
+
+    if (!options.yes) {
+      const readline = await import('node:readline');
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await new Promise<string>((resolve) => {
+        rl.question(`Установить @itphx/synth@${info.latestVersion}? [y/N] `, resolve);
+      });
+      rl.close();
+      if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes' && answer.toLowerCase() !== 'д' && answer.toLowerCase() !== 'да') {
+        console.log('Отменено.');
+        return;
+      }
+    }
+
+    console.log(`Установка @itphx/synth@${info.latestVersion}...\n`);
+
+    const child = spawn('npm', ['install', '-g', `@itphx/synth@${info.latestVersion}`], {
+      stdio: 'inherit',
+      env: { ...process.env },
+    });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        console.log('\nОбновление установлено. Перезапустите synth serve.');
+      } else {
+        console.log(`\nОшибка установки (код ${code})`);
+        process.exit(1);
+      }
+    });
+  });
 
 program.parse();

@@ -742,6 +742,10 @@ export const synthApi = {
       body: JSON.stringify({ mcpServers }),
     })
   },
+
+  async checkUpdate(): Promise<{ currentVersion: string; latestVersion: string; hasUpdate: boolean; checkedAt: string }> {
+    return fetchJSON(`${BASE_URL}/updates/check`)
+  },
 }
 
 export interface McpServerConfig {
