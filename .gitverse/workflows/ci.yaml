@@ -21,9 +21,6 @@ on:
       - main
       - master
 
-env:
-  NODE_VERSION: '22'
-
 jobs:
   lint-and-typecheck:
     name: Линтинг + Typecheck

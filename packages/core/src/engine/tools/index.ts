@@ -5,7 +5,7 @@ import { writeFileTool, editFileTool, createDirectoryTool, deleteFileTool } from
 import { executeShellTool } from './shell.js';
 import { grepFilesTool } from './search.js';
 import { webFetchTool, webSearchTool } from './web.js';
-import { gitStatusTool, gitDiffTool, gitLogTool, gitCommitTool, gitPushTool, gitPullTool, gitCheckoutTool } from './git.js';
+import { gitStatusTool, gitDiffTool, gitLogTool, gitCommitTool } from './git.js';
 import { taskTool } from './task.js';
 
 export { ToolRegistry } from './registry.js';

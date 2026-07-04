@@ -4,7 +4,7 @@ import { ToolCapability } from '@synth/shared';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolContext, ToolResult } from '@synth/shared';
 import { McpClient } from './client.js';
-import { info, warning, error } from '../../logger.js';
+import { info, warning } from '../../logger.js';
 
 const CIRCUIT_BREAKER_THRESHOLD = 5;
 const CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
@@ -163,8 +163,6 @@ export class McpManager {
   }
 
   async deregisterTools(serverName: string, toolRegistry: ToolRegistry): Promise<void> {
-    const prefixedName = (toolName: string) => `${serverName}_${toolName}`;
-
     const entry = this._servers.get(serverName);
     if (entry) {
       for (const name of entry.registeredToolNames) {

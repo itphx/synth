@@ -1,8 +1,7 @@
 import { join } from 'node:path';
 import type { SynthConfig } from '@synth/shared';
-import { ensureDataDir } from '@synth/shared';
 import {
-  FileStore, SessionManager, EventBus, QueueProcessorManager,
+  FileStore, SessionManager, EventBus,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
   createToolRegistry, createAgentRegistry,
 } from '../index.js';
@@ -26,7 +25,6 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   const sessionManager = new SessionManager(fileStore);
   const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
   const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
-  const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
 
   const providerCache = new Map<string, ProviderConfig>();
   (await providerStore.list()).forEach((p) => providerCache.set(p.name, p));

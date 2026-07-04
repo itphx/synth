@@ -14,7 +14,6 @@ export function zodToJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
 
 function _convert(schema: z.ZodTypeAny): JsonSchema {
   let processed = schema;
-  let description: string | undefined;
 
   if (processed instanceof z.ZodDefault) {
     processed = processed._def.innerType;
@@ -44,7 +43,7 @@ function _convert(schema: z.ZodTypeAny): JsonSchema {
     return { anyOf: [result, { type: 'null' }], description: result.description };
   }
 
-  description = processed._def.description;
+  const description = processed._def.description;
 
   if (processed instanceof z.ZodString) {
     const checks = processed._def.checks || [];

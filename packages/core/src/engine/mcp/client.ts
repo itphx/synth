@@ -17,8 +17,6 @@ export interface McpToolResult {
   isError: boolean;
 }
 
-const DEFAULT_TOOL_TIMEOUT = 120_000;
-const DEFAULT_CONNECT_TIMEOUT = 60_000;
 const MAX_TOOL_RESULT = 30_000;
 
 export class McpClient {

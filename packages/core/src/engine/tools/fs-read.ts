@@ -1,4 +1,4 @@
-import { readFile, readdir, stat, access } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { resolve, relative, join } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@synth/shared';

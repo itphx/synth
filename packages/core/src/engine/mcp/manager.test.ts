@@ -24,7 +24,7 @@ vi.mock('./client.js', () => ({
     }
     connect = mockClientConnect;
     disconnect = mockClientDisconnect;
-    callTool = vi.fn((name: string, args: Record<string, unknown>) => mockClientCallTool());
+    callTool = vi.fn((_name: string, _args: Record<string, unknown>) => mockClientCallTool());
   },
 }));
 

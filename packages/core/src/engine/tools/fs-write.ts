@@ -1,5 +1,5 @@
-import { writeFile, mkdir, rm, access } from 'node:fs/promises';
-import { resolve, dirname, join } from 'node:path';
+import { writeFile, mkdir, rm } from 'node:fs/promises';
+import { resolve, dirname } from 'node:path';
 import { relative } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@synth/shared';

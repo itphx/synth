@@ -24,10 +24,6 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+-*'
 
-env:
-  NODE_VERSION: '22'
-  DOCKER_REGISTRY: registry.gitverse.ru
-
 jobs:
   # --- Ручной bump версии (только для workflow_dispatch) ---
   version-bump:
@@ -112,17 +108,19 @@ jobs:
       - name: Установка зависимостей
         run: pnpm install --frozen-lockfile
 
+      - name: Сборка @synth/shared и @synth/core
+        run: |
+          pnpm --filter @synth/shared build
+          pnpm --filter @synth/core build
+
       - name: TypeScript (typecheck)
         run: pnpm typecheck
 
       - name: ESLint
         run: pnpm lint
 
-      - name: Сборка + тесты
-        run: |
-          pnpm --filter @synth/shared build
-          pnpm --filter @synth/core build
-          pnpm test
+      - name: Тесты
+        run: pnpm test
 
   # --- Сборка ---
   build:
@@ -176,12 +174,12 @@ jobs:
       - name: Сгенерировать CHANGELOG
         id: changelog
         run: |
-          # Определяем предыдущий тег
+          # Определяем версию и предыдущий тег
           if [ "${{ gitverse.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ needs.version-bump.outputs.version }}"
             PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
           else
-            VERSION="${GITHUB_REF_NAME#v}"
+            VERSION=$(echo "${{ gitverse.ref }}" | sed 's|refs/tags/v||')
             PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n '2p')
           fi
 
@@ -318,21 +316,20 @@ jobs:
           if [ "${{ gitverse.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ needs.version-bump.outputs.version }}"
           else
-            VERSION="${GITHUB_REF_NAME#v}"
+            VERSION=$(echo "${{ gitverse.ref }}" | sed 's|refs/tags/v||')
           fi
           echo "version=$VERSION" >> "$GITVERSE_OUTPUT"
-          echo "tags=${{ env.DOCKER_REGISTRY }}/itphx/synth:$VERSION,${{ env.DOCKER_REGISTRY }}/itphx/synth:latest" >> "$GITVERSE_OUTPUT"
 
       - name: Сборка Docker образа
         run: |
-          docker build -t ${{ env.DOCKER_REGISTRY }}/itphx/synth:${{ steps.docker_tags.outputs.version }} .
-          docker tag ${{ env.DOCKER_REGISTRY }}/itphx/synth:${{ steps.docker_tags.outputs.version }} ${{ env.DOCKER_REGISTRY }}/itphx/synth:latest
+          docker build -t registry.gitverse.ru/itphx/synth:${{ steps.docker_tags.outputs.version }} .
+          docker tag registry.gitverse.ru/itphx/synth:${{ steps.docker_tags.outputs.version }} registry.gitverse.ru/itphx/synth:latest
 
       - name: Публикация Docker образа
         run: |
-          echo "${{ secrets.GITVERSE_DOCKER_TOKEN }}" | docker login ${{ env.DOCKER_REGISTRY }} --username itphx --password-stdin
-          docker push ${{ env.DOCKER_REGISTRY }}/itphx/synth:${{ steps.docker_tags.outputs.version }}
-          docker push ${{ env.DOCKER_REGISTRY }}/itphx/synth:latest
+          echo "${{ secrets.GITVERSE_DOCKER_TOKEN }}" | docker login registry.gitverse.ru --username itphx --password-stdin
+          docker push registry.gitverse.ru/itphx/synth:${{ steps.docker_tags.outputs.version }}
+          docker push registry.gitverse.ru/itphx/synth:latest
 
   # --- GitVerse Release ---
   create-release:
@@ -350,7 +347,8 @@ jobs:
           if [ "${{ gitverse.event_name }}" = "workflow_dispatch" ]; then
             echo "version=${{ needs.version-bump.outputs.version }}" >> "$GITVERSE_OUTPUT"
           else
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITVERSE_OUTPUT"
+            VERSION=$(echo "${{ gitverse.ref }}" | sed 's|refs/tags/v||')
+            echo "version=$VERSION" >> "$GITVERSE_OUTPUT"
           fi
 
       - name: Скачать CHANGELOG
