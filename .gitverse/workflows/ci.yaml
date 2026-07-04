@@ -27,16 +27,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Клонируем репозиторий
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Установка pnpm
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Активация corepack (pnpm)
-        run: corepack enable && corepack prepare pnpm@latest --activate
+        run: npm install -g pnpm@latest
 
       - name: Установка зависимостей
         run: pnpm install --frozen-lockfile
@@ -59,11 +53,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - name: Установка
-        run: corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile
+        run: npm install -g pnpm@latest && pnpm install --frozen-lockfile
       - name: Сборка @synth/shared
         run: pnpm --filter @synth/shared build
       - name: Тесты
@@ -76,11 +67,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - name: Установка
-        run: corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile
+        run: npm install -g pnpm@latest && pnpm install --frozen-lockfile
       - name: Сборка @synth/shared
         run: pnpm --filter @synth/shared build
       - name: Сборка @synth/core
@@ -95,11 +83,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - name: Установка
-        run: corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile
+        run: npm install -g pnpm@latest && pnpm install --frozen-lockfile
       - name: Сборка @synth/shared
         run: pnpm --filter @synth/shared build
       - name: Сборка @synth/core
@@ -114,11 +99,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - name: Установка
-        run: corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile
+        run: npm install -g pnpm@latest && pnpm install --frozen-lockfile
       - name: Сборка @synth/shared
         run: pnpm --filter @synth/shared build
       - name: Тесты

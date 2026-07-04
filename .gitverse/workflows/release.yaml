@@ -39,9 +39,8 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITVERSE_TOKEN || secrets.GITVERSE_API_KEY }}
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
+      - name: Установка pnpm
+        run: npm install -g pnpm@latest
 
       - name: Вычислить новую версию
         id: bump
@@ -98,12 +97,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
       - name: Установка pnpm
-        run: corepack enable && corepack prepare pnpm@latest --activate
+        run: npm install -g pnpm@latest
 
       - name: Установка зависимостей
         run: pnpm install --frozen-lockfile
@@ -131,12 +126,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
       - name: Установка pnpm
-        run: corepack enable && corepack prepare pnpm@latest --activate
+        run: npm install -g pnpm@latest
 
       - name: Сборка всех пакетов
         run: |
@@ -250,14 +241,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
-
       - name: Установка + сборка
         run: |
-          corepack enable && corepack prepare pnpm@latest --activate
+          npm install -g pnpm@latest
           pnpm install --frozen-lockfile
           pnpm --filter @synth/shared build
           pnpm --filter @synth/core build
@@ -266,10 +252,9 @@ jobs:
 
       - name: Публикация в npmjs.org
         run: |
+          npm config set "//registry.npmjs.org/:_authToken" "${{ secrets.NPM_TOKEN }}"
           cd packages/synth
           npm publish --access public --registry https://registry.npmjs.org
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-gitverse-npm:
     name: GitVerse Package Registry
@@ -280,13 +265,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
       - name: Установка + сборка
         run: |
-          corepack enable && corepack prepare pnpm@latest --activate
+          npm install -g pnpm@latest
           pnpm install --frozen-lockfile
           pnpm --filter @synth/shared build
           pnpm --filter @synth/core build
@@ -295,10 +276,9 @@ jobs:
 
       - name: Публикация в GitVerse Package Registry
         run: |
+          npm config set "//npm.gitverse.ru/:_authToken" "${{ secrets.GITVERSE_NPM_TOKEN }}"
           cd packages/synth
           npm publish --access public --registry https://npm.gitverse.ru
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITVERSE_NPM_TOKEN }}
 
   # --- Публикация Docker ---
   build-docker:
