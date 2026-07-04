@@ -433,6 +433,8 @@ function FilesTab() {
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [renamingProject, setRenamingProject] = useState<string | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [renamingEntry, setRenamingEntry] = useState<any>(null)
   const [popover, setPopover] = useState<{ type: 'newFolder' | 'newFile'; projectId: string; parentPath: string } | null>(null)
   const [popoverName, setPopoverName] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
