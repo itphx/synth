@@ -155,8 +155,6 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    outputs:
-      changelog_content: ${{ steps.changelog.outputs.content }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -165,12 +163,12 @@ jobs:
       - name: Сгенерировать CHANGELOG
         id: changelog
         run: |
-          # Определяем версию и предыдущий тег
-          if [ "${{ gitverse.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ needs.version-bump.outputs.version }}"
-            PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-          else
-            VERSION=$(echo "${{ gitverse.ref }}" | sed 's|refs/tags/v||')
+          VERSION=$(node -e "console.log(require('./packages/synth/package.json').version)")
+
+          # Определяем предыдущий тег
+          PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+
+          if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "v$VERSION" ]; then
             PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n '2p')
           fi
 
