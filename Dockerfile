@@ -10,7 +10,7 @@ COPY packages/core/package.json packages/core/tsconfig.json ./packages/core/
 COPY packages/ui/package.json packages/ui/tsconfig.json ./packages/ui/
 
 # Устанавливаем зависимости
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile && pnpm store prune
 
 # Копируем исходный код и собираем
 COPY packages/shared/src ./packages/shared/src
@@ -34,7 +34,7 @@ COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/core/package.json ./packages/core/
 
-RUN pnpm install --frozen-lockfile --prod
+RUN pnpm install --frozen-lockfile --prod && pnpm store prune
 
 # Копируем собранные артефакты
 COPY --from=builder /app/packages/shared/dist ./packages/shared/dist

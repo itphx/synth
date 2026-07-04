@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.git/
+.gitverse/
+tmp/
+*.log
+.env
+.env.*
+.DS_Store
