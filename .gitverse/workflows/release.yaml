@@ -290,18 +290,24 @@ jobs:
         with:
           name: changelog
 
+      - name: Собрать тело релиза
+        id: release_body
+        run: |
+          printf 'body<<GVEOF\n' >> "$GITVERSE_OUTPUT"
+          cat changelog-partial.md >> "$GITVERSE_OUTPUT"
+          printf '\n## Установка\n\n' >> "$GITVERSE_OUTPUT"
+          printf '\`\`\`bash\n' >> "$GITVERSE_OUTPUT"
+          printf 'npm install -g @itphx/synth@%s\n' "${{ steps.version.outputs.version }}" >> "$GITVERSE_OUTPUT"
+          printf 'docker run -p 4300:4300 gitverse.ru/itphx/synth:%s\n' "${{ steps.version.outputs.version }}" >> "$GITVERSE_OUTPUT"
+          printf '\`\`\`\n' >> "$GITVERSE_OUTPUT"
+          printf 'GVEOF\n' >> "$GITVERSE_OUTPUT"
+
       - name: Создать релиз
         uses: actions/create-release@v1
         with:
           api_key: ${{ secrets.GV_TOKEN }}
           title: Release v${{ steps.version.outputs.version }}
-          body: |
-            ## Установка
-
-            ```bash
-            npm install -g @itphx/synth@${{ steps.version.outputs.version }}
-            docker run -p 4300:4300 gitverse.ru/itphx/synth:${{ steps.version.outputs.version }}
-            ```
+          body: ${{ steps.release_body.outputs.body }}
           files: |
             packages/synth/dist/cli.js
           pre_release: ${{ inputs.pre_release || false }}
