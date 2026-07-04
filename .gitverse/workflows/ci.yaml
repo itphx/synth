@@ -36,13 +36,18 @@ jobs:
       - name: Установка pnpm
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '22'
 
       - name: Активация corepack (pnpm)
         run: corepack enable && corepack prepare pnpm@latest --activate
 
       - name: Установка зависимостей
         run: pnpm install --frozen-lockfile
+
+      - name: Сборка @synth/shared и @synth/core
+        run: |
+          pnpm --filter @synth/shared build
+          pnpm --filter @synth/core build
 
       - name: TypeScript (typecheck)
         run: pnpm typecheck
@@ -59,7 +64,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '22'
       - name: Установка
         run: corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile
       - name: Сборка @synth/shared
@@ -76,7 +81,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '22'
       - name: Установка
         run: corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile
       - name: Сборка @synth/shared
@@ -95,7 +100,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '22'
       - name: Установка
         run: corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile
       - name: Сборка @synth/shared
@@ -114,7 +119,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '22'
       - name: Установка
         run: corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile
       - name: Сборка @synth/shared
