@@ -166,7 +166,30 @@ jobs:
           echo "CHANGELOG: начало"
           VERSION=$(node -e "console.log(require('./packages/synth/package.json').version)")
           echo "Версия: $VERSION"
-          echo "content=## $VERSION — Первый релиз" >> "$GITVERSE_OUTPUT"
+          PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+.[0-9]+.[0-9]+$' | head -1)
+          echo "Предыдущий тег: ${PREV_TAG:-нет}"
+          if [ -z "$PREV_TAG" ]; then
+            echo "Первый релиз — changelog пустой"
+            echo "## $VERSION ($(date +%Y-%m-%d)) — Первый релиз" > changelog-partial.md
+          else
+            echo "## $VERSION ($(date +%Y-%m-%d))" > changelog-partial.md
+            echo "" >> changelog-partial.md
+            echo "### Новые возможности" >> changelog-partial.md
+            git log "$PREV_TAG..HEAD" --no-merges --format="- %s" --grep="^feat[:(]" >> changelog-partial.md 2>/dev/null || echo "  (нет)" >> changelog-partial.md
+            echo "" >> changelog-partial.md
+            echo "### Исправления" >> changelog-partial.md
+            git log "$PREV_TAG..HEAD" --no-merges --format="- %s" --grep="^fix[:(]" >> changelog-partial.md 2>/dev/null || echo "  (нет)" >> changelog-partial.md
+            echo "" >> changelog-partial.md
+            echo "### Прочее" >> changelog-partial.md
+            git log "$PREV_TAG..HEAD" --no-merges --format="- %s" --grep="^chore[:(]" --grep="^refactor[:(]" --grep="^docs[:(]" >> changelog-partial.md 2>/dev/null || echo "  (нет)" >> changelog-partial.md
+          fi
+          echo "CHANGELOG готов"
+
+      - name: Загрузить CHANGELOG как артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: changelog
+          path: changelog-partial.md
 
   # --- Публикация npm ---
   publish-npmjs:
@@ -268,6 +291,11 @@ jobs:
             echo "version=$VERSION" >> "$GITVERSE_OUTPUT"
           fi
 
+      - name: Скачать CHANGELOG
+        uses: actions/download-artifact@v4
+        with:
+          name: changelog
+
       - name: Создать релиз
         uses: actions/create-release@v1
         with:
@@ -277,12 +305,11 @@ jobs:
             ## Установка
 
             ```bash
-            # Глобальная установка из npm
             npm install -g @itphx/synth@${{ steps.version.outputs.version }}
-
-            # Или через Docker
             docker run -p 4300:4300 registry.gitverse.ru/itphx/synth:${{ steps.version.outputs.version }}
             ```
+
+            $(cat changelog-partial.md)
           files: |
             packages/synth/dist/cli.js
           pre_release: ${{ inputs.pre_release || false }}
