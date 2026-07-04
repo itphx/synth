@@ -42,7 +42,7 @@ export function TreeNode({
   id,
   label,
   labelMuted,
-  depth = 0,
+  depth: _depth = 0,
 
   icon,
   iconColor,

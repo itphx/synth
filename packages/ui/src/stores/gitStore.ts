@@ -28,15 +28,13 @@ interface GitStore {
   setShowMoreLimit: (key: string, limit: number) => void
 }
 
-const MAX_VISIBLE_COMMITS = 10
-
 function repoKey(projectId: string, repoPath: string): string {
   return `${projectId}::${repoPath}`
 }
 
 export const useGitStore = create<GitStore>()(
   persist(
-    (set, get) => ({
+    (set) => ({
   reposByProject: {},
   commitsByRepo: {},
   loading: false,

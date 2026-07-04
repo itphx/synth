@@ -135,6 +135,7 @@ export class GitService {
     try {
       await mkdir(parentDir, { recursive: true });
     } catch {
+      // директория может уже существовать
     }
     await simpleGit().clone(url, repoPath, branch ? { '--branch': branch } : undefined);
     return {

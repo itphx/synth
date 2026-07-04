@@ -87,7 +87,7 @@ function DiffView({ diff }: { diff: string }) {
   )
 }
 
-function SubagentResult({ result, toolCall }: { result: ToolCallData['result']; toolCall: ToolCallData }) {
+function SubagentResult({ result, toolCall: _toolCall }: { result: ToolCallData['result']; toolCall: ToolCallData }) {
   const [showReasoning, setShowReasoning] = useState(false)
   const [showToolCalls, setShowToolCalls] = useState(false)
 

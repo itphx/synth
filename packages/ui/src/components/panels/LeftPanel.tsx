@@ -428,12 +428,11 @@ function GroupNode({
 function FilesTab() {
   const { t } = useI18n()
   const { projects, loadProjects } = useProjectsStore()
-  const { treesByProject, loadFileTree, loadSubDirectory, expandedProjects, expandedDirs, toggleProjectExpand, toggleDirExpand, ensureDirExpanded, createFile, createDirectory, moveEntry, deleteEntry, uploadFile } = useFilesStore()
+  const { treesByProject, loadFileTree, loadSubDirectory, expandedProjects, expandedDirs, toggleProjectExpand, toggleDirExpand, createFile, createDirectory, moveEntry, deleteEntry, uploadFile } = useFilesStore()
   const { openTab, centerTabs, activeCenterTabId } = useUIStore()
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [renamingProject, setRenamingProject] = useState<string | null>(null)
-  const [renamingEntry, setRenamingEntry] = useState<any>(null)
   const [popover, setPopover] = useState<{ type: 'newFolder' | 'newFile'; projectId: string; parentPath: string } | null>(null)
   const [popoverName, setPopoverName] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
