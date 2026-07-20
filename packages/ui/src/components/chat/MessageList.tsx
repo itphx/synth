@@ -18,8 +18,8 @@ interface MessageListProps {
   onStop: () => void
 }
 
-const VIRTUALIZE_THRESHOLD = 15
-const OVERSCAN = 6
+const VIRTUALIZE_THRESHOLD = 30
+const OVERSCAN = 30
 
 export function MessageList({
   messages,
@@ -37,13 +37,12 @@ export function MessageList({
   const [showScrollBtn, setShowScrollBtn] = useState(false)
 
   const streamEntries = Object.values(streams).filter((s) => s.isStreaming)
-  const totalItems = messages.length + streamEntries.length
   const streamContentSize = streamEntries.reduce((sum, s) => sum + s.content.length + s.reasoningBlocks.reduce((rsum, r) => rsum + r.text.length, 0), 0)
 
   const virtualizer = useVirtualizer({
-    count: totalItems > VIRTUALIZE_THRESHOLD ? messages.length : messages.length,
+    count: messages.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 120,
+    estimateSize: () => 200,
     overscan: OVERSCAN,
   })
 
