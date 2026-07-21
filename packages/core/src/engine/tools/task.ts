@@ -6,6 +6,7 @@ import type { BaseProvider, LLMMessage, CancellationToken } from '../../provider
 import type { ToolRegistry } from './registry.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
+import { serializeSession } from '../../server/serialize.js';
 
 interface TaskExtra {
   provider: BaseProvider;
@@ -89,9 +90,12 @@ export const taskTool: ToolDefinition = {
             parentId: extra.sessionId,
             settings: { ...parentSession.settings, agentRole: params.subagent_type },
           });
+          child.userId = parentSession.userId;
+          child.ownerId = parentSession.ownerId;
+          await extra.sessionManager.updateSession(child);
           childSessionId = child.id;
           if (extra.eventBus) {
-            extra.eventBus.publish(childSessionId, 'session.fork.created', { session_id: childSessionId, parent_id: extra.sessionId });
+            extra.eventBus.publish(childSessionId, 'session.created', serializeSession(child));
           }
         }
       } catch {

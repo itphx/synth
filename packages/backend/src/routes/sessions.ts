@@ -113,6 +113,36 @@ export function createSessionRoutes(
     return c.body(null, 204);
   });
 
+  // POST /api/v2/sessions/:id/fork — ответвление сессии
+  app.post('/:id/fork', kit.requireAuth, async (c) => {
+    const user = kit.getCurrentUser(c)!;
+    const body = await c.req.json().catch(() => ({}));
+    const fork = await sessionManager.forkSession(c.req.param('id'), {
+      messageId: body.message_id ?? body.messageId,
+      title: body.title,
+    });
+    fork.userId = user.id;
+    fork.ownerId = user.id;
+    await sessionManager.updateSession(fork);
+    eventHub.subscribeToSession(user.id, fork.id).catch((e: unknown) =>
+      console.warn('subscribeToSession failed:', e),
+    );
+    eventBus.publish(fork.id, 'session.fork.created', serializeSession(fork));
+    return c.json(serializeSession(fork), 201);
+  });
+
+  // GET /api/v2/sessions/:id/children — дочерние сессии
+  app.get('/:id/children', kit.requireAuth, async (c) => {
+    const children = await sessionManager.getChildren(c.req.param('id'));
+    return c.json(children.map(serializeSession));
+  });
+
+  // GET /api/v2/sessions/:id/tree — дерево сессий
+  app.get('/:id/tree', kit.requireAuth, async (c) => {
+    const tree = await sessionManager.getSessionTree(c.req.param('id'));
+    return c.json(tree);
+  });
+
   // GET /api/v2/sessions/:id/status
   app.get('/:id/status', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));

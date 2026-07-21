@@ -161,6 +161,7 @@ export const dict = {
 'leftPanel.confirmDeleteSession': 'Удалить сессию?',
   'leftPanel.confirmBulkDelete': 'Удалить {count} выбранных сессий?',
   'leftPanel.rename': 'Переименовать',
+  'leftPanel.forkSession': 'Создать ответвление',
   'leftPanel.configure': 'Настроить',
   'leftPanel.delete': 'Удалить',
   'leftPanel.clearSession': 'Очистить',

@@ -316,6 +316,17 @@ export const synthApi = {
     })
   },
 
+  async forkSession(sessionId: string, options?: { message_id?: string; title?: string }): Promise<SessionData> {
+    return fetchJSON<SessionData>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/fork`, {
+      method: 'POST',
+      body: JSON.stringify(options || {}),
+    })
+  },
+
+  async getSessionChildren(sessionId: string): Promise<SessionData[]> {
+    return fetchJSON<SessionData[]>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/children`)
+  },
+
   // Сообщения (API v2 — путь /messages/:sessionId/:index)
   async getSessionMessages(sessionId: string): Promise<MessageListResponse> {
     return fetchJSON<MessageListResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/messages`)

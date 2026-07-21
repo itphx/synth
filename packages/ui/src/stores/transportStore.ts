@@ -231,7 +231,8 @@ function createDispatcher(): EventDispatcher {
         break
       }
 
-      case 'session.created': {
+      case 'session.created':
+      case 'session.fork.created': {
         const session = payload as unknown as SessionData
         if (session.id) {
           useSessionsStore.setState((s) => ({
