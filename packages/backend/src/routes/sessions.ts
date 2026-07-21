@@ -90,6 +90,7 @@ export function createSessionRoutes(
     }
 
     await sessionManager.updateSession(session);
+    eventBus.publish(session.id, 'session.updated', serializeSession(session));
     return c.json(serializeSession(session));
   });
 
@@ -144,7 +145,11 @@ export function createSessionRoutes(
     const streamId = body.messageId || generateStreamId();
 
     const message = {
+      id: streamId,
       role: MessageRole.USER,
+      seq: session.messages.length + 1,
+      origin: 'local' as const,
+      parts: [{ id: generateStreamId(), type: 'text' as const, data: content }],
       content,
       createdAt: nowISO(),
       disabled: false,
@@ -290,7 +295,11 @@ export function createSessionRoutes(
     const streamId = generateStreamId();
 
     const sysMsg: import('@synth/shared').Message = {
+      id: streamId,
       role: MessageRole.SYSTEM,
+      seq: 0,
+      origin: 'local',
+      parts: [{ id: generateStreamId(), type: 'text' as const, data: '' }],
       content: '',
       createdAt: nowISO(),
       disabled: false,
@@ -319,7 +328,11 @@ export function createSessionRoutes(
     const streamId = generateStreamId();
 
     const sysMsg: import('@synth/shared').Message = {
+      id: streamId,
       role: MessageRole.SYSTEM,
+      seq: 0,
+      origin: 'local',
+      parts: [{ id: generateStreamId(), type: 'text' as const, data: '' }],
       content: '',
       createdAt: nowISO(),
       disabled: false,

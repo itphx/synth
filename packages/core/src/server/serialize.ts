@@ -4,6 +4,9 @@ export function serializeSession(session: Session) {
   return {
     id: session.id,
     name: session.title || null,
+    parent_id: session.parentId || null,
+    branch_point: session.branchPoint || null,
+    plan_path: session.planPath || null,
     user_id: session.userId || null,
     owner_id: session.ownerId || null,
     project_id: session.projectId || null,
@@ -52,8 +55,17 @@ export function serializeSession(session: Session) {
 export function serializeMessage(msg: Message, index: number) {
   return {
     index,
+    id: msg.id,
+    seq: msg.seq,
+    origin: msg.origin,
+    source_msg_id: msg.sourceMsgId || null,
     role: msg.role,
     content: msg.content,
+    parts: msg.parts.map((p) => ({
+      id: p.id,
+      type: p.type,
+      data: p.data,
+    })),
     author: msg.author || null,
     disabled: msg.disabled,
     pinned: msg.pinned,

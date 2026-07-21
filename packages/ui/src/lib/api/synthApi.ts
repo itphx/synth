@@ -45,12 +45,20 @@ export interface ProjectData {
 export interface SessionData {
   id: string
   name: string | null
+  parent_id?: string | null
+  branch_point?: string | null
+  plan_path?: string | null
   user_id: string | null
   owner_id: string | null
   project_id: string | null
   engine: string
   messages: Array<{
     index: number
+    id?: string
+    seq?: number
+    origin?: string
+    source_msg_id?: string | null
+    parts?: Array<{ id: string; type: string; data: unknown }> | null
     role: string
     content: string
     author: string | null
@@ -58,6 +66,16 @@ export interface SessionData {
     pinned: boolean
     usage: Record<string, number> | null
     timestamp: string
+    tool_calls?: unknown
+    tool_call_id?: string | null
+    reasoning?: string | null
+    reasoning_blocks?: unknown | null
+    intermediate_text_blocks?: unknown | null
+    source?: string | null
+    agent_role?: string | null
+    summary_of?: number[] | null
+    debug_data?: Record<string, unknown> | null
+    metadata?: Record<string, unknown> | null
   }>
   pending_messages: unknown[]
   status: {

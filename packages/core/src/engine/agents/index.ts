@@ -18,6 +18,7 @@ interface AgentDefFile {
   icon: string;
   color: string;
   contextFile: string;
+  hidden?: boolean;
   agentMode?: 'primary' | 'subagent' | 'all';
   subagentPrompt?: string;
   maxSteps?: number;
@@ -40,6 +41,7 @@ export function loadSystemAgentDefinitions(): AgentDefinition[] {
       color: def.color,
       contextFile: def.contextFile,
       enabled: true,
+      hidden: def.hidden ?? false,
       sshKeys: [],
       isOverridden: false,
       agentMode: def.agentMode,

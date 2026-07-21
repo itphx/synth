@@ -1,5 +1,5 @@
 import type { Message, Session, ProviderConfig as SharedProviderConfig, SummarizationConfig } from '@synth/shared';
-import { MessageRole, nowISO, lookupContextWindow } from '@synth/shared';
+import { MessageRole, nowISO, lookupContextWindow, generateId, makeTextPart } from '@synth/shared';
 import type { ContextConfig } from './config.js';
 import type { LLMMessage } from '../../providers/base.js';
 import { BaseProvider, ProviderFactory } from '../../providers/index.js';
@@ -214,7 +214,11 @@ export class ContextOptimizer {
     info('CONTEXT', `Summarization complete for session ${session.id}`);
 
     return {
+      id: generateId(),
       role: MessageRole.SUMMARY,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(response.content)],
       content: response.content,
       createdAt: nowISO(),
       disabled: false,

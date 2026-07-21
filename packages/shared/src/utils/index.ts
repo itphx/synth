@@ -79,3 +79,60 @@ export class AsyncLock {
 export function pickLocalized<V>(record: Record<string, V>, lang: string, fallbackLang = 'ru'): V | undefined {
   return record[lang] ?? record[fallbackLang] ?? undefined;
 }
+
+// --- Session title helpers ---
+
+const DEFAULT_TITLE = 'Новая сессия';
+const CHILD_TITLE_PREFIX = 'Дочерняя сессия';
+
+export function isDefaultTitle(title?: string): boolean {
+  if (!title) return true;
+  return title === DEFAULT_TITLE || title.startsWith(CHILD_TITLE_PREFIX);
+}
+
+export function getForkedTitle(title?: string, existingTitles?: string[]): string {
+  const base = title || DEFAULT_TITLE;
+  const match = base.match(/^(.+) \(fork #(\d+)\)$/);
+  const name = (match && match[1]) ? match[1] : base;
+  let maxN = 0;
+  if (existingTitles) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`^${escaped} \\(fork #(\\d+)\\)$`);
+    for (const t of existingTitles) {
+      const m = t.match(regex);
+      if (m && m[1]) maxN = Math.max(maxN, parseInt(m[1]));
+    }
+  }
+  return `${name} (fork #${maxN + 1})`;
+}
+
+// --- Part helpers ---
+
+import type { Part, PartType } from '../types/index.js';
+
+export function makePart(type: PartType, data: unknown): Part {
+  return { id: generateId(), type, data };
+}
+
+export function makeTextPart(text: string): Part {
+  return makePart('text', text);
+}
+
+export function buildContentFromParts(parts: Part[]): string {
+  return parts
+    .map((p) => {
+      if (p.type === 'text') return String(p.data ?? '');
+      if (p.type === 'reasoning') return `<reasoning>${String(p.data ?? '')}</reasoning>`;
+      if (p.type === 'tool_use') {
+        const d = p.data as Record<string, unknown>;
+        return `<tool_call name="${d.name ?? ''}">${JSON.stringify(d.args ?? {})}</tool_call>`;
+      }
+      if (p.type === 'tool_result') {
+        const d = p.data as Record<string, unknown>;
+        const isError = d.isError ? ' error="true"' : '';
+        return `<tool_result${isError}>${String(d.content ?? '')}</tool_result>`;
+      }
+      return '';
+    })
+    .join('\n');
+}

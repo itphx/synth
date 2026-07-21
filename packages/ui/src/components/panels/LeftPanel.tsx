@@ -51,7 +51,7 @@ function useAutoScroll(targetId: string | null) {
       }
     }, 80)
     return () => clearTimeout(timer)
-  })
+  }, [])
 }
 
 // ---- Projects tab ----
@@ -90,8 +90,11 @@ function ProjectsTab() {
     const sortFn = sortMode === 'date'
       ? (a: any, b: any) => parseISODate(b.updated_at).getTime() - parseISODate(a.updated_at).getTime()
       : (a: any, b: any) => a.id.localeCompare(b.id)
+    const seen = new Set<string>()
     map['__none__'] = []
     for (const s of sessions) {
+      if (seen.has(s.id)) continue
+      seen.add(s.id)
       const pid = s.project_id || '__none__'
       if (!map[pid]) map[pid] = []
       map[pid].push(s)

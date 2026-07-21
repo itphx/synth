@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { SessionManager } from './manager.js';
 import { FileStore } from '../storage/file-store.js';
 import type { Message } from '@synth/shared';
-import { MessageRole } from '@synth/shared';
+import { MessageRole, generateId, makeTextPart } from '@synth/shared';
 
 describe('SessionManager', () => {
   let store: FileStore;
@@ -24,7 +24,11 @@ describe('SessionManager', () => {
 
   function makeMsg(content: string, role: MessageRole = MessageRole.USER): Message {
     return {
+      id: generateId(),
       role,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(content)],
       content,
       createdAt: new Date().toISOString(),
       disabled: false,

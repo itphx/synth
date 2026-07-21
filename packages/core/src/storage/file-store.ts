@@ -1,8 +1,8 @@
 import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import type { Session, SessionFilter, Message, TsmState, TsmStatus, SessionSettings } from '@synth/shared';
-import { atomicWrite, safeJsonParse, AsyncLock } from '@synth/shared';
+import type { Session, Message, TsmState, TsmStatus, SessionSettings, Part } from '@synth/shared';
+import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts } from '@synth/shared';
 
 export interface StorageConfig {
   dataDir: string;
@@ -17,8 +17,19 @@ interface SerializedUsage {
   reasoning_tokens?: number;
 }
 
+interface SerializedPart {
+  id: string;
+  type: string;
+  data: unknown;
+}
+
 interface SerializedMessage {
+  id?: string;
   role: string;
+  seq?: number;
+  origin?: string;
+  source_msg_id?: string;
+  parts?: SerializedPart[];
   content: string;
   tool_calls?: Record<string, unknown>[];
   tool_call_id?: string;
@@ -42,6 +53,9 @@ interface SerializedMessage {
 interface SerializedSession {
   id: string;
   title?: string;
+  parent_id?: string;
+  branch_point?: string;
+  plan_path?: string;
   user_id?: string;
   owner_id?: string;
   project_id?: string;
@@ -86,9 +100,30 @@ interface SerializedCheckpoint {
   created_at: string;
 }
 
+function serializePart(part: Part): SerializedPart {
+  return {
+    id: part.id,
+    type: part.type,
+    data: part.data,
+  };
+}
+
+function deserializePart(data: SerializedPart): Part {
+  return {
+    id: data.id,
+    type: data.type as Part['type'],
+    data: data.data,
+  };
+}
+
 function serializeMessage(msg: Message): SerializedMessage {
   return {
+    id: msg.id,
     role: msg.role,
+    seq: msg.seq,
+    origin: msg.origin,
+    source_msg_id: msg.sourceMsgId,
+    parts: msg.parts.map(serializePart),
     content: msg.content,
     tool_calls: msg.toolCalls,
     tool_call_id: msg.toolCallId,
@@ -118,9 +153,48 @@ function serializeMessage(msg: Message): SerializedMessage {
 }
 
 function deserializeMessage(data: SerializedMessage): Message {
+  const hasParts = Array.isArray(data.parts) && data.parts.length > 0;
+  let parts: Part[];
+
+  if (hasParts) {
+    parts = data.parts!.map(deserializePart);
+  } else {
+    parts = [];
+    if (data.content) {
+      parts.push(makeTextPart(data.content));
+    }
+    if (data.reasoning) {
+      parts.push({ id: generateId(), type: 'reasoning' as const, data: data.reasoning });
+    }
+    if (data.tool_calls && data.tool_calls.length > 0) {
+      for (const tc of data.tool_calls) {
+        const func = tc.function as { name: string; arguments: unknown } | undefined;
+        parts.push({
+          id: generateId(),
+          type: 'tool_use' as const,
+          data: { name: func?.name ?? 'unknown', args: func?.arguments ?? {} },
+        });
+      }
+    }
+    if (data.role === 'tool' && data.tool_call_id) {
+      parts.push({
+        id: generateId(),
+        type: 'tool_result' as const,
+        data: { content: data.content, isError: false },
+      });
+    }
+  }
+
+  const content = buildContentFromParts(parts);
+
   return {
+    id: data.id || generateId(),
     role: data.role as Message['role'],
-    content: data.content,
+    seq: data.seq ?? 0,
+    origin: (data.origin || 'local') as Message['origin'],
+    sourceMsgId: data.source_msg_id,
+    parts,
+    content,
     toolCalls: data.tool_calls,
     toolCallId: data.tool_call_id,
     createdAt: data.created_at,
@@ -152,6 +226,9 @@ function serializeSession(session: Session): SerializedSession {
   return {
     id: session.id,
     title: session.title,
+    parent_id: session.parentId,
+    branch_point: session.branchPoint,
+    plan_path: session.planPath,
     user_id: session.userId,
     owner_id: session.ownerId,
     project_id: session.projectId,
@@ -160,7 +237,7 @@ function serializeSession(session: Session): SerializedSession {
     pending_messages: session.pendingMessages.map(serializeMessage),
     status: session.status as unknown as Record<string, unknown>,
     settings: session.settings as unknown as Record<string, unknown>,
-    branches: session.branches,
+    branches: [],
     checkpoints: session.checkpoints.map((c) => ({
       id: c.id,
       session_id: c.sessionId,
@@ -205,6 +282,9 @@ function deserializeSession(data: SerializedSession): Session {
   return {
     id: data.id,
     title: data.title,
+    parentId: data.parent_id,
+    branchPoint: data.branch_point,
+    planPath: data.plan_path,
     userId: data.user_id,
     ownerId: data.owner_id,
     projectId: data.project_id,
@@ -213,7 +293,6 @@ function deserializeSession(data: SerializedSession): Session {
     pendingMessages: data.pending_messages.map(deserializeMessage),
     status: data.status as unknown as TsmStatus,
     settings: data.settings as unknown as SessionSettings,
-    branches: data.branches as Session['branches'],
     checkpoints: (data.checkpoints || []).map((c: SerializedCheckpoint) => ({
       id: c.id,
       sessionId: c.session_id,
@@ -253,6 +332,7 @@ function deserializeSession(data: SerializedSession): Session {
     reasoningTokens: data.reasoning_tokens ?? 0,
   };
 }
+
 export class FileStore {
   private _sessionLocks = new Map<string, AsyncLock>();
 
@@ -318,7 +398,7 @@ export class FileStore {
     }
   }
 
-  async list(filter?: SessionFilter): Promise<Session[]> {
+  async list(filter?: { projectId?: string; userId?: string; search?: string; parentId?: string }): Promise<Session[]> {
     const dir = this._sessionsDir();
     const { readdir } = await import('node:fs/promises');
     let files: string[];
@@ -331,18 +411,22 @@ export class FileStore {
     const jsonFiles = files.filter((f) => f.endsWith('.json'));
     const sessions: Session[] = [];
 
-    // Параллельная загрузка всех файлов
     const loaded = await Promise.all(jsonFiles.map((file) => this.load(file.replace('.json', ''))));
 
     for (const session of loaded) {
       if (!session) continue;
       if (filter?.projectId && session.projectId !== filter.projectId) continue;
+      if (filter?.parentId !== undefined) {
+        if (filter.parentId === null && session.parentId) continue;
+        if (filter.parentId !== null && session.parentId !== filter.parentId) continue;
+      }
       if (filter?.search) {
         const search = filter.search.toLowerCase();
+        const matchTitle = session.title?.toLowerCase().includes(search);
         const matchMsg = session.messages.some(
           (m) => m.content.toLowerCase().includes(search),
         );
-        if (!matchMsg) continue;
+        if (!matchTitle && !matchMsg) continue;
       }
       sessions.push(session);
     }

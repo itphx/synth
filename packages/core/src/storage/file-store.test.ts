@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileStore } from './file-store.js';
 import type { Session } from '@synth/shared';
-import { MessageRole } from '@synth/shared';
+import { MessageRole, makeTextPart, generateId } from '@synth/shared';
 
 describe('FileStore', () => {
   let store: FileStore;
@@ -52,7 +52,6 @@ describe('FileStore', () => {
         showInterview: true,
         websocketEnabled: true,
       },
-      branches: [],
       checkpoints: [],
       stickyNotes: [],
       summarizationPending: false,
@@ -88,7 +87,11 @@ describe('FileStore', () => {
       id: 'with-messages',
       messages: [
         {
+          id: generateId(),
           role: MessageRole.USER,
+          seq: 1,
+          origin: 'local' as const,
+          parts: [makeTextPart('hello')],
           content: 'hello',
           createdAt: new Date().toISOString(),
           disabled: false,
@@ -96,7 +99,11 @@ describe('FileStore', () => {
           hidden: false,
         },
         {
+          id: generateId(),
           role: MessageRole.ASSISTANT,
+          seq: 2,
+          origin: 'local' as const,
+          parts: [makeTextPart('hi there')],
           content: 'hi there',
           createdAt: new Date().toISOString(),
           disabled: false,

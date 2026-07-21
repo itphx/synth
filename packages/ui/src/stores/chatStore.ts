@@ -15,6 +15,15 @@ export interface IntermediateTextBlockData {
 
 export interface MessageData {
   index: number
+  id?: string
+  seq?: number
+  origin?: string
+  source_msg_id?: string | null
+  parts?: Array<{
+    id: string
+    type: string
+    data: unknown
+  }> | null
   role: string
   content: string
   tool_calls?: Array<{

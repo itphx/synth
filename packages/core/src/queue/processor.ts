@@ -1,5 +1,5 @@
 import type { Message, Session } from '@synth/shared';
-import { nowISO, generateStreamId, MessageRole } from '@synth/shared';
+import { nowISO, generateStreamId, generateId, MessageRole } from '@synth/shared';
 import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
 import type { ContextOptimizer } from '../engine/context/optimizer.js';
@@ -75,7 +75,11 @@ export class QueueProcessor {
           session = await this.sessionManager.withLock(this.sessionId, async (s) => {
             // Вставить системное сообщение в начало очереди вместо блокирующего вызова
             const sysMsg: Message = {
+              id: generateId(),
               role: MessageRole.SYSTEM,
+              seq: 0,
+              origin: 'local',
+              parts: [{ id: generateId(), type: 'text', data: '' }],
               content: '',
               createdAt: nowISO(),
               disabled: false,

@@ -39,9 +39,26 @@ export enum StatusMessageType {
   STREAM = 'stream',
 }
 
+// --- Part ---
+export type PartType = 'text' | 'tool_use' | 'tool_result' | 'reasoning';
+
+export interface Part {
+  id: string;
+  type: PartType;
+  data: unknown;
+}
+
+// --- MessageOrigin ---
+export type MessageOrigin = 'local' | 'inherited' | 'merged' | 'crosspost';
+
 // --- Message ---
 export interface Message {
+  id: string;
   role: MessageRole;
+  seq: number;
+  origin: MessageOrigin;
+  sourceMsgId?: string;
+  parts: Part[];
   content: string;
   toolCalls?: Record<string, unknown>[];
   toolCallId?: string;
@@ -140,6 +157,9 @@ export interface StickyNote {
 export interface Session {
   id: string;
   title?: string;
+  parentId?: string;
+  branchPoint?: string;
+  planPath?: string;
   userId?: string;
   ownerId?: string;
   projectId?: string;
@@ -149,7 +169,6 @@ export interface Session {
   status: TsmStatus;
   settings: SessionSettings;
   mcpServers?: string[];
-  branches: Branch[];
   checkpoints: Checkpoint[];
   stickyNotes: StickyNote[];
   currentStream?: StreamInfo;
@@ -275,6 +294,7 @@ export interface AgentDefinition {
   contextFile?: string;
   capabilities: ToolCapability[];
   enabled: boolean;
+  hidden?: boolean;
   provider?: string;
   model?: string;
   temperature?: number;
@@ -409,6 +429,9 @@ export type EventType =
   | 'session.created'
   | 'session.updated'
   | 'session.deleted'
+  | 'session.renamed'
+  | 'session.forked'
+  | 'session.fork.created'
   | 'message.added'
   | 'message.updated'
   | 'stream.start'

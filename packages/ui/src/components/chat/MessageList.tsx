@@ -117,7 +117,7 @@ export function MessageList({
                 const msg = messages[vi.index]
                 if (!msg) return null
                 return (
-                  <div key={msg.index} data-index={vi.index} ref={virtualizer.measureElement}>
+                  <div key={msg.id || msg.index} data-index={vi.index} ref={virtualizer.measureElement}>
                     <ChatMessage
                       message={msg}
                       onCopy={createHandler(onCopy)(msg)}
@@ -134,7 +134,7 @@ export function MessageList({
           ) : (
             messages.map((msg) => (
               <ChatMessage
-                key={`${msg.role}-${msg.index}-${msg.created_at}`}
+                key={msg.id || `${msg.role}-${msg.index}-${msg.created_at}`}
                 message={msg}
                 onCopy={createHandler(onCopy)(msg)}
                 onToggle={createHandler(onToggle)(msg)}

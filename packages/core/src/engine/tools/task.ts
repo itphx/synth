@@ -1,14 +1,18 @@
 import { z } from 'zod';
-import { ToolCapability } from '@synth/shared';
-import type { ToolDefinition, ToolResult } from '@synth/shared';
+import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart, TsmState } from '@synth/shared';
+import type { ToolDefinition, ToolResult, Message } from '@synth/shared';
 import type { AgentRegistry } from '../agents/registry.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ToolRegistry } from './registry.js';
+import type { SessionManager } from '../../sessions/manager.js';
+import type { EventBus } from '../../events/bus.js';
 
 interface TaskExtra {
   provider: BaseProvider;
   agentRegistry: AgentRegistry;
   toolRegistry?: ToolRegistry;
+  sessionManager?: SessionManager;
+  eventBus?: EventBus;
   sessionSettings?: {
     temperature?: number;
     maxTokens?: number;
@@ -71,7 +75,29 @@ export const taskTool: ToolDefinition = {
       ? Number.POSITIVE_INFINITY
       : maxSteps;
     const publish = extra.publish;
-    const parentCallId = ''; // base call
+
+    // Создать дочернюю сессию если есть sessionManager
+    let childSessionId: string | undefined;
+    if (extra.sessionManager && extra.sessionId) {
+      try {
+        const parentSession = await extra.sessionManager.getSession(extra.sessionId);
+        if (parentSession) {
+          const child = await extra.sessionManager.createSession({
+            title: `Подзадача: ${params.description}`,
+            projectId: parentSession.projectId,
+            engine: parentSession.engine,
+            parentId: extra.sessionId,
+            settings: { ...parentSession.settings, agentRole: params.subagent_type },
+          });
+          childSessionId = child.id;
+          if (extra.eventBus) {
+            extra.eventBus.publish(childSessionId, 'session.fork.created', { session_id: childSessionId, parent_id: extra.sessionId });
+          }
+        }
+      } catch {
+        // не фатально — продолжаем без дочерней сессии
+      }
+    }
 
     const messages: LLMMessage[] = [
       {
@@ -97,12 +123,10 @@ export const taskTool: ToolDefinition = {
     const cancelToken: CancellationToken = { cancelled: false, cancel: () => { cancelToken.cancelled = true; } };
 
     try {
-      // Simple tool loop within subagent
       let finalContent = '';
       let iteration = 0;
       const doomTracker = new Map<string, number>();
       let subagentReasoning = '';
-      const subagentToolCalls: Array<{ name: string; args: Record<string, unknown>; result: string }> = [];
 
       const allSubagentReasoning: Array<{ text: string; iteration: number }> = [];
       const allSubagentIntermediateTexts: Array<{ text: string; iteration: number }> = [];
@@ -124,7 +148,7 @@ export const taskTool: ToolDefinition = {
             messages,
             systemPrompt || undefined,
             tools as Record<string, unknown>[] | undefined,
-            undefined, // no debug collector for subagents
+            undefined,
             cancelToken,
           )) {
             if (cancelToken.cancelled) break;
@@ -152,7 +176,6 @@ export const taskTool: ToolDefinition = {
           allSubagentReasoning.push({ text: reasoning, iteration });
         }
 
-        // No tool calls — done
         if (!toolCalls || toolCalls.length === 0) {
           finalContent = accumulatedContent;
           if (reasoning) subagentReasoning = reasoning;
@@ -163,7 +186,6 @@ export const taskTool: ToolDefinition = {
           allSubagentIntermediateTexts.push({ text: accumulatedContent, iteration });
         }
 
-        // Got tool calls — execute them
         iteration++;
 
         messages.push({
@@ -214,22 +236,21 @@ export const taskTool: ToolDefinition = {
             name: toolName,
             arguments: toolArgs,
             iteration,
-            parent_call_id: parentCallId || undefined,
           });
 
           const toolDef = extra.toolRegistry?.get(toolName);
           let toolResult: ToolResult;
 
           if (toolDef) {
-            const parsed = toolDef.parameters.safeParse(toolArgs);
-            if (!parsed.success) {
+            const parsed2 = toolDef.parameters.safeParse(toolArgs);
+            if (!parsed2.success) {
               toolResult = {
-                content: `Ошибка аргументов инструмента "${toolName}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`,
+                content: `Ошибка аргументов инструмента "${toolName}": ${parsed2.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`,
                 isError: true,
               };
             } else {
               try {
-                toolResult = await toolDef.execute(parsed.data, {
+                toolResult = await toolDef.execute(parsed2.data, {
                   ...ctx,
                   abortSignal: ctx.abortSignal,
                   extra: extra as unknown as Record<string, unknown>,
@@ -255,13 +276,6 @@ export const taskTool: ToolDefinition = {
             name: toolName,
             result: toolResult,
             iteration,
-            parent_call_id: parentCallId || undefined,
-          });
-
-          subagentToolCalls.push({
-            name: toolName,
-            args: toolArgs,
-            result: toolResult.content,
           });
 
           allSubagentToolCalls.push({
@@ -288,11 +302,63 @@ export const taskTool: ToolDefinition = {
           session_id: extra.sessionId,
           iteration,
           total_tool_calls: toolCalls.length,
-          parent_call_id: parentCallId || undefined,
         });
       }
 
       const output = finalContent || '(пустой ответ сабагента)';
+
+      // Сохранить результат в дочернюю сессию
+      if (childSessionId && extra.sessionManager) {
+        try {
+          const childSession = await extra.sessionManager.getSession(childSessionId);
+          if (childSession) {
+            const userMsg: Message = {
+              id: generateId(),
+              role: MessageRole.USER,
+              seq: childSession.messages.length + 1,
+              origin: 'local',
+              parts: [makeTextPart(params.prompt)],
+              content: params.prompt,
+              createdAt: nowISO(),
+              disabled: false,
+              pinned: false,
+              hidden: false,
+              agentRole: params.subagent_type,
+            };
+            childSession.messages.push(userMsg);
+
+            const assistantMsg: Message = {
+              id: generateId(),
+              role: MessageRole.ASSISTANT,
+              seq: childSession.messages.length + 1,
+              origin: 'local',
+              parts: [makeTextPart(output)],
+              content: output,
+              createdAt: nowISO(),
+              disabled: false,
+              pinned: false,
+              hidden: false,
+              agentRole: params.subagent_type,
+              reasoning: subagentReasoning || undefined,
+              metadata: {
+                steps: iteration,
+                tool_calls: allSubagentToolCalls,
+              },
+            };
+            childSession.messages.push(assistantMsg);
+
+            childSession.status.state = TsmState.DONE;
+            childSession.updatedAt = nowISO();
+            await extra.sessionManager.updateSession(childSession);
+
+            if (extra.eventBus) {
+              extra.eventBus.publish(childSessionId, 'session.updated', { session_id: childSessionId });
+            }
+          }
+        } catch {
+          // не фатально
+        }
+      }
 
       return {
         content: `<task_result>\n<summary>${params.description}</summary>\n\n${output}\n</task_result>`,
@@ -300,6 +366,7 @@ export const taskTool: ToolDefinition = {
           subagent_type: params.subagent_type,
           description: params.description,
           steps: iteration,
+          child_session_id: childSessionId,
           reasoning: subagentReasoning || undefined,
           reasoning_blocks: allSubagentReasoning.length > 0 ? allSubagentReasoning : undefined,
           intermediate_text_blocks: allSubagentIntermediateTexts.length > 0 ? allSubagentIntermediateTexts : undefined,
