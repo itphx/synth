@@ -4,6 +4,9 @@ export function serializeSession(session: Session) {
   return {
     id: session.id,
     name: session.title || null,
+    parent_id: session.parentId || null,
+    branch_point: session.branchPoint || null,
+    plan_path: session.planPath || null,
     user_id: session.userId || null,
     owner_id: session.ownerId || null,
     project_id: session.projectId || null,

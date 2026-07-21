@@ -104,7 +104,7 @@ export class ChatOrchestrator {
     publishChunk: (event: string, data: Record<string, unknown>) => void,
   ): Promise<ProcessMessageResult> {
     const streamId = (message.metadata?.stream_id as string) || 'unknown';
-    const effectiveAgentRole = message.agentRole || session.settings.agentRole;
+    const effectiveAgentRole = message.agentRole || session.settings.agentRole || 'assistant';
     const author = message.author || 'unknown';
 
     const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
@@ -437,6 +437,7 @@ export class ChatOrchestrator {
                     agentRegistry: this._agentRegistry,
                     sessionManager: this._sessionManager,
                     eventBus: this._eventBus,
+                    callerAgentRole: effectiveAgentRole,
                     sessionSettings: {
                       temperature: session.settings.temperature,
                       maxTokens: session.settings.maxTokens,

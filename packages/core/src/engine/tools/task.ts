@@ -21,6 +21,7 @@ interface TaskExtra {
   publish?: (type: string, data: Record<string, unknown>) => void;
   streamId?: string;
   sessionId?: string;
+  callerAgentRole?: string;
 }
 
 const DEFAULT_SUBAGENT_MAX_STEPS = 15;
@@ -95,7 +96,7 @@ export const taskTool: ToolDefinition = {
           await extra.sessionManager.updateSession(child);
           childSessionId = child.id;
           if (extra.eventBus) {
-            extra.eventBus.publish(childSessionId, 'session.created', serializeSession(child));
+            extra.eventBus.publish(extra.sessionId, 'session.created', serializeSession(child));
           }
         }
       } catch {
@@ -327,7 +328,8 @@ export const taskTool: ToolDefinition = {
               disabled: false,
               pinned: false,
               hidden: false,
-              agentRole: params.subagent_type,
+              agentRole: extra.callerAgentRole,
+              author: extra.callerAgentRole,
             };
             childSession.messages.push(userMsg);
 
