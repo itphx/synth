@@ -39,14 +39,12 @@ export class EventBus {
 
     const handlers = this._subscribers.get(sessionId);
     if (!handlers) {
-      if (type.startsWith('stream.')) {
-        console.warn(`[EventBus] publish ${type} for ${sessionId}: 0 subscribers — EVENT LOST`);
-      }
+      console.warn(`[EventBus] publish ${type} for ${sessionId.slice(0, 8)}: 0 subscribers — EVENT LOST`);
       return;
     }
 
     if (type.startsWith('stream.')) {
-      console.debug(`[EventBus] publish ${type} for ${sessionId}: ${handlers.size} subscriber(s)`);
+      console.debug(`[EventBus] publish ${type} for ${sessionId.slice(0, 8)}: ${handlers.size} subscriber(s)`);
     }
 
     for (const handler of handlers) {
