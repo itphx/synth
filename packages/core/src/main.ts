@@ -372,6 +372,7 @@ program
     new Command('fork')
       .description('Создать ответвление (fork) сессии')
       .argument('<sessionId>', 'ID исходной сессии')
+      .option('--index <n>', 'позиция сообщения в массиве — точка развилки')
       .option('--message <id>', 'ID сообщения — точка развилки')
       .option('--title <title>', 'заголовок новой сессии')
       .option('--config <path>', 'путь к config.yaml')
@@ -388,6 +389,7 @@ program
         const manager = new SessionManager(store);
         const fork = await manager.forkSession(sessionId, {
           messageId: options.message,
+          messageIndex: options.index != null ? Number(options.index) : undefined,
           title: options.title,
         });
         console.log(`Создана сессия-форк: ${fork.id} "${fork.title}"`);

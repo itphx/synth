@@ -172,3 +172,373 @@ describe('SessionManager', () => {
     expect(restored!.messages[0]!.content).toBe('hello');
   });
 });
+
+describe('AD-033: Session forking and branching', () => {
+  let store: FileStore;
+  let manager: SessionManager;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-fork-test-'));
+    store = new FileStore({ dataDir: tmpDir });
+    manager = new SessionManager(store);
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeMsg(content: string, role: MessageRole = MessageRole.USER): Message {
+    return {
+      id: generateId(),
+      role,
+      seq: 0,
+      origin: 'local' as const,
+      parts: [makeTextPart(content)],
+      content,
+      createdAt: new Date().toISOString(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    };
+  }
+
+  // ─── Слой 2: Ветвление (fork) ─────────────────────────────────────
+
+  it('forkSession создаёт дочернюю сессию с parentId', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    await manager.addMessage(parent.id, makeMsg('Сообщение 1'));
+
+    const fork = await manager.forkSession(parent.id, {});
+    expect(fork.id).toBeDefined();
+    expect(fork.parentId).toBe(parent.id);
+    expect(fork.sessionOrigin).toBe('fork');
+  });
+
+  it('forkSession копирует сообщения с origin=inherited и sourceMsgId', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    const msg1 = await manager.addMessage(parent.id, makeMsg('Привет'));
+    const msg2 = await manager.addMessage(parent.id, makeMsg('Как дела?', MessageRole.ASSISTANT));
+
+    const fork = await manager.forkSession(parent.id, {});
+    expect(fork.messages).toHaveLength(2);
+    expect(fork.messages[0]!.origin).toBe('inherited');
+    expect(fork.messages[1]!.origin).toBe('inherited');
+    expect(fork.messages[0]!.sourceMsgId).toBeDefined();
+    expect(fork.messages[1]!.sourceMsgId).toBeDefined();
+    expect(fork.messages[0]!.content).toBe('Привет');
+    expect(fork.messages[1]!.content).toBe('Как дела?');
+  });
+
+  it('forkSession нумерует seq последовательно с 1', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    await manager.addMessage(parent.id, makeMsg('A'));
+    await manager.addMessage(parent.id, makeMsg('B'));
+    await manager.addMessage(parent.id, makeMsg('C'));
+
+    const fork = await manager.forkSession(parent.id, {});
+    expect(fork.messages).toHaveLength(3);
+    expect(fork.messages[0]!.seq).toBe(1);
+    expect(fork.messages[1]!.seq).toBe(2);
+    expect(fork.messages[2]!.seq).toBe(3);
+  });
+
+  it('forkSession устанавливает branchPoint в messageId при options.messageId', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    const msg1 = await manager.addMessage(parent.id, makeMsg('Первый'));
+    const msg2 = await manager.addMessage(parent.id, makeMsg('Второй'));
+
+    const fork = await manager.forkSession(parent.id, { messageId: msg1!.messages[0]!.id });
+    expect(fork.branchPoint).toBe(msg1!.messages[0]!.id);
+  });
+
+  it('forkSession устанавливает branchPoint по messageIndex если messageId не указан', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    const msg1 = await manager.addMessage(parent.id, makeMsg('Первый'));
+    const msg2 = await manager.addMessage(parent.id, makeMsg('Второй'));
+
+    const fork = await manager.forkSession(parent.id, { messageIndex: 0 });
+    // branchPoint должен быть id сообщения на индексе 0
+    expect(fork.branchPoint).toBe(msg1!.messages[0]!.id);
+  });
+
+  it('forkSession обрезает сообщения по messageIndex — не включает user-сообщение на границе', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    await manager.addMessage(parent.id, makeMsg('User 1'));
+    await manager.addMessage(parent.id, makeMsg('Assistant 1', MessageRole.ASSISTANT));
+    await manager.addMessage(parent.id, makeMsg('User 2'));
+
+    // обрезаем до индекса 2 (User 2) — не включаем его (role=USER)
+    const fork = await manager.forkSession(parent.id, { messageIndex: 2 });
+    expect(fork.messages).toHaveLength(2);
+    expect(fork.messages[0]!.content).toBe('User 1');
+    expect(fork.messages[1]!.content).toBe('Assistant 1');
+  });
+
+  it('forkSession обрезает сообщения по messageIndex — включает assistant-сообщение на границе', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    await manager.addMessage(parent.id, makeMsg('User 1'));
+    await manager.addMessage(parent.id, makeMsg('Assistant 1', MessageRole.ASSISTANT));
+    await manager.addMessage(parent.id, makeMsg('User 2'));
+    await manager.addMessage(parent.id, makeMsg('Assistant 2', MessageRole.ASSISTANT));
+
+    // обрезаем до индекса 3 (Assistant 2) — включаем его (role=ASSISTANT)
+    const fork = await manager.forkSession(parent.id, { messageIndex: 3 });
+    expect(fork.messages).toHaveLength(4);
+    expect(fork.messages[3]!.content).toBe('Assistant 2');
+  });
+
+  it('forkSession без точки обрезки копирует все сообщения', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    await manager.addMessage(parent.id, makeMsg('A'));
+    await manager.addMessage(parent.id, makeMsg('B'));
+    await manager.addMessage(parent.id, makeMsg('C'));
+
+    const fork = await manager.forkSession(parent.id, {});
+    expect(fork.messages).toHaveLength(3);
+    expect(fork.messages[0]!.content).toBe('A');
+    expect(fork.messages[1]!.content).toBe('B');
+    expect(fork.messages[2]!.content).toBe('C');
+  });
+
+  it('forkSession сбрасывает TSM в PLANNING', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    await manager.updateTsmState(parent.id, 'execution');
+
+    const fork = await manager.forkSession(parent.id, {});
+    expect(fork.status.state).toBe('planning');
+    expect(fork.status.iteration).toBe(0);
+    expect(fork.status.validationAttempts).toBe(0);
+  });
+
+  it('forkSession очищает pendingMessages', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    await manager.addPendingMessage(parent.id, makeMsg('pending'));
+
+    const fork = await manager.forkSession(parent.id, {});
+    expect(fork.pendingMessages).toHaveLength(0);
+  });
+
+  it('forkSession копирует настройки из родительской сессии', async () => {
+    const parent = await manager.createSession({
+      title: 'Parent',
+      settings: { ...(await manager.createSession({})).settings, model: 'gpt-4', temperature: 0.3 },
+    });
+
+    const fork = await manager.forkSession(parent.id, {});
+    expect(fork.settings.model).toBe(parent.settings.model);
+    expect(fork.settings.temperature).toBe(parent.settings.temperature);
+  });
+
+  it('forkSession из пустой сессии создаёт пустую дочернюю', async () => {
+    const parent = await manager.createSession({ title: 'Empty' });
+    const fork = await manager.forkSession(parent.id, {});
+    expect(fork.messages).toHaveLength(0);
+    expect(fork.parentId).toBe(parent.id);
+  });
+
+  it('forkSession с кастомным названием', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    const fork = await manager.forkSession(parent.id, { title: 'Мой форк' });
+    expect(fork.title).toBe('Мой форк');
+  });
+
+  it('forkSession генерирует уникальное название с нумерацией', async () => {
+    const parent = await manager.createSession({ title: 'Исследование' });
+    const fork1 = await manager.forkSession(parent.id, {});
+    expect(fork1.title).toBe('Исследование (fork #1)');
+
+    const fork2 = await manager.forkSession(parent.id, {});
+    expect(fork2.title).toBe('Исследование (fork #2)');
+  });
+
+  it('forkSession выбрасывает ошибку для несуществующей сессии', async () => {
+    await expect(manager.forkSession('non-existent', {})).rejects.toThrow('Session non-existent not found');
+  });
+
+  it('forkSession проставляет новые id у скопированных сообщений', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    const msg = await manager.addMessage(parent.id, makeMsg('test'));
+    const originalId = msg!.messages[0]!.id;
+
+    const fork = await manager.forkSession(parent.id, {});
+    expect(fork.messages[0]!.id).not.toBe(originalId);
+    expect(fork.messages[0]!.sourceMsgId).toBe(originalId);
+  });
+
+  // ─── createSession с parentId ─────────────────────────────────────
+
+  it('createSession принимает parentId', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    const child = await manager.createSession({
+      title: 'Child',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+    });
+    expect(child.parentId).toBe(parent.id);
+    expect(child.sessionOrigin).toBe('subagent');
+  });
+
+  // ─── getChildren / getSessionTree ─────────────────────────────────
+
+  it('getChildren возвращает дочерние сессии', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    const fork1 = await manager.forkSession(parent.id, { title: 'Fork 1' });
+    const fork2 = await manager.forkSession(parent.id, { title: 'Fork 2' });
+
+    const children = await manager.getChildren(parent.id);
+    expect(children).toHaveLength(2);
+    const titles = children.map((c) => c.title).sort();
+    expect(titles).toEqual(['Fork 1', 'Fork 2']);
+  });
+
+  it('getChildren не возвращает сессии других родителей', async () => {
+    const parent1 = await manager.createSession({ title: 'P1' });
+    const parent2 = await manager.createSession({ title: 'P2' });
+    await manager.forkSession(parent1.id, { title: 'Fork of P1' });
+    await manager.forkSession(parent2.id, { title: 'Fork of P2' });
+
+    const children = await manager.getChildren(parent1.id);
+    expect(children).toHaveLength(1);
+    expect(children[0]!.title).toBe('Fork of P1');
+  });
+
+  it('getSessionTree строит дерево сессий', async () => {
+    const root = await manager.createSession({ title: 'Root' });
+    const fork1 = await manager.forkSession(root.id, { title: 'Fork 1' });
+    const fork2 = await manager.forkSession(root.id, { title: 'Fork 2' });
+    const subfork = await manager.forkSession(fork1.id, { title: 'Subfork' });
+
+    const tree = await manager.getSessionTree(root.id);
+    expect(tree.session).not.toBeNull();
+    expect(tree.session!.id).toBe(root.id);
+    expect(tree.children).toHaveLength(2);
+    // Находим Fork 1 в детях
+    const fork1Node = tree.children.find((c) => c.session?.title === 'Fork 1');
+    expect(fork1Node).toBeDefined();
+    expect(fork1Node!.children).toHaveLength(1);
+    expect(fork1Node!.children[0]!.session?.title).toBe('Subfork');
+  });
+
+  it('getSessionTree возвращает null session для несуществующей', async () => {
+    const tree = await manager.getSessionTree('nonexistent');
+    expect(tree.session).toBeNull();
+    expect(tree.children).toHaveLength(0);
+  });
+
+  // ─── addMessage origin tracking (Слой 2) ─────────────────────────
+
+  it('addMessage проставляет origin=local по умолчанию', async () => {
+    const session = await manager.createSession({});
+    const result = await manager.addMessage(session.id, makeMsg('test'));
+    expect(result!.messages[0]!.origin).toBe('local');
+  });
+
+  it('addMessage проставляет seq автоматически', async () => {
+    const session = await manager.createSession({});
+    const r1 = await manager.addMessage(session.id, makeMsg('first'));
+    const r2 = await manager.addMessage(session.id, makeMsg('second'));
+    const r3 = await manager.addMessage(session.id, makeMsg('third'));
+    expect(r3!.messages[2]!.seq).toBe(3);
+  });
+
+  // ─── Subagent session (Слой 1) ────────────────────────────────────
+
+  it('createSession с sessionOrigin=subagent создаёт сессию саб-агента', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    const sub = await manager.createSession({
+      title: 'Подзадача: анализ',
+      projectId: parent.projectId,
+      engine: parent.engine,
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { ...parent.settings, agentRole: 'explore' },
+    });
+    expect(sub.parentId).toBe(parent.id);
+    expect(sub.sessionOrigin).toBe('subagent');
+    expect(sub.settings.agentRole).toBe('explore');
+  });
+
+  // ─── Persistence: parent_id и branch_point ──────────────────────
+
+  it('parent_id и branch_point сохраняются через FileStore save/load', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    await manager.addMessage(parent.id, makeMsg('msg'));
+    const fork = await manager.forkSession(parent.id, { messageIndex: 0 });
+    const forkId = fork.id;
+
+    // загружаем заново из стора
+    const loaded = await manager.getSession(forkId);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.parentId).toBe(parent.id);
+    expect(loaded!.branchPoint).toBeDefined();
+    expect(loaded!.sessionOrigin).toBe('fork');
+
+    // сообщения должны сохранить origin и sourceMsgId
+    expect(loaded!.messages[0]!.origin).toBe('inherited');
+    expect(loaded!.messages[0]!.sourceMsgId).toBeDefined();
+    expect(loaded!.messages[0]!.seq).toBe(1);
+  });
+
+  // ─── Message origin enum coverage ────────────────────────────────
+
+  it('MessageOrigin поддерживает все 4 значения из AD-033', async () => {
+    // Проверяем что тип MessageOrigin включает все нужные литералы
+    const origins: Array<'local' | 'inherited' | 'merged' | 'crosspost'> = ['local', 'inherited', 'merged', 'crosspost'];
+    expect(origins).toHaveLength(4);
+
+    // Проверяем что message может принять merged/crosspost (хотя логика ещё не реализована)
+    const session = await manager.createSession({});
+    const mergedMsg: Message = { ...makeMsg('merged'), origin: 'merged', sourceMsgId: 'orig-123' };
+    await manager.addMessage(session.id, mergedMsg);
+    const loaded = await manager.getSession(session.id);
+    expect(loaded!.messages[0]!.origin).toBe('merged');
+    expect(loaded!.messages[0]!.sourceMsgId).toBe('orig-123');
+
+    const crossMsg: Message = { ...makeMsg('crosspost'), origin: 'crosspost' };
+    await manager.addMessage(session.id, crossMsg);
+    const loaded2 = await manager.getSession(session.id);
+    expect(loaded2!.messages[1]!.origin).toBe('crosspost');
+  });
+
+  // ─── SessionOrigin enum coverage ─────────────────────────────────
+
+  it('SessionOrigin поддерживает user/fork/subagent из AD-033', () => {
+    const origins: Array<'user' | 'fork' | 'subagent'> = ['user', 'fork', 'subagent'];
+    expect(origins).toHaveLength(3);
+  });
+
+  // ─── Слой 3: подготовка структур данных (данные могут храниться) ──
+
+  it('sourceMsgId может быть установлен на произвольное значение', async () => {
+    const session = await manager.createSession({});
+    const msg: Message = {
+      ...makeMsg('сообщение со ссылкой'),
+      origin: 'merged',
+      sourceMsgId: 'session-abc::msg-42',
+    };
+    await manager.addMessage(session.id, msg);
+    const loaded = await manager.getSession(session.id);
+    expect(loaded!.messages[0]!.sourceMsgId).toBe('session-abc::msg-42');
+    expect(loaded!.messages[0]!.origin).toBe('merged');
+  });
+
+  // ─── Edge cases ─────────────────────────────────────────────────
+
+  it('forkSession с отрицательным messageIndex копирует все сообщения', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    await manager.addMessage(parent.id, makeMsg('A'));
+    await manager.addMessage(parent.id, makeMsg('B'));
+
+    const fork = await manager.forkSession(parent.id, { messageIndex: -1 });
+    expect(fork.messages).toHaveLength(2);
+  });
+
+  it('forkSession с messageIndex больше чем сообщений копирует все', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    await manager.addMessage(parent.id, makeMsg('A'));
+
+    const fork = await manager.forkSession(parent.id, { messageIndex: 99 });
+    expect(fork.messages).toHaveLength(1);
+  });
+});

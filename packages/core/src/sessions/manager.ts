@@ -1,5 +1,5 @@
 import type { Session, TsmState, Message, SessionSettings, Checkpoint, SessionOrigin } from '@synth/shared';
-import { TsmState as TsmStateEnum, getForkedTitle } from '@synth/shared';
+import { TsmState as TsmStateEnum, getForkedTitle, MessageRole } from '@synth/shared';
 import { nowISO, generateId, makeTextPart } from '@synth/shared';
 import type { FileStore } from '../storage/file-store.js';
 
@@ -296,7 +296,7 @@ export class SessionManager {
 
   async forkSession(
     sourceSessionId: string,
-    options: { messageId?: string; title?: string },
+    options: { messageId?: string; messageIndex?: number; title?: string },
   ): Promise<Session> {
     const source = await this.getSession(sourceSessionId);
     if (!source) throw new Error(`Session ${sourceSessionId} not found`);
@@ -314,14 +314,22 @@ export class SessionManager {
       settings: { ...source.settings },
     });
 
-    forked.branchPoint = options.messageId;
+    // Определяем точку обрезки: messageIndex (всегда есть в UI) приоритетнее messageId
+    const cutoffIdx = options.messageIndex != null
+      ? options.messageIndex
+      : options.messageId
+        ? source.messages.findIndex((m) => m.id === options.messageId)
+        : source.messages.length;
 
-    const cutoffIdx = options.messageId
-      ? source.messages.findIndex((m) => m.id === options.messageId)
-      : source.messages.length;
+    // branchPoint: messageId если известен, иначе id сообщения по индексу (для ссылочной целостности)
+    forked.branchPoint = options.messageId
+      ?? (options.messageIndex != null && cutoffIdx >= 0 ? source.messages[cutoffIdx]?.id : undefined);
 
+    // Если указана точка развилки и это ответ ассистента — включаем его в форк.
+    // Для сообщения пользователя — только история выше (само сообщение уходит в input).
+    const includeBranchMsg = cutoffIdx >= 0 && source.messages[cutoffIdx]?.role === MessageRole.ASSISTANT;
     const msgsToCopy = cutoffIdx >= 0
-      ? source.messages.slice(0, cutoffIdx)
+      ? source.messages.slice(0, cutoffIdx + (includeBranchMsg ? 1 : 0))
       : [...source.messages];
 
     forked.messages = msgsToCopy.map((m, i) => ({

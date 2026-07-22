@@ -308,6 +308,7 @@ export function createSessionRoutes(
     const body = await c.req.json().catch(() => ({}));
     const fork = await sessionManager.forkSession(c.req.param('id'), {
       messageId: body.message_id ?? body.messageId,
+      messageIndex: body.message_index ?? body.messageIndex,
       title: body.title,
     });
     eventBus.publish(fork.id, 'session.fork.created', serializeSession(fork));

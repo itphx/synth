@@ -16,7 +16,7 @@ interface SessionsStore {
     project_id?: string | null
     engine?: string
   }) => Promise<SessionData | null>
-  forkSession: (sessionId: string, options?: { message_id?: string; title?: string }) => Promise<SessionData | null>
+  forkSession: (sessionId: string, options?: { message_id?: string; message_index?: number; title?: string }) => Promise<SessionData | null>
   moveSession: (sessionId: string, projectId: string | null) => Promise<SessionData | null>
   renameSession: (sessionId: string, newName: string) => Promise<SessionData | null>
   deleteSession: (sessionId: string) => Promise<boolean>

@@ -317,7 +317,7 @@ export const synthApi = {
     })
   },
 
-  async forkSession(sessionId: string, options?: { message_id?: string; title?: string }): Promise<SessionData> {
+  async forkSession(sessionId: string, options?: { message_id?: string; message_index?: number; title?: string }): Promise<SessionData> {
     return fetchJSON<SessionData>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/fork`, {
       method: 'POST',
       body: JSON.stringify(options || {}),

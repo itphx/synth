@@ -120,6 +120,7 @@ export function ChatTab({ tab }: ChatTabProps) {
       try {
         const fork = await useSessionsStore.getState().forkSession(sessionId, {
           message_id: msg.id || undefined,
+          message_index: msg.index,
         })
         if (fork) {
           notify({ text: t('chat.message.forked'), type: 'info', category: 'message', sessionId })
