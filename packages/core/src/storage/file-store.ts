@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import type { Session, Message, TsmState, TsmStatus, SessionSettings, Part } from '@synth/shared';
+import type { Session, Message, TsmState, TsmStatus, SessionSettings, Part, SessionOrigin } from '@synth/shared';
 import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts } from '@synth/shared';
 
 export interface StorageConfig {
@@ -56,6 +56,7 @@ interface SerializedSession {
   parent_id?: string;
   branch_point?: string;
   plan_path?: string;
+  session_origin?: string;
   user_id?: string;
   owner_id?: string;
   project_id?: string;
@@ -229,6 +230,7 @@ function serializeSession(session: Session): SerializedSession {
     parent_id: session.parentId,
     branch_point: session.branchPoint,
     plan_path: session.planPath,
+    session_origin: session.sessionOrigin,
     user_id: session.userId,
     owner_id: session.ownerId,
     project_id: session.projectId,
@@ -285,6 +287,7 @@ function deserializeSession(data: SerializedSession): Session {
     parentId: data.parent_id,
     branchPoint: data.branch_point,
     planPath: data.plan_path,
+    sessionOrigin: (data.session_origin as SessionOrigin) || 'user',
     userId: data.user_id,
     ownerId: data.owner_id,
     projectId: data.project_id,

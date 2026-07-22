@@ -56,6 +56,8 @@ interface ChatMessageProps {
   onDelete: () => void
   onRetry: () => void
   onDebug: () => void
+  onFork: () => void
+  readOnly?: boolean
 }
 
 function ChatMessageInner({
@@ -66,6 +68,8 @@ function ChatMessageInner({
   onDelete,
   onRetry,
   onDebug,
+  onFork,
+  readOnly,
 }: ChatMessageProps) {
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
@@ -233,12 +237,14 @@ function ChatMessageInner({
             pinned={message.pinned}
             canRetry={canRetry}
             hasDebug={hasDebug}
+            readOnly={readOnly}
             onCopy={onCopy}
             onToggle={onToggle}
             onPin={onPin}
             onDelete={onDelete}
             onRetry={onRetry}
             onDebug={onDebug}
+            onFork={onFork}
           />
         )}
       </div>

@@ -69,6 +69,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   const windowPercent = contextWindow > 0 ? Math.round((lastInputTokens / contextWindow) * 100) : 0
   const [summarizing, setSummarizing] = useState(false)
   const canSummarize = activeSession?.can_summarize ?? false
+  const isSubagentSession = activeSession?.session_origin === 'subagent'
 
   const handleClearSession = useCallback(async () => {
     if (!sessionId) return
@@ -174,26 +175,30 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
               </div>
               <span className="text-[10px] tabular-nums text-muted-foreground">{windowPercent}%</span>
             </div>
-            <button
-              onClick={handleSummarize}
-              disabled={!canSummarize || summarizing}
-              title={canSummarize ? t('rightPanel.context.summarizeNow') : t('rightPanel.context.notEnoughMessages')}
-              className={cn(
-                'shrink-0 rounded p-1 transition-colors',
-                canSummarize && !summarizing
-                  ? 'text-muted-foreground hover:text-foreground hover:bg-interactive-hover'
-                  : 'text-muted-foreground opacity-30 cursor-default',
-              )}
-            >
-              <Icon name="subtract" className="size-3.5 text-amber-400" />
-            </button>
-            <button
-              onClick={handleClearSession}
-              title={t('leftPanel.clearSession')}
-              className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
-            >
-              <Icon name="close" className="size-3.5 text-destructive" />
-            </button>
+            {!isSubagentSession && (
+              <button
+                onClick={handleSummarize}
+                disabled={!canSummarize || summarizing}
+                title={canSummarize ? t('rightPanel.context.summarizeNow') : t('rightPanel.context.notEnoughMessages')}
+                className={cn(
+                  'shrink-0 rounded p-1 transition-colors',
+                  canSummarize && !summarizing
+                    ? 'text-muted-foreground hover:text-foreground hover:bg-interactive-hover'
+                    : 'text-muted-foreground opacity-30 cursor-default',
+                )}
+              >
+                <Icon name="subtract" className="size-3.5 text-amber-400" />
+              </button>
+            )}
+            {!isSubagentSession && (
+              <button
+                onClick={handleClearSession}
+                title={t('leftPanel.clearSession')}
+                className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
+              >
+                <Icon name="close" className="size-3.5 text-destructive" />
+              </button>
+            )}
           </div>
         )}
 

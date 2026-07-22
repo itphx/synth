@@ -107,7 +107,7 @@ function ProjectsTab() {
   const childrenByParentId = useMemo(() => {
     const map: Record<string, any[]> = {}
     for (const s of sessions) {
-      if (s.parent_id) {
+      if (s.parent_id && s.session_origin === 'subagent') {
         if (!map[s.parent_id]) map[s.parent_id] = []
         map[s.parent_id].push(s)
       }
@@ -182,11 +182,12 @@ function ProjectsTab() {
   }
 
   const renderSessionNode = (session: any, depth: number, hasChildren: boolean, isExpanded: boolean, onToggle: () => void): TreeNodeBase => {
+    const isSubagent = session.session_origin === 'subagent'
     return {
       id: `session:${session.id}`,
       label: session.name || session.id,
       depth,
-      icon: 'chat-new',
+      icon: isSubagent ? 'cpu' : 'chat-new',
       subtitle: formatRelativeTime(session.updated_at),
       isSelected: selectedIds.has(session.id),
       isTabOpen: sessionTabOpenSet.has(session.id),
@@ -406,7 +407,7 @@ function SessionTreeItem({
   expandedSessions: Set<string>
   onToggleExpand: (id: string) => void
 }) {
-  const childSessions = childrenByParentId[session.id] || []
+  const childSessions = depth < 2 ? (childrenByParentId[session.id] || []) : []
   const hasChildren = childSessions.length > 0
   const isExpanded = expandedSessions.has(session.id)
   const node = renderSessionNode(session, depth, hasChildren, isExpanded, () => onToggleExpand(session.id))
@@ -452,7 +453,7 @@ function GroupNode({
 }) {
   const expandKey = projectId ? `project:${projectId}` : `group:__none__`
   const isExpanded = expandedGroups.has(expandKey)
-  const rootSessions = sessions.filter((s) => !s.parent_id)
+  const rootSessions = sessions.filter((s) => s.session_origin !== 'subagent')
   const visibleSessions = isExpanded ? rootSessions : rootSessions.slice(0, MAX_VISIBLE_SESSIONS)
   const remaining = rootSessions.length - visibleSessions.length
   const totalCount = sessions.length

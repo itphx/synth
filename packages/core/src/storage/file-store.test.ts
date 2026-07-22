@@ -23,6 +23,7 @@ describe('FileStore', () => {
     return {
       id: 'test-1',
       title: 'Test Session',
+      sessionOrigin: 'user',
       userId: 'user-1',
       projectId: 'proj-1',
       engine: 'synth' as Session['engine'],

@@ -89,6 +89,7 @@ export const taskTool: ToolDefinition = {
             projectId: parentSession.projectId,
             engine: parentSession.engine,
             parentId: extra.sessionId,
+            sessionOrigin: 'subagent',
             settings: { ...parentSession.settings, agentRole: params.subagent_type },
           });
           child.userId = parentSession.userId;

@@ -48,6 +48,7 @@ export interface SessionData {
   parent_id?: string | null
   branch_point?: string | null
   plan_path?: string | null
+  session_origin?: string | null
   user_id: string | null
   owner_id: string | null
   project_id: string | null

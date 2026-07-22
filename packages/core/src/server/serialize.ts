@@ -7,6 +7,7 @@ export function serializeSession(session: Session) {
     parent_id: session.parentId || null,
     branch_point: session.branchPoint || null,
     plan_path: session.planPath || null,
+    session_origin: session.sessionOrigin,
     user_id: session.userId || null,
     owner_id: session.ownerId || null,
     project_id: session.projectId || null,

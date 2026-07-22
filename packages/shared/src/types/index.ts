@@ -51,6 +51,9 @@ export interface Part {
 // --- MessageOrigin ---
 export type MessageOrigin = 'local' | 'inherited' | 'merged' | 'crosspost';
 
+// --- SessionOrigin ---
+export type SessionOrigin = 'user' | 'fork' | 'subagent';
+
 // --- Message ---
 export interface Message {
   id: string;
@@ -157,6 +160,7 @@ export interface StickyNote {
 export interface Session {
   id: string;
   title?: string;
+  sessionOrigin: SessionOrigin;
   parentId?: string;
   branchPoint?: string;
   planPath?: string;

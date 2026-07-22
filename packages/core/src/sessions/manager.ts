@@ -1,4 +1,4 @@
-import type { Session, TsmState, Message, SessionSettings, Checkpoint } from '@synth/shared';
+import type { Session, TsmState, Message, SessionSettings, Checkpoint, SessionOrigin } from '@synth/shared';
 import { TsmState as TsmStateEnum, getForkedTitle } from '@synth/shared';
 import { nowISO, generateId, makeTextPart } from '@synth/shared';
 import type { FileStore } from '../storage/file-store.js';
@@ -51,10 +51,11 @@ export class SessionManager {
     return this.store.load(sessionId);
   }
 
-  async createSession(data: { title?: string; projectId?: string; engine?: string; parentId?: string; settings?: Partial<SessionSettings> } = {}): Promise<Session> {
+  async createSession(data: { title?: string; projectId?: string; engine?: string; parentId?: string; sessionOrigin?: SessionOrigin; settings?: Partial<SessionSettings> } = {}): Promise<Session> {
     const session: Session = {
       id: generateId(),
       title: data.title || 'Новая сессия',
+      sessionOrigin: data.sessionOrigin || 'user',
       parentId: data.parentId,
       userId: '',
       projectId: data.projectId,
@@ -308,6 +309,7 @@ export class SessionManager {
       title: forkedTitle,
       projectId: source.projectId,
       engine: source.engine,
+      sessionOrigin: 'fork' as SessionOrigin,
       parentId: sourceSessionId,
       settings: { ...source.settings },
     });

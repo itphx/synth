@@ -153,6 +153,11 @@ export function TreeNode({
           <Icon name={isExpanded ? 'arrow-down-s' : 'arrow-right-s'} className={resolvedIconSize} />
         </span>
       )}
+      {hasChildren === undefined && (
+        <span className={cn('flex items-center justify-center shrink-0', arrowClass, 'invisible')}>
+          <Icon name="arrow-right-s" className={resolvedIconSize} />
+        </span>
+      )}
 
       {icon && (
         <Icon

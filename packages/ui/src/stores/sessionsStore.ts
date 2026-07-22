@@ -55,7 +55,10 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
     try {
       const fork = await synthApi.forkSession(sessionId, options)
       if (!isTransportConnected()) {
-        set((s) => ({ sessions: [fork, ...s.sessions] }))
+        set((s) => {
+          if (s.sessions.some((ses) => ses.id === fork.id)) return s
+          return { sessions: [fork, ...s.sessions] }
+        })
       }
       return fork
     } catch (e) {
