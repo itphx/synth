@@ -454,6 +454,7 @@ export function ChatTab({ tab }: ChatTabProps) {
         onFork={handleFork}
         readOnly={isReadOnly}
         onStop={handleStop}
+        isSubagent={isSubagent}
       />
 
       {!isSubagent && (

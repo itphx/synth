@@ -58,6 +58,8 @@ interface ChatMessageProps {
   onDebug: () => void
   onFork: () => void
   readOnly?: boolean
+  /** true если сессия — дочерняя (сабагент) */
+  isSubagent?: boolean
 }
 
 function ChatMessageInner({
@@ -70,6 +72,7 @@ function ChatMessageInner({
   onDebug,
   onFork,
   readOnly,
+  isSubagent,
 }: ChatMessageProps) {
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
@@ -139,15 +142,15 @@ function ChatMessageInner({
     <div className={containerClass}>
       <div className={bubbleClass}>
         {isAssistant && (
-          <MessageHeader message={message} />
+          <MessageHeader message={message} isSubagent={isSubagent} />
         )}
 
         {isSummary && (
-          <MessageHeader message={message} />
+          <MessageHeader message={message} isSubagent={isSubagent} />
         )}
 
         {isDebug && (
-          <MessageHeader message={message} />
+          <MessageHeader message={message} isSubagent={isSubagent} />
         )}
 
         {(isAssistant || isSummary || isDebug) && (
@@ -218,7 +221,7 @@ function ChatMessageInner({
         )}
 
         {isUser && (
-          <MessageHeader message={message} />
+          <MessageHeader message={message} isSubagent={isSubagent} />
         )}
 
         {displayContent && (

@@ -18,6 +18,8 @@ interface MessageListProps {
   onFork: (msg: MessageData) => void
   readOnly?: boolean
   onStop: () => void
+  /** true если сессия — дочерняя (сабагент) */
+  isSubagent?: boolean
 }
 
 const VIRTUALIZE_THRESHOLD = 30
@@ -35,6 +37,7 @@ export function MessageList({
   onFork,
   readOnly,
   onStop,
+  isSubagent,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
@@ -102,7 +105,8 @@ export function MessageList({
     onDebug: () => onDebug(msg),
     onFork: () => onFork(msg),
     readOnly,
-  }), [onCopy, onToggle, onPin, onDelete, onRetry, onDebug, onFork, readOnly])
+    isSubagent,
+  }), [onCopy, onToggle, onPin, onDelete, onRetry, onDebug, onFork, readOnly, isSubagent])
 
   return (
     <div className="relative flex-1 overflow-hidden">

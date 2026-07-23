@@ -201,11 +201,28 @@ export const taskTool: ToolDefinition = {
                   origin: 'local',
                   hidden: false,
                 });
-                const updated = await extra.sessionManager.getSession(childSessionId);
-                if (updated) childMessages = updated.messages;
               }
             } catch {
               // fallback: без саммари, только prompt с полной историей
+            }
+
+            // Всегда отключаем унаследованные сообщения — в summary-режиме
+            // они заменены суммаризацией (или мы fallback-нули без неё)
+            {
+              const child = await extra.sessionManager.getSession(childSessionId);
+              if (child) {
+                let changed = false;
+                for (const msg of child.messages) {
+                  if (msg.role !== MessageRole.SUMMARY && !msg.disabled) {
+                    msg.disabled = true;
+                    changed = true;
+                  }
+                }
+                if (changed) {
+                  await extra.sessionManager.updateSession(child);
+                }
+                childMessages = child.messages;
+              }
             }
           } else {
             // none mode (default)
@@ -260,6 +277,7 @@ export const taskTool: ToolDefinition = {
 
     if ((contextMode === 'inherit' || contextMode === 'last_n') && childMessages.length > 0) {
       for (const msg of childMessages) {
+        if (msg.hidden || msg.disabled) continue;
         messages.push(messageToLLMMessage(msg));
       }
     }
