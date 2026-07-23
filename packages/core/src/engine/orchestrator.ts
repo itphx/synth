@@ -437,6 +437,7 @@ export class ChatOrchestrator {
                     agentRegistry: this._agentRegistry,
                     sessionManager: this._sessionManager,
                     eventBus: this._eventBus,
+                    contextOptimizer: this._optimizer ?? undefined,
                     callerAgentRole: effectiveAgentRole,
                     sessionSettings: {
                       temperature: session.settings.temperature,

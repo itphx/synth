@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { SessionManager } from './manager.js';
 import { FileStore } from '../storage/file-store.js';
 import type { Message } from '@synth/shared';
-import { MessageRole, generateId, makeTextPart } from '@synth/shared';
+import { MessageRole, generateId, makeTextPart, TsmState } from '@synth/shared';
 
 describe('SessionManager', () => {
   let store: FileStore;
@@ -217,8 +217,8 @@ describe('AD-033: Session forking and branching', () => {
 
   it('forkSession копирует сообщения с origin=inherited и sourceMsgId', async () => {
     const parent = await manager.createSession({ title: 'Parent' });
-    const msg1 = await manager.addMessage(parent.id, makeMsg('Привет'));
-    const msg2 = await manager.addMessage(parent.id, makeMsg('Как дела?', MessageRole.ASSISTANT));
+    await manager.addMessage(parent.id, makeMsg('Привет'));
+    await manager.addMessage(parent.id, makeMsg('Как дела?', MessageRole.ASSISTANT));
 
     const fork = await manager.forkSession(parent.id, {});
     expect(fork.messages).toHaveLength(2);
@@ -245,17 +245,17 @@ describe('AD-033: Session forking and branching', () => {
 
   it('forkSession устанавливает branchPoint в messageId при options.messageId', async () => {
     const parent = await manager.createSession({ title: 'Parent' });
-    const msg1 = await manager.addMessage(parent.id, makeMsg('Первый'));
-    const msg2 = await manager.addMessage(parent.id, makeMsg('Второй'));
+    const result = await manager.addMessage(parent.id, makeMsg('Первый'));
+    await manager.addMessage(parent.id, makeMsg('Второй'));
 
-    const fork = await manager.forkSession(parent.id, { messageId: msg1!.messages[0]!.id });
-    expect(fork.branchPoint).toBe(msg1!.messages[0]!.id);
+    const fork = await manager.forkSession(parent.id, { messageId: result!.messages[0]!.id });
+    expect(fork.branchPoint).toBe(result!.messages[0]!.id);
   });
 
   it('forkSession устанавливает branchPoint по messageIndex если messageId не указан', async () => {
     const parent = await manager.createSession({ title: 'Parent' });
     const msg1 = await manager.addMessage(parent.id, makeMsg('Первый'));
-    const msg2 = await manager.addMessage(parent.id, makeMsg('Второй'));
+    await manager.addMessage(parent.id, makeMsg('Второй'));
 
     const fork = await manager.forkSession(parent.id, { messageIndex: 0 });
     // branchPoint должен быть id сообщения на индексе 0
@@ -303,7 +303,7 @@ describe('AD-033: Session forking and branching', () => {
 
   it('forkSession сбрасывает TSM в PLANNING', async () => {
     const parent = await manager.createSession({ title: 'Parent' });
-    await manager.updateTsmState(parent.id, 'execution');
+    await manager.updateTsmState(parent.id, TsmState.EXECUTION);
 
     const fork = await manager.forkSession(parent.id, {});
     expect(fork.status.state).toBe('planning');
@@ -383,8 +383,8 @@ describe('AD-033: Session forking and branching', () => {
 
   it('getChildren возвращает дочерние сессии', async () => {
     const parent = await manager.createSession({ title: 'Parent' });
-    const fork1 = await manager.forkSession(parent.id, { title: 'Fork 1' });
-    const fork2 = await manager.forkSession(parent.id, { title: 'Fork 2' });
+    await manager.forkSession(parent.id, { title: 'Fork 1' });
+    await manager.forkSession(parent.id, { title: 'Fork 2' });
 
     const children = await manager.getChildren(parent.id);
     expect(children).toHaveLength(2);
@@ -406,8 +406,8 @@ describe('AD-033: Session forking and branching', () => {
   it('getSessionTree строит дерево сессий', async () => {
     const root = await manager.createSession({ title: 'Root' });
     const fork1 = await manager.forkSession(root.id, { title: 'Fork 1' });
-    const fork2 = await manager.forkSession(root.id, { title: 'Fork 2' });
-    const subfork = await manager.forkSession(fork1.id, { title: 'Subfork' });
+    await manager.forkSession(root.id, { title: 'Fork 2' });
+    await manager.forkSession(fork1.id, { title: 'Subfork' });
 
     const tree = await manager.getSessionTree(root.id);
     expect(tree.session).not.toBeNull();
@@ -436,8 +436,8 @@ describe('AD-033: Session forking and branching', () => {
 
   it('addMessage проставляет seq автоматически', async () => {
     const session = await manager.createSession({});
-    const r1 = await manager.addMessage(session.id, makeMsg('first'));
-    const r2 = await manager.addMessage(session.id, makeMsg('second'));
+    await manager.addMessage(session.id, makeMsg('first'));
+    await manager.addMessage(session.id, makeMsg('second'));
     const r3 = await manager.addMessage(session.id, makeMsg('third'));
     expect(r3!.messages[2]!.seq).toBe(3);
   });
@@ -463,8 +463,9 @@ describe('AD-033: Session forking and branching', () => {
 
   it('parent_id и branch_point сохраняются через FileStore save/load', async () => {
     const parent = await manager.createSession({ title: 'Parent' });
-    await manager.addMessage(parent.id, makeMsg('msg'));
-    const fork = await manager.forkSession(parent.id, { messageIndex: 0 });
+    await manager.addMessage(parent.id, makeMsg('user-msg'));
+    await manager.addMessage(parent.id, makeMsg('assistant-reply', MessageRole.ASSISTANT));
+    const fork = await manager.forkSession(parent.id, { messageIndex: 1 });
     const forkId = fork.id;
 
     // загружаем заново из стора
@@ -474,7 +475,8 @@ describe('AD-033: Session forking and branching', () => {
     expect(loaded!.branchPoint).toBeDefined();
     expect(loaded!.sessionOrigin).toBe('fork');
 
-    // сообщения должны сохранить origin и sourceMsgId
+    // messageIndex:1 — assistant сообщение на границе включается (2 сообщения скопированы)
+    expect(loaded!.messages).toHaveLength(2);
     expect(loaded!.messages[0]!.origin).toBe('inherited');
     expect(loaded!.messages[0]!.sourceMsgId).toBeDefined();
     expect(loaded!.messages[0]!.seq).toBe(1);

@@ -438,6 +438,8 @@ export type EventType =
   | 'session.fork.created'
   | 'message.added'
   | 'message.updated'
+  | 'child.message.added'
+  | 'child.session.updated'
   | 'stream.start'
   | 'stream.chunk'
   | 'stream.done'
