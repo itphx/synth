@@ -318,9 +318,12 @@ export class SessionManager {
         ?? (options.messageIndex != null && cutoffIdx >= 0 ? source.messages[cutoffIdx]?.id : undefined);
 
       const includeBranchMsg = cutoffIdx >= 0 && source.messages[cutoffIdx]?.role === MessageRole.ASSISTANT;
-      const msgsToCopy = cutoffIdx >= 0
+      const allSourceMsgs = cutoffIdx >= 0
         ? source.messages.slice(0, cutoffIdx + (includeBranchMsg ? 1 : 0))
         : [...source.messages];
+
+      // Копируем только не скрытые и не отключенные сообщения
+      const msgsToCopy = allSourceMsgs.filter((m) => !m.hidden && !m.disabled);
 
       forked.messages = msgsToCopy.map((m, i) => ({
         ...structuredClone(m),

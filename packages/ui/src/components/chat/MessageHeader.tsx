@@ -9,6 +9,8 @@ import { resolveColor } from '@/lib/utils'
 
 interface MessageHeaderProps {
   message: MessageData
+  /** true если сессия — дочерняя (сабагент) */
+  isSubagent?: boolean
 }
 
 function resolveAuthor(): string {
@@ -16,7 +18,7 @@ function resolveAuthor(): string {
   return profile?.display_name || user?.username || ''
 }
 
-function MessageHeaderInner({ message }: MessageHeaderProps) {
+function MessageHeaderInner({ message, isSubagent }: MessageHeaderProps) {
   const time = message.timestamp || message.created_at
   const formatted = time
     ? new Date(time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
@@ -40,7 +42,23 @@ function MessageHeaderInner({ message }: MessageHeaderProps) {
     ? providers.find((p) => p.name === message.provider)?.url
     : undefined
 
-  const agentBadge = !isSummary && message.agent_role && (
+  const isInherited = message.origin === 'inherited'
+
+  // В дочерних сессиях (сабагент):
+  //   inherited user     → userBadge  (сообщение написал пользователь в родительской сессии)
+  //   inherited assistant → agentBadge (ответ написал агент в родительской сессии)
+  //   local сообщения    → agentBadge (промпт/ответ сабагента — от агента)
+  // В основных сессиях:
+  //   user      → userBadge
+  //   assistant → agentBadge
+  //   summary   → summary badge
+  const showUserBadge = isSubagent ? (isInherited && isUser) : isUser
+  const showAgentBadge = !isSummary && !!message.agent_role && (
+    isSubagent
+      ? (isInherited ? !isUser : true)     // сабагент: inherited-ассистент или любое local
+      : !isUser                              // основная сессия: не-user → agentBadge
+  )
+  const agentBadge = showAgentBadge && (
     agentInfo ? (
       <span
         className={`inline-flex items-center gap-1 rounded-sm py-0.5 ${agentColor ? '' : 'text-primary'}`}
@@ -57,7 +75,7 @@ function MessageHeaderInner({ message }: MessageHeaderProps) {
     )
   )
 
-  const userBadge = isUser && !message.agent_role && (
+  const userBadge = showUserBadge && (
     <span className="inline-flex items-center gap-1 rounded-sm py-0.5 text-primary">
       <Icon name="user-3" className="size-3" />
       <span>{resolveAuthor()}</span>

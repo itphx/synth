@@ -6,8 +6,23 @@ import { taskTool } from './task.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
-import { ToolCapability, MessageRole, generateId, makeTextPart } from '@synth/shared';
+import { ToolCapability, MessageRole, generateId, makeTextPart, nowISO } from '@synth/shared';
 import type { Message, Session } from '@synth/shared';
+import type { ContextOptimizer } from '../context/optimizer.js';
+
+/** Минимальный тип для мока AgentRegistry — только поля, используемые в taskTool */
+interface MockAgentDef {
+  id: string;
+  agentMode: string;
+  subagentPrompt?: string;
+  maxSteps?: number;
+}
+
+interface MockAgentRegistry {
+  get(id: string): MockAgentDef | undefined;
+  getSubagents(): Array<{ id: string }>;
+  getToolsForAgent(): Array<Record<string, never>>;
+}
 
 function makeMockChatAsync(content: string) {
   return vi.fn().mockReturnValue(
@@ -17,7 +32,7 @@ function makeMockChatAsync(content: string) {
   );
 }
 
-function makeMockAgentRegistry(subagents: string[] = ['explore']) {
+function makeMockAgentRegistry(subagents: string[] = ['explore']): MockAgentRegistry {
   return {
     get: (id: string) => {
       if (subagents.includes(id)) {
@@ -28,7 +43,7 @@ function makeMockAgentRegistry(subagents: string[] = ['explore']) {
           maxSteps: 1,
         };
       }
-      return null;
+      return undefined;
     },
     getSubagents: () => subagents.map(id => ({ id })),
     getToolsForAgent: () => [],
@@ -229,7 +244,7 @@ describe('taskTool — context modes', () => {
           sessionManager,
           eventBus,
           sessionId: parent.id,
-          agentRegistry: makeMockAgentRegistry() as any,
+          agentRegistry: makeMockAgentRegistry(),
         },
       },
     );
@@ -269,7 +284,7 @@ describe('taskTool — context modes', () => {
           sessionManager,
           eventBus,
           sessionId: parent.id,
-          agentRegistry: makeMockAgentRegistry() as any,
+          agentRegistry: makeMockAgentRegistry(),
         },
       },
     );
@@ -298,7 +313,7 @@ describe('taskTool — context modes', () => {
           sessionManager,
           eventBus,
           sessionId: parent.id,
-          agentRegistry: makeMockAgentRegistry() as any,
+          agentRegistry: makeMockAgentRegistry(),
         },
       },
     );
@@ -314,6 +329,151 @@ describe('taskTool — context modes', () => {
     expect(inherited).toHaveLength(0);
   });
 
+  // ─── SessionManager: mode 'summary' — fork + summarize ───────────
+
+  it('summary mode: child session содержит forked сообщения + summary от contextOptimizer', async () => {
+    const parent = await createParentWithMessages();
+    const parentMsgCount = parent.messages.length;
+
+    const mockSummaryContent = 'Краткое резюме диалога: пользователь попросил функцию sum и тесты для неё.';
+    const mockContextOptimizer = {
+      summarize: vi.fn().mockResolvedValue({
+        id: 'summary-1',
+        role: MessageRole.SUMMARY,
+        seq: 0,
+        origin: 'local',
+        parts: [makeTextPart(mockSummaryContent)],
+        content: mockSummaryContent,
+        createdAt: nowISO(),
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        summaryOf: [0, 1, 2, 3, 4],
+        metadata: { type: 'auto_summary' },
+      }),
+    } satisfies Pick<ContextOptimizer, 'summarize'>;
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'summary' },
+      {
+        ...baseCtx,
+        extra: {
+          provider: makeMockProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          contextOptimizer: mockContextOptimizer,
+        } as unknown as Record<string, unknown>,
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.metadata!.context_mode).toBe('summary');
+    const childSessionId = result.metadata!.child_session_id as string;
+    expect(childSessionId).toBeDefined();
+
+    const child = await sessionManager.getSession(childSessionId);
+    expect(child).toBeDefined();
+    expect(child!.parentId).toBe(parent.id);
+    expect(child!.sessionOrigin).toBe('subagent');
+
+    // Должны быть унаследованные сообщения от родителя (fork)
+    const inherited = child!.messages.filter(m => m.origin === 'inherited');
+    expect(inherited.length).toBe(parentMsgCount);
+
+    // Должен быть summary message
+    const summary = child!.messages.find(m => m.role === MessageRole.SUMMARY);
+    expect(summary).toBeDefined();
+    expect(summary!.content).toBe(mockSummaryContent);
+  });
+
+  it('summary mode: fallback на inherit при ошибке contextOptimizer', async () => {
+    const parent = await createParentWithMessages();
+    const parentMsgCount = parent.messages.length;
+
+    const mockContextOptimizer = {
+      summarize: vi.fn().mockRejectedValue(new Error('Summarization failed')),
+    } satisfies Pick<ContextOptimizer, 'summarize'>;
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'summary' },
+      {
+        ...baseCtx,
+        extra: {
+          provider: makeMockProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          contextOptimizer: mockContextOptimizer,
+        } as unknown as Record<string, unknown>,
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    const childSessionId = result.metadata!.child_session_id as string;
+    const child = await sessionManager.getSession(childSessionId);
+    expect(child).toBeDefined();
+    // Даже при ошибке суммаризации форк создан (полная история)
+    const inherited = child!.messages.filter(m => m.origin === 'inherited');
+    expect(inherited.length).toBe(parentMsgCount);
+    // Summary не должно быть
+    const summary = child!.messages.find(m => m.role === MessageRole.SUMMARY);
+    expect(summary).toBeUndefined();
+  });
+
+  // ─── Edge case: summary mode с пустой родительской сессией ─────
+
+  it('summary mode с пустой родительской сессией: не падает, создаёт дочернюю сессию', async () => {
+    const parent = await sessionManager.createSession({ title: 'Empty' });
+
+    const mockContextOptimizer = {
+      summarize: vi.fn().mockResolvedValue({
+        id: 'summary-1',
+        role: MessageRole.SUMMARY,
+        seq: 0,
+        origin: 'local',
+        parts: [makeTextPart('(пустой контекст)')],
+        content: '(пустой контекст)',
+        createdAt: nowISO(),
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        summaryOf: [],
+        metadata: { type: 'auto_summary' },
+      }),
+    } satisfies Pick<ContextOptimizer, 'summarize'>;
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'summary' },
+      {
+        ...baseCtx,
+        extra: {
+          provider: makeMockProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          contextOptimizer: mockContextOptimizer,
+        } as unknown as Record<string, unknown>,
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    const childSessionId = result.metadata!.child_session_id as string;
+    const child = await sessionManager.getSession(childSessionId);
+    expect(child).toBeDefined();
+    expect(child!.parentId).toBe(parent.id);
+    expect(child!.sessionOrigin).toBe('subagent');
+    // Нет inherited сообщений (пустая родительская сессия)
+    const inherited = child!.messages.filter(m => m.origin === 'inherited');
+    expect(inherited).toHaveLength(0);
+    // Summary всё ещё добавляется
+    const summary = child!.messages.find(m => m.role === MessageRole.SUMMARY);
+    expect(summary).toBeDefined();
+  });
+
   // ─── No valid agent ──────────────────────────────────────────────
 
   it('возвращает ошибку при невалидном subagent_type', async () => {
@@ -324,9 +484,10 @@ describe('taskTool — context modes', () => {
         extra: {
           provider: makeMockProvider(),
           agentRegistry: {
-            get: () => null,
+            get: () => undefined,
             getSubagents: () => [{ id: 'explore' }],
-          } as any,
+            getToolsForAgent: () => [],
+          } as MockAgentRegistry,
         },
       },
     );
@@ -353,7 +514,7 @@ describe('taskTool — context modes', () => {
           sessionManager,
           eventBus,
           sessionId: parent.id,
-          agentRegistry: makeMockAgentRegistry() as any,
+          agentRegistry: makeMockAgentRegistry(),
         },
       },
     );
@@ -386,7 +547,7 @@ describe('taskTool — context modes', () => {
           sessionManager,
           eventBus,
           sessionId: parent.id,
-          agentRegistry: makeMockAgentRegistry() as any,
+          agentRegistry: makeMockAgentRegistry(),
         },
       },
     );
