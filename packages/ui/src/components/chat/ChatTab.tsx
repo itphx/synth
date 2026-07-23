@@ -66,16 +66,24 @@ export function ChatTab({ tab }: ChatTabProps) {
   const forkingRef = useRef(false)
 
   useEffect(() => {
+    let cancelled = false
     const load = async () => {
       try {
+        // Загружаем сообщения — нужно первым
         const result = await synthApi.getSessionMessages(sessionId)
+        if (cancelled) return
         setMessages(sessionId, result.messages)
 
-        const agentsResp = await synthApi.getAgents(sessionId)
-        agentsRef.current = agentsResp.agents
+        // Агенты и данные сессии параллельно (независимы друг от друга)
+        const [agentsResp, session] = await Promise.all([
+          synthApi.getAgents(sessionId),
+          synthApi.getSession(sessionId).catch(() => null),
+        ])
+        if (cancelled) return
 
-        try {
-          const session = await synthApi.getSession(sessionId)
+        if (agentsResp) agentsRef.current = agentsResp.agents
+
+        if (session) {
           const s = session?.settings as Record<string, unknown> | undefined
           if (s) {
             const { setSelectedProvider, setSelectedModel } = useProvidersStore.getState()
@@ -103,14 +111,15 @@ export function ChatTab({ tab }: ChatTabProps) {
             setStickyNotes(sessionId, session.sticky_notes)
           }
           resetQueueStalled(sessionId)
-        } catch {
-          // session not found or not accessible — use defaults
         }
       } catch {
-        notify({ text: t('chat.error.loadSession'), type: 'error', category: 'error', sessionId })
+        if (!cancelled) {
+          notify({ text: t('chat.error.loadSession'), type: 'error', category: 'error', sessionId })
+        }
       }
     }
     load()
+    return () => { cancelled = true }
   }, [sessionId])
 
   const handleFork = useCallback(

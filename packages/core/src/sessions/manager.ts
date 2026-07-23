@@ -51,13 +51,13 @@ export class SessionManager {
     return this.store.load(sessionId);
   }
 
-  async createSession(data: { title?: string; projectId?: string; engine?: string; parentId?: string; sessionOrigin?: SessionOrigin; settings?: Partial<SessionSettings> } = {}): Promise<Session> {
+  async createSession(data: { title?: string; projectId?: string; engine?: string; parentId?: string; sessionOrigin?: SessionOrigin; settings?: Partial<SessionSettings>; userId?: string; ownerId?: string } = {}): Promise<Session> {
     const session: Session = {
       id: generateId(),
       title: data.title || 'Новая сессия',
       sessionOrigin: data.sessionOrigin || 'user',
       parentId: data.parentId,
-      userId: '',
+      userId: data.userId || '',
       projectId: data.projectId,
       engine: (data.engine || 'synth') as Session['engine'],
       messages: [],
@@ -260,12 +260,6 @@ export class SessionManager {
 
   async safeUpdate(sessionId: string, updateFn: (session: Session) => Promise<void> | void): Promise<void> {
     await this.withLock(sessionId, async (stored) => {
-      if (stored.pendingMessages.length > 0) {
-        const fresh = await this.store.load(sessionId);
-        if (fresh?.pendingMessages.length) {
-          stored.pendingMessages = fresh.pendingMessages;
-        }
-      }
       await updateFn(stored);
       stored.updatedAt = nowISO();
       await this.store.save(stored);
@@ -296,56 +290,53 @@ export class SessionManager {
 
   async forkSession(
     sourceSessionId: string,
-    options: { messageId?: string; messageIndex?: number; title?: string },
+    options: { messageId?: string; messageIndex?: number; title?: string; userId?: string; ownerId?: string },
   ): Promise<Session> {
-    const source = await this.getSession(sourceSessionId);
-    if (!source) throw new Error(`Session ${sourceSessionId} not found`);
+    return this.withLock(sourceSessionId, async (source) => {
+      const siblings = await this.getChildren(sourceSessionId);
+      const existingTitles = siblings.map((s) => s.title || '');
+      const forkedTitle = options.title || getForkedTitle(source.title, existingTitles);
 
-    const siblings = await this.getChildren(sourceSessionId);
-    const existingTitles = siblings.map((s) => s.title || '');
-    const forkedTitle = options.title || getForkedTitle(source.title, existingTitles);
+      const forked = await this.createSession({
+        title: forkedTitle,
+        projectId: source.projectId,
+        engine: source.engine,
+        sessionOrigin: 'fork' as SessionOrigin,
+        parentId: sourceSessionId,
+        settings: { ...source.settings },
+        userId: options.userId,
+        ownerId: options.ownerId,
+      });
 
-    const forked = await this.createSession({
-      title: forkedTitle,
-      projectId: source.projectId,
-      engine: source.engine,
-      sessionOrigin: 'fork' as SessionOrigin,
-      parentId: sourceSessionId,
-      settings: { ...source.settings },
+      const cutoffIdx = options.messageIndex != null
+        ? options.messageIndex
+        : options.messageId
+          ? source.messages.findIndex((m) => m.id === options.messageId)
+          : source.messages.length;
+
+      forked.branchPoint = options.messageId
+        ?? (options.messageIndex != null && cutoffIdx >= 0 ? source.messages[cutoffIdx]?.id : undefined);
+
+      const includeBranchMsg = cutoffIdx >= 0 && source.messages[cutoffIdx]?.role === MessageRole.ASSISTANT;
+      const msgsToCopy = cutoffIdx >= 0
+        ? source.messages.slice(0, cutoffIdx + (includeBranchMsg ? 1 : 0))
+        : [...source.messages];
+
+      forked.messages = msgsToCopy.map((m, i) => ({
+        ...structuredClone(m),
+        id: generateId(),
+        seq: i + 1,
+        origin: 'inherited' as const,
+        sourceMsgId: m.id,
+      }));
+
+      forked.pendingMessages = [];
+      forked.status.state = TsmStateEnum.PLANNING;
+      forked.status.iteration = 0;
+      forked.status.validationAttempts = 0;
+
+      await this.store.save(forked);
+      return forked;
     });
-
-    // Определяем точку обрезки: messageIndex (всегда есть в UI) приоритетнее messageId
-    const cutoffIdx = options.messageIndex != null
-      ? options.messageIndex
-      : options.messageId
-        ? source.messages.findIndex((m) => m.id === options.messageId)
-        : source.messages.length;
-
-    // branchPoint: messageId если известен, иначе id сообщения по индексу (для ссылочной целостности)
-    forked.branchPoint = options.messageId
-      ?? (options.messageIndex != null && cutoffIdx >= 0 ? source.messages[cutoffIdx]?.id : undefined);
-
-    // Если указана точка развилки и это ответ ассистента — включаем его в форк.
-    // Для сообщения пользователя — только история выше (само сообщение уходит в input).
-    const includeBranchMsg = cutoffIdx >= 0 && source.messages[cutoffIdx]?.role === MessageRole.ASSISTANT;
-    const msgsToCopy = cutoffIdx >= 0
-      ? source.messages.slice(0, cutoffIdx + (includeBranchMsg ? 1 : 0))
-      : [...source.messages];
-
-    forked.messages = msgsToCopy.map((m, i) => ({
-      ...structuredClone(m),
-      id: generateId(),
-      seq: i + 1,
-      origin: 'inherited' as const,
-      sourceMsgId: m.id,
-    }));
-
-    forked.pendingMessages = [];
-    forked.status.state = TsmStateEnum.PLANNING;
-    forked.status.iteration = 0;
-    forked.status.validationAttempts = 0;
-
-    await this.store.save(forked);
-    return forked;
   }
 }

@@ -22,7 +22,8 @@ function EmptyState() {
 }
 
 export function CenterPanel() {
-  const { centerTabs, activeCenterTabId } = useUIStore()
+  const centerTabs = useUIStore((s) => s.centerTabs)
+  const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
 
   const activeTab = centerTabs.find((t) => t.id === activeCenterTabId)
 

@@ -1,5 +1,4 @@
-import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { readFile, writeFile, rename, mkdir, unlink, access, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import type { Session, Message, TsmState, TsmStatus, SessionSettings, Part, SessionOrigin } from '@synth/shared';
 import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts } from '@synth/shared';
@@ -403,7 +402,6 @@ export class FileStore {
 
   async list(filter?: { projectId?: string; userId?: string; search?: string; parentId?: string }): Promise<Session[]> {
     const dir = this._sessionsDir();
-    const { readdir } = await import('node:fs/promises');
     let files: string[];
     try {
       files = await readdir(dir);
@@ -439,7 +437,12 @@ export class FileStore {
   }
 
   async exists(sessionId: string): Promise<boolean> {
-    return existsSync(this._sessionPath(sessionId));
+    try {
+      await access(this._sessionPath(sessionId));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async listForUser(userId: string): Promise<Session[]> {

@@ -60,7 +60,11 @@ function ProjectsTab() {
   const { t } = useI18n()
   const { projects, loadProjects, deleteProject } = useProjectsStore()
   const { sessions, loadSessions, createSession, forkSession, deleteSession, moveSession } = useSessionsStore()
-  const { collapsedProjects, toggleProjectCollapse, openTab, centerTabs, activeCenterTabId } = useUIStore()
+  const collapsedProjects = useUIStore((s) => s.collapsedProjects)
+  const toggleProjectCollapse = useUIStore((s) => s.toggleProjectCollapse)
+  const openTab = useUIStore((s) => s.openTab)
+  const centerTabs = useUIStore((s) => s.centerTabs)
+  const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
   const { sortMode, selectionMode, selectedIds, toggleSelected } = useSessionsTreeStore()
   const streamingBySession = useChatStore((s) => s.streamingBySession)
   const queueBySession = useChatStore((s) => s.queueBySession)
@@ -160,12 +164,10 @@ function ProjectsTab() {
     const session = sessions.find((s) => s.id === sessionId)
     if (!session) return
     const pid = session.project_id || '__none__'
-    const uiState = useUIStore.getState()
-    if (pid && pid !== '__none__' && uiState.collapsedProjects.has(pid)) {
-      uiState.toggleProjectCollapse(pid)
-    }
-    if (pid === '__none__' && uiState.collapsedProjects.has('__none__')) {
-      uiState.toggleProjectCollapse('__none__')
+    const { collapsedProjects: cp, toggleProjectCollapse: tpc } = useUIStore.getState()
+    if (cp.has(pid)) {
+      // Use getState() to avoid re-render cascade — the toggle is purely visual
+      tpc(pid)
     }
   }, [activeCenterTabId])
 
@@ -524,7 +526,9 @@ function FilesTab() {
   const { t } = useI18n()
   const { projects, loadProjects } = useProjectsStore()
   const { treesByProject, loadFileTree, loadSubDirectory, expandedProjects, expandedDirs, toggleProjectExpand, toggleDirExpand, createFile, createDirectory, moveEntry, deleteEntry, uploadFile } = useFilesStore()
-  const { openTab, centerTabs, activeCenterTabId } = useUIStore()
+  const openTab = useUIStore((s) => s.openTab)
+  const centerTabs = useUIStore((s) => s.centerTabs)
+  const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [renamingProject, setRenamingProject] = useState<string | null>(null)
@@ -958,7 +962,9 @@ function GitTab() {
   const { t } = useI18n()
   const { projects, loadProjects } = useProjectsStore()
   const { reposByProject, commitsByRepo, expandedProjects, expandedRepos, loadRepos, loadCommitLog, toggleProjectExpand, toggleRepoExpand, initRepo } = useGitStore()
-  const { openTab, activeCenterTabId, centerTabs } = useUIStore()
+  const openTab = useUIStore((s) => s.openTab)
+  const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
+  const centerTabs = useUIStore((s) => s.centerTabs)
   const [commitShowMore, setCommitShowMore] = useState<Record<string, boolean>>({})
   const [addRepoProjectId, setAddRepoProjectId] = useState<string | null>(null)
   const [popoverMode, setPopoverMode] = useState<AddRepoMode>(null)

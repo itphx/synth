@@ -45,11 +45,9 @@ export function createSessionRoutes(
       projectId: body.project_id || body.projectId || undefined,
       engine: body.engine || 'synth',
       settings: body.settings,
+      userId: user.id,
+      ownerId: user.id,
     });
-
-    session.userId = user.id;
-    session.ownerId = user.id;
-    await sessionManager.updateSession(session);
 
     // Автоматически подписываем активных клиентов на новую сессию
     eventHub.subscribeToSession(user.id, session.id).catch((e: unknown) =>
@@ -121,10 +119,9 @@ export function createSessionRoutes(
       messageId: body.message_id ?? body.messageId,
       messageIndex: body.message_index ?? body.messageIndex,
       title: body.title,
+      userId: user.id,
+      ownerId: user.id,
     });
-    fork.userId = user.id;
-    fork.ownerId = user.id;
-    await sessionManager.updateSession(fork);
     eventHub.subscribeToSession(user.id, fork.id).catch((e: unknown) =>
       console.warn('subscribeToSession failed:', e),
     );
