@@ -56,6 +56,8 @@ export function serializeSession(session: Session) {
 export function serializeMessage(msg: Message, index: number) {
   return {
     index,
+    origin: msg.origin,
+    source_msg_id: msg.sourceMsgId || null,
     role: msg.role,
     content: msg.content,
     author: msg.author || null,

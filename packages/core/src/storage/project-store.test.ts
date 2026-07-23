@@ -120,7 +120,7 @@ describe('ProjectStore', () => {
     const project = store.create('CRUD', 'u1', { description: 'initial' });
     expect(project.name).toBe('CRUD');
     await store.save(project);
-    let loaded = await store.load(project.id);
+    const loaded = await store.load(project.id);
     expect(loaded).not.toBeNull();
     expect(loaded!.description).toBe('initial');
     loaded!.name = 'CRUD Updated';

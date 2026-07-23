@@ -9,7 +9,7 @@ import type { EventBus } from '../../events/bus.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import { serializeSession, serializeMessage } from '../../server/serialize.js';
 
-interface TaskExtra {
+export interface TaskExtra {
   provider: BaseProvider;
   agentRegistry: AgentRegistry;
   toolRegistry?: ToolRegistry;
@@ -181,33 +181,31 @@ export const taskTool: ToolDefinition = {
             childSessionId = fork.id;
             childMessages = fork.messages;
           } else if (effectiveMode === 'summary') {
-            const child = await extra.sessionManager.createSession({
+            const fork = await extra.sessionManager.forkSession(extra.sessionId, {
               title: `Подзадача: ${params.description}`,
-              projectId: parentSession.projectId,
-              engine: parentSession.engine,
-              parentId: extra.sessionId,
-              sessionOrigin: 'subagent',
-              settings: { ...parentSession.settings, agentRole: params.subagent_type },
             });
-            child.userId = parentSession.userId;
-            child.ownerId = parentSession.ownerId;
-            await extra.sessionManager.updateSession(child);
-            childSessionId = child.id;
+            fork.sessionOrigin = 'subagent';
+            fork.userId = parentSession.userId;
+            fork.ownerId = parentSession.ownerId;
+            fork.settings = { ...fork.settings, agentRole: params.subagent_type };
+            await extra.sessionManager.updateSession(fork);
+            childSessionId = fork.id;
+            childMessages = fork.messages;
 
             try {
-              const summaryMsg = await extra.contextOptimizer!.summarize(parentSession);
+              const summaryMsg = await extra.contextOptimizer!.summarize(fork);
               if (summaryMsg.content) {
-                await extra.sessionManager.addMessage(child.id, {
+                await extra.sessionManager.addMessage(childSessionId, {
                   ...summaryMsg,
                   id: generateId(),
                   origin: 'local',
                   hidden: false,
                 });
-                const updated = await extra.sessionManager.getSession(child.id);
+                const updated = await extra.sessionManager.getSession(childSessionId);
                 if (updated) childMessages = updated.messages;
               }
             } catch {
-              // fallback: без саммари, только prompt
+              // fallback: без саммари, только prompt с полной историей
             }
           } else {
             // none mode (default)
