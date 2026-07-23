@@ -148,12 +148,18 @@ export const taskTool: ToolDefinition = {
 
     let childSessionId: string | undefined;
     let childMessages: Message[] = [];
+    let parentNotesText = '';
 
     // ─── Создание дочерней сессии с контекстом ───────────────────────
     if (extra.sessionManager && extra.sessionId) {
       try {
         const parentSession = await extra.sessionManager.getSession(extra.sessionId);
         if (parentSession) {
+          // Извлекаем активные заметки родителя для передачи саб-агенту
+          const activeNotes = parentSession.stickyNotes.filter((n) => !n.disabled);
+          if (activeNotes.length > 0) {
+            parentNotesText = activeNotes.map((n) => n.content).join('\n\n---\n\n');
+          }
           const effectiveMode = contextMode === 'summary' && !extra.contextOptimizer ? 'none' : contextMode;
 
           if (effectiveMode === 'inherit') {
@@ -254,13 +260,21 @@ export const taskTool: ToolDefinition = {
 
     // ─── Сборка LLM-сообщений ────────────────────────────────────────
     const llmSystemPrompt = (() => {
+      let prompt = systemPrompt;
+
+      // Заметки родительской сессии — передаём во всех режимах с контекстом
+      // (inherit, summary, last_n), но НЕ в none (чистый лист)
+      if (contextMode !== 'none' && parentNotesText) {
+        prompt += `\n\n[ЗАМЕТКИ РОДИТЕЛЬСКОЙ СЕССИИ]\nНиже — важные заметки из основной сессии. Учитывай их при выполнении задачи.\n\n${parentNotesText}`;
+      }
+
       if (contextMode === 'summary' && childMessages.length > 0) {
         const summaryMsg = childMessages.find(m => m.role === MessageRole.SUMMARY);
         if (summaryMsg?.content) {
-          return `${systemPrompt}\n\n[СЖАТЫЙ КОНТЕКСТ РОДИТЕЛЬСКОЙ СЕССИИ]\n${summaryMsg.content}`;
+          prompt += `\n\n[СЖАТЫЙ КОНТЕКСТ РОДИТЕЛЬСКОЙ СЕССИИ]\n${summaryMsg.content}`;
         }
       }
-      return systemPrompt;
+      return prompt;
     })();
 
     const messages: LLMMessage[] = [

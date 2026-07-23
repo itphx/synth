@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { SessionManager } from './manager.js';
 import { FileStore } from '../storage/file-store.js';
 import type { Message } from '@synth/shared';
-import { MessageRole, generateId, makeTextPart, TsmState } from '@synth/shared';
+import { MessageRole, generateId, makeTextPart, TsmState, nowISO } from '@synth/shared';
 
 describe('SessionManager', () => {
   let store: FileStore;
@@ -542,5 +542,32 @@ describe('AD-033: Session forking and branching', () => {
 
     const fork = await manager.forkSession(parent.id, { messageIndex: 99 });
     expect(fork.messages).toHaveLength(1);
+  });
+
+  it('forkSession копирует активные stickyNotes из родительской сессии', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    // Добавляем заметки: одна активная, одна disabled
+    parent.stickyNotes = [
+      { id: 'n1', content: 'Важное решение: использовать SQLite', createdAt: nowISO(), updatedAt: nowISO(), disabled: false },
+      { id: 'n2', content: 'Игнорируемая заметка', createdAt: nowISO(), updatedAt: nowISO(), disabled: true },
+    ];
+    await manager.updateSession(parent);
+
+    const fork = await manager.forkSession(parent.id, {});
+
+    // Только активная заметка скопирована
+    expect(fork.stickyNotes).toHaveLength(1);
+    expect(fork.stickyNotes[0]!.content).toBe('Важное решение: использовать SQLite');
+    // ID регенерирован
+    expect(fork.stickyNotes[0]!.id).not.toBe('n1');
+    // Флаг disabled сброшен у копии
+    expect(fork.stickyNotes[0]!.disabled).toBe(false);
+  });
+
+  it('forkSession копирует пустые stickyNotes без ошибок', async () => {
+    const parent = await manager.createSession({ title: 'Parent' });
+    // stickyNotes уже пустые по умолчанию
+    const fork = await manager.forkSession(parent.id, {});
+    expect(fork.stickyNotes).toEqual([]);
   });
 });

@@ -333,6 +333,11 @@ export class SessionManager {
         sourceMsgId: m.id,
       }));
 
+      // Копируем активные заметки родительской сессии
+      forked.stickyNotes = source.stickyNotes
+        .filter((n) => !n.disabled)
+        .map((n) => ({ ...structuredClone(n), id: generateId() }));
+
       forked.pendingMessages = [];
       forked.status.state = TsmStateEnum.PLANNING;
       forked.status.iteration = 0;
