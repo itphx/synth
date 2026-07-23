@@ -3,6 +3,7 @@ import type { SessionData } from '@/lib/api/synthApi'
 import { synthApi } from '@/lib/api/synthApi'
 import { useUIStore } from './useUIStore'
 import { useChatStore } from './chatStore'
+import { isTransportConnected } from './transportStore'
 
 interface SessionsStore {
   sessions: SessionData[]
@@ -15,6 +16,7 @@ interface SessionsStore {
     project_id?: string | null
     engine?: string
   }) => Promise<SessionData | null>
+  forkSession: (sessionId: string, options?: { message_id?: string; message_index?: number; title?: string }) => Promise<SessionData | null>
   moveSession: (sessionId: string, projectId: string | null) => Promise<SessionData | null>
   renameSession: (sessionId: string, newName: string) => Promise<SessionData | null>
   deleteSession: (sessionId: string) => Promise<boolean>
@@ -39,8 +41,26 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
   createSession: async (data) => {
     try {
       const session = await synthApi.createSession(data)
-      set((s) => ({ sessions: [session, ...s.sessions] }))
+      if (!isTransportConnected()) {
+        set((s) => ({ sessions: [session, ...s.sessions] }))
+      }
       return session
+    } catch (e) {
+      set({ error: (e as Error).message })
+      return null
+    }
+  },
+
+  forkSession: async (sessionId, options) => {
+    try {
+      const fork = await synthApi.forkSession(sessionId, options)
+      if (!isTransportConnected()) {
+        set((s) => {
+          if (s.sessions.some((ses) => ses.id === fork.id)) return s
+          return { sessions: [fork, ...s.sessions] }
+        })
+      }
+      return fork
     } catch (e) {
       set({ error: (e as Error).message })
       return null
@@ -50,9 +70,11 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
   moveSession: async (sessionId, projectId) => {
     try {
       const updated = await synthApi.updateSession(sessionId, { project_id: projectId })
-      set((s) => ({
-        sessions: s.sessions.map((sess) => (sess.id === sessionId ? updated : sess)),
-      }))
+      if (!isTransportConnected()) {
+        set((s) => ({
+          sessions: s.sessions.map((sess) => (sess.id === sessionId ? updated : sess)),
+        }))
+      }
       return updated
     } catch (e) {
       set({ error: (e as Error).message })
@@ -63,9 +85,11 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
   renameSession: async (sessionId, newName) => {
     try {
       const updated = await synthApi.updateSession(sessionId, { name: newName })
-      set((s) => ({
-        sessions: s.sessions.map((sess) => (sess.id === sessionId ? updated : sess)),
-      }))
+      if (!isTransportConnected()) {
+        set((s) => ({
+          sessions: s.sessions.map((sess) => (sess.id === sessionId ? updated : sess)),
+        }))
+      }
       return updated
     } catch (e) {
       set({ error: (e as Error).message })
@@ -76,9 +100,10 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
   async deleteSession(sessionId: string) {
     try {
       await synthApi.deleteSession(sessionId)
-      set((s) => ({ sessions: s.sessions.filter((sess) => sess.id !== sessionId) }))
+      if (!isTransportConnected()) {
+        set((s) => ({ sessions: s.sessions.filter((sess) => sess.id !== sessionId) }))
+      }
 
-      // Закрываем вкладку, если сессия была открыта
       const tabId = `chat-${sessionId}`
       const uiState = useUIStore.getState()
       const tab = uiState.centerTabs.find((t) => t.id === tabId)
@@ -86,7 +111,6 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
         uiState.closeTab(tabId)
       }
 
-      // Очищаем данные из chatStore
       useChatStore.getState().clearSession(sessionId)
 
       return true

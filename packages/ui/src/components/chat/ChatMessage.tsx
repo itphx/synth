@@ -8,31 +8,23 @@ import { ToolCallPart } from './ToolCallPart'
 import { SubagentPart, type SubagentPartData } from './SubagentPart'
 import { useUIStore } from '@/stores/useUIStore'
 import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData } from '@/stores/chatStore'
-import { useEffect, useState } from 'react'
+import { useMemo } from 'react'
 
 function useToolCallData(toolCalls: MessageData['tool_calls']) {
-  const [data, setData] = useState<LiveToolCall[]>([])
-
-  useEffect(() => {
-    if (!toolCalls || toolCalls.length === 0) {
-      setData([])
-      return
-    }
-    setData(
-      toolCalls.map((tc) => ({
-        callId: tc.id || `tc_${Math.random().toString(36).slice(2, 8)}`,
-        name: tc.name,
-        args: tc.args,
-        status: 'done' as const,
-        result: tc.result,
-        startedAt: tc.started_at || '',
-        completedAt: tc.completed_at,
-        iteration: tc.iteration || 0,
-      })),
-    )
+  return useMemo(() => {
+    if (!toolCalls || toolCalls.length === 0) return []
+    return toolCalls.map((tc) => ({
+      callId: tc.id || `tc_${Math.random().toString(36).slice(2, 8)}`,
+      name: tc.name,
+      args: tc.args,
+      status: 'done' as const,
+      result: tc.result,
+      startedAt: tc.started_at || '',
+      completedAt: tc.completed_at,
+      iteration: tc.iteration || 0,
+      parentCallId: undefined,
+    }))
   }, [toolCalls])
-
-  return data
 }
 
 function getReasoningBlocks(message: MessageData): ReasoningBlockData[] {
@@ -64,6 +56,8 @@ interface ChatMessageProps {
   onDelete: () => void
   onRetry: () => void
   onDebug: () => void
+  onFork: () => void
+  readOnly?: boolean
 }
 
 function ChatMessageInner({
@@ -74,6 +68,8 @@ function ChatMessageInner({
   onDelete,
   onRetry,
   onDebug,
+  onFork,
+  readOnly,
 }: ChatMessageProps) {
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
@@ -241,12 +237,14 @@ function ChatMessageInner({
             pinned={message.pinned}
             canRetry={canRetry}
             hasDebug={hasDebug}
+            readOnly={readOnly}
             onCopy={onCopy}
             onToggle={onToggle}
             onPin={onPin}
             onDelete={onDelete}
             onRetry={onRetry}
             onDebug={onDebug}
+            onFork={onFork}
           />
         )}
       </div>

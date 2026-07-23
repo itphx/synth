@@ -168,6 +168,7 @@ export const dict = {
   'leftPanel.confirmDeleteSession': 'Delete session?',
   'leftPanel.confirmBulkDelete': 'Delete {count} selected sessions?',
   'leftPanel.rename': 'Rename',
+  'leftPanel.forkSession': 'Fork',
   'leftPanel.configure': 'Configure',
   'leftPanel.delete': 'Delete',
   'leftPanel.clearSession': 'Clear',
@@ -356,6 +357,7 @@ export const dict = {
 
   // Chat
   'chat.input.placeholder': 'Type a message... Use @ to mention an agent',
+  'chat.input.readOnly': 'Read-only — this is a subagent session',
   'chat.input.send': 'Send',
   'chat.input.createNote': 'Create note',
   'chat.input.stop': 'Stop',
@@ -372,6 +374,7 @@ export const dict = {
   'chat.actions.retry': 'Retry',
   'chat.actions.retryConfirm': 'Retry? This and subsequent messages will be disabled.',
   'chat.actions.return': 'Return to input',
+  'chat.actions.fork': 'Create branch',
   'chat.actions.debug': 'Debug',
 
   'chat.message.copied': 'Copied',
@@ -381,6 +384,7 @@ export const dict = {
   'chat.message.unpinned': 'Unpinned',
   'chat.message.deleted': 'Message deleted',
   'chat.message.retrying': 'Returned to input',
+  'chat.message.forked': 'Branch created',
   'chat.message.empty': 'Empty message',
 
   'chat.session.cleared': 'Session cleared',
@@ -437,7 +441,10 @@ export const dict = {
   'chat.error.retryMessage': 'Failed to retry message',
   'chat.error.clearSession': 'Failed to clear session',
 
+  'chat.error.forkFailed': 'Failed to create branch:',
+
   'chat.message.sent': 'Message sent',
+
 
   'chat.debug.noData': 'No debug data',
   'chat.queue.returnInDev': 'Return queue — in development',

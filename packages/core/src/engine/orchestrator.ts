@@ -1,5 +1,5 @@
 import type { Message, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@synth/shared';
-import { MessageRole, nowISO, ToolCapability } from '@synth/shared';
+import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart } from '@synth/shared';
 import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
 import { DebugCollector } from '../debug.js';
@@ -12,6 +12,7 @@ import type { ToolForLLM } from '@synth/shared';
 import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
 import { warning } from '../logger.js';
+import { autoTitleSession } from '../sessions/auto-title.js';
 
 const MAX_DOOM_LOOP_COUNT = 3;
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
@@ -103,7 +104,7 @@ export class ChatOrchestrator {
     publishChunk: (event: string, data: Record<string, unknown>) => void,
   ): Promise<ProcessMessageResult> {
     const streamId = (message.metadata?.stream_id as string) || 'unknown';
-    const effectiveAgentRole = message.agentRole || session.settings.agentRole;
+    const effectiveAgentRole = message.agentRole || session.settings.agentRole || 'assistant';
     const author = message.author || 'unknown';
 
     const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
@@ -434,6 +435,10 @@ export class ChatOrchestrator {
                   extra: {
                     provider,
                     agentRegistry: this._agentRegistry,
+                    sessionManager: this._sessionManager,
+                    eventBus: this._eventBus,
+                    contextOptimizer: this._optimizer ?? undefined,
+                    callerAgentRole: effectiveAgentRole,
                     sessionSettings: {
                       temperature: session.settings.temperature,
                       maxTokens: session.settings.maxTokens,
@@ -536,6 +541,16 @@ export class ChatOrchestrator {
       }
 
       publishChunk('stream.done', doneData);
+
+      // 8.5. Auto-rename session on first exchange
+      if (updatedSession) {
+        const userMsgCount = updatedSession.messages.filter(
+          (m) => m.role === MessageRole.USER && !m.metadata?.synthetic,
+        ).length;
+        if (userMsgCount === 1) {
+          autoTitleSession(updatedSession, this._sessionManager, provider).catch(() => {});
+        }
+      }
 
       // 9. Check context optimization triggers
       if (this._optimizer && updatedSession) {
@@ -976,7 +991,11 @@ export class ChatOrchestrator {
     }
 
     const msg: Message = {
+      id: generateId(),
       role,
+      seq: 0, // filled by addMessage
+      origin: 'local',
+      parts: [makeTextPart(finalContent)],
       content: finalContent,
       createdAt: nowISO(),
       disabled: false,

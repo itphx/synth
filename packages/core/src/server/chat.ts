@@ -8,7 +8,7 @@ import {
 import { JsonStore } from '../storage/json-store.js';
 import type { ProviderConfig, ModelConfig, SummarizationConfig } from '@synth/shared';
 import type { Message } from '@synth/shared';
-import { MessageRole, nowISO, generateId } from '@synth/shared';
+import { MessageRole, nowISO, generateId, makeTextPart } from '@synth/shared';
 
 export interface SingleChatOptions {
   message: string;
@@ -108,7 +108,11 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   await sessionManager.updateSession(session);
 
   const message: Message = {
+    id: generateId(),
     role: MessageRole.USER,
+    seq: session.messages.length + 1,
+    origin: 'local',
+    parts: [makeTextPart(options.message)],
     content: options.message,
     createdAt: nowISO(),
     disabled: false,

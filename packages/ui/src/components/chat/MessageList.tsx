@@ -15,6 +15,8 @@ interface MessageListProps {
   onDelete: (msg: MessageData) => void
   onRetry: (msg: MessageData) => void
   onDebug: (msg: MessageData) => void
+  onFork: (msg: MessageData) => void
+  readOnly?: boolean
   onStop: () => void
 }
 
@@ -30,6 +32,8 @@ export function MessageList({
   onDelete,
   onRetry,
   onDebug,
+  onFork,
+  readOnly,
   onStop,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -85,12 +89,20 @@ export function MessageList({
     }
   }, [messages, streamContentSize, streamEntries.length, autoScroll, scrollToBottom])
 
-  const createHandler = (handler: (msg: MessageData) => void) => (msg: MessageData) => {
-    return () => handler(msg)
-  }
-
   const shouldVirtualize = messages.length > VIRTUALIZE_THRESHOLD
   const virtualItems = virtualizer.getVirtualItems()
+
+  const chatMsgProps = useCallback((msg: MessageData) => ({
+    message: msg,
+    onCopy: () => onCopy(msg),
+    onToggle: () => onToggle(msg),
+    onPin: () => onPin(msg),
+    onDelete: () => onDelete(msg),
+    onRetry: () => onRetry(msg),
+    onDebug: () => onDebug(msg),
+    onFork: () => onFork(msg),
+    readOnly,
+  }), [onCopy, onToggle, onPin, onDelete, onRetry, onDebug, onFork, readOnly])
 
   return (
     <div className="relative flex-1 overflow-hidden">
@@ -117,16 +129,8 @@ export function MessageList({
                 const msg = messages[vi.index]
                 if (!msg) return null
                 return (
-                  <div key={msg.index} data-index={vi.index} ref={virtualizer.measureElement}>
-                    <ChatMessage
-                      message={msg}
-                      onCopy={createHandler(onCopy)(msg)}
-                      onToggle={createHandler(onToggle)(msg)}
-                      onPin={createHandler(onPin)(msg)}
-                      onDelete={createHandler(onDelete)(msg)}
-                      onRetry={createHandler(onRetry)(msg)}
-                      onDebug={createHandler(onDebug)(msg)}
-                    />
+                  <div key={msg.id || msg.index} data-index={vi.index} ref={virtualizer.measureElement}>
+                    <ChatMessage {...chatMsgProps(msg)} />
                   </div>
                 )
               })}
@@ -134,14 +138,8 @@ export function MessageList({
           ) : (
             messages.map((msg) => (
               <ChatMessage
-                key={`${msg.role}-${msg.index}-${msg.created_at}`}
-                message={msg}
-                onCopy={createHandler(onCopy)(msg)}
-                onToggle={createHandler(onToggle)(msg)}
-                onPin={createHandler(onPin)(msg)}
-                onDelete={createHandler(onDelete)(msg)}
-                onRetry={createHandler(onRetry)(msg)}
-                onDebug={createHandler(onDebug)(msg)}
+                key={msg.id || `${msg.role}-${msg.index}-${msg.created_at}`}
+                {...chatMsgProps(msg)}
               />
             ))
           )}

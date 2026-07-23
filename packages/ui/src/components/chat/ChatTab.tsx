@@ -1,8 +1,9 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useChatStore, type MessageData } from '@/stores/chatStore'
+import { useSessionsStore } from '@/stores/sessionsStore'
 import { useTransportStore } from '@/stores/transportStore'
 import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
 import { useNotification } from '@/hooks/useNotification'
@@ -57,7 +58,12 @@ export function ChatTab({ tab }: ChatTabProps) {
     ? messages.find((m) => m.index === debugModalMessageIndex) ?? null
     : null
 
+  const [sessionOrigin, setSessionOrigin] = useState<string | null>(null)
+  const isSubagent = sessionOrigin === 'subagent'
+  const isReadOnly = isSubagent
+
   const agentsRef = useRef<AgentInfo[]>([])
+  const forkingRef = useRef(false)
 
   useEffect(() => {
     const load = async () => {
@@ -79,6 +85,7 @@ export function ChatTab({ tab }: ChatTabProps) {
             if (typeof s.agent_role === 'string') setActiveAgentId(s.agent_role)
           }
           const sessData = session as unknown as Record<string, unknown>
+          setSessionOrigin((sessData.session_origin as string) || null)
           const pendingMsgs = sessData.pending_messages as MessageData[] | undefined
           if (pendingMsgs && pendingMsgs.length > 0) {
             const hasActiveStream = sessData.current_stream != null
@@ -105,6 +112,36 @@ export function ChatTab({ tab }: ChatTabProps) {
     }
     load()
   }, [sessionId])
+
+  const handleFork = useCallback(
+    async (msg: MessageData) => {
+      if (forkingRef.current) return
+      forkingRef.current = true
+      try {
+        const fork = await useSessionsStore.getState().forkSession(sessionId, {
+          message_id: msg.id || undefined,
+          message_index: msg.index,
+        })
+        if (fork) {
+          notify({ text: t('chat.message.forked'), type: 'info', category: 'message', sessionId })
+          useUIStore.getState().openTab({
+            id: `chat-${fork.id}`,
+            type: 'chat' as const,
+            title: fork.name || fork.id,
+            data: { sessionId: fork.id, projectId: fork.project_id || undefined },
+          })
+          if (msg.role === 'user' && msg.content) {
+            useChatStore.getState().setRetryInput(fork.id, msg.content)
+          }
+        }
+      } catch (e) {
+        notify({ text: `${t('chat.error.forkFailed')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
+      } finally {
+        forkingRef.current = false
+      }
+    },
+    [sessionId, notify, t]
+  )
 
   const handleSend = useCallback(
     async (text: string, agentRole?: string) => {
@@ -354,7 +391,7 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-background w-full">
-      {summarizationPending && (
+      {summarizationPending && !isSubagent && (
         <div className="flex items-center gap-2 px-4 py-2 bg-yellow-500/10 border-b border-yellow-500/20">
           <span className="text-xs text-yellow-600 dark:text-yellow-400 flex-1">
             {t('rightPanel.context.summarizationPendingBanner')}
@@ -387,7 +424,7 @@ export function ChatTab({ tab }: ChatTabProps) {
         </div>
       ) : null}
 
-      {stickyNotes.length > 0 && (
+      {stickyNotes.length > 0 && !isSubagent && (
         <StickyNotesPanel
           notes={stickyNotes}
           onUpdate={handleUpdateNote}
@@ -405,28 +442,38 @@ export function ChatTab({ tab }: ChatTabProps) {
         onDelete={handleDelete}
         onRetry={handleRetry}
         onDebug={handleDebug}
+        onFork={handleFork}
+        readOnly={isReadOnly}
         onStop={handleStop}
       />
 
-      <QueuePanel
-        pending={pending}
-        isStalled={queue?.isStalled ?? false}
-        pendingCount={queue?.pendingCount ?? 0}
-        onResume={handleResumeQueue}
-        onClear={handleClearQueue}
-        onReturnAll={handleReturnQueue}
-        onReturnMsg={handleReturnMsg}
-      />
+      {!isSubagent && (
+        <QueuePanel
+          pending={pending}
+          isStalled={queue?.isStalled ?? false}
+          pendingCount={queue?.pendingCount ?? 0}
+          onResume={handleResumeQueue}
+          onClear={handleClearQueue}
+          onReturnAll={handleReturnQueue}
+          onReturnMsg={handleReturnMsg}
+        />
+      )}
 
-      <ChatInput
-        sessionId={sessionId}
-        agents={agentsRef.current}
-        isStreaming={isStreaming}
-        onSend={handleSend}
-        onStop={handleStop}
-        onStopQueue={handleStopAll}
-        onCreateNote={handleCreateNote}
-      />
+      {isSubagent ? (
+        <div className="shrink-0 mx-auto mt-2 mb-2 w-4/5 rounded-xl border border-border/60 bg-surface-subtle px-4 py-3 text-center">
+          <p className="text-xs text-muted-foreground">{t('chat.input.readOnly')}</p>
+        </div>
+      ) : (
+        <ChatInput
+          sessionId={sessionId}
+          agents={agentsRef.current}
+          isStreaming={isStreaming}
+          onSend={handleSend}
+          onStop={handleStop}
+          onStopQueue={handleStopAll}
+          onCreateNote={handleCreateNote}
+        />
+      )}
 
       {debugMessage?.debug_data && Object.keys(debugMessage.debug_data).length > 0 && (
         <DebugModal

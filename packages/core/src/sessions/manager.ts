@@ -1,6 +1,6 @@
-import type { Session, TsmState, Message, SessionSettings, Checkpoint } from '@synth/shared';
-import { TsmState as TsmStateEnum } from '@synth/shared';
-import { nowISO, generateId } from '@synth/shared';
+import type { Session, TsmState, Message, SessionSettings, Checkpoint, SessionOrigin } from '@synth/shared';
+import { TsmState as TsmStateEnum, getForkedTitle, MessageRole } from '@synth/shared';
+import { nowISO, generateId, makeTextPart } from '@synth/shared';
 import type { FileStore } from '../storage/file-store.js';
 
 const VALID_TSM_TRANSITIONS: Record<TsmState, TsmState[]> = {
@@ -9,6 +9,11 @@ const VALID_TSM_TRANSITIONS: Record<TsmState, TsmState[]> = {
   [TsmStateEnum.VALIDATION]: [TsmStateEnum.DONE, TsmStateEnum.EXECUTION],
   [TsmStateEnum.DONE]: [],
 };
+
+export interface SessionTree {
+  session: Session | null;
+  children: SessionTree[];
+}
 
 export class SessionManager {
   private _locks = new Map<string, Promise<void>>();
@@ -26,14 +31,13 @@ export class SessionManager {
     this._locks.set(sessionId, promise);
   }
 
-  // Атомарный read-modify-write (как в Python AD-013)
   async withLock<T>(sessionId: string, fn: (session: Session) => Promise<T>): Promise<T> {
     const prevLock = this._getLock(sessionId);
     let release: () => void;
     const newLock = new Promise<void>((resolve) => { release = resolve; });
     this._setLock(sessionId, newLock);
 
-    await prevLock; // дождаться предыдущей операции
+    await prevLock;
     try {
       const session = await this.store.load(sessionId);
       if (!session) throw new Error(`Session ${sessionId} not found`);
@@ -43,16 +47,16 @@ export class SessionManager {
     }
   }
 
-  // CRUD
-
   async getSession(sessionId: string): Promise<Session | null> {
     return this.store.load(sessionId);
   }
 
-  async createSession(data: { title?: string; projectId?: string; engine?: string; settings?: Partial<SessionSettings> } = {}): Promise<Session> {
+  async createSession(data: { title?: string; projectId?: string; engine?: string; parentId?: string; sessionOrigin?: SessionOrigin; settings?: Partial<SessionSettings> } = {}): Promise<Session> {
     const session: Session = {
       id: generateId(),
-      title: data.title,
+      title: data.title || 'Новая сессия',
+      sessionOrigin: data.sessionOrigin || 'user',
+      parentId: data.parentId,
       userId: '',
       projectId: data.projectId,
       engine: (data.engine || 'synth') as Session['engine'],
@@ -87,7 +91,6 @@ export class SessionManager {
         agentRole: data.settings?.agentRole,
         language: data.settings?.language,
       },
-      branches: [],
       checkpoints: [],
       stickyNotes: [],
       summarizationPending: false,
@@ -132,8 +135,6 @@ export class SessionManager {
   async saveSession(session: Session): Promise<void> {
     await this.store.save(session);
   }
-
-  // Блокировки (AD-013)
 
   async acquireLock(sessionId: string, processId: string): Promise<boolean> {
     return this.withLock(sessionId, async (session) => {
@@ -185,10 +186,14 @@ export class SessionManager {
     return stale;
   }
 
-  // Сообщения
-
   async addMessage(sessionId: string, message: Message): Promise<Session | null> {
     return this.withLock(sessionId, async (session) => {
+      if (!message.id) message.id = generateId();
+      if (!message.seq) message.seq = session.messages.length + 1;
+      if (!message.origin) message.origin = 'local';
+      if (!message.parts || message.parts.length === 0) {
+        message.parts = [makeTextPart(message.content)];
+      }
       session.messages.push(message);
       session.updatedAt = nowISO();
       await this.store.save(session);
@@ -199,14 +204,17 @@ export class SessionManager {
   async addPendingMessage(sessionId: string, message: Message, maxPending = 5): Promise<Session | null> {
     return this.withLock(sessionId, async (session) => {
       if (session.pendingMessages.length >= maxPending) return null;
+      if (!message.id) message.id = generateId();
+      if (!message.origin) message.origin = 'local';
+      if (!message.parts || message.parts.length === 0) {
+        message.parts = [makeTextPart(message.content)];
+      }
       session.pendingMessages.push(message);
       session.updatedAt = nowISO();
       await this.store.save(session);
       return session;
     });
   }
-
-  // TSM
 
   async updateTsmState(sessionId: string, newState: TsmState): Promise<Session | null> {
     return this.withLock(sessionId, async (session) => {
@@ -221,8 +229,6 @@ export class SessionManager {
       return session;
     });
   }
-
-  // Checkpoints
 
   async createCheckpoint(sessionId: string): Promise<Session | null> {
     return this.withLock(sessionId, async (session) => {
@@ -252,11 +258,9 @@ export class SessionManager {
     });
   }
 
-  // Safe update (сохраняет pending_messages из хранилища — AD-013)
   async safeUpdate(sessionId: string, updateFn: (session: Session) => Promise<void> | void): Promise<void> {
     await this.withLock(sessionId, async (stored) => {
       if (stored.pendingMessages.length > 0) {
-        // merge свежие pending_messages с хранилища
         const fresh = await this.store.load(sessionId);
         if (fresh?.pendingMessages.length) {
           stored.pendingMessages = fresh.pendingMessages;
@@ -266,5 +270,82 @@ export class SessionManager {
       stored.updatedAt = nowISO();
       await this.store.save(stored);
     });
+  }
+
+  async renameSession(sessionId: string, title: string): Promise<Session | null> {
+    return this.withLock(sessionId, async (s) => {
+      s.title = title;
+      s.updatedAt = nowISO();
+      await this.store.save(s);
+      return s;
+    });
+  }
+
+  async getChildren(parentId: string): Promise<Session[]> {
+    return this.store.list({ parentId });
+  }
+
+  async getSessionTree(rootId: string): Promise<SessionTree> {
+    const root = await this.getSession(rootId);
+    const children = await this.getChildren(rootId);
+    const childTrees = await Promise.all(
+      children.map((c) => this.getSessionTree(c.id)),
+    );
+    return { session: root, children: childTrees };
+  }
+
+  async forkSession(
+    sourceSessionId: string,
+    options: { messageId?: string; messageIndex?: number; title?: string },
+  ): Promise<Session> {
+    const source = await this.getSession(sourceSessionId);
+    if (!source) throw new Error(`Session ${sourceSessionId} not found`);
+
+    const siblings = await this.getChildren(sourceSessionId);
+    const existingTitles = siblings.map((s) => s.title || '');
+    const forkedTitle = options.title || getForkedTitle(source.title, existingTitles);
+
+    const forked = await this.createSession({
+      title: forkedTitle,
+      projectId: source.projectId,
+      engine: source.engine,
+      sessionOrigin: 'fork' as SessionOrigin,
+      parentId: sourceSessionId,
+      settings: { ...source.settings },
+    });
+
+    // Определяем точку обрезки: messageIndex (всегда есть в UI) приоритетнее messageId
+    const cutoffIdx = options.messageIndex != null
+      ? options.messageIndex
+      : options.messageId
+        ? source.messages.findIndex((m) => m.id === options.messageId)
+        : source.messages.length;
+
+    // branchPoint: messageId если известен, иначе id сообщения по индексу (для ссылочной целостности)
+    forked.branchPoint = options.messageId
+      ?? (options.messageIndex != null && cutoffIdx >= 0 ? source.messages[cutoffIdx]?.id : undefined);
+
+    // Если указана точка развилки и это ответ ассистента — включаем его в форк.
+    // Для сообщения пользователя — только история выше (само сообщение уходит в input).
+    const includeBranchMsg = cutoffIdx >= 0 && source.messages[cutoffIdx]?.role === MessageRole.ASSISTANT;
+    const msgsToCopy = cutoffIdx >= 0
+      ? source.messages.slice(0, cutoffIdx + (includeBranchMsg ? 1 : 0))
+      : [...source.messages];
+
+    forked.messages = msgsToCopy.map((m, i) => ({
+      ...structuredClone(m),
+      id: generateId(),
+      seq: i + 1,
+      origin: 'inherited' as const,
+      sourceMsgId: m.id,
+    }));
+
+    forked.pendingMessages = [];
+    forked.status.state = TsmStateEnum.PLANNING;
+    forked.status.iteration = 0;
+    forked.status.validationAttempts = 0;
+
+    await this.store.save(forked);
+    return forked;
   }
 }

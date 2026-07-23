@@ -1,0 +1,19 @@
+{
+  "id": "title",
+  "displayName": {
+    "ru": "Генератор заголовков",
+    "en": "Title Generator"
+  },
+  "description": {
+    "ru": "Генерирует краткие заголовки для сессий",
+    "en": "Generates short titles for sessions"
+  },
+  "capabilities": [],
+  "icon": "pencil",
+  "color": "#6b7280",
+  "contextFile": "title",
+  "hidden": true,
+  "temperature": 0.3,
+  "agentMode": "primary",
+  "sshKeys": []
+}

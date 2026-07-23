@@ -120,7 +120,7 @@ export const LoginForm = () => {
 
           <button
             type="submit"
-            disabled={isLoading || !apiKey}
+            disabled={isLoading || !apiKey || (isDebugMode && !username)}
             className={cn(
               "w-full px-4 py-2.5 rounded-lg font-medium text-foreground",
               "bg-interactive-selection hover:bg-interactive-selection/90",

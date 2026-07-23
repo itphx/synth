@@ -231,11 +231,12 @@ function createDispatcher(): EventDispatcher {
         break
       }
 
-      case 'session.created': {
+      case 'session.created':
+      case 'session.fork.created': {
         const session = payload as unknown as SessionData
         if (session.id) {
           useSessionsStore.setState((s) => ({
-            sessions: [...s.sessions, session],
+            sessions: [session, ...s.sessions],
           }))
         }
         break
@@ -334,6 +335,10 @@ function createDispatcher(): EventDispatcher {
 
 let transport: TransportClient | null = null
 let transportReady = false
+
+export function isTransportConnected(): boolean {
+  return transportReady
+}
 
 // Очистка при HMR (hot module replacement)
 if (import.meta.hot) {

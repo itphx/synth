@@ -508,8 +508,12 @@ server.on('upgrade', (request, socket, head) => {
                 return;
               }
 
-              const message = {
+              const message: import('@synth/shared').Message = {
+                id: streamId,
                 role: MessageRole.USER,
+                seq: session.messages.length + 1,
+                origin: 'local',
+                parts: [{ id: generateStreamId(), type: 'text' as const, data: msg.content.trim() }],
                 content: msg.content.trim(),
                 createdAt: nowISO(),
                 disabled: false,

@@ -23,7 +23,6 @@ function MessageHeaderInner({ message }: MessageHeaderProps) {
     : ''
 
   const isUser = message.role === 'user'
-  const isAssistant = message.role === 'assistant'
   const isSummary = message.role === 'summary'
 
   const agents = useAgentsStore((s) => s.agents)
@@ -41,37 +40,40 @@ function MessageHeaderInner({ message }: MessageHeaderProps) {
     ? providers.find((p) => p.name === message.provider)?.url
     : undefined
 
+  const agentBadge = !isSummary && message.agent_role && (
+    agentInfo ? (
+      <span
+        className={`inline-flex items-center gap-1 rounded-sm py-0.5 ${agentColor ? '' : 'text-primary'}`}
+        style={agentColor ? { color: agentColor } : undefined}
+      >
+        <Icon name={agentInfo.icon || 'user-smile'} className="size-3" />
+        <span>{agentInfo.display_name || message.agent_role}</span>
+      </span>
+    ) : (
+      <span className="inline-flex items-center gap-1 rounded-sm py-0.5 text-primary">
+        <Icon name="user-smile" className="size-3" />
+        <span>{message.agent_role}</span>
+      </span>
+    )
+  )
+
+  const userBadge = isUser && !message.agent_role && (
+    <span className="inline-flex items-center gap-1 rounded-sm py-0.5 text-primary">
+      <Icon name="user-3" className="size-3" />
+      <span>{resolveAuthor()}</span>
+    </span>
+  )
+
   return (
     <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70 mb-1">
-      {isUser && (
-        <span className="inline-flex items-center gap-1 rounded-sm py-0.5 text-primary">
-          <Icon name="user-3" className="size-3" />
-          <span>{resolveAuthor()}</span>
-        </span>
-      )}
+      {userBadge}
+      {agentBadge}
 
       {isSummary && (
         <span className="inline-flex items-center gap-1 rounded-sm py-0.5 text-primary">
           <Icon name="subtract" className="size-3" />
           <span>Summary</span>
         </span>
-      )}
-
-      {!isUser && !isSummary && message.agent_role && (
-        isAssistant && agentInfo ? (
-          <span
-            className={`inline-flex items-center gap-1 rounded-sm py-0.5 ${agentColor ? '' : 'text-primary'}`}
-            style={agentColor ? { color: agentColor } : undefined}
-          >
-            <Icon name={agentInfo.icon || 'user-smile'} className="size-3" />
-            <span>{agentInfo.display_name || message.agent_role}</span>
-          </span>
-        ) : (
-        <span className="inline-flex items-center gap-1 rounded-sm py-0.5 text-primary">
-            <Icon name="user-smile" className="size-3" />
-            <span>{message.agent_role}</span>
-          </span>
-        )
       )}
 
       {!isUser && message.model && (

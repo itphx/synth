@@ -60,12 +60,19 @@ export function createSessionRoutes(
       session.projectId = body.project_id ?? body.projectId;
     }
     if (body.name !== undefined) session.title = body.name;
-    if (body.title !== undefined) session.title = body.title;
+    if (body.title !== undefined) {
+      const prevTitle = session.title;
+      session.title = body.title;
+      if (prevTitle !== body.title) {
+        eventBus.publish(session.id, 'session.renamed', { session_id: session.id, title: body.title, prev_title: prevTitle });
+      }
+    }
     if (body.engine !== undefined) session.engine = body.engine;
     if (body.settings !== undefined) {
       session.settings = { ...session.settings, ...(body.settings as Partial<typeof session.settings>) };
     }
     await sessionManager.updateSession(session);
+    eventBus.publish(session.id, 'session.updated', serializeSession(session));
     return c.json(serializeSession(session));
   });
 
@@ -109,7 +116,11 @@ export function createSessionRoutes(
     const streamId = body.messageId || generateStreamId();
 
     const message: Message = {
+      id: generateStreamId(),
       role: MessageRole.USER,
+      seq: session.messages.length + 1,
+      origin: 'local',
+      parts: [{ id: generateStreamId(), type: 'text', data: content }],
       content,
       createdAt: nowISO(),
       disabled: false,
@@ -230,7 +241,11 @@ export function createSessionRoutes(
 
     const streamId = generateStreamId();
     const sysMsg: Message = {
+      id: streamId,
       role: MessageRole.SYSTEM,
+      seq: 0,
+      origin: 'local',
+      parts: [{ id: generateStreamId(), type: 'text', data: '' }],
       content: '',
       createdAt: nowISO(),
       disabled: false,
@@ -277,6 +292,27 @@ export function createSessionRoutes(
         },
       },
     );
+  });
+
+  app.get('/:id/children', auth.requireAuth, async (c) => {
+    const children = await sessionManager.getChildren(c.req.param('id'));
+    return c.json(children.map(serializeSession));
+  });
+
+  app.get('/:id/tree', auth.requireAuth, async (c) => {
+    const tree = await sessionManager.getSessionTree(c.req.param('id'));
+    return c.json(tree);
+  });
+
+  app.post('/:id/fork', auth.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const fork = await sessionManager.forkSession(c.req.param('id'), {
+      messageId: body.message_id ?? body.messageId,
+      messageIndex: body.message_index ?? body.messageIndex,
+      title: body.title,
+    });
+    eventBus.publish(fork.id, 'session.fork.created', serializeSession(fork));
+    return c.json(serializeSession(fork), 201);
   });
 
   return app;

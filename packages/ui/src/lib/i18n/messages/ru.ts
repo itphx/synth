@@ -161,6 +161,7 @@ export const dict = {
 'leftPanel.confirmDeleteSession': 'Удалить сессию?',
   'leftPanel.confirmBulkDelete': 'Удалить {count} выбранных сессий?',
   'leftPanel.rename': 'Переименовать',
+  'leftPanel.forkSession': 'Создать ответвление',
   'leftPanel.configure': 'Настроить',
   'leftPanel.delete': 'Удалить',
   'leftPanel.clearSession': 'Очистить',
@@ -355,6 +356,7 @@ export const dict = {
 
   // Chat
   'chat.input.placeholder': 'Введите сообщение... Используйте @ для обращения к агенту',
+  'chat.input.readOnly': 'Только чтение — это сессия сабагента',
   'chat.input.send': 'Отправить',
   'chat.input.createNote': 'Создать заметку',
   'chat.input.stop': 'Стоп',
@@ -371,6 +373,7 @@ export const dict = {
   'chat.actions.retry': 'Повторить',
   'chat.actions.retryConfirm': 'Повторить? Это и последующие сообщения будут отключены.',
   'chat.actions.return': 'Вернуть в поле ввода',
+  'chat.actions.fork': 'Создать ветку',
   'chat.actions.debug': 'Отладка',
 
   'chat.message.copied': 'Скопировано',
@@ -380,6 +383,7 @@ export const dict = {
   'chat.message.unpinned': 'Откреплено',
   'chat.message.deleted': 'Сообщение удалено',
   'chat.message.retrying': 'Возвращено в поле ввода',
+  'chat.message.forked': 'Создана ветка',
   'chat.message.empty': 'Пустое сообщение',
 
   'chat.session.cleared': 'Сессия очищена',
@@ -431,6 +435,8 @@ export const dict = {
   'chat.error.deleteMessage': 'Ошибка удаления сообщения',
   'chat.error.retryMessage': 'Ошибка повтора сообщения',
   'chat.error.clearSession': 'Ошибка очистки сессии',
+
+  'chat.error.forkFailed': 'Ошибка создания ветки:',
 
   'chat.message.sent': 'Сообщение отправлено',
 

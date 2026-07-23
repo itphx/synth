@@ -8,26 +8,31 @@ interface MessageActionsProps {
   pinned: boolean
   canRetry: boolean
   hasDebug: boolean
+  readOnly?: boolean
   onCopy: () => void
   onToggle: () => void
   onPin: () => void
   onDelete: () => void
   onRetry: () => void
   onDebug: () => void
+  onFork: () => void
 }
 
 export function MessageActions({
+  messageIndex: _messageIndex,
   role,
   disabled,
   pinned,
   canRetry,
   hasDebug,
+  readOnly,
   onCopy,
   onToggle,
   onPin,
   onDelete,
   onRetry,
   onDebug,
+  onFork,
 }: MessageActionsProps) {
   const { t } = useI18n()
   const isUser = role === 'user'
@@ -36,23 +41,31 @@ export function MessageActions({
     <div className="flex items-center gap-0.5 mt-2 pt-1.5 border-t border-border/30 opacity-0 group-hover:opacity-100 transition-opacity">
       <ActionBtn onClick={onCopy} title={t('chat.actions.copy')} icon="file-copy" />
 
-      <ActionBtn
-        onClick={onToggle}
-        title={disabled ? t('chat.actions.toggleOn') : t('chat.actions.toggleOff')}
-        icon={disabled ? 'eye-off' : 'eye'}
-        active={disabled}
-      />
+      <ActionBtn onClick={onFork} title={t('chat.actions.fork')} icon="git-branch" />
 
-      <ActionBtn
-        onClick={onPin}
-        title={pinned ? t('chat.actions.unpin') : t('chat.actions.pin')}
-        icon="pushpin"
-        active={pinned}
-      />
+      {!readOnly && (
+        <ActionBtn
+          onClick={onToggle}
+          title={disabled ? t('chat.actions.toggleOn') : t('chat.actions.toggleOff')}
+          icon={disabled ? 'eye-off' : 'eye'}
+          active={disabled}
+        />
+      )}
 
-      <ActionBtn onClick={onDelete} title={t('chat.actions.delete')} icon="delete-bin" danger />
+      {!readOnly && (
+        <ActionBtn
+          onClick={onPin}
+          title={pinned ? t('chat.actions.unpin') : t('chat.actions.pin')}
+          icon="pushpin"
+          active={pinned}
+        />
+      )}
 
-      {isUser && canRetry && (
+      {!readOnly && (
+        <ActionBtn onClick={onDelete} title={t('chat.actions.delete')} icon="delete-bin" danger />
+      )}
+
+      {!readOnly && isUser && canRetry && (
         <ActionBtn onClick={onRetry} title={t('chat.actions.retry')} icon="refresh" />
       )}
 

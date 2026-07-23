@@ -311,4 +311,121 @@ program
     });
   });
 
+program
+  .command('session')
+  .description('Управление сессиями')
+  .addCommand(
+    new Command('list')
+      .description('Список сессий')
+      .option('--config <path>', 'путь к config.yaml')
+      .option('--data-dir <path>', 'каталог данных')
+      .action(async (options) => {
+        const synth = await loadConfig({ configPath: options.config });
+        const dataDir = options.dataDir || resolveDataDir(synth);
+        await ensureDataDir(dataDir);
+
+        const { FileStore } = await import('./storage/file-store.js');
+        const { SessionManager } = await import('./sessions/manager.js');
+
+        const store = new FileStore({ dataDir });
+        const manager = new SessionManager(store);
+        const sessions = await manager.listSessions();
+
+        if (sessions.length === 0) {
+          console.log('Нет сессий.');
+          return;
+        }
+
+        console.log(`ID                                    Название                              Сообщений  Последняя активность`);
+        console.log('─'.repeat(120));
+        for (const s of sessions) {
+          const title = (s.title || 'Новая сессия').substring(0, 38).padEnd(38);
+          const msgCount = String(s.messages.length).padStart(9);
+          const updated = s.updatedAt?.substring(0, 19) || '-';
+          const parent = s.parentId ? ` [fork от ${s.parentId.substring(0, 12)}...]` : '';
+          console.log(`${s.id.padEnd(38)} ${title} ${msgCount}  ${updated}${parent}`);
+        }
+      }),
+  )
+  .addCommand(
+    new Command('rename')
+      .description('Переименовать сессию')
+      .argument('<sessionId>', 'ID сессии')
+      .argument('<title>', 'новый заголовок')
+      .option('--config <path>', 'путь к config.yaml')
+      .option('--data-dir <path>', 'каталог данных')
+      .action(async (sessionId, title, options) => {
+        const synth = await loadConfig({ configPath: options.config });
+        const dataDir = options.dataDir || resolveDataDir(synth);
+        await ensureDataDir(dataDir);
+
+        const { FileStore } = await import('./storage/file-store.js');
+        const { SessionManager } = await import('./sessions/manager.js');
+
+        const store = new FileStore({ dataDir });
+        const manager = new SessionManager(store);
+        await manager.renameSession(sessionId, title);
+        console.log(`Сессия ${sessionId} переименована в "${title}"`);
+      }),
+  )
+  .addCommand(
+    new Command('fork')
+      .description('Создать ответвление (fork) сессии')
+      .argument('<sessionId>', 'ID исходной сессии')
+      .option('--index <n>', 'позиция сообщения в массиве — точка развилки')
+      .option('--message <id>', 'ID сообщения — точка развилки')
+      .option('--title <title>', 'заголовок новой сессии')
+      .option('--config <path>', 'путь к config.yaml')
+      .option('--data-dir <path>', 'каталог данных')
+      .action(async (sessionId, options) => {
+        const synth = await loadConfig({ configPath: options.config });
+        const dataDir = options.dataDir || resolveDataDir(synth);
+        await ensureDataDir(dataDir);
+
+        const { FileStore } = await import('./storage/file-store.js');
+        const { SessionManager } = await import('./sessions/manager.js');
+
+        const store = new FileStore({ dataDir });
+        const manager = new SessionManager(store);
+        const fork = await manager.forkSession(sessionId, {
+          messageId: options.message,
+          messageIndex: options.index != null ? Number(options.index) : undefined,
+          title: options.title,
+        });
+        console.log(`Создана сессия-форк: ${fork.id} "${fork.title}"`);
+      }),
+  )
+  .addCommand(
+    new Command('children')
+      .description('Показать дочерние сессии')
+      .argument('<sessionId>', 'ID родительской сессии')
+      .option('--config <path>', 'путь к config.yaml')
+      .option('--data-dir <path>', 'каталог данных')
+      .action(async (sessionId, options) => {
+        const synth = await loadConfig({ configPath: options.config });
+        const dataDir = options.dataDir || resolveDataDir(synth);
+        await ensureDataDir(dataDir);
+
+        const { FileStore } = await import('./storage/file-store.js');
+        const { SessionManager } = await import('./sessions/manager.js');
+
+        const store = new FileStore({ dataDir });
+        const manager = new SessionManager(store);
+        const children = await manager.getChildren(sessionId);
+
+        if (children.length === 0) {
+          console.log('Нет дочерних сессий.');
+          return;
+        }
+
+        console.log(`ID                                    Название                              Сообщений`);
+        console.log('─'.repeat(90));
+        for (const c of children) {
+          const title = (c.title || 'Новая сессия').substring(0, 38).padEnd(38);
+          const msgCount = String(c.messages.length).padStart(9);
+          console.log(`${c.id.padEnd(38)} ${title} ${msgCount}`);
+        }
+      }),
+  );
+
 program.parse();

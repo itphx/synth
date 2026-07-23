@@ -1,14 +1,21 @@
 import { z } from 'zod';
-import { ToolCapability } from '@synth/shared';
-import type { ToolDefinition, ToolResult } from '@synth/shared';
+import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart, TsmState } from '@synth/shared';
+import type { ToolDefinition, ToolResult, Message, Session } from '@synth/shared';
 import type { AgentRegistry } from '../agents/registry.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ToolRegistry } from './registry.js';
+import type { SessionManager } from '../../sessions/manager.js';
+import type { EventBus } from '../../events/bus.js';
+import type { ContextOptimizer } from '../context/optimizer.js';
+import { serializeSession, serializeMessage } from '../../server/serialize.js';
 
 interface TaskExtra {
   provider: BaseProvider;
   agentRegistry: AgentRegistry;
   toolRegistry?: ToolRegistry;
+  sessionManager?: SessionManager;
+  eventBus?: EventBus;
+  contextOptimizer?: ContextOptimizer;
   sessionSettings?: {
     temperature?: number;
     maxTokens?: number;
@@ -16,9 +23,63 @@ interface TaskExtra {
   publish?: (type: string, data: Record<string, unknown>) => void;
   streamId?: string;
   sessionId?: string;
+  callerAgentRole?: string;
 }
 
+type ContextMode = 'none' | 'inherit' | 'summary' | 'last_n';
+
 const DEFAULT_SUBAGENT_MAX_STEPS = 15;
+const DEFAULT_LAST_N = 4;
+
+function messageToLLMMessage(msg: Message): LLMMessage {
+  const roleMap: Record<string, LLMMessage['role']> = {
+    [MessageRole.USER]: 'user',
+    [MessageRole.ASSISTANT]: 'assistant',
+    [MessageRole.TOOL]: 'tool',
+    [MessageRole.SYSTEM]: 'system',
+    [MessageRole.SUMMARY]: 'user',
+    [MessageRole.DEBUG]: 'user',
+    [MessageRole.INFO]: 'user',
+    [MessageRole.ERROR]: 'user',
+  };
+
+  return {
+    id: msg.id,
+    role: roleMap[msg.role] || 'user',
+    content: msg.content,
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    disabled: false,
+    pinned: false,
+    branchId: '',
+    toolCallId: msg.toolCallId,
+  };
+}
+
+async function publishMessageAdded(
+  eventBus: EventBus,
+  parentSessionId: string,
+  childSessionId: string,
+  msg: Message,
+  index: number,
+  childSession?: Session,
+): Promise<void> {
+  const serialized = serializeMessage(msg, index);
+  const payload = {
+    session_id: childSessionId,
+    message: serialized,
+    index,
+  };
+  eventBus.publish(childSessionId, 'message.added', payload);
+  eventBus.publish(parentSessionId, 'child.message.added', {
+    ...payload,
+    child_session_id: childSessionId,
+  });
+  if (childSession) {
+    eventBus.publish(parentSessionId, 'child.session.updated', {
+      session: serializeSession(childSession),
+    });
+  }
+}
 
 export const taskTool: ToolDefinition = {
   name: 'task',
@@ -32,6 +93,10 @@ export const taskTool: ToolDefinition = {
     prompt: z.string().describe('The task for the subagent to perform'),
     subagent_type: z.string().describe('Type of subagent: "general" or "explore"'),
     task_id: z.string().optional().describe('ID for resuming an existing subagent session'),
+    context_mode: z.enum(['none', 'inherit', 'summary', 'last_n']).optional()
+      .describe('Context passing mode: none — only prompt, inherit — full parent history, summary — compressed via LLM, last_n — last N messages (default: none)'),
+    context_count: z.number().int().min(1).max(50).optional()
+      .describe('Number of last messages to include (only for last_n mode, default: 4)'),
   }),
   capabilities: [ToolCapability.TASK],
   async execute(args, ctx) {
@@ -39,7 +104,14 @@ export const taskTool: ToolDefinition = {
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
-    const params = parsed.data as { description: string; prompt: string; subagent_type: string; task_id?: string };
+    const params = parsed.data as {
+      description: string;
+      prompt: string;
+      subagent_type: string;
+      task_id?: string;
+      context_mode?: ContextMode;
+      context_count?: number;
+    };
     const extra = ctx.extra as TaskExtra | undefined;
 
     if (!extra?.provider || !extra?.agentRegistry) {
@@ -64,6 +136,8 @@ export const taskTool: ToolDefinition = {
       };
     }
 
+    const contextMode: ContextMode = params.context_mode || 'none';
+    const contextCount = params.context_count || DEFAULT_LAST_N;
     const systemPrompt = agentDef.subagentPrompt || '';
     const tools = extra.agentRegistry.getToolsForAgent(agentDef.id);
     const maxSteps = agentDef.maxSteps ?? DEFAULT_SUBAGENT_MAX_STEPS;
@@ -71,22 +145,114 @@ export const taskTool: ToolDefinition = {
       ? Number.POSITIVE_INFINITY
       : maxSteps;
     const publish = extra.publish;
-    const parentCallId = ''; // base call
+
+    let childSessionId: string | undefined;
+    let childMessages: Message[] = [];
+
+    // ─── Создание дочерней сессии с контекстом ───────────────────────
+    if (extra.sessionManager && extra.sessionId) {
+      try {
+        const parentSession = await extra.sessionManager.getSession(extra.sessionId);
+        if (parentSession) {
+          const effectiveMode = contextMode === 'summary' && !extra.contextOptimizer ? 'none' : contextMode;
+
+          if (effectiveMode === 'inherit') {
+            const fork = await extra.sessionManager.forkSession(extra.sessionId, {
+              title: `Подзадача: ${params.description}`,
+            });
+            fork.sessionOrigin = 'subagent';
+            fork.userId = parentSession.userId;
+            fork.ownerId = parentSession.ownerId;
+            fork.settings = { ...fork.settings, agentRole: params.subagent_type };
+            await extra.sessionManager.updateSession(fork);
+            childSessionId = fork.id;
+            childMessages = fork.messages;
+          } else if (effectiveMode === 'last_n') {
+            const startIdx = Math.max(0, parentSession.messages.length - contextCount);
+            const fork = await extra.sessionManager.forkSession(extra.sessionId, {
+              messageIndex: startIdx,
+              title: `Подзадача: ${params.description}`,
+            });
+            fork.sessionOrigin = 'subagent';
+            fork.userId = parentSession.userId;
+            fork.ownerId = parentSession.ownerId;
+            fork.settings = { ...fork.settings, agentRole: params.subagent_type };
+            await extra.sessionManager.updateSession(fork);
+            childSessionId = fork.id;
+            childMessages = fork.messages;
+          } else if (effectiveMode === 'summary') {
+            const child = await extra.sessionManager.createSession({
+              title: `Подзадача: ${params.description}`,
+              projectId: parentSession.projectId,
+              engine: parentSession.engine,
+              parentId: extra.sessionId,
+              sessionOrigin: 'subagent',
+              settings: { ...parentSession.settings, agentRole: params.subagent_type },
+            });
+            child.userId = parentSession.userId;
+            child.ownerId = parentSession.ownerId;
+            await extra.sessionManager.updateSession(child);
+            childSessionId = child.id;
+
+            try {
+              const summaryMsg = await extra.contextOptimizer!.summarize(parentSession);
+              if (summaryMsg.content) {
+                await extra.sessionManager.addMessage(child.id, {
+                  ...summaryMsg,
+                  id: generateId(),
+                  origin: 'local',
+                  hidden: false,
+                });
+                const updated = await extra.sessionManager.getSession(child.id);
+                if (updated) childMessages = updated.messages;
+              }
+            } catch {
+              // fallback: без саммари, только prompt
+            }
+          } else {
+            // none mode (default)
+            const child = await extra.sessionManager.createSession({
+              title: `Подзадача: ${params.description}`,
+              projectId: parentSession.projectId,
+              engine: parentSession.engine,
+              parentId: extra.sessionId,
+              sessionOrigin: 'subagent',
+              settings: { ...parentSession.settings, agentRole: params.subagent_type },
+            });
+            child.userId = parentSession.userId;
+            child.ownerId = parentSession.ownerId;
+            await extra.sessionManager.updateSession(child);
+            childSessionId = child.id;
+          }
+
+          if (extra.eventBus && childSessionId) {
+            const child = await extra.sessionManager.getSession(childSessionId);
+            if (child) {
+              extra.eventBus.publish(extra.sessionId, 'session.created', serializeSession(child));
+            }
+          }
+        }
+      } catch {
+        // не фатально — продолжаем без дочерней сессии
+      }
+    }
+
+    // ─── Сборка LLM-сообщений ────────────────────────────────────────
+    const llmSystemPrompt = (() => {
+      if (contextMode === 'summary' && childMessages.length > 0) {
+        const summaryMsg = childMessages.find(m => m.role === MessageRole.SUMMARY);
+        if (summaryMsg?.content) {
+          return `${systemPrompt}\n\n[СЖАТЫЙ КОНТЕКСТ РОДИТЕЛЬСКОЙ СЕССИИ]\n${summaryMsg.content}`;
+        }
+      }
+      return systemPrompt;
+    })();
 
     const messages: LLMMessage[] = [
       {
         id: '',
         role: 'system' as const,
-        content: systemPrompt,
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-        disabled: false,
-        pinned: false,
-        branchId: '',
-      },
-      {
-        id: '',
-        role: 'user' as const,
-        content: params.prompt,
+        content: llmSystemPrompt,
         usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
         disabled: false,
         pinned: false,
@@ -94,15 +260,60 @@ export const taskTool: ToolDefinition = {
       },
     ];
 
+    if ((contextMode === 'inherit' || contextMode === 'last_n') && childMessages.length > 0) {
+      for (const msg of childMessages) {
+        messages.push(messageToLLMMessage(msg));
+      }
+    }
+
+    const userPromptMsg: LLMMessage = {
+      id: '',
+      role: 'user' as const,
+      content: params.prompt,
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      disabled: false,
+      pinned: false,
+      branchId: '',
+    };
+    messages.push(userPromptMsg);
+
+    // Сохранить промпт в дочернюю сессию
+    if (childSessionId && extra.sessionManager) {
+      try {
+        const userMsg: Message = {
+          id: generateId(),
+          role: MessageRole.USER,
+          seq: childMessages.length + 1,
+          origin: 'local',
+          parts: [makeTextPart(params.prompt)],
+          content: params.prompt,
+          createdAt: nowISO(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          agentRole: extra.callerAgentRole,
+          author: extra.callerAgentRole,
+        };
+        const updated = await extra.sessionManager.addMessage(childSessionId, userMsg);
+        if (updated) {
+          childMessages = updated.messages;
+          if (extra.eventBus) {
+            const idx = updated.messages.length - 1;
+            await publishMessageAdded(extra.eventBus, extra.sessionId!, childSessionId, updated.messages[idx]!, idx, updated);
+          }
+        }
+      } catch {
+        // не фатально
+      }
+    }
+
     const cancelToken: CancellationToken = { cancelled: false, cancel: () => { cancelToken.cancelled = true; } };
 
     try {
-      // Simple tool loop within subagent
       let finalContent = '';
       let iteration = 0;
       const doomTracker = new Map<string, number>();
       let subagentReasoning = '';
-      const subagentToolCalls: Array<{ name: string; args: Record<string, unknown>; result: string }> = [];
 
       const allSubagentReasoning: Array<{ text: string; iteration: number }> = [];
       const allSubagentIntermediateTexts: Array<{ text: string; iteration: number }> = [];
@@ -124,7 +335,7 @@ export const taskTool: ToolDefinition = {
             messages,
             systemPrompt || undefined,
             tools as Record<string, unknown>[] | undefined,
-            undefined, // no debug collector for subagents
+            undefined,
             cancelToken,
           )) {
             if (cancelToken.cancelled) break;
@@ -152,10 +363,36 @@ export const taskTool: ToolDefinition = {
           allSubagentReasoning.push({ text: reasoning, iteration });
         }
 
-        // No tool calls — done
         if (!toolCalls || toolCalls.length === 0) {
           finalContent = accumulatedContent;
           if (reasoning) subagentReasoning = reasoning;
+
+          // Сохранить финальный ответ ассистента в дочернюю сессию
+          if (childSessionId && extra.sessionManager) {
+            try {
+              const assistantMsg: Message = {
+                id: generateId(),
+                role: MessageRole.ASSISTANT,
+                seq: 0,
+                origin: 'local',
+                parts: [makeTextPart(accumulatedContent)],
+                content: accumulatedContent,
+                createdAt: nowISO(),
+                disabled: false,
+                pinned: false,
+                hidden: false,
+                agentRole: params.subagent_type,
+                reasoning: reasoning || undefined,
+              };
+              const updated = await extra.sessionManager.addMessage(childSessionId, assistantMsg);
+              if (updated && extra.eventBus) {
+                const idx = updated.messages.length - 1;
+                await publishMessageAdded(extra.eventBus, extra.sessionId!, childSessionId, updated.messages[idx]!, idx, updated);
+              }
+            } catch {
+              // не фатально
+            }
+          }
           break;
         }
 
@@ -163,8 +400,34 @@ export const taskTool: ToolDefinition = {
           allSubagentIntermediateTexts.push({ text: accumulatedContent, iteration });
         }
 
-        // Got tool calls — execute them
         iteration++;
+
+        // Сохранить ответ ассистента с tool calls в дочернюю сессию
+        if (childSessionId && extra.sessionManager) {
+          try {
+            const assistantMsg: Message = {
+              id: generateId(),
+              role: MessageRole.ASSISTANT,
+              seq: 0,
+              origin: 'local',
+              parts: [makeTextPart(accumulatedContent || '')],
+              content: accumulatedContent || '',
+              createdAt: nowISO(),
+              disabled: false,
+              pinned: false,
+              hidden: false,
+              agentRole: params.subagent_type,
+              reasoning: reasoning || undefined,
+            };
+            const updated = await extra.sessionManager.addMessage(childSessionId, assistantMsg);
+            if (updated && extra.eventBus) {
+              const idx = updated.messages.length - 1;
+              await publishMessageAdded(extra.eventBus, extra.sessionId!, childSessionId, updated.messages[idx]!, idx, updated);
+            }
+          } catch {
+            // не фатально
+          }
+        }
 
         messages.push({
           id: '',
@@ -197,13 +460,39 @@ export const taskTool: ToolDefinition = {
           doomTracker.set(doomKey, doomCount);
 
           if (doomCount >= 3) {
-            messages.push({
+            const doomMsg: LLMMessage = {
               id: '', role: 'tool',
               content: `Ошибка: инструмент "${toolName}" вызван ${doomCount} раз(а) с одинаковыми аргументами. Цикл прерван.`,
               usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
               disabled: false, pinned: false, branchId: '',
               toolCallId: tcId,
-            });
+            };
+            messages.push(doomMsg);
+
+            if (childSessionId && extra.sessionManager) {
+              try {
+                const toolResultMsg: Message = {
+                  id: generateId(),
+                  role: MessageRole.TOOL,
+                  seq: 0,
+                  origin: 'local',
+                  parts: [makeTextPart(doomMsg.content)],
+                  content: doomMsg.content,
+                  createdAt: nowISO(),
+                  disabled: false,
+                  pinned: false,
+                  hidden: false,
+                  toolCallId: tcId,
+                };
+                const updated = await extra.sessionManager.addMessage(childSessionId, toolResultMsg);
+                if (updated && extra.eventBus) {
+                  const idx = updated.messages.length - 1;
+                  await publishMessageAdded(extra.eventBus, extra.sessionId!, childSessionId, updated.messages[idx]!, idx, updated);
+                }
+              } catch {
+                // не фатально
+              }
+            }
             continue;
           }
 
@@ -214,22 +503,21 @@ export const taskTool: ToolDefinition = {
             name: toolName,
             arguments: toolArgs,
             iteration,
-            parent_call_id: parentCallId || undefined,
           });
 
           const toolDef = extra.toolRegistry?.get(toolName);
           let toolResult: ToolResult;
 
           if (toolDef) {
-            const parsed = toolDef.parameters.safeParse(toolArgs);
-            if (!parsed.success) {
+            const parsed2 = toolDef.parameters.safeParse(toolArgs);
+            if (!parsed2.success) {
               toolResult = {
-                content: `Ошибка аргументов инструмента "${toolName}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`,
+                content: `Ошибка аргументов инструмента "${toolName}": ${parsed2.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`,
                 isError: true,
               };
             } else {
               try {
-                toolResult = await toolDef.execute(parsed.data, {
+                toolResult = await toolDef.execute(parsed2.data, {
                   ...ctx,
                   abortSignal: ctx.abortSignal,
                   extra: extra as unknown as Record<string, unknown>,
@@ -255,13 +543,6 @@ export const taskTool: ToolDefinition = {
             name: toolName,
             result: toolResult,
             iteration,
-            parent_call_id: parentCallId || undefined,
-          });
-
-          subagentToolCalls.push({
-            name: toolName,
-            args: toolArgs,
-            result: toolResult.content,
           });
 
           allSubagentToolCalls.push({
@@ -274,13 +555,40 @@ export const taskTool: ToolDefinition = {
             iteration,
           });
 
-          messages.push({
+          const toolResultLLMMsg: LLMMessage = {
             id: '', role: 'tool',
             content: toolResult.content,
             usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
             disabled: false, pinned: false, branchId: '',
             toolCallId: tcId,
-          });
+          };
+          messages.push(toolResultLLMMsg);
+
+          // Сохранить tool_result в дочернюю сессию
+          if (childSessionId && extra.sessionManager) {
+            try {
+              const toolResultMsg: Message = {
+                id: generateId(),
+                role: MessageRole.TOOL,
+                seq: 0,
+                origin: 'local',
+                parts: [makeTextPart(toolResult.content)],
+                content: toolResult.content,
+                createdAt: nowISO(),
+                disabled: false,
+                pinned: false,
+                hidden: false,
+                toolCallId: tcId,
+              };
+              const updated = await extra.sessionManager.addMessage(childSessionId, toolResultMsg);
+              if (updated && extra.eventBus) {
+                const idx = updated.messages.length - 1;
+                await publishMessageAdded(extra.eventBus, extra.sessionId!, childSessionId, updated.messages[idx]!, idx, updated);
+              }
+            } catch {
+              // не фатально
+            }
+          }
         }
 
         publish?.('tool_call.loop', {
@@ -288,18 +596,43 @@ export const taskTool: ToolDefinition = {
           session_id: extra.sessionId,
           iteration,
           total_tool_calls: toolCalls.length,
-          parent_call_id: parentCallId || undefined,
         });
       }
 
       const output = finalContent || '(пустой ответ сабагента)';
+
+      // Финализировать дочернюю сессию — обновить TSM
+      if (childSessionId && extra.sessionManager) {
+        try {
+          const childSession = await extra.sessionManager.getSession(childSessionId);
+          if (childSession) {
+            childSession.status.state = TsmState.DONE;
+            childSession.updatedAt = nowISO();
+            await extra.sessionManager.updateSession(childSession);
+
+            if (extra.eventBus) {
+              extra.eventBus.publish(childSessionId, 'session.updated', {
+                session_id: childSessionId,
+                status: { state: TsmState.DONE },
+              });
+              extra.eventBus.publish(extra.sessionId!, 'child.session.updated', {
+                session: serializeSession(childSession),
+              });
+            }
+          }
+        } catch {
+          // не фатально
+        }
+      }
 
       return {
         content: `<task_result>\n<summary>${params.description}</summary>\n\n${output}\n</task_result>`,
         metadata: {
           subagent_type: params.subagent_type,
           description: params.description,
+          context_mode: contextMode,
           steps: iteration,
+          child_session_id: childSessionId,
           reasoning: subagentReasoning || undefined,
           reasoning_blocks: allSubagentReasoning.length > 0 ? allSubagentReasoning : undefined,
           intermediate_text_blocks: allSubagentIntermediateTexts.length > 0 ? allSubagentIntermediateTexts : undefined,

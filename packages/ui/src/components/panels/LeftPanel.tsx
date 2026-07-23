@@ -51,7 +51,7 @@ function useAutoScroll(targetId: string | null) {
       }
     }, 80)
     return () => clearTimeout(timer)
-  })
+  }, [])
 }
 
 // ---- Projects tab ----
@@ -59,7 +59,7 @@ function useAutoScroll(targetId: string | null) {
 function ProjectsTab() {
   const { t } = useI18n()
   const { projects, loadProjects, deleteProject } = useProjectsStore()
-  const { sessions, loadSessions, createSession, deleteSession, moveSession } = useSessionsStore()
+  const { sessions, loadSessions, createSession, forkSession, deleteSession, moveSession } = useSessionsStore()
   const { collapsedProjects, toggleProjectCollapse, openTab, centerTabs, activeCenterTabId } = useUIStore()
   const { sortMode, selectionMode, selectedIds, toggleSelected } = useSessionsTreeStore()
   const streamingBySession = useChatStore((s) => s.streamingBySession)
@@ -67,6 +67,7 @@ function ProjectsTab() {
   const sessionUnread = useNotificationStore((s) => s.sessionUnread)
   const clearSessionUnread = useNotificationStore((s) => s.clearSessionUnread)
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [editingProject, setEditingProject] = useState<any>(null)
@@ -90,8 +91,11 @@ function ProjectsTab() {
     const sortFn = sortMode === 'date'
       ? (a: any, b: any) => parseISODate(b.updated_at).getTime() - parseISODate(a.updated_at).getTime()
       : (a: any, b: any) => a.id.localeCompare(b.id)
+    const seen = new Set<string>()
     map['__none__'] = []
     for (const s of sessions) {
+      if (seen.has(s.id)) continue
+      seen.add(s.id)
       const pid = s.project_id || '__none__'
       if (!map[pid]) map[pid] = []
       map[pid].push(s)
@@ -99,6 +103,26 @@ function ProjectsTab() {
     for (const pid of Object.keys(map)) map[pid].sort(sortFn)
     return map
   }, [sessions, sortMode])
+
+  const childrenByParentId = useMemo(() => {
+    const map: Record<string, any[]> = {}
+    for (const s of sessions) {
+      if (s.parent_id && s.session_origin === 'subagent') {
+        if (!map[s.parent_id]) map[s.parent_id] = []
+        map[s.parent_id].push(s)
+      }
+    }
+    return map
+  }, [sessions])
+
+  const toggleSessionExpand = useCallback((sessionId: string) => {
+    setExpandedSessions((prev) => {
+      const next = new Set(prev)
+      if (next.has(sessionId)) next.delete(sessionId)
+      else next.add(sessionId)
+      return next
+    })
+  }, [])
 
   const sortedProjects = useMemo(() => {
     if (sortMode === 'date') return projects
@@ -157,12 +181,13 @@ function ProjectsTab() {
     loadProjects()
   }
 
-  const renderSessionNode = (session: any): TreeNodeBase => {
+  const renderSessionNode = (session: any, depth: number, hasChildren: boolean, isExpanded: boolean, onToggle: () => void): TreeNodeBase => {
+    const isSubagent = session.session_origin === 'subagent'
     return {
       id: `session:${session.id}`,
       label: session.name || session.id,
-      depth: 1,
-      icon: 'chat-new',
+      depth,
+      icon: isSubagent ? 'cpu' : 'chat-new',
       subtitle: formatRelativeTime(session.updated_at),
       isSelected: selectedIds.has(session.id),
       isTabOpen: sessionTabOpenSet.has(session.id),
@@ -170,6 +195,9 @@ function ProjectsTab() {
       selectionMode,
       status: getSessionStatus(session.id),
       unreadCount: sessionUnread[session.id] || 0,
+      hasChildren: hasChildren || undefined,
+      isExpanded: hasChildren ? isExpanded : undefined,
+      onToggle: hasChildren ? onToggle : undefined,
       isRenaming: renamingId === session.id,
       renameValue: renamingId === session.id ? renameValue : '',
       onRenameStart: () => { setRenamingId(session.id); setRenameValue(session.name || session.id) },
@@ -188,6 +216,10 @@ function ProjectsTab() {
       onDragStart: (e) => { e.dataTransfer.setData('text/plain', session.id); e.dataTransfer.effectAllowed = 'move' },
       contextItems: [
         { label: t('leftPanel.rename'), icon: 'pencil-ai', onClick: () => { setRenamingId(session.id); setRenameValue(session.name || session.id) } },
+        { label: t('leftPanel.forkSession'), icon: 'git-branch', onClick: async () => {
+          const result = await forkSession(session.id)
+          if (result) { setRenamingId(result.id); setRenameValue(result.id) }
+        }},
         { label: t('leftPanel.clearSession'), icon: 'close', onClick: () => setConfirm({
           title: t('leftPanel.clearSession'),
           message: t('leftPanel.confirmClearSession'),
@@ -292,6 +324,9 @@ function ProjectsTab() {
         expandedGroups={expandedGroups}
         toggleGroupExpand={(k) => setExpandedGroups(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n })}
         renderSessionNode={renderSessionNode}
+        childrenByParentId={childrenByParentId}
+        expandedSessions={expandedSessions}
+        toggleSessionExpand={toggleSessionExpand}
         projectId={null}
         onCreateSession={async () => {
           const uiState = useUIStore.getState()
@@ -318,6 +353,9 @@ function ProjectsTab() {
             expandedGroups={expandedGroups}
             toggleGroupExpand={(k) => setExpandedGroups(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n })}
             renderSessionNode={renderSessionNode}
+            childrenByParentId={childrenByParentId}
+            expandedSessions={expandedSessions}
+            toggleSessionExpand={toggleSessionExpand}
             projectId={project.id}
             onCreateSession={async () => {
               const uiState = useUIStore.getState()
@@ -354,24 +392,71 @@ function ProjectsTab() {
   )
 }
 
+function SessionTreeItem({
+  session,
+  depth,
+  childrenByParentId,
+  renderSessionNode,
+  expandedSessions,
+  onToggleExpand,
+}: {
+  session: any
+  depth: number
+  childrenByParentId: Record<string, any[]>
+  renderSessionNode: (session: any, depth: number, hasChildren: boolean, isExpanded: boolean, onToggle: () => void) => TreeNodeBase
+  expandedSessions: Set<string>
+  onToggleExpand: (id: string) => void
+}) {
+  const childSessions = depth < 2 ? (childrenByParentId[session.id] || []) : []
+  const hasChildren = childSessions.length > 0
+  const isExpanded = expandedSessions.has(session.id)
+  const node = renderSessionNode(session, depth, hasChildren, isExpanded, () => onToggleExpand(session.id))
+
+  return (
+    <>
+      <TreeNode {...node} />
+      {hasChildren && isExpanded && (
+        <div className="ml-[15px] border-l border-sidebar-border pl-4">
+          {childSessions.map((child) => (
+            <SessionTreeItem
+              key={child.id}
+              session={child}
+              depth={depth + 1}
+              childrenByParentId={childrenByParentId}
+              renderSessionNode={renderSessionNode}
+              expandedSessions={expandedSessions}
+              onToggleExpand={onToggleExpand}
+            />
+          ))}
+        </div>
+      )}
+    </>
+  )
+}
+
 function GroupNode({
   id, label, icon, iconColor, isCollapsed, onToggle,
-  sessions, expandedGroups, toggleGroupExpand, renderSessionNode,
+  sessions, childrenByParentId, expandedGroups, toggleGroupExpand, renderSessionNode,
+  expandedSessions, toggleSessionExpand,
   projectId, onCreateSession, onDropSession,
   projectActions, projectContextItems, t,
 }: {
   id: string; label: string; icon: string; iconColor?: string
   isCollapsed: boolean; onToggle: () => void
-  sessions: any[]; expandedGroups: Set<string>; toggleGroupExpand: (k: string) => void
-  renderSessionNode: (s: any) => TreeNodeBase
+  sessions: any[]; childrenByParentId: Record<string, any[]>
+  expandedGroups: Set<string>; toggleGroupExpand: (k: string) => void
+  renderSessionNode: (session: any, depth: number, hasChildren: boolean, isExpanded: boolean, onToggle: () => void) => TreeNodeBase
+  expandedSessions: Set<string>; toggleSessionExpand: (id: string) => void
   projectId: string | null; onCreateSession: () => void; onDropSession: (sid: string) => void
   projectActions?: TreeAction[]; projectContextItems?: any[]
   t: any
 }) {
   const expandKey = projectId ? `project:${projectId}` : `group:__none__`
   const isExpanded = expandedGroups.has(expandKey)
-  const visibleSessions = isExpanded ? sessions : sessions.slice(0, MAX_VISIBLE_SESSIONS)
-  const remaining = sessions.length - visibleSessions.length
+  const rootSessions = sessions.filter((s) => s.session_origin !== 'subagent')
+  const visibleSessions = isExpanded ? rootSessions : rootSessions.slice(0, MAX_VISIBLE_SESSIONS)
+  const remaining = rootSessions.length - visibleSessions.length
+  const totalCount = sessions.length
 
   const actions = projectActions ?? [
     { id: 'new-session', icon: 'add' as const, title: t('leftPanel.newSession'), onClick: onCreateSession },
@@ -397,7 +482,7 @@ function GroupNode({
     isExpanded: !isCollapsed,
     hasChildren: true,
     onToggle,
-    count: sessions.length,
+    count: totalCount,
     actions,
     contextItems: projectContextItems,
   }
@@ -407,7 +492,7 @@ function GroupNode({
       <TreeNode {...groupNode} />
       {!isCollapsed && (
         <TreeChildren
-          totalCount={sessions.length}
+          totalCount={totalCount}
           maxVisible={MAX_VISIBLE_SESSIONS}
           expanded={isExpanded}
           showMoreLabel={t('leftPanel.showMore', { count: String(remaining) })}
@@ -416,7 +501,17 @@ function GroupNode({
           onCollapse={isExpanded ? () => toggleGroupExpand(expandKey) : undefined}
           emptyText={t('leftPanel.noSessions')}
         >
-          {visibleSessions.map((s) => <TreeNode key={s.id} {...renderSessionNode(s)} />)}
+          {visibleSessions.map((s) => (
+            <SessionTreeItem
+              key={s.id}
+              session={s}
+              depth={1}
+              childrenByParentId={childrenByParentId}
+              renderSessionNode={renderSessionNode}
+              expandedSessions={expandedSessions}
+              onToggleExpand={toggleSessionExpand}
+            />
+          ))}
         </TreeChildren>
       )}
     </div>
