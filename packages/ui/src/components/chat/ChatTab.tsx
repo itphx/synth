@@ -433,7 +433,7 @@ export function ChatTab({ tab }: ChatTabProps) {
         </div>
       ) : null}
 
-      {stickyNotes.length > 0 && !isSubagent && (
+      {stickyNotes.length > 0 && (
         <StickyNotesPanel
           notes={stickyNotes}
           onUpdate={handleUpdateNote}

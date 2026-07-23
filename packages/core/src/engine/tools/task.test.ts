@@ -589,4 +589,112 @@ describe('taskTool — context modes', () => {
     expect(child.sessionOrigin).toBe('subagent');
     expect(child.parentId).toBe(parent.id);
   });
+
+  // ─── Sticky notes в system prompt саб-агента ─────────────────────
+
+  it('inherit mode: stickyNotes родителя попадают в system prompt саб-агента', async () => {
+    const parent = await createParentWithMessages();
+    // Добавляем заметки родителю
+    parent.stickyNotes = [
+      { id: 'n1', content: 'Решение: использовать SQLite', createdAt: nowISO(), updatedAt: nowISO(), disabled: false },
+    ];
+    await sessionManager.updateSession(parent);
+
+    let capturedSystemMsg = '';
+    const capturingProvider = {
+      chatAsync: vi.fn().mockImplementation(async function* (messages: any[]) {
+        capturedSystemMsg = messages[0]?.content || '';
+        yield { isFinal: true, content: 'OK', toolCalls: [] };
+      }),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+
+    await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'inherit' },
+      {
+        ...baseCtx,
+        extra: {
+          provider: capturingProvider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+        },
+      },
+    );
+
+    expect(capturedSystemMsg).toContain('[ЗАМЕТКИ РОДИТЕЛЬСКОЙ СЕССИИ]');
+    expect(capturedSystemMsg).toContain('Решение: использовать SQLite');
+  });
+
+  it('summary mode: stickyNotes родителя попадают в system prompt саб-агента', async () => {
+    const parent = await createParentWithMessages();
+    parent.stickyNotes = [
+      { id: 'n1', content: 'Использовать PostgreSQL', createdAt: nowISO(), updatedAt: nowISO(), disabled: false },
+    ];
+    await sessionManager.updateSession(parent);
+
+    let capturedSystemMsg = '';
+    const capturingProvider = {
+      chatAsync: vi.fn().mockImplementation(async function* (messages: any[]) {
+        capturedSystemMsg = messages[0]?.content || '';
+        yield { isFinal: true, content: 'OK', toolCalls: [] };
+      }),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+
+    await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'summary' },
+      {
+        ...baseCtx,
+        extra: {
+          provider: capturingProvider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+        },
+      },
+    );
+
+    expect(capturedSystemMsg).toContain('[ЗАМЕТКИ РОДИТЕЛЬСКОЙ СЕССИИ]');
+    expect(capturedSystemMsg).toContain('Использовать PostgreSQL');
+  });
+
+  it('none mode: stickyNotes НЕ попадают в system prompt саб-агента (чистый лист)', async () => {
+    const parent = await createParentWithMessages();
+    parent.stickyNotes = [
+      { id: 'n1', content: 'Секретные заметки', createdAt: nowISO(), updatedAt: nowISO(), disabled: false },
+    ];
+    await sessionManager.updateSession(parent);
+
+    let capturedSystemMsg = '';
+    const capturingProvider = {
+      chatAsync: vi.fn().mockImplementation(async function* (messages: any[]) {
+        capturedSystemMsg = messages[0]?.content || '';
+        yield { isFinal: true, content: 'OK', toolCalls: [] };
+      }),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+
+    await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        ...baseCtx,
+        extra: {
+          provider: capturingProvider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+        },
+      },
+    );
+
+    expect(capturedSystemMsg).not.toContain('[ЗАМЕТКИ РОДИТЕЛЬСКОЙ СЕССИИ]');
+    expect(capturedSystemMsg).not.toContain('Секретные заметки');
+  });
 });
