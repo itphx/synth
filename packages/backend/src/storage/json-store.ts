@@ -64,7 +64,14 @@ export class JsonStore<T> {
 
   async delete(key: string): Promise<void> {
     this._validateKey(key);
-    await unlink(this._filePath(key)).catch(() => {});
+    const lock = this._getLock(key);
+    await lock.acquire();
+    try {
+      await unlink(this._filePath(key)).catch(() => {});
+    } finally {
+      lock.release();
+      this._locks.delete(key);
+    }
   }
 
   async list(): Promise<T[]> {

@@ -67,7 +67,7 @@ function SortableTab({
   isActive: boolean
   onClose: (id: string) => void
 }) {
-  const { setActiveCenterTab } = useUIStore()
+  const setActiveCenterTab = useUIStore((s) => s.setActiveCenterTab)
   const { t } = useI18n()
   const {
     attributes,
@@ -168,7 +168,10 @@ function DraggingTabOverlay({ tab }: { tab: CenterTab }) {
 }
 
 export function CenterTabs() {
-  const { centerTabs, activeCenterTabId, closeTab, reorderTabs } = useUIStore()
+  const centerTabs = useUIStore((s) => s.centerTabs)
+  const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
+  const closeTab = useUIStore((s) => s.closeTab)
+  const reorderTabs = useUIStore((s) => s.reorderTabs)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [activeDragTab, setActiveDragTab] = useState<CenterTab | null>(null)
 
