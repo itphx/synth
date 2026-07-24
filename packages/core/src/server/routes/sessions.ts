@@ -33,6 +33,8 @@ export function createSessionRoutes(
       title: body.name || body.title || undefined,
       projectId: body.project_id || body.projectId || undefined,
       engine: body.engine || 'synth',
+      parentId: body.parent_id || body.parentId || undefined,
+      sessionOrigin: body.session_origin || body.sessionOrigin || undefined,
       settings: body.settings,
     });
     session.userId = LOCAL_USER_ID;
@@ -313,6 +315,67 @@ export function createSessionRoutes(
     });
     eventBus.publish(fork.id, 'session.fork.created', serializeSession(fork));
     return c.json(serializeSession(fork), 201);
+  });
+
+  // GET /api/v2/sessions/:id/references — список ссылок
+  app.get('/:id/references', auth.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+    }
+    const refs = await sessionManager.getReferences(c.req.param('id'));
+    return c.json({ references: refs });
+  });
+
+  // POST /api/v2/sessions/:id/references — добавить ссылку
+  app.post('/:id/references', auth.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const sourceSessionId = body.source_session_id || body.sourceSessionId;
+    if (!sourceSessionId) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'source_session_id is required' } }, 400);
+    }
+    const ref = await sessionManager.addReference(c.req.param('id'), sourceSessionId, {
+      label: body.label,
+      messageRange: body.message_range || body.messageRange,
+      autoSummarize: body.auto_summarize ?? body.autoSummarize ?? false,
+    });
+    eventBus.publish(c.req.param('id'), 'session.reference.added', { reference: ref });
+    return c.json({ reference: ref }, 201);
+  });
+
+  // DELETE /api/v2/sessions/:id/references/:refSid — удалить ссылку
+  app.delete('/:id/references/:refSid', auth.requireAuth, async (c) => {
+    await sessionManager.removeReference(c.req.param('id'), c.req.param('refSid'));
+    eventBus.publish(c.req.param('id'), 'session.reference.removed', { session_id: c.req.param('refSid') });
+    return c.body(null, 204);
+  });
+
+  // POST /api/v2/sessions/:id/messages/merge — копировать сообщения из другой сессии
+  app.post('/:id/messages/merge', auth.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const sourceSessionId = body.source_session_id || body.sourceSessionId;
+    const sourceRange = body.source_range || body.sourceRange;
+    const position = body.position || 'after';
+    const anchorMessageId = body.anchor_message_id || body.anchorMessageId;
+    const summarize = body.summarize || false;
+
+    if (!sourceSessionId || !sourceRange || !Array.isArray(sourceRange) || sourceRange.length !== 2) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'source_session_id and source_range are required' } }, 400);
+    }
+
+    const merged = await sessionManager.mergeMessages(c.req.param('id'), sourceSessionId, {
+      sourceRange: sourceRange as [number, number],
+      position: position as 'after' | 'before',
+      anchorMessageId,
+      summarize,
+    });
+
+    eventBus.publish(c.req.param('id'), 'session.messages.merged', {
+      messages: merged.map((m, i) => serializeMessage(m, i)),
+      source_session_id: sourceSessionId,
+    });
+
+    return c.json({ messages: merged.map((m, i) => serializeMessage(m, i)) }, 201);
   });
 
   return app;

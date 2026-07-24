@@ -9,6 +9,7 @@ import { SubagentPart, type SubagentPartData } from './SubagentPart'
 import { useUIStore } from '@/stores/useUIStore'
 import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData } from '@/stores/chatStore'
 import { useMemo } from 'react'
+import { Icon } from '@/components/icon/Icon'
 
 function useToolCallData(toolCalls: MessageData['tool_calls']) {
   return useMemo(() => {
@@ -227,9 +228,25 @@ function ChatMessageInner({
         {displayContent && (
           isUser ? (
             <p className="text-sm whitespace-pre-wrap">{displayContent}</p>
+          ) : isInfo && (message.metadata as Record<string, unknown>)?.type === 'session_reference' ? (
+            <SessionReferenceCard
+              sessionId={String((message.metadata as Record<string, unknown>)?.session_id || '')}
+              content={displayContent}
+            />
           ) : (
             <MarkdownContent content={displayContent} />
           )
+        )}
+
+        {message.origin && message.origin !== 'local' && (
+          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] mt-1 ${
+            message.origin === 'merged' ? 'bg-purple-500/10 text-purple-600' :
+            message.origin === 'inherited' ? 'bg-blue-500/10 text-blue-600' :
+            'bg-muted text-muted-foreground'
+          }`}>
+            <Icon name={message.origin === 'merged' ? 'link' : 'git-branch'} className="h-2.5 w-2.5" />
+            {message.origin === 'merged' ? 'merged' : message.origin === 'inherited' ? 'inherited' : message.origin}
+          </span>
         )}
 
         {showActions && (
@@ -250,6 +267,19 @@ function ChatMessageInner({
             onFork={onFork}
           />
         )}
+      </div>
+    </div>
+  )
+}
+
+function SessionReferenceCard({ sessionId, content }: { sessionId: string; content: string }) {
+  return (
+    <div className="flex items-start gap-2 p-2 rounded-lg bg-blue-500/5 border border-blue-500/15 text-xs">
+      <Icon name="link" className="h-3.5 w-3.5 text-blue-500 mt-0.5 shrink-0" />
+      <div className="min-w-0">
+        <span className="font-medium text-blue-600 dark:text-blue-400">Ссылка на сессию</span>
+        <span className="text-muted-foreground ml-1">{sessionId}</span>
+        {content && <p className="text-muted-foreground mt-0.5 truncate">{content}</p>}
       </div>
     </div>
   )

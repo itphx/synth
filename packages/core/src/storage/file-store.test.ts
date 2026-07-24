@@ -55,6 +55,7 @@ describe('FileStore', () => {
       },
       checkpoints: [],
       stickyNotes: [],
+      references: [],
       summarizationPending: false,
       canSummarize: false,
       inputCost: 0,

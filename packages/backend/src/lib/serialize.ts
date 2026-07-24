@@ -35,6 +35,13 @@ export function serializeSession(session: Session) {
       updated_at: n.updatedAt,
       disabled: n.disabled,
     })),
+    references: (session.references || []).map((ref) => ({
+      session_id: ref.sessionId,
+      label: ref.label,
+      message_range: ref.messageRange,
+      auto_summary: ref.autoSummary || null,
+      created_at: ref.createdAt,
+    })),
     summarization_pending: session.summarizationPending,
     can_summarize: session.canSummarize,
     input_tokens: session.inputTokens,

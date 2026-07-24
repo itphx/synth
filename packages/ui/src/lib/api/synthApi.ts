@@ -328,6 +328,30 @@ export const synthApi = {
     return fetchJSON<SessionData[]>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/children`)
   },
 
+  async getSessionReferences(sessionId: string): Promise<{ references: Array<{ sessionId: string; label: string; messageRange: [number, number]; autoSummary?: string; createdAt: string }> }> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/references`)
+  },
+
+  async addSessionReference(sessionId: string, sourceSessionId: string, options?: { label?: string; messageRange?: [number, number]; autoSummarize?: boolean }): Promise<{ reference: Record<string, unknown> }> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/references`, {
+      method: 'POST',
+      body: JSON.stringify({ source_session_id: sourceSessionId, ...options }),
+    })
+  },
+
+  async removeSessionReference(sessionId: string, refSessionId: string): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/references/${encodeURIComponent(refSessionId)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  async mergeMessages(sessionId: string, sourceSessionId: string, options: { sourceRange: [number, number]; position?: 'after' | 'before'; anchorMessageId?: string; summarize?: boolean }): Promise<{ messages: unknown[] }> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/messages/merge`, {
+      method: 'POST',
+      body: JSON.stringify({ source_session_id: sourceSessionId, source_range: options.sourceRange, ...options }),
+    })
+  },
+
   // Сообщения (API v2 — путь /messages/:sessionId/:index)
   async getSessionMessages(sessionId: string): Promise<MessageListResponse> {
     return fetchJSON<MessageListResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/messages`)
