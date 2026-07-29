@@ -21,7 +21,7 @@ export default defineConfig({
     alias: [{ find: "@", replacement: path.resolve(__dirname, "src") }],
   },
   server: {
-    host: "0.0.0.0",
+    host: process.env.VITE_HOST || "0.0.0.0",
     port: PORT,
     allowedHosts: resolveAllowedHosts(),
     proxy: {

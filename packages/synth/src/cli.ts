@@ -76,8 +76,10 @@ program
     process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
     process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
 
-    server.listen(port, () => {
-      console.log(`\n  Откройте http://localhost:${port} в браузере`);
+    const host = process.env.SYNTH_HOST || '0.0.0.0';
+
+    server.listen(port, host, () => {
+      console.log(`\n  Откройте http://${host}:${port} в браузере`);
       console.log(`  API-ключ: ${apiKey ? apiKey.slice(0, 8) + '...' : '(не задан)'}`);
     });
   });

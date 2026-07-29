@@ -37,6 +37,8 @@ import { JsonStore } from './storage/json-store.js';
 import { EventHub } from './events/hub.js';
 import type { EventClient } from './events/hub.js';
 
+const host = process.env.SYNTH_HOST || '0.0.0.0';
+
 const app = new Hono();
 
 app.use(logger());
@@ -574,7 +576,7 @@ server.on('upgrade', (request, socket, head) => {
   socket.destroy();
 });
 
-console.log(`synth-backend starting on http://localhost:${port}`);
+console.log(`synth-backend starting on http://${host}:${port}`);
 console.log(`  data dir: ${dataDir}`);
 console.log(`  debug mode: ${backendConfig.auth.debugMode}`);
 if (backendConfig.auth.debugMode) {
@@ -584,4 +586,4 @@ if (backendConfig.auth.debugMode) {
   });
 }
 
-server.listen(port);
+server.listen(port, host);
