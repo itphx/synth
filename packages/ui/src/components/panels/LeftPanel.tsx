@@ -1428,7 +1428,7 @@ export const LeftPanel: React.FC = () => {
           })}
         </div>
       </div>
-      <div className="flex-1 overflow-hidden">
+      <div className="flex flex-col flex-1 overflow-hidden">
         {leftPanelTab === 'projects' && <ProjectsTab />}
         {leftPanelTab === 'files' && <FilesTab />}
         {leftPanelTab === 'git' && <GitTab />}
