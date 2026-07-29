@@ -103,36 +103,29 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick }: MessageHeade
         </span>
       )}
 
-      {message.origin && message.origin !== 'local' && (
-        <button
-          title={message.source_msg_id ? `Из сообщения ${message.source_msg_id.slice(0, 8)}...` : undefined}
-          onClick={onOriginClick}
-          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] cursor-pointer hover:opacity-80 transition-opacity ${
-            message.origin === 'merged' ? 'bg-purple-500/10 text-purple-600' :
-            message.origin === 'inherited' ? 'bg-blue-500/10 text-blue-600' :
-            message.origin === 'crosspost' ? 'bg-teal-500/10 text-teal-600' :
-            'bg-muted text-muted-foreground'
-          }`}
-        >
-          <Icon
-            name={
-              message.origin === 'merged' ? 'links-line' :
-              message.origin === 'inherited' ? 'git-branch' :
-              message.origin === 'crosspost' ? 'link' :
-              'git-branch'
-            }
-            className="h-2.5 w-2.5"
-          />
-          {message.origin === 'merged' ? '📋 Скопировано' :
-           message.origin === 'inherited' ? '↳ Унаследовано' :
-           message.origin === 'crosspost' ? '↔ Связано' :
-           message.origin}
-        </button>
-      )}
-
-      {formatted && (
-        <span className="ml-auto tabular-nums">{formatted}</span>
-      )}
+      {formatted || (message.origin === 'merged' || message.origin === 'crosspost') ? (
+        <span className="ml-auto inline-flex items-center gap-1">
+          {(message.origin === 'merged' || message.origin === 'crosspost') && (
+            <button
+              title={message.source_msg_id ? `Из сообщения ${message.source_msg_id.slice(0, 8)}...` : undefined}
+              onClick={onOriginClick}
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] cursor-pointer hover:opacity-80 transition-opacity ${
+                message.origin === 'merged' ? 'bg-purple-500/10 text-purple-600' :
+                'bg-teal-500/10 text-teal-600'
+              }`}
+            >
+              <Icon
+                name={message.origin === 'merged' ? 'links-line' : 'link'}
+                className="h-2.5 w-2.5"
+              />
+              {message.origin === 'merged' ? 'Скопировано' : 'Связано'}
+            </button>
+          )}
+          {formatted && (
+            <span className="tabular-nums">{formatted}</span>
+          )}
+        </span>
+      ) : null}
     </div>
   )
 }
