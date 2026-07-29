@@ -276,22 +276,23 @@ export function MergeModal() {
                   const checked = selectedSeqs.has(seq)
                   const roleLabel = msg.role === 'user' ? '👤' : msg.role === 'assistant' ? '🤖' : '🔧'
                   return (
-                    <label
+                    <div
                       key={seq}
                       className={`flex items-start gap-2 px-2 py-1.5 text-xs cursor-pointer hover:bg-accent/50 ${checked ? 'bg-accent/30' : ''}`}
+                      onClick={() => toggleSeq(seq)}
                     >
                       <input
                         type="checkbox"
                         checked={checked}
-                        onChange={() => toggleSeq(seq)}
-                        className="mt-0.5 shrink-0"
+                        readOnly
+                        className="mt-0.5 shrink-0 pointer-events-none"
                       />
                       <span className="text-muted-foreground shrink-0">#{seq}</span>
                       <span className="shrink-0">{roleLabel}</span>
                       <span className="truncate text-muted-foreground">
                         {previewContent(msg.content)}
                       </span>
-                    </label>
+                    </div>
                   )
                 })}
               </div>

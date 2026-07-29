@@ -109,6 +109,18 @@ function ChatMessageInner({
 
   const showActions = isUser || isAssistant || isSummary || isDebug
 
+  const handleOriginClick = () => {
+    const parentSessionId = (message.metadata as Record<string, unknown>)?.source_session_id as string | undefined
+    if (parentSessionId) {
+      useUIStore.getState().openTab({
+        id: `chat-${parentSessionId}`,
+        type: 'chat',
+        title: 'Родительская сессия',
+        data: { sessionId: parentSessionId },
+      })
+    }
+  }
+
   const toolCalls = message.tool_calls || []
   const liveToolCalls = useToolCallData(toolCalls)
   const reasoningBlocks = getReasoningBlocks(message)
@@ -147,15 +159,15 @@ function ChatMessageInner({
     <div className={containerClass}>
       <div className={bubbleClass}>
         {isAssistant && (
-          <MessageHeader message={message} isSubagent={isSubagent} />
+          <MessageHeader message={message} isSubagent={isSubagent} onOriginClick={handleOriginClick} />
         )}
 
         {isSummary && (
-          <MessageHeader message={message} isSubagent={isSubagent} />
+          <MessageHeader message={message} isSubagent={isSubagent} onOriginClick={handleOriginClick} />
         )}
 
         {isDebug && (
-          <MessageHeader message={message} isSubagent={isSubagent} />
+          <MessageHeader message={message} isSubagent={isSubagent} onOriginClick={handleOriginClick} />
         )}
 
         {(isAssistant || isSummary || isDebug) && (
@@ -226,7 +238,7 @@ function ChatMessageInner({
         )}
 
         {isUser && (
-          <MessageHeader message={message} isSubagent={isSubagent} />
+          <MessageHeader message={message} isSubagent={isSubagent} onOriginClick={handleOriginClick} />
         )}
 
         {displayContent && (
@@ -241,32 +253,6 @@ function ChatMessageInner({
           ) : (
             <MarkdownContent content={displayContent} />
           )
-        )}
-
-        {message.origin && message.origin !== 'local' && (
-          <span
-            title={message.source_msg_id ? `Из сообщения ${message.source_msg_id.slice(0, 8)}...` : undefined}
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] mt-1 ${
-              message.origin === 'merged' ? 'bg-purple-500/10 text-purple-600' :
-              message.origin === 'inherited' ? 'bg-blue-500/10 text-blue-600' :
-              message.origin === 'crosspost' ? 'bg-teal-500/10 text-teal-600' :
-              'bg-muted text-muted-foreground'
-            }`}
-          >
-            <Icon
-              name={
-                message.origin === 'merged' ? 'links-line' :
-                message.origin === 'inherited' ? 'git-branch' :
-                message.origin === 'crosspost' ? 'link' :
-                'git-branch'
-              }
-              className="h-2.5 w-2.5"
-            />
-            {message.origin === 'merged' ? '📋 Скопировано' :
-             message.origin === 'inherited' ? '↳ Унаследовано' :
-             message.origin === 'crosspost' ? '↔ Связано' :
-             message.origin}
-          </span>
         )}
 
         {showActions && (

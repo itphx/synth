@@ -11,6 +11,8 @@ interface MessageHeaderProps {
   message: MessageData
   /** true если сессия — дочерняя (сабагент) */
   isSubagent?: boolean
+  /** Клик по origin-бейджу — открыть родительскую сессию */
+  onOriginClick?: () => void
 }
 
 function resolveAuthor(): string {
@@ -18,7 +20,7 @@ function resolveAuthor(): string {
   return profile?.display_name || user?.username || ''
 }
 
-function MessageHeaderInner({ message, isSubagent }: MessageHeaderProps) {
+function MessageHeaderInner({ message, isSubagent, onOriginClick }: MessageHeaderProps) {
   const time = message.timestamp || message.created_at
   const formatted = time
     ? new Date(time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
@@ -99,6 +101,33 @@ function MessageHeaderInner({ message, isSubagent }: MessageHeaderProps) {
           <ProviderIcon icon={providerIcon} baseUrl={providerUrl} size={12} className="shrink-0" />
           <span>{message.model}</span>
         </span>
+      )}
+
+      {message.origin && message.origin !== 'local' && (
+        <button
+          title={message.source_msg_id ? `Из сообщения ${message.source_msg_id.slice(0, 8)}...` : undefined}
+          onClick={onOriginClick}
+          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] cursor-pointer hover:opacity-80 transition-opacity ${
+            message.origin === 'merged' ? 'bg-purple-500/10 text-purple-600' :
+            message.origin === 'inherited' ? 'bg-blue-500/10 text-blue-600' :
+            message.origin === 'crosspost' ? 'bg-teal-500/10 text-teal-600' :
+            'bg-muted text-muted-foreground'
+          }`}
+        >
+          <Icon
+            name={
+              message.origin === 'merged' ? 'links-line' :
+              message.origin === 'inherited' ? 'git-branch' :
+              message.origin === 'crosspost' ? 'link' :
+              'git-branch'
+            }
+            className="h-2.5 w-2.5"
+          />
+          {message.origin === 'merged' ? '📋 Скопировано' :
+           message.origin === 'inherited' ? '↳ Унаследовано' :
+           message.origin === 'crosspost' ? '↔ Связано' :
+           message.origin}
+        </button>
       )}
 
       {formatted && (
