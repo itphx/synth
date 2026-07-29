@@ -128,6 +128,8 @@ interface ChatStore {
   debugModalSessionId: string | null
   debugModalMessageIndex: number | null
 
+  selectionBySession: Record<string, { mode: boolean; indices: Set<number> }>
+
   setMessages: (sessionId: string, messages: MessageData[]) => void
   updateMessage: (sessionId: string, index: number, changes: Partial<MessageData>) => void
   startStream: (sessionId: string, streamId: string, agentRole: string | null, model?: string, provider?: string) => void
@@ -158,6 +160,12 @@ interface ChatStore {
   retryInputBySession: Record<string, string>
   setRetryInput: (sessionId: string, text: string) => void
   clearRetryInput: (sessionId: string) => void
+
+  toggleSelectionMode: (sessionId: string) => void
+  toggleMessageSelection: (sessionId: string, index: number) => void
+  selectMessageRange: (sessionId: string, from: number, to: number) => void
+  selectAllMessages: (sessionId: string) => void
+  clearSelection: (sessionId: string) => void
 }
 
 export const useChatStore = create<ChatStore>((set) => ({
@@ -171,6 +179,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   debugModalSessionId: null,
   debugModalMessageIndex: null,
   retryInputBySession: {},
+  selectionBySession: {},
 
   setMessages: (sessionId, messages) =>
     set((s) => ({
@@ -549,5 +558,85 @@ export const useChatStore = create<ChatStore>((set) => ({
       const retryInputBySession = { ...s.retryInputBySession }
       delete retryInputBySession[sessionId]
       return { retryInputBySession }
+    }),
+
+  toggleSelectionMode: (sessionId) =>
+    set((s) => {
+      const current = s.selectionBySession[sessionId]
+      if (current?.mode) {
+        // Exiting selection mode: clear everything
+        const selectionBySession = { ...s.selectionBySession }
+        delete selectionBySession[sessionId]
+        return { selectionBySession }
+      }
+      // Entering selection mode
+      return {
+        selectionBySession: {
+          ...s.selectionBySession,
+          [sessionId]: { mode: true, indices: new Set<number>() },
+        },
+      }
+    }),
+
+  toggleMessageSelection: (sessionId, index) =>
+    set((s) => {
+      const current = s.selectionBySession[sessionId]
+      if (!current?.mode) return s
+      const next = new Set(current.indices)
+      if (next.has(index)) {
+        next.delete(index)
+      } else {
+        next.add(index)
+      }
+      return {
+        selectionBySession: {
+          ...s.selectionBySession,
+          [sessionId]: { mode: true, indices: next },
+        },
+      }
+    }),
+
+  selectMessageRange: (sessionId, from, to) =>
+    set((s) => {
+      const current = s.selectionBySession[sessionId]
+      if (!current?.mode) return s
+      const next = new Set(current.indices)
+      const start = Math.min(from, to)
+      const end = Math.max(from, to)
+      for (let i = start; i <= end; i++) {
+        next.add(i)
+      }
+      return {
+        selectionBySession: {
+          ...s.selectionBySession,
+          [sessionId]: { mode: true, indices: next },
+        },
+      }
+    }),
+
+  selectAllMessages: (sessionId) =>
+    set((s) => {
+      const current = s.selectionBySession[sessionId]
+      if (!current?.mode) return s
+      const msgs = s.messagesBySession[sessionId] || []
+      const next = new Set<number>(msgs.map((m) => m.index))
+      return {
+        selectionBySession: {
+          ...s.selectionBySession,
+          [sessionId]: { mode: true, indices: next },
+        },
+      }
+    }),
+
+  clearSelection: (sessionId) =>
+    set((s) => {
+      const current = s.selectionBySession[sessionId]
+      if (!current) return s
+      return {
+        selectionBySession: {
+          ...s.selectionBySession,
+          [sessionId]: { ...current, indices: new Set<number>() },
+        },
+      }
     }),
 }))

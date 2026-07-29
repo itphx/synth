@@ -292,7 +292,7 @@ export class SessionManager {
   async addReference(
     targetSessionId: string,
     sourceSessionId: string,
-    options: { label?: string; messageRange?: [number, number]; autoSummarize?: boolean },
+    options: { label?: string; messageRange?: [number, number]; autoSummarize?: boolean; position?: 'after' | 'before' },
   ): Promise<SessionReference> {
     return this.withLock(targetSessionId, async (target) => {
       const source = await this.getSession(sourceSessionId);
@@ -345,11 +345,51 @@ export class SessionManager {
         hidden: false,
         metadata: { type: 'session_reference', session_id: sourceSessionId },
       };
-      target.messages.push(refMessage);
+      if (options.position === 'before') {
+        target.messages.unshift(refMessage);
+      } else {
+        target.messages.push(refMessage);
+      }
+      target.messages.forEach((m, i) => { m.seq = i + 1; });
 
       target.updatedAt = nowISO();
       await this.store.save(target);
       return ref;
+    });
+  }
+
+  async batchMessageOperation(
+    sessionId: string,
+    action: 'pin' | 'toggle' | 'delete',
+    indices: number[],
+    state?: boolean,
+  ): Promise<{ results: Array<{ index: number; success: boolean; state?: boolean }> }> {
+    return this.withLock(sessionId, async (session) => {
+      const results: Array<{ index: number; success: boolean; state?: boolean }> = [];
+      const sorted = action === 'delete'
+        ? [...indices].sort((a, b) => b - a)
+        : [...indices].sort((a, b) => a - b);
+
+      for (const idx of sorted) {
+        const msg = session.messages[idx];
+        if (!msg) { results.push({ index: idx, success: false }); continue; }
+
+        if (action === 'pin') {
+          msg.pinned = state !== undefined ? state : !msg.pinned;
+          results.push({ index: idx, success: true, state: msg.pinned });
+        } else if (action === 'toggle') {
+          msg.disabled = state !== undefined ? state : !msg.disabled;
+          results.push({ index: idx, success: true, state: msg.disabled });
+        } else if (action === 'delete') {
+          session.messages.splice(idx, 1);
+          results.push({ index: idx, success: true });
+        }
+      }
+
+      session.messages.forEach((m, i) => { m.seq = i + 1; });
+      session.updatedAt = new Date().toISOString();
+      await this.store.save(session);
+      return { results };
     });
   }
 

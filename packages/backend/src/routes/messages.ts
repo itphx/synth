@@ -49,6 +49,34 @@ export function createMessageRoutes(
     });
   }
 
+  // POST /api/v2/messages/:sessionId/batch — групповая операция
+  app.post('/:sessionId/batch', kit.requireAuth, async (c) => {
+    const sessionId = c.req.param('sessionId');
+    const body = await c.req.json<{ action: string; indices: number[]; state?: boolean }>();
+    const { action, indices, state } = body;
+
+    if (!['pin', 'toggle', 'delete'].includes(action)) {
+      return c.json({ error: { code: 'INVALID_ACTION', message: `Unknown action: ${action}` } }, 400);
+    }
+    if (!Array.isArray(indices) || indices.length === 0) {
+      return c.json({ error: { code: 'INVALID_INDICES', message: 'indices must be a non-empty array' } }, 400);
+    }
+
+    const session = await sessionManager.getSession(sessionId);
+    if (!session) return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+
+    const result = await sessionManager.batchMessageOperation(
+      sessionId,
+      action as 'pin' | 'toggle' | 'delete',
+      indices,
+      state,
+    );
+
+    recalcCanSummarize(sessionId);
+
+    return c.json(result, 200);
+  });
+
   // PATCH /api/v2/messages/:sessionId/:index/toggle — переключить disabled
   app.patch('/:sessionId/:index/toggle', kit.requireAuth, async (c) => {
     const sessionId = c.req.param('sessionId');

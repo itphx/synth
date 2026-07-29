@@ -20,6 +20,10 @@ interface MessageListProps {
   onStop: () => void
   /** true если сессия — дочерняя (сабагент) */
   isSubagent?: boolean
+  selectionMode?: boolean
+  selectedIndices?: Set<number>
+  onToggleSelect?: (index: number, shiftKey: boolean) => void
+  onSelectRange?: (from: number, to: number) => void
 }
 
 const VIRTUALIZE_THRESHOLD = 30
@@ -38,10 +42,15 @@ export function MessageList({
   readOnly,
   onStop,
   isSubagent,
+  selectionMode,
+  selectedIndices,
+  onToggleSelect,
+  onSelectRange,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
+  const lastClickedRef = useRef<number | null>(null)
 
   const streamEntries = Object.values(streams).filter((s) => s.isStreaming)
   const streamContentSize = streamEntries.reduce((sum, s) => sum + s.content.length + s.reasoningBlocks.reduce((rsum, r) => rsum + r.text.length, 0), 0)
@@ -95,6 +104,17 @@ export function MessageList({
   const shouldVirtualize = messages.length > VIRTUALIZE_THRESHOLD
   const virtualItems = virtualizer.getVirtualItems()
 
+  const handleToggleSelect = useCallback((index: number, shiftKey: boolean) => {
+    if (shiftKey && lastClickedRef.current != null) {
+      const from = Math.min(lastClickedRef.current, index)
+      const to = Math.max(lastClickedRef.current, index)
+      onSelectRange?.(from, to)
+    } else {
+      onToggleSelect?.(index, shiftKey)
+    }
+    lastClickedRef.current = index
+  }, [onToggleSelect, onSelectRange])
+
   const chatMsgProps = useCallback((msg: MessageData) => ({
     message: msg,
     onCopy: () => onCopy(msg),
@@ -106,7 +126,10 @@ export function MessageList({
     onFork: () => onFork(msg),
     readOnly,
     isSubagent,
-  }), [onCopy, onToggle, onPin, onDelete, onRetry, onDebug, onFork, readOnly, isSubagent])
+    selectionMode,
+    isSelected: selectedIndices?.has(msg.index) ?? false,
+    onToggleSelect: (shiftKey: boolean) => handleToggleSelect(msg.index, shiftKey),
+  }), [onCopy, onToggle, onPin, onDelete, onRetry, onDebug, onFork, readOnly, isSubagent, selectionMode, selectedIndices, handleToggleSelect])
 
   return (
     <div className="relative flex-1 overflow-hidden">

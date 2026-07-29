@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react'
 import { useUIStore } from '@/stores/useUIStore'
+import { cn } from '@/lib/utils'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useSessionsTreeStore } from '@/stores/useSessionsTreeStore'
@@ -16,6 +17,7 @@ import { TreeNode, TreeChildren, TreeContainer } from '@/components/tree'
 import type { TreeNodeBase, TreeAction } from '@/components/tree'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { ConfirmDialog, type ConfirmVariant } from '@/components/ui/confirm-dialog'
+import { Dialog, DialogContent } from '@/components/ui/dialog'
 
 const LEFT_TABS = [
   { id: 'projects' as const, icon: 'folder-3' as const, labelKey: 'leftPanel.tab.projects' },
@@ -65,6 +67,7 @@ function ProjectsTab() {
   const openTab = useUIStore((s) => s.openTab)
   const centerTabs = useUIStore((s) => s.centerTabs)
   const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
+  const forwardMode = useUIStore((s) => s.forwardMode)
   const { sortMode, selectionMode, selectedIds, toggleSelected } = useSessionsTreeStore()
   const streamingBySession = useChatStore((s) => s.streamingBySession)
   const queueBySession = useChatStore((s) => s.queueBySession)
@@ -77,6 +80,15 @@ function ProjectsTab() {
   const [editingProject, setEditingProject] = useState<any>(null)
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null)
   const pendingDeleteRef = useRef<Set<string>>(new Set())
+  const [forwardTarget, setForwardTarget] = useState<{ sessionId: string; sessionName: string } | null>(null)
+  const [summarizeChecked, setSummarizeChecked] = useState(false)
+
+  // Switch to Projects tab when forward mode activates
+  useEffect(() => {
+    if (forwardMode.active) {
+      useUIStore.getState().setLeftPanelTab('projects')
+    }
+  }, [forwardMode.active])
 
   useEffect(() => { loadProjects(); loadSessions() }, [loadProjects, loadSessions])
 
@@ -185,6 +197,8 @@ function ProjectsTab() {
 
   const renderSessionNode = (session: any, depth: number, hasChildren: boolean, isExpanded: boolean, onToggle: () => void): TreeNodeBase => {
     const isSubagent = session.session_origin === 'subagent'
+    const isForwardSource = forwardMode.active && session.id === forwardMode.sourceSessionId
+    const isForwardTarget = forwardMode.active && !isForwardSource
     return {
       id: `session:${session.id}`,
       label: session.name || session.id,
@@ -216,17 +230,15 @@ function ProjectsTab() {
       onRenameCancel: () => { setRenamingId(null); setRenameValue('') },
       draggable: !selectionMode,
       onDragStart: (e) => { e.dataTransfer.setData('text/plain', session.id); e.dataTransfer.effectAllowed = 'move' },
+      className: cn(
+        isForwardSource && 'opacity-40 pointer-events-none',
+        isForwardTarget && 'cursor-pointer hover:bg-primary/10',
+      ),
       contextItems: [
         { label: t('leftPanel.rename'), icon: 'pencil-ai', onClick: () => { setRenamingId(session.id); setRenameValue(session.name || session.id) } },
         { label: t('leftPanel.forkSession'), icon: 'git-branch', onClick: async () => {
           const result = await forkSession(session.id)
           if (result) { setRenamingId(result.id); setRenameValue(result.id) }
-        }},
-        { label: t('leftPanel.copyToSession'), icon: 'file-copy', onClick: () => {
-          useUIStore.getState().openMergeModal(session.id)
-        }},
-        { label: t('leftPanel.addReference'), icon: 'link', onClick: () => {
-          useUIStore.getState().openReferenceModal(session.id)
         }},
         { label: t('leftPanel.clearSession'), icon: 'close', onClick: () => setConfirm({
           title: t('leftPanel.clearSession'),
@@ -255,6 +267,11 @@ function ProjectsTab() {
         }, destructive: true },
       ],
       onClick: () => {
+        if (forwardMode.active && !isForwardSource) {
+          setForwardTarget({ sessionId: session.id, sessionName: session.name || session.id })
+          return
+        }
+        if (isForwardSource) return
         if (selectionMode) { toggleSelected(session.id); return }
         if (pendingDeleteRef.current.has(session.id)) return
         clearSessionUnread(session.id)
@@ -288,6 +305,62 @@ function ProjectsTab() {
         variant={confirm?.variant ?? 'danger'}
         onConfirm={() => { confirm?.onConfirm(); setConfirm(null) }}
       />
+
+      {forwardTarget && (
+        <Dialog open={!!forwardTarget} onOpenChange={(open) => { if (!open) { setForwardTarget(null); setSummarizeChecked(false) } }}>
+          <DialogContent className="max-w-sm p-4 gap-3" showCloseButton={true}>
+            <h3 className="text-sm font-semibold">
+              Куда вставить{forwardMode.mode === 'merge' ? ' ссылку' : ' сообщения'}?
+            </h3>
+            <p className="text-xs text-muted-foreground">Сессия: {forwardTarget.sessionName}</p>
+            {forwardMode.mode === 'merge' && (
+              <label className="flex items-center gap-2 text-sm cursor-pointer px-3 py-1">
+                <input type="checkbox" checked={summarizeChecked} onChange={e => setSummarizeChecked(e.target.checked)} />
+                Суммаризировать
+              </label>
+            )}
+            <div className="flex flex-col gap-1.5">
+              <button
+                onClick={() => {
+                  useUIStore.getState().forwardConfirmAction?.(forwardTarget.sessionId, 'before', summarizeChecked)
+                  setForwardTarget(null)
+                  setSummarizeChecked(false)
+                }}
+                className="w-full text-left px-3 py-2 rounded text-sm hover:bg-accent"
+              >
+                Вставить в начало
+              </button>
+              <button
+                onClick={() => {
+                  useUIStore.getState().forwardConfirmAction?.(forwardTarget.sessionId, 'after', summarizeChecked)
+                  setForwardTarget(null)
+                  setSummarizeChecked(false)
+                }}
+                className="w-full text-left px-3 py-2 rounded text-sm hover:bg-accent"
+              >
+                Вставить в конец
+              </button>
+              <button
+                onClick={() => setForwardTarget(null)}
+                className="w-full text-left px-3 py-2 rounded text-sm hover:bg-accent"
+              >
+                Выбрать другую сессию
+              </button>
+              <div className="border-t my-1" />
+              <button
+                onClick={() => {
+                  useUIStore.getState().cancelForwardMode()
+                  setForwardTarget(null)
+                  setSummarizeChecked(false)
+                }}
+                className="w-full text-left px-3 py-2 rounded text-sm text-destructive hover:bg-destructive/10"
+              >
+                Отменить
+              </button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {editingProject && (
         <Popover open={!!editingProject} onOpenChange={(open) => { if (!open) setEditingProject(null) }}>

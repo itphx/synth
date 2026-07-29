@@ -28,6 +28,7 @@ import { createFsRoutes } from './routes/fs.js';
 import { createQueueRoutes } from './routes/queue.js';
 import { createI18nRoutes } from './routes/i18n.js';
 import { createUpdateRoutes } from './routes/updates.js';
+import { createMessageRoutes } from './routes/messages.js';
 
 export interface StandaloneConfig {
   port: number;
@@ -278,6 +279,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   // Updates
   app.route('/api/v2/updates', createUpdateRoutes(auth, dataDir));
+
+  // Messages (batch operations)
+  app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager));
 
   // Глобальный SSE-хаб
   app.get('/api/v2/events', async (c) => {
