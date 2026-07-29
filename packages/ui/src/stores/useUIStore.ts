@@ -76,6 +76,16 @@ interface UIStore {
   adminPage: string
   setAdminPage: (page: string) => void
 
+  isReferenceModalOpen: boolean
+  referenceModalSessionId: string | null
+  openReferenceModal: (sessionId: string) => void
+  closeReferenceModal: () => void
+
+  isMergeModalOpen: boolean
+  mergeModalSessionId: string | null
+  openMergeModal: (sessionId: string) => void
+  closeMergeModal: () => void
+
   theme: string
   setTheme: (theme: string) => void
   themeMode: ThemeMode
@@ -198,6 +208,16 @@ export const useUIStore = create<UIStore>()(
       setAdminSettingsOpen: (open) => set({ isAdminSettingsOpen: open }),
       adminPage: 'dashboard',
       setAdminPage: (page) => set({ adminPage: page }),
+
+      isReferenceModalOpen: false,
+      referenceModalSessionId: null,
+      openReferenceModal: (sessionId) => set({ isReferenceModalOpen: true, referenceModalSessionId: sessionId }),
+      closeReferenceModal: () => set({ isReferenceModalOpen: false, referenceModalSessionId: null }),
+
+      isMergeModalOpen: false,
+      mergeModalSessionId: null,
+      openMergeModal: (sessionId) => set({ isMergeModalOpen: true, mergeModalSessionId: sessionId }),
+      closeMergeModal: () => set({ isMergeModalOpen: false, mergeModalSessionId: null }),
 
       theme: 'flexoki',
       setTheme: (theme) => {

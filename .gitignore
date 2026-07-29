@@ -7,6 +7,8 @@ dist/
 build/
 .next/
 out/
+# Артефакты @synth/ui, копируемые в @itphx/synth при сборке
+packages/synth/ui/
 
 # Runtime данные
 data/

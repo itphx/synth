@@ -426,6 +426,125 @@ program
           console.log(`${c.id.padEnd(38)} ${title} ${msgCount}`);
         }
       }),
+  )
+  .addCommand(
+    new Command('ref')
+      .description('Добавить ссылку на сессию в другую сессию')
+      .argument('<sourceSessionId>', 'ID исходной сессии (может включать :seqRange)')
+      .option('--to <targetId>', 'ID целевой сессии (куда добавить ссылку)')
+      .option('--label <label>', 'метка для ссылки')
+      .option('--range <from>,<to>', 'диапазон сообщений (seq from,to)')
+      .option('--summarize', 'сгенерировать авто-саммари')
+      .option('--config <path>', 'путь к config.yaml')
+      .option('--data-dir <path>', 'каталог данных')
+      .action(async (arg, options) => {
+        const synth = await loadConfig({ configPath: options.config });
+        const dataDir = options.dataDir || resolveDataDir(synth);
+        await ensureDataDir(dataDir);
+
+        const { FileStore } = await import('./storage/file-store.js');
+        const { SessionManager } = await import('./sessions/manager.js');
+
+        let sourceSessionId = arg;
+        let seqRange: [number, number] | undefined;
+
+        const colonIdx = sourceSessionId.indexOf(':');
+        if (colonIdx >= 0) {
+          const rangeStr = sourceSessionId.slice(colonIdx + 1);
+          sourceSessionId = sourceSessionId.slice(0, colonIdx);
+          const parts = rangeStr.split('..');
+          if (parts.length === 2) {
+            seqRange = [parseInt(parts[0]!), parseInt(parts[1]!)];
+          }
+        }
+
+        if (options.range) {
+          const parts = String(options.range).split(',');
+          if (parts.length === 2) {
+            seqRange = [parseInt(parts[0]!), parseInt(parts[1]!)];
+          }
+        }
+
+        const targetId = options.to;
+        if (!targetId) {
+          console.error('Ошибка: укажите --to <targetSessionId>');
+          process.exit(1);
+        }
+
+        const store = new FileStore({ dataDir });
+        const manager = new SessionManager(store);
+        const ref = await manager.addReference(targetId, sourceSessionId, {
+          label: options.label,
+          messageRange: seqRange,
+          autoSummarize: !!options.summarize,
+        });
+        console.log(`Ссылка добавлена: session_id=${ref.sessionId}, range=[${ref.messageRange[0]}, ${ref.messageRange[1]}]`);
+      }),
+  )
+  .addCommand(
+    new Command('merge')
+      .description('Скопировать сообщения из одной сессии в другую')
+      .argument('<sourceSessionId>', 'ID исходной сессии (может включать :seqRange)')
+      .option('--to <targetId>', 'ID целевой сессии (куда копировать)')
+      .option('--position <pos>', 'позиция вставки: after (по умолчанию) или before', 'after')
+      .option('--anchor <messageId>', 'ID сообщения-якоря (после/перед которым вставить)')
+      .option('--range <from>,<to>', 'диапазон сообщений (seq from,to)')
+      .option('--summarize', 'сжать сообщения перед вставкой')
+      .option('--config <path>', 'путь к config.yaml')
+      .option('--data-dir <path>', 'каталог данных')
+      .action(async (arg, options) => {
+        const synth = await loadConfig({ configPath: options.config });
+        const dataDir = options.dataDir || resolveDataDir(synth);
+        await ensureDataDir(dataDir);
+
+        const { FileStore } = await import('./storage/file-store.js');
+        const { SessionManager } = await import('./sessions/manager.js');
+
+        let sourceSessionId = arg;
+        let seqRange: [number, number] | undefined;
+
+        const colonIdx = sourceSessionId.indexOf(':');
+        if (colonIdx >= 0) {
+          const rangeStr = sourceSessionId.slice(colonIdx + 1);
+          sourceSessionId = sourceSessionId.slice(0, colonIdx);
+          const parts = rangeStr.split('..');
+          if (parts.length === 2) {
+            seqRange = [parseInt(parts[0]!), parseInt(parts[1]!)];
+          }
+        }
+
+        if (options.range) {
+          const parts = String(options.range).split(',');
+          if (parts.length === 2) {
+            seqRange = [parseInt(parts[0]!), parseInt(parts[1]!)];
+          }
+        }
+
+        const targetId = options.to;
+        if (!targetId) {
+          console.error('Ошибка: укажите --to <targetSessionId>');
+          process.exit(1);
+        }
+
+        const store = new FileStore({ dataDir });
+        const manager = new SessionManager(store);
+
+        const sourceSession = await manager.getSession(sourceSessionId);
+        if (!sourceSession) {
+          console.error(`Ошибка: исходная сессия ${sourceSessionId} не найдена`);
+          process.exit(1);
+        }
+
+        const finalRange: [number, number] = seqRange || [1, sourceSession.messages.length];
+
+        const merged = await manager.mergeMessages(targetId, sourceSessionId, {
+          sourceRange: finalRange,
+          position: options.position === 'before' ? 'before' : 'after',
+          anchorMessageId: options.anchor,
+          summarize: !!options.summarize,
+        });
+        console.log(`Скопировано ${merged.length} сообщений из сессии ${sourceSessionId} в ${targetId}`);
+      }),
   );
 
 program.parse();

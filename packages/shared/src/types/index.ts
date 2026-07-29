@@ -40,7 +40,7 @@ export enum StatusMessageType {
 }
 
 // --- Part ---
-export type PartType = 'text' | 'tool_use' | 'tool_result' | 'reasoning';
+export type PartType = 'text' | 'tool_use' | 'tool_result' | 'reasoning' | 'session_reference';
 
 export interface Part {
   id: string;
@@ -157,6 +157,15 @@ export interface StickyNote {
   disabled: boolean;
 }
 
+export interface SessionReference {
+  type: 'session_reference';
+  sessionId: string;
+  label: string;
+  messageRange: [number, number];
+  autoSummary?: string;
+  createdAt: string;
+}
+
 export interface Session {
   id: string;
   title?: string;
@@ -175,6 +184,7 @@ export interface Session {
   mcpServers?: string[];
   checkpoints: Checkpoint[];
   stickyNotes: StickyNote[];
+  references: SessionReference[];
   currentStream?: StreamInfo;
   summarizationPending: boolean;
   canSummarize: boolean;
@@ -436,6 +446,9 @@ export type EventType =
   | 'session.renamed'
   | 'session.forked'
   | 'session.fork.created'
+  | 'session.reference.added'
+  | 'session.reference.removed'
+  | 'session.messages.merged'
   | 'message.added'
   | 'message.updated'
   | 'child.message.added'

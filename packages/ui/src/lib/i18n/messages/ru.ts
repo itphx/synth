@@ -162,6 +162,8 @@ export const dict = {
   'leftPanel.confirmBulkDelete': 'Удалить {count} выбранных сессий?',
   'leftPanel.rename': 'Переименовать',
   'leftPanel.forkSession': 'Создать ответвление',
+  'leftPanel.copyToSession': 'Копировать в сессию...',
+  'leftPanel.addReference': 'Прикрепить ссылку...',
   'leftPanel.configure': 'Настроить',
   'leftPanel.delete': 'Удалить',
   'leftPanel.clearSession': 'Очистить',
@@ -225,6 +227,7 @@ export const dict = {
   'rightPanel.tab.params': 'Параметры',
   'rightPanel.tab.context': 'Контекст',
   'rightPanel.tab.scheduler': 'Шедулер',
+  'rightPanel.tab.references': 'Ссылки',
   'rightPanel.stats.projectStats': 'Статистика проекта',
   'rightPanel.stats.sessions': 'Сессий',
   'rightPanel.stats.inputTokens': 'Входные',
@@ -413,6 +416,7 @@ export const dict = {
 
   'chat.subagent.title': 'Сабагент',
   'chat.subagent.steps': 'шагов',
+  'chat.subagent.open': 'Открыть',
 
   'chat.queue.stalled': 'Обработка остановлена: {count} сообщ.',
   'chat.queue.pending': 'В очереди: {count}',
@@ -826,4 +830,27 @@ export const dict = {
   'mcp.url': 'URL',
   'mcp.enabledByDefault': 'Включён по умолчанию для новых сессий',
   'mcp.testConnection': 'Проверить подключение',
+
+  // Reference & Merge
+  'reference.title': 'Прикрепить ссылку на сессию',
+  'reference.selectSession': 'Выберите сессию-источник',
+  'reference.label': 'Метка',
+  'reference.labelPlaceholder': 'Например: «Выводы анализа»',
+  'reference.autoSummarize': 'Авто-саммари',
+  'reference.add': 'Прикрепить',
+  'reference.empty': 'Нет прикреплённых ссылок',
+  'reference.remove': 'Удалить ссылку',
+  'reference.source': 'Источник',
+  'reference.range': 'Сообщения',
+  'reference.attached': 'Прикреплено',
+
+  'merge.title': 'Копировать сообщения',
+  'merge.selectSession': 'Выберите сессию-источник',
+  'merge.range': 'Диапазон seq (from,to)',
+  'merge.position': 'Позиция',
+  'merge.position.after': 'В конец',
+  'merge.position.before': 'В начало',
+  'merge.summarize': 'Сжать (суммаризация)',
+  'merge.copy': 'Копировать',
+  'merge.copied': 'Скопировано {count} сообщ.',
 };

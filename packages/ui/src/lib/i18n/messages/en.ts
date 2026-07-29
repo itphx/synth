@@ -169,6 +169,8 @@ export const dict = {
   'leftPanel.confirmBulkDelete': 'Delete {count} selected sessions?',
   'leftPanel.rename': 'Rename',
   'leftPanel.forkSession': 'Fork',
+  'leftPanel.copyToSession': 'Copy to session...',
+  'leftPanel.addReference': 'Add reference...',
   'leftPanel.configure': 'Configure',
   'leftPanel.delete': 'Delete',
   'leftPanel.clearSession': 'Clear',
@@ -226,6 +228,7 @@ export const dict = {
   'rightPanel.tab.params': 'Settings',
   'rightPanel.tab.context': 'Context',
   'rightPanel.tab.scheduler': 'Scheduler',
+  'rightPanel.tab.references': 'References',
   'rightPanel.stats.projectStats': 'Project stats',
   'rightPanel.stats.sessions': 'Sessions',
   'rightPanel.stats.inputTokens': 'Input',
@@ -418,6 +421,7 @@ export const dict = {
 
   'chat.subagent.title': 'Subagent',
   'chat.subagent.steps': 'steps',
+  'chat.subagent.open': 'Open',
 
   'chat.queue.stalled': 'Processing stopped: {count} messages',
   'chat.queue.pending': 'In queue: {count}',
@@ -830,4 +834,27 @@ export const dict = {
   'mcp.url': 'URL',
   'mcp.enabledByDefault': 'Enabled by default for new sessions',
   'mcp.testConnection': 'Test Connection',
+
+  // Reference & Merge
+  'reference.title': 'Add Session Reference',
+  'reference.selectSession': 'Select source session',
+  'reference.label': 'Label',
+  'reference.labelPlaceholder': 'E.g. "Analysis results"',
+  'reference.autoSummarize': 'Auto-summarize',
+  'reference.add': 'Add Reference',
+  'reference.empty': 'No references attached',
+  'reference.remove': 'Remove reference',
+  'reference.source': 'Source',
+  'reference.range': 'Messages',
+  'reference.attached': 'Attached',
+
+  'merge.title': 'Copy Messages',
+  'merge.selectSession': 'Select source session',
+  'merge.range': 'Seq range (from,to)',
+  'merge.position': 'Position',
+  'merge.position.after': 'End',
+  'merge.position.before': 'Start',
+  'merge.summarize': 'Summarize',
+  'merge.copy': 'Copy',
+  'merge.copied': 'Copied {count} msgs',
 };

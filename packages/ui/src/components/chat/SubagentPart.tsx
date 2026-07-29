@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
+import { useUIStore } from '@/stores/useUIStore'
 import { MarkdownContent } from './MarkdownContent'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
@@ -20,6 +21,7 @@ export interface SubagentPartData {
   name: string
   prompt?: string
   response?: string
+  sessionId?: string
   reasoning_blocks?: Array<{ text: string; iteration: number }>
   intermediate_text_blocks?: Array<{ text: string; iteration: number }>
   tool_calls?: SubagentToolCall[]
@@ -61,6 +63,19 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
     }
   }
 
+  const shortSessionId = subagent.sessionId?.slice(0, 8)
+
+  const handleOpenSession = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!subagent.sessionId) return
+    useUIStore.getState().openTab({
+      id: `chat-${subagent.sessionId}`,
+      type: 'chat',
+      title: `${t('chat.subagent.title')}: ${subagent.name}`,
+      data: { sessionId: subagent.sessionId },
+    })
+  }
+
   return (
     <div className="mb-2 rounded-md border border-border/50 overflow-hidden">
       <button
@@ -71,10 +86,26 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
           name={expanded ? 'arrow-down-s' : 'arrow-right-s'}
           className="size-3.5 transition-transform"
         />
-        <Icon name="robot-2" className="size-3.5 text-purple-400" />
+        <Icon name="git-branch" className="size-3.5 text-purple-400" />
         <span className="font-medium">{t('chat.subagent.title')}: {subagent.name}</span>
+        {shortSessionId && (
+          <span className="font-mono text-[10px] text-muted-foreground/70">
+            {shortSessionId}
+          </span>
+        )}
+        {subagent.sessionId && (
+          <button
+            type="button"
+            className="ml-auto inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] text-purple-400 hover:text-purple-300 hover:bg-purple-500/10 transition-colors cursor-pointer"
+            onClick={handleOpenSession}
+            title={subagent.sessionId}
+          >
+            <Icon name="external-link" className="size-3" />
+            {t('chat.subagent.open')}
+          </button>
+        )}
         {subagent.steps != null && (
-          <span className="ml-auto text-[10px] text-muted-foreground/60">
+          <span className="text-[10px] text-muted-foreground/60">
             {subagent.steps} {t('chat.subagent.steps')}
           </span>
         )}

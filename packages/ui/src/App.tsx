@@ -16,6 +16,8 @@ import { BackendConnection } from './components/layout/BackendConnection'
 import { UpdateNotification } from './components/layout/UpdateNotification'
 import { SettingsModal } from './components/settings/SettingsModal'
 import { AdminModal } from './components/admin/AdminModal'
+import { ReferenceModal } from './components/modals/ReferenceModal'
+import { MergeModal } from './components/modals/MergeModal'
 import { AuthGate } from './components/auth/AuthGate'
 import { profileService } from '@/lib/api/profileService'
 import { useAuthStore } from '@/stores/authStore'
@@ -103,6 +105,8 @@ function App() {
 
         <SettingsModal />
         <AdminModal />
+        <ReferenceModal />
+        <MergeModal />
         <ToastContainer
           position="bottom-right"
           newestOnTop

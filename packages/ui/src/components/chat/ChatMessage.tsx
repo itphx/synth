@@ -7,8 +7,11 @@ import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
 import { SubagentPart, type SubagentPartData } from './SubagentPart'
 import { useUIStore } from '@/stores/useUIStore'
+import { useChatStore } from '@/stores/chatStore'
 import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData } from '@/stores/chatStore'
+import { synthApi } from '@/lib/api/synthApi'
 import { useMemo } from 'react'
+import { Icon } from '@/components/icon/Icon'
 
 function useToolCallData(toolCalls: MessageData['tool_calls']) {
   return useMemo(() => {
@@ -116,10 +119,12 @@ function ChatMessageInner({
   const getSubagentData = (tc: LiveToolCall) => {
     const meta = tc.result?.metadata as Record<string, unknown> | undefined
     if (!meta) return null
+    const sessionId = meta.child_session_id as string | undefined
     return {
       name: (meta.subagent_type as string) || 'task',
       prompt: tc.args?.prompt as string | undefined,
       response: (meta.final_content as string) || (meta.description as string) || '',
+      sessionId,
       reasoning_blocks: meta.reasoning_blocks as Array<{ text: string; iteration: number }> | undefined,
       intermediate_text_blocks: meta.intermediate_text_blocks as Array<{ text: string; iteration: number }> | undefined,
       tool_calls: meta.tool_calls as Array<{
@@ -227,9 +232,41 @@ function ChatMessageInner({
         {displayContent && (
           isUser ? (
             <p className="text-sm whitespace-pre-wrap">{displayContent}</p>
+          ) : isInfo && (message.metadata as Record<string, unknown>)?.type === 'session_reference' ? (
+            <SessionReferenceCard
+              sessionId={String((message.metadata as Record<string, unknown>)?.session_id || '')}
+              content={displayContent}
+              metadata={message.metadata as Record<string, unknown> | undefined}
+            />
           ) : (
             <MarkdownContent content={displayContent} />
           )
+        )}
+
+        {message.origin && message.origin !== 'local' && (
+          <span
+            title={message.source_msg_id ? `Из сообщения ${message.source_msg_id.slice(0, 8)}...` : undefined}
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] mt-1 ${
+              message.origin === 'merged' ? 'bg-purple-500/10 text-purple-600' :
+              message.origin === 'inherited' ? 'bg-blue-500/10 text-blue-600' :
+              message.origin === 'crosspost' ? 'bg-teal-500/10 text-teal-600' :
+              'bg-muted text-muted-foreground'
+            }`}
+          >
+            <Icon
+              name={
+                message.origin === 'merged' ? 'links-line' :
+                message.origin === 'inherited' ? 'git-branch' :
+                message.origin === 'crosspost' ? 'link' :
+                'git-branch'
+              }
+              className="h-2.5 w-2.5"
+            />
+            {message.origin === 'merged' ? '📋 Скопировано' :
+             message.origin === 'inherited' ? '↳ Унаследовано' :
+             message.origin === 'crosspost' ? '↔ Связано' :
+             message.origin}
+          </span>
         )}
 
         {showActions && (
@@ -249,6 +286,107 @@ function ChatMessageInner({
             onDebug={onDebug}
             onFork={onFork}
           />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function SessionReferenceCard({
+  sessionId,
+  content,
+  metadata,
+}: {
+  sessionId: string
+  content: string
+  metadata?: Record<string, unknown>
+}) {
+  const activeTab = useUIStore((s) => {
+    const tab = s.centerTabs.find((t) => t.id === s.activeCenterTabId)
+    return tab
+  })
+  const currentSessionId = (activeTab?.data?.sessionId as string) || ''
+  const openTab = useUIStore((s) => s.openTab)
+  const setMessages = useChatStore((s) => s.setMessages)
+
+  const label = (metadata?.label as string) || undefined
+  const sourceSessionName = (metadata?.sourceSessionName as string) || undefined
+  const messageRange =
+    (metadata?.messageRange as [number, number]) ||
+    (metadata?.range as [number, number]) ||
+    undefined
+  const autoSummary =
+    (metadata?.autoSummary as string) ||
+    (metadata?.auto_summary as string) ||
+    undefined
+
+  const displayName = label || sourceSessionName || sessionId.slice(0, 8)
+  const shortId = sessionId.slice(0, 8)
+
+  const handleOpen = () => {
+    if (!sessionId) return
+    openTab({
+      id: `chat-${sessionId}`,
+      type: 'chat' as const,
+      title: displayName,
+      data: { sessionId },
+    })
+  }
+
+  const handleRemove = async () => {
+    if (!currentSessionId || !sessionId) return
+    try {
+      await synthApi.removeSessionReference(currentSessionId, sessionId)
+      const result = await synthApi.getSessionMessages(currentSessionId)
+      setMessages(currentSessionId, result.messages)
+    } catch {
+      // ignore
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2 p-3 rounded-lg bg-blue-500/5 border border-blue-500/15 text-xs">
+      {/* Заголовок с иконкой и названием */}
+      <div className="flex items-center gap-2">
+        <Icon name="link" className="h-4 w-4 text-blue-500 shrink-0" />
+        <span className="font-medium text-blue-600 dark:text-blue-400 truncate">
+          {displayName}
+        </span>
+        {displayName !== shortId && (
+          <span className="text-muted-foreground font-mono text-[10px] shrink-0">{shortId}</span>
+        )}
+      </div>
+
+      {/* Мета-информация: диапазон, авто-саммари */}
+      {(messageRange || autoSummary) && (
+        <div className="text-muted-foreground space-y-0.5">
+          {messageRange && (
+            <div>Сообщения {messageRange[0]}–{messageRange[1]}</div>
+          )}
+          {autoSummary && <p className="line-clamp-3">{autoSummary}</p>}
+        </div>
+      )}
+
+      {/* Контент (если передан) */}
+      {content && <MarkdownContent content={content} />}
+
+      {/* Кнопки действий */}
+      <div className="flex gap-2">
+        <button
+          onClick={handleOpen}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium text-blue-600 hover:bg-blue-500/10 transition-colors"
+        >
+          <Icon name="external-link" className="h-3 w-3" />
+          Открыть сессию
+        </button>
+        {currentSessionId && (
+          <button
+            onClick={handleRemove}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+          >
+            <Icon name="close" className="h-3 w-3" />
+            Удалить
+          </button>
         )}
       </div>
     </div>

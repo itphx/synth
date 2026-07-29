@@ -1,6 +1,6 @@
-import type { Session, TsmState, Message, SessionSettings, Checkpoint, SessionOrigin } from '@synth/shared';
+import type { Session, TsmState, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference } from '@synth/shared';
 import { TsmState as TsmStateEnum, getForkedTitle, MessageRole } from '@synth/shared';
-import { nowISO, generateId, makeTextPart } from '@synth/shared';
+import { nowISO, generateId, makeTextPart, makePart } from '@synth/shared';
 import type { FileStore } from '../storage/file-store.js';
 
 const VALID_TSM_TRANSITIONS: Record<TsmState, TsmState[]> = {
@@ -93,6 +93,7 @@ export class SessionManager {
       },
       checkpoints: [],
       stickyNotes: [],
+      references: [],
       summarizationPending: false,
       canSummarize: false,
       inputCost: 0,
@@ -286,6 +287,157 @@ export class SessionManager {
       children.map((c) => this.getSessionTree(c.id)),
     );
     return { session: root, children: childTrees };
+  }
+
+  async addReference(
+    targetSessionId: string,
+    sourceSessionId: string,
+    options: { label?: string; messageRange?: [number, number]; autoSummarize?: boolean },
+  ): Promise<SessionReference> {
+    return this.withLock(targetSessionId, async (target) => {
+      const source = await this.getSession(sourceSessionId);
+      if (!source) throw new Error(`Source session ${sourceSessionId} not found`);
+
+      const range: [number, number] = options.messageRange || [1, source.messages.length];
+      const label = options.label || source.title || 'Сессия';
+
+      let autoSummary: string | undefined;
+      if (options.autoSummarize && range[0] <= range[1]) {
+        const msgsInRange = source.messages
+          .filter((m: Message) => m.seq >= range[0] && m.seq <= range[1] && !m.hidden && !m.disabled);
+        autoSummary = msgsInRange
+          .map((m: Message) => `[${m.role}]: ${m.content.slice(0, 200)}${m.content.length > 200 ? '...' : ''}`)
+          .join(' | ');
+      }
+
+      const ref: SessionReference = {
+        type: 'session_reference',
+        sessionId: sourceSessionId,
+        label,
+        messageRange: range,
+        autoSummary,
+        createdAt: nowISO(),
+      };
+
+      if (!target.references) target.references = [];
+      const existingIdx = target.references.findIndex((r) => r.sessionId === sourceSessionId);
+      if (existingIdx >= 0) {
+        target.references[existingIdx] = ref;
+      } else {
+        target.references.push(ref);
+      }
+
+      const refMessage: Message = {
+        id: generateId(),
+        role: MessageRole.INFO,
+        seq: target.messages.length + 1,
+        origin: 'local',
+        parts: [makePart('session_reference', {
+          sessionId: ref.sessionId,
+          label: ref.label,
+          messageRange: ref.messageRange,
+          autoSummary: ref.autoSummary,
+        })],
+        content: `Ссылка на сессию: ${label} (${sourceSessionId}, сообщения ${range[0]}-${range[1]})`,
+        createdAt: nowISO(),
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        metadata: { type: 'session_reference', session_id: sourceSessionId },
+      };
+      target.messages.push(refMessage);
+
+      target.updatedAt = nowISO();
+      await this.store.save(target);
+      return ref;
+    });
+  }
+
+  async removeReference(targetSessionId: string, refSessionId: string): Promise<void> {
+    return this.withLock(targetSessionId, async (session) => {
+      if (session.references) {
+        session.references = session.references.filter((r) => r.sessionId !== refSessionId);
+      }
+      session.messages = session.messages.filter(
+        (m) => m.metadata?.type !== 'session_reference' || m.metadata?.session_id !== refSessionId,
+      );
+      session.updatedAt = nowISO();
+      await this.store.save(session);
+    });
+  }
+
+  async getReferences(sessionId: string): Promise<SessionReference[]> {
+    return this.store.getReferences(sessionId);
+  }
+
+  async mergeMessages(
+    targetSessionId: string,
+    sourceSessionId: string,
+    options: {
+      sourceRange: [number, number];
+      position: 'after' | 'before';
+      anchorMessageId?: string;
+      summarize?: boolean;
+    },
+  ): Promise<Message[]> {
+    return this.withLock(targetSessionId, async (target) => {
+      const source = await this.getSession(sourceSessionId);
+      if (!source) throw new Error(`Source session ${sourceSessionId} not found`);
+
+      const [fromSeq, toSeq] = options.sourceRange;
+      const sourceMsgs = source.messages.filter(
+        (m) => m.seq >= fromSeq && m.seq <= toSeq && !m.hidden && !m.disabled,
+      );
+
+      if (sourceMsgs.length === 0) return [];
+
+      let messagesToInsert: Message[];
+      if (options.summarize) {
+        const combined = sourceMsgs.map((m) => `[${m.role}]: ${m.content}`).join('\n\n');
+        const summaryMsg: Message = {
+          id: generateId(),
+          role: MessageRole.SUMMARY,
+          seq: 0,
+          origin: 'merged',
+          sourceMsgId: sourceSessionId,
+          parts: [makeTextPart(combined.slice(0, 4000))],
+          content: combined.slice(0, 4000),
+          createdAt: nowISO(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          metadata: { type: 'merged_summary', source_session_id: sourceSessionId, source_range: [fromSeq, toSeq] },
+        };
+        messagesToInsert = [summaryMsg];
+      } else {
+        messagesToInsert = sourceMsgs.map((m) => ({
+          ...structuredClone(m),
+          id: generateId(),
+          origin: 'merged' as const,
+          sourceMsgId: m.id,
+          seq: 0,
+        }));
+      }
+
+      let anchorIdx = target.messages.length;
+      if (options.anchorMessageId) {
+        const found = target.messages.findIndex((m) => m.id === options.anchorMessageId);
+        if (found >= 0) {
+          anchorIdx = options.position === 'after' ? found + 1 : found;
+        }
+      } else if (options.position === 'before') {
+        anchorIdx = 0;
+      }
+
+      target.messages.splice(anchorIdx, 0, ...messagesToInsert);
+      for (let i = 0; i < target.messages.length; i++) {
+        const msg = target.messages[i];
+        if (msg) msg.seq = i + 1;
+      }
+      target.updatedAt = nowISO();
+      await this.store.save(target);
+      return messagesToInsert;
+    });
   }
 
   async forkSession(

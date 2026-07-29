@@ -5,17 +5,21 @@ import { Icon } from '@/components/icon/Icon'
 import { StatsTab } from './StatsTab'
 import { ContextTab } from './ContextTab'
 import { SessionSettingsTab } from './SessionSettingsTab'
+import { ReferencesTab } from './ReferencesTab'
 
 const RIGHT_TABS = [
   { id: 'stats', icon: 'bar-chart-2' as const, labelKey: 'rightPanel.tab.stats' },
   { id: 'params', icon: 'settings-3' as const, labelKey: 'rightPanel.tab.params' },
   { id: 'context', icon: 'file-text' as const, labelKey: 'rightPanel.tab.context' },
+  { id: 'references', icon: 'link' as const, labelKey: 'rightPanel.tab.references' },
   { id: 'scheduler', icon: 'calendar-schedule' as const, labelKey: 'rightPanel.tab.scheduler' },
 ] as const
 
 export const RightPanel: React.FC = () => {
   const { t } = useI18n()
-  const { rightPanelTab, setRightPanelTab } = useUIStore()
+  const { rightPanelTab, setRightPanelTab, centerTabs, activeCenterTabId } = useUIStore()
+  const activeTab = centerTabs.find((t) => t.id === activeCenterTabId)
+  const sessionId = activeTab?.data?.sessionId
 
   return (
     <div className="flex h-full flex-col">
@@ -45,6 +49,12 @@ export const RightPanel: React.FC = () => {
         {rightPanelTab === 'stats' && <StatsTab />}
         {rightPanelTab === 'params' && <SessionSettingsTab />}
         {rightPanelTab === 'context' && <ContextTab />}
+        {rightPanelTab === 'references' && sessionId && <ReferencesTab sessionId={sessionId} />}
+        {rightPanelTab === 'references' && !sessionId && (
+          <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+            {t('reference.empty')}
+          </div>
+        )}
         {rightPanelTab === 'scheduler' && (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
             {t('rightPanel.scheduler.placeholder')}

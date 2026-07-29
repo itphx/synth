@@ -132,6 +132,11 @@ export function buildContentFromParts(parts: Part[]): string {
         const isError = d.isError ? ' error="true"' : '';
         return `<tool_result${isError}>${String(d.content ?? '')}</tool_result>`;
       }
+      if (p.type === 'session_reference') {
+        const d = p.data as Record<string, unknown>;
+        const summary = d.autoSummary ?? d.auto_summary ?? '';
+        return `<session_reference session_id="${d.sessionId ?? d.session_id ?? ''}" label="${d.label ?? ''}">${String(summary)}</session_reference>`;
+      }
       return '';
     })
     .join('\n');

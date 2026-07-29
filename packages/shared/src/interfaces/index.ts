@@ -1,4 +1,4 @@
-import type { Session, Project, Message, AgentDefinition, ProviderConfig, ModelConfig } from '../types/index.js';
+import type { Session, Project, Message, AgentDefinition, ProviderConfig, ModelConfig, SessionReference } from '../types/index.js';
 
 export interface SessionStore {
   get(id: string): Promise<Session | null>;
@@ -6,11 +6,15 @@ export interface SessionStore {
   delete(id: string): Promise<void>;
   list(filter?: SessionFilter): Promise<Session[]>;
   exists(id: string): Promise<boolean>;
+  addReference(sessionId: string, ref: SessionReference): Promise<void>;
+  removeReference(sessionId: string, refSessionId: string): Promise<void>;
+  getReferences(sessionId: string): Promise<SessionReference[]>;
 }
 
 export interface SessionFilter {
   projectId?: string;
   search?: string;
+  parentId?: string | null;
 }
 
 export interface ProjectStore {

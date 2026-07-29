@@ -40,6 +40,8 @@ export class ContextOptimizer {
   private readonly _providerLoader: (name: string) => SharedProviderConfig | null;
   private readonly _summarizationConfig: SummarizationConfig;
 
+  private _summaryCache = new Map<string, { result: Message; hash: string; at: number }>();
+
   // Константа: 4 символа ≈ 1 токен (приблизительно, fallback)
   private static readonly CHARS_PER_TOKEN = 4;
 
@@ -210,10 +212,18 @@ export class ContextOptimizer {
     const tailCount = session.settings.summarizationTailMessages;
 
     const prep = this._prepareSummarization(session, lang, headCount, tailCount);
+
+    const cacheKey = `${session.id}:${prep.indices.join(',')}`;
+    const contentHash = this._simpleHash(prep.llmMessages.map((m) => m.content).join('||'));
+    const cached = this._summaryCache.get(cacheKey);
+    if (cached && cached.hash === contentHash) {
+      return cached.result;
+    }
+
     const response = await prep.provider.chat(prep.llmMessages, prep.summarizerPrompt);
     info('CONTEXT', `Summarization complete for session ${session.id}`);
 
-    return {
+    const result: Message = {
       id: generateId(),
       role: MessageRole.SUMMARY,
       seq: 0,
@@ -229,6 +239,19 @@ export class ContextOptimizer {
       usage: response.usage,
       metadata: { type: 'auto_summary' },
     };
+
+    this._summaryCache.set(cacheKey, { result, hash: contentHash, at: Date.now() });
+    return result;
+  }
+
+  private _simpleHash(str: string): string {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const chr = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + chr;
+      hash |= 0;
+    }
+    return hash.toString(36);
   }
 
   async *summarizeStream(session: Session): AsyncGenerator<

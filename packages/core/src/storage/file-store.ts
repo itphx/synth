@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename, mkdir, unlink, access, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Session, Message, TsmState, TsmStatus, SessionSettings, Part, SessionOrigin } from '@synth/shared';
+import type { Session, Message, TsmState, TsmStatus, SessionSettings, Part, SessionOrigin, SessionReference } from '@synth/shared';
 import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts } from '@synth/shared';
 
 export interface StorageConfig {
@@ -49,6 +49,14 @@ interface SerializedMessage {
   summary_of?: number[];
 }
 
+interface SerializedSessionReference {
+  session_id: string;
+  label: string;
+  message_range: [number, number];
+  auto_summary?: string;
+  created_at: string;
+}
+
 interface SerializedSession {
   id: string;
   title?: string;
@@ -64,6 +72,7 @@ interface SerializedSession {
   pending_messages: SerializedMessage[];
   status: Record<string, unknown>;
   settings: Record<string, unknown>;
+  references: SerializedSessionReference[];
   branches: unknown[];
   checkpoints: SerializedCheckpoint[];
   sticky_notes: StickyNoteData[];
@@ -238,6 +247,13 @@ function serializeSession(session: Session): SerializedSession {
     pending_messages: session.pendingMessages.map(serializeMessage),
     status: session.status as unknown as Record<string, unknown>,
     settings: session.settings as unknown as Record<string, unknown>,
+    references: (session.references || []).map((ref) => ({
+      session_id: ref.sessionId,
+      label: ref.label,
+      message_range: ref.messageRange,
+      auto_summary: ref.autoSummary,
+      created_at: ref.createdAt,
+    })),
     branches: [],
     checkpoints: session.checkpoints.map((c) => ({
       id: c.id,
@@ -301,6 +317,14 @@ function deserializeSession(data: SerializedSession): Session {
       messages: c.messages.map(deserializeMessage),
       tsmState: c.tsm_state as TsmState,
       createdAt: c.created_at,
+    })),
+    references: (data.references || []).map((ref: SerializedSessionReference): SessionReference => ({
+      type: 'session_reference' as const,
+      sessionId: ref.session_id,
+      label: ref.label,
+      messageRange: ref.message_range,
+      autoSummary: ref.auto_summary,
+      createdAt: ref.created_at,
     })),
     stickyNotes: (data.sticky_notes || []).map((n: StickyNoteData) => ({
       id: n.id,
@@ -448,5 +472,40 @@ export class FileStore {
   async listForUser(userId: string): Promise<Session[]> {
     const all = await this.list();
     return all.filter((s) => s.userId === userId || s.ownerId === userId);
+  }
+
+  async addReference(sessionId: string, ref: SessionReference): Promise<void> {
+    const lock = this._getLock(sessionId);
+    await lock.acquire();
+    try {
+      const session = await this.load(sessionId);
+      if (!session) throw new Error(`Session ${sessionId} not found`);
+      if (!session.references) session.references = [];
+      session.references.push(ref);
+      await this.save(session);
+    } finally {
+      lock.release();
+    }
+  }
+
+  async removeReference(sessionId: string, refSessionId: string): Promise<void> {
+    const lock = this._getLock(sessionId);
+    await lock.acquire();
+    try {
+      const session = await this.load(sessionId);
+      if (!session) throw new Error(`Session ${sessionId} not found`);
+      if (session.references) {
+        session.references = session.references.filter((r) => r.sessionId !== refSessionId);
+      }
+      await this.save(session);
+    } finally {
+      lock.release();
+    }
+  }
+
+  async getReferences(sessionId: string): Promise<SessionReference[]> {
+    const session = await this.load(sessionId);
+    if (!session) return [];
+    return session.references || [];
   }
 }

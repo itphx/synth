@@ -222,6 +222,12 @@ function ProjectsTab() {
           const result = await forkSession(session.id)
           if (result) { setRenamingId(result.id); setRenameValue(result.id) }
         }},
+        { label: t('leftPanel.copyToSession'), icon: 'file-copy', onClick: () => {
+          useUIStore.getState().openMergeModal(session.id)
+        }},
+        { label: t('leftPanel.addReference'), icon: 'link', onClick: () => {
+          useUIStore.getState().openReferenceModal(session.id)
+        }},
         { label: t('leftPanel.clearSession'), icon: 'close', onClick: () => setConfirm({
           title: t('leftPanel.clearSession'),
           message: t('leftPanel.confirmClearSession'),
