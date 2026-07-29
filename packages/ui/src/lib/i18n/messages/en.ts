@@ -421,6 +421,7 @@ export const dict = {
 
   'chat.subagent.title': 'Subagent',
   'chat.subagent.steps': 'steps',
+  'chat.subagent.open': 'Open',
 
   'chat.queue.stalled': 'Processing stopped: {count} messages',
   'chat.queue.pending': 'In queue: {count}',
@@ -845,6 +846,7 @@ export const dict = {
   'reference.remove': 'Remove reference',
   'reference.source': 'Source',
   'reference.range': 'Messages',
+  'reference.attached': 'Attached',
 
   'merge.title': 'Copy Messages',
   'merge.selectSession': 'Select source session',

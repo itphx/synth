@@ -416,6 +416,7 @@ export const dict = {
 
   'chat.subagent.title': 'Сабагент',
   'chat.subagent.steps': 'шагов',
+  'chat.subagent.open': 'Открыть',
 
   'chat.queue.stalled': 'Обработка остановлена: {count} сообщ.',
   'chat.queue.pending': 'В очереди: {count}',
@@ -841,6 +842,7 @@ export const dict = {
   'reference.remove': 'Удалить ссылку',
   'reference.source': 'Источник',
   'reference.range': 'Сообщения',
+  'reference.attached': 'Прикреплено',
 
   'merge.title': 'Копировать сообщения',
   'merge.selectSession': 'Выберите сессию-источник',
