@@ -296,119 +296,127 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
 
         <span className="font-semibold text-foreground shrink-0">{headerTitle}</span>
 
-        {/* Chat context */}
-        {isChatTab && !selectionMode && (
-          <div className="flex items-center gap-1 ml-1">
-            <div
-              className="flex items-center gap-1"
-              title={`${lastInputTokens.toLocaleString()} / ${contextWindow.toLocaleString()}`}
-            >
-              <div className="h-1.5 w-12 rounded-full bg-foreground/10 overflow-hidden">
-                <div
-                  className="h-1.5 rounded-full bg-primary transition-all"
-                  style={{ width: `${Math.min(windowPercent, 100)}%` }}
-                />
+        {/* Chat context — always visible */}
+        {isChatTab && (
+          <>
+            <div className="flex items-center gap-1 ml-1">
+              <div
+                className="flex items-center gap-1"
+                title={`${lastInputTokens.toLocaleString()} / ${contextWindow.toLocaleString()}`}
+              >
+                <div className="h-1.5 w-12 rounded-full bg-foreground/10 overflow-hidden">
+                  <div
+                    className="h-1.5 rounded-full bg-primary transition-all"
+                    style={{ width: `${Math.min(windowPercent, 100)}%` }}
+                  />
+                </div>
+                <span className="text-[10px] tabular-nums text-muted-foreground">{windowPercent}%</span>
               </div>
-              <span className="text-[10px] tabular-nums text-muted-foreground">{windowPercent}%</span>
-            </div>
-            {!isSubagentSession && (
-              <button
-                onClick={handleSummarize}
-                disabled={!canSummarize || summarizing}
-                title={canSummarize ? t('rightPanel.context.summarizeNow') : t('rightPanel.context.notEnoughMessages')}
-                className={cn(
-                  'shrink-0 rounded p-1 transition-colors',
-                  canSummarize && !summarizing
-                    ? 'text-muted-foreground hover:text-foreground hover:bg-interactive-hover'
-                    : 'text-muted-foreground opacity-30 cursor-default',
-                )}
-              >
-                <Icon name="subtract" className="size-3.5 text-amber-400" />
-              </button>
-            )}
-            {!isSubagentSession && (
-              <button
-                onClick={handleClearSession}
-                title={t('leftPanel.clearSession')}
-                className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
-              >
-                <Icon name="close" className="size-3.5 text-destructive" />
-              </button>
-            )}
-            <button
-              onClick={handleToggleSelectionMode}
-              className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
-              title="Режим выделения"
-            >
-              <Icon name="checkbox-multiple" className="size-3.5" />
-            </button>
-          </div>
-        )}
+              {!isSubagentSession && (
+                <button
+                  onClick={handleSummarize}
+                  disabled={!canSummarize || summarizing}
+                  title={canSummarize ? t('rightPanel.context.summarizeNow') : t('rightPanel.context.notEnoughMessages')}
+                  className={cn(
+                    'shrink-0 rounded p-1 transition-colors',
+                    canSummarize && !summarizing
+                      ? 'text-muted-foreground hover:text-foreground hover:bg-interactive-hover'
+                      : 'text-muted-foreground opacity-30 cursor-default',
+                  )}
+                >
+                  <Icon name="subtract" className="size-3.5 text-amber-400" />
+                </button>
+              )}
+              {!isSubagentSession && (
+                <button
+                  onClick={handleClearSession}
+                  title={t('leftPanel.clearSession')}
+                  className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
+                >
+                  <Icon name="close" className="size-3.5 text-destructive" />
+                </button>
+              )}
 
-        {/* Selection toolbar */}
-        {isChatTab && selectionMode && (
-          <div className="flex items-center gap-1 ml-1">
-            <button
-              onClick={handleToggleSelectionMode}
-              className="rounded px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10"
-            >
-              ✕ Выйти
-            </button>
-            <button
-              onClick={handleSelectAll}
-              className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover"
-            >
-              Выделить всё
-            </button>
-            <button
-              onClick={handleClearSelection}
-              className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover"
-            >
-              Снять
-            </button>
-            <span className="text-[11px] text-muted-foreground mx-0.5">
-              {selectedCount}/{totalMessageCount}
-            </span>
-            <button
-              onClick={handleBulkPin}
-              disabled={selectedCount === 0}
-              className="rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover disabled:opacity-30"
-              title="Закрепить"
-            >
-              📌
-            </button>
-            <button
-              onClick={handleBulkToggle}
-              disabled={selectedCount === 0}
-              className="rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover disabled:opacity-30"
-              title="Отключить"
-            >
-              👁
-            </button>
-            <button
-              onClick={handleBulkDelete}
-              disabled={selectedCount === 0}
-              className="rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-30"
-              title="Удалить"
-            >
-              🗑
-            </button>
-            <button
-              onClick={handleForward}
-              disabled={selectedCount === 0}
-              className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover disabled:opacity-30"
-              title="Переслать"
-            >
-              ↗ Переслать
-            </button>
+              {/* Selection toggle — always visible */}
+              {!selectionMode && (
+                <button
+                  onClick={handleToggleSelectionMode}
+                  className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
+                  title="Режим выделения"
+                >
+                  <Icon name="checkbox-multiple" className="size-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Selection toolbar */}
+            {selectionMode && (
+              <div className="flex items-center gap-1 ml-1">
+                <button
+                  onClick={handleToggleSelectionMode}
+                  className="rounded px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10"
+                >
+                  ✕ Выйти
+                </button>
+                <button
+                  onClick={handleSelectAll}
+                  className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover"
+                >
+                  Выделить всё
+                </button>
+                <button
+                  onClick={handleClearSelection}
+                  className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover"
+                >
+                  Снять
+                </button>
+                <span className="text-[11px] text-muted-foreground mx-0.5">
+                  {selectedCount}/{totalMessageCount}
+                </span>
+                <button
+                  onClick={handleBulkPin}
+                  disabled={selectedCount === 0}
+                  className="rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover disabled:opacity-30"
+                  title="Закрепить"
+                >
+                  📌
+                </button>
+                <button
+                  onClick={handleBulkToggle}
+                  disabled={selectedCount === 0}
+                  className="rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover disabled:opacity-30"
+                  title="Отключить"
+                >
+                  👁
+                </button>
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={selectedCount === 0}
+                  className="rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-30"
+                  title="Удалить"
+                >
+                  🗑
+                </button>
+                <button
+                  onClick={handleForward}
+                  disabled={selectedCount === 0}
+                  className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover disabled:opacity-30"
+                  title="Переслать"
+                >
+                  ↗ Переслать
+                </button>
+              </div>
+            )}
+
+            {/* Merge button — always visible, independent of selection */}
             <button
               onClick={handleMerge}
-              className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover"
+              className="shrink-0 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors ml-1"
               title="Слияние"
             >
               🔗 Слияние
             </button>
-          </div>
+          </>
         )}
 
         {/* File viewer toolbar */}
