@@ -141,10 +141,8 @@ export function RoutingSettings() {
           </span>
         </label>
 
-        {settings.routingEnabled && (
-          <>
-            {/* Стратегия */}
-            <div className="flex flex-col gap-1">
+        {/* Стратегия */}
+        <div className="flex flex-col gap-1">
               <label className="text-sm font-medium">{t('routing.strategy')}</label>
               <select
                 value={settings.routingStrategy}
@@ -283,8 +281,6 @@ export function RoutingSettings() {
                 </div>
               )}
             </div>
-          </>
-        )}
       </div>
     </div>
   )
