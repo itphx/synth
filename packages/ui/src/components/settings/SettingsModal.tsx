@@ -1,6 +1,8 @@
+import { Fragment } from "react"
 import { Dialog, DialogContent } from "../ui/dialog"
 import { Icon } from "../icon/Icon"
 import { useUIStore } from "../../stores/useUIStore"
+import { useAuthStore } from "@/stores/authStore"
 import { useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 import { AppearanceSettings } from "./AppearanceSettings"
@@ -8,26 +10,57 @@ import { ProfileSettings } from "./ProfileSettings"
 import { NotificationSettings } from "./NotificationSettings"
 import { ChatSettings } from "./ChatSettings"
 import { RoutingSettings } from "./RoutingSettings"
+import { McpSettings } from "./McpSettings"
+import { DashboardPanel } from "../admin/DashboardPanel"
+import { SessionsPanel } from "../admin/SessionsPanel"
+import { ProjectsPanel } from "../admin/ProjectsPanel"
 import { ProvidersPanel } from "../admin/ProvidersPanel"
 import { ModelsPanel } from "../admin/ModelsPanel"
 import { AgentsPanel } from "../admin/AgentsPanel"
-import { McpSettings } from "./McpSettings"
+import { ContextPanel } from "../admin/ContextPanel"
+import { UsersPanel } from "../admin/UsersPanel"
+import { DefaultsPanel } from "../admin/DefaultsPanel"
+import { DebugPanel } from "../admin/DebugPanel"
 
-const CATEGORIES = [
-  { id: "profile", labelKey: "settings.category.profile" as const, icon: "user-smile" },
-  { id: "appearance", labelKey: "settings.category.appearance" as const, icon: "palette" },
-  { id: "notifications", labelKey: "settings.category.notifications" as const, icon: "alert" },
-  { id: "chat", labelKey: "settings.category.chat" as const, icon: "chat-new" },
-  { id: "routing", labelKey: "settings.category.routing" as const, icon: "git-branch" },
-  { id: "providers", labelKey: "settings.category.providers" as const, icon: "server" },
-  { id: "models", labelKey: "settings.category.models" as const, icon: "cpu" },
-  { id: "agents", labelKey: "settings.category.agents" as const, icon: "robot-2" },
-  { id: "mcp", labelKey: "settings.category.mcp" as const, icon: "tools" },
+interface CategoryItem {
+  id: string
+  labelKey: string
+  icon: string
+  roles?: string[]
+}
+
+const CATEGORIES: CategoryItem[] = [
+  { id: "profile", labelKey: "settings.category.profile", icon: "user-smile" },
+  { id: "appearance", labelKey: "settings.category.appearance", icon: "palette" },
+  { id: "notifications", labelKey: "settings.category.notifications", icon: "alert" },
+  { id: "chat", labelKey: "settings.category.chat", icon: "chat-new" },
+  { id: "routing", labelKey: "settings.category.routing", icon: "git-branch" },
+  { id: "mcp", labelKey: "settings.category.mcp", icon: "tools" },
+  // Admin sections below
+  { id: "dashboard", labelKey: "settings.category.dashboard", icon: "home", roles: ["ADMIN", "LEAD"] },
+  { id: "sessions", labelKey: "settings.category.sessions", icon: "chat-new", roles: ["ADMIN", "LEAD"] },
+  { id: "projects", labelKey: "settings.category.projects", icon: "briefcase", roles: ["ADMIN", "LEAD"] },
+  { id: "providers", labelKey: "settings.category.providers", icon: "server", roles: ["ADMIN"] },
+  { id: "models", labelKey: "settings.category.models", icon: "cpu", roles: ["ADMIN"] },
+  { id: "agents", labelKey: "settings.category.agents", icon: "robot-2", roles: ["ADMIN"] },
+  { id: "context", labelKey: "settings.category.context", icon: "book-open", roles: ["ADMIN"] },
+  { id: "users", labelKey: "settings.category.users", icon: "user-smile", roles: ["ADMIN"] },
+  { id: "defaults", labelKey: "settings.category.defaults", icon: "settings-3", roles: ["ADMIN"] },
+  { id: "debug", labelKey: "settings.category.debug", icon: "bug", roles: ["ADMIN"] },
 ]
 
 export const SettingsModal = () => {
   const { t } = useI18n()
+  const { user } = useAuthStore()
   const { isSettingsDialogOpen, setSettingsDialogOpen, settingsPage, setSettingsPage } = useUIStore()
+
+  const userRoles = user?.roles ?? []
+
+  const visibleCategories = CATEGORIES.filter(
+    (cat) => !cat.roles || cat.roles.some((r) => userRoles.includes(r))
+  )
+
+  const adminBoundaryIndex = visibleCategories.findIndex((c) => c.roles !== undefined)
 
   return (
     <Dialog open={isSettingsDialogOpen} onOpenChange={setSettingsDialogOpen}>
@@ -43,20 +76,24 @@ export const SettingsModal = () => {
               <span className="font-medium text-sm">{t('settings.title')}</span>
             </div>
             <nav className="flex-1 overflow-y-auto p-2">
-              {CATEGORIES.map((cat) => (
-                <button
-                  key={cat.id}
-                  onClick={() => setSettingsPage(cat.id)}
-                  className={cn(
-                    "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition-colors",
-                    settingsPage === cat.id
-                      ? "bg-interactive-selection text-interactive-selection-foreground"
-                      : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
+              {visibleCategories.map((cat, idx) => (
+                <Fragment key={cat.id}>
+                  {idx === adminBoundaryIndex && (
+                    <hr className="my-2 border-border" />
                   )}
-                >
-                  <Icon name={cat.icon} className="size-4 shrink-0" />
-                  {t(cat.labelKey)}
-                </button>
+                  <button
+                    onClick={() => setSettingsPage(cat.id)}
+                    className={cn(
+                      "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition-colors",
+                      settingsPage === cat.id
+                        ? "bg-interactive-selection text-interactive-selection-foreground"
+                        : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
+                    )}
+                  >
+                    <Icon name={cat.icon} className="size-4 shrink-0" />
+                    {t(cat.labelKey as Parameters<typeof t>[0])}
+                  </button>
+                </Fragment>
               ))}
             </nav>
           </div>
@@ -68,10 +105,17 @@ export const SettingsModal = () => {
             {settingsPage === "notifications" && <NotificationSettings />}
             {settingsPage === "chat" && <ChatSettings />}
             {settingsPage === "routing" && <RoutingSettings />}
+            {settingsPage === "mcp" && <McpSettings />}
+            {settingsPage === "dashboard" && <DashboardPanel />}
+            {settingsPage === "sessions" && <SessionsPanel />}
+            {settingsPage === "projects" && <ProjectsPanel />}
             {settingsPage === "providers" && <ProvidersPanel />}
             {settingsPage === "models" && <ModelsPanel />}
             {settingsPage === "agents" && <AgentsPanel />}
-            {settingsPage === "mcp" && <McpSettings />}
+            {settingsPage === "context" && <ContextPanel />}
+            {settingsPage === "users" && <UsersPanel />}
+            {settingsPage === "defaults" && <DefaultsPanel />}
+            {settingsPage === "debug" && <DebugPanel />}
           </div>
         </div>
       </DialogContent>

@@ -95,6 +95,13 @@ export const dict = {
   'settings.category.mcp': 'MCP Servers',
   'settings.category.notifications': 'Notifications',
   'settings.category.routing': 'Routing',
+  'settings.category.dashboard': 'Dashboard',
+  'settings.category.sessions': 'Sessions',
+  'settings.category.projects': 'Projects',
+  'settings.category.context': 'Context files',
+  'settings.category.users': 'Users',
+  'settings.category.defaults': 'Defaults',
+  'settings.category.debug': 'Debug',
 
   // Appearance settings
   'settings.appearance.title': 'Appearance',

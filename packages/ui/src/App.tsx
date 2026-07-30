@@ -15,7 +15,6 @@ import { CenterPanel } from './components/layout/CenterPanel'
 import { BackendConnection } from './components/layout/BackendConnection'
 import { UpdateNotification } from './components/layout/UpdateNotification'
 import { SettingsModal } from './components/settings/SettingsModal'
-import { AdminModal } from './components/admin/AdminModal'
 import { AuthGate } from './components/auth/AuthGate'
 import { profileService } from '@/lib/api/profileService'
 import { useAuthStore } from '@/stores/authStore'
@@ -109,7 +108,6 @@ function App() {
         </TooltipProvider>
 
         <SettingsModal />
-        <AdminModal />
         <ToastContainer
           position="bottom-right"
           newestOnTop

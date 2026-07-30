@@ -94,6 +94,13 @@ export const dict = {
   'settings.category.mcp': 'MCP-серверы',
   'settings.category.notifications': 'Уведомления',
   'settings.category.routing': 'Маршрутизация',
+  'settings.category.dashboard': 'Панель управления',
+  'settings.category.sessions': 'Сессии',
+  'settings.category.projects': 'Проекты',
+  'settings.category.context': 'Контекстные файлы',
+  'settings.category.users': 'Пользователи',
+  'settings.category.defaults': 'Умолчания',
+  'settings.category.debug': 'Отладка',
 
   // Appearance settings
   'settings.appearance.title': 'Внешний вид',

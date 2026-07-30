@@ -14,7 +14,7 @@ interface QuickSettingsPopupProps {
 export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps) => {
   const { t, setLocale: setI18nLocale } = useI18n()
   const { user, profile } = useAuthStore()
-  const { themeMode, setThemeMode, locale: uiLocale, setLocale: setUILocale, setAdminSettingsOpen } = useUIStore()
+  const { themeMode, setThemeMode, locale: uiLocale, setLocale: setUILocale, setSettingsDialogOpen, setSettingsPage } = useUIStore()
   const { setThemeMode: setThemeSystemMode } = useThemeSystem()
   const [isOpen, setIsOpen] = useState(false)
   const [locales, setLocales] = useState<Array<{ value: string; label: string }>>([])
@@ -180,7 +180,8 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
             {user?.roles?.includes('ADMIN') && (
               <button
                 onClick={() => {
-                  setAdminSettingsOpen(true)
+                  setSettingsPage('dashboard')
+                  setSettingsDialogOpen(true)
                   setIsOpen(false)
                 }}
                 className={cn(
