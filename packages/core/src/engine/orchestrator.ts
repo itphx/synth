@@ -1041,7 +1041,7 @@ export class ChatOrchestrator {
         toolCalls: toolCallNames,
       });
 
-      const provider = this._router.getProvider(decision);
+      let provider = this._router.getProvider(decision);
       if (provider) {
         return {
           provider,
@@ -1050,9 +1050,23 @@ export class ChatOrchestrator {
           decision,
         };
       }
+
+      // Fallback: если decision не содержит валидного провайдера/модели
+      // (например, категория не имеет маппинга в routingContent),
+      // используем стандартный _getProvider() для провайдера сессии
+      const fallbackName = session.settings.provider || '';
+      provider = this._getProvider(fallbackName, session);
+      if (provider) {
+        return {
+          provider,
+          providerName: fallbackName,
+          modelName: this._getEffectiveModel(session, fallbackName),
+          decision,
+        };
+      }
     }
 
-    // Fallback: старый метод
+    // Fallback: старый метод (если роутер недоступен или все пути выше не сработали)
     const providerName = (message.provider as string) || session.settings.provider || '';
     const provider = this._getProvider(providerName, session);
     if (!provider) return null;
