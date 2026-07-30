@@ -147,7 +147,7 @@ export function RoutingSettings() {
               <select
                 value={settings.routingStrategy}
                 onChange={(e) => update({ routingStrategy: e.target.value as RoutingDefaults['routingStrategy'] })}
-                className="w-full rounded-md bg-interactive border border-border px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                className="w-full rounded-md bg-input border border-border px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
               >
                 <option value="auto">{t('routing.strategy.auto')}</option>
                 <option value="content">{t('routing.strategy.content')}</option>
@@ -212,7 +212,7 @@ export function RoutingSettings() {
                       min={1}
                       value={settings.routingEscalation.minLength}
                       onChange={(e) => updateEscalation({ minLength: Number(e.target.value) || 1 })}
-                      className="w-20 rounded-md bg-interactive border border-border px-2 py-1 text-sm text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
+                      className="w-20 rounded-md bg-input border border-border px-2 py-1 text-sm text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
                     />
                   </div>
                 </>
@@ -243,7 +243,7 @@ export function RoutingSettings() {
                       min={1}
                       value={settings.routingCost.maxCheapTokens}
                       onChange={(e) => updateCost({ maxCheapTokens: Number(e.target.value) || 1 })}
-                      className="w-20 rounded-md bg-interactive border border-border px-2 py-1 text-sm text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
+                      className="w-20 rounded-md bg-input border border-border px-2 py-1 text-sm text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
                     />
                   </div>
                 </>
@@ -269,7 +269,7 @@ export function RoutingSettings() {
                         updateSubagent({ provider: p!, model: rest.join(':') })
                       }
                     }}
-                    className="w-full rounded-md bg-interactive border border-border px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    className="w-full rounded-md bg-input border border-border px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
                   >
                     <option value="auto">{t('routing.subagent.modelAuto')}</option>
                     {models.filter((m) => m.enabled).map((m) => (
@@ -313,7 +313,7 @@ function ModelPairRow({
             onProviderChange(e.target.value)
             onModelChange('')
           }}
-          className="flex-1 rounded-md bg-interactive border border-border px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          className="flex-1 rounded-md bg-input border border-border px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
         >
           <option value="">Провайдер</option>
           {providers.map((p) => (
@@ -323,7 +323,7 @@ function ModelPairRow({
         <select
           value={model}
           onChange={(e) => onModelChange(e.target.value)}
-          className="flex-1 rounded-md bg-interactive border border-border px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          className="flex-1 rounded-md bg-input border border-border px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           disabled={!provider}
         >
           <option value="">Модель</option>

@@ -8,6 +8,7 @@ import { ProviderFactory } from '../providers/base.js';
 import type { LLMMessage, CancellationToken, ProviderConfig as CoreProviderConfig, BaseProvider } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
+import { ContextConfig } from './context/config.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { ToolForLLM } from '@synth/shared';
 import type { AgentRegistry } from './agents/registry.js';
@@ -36,6 +37,7 @@ export interface OrchestratorOptions {
   contextBuilder: ContextBuilder;
   providerLoader: (name: string) => SharedProviderConfig | null;
   contextOptimizer?: ContextOptimizer;
+  contextConfig?: ContextConfig;
   modelPriceLoader?: (modelName: string) => ModelPricing | null;
   dataDir?: string;
   toolRegistry?: ToolRegistry;
@@ -79,6 +81,7 @@ export class ChatOrchestrator {
   private readonly _cancellationTokens = new Map<string, CancellationToken>();
   private readonly _router: ModelRouter | null;
   private readonly _routerConfig: RouterConfig | null;
+  private readonly _contextConfig: ContextConfig | null;
 
   constructor(options: OrchestratorOptions) {
     this._sessionManager = options.sessionManager;
@@ -91,6 +94,7 @@ export class ChatOrchestrator {
     this._agentRegistry = options.agentRegistry ?? null;
     this._mcpManager = options.mcpManager ?? null;
     this._routerConfig = options.routerConfig ?? null;
+    this._contextConfig = options.contextConfig ?? null;
 
     if (options.routerConfig && options.routerConfig.enabled) {
       const classifier = new ContentClassifier();
@@ -466,6 +470,7 @@ export class ChatOrchestrator {
                     parentSessionSettings: session.settings,
                     modelRouter: this._router ?? undefined,
                     routerConfig: this._routerConfig ?? undefined,
+                    contextConfig: this._contextConfig ?? undefined,
                     publish: (type: string, data: Record<string, unknown>) =>
                       publishChunk(type as never, data),
                     streamId,

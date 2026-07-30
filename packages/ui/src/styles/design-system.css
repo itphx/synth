@@ -61,7 +61,6 @@
     --sidebar-ring: oklch(0.65 0.2 55); /* Focus ring */
     --sidebar-stuck-bg: var(--sidebar); /* Desktop sidebar sticky header background (match sidebar) */
     --surface-subtle: oklch(0.97 0.02 85); /* Warm sand input area background */
-    --interactive: oklch(0.94 0.02 80);
     --interactive-hover: oklch(0.92 0.02 80);
     --interactive-active: oklch(0.88 0.02 80);
     --interactive-selection: oklch(0.92 0.02 80);
@@ -337,7 +336,6 @@
   --color-surface-subtle: var(--surface-subtle);
 
   /* Interactive state tokens (Theme.colors.interactive.*) */
-  --color-interactive: var(--interactive);
   --color-interactive-hover: var(--interactive-hover);
   --color-interactive-active: var(--interactive-active);
   --color-interactive-selection: var(--interactive-selection);

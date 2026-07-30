@@ -7,6 +7,7 @@ import type { ToolRegistry } from './registry.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
+import type { ContextConfig } from '../context/config.js';
 import type { ModelRouter } from '../router/router.js';
 import { serializeSession, serializeMessage } from '../../server/serialize.js';
 
@@ -24,6 +25,7 @@ export interface TaskExtra {
   parentSessionSettings?: SessionSettings;
   modelRouter?: ModelRouter;
   routerConfig?: RouterConfig;
+  contextConfig?: ContextConfig;
   publish?: (type: string, data: Record<string, unknown>) => void;
   streamId?: string;
   sessionId?: string;
@@ -313,37 +315,41 @@ export const taskTool: ToolDefinition = {
       }
 
       // ─── Информация о маршрутизации (AD-034 Фаза 4) ──────────────
+      // Загружается из контекстных файлов prompts/system/ROUTING.{lang}.md
       const parentSettings = extra.parentSessionSettings;
       const routingEnabled = extra.routerConfig?.enabled && (parentSettings?.routingEnabled !== false);
       const shouldShowRouting = routingEnabled || childRoutingOverrides.model || childRoutingOverrides.provider;
       if (shouldShowRouting && extra.routerConfig) {
-        prompt += '\n\n## Маршрутизация запросов\n\n';
-        prompt += 'Для запуска дочерних агентов ты можешь указать модель:\n';
-        prompt += '- Используй параметр `model` для выбора модели под задачу\n';
+        const lang = parentSettings?.language || 'ru';
+        const template = extra.contextConfig?.getRoutingInstructions(lang) || '';
 
+        // Строим список доступных моделей
         const contentCfg = extra.routerConfig.content;
         const effectiveContent = parentSettings?.routingContent;
         const routingLines: string[] = [];
-        if (effectiveContent?.coding?.provider && effectiveContent?.coding?.model) {
-          routingLines.push(`- coding (сессия): **${effectiveContent.coding.provider}/${effectiveContent.coding.model}**`);
-        } else if (contentCfg.coding?.provider && contentCfg.coding?.model) {
-          routingLines.push(`- coding (глобально): **${contentCfg.coding.provider}/${contentCfg.coding.model}**`);
-        }
-        if (effectiveContent?.chat?.provider && effectiveContent?.chat?.model) {
-          routingLines.push(`- chat (сессия): **${effectiveContent.chat.provider}/${effectiveContent.chat.model}**`);
-        } else if (contentCfg.chat?.provider && contentCfg.chat?.model) {
-          routingLines.push(`- chat (глобально): **${contentCfg.chat.provider}/${contentCfg.chat.model}**`);
-        }
-        if (effectiveContent?.research?.provider && effectiveContent?.research?.model) {
-          routingLines.push(`- research (сессия): **${effectiveContent.research.provider}/${effectiveContent.research.model}**`);
-        } else if (contentCfg.research?.provider && contentCfg.research?.model) {
-          routingLines.push(`- research (глобально): **${contentCfg.research.provider}/${contentCfg.research.model}**`);
-        }
-        if (routingLines.length > 0) {
-          prompt += 'Доступные провайдеры и модели:\n';
-          prompt += routingLines.join('\n') + '\n';
-        }
-        prompt += '- Если модель не указана, будет использована стратегия родительской сессии\n';
+        const addLine = (cat: string, cfg: { provider?: string; model?: string } | undefined, globalCfg: { provider: string; model: string }) => {
+          if (cfg?.provider && cfg?.model) {
+            routingLines.push(`- ${cat} (сессия): **${cfg.provider}/${cfg.model}**`);
+          } else if (globalCfg.provider && globalCfg.model) {
+            routingLines.push(`- ${cat} (глобально): **${globalCfg.provider}/${globalCfg.model}**`);
+          }
+        };
+        addLine('coding', effectiveContent?.coding, contentCfg.coding);
+        addLine('chat', effectiveContent?.chat, contentCfg.chat);
+        addLine('research', effectiveContent?.research, contentCfg.research);
+        const modelsText = routingLines.length > 0
+          ? 'Доступные провайдеры и модели:\n' + routingLines.join('\n')
+          : '';
+
+        const routingBlock = template
+          ? template.replace('{routing_models}', modelsText ? modelsText + '\n' : '')
+          : ('\n\n## Маршрутизация запросов\n\n' +
+             'Для запуска дочерних агентов ты можешь указать модель:\n' +
+             '- Используй параметр `model` для выбора модели под задачу\n' +
+             (modelsText ? modelsText + '\n' : '') +
+             '- Если модель не указана, будет использована стратегия родительской сессии\n');
+
+        prompt += routingBlock;
       }
 
       return prompt;

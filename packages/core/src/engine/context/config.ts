@@ -347,4 +347,8 @@ export class ContextConfig {
   getStickyNotesTemplate(language = 'ru'): string {
     return this._readPrompt('STICKY_NOTES', 'system', language) ?? '';
   }
+
+  getRoutingInstructions(language = 'ru'): string {
+    return this._readPrompt('ROUTING', 'system', language) ?? '';
+  }
 }
