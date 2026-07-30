@@ -749,7 +749,7 @@ export const taskTool: ToolDefinition = {
             modelName: routingDecisionInfo.modelName,
             reason: routingDecisionInfo.strategy,
             strategy: routingDecisionInfo.strategy,
-          });
+          }, extra.parentSessionSettings);
           qaPass = qaResult.pass;
           qaReason = qaResult.reason;
 

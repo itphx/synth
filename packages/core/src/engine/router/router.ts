@@ -58,12 +58,8 @@ export class ModelRouter {
       };
     }
 
-    // Приоритет: модель (classify_conversation) > keyword > default
-    const modelCategory = sessionSettings.routingCategory;
-    if (modelCategory) {
-      return this._routeByCategory(modelCategory, sessionSettings, defaultProvider, defaultModel, 'model');
-    }
-
+    // Приоритет: keyword > модель (classify_conversation) > default
+    // Сначала пробуем keyword-классификатор
     const strategy = sessionSettings.routingStrategy || this._routerConfig.strategy;
 
     switch (strategy) {
@@ -86,8 +82,15 @@ export class ModelRouter {
     return this._pool.getProvider(decision.providerName, decision.modelName, temperature);
   }
 
-  async checkQuality(content: string, decision: RoutingDecision): Promise<QualityCheckResult> {
-    const escalation = this._routerConfig.escalation;
+  async checkQuality(content: string, decision: RoutingDecision, sessionSettings?: SessionSettings): Promise<QualityCheckResult> {
+    // Приоритет: настройки сессии > глобальный конфиг роутера (AD-034)
+    const sessionEscalation = sessionSettings?.routingEscalation;
+    const globalEscalation = this._routerConfig.escalation;
+    const escalation = {
+      enabled: sessionEscalation?.enabled ?? globalEscalation.enabled,
+      checks: sessionEscalation?.checks ?? globalEscalation.checks,
+      minLength: sessionEscalation?.minLength ?? globalEscalation.minLength,
+    };
     const provider = this._pool.getProvider(decision.providerName, decision.modelName);
 
     return this._qualityChecker.check({
@@ -115,6 +118,19 @@ export class ModelRouter {
       userMessage,
       toolCalls,
     });
+
+    // Если keyword уверен (confidence >= 0.5) — используем keyword
+    if (classifyResult.confidence >= 0.5) {
+      return this._routeByCategory(classifyResult.category, settings, defaultProvider, defaultModel, 'content', classifyResult.signals);
+    }
+
+    // Иначе проверяем modelCategory (из classify_conversation)
+    const modelCategory = settings.routingCategory;
+    if (modelCategory) {
+      return this._routeByCategory(modelCategory, settings, defaultProvider, defaultModel, 'model', [`fallback_from_model:${classifyResult.category}`]);
+    }
+
+    // Fallback: keyword-категория даже с низкой уверенностью
     return this._routeByCategory(classifyResult.category, settings, defaultProvider, defaultModel, 'content', classifyResult.signals);
   }
 

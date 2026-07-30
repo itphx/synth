@@ -572,7 +572,7 @@ export class ChatOrchestrator {
       let qaReason: string | undefined;
       const escalation = this._router?.getEscalationConfig();
       if (this._router && escalation?.enabled && routingDecision && finalContent) {
-        const qaResult = await this._router.checkQuality(finalContent, routingDecision);
+        const qaResult = await this._router.checkQuality(finalContent, routingDecision, session.settings);
         if (!qaResult.pass) {
           qaPass = false;
           qaReason = qaResult.reason;
