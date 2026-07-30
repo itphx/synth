@@ -19,6 +19,7 @@ import { ModelRouter } from './router/router.js';
 import { ContentClassifier } from './router/content-classifier.js';
 import { ProviderPool } from './router/provider-pool.js';
 import { QualityChecker } from './router/quality-checker.js';
+import { DictionaryStore } from './router/dictionary-store.js';
 import type { RoutingDecision } from './router/router.js';
 
 const MAX_DOOM_LOOP_COUNT = 3;
@@ -97,7 +98,8 @@ export class ChatOrchestrator {
     this._contextConfig = options.contextConfig ?? null;
 
     if (options.routerConfig && options.routerConfig.enabled) {
-      const classifier = new ContentClassifier();
+      const dictionaryStore = new DictionaryStore(options.dataDir || '/var/synth/data');
+      const classifier = new ContentClassifier(dictionaryStore);
       const pool = new ProviderPool(options.providerLoader);
       const qualityChecker = new QualityChecker();
       this._router = new ModelRouter(classifier, pool, qualityChecker, options.routerConfig);
@@ -188,6 +190,16 @@ export class ChatOrchestrator {
           summaryContent: summaryContent || undefined,
         });
 
+      // Добавляем инструкцию classify_conversation если routing включен (AD-034)
+      let finalSystemPrompt = systemPrompt;
+      if (this._router && session.settings.routingEnabled !== false) {
+        const lang = session.settings.language || 'ru';
+        const classifyInstruction = lang === 'ru'
+          ? '\n\n## Классификация разговора\n\nКогда определишь характер задачи, вызови инструмент `classify_conversation` с категорией: coding (написание/изменение кода), research (анализ/исследование), или chat (общий разговор). Это поможет выбрать оптимальную модель для последующих запросов.'
+          : '\n\n## Conversation Classification\n\nWhen you determine the nature of the task, call the `classify_conversation` tool with the category: coding (writing/modifying code), research (analysis/investigation), or chat (general conversation). This helps select the optimal model for subsequent requests.';
+        finalSystemPrompt = systemPrompt + classifyInstruction;
+      }
+
       // 3. Convert messages for LLM (без summary — они уже в system prompt)
       const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
       const baseLlmMessages = ChatOrchestrator._sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author);
@@ -272,7 +284,7 @@ export class ChatOrchestrator {
         try {
           for await (const chunk of provider.chatAsync(
             currentMessages,
-            systemPrompt,
+            finalSystemPrompt,
             tools as Record<string, unknown>[] | undefined,
             debugCollector,
             cancelToken,
@@ -501,6 +513,21 @@ export class ChatOrchestrator {
             iteration: toolIteration,
           });
 
+          // classify_conversation: сохраняем категорию в настройках сессии (AD-034)
+          if (toolName === 'classify_conversation' && !toolResult.isError) {
+            const cat = (toolResult.metadata?.routingCategory as string) || undefined;
+            if (cat && (cat === 'coding' || cat === 'chat' || cat === 'research')) {
+              await this._sessionManager.withLock(session.id, async (s) => {
+                s.settings.routingCategory = cat as 'coding' | 'chat' | 'research';
+                await this._sessionManager.saveSession(s);
+              });
+              this._eventBus.publish(session.id, 'session.routing_category', {
+                category: cat,
+                source: 'model',
+              });
+            }
+          }
+
           allToolCalls.push({
             name: toolName,
             args: toolArgs,
@@ -570,7 +597,7 @@ export class ChatOrchestrator {
                     (m) => m.role !== 'assistant' || m.toolUse === undefined || m.toolUse.length === 0,
                   ),
                 ];
-                const fbResponse = await fbProvider.chat(fbMessages, systemPrompt, undefined, false);
+                const fbResponse = await fbProvider.chat(fbMessages, finalSystemPrompt, undefined, false);
                 if (fbResponse.content) {
                   finalContent = fbResponse.content;
                   qaPass = true;

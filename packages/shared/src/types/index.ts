@@ -151,6 +151,8 @@ export interface SessionSettings {
     model?: string;
     provider?: string;
   };
+  /** Категория, установленная моделью через classify_conversation. Приоритет над keyword-классификатором. */
+  routingCategory?: 'coding' | 'chat' | 'research';
 }
 
 export interface StreamInfo {
@@ -502,6 +504,7 @@ export type EventType =
   | 'tool_call.result'
   | 'tool_call.loop'
   | 'message.quality_check'
+  | 'session.routing_category'
   | 'error';
 
 export interface BusEvent {

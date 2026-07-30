@@ -281,9 +281,64 @@ export function RoutingSettings() {
                 </div>
               )}
             </div>
+
+            {/* Словари классификации */}
+            <DictionarySection language="ru" />
       </div>
     </div>
   )
+}
+
+// Дефолтные ключевые слова (зеркало YAML-файлов dictionaries/)
+const DEFAULT_CODING_KEYWORDS_RU = [
+  'напиши', 'исправь', 'рефакторинг', 'функцию', 'компонент',
+  'баг', 'ошибка', 'тест', 'код', 'реализуй', 'добавь', 'почини',
+  'создай', 'удали', 'измени', 'перепиши', 'оптимизируй', 'отрефактори',
+];
+const DEFAULT_RESEARCH_KEYWORDS_RU = [
+  'исследуй', 'проанализируй', 'архитектур', 'почему', 'объясни',
+  'как работает', 'найди', 'покажи', 'расскажи', 'опиши', 'изучи',
+  'сравни', 'оцени', 'разбери', 'проверь',
+];
+const DEFAULT_CODING_TOOLS = [
+  'write_file', 'edit_file', 'create_file', 'delete_file',
+  'write', 'edit', 'patch', 'replace', 'execute_shell', 'git_commit',
+];
+
+function DictionarySection({ language }: { language: string }) {
+  const codingKeywords = language === 'ru' ? DEFAULT_CODING_KEYWORDS_RU : DEFAULT_CODING_KEYWORDS_RU;
+  const researchKeywords = language === 'ru' ? DEFAULT_RESEARCH_KEYWORDS_RU : DEFAULT_RESEARCH_KEYWORDS_RU;
+
+  return (
+    <div className="space-y-3 pl-4 border-l-2 border-border/30">
+      <details className="space-y-2">
+        <summary className="text-sm font-medium cursor-pointer">📖 Словари классификации</summary>
+        <div className="pt-2 space-y-3">
+          <div>
+            <span className="text-xs text-muted-foreground">coding — ключевые слова ({codingKeywords.length}):</span>
+            <p className="text-[10px] text-foreground/60 mt-0.5 leading-relaxed">
+              {codingKeywords.join(', ')}
+            </p>
+          </div>
+          <div>
+            <span className="text-xs text-muted-foreground">research — ключевые слова ({researchKeywords.length}):</span>
+            <p className="text-[10px] text-foreground/60 mt-0.5 leading-relaxed">
+              {researchKeywords.join(', ')}
+            </p>
+          </div>
+          <div>
+            <span className="text-xs text-muted-foreground">coding — инструменты ({DEFAULT_CODING_TOOLS.length}):</span>
+            <p className="text-[10px] text-foreground/60 mt-0.5 leading-relaxed">
+              {DEFAULT_CODING_TOOLS.join(', ')}
+            </p>
+          </div>
+          <p className="text-[10px] text-muted-foreground/60 italic">
+            Словари загружаются из YAML-файлов в packages/core/dictionaries/. Переопределить можно через {`{$SYNTH_DATA_DIR}/dictionaries/`}.
+          </p>
+        </div>
+      </details>
+    </div>
+  );
 }
 
 function ModelPairRow({

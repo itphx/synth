@@ -58,6 +58,12 @@ export class ModelRouter {
       };
     }
 
+    // Приоритет: модель (classify_conversation) > keyword > default
+    const modelCategory = sessionSettings.routingCategory;
+    if (modelCategory) {
+      return this._routeByCategory(modelCategory, sessionSettings, defaultProvider, defaultModel, 'model');
+    }
+
     const strategy = sessionSettings.routingStrategy || this._routerConfig.strategy;
 
     switch (strategy) {
@@ -109,33 +115,40 @@ export class ModelRouter {
       userMessage,
       toolCalls,
     });
-    const category = classifyResult.category;
+    return this._routeByCategory(classifyResult.category, settings, defaultProvider, defaultModel, 'content', classifyResult.signals);
+  }
 
-    // Ищем mapping в сессии, если пусто — из routerConfig
+  /** Роутинг по явно заданной категории (из classify_conversation или keyword-классификатора). */
+  private _routeByCategory(
+    category: string,
+    settings: SessionSettings,
+    defaultProvider: string,
+    defaultModel: string,
+    strategy: string,
+    signals?: string[],
+  ): RoutingDecision {
     const sessionContent = settings.routingContent;
     const configContent = this._routerConfig.content;
-
     const mapping = this._resolveContentMapping(category, sessionContent, configContent);
 
     if (mapping && mapping.provider && mapping.model) {
-      // Проверяем доступность в пуле
       const provider = this._pool.getProvider(mapping.provider, mapping.model);
       if (provider) {
+        const signalInfo = signals?.length ? ` (сигналы: ${signals.join(', ')})` : ' (модель)';
         return {
           providerName: mapping.provider,
           modelName: mapping.model,
-          reason: `Content-based: категория "${category}" → ${mapping.provider}/${mapping.model} (сигналы: ${classifyResult.signals.join(', ')})`,
-          strategy: 'content',
+          reason: `${strategy}: категория "${category}" → ${mapping.provider}/${mapping.model}${signalInfo}`,
+          strategy,
         };
       }
-      warning('ROUTER', `Провайдер/модель из routing content не найдены в пуле: ${mapping.provider}/${mapping.model}, fallback на default`);
+      warning('ROUTER', `Провайдер/модель не найдены: ${mapping.provider}/${mapping.model}, fallback на default`);
     }
 
-    // Fallback на default модели сессии
     return {
       providerName: defaultProvider,
       modelName: defaultModel,
-      reason: `Content-based: категория "${category}" — провайдер не настроен, fallback на default`,
+      reason: `${strategy}: категория "${category}" — провайдер не настроен, fallback на default`,
       strategy: 'default',
     };
   }
