@@ -171,6 +171,7 @@ const orchestrator = new ChatOrchestrator({
   toolRegistry,
   agentRegistry,
   mcpManager,
+  routerConfig: backendConfig.synth.router,
 });
 
 const processMessage = orchestrator.createProcessMessage();

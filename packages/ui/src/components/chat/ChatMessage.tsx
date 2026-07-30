@@ -63,6 +63,9 @@ interface ChatMessageProps {
   readOnly?: boolean
   /** true если сессия — дочерняя (сабагент) */
   isSubagent?: boolean
+  selectionMode?: boolean
+  isSelected?: boolean
+  onToggleSelect?: (shiftKey: boolean) => void
 }
 
 function ChatMessageInner({
@@ -76,6 +79,9 @@ function ChatMessageInner({
   onFork,
   readOnly,
   isSubagent,
+  selectionMode,
+  isSelected,
+  onToggleSelect,
 }: ChatMessageProps) {
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
@@ -87,7 +93,8 @@ function ChatMessageInner({
   const hasDebug = !!message.debug_data && Object.keys(message.debug_data).length > 0
 
   const containerClass = cn(
-    'flex flex-col px-4 py-3 group',
+    'flex px-4 py-3 group',
+    selectionMode ? 'flex-row items-start' : 'flex-col',
     isUser && 'items-end',
     isAssistant && 'items-start',
     isSummary && 'items-center',
@@ -157,6 +164,19 @@ function ChatMessageInner({
 
   return (
     <div className={containerClass}>
+      {selectionMode && (
+        <div className="flex items-center self-stretch pr-1">
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={(e) => {
+              const ev = e.nativeEvent as MouseEvent
+              onToggleSelect?.(ev.shiftKey ?? false)
+            }}
+            className="size-4 rounded border-border cursor-pointer accent-primary"
+          />
+        </div>
+      )}
       <div className={bubbleClass}>
         {isAssistant && (
           <MessageHeader message={message} isSubagent={isSubagent} onOriginClick={handleOriginClick} />

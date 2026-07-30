@@ -332,7 +332,12 @@ export const synthApi = {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/references`)
   },
 
-  async addSessionReference(sessionId: string, sourceSessionId: string, options?: { label?: string; messageRange?: [number, number]; autoSummarize?: boolean }): Promise<{ reference: Record<string, unknown> }> {
+  async addSessionReference(sessionId: string, sourceSessionId: string, options?: { 
+    label?: string; 
+    messageRange?: [number, number]; 
+    autoSummarize?: boolean;
+    position?: 'after' | 'before';
+  }): Promise<{ reference: Record<string, unknown> }> {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/references`, {
       method: 'POST',
       body: JSON.stringify({ source_session_id: sourceSessionId, ...options }),
@@ -372,6 +377,13 @@ export const synthApi = {
   async deleteMessage(sessionId: string, messageIndex: number): Promise<{ success: boolean }> {
     return fetchJSON(`${BASE_URL}/messages/${encodeURIComponent(sessionId)}/${messageIndex}`, {
       method: 'DELETE',
+    })
+  },
+
+  async batchMessages(sessionId: string, action: 'pin' | 'toggle' | 'delete', indices: number[], state?: boolean): Promise<{ results: Array<{ index: number; success: boolean; state?: boolean }> }> {
+    return fetchJSON(`${BASE_URL}/messages/${encodeURIComponent(sessionId)}/batch`, {
+      method: 'POST',
+      body: JSON.stringify({ action, indices, ...(state !== undefined ? { state } : {}) }),
     })
   },
 

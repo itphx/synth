@@ -49,6 +49,13 @@ export interface StatusMessage {
   timestamp: number
 }
 
+export interface ForwardModeState {
+  active: boolean
+  sourceSessionId: string | null
+  sourceIndices: number[]
+  mode: 'forward' | 'merge'
+}
+
 interface UIStore {
   leftPanel: LeftPanelState
   rightPanel: RightPanelState
@@ -76,15 +83,10 @@ interface UIStore {
   adminPage: string
   setAdminPage: (page: string) => void
 
-  isReferenceModalOpen: boolean
-  referenceModalSessionId: string | null
-  openReferenceModal: (sessionId: string) => void
-  closeReferenceModal: () => void
-
-  isMergeModalOpen: boolean
-  mergeModalSessionId: string | null
-  openMergeModal: (sessionId: string) => void
-  closeMergeModal: () => void
+  forwardMode: ForwardModeState
+  enterForwardMode: (sourceSessionId: string, sourceIndices: number[], mode: 'forward' | 'merge') => void
+  cancelForwardMode: () => void
+  forwardConfirmAction: ((targetSessionId: string, position: 'after' | 'before', summarize: boolean) => void) | null
 
   theme: string
   setTheme: (theme: string) => void
@@ -209,15 +211,17 @@ export const useUIStore = create<UIStore>()(
       adminPage: 'dashboard',
       setAdminPage: (page) => set({ adminPage: page }),
 
-      isReferenceModalOpen: false,
-      referenceModalSessionId: null,
-      openReferenceModal: (sessionId) => set({ isReferenceModalOpen: true, referenceModalSessionId: sessionId }),
-      closeReferenceModal: () => set({ isReferenceModalOpen: false, referenceModalSessionId: null }),
-
-      isMergeModalOpen: false,
-      mergeModalSessionId: null,
-      openMergeModal: (sessionId) => set({ isMergeModalOpen: true, mergeModalSessionId: sessionId }),
-      closeMergeModal: () => set({ isMergeModalOpen: false, mergeModalSessionId: null }),
+      forwardMode: {
+        active: false,
+        sourceSessionId: null,
+        sourceIndices: [],
+        mode: 'forward',
+      },
+      enterForwardMode: (sourceSessionId, sourceIndices, mode) =>
+        set({ forwardMode: { active: true, sourceSessionId, sourceIndices, mode } }),
+      cancelForwardMode: () =>
+        set({ forwardMode: { active: false, sourceSessionId: null, sourceIndices: [], mode: 'forward' } }),
+      forwardConfirmAction: null,
 
       theme: 'flexoki',
       setTheme: (theme) => {

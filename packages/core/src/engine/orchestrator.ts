@@ -1,18 +1,26 @@
 import type { Message, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@synth/shared';
 import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart } from '@synth/shared';
+import type { RouterConfig } from '@synth/shared';
 import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
 import { DebugCollector } from '../debug.js';
 import { ProviderFactory } from '../providers/base.js';
-import type { LLMMessage, CancellationToken, ProviderConfig as CoreProviderConfig } from '../providers/base.js';
+import type { LLMMessage, CancellationToken, ProviderConfig as CoreProviderConfig, BaseProvider } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
+import { ContextConfig } from './context/config.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { ToolForLLM } from '@synth/shared';
 import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
 import { warning } from '../logger.js';
 import { autoTitleSession } from '../sessions/auto-title.js';
+import { ModelRouter } from './router/router.js';
+import { ContentClassifier } from './router/content-classifier.js';
+import { ProviderPool } from './router/provider-pool.js';
+import { QualityChecker } from './router/quality-checker.js';
+import { DictionaryStore } from './router/dictionary-store.js';
+import type { RoutingDecision } from './router/router.js';
 
 const MAX_DOOM_LOOP_COUNT = 3;
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
@@ -30,11 +38,13 @@ export interface OrchestratorOptions {
   contextBuilder: ContextBuilder;
   providerLoader: (name: string) => SharedProviderConfig | null;
   contextOptimizer?: ContextOptimizer;
+  contextConfig?: ContextConfig;
   modelPriceLoader?: (modelName: string) => ModelPricing | null;
   dataDir?: string;
   toolRegistry?: ToolRegistry;
   agentRegistry?: AgentRegistry;
   mcpManager?: McpManager;
+  routerConfig?: RouterConfig;
 }
 
 export interface ProcessMessageResult {
@@ -70,6 +80,9 @@ export class ChatOrchestrator {
   private readonly _mcpManager: McpManager | null;
   private readonly _loadedMcpServers = new Set<string>();
   private readonly _cancellationTokens = new Map<string, CancellationToken>();
+  private readonly _router: ModelRouter | null;
+  private readonly _routerConfig: RouterConfig | null;
+  private readonly _contextConfig: ContextConfig | null;
 
   constructor(options: OrchestratorOptions) {
     this._sessionManager = options.sessionManager;
@@ -81,6 +94,18 @@ export class ChatOrchestrator {
     this._toolRegistry = options.toolRegistry ?? null;
     this._agentRegistry = options.agentRegistry ?? null;
     this._mcpManager = options.mcpManager ?? null;
+    this._routerConfig = options.routerConfig ?? null;
+    this._contextConfig = options.contextConfig ?? null;
+
+    if (options.routerConfig && options.routerConfig.enabled) {
+      const dictionaryStore = new DictionaryStore(options.dataDir || '/var/synth/data');
+      const classifier = new ContentClassifier(dictionaryStore);
+      const pool = new ProviderPool(options.providerLoader);
+      const qualityChecker = new QualityChecker();
+      this._router = new ModelRouter(classifier, pool, qualityChecker, options.routerConfig);
+    } else {
+      this._router = null;
+    }
   }
 
   /**
@@ -124,16 +149,17 @@ export class ChatOrchestrator {
     }
 
     try {
-      // 1. Get provider
-      const providerName = message.provider || session.settings.provider || '';
-      const provider = this._getProvider(providerName, session);
-      if (!provider) {
+      // 1. Get provider (через роутер если доступен, иначе напрямую)
+      const routeResult = this._routeProvider(session, message);
+      if (!routeResult) {
+        const providerName = (message.provider as string) || session.settings.provider || '';
         return {
           error: `Провайдер ${providerName || 'не указан'} не найден или не настроен`,
           errorType: 'provider_not_found',
           canRetry: false,
         };
       }
+      const { provider, providerName, decision: routingDecision } = routeResult;
 
       debugCollector.captureSessionInfo(session.id, provider.model, provider.name, {
         provider_type: provider.type,
@@ -163,6 +189,16 @@ export class ChatOrchestrator {
           stickyNotes: session.stickyNotes,
           summaryContent: summaryContent || undefined,
         });
+
+      // Добавляем инструкцию classify_conversation если routing включен (AD-034)
+      let finalSystemPrompt = systemPrompt;
+      if (this._router && session.settings.routingEnabled !== false) {
+        const lang = session.settings.language || 'ru';
+        const classifyInstruction = lang === 'ru'
+          ? '\n\n## Классификация разговора\n\nКогда определишь характер задачи, вызови инструмент `classify_conversation` с категорией: coding (написание/изменение кода), research (анализ/исследование), или chat (общий разговор). Это поможет выбрать оптимальную модель для последующих запросов.'
+          : '\n\n## Conversation Classification\n\nWhen you determine the nature of the task, call the `classify_conversation` tool with the category: coding (writing/modifying code), research (analysis/investigation), or chat (general conversation). This helps select the optimal model for subsequent requests.';
+        finalSystemPrompt = systemPrompt + classifyInstruction;
+      }
 
       // 3. Convert messages for LLM (без summary — они уже в system prompt)
       const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
@@ -248,7 +284,7 @@ export class ChatOrchestrator {
         try {
           for await (const chunk of provider.chatAsync(
             currentMessages,
-            systemPrompt,
+            finalSystemPrompt,
             tools as Record<string, unknown>[] | undefined,
             debugCollector,
             cancelToken,
@@ -443,6 +479,10 @@ export class ChatOrchestrator {
                       temperature: session.settings.temperature,
                       maxTokens: session.settings.maxTokens,
                     },
+                    parentSessionSettings: session.settings,
+                    modelRouter: this._router ?? undefined,
+                    routerConfig: this._routerConfig ?? undefined,
+                    contextConfig: this._contextConfig ?? undefined,
                     publish: (type: string, data: Record<string, unknown>) =>
                       publishChunk(type as never, data),
                     streamId,
@@ -472,6 +512,21 @@ export class ChatOrchestrator {
             result: toolResult,
             iteration: toolIteration,
           });
+
+          // classify_conversation: сохраняем категорию в настройках сессии (AD-034)
+          if (toolName === 'classify_conversation' && !toolResult.isError) {
+            const cat = (toolResult.metadata?.routingCategory as string) || undefined;
+            if (cat && (cat === 'coding' || cat === 'chat' || cat === 'research')) {
+              await this._sessionManager.withLock(session.id, async (s) => {
+                s.settings.routingCategory = cat as 'coding' | 'chat' | 'research';
+                await this._sessionManager.saveSession(s);
+              });
+              this._eventBus.publish(session.id, 'session.routing_category', {
+                category: cat,
+                source: 'model',
+              });
+            }
+          }
 
           allToolCalls.push({
             name: toolName,
@@ -512,12 +567,77 @@ export class ChatOrchestrator {
         finalContent = '(достигнут лимит итераций инструментов)';
       }
 
+      // 7.5. Quality check + escalation (AD-034)
+      let qaPass: boolean | undefined;
+      let qaReason: string | undefined;
+      const escalation = this._router?.getEscalationConfig();
+      if (this._router && escalation?.enabled && routingDecision && finalContent) {
+        const qaResult = await this._router.checkQuality(finalContent, routingDecision, session.settings);
+        if (!qaResult.pass) {
+          qaPass = false;
+          qaReason = qaResult.reason;
+
+          // Эскалация на fallback-модель
+          const sessionEscalation = session.settings.routingEscalation;
+          const fallbackProvider = sessionEscalation?.fallbackProvider || escalation.fallbackProvider;
+          const fallbackModel = sessionEscalation?.fallbackModel || escalation.fallbackModel;
+          if (fallbackProvider && fallbackModel) {
+            const fbDecision: RoutingDecision = {
+              providerName: fallbackProvider,
+              modelName: fallbackModel,
+              reason: 'escalation_fallback',
+              strategy: 'default',
+            };
+            const fbProvider = this._router.getProvider(fbDecision);
+            if (fbProvider) {
+              // Перевызываем LLM с fallback-моделью (без стриминга в UI)
+              try {
+                const fbMessages = [
+                  ...currentMessages.filter(
+                    (m) => m.role !== 'assistant' || m.toolUse === undefined || m.toolUse.length === 0,
+                  ),
+                ];
+                const fbResponse = await fbProvider.chat(fbMessages, finalSystemPrompt, undefined, false);
+                if (fbResponse.content) {
+                  finalContent = fbResponse.content;
+                  qaPass = true;
+                  qaReason = `Эскалация на ${fallbackProvider}/${fallbackModel}: ${qaResult.reason}`;
+                  if (fbResponse.usage) finalUsage = fbResponse.usage;
+                  if (fbResponse.model) finalModel = fbResponse.model;
+                }
+              } catch (fbErr) {
+                warning('ORCHESTRATOR', `Fallback LLM call failed: ${fbErr}`);
+              }
+            } else {
+              warning('ORCHESTRATOR', `Fallback provider/model not found: ${fallbackProvider}/${fallbackModel}`);
+            }
+          }
+        } else {
+          qaPass = true;
+          qaReason = qaResult.reason;
+        }
+
+        // Публикуем событие quality check
+        if (qaPass !== undefined) {
+          const sessionAfterMsg = await this._sessionManager.getSession(session.id);
+          const msgIndex = sessionAfterMsg
+            ? sessionAfterMsg.messages.length
+            : session.messages.length;
+          this._eventBus.publish(session.id, 'message.quality_check', {
+            qa_pass: qaPass,
+            qa_reason: qaReason,
+            message_index: msgIndex,
+          });
+        }
+      }
+
       // 8. Save final assistant message
       const reasoningJoined = allReasoning.map((r) => r.text).join('\n\n---\n\n');
       const savedContent = await this._saveAssistantMessage(
         session.id, finalContent, streamId, effectiveAgentRole,
         finalUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
         MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
+        qaPass, qaReason,
       );
 
       // Получаем актуальную сессию после сохранения
@@ -901,6 +1021,63 @@ export class ChatOrchestrator {
     return session.settings.model || this._providerLoader(providerName)?.defaultModel || '';
   }
 
+  /**
+   * Выбор провайдера и модели через роутер (AD-034).
+   * Если роутер недоступен — fallback на _getProvider().
+   */
+  private _routeProvider(
+    session: Session,
+    message: Message,
+  ): { provider: BaseProvider; providerName: string; modelName: string; decision?: RoutingDecision } | null {
+    if (this._router && session.settings.routingEnabled !== false) {
+      const toolCallNames = message.toolCalls?.map((tc) => {
+        const func = tc.function as { name: string } | undefined;
+        return func?.name || '';
+      }).filter(Boolean);
+
+      const decision = this._router.route({
+        sessionSettings: session.settings,
+        userMessage: message.content,
+        toolCalls: toolCallNames,
+      });
+
+      let provider = this._router.getProvider(decision);
+      if (provider) {
+        return {
+          provider,
+          providerName: decision.providerName,
+          modelName: decision.modelName,
+          decision,
+        };
+      }
+
+      // Fallback: если decision не содержит валидного провайдера/модели
+      // (например, категория не имеет маппинга в routingContent),
+      // используем стандартный _getProvider() для провайдера сессии
+      const fallbackName = session.settings.provider || '';
+      provider = this._getProvider(fallbackName, session);
+      if (provider) {
+        return {
+          provider,
+          providerName: fallbackName,
+          modelName: this._getEffectiveModel(session, fallbackName),
+          decision,
+        };
+      }
+    }
+
+    // Fallback: старый метод (если роутер недоступен или все пути выше не сработали)
+    const providerName = (message.provider as string) || session.settings.provider || '';
+    const provider = this._getProvider(providerName, session);
+    if (!provider) return null;
+
+    return {
+      provider,
+      providerName,
+      modelName: provider.model,
+    };
+  }
+
   static _sessionMessagesToLlm(
     messages: Message[],
     currentAgentRole?: string,
@@ -969,6 +1146,8 @@ export class ChatOrchestrator {
     skipEvent = false,
     toolResults?: Array<Record<string, unknown>>,
     intermediateTextBlocks?: Array<{ text: string; iteration: number }>,
+    qaPass?: boolean,
+    qaReason?: string,
   ): Promise<string> {
     const finalContent = content;
 
@@ -1009,6 +1188,8 @@ export class ChatOrchestrator {
       debugData: debugInfo ?? undefined,
       metadata,
       ...(summaryOf ? { summaryOf } : {}),
+      ...(qaPass !== undefined ? { qa_pass: qaPass } : {}),
+      ...(qaReason !== undefined ? { qa_reason: qaReason } : {}),
     };
 
     await this._sessionManager.addMessage(sessionId, msg);

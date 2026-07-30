@@ -7,6 +7,7 @@ import { grepFilesTool } from './search.js';
 import { webFetchTool, webSearchTool } from './web.js';
 import { gitStatusTool, gitDiffTool, gitLogTool, gitCommitTool } from './git.js';
 import { taskTool } from './task.js';
+import { classifyConversationTool } from './classify-conversation.js';
 import { readSessionReferenceTool } from './read-reference.js';
 
 export { ToolRegistry } from './registry.js';
@@ -29,6 +30,7 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   gitLogTool,
   gitCommitTool,
   taskTool,
+  classifyConversationTool,
   readSessionReferenceTool,
 ];
 

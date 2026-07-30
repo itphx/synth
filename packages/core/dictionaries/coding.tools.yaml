@@ -1,0 +1,12 @@
+# Tool names that indicate a coding session
+tools:
+  - write_file
+  - edit_file
+  - create_file
+  - delete_file
+  - write
+  - edit
+  - patch
+  - replace
+  - execute_shell
+  - git_commit

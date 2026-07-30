@@ -80,6 +80,8 @@ export interface Message {
   agentRole?: string;
   metadata?: Record<string, unknown>;
   summaryOf?: number[];
+  qa_pass?: boolean;
+  qa_reason?: string;
 }
 
 // --- Session ---
@@ -123,6 +125,34 @@ export interface SessionSettings {
   showInterview: boolean;
   websocketEnabled: boolean;
   language?: string;
+  // === Роутинг (AD-034) ===
+  routingEnabled: boolean;
+  routingStrategy: 'content' | 'cost' | 'content+cost' | 'auto';
+  routingContent: {
+    coding?: { provider: string; model: string };
+    chat?: { provider: string; model: string };
+    research?: { provider: string; model: string };
+  };
+  routingEscalation: {
+    enabled: boolean;
+    fallbackProvider: string;
+    fallbackModel: string;
+    checks: ('min_length' | 'constraint' | 'self_check')[];
+    minLength: number;
+  };
+  routingCost: {
+    enabled: boolean;
+    cheapProvider: string;
+    cheapModel: string;
+    maxCheapTokens: number;
+  };
+  subagentRouting: {
+    enabled: boolean;
+    model?: string;
+    provider?: string;
+  };
+  /** Категория, установленная моделью через classify_conversation. Приоритет над keyword-классификатором. */
+  routingCategory?: 'coding' | 'chat' | 'research';
 }
 
 export interface StreamInfo {
@@ -473,6 +503,8 @@ export type EventType =
   | 'tool_call.started'
   | 'tool_call.result'
   | 'tool_call.loop'
+  | 'message.quality_check'
+  | 'session.routing_category'
   | 'error';
 
 export interface BusEvent {

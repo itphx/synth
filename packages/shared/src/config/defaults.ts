@@ -77,4 +77,34 @@ export const defaultConfig: SynthConfig = {
   mcp: {
     servers: {},
   },
+  router: {
+    enabled: true,
+    strategy: 'auto',
+    content: {
+      coding: { provider: '', model: '' },
+      chat: { provider: '', model: '' },
+      research: { provider: '', model: '' },
+    },
+    escalation: {
+      enabled: true,
+      fallbackProvider: '',
+      fallbackModel: '',
+      maxRetries: 1,
+      checks: ['min_length', 'constraint'],
+      minLength: 10,
+    },
+    cost: {
+      enabled: false,
+      cheapProvider: '',
+      cheapModel: '',
+      expensiveProvider: '',
+      expensiveModel: '',
+      maxCheapTokens: 500,
+    },
+    subagent: {
+      enabled: true,
+      model: '',
+      provider: '',
+    },
+  },
 };

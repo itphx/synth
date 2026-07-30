@@ -492,6 +492,7 @@ export function createSessionRoutes(
       label: body.label,
       messageRange: body.message_range || body.messageRange,
       autoSummarize: body.auto_summarize ?? body.autoSummarize ?? false,
+      position: body.position,
     });
     eventBus.publish(c.req.param('id'), 'session.reference.added', { reference: ref });
     return c.json({ reference: ref }, 201);

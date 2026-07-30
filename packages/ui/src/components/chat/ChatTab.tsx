@@ -58,6 +58,10 @@ export function ChatTab({ tab }: ChatTabProps) {
     ? messages.find((m) => m.index === debugModalMessageIndex) ?? null
     : null
 
+  const selectionState = useChatStore(s => s.selectionBySession[sessionId])
+  const selectionMode = selectionState?.mode ?? false
+  const selectedIndices = selectionState?.indices ?? new Set<number>()
+
   const [sessionOrigin, setSessionOrigin] = useState<string | null>(null)
   const isSubagent = sessionOrigin === 'subagent'
   const isReadOnly = isSubagent
@@ -361,6 +365,71 @@ export function ChatTab({ tab }: ChatTabProps) {
     }
   }, [sessionId, streamingBySession, setPendingMessages, setRetryInput, notify, t])
 
+  // --- Selection mode handlers ---
+
+  const handleToggleSelect = useCallback((index: number) => {
+    useChatStore.getState().toggleMessageSelection(sessionId, index)
+  }, [sessionId])
+
+  const handleSelectRange = useCallback((from: number, to: number) => {
+    useChatStore.getState().selectMessageRange(sessionId, from, to)
+  }, [sessionId])
+
+  // --- Forward confirm ---
+
+  const handleForwardConfirm = useCallback(async (targetSessionId: string, position: 'after' | 'before', summarize: boolean) => {
+    const fm = useUIStore.getState().forwardMode
+    if (!fm.active || !fm.sourceSessionId) return
+
+    try {
+      if (fm.mode === 'forward') {
+        const sorted = [...fm.sourceIndices].sort((a, b) => a - b)
+        const msgs = messagesBySession[sessionId] || []
+        const selectedMsgs = sorted.map(i => msgs[i]).filter(Boolean)
+        if (selectedMsgs.length === 0) return
+        const lastSelected = selectedMsgs[selectedMsgs.length - 1]
+        // Use seq numbers, not indices
+        const fromSeq = selectedMsgs[0].seq ?? sorted[0] + 1
+        const toSeq = lastSelected.role === 'user' && selectedMsgs.length > 1
+          ? selectedMsgs[selectedMsgs.length - 2].seq ?? sorted[sorted.length - 2] + 1
+          : lastSelected.seq ?? sorted[sorted.length - 1] + 1
+
+        await synthApi.mergeMessages(targetSessionId, sessionId, {
+          sourceRange: [fromSeq, toSeq],
+          position,
+        })
+
+        if (lastSelected.role === 'user') {
+          useChatStore.getState().setRetryInput(targetSessionId, lastSelected.content)
+        }
+
+        notify({ text: `Сообщения скопированы в сессию`, type: 'success', category: 'message', sessionId })
+      } else {
+        await synthApi.addSessionReference(targetSessionId, sessionId, {
+          messageRange: [1, messages.length || 9999],
+          position,
+          autoSummarize: summarize,
+        })
+        notify({ text: `Ссылка на сессию добавлена`, type: 'success', category: 'message', sessionId })
+      }
+
+      useUIStore.getState().cancelForwardMode()
+    } catch (e) {
+      notify({ text: `Ошибка: ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
+    }
+  }, [sessionId, messagesBySession, messages.length, notify])
+
+  // Register forward confirm handler in UIStore
+  useEffect(() => {
+    useUIStore.getState().forwardConfirmAction = handleForwardConfirm
+    return () => {
+      const state = useUIStore.getState()
+      if (state.forwardConfirmAction === handleForwardConfirm) {
+        state.forwardConfirmAction = null
+      }
+    }
+  }, [handleForwardConfirm])
+
   const handleCreateNote = useCallback(async (text: string) => {
     try {
       const result = await synthApi.addStickyNote(sessionId, text)
@@ -455,6 +524,10 @@ export function ChatTab({ tab }: ChatTabProps) {
         readOnly={isReadOnly}
         onStop={handleStop}
         isSubagent={isSubagent}
+        selectionMode={selectionMode}
+        selectedIndices={selectedIndices}
+        onToggleSelect={handleToggleSelect}
+        onSelectRange={handleSelectRange}
       />
 
       {!isSubagent && (

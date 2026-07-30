@@ -112,6 +112,56 @@ export const mcpConfigSchema = z.object({
   servers: z.record(z.string(), mcpServerConfigSchema).default({}),
 });
 
+// --- Router (AD-034) ---
+
+export const routerContentConfigSchema = z.object({
+  coding: z.object({
+    provider: z.string().default(''),
+    model: z.string().default(''),
+  }).default({}),
+  chat: z.object({
+    provider: z.string().default(''),
+    model: z.string().default(''),
+  }).default({}),
+  research: z.object({
+    provider: z.string().default(''),
+    model: z.string().default(''),
+  }).default({}),
+});
+
+export const routerEscalationConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  fallbackProvider: z.string().default(''),
+  fallbackModel: z.string().default(''),
+  maxRetries: z.number().int().min(0).max(3).default(1),
+  checks: z.array(z.enum(['min_length', 'constraint', 'self_check'])).default(['min_length', 'constraint']),
+  minLength: z.number().int().min(1).default(10),
+});
+
+export const routerCostConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  cheapProvider: z.string().default(''),
+  cheapModel: z.string().default(''),
+  expensiveProvider: z.string().default(''),
+  expensiveModel: z.string().default(''),
+  maxCheapTokens: z.number().int().min(1).default(500),
+});
+
+export const routerSubagentConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  model: z.string().default(''),
+  provider: z.string().default(''),
+});
+
+export const routerConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  strategy: z.enum(['content', 'cost', 'content+cost', 'auto']).default('auto'),
+  content: routerContentConfigSchema.default({}),
+  escalation: routerEscalationConfigSchema.default({}),
+  cost: routerCostConfigSchema.default({}),
+  subagent: routerSubagentConfigSchema.default({}),
+});
+
 export const synthConfigSchema = z.object({
   server: serverConfigSchema.default({}),
   storage: storageConfigSchema.default({}),
@@ -126,6 +176,7 @@ export const synthConfigSchema = z.object({
   context: contextConfigSchema.default({}),
   summarization: summarizationConfigSchema.default({}),
   mcp: mcpConfigSchema.default({}),
+  router: routerConfigSchema.default({}),
 });
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>;
@@ -142,4 +193,9 @@ export type ContextConfigSchema = z.infer<typeof contextConfigSchema>;
 export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
 export type McpConfig = z.infer<typeof mcpConfigSchema>;
+export type RouterContentConfig = z.infer<typeof routerContentConfigSchema>;
+export type RouterEscalationConfig = z.infer<typeof routerEscalationConfigSchema>;
+export type RouterCostConfig = z.infer<typeof routerCostConfigSchema>;
+export type RouterSubagentConfig = z.infer<typeof routerSubagentConfigSchema>;
+export type RouterConfig = z.infer<typeof routerConfigSchema>;
 export type SynthConfig = z.infer<typeof synthConfigSchema>;

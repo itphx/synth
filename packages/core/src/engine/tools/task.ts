@@ -1,12 +1,14 @@
 import { z } from 'zod';
 import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart, TsmState } from '@synth/shared';
-import type { ToolDefinition, ToolResult, Message, Session } from '@synth/shared';
+import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig } from '@synth/shared';
 import type { AgentRegistry } from '../agents/registry.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ToolRegistry } from './registry.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
+import type { ContextConfig } from '../context/config.js';
+import type { ModelRouter } from '../router/router.js';
 import { serializeSession, serializeMessage } from '../../server/serialize.js';
 
 export interface TaskExtra {
@@ -20,6 +22,10 @@ export interface TaskExtra {
     temperature?: number;
     maxTokens?: number;
   };
+  parentSessionSettings?: SessionSettings;
+  modelRouter?: ModelRouter;
+  routerConfig?: RouterConfig;
+  contextConfig?: ContextConfig;
   publish?: (type: string, data: Record<string, unknown>) => void;
   streamId?: string;
   sessionId?: string;
@@ -97,6 +103,12 @@ export const taskTool: ToolDefinition = {
       .describe('Context passing mode: none — only prompt, inherit — full parent history, summary — compressed via LLM, last_n — last N messages (default: none)'),
     context_count: z.number().int().min(1).max(50).optional()
       .describe('Number of last messages to include (only for last_n mode, default: 4)'),
+    model: z.string().optional()
+      .describe('Override model for the subagent'),
+    provider: z.string().optional()
+      .describe('Override provider for the subagent'),
+    routing_strategy: z.enum(['auto', 'content', 'cost', 'none']).optional()
+      .describe('Routing strategy for the subagent (default: inherit from parent)'),
   }),
   capabilities: [ToolCapability.TASK],
   async execute(args, ctx) {
@@ -111,6 +123,9 @@ export const taskTool: ToolDefinition = {
       task_id?: string;
       context_mode?: ContextMode;
       context_count?: number;
+      model?: string;
+      provider?: string;
+      routing_strategy?: 'auto' | 'content' | 'cost' | 'none';
     };
     const extra = ctx.extra as TaskExtra | undefined;
 
@@ -146,6 +161,30 @@ export const taskTool: ToolDefinition = {
       : maxSteps;
     const publish = extra.publish;
 
+    // ─── Настройки роутинга для дочерней сессии (AD-034 Фаза 4) ──
+    const childRoutingOverrides: Partial<SessionSettings> = {};
+    if (params.model) childRoutingOverrides.model = params.model;
+    if (params.provider) childRoutingOverrides.provider = params.provider;
+    if (params.routing_strategy) {
+      if (params.routing_strategy === 'none') {
+        childRoutingOverrides.routingEnabled = false;
+      } else {
+        childRoutingOverrides.routingStrategy = params.routing_strategy;
+      }
+    }
+    // Если subagentRouting включён в routerConfig, наследуем routing от родителя
+    const subagentRoutingCfg = extra.routerConfig?.subagent;
+    if (subagentRoutingCfg?.enabled && params.routing_strategy !== 'none') {
+      childRoutingOverrides.routingEnabled = true;
+      // Если есть дефолтная модель саб-агента в конфиге и не переопределена
+      if (!params.model && subagentRoutingCfg.model) {
+        childRoutingOverrides.model = subagentRoutingCfg.model;
+      }
+      if (!params.provider && subagentRoutingCfg.provider) {
+        childRoutingOverrides.provider = subagentRoutingCfg.provider;
+      }
+    }
+
     let childSessionId: string | undefined;
     let childMessages: Message[] = [];
     let parentNotesText = '';
@@ -169,7 +208,7 @@ export const taskTool: ToolDefinition = {
             fork.sessionOrigin = 'subagent';
             fork.userId = parentSession.userId;
             fork.ownerId = parentSession.ownerId;
-            fork.settings = { ...fork.settings, agentRole: params.subagent_type };
+            fork.settings = { ...fork.settings, agentRole: params.subagent_type, ...childRoutingOverrides };
             await extra.sessionManager.updateSession(fork);
             childSessionId = fork.id;
             childMessages = fork.messages;
@@ -182,7 +221,7 @@ export const taskTool: ToolDefinition = {
             fork.sessionOrigin = 'subagent';
             fork.userId = parentSession.userId;
             fork.ownerId = parentSession.ownerId;
-            fork.settings = { ...fork.settings, agentRole: params.subagent_type };
+            fork.settings = { ...fork.settings, agentRole: params.subagent_type, ...childRoutingOverrides };
             await extra.sessionManager.updateSession(fork);
             childSessionId = fork.id;
             childMessages = fork.messages;
@@ -193,7 +232,7 @@ export const taskTool: ToolDefinition = {
             fork.sessionOrigin = 'subagent';
             fork.userId = parentSession.userId;
             fork.ownerId = parentSession.ownerId;
-            fork.settings = { ...fork.settings, agentRole: params.subagent_type };
+            fork.settings = { ...fork.settings, agentRole: params.subagent_type, ...childRoutingOverrides };
             await extra.sessionManager.updateSession(fork);
             childSessionId = fork.id;
             childMessages = fork.messages;
@@ -238,7 +277,7 @@ export const taskTool: ToolDefinition = {
               engine: parentSession.engine,
               parentId: extra.sessionId,
               sessionOrigin: 'subagent',
-              settings: { ...parentSession.settings, agentRole: params.subagent_type },
+              settings: { ...parentSession.settings, agentRole: params.subagent_type, ...childRoutingOverrides },
             });
             child.userId = parentSession.userId;
             child.ownerId = parentSession.ownerId;
@@ -274,8 +313,72 @@ export const taskTool: ToolDefinition = {
           prompt += `\n\n[СЖАТЫЙ КОНТЕКСТ РОДИТЕЛЬСКОЙ СЕССИИ]\n${summaryMsg.content}`;
         }
       }
+
+      // ─── Информация о маршрутизации (AD-034 Фаза 4) ──────────────
+      // Загружается из контекстных файлов prompts/system/ROUTING.{lang}.md
+      const parentSettings = extra.parentSessionSettings;
+      const routingEnabled = extra.routerConfig?.enabled && (parentSettings?.routingEnabled !== false);
+      const shouldShowRouting = routingEnabled || childRoutingOverrides.model || childRoutingOverrides.provider;
+      if (shouldShowRouting && extra.routerConfig) {
+        const lang = parentSettings?.language || 'ru';
+        const template = extra.contextConfig?.getRoutingInstructions(lang) || '';
+
+        // Строим список доступных моделей
+        const contentCfg = extra.routerConfig.content;
+        const effectiveContent = parentSettings?.routingContent;
+        const routingLines: string[] = [];
+        const addLine = (cat: string, cfg: { provider?: string; model?: string } | undefined, globalCfg: { provider: string; model: string }) => {
+          if (cfg?.provider && cfg?.model) {
+            routingLines.push(`- ${cat} (сессия): **${cfg.provider}/${cfg.model}**`);
+          } else if (globalCfg.provider && globalCfg.model) {
+            routingLines.push(`- ${cat} (глобально): **${globalCfg.provider}/${globalCfg.model}**`);
+          }
+        };
+        addLine('coding', effectiveContent?.coding, contentCfg.coding);
+        addLine('chat', effectiveContent?.chat, contentCfg.chat);
+        addLine('research', effectiveContent?.research, contentCfg.research);
+        const modelsText = routingLines.length > 0
+          ? 'Доступные провайдеры и модели:\n' + routingLines.join('\n')
+          : '';
+
+        const routingBlock = template
+          ? template.replace('{routing_models}', modelsText ? modelsText + '\n' : '')
+          : ('\n\n## Маршрутизация запросов\n\n' +
+             'Для запуска дочерних агентов ты можешь указать модель:\n' +
+             '- Используй параметр `model` для выбора модели под задачу\n' +
+             (modelsText ? modelsText + '\n' : '') +
+             '- Если модель не указана, будет использована стратегия родительской сессии\n');
+
+        prompt += routingBlock;
+      }
+
       return prompt;
     })();
+
+    // ─── Выбор провайдера для саб-агента через роутер (AD-034 Фаза 4) ──
+    let effectiveProvider = extra.provider;
+    let routingDecisionInfo: { providerName: string; modelName: string; strategy: string } | undefined;
+    const parentSettings = extra.parentSessionSettings;
+    if (extra.modelRouter && (parentSettings?.routingEnabled !== false) && extra.routerConfig) {
+      try {
+        const decision = extra.modelRouter.route({
+          sessionSettings: parentSettings!,
+          userMessage: params.prompt,
+          systemPrompt: llmSystemPrompt,
+        });
+        const routedProvider = extra.modelRouter.getProvider(decision);
+        if (routedProvider && (decision.providerName !== parentSettings?.provider || decision.modelName !== parentSettings?.model)) {
+          effectiveProvider = routedProvider;
+          routingDecisionInfo = {
+            providerName: decision.providerName,
+            modelName: decision.modelName,
+            strategy: decision.strategy,
+          };
+        }
+      } catch {
+        // fallback на провайдер родителя
+      }
+    }
 
     const messages: LLMMessage[] = [
       {
@@ -361,7 +464,7 @@ export const taskTool: ToolDefinition = {
         let reasoning = '';
 
         try {
-          for await (const chunk of extra.provider.chatAsync(
+          for await (const chunk of effectiveProvider.chatAsync(
             messages,
             systemPrompt || undefined,
             tools as Record<string, unknown>[] | undefined,
@@ -631,6 +734,90 @@ export const taskTool: ToolDefinition = {
 
       const output = finalContent || '(пустой ответ сабагента)';
 
+      // ─── Quality check результата саб-агента (AD-034 Фаза 4) ─────
+      let qaPass: boolean | undefined;
+      let qaReason: string | undefined;
+      let qualityOutput = output;
+      const escalationCfg = extra.routerConfig?.escalation;
+      const sessionEscalation = extra.parentSessionSettings?.routingEscalation;
+      const escalationEnabled = sessionEscalation?.enabled ?? escalationCfg?.enabled ?? false;
+
+      if (extra.modelRouter && escalationEnabled && finalContent && routingDecisionInfo) {
+        try {
+          const qaResult = await extra.modelRouter.checkQuality(finalContent, {
+            providerName: routingDecisionInfo.providerName,
+            modelName: routingDecisionInfo.modelName,
+            reason: routingDecisionInfo.strategy,
+            strategy: routingDecisionInfo.strategy,
+          }, extra.parentSessionSettings);
+          qaPass = qaResult.pass;
+          qaReason = qaResult.reason;
+
+          // Пометить QA-информацию в дочерней сессии
+          if (childSessionId && extra.sessionManager) {
+            try {
+              const childSession = await extra.sessionManager.getSession(childSessionId);
+              if (childSession) {
+                const lastAssistantMsg = [...childSession.messages].reverse()
+                  .find(m => m.role === MessageRole.ASSISTANT);
+                if (lastAssistantMsg) {
+                  lastAssistantMsg.qa_pass = qaResult.pass;
+                  lastAssistantMsg.qa_reason = qaResult.reason;
+                  await extra.sessionManager.updateSession(childSession);
+                }
+              }
+            } catch {
+              // не фатально
+            }
+          }
+
+          // Эскалация на fallback-модель при FAIL
+          if (!qaResult.pass) {
+            const fallbackProvider = sessionEscalation?.fallbackProvider || escalationCfg?.fallbackProvider;
+            const fallbackModel = sessionEscalation?.fallbackModel || escalationCfg?.fallbackModel;
+            if (fallbackProvider && fallbackModel && extra.modelRouter) {
+              const fbDecision = {
+                providerName: fallbackProvider,
+                modelName: fallbackModel,
+                reason: 'escalation_fallback',
+                strategy: 'default',
+              };
+              const fbEffectiveProvider = extra.modelRouter.getProvider(fbDecision);
+              if (fbEffectiveProvider) {
+                try {
+                  // Перевызываем с fallback-моделью (только последний user-запрос)
+                  const fbMessages: LLMMessage[] = [messages[0]!];
+                  // Добавляем только user-сообщение без tool-результатов
+                  const userMsg = messages.find(m => m.role === 'user');
+                  if (userMsg) fbMessages.push(userMsg);
+                  const fbResponse = await fbEffectiveProvider.chat(
+                    fbMessages,
+                    systemPrompt || undefined,
+                    undefined,
+                    false,
+                  );
+                  if (fbResponse.content) {
+                    finalContent = fbResponse.content;
+                    qualityOutput = fbResponse.content;
+                    qaPass = true;
+                    qaReason = `Эскалация на ${fallbackProvider}/${fallbackModel}: ${qaResult.reason}`;
+                    routingDecisionInfo = {
+                      providerName: fallbackProvider,
+                      modelName: fallbackModel,
+                      strategy: 'escalation_fallback',
+                    };
+                  }
+                } catch {
+                  // fallback не удался, оставляем оригинальный ответ
+                }
+              }
+            }
+          }
+        } catch {
+          // QA не удался, не блокируем
+        }
+      }
+
       // Финализировать дочернюю сессию — обновить TSM
       if (childSessionId && extra.sessionManager) {
         try {
@@ -655,8 +842,19 @@ export const taskTool: ToolDefinition = {
         }
       }
 
+      // ─── Формирование результата tool_result ──────────────────────
+      const qualityBlock = qaPass !== undefined
+        ? `<quality pass="${qaPass}" reason="${qaReason || ''}"/>\n`
+        : '';
+      const routedByBlock = routingDecisionInfo && routingDecisionInfo.strategy !== 'default'
+        ? `<routed_by strategy="${routingDecisionInfo.strategy}" provider="${routingDecisionInfo.providerName}" model="${routingDecisionInfo.modelName}"/>\n`
+        : '';
+      const qaWarningText = qaPass === false
+        ? `\n\n⚠️ Ответ не прошёл контроль качества: ${qaReason || 'неизвестная причина'}`
+        : '';
+
       return {
-        content: `<task_result>\n<summary>${params.description}</summary>\n\n${output}\n</task_result>`,
+        content: `<task_result>\n<summary>${params.description}</summary>\n${qualityBlock}${routedByBlock}\n${qualityOutput}${qaWarningText}\n</task_result>`,
         metadata: {
           subagent_type: params.subagent_type,
           description: params.description,
@@ -668,6 +866,11 @@ export const taskTool: ToolDefinition = {
           intermediate_text_blocks: allSubagentIntermediateTexts.length > 0 ? allSubagentIntermediateTexts : undefined,
           tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
           final_content: finalContent || undefined,
+          qa_pass: qaPass,
+          qa_reason: qaReason || undefined,
+          routing_strategy: routingDecisionInfo?.strategy,
+          routing_provider: routingDecisionInfo?.providerName,
+          routing_model: routingDecisionInfo?.modelName,
         },
       };
     } catch (err: unknown) {

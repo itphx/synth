@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { ProviderIcon } from '@/components/admin/ProviderIcon'
+import { QualityBadge } from './QualityBadge'
 import { resolveColor } from '@/lib/utils'
 
 interface MessageHeaderProps {
@@ -103,15 +104,19 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick }: MessageHeade
         </span>
       )}
 
+      {message.qa_pass !== undefined && (
+        <QualityBadge qa_pass={message.qa_pass} qa_reason={message.qa_reason} />
+      )}
+
       {formatted || (message.origin === 'merged' || message.origin === 'crosspost') ? (
         <span className="ml-auto inline-flex items-center gap-1">
           {(message.origin === 'merged' || message.origin === 'crosspost') && (
             <button
               title={message.source_msg_id ? `Из сообщения ${message.source_msg_id.slice(0, 8)}...` : undefined}
               onClick={onOriginClick}
-              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] cursor-pointer hover:opacity-80 transition-opacity ${
-                message.origin === 'merged' ? 'bg-purple-500/10 text-purple-600' :
-                'bg-teal-500/10 text-teal-600'
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity border ${
+                message.origin === 'merged' ? 'bg-blue-500/10 text-blue-600 border-blue-500/20' :
+                'bg-teal-500/10 text-teal-600 border-teal-500/20'
               }`}
             >
               <Icon

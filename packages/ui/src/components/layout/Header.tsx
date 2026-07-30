@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useState } from 'react'
+import { useMemo, useCallback, useState, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
@@ -145,6 +145,142 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
     if (activeTab) closeTab(activeTab.id)
   }, [activeTab, closeTab])
 
+  // ---- Selection mode & bulk operations (from ChatTab) ----
+  const selectionState = useChatStore(s => sessionId ? s.selectionBySession[sessionId] : undefined)
+  const selectionMode = selectionState?.mode ?? false
+  const selectedIndices = selectionState?.indices ?? new Set<number>()
+  const selectedCount = selectedIndices.size
+  const sessionMessages = sessionId ? useChatStore.getState().messagesBySession[sessionId] || [] : []
+  const totalMessageCount = sessionMessages.length
+
+  const handleToggleSelectionMode = useCallback(() => {
+    if (!sessionId) return
+    useChatStore.getState().toggleSelectionMode(sessionId)
+  }, [sessionId])
+
+  const handleSelectAll = useCallback(() => {
+    if (!sessionId) return
+    useChatStore.getState().selectAllMessages(sessionId)
+  }, [sessionId])
+
+  const handleClearSelection = useCallback(() => {
+    if (!sessionId) return
+    useChatStore.getState().clearSelection(sessionId)
+  }, [sessionId])
+
+  const afterBulkReload = useCallback(async () => {
+    if (!sessionId) return
+    const result = await synthApi.getSessionMessages(sessionId)
+    useChatStore.getState().setMessages(sessionId, result.messages)
+    useChatStore.getState().clearSelection(sessionId)
+  }, [sessionId])
+
+  const handleBulkPin = useCallback(async () => {
+    if (!sessionId) return
+    const indices = [...selectedIndices]
+    if (indices.length === 0) return
+    // Determine target state: if ALL are pinned → unpin, else → pin
+    const selectedMsgs = indices.map(i => sessionMessages[i]).filter(Boolean)
+    const allPinned = selectedMsgs.length > 0 && selectedMsgs.every(m => m.pinned)
+    const targetState = !allPinned
+    try {
+      await synthApi.batchMessages(sessionId, 'pin', indices, targetState)
+      await afterBulkReload()
+      notify({ text: targetState ? `Закреплено: ${indices.length}` : `Откреплено: ${indices.length}`, type: 'info', category: 'message', sessionId })
+    } catch (e) {
+      notify({ text: `Ошибка: ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
+    }
+  }, [sessionId, selectedIndices, sessionMessages, afterBulkReload, notify])
+
+  const handleBulkToggle = useCallback(async () => {
+    if (!sessionId) return
+    const indices = [...selectedIndices]
+    if (indices.length === 0) return
+    // Determine target state: if ALL are disabled → enable, else → disable
+    const selectedMsgs = indices.map(i => sessionMessages[i]).filter(Boolean)
+    const allDisabled = selectedMsgs.length > 0 && selectedMsgs.every(m => m.disabled)
+    const targetState = !allDisabled
+    try {
+      await synthApi.batchMessages(sessionId, 'toggle', indices, targetState)
+      await afterBulkReload()
+      notify({ text: targetState ? `Отключено: ${indices.length}` : `Включено: ${indices.length}`, type: 'info', category: 'message', sessionId })
+    } catch (e) {
+      notify({ text: `Ошибка: ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
+    }
+  }, [sessionId, selectedIndices, sessionMessages, afterBulkReload, notify])
+
+  const handleBulkDelete = useCallback(async () => {
+    if (!sessionId) return
+    const indices = [...selectedIndices]
+    if (indices.length === 0) return
+    if (!window.confirm(`Удалить ${indices.length} сообщений?`)) return
+    try {
+      await synthApi.batchMessages(sessionId, 'delete', indices)
+      await afterBulkReload()
+      notify({ text: `Удалено сообщений: ${indices.length}`, type: 'info', category: 'message', sessionId })
+    } catch (e) {
+      notify({ text: `Ошибка: ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
+    }
+  }, [sessionId, selectedIndices, afterBulkReload, notify])
+
+  const handleForward = useCallback(() => {
+    if (!sessionId) return
+    const indices = [...selectedIndices]
+    if (indices.length === 0) return
+    useUIStore.getState().enterForwardMode(sessionId, indices, 'forward')
+  }, [sessionId, selectedIndices])
+
+  const handleMerge = useCallback(() => {
+    if (!sessionId) return
+    useUIStore.getState().enterForwardMode(sessionId, [], 'merge')
+  }, [sessionId])
+
+  // Register forward confirm action
+  const forwardCallbackRef = useRef(false)
+  const handleForwardConfirm = useCallback(async (targetSessionId: string, position: 'after' | 'before', summarize: boolean) => {
+    const fm = useUIStore.getState().forwardMode
+    if (!fm.active || !fm.sourceSessionId || !sessionId) return
+
+    try {
+      const msgs = useChatStore.getState().messagesBySession[sessionId] || []
+      
+      if (fm.mode === 'forward') {
+        const sorted = [...fm.sourceIndices].sort((a, b) => a - b)
+        const selectedMsgs = sorted.map(i => msgs[i]).filter(Boolean)
+        if (selectedMsgs.length === 0) return
+        const lastSelected = selectedMsgs[selectedMsgs.length - 1]
+        // Use seq numbers, not indices
+        const fromSeq = selectedMsgs[0].seq ?? sorted[0] + 1
+        const toSeq = lastSelected.role === 'user' && selectedMsgs.length > 1
+          ? selectedMsgs[selectedMsgs.length - 2].seq ?? sorted[sorted.length - 2] + 1
+          : lastSelected.seq ?? sorted[sorted.length - 1] + 1
+
+        await synthApi.mergeMessages(targetSessionId, sessionId, { sourceRange: [fromSeq, toSeq], position })
+
+        if (lastSelected.role === 'user') {
+          useChatStore.getState().setRetryInput(targetSessionId, lastSelected.content)
+        }
+        notify({ text: 'Сообщения скопированы', type: 'success', category: 'message', sessionId })
+      } else {
+        await synthApi.addSessionReference(targetSessionId, sessionId, {
+          messageRange: [1, sessionMessages.length || 9999],
+          position,
+          autoSummarize: summarize,
+        })
+        notify({ text: 'Ссылка на сессию добавлена', type: 'success', category: 'message', sessionId })
+      }
+      useUIStore.getState().cancelForwardMode()
+    } catch (e) {
+      notify({ text: `Ошибка: ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
+    }
+  }, [sessionId, sessionMessages.length, notify])
+
+  // Register the callback so LeftPanel can call it
+  useUIStore.getState().forwardConfirmAction = handleForwardConfirm
+  if (!forwardCallbackRef.current) {
+    forwardCallbackRef.current = true
+  }
+
   return (
     <header className="flex h-9 items-center justify-between px-3 bg-background">
       <div className="flex items-center gap-3 min-w-0">
@@ -160,46 +296,127 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
 
         <span className="font-semibold text-foreground shrink-0">{headerTitle}</span>
 
-        {/* Chat context */}
+        {/* Chat context — always visible */}
         {isChatTab && (
-          <div className="flex items-center gap-1 ml-1">
-            <div
-              className="flex items-center gap-1"
-              title={`${lastInputTokens.toLocaleString()} / ${contextWindow.toLocaleString()}`}
-            >
-              <div className="h-1.5 w-12 rounded-full bg-foreground/10 overflow-hidden">
-                <div
-                  className="h-1.5 rounded-full bg-primary transition-all"
-                  style={{ width: `${Math.min(windowPercent, 100)}%` }}
-                />
+          <>
+            <div className="flex items-center gap-1 ml-1">
+              <div
+                className="flex items-center gap-1"
+                title={`${lastInputTokens.toLocaleString()} / ${contextWindow.toLocaleString()}`}
+              >
+                <div className="h-1.5 w-12 rounded-full bg-foreground/10 overflow-hidden">
+                  <div
+                    className="h-1.5 rounded-full bg-primary transition-all"
+                    style={{ width: `${Math.min(windowPercent, 100)}%` }}
+                  />
+                </div>
+                <span className="text-[10px] tabular-nums text-muted-foreground">{windowPercent}%</span>
               </div>
-              <span className="text-[10px] tabular-nums text-muted-foreground">{windowPercent}%</span>
+              {!isSubagentSession && (
+                <button
+                  onClick={handleSummarize}
+                  disabled={!canSummarize || summarizing}
+                  title={canSummarize ? t('rightPanel.context.summarizeNow') : t('rightPanel.context.notEnoughMessages')}
+                  className={cn(
+                    'shrink-0 rounded p-1 transition-colors',
+                    canSummarize && !summarizing
+                      ? 'text-muted-foreground hover:text-foreground hover:bg-interactive-hover'
+                      : 'text-muted-foreground opacity-30 cursor-default',
+                  )}
+                >
+                  <Icon name="subtract" className="size-3.5 text-amber-400" />
+                </button>
+              )}
+              {!isSubagentSession && (
+                <button
+                  onClick={handleClearSession}
+                  title={t('leftPanel.clearSession')}
+                  className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
+                >
+                  <Icon name="close" className="size-3.5 text-destructive" />
+                </button>
+              )}
+
+              {/* Selection toggle — always visible */}
+              {!selectionMode && (
+                <button
+                  onClick={handleToggleSelectionMode}
+                  className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
+                  title="Режим выделения"
+                >
+                  <Icon name="checkbox-multiple" className="size-3.5" />
+                </button>
+              )}
             </div>
-            {!isSubagentSession && (
-              <button
-                onClick={handleSummarize}
-                disabled={!canSummarize || summarizing}
-                title={canSummarize ? t('rightPanel.context.summarizeNow') : t('rightPanel.context.notEnoughMessages')}
-                className={cn(
-                  'shrink-0 rounded p-1 transition-colors',
-                  canSummarize && !summarizing
-                    ? 'text-muted-foreground hover:text-foreground hover:bg-interactive-hover'
-                    : 'text-muted-foreground opacity-30 cursor-default',
-                )}
-              >
-                <Icon name="subtract" className="size-3.5 text-amber-400" />
-              </button>
+
+            {/* Selection toolbar */}
+            {selectionMode && (
+              <div className="flex items-center gap-1 ml-1">
+                <button
+                  onClick={handleToggleSelectionMode}
+                  className="rounded px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10"
+                >
+                  ✕ Выйти
+                </button>
+                <button
+                  onClick={handleSelectAll}
+                  className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover"
+                >
+                  Выделить всё
+                </button>
+                <button
+                  onClick={handleClearSelection}
+                  className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover"
+                >
+                  Снять
+                </button>
+                <span className="text-[11px] text-muted-foreground mx-0.5">
+                  {selectedCount}/{totalMessageCount}
+                </span>
+                <button
+                  onClick={handleBulkPin}
+                  disabled={selectedCount === 0}
+                  className="rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover disabled:opacity-30"
+                  title="Закрепить"
+                >
+                  📌
+                </button>
+                <button
+                  onClick={handleBulkToggle}
+                  disabled={selectedCount === 0}
+                  className="rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover disabled:opacity-30"
+                  title="Отключить"
+                >
+                  👁
+                </button>
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={selectedCount === 0}
+                  className="rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-30"
+                  title="Удалить"
+                >
+                  🗑
+                </button>
+                <button
+                  onClick={handleForward}
+                  disabled={selectedCount === 0}
+                  className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover disabled:opacity-30"
+                  title="Переслать"
+                >
+                  ↗ Переслать
+                </button>
+              </div>
             )}
-            {!isSubagentSession && (
-              <button
-                onClick={handleClearSession}
-                title={t('leftPanel.clearSession')}
-                className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
-              >
-                <Icon name="close" className="size-3.5 text-destructive" />
-              </button>
-            )}
-          </div>
+
+            {/* Merge button — always visible, independent of selection */}
+            <button
+              onClick={handleMerge}
+              className="shrink-0 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors ml-1"
+              title="Слияние"
+            >
+              🔗 Слияние
+            </button>
+          </>
         )}
 
         {/* File viewer toolbar */}

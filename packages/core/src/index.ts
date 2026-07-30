@@ -42,6 +42,9 @@ export type { BuildSystemPromptParams, ContextBuilderOptions, SummarizationResul
 export { ChatOrchestrator } from './engine/orchestrator.js';
 export type { OrchestratorOptions, ProcessMessageResult, ModelPricing } from './engine/orchestrator.js';
 
+export { ModelRouter, ContentClassifier, ProviderPool, QualityChecker } from './engine/router/index.js';
+export type { RoutingRequest, RoutingDecision, ContentCategory, ClassifyRequest, ClassifyResult, QualityCheckInput, QualityCheckResult } from './engine/router/index.js';
+
 export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
 export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions } from './engine/agents/index.js';
 export { McpClient, McpManager } from './engine/mcp/index.js';
