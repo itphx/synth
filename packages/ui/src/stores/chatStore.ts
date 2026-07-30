@@ -54,6 +54,8 @@ export interface MessageData {
   metadata?: Record<string, unknown> | null
   created_at: string
   timestamp?: string
+  qa_pass?: boolean
+  qa_reason?: string
 }
 
 export interface LiveToolCall {

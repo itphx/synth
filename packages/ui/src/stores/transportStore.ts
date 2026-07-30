@@ -326,6 +326,17 @@ function createDispatcher(): EventDispatcher {
         }
         break
       }
+
+      case 'message.quality_check': {
+        const msgIndex = payload.message_index as number | undefined
+        if (msgIndex != null) {
+          useChatStore.getState().updateMessage(sid, msgIndex, {
+            qa_pass: payload.qa_pass as boolean | undefined,
+            qa_reason: payload.qa_reason as string | undefined,
+          })
+        }
+        break
+      }
     }
     } catch (e) {
       console.error('[TransportStore] Dispatcher error:', e, event)

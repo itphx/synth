@@ -93,6 +93,7 @@ export const dict = {
   'settings.category.agents': 'Агенты',
   'settings.category.mcp': 'MCP-серверы',
   'settings.category.notifications': 'Уведомления',
+  'settings.category.routing': 'Маршрутизация',
 
   // Appearance settings
   'settings.appearance.title': 'Внешний вид',
@@ -853,4 +854,28 @@ export const dict = {
   'merge.summarize': 'Сжать (суммаризация)',
   'merge.copy': 'Копировать',
   'merge.copied': 'Скопировано {count} сообщ.',
+
+  // Routing (AD-034)
+  'routing.title': 'Маршрутизация',
+  'routing.globalDescription': 'Глобальные настройки маршрутизации запросов по умолчанию для новых сессий.',
+  'routing.strategy': 'Стратегия',
+  'routing.strategy.auto': 'Авто',
+  'routing.strategy.content': 'Контентная',
+  'routing.strategy.cost': 'По стоимости',
+  'routing.strategy.contentCost': 'Контентная + стоимость',
+  'routing.content': 'Контентная',
+  'routing.content.coding': 'Кодинг',
+  'routing.content.chat': 'Чат',
+  'routing.content.research': 'Анализ',
+  'routing.escalation': 'Контроль качества',
+  'routing.escalation.fallback': 'Fallback',
+  'routing.escalation.minLength': 'Мин. длина ответа (симв.)',
+  'routing.cost': 'Стоимость',
+  'routing.cost.cheap': 'Дешёвая модель',
+  'routing.cost.threshold': 'Порог (токенов)',
+  'routing.subagent': 'Саб-агенты',
+  'routing.subagent.model': 'Модель',
+  'routing.subagent.modelAuto': 'Авто (как у агента)',
+  'routing.quality.pass': 'Качество: OK',
+  'routing.quality.fail': 'Качество: ошибка',
 };

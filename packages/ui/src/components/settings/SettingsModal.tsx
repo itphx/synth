@@ -7,6 +7,7 @@ import { AppearanceSettings } from "./AppearanceSettings"
 import { ProfileSettings } from "./ProfileSettings"
 import { NotificationSettings } from "./NotificationSettings"
 import { ChatSettings } from "./ChatSettings"
+import { RoutingSettings } from "./RoutingSettings"
 import { ProvidersPanel } from "../admin/ProvidersPanel"
 import { ModelsPanel } from "../admin/ModelsPanel"
 import { AgentsPanel } from "../admin/AgentsPanel"
@@ -17,6 +18,7 @@ const CATEGORIES = [
   { id: "appearance", labelKey: "settings.category.appearance" as const, icon: "palette" },
   { id: "notifications", labelKey: "settings.category.notifications" as const, icon: "alert" },
   { id: "chat", labelKey: "settings.category.chat" as const, icon: "chat-new" },
+  { id: "routing", labelKey: "settings.category.routing" as const, icon: "git-branch" },
   { id: "providers", labelKey: "settings.category.providers" as const, icon: "server" },
   { id: "models", labelKey: "settings.category.models" as const, icon: "cpu" },
   { id: "agents", labelKey: "settings.category.agents" as const, icon: "robot-2" },
@@ -65,6 +67,7 @@ export const SettingsModal = () => {
             {settingsPage === "appearance" && <AppearanceSettings />}
             {settingsPage === "notifications" && <NotificationSettings />}
             {settingsPage === "chat" && <ChatSettings />}
+            {settingsPage === "routing" && <RoutingSettings />}
             {settingsPage === "providers" && <ProvidersPanel />}
             {settingsPage === "models" && <ModelsPanel />}
             {settingsPage === "agents" && <AgentsPanel />}

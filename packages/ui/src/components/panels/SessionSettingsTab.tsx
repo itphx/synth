@@ -22,6 +22,9 @@ export function SessionSettingsTab() {
     loadModels,
   } = useProvidersStore()
 
+  const providers = useProvidersStore((s) => s.providers)
+  const models = useProvidersStore((s) => s.models)
+
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [debugEnabled, setDebugEnabled] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -31,6 +34,31 @@ export function SessionSettingsTab() {
 
   const [mcpServers, setMcpServers] = useState<Array<{ name: string; active: boolean }>>([])
   const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([])
+
+  // Роутинг (AD-034)
+  const [routingEnabled, setRoutingEnabled] = useState(false)
+  const [routingStrategy, setRoutingStrategy] = useState<'auto' | 'content' | 'cost' | 'content+cost'>('auto')
+  // Контентная
+  const [routingContentCodingProvider, setRoutingContentCodingProvider] = useState('')
+  const [routingContentCodingModel, setRoutingContentCodingModel] = useState('')
+  const [routingContentChatProvider, setRoutingContentChatProvider] = useState('')
+  const [routingContentChatModel, setRoutingContentChatModel] = useState('')
+  const [routingContentResearchProvider, setRoutingContentResearchProvider] = useState('')
+  const [routingContentResearchModel, setRoutingContentResearchModel] = useState('')
+  // Эскалация
+  const [routingEscalationEnabled, setRoutingEscalationEnabled] = useState(false)
+  const [routingEscalationFallbackProvider, setRoutingEscalationFallbackProvider] = useState('')
+  const [routingEscalationFallbackModel, setRoutingEscalationFallbackModel] = useState('')
+  const [routingEscalationMinLength, setRoutingEscalationMinLength] = useState(10)
+  // Стоимость
+  const [routingCostEnabled, setRoutingCostEnabled] = useState(false)
+  const [routingCostCheapProvider, setRoutingCostCheapProvider] = useState('')
+  const [routingCostCheapModel, setRoutingCostCheapModel] = useState('')
+  const [routingCostMaxTokens, setRoutingCostMaxTokens] = useState(500)
+  // Саб-агенты
+  const [routingSubagentEnabled, setRoutingSubagentEnabled] = useState(false)
+  const [routingSubagentModel, setRoutingSubagentModel] = useState('')
+  const [routingSubagentProvider, setRoutingSubagentProvider] = useState('')
 
   const activeTabId = useUIStore((s) => s.activeCenterTabId)
   const centerTabs = useUIStore((s) => s.centerTabs)
@@ -62,6 +90,40 @@ export function SessionSettingsTab() {
       if (sp) setSelectedProvider(sp)
       if (sm) setSelectedModel(sm)
       if (de !== undefined) setDebugEnabled(de)
+
+      // Routing settings
+      const re = session.settings.routingEnabled as boolean | undefined
+      const rs = session.settings.routingStrategy as 'auto' | 'content' | 'cost' | 'content+cost' | undefined
+      const rc = session.settings.routingContent as Record<string, { provider: string; model: string }> | undefined
+      const resc = session.settings.routingEscalation as Record<string, unknown> | undefined
+      const rcost = session.settings.routingCost as Record<string, unknown> | undefined
+      const sar = session.settings.subagentRouting as Record<string, unknown> | undefined
+
+      if (re !== undefined) setRoutingEnabled(re)
+      if (rs) setRoutingStrategy(rs)
+      if (rc?.coding?.provider) setRoutingContentCodingProvider(rc.coding.provider)
+      if (rc?.coding?.model) setRoutingContentCodingModel(rc.coding.model)
+      if (rc?.chat?.provider) setRoutingContentChatProvider(rc.chat.provider)
+      if (rc?.chat?.model) setRoutingContentChatModel(rc.chat.model)
+      if (rc?.research?.provider) setRoutingContentResearchProvider(rc.research.provider)
+      if (rc?.research?.model) setRoutingContentResearchModel(rc.research.model)
+      if (resc) {
+        if (resc.enabled !== undefined) setRoutingEscalationEnabled(resc.enabled as boolean)
+        if (resc.fallbackProvider) setRoutingEscalationFallbackProvider(resc.fallbackProvider as string)
+        if (resc.fallbackModel) setRoutingEscalationFallbackModel(resc.fallbackModel as string)
+        if (resc.minLength !== undefined) setRoutingEscalationMinLength(resc.minLength as number)
+      }
+      if (rcost) {
+        if (rcost.enabled !== undefined) setRoutingCostEnabled(rcost.enabled as boolean)
+        if (rcost.cheapProvider) setRoutingCostCheapProvider(rcost.cheapProvider as string)
+        if (rcost.cheapModel) setRoutingCostCheapModel(rcost.cheapModel as string)
+        if (rcost.maxCheapTokens !== undefined) setRoutingCostMaxTokens(rcost.maxCheapTokens as number)
+      }
+      if (sar) {
+        if (sar.enabled !== undefined) setRoutingSubagentEnabled(sar.enabled as boolean)
+        if (sar.model) setRoutingSubagentModel(sar.model as string)
+        if (sar.provider) setRoutingSubagentProvider(sar.provider as string)
+      }
     }
   }, [session])
 
@@ -80,6 +142,31 @@ export function SessionSettingsTab() {
           model: selectedModelName,
           debugEnabled: debugEnabled,
           mcpServers: selectedMcpServers,
+          routingEnabled,
+          routingStrategy,
+          routingContent: {
+            coding: { provider: routingContentCodingProvider, model: routingContentCodingModel },
+            chat: { provider: routingContentChatProvider, model: routingContentChatModel },
+            research: { provider: routingContentResearchProvider, model: routingContentResearchModel },
+          },
+          routingEscalation: {
+            enabled: routingEscalationEnabled,
+            fallbackProvider: routingEscalationFallbackProvider,
+            fallbackModel: routingEscalationFallbackModel,
+            checks: ['min_length' as const],
+            minLength: routingEscalationMinLength,
+          },
+          routingCost: {
+            enabled: routingCostEnabled,
+            cheapProvider: routingCostCheapProvider,
+            cheapModel: routingCostCheapModel,
+            maxCheapTokens: routingCostMaxTokens,
+          },
+          subagentRouting: {
+            enabled: routingSubagentEnabled,
+            model: routingSubagentModel,
+            provider: routingSubagentProvider || undefined,
+          },
         },
       })
       notify({ text: t('sessionSettings.saved'), type: 'success', category: 'system', sessionId: sessionId || undefined })
@@ -123,6 +210,176 @@ export function SessionSettingsTab() {
 
         <Section title={t('sessionSettings.providerModel')}>
           <ModelSelector sessionId={sessionId} />
+        </Section>
+
+        {/* === Маршрутизация (AD-034) === */}
+        <Section title={t('routing.title')}>
+          <div className="space-y-3">
+            {/* Вкл/Выкл */}
+            <label className="flex items-center gap-3 cursor-pointer">
+              <Toggle enabled={routingEnabled} onToggle={() => setRoutingEnabled(!routingEnabled)} />
+              <span className="text-xs text-foreground">
+                {routingEnabled ? t('common.enabled') : t('common.disabled')}
+              </span>
+            </label>
+
+            {routingEnabled && (
+              <>
+                {/* Стратегия */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">
+                    {t('routing.strategy')}
+                  </label>
+                  <select
+                    value={routingStrategy}
+                    onChange={(e) => setRoutingStrategy(e.target.value as typeof routingStrategy)}
+                    className="w-full rounded-md bg-interactive border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                  >
+                    <option value="auto">{t('routing.strategy.auto')}</option>
+                    <option value="content">{t('routing.strategy.content')}</option>
+                    <option value="cost">{t('routing.strategy.cost')}</option>
+                    <option value="content+cost">{t('routing.strategy.contentCost')}</option>
+                  </select>
+                </div>
+
+                {/* Контентная */}
+                <div className="space-y-2 pl-2 border-l-2 border-border/30">
+                  <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">
+                    📝 {t('routing.content')}
+                  </span>
+                  <RoutingModelPair
+                    label={t('routing.content.coding')}
+                    provider={routingContentCodingProvider}
+                    model={routingContentCodingModel}
+                    providers={providers}
+                    models={models}
+                    onProviderChange={setRoutingContentCodingProvider}
+                    onModelChange={setRoutingContentCodingModel}
+                  />
+                  <RoutingModelPair
+                    label={t('routing.content.chat')}
+                    provider={routingContentChatProvider}
+                    model={routingContentChatModel}
+                    providers={providers}
+                    models={models}
+                    onProviderChange={setRoutingContentChatProvider}
+                    onModelChange={setRoutingContentChatModel}
+                  />
+                  <RoutingModelPair
+                    label={t('routing.content.research')}
+                    provider={routingContentResearchProvider}
+                    model={routingContentResearchModel}
+                    providers={providers}
+                    models={models}
+                    onProviderChange={setRoutingContentResearchProvider}
+                    onModelChange={setRoutingContentResearchModel}
+                  />
+                </div>
+
+                {/* Эскалация */}
+                <div className="space-y-2 pl-2 border-l-2 border-border/30">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">
+                      ⚠️ {t('routing.escalation')}
+                    </span>
+                    <Toggle enabled={routingEscalationEnabled} onToggle={() => setRoutingEscalationEnabled(!routingEscalationEnabled)} />
+                  </div>
+                  {routingEscalationEnabled && (
+                    <>
+                      <RoutingModelPair
+                        label={t('routing.escalation.fallback')}
+                        provider={routingEscalationFallbackProvider}
+                        model={routingEscalationFallbackModel}
+                        providers={providers}
+                        models={models}
+                        onProviderChange={setRoutingEscalationFallbackProvider}
+                        onModelChange={setRoutingEscalationFallbackModel}
+                      />
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">{t('routing.escalation.minLength')}</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={routingEscalationMinLength}
+                          onChange={(e) => setRoutingEscalationMinLength(Number(e.target.value) || 1)}
+                          className="w-16 rounded-md bg-interactive border border-border px-2 py-0.5 text-xs text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Стоимость */}
+                <div className="space-y-2 pl-2 border-l-2 border-border/30">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">
+                      💰 {t('routing.cost')}
+                    </span>
+                    <Toggle enabled={routingCostEnabled} onToggle={() => setRoutingCostEnabled(!routingCostEnabled)} />
+                  </div>
+                  {routingCostEnabled && (
+                    <>
+                      <RoutingModelPair
+                        label={t('routing.cost.cheap')}
+                        provider={routingCostCheapProvider}
+                        model={routingCostCheapModel}
+                        providers={providers}
+                        models={models}
+                        onProviderChange={setRoutingCostCheapProvider}
+                        onModelChange={setRoutingCostCheapModel}
+                      />
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">{t('routing.cost.threshold')}</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={routingCostMaxTokens}
+                          onChange={(e) => setRoutingCostMaxTokens(Number(e.target.value) || 1)}
+                          className="w-20 rounded-md bg-interactive border border-border px-2 py-0.5 text-xs text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Саб-агенты */}
+                <div className="space-y-2 pl-2 border-l-2 border-border/30">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">
+                      🤖 {t('routing.subagent')}
+                    </span>
+                    <Toggle enabled={routingSubagentEnabled} onToggle={() => setRoutingSubagentEnabled(!routingSubagentEnabled)} />
+                  </div>
+                  {routingSubagentEnabled && (
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] text-muted-foreground/60">{t('routing.subagent.model')}</label>
+                      <select
+                        value={routingSubagentProvider ? `${routingSubagentProvider}:${routingSubagentModel}` : 'auto'}
+                        onChange={(e) => {
+                          if (e.target.value === 'auto') {
+                            setRoutingSubagentProvider('')
+                            setRoutingSubagentModel('')
+                          } else {
+                            const [p, ...rest] = e.target.value.split(':')
+                            setRoutingSubagentProvider(p!)
+                            setRoutingSubagentModel(rest.join(':'))
+                          }
+                        }}
+                        className="w-full rounded-md bg-interactive border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                      >
+                        <option value="auto">{t('routing.subagent.modelAuto')}</option>
+                        {models.filter((m) => m.enabled).map((m) => (
+                          <option key={`${m.provider}:${m.name}`} value={`${m.provider}:${m.name}`}>
+                            {m.provider}/{m.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         </Section>
 
         <Section title={t('sessionSettings.debug')}>
@@ -236,6 +493,62 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
     <div className="flex items-center justify-between text-xs">
       <span className="text-muted-foreground">{label}</span>
       <span className={mono ? 'font-mono text-[11px]' : ''}>{value}</span>
+    </div>
+  )
+}
+
+interface ProviderLike { name: string; enabled: boolean }
+interface ModelLike { name: string; provider: string; enabled: boolean }
+
+function RoutingModelPair({
+  label,
+  provider,
+  model,
+  providers,
+  models,
+  onProviderChange,
+  onModelChange,
+}: {
+  label: string
+  provider: string
+  model: string
+  providers: ProviderLike[]
+  models: ModelLike[]
+  onProviderChange: (v: string) => void
+  onModelChange: (v: string) => void
+}) {
+  const availableProviders = providers.filter((p) => p.enabled)
+  const filteredModels = models.filter((m) => m.enabled && (!provider || m.provider === provider))
+
+  return (
+    <div className="space-y-1">
+      <span className="text-[10px] text-muted-foreground/60">{label}</span>
+      <div className="flex gap-1">
+        <select
+          value={provider}
+          onChange={(e) => {
+            onProviderChange(e.target.value)
+            onModelChange('')
+          }}
+          className="flex-1 min-w-0 rounded-md bg-interactive border border-border px-1.5 py-0.5 text-[10px] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+        >
+          <option value="">Провайдер</option>
+          {availableProviders.map((p) => (
+            <option key={p.name} value={p.name}>{p.name}</option>
+          ))}
+        </select>
+        <select
+          value={model}
+          onChange={(e) => onModelChange(e.target.value)}
+          className="flex-1 min-w-0 rounded-md bg-interactive border border-border px-1.5 py-0.5 text-[10px] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          disabled={!provider}
+        >
+          <option value="">Модель</option>
+          {filteredModels.map((m) => (
+            <option key={m.name} value={m.name}>{m.name}</option>
+          ))}
+        </select>
+      </div>
     </div>
   )
 }

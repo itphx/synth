@@ -94,6 +94,7 @@ export const dict = {
   'settings.category.agents': 'Agents',
   'settings.category.mcp': 'MCP Servers',
   'settings.category.notifications': 'Notifications',
+  'settings.category.routing': 'Routing',
 
   // Appearance settings
   'settings.appearance.title': 'Appearance',
@@ -857,4 +858,28 @@ export const dict = {
   'merge.summarize': 'Summarize',
   'merge.copy': 'Copy',
   'merge.copied': 'Copied {count} msgs',
+
+  // Routing (AD-034)
+  'routing.title': 'Routing',
+  'routing.globalDescription': 'Default routing settings for new sessions.',
+  'routing.strategy': 'Strategy',
+  'routing.strategy.auto': 'Auto',
+  'routing.strategy.content': 'Content',
+  'routing.strategy.cost': 'Cost',
+  'routing.strategy.contentCost': 'Content + Cost',
+  'routing.content': 'Content',
+  'routing.content.coding': 'Coding',
+  'routing.content.chat': 'Chat',
+  'routing.content.research': 'Research',
+  'routing.escalation': 'Quality Check',
+  'routing.escalation.fallback': 'Fallback',
+  'routing.escalation.minLength': 'Min reply length (chars)',
+  'routing.cost': 'Cost',
+  'routing.cost.cheap': 'Cheap model',
+  'routing.cost.threshold': 'Threshold (tokens)',
+  'routing.subagent': 'Sub-agents',
+  'routing.subagent.model': 'Model',
+  'routing.subagent.modelAuto': 'Auto (same as agent)',
+  'routing.quality.pass': 'Quality: OK',
+  'routing.quality.fail': 'Quality: ERROR',
 };

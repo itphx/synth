@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { ProviderIcon } from '@/components/admin/ProviderIcon'
+import { QualityBadge } from './QualityBadge'
 import { resolveColor } from '@/lib/utils'
 
 interface MessageHeaderProps {
@@ -101,6 +102,10 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick }: MessageHeade
           <ProviderIcon icon={providerIcon} baseUrl={providerUrl} size={12} className="shrink-0" />
           <span>{message.model}</span>
         </span>
+      )}
+
+      {message.qa_pass !== undefined && (
+        <QualityBadge qa_pass={message.qa_pass} qa_reason={message.qa_reason} />
       )}
 
       {formatted || (message.origin === 'merged' || message.origin === 'crosspost') ? (
