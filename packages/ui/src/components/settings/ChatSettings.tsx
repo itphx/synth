@@ -16,8 +16,10 @@ export const ChatSettings = () => {
 
       <div className="space-y-3">
         <label className="text-sm font-medium">{t('chatSettings.intermediateTextDisplay')}</label>
-        <div className="flex gap-2">
+        <div className="flex gap-2" role="radiogroup" aria-label={t('chatSettings.intermediateTextDisplay')}>
           <button
+            role="radio"
+            aria-checked={intermediateTextDisplay !== 'bottom'}
             onClick={() => setIntermediateTextDisplay('inline')}
             className={cn(
               "px-4 py-2 rounded-lg text-sm font-medium transition-colors",
@@ -29,6 +31,8 @@ export const ChatSettings = () => {
             {t('chatSettings.intermediateTextInline')}
           </button>
           <button
+            role="radio"
+            aria-checked={intermediateTextDisplay === 'bottom'}
             onClick={() => setIntermediateTextDisplay('bottom')}
             className={cn(
               "px-4 py-2 rounded-lg text-sm font-medium transition-colors",

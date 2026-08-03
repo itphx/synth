@@ -3,6 +3,7 @@ import { Icon } from '../icon/Icon'
 import { useMcpStore } from '../../stores/mcpStore'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
+import { ConfirmDialog } from '../ui/confirm-dialog'
 import type { McpServerConfig } from '../../lib/api/synthApi'
 
 const EMPTY_CONFIG: McpServerConfig = { type: 'stdio' }
@@ -14,7 +15,11 @@ export const McpSettings = () => {
   const [formName, setFormName] = useState('')
   const [formConfig, setFormConfig] = useState<McpServerConfig>(EMPTY_CONFIG)
   const [testResult, setTestResult] = useState<string | null>(null)
+  const [testSucceeded, setTestSucceeded] = useState<boolean | null>(null)
   const [testing, setTesting] = useState(false)
+
+  // Delete confirmation state
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
 
   useEffect(() => {
     fetchServers()
@@ -25,6 +30,7 @@ export const McpSettings = () => {
     setFormName('')
     setFormConfig({ type: 'stdio' })
     setTestResult(null)
+    setTestSucceeded(null)
   }
 
   const openEdit = (name: string) => {
@@ -34,11 +40,13 @@ export const McpSettings = () => {
     setFormName(name)
     setFormConfig({ ...entry.config })
     setTestResult(null)
+    setTestSucceeded(null)
   }
 
   const closeForm = () => {
     setEditing(null)
     setTestResult(null)
+    setTestSucceeded(null)
   }
 
   const handleSave = async () => {
@@ -55,9 +63,10 @@ export const McpSettings = () => {
     }
   }
 
-  const handleDelete = async (name: string) => {
-    if (!confirm(`Удалить MCP-сервер "${name}"?`)) return
-    await deleteServer(name)
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return
+    await deleteServer(deleteTarget)
+    setDeleteTarget(null)
   }
 
   const handleToggle = async (name: string, currentConfig: McpServerConfig) => {
@@ -68,12 +77,15 @@ export const McpSettings = () => {
     if (!formName.trim()) return
     setTesting(true)
     setTestResult(null)
+    setTestSucceeded(null)
     const result = await testServer(formName.trim(), formConfig)
     setTesting(false)
     if (result.success) {
-      setTestResult(`Подключение успешно. Инструментов: ${result.toolCount ?? 0}`)
+      setTestResult(t('mcp.testSuccess', { count: result.toolCount ?? 0 }))
+      setTestSucceeded(true)
     } else {
-      setTestResult(`Ошибка: ${result.error ?? 'неизвестная ошибка'}`)
+      setTestResult(t('mcp.testError', { error: result.error ?? 'unknown' }))
+      setTestSucceeded(false)
     }
   }
 
@@ -95,6 +107,9 @@ export const McpSettings = () => {
       .join('\n')
   }
 
+  // Убираем хрупкий startsWith — используем testSucceeded state
+  // (замена isTestSuccess = testResult?.startsWith(...))
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -106,7 +121,7 @@ export const McpSettings = () => {
         </div>
         <button
           onClick={openAdd}
-          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-interactive-accent text-interactive-accent-foreground hover:opacity-90 transition-colors"
         >
           <Icon name="add" className="size-3.5" />
           {t('common.add')}
@@ -115,7 +130,7 @@ export const McpSettings = () => {
       <p className="text-sm text-muted-foreground">{t('mcp.description')}</p>
 
       {error && (
-        <div className="p-3 rounded-lg bg-red-900/20 text-red-400 text-sm">{error}</div>
+        <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{error}</div>
       )}
 
       {loading && servers === null && (
@@ -231,11 +246,12 @@ export const McpSettings = () => {
             {/* Test result */}
             {testResult && (
               <div
-                className={`p-2 rounded text-sm ${
-                  testResult.startsWith('Подключение успешно')
-                    ? 'bg-green-900/20 text-green-400'
-                    : 'bg-red-900/20 text-red-400'
-                }`}
+                className={cn(
+                  "p-2 rounded text-sm",
+                  testSucceeded
+                    ? "bg-success/10 text-success"
+                    : "bg-destructive/10 text-destructive"
+                )}
               >
                 {testResult}
               </div>
@@ -259,8 +275,8 @@ export const McpSettings = () => {
             </button>
             {editing !== '__new__' && (
               <button
-                onClick={() => handleDelete(formName.trim())}
-                className="px-4 py-2 rounded-lg border border-red-900/40 text-red-400 text-sm hover:bg-red-900/20 ml-auto"
+                onClick={() => setDeleteTarget(formName.trim())}
+                className="px-4 py-2 rounded-lg border border-destructive/40 text-destructive text-sm hover:bg-destructive/10 ml-auto"
               >
                 {t('common.delete')}
               </button>
@@ -294,13 +310,13 @@ export const McpSettings = () => {
               )}
             >
               <span
-                title={entry.config.enabledByDefault ? 'Включён по умолчанию' : 'Не включён по умолчанию'}
+                title={entry.config.enabledByDefault ? t('mcp.enabledByDefaultTitle') : t('mcp.disabledByDefaultTitle')}
               >
                 <Icon
                   name="checkbox"
                   className={cn(
                     "size-4 shrink-0",
-                    entry.config.enabledByDefault ? "text-green-500" : "text-gray-500"
+                    entry.config.enabledByDefault ? "text-interactive-accent" : "text-muted-foreground/40"
                   )}
                 />
               </span>
@@ -310,33 +326,35 @@ export const McpSettings = () => {
                   {entry.config.type === 'stdio'
                     ? `stdio: ${entry.config.command || '?'}`
                     : `sse: ${entry.config.url || '?'}`}
-                  {entry.config.enabledByDefault && ' · авто'}
+                  {entry.config.enabledByDefault && ` · ${t('mcp.autoEnabled')}`}
                 </div>
               </div>
               <button
                 onClick={() => handleToggle(name, entry.config)}
+                role="switch"
+                aria-checked={entry.config.enabled !== false}
+                aria-label={entry.config.enabled !== false ? t('mcp.disable') : t('mcp.enable')}
                 className={cn(
                   "relative w-9 h-5 rounded-full transition-colors shrink-0",
-                  entry.config.enabled !== false ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
+                  entry.config.enabled !== false ? 'bg-primary' : 'bg-muted-foreground/20'
                 )}
-                title={entry.config.enabled !== false ? 'Отключить' : 'Включить'}
               >
                 <span className={cn(
-                  "absolute top-0.5 size-4 rounded-full bg-white transition-all shadow-sm",
-                  entry.config.enabled !== false ? 'right-0.5' : 'left-0.5'
+                  "block size-3.5 rounded-full bg-card shadow-sm transition-transform",
+                  entry.config.enabled !== false ? 'translate-x-[19px]' : 'translate-x-[3px]'
                 )} />
               </button>
               <button
                 onClick={() => openEdit(name)}
                 className="p-1.5 rounded-lg hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
-                title="Редактировать"
+                aria-label={t('mcp.edit')}
               >
                 <Icon name="edit-2" className="size-4" />
               </button>
               <button
-                onClick={() => handleDelete(name)}
-                className="p-1.5 rounded-lg hover:bg-red-900/20 text-muted-foreground hover:text-red-400 transition-colors"
-                title="Удалить"
+                onClick={() => setDeleteTarget(name)}
+                className="p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                aria-label={t('mcp.delete')}
               >
                 <Icon name="delete-bin" className="size-4" />
               </button>
@@ -344,6 +362,18 @@ export const McpSettings = () => {
           ))}
         </div>
       )}
+
+      {/* Delete confirmation */}
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={() => setDeleteTarget(null)}
+        title={t('mcp.deleteConfirm')}
+        message={deleteTarget ? t('mcp.deleteConfirmMessage', { name: deleteTarget }) : ''}
+        confirmLabel={t('common.delete')}
+        variant="danger"
+        icon="delete-bin"
+        onConfirm={handleDeleteConfirm}
+      />
     </div>
   )
 }

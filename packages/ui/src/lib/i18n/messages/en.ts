@@ -842,6 +842,17 @@ export const dict = {
   'mcp.url': 'URL',
   'mcp.enabledByDefault': 'Enabled by default for new sessions',
   'mcp.testConnection': 'Test Connection',
+  'mcp.testSuccess': 'Connection successful. Tools: {count}',
+  'mcp.testError': 'Error: {error}',
+  'mcp.enable': 'Enable',
+  'mcp.disable': 'Disable',
+  'mcp.edit': 'Edit',
+  'mcp.delete': 'Delete',
+  'mcp.deleteConfirm': 'Delete MCP server?',
+  'mcp.deleteConfirmMessage': 'Are you sure you want to delete server «{name}»?',
+  'mcp.autoEnabled': 'auto',
+  'mcp.enabledByDefaultTitle': 'Enabled by default',
+  'mcp.disabledByDefaultTitle': 'Not enabled by default',
 
   // Reference & Merge
   'reference.title': 'Add Session Reference',

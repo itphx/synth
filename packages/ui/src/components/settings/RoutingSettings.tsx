@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useProvidersStore } from '@/stores/providersStore'
 import { Toggle } from '../ui/Toggle'
+import { Icon } from '../icon/Icon'
 
 const STORAGE_KEY = 'synth-routing-defaults'
 
@@ -158,7 +159,7 @@ export function RoutingSettings() {
 
             {/* Контентная */}
             <div className="space-y-3 pl-4 border-l-2 border-border/30">
-              <span className="text-sm font-medium">📝 {t('routing.content')}</span>
+              <span className="text-sm font-medium"><Icon name="code-s-slash" className="size-4 inline-block -mt-0.5 mr-1.5 text-muted-foreground" />{t('routing.content')}</span>
               <ModelPairRow
                 label={t('routing.content.coding')}
                 provider={settings.routingContent.coding.provider}
@@ -191,7 +192,7 @@ export function RoutingSettings() {
             {/* Эскалация */}
             <div className="space-y-3 pl-4 border-l-2 border-border/30">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">⚠️ {t('routing.escalation')}</span>
+                <span className="text-sm font-medium"><Icon name="shield-check" className="size-4 inline-block -mt-0.5 mr-1.5 text-muted-foreground" />{t('routing.escalation')}</span>
                 <Toggle enabled={settings.routingEscalation.enabled} onToggle={() => updateEscalation({ enabled: !settings.routingEscalation.enabled })} />
               </div>
               {settings.routingEscalation.enabled && (
@@ -212,7 +213,7 @@ export function RoutingSettings() {
                       min={1}
                       value={settings.routingEscalation.minLength}
                       onChange={(e) => updateEscalation({ minLength: Number(e.target.value) || 1 })}
-                      className="w-20 rounded-md bg-input border border-border px-2 py-1 text-sm text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
+                      className="w-20 rounded-md bg-input border border-border px-2 py-1 text-sm text-foreground text-right tabular-nums focus:outline-none focus:ring-1 focus:ring-ring"
                     />
                   </div>
                 </>
@@ -222,7 +223,7 @@ export function RoutingSettings() {
             {/* Стоимость */}
             <div className="space-y-3 pl-4 border-l-2 border-border/30">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">💰 {t('routing.cost')}</span>
+                <span className="text-sm font-medium"><Icon name="database-2" className="size-4 inline-block -mt-0.5 mr-1.5 text-muted-foreground" />{t('routing.cost')}</span>
                 <Toggle enabled={settings.routingCost.enabled} onToggle={() => updateCost({ enabled: !settings.routingCost.enabled })} />
               </div>
               {settings.routingCost.enabled && (
@@ -243,7 +244,7 @@ export function RoutingSettings() {
                       min={1}
                       value={settings.routingCost.maxCheapTokens}
                       onChange={(e) => updateCost({ maxCheapTokens: Number(e.target.value) || 1 })}
-                      className="w-20 rounded-md bg-input border border-border px-2 py-1 text-sm text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
+                      className="w-20 rounded-md bg-input border border-border px-2 py-1 text-sm text-foreground text-right tabular-nums focus:outline-none focus:ring-1 focus:ring-ring"
                     />
                   </div>
                 </>
@@ -253,7 +254,7 @@ export function RoutingSettings() {
             {/* Саб-агенты */}
             <div className="space-y-3 pl-4 border-l-2 border-border/30">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">🤖 {t('routing.subagent')}</span>
+                <span className="text-sm font-medium"><Icon name="robot-2" className="size-4 inline-block -mt-0.5 mr-1.5 text-muted-foreground" />{t('routing.subagent')}</span>
                 <Toggle enabled={settings.subagentRouting.enabled} onToggle={() => updateSubagent({ enabled: !settings.subagentRouting.enabled })} />
               </div>
               {settings.subagentRouting.enabled && (
@@ -312,7 +313,7 @@ function DictionarySection({ language }: { language: string }) {
   return (
     <div className="space-y-3 pl-4 border-l-2 border-border/30">
       <details className="space-y-2">
-        <summary className="text-sm font-medium cursor-pointer">📖 Словари классификации</summary>
+        <summary className="text-sm font-medium cursor-pointer flex items-center gap-1.5"><Icon name="book-open" className="size-4 text-muted-foreground" /> Словари классификации</summary>
         <div className="pt-2 space-y-3">
           <div>
             <span className="text-xs text-muted-foreground">coding — ключевые слова ({codingKeywords.length}):</span>
@@ -364,11 +365,12 @@ function ModelPairRow({
       <div className="flex gap-2">
         <select
           value={provider}
+          aria-label="Провайдер"
           onChange={(e) => {
             onProviderChange(e.target.value)
             onModelChange('')
           }}
-          className="flex-1 rounded-md bg-input border border-border px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          className="flex-1 min-w-0 rounded-md bg-input border border-border px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
         >
           <option value="">Провайдер</option>
           {providers.map((p) => (
@@ -377,8 +379,9 @@ function ModelPairRow({
         </select>
         <select
           value={model}
+          aria-label="Модель"
           onChange={(e) => onModelChange(e.target.value)}
-          className="flex-1 rounded-md bg-input border border-border px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          className="flex-1 min-w-0 rounded-md bg-input border border-border px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           disabled={!provider}
         >
           <option value="">Модель</option>

@@ -1,5 +1,5 @@
 import { Fragment } from "react"
-import { Dialog, DialogContent } from "../ui/dialog"
+import { Dialog, DialogClose, DialogContent } from "../ui/dialog"
 import { Icon } from "../icon/Icon"
 import { useUIStore } from "../../stores/useUIStore"
 import { useAuthStore } from "@/stores/authStore"
@@ -65,17 +65,25 @@ export const SettingsModal = () => {
   return (
     <Dialog open={isSettingsDialogOpen} onOpenChange={setSettingsDialogOpen}>
       <DialogContent
-        className="p-0 gap-0 max-w-5xl w-[95vw] h-[90vh] max-h-[90vh]"
+        className="p-0 gap-0 max-w-5xl w-[95vw] h-[90vh] max-h-[90vh] md:max-h-[85vh] shadow-xl"
         showCloseButton={false}
       >
-        <div className="flex h-full overflow-hidden">
+        <div className="flex h-full overflow-hidden overscroll-behavior-contain">
           {/* Left sidebar */}
-          <div className="w-48 border-r border-border flex flex-col shrink-0">
+          <div className="w-48 md:w-52 border-r border-border flex flex-col shrink-0">
             <div className="flex items-center gap-2 px-4 h-12 border-b border-border">
               <Icon name="settings" className="size-4 text-muted-foreground" />
               <span className="font-medium text-sm">{t('settings.title')}</span>
+              <div className="ml-auto">
+                <DialogClose
+                  className="rounded-lg p-1.5 opacity-70 transition-opacity hover:opacity-100 hover:bg-interactive-hover text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                  aria-label={t('common.close')}
+                >
+                  <Icon name="close" className="size-4" />
+                </DialogClose>
+              </div>
             </div>
-            <nav className="flex-1 overflow-y-auto p-2">
+            <nav className="flex-1 overflow-y-auto p-2" aria-label={t('settings.title')}>
               {visibleCategories.map((cat, idx) => (
                 <Fragment key={cat.id}>
                   {idx === adminBoundaryIndex && (
@@ -83,8 +91,9 @@ export const SettingsModal = () => {
                   )}
                   <button
                     onClick={() => setSettingsPage(cat.id)}
+                    aria-current={settingsPage === cat.id ? 'page' : undefined}
                     className={cn(
-                      "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition-colors",
+                      "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition-[transform,color] duration-150 active:scale-[0.96]",
                       settingsPage === cat.id
                         ? "bg-interactive-selection text-interactive-selection-foreground"
                         : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
@@ -99,7 +108,7 @@ export const SettingsModal = () => {
           </div>
 
           {/* Right content */}
-          <div className="flex-1 overflow-y-auto p-6">
+          <div className="flex-1 overflow-y-auto p-6 overscroll-behavior-contain">
             {settingsPage === "profile" && <ProfileSettings />}
             {settingsPage === "appearance" && <AppearanceSettings />}
             {settingsPage === "notifications" && <NotificationSettings />}

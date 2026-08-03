@@ -838,6 +838,17 @@ export const dict = {
   'mcp.url': 'URL',
   'mcp.enabledByDefault': 'Включён по умолчанию для новых сессий',
   'mcp.testConnection': 'Проверить подключение',
+  'mcp.testSuccess': 'Подключение успешно. Инструментов: {count}',
+  'mcp.testError': 'Ошибка: {error}',
+  'mcp.enable': 'Включить',
+  'mcp.disable': 'Отключить',
+  'mcp.edit': 'Редактировать',
+  'mcp.delete': 'Удалить',
+  'mcp.deleteConfirm': 'Удалить MCP-сервер?',
+  'mcp.deleteConfirmMessage': 'Вы уверены, что хотите удалить сервер «{name}»?',
+  'mcp.autoEnabled': 'авто',
+  'mcp.enabledByDefaultTitle': 'Включён по умолчанию',
+  'mcp.disabledByDefaultTitle': 'Не включён по умолчанию',
 
   // Reference & Merge
   'reference.title': 'Прикрепить ссылку на сессию',

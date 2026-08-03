@@ -5,9 +5,9 @@ import { THEME_PRESETS } from "@/lib/theme/themes"
 import type { ThemeMode } from "@/types/theme"
 import { useThemeSystem } from "@/contexts/useThemeSystem"
 import { useI18n } from "@/lib/i18n"
-import { Icon } from '@/components/icon/Icon'
 import { cn } from "@/lib/utils"
 import { profileService } from '@/lib/api/profileService'
+import { ConfirmDialog } from '../ui/confirm-dialog'
 
 const THEME_MODE_OPTIONS: { value: ThemeMode; labelKey: string }[] = [
   { value: "system", labelKey: 'settings.appearance.themeMode.system' },
@@ -97,10 +97,12 @@ export const AppearanceSettings = () => {
       {/* Theme mode */}
       <div className="space-y-3">
         <label className="text-sm font-medium">{t('settings.appearance.themeMode.label')}</label>
-        <div className="flex gap-2">
+        <div className="flex gap-2" role="radiogroup" aria-label={t('settings.appearance.themeMode.label')}>
           {THEME_MODE_OPTIONS.map((option) => (
             <button
               key={option.value}
+              role="radio"
+              aria-checked={themeMode === option.value}
               onClick={() => handleThemeModeChange(option.value)}
               className={cn(
                 "px-4 py-2 rounded-lg text-sm font-medium transition-colors",
@@ -167,43 +169,16 @@ export const AppearanceSettings = () => {
       </div>
 
       {/* Reset confirmation dialog */}
-      {showResetConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-background rounded-xl border p-6 max-w-sm w-full mx-4 shadow-lg">
-            <div className="flex items-start gap-3 mb-4">
-              <Icon name="alert" className="size-5 text-warning mt-0.5" />
-              <div>
-                <h3 className="font-semibold text-foreground">{t('auth.resetVisualSettings')}</h3>
-                <p className="text-sm text-muted-foreground mt-1">{t('auth.resetConfirm')}</p>
-              </div>
-            </div>
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={() => setShowResetConfirm(false)}
-                className={cn(
-                  "px-4 py-2 rounded-lg text-sm font-medium",
-                  "text-muted-foreground hover:bg-interactive-hover",
-                  "transition-colors"
-                )}
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                onClick={handleResetToDefaults}
-                disabled={isResetting}
-                className={cn(
-                  "px-4 py-2 rounded-lg text-sm font-medium",
-                  "bg-destructive text-destructive-foreground hover:bg-destructive/90",
-                  "disabled:opacity-50",
-                  "transition-colors"
-                )}
-              >
-                {isResetting ? t('common.loading') : t('auth.resetVisualSettings')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={showResetConfirm}
+        onOpenChange={setShowResetConfirm}
+        title={t('auth.resetVisualSettings')}
+        message={t('auth.resetConfirm')}
+        confirmLabel={isResetting ? t('common.loading') : t('auth.resetVisualSettings')}
+        variant="warning"
+        icon="alert"
+        onConfirm={handleResetToDefaults}
+      />
     </div>
   )
 }

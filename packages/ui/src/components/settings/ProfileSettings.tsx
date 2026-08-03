@@ -153,8 +153,9 @@ export const ProfileSettings = () => {
         </div>
 
         <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-foreground">{t('auth.login')}</label>
+          <label className="text-sm font-medium text-foreground" htmlFor="profile-username">{t('auth.login')}</label>
           <input
+            id="profile-username"
             type="text"
             value={form.username}
             readOnly
@@ -167,8 +168,9 @@ export const ProfileSettings = () => {
         </div>
 
         <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-foreground">{t('auth.displayName')}</label>
+          <label className="text-sm font-medium text-foreground" htmlFor="profile-display-name">{t('auth.displayName')}</label>
           <input
+            id="profile-display-name"
             type="text"
             value={form.display_name}
             onChange={(e) => setForm({ ...form, display_name: e.target.value })}
@@ -181,8 +183,9 @@ export const ProfileSettings = () => {
         </div>
 
         <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-foreground">Email</label>
+          <label className="text-sm font-medium text-foreground" htmlFor="profile-email">{t('common.email')}</label>
           <input
+            id="profile-email"
             type="email"
             value={form.email || ''}
             onChange={(e) => setForm({ ...form, email: e.target.value })}
@@ -195,8 +198,9 @@ export const ProfileSettings = () => {
         </div>
 
         <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-foreground">{t('auth.teamRole')}</label>
+          <label className="text-sm font-medium text-foreground" htmlFor="profile-team-role">{t('auth.teamRole')}</label>
           <select
+            id="profile-team-role"
             value={form.team_roles[0] || 'developer'}
             onChange={(e) => setForm({ ...form, team_roles: [e.target.value] })}
             className={cn(
@@ -212,8 +216,9 @@ export const ProfileSettings = () => {
         </div>
 
         <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-foreground">{t('auth.notes')}</label>
+          <label className="text-sm font-medium text-foreground" htmlFor="profile-notes">{t('auth.notes')}</label>
           <textarea
+            id="profile-notes"
             value={form.notes}
             onChange={(e) => setForm({ ...form, notes: e.target.value })}
             rows={3}
@@ -233,7 +238,7 @@ export const ProfileSettings = () => {
         )}
 
         {success && (
-          <div className="flex items-center gap-2 p-3 rounded-lg bg-green-500/10 text-green-600 text-sm">
+          <div className="flex items-center gap-2 p-3 rounded-lg bg-status-success/10 text-status-success text-sm">
             <Icon name="check" className="size-4 shrink-0" />
             {t('common.saved')}
           </div>

@@ -30,7 +30,7 @@ export function NotificationSettings() {
               type="checkbox"
               checked={prefs.enabledCategories[cat.id]}
               onChange={(e) => setCategoryEnabled(cat.id, e.target.checked)}
-              className="mt-1 h-4 w-4 shrink-0 rounded border-border bg-interactive accent-primary cursor-pointer"
+              className="h-4 w-4 shrink-0 self-center rounded border-border bg-interactive accent-primary cursor-pointer"
             />
           </label>
         ))}
