@@ -203,6 +203,39 @@ export class OllamaProvider extends BaseProvider {
     }
   }
 
+  async embed(text: string): Promise<number[]> {
+    const baseUrl = this.url.replace(/\/api\/chat\/?$/, '').replace(/\/v1\/?$/, '');
+    // Имя модели без префикса local. — Ollama знает модель без него
+    const ollamaModel = this.model.startsWith('local.') ? this.model.slice('local.'.length) : this.model;
+
+    // Формат 1: новый /api/embed с полем input → embeddings[0]
+    try {
+      const resp = await fetch(`${baseUrl}/api/embed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: ollamaModel, input: text }),
+        signal: AbortSignal.timeout(this.timeout * 1000),
+      });
+      if (resp.ok) {
+        const data = await resp.json() as { embeddings?: number[][] };
+        if (data.embeddings?.[0]?.length) return data.embeddings[0];
+      }
+    } catch {
+      // fallback
+    }
+
+    // Формат 2: старый /api/embeddings с полем prompt → embedding
+    const resp2 = await fetch(`${baseUrl}/api/embeddings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: ollamaModel, prompt: text }),
+      signal: AbortSignal.timeout(this.timeout * 1000),
+    });
+    if (!resp2.ok) throw new Error(`Ollama embeddings error ${resp2.status}`);
+    const data2 = await resp2.json() as { embedding?: number[] };
+    return data2.embedding ?? [];
+  }
+
   async listModels(): Promise<string[]> {
     const baseUrl = this.url.replace('/api/chat', '').replace('/v1/chat/completions', '');
     const tagsUrl = `${baseUrl}/api/tags`;

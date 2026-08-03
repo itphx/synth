@@ -153,6 +153,17 @@ export interface SessionSettings {
   };
   /** Категория, установленная моделью через classify_conversation. Приоритет над keyword-классификатором. */
   routingCategory?: 'coding' | 'chat' | 'research';
+  // === Микро-слой (AD-035) ===
+  /** Включить микро-слой: обработка простых запросов без LLM (приветствия, классификация, enum-решения). */
+  microFirst: boolean;
+  /** Порог уверенности микро-слоя. confidence >= порог → OK, иначе UNSURE → LLM fallback. */
+  microConfidenceThreshold: number;
+  /** Включить embedding-слой в микро-каскаде. */
+  embeddingEnabled: boolean;
+  /** Провайдер для embedding-модели. */
+  embedProvider?: string;
+  /** Модель для embedding. */
+  embedModel?: string;
 }
 
 export interface StreamInfo {

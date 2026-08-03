@@ -60,6 +60,14 @@ export function SessionSettingsTab() {
   const [routingSubagentModel, setRoutingSubagentModel] = useState('')
   const [routingSubagentProvider, setRoutingSubagentProvider] = useState('')
 
+  // Micro-first (AD-035)
+  const [microFirst, setMicroFirst] = useState(false)
+  const [microConfidenceThreshold, setMicroConfidenceThreshold] = useState(0.8)
+  // Embedding (AD-035)
+  const [embeddingEnabled, setEmbeddingEnabled] = useState(false)
+  const [embedProvider, setEmbedProvider] = useState('')
+  const [embedModel, setEmbedModel] = useState('')
+
   const activeTabId = useUIStore((s) => s.activeCenterTabId)
   const centerTabs = useUIStore((s) => s.centerTabs)
   const activeTab = centerTabs.find((t) => t.id === activeTabId)
@@ -124,6 +132,19 @@ export function SessionSettingsTab() {
         if (sar.model) setRoutingSubagentModel(sar.model as string)
         if (sar.provider) setRoutingSubagentProvider(sar.provider as string)
       }
+
+      // Micro-first (AD-035)
+      const mf = session.settings.microFirst as boolean | undefined
+      const mct = session.settings.microConfidenceThreshold as number | undefined
+      if (mf !== undefined) setMicroFirst(mf)
+      if (mct !== undefined) setMicroConfidenceThreshold(mct)
+      // Embedding (AD-035)
+      const ee = session.settings.embeddingEnabled as boolean | undefined
+      const ep = session.settings.embedProvider as string | undefined
+      const em = session.settings.embedModel as string | undefined
+      if (ee !== undefined) setEmbeddingEnabled(ee)
+      if (ep) setEmbedProvider(ep)
+      if (em) setEmbedModel(em)
     }
   }, [session])
 
@@ -167,6 +188,11 @@ export function SessionSettingsTab() {
             model: routingSubagentModel,
             provider: routingSubagentProvider || undefined,
           },
+          microFirst,
+          microConfidenceThreshold,
+          embeddingEnabled,
+          embedProvider,
+          embedModel,
         },
       })
       notify({ text: t('sessionSettings.saved'), type: 'success', category: 'system', sessionId: sessionId || undefined })
@@ -380,6 +406,62 @@ export function SessionSettingsTab() {
               </>
             )}
           </div>
+        </Section>
+
+        {/* Micro-first (AD-035) */}
+        <Section title="Micro-first (AD-035)">
+          <div className="text-[10px] text-muted-foreground/60 mb-2">
+            Микро-модель обрабатывает простые запросы без вызова LLM (приветствия, классификация, enum-решения)
+          </div>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <Toggle enabled={microFirst} onToggle={() => setMicroFirst(!microFirst)} />
+            <span className="text-xs text-foreground">
+              {microFirst ? 'Включено' : 'Выключено'}
+            </span>
+          </label>
+          {microFirst && (
+            <div className="mt-2 flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">Confidence Threshold</span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="range"
+                  min="0.5" max="1.0" step="0.05"
+                  value={microConfidenceThreshold}
+                  onChange={(e) => setMicroConfidenceThreshold(parseFloat(e.target.value))}
+                  className="w-20 h-1 accent-primary"
+                />
+                <span className="text-foreground font-mono tabular-nums min-w-[3ch]">
+                  {microConfidenceThreshold.toFixed(2)}
+                </span>
+              </div>
+            </div>
+          )}
+        </Section>
+
+        {/* Embedding (AD-035) */}
+        <Section title="Embedding (AD-035)">
+          <div className="text-[10px] text-muted-foreground/60 mb-2">
+            Эмбеддинг-модель для семантической классификации в микро-слое
+          </div>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <Toggle enabled={embeddingEnabled} onToggle={() => setEmbeddingEnabled(!embeddingEnabled)} />
+            <span className="text-xs text-foreground">
+              {embeddingEnabled ? 'Включено' : 'Выключено'}
+            </span>
+          </label>
+          {embeddingEnabled && (
+            <div className="mt-2">
+              <RoutingModelPair
+                label="Embedding модель"
+                provider={embedProvider}
+                model={embedModel}
+                providers={providers}
+                models={models}
+                onProviderChange={setEmbedProvider}
+                onModelChange={setEmbedModel}
+              />
+            </div>
+          )}
         </Section>
 
         <Section title={t('sessionSettings.debug')}>

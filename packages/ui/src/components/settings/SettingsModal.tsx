@@ -10,6 +10,7 @@ import { ProfileSettings } from "./ProfileSettings"
 import { NotificationSettings } from "./NotificationSettings"
 import { ChatSettings } from "./ChatSettings"
 import { RoutingSettings } from "./RoutingSettings"
+import { MicroFirstDefaults } from "./MicroFirstDefaults"
 import { McpSettings } from "./McpSettings"
 import { DashboardPanel } from "../admin/DashboardPanel"
 import { SessionsPanel } from "../admin/SessionsPanel"
@@ -35,6 +36,7 @@ const CATEGORIES: CategoryItem[] = [
   { id: "notifications", labelKey: "settings.category.notifications", icon: "alert" },
   { id: "chat", labelKey: "settings.category.chat", icon: "chat-new" },
   { id: "routing", labelKey: "settings.category.routing", icon: "git-branch" },
+  { id: "microFirst", labelKey: "settings.category.microFirst", icon: "cpu" },
   { id: "mcp", labelKey: "settings.category.mcp", icon: "tools" },
   // Admin sections below
   { id: "dashboard", labelKey: "settings.category.dashboard", icon: "home", roles: ["ADMIN", "LEAD"] },
@@ -114,6 +116,7 @@ export const SettingsModal = () => {
             {settingsPage === "notifications" && <NotificationSettings />}
             {settingsPage === "chat" && <ChatSettings />}
             {settingsPage === "routing" && <RoutingSettings />}
+            {settingsPage === "microFirst" && <MicroFirstDefaults />}
             {settingsPage === "mcp" && <McpSettings />}
             {settingsPage === "dashboard" && <DashboardPanel />}
             {settingsPage === "sessions" && <SessionsPanel />}

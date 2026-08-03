@@ -41,6 +41,7 @@ export {
   type RouterEscalationConfig,
   type RouterCostConfig,
   type RouterSubagentConfig,
+  type MicroFirstConfig,
 } from './config/index.js';
 export { defaultConfig, loadConfig } from './config/index.js';
 export { resolveDataDir, resolvePort, resolveWorkspacesRoot, ensureDataDir, createDefaultConfig, resolveDeployMode, findConfigPath, defaultConfigPath, ensureConfigFile, ensureFirstRun } from './config/index.js';

@@ -153,6 +153,20 @@ export const routerSubagentConfigSchema = z.object({
   provider: z.string().default(''),
 });
 
+// --- Micro-first (AD-035) ---
+
+export const microFirstConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  confidenceThreshold: z.number().min(0).max(1).default(0.8),
+  microLlmProvider: z.string().default(''),
+  microLlmModel: z.string().default(''),
+  rulesEnabled: z.boolean().default(true),
+  embeddingEnabled: z.boolean().default(false),
+  embedProvider: z.string().default('ollama'),
+  embedModel: z.string().default('local.nomic-embed-text:latest'),
+  microLlmEnabled: z.boolean().default(false),
+});
+
 export const routerConfigSchema = z.object({
   enabled: z.boolean().default(true),
   strategy: z.enum(['content', 'cost', 'content+cost', 'auto']).default('auto'),
@@ -177,6 +191,7 @@ export const synthConfigSchema = z.object({
   summarization: summarizationConfigSchema.default({}),
   mcp: mcpConfigSchema.default({}),
   router: routerConfigSchema.default({}),
+  microFirst: microFirstConfigSchema.default({}),
 });
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>;
@@ -198,4 +213,5 @@ export type RouterEscalationConfig = z.infer<typeof routerEscalationConfigSchema
 export type RouterCostConfig = z.infer<typeof routerCostConfigSchema>;
 export type RouterSubagentConfig = z.infer<typeof routerSubagentConfigSchema>;
 export type RouterConfig = z.infer<typeof routerConfigSchema>;
+export type MicroFirstConfig = z.infer<typeof microFirstConfigSchema>;
 export type SynthConfig = z.infer<typeof synthConfigSchema>;

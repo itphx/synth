@@ -1,5 +1,5 @@
 /**
- * Подсистема роутинга моделей (AD-034).
+ * Подсистема роутинга моделей (AD-034, AD-035).
  * Реэкспорт всех публичных классов и типов.
  */
 
@@ -17,3 +17,12 @@ export { ModelRouter } from './router.js';
 export type { RoutingRequest, RoutingDecision } from './router.js';
 
 export { toCoreProviderConfig } from './utils.js';
+
+// Micro-first (AD-035)
+export { MicroPipeline } from './micro/index.js';
+export type { MicroInput, MicroResult, MicroStatus, MicroTaskClass, PipelineResult } from './micro/types.js';
+export { TaskClassifier } from './micro/task-classifier.js';
+export type { ClassifyOut } from './micro/task-classifier.js';
+export { RulesModel, EmbeddingModel, MicroLlmModel } from './micro/models/index.js';
+export type { MicroModel } from './micro/models/base.js';
+export type { MicroLlmConfig } from './micro/models/micro-llm-model.js';

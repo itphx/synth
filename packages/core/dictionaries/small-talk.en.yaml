@@ -1,0 +1,67 @@
+# Small talk keywords (English) — AD-035
+keywords:
+  # Greetings
+  - hello
+  - hi
+  - hey
+  - good morning
+  - good afternoon
+  - good evening
+  - greetings
+  - howdy
+  - sup
+  - yo
+  # Farewells
+  - bye
+  - goodbye
+  - see you
+  - later
+  - farewell
+  - cya
+  # Thanks
+  - thanks
+  - thank you
+  - thx
+  - ty
+  - cheers
+  - much obliged
+
+categories:
+  greeting:
+    keywords:
+      - hello
+      - hi
+      - hey
+      - good morning
+      - good afternoon
+      - good evening
+      - greetings
+      - howdy
+      - sup
+      - yo
+    answers:
+      - "Hello! How can I help you?"
+      - "Hi there! I'm Synth, your AI assistant. What can I do for you?"
+      - "Hello! Ready to help. What do you need?"
+  farewell:
+    keywords:
+      - bye
+      - goodbye
+      - see you
+      - later
+      - farewell
+      - cya
+    answers:
+      - "Goodbye! Feel free to reach out if you need anything."
+      - "Bye! Have a great day!"
+  thanks:
+    keywords:
+      - thanks
+      - thank you
+      - thx
+      - ty
+      - cheers
+      - much obliged
+    answers:
+      - "You're welcome! Happy to help."
+      - "Anytime! Need anything else?"
