@@ -60,14 +60,14 @@ export function MicroFirstDefaults() {
   return (
     <div className="space-y-6 max-w-lg">
       <div>
-        <h2 className="text-lg font-semibold mb-1">Micro-first (AD-035)</h2>
+        <h2 className="text-lg font-semibold mb-1">Быстрые ответы</h2>
         <p className="text-sm text-muted-foreground">
-          Дефолтные настройки микро-слоя для новых сессий. Микро-модель обрабатывает простые запросы без вызова LLM.
+          Простые запросы — приветствия, да/нет, классификация задач — обрабатываются мгновенно по правилам или embedding, без вызова большой модели. Это ускоряет ответ и экономит токены. Если запрос сложный или уверенность низкая — автоматически вызывается LLM. Порог уверенности настраивается ниже.
         </p>
       </div>
 
       <div className="space-y-4">
-        {/* Micro-first вкл/выкл */}
+        {/* Быстрые ответы вкл/выкл */}
         <label className="flex items-center gap-3 cursor-pointer">
           <Toggle enabled={settings.microFirst} onToggle={() => update({ microFirst: !settings.microFirst })} />
           <span className="text-sm text-foreground">

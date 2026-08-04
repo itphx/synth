@@ -6,8 +6,10 @@ import { useChatStore } from '@/stores/chatStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useNotification } from '@/hooks/useNotification'
 import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
+import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
 import { ModelSelector } from '../chat/ModelSelector'
+import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 
 export function SessionSettingsTab() {
   const { t } = useI18n()
@@ -60,10 +62,10 @@ export function SessionSettingsTab() {
   const [routingSubagentModel, setRoutingSubagentModel] = useState('')
   const [routingSubagentProvider, setRoutingSubagentProvider] = useState('')
 
-  // Micro-first (AD-035)
+  // Быстрые ответы
   const [microFirst, setMicroFirst] = useState(false)
   const [microConfidenceThreshold, setMicroConfidenceThreshold] = useState(0.8)
-  // Embedding (AD-035)
+  // Embedding
   const [embeddingEnabled, setEmbeddingEnabled] = useState(false)
   const [embedProvider, setEmbedProvider] = useState('')
   const [embedModel, setEmbedModel] = useState('')
@@ -133,12 +135,12 @@ export function SessionSettingsTab() {
         if (sar.provider) setRoutingSubagentProvider(sar.provider as string)
       }
 
-      // Micro-first (AD-035)
+      // Быстрые ответы
       const mf = session.settings.microFirst as boolean | undefined
       const mct = session.settings.microConfidenceThreshold as number | undefined
       if (mf !== undefined) setMicroFirst(mf)
       if (mct !== undefined) setMicroConfidenceThreshold(mct)
-      // Embedding (AD-035)
+      // Embedding
       const ee = session.settings.embeddingEnabled as boolean | undefined
       const ep = session.settings.embedProvider as string | undefined
       const em = session.settings.embedModel as string | undefined
@@ -238,8 +240,95 @@ export function SessionSettingsTab() {
           <ModelSelector sessionId={sessionId} />
         </Section>
 
-        {/* === Маршрутизация (AD-034) === */}
-        <Section title={t('routing.title')}>
+        {/* Быстрые ответы */}
+        <Section
+          title={
+            <span className="inline-flex items-center gap-1">
+              Быстрые ответы
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="cursor-help">
+                    <Icon name="question" className="size-3 text-muted-foreground" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Простые запросы — приветствия, да/нет, классификация задач — обрабатываются мгновенно по правилам или embedding, без вызова большой модели. Это ускоряет ответ и экономит токены. Если запрос сложный или уверенность низкая — автоматически вызывается LLM. Порог уверенности настраивается ниже.
+                </TooltipContent>
+              </Tooltip>
+            </span>
+          }
+        >
+          <label className="flex items-center gap-3 cursor-pointer">
+            <Toggle enabled={microFirst} onToggle={() => setMicroFirst(!microFirst)} />
+            <span className="text-xs text-foreground">
+              {microFirst ? 'Включено' : 'Выключено'}
+            </span>
+          </label>
+          {microFirst && (
+            <div className="mt-2 flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">Confidence Threshold</span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="range"
+                  min="0.5" max="1.0" step="0.05"
+                  value={microConfidenceThreshold}
+                  onChange={(e) => setMicroConfidenceThreshold(parseFloat(e.target.value))}
+                  className="w-20 h-1 accent-primary"
+                />
+                <span className="text-foreground font-mono tabular-nums min-w-[3ch]">
+                  {microConfidenceThreshold.toFixed(2)}
+                </span>
+              </div>
+            </div>
+          )}
+        </Section>
+
+        {/* Embedding */}
+        {microFirst && (
+          <Section title="Embedding">
+            <div className="text-[10px] text-muted-foreground/60 mb-2">
+              Эмбеддинг-модель для семантической классификации в микро-слое
+            </div>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <Toggle enabled={embeddingEnabled} onToggle={() => setEmbeddingEnabled(!embeddingEnabled)} />
+              <span className="text-xs text-foreground">
+                {embeddingEnabled ? 'Включено' : 'Выключено'}
+              </span>
+            </label>
+            {embeddingEnabled && (
+              <div className="mt-2">
+                <RoutingModelPair
+                  label="Embedding модель"
+                  provider={embedProvider}
+                  model={embedModel}
+                  providers={providers}
+                  models={models}
+                  onProviderChange={setEmbedProvider}
+                  onModelChange={setEmbedModel}
+                />
+              </div>
+            )}
+          </Section>
+        )}
+
+        {/* Маршрутизация */}
+        <Section
+          title={
+            <span className="inline-flex items-center gap-1">
+              {t('routing.title')}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="cursor-help">
+                    <Icon name="question" className="size-3 text-muted-foreground" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Запросы, которые не обработали Быстрые ответы, распределяются между моделями автоматически: стратегия выбирает модель по типу задачи (кодинг/чат/анализ), по стоимости или сочетанием. Дополнительно работает контроль качества: если ответ неуверенный или слишком короткий — запрос пересылается на fallback-модель. Если маршрутизация выключена — используется модель, выбранная в сессии.
+                </TooltipContent>
+              </Tooltip>
+            </span>
+          }
+        >
           <div className="space-y-3">
             {/* Вкл/Выкл */}
             <label className="flex items-center gap-3 cursor-pointer">
@@ -408,62 +497,6 @@ export function SessionSettingsTab() {
           </div>
         </Section>
 
-        {/* Micro-first (AD-035) */}
-        <Section title="Micro-first (AD-035)">
-          <div className="text-[10px] text-muted-foreground/60 mb-2">
-            Микро-модель обрабатывает простые запросы без вызова LLM (приветствия, классификация, enum-решения)
-          </div>
-          <label className="flex items-center gap-3 cursor-pointer">
-            <Toggle enabled={microFirst} onToggle={() => setMicroFirst(!microFirst)} />
-            <span className="text-xs text-foreground">
-              {microFirst ? 'Включено' : 'Выключено'}
-            </span>
-          </label>
-          {microFirst && (
-            <div className="mt-2 flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Confidence Threshold</span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min="0.5" max="1.0" step="0.05"
-                  value={microConfidenceThreshold}
-                  onChange={(e) => setMicroConfidenceThreshold(parseFloat(e.target.value))}
-                  className="w-20 h-1 accent-primary"
-                />
-                <span className="text-foreground font-mono tabular-nums min-w-[3ch]">
-                  {microConfidenceThreshold.toFixed(2)}
-                </span>
-              </div>
-            </div>
-          )}
-        </Section>
-
-        {/* Embedding (AD-035) */}
-        <Section title="Embedding (AD-035)">
-          <div className="text-[10px] text-muted-foreground/60 mb-2">
-            Эмбеддинг-модель для семантической классификации в микро-слое
-          </div>
-          <label className="flex items-center gap-3 cursor-pointer">
-            <Toggle enabled={embeddingEnabled} onToggle={() => setEmbeddingEnabled(!embeddingEnabled)} />
-            <span className="text-xs text-foreground">
-              {embeddingEnabled ? 'Включено' : 'Выключено'}
-            </span>
-          </label>
-          {embeddingEnabled && (
-            <div className="mt-2">
-              <RoutingModelPair
-                label="Embedding модель"
-                provider={embedProvider}
-                model={embedModel}
-                providers={providers}
-                models={models}
-                onProviderChange={setEmbedProvider}
-                onModelChange={setEmbedModel}
-              />
-            </div>
-          )}
-        </Section>
-
         <Section title={t('sessionSettings.debug')}>
           <label className="flex items-center gap-3 cursor-pointer">
             <Toggle enabled={debugEnabled} onToggle={() => setDebugEnabled(!debugEnabled)} />
@@ -561,7 +594,7 @@ export function SessionSettingsTab() {
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children }: { title: React.ReactNode; children: React.ReactNode }) {
   return (
     <div>
       <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wide mb-2">{title}</div>

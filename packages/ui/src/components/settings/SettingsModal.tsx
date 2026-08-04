@@ -35,8 +35,8 @@ const CATEGORIES: CategoryItem[] = [
   { id: "appearance", labelKey: "settings.category.appearance", icon: "palette" },
   { id: "notifications", labelKey: "settings.category.notifications", icon: "alert" },
   { id: "chat", labelKey: "settings.category.chat", icon: "chat-new" },
-  { id: "routing", labelKey: "settings.category.routing", icon: "git-branch" },
   { id: "microFirst", labelKey: "settings.category.microFirst", icon: "cpu" },
+  { id: "routing", labelKey: "settings.category.routing", icon: "git-branch" },
   { id: "mcp", labelKey: "settings.category.mcp", icon: "tools" },
   // Admin sections below
   { id: "dashboard", labelKey: "settings.category.dashboard", icon: "home", roles: ["ADMIN", "LEAD"] },

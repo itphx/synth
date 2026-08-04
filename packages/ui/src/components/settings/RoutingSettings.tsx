@@ -130,7 +130,9 @@ export function RoutingSettings() {
     <div className="space-y-6 max-w-lg">
       <div>
         <h2 className="text-lg font-semibold mb-1">{t('routing.title')}</h2>
-        <p className="text-sm text-muted-foreground">{t('routing.globalDescription')}</p>
+        <p className="text-sm text-muted-foreground">
+          Запросы, которые не обработали Быстрые ответы, распределяются между моделями автоматически: стратегия выбирает модель по типу задачи (кодинг/чат/анализ), по стоимости или сочетанием. Дополнительно работает контроль качества: если ответ неуверенный или слишком короткий — запрос пересылается на fallback-модель. Если маршрутизация выключена — используется модель, выбранная в сессии.
+        </p>
       </div>
 
       <div className="space-y-4">
