@@ -8,6 +8,7 @@ interface ProjectsStore {
   error: string | null
 
   loadProjects: () => Promise<void>
+  getProject: (id: string) => Promise<ProjectData | null>
   createProject: (data: {
     name: string
     description?: string
@@ -39,6 +40,24 @@ export const useProjectsStore = create<ProjectsStore>((set) => ({
       set({ projects, loading: false })
     } catch (e) {
       set({ error: (e as Error).message, loading: false })
+    }
+  },
+
+  // Загружает проект по id и кладёт его в стор (upsert). Возвращает null при ошибке.
+  getProject: async (id) => {
+    try {
+      const project = await synthApi.getProject(id)
+      set((s) => {
+        const exists = s.projects.some((p) => p.id === project.id)
+        if (exists) {
+          return { projects: s.projects.map((p) => (p.id === project.id ? project : p)) }
+        }
+        return { projects: [project, ...s.projects] }
+      })
+      return project
+    } catch (e) {
+      set({ error: (e as Error).message })
+      return null
     }
   },
 
