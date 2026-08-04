@@ -281,6 +281,7 @@ export class ChatOrchestrator {
       const systemPrompt = session.settings.systemPrompt
         || await this._contextBuilder.buildSystemPrompt({
           agentRole: effectiveAgentRole,
+          agentContextFile: agentDef?.contextFile,
           historyMessages: session.messages,
           userId: session.userId,
           projectName: session.projectId,
