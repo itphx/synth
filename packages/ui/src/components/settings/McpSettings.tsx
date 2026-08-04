@@ -1,16 +1,28 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Icon } from '../icon/Icon'
 import { useMcpStore } from '../../stores/mcpStore'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { ConfirmDialog } from '../ui/confirm-dialog'
-import type { McpServerConfig } from '../../lib/api/synthApi'
+import { Toggle } from '../ui/Toggle'
+import { useNotification } from '@/hooks/useNotification'
+import type {
+  McpServerConfig,
+  McpServerToolsSettings,
+  McpModeAvailability,
+  McpProbedTool,
+} from '../../lib/api/synthApi'
 
 const EMPTY_CONFIG: McpServerConfig = { type: 'stdio' }
 
 export const McpSettings = () => {
   const { t } = useI18n()
-  const { servers, loading, error, fetchServers, addServer, updateServer, deleteServer, testServer } = useMcpStore()
+  const { notify } = useNotification()
+  const {
+    servers, loading, error, fetchServers, addServer, updateServer, deleteServer, testServer,
+    toolSettings, toolSettingsLoading, toolSettingsError,
+    fetchToolSettings, updateToolAvailability, saveToolSettings, probeServer,
+  } = useMcpStore()
   const [editing, setEditing] = useState<string | null>(null)
   const [formName, setFormName] = useState('')
   const [formConfig, setFormConfig] = useState<McpServerConfig>(EMPTY_CONFIG)
@@ -21,9 +33,31 @@ export const McpSettings = () => {
   // Delete confirmation state
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
 
+  // Доступность инструментов по режимам (W4c)
+  const [probedTools, setProbedTools] = useState<Record<string, McpProbedTool[] | null>>({})
+  const [probing, setProbing] = useState<Record<string, boolean>>({})
+  const [probeError, setProbeError] = useState<Record<string, string | null>>({})
+  const [savingSettings, setSavingSettings] = useState(false)
+  const initialSettingsRef = useRef<Record<string, McpServerToolsSettings> | null>(null)
+  const prevToolSettingsRef = useRef<typeof toolSettings>(null)
+
   useEffect(() => {
     fetchServers()
-  }, [fetchServers])
+    fetchToolSettings()
+  }, [fetchServers, fetchToolSettings])
+
+  // Снапшот исходных настроек — только при первичной загрузке
+  useEffect(() => {
+    if (toolSettings && prevToolSettingsRef.current === null) {
+      initialSettingsRef.current = JSON.parse(JSON.stringify(toolSettings))
+    }
+    prevToolSettingsRef.current = toolSettings
+  }, [toolSettings])
+
+  const dirty =
+    toolSettings !== null &&
+    initialSettingsRef.current !== null &&
+    JSON.stringify(toolSettings) !== JSON.stringify(initialSettingsRef.current)
 
   const openAdd = () => {
     setEditing('__new__')
@@ -89,6 +123,36 @@ export const McpSettings = () => {
     }
   }
 
+  const handleProbe = async (name: string) => {
+    setProbing((p) => ({ ...p, [name]: true }))
+    setProbeError((p) => ({ ...p, [name]: null }))
+    const result = await probeServer(name)
+    setProbing((p) => ({ ...p, [name]: false }))
+    if (result.success) {
+      setProbedTools((p) => ({ ...p, [name]: result.tools ?? [] }))
+    } else {
+      setProbedTools((p) => ({ ...p, [name]: null }))
+      setProbeError((p) => ({ ...p, [name]: result.error ?? t('mcp.permissions.probeError', { error: 'unknown' }) }))
+    }
+  }
+
+  const handleSaveSettings = async () => {
+    setSavingSettings(true)
+    try {
+      await saveToolSettings()
+      initialSettingsRef.current = JSON.parse(JSON.stringify(useMcpStore.getState().toolSettings))
+      notify({ text: t('mcp.permissions.saved'), type: 'success', category: 'system' })
+    } catch (err) {
+      notify({
+        text: t('mcp.permissions.saveError', { error: err instanceof Error ? err.message : 'unknown' }),
+        type: 'error',
+        category: 'error',
+      })
+    } finally {
+      setSavingSettings(false)
+    }
+  }
+
   const updateConfig = (patch: Partial<McpServerConfig>) => {
     setFormConfig((prev) => ({ ...prev, ...patch }))
   }
@@ -106,9 +170,6 @@ export const McpSettings = () => {
       .map(([k, v]) => `${k}=${v}`)
       .join('\n')
   }
-
-  // Убираем хрупкий startsWith — используем testSucceeded state
-  // (замена isTestSuccess = testResult?.startsWith(...))
 
   return (
     <div className="space-y-4">
@@ -363,6 +424,66 @@ export const McpSettings = () => {
         </div>
       )}
 
+      {/* Доступность инструментов по режимам (W4c) */}
+      <div className="border-t border-border pt-4 space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold">{t('mcp.permissions.title')}</h3>
+            <p className="text-sm text-muted-foreground">{t('mcp.permissions.description')}</p>
+          </div>
+          {toolSettings && Object.keys(toolSettings).length > 0 && (
+            <button
+              onClick={handleSaveSettings}
+              disabled={!dirty || savingSettings || toolSettingsLoading}
+              className="shrink-0 px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50"
+            >
+              {savingSettings ? t('mcp.permissions.saving') : t('mcp.permissions.save')}
+            </button>
+          )}
+        </div>
+
+        {dirty && (
+          <div className="p-2 rounded-lg bg-interactive-hover text-muted-foreground text-xs">
+            {t('mcp.permissions.unsaved')}
+          </div>
+        )}
+
+        {toolSettingsLoading && toolSettings === null && (
+          <div className="text-center text-muted-foreground py-6">{t('mcp.permissions.loading')}</div>
+        )}
+
+        {toolSettingsError && !toolSettings && (
+          <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+            {t('mcp.permissions.loadError', { error: toolSettingsError })}
+            <div className="text-xs opacity-80 mt-1">{t('mcp.permissions.notReady')}</div>
+          </div>
+        )}
+
+        {toolSettings && Object.keys(toolSettings).length === 0 && !toolSettingsLoading && (
+          <div className="text-center text-muted-foreground py-6 text-sm">
+            {t('mcp.permissions.noServerSettings')}
+          </div>
+        )}
+
+        {toolSettings && Object.keys(toolSettings).length > 0 && (
+          <div className="space-y-2">
+            {Object.entries(toolSettings).map(([name, entry]) => (
+              <ServerAvailabilityCard
+                key={name}
+                name={name}
+                entry={entry}
+                probing={probing[name] ?? false}
+                tools={probedTools[name]}
+                probeError={probeError[name] ?? null}
+                onProbe={() => handleProbe(name)}
+                onToggleDefault={(mode, value) => updateToolAvailability(name, 'default', mode, value)}
+                onToggleTool={(toolName, mode, value) => updateToolAvailability(name, toolName, mode, value)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Delete confirmation */}
       <ConfirmDialog
         open={deleteTarget !== null}
@@ -374,6 +495,125 @@ export const McpSettings = () => {
         icon="delete-bin"
         onConfirm={handleDeleteConfirm}
       />
+    </div>
+  )
+}
+
+function ServerAvailabilityCard({
+  name,
+  entry,
+  probing,
+  tools,
+  probeError,
+  onProbe,
+  onToggleDefault,
+  onToggleTool,
+}: {
+  name: string
+  entry: McpServerToolsSettings
+  probing: boolean
+  tools: McpProbedTool[] | null | undefined
+  probeError: string | null
+  onProbe: () => void
+  onToggleDefault: (mode: 'plan' | 'act', value: boolean) => void
+  onToggleTool: (toolName: string, mode: 'plan' | 'act', value: boolean) => void
+}) {
+  const { t } = useI18n()
+  const hasProbed = tools !== undefined
+
+  return (
+    <div className="border border-border rounded-lg p-3 space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium truncate">{name}</div>
+        </div>
+        <button
+          onClick={onProbe}
+          disabled={probing}
+          className="shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-interactive-hover disabled:opacity-50"
+        >
+          <Icon name="plug" className="size-3.5" />
+          {probing ? t('mcp.permissions.probing') : t('mcp.permissions.probe')}
+        </button>
+      </div>
+
+      {probeError && (
+        <div className="p-2 rounded bg-destructive/10 text-destructive text-xs">{probeError}</div>
+      )}
+
+      {/* Default для всех инструментов */}
+      <div className="flex items-center justify-between gap-3 rounded-lg bg-interactive-hover/50 px-3 py-2">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">{t('mcp.permissions.defaultTools')}</div>
+          <div className="text-xs text-muted-foreground truncate">{t('mcp.permissions.defaultToolsHint')}</div>
+        </div>
+        <ModeToggles availability={entry.default} onToggle={onToggleDefault} />
+      </div>
+
+      {/* Инструменты сервера */}
+      {hasProbed && (
+        <div className="space-y-1.5">
+          <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            {t('mcp.permissions.perTool')}
+          </div>
+          {tools && tools.length === 0 && (
+            <div className="text-sm text-muted-foreground py-2">{t('mcp.permissions.noTools')}</div>
+          )}
+          {tools && tools.length > 0 && (
+            <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+              {tools.map((tool) => {
+                const toolSettings = entry.tools[tool.name]
+                const effective = toolSettings ?? entry.default
+                return (
+                  <div
+                    key={tool.name}
+                    className={cn(
+                      "flex items-center justify-between gap-3 px-3 py-2 rounded-lg border border-border/60",
+                      !toolSettings && "opacity-80"
+                    )}
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm font-mono truncate" title={tool.name}>{tool.name}</div>
+                      {tool.description && (
+                        <div className="text-xs text-muted-foreground truncate" title={tool.description}>
+                          {tool.description}
+                          {!toolSettings && ` · ${t('mcp.permissions.toolDefaultHint')}`}
+                        </div>
+                      )}
+                    </div>
+                    <ModeToggles
+                      availability={effective}
+                      onToggle={(mode, value) => onToggleTool(tool.name, mode, value)}
+                    />
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ModeToggles({
+  availability,
+  onToggle,
+}: {
+  availability: McpModeAvailability
+  onToggle: (mode: 'plan' | 'act', value: boolean) => void
+}) {
+  const { t } = useI18n()
+  return (
+    <div className="flex items-center gap-3 shrink-0">
+      <label className="flex items-center gap-1.5 cursor-pointer">
+        <span className="text-xs text-muted-foreground">{t('mcp.permissions.mode.plan')}</span>
+        <Toggle enabled={availability.plan} onToggle={() => onToggle('plan', !availability.plan)} />
+      </label>
+      <label className="flex items-center gap-1.5 cursor-pointer">
+        <span className="text-xs text-muted-foreground">{t('mcp.permissions.mode.act')}</span>
+        <Toggle enabled={availability.act} onToggle={() => onToggle('act', !availability.act)} />
+      </label>
     </div>
   )
 }

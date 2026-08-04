@@ -30,3 +30,30 @@ export function normalizeMcpServerSettings(settings: McpServerToolSettings | und
   }
   return { default: def, tools: normalizedTools };
 }
+
+/**
+ * Объединяет глобальные (runtime) и локальные (сессионные) настройки
+ * доступности MCP-серверов. Сессионные настройки приоритетнее: на уровне
+ * сервера берутся сессионные default/tools, но недостающие серверы и поля
+ * дополняются из глобальных.
+ */
+export function mergeMcpToolSettings(
+  global: Record<string, McpServerToolSettings> | undefined,
+  local: Record<string, McpServerToolSettings> | undefined,
+): Record<string, McpServerToolSettings> | undefined {
+  if (!global) return local;
+  if (!local) return global;
+  const merged: Record<string, McpServerToolSettings> = { ...global };
+  for (const [serverName, localServer] of Object.entries(local)) {
+    const globalServer = merged[serverName];
+    if (!globalServer) {
+      merged[serverName] = localServer;
+      continue;
+    }
+    merged[serverName] = {
+      default: localServer.default ?? globalServer.default,
+      tools: { ...globalServer.tools, ...localServer.tools },
+    };
+  }
+  return merged;
+}

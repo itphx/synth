@@ -127,10 +127,14 @@ export const getProjectInfoTool: ToolDefinition = {
     const parts: string[] = [];
 
     const project = await loadProject(ctx);
+    // Каталог жёстко определён проектом (project.workspace); произвольный
+    // ввод пути от агента инструмент не принимает (z.object({})).
+    const projectDir = project?.workspace || ctx.workingDir;
+
     if (project) {
       parts.push(`# Проект: ${project.name}`);
       parts.push(`- ID: ${project.id}`);
-      if (project.workspace) parts.push(`- Рабочий каталог: ${project.workspace}`);
+      if (project.workspace) parts.push(`- Рабочий каталог проекта: ${project.workspace}`);
       if (project.description) parts.push(`- Описание: ${project.description}`);
     } else {
       const name = basename(ctx.workingDir) || ctx.workingDir;
@@ -150,14 +154,20 @@ export const getProjectInfoTool: ToolDefinition = {
       }
     }
 
-    const repo = await detectRepoInfo(ctx.workingDir);
+    const repo = await detectRepoInfo(projectDir);
     if (repo) {
       parts.push('');
       parts.push('## Git-репозиторий');
-      parts.push(formatRepo(repo, ctx.workingDir));
+      parts.push(formatRepo(repo, projectDir));
     }
 
-    return { content: parts.join('\n'), metadata: { workingDir: ctx.workingDir } };
+    return {
+      content: parts.join('\n'),
+      metadata: {
+        workingDir: ctx.workingDir,
+        ...(project?.workspace ? { projectWorkspace: project.workspace } : {}),
+      },
+    };
   },
 };
 
@@ -172,6 +182,10 @@ export const listReposTool: ToolDefinition = {
     const parts: string[] = [];
 
     const project = await loadProject(ctx);
+    // Каталог жёстко определён проектом (project.workspace); произвольный
+    // ввод пути от агента инструмент не принимает (z.object({})).
+    const projectDir = project?.workspace || ctx.workingDir;
+
     if (project?.repos && project.repos.length > 0) {
       parts.push(`# Репозитории проекта ${project.name}:`);
       for (const repoCfg of project.repos) {
@@ -183,14 +197,18 @@ export const listReposTool: ToolDefinition = {
         }
       }
     } else {
-      const repos = await findReposInDir(ctx.workingDir);
+      const repos = await findReposInDir(projectDir);
       if (repos.length === 0) {
         return {
-          content: `Git-репозитории в "${ctx.workingDir}" не найдены`,
-          metadata: { workingDir: ctx.workingDir, count: 0 },
+          content: `Git-репозитории в "${projectDir}" не найдены`,
+          metadata: {
+            workingDir: ctx.workingDir,
+            ...(project?.workspace ? { projectWorkspace: project.workspace } : {}),
+            count: 0,
+          },
         };
       }
-      parts.push(`# Git-репозитории в ${ctx.workingDir}:`);
+      parts.push(`# Git-репозитории в ${projectDir}:`);
       for (const repo of repos) {
         parts.push(formatRepo(repo, repo.path));
       }
@@ -199,7 +217,11 @@ export const listReposTool: ToolDefinition = {
     const count = parts.filter((line) => line.startsWith('- ')).length;
     return {
       content: parts.join('\n'),
-      metadata: { workingDir: ctx.workingDir, count },
+      metadata: {
+        workingDir: ctx.workingDir,
+        ...(project?.workspace ? { projectWorkspace: project.workspace } : {}),
+        count,
+      },
     };
   },
 };

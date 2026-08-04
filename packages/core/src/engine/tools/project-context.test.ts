@@ -71,7 +71,40 @@ describe('project-context tools', () => {
 
     expect(result.content).toContain('# Проект: TestProject');
     expect(result.content).toContain(`- ID: ${project.id}`);
-    expect(result.content).toContain(`- Рабочий каталог: ${tmpDir}`);
+    expect(result.content).toContain(`- Рабочий каталог проекта: ${tmpDir}`);
+    expect(result.metadata?.projectWorkspace).toBe(tmpDir);
+  });
+
+  it('get_project_info: каталог проекта берётся из project.workspace, а не из рабочего каталога сессии', async () => {
+    const wsDir = await mkdtemp(join(tmpdir(), 'synth-project-ws-'));
+    await initGitRepo(wsDir);
+    const project = projectStore.create('WsProject', 'u1', { workspace: wsDir });
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({ projectId: project.id, title: 'S' });
+
+    // workingDir сессии сознательно отличается от project.workspace
+    const result = await getProjectInfoTool.execute({}, makeCtx({
+      sessionId: session.id,
+      workingDir: tmpDir,
+      extra: { sessionManager, projectStore, sessionId: session.id },
+    }));
+
+    expect(result.content).toContain('# Проект: WsProject');
+    expect(result.content).toContain(`- Рабочий каталог проекта: ${wsDir}`);
+    expect(result.content).toContain('Git-репозиторий');
+    expect(result.content).toContain(wsDir);
+    expect(result.metadata?.workingDir).toBe(tmpDir);
+    expect(result.metadata?.projectWorkspace).toBe(wsDir);
+  });
+
+  it('get_project_info: не принимает path/cwd-параметры от агента', () => {
+    const shape = (getProjectInfoTool.parameters as { shape?: Record<string, unknown> }).shape ?? {};
+    expect(Object.keys(shape)).toEqual([]);
+  });
+
+  it('list_repos: не принимает path/cwd-параметры от агента', () => {
+    const shape = (listReposTool.parameters as { shape?: Record<string, unknown> }).shape ?? {};
+    expect(Object.keys(shape)).toEqual([]);
   });
 
   it('list_repos: находит репозиторий в корне и во вложенной директории', async () => {
@@ -105,5 +138,24 @@ describe('project-context tools', () => {
 
     expect(result.content).toContain('# Репозитории проекта TestProject:');
     expect(result.content).toContain('- Ветка:');
+  });
+
+  it('list_repos: сканирует project.workspace, когда в проекте нет настроенных repos', async () => {
+    const wsDir = await mkdtemp(join(tmpdir(), 'synth-project-ws-'));
+    await initGitRepo(wsDir);
+    const project = projectStore.create('WsProject', 'u1', { workspace: wsDir });
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({ projectId: project.id, title: 'S' });
+
+    // рабочая директория сессии пуста — репозиторий только в project.workspace
+    const result = await listReposTool.execute({}, makeCtx({
+      sessionId: session.id,
+      extra: { sessionManager, projectStore, sessionId: session.id },
+    }));
+
+    expect(result.content).toContain(`# Git-репозитории в ${wsDir}:`);
+    expect(result.content).toContain(wsDir);
+    expect(result.content).toContain('- Ветка:');
+    expect(result.metadata?.projectWorkspace).toBe(wsDir);
   });
 });

@@ -1,7 +1,8 @@
-import type { Session, TsmState, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference } from '@synth/shared';
+import type { Session, TsmState, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings } from '@synth/shared';
 import { TsmState as TsmStateEnum, getForkedTitle, MessageRole } from '@synth/shared';
 import { nowISO, generateId, makeTextPart, makePart } from '@synth/shared';
 import type { FileStore } from '../storage/file-store.js';
+import { mergeMcpToolSettings } from '../engine/mcp/settings.js';
 
 const VALID_TSM_TRANSITIONS: Record<TsmState, TsmState[]> = {
   [TsmStateEnum.PLANNING]: [TsmStateEnum.EXECUTION],
@@ -9,6 +10,11 @@ const VALID_TSM_TRANSITIONS: Record<TsmState, TsmState[]> = {
   [TsmStateEnum.VALIDATION]: [TsmStateEnum.DONE, TsmStateEnum.EXECUTION],
   [TsmStateEnum.DONE]: [],
 };
+
+export interface SessionManagerOptions {
+  /** Поставщик глобальных настроек доступности MCP-серверов (runtime settings). */
+  mcpSettingsProvider?: () => Promise<Record<string, McpServerToolSettings> | undefined>;
+}
 
 export interface SessionTree {
   session: Session | null;
@@ -18,7 +24,7 @@ export interface SessionTree {
 export class SessionManager {
   private _locks = new Map<string, Promise<void>>();
 
-  constructor(private store: FileStore) {}
+  constructor(private store: FileStore, private _options: SessionManagerOptions = {}) {}
 
   private _getLock(sessionId: string): Promise<void> {
     if (!this._locks.has(sessionId)) {
@@ -52,6 +58,7 @@ export class SessionManager {
   }
 
   async createSession(data: { title?: string; projectId?: string; engine?: string; parentId?: string; sessionOrigin?: SessionOrigin; settings?: Partial<SessionSettings>; userId?: string; ownerId?: string } = {}): Promise<Session> {
+    const mcpToolSettings = await this._resolveMcpToolSettings(data.settings?.mcpToolSettings);
     const session: Session = {
       id: generateId(),
       title: data.title || 'Новая сессия',
@@ -102,6 +109,7 @@ export class SessionManager {
         embeddingEnabled: data.settings?.embeddingEnabled ?? false,
         embedProvider: data.settings?.embedProvider ?? 'ollama',
         embedModel: data.settings?.embedModel ?? 'local.nomic-embed-text:latest',
+        mcpToolSettings,
       },
       checkpoints: [],
       stickyNotes: [],
@@ -123,6 +131,16 @@ export class SessionManager {
     };
     await this.store.save(session);
     return session;
+  }
+
+  private async _resolveMcpToolSettings(
+    local?: Record<string, McpServerToolSettings>,
+  ): Promise<Record<string, McpServerToolSettings> | undefined> {
+    if (!local && !this._options.mcpSettingsProvider) return undefined;
+    const global = this._options.mcpSettingsProvider
+      ? await this._options.mcpSettingsProvider()
+      : undefined;
+    return mergeMcpToolSettings(global, local);
   }
 
   async deleteSession(sessionId: string): Promise<void> {

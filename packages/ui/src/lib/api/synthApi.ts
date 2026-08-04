@@ -834,6 +834,44 @@ export const synthApi = {
   async checkUpdate(): Promise<{ currentVersion: string; latestVersion: string; hasUpdate: boolean; checkedAt: string }> {
     return fetchJSON(`${BASE_URL}/updates/check`)
   },
+
+  // --- MCP: доступность инструментов по режимам (W4c) ---
+  async getMcpToolSettings(): Promise<McpSettingsPayload> {
+    return fetchJSON(`${BASE_URL}/settings/mcp`)
+  },
+
+  async saveMcpToolSettings(servers: Record<string, McpServerToolsSettings>): Promise<McpSettingsPayload> {
+    return fetchJSON(`${BASE_URL}/settings/mcp`, {
+      method: 'PUT',
+      body: JSON.stringify({ servers }),
+    })
+  },
+
+  async probeMcpServer(name: string): Promise<{ name: string; tools: McpProbedTool[] }> {
+    return fetchJSON(`${BASE_URL}/mcp/probe`, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    })
+  },
+}
+
+export interface McpProbedTool {
+  name: string
+  description: string
+}
+
+export interface McpModeAvailability {
+  plan: boolean
+  act: boolean
+}
+
+export interface McpServerToolsSettings {
+  default: McpModeAvailability
+  tools: Record<string, McpModeAvailability>
+}
+
+export interface McpSettingsPayload {
+  servers: Record<string, McpServerToolsSettings>
 }
 
 export interface McpServerConfig {

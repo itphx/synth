@@ -82,8 +82,18 @@ describe('plan_enter / plan_exit', () => {
 
     const relPath = (result.metadata?.plan_file as string) ?? '';
     expect(relPath).toMatch(/^\.synth\/plans\/\d{4}-\d{2}-\d{2}-\d{6}-ispravit-bag-v-auth\.md$/);
+    // план жёстко пишется в каталог сессии (ctx.workingDir), путь агент не указывает
+    expect(session.planPath).toBe(join(tmpDir, relPath));
     const onDisk = await readFile(join(tmpDir, relPath), 'utf-8');
     expect(onDisk).toContain(planText);
+  });
+
+  it('plan_enter/plan_exit не принимают path/cwd-параметры от агента', () => {
+    const enterShape = (planEnterTool.parameters as { shape?: Record<string, unknown> }).shape ?? {};
+    expect(Object.keys(enterShape)).toEqual([]);
+
+    const exitShape = (planExitTool.parameters as { shape?: Record<string, unknown> }).shape ?? {};
+    expect(Object.keys(exitShape)).toEqual(['plan']);
   });
 
   it('plan_exit с пустым планом — ошибка', async () => {

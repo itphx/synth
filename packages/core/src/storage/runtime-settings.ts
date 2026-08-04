@@ -1,10 +1,13 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@synth/shared';
+import type { McpServerToolSettings } from '@synth/shared';
 
 export interface RuntimeSettings {
   /** Рабочий каталог по умолчанию, заданный через UI (раздел «Проекты»). */
   workspace?: string;
+  /** Глобальные настройки доступности MCP-серверов по режимам plan/act. */
+  mcpServers?: Record<string, McpServerToolSettings>;
 }
 
 /**
@@ -46,13 +49,26 @@ export class RuntimeSettingsStore {
   }
 
   async setWorkspace(workspace: string): Promise<void> {
+    await this._update((current) => ({ ...current, workspace }));
+  }
+
+  async getMcpSettings(): Promise<Record<string, McpServerToolSettings>> {
+    const settings = await this.load();
+    return settings.mcpServers ?? {};
+  }
+
+  async setMcpSettings(servers: Record<string, McpServerToolSettings>): Promise<void> {
+    await this._update((current) => ({ ...current, mcpServers: servers }));
+  }
+
+  private async _update(mutate: (current: RuntimeSettings) => RuntimeSettings): Promise<void> {
     const path = this._filePath();
     const lock = this._getLock('settings');
 
     await lock.acquire();
     try {
       const current = await this.load();
-      const next: RuntimeSettings = { ...current, workspace };
+      const next = mutate(current);
       await mkdir(dirname(path), { recursive: true });
       const data = JSON.stringify(next, null, 2);
       await atomicWrite(

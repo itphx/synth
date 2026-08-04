@@ -150,4 +150,135 @@ describe('Settings API Routes (workspace)', () => {
       expect(files.filter((f) => f.includes('.tmp.') || f.endsWith('.json'))).toEqual(['settings.json']);
     });
   });
+
+  describe('GET /api/v2/settings/mcp', () => {
+    it('возвращает пустой объект servers, если настройки не заданы', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/mcp');
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body).toEqual({ servers: {} });
+    });
+
+    it('возвращает сохранённые настройки', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const servers = {
+        github: {
+          default: { plan: true, act: true },
+          tools: { list_issues: { plan: true, act: false } },
+        },
+      };
+      await app.request('/api/v2/settings/mcp', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ servers }),
+      });
+      const res = await app.request('/api/v2/settings/mcp');
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.servers).toEqual(servers);
+    });
+  });
+
+  describe('PUT /api/v2/settings/mcp', () => {
+    it('сохраняет настройки и возвращает их', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const servers = {
+        github: {
+          default: { plan: false, act: true },
+        },
+      };
+      const res = await app.request('/api/v2/settings/mcp', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ servers }),
+      });
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.servers).toEqual(servers);
+    });
+
+    it('отклоняет пустое имя сервера', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/mcp', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ servers: { '': { default: { plan: true, act: true } } } }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('отклоняет не-boolean plan/act', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/mcp', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ servers: { github: { default: { plan: 'yes', act: true } } } }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('отклоняет пустое имя инструмента в tools', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/mcp', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ servers: { github: { tools: { '': { plan: true, act: true } } } } }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('отклоняет отсутствующий servers', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/mcp', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('не ломает workspace при перезаписи (общий settings.json)', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      await app.request('/api/v2/settings/workspace', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace: '/keep/ws' }),
+      });
+      await app.request('/api/v2/settings/mcp', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ servers: { github: { default: { plan: true, act: false } } } }),
+      });
+      const settings = await settingsLoad(tmpDir);
+      expect(settings.workspace).toBe('/keep/ws');
+      expect(settings.mcpServers?.github?.default).toEqual({ plan: true, act: false });
+    });
+
+    it('переживает рестарт: новый инстанс store читает mcpServers', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      await app.request('/api/v2/settings/mcp', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ servers: { gitlab: { default: { plan: false, act: true } } } }),
+      });
+
+      const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const mcp = await restartedStore.getMcpSettings();
+      expect(mcp.gitlab?.default).toEqual({ plan: false, act: true });
+    });
+  });
 });
+
+async function settingsLoad(tmpDir: string): Promise<{ workspace?: string; mcpServers?: Record<string, any> }> {
+  const raw = await readFile(join(tmpDir, 'settings.json'), 'utf-8');
+  return JSON.parse(raw);
+}

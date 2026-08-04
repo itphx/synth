@@ -73,4 +73,9 @@ describe('todo_write', () => {
     const result = await todoWriteTool.execute({ todos }, ctx);
     expect(result.isError).toBe(true);
   });
+
+  it('не принимает path/cwd-параметры от агента', () => {
+    const shape = (todoWriteTool.parameters as { shape?: Record<string, unknown> }).shape ?? {};
+    expect(Object.keys(shape)).toEqual(['todos']);
+  });
 });

@@ -7,11 +7,11 @@ import { join, extname } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode } from '@synth/shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig } from '@synth/shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
-  enqueueUserMessage, createToolRegistry, createAgentRegistry,
+  enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
 } from '../index.js';
 import type { SummarizationConfig } from '@synth/shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } from '@synth/shared';
@@ -32,6 +32,7 @@ import { createI18nRoutes } from './routes/i18n.js';
 import { createUpdateRoutes } from './routes/updates.js';
 import { createMessageRoutes } from './routes/messages.js';
 import { createSettingsRoutes } from './routes/settings.js';
+import { createMcpRoutes } from './routes/mcp.js';
 
 export interface StandaloneConfig {
   port: number;
@@ -46,6 +47,8 @@ export interface StandaloneConfig {
   permissionConfig?: PermissionConfig;
   /** Строгость цикла Plan→Build по умолчанию из config.yaml (AD-028). */
   defaultPlanMode?: PlanMode;
+  /** Конфигурация MCP-серверов из config.yaml mcp.servers (для probe и загрузки тулов). */
+  mcpServers?: Record<string, McpServerConfig>;
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -191,7 +194,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   await mkdir(defaultWorkingDir, { recursive: true });
 
   const fileStore = new FileStore({ dataDir });
-  const sessionManager = new SessionManager(fileStore);
+  const sessionManager = new SessionManager(fileStore, {
+    mcpSettingsProvider: () => settingsStore.getMcpSettings(),
+  });
   const projectStore = new ProjectStore({ dataDir });
   const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
   const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
@@ -200,6 +205,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     userDataDir: `${dataDir}/context`,
     systemPromptsDir: config.systemPromptsDir,
   });
+
+  const mcpManager = new McpManager();
+  mcpManager.setConfig(config.mcpServers ?? {});
 
   // Парсим провайдеров из переменных окружения
   await syncProvidersFromEnv(providerStore, modelStore);
@@ -266,6 +274,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     defaultWorkingDir,
     permissionConfig: config.permissionConfig,
     defaultPlanMode: config.defaultPlanMode,
+    mcpManager,
   });
 
   const processMessage = orchestrator.createProcessMessage();
@@ -307,6 +316,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     settingsStore,
     fallbackWorkspace: defaultWorkingDir,
   }));
+
+  // MCP (probe подключения к серверу)
+  app.route('/api/v2/mcp', createMcpRoutes(auth, { mcpManager }));
 
   // Глобальный SSE-хаб
   app.get('/api/v2/events', async (c) => {

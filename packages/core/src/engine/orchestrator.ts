@@ -753,6 +753,7 @@ export class ChatOrchestrator {
                       provider,
                       agentRegistry: this._agentRegistry,
                       sessionManager: this._sessionManager,
+                      projectStore: this._projectStore ?? undefined,
                       eventBus: this._eventBus,
                       contextOptimizer: this._optimizer ?? undefined,
                       callerAgentRole: effectiveAgentRole,
