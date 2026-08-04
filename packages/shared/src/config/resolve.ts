@@ -20,6 +20,7 @@ const DATA_SUBDIRS = [
   'auth/sessions',
   'auth/states',
   'workspaces',
+  'workspaces/default',
 ];
 
 const DOCKER_MARKERS = ['/.dockerenv', '/run/.containerenv'];
@@ -161,6 +162,14 @@ export function resolveWorkspacesRoot(config: SynthConfig, env?: NodeJS.ProcessE
   if (config.storage.workspacesRoot) return config.storage.workspacesRoot;
   const dataDir = resolveDataDir(config, env);
   return `${dataDir}/workspaces`;
+}
+
+export function resolveDefaultWorkspace(config: SynthConfig, env?: NodeJS.ProcessEnv): string {
+  const envVal = (env ?? process.env).SYNTH_DEFAULT_WORKSPACE;
+  if (envVal) return envVal;
+  if (config.storage.defaultWorkspace) return config.storage.defaultWorkspace;
+  const dataDir = resolveDataDir(config, env);
+  return join(dataDir, 'workspaces', 'default');
 }
 
 export async function ensureDataDir(dataDir: string): Promise<void> {

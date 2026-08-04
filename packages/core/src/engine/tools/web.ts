@@ -5,6 +5,10 @@ import type { ToolDefinition } from '@synth/shared';
 
 const MAX_RESPONSE_SIZE = 50_000;
 const MAX_FETCH_URLS = 5;
+const DDG_SEARCH_URL = 'https://html.duckduckgo.com/html/';
+const BING_SEARCH_URL = 'https://www.bing.com/search';
+const SEARCH_ATTEMPTS = 3;
+const SEARCH_RETRY_DELAY_MS = 400;
 
 const BROWSER_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -21,8 +25,6 @@ interface P5Node {
   childNodes?: P5Node[];
   value?: string;
 }
-
-const DDG_SEARCH_URL = 'https://html.duckduckgo.com/html/';
 
 function getAttr(node: P5Node, name: string): string | undefined {
   return node.attrs?.find((a) => a.name === name)?.value;
@@ -97,43 +99,129 @@ export function parseDuckDuckGoResults(html: string, limit: number): SearchResul
   return results;
 }
 
-async function duckDuckGoSearch(query: string, limit: number): Promise<string> {
+function isDdgChallenge(html: string, status: number): boolean {
+  if (status === 202 || status === 429) return true;
+  const lower = html.toLowerCase();
+  return lower.includes('complete the following challenge')
+    || lower.includes('bots use duckduckgo')
+    || (status === 403 && lower.includes('tor'));
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function duckDuckGoSearch(query: string, limit: number, attempts = SEARCH_ATTEMPTS): Promise<SearchResult[]> {
+  let lastError = '';
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+
+    try {
+      const response = await fetch(DDG_SEARCH_URL, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          ...BROWSER_HEADERS,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({ q: query }),
+      });
+
+      const html = await response.text();
+
+      if (isDdgChallenge(html, response.status)) {
+        lastError = 'DuckDuckGo временно блокирует запросы (anti-bot challenge)';
+        continue;
+      }
+
+      if (!response.ok) {
+        lastError = `HTTP ${response.status} ${response.statusText}`;
+        continue;
+      }
+
+      return parseDuckDuckGoResults(html, limit);
+    } catch (err: unknown) {
+      lastError = (err as Error).message || String(err);
+    } finally {
+      clearTimeout(timer);
+    }
+
+    await sleep(SEARCH_RETRY_DELAY_MS);
+  }
+  throw new Error(lastError || 'Не удалось получить результаты от DuckDuckGo');
+}
+
+// ─── Парсинг Bing HTML (fallback для web_search) ────────────────────────────
+
+export function parseBingResults(html: string, limit: number): SearchResult[] {
+  const doc = parse(html) as unknown as P5Node;
+
+  const resultBlocks: P5Node[] = [];
+  walk(doc, (n) => {
+    if (n.tagName === 'li' && hasClass(n, 'b_algo')) {
+      resultBlocks.push(n);
+    }
+  });
+
+  const results: SearchResult[] = [];
+  for (const block of resultBlocks) {
+    if (results.length >= limit) break;
+
+    let titleEl: P5Node | undefined;
+    let snippetEl: P5Node | undefined;
+    let citeEl: P5Node | undefined;
+
+    walk(block, (n) => {
+      if (!titleEl && n.tagName === 'h2') titleEl = n;
+      if (!snippetEl && n.tagName === 'p') snippetEl = n;
+      if (!citeEl && n.tagName === 'cite') citeEl = n;
+    });
+
+    if (!titleEl) continue;
+    const linkEl = titleEl.childNodes?.find((n) => n.tagName === 'a');
+
+    const title = textContent(titleEl).replace(/\s+/g, ' ').trim();
+    const href = linkEl ? getAttr(linkEl, 'href') ?? '' : '';
+    const displayUrl = textContent(citeEl).replace(/\s+/g, ' ').trim();
+    const snippet = textContent(snippetEl).replace(/\s+/g, ' ').trim();
+
+    const url = displayUrl || href || '';
+    results.push({ title, url, snippet, displayUrl });
+  }
+
+  return results;
+}
+
+async function bingSearch(query: string, limit: number): Promise<SearchResult[]> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
 
   try {
-    const response = await fetch(DDG_SEARCH_URL, {
-      method: 'POST',
+    const url = `${BING_SEARCH_URL}?q=${encodeURIComponent(query)}&count=${limit}`;
+    const response = await fetch(url, {
       signal: controller.signal,
-      headers: {
-        ...BROWSER_HEADERS,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({ q: query }),
+      headers: BROWSER_HEADERS,
     });
 
     if (!response.ok) {
-      return `Ошибка поиска: HTTP ${response.status} ${response.statusText}`;
+      throw new Error(`HTTP ${response.status} ${response.statusText}`);
     }
 
     const html = await response.text();
-    const results = parseDuckDuckGoResults(html, limit);
-
-    if (results.length === 0) {
-      return `По запросу «${query}» ничего не найдено.`;
-    }
-
-    const parts = results.map((r) => {
-      const lines = [`**${r.title}**`];
-      if (r.snippet) lines.push(r.snippet);
-      lines.push(r.displayUrl);
-      return lines.join('\n');
-    });
-
-    return `Результаты поиска «${query}» (${results.length}):\n\n${parts.join('\n\n')}`;
+    return parseBingResults(html, limit);
   } finally {
     clearTimeout(timer);
   }
+}
+
+function formatSearchResults(query: string, results: SearchResult[]): string {
+  const parts = results.map((r) => {
+    const lines = [`**${r.title}**`];
+    if (r.snippet) lines.push(r.snippet);
+    lines.push(r.displayUrl || r.url);
+    return lines.join('\n');
+  });
+
+  return `Результаты поиска «${query}» (${results.length}):\n\n${parts.join('\n\n')}`;
 }
 
 // ─── Очистка HTML для web_fetch ─────────────────────────────────────────────
@@ -161,6 +249,12 @@ function cleanHtml(html: string): string {
   return cleaned;
 }
 
+function normalizeUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) return trimmed;
+  return 'https://' + trimmed;
+}
+
 // ─── Тулы ────────────────────────────────────────────────────────────────────
 
 export const webFetchTool: ToolDefinition = {
@@ -169,7 +263,7 @@ export const webFetchTool: ToolDefinition = {
     'Fetch content from URLs and convert to readable text. Supports up to 5 URLs at once. '
     + 'Use this to retrieve and analyze web content.',
   parameters: z.object({
-    url: z.string().describe('The URL to fetch content from'),
+    url: z.string().optional().describe('The URL to fetch content from'),
     urls: z.array(z.string()).max(MAX_FETCH_URLS).optional()
       .describe(`Multiple URLs to fetch (up to ${MAX_FETCH_URLS}). Takes priority over "url".`),
     format: z.enum(['text', 'markdown', 'html']).optional().default('markdown')
@@ -183,13 +277,17 @@ export const webFetchTool: ToolDefinition = {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
     const params = parsed.data as {
-      url: string;
+      url?: string;
       urls?: string[];
       format?: 'text' | 'markdown' | 'html';
       timeout?: number;
     };
 
-    const urls = (params.urls && params.urls.length > 0 ? params.urls : [params.url]).slice(0, MAX_FETCH_URLS);
+    const rawUrls = params.urls && params.urls.length > 0 ? params.urls : (params.url ? [params.url] : []);
+    if (rawUrls.length === 0) {
+      return { content: `Ошибка аргументов инструмента "${this.name}": укажите url или urls`, isError: true };
+    }
+    const urls = rawUrls.slice(0, MAX_FETCH_URLS).map(normalizeUrl);
     const timeoutMs = (params.timeout ?? 30) * 1000;
 
     const blocks: string[] = [];
@@ -278,10 +376,26 @@ export const webSearchTool: ToolDefinition = {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
     const params = parsed.data as { query: string; max_results?: number };
+    const limit = params.max_results ?? 10;
 
     try {
-      const content = await duckDuckGoSearch(params.query, params.max_results ?? 10);
-      return { content, metadata: { query: params.query, max_results: params.max_results ?? 10 } };
+      try {
+        const results = await duckDuckGoSearch(params.query, limit);
+        if (results.length > 0) {
+          return { content: formatSearchResults(params.query, results), metadata: { query: params.query, max_results: limit, source: 'duckduckgo' } };
+        }
+      } catch (err: unknown) {
+        // DDG заблокирован или недоступен — пробуем Bing
+        try {
+          const results = await bingSearch(params.query, limit);
+          if (results.length > 0) {
+            return { content: formatSearchResults(params.query, results), metadata: { query: params.query, max_results: limit, source: 'bing' } };
+          }
+        } catch {
+          throw err;
+        }
+      }
+      return { content: `По запросу «${params.query}» ничего не найдено.`, metadata: { query: params.query, max_results: limit } };
     } catch (err: unknown) {
       return {
         content: `Ошибка веб-поиска: ${(err as Error).message || String(err)}`,

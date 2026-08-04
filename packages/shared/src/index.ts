@@ -44,5 +44,5 @@ export {
   type MicroFirstConfig,
 } from './config/index.js';
 export { defaultConfig, loadConfig } from './config/index.js';
-export { resolveDataDir, resolvePort, resolveWorkspacesRoot, ensureDataDir, createDefaultConfig, resolveDeployMode, findConfigPath, defaultConfigPath, ensureConfigFile, ensureFirstRun } from './config/index.js';
+export { resolveDataDir, resolvePort, resolveWorkspacesRoot, resolveDefaultWorkspace, ensureDataDir, createDefaultConfig, resolveDeployMode, findConfigPath, defaultConfigPath, ensureConfigFile, ensureFirstRun } from './config/index.js';
 export type { DeployMode } from './config/index.js';

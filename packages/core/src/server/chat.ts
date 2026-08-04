@@ -1,5 +1,7 @@
 import { join } from 'node:path';
+import { mkdir } from 'node:fs/promises';
 import type { SynthConfig } from '@synth/shared';
+import { resolveDefaultWorkspace } from '@synth/shared';
 import {
   FileStore, SessionManager, EventBus,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -21,6 +23,13 @@ export interface SingleChatOptions {
 
 export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   const dataDir = options.dataDir;
+
+  const defaultWorkingDir = resolveDefaultWorkspace(options.config, {
+    ...process.env,
+    SYNTH_DATA_DIR: options.dataDir,
+  });
+  await mkdir(defaultWorkingDir, { recursive: true });
+
   const fileStore = new FileStore({ dataDir });
   const sessionManager = new SessionManager(fileStore);
   const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
@@ -91,6 +100,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     dataDir,
     toolRegistry,
     agentRegistry,
+    defaultWorkingDir,
     permissionConfig: options.config.permission,
     defaultPlanMode: options.config.session?.planMode,
   });

@@ -441,6 +441,18 @@ export const dict = {
   'chat.queue.resumed': 'Queue processing resumed',
   'chat.queue.returned': 'Queue returned',
 
+  'permission.bar.request': 'Tool "{tool}" requests permission',
+  'permission.bar.waiting': '{count} more',
+  'permission.bar.details': 'Details',
+  'permission.bar.hide': 'Hide',
+  'permission.bar.reason': 'Reason',
+  'permission.bar.params': 'Arguments',
+  'permission.bar.allowOnce': 'Allow once',
+  'permission.bar.allowSession': 'Allow in session',
+  'permission.bar.deny': 'Deny',
+  'permission.bar.allowOnceHint': 'Allow this call once',
+  'permission.bar.allowSessionHint': 'Allow calls within this session',
+
   'chat.error.rateLimit': 'Rate limit exceeded. Pause {sec}s...',
   'chat.error.retryCount': 'Attempt {current}/{max}',
   'chat.error.loadSession': 'Failed to load session',

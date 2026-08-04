@@ -3,6 +3,7 @@ import { TransportClient, type WSEvent, type TransportKind } from '@/lib/api/tra
 import { useChatStore } from './chatStore'
 import { useSessionsStore } from './sessionsStore'
 import { useUIStore } from './useUIStore'
+import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS } from './permissionStore'
 import type { TransportMode } from './useUIStore'
 import type { StreamDoneMetadata, MessageData } from './chatStore'
 import { synthApi } from '@/lib/api/synthApi'
@@ -21,6 +22,7 @@ interface TransportState {
   setTransportMode: (mode: TransportMode) => void
   sendMessage: (sessionId: string, text: string, agentRole?: string, provider?: string, model?: string) => Promise<void>
   cancel: (sessionId: string) => void
+  sendPermissionReply: (sessionId: string, approvalId: string, approved: boolean, once?: boolean) => void
   markSessionOpen: (sid: string) => void
   markSessionClosed: (sid: string) => void
 }
@@ -186,8 +188,7 @@ function createDispatcher(): EventDispatcher {
         break
       }
 
-      case 'question.asked':
-      case 'permission.asked': {
+      case 'question.asked': {
         const pendingCount = (payload.pending_count as number) || 0
         if (pendingCount > 0) {
           const hasStream = Object.values(useChatStore.getState().streamingBySession[sid] || {}).some((s) => s.isStreaming)
@@ -197,6 +198,28 @@ function createDispatcher(): EventDispatcher {
             updateQueueCount(sid, pendingCount)
           }
         }
+        break
+      }
+
+      case 'permission.asked': {
+        const approvalId = payload.approval_id as string | undefined
+        if (!approvalId) break
+
+        const toolName = (payload.tool as string) || (payload.tool_name as string) || 'tool'
+        const params = (payload.arguments as Record<string, unknown>)
+          || (payload.params as Record<string, unknown>)
+          || {}
+        const reason = (payload.reason as string) || ''
+        const timeoutMs = (payload.ask_timeout_ms as number) || PERMISSION_ASK_TIMEOUT_MS
+
+        usePermissionStore.getState().addRequest(sid, {
+          approvalId,
+          toolName,
+          params,
+          reason,
+          askedAt: new Date().toISOString(),
+          timeoutMs,
+        })
         break
       }
 
@@ -444,6 +467,16 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     } else {
       console.debug('[TransportStore] cancel via HTTP POST:', sessionId)
       synthApi.stopGeneration(sessionId).catch(() => {})
+    }
+  },
+
+  sendPermissionReply: (sessionId, approvalId, approved, once) => {
+    if (transport && transportReady && transport.getTransport() === 'ws') {
+      console.debug('[TransportStore] sendPermissionReply via WS:', sessionId, approvalId, approved, once)
+      transport.sendPermissionReply(sessionId, approvalId, approved, once)
+    } else {
+      // Нет WS-соединения: backend сам сбросит ask по таймауту.
+      console.warn('[TransportStore] sendPermissionReply: WS not connected, request will time out', sessionId, approvalId)
     }
   },
 

@@ -13,6 +13,8 @@ export const serverConfigSchema = z.object({
 export const storageConfigSchema = z.object({
   dataDir: z.string().default('/var/synth/data'),
   workspacesRoot: z.string().default(''),
+  /** Рабочий каталог по умолчанию для сессий без проекта. Резолвится от dataDir: {dataDir}/workspaces/default. */
+  defaultWorkspace: z.string().default(''),
 });
 
 export const authConfigSchema = z.object({

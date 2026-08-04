@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { resolveDataDir, resolvePort } from './resolve.js';
+import { resolveDataDir, resolvePort, resolveDefaultWorkspace } from './resolve.js';
 import { defaultConfig } from './defaults.js';
 import type { SynthConfig } from './types.js';
 
@@ -56,6 +56,42 @@ describe('resolvePort', () => {
 
   it('возвращает configFallback при отсутствии env var', () => {
     expect(resolvePort(cfg, 'SYNTH_PORT', 5000, {})).toBe(5000);
+  });
+});
+
+describe('resolveDefaultWorkspace', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('использует env.SYNTH_DEFAULT_WORKSPACE в первую очередь', () => {
+    const env = { SYNTH_DEFAULT_WORKSPACE: '/from/env' };
+    expect(resolveDefaultWorkspace(cfg, env)).toBe('/from/env');
+  });
+
+  it('использует config.storage.defaultWorkspace если env не задан', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, defaultWorkspace: '/cfg/ws' } };
+    expect(resolveDefaultWorkspace(c, {})).toBe('/cfg/ws');
+  });
+
+  it('приоритет env > config > дефолт', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, defaultWorkspace: '/cfg/ws' } };
+    const env = { SYNTH_DEFAULT_WORKSPACE: '/env/ws' };
+    expect(resolveDefaultWorkspace(c, env)).toBe('/env/ws');
+  });
+
+  it('дефолт = join(dataDir, workspaces, default)', () => {
+    expect(resolveDefaultWorkspace(cfg, {})).toBe('/test/data/workspaces/default');
+  });
+
+  it('дефолт резолвится от dataDir из env.SYNTH_DATA_DIR', () => {
+    const env = { SYNTH_DATA_DIR: '/custom/data' };
+    expect(resolveDefaultWorkspace(cfg, env)).toBe('/custom/data/workspaces/default');
+  });
+
+  it('НЕ читает реальный process.env, если передан env', () => {
+    vi.stubEnv('SYNTH_DEFAULT_WORKSPACE', '/should-not-be-used');
+    expect(resolveDefaultWorkspace(cfg, {})).toBe('/test/data/workspaces/default');
   });
 });
 

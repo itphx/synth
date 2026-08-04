@@ -2,6 +2,7 @@ import { createServer, IncomingMessage } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Readable } from 'node:stream';
 import { existsSync, readFileSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -35,6 +36,8 @@ export interface StandaloneConfig {
   dataDir: string;
   apiKey: string;
   workspacesRoot?: string;
+  /** Рабочий каталог по умолчанию для сессий без проекта. Дефолт: {dataDir}/workspaces/default. */
+  defaultWorkingDir?: string;
   uiDistPath?: string;
   systemPromptsDir?: string;
   /** Глобальная секция permission из config.yaml (AD-029). */
@@ -179,6 +182,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const dataDir = config.dataDir;
   await ensureDataDir(dataDir);
 
+  const defaultWorkingDir = config.defaultWorkingDir ?? join(dataDir, 'workspaces', 'default');
+  await mkdir(defaultWorkingDir, { recursive: true });
+
   const fileStore = new FileStore({ dataDir });
   const sessionManager = new SessionManager(fileStore);
   const projectStore = new ProjectStore({ dataDir });
@@ -252,6 +258,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     toolRegistry,
     agentRegistry,
     projectStore,
+    defaultWorkingDir,
     permissionConfig: config.permissionConfig,
     defaultPlanMode: config.defaultPlanMode,
   });

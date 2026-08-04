@@ -436,6 +436,18 @@ export const dict = {
   'chat.queue.resumed': 'Обработка очереди возобновлена',
   'chat.queue.returned': 'Очередь возвращена',
 
+  'permission.bar.request': 'Инструмент «{tool}» запрашивает разрешение',
+  'permission.bar.waiting': 'ещё {count}',
+  'permission.bar.details': 'Подробнее',
+  'permission.bar.hide': 'Скрыть',
+  'permission.bar.reason': 'Причина',
+  'permission.bar.params': 'Параметры',
+  'permission.bar.allowOnce': 'Разрешить один раз',
+  'permission.bar.allowSession': 'Разрешить в сессии',
+  'permission.bar.deny': 'Запретить',
+  'permission.bar.allowOnceHint': 'Разрешить вызов один раз',
+  'permission.bar.allowSessionHint': 'Разрешить вызовы в рамках этой сессии',
+
   'chat.error.rateLimit': 'Превышен лимит запросов. Пауза {sec}с...',
   'chat.error.retryCount': 'Попытка {current}/{max}',
   'chat.error.loadSession': 'Ошибка загрузки сессии',

@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile, access } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, access, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ChatOrchestrator } from './orchestrator.js';
 import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
+import { ProjectStore } from '../storage/project-store.js';
 import { EventBus } from '../events/bus.js';
 import { createToolRegistry } from './tools/index.js';
 import { ProviderFactory, BaseProvider } from '../providers/base.js';
@@ -283,6 +284,53 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
       { planMode: 'auto' },
     );
     expect(session?.todos).toEqual(todos);
+  });
+
+  it('рабочий каталог проекта (project.workspace) перекрывает defaultWorkingDir', async () => {
+    const projectStore = new ProjectStore({ dataDir: tmpDir });
+    const wsProject = join(tmpDir, 'proj-ws');
+    const wsDefault = join(tmpDir, 'default-ws');
+    await mkdir(wsProject, { recursive: true });
+    await mkdir(wsDefault, { recursive: true });
+
+    ScriptedProvider.configure([
+      { toolCalls: [{ name: 'write_file', args: writeArgs('x.txt') }] },
+      { content: 'готово' },
+    ]);
+
+    const toolRegistry = createToolRegistry();
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus,
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: (name: string) => {
+        return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@synth/shared').ProviderConfig;
+      },
+      toolRegistry,
+      permissionConfig: { rules: {}, askTimeoutMs: 1000 },
+      projectStore,
+      defaultWorkingDir: wsDefault,
+    });
+
+    const project = projectStore.create('Proj', 'u1', { workspace: wsProject });
+    await projectStore.save(project);
+
+    const session = await sessionManager.createSession({
+      title: 'WS',
+      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'developer', planMode: 'off' },
+    });
+    session.projectId = project.id;
+    await sessionManager.updateSession(session);
+    const msg = makeMessage();
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+
+    const processMessage = orchestrator.createProcessMessage();
+    const result = await processMessage(fresh, msg, new AbortController().signal, () => {});
+    expect(result.error).toBeUndefined();
+
+    await expect(readFile(join(wsProject, 'x.txt'), 'utf-8')).resolves.toBe('data');
+    await expect(exists(join(wsDefault, 'x.txt'))).resolves.toBe(false);
   });
 
   it('при возобновлении сессии утверждённый план встраивается в system prompt', async () => {

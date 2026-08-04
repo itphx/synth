@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { parseDuckDuckGoResults, webSearchTool, webFetchTool } from './web.js';
+import { parseDuckDuckGoResults, parseBingResults, webSearchTool, webFetchTool } from './web.js';
 
 function initToBody(init?: RequestInit): URLSearchParams {
   return init?.body as URLSearchParams;
@@ -34,6 +34,35 @@ const DDG_HTML_FIXTURE = `<!DOCTYPE html>
 </div>
 </body></html>`;
 
+// Страница-капча DuckDuckGo (anti-bot challenge, HTTP 202)
+const DDG_CHALLENGE_FIXTURE = `<!DOCTYPE html>
+<html lang="en"><head><title>DuckDuckGo</title></head><body>
+<h1>DuckDuckGo</h1>
+<p>Unfortunately, bots use DuckDuckGo too. Please complete the following challenge to confirm this search was made by a human. Select all squares containing a duck:</p>
+<form><input type="submit" value="Submit"></form>
+</body></html>`;
+
+// Типовая структура HTML-страницы результатов Bing (www.bing.com/search)
+const BING_HTML_FIXTURE = `<!DOCTYPE html>
+<html><head><title>synth — Bing</title></head><body>
+<ol id="b_results">
+  <li class="b_algo">
+    <h2><a href="https://www.bing.com/ck/a?!&&p=abc123">Example <b>Domain</b> on Bing</a></h2>
+    <div class="b_caption">
+      <cite>https://example.com</cite>
+      <p>This domain is for use in illustrative examples in documents.</p>
+    </div>
+  </li>
+  <li class="b_algo">
+    <h2><a href="https://www.bing.com/ck/a?!&&p=def456">IANA — IANA-managed Reserved Domains</a></h2>
+    <div class="b_caption">
+      <cite>https://www.iana.org/domains/reserved</cite>
+      <p>Example domains as described in RFC 2606.</p>
+    </div>
+  </li>
+</ol>
+</body></html>`;
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -60,6 +89,31 @@ describe('parseDuckDuckGoResults', () => {
 
   it('возвращает пустой массив для HTML без результатов', () => {
     expect(parseDuckDuckGoResults('<html><body><p>no results</p></body></html>', 10)).toEqual([]);
+  });
+});
+
+describe('parseBingResults', () => {
+  it('извлекает title, url, snippet и displayUrl из HTML', () => {
+    const results = parseBingResults(BING_HTML_FIXTURE, 10);
+
+    expect(results).toHaveLength(2);
+
+    expect(results[0]!.title).toBe('Example Domain on Bing');
+    expect(results[0]!.url).toBe('https://example.com');
+    expect(results[0]!.displayUrl).toBe('https://example.com');
+    expect(results[0]!.snippet).toContain('This domain is for use in illustrative examples');
+
+    expect(results[1]!.title).toBe('IANA — IANA-managed Reserved Domains');
+    expect(results[1]!.url).toBe('https://www.iana.org/domains/reserved');
+  });
+
+  it('соблюдает лимит количества результатов', () => {
+    const results = parseBingResults(BING_HTML_FIXTURE, 1);
+    expect(results).toHaveLength(1);
+  });
+
+  it('возвращает пустой массив для HTML без результатов', () => {
+    expect(parseBingResults('<html><body><p>no results</p></body></html>', 10)).toEqual([]);
   });
 });
 
@@ -97,6 +151,45 @@ describe('webSearchTool', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content).toContain('network down');
+  });
+
+  it('переключается на Bing, если DuckDuckGo отдаёт anti-bot challenge', async () => {
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).includes('html.duckduckgo.com')) {
+        return new Response(DDG_CHALLENGE_FIXTURE, { status: 202, headers: { 'content-type': 'text/html' } });
+      }
+      return new Response(BING_HTML_FIXTURE, { status: 200, headers: { 'content-type': 'text/html' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await webSearchTool.execute({ query: 'example domain' }, {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: '/tmp',
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('Example Domain on Bing');
+    expect(result.metadata).toMatchObject({ source: 'bing' });
+  });
+
+  it('сообщает об ошибке, если DuckDuckGo и Bing недоступны', async () => {
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).includes('html.duckduckgo.com')) {
+        return new Response(DDG_CHALLENGE_FIXTURE, { status: 202, headers: { 'content-type': 'text/html' } });
+      }
+      return new Response('Server Error', { status: 500, headers: { 'content-type': 'text/plain' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await webSearchTool.execute({ query: 'test' }, {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: '/tmp',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('anti-bot');
   });
 });
 
@@ -140,5 +233,53 @@ describe('webFetchTool', () => {
     expect(result.content).not.toContain('color:red');
     expect(result.content).toContain('Text');
     expect(result.content).toContain('More');
+  });
+
+  it('поддерживает вызов только с urls (без url)', async () => {
+    const fetchMock = vi.fn(async () => new Response('ok', {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await webFetchTool.execute(
+      { urls: ['https://one.example', 'https://two.example'] },
+      { sessionId: 's1', messageId: 'm1', workingDir: '/tmp' },
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.metadata?.count).toBe(2);
+  });
+
+  it('возвращает ошибку, если не указаны ни url, ни urls', async () => {
+    const fetchMock = vi.fn(async () => new Response('ok'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await webFetchTool.execute(
+      {},
+      { sessionId: 's1', messageId: 'm1', workingDir: '/tmp' },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('url или urls');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('нормализует URL без схемы', async () => {
+    const fetchMock = vi.fn(async () => new Response('ok', {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await webFetchTool.execute(
+      { url: 'example.com' },
+      { sessionId: 's1', messageId: 'm1', workingDir: '/tmp' },
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(fetchMock).toHaveBeenCalledWith('https://example.com', expect.anything());
+    expect(result.content).toContain('### https://example.com');
   });
 });
