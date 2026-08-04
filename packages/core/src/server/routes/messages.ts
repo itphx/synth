@@ -34,5 +34,124 @@ export function createMessageRoutes(
     return c.json(result, 200);
   });
 
+  // PATCH /api/v2/messages/:sessionId/:index/toggle — переключить disabled
+  app.patch('/:sessionId/:index/toggle', auth.requireAuth, async (c) => {
+    const sessionId = c.req.param('sessionId');
+    const index = parseInt(c.req.param('index'), 10);
+
+    const session = await sessionManager.getSession(sessionId);
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+    }
+    if (index < 0 || index >= session.messages.length) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Сообщение не найдено' } }, 404);
+    }
+
+    const disabled = await sessionManager.withLock(sessionId, async (locked) => {
+      locked.messages[index]!.disabled = !locked.messages[index]!.disabled;
+      await sessionManager.updateSession(locked);
+      return locked.messages[index]!.disabled;
+    });
+
+    return c.json({ disabled, success: true });
+  });
+
+  // PATCH /api/v2/messages/:sessionId/:index/pin — переключить pinned
+  app.patch('/:sessionId/:index/pin', auth.requireAuth, async (c) => {
+    const sessionId = c.req.param('sessionId');
+    const index = parseInt(c.req.param('index'), 10);
+
+    const session = await sessionManager.getSession(sessionId);
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+    }
+    if (index < 0 || index >= session.messages.length) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Сообщение не найдено' } }, 404);
+    }
+
+    const pinned = await sessionManager.withLock(sessionId, async (locked) => {
+      locked.messages[index]!.pinned = !locked.messages[index]!.pinned;
+      await sessionManager.updateSession(locked);
+      return locked.messages[index]!.pinned;
+    });
+
+    return c.json({ pinned, success: true });
+  });
+
+  // DELETE /api/v2/messages/:sessionId/:index — удалить сообщение
+  app.delete('/:sessionId/:index', auth.requireAuth, async (c) => {
+    const sessionId = c.req.param('sessionId');
+    const index = parseInt(c.req.param('index'), 10);
+
+    const session = await sessionManager.getSession(sessionId);
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+    }
+    if (index < 0 || index >= session.messages.length) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Сообщение не найдено' } }, 404);
+    }
+
+    await sessionManager.withLock(sessionId, async (locked) => {
+      locked.messages.splice(index, 1);
+      locked.messages.forEach((m, i) => { m.seq = i + 1; });
+      await sessionManager.updateSession(locked);
+    });
+
+    return c.json({ success: true });
+  });
+
+  // POST /api/v2/messages/:sessionId/:index/retry — отключить сообщения от index и вернуть текст
+  app.post('/:sessionId/:index/retry', auth.requireAuth, async (c) => {
+    const sessionId = c.req.param('sessionId');
+    const index = parseInt(c.req.param('index'), 10);
+
+    const session = await sessionManager.getSession(sessionId);
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+    }
+    if (index < 0 || index >= session.messages.length) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Сообщение не найдено' } }, 404);
+    }
+
+    const msg = session.messages[index]!;
+    const content = msg.content;
+
+    await sessionManager.withLock(sessionId, async (locked) => {
+      for (let i = index; i < locked.messages.length; i++) {
+        locked.messages[i]!.disabled = true;
+      }
+      locked.pendingMessages = [];
+      await sessionManager.updateSession(locked);
+    });
+
+    return c.json({ content, success: true });
+  });
+
+  // GET /api/v2/messages/:sessionId/:index/debug
+  app.get('/:sessionId/:index/debug', auth.requireAuth, async (c) => {
+    const sessionId = c.req.param('sessionId');
+    const index = parseInt(c.req.param('index'), 10);
+
+    const session = await sessionManager.getSession(sessionId);
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+    }
+    if (index < 0 || index >= session.messages.length) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Сообщение не найдено' } }, 404);
+    }
+
+    const msg = session.messages[index]!;
+    return c.json({
+      role: msg.role,
+      content: msg.content.slice(0, 200),
+      model: msg.model,
+      provider: msg.provider,
+      usage: msg.usage,
+      debug_data: msg.debugData || {},
+      metadata: msg.metadata || {},
+      tool_calls: msg.toolCalls,
+    });
+  });
+
   return app;
 }
