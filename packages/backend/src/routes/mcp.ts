@@ -72,6 +72,14 @@ export function createMcpRoutes(
 
     await configStore.addServer(name, config);
 
+    // Синхронизируем конфиг менеджера, чтобы сервер сразу был доступен probe
+    if (mcpManager) {
+      mcpManager.setConfig({
+        ...mcpManager.getConfig(),
+        [name]: config,
+      });
+    }
+
     const connected = mcpManager?.getConfiguredServers().find((s) => s.name === name)?.connected ?? false;
     return c.json({ name, config, connected }, 201);
   });

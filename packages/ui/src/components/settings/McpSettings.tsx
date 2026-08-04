@@ -14,6 +14,7 @@ import type {
 } from '../../lib/api/synthApi'
 
 const EMPTY_CONFIG: McpServerConfig = { type: 'stdio' }
+const DEFAULT_AVAILABILITY = { plan: false, act: true }
 
 export const McpSettings = () => {
   const { t } = useI18n()
@@ -58,6 +59,17 @@ export const McpSettings = () => {
     toolSettings !== null &&
     initialSettingsRef.current !== null &&
     JSON.stringify(toolSettings) !== JSON.stringify(initialSettingsRef.current)
+
+  // Секция «Доступность инструментов» строится от серверов из MCP-конфига (CRUD-список).
+  // Настройки plan/act берутся из settings/mcp по имени сервера; серверы из settings/mcp,
+  // отсутствующие в конфиге, не показываем — probe и точечная настройка для них невозможны.
+  const availabilityServers =
+    servers === null
+      ? null
+      : Object.keys(servers).map((name) => ({
+          name,
+          entry: toolSettings?.[name] ?? { default: { ...DEFAULT_AVAILABILITY }, tools: {} },
+        }))
 
   const openAdd = () => {
     setEditing('__new__')
@@ -431,7 +443,7 @@ export const McpSettings = () => {
             <h3 className="text-base font-semibold">{t('mcp.permissions.title')}</h3>
             <p className="text-sm text-muted-foreground">{t('mcp.permissions.description')}</p>
           </div>
-          {toolSettings && Object.keys(toolSettings).length > 0 && (
+          {availabilityServers && availabilityServers.length > 0 && (
             <button
               onClick={handleSaveSettings}
               disabled={!dirty || savingSettings || toolSettingsLoading}
@@ -459,15 +471,15 @@ export const McpSettings = () => {
           </div>
         )}
 
-        {toolSettings && Object.keys(toolSettings).length === 0 && !toolSettingsLoading && (
+        {availabilityServers && availabilityServers.length === 0 && !toolSettingsLoading && (
           <div className="text-center text-muted-foreground py-6 text-sm">
             {t('mcp.permissions.noServerSettings')}
           </div>
         )}
 
-        {toolSettings && Object.keys(toolSettings).length > 0 && (
+        {availabilityServers && availabilityServers.length > 0 && (
           <div className="space-y-2">
-            {Object.entries(toolSettings).map(([name, entry]) => (
+            {availabilityServers.map(({ name, entry }) => (
               <ServerAvailabilityCard
                 key={name}
                 name={name}
