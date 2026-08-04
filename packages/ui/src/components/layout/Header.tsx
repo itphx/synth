@@ -465,10 +465,16 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
             <button
               onClick={handleFileSave}
               disabled={!isEditorDirty || isSaving}
-              className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className={cn(
+                'shrink-0 inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium transition-colors',
+                isEditorDirty && !isSaving
+                  ? 'text-primary hover:bg-primary/10'
+                  : 'text-muted-foreground opacity-50 cursor-default',
+              )}
               title={t('common.save')}
             >
               <Icon name="save" className="size-3.5" />
+              {isSaving ? t('file.saving') : t('common.save')}
             </button>
             <button
               onClick={handleFileClose}
