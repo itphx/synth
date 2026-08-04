@@ -4,6 +4,8 @@ import { JsonStore } from '../../storage/json-store.js';
 import type { AgentDefinition } from '@synth/shared';
 import { loadSystemAgentDefinitions } from '../../engine/agents/index.js';
 
+const AGENT_ID_REGEX = /^[a-z0-9_-]+$/;
+
 export function createAgentRoutes(
   auth: AuthKit,
   agentStore: JsonStore<AgentDefinition>,
@@ -53,6 +55,9 @@ export function createAgentRoutes(
     const id = body.id?.trim();
     if (!id) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'ID обязателен' } }, 400);
+    }
+    if (!AGENT_ID_REGEX.test(id)) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'ID агента может содержать только латиницу, цифры, дефис и подчёркивание' } }, 400);
     }
 
     const existing = await agentStore.load(id);

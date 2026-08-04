@@ -8,6 +8,8 @@ import { t } from '../lib/i18n.js';
 
 const BUILTIN_IDS = new Set(loadSystemAgentDefinitions().map((a: AgentDefinition) => a.id));
 
+const AGENT_ID_REGEX = /^[a-z0-9_-]+$/;
+
 function getBuiltInAgents(): AgentDefinition[] {
   return loadSystemAgentDefinitions();
 }
@@ -100,6 +102,9 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
     const id = body.id?.trim();
     if (!id) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.idRequired', undefined, c) } }, 400);
+    }
+    if (!AGENT_ID_REGEX.test(id)) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidAgentId', undefined, c) } }, 400);
     }
 
     const builtins = getBuiltInAgents();
