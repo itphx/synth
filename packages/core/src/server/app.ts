@@ -18,6 +18,7 @@ import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } fr
 import { createLocalAuth } from '../auth/local.js';
 import { JsonStore } from '../storage/json-store.js';
 import { ProjectStore } from '../storage/project-store.js';
+import { RuntimeSettingsStore } from '../storage/runtime-settings.js';
 import { createHealthRoutes } from './routes/health.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createSessionRoutes } from './routes/sessions.js';
@@ -30,6 +31,7 @@ import { createQueueRoutes } from './routes/queue.js';
 import { createI18nRoutes } from './routes/i18n.js';
 import { createUpdateRoutes } from './routes/updates.js';
 import { createMessageRoutes } from './routes/messages.js';
+import { createSettingsRoutes } from './routes/settings.js';
 
 export interface StandaloneConfig {
   port: number;
@@ -182,7 +184,10 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const dataDir = config.dataDir;
   await ensureDataDir(dataDir);
 
-  const defaultWorkingDir = config.defaultWorkingDir ?? join(dataDir, 'workspaces', 'default');
+  // Runtime-настройки (AD-005): workspace из {dataDir}/settings.json приоритетнее config/env
+  const settingsStore = new RuntimeSettingsStore({ dataDir });
+  const runtimeWorkspace = await settingsStore.getWorkspace();
+  const defaultWorkingDir = runtimeWorkspace ?? config.defaultWorkingDir ?? join(dataDir, 'workspaces', 'default');
   await mkdir(defaultWorkingDir, { recursive: true });
 
   const fileStore = new FileStore({ dataDir });
@@ -296,6 +301,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   // Messages (batch operations)
   app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager));
+
+  // Settings (runtime-настройки для UI, раздел «Проекты»)
+  app.route('/api/v2/settings', createSettingsRoutes(auth, {
+    settingsStore,
+    fallbackWorkspace: defaultWorkingDir,
+  }));
 
   // Глобальный SSE-хаб
   app.get('/api/v2/events', async (c) => {
@@ -566,10 +577,15 @@ export async function createStandaloneApp(config: StandaloneConfig) {
               const approvalId = msg.approval_id;
               if (!sid || !approvalId) return;
 
+              // Новый формат: { action: 'allow'|'deny', once?: boolean }.
+              // Старый формат { approved: boolean } остаётся совместимым.
+              const action = msg.action === 'allow' || msg.action === 'deny' ? msg.action : undefined;
               eventBus.publish(sid, 'permission.replied', {
                 approval_id: approvalId,
                 session_id: sid,
-                approved: msg.approved === true,
+                approved: action !== undefined ? action === 'allow' : msg.approved === true,
+                ...(action ? { action } : {}),
+                ...(typeof msg.once === 'boolean' ? { once: msg.once } : {}),
               });
             }
           } catch { /* ignore parse errors */ }

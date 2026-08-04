@@ -480,6 +480,14 @@ export const dict = {
   'chat.footer.approve': 'Auto-approve (in development)',
   'chat.footer.mode': 'Mode',
 
+  // Session Plan/Act mode (AD-025)
+  'chat.mode.title': 'Session mode: Plan (read-only) / Act (full access)',
+  'chat.mode.plan': 'Plan',
+  'chat.mode.act': 'Act',
+  'chat.mode.planEnabled': 'Plan mode enabled',
+  'chat.mode.actEnabled': 'Act mode enabled',
+  'chat.mode.error': 'Failed to change mode:',
+
   // Connection indicator
   'connection.idle': 'No session',
   'connection.ws': 'WebSocket connected',
@@ -604,6 +612,17 @@ export const dict = {
   'admin.projects.memberCount': '{count} members',
   'admin.projects.statusCount': '{count} statuses',
   'admin.projects.confirmDelete': 'Delete project «{name}»?',
+
+  // Default workspace
+  'admin.projects.workspace.title': 'Default workspace',
+  'admin.projects.workspace.placeholder': 'Path to workspace',
+  'admin.projects.workspace.save': 'Save',
+  'admin.projects.workspace.saving': 'Saving...',
+  'admin.projects.workspace.saved': 'Workspace saved',
+  'admin.projects.workspace.error': 'Failed to save workspace',
+  'admin.projects.workspace.pathRequired': 'Path cannot be empty',
+  'admin.projects.workspace.current': 'Current: {path}',
+  'admin.projects.workspace.hint': 'Default: <dataDir>/workspaces/default. Can be overridden via env SYNTH_DEFAULT_WORKSPACE.',
 
   // Providers
   'admin.providers.title': 'Providers',

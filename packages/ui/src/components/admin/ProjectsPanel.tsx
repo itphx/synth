@@ -2,14 +2,21 @@ import { useEffect, useState } from 'react'
 import { synthApi, type ProjectData } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { useI18n } from '@/lib/i18n'
+import { useNotification } from '@/hooks/useNotification'
 
 export const ProjectsPanel = () => {
   const { t } = useI18n()
+  const { notify } = useNotification()
   const [projects, setProjects] = useState<ProjectData[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
   const [name, setName] = useState('')
   const [error, setError] = useState('')
+
+  // Рабочий каталог по умолчанию
+  const [workspace, setWorkspace] = useState('')
+  const [workspaceDraft, setWorkspaceDraft] = useState('')
+  const [workspaceSaving, setWorkspaceSaving] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -22,6 +29,37 @@ export const ProjectsPanel = () => {
   }
 
   useEffect(() => { load() }, [])
+
+  useEffect(() => {
+    synthApi
+      .getWorkspaceSetting()
+      .then((r) => {
+        setWorkspace(r.workspace)
+        setWorkspaceDraft(r.workspace)
+      })
+      .catch(() => {})
+  }, [])
+
+  const handleSaveWorkspace = async () => {
+    const path = workspaceDraft.trim()
+    if (!path) {
+      setError(t('admin.projects.workspace.pathRequired'))
+      return
+    }
+    setWorkspaceSaving(true)
+    try {
+      const r = await synthApi.setWorkspaceSetting(path)
+      setWorkspace(r.workspace)
+      setWorkspaceDraft(r.workspace)
+      setError('')
+      notify({ text: t('admin.projects.workspace.saved'), type: 'success', category: 'system' })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : t('admin.projects.workspace.error')
+      notify({ text: `${t('admin.projects.workspace.error')} ${msg}`, type: 'error', category: 'error' })
+    } finally {
+      setWorkspaceSaving(false)
+    }
+  }
 
   const handleCreate = async () => {
     if (!name.trim()) {
@@ -63,6 +101,36 @@ export const ProjectsPanel = () => {
           <Icon name="add" className="size-3.5" />
           {t('admin.projects.create')}
         </button>
+      </div>
+
+      <div className="bg-background rounded-lg border p-4 space-y-2">
+        <h4 className="font-medium text-sm">{t('admin.projects.workspace.title')}</h4>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={workspaceDraft}
+            onChange={(e) => { setWorkspaceDraft(e.target.value); setError('') }}
+            placeholder={t('admin.projects.workspace.placeholder')}
+            className="flex-1 min-w-0 px-3 py-2 rounded-lg border bg-background text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring"
+            onKeyDown={(e) => e.key === 'Enter' && handleSaveWorkspace()}
+          />
+          <button
+            onClick={handleSaveWorkspace}
+            disabled={workspaceSaving}
+            className="shrink-0 px-3 py-2 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {workspaceSaving ? t('admin.projects.workspace.saving') : t('admin.projects.workspace.save')}
+          </button>
+        </div>
+        {workspace && (
+          <p className="text-xs text-muted-foreground">
+            {t('admin.projects.workspace.current', { path: workspace })}
+          </p>
+        )}
+        <p className="text-xs text-muted-foreground/70">
+          {t('admin.projects.workspace.hint')}
+        </p>
+        {error && <p className="text-xs text-red-500">{error}</p>}
       </div>
 
       {showCreate && (

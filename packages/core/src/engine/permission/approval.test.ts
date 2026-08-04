@@ -81,6 +81,68 @@ describe('PermissionApprovalManager — ask flow', () => {
     expect(decision.timeout).toBe(true);
   });
 
+  it('ответ с action=allow + once=false — решение с action/once', async () => {
+    bus.subscribe('s1', () => {});
+    const pending = manager.waitForDecision('s1', request, 1000);
+    await new Promise((r) => setTimeout(r, 10));
+    bus.publish('s1', 'permission.replied', {
+      approval_id: 'approval_1',
+      session_id: 's1',
+      action: 'allow',
+      once: false,
+    });
+    const decision = await pending;
+    expect(decision.approved).toBe(true);
+    expect(decision.action).toBe('allow');
+    expect(decision.once).toBe(false);
+  });
+
+  it('ответ с action=deny — approved=false, action=deny', async () => {
+    bus.subscribe('s1', () => {});
+    const pending = manager.waitForDecision('s1', request, 1000);
+    await new Promise((r) => setTimeout(r, 10));
+    bus.publish('s1', 'permission.replied', {
+      approval_id: 'approval_1',
+      session_id: 's1',
+      action: 'deny',
+      once: true,
+    });
+    const decision = await pending;
+    expect(decision.approved).toBe(false);
+    expect(decision.action).toBe('deny');
+    expect(decision.once).toBe(true);
+  });
+
+  it('старый формат { approved: true } — approved=true без action', async () => {
+    bus.subscribe('s1', () => {});
+    const pending = manager.waitForDecision('s1', request, 1000);
+    await new Promise((r) => setTimeout(r, 10));
+    bus.publish('s1', 'permission.replied', {
+      approval_id: 'approval_1',
+      session_id: 's1',
+      approved: true,
+    });
+    const decision = await pending;
+    expect(decision.approved).toBe(true);
+    expect(decision.action).toBeUndefined();
+    expect(decision.once).toBeUndefined();
+  });
+
+  it('action приоритетнее approved при конфликте', async () => {
+    bus.subscribe('s1', () => {});
+    const pending = manager.waitForDecision('s1', request, 1000);
+    await new Promise((r) => setTimeout(r, 10));
+    bus.publish('s1', 'permission.replied', {
+      approval_id: 'approval_1',
+      session_id: 's1',
+      approved: true,
+      action: 'deny',
+    });
+    const decision = await pending;
+    expect(decision.approved).toBe(false);
+    expect(decision.action).toBe('deny');
+  });
+
   it('после ответа подписка отписана (не утекает)', async () => {
     const spy = vi.spyOn(bus, 'unsubscribe');
     bus.subscribe('s1', () => {});

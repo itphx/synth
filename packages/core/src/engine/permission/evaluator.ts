@@ -1,6 +1,6 @@
 import { relative, resolve, isAbsolute, normalize, sep } from 'node:path';
-import { globMatch } from '@synth/shared';
-import type { PermissionAction, PermissionConfig, PermissionDecision, PermissionRule, PlanMode, SessionMode } from '@synth/shared';
+import { globMatch, ToolCapability } from '@synth/shared';
+import type { PermissionAction, PermissionConfig, PermissionDecision, PermissionRule, PlanMode, SessionMode, McpServerToolSettings, McpToolAvailability } from '@synth/shared';
 import { resolvePath } from '../tools/path-utils.js';
 import { getToolGroups, TOOL_PATH_PARAMS } from './groups.js';
 
@@ -15,6 +15,8 @@ export interface PermissionCheckInput {
   planMode?: PlanMode;
   /** Утверждён ли план в сессии (после plan_exit). */
   planApproved?: boolean;
+  /** Доступность MCP-инструментов по режимам plan/act (serverName → настройки). */
+  mcpToolSettings?: Record<string, McpServerToolSettings>;
 }
 
 /**
@@ -40,6 +42,35 @@ export function isEditTool(toolName: string, capabilities?: readonly string[]): 
 }
 
 /**
+ * AD-025: тулы, блокируемые в plan-режиме (и strict без утверждённого плана):
+ * edit-группа (write/edit/delete файлов) + git-запись (git_commit/git_push/...).
+ * Read-only git-тулы (git_status/git_diff/...) в группу не входят и остаются доступны.
+ */
+export function isPlanBlockedTool(toolName: string, capabilities?: readonly string[]): boolean {
+  const groups = getToolGroups(toolName, capabilities);
+  return groups.includes('edit') || groups.includes('git_write');
+}
+
+/**
+ * Достаёт настройку доступности MCP-инструмента по имени сервера и локальному имени
+ * тула (без префикса). Полное имя инструмента: "{serverName}_{toolName}".
+ * Возвращает undefined, если для сервера/тула нет настроек (доступен по умолчанию).
+ */
+export function getMcpToolAvailability(
+  settings: Record<string, McpServerToolSettings> | undefined,
+  fullToolName: string,
+): McpToolAvailability | undefined {
+  if (!settings) return undefined;
+  const idx = fullToolName.indexOf('_');
+  if (idx === -1) return undefined;
+  const serverName = fullToolName.slice(0, idx);
+  const localName = fullToolName.slice(idx + 1);
+  const server = settings[serverName];
+  if (!server) return undefined;
+  return server.tools?.[localName] ?? server.default;
+}
+
+/**
  * AD-029: PermissionEvaluator — вычисление решения для одного tool_call.
  *
  * Приоритет правил:
@@ -61,15 +92,15 @@ export class PermissionEvaluator {
   }
 
   check(input: PermissionCheckInput): PermissionDecision {
-    const { toolName, params, workingDir, capabilities, sessionMode, planMode, planApproved } = input;
+    const { toolName, params, workingDir, capabilities, sessionMode, planMode, planApproved, mcpToolSettings } = input;
     const paths = extractPaths(toolName, params, workingDir);
     const isFile = paths.length > 0;
 
     // AD-025: plan-рестрикция применяется поверх конфига. В режиме plan (или
-    // strict без утверждённого плана) все write/edit/delete тулы → deny,
-    // единственное исключение — файлы .synth/plans/*.md.
-    if (isPlanRestricted(sessionMode, planMode, planApproved) && isEditTool(toolName, capabilities)) {
-      if (isFile && paths.some((p) => matchPathPattern('.synth/plans/*.md', p, workingDir))) {
+    // strict без утверждённого плана) все write/edit/delete тулы и git-запись → deny,
+    // единственное исключение — файлы .synth/plans/*.md для edit-тулов.
+    if (isPlanRestricted(sessionMode, planMode, planApproved) && isPlanBlockedTool(toolName, capabilities)) {
+      if (isEditTool(toolName, capabilities) && isFile && paths.some((p) => matchPathPattern('.synth/plans/*.md', p, workingDir))) {
         return {
           action: 'allow',
           reason: 'plan mode: запись в .synth/plans/*.md разрешена',
@@ -82,6 +113,22 @@ export class PermissionEvaluator {
         reason: `plan mode: запись файлов заблокирована (${restrictionSource})`,
         matchedRule: 'plan.deny',
       };
+    }
+
+    // MCP-доступность по режимам (настройки сессии): в plan-режиме инструмент
+    // доступен только если plan=true, в act — act=true. Применяется поверх конфига.
+    if (capabilities?.includes(ToolCapability.MCP) && mcpToolSettings) {
+      const availability = getMcpToolAvailability(mcpToolSettings, toolName);
+      if (availability) {
+        const modeKey: keyof McpToolAvailability = sessionMode === 'plan' ? 'plan' : 'act';
+        if (!availability[modeKey]) {
+          return {
+            action: 'deny',
+            reason: `MCP-инструмент недоступен в режиме ${modeKey}`,
+            matchedRule: 'mcp.mode',
+          };
+        }
+      }
     }
 
     // 1. Правило по конкретному имени тула

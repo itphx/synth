@@ -39,3 +39,21 @@ export interface PermissionDecision {
   /** Ключ правила, которое сработало (имя тула, группа, паттерн или '*'). */
   matchedRule?: string;
 }
+
+/**
+ * Доступность MCP-инструмента по режимам сессии (plan / act).
+ * Используется в настройках сессии: mcpToolSettings[serverName].tools[toolName]
+ * или .default для всех инструментов сервера.
+ */
+export interface McpToolAvailability {
+  plan: boolean;
+  act: boolean;
+}
+
+/** Настройки доступности инструментов одного MCP-сервера по режимам. */
+export interface McpServerToolSettings {
+  /** Дефолт для всех инструментов сервера. */
+  default?: McpToolAvailability;
+  /** Точечная настройка по имени инструмента (без префикса сервера). */
+  tools?: Record<string, McpToolAvailability>;
+}

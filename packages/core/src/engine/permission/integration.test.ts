@@ -225,3 +225,266 @@ describe('ChatOrchestrator × permissions (AD-029) — smoke', () => {
     expect(r.fileCreated).toBe(false);
   });
 });
+
+/** Провайдер, который дважды «зовёт» write_file, затем отвечает текстом. */
+class MockDoubleWriteProvider extends BaseProvider {
+  private _calls = 0;
+
+  private _next(): { content: string; toolCalls?: Record<string, unknown>[] } {
+    if (this._calls < 2) {
+      const n = this._calls;
+      return {
+        content: '',
+        toolCalls: [{
+          id: `call_w${n}`,
+          function: { name: 'write_file', arguments: JSON.stringify({ file_path: `double${n}.txt`, content: 'x' }) },
+        }],
+      };
+    }
+    return { content: 'Готово' };
+  }
+
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _stream?: boolean,
+    _debugCollector?: unknown,
+  ): Promise<import('@synth/shared').LLMResponse> {
+    const next = this._next();
+    this._calls++;
+    return { content: next.content, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: next.toolCalls };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _cancellationToken?: CancellationToken,
+  ): AsyncGenerator<import('@synth/shared').LLMChunk> {
+    const next = this._next();
+    this._calls++;
+    yield { content: next.content, isFinal: true, toolCalls: next.toolCalls, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+  }
+
+  getProviderName(): string {
+    return 'mockdouble';
+  }
+}
+
+/** Провайдер: первый вызов — write_file, второй — текст. Статический счётчик вызовов LLM. */
+class MockDenyProvider extends BaseProvider {
+  static calls = 0;
+
+  private _next(): { content: string; toolCalls?: Record<string, unknown>[] } {
+    if (MockDenyProvider.calls === 0) {
+      return {
+        content: '',
+        toolCalls: [{
+          id: 'call_deny',
+          function: { name: 'write_file', arguments: JSON.stringify({ file_path: 'deny.txt', content: 'x' }) },
+        }],
+      };
+    }
+    return { content: 'Второй вызов — не должен случиться' };
+  }
+
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _stream?: boolean,
+    _debugCollector?: unknown,
+  ): Promise<import('@synth/shared').LLMResponse> {
+    const next = this._next();
+    MockDenyProvider.calls++;
+    return { content: next.content, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: next.toolCalls };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _cancellationToken?: CancellationToken,
+  ): AsyncGenerator<import('@synth/shared').LLMChunk> {
+    const next = this._next();
+    MockDenyProvider.calls++;
+    yield { content: next.content, isFinal: true, toolCalls: next.toolCalls, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+  }
+
+  getProviderName(): string {
+    return 'mockdeny';
+  }
+}
+
+describe('ChatOrchestrator × permissions — once:false и deny (AD-029)', () => {
+  let store: FileStore;
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-perm2-'));
+    store = new FileStore({ dataDir: tmpDir });
+    sessionManager = new SessionManager(store);
+    eventBus = new EventBus();
+    ProviderFactory.register('mockdouble', MockDoubleWriteProvider);
+    ProviderFactory.register('mockdeny', MockDenyProvider);
+    MockDenyProvider.calls = 0;
+  });
+
+  afterEach(async () => {
+    ProviderFactory['_providers'].delete('mockdouble');
+    ProviderFactory['_providers'].delete('mockdeny');
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function runRaw(
+    providerName: string,
+    permissionConfig: PermissionConfig,
+    opts?: { onSession?: (sessionId: string) => void },
+  ): Promise<{ result: import('../orchestrator.js').ProcessMessageResult; chunks: Array<{ event: string; data: Record<string, unknown> }>; sessionId: string }> {
+    const toolRegistry = createToolRegistry();
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus,
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: (name: string) => {
+        return { name, type: providerName, baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@synth/shared').ProviderConfig;
+      },
+      toolRegistry,
+      permissionConfig,
+      defaultWorkingDir: tmpDir,
+    });
+
+    const session = await sessionManager.createSession({
+      title: 'Smoke2',
+      settings: { provider: providerName, model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+    });
+    opts?.onSession?.(session.id);
+    const msg = makeMessage();
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const processMessage = orchestrator.createProcessMessage();
+    const result = await processMessage(fresh, msg, new AbortController().signal, (event, data) => {
+      chunks.push({ event, data });
+    });
+    return { result, chunks, sessionId: session.id };
+  }
+
+  it('ask + once:false — allow-правило добавляется в сессию, повторный вызов не спрашивает', async () => {
+    let sessionId = '';
+    const asked: Array<Record<string, unknown>> = [];
+    const unsubs: Array<() => void> = [];
+    const { result } = await runRaw('mockdouble', { rules: { write_file: 'ask' }, askTimeoutMs: 2000 }, {
+      onSession: (id) => {
+        sessionId = id;
+        unsubs.push(eventBus.subscribe(id, (e) => {
+          if (e.type === 'permission.asked') {
+            asked.push(e.data as Record<string, unknown>);
+            eventBus.publish(id, 'permission.replied', {
+              approval_id: (e.data as Record<string, unknown>).approval_id as string,
+              session_id: id,
+              action: 'allow',
+              once: false,
+            });
+          }
+        }));
+      },
+    });
+    expect(result.error).toBeUndefined();
+    expect(asked.length).toBe(1);
+    const session = (await sessionManager.getSession(sessionId))!;
+    expect(session.settings.permission?.rules.write_file).toBe('allow');
+    await expect(readFile(join(tmpDir, 'double1.txt'), 'utf-8')).resolves.toBe('x');
+    for (const unsub of unsubs) unsub();
+  });
+
+  it('ask + once:true — allow только один раз, повторный вызов снова спрашивает', async () => {
+    let sessionId = '';
+    const asked: Array<Record<string, unknown>> = [];
+    const unsubs: Array<() => void> = [];
+    const { result } = await runRaw('mockdouble', { rules: { write_file: 'ask' }, askTimeoutMs: 2000 }, {
+      onSession: (id) => {
+        sessionId = id;
+        unsubs.push(eventBus.subscribe(id, (e) => {
+          if (e.type === 'permission.asked') {
+            asked.push(e.data as Record<string, unknown>);
+            eventBus.publish(id, 'permission.replied', {
+              approval_id: (e.data as Record<string, unknown>).approval_id as string,
+              session_id: id,
+              action: 'allow',
+              once: true,
+            });
+          }
+        }));
+      },
+    });
+    expect(result.error).toBeUndefined();
+    expect(asked.length).toBe(2);
+    const session = (await sessionManager.getSession(sessionId))!;
+    expect(session.settings.permission).toBeUndefined();
+    for (const unsub of unsubs) unsub();
+  });
+
+  it('ask→deny от пользователя — обработка завершается, история tool_result сохраняется', async () => {
+    let sessionId = '';
+    const unsubs: Array<() => void> = [];
+    const { result, chunks } = await runRaw('mockdeny', { rules: { write_file: 'ask' }, askTimeoutMs: 2000 }, {
+      onSession: (id) => {
+        sessionId = id;
+        unsubs.push(eventBus.subscribe(id, (e) => {
+          if (e.type === 'permission.asked') {
+            eventBus.publish(id, 'permission.replied', {
+              approval_id: (e.data as Record<string, unknown>).approval_id as string,
+              session_id: id,
+              action: 'deny',
+              once: true,
+            });
+          }
+        }));
+      },
+    });
+    expect(result.error).toBeUndefined();
+
+    // Цикл LLM не продолжается: провайдер вызван ровно один раз
+    expect(MockDenyProvider.calls).toBe(1);
+
+    // Файл не создан
+    await expect(access(join(tmpDir, 'deny.txt'))).rejects.toThrow();
+
+    // stream.done помечен как остановленный пользователем
+    const done = chunks.find((c) => c.event === 'stream.done');
+    expect(done).toBeDefined();
+    expect(done!.data.stopped_by_deny).toBe(true);
+    expect(done!.data.deny_reason).toContain('отклонено пользователем');
+
+    // История сохранена: финальное сообщение ассистента с tool_results
+    const session = (await sessionManager.getSession(sessionId))!;
+    const assistant = [...session.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT);
+    expect(assistant).toBeDefined();
+    expect((assistant!.metadata as Record<string, unknown>).tool_results).toBeDefined();
+    expect(assistant!.content).toContain('Обработка остановлена');
+    for (const unsub of unsubs) unsub();
+  });
+
+  it('ask→deny (timeout) — цикл продолжается, история не помечается stopped_by_deny', async () => {
+    const unsubs: Array<() => void> = [];
+    const { result, chunks } = await runRaw('mockdeny', { rules: { write_file: 'ask' }, askTimeoutMs: 50 }, {
+      onSession: (id) => {
+        // Подписчик есть (иначе noSubscribers), но не отвечает — таймаут
+        unsubs.push(eventBus.subscribe(id, () => {}));
+      },
+    });
+    expect(result.error).toBeUndefined();
+    // Таймаут не останавливает обработку — провайдер вызван повторно
+    expect(MockDenyProvider.calls).toBe(2);
+    const done = chunks.find((c) => c.event === 'stream.done');
+    expect(done!.data.stopped_by_deny).toBeUndefined();
+    for (const unsub of unsubs) unsub();
+  });
+});

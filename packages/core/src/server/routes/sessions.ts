@@ -2,7 +2,7 @@ import { ReadableStream } from 'node:stream/web';
 import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer } from '../../index.js';
-import { MessageRole, generateStreamId, nowISO } from '@synth/shared';
+import { MessageRole, SESSION_MODES, generateStreamId, nowISO } from '@synth/shared';
 import type { Message } from '@synth/shared';
 import { enqueueUserMessage, sseEventStream } from '../../index.js';
 import { serializeSession, serializeMessage } from '../serialize.js';
@@ -70,6 +70,14 @@ export function createSessionRoutes(
       }
     }
     if (body.engine !== undefined) session.engine = body.engine;
+    if (body.mode !== undefined) {
+      if (!SESSION_MODES.includes(body.mode)) {
+        return c.json({
+          error: { code: 'VALIDATION_ERROR', message: 'mode должен быть "plan" или "act"' },
+        }, 400);
+      }
+      session.mode = body.mode;
+    }
     if (body.settings !== undefined) {
       session.settings = { ...session.settings, ...(body.settings as Partial<typeof session.settings>) };
     }

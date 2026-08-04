@@ -245,11 +245,11 @@ export class ChatOrchestrator {
     let sessionMode: SessionMode = session.mode === 'plan' ? 'plan' : 'act';
     let planApproved = Boolean(session.planContent);
 
-    // AD-029: permissions — сессионный override приоритетнее глобального конфига
-    const permissionEvaluator = new PermissionEvaluator(
-      session.settings.permission ?? this._permissionConfig,
-    );
-    const effectivePermissionConfig = session.settings.permission ?? this._permissionConfig;
+    // AD-029: permissions — сессионный override приоритетнее глобального конфига.
+    // Конфиг может быть расширен «разрешить в сессии» (once:false) в процессе
+    // обработки, поэтому ссылка и эвалуатор пересоздаются.
+    let effectivePermissionConfig = session.settings.permission ?? this._permissionConfig;
+    let permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig);
 
     const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
     const agentMaxSteps = agentDef?.maxSteps;
@@ -480,6 +480,8 @@ export class ChatOrchestrator {
       let finalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       let finalModel: string | undefined;
       const allToolCalls: Array<Record<string, unknown>> = [];
+      let stopAfterDeny = false;
+      let denyStopReason: string | undefined;
 
       while (toolIteration < maxIterations) {
         if (cancelToken.cancelled) break;
@@ -670,10 +672,12 @@ export class ChatOrchestrator {
             sessionMode,
             planMode,
             planApproved,
+            mcpToolSettings: session.settings.mcpToolSettings,
           });
 
           let executeTool = permissionDecision.action === 'allow';
           let deniedReason: string | undefined;
+          let userDenied = false;
 
           if (permissionDecision.action === 'deny') {
             deniedReason = permissionDecision.reason;
@@ -691,6 +695,12 @@ export class ChatOrchestrator {
             );
             if (approval.approved) {
               executeTool = true;
+              // «Разрешить в сессии» (once:false) — добавляем allow-правило для
+              // тула в permission-конфиг сессии, чтобы не спрашивать повторно.
+              if (approval.once === false) {
+                effectivePermissionConfig = await this._grantSessionToolAllow(session, toolName);
+                permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig);
+              }
             } else {
               const why = approval.timeout
                 ? 'истекло время ожидания подтверждения'
@@ -698,6 +708,7 @@ export class ChatOrchestrator {
                   ? 'нет подключённого пользователя для подтверждения'
                   : 'отклонено пользователем';
               deniedReason = `${permissionDecision.reason} (${why})`;
+              userDenied = !approval.timeout && !approval.noSubscribers;
             }
           }
 
@@ -841,6 +852,15 @@ export class ChatOrchestrator {
             branchId: '',
             toolCallId: tcId,
           });
+
+          // AD-029: пользователь отклонил запрос (ask→deny) — прекращаем
+          // обработку: не продолжаем цикл LLM, но уже выполненные tool_result
+          // и промежуточные ответы остаются в истории (сохраняются ниже).
+          if (userDenied) {
+            stopAfterDeny = true;
+            denyStopReason = deniedReason;
+            break;
+          }
         }
 
         publishChunk('tool_call.loop', {
@@ -851,11 +871,18 @@ export class ChatOrchestrator {
         });
 
         toolIteration++;
+        if (stopAfterDeny) break;
       }
 
       // 7. Handle max iterations exceeded
       if (toolIteration >= maxIterations && !finalContent) {
         finalContent = '(достигнут лимит итераций инструментов)';
+      }
+
+      // AD-029: пользователь отклонил ask — обработка завершена. Фиксируем
+      // причину в финальном сообщении (история tool_result уже собрана).
+      if (stopAfterDeny && !finalContent) {
+        finalContent = `Обработка остановлена: ${denyStopReason ?? 'пользователь отклонил запрос'}`;
       }
 
       // 7.5. Quality check + escalation (AD-034)
@@ -945,6 +972,11 @@ export class ChatOrchestrator {
         reasoning_blocks: allReasoning.length > 0 ? allReasoning : undefined,
         intermediate_text_blocks: allIntermediateTexts.length > 0 ? allIntermediateTexts : undefined,
       };
+
+      if (stopAfterDeny) {
+        doneData.stopped_by_deny = true;
+        doneData.deny_reason = denyStopReason;
+      }
 
       const debugInfo = debugCollector.getDebugInfo();
       if (debugInfo) {
@@ -1555,5 +1587,32 @@ export class ChatOrchestrator {
       'incorrect api key', '401', 'authentication', 'unauthorized',
     ];
     return !unrecoverable.some((p) => lower.includes(p));
+  }
+
+  /**
+   * AD-029: «Разрешить в сессии» (once:false). Добавляет allow-правило для тула
+   * в permission-конфиг сессии и сохраняет его. Если у сессии не было своего
+   * конфига — наследует глобальные правила, чтобы не потерять их при оверрайде.
+   */
+  private async _grantSessionToolAllow(
+    session: Session,
+    toolName: string,
+  ): Promise<PermissionConfig> {
+    let cfg: PermissionConfig | undefined = session.settings.permission;
+    if (!cfg) {
+      cfg = {
+        rules: { ...this._permissionConfig.rules },
+        askTimeoutMs: this._permissionConfig.askTimeoutMs,
+      };
+    }
+    const next: PermissionConfig = {
+      ...cfg,
+      rules: { ...cfg.rules, [toolName]: 'allow' },
+    };
+    await this._sessionManager.withLock(session.id, async (s) => {
+      s.settings.permission = next;
+      await this._sessionManager.saveSession(s);
+    });
+    return next;
   }
 }

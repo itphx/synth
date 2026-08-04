@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { SessionData } from '@/lib/api/synthApi'
+import type { SessionMode } from '@synth/shared'
 import { synthApi } from '@/lib/api/synthApi'
 import { loadRoutingDefaults, routingDefaultsToSettings } from '@/lib/routingDefaults'
 import { useUIStore } from './useUIStore'
@@ -22,6 +23,7 @@ interface SessionsStore {
   moveSession: (sessionId: string, projectId: string | null) => Promise<SessionData | null>
   renameSession: (sessionId: string, newName: string) => Promise<SessionData | null>
   deleteSession: (sessionId: string) => Promise<boolean>
+  setSessionMode: (sessionId: string, mode: SessionMode) => Promise<SessionData>
   getSessionsByProject: (projectId: string | null) => SessionData[]
 }
 
@@ -124,6 +126,21 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
     } catch (e) {
       set({ error: (e as Error).message })
       return false
+    }
+  },
+
+  // Plan/Act режим сессии (AD-025): PATCH /sessions/:id { mode }
+  // Бросает ошибку при неудаче — вызывающий код решает, что показать.
+  setSessionMode: async (sessionId, mode) => {
+    try {
+      const updated = await synthApi.patchSessionMode(sessionId, mode)
+      set((s) => ({
+        sessions: s.sessions.map((sess) => (sess.id === sessionId ? updated : sess)),
+      }))
+      return updated
+    } catch (e) {
+      set({ error: (e as Error).message })
+      throw e
     }
   },
 

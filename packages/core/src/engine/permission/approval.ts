@@ -14,6 +14,10 @@ export interface ApprovalDecision {
   timeout?: boolean;
   /** true — у сессии не было подписчиков, спрашивать было некому */
   noSubscribers?: boolean;
+  /** Решение пользователя в новом формате WS permission_reply: allow | deny. */
+  action?: 'allow' | 'deny';
+  /** true — разрешить только один раз (не добавлять allow-правило в сессию). */
+  once?: boolean;
 }
 
 /**
@@ -61,7 +65,13 @@ export class PermissionApprovalManager {
         if (event.type !== 'permission.replied') return;
         const data = event.data as Record<string, unknown>;
         if (data.approval_id !== request.approvalId) return;
-        finish({ approved: data.approved === true });
+        const action = data.action === 'allow' || data.action === 'deny' ? data.action : undefined;
+        const decision: ApprovalDecision = {
+          approved: action !== undefined ? action === 'allow' : data.approved === true,
+        };
+        if (action) decision.action = action;
+        if (typeof data.once === 'boolean') decision.once = data.once;
+        finish(decision);
       });
 
       this._eventBus.publish(sessionId, 'permission.asked', {

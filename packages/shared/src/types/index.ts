@@ -1,5 +1,5 @@
 import type { ToolCapability } from './tools.js';
-import type { PermissionConfig } from './permission.js';
+import type { PermissionConfig, McpServerToolSettings } from './permission.js';
 
 // Core enums
 export enum MessageRole {
@@ -186,6 +186,8 @@ export interface SessionSettings {
   // === Permissions (AD-029) ===
   /** Гранулярные permissions сессии. Приоритетнее глобальной секции permission в config.yaml. */
   permission?: PermissionConfig;
+  /** Доступность MCP-инструментов по режимам plan/act (serverName → настройки). */
+  mcpToolSettings?: Record<string, McpServerToolSettings>;
   // === Plan/Act (AD-025, AD-028) ===
   /** Строгость цикла Plan→Build: auto — модель сама решает, strict — план обязателен, off — планирование отключено. */
   planMode?: PlanMode;

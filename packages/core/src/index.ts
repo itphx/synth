@@ -64,6 +64,8 @@ export { JsonStore } from './storage/json-store.js';
 export type { JsonStoreConfig } from './storage/json-store.js';
 export { ProjectStore } from './storage/project-store.js';
 export type { ProjectStoreConfig } from './storage/project-store.js';
+export { RuntimeSettingsStore } from './storage/runtime-settings.js';
+export type { RuntimeSettings } from './storage/runtime-settings.js';
 export { createLocalAuth } from './auth/local.js';
 export type { AuthKit, LocalAuthConfig } from './auth/local.js';
 export { createStandaloneApp } from './server/app.js';

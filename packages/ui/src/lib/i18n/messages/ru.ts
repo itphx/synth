@@ -476,6 +476,14 @@ export const dict = {
   'chat.footer.approve': 'Авто-одобрение (в разработке)',
   'chat.footer.mode': 'Режим',
 
+  // Plan/Act режим сессии (AD-025)
+  'chat.mode.title': 'Режим сессии: План (только чтение) / Действия (полный доступ)',
+  'chat.mode.plan': 'План',
+  'chat.mode.act': 'Действия',
+  'chat.mode.planEnabled': 'Включён режим «План»',
+  'chat.mode.actEnabled': 'Включён режим «Действия»',
+  'chat.mode.error': 'Ошибка смены режима:',
+
   // Connection indicator
   'connection.idle': 'Нет сессии',
   'connection.ws': 'WebSocket подключен',
@@ -600,6 +608,17 @@ export const dict = {
   'admin.projects.memberCount': '{count} участников',
   'admin.projects.statusCount': '{count} статусов',
   'admin.projects.confirmDelete': 'Удалить проект «{name}»?',
+
+  // Рабочий каталог по умолчанию
+  'admin.projects.workspace.title': 'Рабочий каталог по умолчанию',
+  'admin.projects.workspace.placeholder': 'Путь к рабочему каталогу',
+  'admin.projects.workspace.save': 'Сохранить',
+  'admin.projects.workspace.saving': 'Сохранение...',
+  'admin.projects.workspace.saved': 'Рабочий каталог сохранён',
+  'admin.projects.workspace.error': 'Ошибка сохранения рабочего каталога',
+  'admin.projects.workspace.pathRequired': 'Путь не может быть пустым',
+  'admin.projects.workspace.current': 'Текущий: {path}',
+  'admin.projects.workspace.hint': 'По умолчанию <dataDir>/workspaces/default. Можно переопределить через env SYNTH_DEFAULT_WORKSPACE.',
 
   // Providers
   'admin.providers.title': 'Провайдеры',

@@ -49,6 +49,8 @@ export interface SessionData {
   branch_point?: string | null
   plan_path?: string | null
   session_origin?: string | null
+  /** Текущий runtime-режим сессии (AD-025): 'plan' — только чтение, 'act' — полный доступ. */
+  mode?: SessionMode
   user_id: string | null
   owner_id: string | null
   project_id: string | null
@@ -108,7 +110,7 @@ export interface StickyNoteData {
 
 export type { FileEntry, DirectoryListResult, FileReadResult } from '@synth/shared'
 
-import type { DirectoryListResult, FileReadResult, FileEntry, RepoStatus, CommitInfo, CommitDetail } from '@synth/shared'
+import type { DirectoryListResult, FileReadResult, FileEntry, RepoStatus, CommitInfo, CommitDetail, SessionMode } from '@synth/shared'
 
 export interface GitRepoConfigData {
   path: string
@@ -308,6 +310,14 @@ export const synthApi = {
     return fetchJSON<SessionData>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
+    })
+  },
+
+  // Plan/Act режим сессии (AD-025)
+  async patchSessionMode(sessionId: string, mode: SessionMode): Promise<SessionData> {
+    return fetchJSON<SessionData>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ mode }),
     })
   },
 
@@ -580,6 +590,18 @@ export const synthApi = {
     return fetchJSON(`${BASE_URL}/fs/workspace-root/mkdir`, {
       method: 'POST',
       body: JSON.stringify({ path: rePath }),
+    })
+  },
+
+  // Рабочий каталог по умолчанию (settings)
+  async getWorkspaceSetting(): Promise<{ workspace: string }> {
+    return fetchJSON<{ workspace: string }>(`${BASE_URL}/settings/workspace`)
+  },
+
+  async setWorkspaceSetting(workspace: string): Promise<{ workspace: string }> {
+    return fetchJSON<{ workspace: string }>(`${BASE_URL}/settings/workspace`, {
+      method: 'PUT',
+      body: JSON.stringify({ workspace }),
     })
   },
 

@@ -207,12 +207,112 @@ describe('PermissionEvaluator — plan mode (AD-025)', () => {
     expect(planCheck('read_file', { file_path: 'a.txt' }, { planMode: 'strict', planApproved: false }).action).toBe('allow');
   });
 
+  it('mode=plan блокирует git-запись', () => {
+    expect(planCheck('git_commit', { path: '.' }, { sessionMode: 'plan' }).action).toBe('deny');
+    expect(planCheck('git_push', {}, { sessionMode: 'plan' }).action).toBe('deny');
+    expect(planCheck('git_pull', {}, { sessionMode: 'plan' }).action).toBe('deny');
+    expect(planCheck('git_checkout', { branch: 'main' }, { sessionMode: 'plan' }).action).toBe('deny');
+    expect(planCheck('git_stash', { action: 'push' }, { sessionMode: 'plan' }).action).toBe('deny');
+  });
+
+  it('strict без плана блокирует git-запись', () => {
+    expect(planCheck('git_commit', { path: '.' }, { planMode: 'strict', planApproved: false }).action).toBe('deny');
+  });
+
+  it('mode=plan оставляет git-чтение доступным', () => {
+    expect(planCheck('git_status', { path: '.' }, { sessionMode: 'plan' }).action).toBe('allow');
+    expect(planCheck('git_diff', {}, { sessionMode: 'plan' }).action).toBe('allow');
+    expect(planCheck('git_log', {}, { sessionMode: 'plan' }).action).toBe('allow');
+    expect(planCheck('git_branch_list', {}, { sessionMode: 'plan' }).action).toBe('allow');
+    expect(planCheck('git_show', {}, { sessionMode: 'plan' }).action).toBe('allow');
+    expect(planCheck('git_blame', {}, { sessionMode: 'plan' }).action).toBe('allow');
+  });
+
+  it('strict без плана оставляет git-чтение доступным', () => {
+    expect(planCheck('git_status', { path: '.' }, { planMode: 'strict', planApproved: false }).action).toBe('allow');
+  });
+
+  it('mode=plan в act-режиме не блокирует git-запись', () => {
+    expect(planCheck('git_commit', { path: '.' }, { sessionMode: 'act', planMode: 'auto' }).action).toBe('allow');
+  });
+
   it('off никогда не блокирует write', () => {
     expect(planCheck('write_file', { file_path: 'a.txt', content: 'x' }, { planMode: 'off', sessionMode: 'plan', planApproved: false }).action).toBe('allow');
   });
 
   it('auto в act-режиме не блокирует write', () => {
     expect(planCheck('write_file', { file_path: 'a.txt', content: 'x' }, { planMode: 'auto', sessionMode: 'act' }).action).toBe('allow');
+  });
+});
+
+describe('PermissionEvaluator — MCP доступность по режимам (plan/act)', () => {
+  function mcpCheck(
+    mcpToolSettings: Record<string, import('@synth/shared').McpServerToolSettings>,
+    opts: { sessionMode?: 'plan' | 'act' } = {},
+  ) {
+    return new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 }).check({
+      toolName: 'github_create_issue',
+      params: {},
+      workingDir: CWD,
+      capabilities: ['mcp'],
+      sessionMode: opts.sessionMode ?? 'act',
+      mcpToolSettings,
+    });
+  }
+
+  it('plan=false в plan-режиме — deny', () => {
+    const d = mcpCheck({ github: { default: { plan: false, act: true } } }, { sessionMode: 'plan' });
+    expect(d.action).toBe('deny');
+    expect(d.matchedRule).toBe('mcp.mode');
+  });
+
+  it('plan=true в plan-режиме — allow', () => {
+    const d = mcpCheck({ github: { default: { plan: true, act: true } } }, { sessionMode: 'plan' });
+    expect(d.action).toBe('allow');
+  });
+
+  it('act=false в act-режиме — deny', () => {
+    const d = mcpCheck({ github: { default: { plan: true, act: false } } }, { sessionMode: 'act' });
+    expect(d.action).toBe('deny');
+  });
+
+  it('act=true в act-режиме — allow', () => {
+    const d = mcpCheck({ github: { default: { plan: true, act: true } } }, { sessionMode: 'act' });
+    expect(d.action).toBe('allow');
+  });
+
+  it('точечная настройка tools приоритетнее default', () => {
+    const d = mcpCheck({
+      github: { default: { plan: true, act: true }, tools: { create_issue: { plan: false, act: true } } },
+    }, { sessionMode: 'plan' });
+    expect(d.action).toBe('deny');
+  });
+
+  it('без настроек для сервера — доступен (обратная совместимость)', () => {
+    const d = mcpCheck({ other_server: { default: { plan: false, act: false } } }, { sessionMode: 'plan' });
+    expect(d.action).toBe('allow');
+  });
+
+  it('без mcpToolSettings — доступен (обратная совместимость)', () => {
+    const d = new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 }).check({
+      toolName: 'github_create_issue',
+      params: {},
+      workingDir: CWD,
+      capabilities: ['mcp'],
+      sessionMode: 'plan',
+    });
+    expect(d.action).toBe('allow');
+  });
+
+  it('не-MCP тулы не затрагиваются настройками', () => {
+    const d = new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 }).check({
+      toolName: 'read_file',
+      params: { file_path: 'a.txt' },
+      workingDir: CWD,
+      sessionMode: 'plan',
+      mcpToolSettings: { github: { default: { plan: false, act: false } } },
+    });
+    expect(d.action).toBe('allow');
   });
 });
 
