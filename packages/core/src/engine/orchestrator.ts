@@ -1,10 +1,9 @@
-import type { Message, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@synth/shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@synth/shared';
 import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart } from '@synth/shared';
 import type { RouterConfig, PermissionConfig, PlanMode, SessionMode } from '@synth/shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
-import type { ProjectStore } from '../storage/project-store.js';
 import type { EventBus } from '../events/bus.js';
 import { DebugCollector } from '../debug.js';
 import { ProviderFactory } from '../providers/base.js';
@@ -42,6 +41,16 @@ export interface ModelPricing {
   cacheWritePrice?: number;
 }
 
+/**
+ * Минимальный контракт project store, который использует оркестратор (AD-014):
+ * только загрузка проекта для резолва project.workspace. Позволяет передавать
+ * реализации из разных пакетов (backend/core ProjectStore) без структурной
+ * зависимости от конкретного класса.
+ */
+export interface ProjectStoreLike {
+  load(id: string): Promise<Project | null>;
+}
+
 export interface OrchestratorOptions {
   sessionManager: SessionManager;
   eventBus: EventBus;
@@ -55,7 +64,7 @@ export interface OrchestratorOptions {
   agentRegistry?: AgentRegistry;
   mcpManager?: McpManager;
   routerConfig?: RouterConfig;
-  projectStore?: ProjectStore;
+  projectStore?: ProjectStoreLike;
   defaultWorkingDir?: string;
   /**
    * Корень каталога workspaces: `join(dataDir, 'workspaces')` по умолчанию
@@ -106,7 +115,7 @@ export class ChatOrchestrator {
   private readonly _routerConfig: RouterConfig | null;
   private readonly _microPipeline: MicroPipeline | null;
   private readonly _contextConfig: ContextConfig | null;
-  private readonly _projectStore: ProjectStore | null;
+  private readonly _projectStore: ProjectStoreLike | null;
   private readonly _defaultWorkingDir: string;
   private readonly _workspacesRoot: string;
   private readonly _permissionConfig: PermissionConfig;

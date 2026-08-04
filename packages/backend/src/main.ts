@@ -175,8 +175,11 @@ const orchestrator = new ChatOrchestrator({
   toolRegistry,
   agentRegistry,
   mcpManager,
+  projectStore,
   workspacesRoot: backendConfig.workspacesRoot,
   routerConfig: backendConfig.synth.router,
+  permissionConfig: backendConfig.synth.permission,
+  defaultPlanMode: backendConfig.synth.session.planMode,
 });
 
 const processMessage = orchestrator.createProcessMessage();
