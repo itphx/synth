@@ -95,6 +95,7 @@ export const dict = {
   'settings.category.mcp': 'MCP Servers',
   'settings.category.notifications': 'Notifications',
   'settings.category.routing': 'Routing',
+  'settings.category.microFirst': 'Quick answers',
   'settings.category.dashboard': 'Dashboard',
   'settings.category.sessions': 'Sessions',
   'settings.category.projects': 'Projects',

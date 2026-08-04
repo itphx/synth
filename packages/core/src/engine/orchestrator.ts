@@ -13,13 +13,17 @@ import type { ToolRegistry } from './tools/registry.js';
 import type { ToolForLLM } from '@synth/shared';
 import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
-import { warning } from '../logger.js';
+import { info, warning } from '../logger.js';
 import { autoTitleSession } from '../sessions/auto-title.js';
 import { ModelRouter } from './router/router.js';
 import { ContentClassifier } from './router/content-classifier.js';
 import { ProviderPool } from './router/provider-pool.js';
 import { QualityChecker } from './router/quality-checker.js';
 import { DictionaryStore } from './router/dictionary-store.js';
+import { MicroPipeline } from './router/micro/index.js';
+import { TaskClassifier } from './router/micro/task-classifier.js';
+import { RulesModel, EmbeddingModel, MicroLlmModel } from './router/micro/models/index.js';
+import type { MicroModel } from './router/micro/models/base.js';
 import type { RoutingDecision } from './router/router.js';
 
 const MAX_DOOM_LOOP_COUNT = 3;
@@ -82,6 +86,7 @@ export class ChatOrchestrator {
   private readonly _cancellationTokens = new Map<string, CancellationToken>();
   private readonly _router: ModelRouter | null;
   private readonly _routerConfig: RouterConfig | null;
+  private readonly _microPipeline: MicroPipeline | null;
   private readonly _contextConfig: ContextConfig | null;
 
   constructor(options: OrchestratorOptions) {
@@ -97,10 +102,22 @@ export class ChatOrchestrator {
     this._routerConfig = options.routerConfig ?? null;
     this._contextConfig = options.contextConfig ?? null;
 
+    // DictionaryStore и ProviderPool создаём всегда (нужны микро-слою и роутеру)
+    const dictionaryStore = new DictionaryStore(options.dataDir || '/var/synth/data');
+    const pool = new ProviderPool(options.providerLoader);
+
+    // AD-035: Micro-first pipeline — создаём всегда, не зависит от роутера
+    const microClassifier = new TaskClassifier(dictionaryStore);
+    const microModels: MicroModel[] = [
+      new RulesModel(microClassifier),
+      new EmbeddingModel(pool),
+      new MicroLlmModel(pool),
+    ];
+    this._microPipeline = new MicroPipeline(microClassifier, microModels);
+
+    // AD-034: Router — только если включён в конфиге
     if (options.routerConfig && options.routerConfig.enabled) {
-      const dictionaryStore = new DictionaryStore(options.dataDir || '/var/synth/data');
       const classifier = new ContentClassifier(dictionaryStore);
-      const pool = new ProviderPool(options.providerLoader);
       const qualityChecker = new QualityChecker();
       this._router = new ModelRouter(classifier, pool, qualityChecker, options.routerConfig);
     } else {
@@ -148,6 +165,89 @@ export class ChatOrchestrator {
       return this._handleDebugSystemMessage(session, message, signal, publishChunk, debugCollector, streamId);
     }
 
+    // --- AD-035: Micro-first — пробуем ответить без LLM ---
+    if (this._microPipeline && session.settings.microFirst) {
+      const microResult = await this._microPipeline.handle({
+        userMessage: message.content,
+        language: session.settings.language,
+        sessionSettings: session.settings,
+        embedProvider: session.settings.embedProvider,
+        embedModel: session.settings.embedModel,
+      });
+      if (microResult.handled && microResult.microResult?.answer) {
+        // Микрослой уверен — возвращаем ответ без вызова LLM
+        const finalContent = microResult.microResult.answer;
+        const finalModel = `micro:${microResult.microResult.taskClass}`;
+        const finalUsage = {
+          inputTokens: microResult.microResult.usage?.inputTokens ?? 0,
+          outputTokens: microResult.microResult.usage?.outputTokens ?? 0,
+          totalTokens: (microResult.microResult.usage?.inputTokens ?? 0) + (microResult.microResult.usage?.outputTokens ?? 0),
+        };
+
+        publishChunk('text', { content: finalContent });
+        publishChunk('done', { stopped: true });
+
+        // Сохраняем сообщение ассистента
+        const microMetadata: Record<string, unknown> = {
+          stream_id: streamId,
+          micro_first: {
+            label: microResult.microResult.label,
+            confidence: microResult.microResult.confidence,
+            latencyMs: microResult.microResult.latencyMs,
+            signals: microResult.microResult.signals,
+            taskClass: microResult.microResult.taskClass,
+          },
+        };
+
+        const assistantMsg: Message = {
+          id: generateId(),
+          role: MessageRole.ASSISTANT,
+          seq: 0,
+          origin: 'local',
+          parts: [makeTextPart(finalContent)],
+          content: finalContent,
+          createdAt: nowISO(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          model: finalModel,
+          provider: 'micro',
+          usage: finalUsage,
+          agentRole: effectiveAgentRole,
+          metadata: microMetadata,
+        };
+
+        await this._sessionManager.addMessage(session.id, assistantMsg);
+
+        // Обновляем токены сессии
+        session.inputTokens += finalUsage.inputTokens;
+        session.outputTokens += finalUsage.outputTokens;
+        session.totalTokens += finalUsage.totalTokens;
+
+        // Авто-тайтл если это первое сообщение
+        if (session.messages.filter((m) => m.role === MessageRole.USER).length <= 1) {
+          try {
+            session.title = `Диалог — ${session.id.slice(0, 8)}`;
+            await this._sessionManager.saveSession(session);
+          } catch {
+            // ok
+          }
+        }
+
+        info('MICRO', `Ответ через микро-слой: ${microResult.microResult.taskClass} (${microResult.microResult.latencyMs}ms, confidence=${microResult.microResult.confidence.toFixed(2)})`);
+        return {};
+      }
+
+      // Если handled=false — продолжаем обычный путь (router → LLM)
+      if (microResult.fallbackSignals?.length) {
+        debugCollector.addContext('micro_first', {
+          status: 'fallback',
+          signals: microResult.fallbackSignals,
+          taskClass: microResult.microResult?.taskClass ?? 'llm_task',
+        });
+      }
+    }
+
     try {
       // 1. Get provider (через роутер если доступен, иначе напрямую)
       const routeResult = this._routeProvider(session, message);
@@ -181,6 +281,7 @@ export class ChatOrchestrator {
       const systemPrompt = session.settings.systemPrompt
         || await this._contextBuilder.buildSystemPrompt({
           agentRole: effectiveAgentRole,
+          agentContextFile: agentDef?.contextFile,
           historyMessages: session.messages,
           userId: session.userId,
           projectName: session.projectId,

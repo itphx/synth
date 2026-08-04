@@ -70,7 +70,7 @@ export function FileViewerTab({ tab }: FileViewerTabProps) {
   }
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="flex flex-1 h-full flex-col bg-background">
       <div className="flex-1 overflow-auto">
         {isBinary ? (
           <div className="flex items-center justify-center h-full">

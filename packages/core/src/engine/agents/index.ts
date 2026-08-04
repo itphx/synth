@@ -59,6 +59,7 @@ export function createAgentRegistry(
 ): AgentRegistry {
   const registry = new AgentRegistry(toolRegistry);
   const systemAgents = loadSystemAgentDefinitions();
+  const systemIds = new Set(systemAgents.map((a) => a.id));
 
   const merged = systemAgents.map((sysAgent) => {
     if (!overridesDir) return sysAgent;
@@ -73,5 +74,22 @@ export function createAgentRegistry(
   });
 
   registry.registerAll(merged);
+
+  // Регистрируем custom-агентов (id вне системных дефиниций) из overridesDir.
+  // Системных не перетираем: файлы с id системного агента уже покрыты merge выше.
+  if (overridesDir && existsSync(overridesDir)) {
+    const files = readdirSync(overridesDir).filter((f) => f.endsWith('.json'));
+    for (const file of files) {
+      try {
+        const def = JSON.parse(readFileSync(join(overridesDir, file), 'utf-8')) as AgentDefinition;
+        if (def.id && !systemIds.has(def.id)) {
+          registry.register({ ...def, isOverridden: true });
+        }
+      } catch {
+        // невалидный JSON — пропускаем
+      }
+    }
+  }
+
   return registry;
 }

@@ -1,5 +1,5 @@
 import { resolve, normalize, relative, sep, join } from 'node:path';
-import { stat, readdir } from 'node:fs/promises';
+import { stat, readdir, open } from 'node:fs/promises';
 import { FsErrorCode } from '@synth/shared';
 import type { FsError, FileEntry } from '@synth/shared';
 
@@ -167,7 +167,16 @@ export class WorkspaceResolver {
     return null;
   }
 
-  static isTextFile(filename: string): boolean {
+  /**
+   * Определяет, является ли файл текстовым (utf-8/utf-16) или бинарным.
+   * 1. Быстрый путь: известные текстовые расширения и типовые имена без расширения.
+   * 2. Быстрый путь: известные бинарные расширения.
+   * 3. Надёжный путь: чтение первых байт и поиск NUL-байта (с учётом BOM UTF-16).
+   */
+  static async isTextFile(filePath: string): Promise<boolean> {
+    const filename = filePath.split(/[\\/]/).pop() ?? filePath;
+    const ext = filename.slice(filename.lastIndexOf('.')).toLowerCase();
+
     const textExtensions = new Set([
       '.txt', '.md', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
       '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
@@ -181,9 +190,55 @@ export class WorkspaceResolver {
       '.prisma', '.proto',
       '.csv', '.log',
     ]);
+    if (textExtensions.has(ext)) return true;
 
-    const ext = filename.slice(filename.lastIndexOf('.')).toLowerCase();
-    return textExtensions.has(ext);
+    // Типовые имена без расширения или с «точечным» именем
+    const knownTextNames = new Set([
+      'makefile', 'dockerfile', 'license', 'licence', 'readme', 'changelog',
+      'copying', 'notice', 'authors', 'contributors', 'todo', 'notes',
+      '.npmrc', '.yarnrc', '.babelrc', '.eslintrc', '.prettierrc',
+      '.dockerignore', '.gitignore', '.gitattributes', '.editorconfig',
+      'gemfile', 'rakefile', 'procfile', 'vagrantfile',
+    ]);
+    if (knownTextNames.has(filename.toLowerCase())) return true;
+
+    // Заведомо бинарные расширения (не дожидаясь чтения содержимого)
+    const binaryExtensions = new Set([
+      '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.tiff', '.tif',
+      '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+      '.zip', '.gz', '.tar', '.7z', '.rar', '.bz2', '.xz', '.zst',
+      '.mp3', '.mp4', '.avi', '.mkv', '.mov', '.wav', '.ogg', '.flac', '.webm',
+      '.woff', '.woff2', '.ttf', '.otf', '.eot',
+      '.exe', '.dll', '.so', '.dylib', '.bin', '.dat', '.db', '.sqlite', '.sqlite3',
+      '.class', '.jar', '.o', '.obj', '.a', '.pyc',
+      '.wasm', '.iso', '.img',
+    ]);
+    if (binaryExtensions.has(ext)) return false;
+
+    // Надёжный путь: проверяем первые байты содержимого
+    try {
+      const handle = await open(filePath, 'r');
+      try {
+        const buf = Buffer.alloc(8000);
+        const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+        const head = buf.subarray(0, bytesRead);
+
+        // UTF-16 BOM (LE: FF FE, BE: FE FF)
+        const isUtf16Bom = head.length >= 2 && (
+          (head[0] === 0xff && head[1] === 0xfe) ||
+          (head[0] === 0xfe && head[1] === 0xff)
+        );
+        if (isUtf16Bom) return true;
+
+        // Наличие NUL-байта — признак бинарного файла
+        return !head.includes(0);
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      // Не удалось прочитать — считаем текстовым (обратная совместимость)
+      return true;
+    }
   }
 
   private async _ensureWorkspaceRoot(): Promise<void> {

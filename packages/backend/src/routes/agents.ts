@@ -3,10 +3,12 @@ import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
 import type { AgentDefinition } from '@synth/shared';
 import { loadSystemAgentDefinitions } from '@synth/core';
-import type { SessionManager } from '@synth/core';
+import type { AgentRegistry, SessionManager } from '@synth/core';
 import { t } from '../lib/i18n.js';
 
 const BUILTIN_IDS = new Set(loadSystemAgentDefinitions().map((a: AgentDefinition) => a.id));
+
+const AGENT_ID_REGEX = /^[a-z0-9_-]+$/;
 
 function getBuiltInAgents(): AgentDefinition[] {
   return loadSystemAgentDefinitions();
@@ -21,7 +23,7 @@ async function mergeWithOverride(
   return { ...builtin, ...override, isOverridden: true };
 }
 
-export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefinition>, sessionManager?: SessionManager): Hono {
+export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefinition>, sessionManager?: SessionManager, agentRegistry?: AgentRegistry): Hono {
   const app = new Hono();
 
   // GET /api/v2/agents — список агентов
@@ -101,6 +103,9 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
     if (!id) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.idRequired', undefined, c) } }, 400);
     }
+    if (!AGENT_ID_REGEX.test(id)) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidAgentId', undefined, c) } }, 400);
+    }
 
     const builtins = getBuiltInAgents();
     const builtin = builtins.find((a) => a.id === id);
@@ -127,6 +132,7 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
       maxSteps: body.max_steps ?? body.maxSteps ?? existing?.maxSteps,
     };
     await agentStore.save(id, agent);
+    agentRegistry?.register(agent);
     return c.json(agent, existing ? 200 : 201);
   });
 
@@ -152,6 +158,8 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
     if (isBuiltin) {
       if (exists) {
         await agentStore.delete(id);
+        const builtin = getBuiltInAgents().find((a) => a.id === id);
+        if (builtin) agentRegistry?.register(builtin);
         return c.json({ status: 'reset' });
       }
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.agentOverride', undefined, c) } }, 404);
@@ -159,6 +167,7 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
 
     if (exists) {
       await agentStore.delete(id);
+      agentRegistry?.unregister(id);
       return c.json({ status: 'deleted' });
     }
     return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.agent', undefined, c) } }, 404);
@@ -182,6 +191,7 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
       ? { ...existing, enabled }
       : { ...builtin!, enabled, isOverridden: true };
     await agentStore.save(id, agent);
+    agentRegistry?.register(agent);
     return c.json({ id, enabled });
   });
 

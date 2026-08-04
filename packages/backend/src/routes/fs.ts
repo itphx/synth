@@ -143,8 +143,7 @@ export function createFsRoutes(kit: AuthKit, projectStore: ProjectStore, workspa
         return c.json(makeFsError(FsErrorCode.IS_DIRECTORY, 'Указанный путь является директорией'), 400);
       }
 
-      const filename = basename(safePath);
-      if (!WorkspaceResolver.isTextFile(filename)) {
+      if (!(await WorkspaceResolver.isTextFile(safePath))) {
         const result: FileReadResult = {
           path: query.path,
           content: '',

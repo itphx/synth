@@ -1,94 +1,19 @@
 import { useState, useEffect } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useProvidersStore } from '@/stores/providersStore'
+import { loadRoutingDefaults, saveRoutingDefaults, type RoutingDefaults } from '@/lib/routingDefaults'
 import { Toggle } from '../ui/Toggle'
 import { Icon } from '../icon/Icon'
-
-const STORAGE_KEY = 'synth-routing-defaults'
-
-interface RoutingDefaults {
-  routingEnabled: boolean
-  routingStrategy: 'auto' | 'content' | 'cost' | 'content+cost'
-  routingContent: {
-    coding: { provider: string; model: string }
-    chat: { provider: string; model: string }
-    research: { provider: string; model: string }
-  }
-  routingEscalation: {
-    enabled: boolean
-    fallbackProvider: string
-    fallbackModel: string
-    minLength: number
-  }
-  routingCost: {
-    enabled: boolean
-    cheapProvider: string
-    cheapModel: string
-    maxCheapTokens: number
-  }
-  subagentRouting: {
-    enabled: boolean
-    model: string
-    provider: string
-  }
-}
-
-const DEFAULTS: RoutingDefaults = {
-  routingEnabled: false,
-  routingStrategy: 'auto',
-  routingContent: {
-    coding: { provider: '', model: '' },
-    chat: { provider: '', model: '' },
-    research: { provider: '', model: '' },
-  },
-  routingEscalation: {
-    enabled: false,
-    fallbackProvider: '',
-    fallbackModel: '',
-    minLength: 10,
-  },
-  routingCost: {
-    enabled: false,
-    cheapProvider: '',
-    cheapModel: '',
-    maxCheapTokens: 500,
-  },
-  subagentRouting: {
-    enabled: false,
-    model: '',
-    provider: '',
-  },
-}
-
-function loadDefaults(): RoutingDefaults {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored) {
-      return { ...DEFAULTS, ...JSON.parse(stored) }
-    }
-  } catch {
-    // ignore
-  }
-  return { ...DEFAULTS }
-}
-
-function saveDefaults(defaults: RoutingDefaults) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(defaults))
-  } catch {
-    // ignore
-  }
-}
 
 export function RoutingSettings() {
   const { t } = useI18n()
   const providers = useProvidersStore((s) => s.providers)
   const models = useProvidersStore((s) => s.models)
 
-  const [settings, setSettings] = useState<RoutingDefaults>(loadDefaults)
+  const [settings, setSettings] = useState<RoutingDefaults>(loadRoutingDefaults)
 
   useEffect(() => {
-    saveDefaults(settings)
+    saveRoutingDefaults(settings)
   }, [settings])
 
   const update = (patch: Partial<RoutingDefaults>) => {
@@ -130,7 +55,9 @@ export function RoutingSettings() {
     <div className="space-y-6 max-w-lg">
       <div>
         <h2 className="text-lg font-semibold mb-1">{t('routing.title')}</h2>
-        <p className="text-sm text-muted-foreground">{t('routing.globalDescription')}</p>
+        <p className="text-sm text-muted-foreground">
+          Запросы, которые не обработали Быстрые ответы, распределяются между моделями автоматически: стратегия выбирает модель по типу задачи (кодинг/чат/анализ), по стоимости или сочетанием. Дополнительно работает контроль качества: если ответ неуверенный или слишком короткий — запрос пересылается на fallback-модель. Если маршрутизация выключена — используется модель, выбранная в сессии.
+        </p>
       </div>
 
       <div className="space-y-4">

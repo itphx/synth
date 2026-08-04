@@ -107,4 +107,15 @@ export const defaultConfig: SynthConfig = {
       provider: '',
     },
   },
+  microFirst: {
+    enabled: false,
+    confidenceThreshold: 0.8,
+    microLlmProvider: '',
+    microLlmModel: '',
+    rulesEnabled: true,
+    embeddingEnabled: false,
+    embedProvider: 'ollama',
+    embedModel: 'local.nomic-embed-text:latest',
+    microLlmEnabled: false,
+  },
 };

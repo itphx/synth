@@ -11,6 +11,10 @@ const CAP_KEYS = [
   'git_read', 'git_write', 'web', 'task', 'mcp',
 ]
 
+function normalizeAgentId(raw: string): string {
+  return raw.toLowerCase().replace(/[^a-z0-9_-]/g, '')
+}
+
 const AGENT_MODES = ['primary', 'subagent', 'all'] as const
 type FilterMode = 'all' | 'agents' | 'subagents'
 
@@ -151,7 +155,7 @@ export const AgentsPanel = () => {
       await synthApi.fetchJSON('/api/v2/agents', {
         method: 'POST',
         body: JSON.stringify({
-          id: form.id.trim(),
+          id: normalizeAgentId(form.id.trim()),
           display_name: form.display_name,
           description: form.description,
           provider: form.provider || undefined,
@@ -234,7 +238,7 @@ export const AgentsPanel = () => {
         <div>
           <label className="text-xs text-muted-foreground">{t('admin.agents.id')}</label>
           <input type="text" value={form.id}
-            onChange={(e) => setForm({ ...form, id: e.target.value })}
+            onChange={(e) => setForm({ ...form, id: normalizeAgentId(e.target.value) })}
             disabled={!!expanded}
             className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" />
         </div>

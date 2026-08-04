@@ -13,6 +13,10 @@ export class AgentRegistry {
     this._agents.set(agent.id, agent);
   }
 
+  unregister(id: string): void {
+    this._agents.delete(id);
+  }
+
   registerAll(agents: AgentDefinition[]): void {
     for (const agent of agents) {
       this.register(agent);

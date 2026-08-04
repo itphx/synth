@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { SessionData } from '@/lib/api/synthApi'
 import { synthApi } from '@/lib/api/synthApi'
+import { loadRoutingDefaults, routingDefaultsToSettings } from '@/lib/routingDefaults'
 import { useUIStore } from './useUIStore'
 import { useChatStore } from './chatStore'
 import { isTransportConnected } from './transportStore'
@@ -15,6 +16,7 @@ interface SessionsStore {
     name?: string
     project_id?: string | null
     engine?: string
+    settings?: Record<string, unknown>
   }) => Promise<SessionData | null>
   forkSession: (sessionId: string, options?: { message_id?: string; message_index?: number; title?: string }) => Promise<SessionData | null>
   moveSession: (sessionId: string, projectId: string | null) => Promise<SessionData | null>
@@ -40,7 +42,12 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
 
   createSession: async (data) => {
     try {
-      const session = await synthApi.createSession(data)
+      // Переносим глобальные дефолты маршрутизации (AD-034) в новую сессию,
+      // если вызывающий код явно не передал settings.
+      const session = await synthApi.createSession({
+        ...data,
+        settings: data.settings ?? routingDefaultsToSettings(loadRoutingDefaults()),
+      })
       if (!isTransportConnected()) {
         set((s) => ({ sessions: [session, ...s.sessions] }))
       }

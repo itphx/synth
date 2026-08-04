@@ -213,7 +213,7 @@ app.route('/api/v2/providers', createProviderRoutes(auth, providerStore));
 app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore));
 
 // Agents routes
-app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, sessionManager));
+app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, sessionManager, agentRegistry));
 
 // Context routes
 app.route('/api/v2/context', createContextRoutes(auth, contextConfig));

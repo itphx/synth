@@ -269,7 +269,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore));
 
   // Agents
-  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore));
+  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry));
 
   // FS
   app.route('/api/v2/fs', createFsRoutes(auth, config.workspacesRoot));

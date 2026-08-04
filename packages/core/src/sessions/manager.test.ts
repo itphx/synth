@@ -46,6 +46,25 @@ describe('SessionManager', () => {
     expect(session.settings.temperature).toBe(0.7);
   });
 
+  it('createSession по умолчанию выключает маршрутизацию (согласовано с UI-дефолтом)', async () => {
+    const session = await manager.createSession({});
+    expect(session.settings.routingEnabled).toBe(false);
+    expect(session.settings.routingEscalation.enabled).toBe(false);
+    expect(session.settings.subagentRouting.enabled).toBe(false);
+  });
+
+  it('createSession сохраняет явно переданные настройки маршрутизации', async () => {
+    const session = await manager.createSession({
+      settings: {
+        routingEnabled: true,
+        routingEscalation: { enabled: true, fallbackProvider: 'itphx', fallbackModel: 'local.qwen3:14b', checks: ['min_length'] as const, minLength: 5 },
+      },
+    });
+    expect(session.settings.routingEnabled).toBe(true);
+    expect(session.settings.routingEscalation.enabled).toBe(true);
+    expect(session.settings.routingEscalation.minLength).toBe(5);
+  });
+
   it('getSession возвращает созданную сессию', async () => {
     const created = await manager.createSession({});
     const loaded = await manager.getSession(created.id);
