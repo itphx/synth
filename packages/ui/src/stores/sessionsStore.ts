@@ -24,6 +24,7 @@ interface SessionsStore {
   renameSession: (sessionId: string, newName: string) => Promise<SessionData | null>
   deleteSession: (sessionId: string) => Promise<boolean>
   setSessionMode: (sessionId: string, mode: SessionMode) => Promise<SessionData>
+  upsertSession: (session: SessionData) => void
   getSessionsByProject: (projectId: string | null) => SessionData[]
 }
 
@@ -143,6 +144,16 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
       throw e
     }
   },
+
+  // Кладёт актуальные данные сессии в стор (например, после GET /sessions/:id).
+  // Повторяет паттерн setSessionMode (map), но добавляет сессию, если её ещё нет
+  // в сторе (например, до loadSessions или для сессии из другого проекта).
+  upsertSession: (session) =>
+    set((s) => {
+      const exists = s.sessions.some((ses) => ses.id === session.id)
+      if (!exists) return { sessions: [session, ...s.sessions] }
+      return { sessions: s.sessions.map((ses) => (ses.id === session.id ? session : ses)) }
+    }),
 
   getSessionsByProject: (projectId) => {
     return get().sessions.filter((s) => s.project_id === projectId)

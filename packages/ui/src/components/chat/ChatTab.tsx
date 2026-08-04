@@ -89,6 +89,9 @@ export function ChatTab({ tab }: ChatTabProps) {
         if (agentsResp) agentsRef.current = agentsResp.agents
 
         if (session) {
+          // Кладём актуальные данные сессии (включая mode) в стор —
+          // иначе PlanActModeToggle не увидит mode и покажет дефолт 'act'.
+          useSessionsStore.getState().upsertSession(session)
           const s = session?.settings as Record<string, unknown> | undefined
           if (s) {
             const { setSelectedProvider, setSelectedModel } = useProvidersStore.getState()
