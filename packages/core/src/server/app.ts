@@ -272,6 +272,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     agentRegistry,
     projectStore,
     defaultWorkingDir,
+    workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
     permissionConfig: config.permissionConfig,
     defaultPlanMode: config.defaultPlanMode,
     mcpManager,

@@ -1,5 +1,5 @@
 import { readdir, access } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, join, isAbsolute, normalize, resolve } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@synth/shared';
 import type { ToolDefinition, ToolContext, Project } from '@synth/shared';
@@ -11,9 +11,37 @@ interface ProjectContextExtra {
   sessionManager?: SessionManager;
   projectStore?: ProjectStore;
   sessionId?: string;
+  /** Корень каталога workspaces для резолва относительного project.workspace (AD-014). */
+  workspacesRoot?: string;
 }
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.cache', '__pycache__']);
+
+/**
+ * Резолвит рабочий каталог проекта: абсолютный workspace возвращается как есть
+ * (normalize), относительный — относительно workspacesRoot. Без workspace —
+ * fallback на рабочий каталог сессии.
+ */
+function resolveWorkspaceDir(
+  project: Project | undefined,
+  workspacesRoot: string | undefined,
+  fallback: string,
+): string {
+  if (project?.workspace) {
+    if (isAbsolute(project.workspace)) return normalize(project.workspace);
+    if (workspacesRoot) return resolve(workspacesRoot, project.workspace);
+    return project.workspace;
+  }
+  return fallback;
+}
+
+/**
+ * Резолвит путь git-репозитория проекта: абсолютный — как есть (normalize),
+ * относительный — относительно рабочего каталога проекта.
+ */
+function resolveRepoPath(repoPath: string, projectDir: string): string {
+  return isAbsolute(repoPath) ? normalize(repoPath) : resolve(projectDir, repoPath);
+}
 
 interface RepoInfo {
   path: string;
@@ -122,19 +150,18 @@ export const getProjectInfoTool: ToolDefinition = {
   parameters: z.object({}),
   capabilities: [ToolCapability.FILE_READ],
   async execute(_args, ctx) {
-    const extra = ctx.extra as ProjectContextExtra | undefined;
-
     const parts: string[] = [];
 
     const project = await loadProject(ctx);
     // Каталог жёстко определён проектом (project.workspace); произвольный
     // ввод пути от агента инструмент не принимает (z.object({})).
-    const projectDir = project?.workspace || ctx.workingDir;
+    const extra = ctx.extra as ProjectContextExtra | undefined;
+    const projectDir = resolveWorkspaceDir(project, extra?.workspacesRoot, ctx.workingDir);
 
     if (project) {
       parts.push(`# Проект: ${project.name}`);
       parts.push(`- ID: ${project.id}`);
-      if (project.workspace) parts.push(`- Рабочий каталог проекта: ${project.workspace}`);
+      if (project.workspace) parts.push(`- Рабочий каталог проекта: ${projectDir}`);
       if (project.description) parts.push(`- Описание: ${project.description}`);
     } else {
       const name = basename(ctx.workingDir) || ctx.workingDir;
@@ -165,7 +192,7 @@ export const getProjectInfoTool: ToolDefinition = {
       content: parts.join('\n'),
       metadata: {
         workingDir: ctx.workingDir,
-        ...(project?.workspace ? { projectWorkspace: project.workspace } : {}),
+        ...(project?.workspace ? { projectWorkspace: projectDir } : {}),
       },
     };
   },
@@ -184,16 +211,20 @@ export const listReposTool: ToolDefinition = {
     const project = await loadProject(ctx);
     // Каталог жёстко определён проектом (project.workspace); произвольный
     // ввод пути от агента инструмент не принимает (z.object({})).
-    const projectDir = project?.workspace || ctx.workingDir;
+    const extra = ctx.extra as ProjectContextExtra | undefined;
+    const projectDir = resolveWorkspaceDir(project, extra?.workspacesRoot, ctx.workingDir);
 
     if (project?.repos && project.repos.length > 0) {
       parts.push(`# Репозитории проекта ${project.name}:`);
       for (const repoCfg of project.repos) {
-        const repo = await detectRepoInfo(repoCfg.path);
+        // Относительные пути репозиториев резолвим относительно рабочего
+        // каталога проекта, чтобы git-детект искал в правильном месте.
+        const repoPath = resolveRepoPath(repoCfg.path, projectDir);
+        const repo = await detectRepoInfo(repoPath);
         if (repo) {
-          parts.push(formatRepo(repo, repoCfg.path));
+          parts.push(formatRepo(repo, repoPath));
         } else {
-          parts.push(`- ${repoCfg.path} (не найден или не git-репозиторий)`);
+          parts.push(`- ${repoPath} (не найден или не git-репозиторий)`);
         }
       }
     } else {
@@ -203,7 +234,7 @@ export const listReposTool: ToolDefinition = {
           content: `Git-репозитории в "${projectDir}" не найдены`,
           metadata: {
             workingDir: ctx.workingDir,
-            ...(project?.workspace ? { projectWorkspace: project.workspace } : {}),
+            ...(project?.workspace ? { projectWorkspace: projectDir } : {}),
             count: 0,
           },
         };
@@ -219,7 +250,7 @@ export const listReposTool: ToolDefinition = {
       content: parts.join('\n'),
       metadata: {
         workingDir: ctx.workingDir,
-        ...(project?.workspace ? { projectWorkspace: project.workspace } : {}),
+        ...(project?.workspace ? { projectWorkspace: projectDir } : {}),
         count,
       },
     };

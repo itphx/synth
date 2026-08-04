@@ -140,6 +140,51 @@ describe('project-context tools', () => {
     expect(result.content).toContain('- Ветка:');
   });
 
+  it('get_project_info: относительный workspace резолвится относительно workspacesRoot', async () => {
+    const wsRoot = join(tmpDir, 'ws-root');
+    const wsDir = join(wsRoot, 'WS1');
+    await mkdir(wsDir, { recursive: true });
+    await initGitRepo(wsDir);
+    const project = projectStore.create('RelProj', 'u1', { workspace: 'WS1' });
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({ projectId: project.id, title: 'S' });
+
+    const result = await getProjectInfoTool.execute({}, makeCtx({
+      sessionId: session.id,
+      workingDir: tmpDir,
+      extra: { sessionManager, projectStore, sessionId: session.id, workspacesRoot: wsRoot },
+    }));
+
+    expect(result.content).toContain(`- Рабочий каталог проекта: ${wsDir}`);
+    expect(result.content).toContain('Git-репозиторий');
+    expect(result.metadata?.projectWorkspace).toBe(wsDir);
+  });
+
+  it('list_repos: относительный repo path резолвится относительно project.workspace', async () => {
+    const wsRoot = join(tmpDir, 'ws-root');
+    const wsDir = join(wsRoot, 'WS1');
+    const subrepo = join(wsDir, 'trepo');
+    await mkdir(subrepo, { recursive: true });
+    await initGitRepo(subrepo);
+    const project = projectStore.create('RelRepos', 'u1', {
+      workspace: 'WS1',
+      repos: [{ path: 'trepo' }],
+    });
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({ projectId: project.id, title: 'S' });
+
+    const result = await listReposTool.execute({}, makeCtx({
+      sessionId: session.id,
+      workingDir: tmpDir,
+      extra: { sessionManager, projectStore, sessionId: session.id, workspacesRoot: wsRoot },
+    }));
+
+    expect(result.content).toContain('# Репозитории проекта RelRepos:');
+    expect(result.content).toContain(subrepo);
+    expect(result.content).toContain('- Ветка:');
+    expect(result.metadata?.projectWorkspace).toBe(wsDir);
+  });
+
   it('list_repos: сканирует project.workspace, когда в проекте нет настроенных repos', async () => {
     const wsDir = await mkdtemp(join(tmpdir(), 'synth-project-ws-'));
     await initGitRepo(wsDir);

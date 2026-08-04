@@ -1,7 +1,7 @@
 import type { Message, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@synth/shared';
 import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart } from '@synth/shared';
 import type { RouterConfig, PermissionConfig, PlanMode, SessionMode } from '@synth/shared';
-import { join } from 'node:path';
+import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
 import type { ProjectStore } from '../storage/project-store.js';
@@ -57,6 +57,12 @@ export interface OrchestratorOptions {
   routerConfig?: RouterConfig;
   projectStore?: ProjectStore;
   defaultWorkingDir?: string;
+  /**
+   * Корень каталога workspaces: `join(dataDir, 'workspaces')` по умолчанию
+   * (аналог resolveWorkspacesRoot). Относительные `project.workspace` резолвятся
+   * относительно этого корня (AD-014).
+   */
+  workspacesRoot?: string;
   /** Глобальная секция permission из config.yaml (AD-029). */
   permissionConfig?: PermissionConfig;
   /** Строгость цикла Plan→Build по умолчанию из config.yaml session.planMode (AD-028). */
@@ -102,6 +108,7 @@ export class ChatOrchestrator {
   private readonly _contextConfig: ContextConfig | null;
   private readonly _projectStore: ProjectStore | null;
   private readonly _defaultWorkingDir: string;
+  private readonly _workspacesRoot: string;
   private readonly _permissionConfig: PermissionConfig;
   private readonly _approvalManager: PermissionApprovalManager;
   private readonly _defaultPlanMode: PlanMode;
@@ -125,6 +132,7 @@ export class ChatOrchestrator {
     this._contextConfig = options.contextConfig ?? null;
     this._projectStore = options.projectStore ?? null;
     this._defaultWorkingDir = options.defaultWorkingDir ?? join(options.dataDir || '/var/synth/data', 'workspaces', 'default');
+    this._workspacesRoot = options.workspacesRoot ?? join(options.dataDir || '/var/synth/data', 'workspaces');
     this._permissionConfig = options.permissionConfig ?? emptyPermissionConfig();
     this._approvalManager = new PermissionApprovalManager(this._eventBus);
     this._defaultPlanMode = options.defaultPlanMode ?? 'auto';
@@ -156,7 +164,13 @@ export class ChatOrchestrator {
     if (session.projectId && this._projectStore) {
       try {
         const project = await this._projectStore.load(session.projectId);
-        if (project?.workspace) return project.workspace;
+        if (project?.workspace) {
+          // Абсолютный workspace — как есть (normalize); относительный —
+          // резолвим относительно workspacesRoot (AD-014).
+          return isAbsolute(project.workspace)
+            ? normalize(project.workspace)
+            : resolve(this._workspacesRoot, project.workspace);
+        }
       } catch {
         // проект не загрузился — используем fallback
       }
@@ -766,6 +780,7 @@ export class ChatOrchestrator {
                       agentRegistry: this._agentRegistry,
                       sessionManager: this._sessionManager,
                       projectStore: this._projectStore ?? undefined,
+                      workspacesRoot: this._workspacesRoot,
                       eventBus: this._eventBus,
                       contextOptimizer: this._optimizer ?? undefined,
                       callerAgentRole: effectiveAgentRole,

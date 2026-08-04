@@ -175,6 +175,7 @@ const orchestrator = new ChatOrchestrator({
   toolRegistry,
   agentRegistry,
   mcpManager,
+  workspacesRoot: backendConfig.workspacesRoot,
   routerConfig: backendConfig.synth.router,
 });
 
