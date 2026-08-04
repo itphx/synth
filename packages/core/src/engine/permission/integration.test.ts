@@ -107,7 +107,7 @@ describe('ChatOrchestrator × permissions (AD-029) — smoke', () => {
 
   async function runSession(
     permissionConfig: PermissionConfig,
-    opts?: { onSession?: (sessionId: string) => void },
+    opts?: { onSession?: (sessionId: string) => void; mode?: 'plan' | 'act' | 'yolo' },
   ): Promise<{ denied: boolean; fileCreated: boolean }> {
     const toolRegistry = createToolRegistry();
     const orchestrator = new ChatOrchestrator({
@@ -131,6 +131,10 @@ describe('ChatOrchestrator × permissions (AD-029) — smoke', () => {
         agentRole: 'developer',
       },
     });
+    if (opts?.mode) {
+      session.mode = opts.mode;
+      await sessionManager.updateSession(session);
+    }
     opts?.onSession?.(session.id);
     const msg = makeMessage();
     await sessionManager.addMessage(session.id, msg);
@@ -223,6 +227,27 @@ describe('ChatOrchestrator × permissions (AD-029) — smoke', () => {
     const r = await runSession({ rules: { write_file: 'ask' }, askTimeoutMs: 2000 });
     expect(r.denied).toBe(true);
     expect(r.fileCreated).toBe(false);
+  });
+
+  it('yolo — ask автоматически подтверждается, permission.asked не публикуется', async () => {
+    let sessionId = '';
+    const asked: Array<Record<string, unknown>> = [];
+    const unsubs: Array<() => void> = [];
+    const r = await runSession({ rules: { write_file: 'ask' }, askTimeoutMs: 2000 }, {
+      mode: 'yolo',
+      onSession: (id) => {
+        sessionId = id;
+        unsubs.push(eventBus.subscribe(id, (e) => {
+          if (e.type === 'permission.asked') asked.push(e.data as Record<string, unknown>);
+        }));
+      },
+    });
+    expect(sessionId).not.toBe('');
+    // ask не возникает: тул выполняется автоматически, файл создаётся
+    expect(asked.length).toBe(0);
+    expect(r.denied).toBe(false);
+    expect(r.fileCreated).toBe(true);
+    for (const unsub of unsubs) unsub();
   });
 });
 

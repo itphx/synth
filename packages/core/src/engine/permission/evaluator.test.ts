@@ -316,6 +316,75 @@ describe('PermissionEvaluator — MCP доступность по режимам
   });
 });
 
+describe('PermissionEvaluator — yolo mode (AD-025)', () => {
+  function yoloCheck(
+    config: PermissionConfig,
+    toolName: string,
+    params: Record<string, unknown>,
+    opts: { sessionMode?: 'plan' | 'act' | 'yolo'; planMode?: 'auto' | 'strict' | 'off'; planApproved?: boolean; capabilities?: readonly string[] } = {},
+  ) {
+    return new PermissionEvaluator(config).check({
+      toolName,
+      params,
+      workingDir: CWD,
+      capabilities: opts.capabilities,
+      sessionMode: opts.sessionMode ?? 'yolo',
+      planMode: opts.planMode ?? 'auto',
+      planApproved: opts.planApproved ?? false,
+    });
+  }
+
+  it('ask трансформируется в allow (автоподтверждение)', () => {
+    const cfg: PermissionConfig = { rules: { write_file: 'ask' }, askTimeoutMs: 30_000 };
+    const d = yoloCheck(cfg, 'write_file', { file_path: 'a.txt', content: 'x' });
+    expect(d.action).toBe('allow');
+    expect(d.reason).toContain('yolo');
+  });
+
+  it('ask на групповом правиле и "*" тоже трансформируется в allow', () => {
+    const cfg: PermissionConfig = { rules: { shell: 'ask' }, askTimeoutMs: 30_000 };
+    expect(yoloCheck(cfg, 'execute_shell', { command: 'ls' }).action).toBe('allow');
+
+    const starCfg: PermissionConfig = { rules: { '*': 'ask' }, askTimeoutMs: 30_000 };
+    expect(yoloCheck(starCfg, 'read_file', { file_path: 'a.txt' }).action).toBe('allow');
+  });
+
+  it('deny остаётся deny (не трансформируется)', () => {
+    const cfg: PermissionConfig = { rules: { write_file: 'deny', '*.env': 'deny' }, askTimeoutMs: 30_000 };
+    expect(yoloCheck(cfg, 'write_file', { file_path: 'a.txt', content: 'x' }).action).toBe('deny');
+  });
+
+  it('allow остаётся allow', () => {
+    const cfg: PermissionConfig = { rules: { read_file: 'allow' }, askTimeoutMs: 30_000 };
+    expect(yoloCheck(cfg, 'read_file', { file_path: 'a.txt' }).action).toBe('allow');
+  });
+
+  it('plan-рестрикция не активируется самим режимом yolo', () => {
+    // write не блокируется из-за yolo (режим plan блокирует — но yolo не plan)
+    const cfg: PermissionConfig = { rules: {}, askTimeoutMs: 30_000 };
+    expect(yoloCheck(cfg, 'write_file', { file_path: 'a.txt', content: 'x' }).action).toBe('allow');
+  });
+
+  it('в yolo deny от MCP-доступности остаётся deny', () => {
+    const cfg: PermissionConfig = { rules: {}, askTimeoutMs: 30_000 };
+    const d = new PermissionEvaluator(cfg).check({
+      toolName: 'github_create_issue',
+      params: {},
+      workingDir: CWD,
+      capabilities: ['mcp'],
+      sessionMode: 'yolo',
+      mcpToolSettings: { github: { default: { plan: true, act: false } } },
+    });
+    expect(d.action).toBe('deny');
+  });
+
+  it('strict без утверждённого плана блокирует write даже в yolo', () => {
+    const cfg: PermissionConfig = { rules: {}, askTimeoutMs: 30_000 };
+    const d = yoloCheck(cfg, 'write_file', { file_path: 'a.txt', content: 'x' }, { planMode: 'strict', planApproved: false });
+    expect(d.action).toBe('deny');
+  });
+});
+
 describe('deriveSubagentPermission', () => {
   it('наследует правила родителя и добавляет deny на question/plan_enter/plan_exit/task', () => {
     const parent: PermissionConfig = {

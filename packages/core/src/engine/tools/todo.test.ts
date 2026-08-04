@@ -5,12 +5,14 @@ import { join } from 'node:path';
 import { todoWriteTool } from './todo.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
+import { EventBus } from '../../events/bus.js';
 import type { ToolContext, TodoItem } from '@synth/shared';
 import { generateId } from '@synth/shared';
 
 describe('todo_write', () => {
   let store: FileStore;
   let sessionManager: SessionManager;
+  let eventBus: EventBus;
   let tmpDir: string;
   let sessionId: string;
 
@@ -18,6 +20,7 @@ describe('todo_write', () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-todo-tool-'));
     store = new FileStore({ dataDir: tmpDir });
     sessionManager = new SessionManager(store);
+    eventBus = new EventBus();
     const session = await sessionManager.createSession({ title: 'Todo test' });
     sessionId = session.id;
   });
@@ -77,5 +80,30 @@ describe('todo_write', () => {
   it('не принимает path/cwd-параметры от агента', () => {
     const shape = (todoWriteTool.parameters as { shape?: Record<string, unknown> }).shape ?? {};
     expect(Object.keys(shape)).toEqual(['todos']);
+  });
+
+  it('публикует событие todos.updated с session_id и todos', async () => {
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const unsub = eventBus.subscribe(sessionId, (e) => events.push({ type: e.type, data: e.data as Record<string, unknown> }));
+
+    const ctx = makeCtx();
+    ctx.extra = { ...ctx.extra, eventBus };
+    await todoWriteTool.execute({ todos }, ctx);
+
+    const updated = events.find((e) => e.type === 'todos.updated');
+    expect(updated).toBeDefined();
+    expect(updated!.data.session_id).toBe(sessionId);
+    expect(updated!.data.todos).toEqual(todos);
+    unsub();
+  });
+
+  it('без eventBus — событие не публикуется, тул не падает', async () => {
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const unsub = eventBus.subscribe(sessionId, (e) => events.push({ type: e.type, data: e.data as Record<string, unknown> }));
+
+    const result = await todoWriteTool.execute({ todos }, makeCtx());
+    expect(result.isError).toBeUndefined();
+    expect(events.some((e) => e.type === 'todos.updated')).toBe(false);
+    unsub();
   });
 });

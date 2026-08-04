@@ -117,3 +117,45 @@ describe('serializeSession', () => {
     expect(serialized.pending_messages[0]!.source_msg_id).toBeNull();
   });
 });
+
+describe('serializeSession — mode_applicable (AD-025)', () => {
+  const registry = (caps: string[]) => ({
+    get: (id: string) => (id === 'agent' ? { capabilities: caps } : undefined),
+  });
+
+  it('агент не найден → mode_applicable=true', () => {
+    const session = makeSession({ settings: { agentRole: 'ghost' } as never });
+    const serialized = serializeSession(session, { agentRegistry: registry([]) });
+    expect(serialized.mode_applicable).toBe(true);
+  });
+
+  it('без agentRegistry → mode_applicable=true', () => {
+    const session = makeSession();
+    const serialized = serializeSession(session);
+    expect(serialized.mode_applicable).toBe(true);
+  });
+
+  it('read-only агент (нет shell/file_write/web) → mode_applicable=false', () => {
+    const session = makeSession({ settings: { agentRole: 'agent' } as never });
+    const serialized = serializeSession(session, { agentRegistry: registry(['file_read', 'search', 'mcp']) });
+    expect(serialized.mode_applicable).toBe(false);
+  });
+
+  it('агент с web → mode_applicable=true', () => {
+    const session = makeSession({ settings: { agentRole: 'agent' } as never });
+    const serialized = serializeSession(session, { agentRegistry: registry(['file_read', 'search', 'web', 'mcp']) });
+    expect(serialized.mode_applicable).toBe(true);
+  });
+
+  it('агент с shell → mode_applicable=true', () => {
+    const session = makeSession({ settings: { agentRole: 'agent' } as never });
+    const serialized = serializeSession(session, { agentRegistry: registry(['file_read', 'shell']) });
+    expect(serialized.mode_applicable).toBe(true);
+  });
+
+  it('агент с file_write → mode_applicable=true', () => {
+    const session = makeSession({ settings: { agentRole: 'agent' } as never });
+    const serialized = serializeSession(session, { agentRegistry: registry(['file_read', 'file_write']) });
+    expect(serialized.mode_applicable).toBe(true);
+  });
+});

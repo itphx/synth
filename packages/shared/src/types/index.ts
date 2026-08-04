@@ -106,7 +106,7 @@ export interface TsmStatus {
 export const PLAN_MODES = ['auto', 'strict', 'off'] as const;
 export type PlanMode = (typeof PLAN_MODES)[number];
 
-export const SESSION_MODES = ['plan', 'act'] as const;
+export const SESSION_MODES = ['plan', 'act', 'yolo'] as const;
 export type SessionMode = (typeof SESSION_MODES)[number];
 
 export const TODO_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'] as const;
@@ -553,6 +553,7 @@ export type EventType =
   | 'message.quality_check'
   | 'session.routing_category'
   | 'plan.approved'
+  | 'todos.updated'
   | 'error';
 
 export interface BusEvent {

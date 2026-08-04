@@ -24,6 +24,7 @@ export class ContextConfig {
   readonly systemPromptsDir: string;
   readonly userPromptsDir: string;
   readonly userRolesDir: string;
+  readonly userModesDir: string;
 
   private _enabledFiles: string[] = [];
 
@@ -31,6 +32,7 @@ export class ContextConfig {
     this.systemPromptsDir = options.systemPromptsDir ?? join(CURRENT_DIR, '..', '..', '..', 'prompts');
     this.userPromptsDir = join(options.userDataDir, 'user');
     this.userRolesDir = join(options.userDataDir, 'roles');
+    this.userModesDir = join(options.userDataDir, 'modes');
     this._enabledFiles = ['SOUL.md', 'COMPANY.md', 'ABOUT.md'];
   }
 
@@ -350,5 +352,36 @@ export class ContextConfig {
 
   getRoutingInstructions(language = 'ru'): string {
     return this._readPrompt('ROUTING', 'system', language) ?? '';
+  }
+
+  /**
+   * AD-025: системный промпт режима сессии (plan/act/yolo).
+   *
+   * Приоритет (по аналогии с getRolePrompt):
+   *   1. Пользовательский override: {userDataDir}/modes/{mode}.{lang}.md → {mode}.md
+   *   2. Встроенный: {systemPromptsDir}/modes/{mode}.{lang}.md → {mode}.md
+   * Возвращает null, если файл не найден (fallback на встроенный текст движка).
+   */
+  getModePrompt(mode: string, language = 'ru'): string | null {
+    const stem = mode;
+
+    // 1. Пользовательский override
+    const userBasePath = join(this.userModesDir, `${stem}.md`);
+    const userLocalized = this._getLocalizedPath(userBasePath, stem, language);
+    if (userLocalized) {
+      const content = this._readFile(userLocalized);
+      if (content) return content;
+    }
+    const userContent = this._readFile(userBasePath);
+    if (userContent) return userContent;
+
+    // 2. Встроенный prompts/modes/
+    const systemBasePath = join(this.systemPromptsDir, 'modes', `${stem}.md`);
+    const systemLocalized = this._getLocalizedPath(systemBasePath, stem, language);
+    if (systemLocalized) {
+      const content = this._readFile(systemLocalized);
+      if (content) return content;
+    }
+    return this._readFile(systemBasePath);
   }
 }

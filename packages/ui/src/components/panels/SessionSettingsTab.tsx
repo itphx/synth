@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import type { TodoItem, TodoStatus, TodoPriority } from '@synth/shared'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
@@ -9,6 +10,7 @@ import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
 import { ModelSelector } from '../chat/ModelSelector'
+import { MarkdownContent } from '../chat/MarkdownContent'
 import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 
 export function SessionSettingsTab() {
@@ -234,6 +236,14 @@ export function SessionSettingsTab() {
           <Field label="ID" value={session.id.slice(0, 12) + '...'} mono />
           <Field label={t('rightPanel.params.project')} value={session.project_id || t('rightPanel.params.none')} />
           <Field label={t('rightPanel.params.engine')} value={session.engine} />
+        </Section>
+
+        <Section title={t('sessionTab.plan.title')}>
+          <SessionPlanBlock planPath={session.plan_path} planContent={session.plan_content} />
+        </Section>
+
+        <Section title={t('sessionTab.todos.title')}>
+          <SessionTodosBlock todos={session.todos} />
         </Section>
 
         <Section title={t('sessionSettings.providerModel')}>
@@ -608,6 +618,97 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
     <div className="flex items-center justify-between text-xs">
       <span className="text-muted-foreground">{label}</span>
       <span className={mono ? 'font-mono text-[11px]' : ''}>{value}</span>
+    </div>
+  )
+}
+
+function SessionPlanBlock({ planPath, planContent }: { planPath?: string | null; planContent?: string | null }) {
+  const { t } = useI18n()
+  const [collapsed, setCollapsed] = useState(false)
+  const hasPlan = Boolean(planContent?.trim())
+
+  if (!hasPlan) {
+    return (
+      <div className="rounded-lg border border-dashed border-border px-3 py-2">
+        <div className="text-xs text-muted-foreground">{t('sessionTab.plan.empty')}</div>
+        <div className="mt-0.5 text-[10px] text-muted-foreground/60">{t('sessionTab.plan.hint')}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-lg border border-border bg-input p-2.5">
+      <div className="flex items-start gap-1.5">
+        <div className="min-w-0 flex-1 space-y-1">
+          {planPath && (
+            <div className="flex items-center gap-1 text-[10px] text-muted-foreground/70" title={planPath}>
+              <Icon name="file-text" className="size-3 shrink-0" />
+              <span className="truncate font-mono">{planPath}</span>
+            </div>
+          )}
+          <div className={`overflow-y-auto pr-1 ${collapsed ? 'max-h-24' : 'max-h-48'}`}>
+            <MarkdownContent content={planContent || ''} className="text-xs" />
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setCollapsed((v) => !v)}
+          className="shrink-0 rounded p-1 text-muted-foreground/60 hover:bg-interactive-hover hover:text-foreground transition-colors"
+          title={collapsed ? t('sessionTab.plan.expand') : t('sessionTab.plan.collapse')}
+        >
+          <Icon name={collapsed ? 'arrow-down-s' : 'arrow-up-s'} className="size-3.5" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+const TODO_STATUS_STYLES: Record<TodoStatus, { labelKey: string; className: string }> = {
+  pending: { labelKey: 'sessionTab.todo.status.pending', className: 'bg-muted/60 text-muted-foreground' },
+  in_progress: { labelKey: 'sessionTab.todo.status.in_progress', className: 'bg-blue-500/15 text-blue-600 dark:text-blue-400' },
+  completed: { labelKey: 'sessionTab.todo.status.completed', className: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' },
+  cancelled: { labelKey: 'sessionTab.todo.status.cancelled', className: 'bg-destructive/10 text-destructive line-through' },
+}
+
+const TODO_PRIORITY_STYLES: Record<TodoPriority, { labelKey: string; className: string }> = {
+  high: { labelKey: 'sessionTab.todo.priority.high', className: 'text-red-600 dark:text-red-400' },
+  medium: { labelKey: 'sessionTab.todo.priority.medium', className: 'text-amber-600 dark:text-amber-400' },
+  low: { labelKey: 'sessionTab.todo.priority.low', className: 'text-muted-foreground' },
+}
+
+function SessionTodosBlock({ todos }: { todos?: TodoItem[] | null }) {
+  const { t } = useI18n()
+
+  if (!todos || todos.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-border px-3 py-2">
+        <div className="text-xs text-muted-foreground">{t('sessionTab.todos.empty')}</div>
+        <div className="mt-0.5 text-[10px] text-muted-foreground/60">{t('sessionTab.todos.hint')}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {todos.map((todo, i) => {
+        const statusStyle = TODO_STATUS_STYLES[todo.status]
+        const priorityStyle = TODO_PRIORITY_STYLES[todo.priority] || TODO_PRIORITY_STYLES.low
+        return (
+          <div key={i} className="flex items-start gap-2 rounded-lg border border-border/60 bg-input px-2.5 py-1.5">
+            <span className={`mt-0.5 inline-flex shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${statusStyle.className}`}>
+              {t(statusStyle.labelKey)}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className={`text-xs text-foreground ${todo.status === 'completed' ? 'line-through opacity-60' : ''}`}>
+                {todo.content}
+              </div>
+              <div className={`mt-0.5 text-[10px] font-medium uppercase tracking-wide ${priorityStyle.className}`}>
+                {t(priorityStyle.labelKey)}
+              </div>
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }

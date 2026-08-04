@@ -11,6 +11,15 @@ import type { SessionData } from '@/lib/api/synthApi'
 
 type EventDispatcher = (event: WSEvent) => void
 
+// Полный refresh сессии с сервера после событий плана/ToDo (plan.approved,
+// plan.updated, todos.updated). Гарантирует актуальность plan_content/todos/mode
+// в сторе независимо от содержимого payload события.
+function refreshSessionFromApi(sid: string) {
+  synthApi.getSession(sid)
+    .then((sess) => useSessionsStore.getState().upsertSession(sess))
+    .catch(() => {})
+}
+
 interface TransportState {
   transportMode: TransportMode
   activeTransport: TransportKind
@@ -251,6 +260,29 @@ function createDispatcher(): EventDispatcher {
         if (patch.summarization_pending === false) {
           setSummarizationPending(sid, false)
         }
+        break
+      }
+
+      // План утверждён (AD-027, план пишется в .synth/plans/ и в состояние сессии).
+      // plan.updated / todos.updated — будущие события W14 (план изменён / todo_write),
+      // закладываем обработку заранее: мгновенный patch из payload + полный refresh.
+      case 'plan.approved':
+      case 'plan.updated':
+      case 'todos.updated': {
+        const patch = payload as Record<string, unknown>
+        const sessionPatch: Record<string, unknown> = {}
+        if (patch.plan_path !== undefined) sessionPatch.plan_path = patch.plan_path
+        if (patch.plan_content !== undefined) sessionPatch.plan_content = patch.plan_content
+        if (patch.todos !== undefined) sessionPatch.todos = patch.todos
+        if (patch.mode !== undefined) sessionPatch.mode = patch.mode
+        if (Object.keys(sessionPatch).length > 0) {
+          useSessionsStore.setState((s) => ({
+            sessions: s.sessions.map((sess) =>
+              sess.id === sid ? { ...sess, ...sessionPatch } : sess,
+            ),
+          }))
+        }
+        refreshSessionFromApi(sid)
         break
       }
 

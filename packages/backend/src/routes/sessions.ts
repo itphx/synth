@@ -23,6 +23,7 @@ export function createSessionRoutes(
   contextOptimizer?: ContextOptimizer,
 ): Hono {
   const app = new Hono();
+  const agentRegistry = orchestrator.agentRegistry;
 
   // GET /api/v2/sessions — список сессий
   app.get('/', kit.requireAuth, async (c) => {
@@ -32,7 +33,7 @@ export function createSessionRoutes(
       projectId: projectId || undefined,
       userId: user.id,
     });
-    return c.json(sessions.map(serializeSession));
+    return c.json(sessions.map((s) => serializeSession(s, { agentRegistry })));
   });
 
   // POST /api/v2/sessions — создать
@@ -57,9 +58,9 @@ export function createSessionRoutes(
     );
 
     // Оповещаем клиентов о новой сессии
-    eventBus.publish(session.id, 'session.created', serializeSession(session));
+    eventBus.publish(session.id, 'session.created', serializeSession(session, { agentRegistry }));
 
-    return c.json(serializeSession(session), 201);
+    return c.json(serializeSession(session, { agentRegistry }), 201);
   });
 
   // GET /api/v2/sessions/:id — получить
@@ -68,7 +69,7 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
-    return c.json(serializeSession(session));
+    return c.json(serializeSession(session, { agentRegistry }));
   });
 
   // PATCH /api/v2/sessions/:id — обновить
@@ -88,7 +89,7 @@ export function createSessionRoutes(
     if (body.mode !== undefined) {
       if (!SESSION_MODES.includes(body.mode)) {
         return c.json({
-          error: { code: 'VALIDATION_ERROR', message: 'mode должен быть "plan" или "act"' },
+          error: { code: 'VALIDATION_ERROR', message: 'mode должен быть "plan", "act" или "yolo"' },
         }, 400);
       }
       session.mode = body.mode;
@@ -98,8 +99,8 @@ export function createSessionRoutes(
     }
 
     await sessionManager.updateSession(session);
-    eventBus.publish(session.id, 'session.updated', serializeSession(session));
-    return c.json(serializeSession(session));
+    eventBus.publish(session.id, 'session.updated', serializeSession(session, { agentRegistry }));
+    return c.json(serializeSession(session, { agentRegistry }));
   });
 
   // DELETE /api/v2/sessions/:id — удалить
@@ -135,14 +136,14 @@ export function createSessionRoutes(
     eventHub.subscribeToSession(user.id, fork.id).catch((e: unknown) =>
       console.warn('subscribeToSession failed:', e),
     );
-    eventBus.publish(fork.id, 'session.fork.created', serializeSession(fork));
-    return c.json(serializeSession(fork), 201);
+    eventBus.publish(fork.id, 'session.fork.created', serializeSession(fork, { agentRegistry }));
+    return c.json(serializeSession(fork, { agentRegistry }), 201);
   });
 
   // GET /api/v2/sessions/:id/children — дочерние сессии
   app.get('/:id/children', kit.requireAuth, async (c) => {
     const children = await sessionManager.getChildren(c.req.param('id'));
-    return c.json(children.map(serializeSession));
+    return c.json(children.map((s) => serializeSession(s, { agentRegistry })));
   });
 
   // GET /api/v2/sessions/:id/tree — дерево сессий
@@ -286,7 +287,7 @@ export function createSessionRoutes(
     session.cacheWriteCost = 0;
     await sessionManager.updateSession(session);
 
-    return c.json(serializeSession(session));
+    return c.json(serializeSession(session, { agentRegistry }));
   });
 
   // POST /api/v2/sessions/:id/abort — отменить генерацию
@@ -428,7 +429,7 @@ export function createSessionRoutes(
     });
 
     const updated = await sessionManager.getSession(c.req.param('id'));
-    return c.json(serializeSession(updated!));
+    return c.json(serializeSession(updated!, { agentRegistry }));
   });
 
   // POST /api/v2/sessions/:id/optimization/check — проверить триггеры

@@ -93,6 +93,34 @@ describe('Session API Routes (PATCH mode)', () => {
       expect(body.mode).toBe('act');
     });
 
+    it('переключает режим сессии в yolo', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      const res = await app.request(`/api/v2/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'yolo' }),
+      });
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.mode).toBe('yolo');
+      const reloaded = await sessionManager.getSession(session.id);
+      expect(reloaded?.mode).toBe('yolo');
+    });
+
+    it('сериализованная сессия содержит mode_applicable', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      const res = await app.request(`/api/v2/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'plan' }),
+      });
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(typeof body.mode_applicable).toBe('boolean');
+    });
+
     it('сохраняет mode в хранилище (переживает чтение сессии)', async () => {
       const { app, sessionManager } = createTestApp(tmpDir);
       const session = await sessionManager.createSession({ title: 'S', userId: 'local' });

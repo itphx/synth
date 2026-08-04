@@ -7,6 +7,7 @@ import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { ProjectStore } from '../storage/project-store.js';
 import { EventBus } from '../events/bus.js';
+import { ContextConfig } from './context/config.js';
 import { createToolRegistry } from './tools/index.js';
 import { ProviderFactory, BaseProvider } from '../providers/base.js';
 import type { LLMMessage, CancellationToken } from '../providers/base.js';
@@ -370,5 +371,76 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     expect(ScriptedProvider.prompts()[0]).toContain('## Утверждённый план');
     expect(ScriptedProvider.prompts()[0]).toContain(planText);
     expect(ScriptedProvider.prompts()[0]).toContain('План утверждён');
+  });
+
+  it('mode prompt из контекстных файлов (prompts/modes/plan.md) встраивается в system prompt', async () => {
+    const contextConfig = new ContextConfig({ userDataDir: tmpDir });
+    ScriptedProvider.configure([{ content: 'готово' }]);
+
+    const toolRegistry = createToolRegistry();
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus,
+      contextBuilder: makeCtxBuilder(),
+      contextConfig,
+      providerLoader: (name: string) => {
+        return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@synth/shared').ProviderConfig;
+      },
+      toolRegistry,
+      permissionConfig: { rules: {}, askTimeoutMs: 1000 },
+      defaultWorkingDir: tmpDir,
+    });
+
+    const session = await sessionManager.createSession({
+      title: 'ModePrompt',
+      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'developer', planMode: 'auto' },
+    });
+    session.mode = 'plan';
+    await sessionManager.updateSession(session);
+    const msg = makeMessage();
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+    const processMessage = orchestrator.createProcessMessage();
+    const result = await processMessage(fresh, msg, new AbortController().signal, () => {});
+    expect(result.error).toBeUndefined();
+
+    const prompts = ScriptedProvider.prompts();
+    expect(prompts.length).toBeGreaterThanOrEqual(1);
+    expect(prompts[0]).toContain('Текущий режим: plan');
+    expect(prompts[0]).toContain('Не вноси никаких изменений');
+  });
+
+  it('fallback: без contextConfig режим plan использует встроенный текст', async () => {
+    ScriptedProvider.configure([{ content: 'готово' }]);
+
+    const toolRegistry = createToolRegistry();
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus,
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: (name: string) => {
+        return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@synth/shared').ProviderConfig;
+      },
+      toolRegistry,
+      permissionConfig: { rules: {}, askTimeoutMs: 1000 },
+      defaultWorkingDir: tmpDir,
+    });
+
+    const session = await sessionManager.createSession({
+      title: 'ModeFallback',
+      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'developer', planMode: 'auto' },
+    });
+    session.mode = 'plan';
+    await sessionManager.updateSession(session);
+    const msg = makeMessage();
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+    const processMessage = orchestrator.createProcessMessage();
+    const result = await processMessage(fresh, msg, new AbortController().signal, () => {});
+    expect(result.error).toBeUndefined();
+
+    const prompts = ScriptedProvider.prompts();
+    expect(prompts[0]).toContain('Текущий режим: plan');
+    expect(prompts[0]).toContain('Изучи задачу, составь план');
   });
 });

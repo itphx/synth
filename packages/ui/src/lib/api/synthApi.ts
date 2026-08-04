@@ -1,4 +1,5 @@
 import type { MessageData } from '@/stores/chatStore'
+import type { TodoItem } from '@synth/shared'
 
 const BASE_URL = '/api/v2'
 
@@ -48,9 +49,15 @@ export interface SessionData {
   parent_id?: string | null
   branch_point?: string | null
   plan_path?: string | null
+  /** Содержимое утверждённого плана (AD-027), сериализуется как plan_content. */
+  plan_content?: string | null
+  /** Todo-список сессии (тул todo_write), сериализуется как todos. */
+  todos?: TodoItem[] | null
   session_origin?: string | null
-  /** Текущий runtime-режим сессии (AD-025): 'plan' — только чтение, 'act' — полный доступ. */
+  /** Текущий runtime-режим сессии (AD-025): 'plan' — только чтение, 'act' — полный доступ, 'yolo' — автоподтверждение. */
   mode?: SessionMode
+  /** Применим ли переключатель режимов к агенту сессии (AD-025). false для read-only агентов. undefined → считается true. */
+  mode_applicable?: boolean
   user_id: string | null
   owner_id: string | null
   project_id: string | null

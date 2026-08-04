@@ -92,6 +92,22 @@ export class PermissionEvaluator {
   }
 
   check(input: PermissionCheckInput): PermissionDecision {
+    const decision = this._computeDecision(input);
+
+    // AD-025-yolo: в режиме yolo все ask-запросы автоматически подтверждаются
+    // (allow) без события permission.asked и без ожидания пользователя.
+    // deny-правила остаются deny — трансформируется только действие ask.
+    if (decision.action === 'ask' && input.sessionMode === 'yolo') {
+      return {
+        ...decision,
+        action: 'allow',
+        reason: `${decision.reason} (yolo-режим: автоподтверждение)`,
+      };
+    }
+    return decision;
+  }
+
+  private _computeDecision(input: PermissionCheckInput): PermissionDecision {
     const { toolName, params, workingDir, capabilities, sessionMode, planMode, planApproved, mcpToolSettings } = input;
     const paths = extractPaths(toolName, params, workingDir);
     const isFile = paths.length > 0;

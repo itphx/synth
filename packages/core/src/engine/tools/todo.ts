@@ -2,9 +2,11 @@ import { z } from 'zod';
 import { ToolCapability } from '@synth/shared';
 import type { ToolDefinition, TodoItem } from '@synth/shared';
 import type { SessionManager } from '../../sessions/manager.js';
+import type { EventBus } from '../../events/bus.js';
 
 export interface TodoToolExtra {
   sessionManager?: SessionManager;
+  eventBus?: EventBus;
   sessionId?: string;
 }
 
@@ -53,6 +55,12 @@ export const todoWriteTool: ToolDefinition = {
         isError: true,
       };
     }
+
+    // AD-XXX: публикуем событие для динамического обновления ToDo в UI.
+    extra.eventBus?.publish(extra.sessionId, 'todos.updated', {
+      session_id: extra.sessionId,
+      todos: params.todos,
+    });
 
     return {
       content: JSON.stringify(params.todos),

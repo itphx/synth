@@ -216,6 +216,7 @@ export const taskTool: ToolDefinition = {
             fork.sessionOrigin = 'subagent';
             fork.userId = parentSession.userId;
             fork.ownerId = parentSession.ownerId;
+            fork.mode = parentSession.mode;
             fork.settings = { ...fork.settings, agentRole: params.subagent_type, permission: derivedPermission, planMode: 'auto', ...childRoutingOverrides };
             await extra.sessionManager.updateSession(fork);
             childSessionId = fork.id;
@@ -229,6 +230,7 @@ export const taskTool: ToolDefinition = {
             fork.sessionOrigin = 'subagent';
             fork.userId = parentSession.userId;
             fork.ownerId = parentSession.ownerId;
+            fork.mode = parentSession.mode;
             fork.settings = { ...fork.settings, agentRole: params.subagent_type, permission: derivedPermission, planMode: 'auto', ...childRoutingOverrides };
             await extra.sessionManager.updateSession(fork);
             childSessionId = fork.id;
@@ -240,6 +242,7 @@ export const taskTool: ToolDefinition = {
             fork.sessionOrigin = 'subagent';
             fork.userId = parentSession.userId;
             fork.ownerId = parentSession.ownerId;
+            fork.mode = parentSession.mode;
             fork.settings = { ...fork.settings, agentRole: params.subagent_type, permission: derivedPermission, planMode: 'auto', ...childRoutingOverrides };
             await extra.sessionManager.updateSession(fork);
             childSessionId = fork.id;
@@ -289,6 +292,7 @@ export const taskTool: ToolDefinition = {
             });
             child.userId = parentSession.userId;
             child.ownerId = parentSession.ownerId;
+            child.mode = parentSession.mode;
             await extra.sessionManager.updateSession(child);
             childSessionId = child.id;
           }
@@ -464,7 +468,7 @@ export const taskTool: ToolDefinition = {
       try {
         const child = await extra.sessionManager.getSession(childSessionId);
         if (child) {
-          childSessionMode = child.mode === 'plan' ? 'plan' : 'act';
+          childSessionMode = child.mode ?? 'act';
           childPlanApproved = Boolean(child.planContent);
           childPlanMode = child.settings.planMode ?? 'auto';
           childMcpToolSettings = child.settings.mcpToolSettings;

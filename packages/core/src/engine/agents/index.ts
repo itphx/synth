@@ -1,4 +1,5 @@
 export { AgentRegistry } from './registry.js';
+export { isModeApplicable } from './mode.js';
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';

@@ -106,6 +106,11 @@ export class ChatOrchestrator {
   private readonly _approvalManager: PermissionApprovalManager;
   private readonly _defaultPlanMode: PlanMode;
 
+  /** Публичный доступ к реестру агентов (для сериализации modeApplicable). */
+  get agentRegistry(): AgentRegistry | null {
+    return this._agentRegistry;
+  }
+
   constructor(options: OrchestratorOptions) {
     this._sessionManager = options.sessionManager;
     this._eventBus = options.eventBus;
@@ -176,7 +181,14 @@ export class ChatOrchestrator {
   ): string {
     const parts: string[] = [];
 
-    if (sessionMode === 'plan') {
+    // AD-025: промпт текущего режима загружается из контекстных файлов
+    // (prompts/modes/{mode}.md, переопределяемые через dataDir/context/modes).
+    // Если файл не найден — fallback на встроенный текст ниже.
+    const language = session.settings.language || 'ru';
+    const modePrompt = this._contextConfig?.getModePrompt(sessionMode, language) ?? null;
+    if (modePrompt) {
+      parts.push(modePrompt);
+    } else if (sessionMode === 'plan') {
       parts.push(
         '## Текущий режим: plan (только чтение)\n'
         + 'Ты в режиме планирования: чтение и исследование разрешены, но запись/изменение файлов '
@@ -242,7 +254,7 @@ export class ChatOrchestrator {
 
     // AD-025: режим Plan/Act — runtime-состояние сессии + строгость из настроек
     const planMode: PlanMode = session.settings.planMode ?? this._defaultPlanMode ?? 'auto';
-    let sessionMode: SessionMode = session.mode === 'plan' ? 'plan' : 'act';
+    let sessionMode: SessionMode = session.mode ?? 'act';
     let planApproved = Boolean(session.planContent);
 
     // AD-029: permissions — сессионный override приоритетнее глобального конфига.

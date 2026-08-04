@@ -233,7 +233,7 @@ export const dict = {
 
   // Right panel
   'rightPanel.tab.stats': 'Статистика',
-  'rightPanel.tab.params': 'Параметры',
+  'rightPanel.tab.session': 'Сессия',
   'rightPanel.tab.context': 'Контекст',
   'rightPanel.tab.scheduler': 'Шедулер',
   'rightPanel.tab.references': 'Ссылки',
@@ -259,6 +259,22 @@ export const dict = {
   'rightPanel.params.agents': 'Доступные агенты',
   'rightPanel.params.noAgents': 'Нет агентов',
   'rightPanel.params.noSessions': 'Нет сессий',
+  'sessionTab.plan.title': 'План',
+  'sessionTab.plan.empty': 'Плана нет',
+  'sessionTab.plan.hint': 'План появится здесь после plan_exit',
+  'sessionTab.plan.file': 'Файл',
+  'sessionTab.plan.collapse': 'Свернуть',
+  'sessionTab.plan.expand': 'Развернуть',
+  'sessionTab.todos.title': 'ToDo',
+  'sessionTab.todos.empty': 'Задач нет',
+  'sessionTab.todos.hint': 'Список задач появится после todo_write',
+  'sessionTab.todo.status.pending': 'Ожидает',
+  'sessionTab.todo.status.in_progress': 'В работе',
+  'sessionTab.todo.status.completed': 'Выполнено',
+  'sessionTab.todo.status.cancelled': 'Отменено',
+  'sessionTab.todo.priority.high': 'Высокий',
+  'sessionTab.todo.priority.medium': 'Средний',
+  'sessionTab.todo.priority.low': 'Низкий',
   'rightPanel.debug.title': 'Отладка',
   'rightPanel.debug.systemMessages': 'Отладка системных сообщений',
   'rightPanel.debug.sendSystemMessage': 'Отправить системное сообщение',
@@ -477,11 +493,15 @@ export const dict = {
   'chat.footer.mode': 'Режим',
 
   // Plan/Act режим сессии (AD-025)
-  'chat.mode.title': 'Режим сессии: План (только чтение) / Действия (полный доступ)',
+  'chat.mode.title': 'Режим сессии: План (только чтение) / Действия (полный доступ) / YOLO (автоподтверждение)',
   'chat.mode.plan': 'План',
   'chat.mode.act': 'Действия',
+  'chat.mode.yolo': 'YOLO',
+  'chat.mode.yoloHint': 'Автоподтверждение запросов',
   'chat.mode.planEnabled': 'Включён режим «План»',
   'chat.mode.actEnabled': 'Включён режим «Действия»',
+  'chat.mode.yoloEnabled': 'Включён режим «YOLO»',
+  'chat.mode.unavailable': 'У этого агента нет инструментов изменения — режим недоступен',
   'chat.mode.error': 'Ошибка смены режима:',
 
   // Connection indicator

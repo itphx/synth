@@ -822,4 +822,40 @@ describe('taskTool × permissions саб-агента (AD-029)', () => {
     expect(toolMsg!.content).toContain('Permission denied');
     unsub();
   });
+
+  it('yolo: саб-агент наследует mode=yolo, ask выполняется без permission.asked', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    parent.mode = 'yolo';
+    await sessionManager.updateSession(parent);
+    const toolRegistry = createToolRegistry();
+    const asked: Array<Record<string, unknown>> = [];
+    const unsub = eventBus.subscribe(parent.id, (e) => {
+      if (e.type === 'permission.asked') asked.push(e.data as Record<string, unknown>);
+    });
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'напиши файл', subagent_type: 'explore' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: new MockSubagentAskProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          toolRegistry,
+          permissionConfig: { rules: { write_file: 'ask' }, askTimeoutMs: 2000 },
+        },
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    // ask не публикуется, тул выполняется автоматически
+    expect(asked.length).toBe(0);
+    await expect(access(join(tmpDir, 'sub.txt'))).resolves.toBeUndefined();
+    unsub();
+  });
 });

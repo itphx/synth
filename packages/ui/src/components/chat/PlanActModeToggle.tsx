@@ -7,9 +7,10 @@ import { Icon } from '../icon/Icon'
 
 interface ModeOption {
   mode: SessionMode
-  labelKey: 'chat.mode.plan' | 'chat.mode.act'
+  labelKey: 'chat.mode.plan' | 'chat.mode.act' | 'chat.mode.yolo'
   icon: string
   activeClass: string
+  hintKey?: 'chat.mode.yoloHint'
 }
 
 const MODE_OPTIONS: ModeOption[] = [
@@ -25,12 +26,20 @@ const MODE_OPTIONS: ModeOption[] = [
     icon: 'rocket',
     activeClass: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300',
   },
+  {
+    mode: 'yolo',
+    labelKey: 'chat.mode.yolo',
+    icon: 'alert-triangle',
+    activeClass: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
+    hintKey: 'chat.mode.yoloHint',
+  },
 ]
 
 export function PlanActModeToggle({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const { notify } = useNotification()
   const sessionMode = useSessionsStore((s) => s.sessions.find((ses) => ses.id === sessionId)?.mode)
+  const modeApplicable = useSessionsStore((s) => s.sessions.find((ses) => ses.id === sessionId)?.mode_applicable ?? true)
   const [mode, setMode] = useState<SessionMode>('act')
   const [busy, setBusy] = useState(false)
 
@@ -44,8 +53,9 @@ export function PlanActModeToggle({ sessionId }: { sessionId: string }) {
     try {
       await useSessionsStore.getState().setSessionMode(sessionId, next)
       setMode(next)
+      const msgKey = next === 'plan' ? 'chat.mode.planEnabled' : next === 'act' ? 'chat.mode.actEnabled' : 'chat.mode.yoloEnabled'
       notify({
-        text: t(next === 'plan' ? 'chat.mode.planEnabled' : 'chat.mode.actEnabled'),
+        text: t(msgKey),
         type: 'success',
         category: 'message',
         sessionId,
@@ -62,12 +72,17 @@ export function PlanActModeToggle({ sessionId }: { sessionId: string }) {
     }
   }
 
+  const disabled = busy || !modeApplicable
+
   return (
     <div
-      className="flex items-center gap-0.5 rounded-lg border border-border/80 bg-surface-subtle p-0.5"
+      className={`flex items-center gap-0.5 rounded-lg border border-border/80 bg-surface-subtle p-0.5 transition-opacity ${
+        disabled ? 'opacity-60' : ''
+      }`}
       role="group"
-      aria-label={t('chat.mode.title')}
-      title={t('chat.mode.title')}
+      aria-label={disabled ? t('chat.mode.unavailable') : t('chat.mode.title')}
+      aria-disabled={disabled}
+      title={disabled ? t('chat.mode.unavailable') : t('chat.mode.title')}
     >
       {MODE_OPTIONS.map((opt) => {
         const active = mode === opt.mode
@@ -76,8 +91,9 @@ export function PlanActModeToggle({ sessionId }: { sessionId: string }) {
             key={opt.mode}
             type="button"
             onClick={() => handleChange(opt.mode)}
-            disabled={busy}
+            disabled={disabled}
             aria-pressed={active}
+            title={!modeApplicable ? t('chat.mode.unavailable') : opt.hintKey ? t(opt.hintKey) : undefined}
             className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               active
                 ? opt.activeClass

@@ -234,7 +234,7 @@ export const dict = {
 
   // Right panel
   'rightPanel.tab.stats': 'Stats',
-  'rightPanel.tab.params': 'Settings',
+  'rightPanel.tab.session': 'Session',
   'rightPanel.tab.context': 'Context',
   'rightPanel.tab.scheduler': 'Scheduler',
   'rightPanel.tab.references': 'References',
@@ -260,6 +260,22 @@ export const dict = {
   'rightPanel.params.agents': 'Available agents',
   'rightPanel.params.noAgents': 'No agents',
   'rightPanel.params.noSessions': 'No sessions',
+  'sessionTab.plan.title': 'Plan',
+  'sessionTab.plan.empty': 'No plan',
+  'sessionTab.plan.hint': 'The plan will appear here after plan_exit',
+  'sessionTab.plan.file': 'File',
+  'sessionTab.plan.collapse': 'Collapse',
+  'sessionTab.plan.expand': 'Expand',
+  'sessionTab.todos.title': 'ToDo',
+  'sessionTab.todos.empty': 'No tasks',
+  'sessionTab.todos.hint': 'The todo list will appear after todo_write',
+  'sessionTab.todo.status.pending': 'Pending',
+  'sessionTab.todo.status.in_progress': 'In progress',
+  'sessionTab.todo.status.completed': 'Completed',
+  'sessionTab.todo.status.cancelled': 'Cancelled',
+  'sessionTab.todo.priority.high': 'High',
+  'sessionTab.todo.priority.medium': 'Medium',
+  'sessionTab.todo.priority.low': 'Low',
   'rightPanel.debug.title': 'Debug',
   'rightPanel.debug.systemMessages': 'Debug system messages',
   'rightPanel.debug.sendSystemMessage': 'Send system message',
@@ -481,11 +497,15 @@ export const dict = {
   'chat.footer.mode': 'Mode',
 
   // Session Plan/Act mode (AD-025)
-  'chat.mode.title': 'Session mode: Plan (read-only) / Act (full access)',
+  'chat.mode.title': 'Session mode: Plan (read-only) / Act (full access) / YOLO (auto-approve)',
   'chat.mode.plan': 'Plan',
   'chat.mode.act': 'Act',
+  'chat.mode.yolo': 'YOLO',
+  'chat.mode.yoloHint': 'Auto-approve all requests',
   'chat.mode.planEnabled': 'Plan mode enabled',
   'chat.mode.actEnabled': 'Act mode enabled',
+  'chat.mode.yoloEnabled': 'YOLO mode enabled',
+  'chat.mode.unavailable': 'This agent has no mutation tools — mode unavailable',
   'chat.mode.error': 'Failed to change mode:',
 
   // Connection indicator
