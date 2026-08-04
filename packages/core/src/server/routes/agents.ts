@@ -3,12 +3,14 @@ import type { AuthKit } from '../../auth/local.js';
 import { JsonStore } from '../../storage/json-store.js';
 import type { AgentDefinition } from '@synth/shared';
 import { loadSystemAgentDefinitions } from '../../engine/agents/index.js';
+import type { AgentRegistry } from '../../engine/agents/index.js';
 
 const AGENT_ID_REGEX = /^[a-z0-9_-]+$/;
 
 export function createAgentRoutes(
   auth: AuthKit,
   agentStore: JsonStore<AgentDefinition>,
+  agentRegistry?: AgentRegistry,
 ): Hono {
   const app = new Hono();
   const BUILTIN_AGENTS = loadSystemAgentDefinitions();
@@ -81,6 +83,7 @@ export function createAgentRoutes(
       maxSteps: body.max_steps ?? body.maxSteps ?? existing?.maxSteps,
     };
     await agentStore.save(id, agent);
+    agentRegistry?.register(agent);
     return c.json(agent, existing ? 200 : 201);
   });
 
@@ -90,6 +93,12 @@ export function createAgentRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: 'Агент не найден' } }, 404);
     }
     await agentStore.delete(id);
+    const builtin = BUILTIN_AGENTS.find((a) => a.id === id);
+    if (builtin) {
+      agentRegistry?.register(builtin);
+    } else {
+      agentRegistry?.unregister(id);
+    }
     return c.json({ status: 'deleted' });
   });
 

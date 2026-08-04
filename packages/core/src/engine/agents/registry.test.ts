@@ -83,4 +83,15 @@ describe('createAgentRegistry', () => {
     const registry = createAgentRegistry(undefined, overridesDir);
     expect(registry.get('assistant')).toBeDefined();
   });
+
+  it('unregister удаляет агента из реестра', async () => {
+    await writeAgent('@bankassist', { contextFile: 'BANKASSIST.md' });
+
+    const registry = createAgentRegistry(undefined, overridesDir);
+    expect(registry.get('@bankassist')).toBeDefined();
+
+    registry.unregister('@bankassist');
+    expect(registry.get('@bankassist')).toBeUndefined();
+    expect(registry.list().map((a) => a.id)).not.toContain('@bankassist');
+  });
 });
