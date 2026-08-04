@@ -134,7 +134,7 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
   }
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="flex flex-1 h-full flex-col bg-background">
       <textarea
         className="flex-1 w-full resize-none bg-background p-4 text-sm font-mono text-foreground outline-none border-0 focus:ring-0"
         value={content}
