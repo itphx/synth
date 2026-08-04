@@ -141,6 +141,15 @@ AUTH="Authorization: Bearer admin-key-123"
 | lead | lead-key-789 | LEAD |
 | auditor | auditor-key-012 | AUDITOR |
 
+### Runtime-настройки (API)
+
+| Метод/путь | Назначение |
+|---|---|
+| `PATCH /api/v2/sessions/:id` `{ mode }` | Переключение режима сессии: `plan` / `act` / `yolo` |
+| `GET/PUT /api/v2/settings/workspace` | Рабочий каталог по умолчанию (runtime override, хранится в `settings.json`) |
+| `GET/PUT /api/v2/settings/mcp` | Доступность MCP-инструментов по режимам (plan/act) |
+| `POST /api/v2/mcp/probe` | Проверка MCP-сервера без регистрации инструментов |
+
 ### Автономный цикл разработки и тестирования
 
 Каждая задача проходит 5 стадий. Переход между стадиями — **только после
@@ -263,11 +272,11 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 | AD-022 | Единый TypeScript стек + Runner архитектура |
 | AD-023 | Единая система конфигурации (@synth/shared/config) |
 | AD-024 | Единый транспорт: EventHub (backend) + TransportClient (UI) |
-| AD-025 | Plan/Act как глобальный permission toggle (не отдельные агенты) |
+| AD-025 | Plan/Act как глобальный permission toggle (не отдельные агенты) ✅ Реализовано |
 | AD-026 | Режимы контекста саб-агента: inherit / summary / none |
-| AD-027 | Двойная передача плана: диск + system prompt |
-| AD-028 | Настраиваемая строгость цикла Plan→Build: auto / strict / off |
-| AD-029 | Гранулярные permissions: allow/deny/ask per tool + file patterns |
+| AD-027 | Двойная передача плана: диск + system prompt ✅ Реализовано |
+| AD-028 | Настраиваемая строгость цикла Plan→Build: auto / strict / off ✅ Реализовано |
+| AD-029 | Гранулярные permissions: allow/deny/ask per tool + file patterns ✅ Реализовано |
 | AD-030 | Hooks для событий агента (pre/post tool use, session, plan, spawn) |
 | AD-031 | Verification синт (аналог VerificationAgent из Claude Code) |
 | AD-032 | Хранение истории: SQLite нормализованная схема (сессии, сообщения, части) |
@@ -312,7 +321,7 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 ```yaml
 # config.yaml
 session:
-  mode: "auto"  # plan | act | auto
+  mode: "auto"  # plan | act | yolo | auto
 
 agents:
   analyst:
@@ -326,7 +335,14 @@ agents:
 |---|---|---|
 | `plan` | **Read-only.** Все write/edit/delete → deny. Синт исследует, задаёт вопросы, пишет план в `.synth/plans/`. Единственное исключение — сам plan-файл | Пользователь (`/plan`) или синт через tool `plan_enter` |
 | `act` | **Полный доступ.** Набор тулов из конфига синта + глобальные permissions | Пользователь (`/act`) или tool `plan_exit` |
+| `yolo` | **Автоподтверждение.** Все ask → allow автоматически (без события `permission.asked` и ожидания пользователя), deny остаётся deny | Пользователь (`/yolo`) |
 | `auto` | Синт **сам решает**, когда войти в план. Вызывает `plan_enter` если задача сложная, требует исследования или архитектурных решений | Автоматически (аналог EnterPlanModeTool) |
+
+**SessionMode:** `'plan' | 'act' | 'yolo'`. В сериализации сессии есть поле `mode_applicable` — `false` для read-only агентов (нет `shell`/`file_write`/`web`): toggle режима в UI деактивируется.
+
+**Системный промпт режима:** контекстные файлы `prompts/modes/{plan,act,yolo}.md` (встроенные, копируются в `dist/`), переопределяются через `{dataDir}/context/modes/{mode}.md` и локализованные `{mode}.{lang}.md`. Встраиваются в system prompt через `_buildPlanSystemPrompt`.
+
+**События:** `plan.approved` (план утверждён через `plan_exit`), `todos.updated` (обновлён список ToDo через `todo_write`).
 
 **Почему не N×2 агентов:** создание отдельных plan-версий для каждого синта даёт квадратичный рост конфигурации. С глобальным toggle — N синтов × 3 режима = те же N в конфиге, а режим переключается сессионно.
 
@@ -461,6 +477,14 @@ permission:
 | `ask` | Показывается пользователю на подтверждение | `external_directory: "*": "ask"` |
 
 **Наследование саб-агентами:** саб-агент получает permissions родительской сессии + свои deny-правила (edit-ограничения от plan mode родителя) + блокировку `question`, `plan_enter`, `task`. Реализуется через `deriveSubagentSessionPermission()` по аналогии с OpenCode.
+
+**«Разрешить в сессии» (once:false):** при ответе пользователя на `ask` с `once:false` в сессию добавляется allow-правило для тула — повторные вызовы не спрашивают. `once:true` — разрешение только на один вызов.
+
+**Deny от пользователя:** при отказе (ask → deny) обработка завершается (`stopped_by_deny`), файл не создаётся, промежуточные результаты сохраняются в истории.
+
+**Саб-агенты:** проходят permission-check; `ask` публикуется в родительскую сессию (`permission.asked`), ответ пользователя применяется к дочерней сессии.
+
+**MCP-инструменты:** доступность по режимам plan/act — `SessionSettings.mcpToolSettings[server].default|tools[tool] = { plan, act }` (настройки в UI). В текущем режиме недоступный тул → deny.
 
 ### AD-030: Hooks для событий агента
 
@@ -1070,6 +1094,44 @@ git commit -m "test: добавлены тесты для SessionStore"
 | LLM Proxy (runner) | 9090 | — |
 | opencode (движок) | 4100 | — |
 | cline (движок) | 4200 | — |
+
+---
+
+## Рабочий каталог и инструменты
+
+### Рабочий каталог по умолчанию
+
+Рабочий каталог для file/shell/git-тулов по умолчанию:
+
+```
+env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspaces/default
+```
+
+- Runtime override: `PUT /api/v2/settings/workspace` — хранится в `{dataDir}/settings.json` (атомарная запись, переживает рестарт)
+- Резолвинг в `_resolveWorkingDir`: `project.workspace` → defaultWorkingDir
+- Проектные/плановые тулы (`plan_enter`, `plan_exit`, `get_project_info`, `list_repos`) жёстко привязаны к `project.workspace`/сессии — не принимают path-параметры от агента
+
+### Встроенные инструменты
+
+| Группа | Тулы |
+|---|---|
+| Файлы (чтение) | `read_file`, `list_directory`, `glob` |
+| Файлы (запись) | `write_file`, `edit_file`, `create_directory`, `delete_file` |
+| Поиск | `grep_files`, `glob` |
+| Shell | `execute_shell` |
+| Git | `git_status`, `git_diff`, `git_log`, `git_commit`, `git_push`, `git_pull`, `git_checkout`, `git_branch_list`, `git_show`, `git_blame`, `git_stash` |
+| План/ToDo | `plan_enter`, `plan_exit`, `todo_write` |
+| Проект | `get_project_info`, `list_repos` |
+| Веб | `web_fetch`, `web_search` (DuckDuckGo, при anti-bot — fallback на Bing) |
+| Задачи | `task`, `classify_conversation`, `read_session_reference` |
+
+Доступность по группам задаётся в `ToolCapability` (`@synth/shared`); MCP-инструменты регистрируются с префиксом `{serverName}_{toolName}` и подчиняются настройкам режимов (см. AD-029).
+
+---
+
+## UI: панель «Сессия»
+
+Вкладка «Сессия» в правой панели показывает план (`planContent`) и ToDo (`todos`) текущей сессии. Обновляются по WS-событиям `plan.approved` / `todos.updated` (полный refresh сессии с сервера).
 
 ---
 
