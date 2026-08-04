@@ -6,7 +6,7 @@ import { join, extname } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition, Message } from '@synth/shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode } from '@synth/shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -37,6 +37,10 @@ export interface StandaloneConfig {
   workspacesRoot?: string;
   uiDistPath?: string;
   systemPromptsDir?: string;
+  /** Глобальная секция permission из config.yaml (AD-029). */
+  permissionConfig?: PermissionConfig;
+  /** Строгость цикла Plan→Build по умолчанию из config.yaml (AD-028). */
+  defaultPlanMode?: PlanMode;
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -247,6 +251,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     dataDir,
     toolRegistry,
     agentRegistry,
+    projectStore,
+    permissionConfig: config.permissionConfig,
+    defaultPlanMode: config.defaultPlanMode,
   });
 
   const processMessage = orchestrator.createProcessMessage();
@@ -547,6 +554,16 @@ export async function createStandaloneApp(config: StandaloneConfig) {
                 }
                 queueManager.stop(sid);
               })().catch(() => {});
+            } else if (msg.type === 'permission_reply') {
+              const sid = msg.session_id;
+              const approvalId = msg.approval_id;
+              if (!sid || !approvalId) return;
+
+              eventBus.publish(sid, 'permission.replied', {
+                approval_id: approvalId,
+                session_id: sid,
+                approved: msg.approved === true,
+              });
             }
           } catch { /* ignore parse errors */ }
         });

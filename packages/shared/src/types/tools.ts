@@ -21,7 +21,7 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   [ToolCapability.SHELL]: { label: 'Shell-команды', description: 'execute_shell' },
   [ToolCapability.SEARCH]: { label: 'Поиск', description: 'grep_files, glob' },
   [ToolCapability.WEB]: { label: 'Веб', description: 'web_fetch, web_search' },
-  [ToolCapability.GIT_READ]: { label: 'Чтение Git', description: 'git_status, git_diff, git_log, git_branch_list' },
+  [ToolCapability.GIT_READ]: { label: 'Чтение Git', description: 'git_status, git_diff, git_log, git_branch_list, git_show, git_blame' },
   [ToolCapability.GIT_WRITE]: { label: 'Запись Git', description: 'git_commit, git_push, git_pull, git_checkout, etc.' },
   [ToolCapability.TASK]: { label: 'Запуск сабагентов', description: 'task' },
   [ToolCapability.MCP]: { label: 'MCP-инструменты', description: 'внешние MCP-серверы' },

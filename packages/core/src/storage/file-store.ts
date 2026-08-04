@@ -63,6 +63,9 @@ interface SerializedSession {
   parent_id?: string;
   branch_point?: string;
   plan_path?: string;
+  plan_content?: string;
+  mode?: string;
+  todos?: unknown[];
   session_origin?: string;
   user_id?: string;
   owner_id?: string;
@@ -238,6 +241,9 @@ function serializeSession(session: Session): SerializedSession {
     parent_id: session.parentId,
     branch_point: session.branchPoint,
     plan_path: session.planPath,
+    plan_content: session.planContent,
+    mode: session.mode,
+    todos: session.todos,
     session_origin: session.sessionOrigin,
     user_id: session.userId,
     owner_id: session.ownerId,
@@ -302,6 +308,9 @@ function deserializeSession(data: SerializedSession): Session {
     parentId: data.parent_id,
     branchPoint: data.branch_point,
     planPath: data.plan_path,
+    planContent: data.plan_content,
+    mode: data.mode as Session['mode'],
+    todos: data.todos as Session['todos'],
     sessionOrigin: (data.session_origin as SessionOrigin) || 'user',
     userId: data.user_id,
     ownerId: data.owner_id,

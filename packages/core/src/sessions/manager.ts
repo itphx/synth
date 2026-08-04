@@ -90,6 +90,7 @@ export class SessionManager {
         systemPrompt: data.settings?.systemPrompt,
         agentRole: data.settings?.agentRole,
         language: data.settings?.language,
+        planMode: data.settings?.planMode,
         routingEnabled: data.settings?.routingEnabled ?? false,
         routingStrategy: data.settings?.routingStrategy ?? 'auto',
         routingContent: data.settings?.routingContent ?? { coding: { provider: '', model: '' }, chat: { provider: '', model: '' }, research: { provider: '', model: '' } },

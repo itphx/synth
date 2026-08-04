@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart, TsmState } from '@synth/shared';
-import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig } from '@synth/shared';
+import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig } from '@synth/shared';
 import type { AgentRegistry } from '../agents/registry.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ToolRegistry } from './registry.js';
@@ -9,6 +9,7 @@ import type { EventBus } from '../../events/bus.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import type { ContextConfig } from '../context/config.js';
 import type { ModelRouter } from '../router/router.js';
+import { deriveSubagentPermission } from '../permission/derive.js';
 import { serializeSession, serializeMessage } from '../../server/serialize.js';
 
 export interface TaskExtra {
@@ -30,6 +31,8 @@ export interface TaskExtra {
   streamId?: string;
   sessionId?: string;
   callerAgentRole?: string;
+  /** Permissions родительской сессии (AD-029) — наследуются саб-агентом с deny-дополнениями. */
+  permissionConfig?: PermissionConfig;
 }
 
 type ContextMode = 'none' | 'inherit' | 'summary' | 'last_n';
@@ -189,6 +192,9 @@ export const taskTool: ToolDefinition = {
     let childMessages: Message[] = [];
     let parentNotesText = '';
 
+    // ─── Permissions дочерней сессии (AD-029): наследуем родителя + deny-дополнения ──
+    const derivedPermission = deriveSubagentPermission(extra.permissionConfig);
+
     // ─── Создание дочерней сессии с контекстом ───────────────────────
     if (extra.sessionManager && extra.sessionId) {
       try {
@@ -208,7 +214,7 @@ export const taskTool: ToolDefinition = {
             fork.sessionOrigin = 'subagent';
             fork.userId = parentSession.userId;
             fork.ownerId = parentSession.ownerId;
-            fork.settings = { ...fork.settings, agentRole: params.subagent_type, ...childRoutingOverrides };
+            fork.settings = { ...fork.settings, agentRole: params.subagent_type, permission: derivedPermission, planMode: 'auto', ...childRoutingOverrides };
             await extra.sessionManager.updateSession(fork);
             childSessionId = fork.id;
             childMessages = fork.messages;
@@ -221,7 +227,7 @@ export const taskTool: ToolDefinition = {
             fork.sessionOrigin = 'subagent';
             fork.userId = parentSession.userId;
             fork.ownerId = parentSession.ownerId;
-            fork.settings = { ...fork.settings, agentRole: params.subagent_type, ...childRoutingOverrides };
+            fork.settings = { ...fork.settings, agentRole: params.subagent_type, permission: derivedPermission, planMode: 'auto', ...childRoutingOverrides };
             await extra.sessionManager.updateSession(fork);
             childSessionId = fork.id;
             childMessages = fork.messages;
@@ -232,7 +238,7 @@ export const taskTool: ToolDefinition = {
             fork.sessionOrigin = 'subagent';
             fork.userId = parentSession.userId;
             fork.ownerId = parentSession.ownerId;
-            fork.settings = { ...fork.settings, agentRole: params.subagent_type, ...childRoutingOverrides };
+            fork.settings = { ...fork.settings, agentRole: params.subagent_type, permission: derivedPermission, planMode: 'auto', ...childRoutingOverrides };
             await extra.sessionManager.updateSession(fork);
             childSessionId = fork.id;
             childMessages = fork.messages;
@@ -277,7 +283,7 @@ export const taskTool: ToolDefinition = {
               engine: parentSession.engine,
               parentId: extra.sessionId,
               sessionOrigin: 'subagent',
-              settings: { ...parentSession.settings, agentRole: params.subagent_type, ...childRoutingOverrides },
+              settings: { ...parentSession.settings, agentRole: params.subagent_type, permission: derivedPermission, planMode: 'auto', ...childRoutingOverrides },
             });
             child.userId = parentSession.userId;
             child.ownerId = parentSession.ownerId;

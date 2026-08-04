@@ -65,6 +65,9 @@ export const defaultConfig: SynthConfig = {
     maxIterations: 50,
     validationTimeout: 30,
   },
+  session: {
+    planMode: 'auto',
+  },
   context: {
     enabledFiles: ['SOUL.md', 'COMPANY.md', 'ABOUT.md'],
   },
@@ -117,5 +120,9 @@ export const defaultConfig: SynthConfig = {
     embedProvider: 'ollama',
     embedModel: 'local.nomic-embed-text:latest',
     microLlmEnabled: false,
+  },
+  permission: {
+    rules: {},
+    askTimeoutMs: 30_000,
   },
 };

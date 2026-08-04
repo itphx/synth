@@ -48,6 +48,8 @@ program
       apiKey,
       workspacesRoot: process.cwd(),
       uiDistPath: uiPath,
+      permissionConfig: synth.permission,
+      defaultPlanMode: synth.session?.planMode,
     });
 
     let shuttingDown = false;

@@ -50,6 +50,15 @@ export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions } from '
 export { McpClient, McpManager } from './engine/mcp/index.js';
 export type { McpToolDef, McpToolResult } from './engine/mcp/index.js';
 
+export {
+  PermissionEvaluator,
+  PermissionApprovalManager,
+  deriveSubagentPermission,
+  emptyPermissionConfig,
+  getToolGroups,
+} from './engine/permission/index.js';
+export type { PermissionCheckInput, ApprovalRequest, ApprovalDecision } from './engine/permission/index.js';
+
 export { FileProfileStore } from './storage/profile-store.js';
 export { JsonStore } from './storage/json-store.js';
 export type { JsonStoreConfig } from './storage/json-store.js';

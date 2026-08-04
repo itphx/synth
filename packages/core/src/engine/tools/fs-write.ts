@@ -1,20 +1,9 @@
 import { writeFile, mkdir, rm } from 'node:fs/promises';
-import { resolve, dirname } from 'node:path';
-import { relative } from 'node:path';
+import { dirname } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@synth/shared';
 import type { ToolDefinition } from '@synth/shared';
-
-function resolvePath(requestedPath: string, workingDir: string): string {
-  return resolve(workingDir, requestedPath);
-}
-
-function validatePath(resolvedPath: string, workingDir: string): void {
-  const rel = relative(workingDir, resolvedPath);
-  if (rel.startsWith('..') || !resolvedPath.startsWith(resolve(workingDir))) {
-    throw new Error(`Доступ запрещён: путь "${resolvedPath}" выходит за пределы рабочей директории`);
-  }
-}
+import { resolvePath, validateInputPath } from './path-utils.js';
 
 function generateUnifiedDiff(oldText: string, newText: string, filePath: string): string {
   const oldLines = oldText.split('\n');
@@ -76,7 +65,7 @@ export const writeFileTool: ToolDefinition = {
   description:
     'Write content to a file. Creates the file if it does not exist, overwrites if it does. Parent directories are created automatically.',
   parameters: z.object({
-    file_path: z.string().describe('Absolute path to the file to write'),
+    file_path: z.string().describe('Path to the file to write (absolute or relative to the working directory)'),
     content: z.string().describe('Content to write to the file'),
   }),
   capabilities: [ToolCapability.FILE_WRITE],
@@ -86,8 +75,8 @@ export const writeFileTool: ToolDefinition = {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
     const params = parsed.data as { file_path: string; content: string };
+    validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
-    validatePath(resolvedPath, ctx.workingDir);
 
     const dir = dirname(resolvedPath);
     await mkdir(dir, { recursive: true });
@@ -106,7 +95,7 @@ export const editFileTool: ToolDefinition = {
   description:
     'Make exact string replacements in a file. The edit will FAIL if old_string is not unique in the file. Provide enough context to make the match unique.',
   parameters: z.object({
-    file_path: z.string().describe('Absolute path to the file to modify'),
+    file_path: z.string().describe('Path to the file to modify (absolute or relative to the working directory)'),
     old_string: z.string().describe('Text to replace (must be unique in file)'),
     new_string: z.string().describe('Text to replace it with'),
     replace_all: z.boolean().optional().default(false).describe('Replace all occurrences (default: false)'),
@@ -118,8 +107,8 @@ export const editFileTool: ToolDefinition = {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
     const params = parsed.data as { file_path: string; old_string: string; new_string: string; replace_all?: boolean };
+    validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
-    validatePath(resolvedPath, ctx.workingDir);
 
     const { readFile } = await import('node:fs/promises');
     const content = await readFile(resolvedPath, 'utf-8');
@@ -165,7 +154,7 @@ export const createDirectoryTool: ToolDefinition = {
   name: 'create_directory',
   description: 'Create a new directory. Creates parent directories as needed.',
   parameters: z.object({
-    path: z.string().describe('Absolute path to the directory to create'),
+    path: z.string().describe('Path to the directory to create (absolute or relative to the working directory)'),
   }),
   capabilities: [ToolCapability.FILE_WRITE],
   async execute(args, ctx) {
@@ -174,8 +163,8 @@ export const createDirectoryTool: ToolDefinition = {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
     const params = parsed.data as { path: string };
+    validateInputPath(params.path, 'path');
     const resolvedPath = resolvePath(params.path, ctx.workingDir);
-    validatePath(resolvedPath, ctx.workingDir);
 
     await mkdir(resolvedPath, { recursive: true });
     return {
@@ -189,7 +178,7 @@ export const deleteFileTool: ToolDefinition = {
   name: 'delete_file',
   description: 'Delete a file at the specified path.',
   parameters: z.object({
-    file_path: z.string().describe('Absolute path to the file to delete'),
+    file_path: z.string().describe('Path to the file to delete (absolute or relative to the working directory)'),
   }),
   capabilities: [ToolCapability.FILE_WRITE],
   async execute(args, ctx) {
@@ -198,8 +187,8 @@ export const deleteFileTool: ToolDefinition = {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
     const params = parsed.data as { file_path: string };
+    validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
-    validatePath(resolvedPath, ctx.workingDir);
 
     await rm(resolvedPath, { force: false });
     return {

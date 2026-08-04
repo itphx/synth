@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { z } from 'zod';
 import { ToolCapability } from '@synth/shared';
 import type { ToolDefinition } from '@synth/shared';
+import { resolvePath, validateInputPath } from './path-utils.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -17,6 +18,8 @@ export const executeShellTool: ToolDefinition = {
     command: z.string().describe('The command to execute (e.g., "npm test", "ls -la")'),
     timeout: z.number().int().min(1000).max(120000).optional()
       .describe('Timeout in milliseconds (default: 30000)'),
+    cwd: z.string().optional()
+      .describe('Working directory for the command (absolute or relative to the working directory; defaults to working directory)'),
   }),
   capabilities: [ToolCapability.SHELL],
   async execute(args, ctx) {
@@ -24,12 +27,14 @@ export const executeShellTool: ToolDefinition = {
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
-    const params = parsed.data as { command: string; timeout?: number };
+    const params = parsed.data as { command: string; timeout?: number; cwd?: string };
     const timeout = params.timeout ?? DEFAULT_TIMEOUT;
+    if (params.cwd !== undefined) validateInputPath(params.cwd, 'cwd');
+    const cwd = resolvePath(params.cwd, ctx.workingDir);
 
     try {
       const { stdout, stderr } = await execFileAsync('sh', ['-c', params.command], {
-        cwd: ctx.workingDir,
+        cwd,
         timeout,
         maxBuffer: 10 * 1024 * 1024,
         env: { ...process.env, HOME: process.env.HOME || '/root' },

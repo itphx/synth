@@ -91,6 +91,8 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     dataDir,
     toolRegistry,
     agentRegistry,
+    permissionConfig: options.config.permission,
+    defaultPlanMode: options.config.session?.planMode,
   });
 
   // Создаём временную сессию
