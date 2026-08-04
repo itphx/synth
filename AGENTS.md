@@ -35,6 +35,7 @@ synth/
 ├── tsconfig.base.json
 ├── eslint.config.js
 └── .prettierrc
+tmp/                               # Каталог для временных файлов. Всегда используй его, а не /tmp в корне ФС
 ```
 
 ### Слои зависимостей
@@ -270,8 +271,8 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 | AD-030 | Hooks для событий агента (pre/post tool use, session, plan, spawn) |
 | AD-031 | Verification синт (аналог VerificationAgent из Claude Code) |
 | AD-032 | Хранение истории: SQLite нормализованная схема (сессии, сообщения, части) |
-| AD-033 | Ветвление сессий, наследование контекста и межсессионное слияние |
-| AD-034 | Routing между моделями (content + confidence + cost) |
+| AD-033 | Ветвление сессий, наследование контекста и межсессионное слияние ✅ Реализовано |
+| AD-034 | Routing между моделями (content + confidence + cost) ✅ Реализовано |
 | AD-035 | Micro-model first: дешёвый слой перед LLM (правила/embedding) ✅ Реализовано |
 
 Подробности deprecated решений — в `archive/AGENTS_OLD.md`.
