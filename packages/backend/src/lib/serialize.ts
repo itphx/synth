@@ -12,6 +12,7 @@ export function serializeSession(session: Session) {
     owner_id: session.ownerId || null,
     project_id: session.projectId || null,
     engine: session.engine,
+    mode: session.mode || 'act',
     messages: session.messages.map((m, i) => serializeMessage(m, i)),
     pending_messages: session.pendingMessages.map((m, i) => serializeMessage(m, i)),
     pending_count: session.pendingMessages.length,

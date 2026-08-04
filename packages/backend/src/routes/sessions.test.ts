@@ -180,6 +180,50 @@ describe('Session API Routes', () => {
       });
       expect(res.status).toBe(404);
     });
+
+    it('переключает mode в plan и возвращает его в сериализованной сессии', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'Mode', userId: 'test-user' });
+      const res = await app.request(`/api/v2/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'plan' }),
+      });
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.mode).toBe('plan');
+      const persisted = await sessionManager.getSession(session.id);
+      expect(persisted?.mode).toBe('plan');
+    });
+
+    it('переключает mode в act', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'Mode', userId: 'test-user' });
+      await sessionManager.updateSession({ ...session, mode: 'plan' });
+      const res = await app.request(`/api/v2/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'act' }),
+      });
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.mode).toBe('act');
+    });
+
+    it('возвращает 400 VALIDATION_ERROR для невалидного mode', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'Mode', userId: 'test-user' });
+      const res = await app.request(`/api/v2/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'review' }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      const persisted = await sessionManager.getSession(session.id);
+      expect(persisted?.mode).toBeUndefined();
+    });
   });
 
   describe('DELETE /api/v2/sessions/:id', () => {

@@ -5,7 +5,7 @@ import type { EventBus } from '@synth/core';
 import type { QueueProcessorManager } from '@synth/core';
 import type { ChatOrchestrator } from '@synth/core';
 import type { ContextOptimizer } from '@synth/core';
-import { MessageRole, generateStreamId, nowISO } from '@synth/shared';
+import { MessageRole, SESSION_MODES, generateStreamId, nowISO } from '@synth/shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 import { enqueueUserMessage, sseEventStream } from '@synth/core';
 import { serializeSession } from '../lib/serialize.js';
@@ -85,6 +85,14 @@ export function createSessionRoutes(
     if (body.name !== undefined) session.title = body.name;
     if (body.title !== undefined) session.title = body.title;
     if (body.engine !== undefined) session.engine = body.engine;
+    if (body.mode !== undefined) {
+      if (!SESSION_MODES.includes(body.mode)) {
+        return c.json({
+          error: { code: 'VALIDATION_ERROR', message: 'mode должен быть "plan" или "act"' },
+        }, 400);
+      }
+      session.mode = body.mode;
+    }
     if (body.settings !== undefined) {
       session.settings = { ...session.settings, ...(body.settings as Partial<typeof session.settings>) };
     }
