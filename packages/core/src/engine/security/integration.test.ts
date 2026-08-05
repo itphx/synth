@@ -201,16 +201,16 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
     expect(sp).not.toContain('[RULES]');
   });
 
-  it('ролевые промпты (системные prompts/roles) содержат секцию [RULES]', () => {
+  it('ролевые промпты (системные prompts/roles) содержат секцию [CONTENT RULES]', () => {
     const ctx = new ContextConfig({ userDataDir: join(tmpDir, 'context') });
     const roles = ['admin', 'analyst', 'assistant', 'auditor', 'developer', 'devops', 'pm', 'qa', 'title'];
     for (const role of roles) {
       const ru = ctx.getRolePrompt(role, undefined, 'ru') ?? '';
-      expect(ru, `role ${role} ru`).toContain('[RULES]');
+      expect(ru, `role ${role} ru`).toContain('[CONTENT RULES]');
       if (role !== 'title') {
         // title имеет только ru-файл
         const en = ctx.getRolePrompt(role, undefined, 'en') ?? '';
-        expect(en, `role ${role} en`).toContain('[RULES]');
+        expect(en, `role ${role} en`).toContain('[CONTENT RULES]');
       }
     }
   });
