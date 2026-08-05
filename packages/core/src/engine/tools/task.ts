@@ -366,16 +366,6 @@ export const taskTool: ToolDefinition = {
         prompt += routingBlock;
       }
 
-      // IPI-защита: глобальная секция [RULES] — один раз для саб-агентов
-      const security = extra.securityConfig;
-      if (security?.promptInjection?.enabled) {
-        const lang = parentSettings?.language || 'ru';
-        const rulesText = extra.contextConfig?.getRules(lang);
-        if (rulesText) {
-          prompt += `\n\n[RULES]\n${rulesText}`;
-        }
-      }
-
       return prompt;
     })();
 

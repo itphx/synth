@@ -24,6 +24,14 @@ export const CONTENT_END = '[CONTENT END]';
 export const WARN_PREFIX = '[WARN: обнаружены признаки prompt injection';
 
 /**
+ * Формирует строку предупреждения о подозрительном контенте.
+ * Используется вызывающим (orchestrator) и ставится ПЕРЕД блоком [CONTENT].
+ */
+export function buildWarnLine(matches: string[]): string {
+  return `${WARN_PREFIX}: ${matches.slice(0, 5).join(', ')}]`;
+}
+
+/**
  * Оборачивает tool-контент в маркеры:
  * [CONTENT | SOURCE: {source} | {ATTR}: {val} | trust: {trust}]
  * {content}
@@ -72,7 +80,8 @@ export function detectPromptInjection(
 
 /**
  * Применение политики к подозрительному контенту.
- * - flag: добавить строку-предупреждение в контент.
+ * - flag: контент не изменяется, возвращается detail (совпадения) — WARN-строку
+ *   формирует вызывающий и ставит её ПЕРЕД блоком [CONTENT].
  * - sanitize: заменить совпавшие фрагменты на [redacted].
  * - block: вернуть blocked=true (контент не отдаётся модели).
  */
@@ -80,13 +89,15 @@ export function applyPolicy(
   content: string,
   policy: InjectionPolicy,
   detection: InjectionDetection,
-): { content: string; suspicious: boolean; blocked: boolean } {
+): { content: string; suspicious: boolean; blocked: boolean; detail: string[] } {
   if (!detection.suspicious) {
-    return { content, suspicious: false, blocked: false };
+    return { content, suspicious: false, blocked: false, detail: [] };
   }
 
+  const detail = detection.matches.slice(0, 5);
+
   if (policy === 'block') {
-    return { content, suspicious: true, blocked: true };
+    return { content, suspicious: true, blocked: true, detail };
   }
 
   if (policy === 'sanitize') {
@@ -99,16 +110,11 @@ export function applyPolicy(
         '[redacted]',
       );
     }
-    return { content: sanitized, suspicious: true, blocked: false };
+    return { content: sanitized, suspicious: true, blocked: false, detail };
   }
 
-  // flag — по умолчанию
-  const detail = detection.matches.slice(0, 5).join(', ');
-  return {
-    content: `${content}\n\n${WARN_PREFIX}: ${detail}]`,
-    suspicious: true,
-    blocked: false,
-  };
+  // flag — по умолчанию: контент не изменяется
+  return { content, suspicious: true, blocked: false, detail };
 }
 
 /** Матчинг по границам слов: «игнорируй» не срабатывает внутри «проигнорируй». */

@@ -31,7 +31,7 @@ import { PermissionEvaluator } from './permission/evaluator.js';
 import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { getToolTrust } from './security/trust.js';
-import { detectPromptInjection, applyPolicy, wrapContent } from './security/prompt-injection.js';
+import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine } from './security/prompt-injection.js';
 
 const MAX_DOOM_LOOP_COUNT = 3;
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
@@ -451,15 +451,6 @@ export class ChatOrchestrator {
       finalSystemPrompt = this._buildPlanSystemPrompt(
         finalSystemPrompt, session, planMode, sessionMode, planApproved,
       );
-
-      // IPI-защита: глобальная секция [RULES] — один раз для всех агентов
-      if (this._securityConfig.promptInjection.enabled) {
-        const lang = session.settings.language || 'ru';
-        const rulesText = this._contextConfig?.getRules(lang);
-        if (rulesText) {
-          finalSystemPrompt = `${finalSystemPrompt}\n\n[RULES]\n${rulesText}`;
-        }
-      }
 
       // 3. Convert messages for LLM (без summary — они уже в system prompt)
       const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
@@ -890,9 +881,13 @@ export class ChatOrchestrator {
                 const wrapped = piConfig.wrapContent
                   ? wrapContent(applied.content, trustInfo.source, trustInfo.attrs, trustInfo.trust)
                   : applied.content;
+                // IPI: предупреждение [WARN] ставится ПЕРЕД блоком [CONTENT | ...]
+                const content = detection.suspicious && piConfig.mode === 'flag'
+                  ? `${buildWarnLine(detection.matches)}\n${wrapped}`
+                  : wrapped;
                 toolResult = {
                   ...toolResult,
-                  content: wrapped,
+                  content,
                   metadata: {
                     ...toolResult.metadata,
                     ...(detection.suspicious

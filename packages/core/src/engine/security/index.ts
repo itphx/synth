@@ -2,6 +2,7 @@ export {
   wrapContent,
   detectPromptInjection,
   applyPolicy,
+  buildWarnLine,
   containsWord,
   CONTENT_START,
   CONTENT_END,

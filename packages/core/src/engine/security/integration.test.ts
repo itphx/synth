@@ -185,16 +185,34 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
     expect(tool).toContain('[CONTENT | SOURCE: web | URL: https://evil.example | trust: untrusted]');
     expect(tool).toContain('[WARN: обнаружены признаки prompt injection');
     expect(tool).toContain('[CONTENT END]');
+    // [WARN] идёт ПЕРЕД блоком [CONTENT | ...]
+    const warnIdx = tool!.indexOf('[WARN: обнаружены признаки prompt injection');
+    const contentIdx = tool!.indexOf('[CONTENT | SOURCE: web');
+    expect(warnIdx).toBeGreaterThanOrEqual(0);
+    expect(contentIdx).toBeGreaterThan(warnIdx);
   });
 
-  it('[RULES] попадает в system prompt (один раз)', async () => {
+  it('[RULES] больше не добавляется кодом — в мок-сборке system prompt без [RULES] (секция живёт в ролевых промптах)', async () => {
     await runSession(
       { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' } },
       [],
     );
     const sp = MockIPIProvider.capturedSystemPrompt ?? '';
-    expect(sp).toContain('[RULES]');
-    expect((sp.match(/\[RULES\]/g) ?? []).length).toBe(1);
+    expect(sp).not.toContain('[RULES]');
+  });
+
+  it('ролевые промпты (системные prompts/roles) содержат секцию [RULES]', () => {
+    const ctx = new ContextConfig({ userDataDir: join(tmpDir, 'context') });
+    const roles = ['admin', 'analyst', 'assistant', 'auditor', 'developer', 'devops', 'pm', 'qa', 'title'];
+    for (const role of roles) {
+      const ru = ctx.getRolePrompt(role, undefined, 'ru') ?? '';
+      expect(ru, `role ${role} ru`).toContain('[RULES]');
+      if (role !== 'title') {
+        // title имеет только ru-файл
+        const en = ctx.getRolePrompt(role, undefined, 'en') ?? '';
+        expect(en, `role ${role} en`).toContain('[RULES]');
+      }
+    }
   });
 
   it('read_file внутри workingDir — trust: trusted, без WARN', async () => {
@@ -275,10 +293,11 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
     const tool = toolMessages()[0];
     expect(tool).not.toContain('[CONTENT |');
     expect(tool).not.toContain('[CONTENT END]');
+    expect(tool).not.toContain('[WARN');
     expect(MockIPIProvider.capturedSystemPrompt ?? '').not.toContain('[RULES]');
   });
 
-  it('wrapContent=false — RULES есть, обёртки нет', async () => {
+  it('wrapContent=false — WARN есть, обёртки нет, RULES не добавляется кодом', async () => {
     await runSession(
       { promptInjection: { enabled: true, wrapContent: false, mode: 'flag' } },
       [{
@@ -293,6 +312,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
 
     const tool = toolMessages()[0];
     expect(tool).not.toContain('[CONTENT |');
-    expect(MockIPIProvider.capturedSystemPrompt ?? '').toContain('[RULES]');
+    expect(tool).toContain('[WARN: обнаружены признаки prompt injection');
+    expect(MockIPIProvider.capturedSystemPrompt ?? '').not.toContain('[RULES]');
   });
 });

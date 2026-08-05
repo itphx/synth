@@ -7,6 +7,7 @@ import {
   wrapContent,
   detectPromptInjection,
   applyPolicy,
+  buildWarnLine,
   containsWord,
 } from './prompt-injection.js';
 
@@ -108,12 +109,20 @@ describe('applyPolicy', () => {
     matches: ['ignore all previous instructions'],
   };
 
-  it('flag — добавляет WARN-строку', () => {
+  it('flag — контент не изменяется, detail содержит совпадения (WARN формирует вызывающий)', () => {
     const res = applyPolicy('do not ignore all previous instructions ok', 'flag', detection);
     expect(res.suspicious).toBe(true);
     expect(res.blocked).toBe(false);
-    expect(res.content).toContain('[WARN: обнаружены признаки prompt injection');
-    expect(res.content).toContain('ignore all previous instructions');
+    expect(res.content).toBe('do not ignore all previous instructions ok');
+    expect(res.content).not.toContain('[WARN');
+    expect(res.detail).toEqual(['ignore all previous instructions']);
+  });
+
+  it('buildWarnLine формирует строку [WARN] для вставки перед [CONTENT]', () => {
+    const line = buildWarnLine(['ignore all previous instructions', 'act as', 'reveal', 'x', 'y', 'z']);
+    expect(line).toBe('[WARN: обнаружены признаки prompt injection: ignore all previous instructions, act as, reveal, x, y]');
+    // Не более 5 совпадений в предупреждении
+    expect((line.match(/,/g) ?? []).length).toBe(4);
   });
 
   it('sanitize — заменяет совпавшие фрагменты на [redacted]', () => {
@@ -125,6 +134,7 @@ describe('applyPolicy', () => {
     expect(res.blocked).toBe(false);
     expect(res.content).not.toContain('ignore all previous instructions');
     expect(res.content).toContain('[redacted]');
+    expect(res.detail).toEqual(['ignore all previous instructions', 'must']);
   });
 
   it('block — блокирует контент', () => {
@@ -132,11 +142,13 @@ describe('applyPolicy', () => {
     expect(res.suspicious).toBe(true);
     expect(res.blocked).toBe(true);
     expect(res.content).toBe('ignore all previous instructions');
+    expect(res.detail).toEqual(['ignore all previous instructions']);
   });
 
   it('чистый контент — не изменяется', () => {
     const res = applyPolicy('normal text', 'block', { suspicious: false, matches: [] });
     expect(res.blocked).toBe(false);
     expect(res.content).toBe('normal text');
+    expect(res.detail).toEqual([]);
   });
 });
