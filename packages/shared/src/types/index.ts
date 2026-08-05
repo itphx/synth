@@ -1,4 +1,5 @@
 import type { ToolCapability } from './tools.js';
+import type { PermissionConfig, McpServerToolSettings } from './permission.js';
 
 // Core enums
 export enum MessageRole {
@@ -102,6 +103,24 @@ export interface TsmStatus {
   blockedAt?: string;
 }
 
+export const PLAN_MODES = ['auto', 'strict', 'off'] as const;
+export type PlanMode = (typeof PLAN_MODES)[number];
+
+export const SESSION_MODES = ['plan', 'act', 'yolo'] as const;
+export type SessionMode = (typeof SESSION_MODES)[number];
+
+export const TODO_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'] as const;
+export type TodoStatus = (typeof TODO_STATUSES)[number];
+
+export const TODO_PRIORITIES = ['high', 'medium', 'low'] as const;
+export type TodoPriority = (typeof TODO_PRIORITIES)[number];
+
+export interface TodoItem {
+  content: string;
+  status: TodoStatus;
+  priority: TodoPriority;
+}
+
 export interface SessionSettings {
   provider?: string;
   model?: string;
@@ -164,6 +183,14 @@ export interface SessionSettings {
   embedProvider?: string;
   /** Модель для embedding. */
   embedModel?: string;
+  // === Permissions (AD-029) ===
+  /** Гранулярные permissions сессии. Приоритетнее глобальной секции permission в config.yaml. */
+  permission?: PermissionConfig;
+  /** Доступность MCP-инструментов по режимам plan/act (serverName → настройки). */
+  mcpToolSettings?: Record<string, McpServerToolSettings>;
+  // === Plan/Act (AD-025, AD-028) ===
+  /** Строгость цикла Plan→Build: auto — модель сама решает, strict — план обязателен, off — планирование отключено. */
+  planMode?: PlanMode;
 }
 
 export interface StreamInfo {
@@ -214,6 +241,12 @@ export interface Session {
   parentId?: string;
   branchPoint?: string;
   planPath?: string;
+  /** Содержимое утверждённого плана (AD-027) — встраивается в system prompt. */
+  planContent?: string;
+  /** Текущий runtime-режим сессии (AD-025): 'plan' — только чтение, 'act' — полный доступ. */
+  mode?: SessionMode;
+  /** Todo-список сессии (тул todo_write), как в OpenCode. */
+  todos?: TodoItem[];
   userId?: string;
   ownerId?: string;
   projectId?: string;
@@ -514,8 +547,13 @@ export type EventType =
   | 'tool_call.started'
   | 'tool_call.result'
   | 'tool_call.loop'
+  | 'permission.asked'
+  | 'permission.replied'
+  | 'permission.denied'
   | 'message.quality_check'
   | 'session.routing_category'
+  | 'plan.approved'
+  | 'todos.updated'
   | 'error';
 
 export interface BusEvent {
@@ -577,3 +615,5 @@ export interface FsError {
 
 // Tool types — re-exported from tools.ts
 export * from './tools.js';
+// Permission types (AD-029) — re-exported from permission.ts
+export * from './permission.js';

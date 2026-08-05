@@ -56,6 +56,10 @@ describe('defaultConfig', () => {
     expect(defaultConfig.tsm.maxIterations).toBe(50);
   });
 
+  it('storage.defaultWorkspace — пустая строка (резолвится от dataDir в рантайме)', () => {
+    expect(defaultConfig.storage.defaultWorkspace).toBe('');
+  });
+
   it('summarization.promptFile == SUMMARIZER', () => {
     expect(defaultConfig.summarization.promptFile).toBe('SUMMARIZER');
   });

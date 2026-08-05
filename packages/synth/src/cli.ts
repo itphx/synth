@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { existsSync } from 'node:fs';
-import { loadConfig, resolveDataDir, resolvePort, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@synth/shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@synth/shared';
 import { createStandaloneApp } from '@synth/core/server/app.js';
 import { runSingleChat } from '@synth/core/server/chat.js';
 import { JsonStore } from '@synth/core/storage/json-store.js';
@@ -36,7 +36,7 @@ program
           port: parseInt(options.port, 10),
           apiKey: options.apiKey,
         },
-        storage: { dataDir, workspacesRoot: '' },
+        storage: { dataDir, workspacesRoot: '', defaultWorkspace: '' },
       },
     });
 
@@ -50,7 +50,8 @@ program
       port,
       dataDir,
       apiKey,
-      workspacesRoot: process.cwd(),
+      workspacesRoot: resolveWorkspacesRoot(synth),
+      defaultWorkingDir: resolveDefaultWorkspace(synth),
       uiDistPath: existsSync(uiDir) ? uiDir : undefined,
       systemPromptsDir: existsSync(promptsDir) ? promptsDir : undefined,
     });

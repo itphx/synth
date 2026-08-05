@@ -271,6 +271,61 @@ describe('MCP API Routes', () => {
     });
   });
 
+  describe('POST /api/v2/mcp/probe', () => {
+    it('успешно пробует сервер и возвращает инструменты', async () => {
+      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const res = await app.request('/api/v2/mcp/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'test-server' }),
+      });
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.name).toBe('test-server');
+      expect(body.tools).toHaveLength(2);
+      expect(body.tools[0]).toEqual({ name: 'tool1', description: 'First tool' });
+    });
+
+    it('возвращает 400 для пустого name', async () => {
+      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const res = await app.request('/api/v2/mcp/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: '  ' }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('возвращает 400 для ненастроенного сервера', async () => {
+      mcpManager.isServerConfigured.mockReturnValue(false);
+      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const res = await app.request('/api/v2/mcp/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'unknown' }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('возвращает 500 при сбое probe', async () => {
+      mcpManager.probeServer.mockRejectedValueOnce(new Error('Connection timeout'));
+      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const res = await app.request('/api/v2/mcp/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'test-server' }),
+      });
+      expect(res.status).toBe(500);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('MCP_CONNECT_ERROR');
+      expect(body.error.message).toContain('Connection timeout');
+    });
+  });
+
   describe('GET /api/v2/mcp/servers/:name/tools', () => {
     it('возвращает инструменты подключённого сервера', async () => {
       const app = createTestApp(configStore, mcpManager, sessionManager);

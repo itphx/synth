@@ -10,6 +10,7 @@ import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator, FileProfileStore,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
+  RuntimeSettingsStore, createSettingsRoutes,
 } from '@synth/core';
 import type { SummarizationConfig } from '@synth/shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, findConfigPath } from '@synth/shared';
@@ -83,6 +84,9 @@ const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
 const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
 const contextConfig = new ContextConfig({ userDataDir: `${dataDir}/context` });
 const profilesStore = new FileProfileStore({ dataDir });
+
+// Runtime-настройки (AD-005): workspace/mcp из {dataDir}/settings.json (переживают рестарт)
+const settingsStore = new RuntimeSettingsStore({ dataDir });
 
 // MCP
 const configPath = findConfigPath() || './config.yaml';
@@ -171,7 +175,12 @@ const orchestrator = new ChatOrchestrator({
   toolRegistry,
   agentRegistry,
   mcpManager,
+  projectStore,
+  workspacesRoot: backendConfig.workspacesRoot,
   routerConfig: backendConfig.synth.router,
+  permissionConfig: backendConfig.synth.permission,
+  defaultPlanMode: backendConfig.synth.session.planMode,
+  securityConfig: backendConfig.synth.security,
 });
 
 const processMessage = orchestrator.createProcessMessage();
@@ -226,6 +235,12 @@ app.route('/api/v2/git', createGitRoutes(auth, projectStore, backendConfig.works
 
 // MCP routes
 app.route('/api/v2/mcp', createMcpRoutes(auth, mcpConfigStore, mcpManager, sessionManager));
+
+// Settings routes (runtime-настройки для UI: workspace + mcp; переиспользуем core-реализацию)
+app.route('/api/v2/settings', createSettingsRoutes(auth, {
+  settingsStore,
+  fallbackWorkspace: join(dataDir, 'workspaces', 'default'),
+}));
 
 // Глобальный SSE-хаб для всех сессий пользователя
 app.get('/api/v2/events', auth.requireAuth, async (c) => {

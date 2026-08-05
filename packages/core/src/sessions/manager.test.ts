@@ -65,6 +65,43 @@ describe('SessionManager', () => {
     expect(session.settings.routingEscalation.minLength).toBe(5);
   });
 
+  it('createSession копирует глобальные mcpToolSettings, если сессия их не задала', async () => {
+    const global = {
+      github: { default: { plan: false, act: true } },
+    };
+    const managerWithGlobal = new SessionManager(store, {
+      mcpSettingsProvider: async () => global,
+    });
+    const session = await managerWithGlobal.createSession({});
+    expect(session.settings.mcpToolSettings).toEqual(global);
+  });
+
+  it('createSession объединяет глобальные и сессионные mcpToolSettings (сессия приоритетнее)', async () => {
+    const global = {
+      github: { default: { plan: false, act: true } },
+      gitlab: { default: { plan: true, act: true } },
+    };
+    const local = {
+      github: { default: { plan: true, act: false }, tools: { list_issues: { plan: true, act: false } } },
+    };
+    const managerWithGlobal = new SessionManager(store, {
+      mcpSettingsProvider: async () => global,
+    });
+    const session = await managerWithGlobal.createSession({ settings: { mcpToolSettings: local } });
+    expect(session.settings.mcpToolSettings).toEqual({
+      github: {
+        default: { plan: true, act: false },
+        tools: { list_issues: { plan: true, act: false } },
+      },
+      gitlab: { default: { plan: true, act: true } },
+    });
+  });
+
+  it('createSession без провайдера и без сессионных mcpToolSettings не задаёт их', async () => {
+    const session = await manager.createSession({});
+    expect(session.settings.mcpToolSettings).toBeUndefined();
+  });
+
   it('getSession возвращает созданную сессию', async () => {
     const created = await manager.createSession({});
     const loaded = await manager.getSession(created.id);

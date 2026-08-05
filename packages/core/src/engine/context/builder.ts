@@ -172,7 +172,7 @@ export class ContextBuilder {
       this._debug.captureContextFiles(loadedFiles);
     }
 
-    return `\n\n[ДОПОЛНИТЕЛЬНЫЙ КОНТЕКСТ]\n${contextParts.join('\n\n')}\n`;
+    return `\n\n[ADDITIONAL CONTEXT]\n${contextParts.join('\n\n')}\n`;
   }
 
   private async _getProfilePrompt(userId: string | undefined, language: string): Promise<string | null> {
@@ -215,7 +215,7 @@ export class ContextBuilder {
     try {
       const content = await readFile(infoPath, 'utf-8');
       this._debugAdd('project', { projectName, found: true });
-      return `\n\n[ПРОЕКТ: ${projectName}]\n${content}\n`;
+      return `\n\n[PROJECT: ${projectName}]\n${content}\n`;
     } catch {
       this._debugAdd('project', { projectName, found: false });
       return null;

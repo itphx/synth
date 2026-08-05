@@ -1,26 +1,16 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
-import { resolve, relative, join } from 'node:path';
+import { join } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@synth/shared';
 import type { ToolDefinition } from '@synth/shared';
-
-function resolvePath(requestedPath: string, workingDir: string): string {
-  return resolve(workingDir, requestedPath);
-}
-
-function validatePath(resolvedPath: string, workingDir: string): void {
-  const rel = relative(workingDir, resolvedPath);
-  if (rel.startsWith('..') || !resolvedPath.startsWith(resolve(workingDir))) {
-    throw new Error(`Доступ запрещён: путь "${resolvedPath}" выходит за пределы рабочей директории`);
-  }
-}
+import { resolvePath, validateInputPath } from './path-utils.js';
 
 export const readFileTool: ToolDefinition = {
   name: 'read_file',
   description:
     'Read contents of a file from the local filesystem. You can access any file directly by using this tool.',
   parameters: z.object({
-    file_path: z.string().describe('Absolute path to the file to read'),
+    file_path: z.string().optional().describe('Path to the file to read (absolute or relative to the working directory; defaults to working directory)'),
     offset: z.number().int().min(0).optional().describe('Line offset to start reading from (0-based)'),
     limit: z.number().int().min(1).optional().describe('Maximum number of lines to read'),
   }),
@@ -30,9 +20,9 @@ export const readFileTool: ToolDefinition = {
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
-    const params = parsed.data as { file_path: string; offset?: number; limit?: number };
+    const params = parsed.data as { file_path?: string; offset?: number; limit?: number };
+    if (params.file_path !== undefined) validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
-    validatePath(resolvedPath, ctx.workingDir);
 
     let content = await readFile(resolvedPath, 'utf-8');
     const lines = content.split('\n');
@@ -62,7 +52,7 @@ export const listDirectoryTool: ToolDefinition = {
   description:
     'List files and directories in a given path. Use this to explore the project structure.',
   parameters: z.object({
-    path: z.string().describe('Absolute path to the directory to list'),
+    path: z.string().optional().describe('Path to the directory to list (absolute or relative to the working directory; defaults to working directory)'),
   }),
   capabilities: [ToolCapability.FILE_READ],
   async execute(args, ctx) {
@@ -70,9 +60,9 @@ export const listDirectoryTool: ToolDefinition = {
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
-    const params = parsed.data as { path: string };
+    const params = parsed.data as { path?: string };
+    if (params.path !== undefined) validateInputPath(params.path, 'path');
     const resolvedPath = resolvePath(params.path, ctx.workingDir);
-    validatePath(resolvedPath, ctx.workingDir);
 
     const entries = await readdir(resolvedPath, { withFileTypes: true });
     const lines: string[] = [];
@@ -105,7 +95,7 @@ export const globTool: ToolDefinition = {
     'Find files matching a glob pattern. Returns matching file paths sorted by modification time.',
   parameters: z.object({
     pattern: z.string().describe('Glob pattern to match files against (e.g., "src/**/*.ts")'),
-    path: z.string().optional().describe('Directory to search in (defaults to working directory)'),
+    path: z.string().optional().describe('Directory to search in (absolute or relative to the working directory; defaults to working directory)'),
   }),
   capabilities: [ToolCapability.FILE_READ, ToolCapability.SEARCH],
   async execute(args, ctx) {
@@ -114,8 +104,8 @@ export const globTool: ToolDefinition = {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
     const params = parsed.data as { pattern: string; path?: string };
-    const searchDir = params.path ? resolvePath(params.path, ctx.workingDir) : ctx.workingDir;
-    validatePath(searchDir, ctx.workingDir);
+    if (params.path !== undefined) validateInputPath(params.path, 'path');
+    const searchDir = resolvePath(params.path, ctx.workingDir);
 
     const { glob } = await import('node:fs/promises');
     const { relative: rel } = await import('node:path');

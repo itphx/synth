@@ -1,4 +1,4 @@
-# Dialogue Participants
+[PARTICIPANTS]
 
 The message history may contain messages from different participants:
 - Users: `{username}: message`

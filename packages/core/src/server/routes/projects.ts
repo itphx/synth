@@ -1,7 +1,24 @@
+import { isAbsolute, normalize } from 'node:path';
 import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import type { ProjectStore } from '../../storage/project-store.js';
 import { serializeProject } from '../serialize.js';
+
+/**
+ * Нормализует workspace перед сохранением: относительный путь очищается от
+ * ведущих './' и '/' (остаётся относительным — резолв происходит при
+ * использовании), абсолютный путь остаётся как есть. '.' / '' → undefined.
+ */
+function normalizeWorkspace(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const withoutTrailing = trimmed.replace(/[/\\]+$/, '');
+  if (!withoutTrailing) return undefined;
+  if (isAbsolute(withoutTrailing)) return normalize(withoutTrailing);
+  const rel = normalize(withoutTrailing).replace(/^[/\\]+/, '').replace(/[/\\]+$/, '');
+  if (!rel || rel === '.' || rel === '..') return undefined;
+  return rel;
+}
 
 export function createProjectRoutes(
   auth: AuthKit,
@@ -26,7 +43,7 @@ export function createProjectRoutes(
       description: body.description,
       icon: body.icon,
       color: body.color,
-      workspace: body.workspace || undefined,
+      workspace: typeof body.workspace === 'string' ? normalizeWorkspace(body.workspace) : undefined,
       repos: body.repos || undefined,
     });
     await store.save(project);
@@ -53,7 +70,11 @@ export function createProjectRoutes(
     if (body.invariants !== undefined) project.invariants = body.invariants;
     if (body.icon !== undefined) project.icon = body.icon;
     if (body.color !== undefined) project.color = body.color;
-    if (body.workspace !== undefined) project.workspace = body.workspace || undefined;
+    if (body.workspace !== undefined) {
+      project.workspace = typeof body.workspace === 'string'
+        ? normalizeWorkspace(body.workspace)
+        : (body.workspace || undefined);
+    }
     if (body.repos !== undefined) project.repos = body.repos;
     project.updatedAt = new Date().toISOString();
     await store.save(project);

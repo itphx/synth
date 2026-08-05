@@ -10,6 +10,7 @@ export const defaultConfig: SynthConfig = {
   storage: {
     dataDir: '/var/synth/data',
     workspacesRoot: '',
+    defaultWorkspace: '',
   },
   auth: {
     debugMode: false,
@@ -65,6 +66,9 @@ export const defaultConfig: SynthConfig = {
     maxIterations: 50,
     validationTimeout: 30,
   },
+  session: {
+    planMode: 'auto',
+  },
   context: {
     enabledFiles: ['SOUL.md', 'COMPANY.md', 'ABOUT.md'],
   },
@@ -117,5 +121,16 @@ export const defaultConfig: SynthConfig = {
     embedProvider: 'ollama',
     embedModel: 'local.nomic-embed-text:latest',
     microLlmEnabled: false,
+  },
+  permission: {
+    rules: {},
+    askTimeoutMs: 30_000,
+  },
+  security: {
+    promptInjection: {
+      enabled: true,
+      wrapContent: true,
+      mode: 'flag',
+    },
   },
 };

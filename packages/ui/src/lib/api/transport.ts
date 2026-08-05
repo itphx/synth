@@ -90,6 +90,24 @@ export class TransportClient {
     this.ws.send(JSON.stringify({ type: 'cancel', session_id: sessionId }))
   }
 
+  /**
+   * Ответ на запрос подтверждения (permission.asked).
+   * `approved` — поле, которое понимает текущий backend (permission.replied).
+   * `action`/`once` — расширенный формат для W4 (allow once / allow session);
+   * старый backend просто проигнорирует неизвестные поля.
+   */
+  sendPermissionReply(sessionId: string, approvalId: string, approved: boolean, once?: boolean): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    this.ws.send(JSON.stringify({
+      type: 'permission_reply',
+      session_id: sessionId,
+      approval_id: approvalId,
+      approved,
+      action: approved ? 'allow' : 'deny',
+      ...(approved && once !== undefined ? { once } : {}),
+    }))
+  }
+
   private connectWS(): void {
     this.cleanupTransport()
     this.transport = 'ws'

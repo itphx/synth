@@ -35,6 +35,8 @@ export const sessionSettingsSchema = z.object({
   showInterview: z.boolean().default(true),
   websocketEnabled: z.boolean().default(true),
   language: z.string().optional(),
+  // === Plan/Act (AD-025) ===
+  planMode: z.enum(['auto', 'strict', 'off']).optional(),
 });
 
 export const tsmStatusSchema = z.object({

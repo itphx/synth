@@ -1,4 +1,5 @@
 import type { MessageData } from '@/stores/chatStore'
+import type { TodoItem } from '@synth/shared'
 
 const BASE_URL = '/api/v2'
 
@@ -48,7 +49,15 @@ export interface SessionData {
   parent_id?: string | null
   branch_point?: string | null
   plan_path?: string | null
+  /** Содержимое утверждённого плана (AD-027), сериализуется как plan_content. */
+  plan_content?: string | null
+  /** Todo-список сессии (тул todo_write), сериализуется как todos. */
+  todos?: TodoItem[] | null
   session_origin?: string | null
+  /** Текущий runtime-режим сессии (AD-025): 'plan' — только чтение, 'act' — полный доступ, 'yolo' — автоподтверждение. */
+  mode?: SessionMode
+  /** Применим ли переключатель режимов к агенту сессии (AD-025). false для read-only агентов. undefined → считается true. */
+  mode_applicable?: boolean
   user_id: string | null
   owner_id: string | null
   project_id: string | null
@@ -108,7 +117,7 @@ export interface StickyNoteData {
 
 export type { FileEntry, DirectoryListResult, FileReadResult } from '@synth/shared'
 
-import type { DirectoryListResult, FileReadResult, FileEntry, RepoStatus, CommitInfo, CommitDetail } from '@synth/shared'
+import type { DirectoryListResult, FileReadResult, FileEntry, RepoStatus, CommitInfo, CommitDetail, SessionMode } from '@synth/shared'
 
 export interface GitRepoConfigData {
   path: string
@@ -308,6 +317,14 @@ export const synthApi = {
     return fetchJSON<SessionData>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
+    })
+  },
+
+  // Plan/Act режим сессии (AD-025)
+  async patchSessionMode(sessionId: string, mode: SessionMode): Promise<SessionData> {
+    return fetchJSON<SessionData>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ mode }),
     })
   },
 
@@ -583,6 +600,18 @@ export const synthApi = {
     })
   },
 
+  // Рабочий каталог по умолчанию (settings)
+  async getWorkspaceSetting(): Promise<{ workspace: string }> {
+    return fetchJSON<{ workspace: string }>(`${BASE_URL}/settings/workspace`)
+  },
+
+  async setWorkspaceSetting(workspace: string): Promise<{ workspace: string }> {
+    return fetchJSON<{ workspace: string }>(`${BASE_URL}/settings/workspace`, {
+      method: 'PUT',
+      body: JSON.stringify({ workspace }),
+    })
+  },
+
   async moveEntry(
     projectId: string,
     sourcePath: string,
@@ -812,6 +841,44 @@ export const synthApi = {
   async checkUpdate(): Promise<{ currentVersion: string; latestVersion: string; hasUpdate: boolean; checkedAt: string }> {
     return fetchJSON(`${BASE_URL}/updates/check`)
   },
+
+  // --- MCP: доступность инструментов по режимам (W4c) ---
+  async getMcpToolSettings(): Promise<McpSettingsPayload> {
+    return fetchJSON(`${BASE_URL}/settings/mcp`)
+  },
+
+  async saveMcpToolSettings(servers: Record<string, McpServerToolsSettings>): Promise<McpSettingsPayload> {
+    return fetchJSON(`${BASE_URL}/settings/mcp`, {
+      method: 'PUT',
+      body: JSON.stringify({ servers }),
+    })
+  },
+
+  async probeMcpServer(name: string): Promise<{ name: string; tools: McpProbedTool[] }> {
+    return fetchJSON(`${BASE_URL}/mcp/probe`, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    })
+  },
+}
+
+export interface McpProbedTool {
+  name: string
+  description: string
+}
+
+export interface McpModeAvailability {
+  plan: boolean
+  act: boolean
+}
+
+export interface McpServerToolsSettings {
+  default: McpModeAvailability
+  tools: Record<string, McpModeAvailability>
+}
+
+export interface McpSettingsPayload {
+  servers: Record<string, McpServerToolsSettings>
 }
 
 export interface McpServerConfig {

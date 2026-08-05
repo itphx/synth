@@ -72,6 +72,14 @@ export function createMcpRoutes(
 
     await configStore.addServer(name, config);
 
+    // Синхронизируем конфиг менеджера, чтобы сервер сразу был доступен probe
+    if (mcpManager) {
+      mcpManager.setConfig({
+        ...mcpManager.getConfig(),
+        [name]: config,
+      });
+    }
+
     const connected = mcpManager?.getConfiguredServers().find((s) => s.name === name)?.connected ?? false;
     return c.json({ name, config, connected }, 201);
   });
@@ -161,6 +169,47 @@ export function createMcpRoutes(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return c.json({ success: false, error: message });
+    }
+  });
+
+  // --- Probe по имени (алиас для UI; core-совместимый формат) ---
+  // POST /api/v2/mcp/probe body { name } → 200 { name, tools: [{ name, description }] }.
+  // Сервер не настроен → 400 VALIDATION_ERROR, ошибка подключения → 500 MCP_CONNECT_ERROR.
+  app.post('/probe', kit.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const name = typeof (body as { name?: unknown }).name === 'string'
+      ? ((body as { name: string }).name).trim()
+      : '';
+
+    if (!name) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'Поле name обязательно и не может быть пустым' },
+      }, 400);
+    }
+
+    if (!mcpManager) {
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'McpManager не настроен' } }, 500);
+    }
+
+    if (!mcpManager.isServerConfigured(name)) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: `MCP-сервер "${name}" не настроен` },
+      }, 400);
+    }
+
+    try {
+      const tools = await mcpManager.probeServer(name);
+      return c.json({
+        name,
+        tools: tools.map((t) => ({ name: t.name, description: t.description })),
+      });
+    } catch (err) {
+      return c.json({
+        error: {
+          code: 'MCP_CONNECT_ERROR',
+          message: err instanceof Error ? err.message : String(err),
+        },
+      }, 500);
     }
   });
 

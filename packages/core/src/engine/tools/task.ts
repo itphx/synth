@@ -1,14 +1,17 @@
 import { z } from 'zod';
 import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart, TsmState } from '@synth/shared';
-import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig } from '@synth/shared';
+import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig } from '@synth/shared';
 import type { AgentRegistry } from '../agents/registry.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ToolRegistry } from './registry.js';
 import type { SessionManager } from '../../sessions/manager.js';
-import type { EventBus } from '../../events/bus.js';
+import { EventBus } from '../../events/bus.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import type { ContextConfig } from '../context/config.js';
 import type { ModelRouter } from '../router/router.js';
+import { deriveSubagentPermission } from '../permission/derive.js';
+import { PermissionEvaluator } from '../permission/evaluator.js';
+import { PermissionApprovalManager } from '../permission/approval.js';
 import { serializeSession, serializeMessage } from '../../server/serialize.js';
 
 export interface TaskExtra {
@@ -30,6 +33,10 @@ export interface TaskExtra {
   streamId?: string;
   sessionId?: string;
   callerAgentRole?: string;
+  /** Permissions родительской сессии (AD-029) — наследуются саб-агентом с deny-дополнениями. */
+  permissionConfig?: PermissionConfig;
+  /** Секция безопасности (защита от Indirect Prompt Injection) из config.yaml. */
+  securityConfig?: SecurityConfig;
 }
 
 type ContextMode = 'none' | 'inherit' | 'summary' | 'last_n';
@@ -189,6 +196,9 @@ export const taskTool: ToolDefinition = {
     let childMessages: Message[] = [];
     let parentNotesText = '';
 
+    // ─── Permissions дочерней сессии (AD-029): наследуем родителя + deny-дополнения ──
+    const derivedPermission = deriveSubagentPermission(extra.permissionConfig);
+
     // ─── Создание дочерней сессии с контекстом ───────────────────────
     if (extra.sessionManager && extra.sessionId) {
       try {
@@ -208,7 +218,8 @@ export const taskTool: ToolDefinition = {
             fork.sessionOrigin = 'subagent';
             fork.userId = parentSession.userId;
             fork.ownerId = parentSession.ownerId;
-            fork.settings = { ...fork.settings, agentRole: params.subagent_type, ...childRoutingOverrides };
+            fork.mode = parentSession.mode;
+            fork.settings = { ...fork.settings, agentRole: params.subagent_type, permission: derivedPermission, planMode: 'auto', ...childRoutingOverrides };
             await extra.sessionManager.updateSession(fork);
             childSessionId = fork.id;
             childMessages = fork.messages;
@@ -221,7 +232,8 @@ export const taskTool: ToolDefinition = {
             fork.sessionOrigin = 'subagent';
             fork.userId = parentSession.userId;
             fork.ownerId = parentSession.ownerId;
-            fork.settings = { ...fork.settings, agentRole: params.subagent_type, ...childRoutingOverrides };
+            fork.mode = parentSession.mode;
+            fork.settings = { ...fork.settings, agentRole: params.subagent_type, permission: derivedPermission, planMode: 'auto', ...childRoutingOverrides };
             await extra.sessionManager.updateSession(fork);
             childSessionId = fork.id;
             childMessages = fork.messages;
@@ -232,7 +244,8 @@ export const taskTool: ToolDefinition = {
             fork.sessionOrigin = 'subagent';
             fork.userId = parentSession.userId;
             fork.ownerId = parentSession.ownerId;
-            fork.settings = { ...fork.settings, agentRole: params.subagent_type, ...childRoutingOverrides };
+            fork.mode = parentSession.mode;
+            fork.settings = { ...fork.settings, agentRole: params.subagent_type, permission: derivedPermission, planMode: 'auto', ...childRoutingOverrides };
             await extra.sessionManager.updateSession(fork);
             childSessionId = fork.id;
             childMessages = fork.messages;
@@ -277,10 +290,11 @@ export const taskTool: ToolDefinition = {
               engine: parentSession.engine,
               parentId: extra.sessionId,
               sessionOrigin: 'subagent',
-              settings: { ...parentSession.settings, agentRole: params.subagent_type, ...childRoutingOverrides },
+              settings: { ...parentSession.settings, agentRole: params.subagent_type, permission: derivedPermission, planMode: 'auto', ...childRoutingOverrides },
             });
             child.userId = parentSession.userId;
             child.ownerId = parentSession.ownerId;
+            child.mode = parentSession.mode;
             await extra.sessionManager.updateSession(child);
             childSessionId = child.id;
           }
@@ -304,13 +318,13 @@ export const taskTool: ToolDefinition = {
       // Заметки родительской сессии — передаём во всех режимах с контекстом
       // (inherit, summary, last_n), но НЕ в none (чистый лист)
       if (contextMode !== 'none' && parentNotesText) {
-        prompt += `\n\n[ЗАМЕТКИ РОДИТЕЛЬСКОЙ СЕССИИ]\nНиже — важные заметки из основной сессии. Учитывай их при выполнении задачи.\n\n${parentNotesText}`;
+        prompt += `\n\n[PARENT NOTES]\nНиже — важные заметки из основной сессии. Учитывай их при выполнении задачи.\n\n${parentNotesText}`;
       }
 
       if (contextMode === 'summary' && childMessages.length > 0) {
         const summaryMsg = childMessages.find(m => m.role === MessageRole.SUMMARY);
         if (summaryMsg?.content) {
-          prompt += `\n\n[СЖАТЫЙ КОНТЕКСТ РОДИТЕЛЬСКОЙ СЕССИИ]\n${summaryMsg.content}`;
+          prompt += `\n\n[PARENT SUMMARY]\n${summaryMsg.content}`;
         }
       }
 
@@ -343,7 +357,7 @@ export const taskTool: ToolDefinition = {
 
         const routingBlock = template
           ? template.replace('{routing_models}', modelsText ? modelsText + '\n' : '')
-          : ('\n\n## Маршрутизация запросов\n\n' +
+          : ('\n\n[ROUTING]\n\n' +
              'Для запуска дочерних агентов ты можешь указать модель:\n' +
              '- Используй параметр `model` для выбора модели под задачу\n' +
              (modelsText ? modelsText + '\n' : '') +
@@ -442,11 +456,36 @@ export const taskTool: ToolDefinition = {
 
     const cancelToken: CancellationToken = { cancelled: false, cancel: () => { cancelToken.cancelled = true; } };
 
+    // ─── Permissions саб-агента (AD-029): проверка перед каждым tool_call ──
+    // Дочерняя сессия наследует permissions родителя (deriveSubagentPermission).
+    // ask-запросы публикуются в EventBus РОДИТЕЛЬСКОЙ сессии — подтверждение
+    // видит пользователь основной сессии, approval_id связывает ответ.
+    const childEvaluator = new PermissionEvaluator(derivedPermission);
+    const childApprovalManager = new PermissionApprovalManager(extra.eventBus ?? new EventBus());
+    let childSessionMode: SessionMode = 'act';
+    let childPlanApproved = false;
+    let childPlanMode: PlanMode = 'auto';
+    let childMcpToolSettings: Record<string, import('@synth/shared').McpServerToolSettings> | undefined;
+    if (childSessionId && extra.sessionManager) {
+      try {
+        const child = await extra.sessionManager.getSession(childSessionId);
+        if (child) {
+          childSessionMode = child.mode ?? 'act';
+          childPlanApproved = Boolean(child.planContent);
+          childPlanMode = child.settings.planMode ?? 'auto';
+          childMcpToolSettings = child.settings.mcpToolSettings;
+        }
+      } catch {
+        // не фатально — остаёмся в act/auto
+      }
+    }
+
     try {
       let finalContent = '';
       let iteration = 0;
       const doomTracker = new Map<string, number>();
       let subagentReasoning = '';
+      let subagentDenied = false;
 
       const allSubagentReasoning: Array<{ text: string; iteration: number }> = [];
       const allSubagentIntermediateTexts: Array<{ text: string; iteration: number }> = [];
@@ -640,33 +679,138 @@ export const taskTool: ToolDefinition = {
 
           const toolDef = extra.toolRegistry?.get(toolName);
           let toolResult: ToolResult;
+          let subagentUserDenied = false;
 
-          if (toolDef) {
-            const parsed2 = toolDef.parameters.safeParse(toolArgs);
-            if (!parsed2.success) {
-              toolResult = {
-                content: `Ошибка аргументов инструмента "${toolName}": ${parsed2.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`,
-                isError: true,
-              };
-            } else {
-              try {
-                toolResult = await toolDef.execute(parsed2.data, {
-                  ...ctx,
-                  abortSignal: ctx.abortSignal,
-                  extra: extra as unknown as Record<string, unknown>,
-                });
-              } catch (execError) {
+          // AD-029: permission-check саб-агента — permissions дочерней сессии
+          // (родитель + deny-дополнения) применяются к каждому tool_call.
+          const permissionDecision = childEvaluator.check({
+            toolName,
+            params: toolArgs,
+            workingDir: ctx.workingDir,
+            capabilities: toolDef?.capabilities,
+            sessionMode: childSessionMode,
+            planMode: childPlanMode,
+            planApproved: childPlanApproved,
+            mcpToolSettings: childMcpToolSettings,
+          });
+
+          if (permissionDecision.action === 'deny') {
+            toolResult = {
+              content: `Permission denied: ${permissionDecision.reason}`,
+              isError: true,
+              metadata: {
+                permission: {
+                  action: 'deny',
+                  reason: permissionDecision.reason,
+                  matched_rule: permissionDecision.matchedRule,
+                },
+              },
+            };
+          } else if (permissionDecision.action === 'ask') {
+            // ask публикуется в родительскую сессию (extra.sessionId) —
+            // пользователь основной сессии видит запрос и отвечает.
+            const approval = await childApprovalManager.waitForDecision(
+              extra.sessionId!,
+              {
+                approvalId: `approval_${tcId}`,
+                callId: tcId,
+                toolName,
+                arguments: toolArgs,
+                reason: permissionDecision.reason,
+              },
+              derivedPermission.askTimeoutMs,
+            );
+            if (approval.approved) {
+              if (approval.once === false) {
+                // «Разрешить в сессии» — allow-правило в permissions дочерней сессии
+                derivedPermission.rules[toolName] = 'allow';
+                if (childSessionId && extra.sessionManager) {
+                  try {
+                    const child = await extra.sessionManager.getSession(childSessionId);
+                    if (child) {
+                      child.settings.permission = { ...derivedPermission };
+                      await extra.sessionManager.updateSession(child);
+                    }
+                  } catch {
+                    // не фатально
+                  }
+                }
+              }
+              if (toolDef) {
+                const parsed2 = toolDef.parameters.safeParse(toolArgs);
+                if (!parsed2.success) {
+                  toolResult = {
+                    content: `Ошибка аргументов инструмента "${toolName}": ${parsed2.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`,
+                    isError: true,
+                  };
+                } else {
+                  try {
+                    toolResult = await toolDef.execute(parsed2.data, {
+                      ...ctx,
+                      abortSignal: ctx.abortSignal,
+                      extra: extra as unknown as Record<string, unknown>,
+                    });
+                  } catch (execError) {
+                    toolResult = {
+                      content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
+                      isError: true,
+                    };
+                  }
+                }
+              } else {
                 toolResult = {
-                  content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
+                  content: `Инструмент "${toolName}" не найден`,
                   isError: true,
                 };
               }
+            } else {
+              const why = approval.timeout
+                ? 'истекло время ожидания подтверждения'
+                : approval.noSubscribers
+                  ? 'нет подключённого пользователя для подтверждения'
+                  : 'отклонено пользователем';
+              toolResult = {
+                content: `Permission denied: ${permissionDecision.reason} (${why})`,
+                isError: true,
+                metadata: {
+                  permission: {
+                    action: 'deny',
+                    reason: permissionDecision.reason,
+                    matched_rule: permissionDecision.matchedRule,
+                  },
+                },
+              };
+              subagentUserDenied = !approval.timeout && !approval.noSubscribers;
             }
           } else {
-            toolResult = {
-              content: `Инструмент "${toolName}" не найден`,
-              isError: true,
-            };
+            // allow — обычное выполнение
+            if (toolDef) {
+              const parsed2 = toolDef.parameters.safeParse(toolArgs);
+              if (!parsed2.success) {
+                toolResult = {
+                  content: `Ошибка аргументов инструмента "${toolName}": ${parsed2.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`,
+                  isError: true,
+                };
+              } else {
+                try {
+                  toolResult = await toolDef.execute(parsed2.data, {
+                    ...ctx,
+                    abortSignal: ctx.abortSignal,
+                    extra: extra as unknown as Record<string, unknown>,
+                  });
+                } catch (execError) {
+                  toolResult = {
+                    content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
+                    isError: true,
+                  };
+                }
+              }
+            } else {
+              toolResult = {
+                content: `Инструмент "${toolName}" не найден`,
+                isError: true,
+              };
+            }
           }
 
           publish?.('tool_call.result', {
@@ -722,6 +866,12 @@ export const taskTool: ToolDefinition = {
               // не фатально
             }
           }
+
+          // AD-029: пользователь отклонил ask саб-агента — прекращаем выполнение.
+          if (subagentUserDenied) {
+            subagentDenied = true;
+            break;
+          }
         }
 
         publish?.('tool_call.loop', {
@@ -730,6 +880,12 @@ export const taskTool: ToolDefinition = {
           iteration,
           total_tool_calls: toolCalls.length,
         });
+
+        if (subagentDenied) break;
+      }
+
+      if (subagentDenied && !finalContent) {
+        finalContent = 'Обработка остановлена: пользователь отклонил запрос на выполнение инструмента';
       }
 
       const output = finalContent || '(пустой ответ сабагента)';

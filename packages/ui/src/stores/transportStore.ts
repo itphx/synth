@@ -3,12 +3,22 @@ import { TransportClient, type WSEvent, type TransportKind } from '@/lib/api/tra
 import { useChatStore } from './chatStore'
 import { useSessionsStore } from './sessionsStore'
 import { useUIStore } from './useUIStore'
+import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS } from './permissionStore'
 import type { TransportMode } from './useUIStore'
 import type { StreamDoneMetadata, MessageData } from './chatStore'
 import { synthApi } from '@/lib/api/synthApi'
 import type { SessionData } from '@/lib/api/synthApi'
 
 type EventDispatcher = (event: WSEvent) => void
+
+// Полный refresh сессии с сервера после событий плана/ToDo (plan.approved,
+// plan.updated, todos.updated). Гарантирует актуальность plan_content/todos/mode
+// в сторе независимо от содержимого payload события.
+function refreshSessionFromApi(sid: string) {
+  synthApi.getSession(sid)
+    .then((sess) => useSessionsStore.getState().upsertSession(sess))
+    .catch(() => {})
+}
 
 interface TransportState {
   transportMode: TransportMode
@@ -21,6 +31,7 @@ interface TransportState {
   setTransportMode: (mode: TransportMode) => void
   sendMessage: (sessionId: string, text: string, agentRole?: string, provider?: string, model?: string) => Promise<void>
   cancel: (sessionId: string) => void
+  sendPermissionReply: (sessionId: string, approvalId: string, approved: boolean, once?: boolean) => void
   markSessionOpen: (sid: string) => void
   markSessionClosed: (sid: string) => void
 }
@@ -186,8 +197,7 @@ function createDispatcher(): EventDispatcher {
         break
       }
 
-      case 'question.asked':
-      case 'permission.asked': {
+      case 'question.asked': {
         const pendingCount = (payload.pending_count as number) || 0
         if (pendingCount > 0) {
           const hasStream = Object.values(useChatStore.getState().streamingBySession[sid] || {}).some((s) => s.isStreaming)
@@ -197,6 +207,28 @@ function createDispatcher(): EventDispatcher {
             updateQueueCount(sid, pendingCount)
           }
         }
+        break
+      }
+
+      case 'permission.asked': {
+        const approvalId = payload.approval_id as string | undefined
+        if (!approvalId) break
+
+        const toolName = (payload.tool as string) || (payload.tool_name as string) || 'tool'
+        const params = (payload.arguments as Record<string, unknown>)
+          || (payload.params as Record<string, unknown>)
+          || {}
+        const reason = (payload.reason as string) || ''
+        const timeoutMs = (payload.ask_timeout_ms as number) || PERMISSION_ASK_TIMEOUT_MS
+
+        usePermissionStore.getState().addRequest(sid, {
+          approvalId,
+          toolName,
+          params,
+          reason,
+          askedAt: new Date().toISOString(),
+          timeoutMs,
+        })
         break
       }
 
@@ -228,6 +260,29 @@ function createDispatcher(): EventDispatcher {
         if (patch.summarization_pending === false) {
           setSummarizationPending(sid, false)
         }
+        break
+      }
+
+      // План утверждён (AD-027, план пишется в .synth/plans/ и в состояние сессии).
+      // plan.updated / todos.updated — будущие события W14 (план изменён / todo_write),
+      // закладываем обработку заранее: мгновенный patch из payload + полный refresh.
+      case 'plan.approved':
+      case 'plan.updated':
+      case 'todos.updated': {
+        const patch = payload as Record<string, unknown>
+        const sessionPatch: Record<string, unknown> = {}
+        if (patch.plan_path !== undefined) sessionPatch.plan_path = patch.plan_path
+        if (patch.plan_content !== undefined) sessionPatch.plan_content = patch.plan_content
+        if (patch.todos !== undefined) sessionPatch.todos = patch.todos
+        if (patch.mode !== undefined) sessionPatch.mode = patch.mode
+        if (Object.keys(sessionPatch).length > 0) {
+          useSessionsStore.setState((s) => ({
+            sessions: s.sessions.map((sess) =>
+              sess.id === sid ? { ...sess, ...sessionPatch } : sess,
+            ),
+          }))
+        }
+        refreshSessionFromApi(sid)
         break
       }
 
@@ -444,6 +499,16 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     } else {
       console.debug('[TransportStore] cancel via HTTP POST:', sessionId)
       synthApi.stopGeneration(sessionId).catch(() => {})
+    }
+  },
+
+  sendPermissionReply: (sessionId, approvalId, approved, once) => {
+    if (transport && transportReady && transport.getTransport() === 'ws') {
+      console.debug('[TransportStore] sendPermissionReply via WS:', sessionId, approvalId, approved, once)
+      transport.sendPermissionReply(sessionId, approvalId, approved, once)
+    } else {
+      // Нет WS-соединения: backend сам сбросит ask по таймауту.
+      console.warn('[TransportStore] sendPermissionReply: WS not connected, request will time out', sessionId, approvalId)
     }
   },
 

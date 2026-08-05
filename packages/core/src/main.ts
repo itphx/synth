@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { loadConfig, resolveDataDir, resolvePort, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@synth/shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@synth/shared';
 import { spawn } from 'node:child_process';
 import { checkForUpdatesBackground } from './update-checker.js';
 
@@ -28,7 +28,7 @@ program
           port: parseInt(options.port, 10),
           apiKey: options.apiKey,
         },
-        storage: options.dataDir ? { dataDir: options.dataDir, workspacesRoot: '' } : undefined,
+        storage: options.dataDir ? { dataDir: options.dataDir, workspacesRoot: '', defaultWorkspace: '' } : undefined,
       },
     });
 
@@ -46,8 +46,13 @@ program
       port,
       dataDir,
       apiKey,
-      workspacesRoot: process.cwd(),
+      workspacesRoot: resolveWorkspacesRoot(synth),
+      defaultWorkingDir: resolveDefaultWorkspace(synth),
       uiDistPath: uiPath,
+      permissionConfig: synth.permission,
+      defaultPlanMode: synth.session?.planMode,
+      securityConfig: synth.security,
+      mcpServers: synth.mcp?.servers ?? {},
     });
 
     let shuttingDown = false;

@@ -106,6 +106,10 @@ export function getForkedTitle(title?: string, existingTitles?: string[]): strin
   return `${name} (fork #${maxN + 1})`;
 }
 
+// --- Glob (permission patterns, AD-029) ---
+
+export { globMatch } from './glob.js';
+
 // --- Part helpers ---
 
 import type { Part, PartType } from '../types/index.js';

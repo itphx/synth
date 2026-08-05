@@ -5,11 +5,13 @@ import { Icon } from '@/components/icon/Icon'
 import { StatsTab } from './StatsTab'
 import { ContextTab } from './ContextTab'
 import { SessionSettingsTab } from './SessionSettingsTab'
+import { ProjectTab } from './ProjectTab'
 import { ReferencesTab } from './ReferencesTab'
 
 const RIGHT_TABS = [
   { id: 'stats', icon: 'bar-chart-2' as const, labelKey: 'rightPanel.tab.stats' },
-  { id: 'params', icon: 'settings-3' as const, labelKey: 'rightPanel.tab.params' },
+  { id: 'params', icon: 'settings-3' as const, labelKey: 'rightPanel.tab.session' },
+  { id: 'project', icon: 'folder-3' as const, labelKey: 'rightPanel.tab.project' },
   { id: 'context', icon: 'file-text' as const, labelKey: 'rightPanel.tab.context' },
   { id: 'references', icon: 'link' as const, labelKey: 'rightPanel.tab.references' },
   { id: 'scheduler', icon: 'calendar-schedule' as const, labelKey: 'rightPanel.tab.scheduler' },
@@ -48,6 +50,7 @@ export const RightPanel: React.FC = () => {
       <div className="flex-1 overflow-y-auto">
         {rightPanelTab === 'stats' && <StatsTab />}
         {rightPanelTab === 'params' && <SessionSettingsTab />}
+        {rightPanelTab === 'project' && <ProjectTab />}
         {rightPanelTab === 'context' && <ContextTab />}
         {rightPanelTab === 'references' && sessionId && <ReferencesTab sessionId={sessionId} />}
         {rightPanelTab === 'references' && !sessionId && (

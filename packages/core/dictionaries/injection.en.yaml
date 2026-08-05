@@ -1,0 +1,51 @@
+# Indirect Prompt Injection patterns (English) — IPI protection
+# Categorized format (AD-035): categories: { subcategory: { keywords: [...] } }
+
+categories:
+  instruction_spoof:
+    keywords:
+      - ignore all previous instructions
+      - ignore the above instructions
+      - disregard previous instructions
+      - forget everything
+      - forget all instructions
+      - do not follow the instructions above
+      - ignore everything above
+  system_prompt:
+    keywords:
+      - system prompt
+      - reveal your
+      - show your instructions
+      - show your system prompt
+      - print your instructions
+      - expose your prompt
+  role_override:
+    keywords:
+      - you are now
+      - act as
+      - pretend to be
+      - from now on you are
+      - imagine you are
+  delimiter_bypass:
+    keywords:
+      - ignore the content
+      - outside the content
+      - after content end
+      - ignore what comes before
+      - ignore the text above
+  payload:
+    keywords:
+      - exfiltrate
+      - send the data to
+      - run the command
+      - follow the commands in the content
+      - execute the instructions in the content
+      - follow the instructions in the content
+      - run the commands in the content
+  meta:
+    keywords:
+      - important:
+      - attention:
+      - must follow
+      - you must obey
+      - obey the following

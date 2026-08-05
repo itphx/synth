@@ -1,14 +1,7 @@
-import { resolve, relative } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@synth/shared';
 import type { ToolDefinition } from '@synth/shared';
-
-function validatePath(resolvedPath: string, workingDir: string): void {
-  const rel = relative(workingDir, resolvedPath);
-  if (rel.startsWith('..') || !resolvedPath.startsWith(resolve(workingDir))) {
-    throw new Error(`Доступ запрещён: путь "${resolvedPath}" выходит за пределы рабочей директории`);
-  }
-}
+import { resolvePath, validateInputPath } from './path-utils.js';
 
 export const grepFilesTool: ToolDefinition = {
   name: 'grep_files',
@@ -26,9 +19,8 @@ export const grepFilesTool: ToolDefinition = {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
     }
     const params = parsed.data as { pattern: string; path?: string; include?: string };
-    const searchDirRaw = params.path ?? ctx.workingDir;
-    const searchDir = resolve(ctx.workingDir, searchDirRaw);
-    validatePath(searchDir, ctx.workingDir);
+    if (params.path !== undefined) validateInputPath(params.path, 'path');
+    const searchDir = resolvePath(params.path, ctx.workingDir);
 
     try {
       const { execFile } = await import('node:child_process');

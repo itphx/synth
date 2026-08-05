@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { permissionConfigSchema } from '../types/permission.js';
 
 // --- SynthConfig: единый конфиг для всех компонентов ---
 
@@ -12,6 +13,8 @@ export const serverConfigSchema = z.object({
 export const storageConfigSchema = z.object({
   dataDir: z.string().default('/var/synth/data'),
   workspacesRoot: z.string().default(''),
+  /** Рабочий каталог по умолчанию для сессий без проекта. Резолвится от dataDir: {dataDir}/workspaces/default. */
+  defaultWorkspace: z.string().default(''),
 });
 
 export const authConfigSchema = z.object({
@@ -84,6 +87,13 @@ export const tsmConfigSchema = z.object({
   validationTimeout: z.number().int().min(1).default(30),
 });
 
+// --- Session (AD-025 / AD-028): настройки по умолчанию для сессий ---
+
+export const sessionConfigSchema = z.object({
+  /** Строгость цикла Plan→Build по умолчанию для новых сессий: auto | strict | off. */
+  planMode: z.enum(['auto', 'strict', 'off']).default('auto'),
+});
+
 export const contextConfigSchema = z.object({
   enabledFiles: z.array(z.string()).default(['SOUL.md', 'COMPANY.md', 'ABOUT.md']),
 });
@@ -110,6 +120,21 @@ export const mcpServerConfigSchema = z.object({
 
 export const mcpConfigSchema = z.object({
   servers: z.record(z.string(), mcpServerConfigSchema).default({}),
+});
+
+// --- Security (IPI protection) ---
+
+export const promptInjectionConfigSchema = z.object({
+  /** Глобальный выключатель защиты от Indirect Prompt Injection. */
+  enabled: z.boolean().default(true),
+  /** Оборачивать tool-контент в [CONTENT | SOURCE: ... | trust: ...] маркеры. */
+  wrapContent: z.boolean().default(true),
+  /** Режим детекции подозрительных паттернов: flag (пометить), sanitize (заменить), block (заблокировать). */
+  mode: z.enum(['flag', 'sanitize', 'block']).default('flag'),
+});
+
+export const securityConfigSchema = z.object({
+  promptInjection: promptInjectionConfigSchema.default({}),
 });
 
 // --- Router (AD-034) ---
@@ -187,11 +212,14 @@ export const synthConfigSchema = z.object({
   i18n: i18nConfigSchema.default({}),
   logging: loggingConfigSchema.default({}),
   tsm: tsmConfigSchema.default({}),
+  session: sessionConfigSchema.default({}),
   context: contextConfigSchema.default({}),
   summarization: summarizationConfigSchema.default({}),
   mcp: mcpConfigSchema.default({}),
   router: routerConfigSchema.default({}),
   microFirst: microFirstConfigSchema.default({}),
+  permission: permissionConfigSchema.default({}),
+  security: securityConfigSchema.default({}),
 });
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>;
@@ -204,6 +232,7 @@ export type UIConfig = z.infer<typeof uiConfigSchema>;
 export type I18nConfig = z.infer<typeof i18nConfigSchema>;
 export type LoggingConfig = z.infer<typeof loggingConfigSchema>;
 export type TsmConfig = z.infer<typeof tsmConfigSchema>;
+export type SessionConfig = z.infer<typeof sessionConfigSchema>;
 export type ContextConfigSchema = z.infer<typeof contextConfigSchema>;
 export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
@@ -215,3 +244,6 @@ export type RouterSubagentConfig = z.infer<typeof routerSubagentConfigSchema>;
 export type RouterConfig = z.infer<typeof routerConfigSchema>;
 export type MicroFirstConfig = z.infer<typeof microFirstConfigSchema>;
 export type SynthConfig = z.infer<typeof synthConfigSchema>;
+export type PermissionConfig = z.infer<typeof permissionConfigSchema>;
+export type PromptInjectionConfig = z.infer<typeof promptInjectionConfigSchema>;
+export type SecurityConfig = z.infer<typeof securityConfigSchema>;

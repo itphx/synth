@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { taskTool } from './task.js';
@@ -9,6 +9,7 @@ import { EventBus } from '../../events/bus.js';
 import { ToolCapability, MessageRole, generateId, makeTextPart, nowISO } from '@synth/shared';
 import type { Message, Session } from '@synth/shared';
 import type { ContextOptimizer } from '../context/optimizer.js';
+import { createToolRegistry } from './index.js';
 
 /** Минимальный тип для мока AgentRegistry — только поля, используемые в taskTool */
 interface MockAgentDef {
@@ -624,7 +625,7 @@ describe('taskTool — context modes', () => {
       },
     );
 
-    expect(capturedSystemMsg).toContain('[ЗАМЕТКИ РОДИТЕЛЬСКОЙ СЕССИИ]');
+    expect(capturedSystemMsg).toContain('[PARENT NOTES]');
     expect(capturedSystemMsg).toContain('Решение: использовать SQLite');
   });
 
@@ -659,7 +660,7 @@ describe('taskTool — context modes', () => {
       },
     );
 
-    expect(capturedSystemMsg).toContain('[ЗАМЕТКИ РОДИТЕЛЬСКОЙ СЕССИИ]');
+    expect(capturedSystemMsg).toContain('[PARENT NOTES]');
     expect(capturedSystemMsg).toContain('Использовать PostgreSQL');
   });
 
@@ -694,7 +695,167 @@ describe('taskTool — context modes', () => {
       },
     );
 
-    expect(capturedSystemMsg).not.toContain('[ЗАМЕТКИ РОДИТЕЛЬСКОЙ СЕССИИ]');
+    expect(capturedSystemMsg).not.toContain('[PARENT NOTES]');
     expect(capturedSystemMsg).not.toContain('Секретные заметки');
+  });
+});
+
+/** Провайдер саб-агента: первый вызов — write_file, второй — текст. */
+class MockSubagentAskProvider {
+  private _calls = 0;
+
+  async *chatAsync(): AsyncGenerator<import('@synth/shared').LLMChunk> {
+    this._calls++;
+    if (this._calls === 1) {
+      yield {
+        content: '',
+        isFinal: true,
+        toolCalls: [{
+          id: 'call_sub',
+          function: { name: 'write_file', arguments: JSON.stringify({ file_path: 'sub.txt', content: 'hello' }) },
+        }],
+      } as import('@synth/shared').LLMChunk;
+    } else {
+      yield { content: 'готово', isFinal: true, toolCalls: [] } as import('@synth/shared').LLMChunk;
+    }
+  }
+
+  model = 'test-model';
+  name = 'test-provider';
+}
+
+describe('taskTool × permissions саб-агента (AD-029)', () => {
+  let store: FileStore;
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-task-perm-'));
+    store = new FileStore({ dataDir: tmpDir });
+    sessionManager = new SessionManager(store);
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('ask саб-агента публикуется в РОДИТЕЛЬСКУЮ сессию и тул выполняется после allow', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const toolRegistry = createToolRegistry();
+    const asked: Array<Record<string, unknown>> = [];
+    const unsub = eventBus.subscribe(parent.id, (e) => {
+      if (e.type === 'permission.asked') {
+        asked.push(e.data as Record<string, unknown>);
+        eventBus.publish(parent.id, 'permission.replied', {
+          approval_id: (e.data as Record<string, unknown>).approval_id as string,
+          session_id: parent.id,
+          action: 'allow',
+          once: true,
+        });
+      }
+    });
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'напиши файл', subagent_type: 'explore' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: new MockSubagentAskProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          toolRegistry,
+          permissionConfig: { rules: { write_file: 'ask' }, askTimeoutMs: 2000 },
+        },
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(asked.length).toBe(1);
+    expect(asked[0]!.session_id).toBe(parent.id);
+    expect(asked[0]!.tool).toBe('write_file');
+    await expect(access(join(tmpDir, 'sub.txt'))).resolves.toBeUndefined();
+    unsub();
+  });
+
+  it('deny на тул саб-агента — тул блокируется, ask не происходит', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const toolRegistry = createToolRegistry();
+    const asked: Array<Record<string, unknown>> = [];
+    const unsub = eventBus.subscribe(parent.id, (e) => {
+      if (e.type === 'permission.asked') asked.push(e.data as Record<string, unknown>);
+    });
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'напиши файл', subagent_type: 'explore' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: new MockSubagentAskProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          toolRegistry,
+          permissionConfig: { rules: { write_file: 'deny' }, askTimeoutMs: 2000 },
+        },
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(asked.length).toBe(0);
+    await expect(access(join(tmpDir, 'sub.txt'))).rejects.toThrow();
+    // deny-результат сохранён в дочерней сессии как tool_result
+    const childId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childId))!;
+    const toolMsg = child.messages.find((m) => m.role === MessageRole.TOOL);
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg!.content).toContain('Permission denied');
+    unsub();
+  });
+
+  it('yolo: саб-агент наследует mode=yolo, ask выполняется без permission.asked', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    parent.mode = 'yolo';
+    await sessionManager.updateSession(parent);
+    const toolRegistry = createToolRegistry();
+    const asked: Array<Record<string, unknown>> = [];
+    const unsub = eventBus.subscribe(parent.id, (e) => {
+      if (e.type === 'permission.asked') asked.push(e.data as Record<string, unknown>);
+    });
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'напиши файл', subagent_type: 'explore' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: new MockSubagentAskProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          toolRegistry,
+          permissionConfig: { rules: { write_file: 'ask' }, askTimeoutMs: 2000 },
+        },
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    // ask не публикуется, тул выполняется автоматически
+    expect(asked.length).toBe(0);
+    await expect(access(join(tmpDir, 'sub.txt'))).resolves.toBeUndefined();
+    unsub();
   });
 });

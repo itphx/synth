@@ -11,6 +11,7 @@ import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { DebugModal } from './DebugModal'
 import { QueuePanel } from './QueuePanel'
+import { PermissionRequestBar } from './PermissionRequestBar'
 import { StickyNotesPanel } from './StickyNotesPanel'
 import type { CenterTab } from '@/stores/useUIStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -88,6 +89,9 @@ export function ChatTab({ tab }: ChatTabProps) {
         if (agentsResp) agentsRef.current = agentsResp.agents
 
         if (session) {
+          // Кладём актуальные данные сессии (включая mode) в стор —
+          // иначе PlanActModeToggle не увидит mode и покажет дефолт 'act'.
+          useSessionsStore.getState().upsertSession(session)
           const s = session?.settings as Record<string, unknown> | undefined
           if (s) {
             const { setSelectedProvider, setSelectedModel } = useProvidersStore.getState()
@@ -540,6 +544,10 @@ export function ChatTab({ tab }: ChatTabProps) {
           onReturnAll={handleReturnQueue}
           onReturnMsg={handleReturnMsg}
         />
+      )}
+
+      {!isSubagent && (
+        <PermissionRequestBar sessionId={sessionId} />
       )}
 
       {isSubagent ? (

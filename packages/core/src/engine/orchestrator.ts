@@ -1,6 +1,8 @@
-import type { Message, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@synth/shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@synth/shared';
 import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart } from '@synth/shared';
-import type { RouterConfig } from '@synth/shared';
+import type { RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig } from '@synth/shared';
+import { join, isAbsolute, normalize, resolve } from 'node:path';
+import { mkdir } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
 import { DebugCollector } from '../debug.js';
@@ -25,6 +27,11 @@ import { TaskClassifier } from './router/micro/task-classifier.js';
 import { RulesModel, EmbeddingModel, MicroLlmModel } from './router/micro/models/index.js';
 import type { MicroModel } from './router/micro/models/base.js';
 import type { RoutingDecision } from './router/router.js';
+import { PermissionEvaluator } from './permission/evaluator.js';
+import { PermissionApprovalManager } from './permission/approval.js';
+import { emptyPermissionConfig } from './permission/derive.js';
+import { getToolTrust } from './security/trust.js';
+import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine } from './security/prompt-injection.js';
 
 const MAX_DOOM_LOOP_COUNT = 3;
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
@@ -34,6 +41,16 @@ export interface ModelPricing {
   outputPrice?: number;
   cacheReadPrice?: number;
   cacheWritePrice?: number;
+}
+
+/**
+ * Минимальный контракт project store, который использует оркестратор (AD-014):
+ * только загрузка проекта для резолва project.workspace. Позволяет передавать
+ * реализации из разных пакетов (backend/core ProjectStore) без структурной
+ * зависимости от конкретного класса.
+ */
+export interface ProjectStoreLike {
+  load(id: string): Promise<Project | null>;
 }
 
 export interface OrchestratorOptions {
@@ -49,6 +66,20 @@ export interface OrchestratorOptions {
   agentRegistry?: AgentRegistry;
   mcpManager?: McpManager;
   routerConfig?: RouterConfig;
+  projectStore?: ProjectStoreLike;
+  defaultWorkingDir?: string;
+  /**
+   * Корень каталога workspaces: `join(dataDir, 'workspaces')` по умолчанию
+   * (аналог resolveWorkspacesRoot). Относительные `project.workspace` резолвятся
+   * относительно этого корня (AD-014).
+   */
+  workspacesRoot?: string;
+  /** Глобальная секция permission из config.yaml (AD-029). */
+  permissionConfig?: PermissionConfig;
+  /** Строгость цикла Plan→Build по умолчанию из config.yaml session.planMode (AD-028). */
+  defaultPlanMode?: PlanMode;
+  /** Секция безопасности (защита от Indirect Prompt Injection). */
+  securityConfig?: SecurityConfig;
 }
 
 export interface ProcessMessageResult {
@@ -88,6 +119,19 @@ export class ChatOrchestrator {
   private readonly _routerConfig: RouterConfig | null;
   private readonly _microPipeline: MicroPipeline | null;
   private readonly _contextConfig: ContextConfig | null;
+  private readonly _projectStore: ProjectStoreLike | null;
+  private readonly _defaultWorkingDir: string;
+  private readonly _workspacesRoot: string;
+  private readonly _permissionConfig: PermissionConfig;
+  private readonly _approvalManager: PermissionApprovalManager;
+  private readonly _defaultPlanMode: PlanMode;
+  private readonly _securityConfig: SecurityConfig;
+  private readonly _dictionaryStore: DictionaryStore;
+
+  /** Публичный доступ к реестру агентов (для сериализации modeApplicable). */
+  get agentRegistry(): AgentRegistry | null {
+    return this._agentRegistry;
+  }
 
   constructor(options: OrchestratorOptions) {
     this._sessionManager = options.sessionManager;
@@ -101,9 +145,18 @@ export class ChatOrchestrator {
     this._mcpManager = options.mcpManager ?? null;
     this._routerConfig = options.routerConfig ?? null;
     this._contextConfig = options.contextConfig ?? null;
+    this._projectStore = options.projectStore ?? null;
+    this._defaultWorkingDir = options.defaultWorkingDir ?? join(options.dataDir || '/var/synth/data', 'workspaces', 'default');
+    this._workspacesRoot = options.workspacesRoot ?? join(options.dataDir || '/var/synth/data', 'workspaces');
+    this._permissionConfig = options.permissionConfig ?? emptyPermissionConfig();
+    this._approvalManager = new PermissionApprovalManager(this._eventBus);
+    this._defaultPlanMode = options.defaultPlanMode ?? 'auto';
+    this._securityConfig = options.securityConfig
+      ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' } };
 
     // DictionaryStore и ProviderPool создаём всегда (нужны микро-слою и роутеру)
     const dictionaryStore = new DictionaryStore(options.dataDir || '/var/synth/data');
+    this._dictionaryStore = dictionaryStore;
     const pool = new ProviderPool(options.providerLoader);
 
     // AD-035: Micro-first pipeline — создаём всегда, не зависит от роутера
@@ -123,6 +176,87 @@ export class ChatOrchestrator {
     } else {
       this._router = null;
     }
+  }
+
+  private async _resolveWorkingDir(session: Session): Promise<string> {
+    if (session.projectId && this._projectStore) {
+      try {
+        const project = await this._projectStore.load(session.projectId);
+        if (project?.workspace) {
+          // Абсолютный workspace — как есть (normalize); относительный —
+          // резолвим относительно workspacesRoot (AD-014).
+          return isAbsolute(project.workspace)
+            ? normalize(project.workspace)
+            : resolve(this._workspacesRoot, project.workspace);
+        }
+      } catch {
+        // проект не загрузился — используем fallback
+      }
+    }
+    const dir = this._defaultWorkingDir;
+    await mkdir(dir, { recursive: true }).catch(() => {});
+    return dir;
+  }
+
+  /**
+   * AD-025/AD-027: добавляет в system prompt блоки режима Plan/Act и
+   * утверждённого плана. Вызывается при старте обработки и пересобирается
+   * после plan_enter/plan_exit в текущей итерации.
+   */
+  private _buildPlanSystemPrompt(
+    base: string,
+    session: Session,
+    planMode: PlanMode,
+    sessionMode: SessionMode,
+    planApproved: boolean,
+    planContent?: string,
+  ): string {
+    const parts: string[] = [];
+
+    // AD-025: промпт текущего режима загружается из контекстных файлов
+    // (prompts/modes/{mode}.md, переопределяемые через dataDir/context/modes).
+    // Если файл не найден — fallback на встроенный текст ниже.
+    const language = session.settings.language || 'ru';
+    const modePrompt = this._contextConfig?.getModePrompt(sessionMode, language) ?? null;
+    if (modePrompt) {
+      parts.push(modePrompt);
+    } else if (sessionMode === 'plan') {
+      parts.push(
+        '[MODE: PLAN]\n'
+        + 'Ты в режиме планирования: чтение и исследование разрешены, но запись/изменение файлов '
+        + 'заблокированы (единственное исключение — .synth/plans/*.md). Изучи задачу, составь план '
+        + 'и утверди его через plan_exit(plan="..."), чтобы перейти в режим act.',
+      );
+    }
+
+    if (planMode === 'auto') {
+      parts.push(
+        '[PLAN MODE: AUTO]\n'
+        + 'Если задача сложная, затрагивает несколько файлов или требует архитектурных решений — '
+        + 'вызови plan_enter перед изменениями. Для простых фиксов — делай сразу.',
+      );
+    } else if (planMode === 'strict') {
+      if (planApproved) {
+        parts.push(
+          '[PLAN MODE: STRICT]\n'
+          + 'План утверждён — ты можешь вносить изменения в соответствии с ним.',
+        );
+      } else {
+        parts.push(
+          '[PLAN MODE: STRICT]\n'
+          + 'Перед любым изменением файлов план обязателен: вызови plan_enter, составь план и утверди '
+          + 'его через plan_exit. До утверждения плана запись файлов заблокирована (чтение разрешено).',
+        );
+      }
+    }
+
+    const approvedPlan = planContent ?? session.planContent;
+    if (approvedPlan) {
+      parts.push(`[APPROVED PLAN]\n${approvedPlan}`);
+    }
+
+    if (parts.length === 0) return base;
+    return `${base}\n\n${parts.join('\n\n')}`;
   }
 
   /**
@@ -148,6 +282,18 @@ export class ChatOrchestrator {
     const streamId = (message.metadata?.stream_id as string) || 'unknown';
     const effectiveAgentRole = message.agentRole || session.settings.agentRole || 'assistant';
     const author = message.author || 'unknown';
+    const workingDir = await this._resolveWorkingDir(session);
+
+    // AD-025: режим Plan/Act — runtime-состояние сессии + строгость из настроек
+    const planMode: PlanMode = session.settings.planMode ?? this._defaultPlanMode ?? 'auto';
+    let sessionMode: SessionMode = session.mode ?? 'act';
+    let planApproved = Boolean(session.planContent);
+
+    // AD-029: permissions — сессионный override приоритетнее глобального конфига.
+    // Конфиг может быть расширен «разрешить в сессии» (once:false) в процессе
+    // обработки, поэтому ссылка и эвалуатор пересоздаются.
+    let effectivePermissionConfig = session.settings.permission ?? this._permissionConfig;
+    let permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig);
 
     const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
     const agentMaxSteps = agentDef?.maxSteps;
@@ -296,10 +442,15 @@ export class ChatOrchestrator {
       if (this._router && session.settings.routingEnabled !== false) {
         const lang = session.settings.language || 'ru';
         const classifyInstruction = lang === 'ru'
-          ? '\n\n## Классификация разговора\n\nКогда определишь характер задачи, вызови инструмент `classify_conversation` с категорией: coding (написание/изменение кода), research (анализ/исследование), или chat (общий разговор). Это поможет выбрать оптимальную модель для последующих запросов.'
-          : '\n\n## Conversation Classification\n\nWhen you determine the nature of the task, call the `classify_conversation` tool with the category: coding (writing/modifying code), research (analysis/investigation), or chat (general conversation). This helps select the optimal model for subsequent requests.';
+          ? '\n\n[CLASSIFICATION]\n\nКогда определишь характер задачи, вызови инструмент `classify_conversation` с категорией: coding (написание/изменение кода), research (анализ/исследование), или chat (общий разговор). Это поможет выбрать оптимальную модель для последующих запросов.'
+          : '\n\n[CLASSIFICATION]\n\nWhen you determine the nature of the task, call the `classify_conversation` tool with the category: coding (writing/modifying code), research (analysis/investigation), or chat (general conversation). This helps select the optimal model for subsequent requests.';
         finalSystemPrompt = systemPrompt + classifyInstruction;
       }
+
+      // AD-025/AD-027: блоки режима Plan/Act + утверждённый план
+      finalSystemPrompt = this._buildPlanSystemPrompt(
+        finalSystemPrompt, session, planMode, sessionMode, planApproved,
+      );
 
       // 3. Convert messages for LLM (без summary — они уже в system prompt)
       const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
@@ -373,6 +524,8 @@ export class ChatOrchestrator {
       let finalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       let finalModel: string | undefined;
       const allToolCalls: Array<Record<string, unknown>> = [];
+      let stopAfterDeny = false;
+      let denyStopReason: string | undefined;
 
       while (toolIteration < maxIterations) {
         if (cancelToken.cancelled) break;
@@ -553,56 +706,132 @@ export class ChatOrchestrator {
           const toolDef = this._toolRegistry?.get(toolName);
           let toolResult: { content: string; isError?: boolean; metadata?: Record<string, unknown> };
 
-          if (toolDef) {
-            const parsed = toolDef.parameters.safeParse(toolArgs);
-            if (!parsed.success) {
-              toolResult = {
-                content: `Ошибка аргументов инструмента "${toolName}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`,
-                isError: true,
-              };
+          // AD-029: гранулярные permissions — проверяем перед выполнением тула.
+          // AD-025: учитываем текущий режим Plan/Act и строгость плана.
+          const permissionDecision = permissionEvaluator.check({
+            toolName,
+            params: toolArgs,
+            workingDir,
+            capabilities: toolDef?.capabilities,
+            sessionMode,
+            planMode,
+            planApproved,
+            mcpToolSettings: session.settings.mcpToolSettings,
+          });
+
+          let executeTool = permissionDecision.action === 'allow';
+          let deniedReason: string | undefined;
+          let userDenied = false;
+
+          if (permissionDecision.action === 'deny') {
+            deniedReason = permissionDecision.reason;
+          } else if (permissionDecision.action === 'ask') {
+            const approval = await this._approvalManager.waitForDecision(
+              session.id,
+              {
+                approvalId: `approval_${tcId}`,
+                callId: tcId,
+                toolName,
+                arguments: toolArgs,
+                reason: permissionDecision.reason,
+              },
+              effectivePermissionConfig.askTimeoutMs,
+            );
+            if (approval.approved) {
+              executeTool = true;
+              // «Разрешить в сессии» (once:false) — добавляем allow-правило для
+              // тула в permission-конфиг сессии, чтобы не спрашивать повторно.
+              if (approval.once === false) {
+                effectivePermissionConfig = await this._grantSessionToolAllow(session, toolName);
+                permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig);
+              }
             } else {
-              try {
-                toolResult = await toolDef.execute(parsed.data, {
-                  sessionId: session.id,
-                  messageId: (message.metadata?.stream_id as string) || streamId,
-                  abortSignal: signal,
-                  agentRole: effectiveAgentRole,
-                  workingDir: '/home/eof/dev/Synth',
-                  dataDir: this._modelPriceLoader ? undefined : undefined,
-                  extra: {
-                    provider,
-                    agentRegistry: this._agentRegistry,
-                    sessionManager: this._sessionManager,
-                    eventBus: this._eventBus,
-                    contextOptimizer: this._optimizer ?? undefined,
-                    callerAgentRole: effectiveAgentRole,
-                    sessionSettings: {
-                      temperature: session.settings.temperature,
-                      maxTokens: session.settings.maxTokens,
-                    },
-                    parentSessionSettings: session.settings,
-                    modelRouter: this._router ?? undefined,
-                    routerConfig: this._routerConfig ?? undefined,
-                    contextConfig: this._contextConfig ?? undefined,
-                    publish: (type: string, data: Record<string, unknown>) =>
-                      publishChunk(type as never, data),
-                    streamId,
-                    sessionId: session.id,
-                    toolRegistry: this._toolRegistry,
-                  },
-                });
-              } catch (execError) {
+              const why = approval.timeout
+                ? 'истекло время ожидания подтверждения'
+                : approval.noSubscribers
+                  ? 'нет подключённого пользователя для подтверждения'
+                  : 'отклонено пользователем';
+              deniedReason = `${permissionDecision.reason} (${why})`;
+              userDenied = !approval.timeout && !approval.noSubscribers;
+            }
+          }
+
+          if (!executeTool) {
+            this._eventBus.publish(session.id, 'permission.denied', {
+              session_id: session.id,
+              call_id: tcId,
+              tool: toolName,
+              arguments: toolArgs,
+              reason: deniedReason,
+              matched_rule: permissionDecision.matchedRule,
+            });
+            toolResult = {
+              content: `Permission denied: ${deniedReason}`,
+              isError: true,
+              metadata: {
+                permission: {
+                  action: 'deny',
+                  reason: deniedReason,
+                  matched_rule: permissionDecision.matchedRule,
+                },
+              },
+            };
+          } else {
+            if (toolDef) {
+              const parsed = toolDef.parameters.safeParse(toolArgs);
+              if (!parsed.success) {
                 toolResult = {
-                  content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
+                  content: `Ошибка аргументов инструмента "${toolName}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`,
                   isError: true,
                 };
+              } else {
+                try {
+                  toolResult = await toolDef.execute(parsed.data, {
+                    sessionId: session.id,
+                    messageId: (message.metadata?.stream_id as string) || streamId,
+                    abortSignal: signal,
+                    agentRole: effectiveAgentRole,
+                    workingDir,
+                    dataDir: this._modelPriceLoader ? undefined : undefined,
+                    extra: {
+                      provider,
+                      agentRegistry: this._agentRegistry,
+                      sessionManager: this._sessionManager,
+                      projectStore: this._projectStore ?? undefined,
+                      workspacesRoot: this._workspacesRoot,
+                      eventBus: this._eventBus,
+                      contextOptimizer: this._optimizer ?? undefined,
+                      callerAgentRole: effectiveAgentRole,
+                      sessionSettings: {
+                        temperature: session.settings.temperature,
+                        maxTokens: session.settings.maxTokens,
+                      },
+                      parentSessionSettings: session.settings,
+                      modelRouter: this._router ?? undefined,
+                      routerConfig: this._routerConfig ?? undefined,
+                      contextConfig: this._contextConfig ?? undefined,
+                      securityConfig: this._securityConfig,
+                      publish: (type: string, data: Record<string, unknown>) =>
+                        publishChunk(type as never, data),
+                      streamId,
+                      sessionId: session.id,
+                      toolRegistry: this._toolRegistry,
+                      permissionConfig: effectivePermissionConfig,
+                    },
+                  });
+                } catch (execError) {
+                  toolResult = {
+                    content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
+                    isError: true,
+                  };
+                }
               }
+            } else {
+              toolResult = {
+                content: `Инструмент "${toolName}" не найден`,
+                isError: true,
+              };
             }
-          } else {
-            toolResult = {
-              content: `Инструмент "${toolName}" не найден`,
-              isError: true,
-            };
           }
 
           publishChunk('tool_call.result', {
@@ -613,6 +842,62 @@ export class ChatOrchestrator {
             result: toolResult,
             iteration: toolIteration,
           });
+
+          // IPI-защита: оборачиваем tool-контент по матрице доверия + детектируем
+          // подозрительные паттерны (флаг/sanitize/block по конфигу).
+          if (this._securityConfig.promptInjection.enabled && !toolResult.isError) {
+            const trustInfo = getToolTrust(
+              toolName,
+              toolArgs,
+              workingDir,
+              toolDef?.capabilities,
+            );
+            if (trustInfo) {
+              const piConfig = this._securityConfig.promptInjection;
+              const lang = session.settings.language || 'ru';
+              // Детекция по обоим словарям (ru+en) — веб-контент может быть на любом языке
+              const langs = lang === 'en' ? ['en', 'ru'] : ['ru', 'en'];
+              let detection = { suspicious: false, matches: [] as string[] };
+              for (const l of langs) {
+                const d = detectPromptInjection(toolResult.content, this._dictionaryStore, l);
+                if (d.suspicious) {
+                  detection = { suspicious: true, matches: [...detection.matches, ...d.matches] };
+                }
+              }
+
+              const applied = applyPolicy(toolResult.content, piConfig.mode, detection);
+
+              if (applied.blocked) {
+                toolResult = {
+                  content: `[BLOCKED] Результат инструмента "${toolName}" заблокирован: обнаружены признаки prompt injection (${detection.matches.slice(0, 5).join(', ')})`,
+                  isError: true,
+                  metadata: {
+                    ...toolResult.metadata,
+                    injection_suspicious: true,
+                    injection_matches: detection.matches,
+                  },
+                };
+              } else {
+                const wrapped = piConfig.wrapContent
+                  ? wrapContent(applied.content, trustInfo.source, trustInfo.attrs, trustInfo.trust)
+                  : applied.content;
+                // IPI: предупреждение [WARN] ставится ПЕРЕД блоком [CONTENT | ...]
+                const content = detection.suspicious && piConfig.mode === 'flag'
+                  ? `${buildWarnLine(detection.matches)}\n${wrapped}`
+                  : wrapped;
+                toolResult = {
+                  ...toolResult,
+                  content,
+                  metadata: {
+                    ...toolResult.metadata,
+                    ...(detection.suspicious
+                      ? { injection_suspicious: true, injection_matches: detection.matches }
+                      : {}),
+                  },
+                };
+              }
+            }
+          }
 
           // classify_conversation: сохраняем категорию в настройках сессии (AD-034)
           if (toolName === 'classify_conversation' && !toolResult.isError) {
@@ -627,6 +912,25 @@ export class ChatOrchestrator {
                 source: 'model',
               });
             }
+          }
+
+          // AD-025/AD-027: обновляем локальный режим после plan_enter/plan_exit,
+          // чтобы ограничения и system prompt применились к следующим тулам/итерациям.
+          if (!toolResult.isError && toolName === 'plan_enter') {
+            sessionMode = 'plan';
+            finalSystemPrompt = this._buildPlanSystemPrompt(
+              finalSystemPrompt, session, planMode, sessionMode, planApproved,
+            );
+          } else if (!toolResult.isError && toolName === 'plan_exit') {
+            const meta = (toolResult.metadata ?? {}) as Record<string, unknown>;
+            const planContent = typeof meta.plan_content === 'string' ? meta.plan_content : undefined;
+            if (planContent) {
+              planApproved = true;
+              sessionMode = 'act';
+            }
+            finalSystemPrompt = this._buildPlanSystemPrompt(
+              finalSystemPrompt, session, planMode, sessionMode, planApproved, planContent,
+            );
           }
 
           allToolCalls.push({
@@ -651,6 +955,15 @@ export class ChatOrchestrator {
             branchId: '',
             toolCallId: tcId,
           });
+
+          // AD-029: пользователь отклонил запрос (ask→deny) — прекращаем
+          // обработку: не продолжаем цикл LLM, но уже выполненные tool_result
+          // и промежуточные ответы остаются в истории (сохраняются ниже).
+          if (userDenied) {
+            stopAfterDeny = true;
+            denyStopReason = deniedReason;
+            break;
+          }
         }
 
         publishChunk('tool_call.loop', {
@@ -661,11 +974,18 @@ export class ChatOrchestrator {
         });
 
         toolIteration++;
+        if (stopAfterDeny) break;
       }
 
       // 7. Handle max iterations exceeded
       if (toolIteration >= maxIterations && !finalContent) {
         finalContent = '(достигнут лимит итераций инструментов)';
+      }
+
+      // AD-029: пользователь отклонил ask — обработка завершена. Фиксируем
+      // причину в финальном сообщении (история tool_result уже собрана).
+      if (stopAfterDeny && !finalContent) {
+        finalContent = `Обработка остановлена: ${denyStopReason ?? 'пользователь отклонил запрос'}`;
       }
 
       // 7.5. Quality check + escalation (AD-034)
@@ -755,6 +1075,11 @@ export class ChatOrchestrator {
         reasoning_blocks: allReasoning.length > 0 ? allReasoning : undefined,
         intermediate_text_blocks: allIntermediateTexts.length > 0 ? allIntermediateTexts : undefined,
       };
+
+      if (stopAfterDeny) {
+        doneData.stopped_by_deny = true;
+        doneData.deny_reason = denyStopReason;
+      }
 
       const debugInfo = debugCollector.getDebugInfo();
       if (debugInfo) {
@@ -1365,5 +1690,32 @@ export class ChatOrchestrator {
       'incorrect api key', '401', 'authentication', 'unauthorized',
     ];
     return !unrecoverable.some((p) => lower.includes(p));
+  }
+
+  /**
+   * AD-029: «Разрешить в сессии» (once:false). Добавляет allow-правило для тула
+   * в permission-конфиг сессии и сохраняет его. Если у сессии не было своего
+   * конфига — наследует глобальные правила, чтобы не потерять их при оверрайде.
+   */
+  private async _grantSessionToolAllow(
+    session: Session,
+    toolName: string,
+  ): Promise<PermissionConfig> {
+    let cfg: PermissionConfig | undefined = session.settings.permission;
+    if (!cfg) {
+      cfg = {
+        rules: { ...this._permissionConfig.rules },
+        askTimeoutMs: this._permissionConfig.askTimeoutMs,
+      };
+    }
+    const next: PermissionConfig = {
+      ...cfg,
+      rules: { ...cfg.rules, [toolName]: 'allow' },
+    };
+    await this._sessionManager.withLock(session.id, async (s) => {
+      s.settings.permission = next;
+      await this._sessionManager.saveSession(s);
+    });
+    return next;
   }
 }

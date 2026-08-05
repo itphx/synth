@@ -1,6 +1,18 @@
 import type { Session, Message, Project, StatusMessage } from '@synth/shared';
+import { isModeApplicable } from '@synth/core';
 
-export function serializeSession(session: Session) {
+/** Минимальный тип реестра агентов для вычисления modeApplicable. */
+export interface SerializeAgentRegistry {
+  get(id: string): { capabilities?: readonly string[] } | undefined;
+}
+
+export interface SerializeSessionOptions {
+  agentRegistry?: SerializeAgentRegistry | null;
+}
+
+export function serializeSession(session: Session, opts?: SerializeSessionOptions) {
+  const agentId = session.settings.agentRole;
+  const agent = agentId && opts?.agentRegistry ? opts.agentRegistry.get(agentId) : undefined;
   return {
     id: session.id,
     name: session.title || null,
@@ -12,6 +24,9 @@ export function serializeSession(session: Session) {
     owner_id: session.ownerId || null,
     project_id: session.projectId || null,
     engine: session.engine,
+    mode: session.mode || 'act',
+    /** AD-025: применим ли переключатель режимов к агенту сессии (по capabilities). */
+    mode_applicable: isModeApplicable(agent),
     messages: session.messages.map((m, i) => serializeMessage(m, i)),
     pending_messages: session.pendingMessages.map((m, i) => serializeMessage(m, i)),
     pending_count: session.pendingMessages.length,

@@ -6,6 +6,7 @@ import { useChatStore } from '@/stores/chatStore'
 import { MentionPopup } from './MentionPopup'
 import { ModelSelector } from './ModelSelector'
 import { AgentModeSelector } from './AgentModeSelector'
+import { PlanActModeToggle } from './PlanActModeToggle'
 import type { AgentInfo } from '@/lib/api/synthApi'
 
 interface ChatInputProps {
@@ -348,6 +349,7 @@ export function ChatInput({
           </div>
 
           <div className="flex items-center gap-3 pr-1">
+            <PlanActModeToggle sessionId={sessionId} />
             <ModelSelector sessionId={sessionId} />
             <AgentModeSelector sessionId={sessionId} />
 
