@@ -273,6 +273,11 @@ app.route('/api/v2/gateway', createGatewayPatternsRoutes(auth, patternStore));
 app.route('/api/v2/settings', createSettingsRoutes(auth, {
   settingsStore,
   fallbackWorkspace: join(dataDir, 'workspaces', 'default'),
+  // AD-036: live-применение тумблера LLM Gateway из UI — без рестарта сервера.
+  onLlmGatewayChange: async (runtime) => {
+    const merged = mergeLlmGatewayConfig(backendConfig.synth.llmGateway, runtime);
+    orchestrator.setGatewayConfig(merged);
+  },
 }));
 
 // Глобальный SSE-хаб для всех сессий пользователя
@@ -579,6 +584,7 @@ server.on('upgrade', (request, socket, head) => {
 
               const result = await enqueueUserMessage(
                 sessionManager, eventBus, sid, message, queueManager, processMessage,
+                (msgSid, msg) => orchestrator.obfuscateUserMessageForHistory(msgSid, msg),
               );
 
               if (!result) {

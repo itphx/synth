@@ -142,4 +142,49 @@ describe('ProviderPool × LLM Gateway (AD-036)', () => {
     expect(first).toBe(second);
     expect(first).toBeInstanceOf(GatewayProvider);
   });
+
+  it('setGateway включает обёртку на лету и сбрасывает кеш', () => {
+    // Стартуем без gateway — провайдер не обёрнут
+    const pool = new ProviderPool(makeLoader());
+    let provider = pool.getProvider('mockpool', 'mock-model');
+    expect(provider).toBeInstanceOf(MockPoolProvider);
+
+    // Включаем gateway — старый кеш сбрасывается, новый провайдер обёрнут
+    pool.setGateway(
+      makeGatewayConfig(),
+      (inner) => new GatewayProvider(inner, makeGatewayConfig(), {
+        getMap: async () => ({}),
+        saveMap: async () => {},
+        getAudit: noopAudit,
+        getRateLimiter: noopRateLimiter,
+        sessionId: '',
+        userId: '',
+      }),
+    );
+    provider = pool.getProvider('mockpool', 'mock-model');
+    expect(provider).toBeInstanceOf(GatewayProvider);
+  });
+
+  it('setGateway выключает обёртку на лету и сбрасывает кеш', () => {
+    const pool = new ProviderPool(
+      makeLoader(),
+      makeGatewayConfig(),
+      (inner) => new GatewayProvider(inner, makeGatewayConfig(), {
+        getMap: async () => ({}),
+        saveMap: async () => {},
+        getAudit: noopAudit,
+        getRateLimiter: noopRateLimiter,
+        sessionId: '',
+        userId: '',
+      }),
+    );
+    let provider = pool.getProvider('mockpool', 'mock-model');
+    expect(provider).toBeInstanceOf(GatewayProvider);
+
+    // Выключаем — кеш сбрасывается, провайдер создаётся без обёртки
+    pool.setGateway(null, null);
+    provider = pool.getProvider('mockpool', 'mock-model');
+    expect(provider).not.toBeInstanceOf(GatewayProvider);
+    expect(provider).toBeInstanceOf(MockPoolProvider);
+  });
 });

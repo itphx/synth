@@ -14,3 +14,16 @@
   - Тесты: 70 юнит-кейсов gateway + интеграционные + backend routes; UI проверен через Playwright
 - **Проблемы:** найден и исправлен RBAC-баг (вкладка secrets рендерилась для USER из persisted state — 403); провайдер itphx недоступен, поэтому непустая карта проверена юнит-тестами, не живым LLM
 - **Замечание:** в рабочем дереве остались чужие незакоммиченные изменения packages/synth/prompts (не AD-036) — не включались в коммит
+
+## 2026-08-05 — Паттерны обфускации (дополнение AD-036)
+- **Задача:** редактируемый список regex-паттернов обфускации
+- **Тип:** feature
+- **Исполнитель:** @fixer (слои A/B/C), @tester (проверка), оркестратор
+- **Результат:** PASS
+- **Коммит:** 47f26c0
+- **Ключевое:**
+  - SecretPatternStore: дефолт в коде (DEFAULT_PATTERNS), override {dataDir}/gateway/patterns.json полностью заменяет, сброс = удаление
+  - detectSecrets/guards/obfuscator принимают patterns; GatewayProvider.getPatterns — live-детекция
+  - API: GET/PUT/DELETE /api/v2/gateway/patterns (RBAC ADMIN, валидация regex)
+  - UI: блок «Паттерны обфускации» в «Шлюз безопасности» — редактирование, сохранение, сброс, бейдж «дефолтные»
+  - Тесты: 11 store + 10 routes + 3 detector; UI через Playwright (загрузка/сохранение/сброс/403)

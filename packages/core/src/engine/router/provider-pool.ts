@@ -15,8 +15,8 @@ import { toCoreProviderConfig } from './utils.js';
 export class ProviderPool {
   private readonly _cache = new Map<string, BaseProvider>();
   private readonly _providerLoader: (name: string) => SharedProviderConfig | null;
-  private readonly _gatewayConfig: LLMGatewayConfig | null;
-  private readonly _gatewayFactory: ((inner: BaseProvider) => BaseProvider) | null;
+  private _gatewayConfig: LLMGatewayConfig | null;
+  private _gatewayFactory: ((inner: BaseProvider) => BaseProvider) | null;
 
   constructor(
     providerLoader: (name: string) => SharedProviderConfig | null,
@@ -56,6 +56,16 @@ export class ProviderPool {
   }
 
   clear(): void {
+    this._cache.clear();
+  }
+
+  /** AD-036: live-переключение gateway. Сбрасывает кеш — провайдеры пересоздаются с новой обёрткой. */
+  setGateway(
+    gatewayConfig: LLMGatewayConfig | null | undefined,
+    gatewayFactory: ((inner: BaseProvider) => BaseProvider) | null,
+  ): void {
+    this._gatewayConfig = gatewayConfig ?? null;
+    this._gatewayFactory = gatewayFactory ?? null;
     this._cache.clear();
   }
 

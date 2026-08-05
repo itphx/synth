@@ -331,6 +331,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   app.route('/api/v2/settings', createSettingsRoutes(auth, {
     settingsStore,
     fallbackWorkspace: defaultWorkingDir,
+    // AD-036: live-применение тумблера LLM Gateway из UI — без рестарта сервера.
+    onLlmGatewayChange: async (runtime) => {
+      const merged = mergeLlmGatewayConfig(config.gatewayConfig, runtime);
+      orchestrator.setGatewayConfig(merged);
+    },
   }));
 
   // MCP (probe подключения к серверу)
@@ -576,6 +581,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
                 const result = await enqueueUserMessage(
                   sessionManager, eventBus, sid, message, queueManager, processMessage,
+                  (msgSid, msg) => orchestrator.obfuscateUserMessageForHistory(msgSid, msg),
                 );
 
                 if (!result) {

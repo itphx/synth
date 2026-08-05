@@ -32,7 +32,7 @@ import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine } from './security/prompt-injection.js';
-import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, PLACEHOLDER_PATTERN, type SecretPatternStore } from './gateway/index.js';
+import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, PLACEHOLDER_PATTERN, type SecretPatternStore } from './gateway/index.js';
 
 const MAX_DOOM_LOOP_COUNT = 3;
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
@@ -134,11 +134,15 @@ export class ChatOrchestrator {
   private readonly _defaultPlanMode: PlanMode;
   private readonly _securityConfig: SecurityConfig;
   private readonly _dictionaryStore: DictionaryStore;
-  private readonly _gatewayConfig: LLMGatewayConfig | null;
-  private readonly _obfMapStore: ObfuscationMapStore | null;
-  private readonly _gatewayAudit: AuditLogger | null;
-  private readonly _gatewayRateLimiter: RateLimiter | null;
+  private _gatewayConfig: LLMGatewayConfig | null;
+  private _obfMapStore: ObfuscationMapStore | null;
+  private _gatewayAudit: AuditLogger | null;
+  private _gatewayRateLimiter: RateLimiter | null;
   private readonly _gatewayPatternStore: SecretPatternStore | null;
+  private readonly _dataDir: string;
+  /** Внешний audit-logger (backend/runner) — переиспользуется при live-включении gateway. */
+  private readonly _gatewayAuditExternal: AuditLogger | null;
+  private _providerPool: ProviderPool | null;
 
   /** Публичный доступ к реестру агентов (для сериализации modeApplicable). */
   get agentRegistry(): AgentRegistry | null {
@@ -165,9 +169,11 @@ export class ChatOrchestrator {
     this._defaultPlanMode = options.defaultPlanMode ?? 'auto';
     this._securityConfig = options.securityConfig
       ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' } };
+    this._dataDir = options.dataDir || '/var/synth/data';
 
     // AD-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
     // ObfuscationMapStore живёт в сессии, RateLimiter и AuditLogger — общие.
+    this._gatewayAuditExternal = options.gatewayAuditLogger ?? null;
     const gatewayConfig = options.gatewayConfig?.enabled ? options.gatewayConfig : null;
     this._gatewayConfig = gatewayConfig;
     if (gatewayConfig) {
@@ -219,6 +225,7 @@ export class ChatOrchestrator {
           })
         : undefined,
     );
+    this._providerPool = pool;
 
     // AD-035: Micro-first pipeline — создаём всегда, не зависит от роутера
     const microClassifier = new TaskClassifier(dictionaryStore);
@@ -236,6 +243,110 @@ export class ChatOrchestrator {
       this._router = new ModelRouter(classifier, pool, qualityChecker, options.routerConfig);
     } else {
       this._router = null;
+    }
+  }
+
+  /**
+   * AD-036: live-переключение LLM Gateway (runtime-настройка из UI).
+   * config === null/undefined или enabled:false → выключить (убрать обвязку).
+   * enabled:true → создать ObfuscationMapStore/AuditLogger/RateLimiter, обновить
+   * фабрику ProviderPool, обновить hooks суммаризации.
+   */
+  setGatewayConfig(config: LLMGatewayConfig | null | undefined): void {
+    const gatewayConfig = config?.enabled ? config : null;
+    this._gatewayConfig = gatewayConfig;
+
+    if (gatewayConfig) {
+      // Карта обфускации живёт в сессиях (Session.obfuscationMap) — не теряется,
+      // поэтому store не пересоздаём, если он уже есть.
+      this._obfMapStore = this._obfMapStore ?? new ObfuscationMapStore(this._sessionManager);
+      // Внешний audit-logger (backend/runner) переиспользуем; иначе создаём по пути runtime-конфига.
+      this._gatewayAudit = this._gatewayAuditExternal
+        ?? new AuditLogger(gatewayConfig.audit.logPath || join(this._dataDir, 'audit', 'llm-gateway.jsonl'));
+      // Лимиты могли поменяться — RateLimiter пересоздаём всегда.
+      this._gatewayRateLimiter = new RateLimiter(
+        gatewayConfig.rateLimit.userPerMinute,
+        gatewayConfig.rateLimit.providerPerMinute,
+      );
+    } else {
+      this._obfMapStore = null;
+      this._gatewayAudit = null;
+      this._gatewayRateLimiter = null;
+    }
+
+    // AD-036: суммаризация (ContextOptimizer) — обновляем gateway-обвязку.
+    this._optimizer?.setGatewayHooks(
+      gatewayConfig && this._obfMapStore && this._gatewayAudit && this._gatewayRateLimiter
+        ? {
+            config: gatewayConfig,
+            audit: this._gatewayAudit,
+            rateLimiter: this._gatewayRateLimiter,
+            obfMapStore: this._obfMapStore,
+          }
+        : null,
+    );
+
+    // AD-036: пул кешировал провайдеров без новой обёртки — сбрасываем кеш
+    // и обновляем фабрику (по образцу конструктора, с пустой картой обфускации).
+    this._providerPool?.setGateway(
+      gatewayConfig,
+      gatewayConfig
+        ? (inner) => new GatewayProvider(inner, gatewayConfig, {
+            getMap: async () => ({}),
+            saveMap: async () => {},
+            getAudit: () => this._gatewayAudit!,
+            getRateLimiter: () => this._gatewayRateLimiter!,
+            sessionId: '',
+            userId: '',
+          })
+        : null,
+    );
+  }
+
+  /** AD-036: включён ли LLM Gateway (runtime-тумблер / конфиг). */
+  isGatewayEnabled(): boolean {
+    return !!this._gatewayConfig;
+  }
+
+  /**
+   * AD-036: обфусцирует user-сообщение при сохранении в историю (до отправки в LLM).
+   * Карта обфускации сессии обновляется и сохраняется; в message.metadata.secrets
+   * встраиваются реальные значения для раскрытия в UI. Если gateway выключен или
+   * секретов не найдено — возвращает сообщение без изменений (обратная совместимость).
+   */
+  async obfuscateUserMessageForHistory(sessionId: string, message: Message): Promise<Message> {
+    if (!this._gatewayConfig || !this._obfMapStore) return message;
+    try {
+      const map = await this._obfMapStore.get(sessionId);
+      const { text, map: newMap, found } = obfuscateSecrets(message.content, map);
+      if (found.length === 0) return message;
+      await this._obfMapStore.set(sessionId, newMap);
+      // AD-036: аудит обфускации user-сообщения (секреты — только маской,
+      // плейсхолдеры — без значений). Не должен ронять обфускацию.
+      try {
+        await this._gatewayAudit?.append({
+          ts: nowISO(),
+          type: 'obfuscated',
+          sessionId,
+          userId: message.author || undefined,
+          provider: message.provider,
+          model: message.model,
+          secretsFound: found.map((s) => maskSecret(s)),
+          placeholders: Object.keys(newMap),
+        });
+      } catch (e) {
+        warning('ORCHESTRATOR', `Ошибка аудита обфускации: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      const metadata = { ...(message.metadata || {}) };
+      const secrets: Record<string, string> = { ...(metadata.secrets as Record<string, string> | undefined) };
+      for (const ph of Object.keys(newMap)) {
+        if (text.includes(ph)) secrets[ph] = newMap[ph]!;
+      }
+      if (Object.keys(secrets).length > 0) metadata.secrets = secrets;
+      return { ...message, content: text, parts: [makeTextPart(text)], metadata };
+    } catch (e) {
+      warning('ORCHESTRATOR', `Ошибка обфускации user-сообщения: ${e instanceof Error ? e.message : String(e)}`);
+      return message;
     }
   }
 

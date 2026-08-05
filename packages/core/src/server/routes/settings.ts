@@ -8,6 +8,8 @@ export interface SettingsRoutesDeps {
   settingsStore: RuntimeSettingsStore;
   /** Значение по умолчанию (env > config > {dataDir}/workspaces/default), если runtime-настройка не задана. */
   fallbackWorkspace: string;
+  /** Вызывается после успешного PUT /llm-gateway (live-применение runtime-настройки). */
+  onLlmGatewayChange?: (runtime: Partial<LlmGatewayRuntimeSettings>) => void | Promise<void>;
 }
 
 function isValidAvailability(value: unknown): value is McpToolAvailability {
@@ -130,6 +132,8 @@ export function createSettingsRoutes(
     }
 
     await deps.settingsStore.setLlmGatewaySettings(llmGateway);
+    // AD-036: live-применение runtime-настройки — оркестратор переконфигурируется без рестарта.
+    await deps.onLlmGatewayChange?.(llmGateway);
     return c.json({ llmGateway });
   });
 

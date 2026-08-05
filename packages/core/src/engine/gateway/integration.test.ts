@@ -5,7 +5,7 @@
  * - _saveAssistantMessage добавляет metadata.secrets для существующих плейсхолдеров.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,11 +15,12 @@ import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
 import { ProviderFactory, BaseProvider } from '../../providers/base.js';
 import type { LLMMessage, CancellationToken } from '../../providers/base.js';
-import { GatewayProvider } from './index.js';
+import { GatewayProvider, AuditLogger } from './index.js';
 import { DebugCollector } from '../../debug.js';
 import type { ContextBuilder } from '../context/builder.js';
-import type { Session, LLMGatewayConfig, TokenUsage } from '@synth/shared';
-import { MessageRole } from '@synth/shared';
+import type { Session, Message, LLMGatewayConfig, TokenUsage } from '@synth/shared';
+import { MessageRole, nowISO } from '@synth/shared';
+import { enqueueUserMessage, QueueProcessorManager, type ProcessMessageFn } from '../../queue/processor.js';
 
 class MockGwProvider extends BaseProvider {
   async chat(
@@ -77,7 +78,7 @@ describe('ChatOrchestrator × LLM Gateway (AD-036)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  function makeOrchestrator(gatewayConfig?: LLMGatewayConfig) {
+  function makeOrchestrator(gatewayConfig?: LLMGatewayConfig, auditLogger?: AuditLogger) {
     return new ChatOrchestrator({
       sessionManager,
       eventBus: new EventBus(),
@@ -92,6 +93,7 @@ describe('ChatOrchestrator × LLM Gateway (AD-036)', () => {
       } : null),
       dataDir: tmpDir,
       gatewayConfig,
+      gatewayAuditLogger: auditLogger,
     });
   }
 
@@ -223,5 +225,211 @@ describe('ChatOrchestrator × LLM Gateway (AD-036)', () => {
     const updated = await sessionManager.getSession(session.id);
     const msg = updated?.messages[updated.messages.length - 1];
     expect(msg?.metadata?.secrets).toBeUndefined();
+  });
+
+  it('setGatewayConfig включает gateway на лету (live-переключение без рестарта)', async () => {
+    const orch = makeOrchestrator(); // gateway выключен по умолчанию
+    const session = await makeSession();
+
+    // До включения — исходный провайдер без обёртки
+    let provider = getProviderOf(orch, session);
+    expect(provider).toBeInstanceOf(MockGwProvider);
+
+    // Включаем на лету — провайдер оборачивается в GatewayProvider
+    orch.setGatewayConfig(makeGatewayConfig());
+    provider = getProviderOf(orch, session);
+    expect(provider).toBeInstanceOf(GatewayProvider);
+
+    // Выключаем — обёртка снова снимается
+    orch.setGatewayConfig({ ...makeGatewayConfig(), enabled: false });
+    provider = getProviderOf(orch, session);
+    expect(provider).toBeInstanceOf(MockGwProvider);
+  });
+
+  it('setGatewayConfig повторное включение не теряет карту обфускации сессии', async () => {
+    const orch = makeOrchestrator(makeGatewayConfig());
+    const session = await makeSession({
+      obfuscationMap: { '⟦SYNTH_SECRET_1⟧': 'sk-abc123' },
+    });
+
+    // Выключаем и снова включаем — карта живёт в сессии (Session.obfuscationMap)
+    orch.setGatewayConfig(null);
+    orch.setGatewayConfig(makeGatewayConfig());
+
+    const save = (orch as unknown as {
+      _saveAssistantMessage(
+        sessionId: string,
+        content: string,
+        streamId: string,
+        agentRole: string | undefined,
+        usage: TokenUsage,
+        model: string | undefined,
+        reasoning: string | undefined,
+        debugCollector: DebugCollector,
+        isCancelled: boolean,
+        provider?: string,
+        role?: MessageRole,
+      ): Promise<string>;
+    })._saveAssistantMessage;
+
+    await save.call(
+      orch,
+      session.id,
+      'Подключение с ⟦SYNTH_SECRET_1⟧ установлено',
+      'stream-3',
+      undefined,
+      { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      'mock-model',
+      undefined,
+      new DebugCollector(false),
+      false,
+      'mockgw',
+      MessageRole.ASSISTANT,
+    );
+
+    const updated = await sessionManager.getSession(session.id);
+    const msg = updated?.messages[updated.messages.length - 1];
+    expect((msg?.metadata?.secrets as Record<string, string> | undefined)?.['⟦SYNTH_SECRET_1⟧']).toBe('sk-abc123');
+  });
+
+  function makeUserMessage(content: string, id = 'msg-user'): Message {
+    return {
+      id,
+      role: MessageRole.USER,
+      seq: 1,
+      origin: 'local',
+      parts: [{ id: `part-${id}`, type: 'text', data: content }],
+      content,
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      author: 'u1',
+      metadata: { stream_id: 'stream-user' },
+    };
+  }
+
+  it('obfuscateUserMessageForHistory обфусцирует user-сообщение и сохраняет карту (gateway включён)', async () => {
+    const orch = makeOrchestrator(makeGatewayConfig());
+    const session = await makeSession();
+
+    const result = await orch.obfuscateUserMessageForHistory(
+      session.id,
+      makeUserMessage('Мой email a@b.com для связи'),
+    );
+
+    expect(result.content).toContain('⟦SYNTH_SECRET_1⟧');
+    expect(result.content).not.toContain('a@b.com');
+    expect((result.metadata?.secrets as Record<string, string> | undefined)?.['⟦SYNTH_SECRET_1⟧']).toBe('a@b.com');
+    expect(result.parts[0]).toMatchObject({ type: 'text', data: expect.stringContaining('⟦SYNTH_SECRET_1⟧') });
+
+    // Карта обфускации сохранена в сессию (Session.obfuscationMap)
+    const updated = await sessionManager.getSession(session.id);
+    expect(updated?.obfuscationMap?.['⟦SYNTH_SECRET_1⟧']).toBe('a@b.com');
+  });
+
+  it('obfuscateUserMessageForHistory не меняет сообщение когда gateway выключен', async () => {
+    const orch = makeOrchestrator({ ...makeGatewayConfig(), enabled: false });
+    const session = await makeSession();
+
+    const userMsg = makeUserMessage('Мой email a@b.com для связи');
+    const result = await orch.obfuscateUserMessageForHistory(session.id, userMsg);
+
+    // Тот же объект, без изменений — обратная совместимость
+    expect(result).toBe(userMsg);
+    expect(result.content).toBe('Мой email a@b.com для связи');
+
+    const updated = await sessionManager.getSession(session.id);
+    expect(updated?.obfuscationMap).toBeUndefined();
+  });
+
+  it('obfuscateUserMessageForHistory переиспользует существующий плейсхолдер для повторного секрета', async () => {
+    const orch = makeOrchestrator(makeGatewayConfig());
+    const session = await makeSession({
+      obfuscationMap: { '⟦SYNTH_SECRET_1⟧': 'a@b.com' },
+    });
+
+    const result = await orch.obfuscateUserMessageForHistory(
+      session.id,
+      makeUserMessage('Пиши на a@b.com или a@b.com'),
+    );
+
+    expect(result.content).toContain('⟦SYNTH_SECRET_1⟧');
+    expect(result.content).not.toContain('⟦SYNTH_SECRET_2⟧');
+    expect(result.content).not.toContain('a@b.com');
+  });
+
+  it('obfuscateUserMessageForHistory пишет запись type:obfuscated в аудит (gateway включён)', async () => {
+    const audit = new AuditLogger(join(tmpDir, 'audit', 'llm-gateway.jsonl'));
+    const auditSpy = vi.spyOn(audit, 'append');
+    const orch = makeOrchestrator(makeGatewayConfig(), audit);
+    const session = await makeSession();
+
+    await orch.obfuscateUserMessageForHistory(
+      session.id,
+      makeUserMessage('Мой email a@b.com для связи'),
+    );
+
+    // Секреты в аудите — только маской, без реальных значений
+    expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'obfuscated',
+      sessionId: session.id,
+      userId: 'u1',
+      secretsFound: ['email***'],
+      placeholders: ['⟦SYNTH_SECRET_1⟧'],
+    }));
+  });
+
+  it('obfuscateUserMessageForHistory не пишет в аудит когда секретов нет', async () => {
+    const audit = new AuditLogger(join(tmpDir, 'audit', 'llm-gateway.jsonl'));
+    const auditSpy = vi.spyOn(audit, 'append');
+    const orch = makeOrchestrator(makeGatewayConfig(), audit);
+    const session = await makeSession();
+
+    await orch.obfuscateUserMessageForHistory(
+      session.id,
+      makeUserMessage('Обычное сообщение без секретов'),
+    );
+
+    expect(auditSpy).not.toHaveBeenCalled();
+  });
+
+  it('enqueueUserMessage сохраняет обфусцированное user-сообщение в pending (gateway включён)', async () => {
+    const orch = makeOrchestrator(makeGatewayConfig());
+    const session = await makeSession();
+    const queueManager = { createProcessor: () => {} } as unknown as QueueProcessorManager;
+    const processMessage: ProcessMessageFn = async () => ({});
+
+    const result = await enqueueUserMessage(
+      sessionManager, new EventBus(), session.id,
+      makeUserMessage('Напиши на a@b.com'),
+      queueManager, processMessage,
+      (sid, msg) => orch.obfuscateUserMessageForHistory(sid, msg),
+    );
+
+    expect(result).not.toBeNull();
+    const updated = await sessionManager.getSession(session.id);
+    expect(updated?.pendingMessages[0]?.content).toContain('⟦SYNTH_SECRET_1⟧');
+    expect(updated?.pendingMessages[0]?.content).not.toContain('a@b.com');
+    expect(updated?.obfuscationMap?.['⟦SYNTH_SECRET_1⟧']).toBe('a@b.com');
+  });
+
+  it('enqueueUserMessage не обфусцирует когда gateway выключен (обратная совместимость)', async () => {
+    const orch = makeOrchestrator({ ...makeGatewayConfig(), enabled: false });
+    const session = await makeSession();
+    const queueManager = { createProcessor: () => {} } as unknown as QueueProcessorManager;
+    const processMessage: ProcessMessageFn = async () => ({});
+
+    const result = await enqueueUserMessage(
+      sessionManager, new EventBus(), session.id,
+      makeUserMessage('Мой email a@b.com для связи'),
+      queueManager, processMessage,
+      (sid, msg) => orch.obfuscateUserMessageForHistory(sid, msg),
+    );
+
+    expect(result).not.toBeNull();
+    const updated = await sessionManager.getSession(session.id);
+    expect(updated?.pendingMessages[0]?.content).toContain('a@b.com');
+    expect(updated?.obfuscationMap).toBeUndefined();
   });
 });

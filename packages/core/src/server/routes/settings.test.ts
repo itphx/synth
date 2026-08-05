@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSettingsRoutes } from './settings.js';
 import { RuntimeSettingsStore, mergeLlmGatewayConfig } from '../../storage/runtime-settings.js';
+import type { LlmGatewayRuntimeSettings } from '../../storage/runtime-settings.js';
 import type { AuthKit } from '../../auth/local.js';
 import type { LLMGatewayConfig } from '@synth/shared';
 
@@ -318,6 +319,73 @@ describe('Settings API Routes (workspace)', () => {
 
     it('mergeLlmGatewayConfig: возвращает undefined если нет ни конфига, ни runtime', () => {
       expect(mergeLlmGatewayConfig(undefined, {})).toBeUndefined();
+    });
+
+    it('PUT /api/v2/settings/llm-gateway вызывает onLlmGatewayChange с runtime-настройкой (live-применение)', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const onLlmGatewayChange = vi.fn(async (_runtime: Partial<LlmGatewayRuntimeSettings>) => {});
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        onLlmGatewayChange,
+      }));
+
+      const res = await app.request('/api/v2/settings/llm-gateway', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ llmGateway: { enabled: true, inputMode: 'block' } }),
+      });
+      expect(res.status).toBe(200);
+      expect(onLlmGatewayChange).toHaveBeenCalledTimes(1);
+      expect(onLlmGatewayChange).toHaveBeenCalledWith({ enabled: true, inputMode: 'block' });
+    });
+
+    it('PUT /api/v2/settings/llm-gateway await-ит асинхронный onLlmGatewayChange', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      let released = false;
+      const onLlmGatewayChange = vi.fn(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+        released = true;
+      });
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        onLlmGatewayChange,
+      }));
+
+      const res = await app.request('/api/v2/settings/llm-gateway', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ llmGateway: { enabled: false } }),
+      });
+      expect(res.status).toBe(200);
+      // Ответ не отдан раньше завершения колбэка
+      expect(released).toBe(true);
+    });
+
+    it('PUT /workspace и PUT /mcp не вызывают onLlmGatewayChange', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const onLlmGatewayChange = vi.fn();
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        onLlmGatewayChange,
+      }));
+
+      await app.request('/api/v2/settings/workspace', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace: '/ws' }),
+      });
+      await app.request('/api/v2/settings/mcp', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ servers: { github: { default: { plan: true, act: true } } } }),
+      });
+      expect(onLlmGatewayChange).not.toHaveBeenCalled();
     });
   });
 });
