@@ -625,7 +625,7 @@ describe('taskTool — context modes', () => {
       },
     );
 
-    expect(capturedSystemMsg).toContain('[ЗАМЕТКИ РОДИТЕЛЬСКОЙ СЕССИИ]');
+    expect(capturedSystemMsg).toContain('[PARENT NOTES]');
     expect(capturedSystemMsg).toContain('Решение: использовать SQLite');
   });
 
@@ -660,7 +660,7 @@ describe('taskTool — context modes', () => {
       },
     );
 
-    expect(capturedSystemMsg).toContain('[ЗАМЕТКИ РОДИТЕЛЬСКОЙ СЕССИИ]');
+    expect(capturedSystemMsg).toContain('[PARENT NOTES]');
     expect(capturedSystemMsg).toContain('Использовать PostgreSQL');
   });
 
@@ -695,7 +695,7 @@ describe('taskTool — context modes', () => {
       },
     );
 
-    expect(capturedSystemMsg).not.toContain('[ЗАМЕТКИ РОДИТЕЛЬСКОЙ СЕССИИ]');
+    expect(capturedSystemMsg).not.toContain('[PARENT NOTES]');
     expect(capturedSystemMsg).not.toContain('Секретные заметки');
   });
 });

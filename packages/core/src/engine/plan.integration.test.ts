@@ -236,7 +236,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     // system prompt второго вызова (после plan_exit) содержит утверждённый план (AD-027)
     const prompts = ScriptedProvider.prompts();
     expect(prompts.length).toBeGreaterThanOrEqual(2);
-    expect(prompts[1]).toContain('## Утверждённый план');
+    expect(prompts[1]).toContain('[APPROVED PLAN]');
     expect(prompts[1]).toContain(planText);
   });
 
@@ -368,7 +368,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     expect(result.error).toBeUndefined();
 
     // strict + план уже утверждён → write разрешён, план в первом же промпте
-    expect(ScriptedProvider.prompts()[0]).toContain('## Утверждённый план');
+    expect(ScriptedProvider.prompts()[0]).toContain('[APPROVED PLAN]');
     expect(ScriptedProvider.prompts()[0]).toContain(planText);
     expect(ScriptedProvider.prompts()[0]).toContain('План утверждён');
   });
@@ -406,7 +406,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
 
     const prompts = ScriptedProvider.prompts();
     expect(prompts.length).toBeGreaterThanOrEqual(1);
-    expect(prompts[0]).toContain('Текущий режим: plan');
+    expect(prompts[0]).toContain('[MODE: PLAN]');
     expect(prompts[0]).toContain('Не вноси никаких изменений');
   });
 
@@ -440,7 +440,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     expect(result.error).toBeUndefined();
 
     const prompts = ScriptedProvider.prompts();
-    expect(prompts[0]).toContain('Текущий режим: plan');
+    expect(prompts[0]).toContain('[MODE: PLAN]');
     expect(prompts[0]).toContain('Изучи задачу, составь план');
   });
 });

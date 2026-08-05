@@ -19,15 +19,15 @@ describe('ContextConfig.getModePrompt (AD-025)', () => {
     const config = new ContextConfig({ userDataDir });
     const prompt = config.getModePrompt('plan', 'ru');
     expect(prompt).not.toBeNull();
-    expect(prompt!).toContain('Текущий режим: plan');
+    expect(prompt!).toContain('[MODE: PLAN]');
 
     const act = config.getModePrompt('act', 'ru');
     expect(act).not.toBeNull();
-    expect(act!).toContain('Текущий режим: act');
+    expect(act!).toContain('[MODE: ACT]');
 
     const yolo = config.getModePrompt('yolo', 'ru');
     expect(yolo).not.toBeNull();
-    expect(yolo!).toContain('Текущий режим: yolo');
+    expect(yolo!).toContain('[MODE: YOLO]');
   });
 
   it('встроенный промпт описывает другие режимы и ограничения', async () => {

@@ -1,4 +1,4 @@
-# Assistant Roles
+[ROLES]
 
 The following roles are available:
 

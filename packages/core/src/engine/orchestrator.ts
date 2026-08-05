@@ -222,7 +222,7 @@ export class ChatOrchestrator {
       parts.push(modePrompt);
     } else if (sessionMode === 'plan') {
       parts.push(
-        '## Текущий режим: plan (только чтение)\n'
+        '[MODE: PLAN]\n'
         + 'Ты в режиме планирования: чтение и исследование разрешены, но запись/изменение файлов '
         + 'заблокированы (единственное исключение — .synth/plans/*.md). Изучи задачу, составь план '
         + 'и утверди его через plan_exit(plan="..."), чтобы перейти в режим act.',
@@ -231,19 +231,19 @@ export class ChatOrchestrator {
 
     if (planMode === 'auto') {
       parts.push(
-        '## Режим планирования (auto)\n'
+        '[PLAN MODE: AUTO]\n'
         + 'Если задача сложная, затрагивает несколько файлов или требует архитектурных решений — '
         + 'вызови plan_enter перед изменениями. Для простых фиксов — делай сразу.',
       );
     } else if (planMode === 'strict') {
       if (planApproved) {
         parts.push(
-          '## Режим планирования (strict)\n'
+          '[PLAN MODE: STRICT]\n'
           + 'План утверждён — ты можешь вносить изменения в соответствии с ним.',
         );
       } else {
         parts.push(
-          '## Режим планирования (strict)\n'
+          '[PLAN MODE: STRICT]\n'
           + 'Перед любым изменением файлов план обязателен: вызови plan_enter, составь план и утверди '
           + 'его через plan_exit. До утверждения плана запись файлов заблокирована (чтение разрешено).',
         );
@@ -252,7 +252,7 @@ export class ChatOrchestrator {
 
     const approvedPlan = planContent ?? session.planContent;
     if (approvedPlan) {
-      parts.push(`## Утверждённый план\n${approvedPlan}`);
+      parts.push(`[APPROVED PLAN]\n${approvedPlan}`);
     }
 
     if (parts.length === 0) return base;
@@ -442,8 +442,8 @@ export class ChatOrchestrator {
       if (this._router && session.settings.routingEnabled !== false) {
         const lang = session.settings.language || 'ru';
         const classifyInstruction = lang === 'ru'
-          ? '\n\n## Классификация разговора\n\nКогда определишь характер задачи, вызови инструмент `classify_conversation` с категорией: coding (написание/изменение кода), research (анализ/исследование), или chat (общий разговор). Это поможет выбрать оптимальную модель для последующих запросов.'
-          : '\n\n## Conversation Classification\n\nWhen you determine the nature of the task, call the `classify_conversation` tool with the category: coding (writing/modifying code), research (analysis/investigation), or chat (general conversation). This helps select the optimal model for subsequent requests.';
+          ? '\n\n[CLASSIFICATION]\n\nКогда определишь характер задачи, вызови инструмент `classify_conversation` с категорией: coding (написание/изменение кода), research (анализ/исследование), или chat (общий разговор). Это поможет выбрать оптимальную модель для последующих запросов.'
+          : '\n\n[CLASSIFICATION]\n\nWhen you determine the nature of the task, call the `classify_conversation` tool with the category: coding (writing/modifying code), research (analysis/investigation), or chat (general conversation). This helps select the optimal model for subsequent requests.';
         finalSystemPrompt = systemPrompt + classifyInstruction;
       }
 

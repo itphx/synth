@@ -318,13 +318,13 @@ export const taskTool: ToolDefinition = {
       // Заметки родительской сессии — передаём во всех режимах с контекстом
       // (inherit, summary, last_n), но НЕ в none (чистый лист)
       if (contextMode !== 'none' && parentNotesText) {
-        prompt += `\n\n[ЗАМЕТКИ РОДИТЕЛЬСКОЙ СЕССИИ]\nНиже — важные заметки из основной сессии. Учитывай их при выполнении задачи.\n\n${parentNotesText}`;
+        prompt += `\n\n[PARENT NOTES]\nНиже — важные заметки из основной сессии. Учитывай их при выполнении задачи.\n\n${parentNotesText}`;
       }
 
       if (contextMode === 'summary' && childMessages.length > 0) {
         const summaryMsg = childMessages.find(m => m.role === MessageRole.SUMMARY);
         if (summaryMsg?.content) {
-          prompt += `\n\n[СЖАТЫЙ КОНТЕКСТ РОДИТЕЛЬСКОЙ СЕССИИ]\n${summaryMsg.content}`;
+          prompt += `\n\n[PARENT SUMMARY]\n${summaryMsg.content}`;
         }
       }
 
@@ -357,7 +357,7 @@ export const taskTool: ToolDefinition = {
 
         const routingBlock = template
           ? template.replace('{routing_models}', modelsText ? modelsText + '\n' : '')
-          : ('\n\n## Маршрутизация запросов\n\n' +
+          : ('\n\n[ROUTING]\n\n' +
              'Для запуска дочерних агентов ты можешь указать модель:\n' +
              '- Используй параметр `model` для выбора модели под задачу\n' +
              (modelsText ? modelsText + '\n' : '') +

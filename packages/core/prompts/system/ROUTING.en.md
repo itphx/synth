@@ -1,4 +1,4 @@
-## Request Routing
+[ROUTING]
 
 When launching sub-agents, you can specify a model:
 - Use the `model` parameter to select a model for the task
