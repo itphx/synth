@@ -3,7 +3,10 @@
  * Реэкспорт всех публичных сущностей.
  */
 
-export { detectSecrets, maskSecret } from './secret-detector.js';
+export { detectSecrets, maskSecret, DEFAULT_PATTERNS } from './secret-detector.js';
+export type { SecretDetectorPattern } from './secret-detector.js';
+export { SecretPatternStore } from './secret-pattern-store.js';
+export type { SecretPattern, SecretPatternStoreOptions, SecretPatternsRaw } from './secret-pattern-store.js';
 export { obfuscateSecrets, deobfuscateSecrets, restoreSecrets, PLACEHOLDER_PATTERN, PLACEHOLDER_REGEX } from './obfuscator.js';
 export type { ObfuscateResult } from './obfuscator.js';
 export { runInputGuard } from './input-guard.js';

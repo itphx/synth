@@ -32,7 +32,7 @@ import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine } from './security/prompt-injection.js';
-import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, PLACEHOLDER_PATTERN } from './gateway/index.js';
+import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, PLACEHOLDER_PATTERN, type SecretPatternStore } from './gateway/index.js';
 
 const MAX_DOOM_LOOP_COUNT = 3;
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
@@ -85,6 +85,8 @@ export interface OrchestratorOptions {
   gatewayConfig?: LLMGatewayConfig;
   /** Аудит LLM Gateway — если создаётся снаружи (backend/runner). Иначе создаётся внутри. */
   gatewayAuditLogger?: AuditLogger;
+  /** Хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт). */
+  gatewayPatternStore?: SecretPatternStore;
 }
 
 export interface ProcessMessageResult {
@@ -136,6 +138,7 @@ export class ChatOrchestrator {
   private readonly _obfMapStore: ObfuscationMapStore | null;
   private readonly _gatewayAudit: AuditLogger | null;
   private readonly _gatewayRateLimiter: RateLimiter | null;
+  private readonly _gatewayPatternStore: SecretPatternStore | null;
 
   /** Публичный доступ к реестру агентов (для сериализации modeApplicable). */
   get agentRegistry(): AgentRegistry | null {
@@ -181,6 +184,7 @@ export class ChatOrchestrator {
       this._gatewayAudit = options.gatewayAuditLogger ?? null;
       this._gatewayRateLimiter = null;
     }
+    this._gatewayPatternStore = options.gatewayPatternStore ?? null;
 
     // AD-036: суммаризация (ContextOptimizer) создаёт провайдера напрямую —
     // передаём ему общую gateway-обвязку, чтобы эта точка тоже была защищена.
@@ -1507,11 +1511,13 @@ export class ChatOrchestrator {
    */
   private _wrapWithGateway(provider: BaseProvider, session: Session): BaseProvider {
     if (!this._gatewayConfig) return provider;
+    const patternStore = this._gatewayPatternStore;
     return new GatewayProvider(provider, this._gatewayConfig, {
       getMap: () => this._obfMapStore!.get(session.id),
       saveMap: (map) => this._obfMapStore!.set(session.id, map),
       getAudit: () => this._gatewayAudit!,
       getRateLimiter: () => this._gatewayRateLimiter!,
+      getPatterns: patternStore ? () => patternStore.getPatterns() : undefined,
       sessionId: session.id,
       userId: session.userId ?? '',
     });

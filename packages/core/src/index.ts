@@ -83,6 +83,8 @@ export {
   runOutputGuard,
   detectSecrets,
   maskSecret,
+  DEFAULT_PATTERNS,
+  SecretPatternStore,
   obfuscateSecrets,
   deobfuscateSecrets,
   restoreSecrets,
@@ -98,4 +100,6 @@ export type {
   AuditEntry,
   AuditLogQuery,
   ObfuscateResult,
+  SecretPattern,
+  SecretDetectorPattern,
 } from './engine/gateway/index.js';

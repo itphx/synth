@@ -1,12 +1,20 @@
 /**
  * Детекция секретов по регулярным выражениям (AD-036).
  * Чистая функция: text → уникальные значения секретов.
+ * Паттерны можно передавать извне (SecretPatternStore), по умолчанию — встроенный список.
  */
 
 /** Минимальная длина для «ключевых» секретов. */
 const MIN_KEY_LENGTH = 12;
 
-const PATTERNS: Array<{ type: string; regex: RegExp }> = [
+/** Паттерн детекции: тип секрета + regex (готовый RegExp или сериализуемая строка-source). */
+export interface SecretDetectorPattern {
+  type: string;
+  regex: RegExp | string;
+}
+
+/** Встроенный список паттернов по умолчанию (полностью заменяется пользовательским override). */
+export const DEFAULT_PATTERNS: SecretDetectorPattern[] = [
   { type: 'openai', regex: /\bsk-[A-Za-z0-9_-]{20,}/g },
   { type: 'github', regex: /\bghp_[A-Za-z0-9]{36}\b/g },
   { type: 'github_pat', regex: /\bgithub_pat_[A-Za-z0-9_]{50,}/g },
@@ -18,6 +26,15 @@ const PATTERNS: Array<{ type: string; regex: RegExp }> = [
   { type: 'card', regex: /\b\d{13,16}\b/g },
   { type: 'base64', regex: /[A-Za-z0-9+/]{40,}={0,2}/g },
 ];
+
+/**
+ * Компилирует паттерн в глобальный RegExp (детектор использует regex.exec в цикле,
+ * поэтому без флага 'g' exec зациклится на первом совпадении).
+ */
+function _toRegExp(regex: RegExp | string): RegExp {
+  if (typeof regex === 'string') return new RegExp(regex, 'g');
+  return regex.global ? regex : new RegExp(regex.source, 'g');
+}
 
 /** base64-подобная строка — только если без пробелов (regex уже исключает пробелы). */
 function _isValidLuhn(candidate: string): boolean {
@@ -41,16 +58,21 @@ function _isValidLuhn(candidate: string): boolean {
  * Находит подстроки-секреты в тексте.
  * Возвращает уникальные значения. Для ключей применяется порог длины MIN_KEY_LENGTH,
  * для номеров карт — проверка Luhn.
+ * @param patterns паттерны детекции; по умолчанию — DEFAULT_PATTERNS.
  */
-export function detectSecrets(text: string): string[] {
+export function detectSecrets(
+  text: string,
+  patterns: SecretDetectorPattern[] = DEFAULT_PATTERNS,
+): string[] {
   if (!text) return [];
 
   const found = new Set<string>();
 
-  for (const { type, regex } of PATTERNS) {
-    regex.lastIndex = 0;
+  for (const { type, regex } of patterns) {
+    const re = _toRegExp(regex);
+    re.lastIndex = 0;
     let match: RegExpExecArray | null;
-    while ((match = regex.exec(text)) !== null) {
+    while ((match = re.exec(text)) !== null) {
       const raw = match[0].trim();
       if (!raw) continue;
 
@@ -61,7 +83,7 @@ export function detectSecrets(text: string): string[] {
       }
 
       found.add(raw);
-      if (regex.lastIndex === match.index) regex.lastIndex++;
+      if (re.lastIndex === match.index) re.lastIndex++;
     }
   }
 

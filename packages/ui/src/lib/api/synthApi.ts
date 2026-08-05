@@ -873,6 +873,32 @@ export const synthApi = {
     }).then((r) => r.llmGateway)
   },
 
+  // --- LLM Gateway: паттерны обфускации (AD-036) ---
+  async getGatewayPatterns(): Promise<{ patterns: SecretPattern[]; isOverridden: boolean; defaultPatterns: SecretPattern[] }> {
+    return fetchJSON<{ patterns: SecretPattern[]; is_overridden: boolean; default_patterns: SecretPattern[] }>(`${BASE_URL}/gateway/patterns`).then((r) => ({
+      patterns: r.patterns,
+      isOverridden: r.is_overridden,
+      defaultPatterns: r.default_patterns,
+    }))
+  },
+
+  async saveGatewayPatterns(patterns: SecretPattern[]): Promise<{ patterns: SecretPattern[]; isOverridden: boolean; saved: boolean }> {
+    return fetchJSON<{ patterns: SecretPattern[]; is_overridden: boolean; saved: boolean }>(`${BASE_URL}/gateway/patterns`, {
+      method: 'PUT',
+      body: JSON.stringify({ patterns }),
+    }).then((r) => ({
+      patterns: r.patterns,
+      isOverridden: r.is_overridden,
+      saved: r.saved,
+    }))
+  },
+
+  async resetGatewayPatterns(): Promise<{ status: string }> {
+    return fetchJSON<{ status: string }>(`${BASE_URL}/gateway/patterns`, {
+      method: 'DELETE',
+    })
+  },
+
   /** Полная карта обфускации сессии (AD-036): плейсхолдер → реальное значение. Доступ ADMIN/AUDITOR. */
   async getSessionSecrets(sessionId: string): Promise<SessionSecretsResponse> {
     return fetchJSON<SessionSecretsResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/secrets`)
@@ -894,6 +920,12 @@ export interface LlmGatewaySettings {
     userPerMinute: number
     providerPerMinute: number
   }
+}
+
+/** Паттерн детекции секретов (AD-036): type — название, regex — source без слешей и флагов (компилируется с 'g'). */
+export interface SecretPattern {
+  type: string
+  regex: string
 }
 
 export interface SessionSecretsResponse {

@@ -5,7 +5,7 @@ import { resolveDefaultWorkspace, resolveWorkspacesRoot } from '@synth/shared';
 import {
   FileStore, SessionManager, EventBus,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
-  createToolRegistry, createAgentRegistry,
+  createToolRegistry, createAgentRegistry, SecretPatternStore,
 } from '../index.js';
 import { JsonStore } from '../storage/json-store.js';
 import type { ProviderConfig, ModelConfig, SummarizationConfig } from '@synth/shared';
@@ -95,6 +95,9 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   const toolRegistry = createToolRegistry();
   const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
+  // AD-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
+  const patternStore = new SecretPatternStore({ dataDir });
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -111,6 +114,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     defaultPlanMode: options.config.session?.planMode,
     securityConfig: options.config.security,
     gatewayConfig: options.config.llmGateway,
+    gatewayPatternStore: patternStore,
   });
 
   // Создаём временную сессию

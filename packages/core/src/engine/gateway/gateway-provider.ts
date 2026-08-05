@@ -14,6 +14,7 @@ import { runOutputGuard } from './output-guard.js';
 import { maskSecret } from './secret-detector.js';
 import type { AuditLogger } from './audit-logger.js';
 import type { RateLimiter } from './rate-limiter.js';
+import type { SecretPattern } from './secret-pattern-store.js';
 
 export interface GatewayProviderOptions {
   /** Загрузка карты обфускации сессии. */
@@ -22,6 +23,8 @@ export interface GatewayProviderOptions {
   saveMap: (map: Record<string, string>) => Promise<void>;
   getAudit: () => AuditLogger;
   getRateLimiter: () => RateLimiter;
+  /** Актуальный список паттернов детекции (override ?? дефолт). Если не задан — дефолт детектора. */
+  getPatterns?: () => SecretPattern[];
   sessionId: string;
   userId: string;
 }
@@ -34,6 +37,7 @@ interface PreparedCall {
   placeholders: string[];
   blocked?: { reason: string; message: string };
   rateLimited?: boolean;
+  patterns?: SecretPattern[];
 }
 
 const RATE_LIMIT_WARNING = '⚠️ Rate limit exceeded. Повторите запрос позже.';
@@ -94,7 +98,13 @@ export class GatewayProvider extends BaseProvider {
       debugCollector,
     );
 
-    await this._auditCompletion(response.content, response.usage, effective.secretsFound, effective.placeholders);
+    await this._auditCompletion(
+      response.content,
+      response.usage,
+      effective.secretsFound,
+      effective.placeholders,
+      effective.patterns,
+    );
     return response;
   }
 
@@ -142,7 +152,13 @@ export class GatewayProvider extends BaseProvider {
       yield chunk;
     }
 
-    await this._auditCompletion(accumulated, finalUsage, effective.secretsFound, effective.placeholders);
+    await this._auditCompletion(
+      accumulated,
+      finalUsage,
+      effective.secretsFound,
+      effective.placeholders,
+      effective.patterns,
+    );
   }
 
   async embed(text: string): Promise<number[]> {
@@ -160,6 +176,7 @@ export class GatewayProvider extends BaseProvider {
   ): Promise<PreparedCall> {
     const originalMap = await this._opts.getMap();
     const rateLimiter = this._opts.getRateLimiter();
+    const patterns = this._opts.getPatterns?.();
 
     if (!rateLimiter.checkUser(this._opts.userId)) {
       await this._auditRateLimited();
@@ -183,6 +200,7 @@ export class GatewayProvider extends BaseProvider {
         provider: this.getProviderName(),
         model: this.model,
       },
+      patterns,
     );
 
     await this._opts.saveMap(guard.map);
@@ -197,6 +215,7 @@ export class GatewayProvider extends BaseProvider {
         secretsFound: guard.secretsFound,
         placeholders: [],
         blocked: guard.blocked,
+        patterns,
       };
     }
 
@@ -206,6 +225,7 @@ export class GatewayProvider extends BaseProvider {
       tools: guard.tools,
       secretsFound: guard.secretsFound,
       placeholders,
+      patterns,
     };
   }
 
@@ -230,9 +250,10 @@ export class GatewayProvider extends BaseProvider {
     usage: TokenUsage | undefined,
     secretsFound: string[],
     placeholders: string[],
+    patterns?: SecretPattern[],
   ): Promise<void> {
     try {
-      const output = runOutputGuard(content);
+      const output = runOutputGuard(content, patterns);
       if (output.found.length > 0) {
         await this._opts.getAudit().append({
           ts: nowISO(),

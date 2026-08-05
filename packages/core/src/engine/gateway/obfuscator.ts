@@ -4,6 +4,7 @@
  */
 
 import { detectSecrets } from './secret-detector.js';
+import type { SecretPattern } from './secret-pattern-store.js';
 
 /** Одиночный паттерн плейсхолдера (для поиска номера). */
 export const PLACEHOLDER_PATTERN = /⟦SYNTH_SECRET_(\d+)⟧/;
@@ -38,10 +39,11 @@ export interface ObfuscateResult {
 export function obfuscateSecrets(
   text: string,
   map: Record<string, string>,
+  patterns?: SecretPattern[],
 ): ObfuscateResult {
   if (!text) return { text, map: { ...map }, found: [] };
 
-  const secrets = detectSecrets(text).sort((a, b) => b.length - a.length);
+  const secrets = detectSecrets(text, patterns).sort((a, b) => b.length - a.length);
   if (secrets.length === 0) return { text, map: { ...map }, found: [] };
 
   const newMap = { ...map };

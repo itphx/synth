@@ -11,6 +11,7 @@ import {
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator, FileProfileStore,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
   RuntimeSettingsStore, createSettingsRoutes, AuditLogger, mergeLlmGatewayConfig,
+  SecretPatternStore,
 } from '@synth/core';
 import type { SummarizationConfig } from '@synth/shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, findConfigPath } from '@synth/shared';
@@ -32,6 +33,7 @@ import { createUserRoutes } from './routes/users.js';
 import { createGitRoutes } from './routes/git.js';
 import { createMcpRoutes } from './routes/mcp.js';
 import { createAuditRoutes } from './routes/audit.js';
+import { createGatewayPatternsRoutes } from './routes/gateway-patterns.js';
 import { YamlMcpConfigStore } from './lib/mcp-config-store.js';
 import { t, getTranslations } from './lib/i18n.js';
 import { ProjectStore } from './storage/project-store.js';
@@ -85,6 +87,9 @@ const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
 const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
 const contextConfig = new ContextConfig({ userDataDir: `${dataDir}/context` });
 const profilesStore = new FileProfileStore({ dataDir });
+
+// AD-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
+const patternStore = new SecretPatternStore({ dataDir });
 
 // Runtime-настройки (AD-005): workspace/mcp из {dataDir}/settings.json (переживают рестарт)
 const settingsStore = new RuntimeSettingsStore({ dataDir });
@@ -195,6 +200,7 @@ const orchestrator = new ChatOrchestrator({
   securityConfig: backendConfig.synth.security,
   gatewayConfig,
   gatewayAuditLogger,
+  gatewayPatternStore: patternStore,
 });
 
 const processMessage = orchestrator.createProcessMessage();
@@ -259,6 +265,9 @@ app.route('/api/v2/audit', createAuditRoutes(auth, {
   },
   logger: gatewayAuditLogger,
 }));
+
+// LLM Gateway patterns routes (AD-036) — управление regex-паттернами детекции секретов, только ADMIN
+app.route('/api/v2/gateway', createGatewayPatternsRoutes(auth, patternStore));
 
 // Settings routes (runtime-настройки для UI: workspace + mcp; переиспользуем core-реализацию)
 app.route('/api/v2/settings', createSettingsRoutes(auth, {

@@ -80,6 +80,24 @@ describe('detectSecrets', () => {
     expect(result).toContain(EMAIL);
     expect(result).toContain(CARD_VALID);
   });
+
+  it('принимает кастомные паттерны вторым аргументом (RegExp)', () => {
+    const custom = [{ type: 'custom', regex: /\bcustom-[A-Za-z0-9]{20,}/g }];
+    expect(detectSecrets('секрет custom-abcdefghijklmnopqrstuvwxyz', custom)).toContain(
+      'custom-abcdefghijklmnopqrstuvwxyz',
+    );
+    expect(detectSecrets(SK_KEY, custom)).toEqual([]);
+  });
+
+  it('принимает паттерны как строки и компилирует их с флагом g', () => {
+    const custom = [{ type: 'custom', regex: 'custom-[A-Za-z0-9]{20,}' }];
+    const result = detectSecrets('a custom-abcdefghijklmnopqrst b custom-abcdefghijklmnopqrst', custom);
+    expect(result).toEqual(['custom-abcdefghijklmnopqrst']);
+  });
+
+  it('пустой список паттернов → ничего не детектится', () => {
+    expect(detectSecrets(`ключ ${SK_KEY}`, [])).toEqual([]);
+  });
 });
 
 describe('maskSecret', () => {

@@ -12,6 +12,7 @@ import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
+  SecretPatternStore,
 } from '../index.js';
 import type { SummarizationConfig } from '@synth/shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } from '@synth/shared';
@@ -201,6 +202,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const runtimeGateway = await settingsStore.getLlmGatewaySettings();
   const gatewayConfig = mergeLlmGatewayConfig(config.gatewayConfig, runtimeGateway);
 
+  // AD-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
+  const patternStore = new SecretPatternStore({ dataDir });
+
   const fileStore = new FileStore({ dataDir });
   const sessionManager = new SessionManager(fileStore, {
     mcpSettingsProvider: () => settingsStore.getMcpSettings(),
@@ -285,6 +289,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     defaultPlanMode: config.defaultPlanMode,
     securityConfig: config.securityConfig,
     gatewayConfig,
+    gatewayPatternStore: patternStore,
     mcpManager,
   });
 

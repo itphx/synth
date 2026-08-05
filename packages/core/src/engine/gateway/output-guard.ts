@@ -4,6 +4,7 @@
  */
 
 import { detectSecrets } from './secret-detector.js';
+import type { SecretPattern } from './secret-pattern-store.js';
 
 const SUSPICIOUS_URL_REGEX = /https?:\/\/[^\s]+/gi;
 
@@ -13,8 +14,8 @@ export interface OutputGuardResult {
   suspicious: boolean;
 }
 
-export function runOutputGuard(text: string): OutputGuardResult {
-  const found = detectSecrets(text);
+export function runOutputGuard(text: string, patterns?: SecretPattern[]): OutputGuardResult {
+  const found = detectSecrets(text, patterns);
   const hasHttpLinks = SUSPICIOUS_URL_REGEX.test(text);
   return { found, suspicious: found.length > 0 || hasHttpLinks };
 }

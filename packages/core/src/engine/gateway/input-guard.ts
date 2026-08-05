@@ -9,6 +9,7 @@ import type { LLMMessage } from '../../providers/base.js';
 import { detectSecrets, maskSecret } from './secret-detector.js';
 import { obfuscateSecrets } from './obfuscator.js';
 import type { AuditLogger } from './audit-logger.js';
+import type { SecretPattern } from './secret-pattern-store.js';
 
 export interface InputGuardResult {
   /** true — можно отправлять в LLM. */
@@ -45,6 +46,7 @@ export async function runInputGuard(
   map: Record<string, string>,
   audit: AuditLogger,
   meta: InputGuardMeta,
+  patterns?: SecretPattern[],
 ): Promise<InputGuardResult> {
   if (!config.enabled) {
     return { ok: true, messages, systemPrompt, tools, map, secretsFound: [] };
@@ -52,7 +54,7 @@ export async function runInputGuard(
 
   const allFound: string[] = [];
   const collect = (text: string): void => {
-    for (const secret of detectSecrets(text)) {
+    for (const secret of detectSecrets(text, patterns)) {
       if (!allFound.includes(secret)) allFound.push(secret);
     }
   };
@@ -95,7 +97,7 @@ export async function runInputGuard(
   const newPlaceholders: string[] = [];
 
   const obfuscatedMessages = messages.map((message) => {
-    const result = obfuscateSecrets(message.content, currentMap);
+    const result = obfuscateSecrets(message.content, currentMap, patterns);
     currentMap = result.map;
     for (const key of Object.keys(currentMap)) {
       if (!(key in map) && !newPlaceholders.includes(key)) newPlaceholders.push(key);
@@ -105,7 +107,7 @@ export async function runInputGuard(
 
   let obfuscatedSystem = systemPrompt;
   if (systemPrompt) {
-    const result = obfuscateSecrets(systemPrompt, currentMap);
+    const result = obfuscateSecrets(systemPrompt, currentMap, patterns);
     currentMap = result.map;
     for (const key of Object.keys(currentMap)) {
       if (!(key in map) && !newPlaceholders.includes(key)) newPlaceholders.push(key);
@@ -115,7 +117,7 @@ export async function runInputGuard(
 
   let obfuscatedTools = tools;
   if (tools?.length) {
-    const result = obfuscateSecrets(JSON.stringify(tools), currentMap);
+    const result = obfuscateSecrets(JSON.stringify(tools), currentMap, patterns);
     currentMap = result.map;
     for (const key of Object.keys(currentMap)) {
       if (!(key in map) && !newPlaceholders.includes(key)) newPlaceholders.push(key);
