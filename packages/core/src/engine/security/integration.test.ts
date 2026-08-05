@@ -203,16 +203,21 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
 
   it('ролевые промпты (системные prompts/roles) содержат секцию [CONTENT RULES]', () => {
     const ctx = new ContextConfig({ userDataDir: join(tmpDir, 'context') });
-    const roles = ['admin', 'analyst', 'assistant', 'auditor', 'developer', 'devops', 'pm', 'qa', 'title'];
+    // title — исключение: генератор заголовков, не работает с контентом (см. отдельный тест)
+    const roles = ['admin', 'analyst', 'assistant', 'auditor', 'developer', 'devops', 'pm', 'qa'];
     for (const role of roles) {
       const ru = ctx.getRolePrompt(role, undefined, 'ru') ?? '';
       expect(ru, `role ${role} ru`).toContain('[CONTENT RULES]');
-      if (role !== 'title') {
-        // title имеет только ru-файл
-        const en = ctx.getRolePrompt(role, undefined, 'en') ?? '';
-        expect(en, `role ${role} en`).toContain('[CONTENT RULES]');
-      }
+      const en = ctx.getRolePrompt(role, undefined, 'en') ?? '';
+      expect(en, `role ${role} en`).toContain('[CONTENT RULES]');
     }
+  });
+
+  it('title (генератор заголовков) — исключение: свои [RULES], без [CONTENT RULES]', () => {
+    const ctx = new ContextConfig({ userDataDir: join(tmpDir, 'context') });
+    const ru = ctx.getRolePrompt('title', undefined, 'ru') ?? '';
+    expect(ru, 'title ru').toContain('[RULES]');
+    expect(ru, 'title ru').not.toContain('[CONTENT RULES]');
   });
 
   it('read_file внутри workingDir — trust: trusted, без WARN', async () => {
