@@ -1,6 +1,6 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@synth/shared';
 import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart } from '@synth/shared';
-import type { RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig } from '@synth/shared';
+import type { RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig } from '@synth/shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
@@ -32,6 +32,7 @@ import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine } from './security/prompt-injection.js';
+import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, PLACEHOLDER_PATTERN } from './gateway/index.js';
 
 const MAX_DOOM_LOOP_COUNT = 3;
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
@@ -80,6 +81,10 @@ export interface OrchestratorOptions {
   defaultPlanMode?: PlanMode;
   /** Секция безопасности (защита от Indirect Prompt Injection). */
   securityConfig?: SecurityConfig;
+  /** LLM Gateway (AD-036): глобальный тумблер и конфиг. Выключен по умолчанию. */
+  gatewayConfig?: LLMGatewayConfig;
+  /** Аудит LLM Gateway — если создаётся снаружи (backend/runner). Иначе создаётся внутри. */
+  gatewayAuditLogger?: AuditLogger;
 }
 
 export interface ProcessMessageResult {
@@ -127,6 +132,10 @@ export class ChatOrchestrator {
   private readonly _defaultPlanMode: PlanMode;
   private readonly _securityConfig: SecurityConfig;
   private readonly _dictionaryStore: DictionaryStore;
+  private readonly _gatewayConfig: LLMGatewayConfig | null;
+  private readonly _obfMapStore: ObfuscationMapStore | null;
+  private readonly _gatewayAudit: AuditLogger | null;
+  private readonly _gatewayRateLimiter: RateLimiter | null;
 
   /** Публичный доступ к реестру агентов (для сериализации modeApplicable). */
   get agentRegistry(): AgentRegistry | null {
@@ -154,10 +163,58 @@ export class ChatOrchestrator {
     this._securityConfig = options.securityConfig
       ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' } };
 
+    // AD-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
+    // ObfuscationMapStore живёт в сессии, RateLimiter и AuditLogger — общие.
+    const gatewayConfig = options.gatewayConfig?.enabled ? options.gatewayConfig : null;
+    this._gatewayConfig = gatewayConfig;
+    if (gatewayConfig) {
+      this._obfMapStore = new ObfuscationMapStore(this._sessionManager);
+      this._gatewayAudit = options.gatewayAuditLogger ?? new AuditLogger(
+        gatewayConfig.audit.logPath || join(options.dataDir || '/var/synth/data', 'audit', 'llm-gateway.jsonl'),
+      );
+      this._gatewayRateLimiter = new RateLimiter(
+        gatewayConfig.rateLimit.userPerMinute,
+        gatewayConfig.rateLimit.providerPerMinute,
+      );
+    } else {
+      this._obfMapStore = null;
+      this._gatewayAudit = options.gatewayAuditLogger ?? null;
+      this._gatewayRateLimiter = null;
+    }
+
+    // AD-036: суммаризация (ContextOptimizer) создаёт провайдера напрямую —
+    // передаём ему общую gateway-обвязку, чтобы эта точка тоже была защищена.
+    this._optimizer?.setGatewayHooks(
+      gatewayConfig && this._obfMapStore && this._gatewayAudit && this._gatewayRateLimiter
+        ? {
+            config: gatewayConfig,
+            audit: this._gatewayAudit,
+            rateLimiter: this._gatewayRateLimiter,
+            obfMapStore: this._obfMapStore,
+          }
+        : null,
+    );
+
     // DictionaryStore и ProviderPool создаём всегда (нужны микро-слою и роутеру)
     const dictionaryStore = new DictionaryStore(options.dataDir || '/var/synth/data');
     this._dictionaryStore = dictionaryStore;
-    const pool = new ProviderPool(options.providerLoader);
+    // Фабрика обёртки для пула: у пула нет сессии, поэтому оборачиваем с пустой
+    // картой обфускации (защита от утечки секретов работает, карта не персистится).
+    // Для вызовов с сессией оркестратор дополнительно оборачивает через _wrapWithGateway.
+    const pool = new ProviderPool(
+      options.providerLoader,
+      gatewayConfig ?? undefined,
+      gatewayConfig
+        ? (inner) => new GatewayProvider(inner, gatewayConfig, {
+            getMap: async () => ({}),
+            saveMap: async () => {},
+            getAudit: () => this._gatewayAudit!,
+            getRateLimiter: () => this._gatewayRateLimiter!,
+            sessionId: '',
+            userId: '',
+          })
+        : undefined,
+    );
 
     // AD-035: Micro-first pipeline — создаём всегда, не зависит от роутера
     const microClassifier = new TaskClassifier(dictionaryStore);
@@ -1432,15 +1489,32 @@ export class ChatOrchestrator {
     if (!sharedConfig) return null;
 
     try {
-      return ProviderFactory.create(
+      const provider = ProviderFactory.create(
         providerName,
         toCoreProviderConfig(sharedConfig, modelName || sharedConfig.defaultModel || ''),
         session.settings.temperature,
       );
+      return this._wrapWithGateway(provider, session);
     } catch (e) {
       warning('ORCHESTRATOR', `Failed to create provider ${providerName}: ${e}`);
       return null;
     }
+  }
+
+  /**
+   * AD-036: оборачивает провайдер в GatewayProvider с привязкой к сессии.
+   * Если gateway выключен — возвращает провайдер как есть (обратная совместимость).
+   */
+  private _wrapWithGateway(provider: BaseProvider, session: Session): BaseProvider {
+    if (!this._gatewayConfig) return provider;
+    return new GatewayProvider(provider, this._gatewayConfig, {
+      getMap: () => this._obfMapStore!.get(session.id),
+      saveMap: (map) => this._obfMapStore!.set(session.id, map),
+      getAudit: () => this._gatewayAudit!,
+      getRateLimiter: () => this._gatewayRateLimiter!,
+      sessionId: session.id,
+      userId: session.userId ?? '',
+    });
   }
 
   private _getEffectiveModel(session: Session, providerName: string): string {
@@ -1469,6 +1543,7 @@ export class ChatOrchestrator {
 
       let provider = this._router.getProvider(decision);
       if (provider) {
+        provider = this._wrapWithGateway(provider, session);
         return {
           provider,
           providerName: decision.providerName,
@@ -1593,6 +1668,32 @@ export class ChatOrchestrator {
     }
     if (intermediateTextBlocks && intermediateTextBlocks.length > 0) {
       metadata.intermediate_text_blocks = intermediateTextBlocks;
+    }
+
+    // AD-036: раскрытие секретов в UI. Реальные значения плейсхолдеров из
+    // карты обфускации сессии встраиваются в metadata.secrets (клик раскрывает
+    // локально). Только существующие плейсхолдеры; карта — секрет, в логи не пишется.
+    if (role === MessageRole.ASSISTANT && finalContent && this._obfMapStore) {
+      try {
+        const obfMap = await this._obfMapStore.get(sessionId);
+        if (Object.keys(obfMap).length > 0) {
+          const found = new Set<string>();
+          let match: RegExpExecArray | null;
+          const placeholderRe = new RegExp(PLACEHOLDER_PATTERN.source, 'g');
+          while ((match = placeholderRe.exec(finalContent)) !== null) {
+            found.add(match[0]);
+          }
+          const secrets: Record<string, string> = {};
+          for (const ph of found) {
+            if (ph in obfMap) secrets[ph] = obfMap[ph]!;
+          }
+          if (Object.keys(secrets).length > 0) {
+            metadata.secrets = { ...(metadata.secrets as Record<string, string> | undefined), ...secrets };
+          }
+        }
+      } catch (e) {
+        warning('ORCHESTRATOR', `Ошибка раскрытия секретов в metadata: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
 
     const msg: Message = {

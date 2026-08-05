@@ -1,6 +1,7 @@
 import { cn } from '@/lib/utils'
 import { memo } from 'react'
 import { MarkdownContent } from './MarkdownContent'
+import { SecretMarkdown, SecretPlainText } from './SecretPlaceholder'
 import { MessageHeader } from './MessageHeader'
 import { MessageActions } from './MessageActions'
 import { ReasoningBlock } from './ReasoningBlock'
@@ -91,6 +92,11 @@ function ChatMessageInner({
   const isDebug = message.role === 'debug'
   const canRetry = isUser
   const hasDebug = !!message.debug_data && Object.keys(message.debug_data).length > 0
+
+  // LLM Gateway (AD-036): реальные значения секретов для плейсхолдеров ⟦SYNTH_SECRET_N⟧.
+  const secrets = (message.metadata?.secrets as Record<string, string> | undefined) ?? undefined
+  const activeTab = useUIStore((s) => s.centerTabs.find((t) => t.id === s.activeCenterTabId))
+  const sessionId = (activeTab?.data?.sessionId as string) || undefined
 
   const containerClass = cn(
     'flex px-4 py-3 group',
@@ -240,7 +246,7 @@ function ChatMessageInner({
               if (item.type === 'intermediate_text') {
                 return (
                   <div key={`it${i}`} className="my-2 text-sm">
-                    <MarkdownContent content={item.data.text} />
+                    <SecretMarkdown content={item.data.text} secrets={secrets} sessionId={sessionId} />
                   </div>
                 )
               }
@@ -249,7 +255,7 @@ function ChatMessageInner({
               }
               if (item.type === 'tool_calls') {
                 return item.calls.map((tc, j) => (
-                  <ToolCallPart key={tc.callId || j} toolCall={tc} />
+                  <ToolCallPart key={tc.callId || j} toolCall={tc} secrets={secrets} sessionId={sessionId} />
                 ))
               }
               return null
@@ -263,7 +269,7 @@ function ChatMessageInner({
 
         {displayContent && (
           isUser ? (
-            <p className="text-sm whitespace-pre-wrap">{displayContent}</p>
+            <SecretPlainText content={displayContent} secrets={secrets} sessionId={sessionId} />
           ) : isInfo && (message.metadata as Record<string, unknown>)?.type === 'session_reference' ? (
             <SessionReferenceCard
               sessionId={String((message.metadata as Record<string, unknown>)?.session_id || '')}
@@ -271,7 +277,7 @@ function ChatMessageInner({
               metadata={message.metadata as Record<string, unknown> | undefined}
             />
           ) : (
-            <MarkdownContent content={displayContent} />
+            <SecretMarkdown content={displayContent} secrets={secrets} sessionId={sessionId} />
           )
         )}
 

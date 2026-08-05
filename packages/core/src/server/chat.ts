@@ -110,6 +110,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     permissionConfig: options.config.permission,
     defaultPlanMode: options.config.session?.planMode,
     securityConfig: options.config.security,
+    gatewayConfig: options.config.llmGateway,
   });
 
   // Создаём временную сессию

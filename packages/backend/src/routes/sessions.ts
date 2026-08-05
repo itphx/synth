@@ -72,6 +72,16 @@ export function createSessionRoutes(
     return c.json(serializeSession(session, { agentRegistry }));
   });
 
+  // GET /api/v2/sessions/:id/secrets — карта обфускации LLM Gateway (AD-036).
+  // RBAC: только ADMIN/AUDITOR — сама карта является секретом.
+  app.get('/:id/secrets', kit.requirePermission('ADMIN', 'AUDITOR'), async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+    return c.json({ sessionId: session.id, secrets: session.obfuscationMap ?? {} });
+  });
+
   // PATCH /api/v2/sessions/:id — обновить
   app.patch('/:id', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));

@@ -5,8 +5,9 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSettingsRoutes } from './settings.js';
-import { RuntimeSettingsStore } from '../../storage/runtime-settings.js';
+import { RuntimeSettingsStore, mergeLlmGatewayConfig } from '../../storage/runtime-settings.js';
 import type { AuthKit } from '../../auth/local.js';
+import type { LLMGatewayConfig } from '@synth/shared';
 
 function createMockAuth(): AuthKit {
   return {
@@ -274,6 +275,49 @@ describe('Settings API Routes (workspace)', () => {
       const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
       const mcp = await restartedStore.getMcpSettings();
       expect(mcp.gitlab?.default).toEqual({ plan: false, act: true });
+    });
+  });
+
+  describe('LLM Gateway (AD-036)', () => {
+    it('PUT /api/v2/settings/llm-gateway переживает рестарт', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      await app.request('/api/v2/settings/llm-gateway', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ llmGateway: { enabled: true, inputMode: 'block' } }),
+      });
+
+      const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const runtime = await restartedStore.getLlmGatewaySettings();
+      expect(runtime.enabled).toBe(true);
+      expect(runtime.inputMode).toBe('block');
+    });
+
+    it('mergeLlmGatewayConfig: runtime приоритетнее конфига, остальное наследуется из конфига', () => {
+      const base: LLMGatewayConfig = {
+        enabled: false,
+        inputMode: 'obfuscate',
+        rateLimit: { userPerMinute: 10, providerPerMinute: 20 },
+        audit: { enabled: true, logPath: '/x/llm-gateway.jsonl' },
+      };
+      const merged = mergeLlmGatewayConfig(base, { enabled: true });
+      expect(merged).toBeDefined();
+      expect(merged!.enabled).toBe(true);
+      expect(merged!.inputMode).toBe('obfuscate');
+      expect(merged!.rateLimit).toEqual({ userPerMinute: 10, providerPerMinute: 20 });
+      expect(merged!.audit.logPath).toBe('/x/llm-gateway.jsonl');
+    });
+
+    it('mergeLlmGatewayConfig: runtime включается даже если конфига нет', () => {
+      const merged = mergeLlmGatewayConfig(undefined, { enabled: true, inputMode: 'block' });
+      expect(merged).toBeDefined();
+      expect(merged!.enabled).toBe(true);
+      expect(merged!.inputMode).toBe('block');
+      expect(merged!.rateLimit).toEqual({ userPerMinute: 60, providerPerMinute: 120 });
+    });
+
+    it('mergeLlmGatewayConfig: возвращает undefined если нет ни конфига, ни runtime', () => {
+      expect(mergeLlmGatewayConfig(undefined, {})).toBeUndefined();
     });
   });
 });

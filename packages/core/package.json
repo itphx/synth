@@ -33,6 +33,10 @@
     "./auth/local.js": {
       "types": "./dist/auth/local.d.ts",
       "import": "./dist/auth/local.js"
+    },
+    "./engine/gateway/index.js": {
+      "types": "./dist/engine/gateway/index.d.ts",
+      "import": "./dist/engine/gateway/index.js"
     }
   },
   "scripts": {

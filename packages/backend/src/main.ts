@@ -10,7 +10,7 @@ import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator, FileProfileStore,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
-  RuntimeSettingsStore, createSettingsRoutes,
+  RuntimeSettingsStore, createSettingsRoutes, AuditLogger, mergeLlmGatewayConfig,
 } from '@synth/core';
 import type { SummarizationConfig } from '@synth/shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, findConfigPath } from '@synth/shared';
@@ -31,6 +31,7 @@ import { createDebugRoutes } from './routes/debug.js';
 import { createUserRoutes } from './routes/users.js';
 import { createGitRoutes } from './routes/git.js';
 import { createMcpRoutes } from './routes/mcp.js';
+import { createAuditRoutes } from './routes/audit.js';
 import { YamlMcpConfigStore } from './lib/mcp-config-store.js';
 import { t, getTranslations } from './lib/i18n.js';
 import { ProjectStore } from './storage/project-store.js';
@@ -160,6 +161,17 @@ const modelPriceLoader = (modelName: string) => {
   return null;
 };
 
+// LLM Gateway (AD-036): общий AuditLogger создаётся снаружи, чтобы эндпоинт
+// GET /api/v2/audit и оркестратор писали/читали один и тот же JSONL-файл.
+const gatewayAuditLogger = new AuditLogger(
+  backendConfig.synth.llmGateway.audit.logPath || join(dataDir, 'audit', 'llm-gateway.jsonl'),
+);
+
+// AD-036: runtime-настройка LLM Gateway (тумблер из UI, {dataDir}/settings.json)
+// приоритетнее config.yaml — мёржим при старте, чтобы шлюз применялся к оркестратору.
+const runtimeGateway = await settingsStore.getLlmGatewaySettings();
+const gatewayConfig = mergeLlmGatewayConfig(backendConfig.synth.llmGateway, runtimeGateway);
+
 // Orchestrator
 const toolRegistry = createToolRegistry();
 const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
@@ -181,6 +193,8 @@ const orchestrator = new ChatOrchestrator({
   permissionConfig: backendConfig.synth.permission,
   defaultPlanMode: backendConfig.synth.session.planMode,
   securityConfig: backendConfig.synth.security,
+  gatewayConfig,
+  gatewayAuditLogger,
 });
 
 const processMessage = orchestrator.createProcessMessage();
@@ -235,6 +249,16 @@ app.route('/api/v2/git', createGitRoutes(auth, projectStore, backendConfig.works
 
 // MCP routes
 app.route('/api/v2/mcp', createMcpRoutes(auth, mcpConfigStore, mcpManager, sessionManager));
+
+// LLM Gateway audit routes (AD-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные
+app.route('/api/v2/audit', createAuditRoutes(auth, {
+  auditLogPath: gatewayAuditLogger.logPath,
+  sessionExists: async (sessionId: string) => {
+    const session = await sessionManager.getSession(sessionId);
+    return session !== null;
+  },
+  logger: gatewayAuditLogger,
+}));
 
 // Settings routes (runtime-настройки для UI: workspace + mcp; переиспользуем core-реализацию)
 app.route('/api/v2/settings', createSettingsRoutes(auth, {

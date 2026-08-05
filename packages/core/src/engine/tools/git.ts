@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { ToolCapability } from '@synth/shared';
 import type { ToolDefinition } from '@synth/shared';
 import { resolvePath, validateInputPath } from './path-utils.js';
+import { deobfuscateArgs } from './obfuscation.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -145,9 +146,12 @@ export const gitCommitTool: ToolDefinition = {
     if (params.path !== undefined) validateInputPath(params.path, 'path');
     const cwd = resolvePath(params.path, ctx.workingDir);
 
+    // AD-036: деобфускация в точке потребления — message может содержать ⟦SYNTH_SECRET_N⟧
+    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; message: string; allow_empty?: boolean };
+
     try {
-      const commitArgs = ['commit', '-m', params.message];
-      if (params.allow_empty) commitArgs.push('--allow-empty');
+      const commitArgs = ['commit', '-m', restored.message];
+      if (restored.allow_empty) commitArgs.push('--allow-empty');
 
       const { stdout, stderr } = await runGit(commitArgs, cwd);
       return {
@@ -182,9 +186,12 @@ export const gitPushTool: ToolDefinition = {
     if (params.path !== undefined) validateInputPath(params.path, 'path');
     const cwd = resolvePath(params.path, ctx.workingDir);
 
+    // AD-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
+    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; remote?: string; branch?: string };
+
     try {
-      const pushArgs = ['push', params.remote ?? 'origin'];
-      if (params.branch) pushArgs.push(params.branch);
+      const pushArgs = ['push', restored.remote ?? 'origin'];
+      if (restored.branch) pushArgs.push(restored.branch);
 
       const { stdout, stderr } = await runGit(pushArgs, cwd);
       return {
@@ -219,9 +226,12 @@ export const gitPullTool: ToolDefinition = {
     if (params.path !== undefined) validateInputPath(params.path, 'path');
     const cwd = resolvePath(params.path, ctx.workingDir);
 
+    // AD-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
+    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; remote?: string; branch?: string };
+
     try {
-      const pullArgs = ['pull', params.remote ?? 'origin'];
-      if (params.branch) pullArgs.push(params.branch);
+      const pullArgs = ['pull', restored.remote ?? 'origin'];
+      if (restored.branch) pullArgs.push(restored.branch);
 
       const { stdout, stderr } = await runGit(pullArgs, cwd);
       return {
@@ -256,10 +266,13 @@ export const gitCheckoutTool: ToolDefinition = {
     if (params.path !== undefined) validateInputPath(params.path, 'path');
     const cwd = resolvePath(params.path, ctx.workingDir);
 
+    // AD-036: деобфускация в точке потребления — target может содержать ⟦SYNTH_SECRET_N⟧
+    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; target: string; create_branch?: boolean };
+
     try {
       const checkoutArgs = ['checkout'];
-      if (params.create_branch) checkoutArgs.push('-b');
-      checkoutArgs.push(params.target);
+      if (restored.create_branch) checkoutArgs.push('-b');
+      checkoutArgs.push(restored.target);
 
       const { stdout, stderr } = await runGit(checkoutArgs, cwd);
       return {
@@ -450,6 +463,9 @@ export const gitStashTool: ToolDefinition = {
     const cwd = resolvePath(params.path, ctx.workingDir);
     const action = params.action ?? 'push';
 
+    // AD-036: деобфускация в точке потребления — message может содержать ⟦SYNTH_SECRET_N⟧
+    const restored = (await deobfuscateArgs(ctx, params)) as typeof params;
+
     try {
       const stashArgs = ['stash'];
       let result: { stdout: string; stderr: string };
@@ -465,7 +481,7 @@ export const gitStashTool: ToolDefinition = {
 
       if (action === 'show') {
         stashArgs.push('show');
-        if (params.stash_index !== undefined) stashArgs.push(`stash@{${params.stash_index}}`);
+        if (restored.stash_index !== undefined) stashArgs.push(`stash@{${restored.stash_index}}`);
         result = await runGit(stashArgs, cwd);
         if (result.stderr) {
           return { content: `Ошибка git stash: ${result.stderr.trim()}`, isError: true, metadata: { cwd } };
@@ -475,7 +491,7 @@ export const gitStashTool: ToolDefinition = {
 
       if (action === 'drop' || action === 'pop' || action === 'apply') {
         stashArgs.push(action);
-        if (params.stash_index !== undefined) stashArgs.push(`stash@{${params.stash_index}}`);
+        if (restored.stash_index !== undefined) stashArgs.push(`stash@{${restored.stash_index}}`);
         result = await runGit(stashArgs, cwd);
         if (result.stderr) {
           return { content: `Ошибка git stash: ${result.stderr.trim()}`, isError: true, metadata: { cwd } };
@@ -483,9 +499,9 @@ export const gitStashTool: ToolDefinition = {
         return { content: truncateOutput(result.stdout.trim() || `${action} выполнен`), metadata: { cwd } };
       }
 
-      if (params.include_untracked) stashArgs.push('--include-untracked');
-      if (params.message) {
-        stashArgs.push('push', '-m', params.message);
+      if (restored.include_untracked) stashArgs.push('--include-untracked');
+      if (restored.message) {
+        stashArgs.push('push', '-m', restored.message);
       } else {
         stashArgs.push('push');
       }

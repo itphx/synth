@@ -111,6 +111,15 @@ export function createAuthMiddleware(config: AuthConfig) {
     await next();
   });
 
+  // Middleware: требовать одну из указанных ролей (например, ADMIN/AUDITOR)
+  const requirePermission = (...roles: string[]) => createMiddleware(async (c, next) => {
+    const user = c.get('user') as User | undefined;
+    if (!user || !roles.some((r) => user.roles.includes(r))) {
+      return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
+    }
+    await next();
+  });
+
   // Создать cookie-сессию
   const createSession = (user: User): string => {
     const sessionId = crypto.randomUUID();
@@ -143,6 +152,7 @@ export function createAuthMiddleware(config: AuthConfig) {
     attachUser,
     requireAuth,
     requireAdmin,
+    requirePermission,
     createSession,
     setSessionCookie,
     deleteSessionCookie,

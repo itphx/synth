@@ -64,8 +64,8 @@ export { JsonStore } from './storage/json-store.js';
 export type { JsonStoreConfig } from './storage/json-store.js';
 export { ProjectStore } from './storage/project-store.js';
 export type { ProjectStoreConfig } from './storage/project-store.js';
-export { RuntimeSettingsStore } from './storage/runtime-settings.js';
-export type { RuntimeSettings } from './storage/runtime-settings.js';
+export { RuntimeSettingsStore, mergeLlmGatewayConfig } from './storage/runtime-settings.js';
+export type { RuntimeSettings, LlmGatewayRuntimeSettings } from './storage/runtime-settings.js';
 export { createLocalAuth } from './auth/local.js';
 export type { AuthKit, LocalAuthConfig } from './auth/local.js';
 export { createSettingsRoutes } from './server/routes/settings.js';
@@ -73,3 +73,29 @@ export type { SettingsRoutesDeps } from './server/routes/settings.js';
 export { createStandaloneApp } from './server/app.js';
 export type { StandaloneConfig } from './server/app.js';
 export { serializeSession, serializeMessage, serializeProject } from './server/serialize.js';
+
+export {
+  GatewayProvider,
+  ObfuscationMapStore,
+  AuditLogger,
+  RateLimiter,
+  runInputGuard,
+  runOutputGuard,
+  detectSecrets,
+  maskSecret,
+  obfuscateSecrets,
+  deobfuscateSecrets,
+  restoreSecrets,
+  PLACEHOLDER_PATTERN,
+  readAuditLog,
+} from './engine/gateway/index.js';
+export type {
+  GatewayProviderOptions,
+  InputGuardResult,
+  InputGuardMeta,
+  OutputGuardResult,
+  AuditEventType,
+  AuditEntry,
+  AuditLogQuery,
+  ObfuscateResult,
+} from './engine/gateway/index.js';

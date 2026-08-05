@@ -860,6 +860,45 @@ export const synthApi = {
       body: JSON.stringify({ name }),
     })
   },
+
+  // --- LLM Gateway (AD-036) ---
+  async getLlmGatewaySettings(): Promise<LlmGatewaySettings> {
+    return fetchJSON<{ llmGateway: LlmGatewaySettings }>(`${BASE_URL}/settings/llm-gateway`).then((r) => r.llmGateway)
+  },
+
+  async saveLlmGatewaySettings(config: LlmGatewaySettings): Promise<LlmGatewaySettings> {
+    return fetchJSON<{ llmGateway: LlmGatewaySettings }>(`${BASE_URL}/settings/llm-gateway`, {
+      method: 'PUT',
+      body: JSON.stringify({ llmGateway: config }),
+    }).then((r) => r.llmGateway)
+  },
+
+  /** Полная карта обфускации сессии (AD-036): плейсхолдер → реальное значение. Доступ ADMIN/AUDITOR. */
+  async getSessionSecrets(sessionId: string): Promise<SessionSecretsResponse> {
+    return fetchJSON<SessionSecretsResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/secrets`)
+  },
+
+  /** Логирование раскрытия секрета (AD-036, тип 'revealed'). Эндпоинт может отсутствовать — fire-and-forget. */
+  async auditRevealed(sessionId: string | undefined, placeholder: string): Promise<void> {
+    await fetchJSON<void>(`${BASE_URL}/audit/revealed`, {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, placeholder }),
+    })
+  },
+}
+
+export interface LlmGatewaySettings {
+  enabled: boolean
+  inputMode: 'obfuscate' | 'block'
+  rateLimit: {
+    userPerMinute: number
+    providerPerMinute: number
+  }
+}
+
+export interface SessionSecretsResponse {
+  sessionId: string
+  secrets: Record<string, string>
 }
 
 export interface McpProbedTool {

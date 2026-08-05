@@ -1,13 +1,48 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@synth/shared';
-import type { McpServerToolSettings } from '@synth/shared';
+import type { McpServerToolSettings, LLMGatewayConfig } from '@synth/shared';
+
+/** Runtime-настройки LLM Gateway (AD-036), сохраняемые через UI (раздел «Шлюз безопасности»). */
+export interface LlmGatewayRuntimeSettings {
+  enabled: boolean;
+  inputMode: 'obfuscate' | 'block';
+  rateLimit: {
+    userPerMinute: number;
+    providerPerMinute: number;
+  };
+}
 
 export interface RuntimeSettings {
   /** Рабочий каталог по умолчанию, заданный через UI (раздел «Проекты»). */
   workspace?: string;
   /** Глобальные настройки доступности MCP-серверов по режимам plan/act. */
   mcpServers?: Record<string, McpServerToolSettings>;
+  /** Глобальный тумблер LLM Gateway (AD-036): включается/выключается через UI (только ADMIN). */
+  llmGateway?: Partial<LlmGatewayRuntimeSettings>;
+}
+
+/**
+ * Мёржит runtime-настройки LLM Gateway (из {dataDir}/settings.json) поверх
+ * конфига из config.yaml. Runtime приоритетнее: включается/выключается шлюз
+ * через UI без правки конфига. Возвращает undefined, если ни конфига, ни
+ * runtime-настроек нет (шлюз не применяется — обратная совместимость).
+ */
+export function mergeLlmGatewayConfig(
+  base: LLMGatewayConfig | undefined,
+  runtime: Partial<LlmGatewayRuntimeSettings>,
+): LLMGatewayConfig | undefined {
+  const hasRuntime = !!runtime && Object.keys(runtime).length > 0;
+  if (!base && !hasRuntime) return undefined;
+  return {
+    enabled: runtime.enabled ?? base?.enabled ?? false,
+    inputMode: runtime.inputMode ?? base?.inputMode ?? 'obfuscate',
+    rateLimit: {
+      userPerMinute: runtime.rateLimit?.userPerMinute ?? base?.rateLimit?.userPerMinute ?? 60,
+      providerPerMinute: runtime.rateLimit?.providerPerMinute ?? base?.rateLimit?.providerPerMinute ?? 120,
+    },
+    audit: base?.audit ?? { enabled: true, logPath: '' },
+  };
 }
 
 /**
@@ -59,6 +94,15 @@ export class RuntimeSettingsStore {
 
   async setMcpSettings(servers: Record<string, McpServerToolSettings>): Promise<void> {
     await this._update((current) => ({ ...current, mcpServers: servers }));
+  }
+
+  async getLlmGatewaySettings(): Promise<Partial<LlmGatewayRuntimeSettings>> {
+    const settings = await this.load();
+    return settings.llmGateway ?? {};
+  }
+
+  async setLlmGatewaySettings(config: Partial<LlmGatewayRuntimeSettings>): Promise<void> {
+    await this._update((current) => ({ ...current, llmGateway: config }));
   }
 
   private async _update(mutate: (current: RuntimeSettings) => RuntimeSettings): Promise<void> {

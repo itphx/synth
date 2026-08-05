@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { ToolCapability } from '@synth/shared';
 import type { ToolDefinition } from '@synth/shared';
 import { resolvePath, validateInputPath } from './path-utils.js';
+import { deobfuscateText } from './obfuscation.js';
 
 function generateUnifiedDiff(oldText: string, newText: string, filePath: string): string {
   const oldLines = oldText.split('\n');
@@ -78,14 +79,17 @@ export const writeFileTool: ToolDefinition = {
     validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
 
+    // AD-036: деобфускация в точке потребления — контент может содержать ⟦SYNTH_SECRET_N⟧
+    const content = await deobfuscateText(ctx, params.content);
+
     const dir = dirname(resolvedPath);
     await mkdir(dir, { recursive: true });
-    await writeFile(resolvedPath, params.content, 'utf-8');
+    await writeFile(resolvedPath, content, 'utf-8');
 
-    const lines = params.content.split('\n');
+    const lines = content.split('\n');
     return {
-      content: `Файл записан: ${params.file_path} (${lines.length} строк, ${params.content.length} байт)`,
-      metadata: { path: resolvedPath, lines: lines.length, bytes: params.content.length },
+      content: `Файл записан: ${params.file_path} (${lines.length} строк, ${content.length} байт)`,
+      metadata: { path: resolvedPath, lines: lines.length, bytes: content.length },
     };
   },
 };
@@ -110,15 +114,19 @@ export const editFileTool: ToolDefinition = {
     validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
 
+    // AD-036: деобфускация в точке потребления — текст патча может содержать ⟦SYNTH_SECRET_N⟧
+    const oldString = await deobfuscateText(ctx, params.old_string);
+    const newString = await deobfuscateText(ctx, params.new_string);
+
     const { readFile } = await import('node:fs/promises');
     const content = await readFile(resolvedPath, 'utf-8');
 
     if (params.replace_all) {
-      const count = content.split(params.old_string).length - 1;
+      const count = content.split(oldString).length - 1;
       if (count === 0) {
         return { content: `Ошибка: строка для замены не найдена в файле "${params.file_path}"`, isError: true };
       }
-      const newContent = content.replaceAll(params.old_string, params.new_string);
+      const newContent = content.replaceAll(oldString, newString);
       await writeFile(resolvedPath, newContent, 'utf-8');
 
       const diff = generateUnifiedDiff(content, newContent, params.file_path);
@@ -128,7 +136,7 @@ export const editFileTool: ToolDefinition = {
       };
     }
 
-    const occurrences = content.split(params.old_string).length - 1;
+    const occurrences = content.split(oldString).length - 1;
     if (occurrences === 0) {
       return { content: `Ошибка: строка для замены не найдена в файле "${params.file_path}"`, isError: true };
     }
@@ -139,7 +147,7 @@ export const editFileTool: ToolDefinition = {
       };
     }
 
-    const newContent = content.replace(params.old_string, params.new_string);
+    const newContent = content.replace(oldString, newString);
     await writeFile(resolvedPath, newContent, 'utf-8');
 
     const diff = generateUnifiedDiff(content, newContent, params.file_path);

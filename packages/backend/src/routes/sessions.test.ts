@@ -22,6 +22,7 @@ const testUser: User = {
 function createMockKit() {
   return {
     requireAuth: async (_c: Context, next: Next) => { await next(); },
+    requirePermission: () => async (_c: Context, next: Next) => { await next(); },
     getCurrentUser: () => testUser,
   };
 }
