@@ -42,6 +42,8 @@ export {
   type RouterCostConfig,
   type RouterSubagentConfig,
   type MicroFirstConfig,
+  type SecurityConfig,
+  type PromptInjectionConfig,
 } from './config/index.js';
 export { defaultConfig, loadConfig } from './config/index.js';
 export { resolveDataDir, resolvePort, resolveWorkspacesRoot, resolveDefaultWorkspace, ensureDataDir, createDefaultConfig, resolveDeployMode, findConfigPath, defaultConfigPath, ensureConfigFile, ensureFirstRun } from './config/index.js';

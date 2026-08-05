@@ -122,6 +122,21 @@ export const mcpConfigSchema = z.object({
   servers: z.record(z.string(), mcpServerConfigSchema).default({}),
 });
 
+// --- Security (IPI protection) ---
+
+export const promptInjectionConfigSchema = z.object({
+  /** Глобальный выключатель защиты от Indirect Prompt Injection. */
+  enabled: z.boolean().default(true),
+  /** Оборачивать tool-контент в [CONTENT | SOURCE: ... | trust: ...] маркеры. */
+  wrapContent: z.boolean().default(true),
+  /** Режим детекции подозрительных паттернов: flag (пометить), sanitize (заменить), block (заблокировать). */
+  mode: z.enum(['flag', 'sanitize', 'block']).default('flag'),
+});
+
+export const securityConfigSchema = z.object({
+  promptInjection: promptInjectionConfigSchema.default({}),
+});
+
 // --- Router (AD-034) ---
 
 export const routerContentConfigSchema = z.object({
@@ -204,6 +219,7 @@ export const synthConfigSchema = z.object({
   router: routerConfigSchema.default({}),
   microFirst: microFirstConfigSchema.default({}),
   permission: permissionConfigSchema.default({}),
+  security: securityConfigSchema.default({}),
 });
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>;
@@ -229,3 +245,5 @@ export type RouterConfig = z.infer<typeof routerConfigSchema>;
 export type MicroFirstConfig = z.infer<typeof microFirstConfigSchema>;
 export type SynthConfig = z.infer<typeof synthConfigSchema>;
 export type PermissionConfig = z.infer<typeof permissionConfigSchema>;
+export type PromptInjectionConfig = z.infer<typeof promptInjectionConfigSchema>;
+export type SecurityConfig = z.infer<typeof securityConfigSchema>;

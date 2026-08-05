@@ -355,6 +355,14 @@ export class ContextConfig {
   }
 
   /**
+   * Глобальная секция [RULES] защиты от Indirect Prompt Injection.
+   * Файлы: prompts/system/RULES.{lang}.md → RULES.md (fallback).
+   */
+  getRules(language = 'ru'): string {
+    return this._readPrompt('RULES', 'system', language) ?? '';
+  }
+
+  /**
    * AD-025: системный промпт режима сессии (plan/act/yolo).
    *
    * Приоритет (по аналогии с getRolePrompt):

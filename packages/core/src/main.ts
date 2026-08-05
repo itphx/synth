@@ -51,6 +51,7 @@ program
       uiDistPath: uiPath,
       permissionConfig: synth.permission,
       defaultPlanMode: synth.session?.planMode,
+      securityConfig: synth.security,
       mcpServers: synth.mcp?.servers ?? {},
     });
 

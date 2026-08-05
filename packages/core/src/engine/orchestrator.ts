@@ -1,6 +1,6 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@synth/shared';
 import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart } from '@synth/shared';
-import type { RouterConfig, PermissionConfig, PlanMode, SessionMode } from '@synth/shared';
+import type { RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig } from '@synth/shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
@@ -30,6 +30,8 @@ import type { RoutingDecision } from './router/router.js';
 import { PermissionEvaluator } from './permission/evaluator.js';
 import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
+import { getToolTrust } from './security/trust.js';
+import { detectPromptInjection, applyPolicy, wrapContent } from './security/prompt-injection.js';
 
 const MAX_DOOM_LOOP_COUNT = 3;
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
@@ -76,6 +78,8 @@ export interface OrchestratorOptions {
   permissionConfig?: PermissionConfig;
   /** Строгость цикла Plan→Build по умолчанию из config.yaml session.planMode (AD-028). */
   defaultPlanMode?: PlanMode;
+  /** Секция безопасности (защита от Indirect Prompt Injection). */
+  securityConfig?: SecurityConfig;
 }
 
 export interface ProcessMessageResult {
@@ -121,6 +125,8 @@ export class ChatOrchestrator {
   private readonly _permissionConfig: PermissionConfig;
   private readonly _approvalManager: PermissionApprovalManager;
   private readonly _defaultPlanMode: PlanMode;
+  private readonly _securityConfig: SecurityConfig;
+  private readonly _dictionaryStore: DictionaryStore;
 
   /** Публичный доступ к реестру агентов (для сериализации modeApplicable). */
   get agentRegistry(): AgentRegistry | null {
@@ -145,9 +151,12 @@ export class ChatOrchestrator {
     this._permissionConfig = options.permissionConfig ?? emptyPermissionConfig();
     this._approvalManager = new PermissionApprovalManager(this._eventBus);
     this._defaultPlanMode = options.defaultPlanMode ?? 'auto';
+    this._securityConfig = options.securityConfig
+      ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' } };
 
     // DictionaryStore и ProviderPool создаём всегда (нужны микро-слою и роутеру)
     const dictionaryStore = new DictionaryStore(options.dataDir || '/var/synth/data');
+    this._dictionaryStore = dictionaryStore;
     const pool = new ProviderPool(options.providerLoader);
 
     // AD-035: Micro-first pipeline — создаём всегда, не зависит от роутера
@@ -442,6 +451,15 @@ export class ChatOrchestrator {
       finalSystemPrompt = this._buildPlanSystemPrompt(
         finalSystemPrompt, session, planMode, sessionMode, planApproved,
       );
+
+      // IPI-защита: глобальная секция [RULES] — один раз для всех агентов
+      if (this._securityConfig.promptInjection.enabled) {
+        const lang = session.settings.language || 'ru';
+        const rulesText = this._contextConfig?.getRules(lang);
+        if (rulesText) {
+          finalSystemPrompt = `${finalSystemPrompt}\n\n[RULES]\n${rulesText}`;
+        }
+      }
 
       // 3. Convert messages for LLM (без summary — они уже в system prompt)
       const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
@@ -801,6 +819,7 @@ export class ChatOrchestrator {
                       modelRouter: this._router ?? undefined,
                       routerConfig: this._routerConfig ?? undefined,
                       contextConfig: this._contextConfig ?? undefined,
+                      securityConfig: this._securityConfig,
                       publish: (type: string, data: Record<string, unknown>) =>
                         publishChunk(type as never, data),
                       streamId,
@@ -832,6 +851,58 @@ export class ChatOrchestrator {
             result: toolResult,
             iteration: toolIteration,
           });
+
+          // IPI-защита: оборачиваем tool-контент по матрице доверия + детектируем
+          // подозрительные паттерны (флаг/sanitize/block по конфигу).
+          if (this._securityConfig.promptInjection.enabled && !toolResult.isError) {
+            const trustInfo = getToolTrust(
+              toolName,
+              toolArgs,
+              workingDir,
+              toolDef?.capabilities,
+            );
+            if (trustInfo) {
+              const piConfig = this._securityConfig.promptInjection;
+              const lang = session.settings.language || 'ru';
+              // Детекция по обоим словарям (ru+en) — веб-контент может быть на любом языке
+              const langs = lang === 'en' ? ['en', 'ru'] : ['ru', 'en'];
+              let detection = { suspicious: false, matches: [] as string[] };
+              for (const l of langs) {
+                const d = detectPromptInjection(toolResult.content, this._dictionaryStore, l);
+                if (d.suspicious) {
+                  detection = { suspicious: true, matches: [...detection.matches, ...d.matches] };
+                }
+              }
+
+              const applied = applyPolicy(toolResult.content, piConfig.mode, detection);
+
+              if (applied.blocked) {
+                toolResult = {
+                  content: `[BLOCKED] Результат инструмента "${toolName}" заблокирован: обнаружены признаки prompt injection (${detection.matches.slice(0, 5).join(', ')})`,
+                  isError: true,
+                  metadata: {
+                    ...toolResult.metadata,
+                    injection_suspicious: true,
+                    injection_matches: detection.matches,
+                  },
+                };
+              } else {
+                const wrapped = piConfig.wrapContent
+                  ? wrapContent(applied.content, trustInfo.source, trustInfo.attrs, trustInfo.trust)
+                  : applied.content;
+                toolResult = {
+                  ...toolResult,
+                  content: wrapped,
+                  metadata: {
+                    ...toolResult.metadata,
+                    ...(detection.suspicious
+                      ? { injection_suspicious: true, injection_matches: detection.matches }
+                      : {}),
+                  },
+                };
+              }
+            }
+          }
 
           // classify_conversation: сохраняем категорию в настройках сессии (AD-034)
           if (toolName === 'classify_conversation' && !toolResult.isError) {

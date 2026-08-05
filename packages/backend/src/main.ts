@@ -180,6 +180,7 @@ const orchestrator = new ChatOrchestrator({
   routerConfig: backendConfig.synth.router,
   permissionConfig: backendConfig.synth.permission,
   defaultPlanMode: backendConfig.synth.session.planMode,
+  securityConfig: backendConfig.synth.security,
 });
 
 const processMessage = orchestrator.createProcessMessage();

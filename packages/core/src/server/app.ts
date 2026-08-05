@@ -7,7 +7,7 @@ import { join, extname } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig } from '@synth/shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig } from '@synth/shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -47,6 +47,8 @@ export interface StandaloneConfig {
   permissionConfig?: PermissionConfig;
   /** Строгость цикла Plan→Build по умолчанию из config.yaml (AD-028). */
   defaultPlanMode?: PlanMode;
+  /** Секция безопасности (защита от Indirect Prompt Injection) из config.yaml. */
+  securityConfig?: SecurityConfig;
   /** Конфигурация MCP-серверов из config.yaml mcp.servers (для probe и загрузки тулов). */
   mcpServers?: Record<string, McpServerConfig>;
 }
@@ -275,6 +277,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
     permissionConfig: config.permissionConfig,
     defaultPlanMode: config.defaultPlanMode,
+    securityConfig: config.securityConfig,
     mcpManager,
   });
 

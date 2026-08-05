@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart, TsmState } from '@synth/shared';
-import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode } from '@synth/shared';
+import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig } from '@synth/shared';
 import type { AgentRegistry } from '../agents/registry.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ToolRegistry } from './registry.js';
@@ -35,6 +35,8 @@ export interface TaskExtra {
   callerAgentRole?: string;
   /** Permissions родительской сессии (AD-029) — наследуются саб-агентом с deny-дополнениями. */
   permissionConfig?: PermissionConfig;
+  /** Секция безопасности (защита от Indirect Prompt Injection) из config.yaml. */
+  securityConfig?: SecurityConfig;
 }
 
 type ContextMode = 'none' | 'inherit' | 'summary' | 'last_n';
@@ -362,6 +364,16 @@ export const taskTool: ToolDefinition = {
              '- Если модель не указана, будет использована стратегия родительской сессии\n');
 
         prompt += routingBlock;
+      }
+
+      // IPI-защита: глобальная секция [RULES] — один раз для саб-агентов
+      const security = extra.securityConfig;
+      if (security?.promptInjection?.enabled) {
+        const lang = parentSettings?.language || 'ru';
+        const rulesText = extra.contextConfig?.getRules(lang);
+        if (rulesText) {
+          prompt += `\n\n[RULES]\n${rulesText}`;
+        }
       }
 
       return prompt;

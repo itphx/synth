@@ -109,6 +109,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     workspacesRoot,
     permissionConfig: options.config.permission,
     defaultPlanMode: options.config.session?.planMode,
+    securityConfig: options.config.security,
   });
 
   // Создаём временную сессию

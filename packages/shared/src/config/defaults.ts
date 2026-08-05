@@ -126,4 +126,11 @@ export const defaultConfig: SynthConfig = {
     rules: {},
     askTimeoutMs: 30_000,
   },
+  security: {
+    promptInjection: {
+      enabled: true,
+      wrapContent: true,
+      mode: 'flag',
+    },
+  },
 };
