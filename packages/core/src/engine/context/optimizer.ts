@@ -293,8 +293,10 @@ export class ContextOptimizer {
       let usage: import('@synth/shared').TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
       for await (const chunk of prep.provider.chatAsync(prep.llmMessages, prep.summarizerPrompt)) {
-        content += chunk.content;
-        yield { type: 'chunk', content: chunk.content, model: prep.provider.model, provider: prep.provider.name };
+        // Финальный чанк несёт полный накопленный контент — заменяем, а не складываем,
+        // и не отдаём его как отдельный фрагмент (иначе контент удваивается).
+        content = chunk.isFinal && chunk.content ? chunk.content : content + chunk.content;
+        yield { type: 'chunk', content: chunk.isFinal ? '' : chunk.content, model: prep.provider.model, provider: prep.provider.name };
         if (chunk.model) model = chunk.model;
         if (chunk.usage) usage = chunk.usage;
       }
