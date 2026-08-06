@@ -302,4 +302,30 @@ describe('GatewayProvider (AD-036)', () => {
     const entries = await readdir(tmpDir);
     expect(entries).toHaveLength(0);
   });
+
+  it('chatAsync с финальным чанком полного контента НЕ дублирует ответ в payload (регрессия)', async () => {
+    const payloadPath = join(tmpDir, 'payloads.jsonl');
+    const { gw } = makeGateway({ config: { logPayloads: true }, payloadLogPath: payloadPath });
+
+    // Реальный openai.ts: delta-чанки («т», «ест») + финальный чанк с ПОЛНЫМ контентом («тест»).
+    const inner = gw as unknown as { _inner: MockCaptureProvider };
+    const originalChatAsync = inner._inner.chatAsync.bind(inner._inner);
+    inner._inner.chatAsync = async function* () {
+      yield { content: 'т', isFinal: false, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
+      yield { content: 'ест', isFinal: false, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
+      yield { content: 'тест', isFinal: true, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
+    };
+
+    // Потребитель (оркестратор) обрабатывает финальный чанк заменой — контент не дублируется.
+    let accumulated = '';
+    for await (const chunk of gw.chatAsync([makeMessage('hi')])) {
+      accumulated = chunk.isFinal && chunk.content ? chunk.content : accumulated + chunk.content;
+    }
+    expect(accumulated).toBe('тест');
+
+    const raw = await readFile(payloadPath, 'utf8');
+    const entry = JSON.parse(raw.trim()) as { response: { content: string } };
+    expect(entry.response.content).toBe('тест');
+    void originalChatAsync;
+  });
 });

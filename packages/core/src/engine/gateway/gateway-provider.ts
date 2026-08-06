@@ -151,7 +151,9 @@ export class GatewayProvider extends BaseProvider {
       debugCollector,
       cancellationToken,
     )) {
-      accumulated += chunk.content;
+      // Финальный чанк несёт полный накопленный контент — заменяем, а не складываем
+      // (иначе контент удваивается: delta-чанки + финальный полный).
+      accumulated = chunk.isFinal && chunk.content ? chunk.content : accumulated + chunk.content;
       if (chunk.usage) finalUsage = chunk.usage;
       yield chunk;
     }
