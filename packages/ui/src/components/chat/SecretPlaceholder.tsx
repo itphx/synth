@@ -10,6 +10,50 @@ import { MarkdownContent } from './MarkdownContent'
  */
 export const SECRET_PLACEHOLDER_REGEX = /⟦SYNTH_SECRET_(\d+)⟧/g
 
+/** Якорь для временной замены code-фрагментов (не содержит ⟦ — не пересекается с SECRET_PLACEHOLDER_REGEX). */
+export const CODE_ANCHOR_REGEX = /\uE000SYNTH_CODE_(\d+)\uE000/g
+
+export interface CodeProtection {
+  /** Текст с якорями вместо code-фрагментов. */
+  protectedText: string
+  /** Возвращает якоря на место оригинальных code-фрагментов. */
+  restoreCodeBlocks: (text: string) => string
+}
+
+/**
+ * Защита code-контекстов markdown от подмены плейсхолдеров секретов (AD-036).
+ * Внутри fenced code block / inline code плейсхолдер должен остаться буквальным
+ * текстом ⟦SYNTH_SECRET_N⟧: marked экранирует HTML внутри <pre><code> и <code>,
+ * поэтому вставленный спан «Значение скрыто» превращается в сырой HTML.
+ * Fenced-блоки (``` / ~~~) и inline-код (` ... `) временно заменяются на
+ * уникальные якоря, затем плейсхолдеры можно безопасно подменять вне кода.
+ */
+export function protectCodeBlocks(content: string): CodeProtection {
+  const fragments: string[] = []
+  let nextIndex = 0
+
+  const anchorFor = (fragment: string): string => {
+    const anchor = `\uE000SYNTH_CODE_${nextIndex}\uE000`
+    fragments.push(fragment)
+    nextIndex += 1
+    return anchor
+  }
+
+  // Fenced code blocks: ``` ... ``` и ~~~ ... ~~~ (с опциональной строкой языка).
+  const fencedProtected = content.replace(
+    /^( {0,3})(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1\2[^\n]*\n?/gm,
+    anchorFor,
+  )
+
+  // Inline code: ` ... ` (одинарные backticks внутри строки).
+  const protectedText = fencedProtected.replace(/`[^`\n]+`/g, anchorFor)
+
+  const restoreCodeBlocks = (text: string): string =>
+    text.replace(CODE_ANCHOR_REGEX, (_match, index: string) => fragments[Number(index)] ?? '')
+
+  return { protectedText, restoreCodeBlocks }
+}
+
 export interface SecretSegment {
   type: 'text' | 'secret'
   value: string
@@ -119,12 +163,16 @@ export function SecretMarkdown({ content, secrets, sessionId, className = '' }: 
     return <MarkdownContent content={content} className={className} />
   }
 
-  const markedContent = content.replace(SECRET_PLACEHOLDER_REGEX, (ph) => {
+  // Code-контексты (fenced blocks, inline code) временно заменяем на якоря —
+  // внутри них плейсхолдер должен остаться буквальным текстом (marked экранирует HTML).
+  const { protectedText, restoreCodeBlocks } = protectCodeBlocks(content)
+  const replaced = protectedText.replace(SECRET_PLACEHOLDER_REGEX, (ph) => {
     const value = secrets?.[ph]
     const title = value ? `Показать значение: ${ph}` : 'Значение недоступно'
     const cls = value ? SECRET_PH_HIDDEN_CLASS : SECRET_PH_UNAVAILABLE_CLASS
     return `<span class="${cls}" data-ph="${ph}" data-revealed="0" title="${title}">${t('gateway.secret.hidden')}</span>`
   })
+  const markedContent = restoreCodeBlocks(replaced)
 
   const handleSecretClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const el = (e.target as HTMLElement).closest<HTMLElement>('.synth-secret-ph')
