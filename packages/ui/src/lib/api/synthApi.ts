@@ -911,6 +911,33 @@ export const synthApi = {
       body: JSON.stringify({ sessionId, placeholder }),
     })
   },
+
+  // --- Логи сервисов (GET /api/v2/logs/:name) ---
+  async getLogs(name: string, params?: { tail?: number; search?: string }): Promise<LogsResponse> {
+    const q = new URLSearchParams()
+    if (params?.tail !== undefined) q.set('tail', String(params.tail))
+    if (params?.search) q.set('search', params.search)
+    const qs = q.toString()
+    return fetchJSON<LogsResponse>(`${BASE_URL}/logs/${encodeURIComponent(name)}${qs ? `?${qs}` : ''}`)
+  },
+
+  // --- Аудит LLM Gateway (GET /api/v2/audit) ---
+  async getAudit(params?: {
+    userId?: string
+    sessionId?: string
+    since?: string
+    until?: string
+    limit?: number
+  }): Promise<AuditListResponse> {
+    const q = new URLSearchParams()
+    if (params?.userId) q.set('userId', params.userId)
+    if (params?.sessionId) q.set('sessionId', params.sessionId)
+    if (params?.since) q.set('since', params.since)
+    if (params?.until) q.set('until', params.until)
+    if (params?.limit !== undefined) q.set('limit', String(params.limit))
+    const qs = q.toString()
+    return fetchJSON<AuditListResponse>(`${BASE_URL}/audit${qs ? `?${qs}` : ''}`)
+  },
 }
 
 export interface LlmGatewaySettings {
@@ -931,6 +958,38 @@ export interface SecretPattern {
 export interface SessionSecretsResponse {
   sessionId: string
   secrets: Record<string, string>
+}
+
+/** Ответ GET /api/v2/logs/:name — хвост лог-файла сервиса. */
+export interface LogsResponse {
+  name: string
+  file: string
+  total: number
+  tail: number
+  lines: string[]
+}
+
+/** Запись журнала аудита LLM Gateway (AD-036). */
+export interface AuditEntry {
+  ts: string
+  type: string
+  sessionId?: string
+  userId?: string
+  provider?: string
+  model?: string
+  secretsFound?: string[]
+  placeholders?: string[]
+  placeholder?: string
+  tokensIn?: number
+  tokensOut?: number
+  costUsd?: number
+  reason?: string
+}
+
+/** Ответ GET /api/v2/audit. */
+export interface AuditListResponse {
+  entries: AuditEntry[]
+  total: number
 }
 
 export interface McpProbedTool {

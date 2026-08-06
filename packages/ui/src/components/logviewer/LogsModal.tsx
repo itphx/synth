@@ -1,0 +1,106 @@
+import { Fragment } from "react"
+import { Dialog, DialogClose, DialogContent } from "../ui/dialog"
+import { Icon } from "../icon/Icon"
+import { useUIStore } from "../../stores/useUIStore"
+import { useAuthStore } from "@/stores/authStore"
+import { useI18n } from "@/lib/i18n"
+import { cn } from "@/lib/utils"
+import { LogFilePanel } from "./LogFilePanel"
+import { AuditLogPanel } from "./AuditLogPanel"
+
+interface CategoryItem {
+  id: string
+  labelKey: string
+  icon: string
+}
+
+const CATEGORIES: CategoryItem[] = [
+  { id: "core", labelKey: "logs.category.core", icon: "terminal-box" },
+  { id: "ui", labelKey: "logs.category.ui", icon: "file-text" },
+  { id: "backend", labelKey: "logs.category.backend", icon: "server" },
+  { id: "audit", labelKey: "logs.category.audit", icon: "shield-keyhole" },
+]
+
+/** Модальное окно «Логи и аудит»: логи сервисов core/ui/backend + журнал аудита LLM Gateway. */
+export const LogsModal = () => {
+  const { t } = useI18n()
+  const { user } = useAuthStore()
+  const { isLogsDialogOpen, setLogsDialogOpen, logsPage, setLogsPage } = useUIStore()
+
+  const userRoles = user?.roles ?? []
+  const visibleCategories = CATEGORIES.filter(
+    () => userRoles.includes('ADMIN') || userRoles.includes('AUDITOR')
+  )
+
+  return (
+    <Dialog open={isLogsDialogOpen} onOpenChange={setLogsDialogOpen}>
+      <DialogContent
+        className="p-0 gap-0 max-w-5xl w-[95vw] h-[90vh] max-h-[90vh] md:max-h-[85vh] shadow-xl"
+        showCloseButton={false}
+      >
+        <div className="flex h-full overflow-hidden overscroll-behavior-contain">
+          {/* Left sidebar */}
+          <div className="w-48 md:w-52 border-r border-border flex flex-col shrink-0">
+            <div className="flex items-center gap-2 px-4 h-12 border-b border-border">
+              <Icon name="terminal-box" className="size-4 text-muted-foreground" />
+              <span className="font-medium text-sm">{t('logs.title')}</span>
+              <div className="ml-auto">
+                <DialogClose
+                  className="rounded-lg p-1.5 opacity-70 transition-opacity hover:opacity-100 hover:bg-interactive-hover text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                  aria-label={t('common.close')}
+                >
+                  <Icon name="close" className="size-4" />
+                </DialogClose>
+              </div>
+            </div>
+            <nav className="flex-1 overflow-y-auto p-2" aria-label={t('logs.title')}>
+              {visibleCategories.map((cat) => (
+                <Fragment key={cat.id}>
+                  <button
+                    onClick={() => setLogsPage(cat.id)}
+                    aria-current={logsPage === cat.id ? 'page' : undefined}
+                    className={cn(
+                      "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition-[transform,color] duration-150 active:scale-[0.96]",
+                      logsPage === cat.id
+                        ? "bg-interactive-selection text-interactive-selection-foreground"
+                        : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
+                    )}
+                  >
+                    <Icon name={cat.icon} className="size-4 shrink-0" />
+                    {t(cat.labelKey as Parameters<typeof t>[0])}
+                  </button>
+                </Fragment>
+              ))}
+            </nav>
+          </div>
+
+          {/* Right content */}
+          <div className="flex-1 overflow-y-auto p-6 overscroll-behavior-contain">
+            {logsPage === "core" && (
+              <LogFilePanel
+                logName="core"
+                title={t('logs.core.title')}
+                description={t('logs.core.description')}
+              />
+            )}
+            {logsPage === "ui" && (
+              <LogFilePanel
+                logName="ui"
+                title={t('logs.ui.title')}
+                description={t('logs.ui.description')}
+              />
+            )}
+            {logsPage === "backend" && (
+              <LogFilePanel
+                logName="backend"
+                title={t('logs.backend.title')}
+                description={t('logs.backend.description')}
+              />
+            )}
+            {logsPage === "audit" && <AuditLogPanel />}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}

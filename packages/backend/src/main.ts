@@ -33,6 +33,7 @@ import { createUserRoutes } from './routes/users.js';
 import { createGitRoutes } from './routes/git.js';
 import { createMcpRoutes } from './routes/mcp.js';
 import { createAuditRoutes } from './routes/audit.js';
+import { createLogsRoutes, resolveLogDir } from './routes/logs.js';
 import { createGatewayPatternsRoutes } from './routes/gateway-patterns.js';
 import { YamlMcpConfigStore } from './lib/mcp-config-store.js';
 import { t, getTranslations } from './lib/i18n.js';
@@ -265,6 +266,9 @@ app.route('/api/v2/audit', createAuditRoutes(auth, {
   },
   logger: gatewayAuditLogger,
 }));
+
+// Логи сервисов (core/ui/backend) — чтение хвоста лог-файлов, только ADMIN/AUDITOR
+app.route('/api/v2/logs', createLogsRoutes(auth, { logDir: resolveLogDir() }));
 
 // LLM Gateway patterns routes (AD-036) — управление regex-паттернами детекции секретов, только ADMIN
 app.route('/api/v2/gateway', createGatewayPatternsRoutes(auth, patternStore));
