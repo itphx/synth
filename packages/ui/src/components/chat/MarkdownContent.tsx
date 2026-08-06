@@ -22,7 +22,7 @@ export function MarkdownContent({ content, className = '' }: MarkdownContentProp
           'span', 'div', 'hr',
           'input', 'label',
         ],
-        ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class', 'id', 'type', 'checked', 'disabled'],
+        ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class', 'id', 'type', 'checked', 'disabled', 'data-ph'],
       })
     } catch (e) {
       console.warn('[MarkdownContent] marked failed, falling back to plain text:', e)
