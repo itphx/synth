@@ -62,8 +62,8 @@ export function SecretPlaceholder({ placeholder, value, sessionId }: SecretPlace
   if (!canReveal) {
     return (
       <span
-        title="Секрет недоступен"
-        className="secret-placeholder italic select-none align-baseline text-muted-foreground"
+        title={placeholder}
+        className="secret-placeholder [font:inherit] select-none align-baseline text-muted-foreground"
       >
         {t('gateway.secret.hidden')}
       </span>
@@ -74,9 +74,9 @@ export function SecretPlaceholder({ placeholder, value, sessionId }: SecretPlace
     <button
       type="button"
       onClick={handleClick}
-      title={revealed ? 'Скрыть значение' : 'Показать значение'}
+      title={revealed ? 'Скрыть значение' : placeholder}
       className={cn(
-        'secret-placeholder italic cursor-pointer select-none align-baseline transition-colors',
+        'secret-placeholder [font:inherit] cursor-pointer select-none align-baseline transition-colors',
         revealed
           ? 'text-amber-700 dark:text-amber-300'
           : 'text-violet-700 hover:text-violet-900 dark:text-violet-300',
