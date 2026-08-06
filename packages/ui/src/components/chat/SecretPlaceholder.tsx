@@ -74,7 +74,7 @@ export function SecretPlaceholder({ placeholder, value, sessionId }: SecretPlace
     <button
       type="button"
       onClick={handleClick}
-      title={revealed ? 'Скрыть значение' : placeholder}
+      title={revealed ? 'Скрыть значение' : `Показать значение: ${placeholder}`}
       className={cn(
         'secret-placeholder [font:inherit] cursor-pointer select-none align-baseline transition-colors',
         revealed
