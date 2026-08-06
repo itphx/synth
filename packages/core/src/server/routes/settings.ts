@@ -38,12 +38,13 @@ function isValidMcpServers(servers: unknown): servers is Record<string, McpServe
   return true;
 }
 
-/** Валидация runtime-настроек LLM Gateway (AD-036): допустимы только известные поля. */
+/** Валидация runtime-настроек LLM Gateway: допустимы только известные поля. */
 function isValidLlmGatewaySettings(value: unknown): value is Partial<LlmGatewayRuntimeSettings> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const s = value as Record<string, unknown>;
   if (s.enabled !== undefined && typeof s.enabled !== 'boolean') return false;
   if (s.inputMode !== undefined && s.inputMode !== 'obfuscate' && s.inputMode !== 'block') return false;
+  if (s.logPayloads !== undefined && typeof s.logPayloads !== 'boolean') return false;
   if (s.rateLimit !== undefined) {
     const rl = s.rateLimit as Record<string, unknown>;
     if (!rl || typeof rl !== 'object' || Array.isArray(rl)) return false;
@@ -126,7 +127,7 @@ export function createSettingsRoutes(
       return c.json({
         error: {
           code: 'VALIDATION_ERROR',
-          message: 'llmGateway: ожидается { enabled?: boolean, inputMode?: "obfuscate"|"block", rateLimit?: { userPerMinute, providerPerMinute } }',
+          message: 'llmGateway: ожидается { enabled?: boolean, inputMode?: "obfuscate"|"block", logPayloads?: boolean, rateLimit?: { userPerMinute, providerPerMinute } }',
         },
       }, 400);
     }

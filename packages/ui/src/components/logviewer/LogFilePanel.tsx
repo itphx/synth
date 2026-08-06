@@ -67,7 +67,7 @@ export const LogFilePanel = ({ logName, title, description }: LogFilePanelProps)
           <select
             value={tail}
             onChange={(e) => setTail(Number(e.target.value))}
-            className="bg-interactive-selection border border-border rounded-lg px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            className="rounded-md bg-input border border-border px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           >
             {TAIL_OPTIONS.map((n) => (
               <option key={n} value={n}>{n}</option>
@@ -82,7 +82,7 @@ export const LogFilePanel = ({ logName, title, description }: LogFilePanelProps)
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={t('logs.search')}
-            className="w-full rounded-lg bg-interactive-selection border border-border pl-8 pr-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            className="w-full rounded-md bg-input border border-border pl-8 pr-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           />
         </div>
 

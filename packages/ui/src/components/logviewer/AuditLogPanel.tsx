@@ -1,11 +1,15 @@
 import { useEffect, useState, useCallback } from 'react'
-import { synthApi, type AuditEntry } from '@/lib/api/synthApi'
+import { synthApi, type AuditEntry, type SessionData, type UserInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 
 const AUDIT_TYPES = ['obfuscated', 'blocked', 'revealed', 'rate_limited', 'output_guard'] as const
 const LIMIT_OPTIONS = [50, 100, 200, 500]
+
+/** Единый стиль select/input в logviewer (как в GatewaySettings). */
+const CONTROL_CLASS =
+  'rounded-md bg-input border border-border px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring'
 
 const TYPE_COLORS: Record<string, string> = {
   obfuscated: 'bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300',
@@ -51,7 +55,7 @@ function formatCost(costUsd?: number): string {
   return `$${costUsd.toFixed(6)}`
 }
 
-/** Панель «Журнал аудита» (AD-036): события LLM Gateway с фильтрами. */
+/** Панель «Журнал аудита»: события LLM Gateway с фильтрами. */
 export const AuditLogPanel = () => {
   const { t } = useI18n()
   const [filters, setFilters] = useState<AuditFilters>(DEFAULT_FILTERS)
@@ -59,6 +63,36 @@ export const AuditLogPanel = () => {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [users, setUsers] = useState<UserInfo[]>([])
+  const [sessions, setSessions] = useState<SessionData[]>([])
+
+  // Списки пользователей и сессий для выпадающих фильтров. Ошибки загрузки
+  // (например, /users доступен только ADMIN) оставляют список пустым — фильтр
+  // по-прежнему работает как текстовое поле-заглушка через «— все —».
+  useEffect(() => {
+    let cancelled = false
+    synthApi
+      .getUsers()
+      .then((data) => {
+        if (cancelled) return
+        setUsers([...new Map(data.users.map((u) => [u.id, u])).values()])
+      })
+      .catch(() => {
+        if (!cancelled) setUsers([])
+      })
+    synthApi
+      .getSessions()
+      .then((data) => {
+        if (cancelled) return
+        setSessions([...new Map(data.map((s) => [s.id, s])).values()])
+      })
+      .catch(() => {
+        if (!cancelled) setSessions([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const load = useCallback(async (f: AuditFilters) => {
     setLoading(true)
@@ -99,84 +133,96 @@ export const AuditLogPanel = () => {
         <p className="text-muted-foreground text-sm mt-1">{t('logs.audit.description')}</p>
       </div>
 
-      <div className="flex flex-wrap items-end gap-2">
-        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-          {t('logs.audit.type')}
-          <select
-            value={filters.type}
-            onChange={(e) => setFilters((f) => ({ ...f, type: e.target.value }))}
-            className="bg-interactive-selection border border-border rounded-lg px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            {t('logs.audit.type')}
+            <select
+              value={filters.type}
+              onChange={(e) => setFilters((f) => ({ ...f, type: e.target.value }))}
+              className={CONTROL_CLASS}
+            >
+              <option value="">—</option>
+              {AUDIT_TYPES.map((type) => (
+                <option key={type} value={type}>{type}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            {t('logs.audit.user')}
+            <select
+              value={filters.userId}
+              onChange={(e) => setFilters((f) => ({ ...f, userId: e.target.value }))}
+              className={`${CONTROL_CLASS} max-w-48`}
+            >
+              <option value="">— {t('logs.audit.all')} —</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>{u.display_name || u.username}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            {t('logs.audit.session')}
+            <select
+              value={filters.sessionId}
+              onChange={(e) => setFilters((f) => ({ ...f, sessionId: e.target.value }))}
+              className={`${CONTROL_CLASS} max-w-56`}
+            >
+              <option value="">— {t('logs.audit.all')} —</option>
+              {sessions.map((s) => (
+                <option key={s.id} value={s.id}>{s.name || s.id}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            {t('logs.audit.limit')}
+            <select
+              value={filters.limit}
+              onChange={(e) => setFilters((f) => ({ ...f, limit: Number(e.target.value) }))}
+              className={CONTROL_CLASS}
+            >
+              {LIMIT_OPTIONS.map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+          </label>
+
+          <button
+            onClick={handleApply}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-foreground bg-interactive-selection hover:bg-interactive-hover transition-colors disabled:opacity-50"
           >
-            <option value="">—</option>
-            {AUDIT_TYPES.map((type) => (
-              <option key={type} value={type}>{type}</option>
-            ))}
-          </select>
-        </label>
+            <Icon name="search" className="size-4" />
+            {t('logs.audit.apply')}
+          </button>
 
-        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-          {t('logs.audit.user')}
-          <input
-            type="text"
-            value={filters.userId}
-            onChange={(e) => setFilters((f) => ({ ...f, userId: e.target.value }))}
-            className="w-32 rounded-lg bg-interactive-selection border border-border px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        </label>
+          <span className="ml-auto text-xs text-muted-foreground tabular-nums">{total}</span>
+        </div>
 
-        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-          {t('logs.audit.session')}
-          <input
-            type="text"
-            value={filters.sessionId}
-            onChange={(e) => setFilters((f) => ({ ...f, sessionId: e.target.value }))}
-            className="w-36 rounded-lg bg-interactive-selection border border-border px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        </label>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            {t('logs.audit.since')}
+            <input
+              type="datetime-local"
+              value={filters.since}
+              onChange={(e) => setFilters((f) => ({ ...f, since: e.target.value }))}
+              className={CONTROL_CLASS}
+            />
+          </label>
 
-        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-          {t('logs.audit.since')}
-          <input
-            type="datetime-local"
-            value={filters.since}
-            onChange={(e) => setFilters((f) => ({ ...f, since: e.target.value }))}
-            className="rounded-lg bg-interactive-selection border border-border px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        </label>
-
-        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-          {t('logs.audit.until')}
-          <input
-            type="datetime-local"
-            value={filters.until}
-            onChange={(e) => setFilters((f) => ({ ...f, until: e.target.value }))}
-            className="rounded-lg bg-interactive-selection border border-border px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        </label>
-
-        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-          {t('logs.audit.limit')}
-          <select
-            value={filters.limit}
-            onChange={(e) => setFilters((f) => ({ ...f, limit: Number(e.target.value) }))}
-            className="bg-interactive-selection border border-border rounded-lg px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            {LIMIT_OPTIONS.map((n) => (
-              <option key={n} value={n}>{n}</option>
-            ))}
-          </select>
-        </label>
-
-        <button
-          onClick={handleApply}
-          disabled={loading}
-          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-foreground bg-interactive-selection hover:bg-interactive-hover transition-colors disabled:opacity-50"
-        >
-          <Icon name="search" className="size-4" />
-          {t('logs.audit.apply')}
-        </button>
-
-        <span className="ml-auto text-xs text-muted-foreground tabular-nums">{total}</span>
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            {t('logs.audit.until')}
+            <input
+              type="datetime-local"
+              value={filters.until}
+              onChange={(e) => setFilters((f) => ({ ...f, until: e.target.value }))}
+              className={CONTROL_CLASS}
+            />
+          </label>
+        </div>
       </div>
 
       {error && (

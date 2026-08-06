@@ -8,6 +8,7 @@ import { Toggle } from '../ui/Toggle'
 const DEFAULT_SETTINGS: LlmGatewaySettings = {
   enabled: false,
   inputMode: 'obfuscate',
+  logPayloads: false,
   rateLimit: {
     userPerMinute: 60,
     providerPerMinute: 120,
@@ -24,7 +25,7 @@ function isValidRegex(regex: string): boolean {
   }
 }
 
-/** Секция «Шлюз безопасности» (AD-036): глобальный тумблер + режим Input Guard + rate limit. */
+/** Секция «Шлюз безопасности»: глобальный тумблер + режим Input Guard + rate limit. */
 export function GatewaySettings() {
   const { t } = useI18n()
   const { notify } = useNotification()
@@ -48,6 +49,7 @@ export function GatewaySettings() {
         setSettings({
           enabled: cfg.enabled ?? DEFAULT_SETTINGS.enabled,
           inputMode: cfg.inputMode ?? DEFAULT_SETTINGS.inputMode,
+          logPayloads: cfg.logPayloads ?? DEFAULT_SETTINGS.logPayloads,
           rateLimit: {
             userPerMinute: cfg.rateLimit?.userPerMinute ?? DEFAULT_SETTINGS.rateLimit.userPerMinute,
             providerPerMinute: cfg.rateLimit?.providerPerMinute ?? DEFAULT_SETTINGS.rateLimit.providerPerMinute,
@@ -174,6 +176,19 @@ export function GatewaySettings() {
           <span className="text-sm text-foreground">
             {settings.enabled ? t('common.enabled') : t('common.disabled')}
           </span>
+        </label>
+
+        <label className="flex items-center gap-3 cursor-pointer">
+          <Toggle
+            enabled={settings.logPayloads ?? false}
+            onToggle={() => setSettings((s) => ({ ...s, logPayloads: !(s.logPayloads ?? false) }))}
+          />
+          <div className="flex flex-col gap-0.5">
+            <span className="text-sm text-foreground">Логировать запросы и ответы LLM</span>
+            <span className="text-xs text-muted-foreground">
+              Пишутся в отдельный JSONL после обфускации, доступно в окне «Логи и аудит → LLM».
+            </span>
+          </div>
         </label>
 
         <div className="flex flex-col gap-1">

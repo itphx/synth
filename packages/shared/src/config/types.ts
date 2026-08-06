@@ -154,6 +154,10 @@ export const llmGatewayConfigSchema = z.object({
   enabled: z.boolean().default(false),
   /** Режим Input Guard: obfuscate (замена на плейсхолдер) | block (запрос блокируется). */
   inputMode: z.enum(['obfuscate', 'block']).default('obfuscate'),
+  /** Полное логирование запросов и ответов LLM (после обфускации) в JSONL. */
+  logPayloads: z.boolean().default(false),
+  /** Путь к JSONL полного лога; по умолчанию {dataDir}/audit/llm-payloads.jsonl. */
+  payloadLogPath: z.string().default(''),
   rateLimit: llmGatewayRateLimitConfigSchema.default({}),
   audit: llmGatewayAuditConfigSchema.default({}),
 });

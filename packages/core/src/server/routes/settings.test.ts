@@ -298,6 +298,8 @@ describe('Settings API Routes (workspace)', () => {
       const base: LLMGatewayConfig = {
         enabled: false,
         inputMode: 'obfuscate',
+        logPayloads: false,
+        payloadLogPath: '',
         rateLimit: { userPerMinute: 10, providerPerMinute: 20 },
         audit: { enabled: true, logPath: '/x/llm-gateway.jsonl' },
       };

@@ -523,7 +523,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
             className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
             title={t('header.logs')}
           >
-            <Icon name="terminal-box" className="h-5 w-5" />
+            <Icon name="file-list" className="h-5 w-5" />
           </button>
         )}
 

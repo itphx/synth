@@ -90,6 +90,9 @@ export {
   restoreSecrets,
   PLACEHOLDER_PATTERN,
   readAuditLog,
+  PayloadLogger,
+  writePayloadLog,
+  readPayloadLog,
 } from './engine/gateway/index.js';
 export type {
   GatewayProviderOptions,
@@ -102,4 +105,6 @@ export type {
   ObfuscateResult,
   SecretPattern,
   SecretDetectorPattern,
+  LlmPayloadEntry,
+  PayloadLogQuery,
 } from './engine/gateway/index.js';

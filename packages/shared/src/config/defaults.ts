@@ -125,6 +125,8 @@ export const defaultConfig: SynthConfig = {
   llmGateway: {
     enabled: false,
     inputMode: 'obfuscate',
+    logPayloads: false,
+    payloadLogPath: '',
     rateLimit: {
       userPerMinute: 60,
       providerPerMinute: 120,

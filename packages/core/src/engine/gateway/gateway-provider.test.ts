@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -70,6 +70,8 @@ function makeConfig(overrides: Partial<LLMGatewayConfig> = {}): LLMGatewayConfig
   return {
     enabled: true,
     inputMode: 'obfuscate',
+    logPayloads: false,
+    payloadLogPath: '',
     rateLimit: { userPerMinute: 60, providerPerMinute: 120 },
     audit: { enabled: true, logPath: '' },
     ...overrides,
@@ -109,6 +111,7 @@ describe('GatewayProvider (AD-036)', () => {
     config?: Partial<LLMGatewayConfig>;
     rateLimiter?: RateLimiter;
     initialMap?: Record<string, string>;
+    payloadLogPath?: string;
   } = {}) {
     const inner = new MockCaptureProvider({ url: 'http://mock', apiKey: 'k', model: 'm' });
     const audit = new AuditLogger(join(tmpDir, 'audit.jsonl'));
@@ -122,6 +125,7 @@ describe('GatewayProvider (AD-036)', () => {
       },
       getAudit: () => audit,
       getRateLimiter: () => rateLimiter,
+      payloadLogPath: opts.payloadLogPath,
       sessionId: 's1',
       userId: 'u1',
     });
@@ -235,5 +239,67 @@ describe('GatewayProvider (AD-036)', () => {
     }
     expect(MockCaptureProvider.calls).toBe(1); // inner не вызван
     expect(chunks.join('')).toContain('Rate limit');
+  });
+
+  it('logPayloads + payloadLogPath: chat пишет полный лог (запрос после обфускации)', async () => {
+    const payloadPath = join(tmpDir, 'payloads.jsonl');
+    const { gw } = makeGateway({ config: { logPayloads: true }, payloadLogPath: payloadPath });
+    MockCaptureProvider.responseContent = 'ответ';
+
+    await gw.chat([makeMessage(`ключ ${SK_KEY}`)], 'система');
+
+    const raw = await readFile(payloadPath, 'utf8');
+    const entry = JSON.parse(raw.trim()) as {
+      ts: string;
+      sessionId: string;
+      userId: string;
+      provider: string;
+      request: { messages: Array<{ content: string }>; systemPrompt?: string };
+      response: { content: string; usage?: { inputTokens?: number } };
+    };
+    expect(entry.sessionId).toBe('s1');
+    expect(entry.userId).toBe('u1');
+    expect(entry.provider).toBe('mockgw2');
+    // Запрос сохранён ПОСЛЕ обфускации — секрета в логе нет
+    expect(entry.request.messages[0]?.content).toContain('⟦SYNTH_SECRET_1⟧');
+    expect(entry.request.messages[0]?.content).not.toContain(SK_KEY);
+    expect(entry.request.systemPrompt).toBe('система');
+    expect(entry.response.content).toBe('ответ');
+    expect(entry.response.usage?.inputTokens).toBe(1);
+  });
+
+  it('logPayloads + payloadLogPath: chatAsync пишет накопленный ответ', async () => {
+    const payloadPath = join(tmpDir, 'payloads.jsonl');
+    const { gw } = makeGateway({ config: { logPayloads: true }, payloadLogPath: payloadPath });
+    MockCaptureProvider.responseContent = 'стрим-ответ';
+
+    const chunks: string[] = [];
+    for await (const chunk of gw.chatAsync([makeMessage('hi')])) {
+      chunks.push(chunk.content);
+    }
+    expect(chunks.join('')).toBe('стрим-ответ');
+
+    const raw = await readFile(payloadPath, 'utf8');
+    const entry = JSON.parse(raw.trim()) as { response: { content: string } };
+    expect(entry.response.content).toBe('стрим-ответ');
+  });
+
+  it('logPayloads выключен — полный лог НЕ пишется', async () => {
+    const payloadPath = join(tmpDir, 'payloads.jsonl');
+    const { gw } = makeGateway({ config: { logPayloads: false }, payloadLogPath: payloadPath });
+
+    await gw.chat([makeMessage('hi')]);
+
+    await expect(readFile(payloadPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('payloadLogPath не задан — полный лог НЕ пишется', async () => {
+    const { gw } = makeGateway({ config: { logPayloads: true } });
+
+    await gw.chat([makeMessage('hi')]);
+
+    // Никаких файлов в tmpDir не создано (audit.jsonl тоже отсутствует — аудит не сработал)
+    const entries = await readdir(tmpDir);
+    expect(entries).toHaveLength(0);
   });
 });

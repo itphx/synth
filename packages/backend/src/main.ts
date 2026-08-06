@@ -167,11 +167,16 @@ const modelPriceLoader = (modelName: string) => {
   return null;
 };
 
-// LLM Gateway (AD-036): общий AuditLogger создаётся снаружи, чтобы эндпоинт
+// LLM Gateway: общий AuditLogger создаётся снаружи, чтобы эндпоинт
 // GET /api/v2/audit и оркестратор писали/читали один и тот же JSONL-файл.
 const gatewayAuditLogger = new AuditLogger(
   backendConfig.synth.llmGateway.audit.logPath || join(dataDir, 'audit', 'llm-gateway.jsonl'),
 );
+
+// Полный лог запросов/ответов LLM (после обфускации) — один JSONL-файл для
+// записи (оркестратор) и чтения (GET /api/v2/logs/llm).
+const gatewayPayloadLogPath = backendConfig.synth.llmGateway.payloadLogPath
+  || join(dataDir, 'audit', 'llm-payloads.jsonl');
 
 // AD-036: runtime-настройка LLM Gateway (тумблер из UI, {dataDir}/settings.json)
 // приоритетнее config.yaml — мёржим при старте, чтобы шлюз применялся к оркестратору.
@@ -201,6 +206,7 @@ const orchestrator = new ChatOrchestrator({
   securityConfig: backendConfig.synth.security,
   gatewayConfig,
   gatewayAuditLogger,
+  gatewayPayloadLogPath,
   gatewayPatternStore: patternStore,
 });
 
@@ -267,8 +273,11 @@ app.route('/api/v2/audit', createAuditRoutes(auth, {
   logger: gatewayAuditLogger,
 }));
 
-// Логи сервисов (core/ui/backend) — чтение хвоста лог-файлов, только ADMIN/AUDITOR
-app.route('/api/v2/logs', createLogsRoutes(auth, { logDir: resolveLogDir() }));
+// Логи сервисов (core/ui/backend) + полный лог запросов/ответов LLM — чтение, только ADMIN/AUDITOR
+app.route('/api/v2/logs', createLogsRoutes(auth, {
+  logDir: resolveLogDir(),
+  payloadLogPath: gatewayPayloadLogPath,
+}));
 
 // LLM Gateway patterns routes (AD-036) — управление regex-паттернами детекции секретов, только ADMIN
 app.route('/api/v2/gateway', createGatewayPatternsRoutes(auth, patternStore));

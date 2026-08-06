@@ -7,6 +7,7 @@ import { useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 import { LogFilePanel } from "./LogFilePanel"
 import { AuditLogPanel } from "./AuditLogPanel"
+import { LlmPayloadPanel } from "./LlmPayloadPanel"
 
 interface CategoryItem {
   id: string
@@ -18,6 +19,7 @@ const CATEGORIES: CategoryItem[] = [
   { id: "core", labelKey: "logs.category.core", icon: "terminal-box" },
   { id: "ui", labelKey: "logs.category.ui", icon: "file-text" },
   { id: "backend", labelKey: "logs.category.backend", icon: "server" },
+  { id: "llm", labelKey: "logs.category.llm", icon: "file-code" },
   { id: "audit", labelKey: "logs.category.audit", icon: "shield-keyhole" },
 ]
 
@@ -97,6 +99,7 @@ export const LogsModal = () => {
                 description={t('logs.backend.description')}
               />
             )}
+            {logsPage === "llm" && <LlmPayloadPanel />}
             {logsPage === "audit" && <AuditLogPanel />}
           </div>
         </div>

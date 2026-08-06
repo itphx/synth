@@ -54,6 +54,12 @@ interface ErrorResponseBody {
   error: { code: string; message: string };
 }
 
+/** Формат ответа GET /api/v2/logs/llm (тестовое зеркало контракта). */
+interface LlmPayloadListResponse {
+  entries: Array<{ ts: string; sessionId?: string; request: unknown; response: unknown }>;
+  total: number;
+}
+
 /** kit с user === null — для проверки 401 (requireAuth отклоняет). */
 function createMockKit(user: User | null) {
   return {
@@ -97,11 +103,11 @@ describe('Logs API Routes', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  function createApp(user: User | null) {
+  function createApp(user: User | null, payloadLogPath?: string) {
     const app = new Hono();
     const kit = createMockKit(user);
     app.use('*', kit.requireAuth);
-    app.route('/api/v2/logs', createLogsRoutes(kit as any, { logDir }));
+    app.route('/api/v2/logs', createLogsRoutes(kit as any, { logDir, payloadLogPath }));
     return app;
   }
 
@@ -255,6 +261,66 @@ describe('Logs API Routes', () => {
       const app = createApp(adminUser);
       const res = await app.request(`/api/v2/logs/${encodeURIComponent('core.log')}`);
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('GET /api/v2/logs/llm (полный лог запросов/ответов LLM)', () => {
+    it('RBAC: USER получает 403', async () => {
+      const app = createApp(userUser, join(logDir, 'llm-payloads.jsonl'));
+      const res = await app.request('/api/v2/logs/llm');
+      expect(res.status).toBe(403);
+    });
+
+    it('ADMIN получает 200; файл отсутствует → entries: []', async () => {
+      const app = createApp(adminUser, join(logDir, 'llm-payloads.jsonl'));
+      const res = await app.request('/api/v2/logs/llm');
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toEqual({ entries: [], total: 0 });
+    });
+
+    it('payloadLogPath не задан → entries: [] (логирование не настроено)', async () => {
+      const app = createApp(adminUser);
+      const res = await app.request('/api/v2/logs/llm');
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toEqual({ entries: [], total: 0 });
+    });
+
+    it('читает записи из JSONL, фильтрует по sessionId и limit', async () => {
+      const payloadPath = join(logDir, 'llm-payloads.jsonl');
+      const entry1 = { ts: '1', sessionId: 's1', request: { messages: [] }, response: { content: 'a' } };
+      const entry2 = { ts: '2', sessionId: 's2', request: { messages: [] }, response: { content: 'b' } };
+      const entry3 = { ts: '3', sessionId: 's1', request: { messages: [] }, response: { content: 'c' } };
+      await writeFile(payloadPath, [entry1, entry2, entry3].map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf8');
+
+      const app = createApp(adminUser, payloadPath);
+
+      const all = await app.request('/api/v2/logs/llm?limit=10');
+      expect(all.status).toBe(200);
+      const allBody = (await all.json()) as LlmPayloadListResponse;
+      expect(allBody.total).toBe(3);
+      expect(allBody.entries).toHaveLength(3);
+
+      const s1 = await app.request('/api/v2/logs/llm?sessionId=s1&limit=10');
+      const s1Body = (await s1.json()) as LlmPayloadListResponse;
+      expect(s1Body.total).toBe(2);
+      expect(s1Body.entries.every((e) => e.sessionId === 's1')).toBe(true);
+
+      const limited = await app.request('/api/v2/logs/llm?limit=1');
+      const limitedBody = (await limited.json()) as LlmPayloadListResponse;
+      expect(limitedBody.total).toBe(3);
+      expect(limitedBody.entries).toHaveLength(1);
+      expect(limitedBody.entries[0]?.ts).toBe('3');
+    });
+
+    it('пустой файл → entries: []', async () => {
+      const payloadPath = join(logDir, 'llm-payloads.jsonl');
+      await writeFile(payloadPath, '', 'utf8');
+      const app = createApp(adminUser, payloadPath);
+      const res = await app.request('/api/v2/logs/llm');
+      const body = await res.json();
+      expect(body).toEqual({ entries: [], total: 0 });
     });
   });
 });

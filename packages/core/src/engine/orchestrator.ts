@@ -83,6 +83,8 @@ export interface OrchestratorOptions {
   securityConfig?: SecurityConfig;
   /** LLM Gateway (AD-036): глобальный тумблер и конфиг. Выключен по умолчанию. */
   gatewayConfig?: LLMGatewayConfig;
+  /** Путь к JSONL полного лога запросов/ответов LLM ({dataDir}/audit/llm-payloads.jsonl). */
+  gatewayPayloadLogPath?: string;
   /** Аудит LLM Gateway — если создаётся снаружи (backend/runner). Иначе создаётся внутри. */
   gatewayAuditLogger?: AuditLogger;
   /** Хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт). */
@@ -140,6 +142,8 @@ export class ChatOrchestrator {
   private _gatewayRateLimiter: RateLimiter | null;
   private readonly _gatewayPatternStore: SecretPatternStore | null;
   private readonly _dataDir: string;
+  /** Путь к JSONL полного лога запросов/ответов LLM (передаётся в GatewayProvider). */
+  private readonly _gatewayPayloadLogPath: string | undefined;
   /** Внешний audit-logger (backend/runner) — переиспользуется при live-включении gateway. */
   private readonly _gatewayAuditExternal: AuditLogger | null;
   private _providerPool: ProviderPool | null;
@@ -170,6 +174,8 @@ export class ChatOrchestrator {
     this._securityConfig = options.securityConfig
       ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' } };
     this._dataDir = options.dataDir || '/var/synth/data';
+    this._gatewayPayloadLogPath = options.gatewayPayloadLogPath
+      ?? join(options.dataDir || '/var/synth/data', 'audit', 'llm-payloads.jsonl');
 
     // AD-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
     // ObfuscationMapStore живёт в сессии, RateLimiter и AuditLogger — общие.
@@ -220,6 +226,7 @@ export class ChatOrchestrator {
             saveMap: async () => {},
             getAudit: () => this._gatewayAudit!,
             getRateLimiter: () => this._gatewayRateLimiter!,
+            payloadLogPath: this._gatewayPayloadLogPath,
             sessionId: '',
             userId: '',
           })
@@ -296,6 +303,7 @@ export class ChatOrchestrator {
             saveMap: async () => {},
             getAudit: () => this._gatewayAudit!,
             getRateLimiter: () => this._gatewayRateLimiter!,
+            payloadLogPath: this._gatewayPayloadLogPath,
             sessionId: '',
             userId: '',
           })
@@ -1647,6 +1655,7 @@ export class ChatOrchestrator {
       getAudit: () => this._gatewayAudit!,
       getRateLimiter: () => this._gatewayRateLimiter!,
       getPatterns: patternStore ? () => patternStore.getPatterns() : undefined,
+      payloadLogPath: this._gatewayPayloadLogPath,
       sessionId: session.id,
       userId: session.userId ?? '',
     });

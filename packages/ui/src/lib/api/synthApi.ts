@@ -938,11 +938,21 @@ export const synthApi = {
     const qs = q.toString()
     return fetchJSON<AuditListResponse>(`${BASE_URL}/audit${qs ? `?${qs}` : ''}`)
   },
+
+  // --- Полный лог запросов/ответов LLM (GET /api/v2/logs/llm) ---
+  async getLlmPayloads(params?: { sessionId?: string; limit?: number }): Promise<LlmPayloadListResponse> {
+    const q = new URLSearchParams()
+    if (params?.sessionId) q.set('sessionId', params.sessionId)
+    if (params?.limit !== undefined) q.set('limit', String(params.limit))
+    const qs = q.toString()
+    return fetchJSON<LlmPayloadListResponse>(`${BASE_URL}/logs/llm${qs ? `?${qs}` : ''}`)
+  },
 }
 
 export interface LlmGatewaySettings {
   enabled: boolean
   inputMode: 'obfuscate' | 'block'
+  logPayloads?: boolean
   rateLimit: {
     userPerMinute: number
     providerPerMinute: number
@@ -989,6 +999,38 @@ export interface AuditEntry {
 /** Ответ GET /api/v2/audit. */
 export interface AuditListResponse {
   entries: AuditEntry[]
+  total: number
+}
+
+/** Запись полного лога запросов/ответов LLM (после обфускации). */
+export interface LlmPayloadEntry {
+  ts: string
+  sessionId?: string
+  userId?: string
+  provider?: string
+  model?: string
+  request: {
+    messages: Array<{
+      id?: string
+      role: string
+      content: string
+      [key: string]: unknown
+    }>
+    systemPrompt?: string
+  }
+  response: {
+    content: string
+    usage?: {
+      inputTokens?: number
+      outputTokens?: number
+      totalTokens?: number
+    }
+  }
+}
+
+/** Ответ GET /api/v2/logs/llm. */
+export interface LlmPayloadListResponse {
+  entries: LlmPayloadEntry[]
   total: number
 }
 

@@ -12,6 +12,7 @@ import { warning } from '../../logger.js';
 import { runInputGuard } from './input-guard.js';
 import { runOutputGuard } from './output-guard.js';
 import { maskSecret } from './secret-detector.js';
+import { writePayloadLog } from './payload-logger.js';
 import type { AuditLogger } from './audit-logger.js';
 import type { RateLimiter } from './rate-limiter.js';
 import type { SecretPattern } from './secret-pattern-store.js';
@@ -25,6 +26,8 @@ export interface GatewayProviderOptions {
   getRateLimiter: () => RateLimiter;
   /** Актуальный список паттернов детекции (override ?? дефолт). Если не задан — дефолт детектора. */
   getPatterns?: () => SecretPattern[];
+  /** Путь к JSONL полного лога запросов/ответов. Если не задан или logPayloads=false — лог не пишется. */
+  payloadLogPath?: string;
   sessionId: string;
   userId: string;
 }
@@ -105,6 +108,7 @@ export class GatewayProvider extends BaseProvider {
       effective.placeholders,
       effective.patterns,
     );
+    await this._logPayload(effective.messages, effective.systemPrompt, response.content, response.usage);
     return response;
   }
 
@@ -159,6 +163,7 @@ export class GatewayProvider extends BaseProvider {
       effective.placeholders,
       effective.patterns,
     );
+    await this._logPayload(effective.messages, effective.systemPrompt, accumulated, finalUsage);
   }
 
   async embed(text: string): Promise<number[]> {
@@ -283,6 +288,28 @@ export class GatewayProvider extends BaseProvider {
       }
     } catch (e) {
       warning('GATEWAY', `Ошибка аудита завершения: ${this._errorMessage(e)}`);
+    }
+  }
+
+  private async _logPayload(
+    messages: LLMMessage[],
+    systemPrompt: string | undefined,
+    content: string,
+    usage: TokenUsage | undefined,
+  ): Promise<void> {
+    if (!this._config.logPayloads || !this._opts.payloadLogPath) return;
+    try {
+      await writePayloadLog(this._opts.payloadLogPath, {
+        ts: nowISO(),
+        sessionId: this._opts.sessionId,
+        userId: this._opts.userId,
+        provider: this.getProviderName(),
+        model: this.model,
+        request: { messages, systemPrompt },
+        response: { content, usage },
+      });
+    } catch (e) {
+      warning('GATEWAY', `Ошибка полного лога: ${this._errorMessage(e)}`);
     }
   }
 

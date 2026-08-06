@@ -3,6 +3,7 @@ import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
+import { readPayloadLog } from '@synth/core';
 
 /** Имена лог-файлов, доступные для чтения. Строгий whitelist — никакого path traversal. */
 const LOG_WHITELIST = ['core', 'ui', 'backend'] as const;
@@ -14,6 +15,8 @@ const MAX_TAIL = 2000;
 export interface LogsRoutesDeps {
   /** Каталог лог-файлов ({logDir}/{name}.log). */
   logDir: string;
+  /** Путь к JSONL полного лога запросов/ответов LLM (llm-payloads.jsonl). */
+  payloadLogPath?: string;
 }
 
 function toInt(value: string | undefined, fallback: number): number {
@@ -54,6 +57,25 @@ export function resolveLogDir(): string {
  */
 export function createLogsRoutes(kit: AuthKit, deps: LogsRoutesDeps): Hono {
   const app = new Hono();
+
+  /**
+   * GET /api/v2/logs/llm?sessionId=&limit= — полный лог запросов/ответов LLM
+   * (после обфускации). Только ADMIN/AUDITOR. Если логирование выключено или
+   * файла нет — возвращается { entries: [], total: 0 }.
+   * Регистрируется до /:name (статический маршрут имеет приоритет).
+   */
+  app.get('/llm', kit.requirePermission('ADMIN', 'AUDITOR'), async (c) => {
+    if (!deps.payloadLogPath) {
+      return c.json({ entries: [], total: 0 });
+    }
+    const query = c.req.query();
+    const limit = Math.min(Math.max(toInt(query['limit'], 100), 1), 500);
+    const { entries, total } = await readPayloadLog(deps.payloadLogPath, {
+      sessionId: query['sessionId'] || undefined,
+      limit,
+    });
+    return c.json({ entries, total });
+  });
 
   app.get('/:name', kit.requirePermission('ADMIN', 'AUDITOR'), async (c) => {
     const name = c.req.param('name');

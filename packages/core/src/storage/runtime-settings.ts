@@ -3,10 +3,12 @@ import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@synth/shared';
 import type { McpServerToolSettings, LLMGatewayConfig } from '@synth/shared';
 
-/** Runtime-настройки LLM Gateway (AD-036), сохраняемые через UI (раздел «Шлюз безопасности»). */
+/** Runtime-настройки LLM Gateway, сохраняемые через UI (раздел «Шлюз безопасности»). */
 export interface LlmGatewayRuntimeSettings {
   enabled: boolean;
   inputMode: 'obfuscate' | 'block';
+  /** Полное логирование запросов/ответов LLM (после обфускации) в JSONL. */
+  logPayloads?: boolean;
   rateLimit: {
     userPerMinute: number;
     providerPerMinute: number;
@@ -37,6 +39,8 @@ export function mergeLlmGatewayConfig(
   return {
     enabled: runtime.enabled ?? base?.enabled ?? false,
     inputMode: runtime.inputMode ?? base?.inputMode ?? 'obfuscate',
+    logPayloads: runtime.logPayloads ?? base?.logPayloads ?? false,
+    payloadLogPath: base?.payloadLogPath ?? '',
     rateLimit: {
       userPerMinute: runtime.rateLimit?.userPerMinute ?? base?.rateLimit?.userPerMinute ?? 60,
       providerPerMinute: runtime.rateLimit?.providerPerMinute ?? base?.rateLimit?.providerPerMinute ?? 120,

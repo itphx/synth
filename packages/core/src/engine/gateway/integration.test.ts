@@ -62,6 +62,8 @@ function makeGatewayConfig(): LLMGatewayConfig {
   return {
     enabled: true,
     inputMode: 'obfuscate',
+    logPayloads: false,
+    payloadLogPath: '',
     rateLimit: { userPerMinute: 60, providerPerMinute: 120 },
     audit: { enabled: true, logPath: '' },
   };
