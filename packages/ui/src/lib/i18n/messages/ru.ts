@@ -106,6 +106,7 @@ export const dict = {
   'gateway.patterns.invalidRegex': 'Невалидный regex',
   'gateway.patterns.saved': 'Паттерны сохранены',
   'gateway.patterns.empty': 'Нет паттернов',
+  'gateway.secret.hidden': 'Значение скрыто',
   'settings.category.dashboard': 'Панель управления',
   'settings.category.sessions': 'Сессии',
   'settings.category.projects': 'Проекты',

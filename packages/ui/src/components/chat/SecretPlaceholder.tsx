@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import { synthApi } from '@/lib/api/synthApi'
+import { useI18n } from '@/lib/i18n'
 import { MarkdownContent } from './MarkdownContent'
 
 /**
@@ -44,6 +45,7 @@ interface SecretPlaceholderProps {
 }
 
 export function SecretPlaceholder({ placeholder, value, sessionId }: SecretPlaceholderProps) {
+  const { t } = useI18n()
   const [revealed, setRevealed] = useState(false)
   const canReveal = value != null && value !== ''
 
@@ -61,9 +63,9 @@ export function SecretPlaceholder({ placeholder, value, sessionId }: SecretPlace
     return (
       <span
         title="Секрет недоступен"
-        className="secret-placeholder inline-flex select-none items-center rounded border border-border/40 bg-muted px-1 py-px align-baseline font-mono text-[0.85em] leading-relaxed text-muted-foreground"
+        className="secret-placeholder italic select-none align-baseline text-muted-foreground"
       >
-        {placeholder}
+        {t('gateway.secret.hidden')}
       </span>
     )
   }
@@ -74,13 +76,13 @@ export function SecretPlaceholder({ placeholder, value, sessionId }: SecretPlace
       onClick={handleClick}
       title={revealed ? 'Скрыть значение' : 'Показать значение'}
       className={cn(
-        'secret-placeholder inline-flex cursor-pointer select-none items-center rounded border px-1 py-px align-baseline font-mono text-[0.85em] leading-relaxed transition-colors',
+        'secret-placeholder italic cursor-pointer select-none align-baseline transition-colors',
         revealed
-          ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-          : 'border-violet-500/40 bg-violet-500/10 text-violet-700 hover:bg-violet-500/20 dark:text-violet-300',
+          ? 'text-amber-700 dark:text-amber-300'
+          : 'text-violet-700 hover:text-violet-900 dark:text-violet-300',
       )}
     >
-      {revealed ? value : placeholder}
+      {revealed ? value : t('gateway.secret.hidden')}
     </button>
   )
 }
