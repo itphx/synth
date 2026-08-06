@@ -85,6 +85,7 @@ function createDispatcher(): EventDispatcher {
           provider: payload.provider as string | undefined,
           reasoning: (payload.reasoning as string) || undefined,
           intermediate_text_blocks: payload.intermediate_text_blocks as Array<{ text: string; iteration: number }> | undefined,
+          metadata: payload.metadata as Record<string, unknown> | undefined,
           disabled: false,
           pinned: false,
           hidden: false,
@@ -155,7 +156,7 @@ function createDispatcher(): EventDispatcher {
           message_index: payload.message_index as number | undefined,
           cancelled: payload.cancelled as boolean | undefined,
           pending_count: payload.pending_count as number | undefined,
-          metadata: payload.metadata as { type?: string; indices?: number[] } | undefined,
+          metadata: payload.metadata as { type?: string; indices?: number[]; [key: string]: unknown } | undefined,
           reasoning_blocks: (payload.reasoning_blocks as Array<{ text: string; iteration: number }>) || undefined,
           intermediate_text_blocks: (payload.intermediate_text_blocks as Array<{ text: string; iteration: number }>) || undefined,
         }

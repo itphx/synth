@@ -149,6 +149,7 @@ export class QueueProcessor {
             content: message.content.slice(0, 500),
             author: message.author,
             agent_role: message.agentRole,
+            metadata: message.metadata || undefined,
           });
         }
 

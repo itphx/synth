@@ -363,6 +363,14 @@ export class ContextConfig {
   }
 
   /**
+   * AD-036: инструкция по работе с обфусцированными секретами (⟦SYNTH_SECRET_N⟧).
+   * Файлы: prompts/system/GATEWAY.{lang}.md → GATEWAY.md (fallback).
+   */
+  getGatewayInstructions(language = 'ru'): string {
+    return this._readPrompt('GATEWAY', 'system', language) ?? '';
+  }
+
+  /**
    * AD-025: системный промпт режима сессии (plan/act/yolo).
    *
    * Приоритет (по аналогии с getRolePrompt):

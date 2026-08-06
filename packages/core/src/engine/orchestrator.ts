@@ -619,6 +619,15 @@ export class ChatOrchestrator {
         finalSystemPrompt = systemPrompt + classifyInstruction;
       }
 
+      // AD-036: если включена обфускация — сообщаем модели о токенах ⟦SYNTH_SECRET_N⟧
+      if (this._gatewayConfig && this._contextBuilder) {
+        const lang = session.settings.language || 'ru';
+        const gatewayInstructions = this._contextBuilder.getGatewayInstructions(lang);
+        if (gatewayInstructions) {
+          finalSystemPrompt = `${finalSystemPrompt}\n\n${gatewayInstructions}`;
+        }
+      }
+
       // AD-025/AD-027: блоки режима Plan/Act + утверждённый план
       finalSystemPrompt = this._buildPlanSystemPrompt(
         finalSystemPrompt, session, planMode, sessionMode, planApproved,
@@ -1248,6 +1257,15 @@ export class ChatOrchestrator {
         intermediate_text_blocks: allIntermediateTexts.length > 0 ? allIntermediateTexts : undefined,
       };
 
+      // AD-036: проброс secrets в real-time событие — UI раскрывает плейсхолдеры
+      // без перезагрузки списка сообщений (см. transportStore/chatStore).
+      if (finalContent) {
+        const secrets = await this._getAssistantSecrets(session.id, savedContent);
+        if (Object.keys(secrets).length > 0) {
+          doneData.metadata = { secrets };
+        }
+      }
+
       if (stopAfterDeny) {
         doneData.stopped_by_deny = true;
         doneData.deny_reason = denyStopReason;
@@ -1748,6 +1766,33 @@ export class ChatOrchestrator {
     return result;
   }
 
+  /**
+   * AD-036: возвращает реальные значения секретов для плейсхолдеров
+   * ⟦SYNTH_SECRET_N⟧ в тексте сообщения (из карты обфускации сессии).
+   * Пустой объект если карты нет, плейсхолдеров нет или gateway выключен.
+   */
+  private async _getAssistantSecrets(sessionId: string, content: string): Promise<Record<string, string>> {
+    if (!content || !this._obfMapStore) return {};
+    try {
+      const obfMap = await this._obfMapStore.get(sessionId);
+      if (Object.keys(obfMap).length === 0) return {};
+      const found = new Set<string>();
+      let match: RegExpExecArray | null;
+      const placeholderRe = new RegExp(PLACEHOLDER_PATTERN.source, 'g');
+      while ((match = placeholderRe.exec(content)) !== null) {
+        found.add(match[0]);
+      }
+      const secrets: Record<string, string> = {};
+      for (const ph of found) {
+        if (ph in obfMap) secrets[ph] = obfMap[ph]!;
+      }
+      return secrets;
+    } catch (e) {
+      warning('ORCHESTRATOR', `Ошибка раскрытия секретов в metadata: ${e instanceof Error ? e.message : String(e)}`);
+      return {};
+    }
+  }
+
   private async _saveAssistantMessage(
     sessionId: string,
     content: string,
@@ -1791,25 +1836,9 @@ export class ChatOrchestrator {
     // карты обфускации сессии встраиваются в metadata.secrets (клик раскрывает
     // локально). Только существующие плейсхолдеры; карта — секрет, в логи не пишется.
     if (role === MessageRole.ASSISTANT && finalContent && this._obfMapStore) {
-      try {
-        const obfMap = await this._obfMapStore.get(sessionId);
-        if (Object.keys(obfMap).length > 0) {
-          const found = new Set<string>();
-          let match: RegExpExecArray | null;
-          const placeholderRe = new RegExp(PLACEHOLDER_PATTERN.source, 'g');
-          while ((match = placeholderRe.exec(finalContent)) !== null) {
-            found.add(match[0]);
-          }
-          const secrets: Record<string, string> = {};
-          for (const ph of found) {
-            if (ph in obfMap) secrets[ph] = obfMap[ph]!;
-          }
-          if (Object.keys(secrets).length > 0) {
-            metadata.secrets = { ...(metadata.secrets as Record<string, string> | undefined), ...secrets };
-          }
-        }
-      } catch (e) {
-        warning('ORCHESTRATOR', `Ошибка раскрытия секретов в metadata: ${e instanceof Error ? e.message : String(e)}`);
+      const secrets = await this._getAssistantSecrets(sessionId, finalContent);
+      if (Object.keys(secrets).length > 0) {
+        metadata.secrets = { ...(metadata.secrets as Record<string, string> | undefined), ...secrets };
       }
     }
 
@@ -1882,6 +1911,7 @@ export class ChatOrchestrator {
           reasoning: reasoning || null,
           tool_calls: toolResults && toolResults.length > 0 ? toolResults : null,
           intermediate_text_blocks: intermediateTextBlocks && intermediateTextBlocks.length > 0 ? intermediateTextBlocks : null,
+          metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
         });
       }
     }

@@ -17,12 +17,15 @@ import { ProviderFactory, BaseProvider } from '../../providers/base.js';
 import type { LLMMessage, CancellationToken } from '../../providers/base.js';
 import { GatewayProvider, AuditLogger } from './index.js';
 import { DebugCollector } from '../../debug.js';
-import type { ContextBuilder } from '../context/builder.js';
+import { ContextConfig } from '../context/config.js';
+import { ContextBuilder } from '../context/builder.js';
 import type { Session, Message, LLMGatewayConfig, TokenUsage } from '@synth/shared';
 import { MessageRole, nowISO } from '@synth/shared';
 import { enqueueUserMessage, QueueProcessorManager, type ProcessMessageFn } from '../../queue/processor.js';
 
 class MockGwProvider extends BaseProvider {
+  static capturedSystemPrompt: string | null = null;
+
   async chat(
     _messages: LLMMessage[],
     _systemPrompt?: string,
@@ -35,11 +38,12 @@ class MockGwProvider extends BaseProvider {
 
   async *chatAsync(
     _messages: LLMMessage[],
-    _systemPrompt?: string,
+    systemPrompt?: string,
     _tools?: Record<string, unknown>[],
     _debugCollector?: unknown,
     _cancellationToken?: CancellationToken,
   ): AsyncGenerator<import('@synth/shared').LLMChunk> {
+    MockGwProvider.capturedSystemPrompt = systemPrompt ?? null;
     yield { content: 'ok', isFinal: true, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
   }
 
@@ -71,6 +75,7 @@ describe('ChatOrchestrator × LLM Gateway (AD-036)', () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-gw-'));
     sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
     ProviderFactory.register('mockgw', MockGwProvider);
+    MockGwProvider.capturedSystemPrompt = null;
   });
 
   afterEach(async () => {
@@ -78,11 +83,11 @@ describe('ChatOrchestrator × LLM Gateway (AD-036)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  function makeOrchestrator(gatewayConfig?: LLMGatewayConfig, auditLogger?: AuditLogger) {
+  function makeOrchestrator(gatewayConfig?: LLMGatewayConfig, auditLogger?: AuditLogger, contextBuilder?: ContextBuilder) {
     return new ChatOrchestrator({
       sessionManager,
       eventBus: new EventBus(),
-      contextBuilder: makeCtxBuilder(),
+      contextBuilder: contextBuilder ?? makeCtxBuilder(),
       providerLoader: (name) => (name === 'mockgw' ? {
         name,
         type: 'mockgw',
@@ -97,10 +102,15 @@ describe('ChatOrchestrator × LLM Gateway (AD-036)', () => {
     });
   }
 
-  async function makeSession(opts: { obfuscationMap?: Record<string, string> } = {}): Promise<Session> {
+  async function makeSession(opts: { obfuscationMap?: Record<string, string>; language?: string; systemPrompt?: string } = {}): Promise<Session> {
     const session = await sessionManager.createSession({
       title: 'S',
-      settings: { provider: 'mockgw', model: 'mock-model' },
+      settings: {
+        provider: 'mockgw',
+        model: 'mock-model',
+        language: opts.language,
+        systemPrompt: opts.systemPrompt,
+      },
       userId: 'u1',
     });
     if (opts.obfuscationMap) {
@@ -225,6 +235,43 @@ describe('ChatOrchestrator × LLM Gateway (AD-036)', () => {
     const updated = await sessionManager.getSession(session.id);
     const msg = updated?.messages[updated.messages.length - 1];
     expect(msg?.metadata?.secrets).toBeUndefined();
+  });
+
+  it('_getAssistantSecrets возвращает секреты для плейсхолдеров в тексте (проброс в stream.done)', async () => {
+    const orch = makeOrchestrator(makeGatewayConfig());
+    const session = await makeSession({
+      obfuscationMap: {
+        '⟦SYNTH_SECRET_1⟧': 'sk-abc123',
+        '⟦SYNTH_SECRET_2⟧': 'other-token',
+      },
+    });
+
+    const getSecrets = (orch as unknown as {
+      _getAssistantSecrets(sessionId: string, content: string): Promise<Record<string, string>>;
+    })._getAssistantSecrets;
+
+    const secrets = await getSecrets.call(orch, session.id, 'Ключ ⟦SYNTH_SECRET_1⟧ в ответе');
+    expect(secrets['⟦SYNTH_SECRET_1⟧']).toBe('sk-abc123');
+    // Плейсхолдер, которого нет в тексте — не возвращается
+    expect(Object.keys(secrets)).not.toContain('⟦SYNTH_SECRET_2⟧');
+  });
+
+  it('_getAssistantSecrets возвращает пустой объект без плейсхолдеров или при выключенном gateway', async () => {
+    const orch = makeOrchestrator(makeGatewayConfig());
+    const session = await makeSession({
+      obfuscationMap: { '⟦SYNTH_SECRET_1⟧': 'sk-abc123' },
+    });
+
+    const getSecrets = (orch as unknown as {
+      _getAssistantSecrets(sessionId: string, content: string): Promise<Record<string, string>>;
+    })._getAssistantSecrets;
+
+    const noPlaceholders = await getSecrets.call(orch, session.id, 'Обычный ответ');
+    expect(Object.keys(noPlaceholders)).toHaveLength(0);
+
+    const disabled = makeOrchestrator({ ...makeGatewayConfig(), enabled: false });
+    const disabledSecrets = await getSecrets.call(disabled, session.id, 'Ключ ⟦SYNTH_SECRET_1⟧ в ответе');
+    expect(Object.keys(disabledSecrets)).toHaveLength(0);
   });
 
   it('setGatewayConfig включает gateway на лету (live-переключение без рестарта)', async () => {
@@ -431,5 +478,59 @@ describe('ChatOrchestrator × LLM Gateway (AD-036)', () => {
     const updated = await sessionManager.getSession(session.id);
     expect(updated?.pendingMessages[0]?.content).toContain('a@b.com');
     expect(updated?.obfuscationMap).toBeUndefined();
+  });
+
+  function runPromptOnce(orch: ChatOrchestrator, session: Session, msg: Message) {
+    const processMessage = orch.createProcessMessage();
+    return processMessage(session, msg, new AbortController().signal, () => {});
+  }
+
+  it('system prompt содержит [GATEWAY] и ⟦SYNTH_SECRET_N⟧ когда gateway включён', async () => {
+    const contextBuilder = new ContextBuilder(new ContextConfig({ userDataDir: join(tmpDir, 'context') }));
+    const orch = makeOrchestrator(makeGatewayConfig(), undefined, contextBuilder);
+    const session = await makeSession({ language: 'ru' });
+    const msg = makeUserMessage('Привет');
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+
+    const result = await runPromptOnce(orch, fresh, msg);
+    expect(result.error).toBeUndefined();
+
+    const sp = MockGwProvider.capturedSystemPrompt ?? '';
+    expect(sp).toContain('[GATEWAY]');
+    expect(sp).toContain('⟦SYNTH_SECRET_N⟧');
+  });
+
+  it('system prompt НЕ содержит [GATEWAY] когда gateway выключен', async () => {
+    const contextBuilder = new ContextBuilder(new ContextConfig({ userDataDir: join(tmpDir, 'context') }));
+    const orch = makeOrchestrator({ ...makeGatewayConfig(), enabled: false }, undefined, contextBuilder);
+    const session = await makeSession({ language: 'ru' });
+    const msg = makeUserMessage('Привет');
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+
+    const result = await runPromptOnce(orch, fresh, msg);
+    expect(result.error).toBeUndefined();
+
+    const sp = MockGwProvider.capturedSystemPrompt ?? '';
+    expect(sp).not.toContain('[GATEWAY]');
+    expect(sp).not.toContain('⟦SYNTH_SECRET_N⟧');
+  });
+
+  it('gateway-инструкция добавляется даже когда systemPrompt задан пользователем', async () => {
+    const contextBuilder = new ContextBuilder(new ContextConfig({ userDataDir: join(tmpDir, 'context') }));
+    const orch = makeOrchestrator(makeGatewayConfig(), undefined, contextBuilder);
+    const session = await makeSession({ language: 'ru', systemPrompt: 'Ты — персональный ассистент.' });
+    const msg = makeUserMessage('Привет');
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+
+    const result = await runPromptOnce(orch, fresh, msg);
+    expect(result.error).toBeUndefined();
+
+    const sp = MockGwProvider.capturedSystemPrompt ?? '';
+    expect(sp).toContain('Ты — персональный ассистент.');
+    expect(sp).toContain('[GATEWAY]');
+    expect(sp).toContain('⟦SYNTH_SECRET_N⟧');
   });
 });

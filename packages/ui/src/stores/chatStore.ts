@@ -93,7 +93,7 @@ export interface StreamDoneMetadata {
   message_index?: number
   cancelled?: boolean
   pending_count?: number
-  metadata?: { type?: string; indices?: number[] }
+  metadata?: { type?: string; indices?: number[]; [key: string]: unknown }
   reasoning_blocks?: ReasoningBlockData[]
   intermediate_text_blocks?: IntermediateTextBlockData[]
 }
@@ -290,6 +290,7 @@ export const useChatStore = create<ChatStore>((set) => ({
             content: metadata.content,
             model: metadata.model || undefined,
             usage: metadata.usage || undefined,
+            metadata: metadata.metadata || null,
             intermediate_text_blocks: metadata.intermediate_text_blocks || null,
             reasoning_blocks: metadata.reasoning_blocks || null,
             debug_data: metadata.debug_info || undefined,
@@ -344,6 +345,7 @@ export const useChatStore = create<ChatStore>((set) => ({
           intermediate_text_blocks: intermediateTextBlocks || null,
           debug_data: metadata.debug_info || undefined,
           summary_of: metadata.metadata?.indices || null,
+          metadata: metadata.metadata || null,
           tool_calls: streamState.toolCalls.length > 0
             ? streamState.toolCalls.map((tc) => ({
                 name: tc.name,
@@ -374,6 +376,7 @@ export const useChatStore = create<ChatStore>((set) => ({
             provider: streamState.provider || msgs[existingIdx]!.provider,
             usage: metadata.usage || msgs[existingIdx]!.usage,
             summary_of: metadata.metadata?.indices || msgs[existingIdx]!.summary_of,
+            metadata: metadata.metadata || msgs[existingIdx]!.metadata,
             tool_calls: streamState.toolCalls.length > 0
               ? streamState.toolCalls.map((tc) => ({
                   name: tc.name,
