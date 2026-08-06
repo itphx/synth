@@ -5,14 +5,17 @@ import DOMPurify from 'dompurify'
 interface MarkdownContentProps {
   content: string
   className?: string
+  /** Трансформация HTML между marked.parser и DOMPurify.sanitize (например, подмена плейсхолдеров). */
+  transformHtml?: (html: string) => string
 }
 
-export function MarkdownContent({ content, className = '' }: MarkdownContentProps) {
+export function MarkdownContent({ content, className = '', transformHtml }: MarkdownContentProps) {
   const html = useMemo(() => {
     if (!content) return ''
     try {
       const tokens = marked.lexer(content)
-      const raw = marked.parser(tokens)
+      let raw = marked.parser(tokens)
+      if (transformHtml) raw = transformHtml(raw)
       return DOMPurify.sanitize(raw, {
         ALLOWED_TAGS: [
           'p', 'br', 'strong', 'em', 'u', 's', 'del', 'code', 'pre',
@@ -28,7 +31,7 @@ export function MarkdownContent({ content, className = '' }: MarkdownContentProp
       console.warn('[MarkdownContent] marked failed, falling back to plain text:', e)
       return DOMPurify.sanitize(content)
     }
-  }, [content])
+  }, [content, transformHtml])
 
   if (!html) {
     return null

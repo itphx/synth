@@ -1,69 +1,146 @@
 import { describe, it, expect } from 'vitest'
-import { protectCodeBlocks, SECRET_PLACEHOLDER_REGEX } from './SecretPlaceholder'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
+import { replaceSecretsInHtml, SECRET_PLACEHOLDER_REGEX } from './SecretPlaceholder'
 
-/** Имитация подмены плейсхолдера из SecretMarkdown (строковый inline-маркер). */
-function replaceSecrets(text: string): string {
-  return text.replace(
-    SECRET_PLACEHOLDER_REGEX,
-    '<span class="synth-secret-ph" data-ph="⟦SYNTH_SECRET_1⟧">Значение скрыто</span>',
-  )
+// Те же ALLOWED_TAGS/ALLOWED_ATTR, что и в MarkdownContent — проверяем полный pipeline.
+const ALLOWED_TAGS = [
+  'p', 'br', 'strong', 'em', 'u', 's', 'del', 'code', 'pre',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'ul', 'ol', 'li', 'blockquote',
+  'a', 'img', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
+  'span', 'div', 'hr',
+  'input', 'label',
+]
+const ALLOWED_ATTR = ['href', 'src', 'alt', 'title', 'class', 'id', 'type', 'checked', 'disabled', 'data-ph']
+
+const HIDDEN_TEXT = 'Значение скрыто'
+
+/** Полный pipeline как в MarkdownContent: lexer → parser → replaceSecretsInHtml → sanitize. */
+function render(content: string, secrets?: Record<string, string>) {
+  const tokens = marked.lexer(content)
+  const raw = marked.parser(tokens)
+  const withSpans = replaceSecretsInHtml(raw, secrets, HIDDEN_TEXT)
+  const html = DOMPurify.sanitize(withSpans, { ALLOWED_TAGS, ALLOWED_ATTR })
+  return { raw, withSpans, html }
 }
 
-function apply(content: string): string {
-  const { protectedText, restoreCodeBlocks } = protectCodeBlocks(content)
-  return restoreCodeBlocks(replaceSecrets(protectedText))
+/** textContent всех <code> элементов в отрендеренном HTML. */
+function codeTextContents(html: string): string[] {
+  const container = document.createElement('div')
+  container.innerHTML = html
+  return Array.from(container.querySelectorAll('code')).map((el) => el.textContent ?? '')
 }
 
-describe('protectCodeBlocks', () => {
-  it('оставляет плейсхолдер буквальным внутри fenced code block ```', () => {
+describe('replaceSecretsInHtml', () => {
+  it('обычный текст: плейсхолдер → span «Значение скрыто» внутри <p>', () => {
+    const { html } = render('Мой email: ⟦SYNTH_SECRET_1⟧, сохрани его.', {
+      '⟦SYNTH_SECRET_1⟧': 'sk-abc123',
+    })
+    expect(html).toContain('<p>Мой email: <span class="synth-secret-ph')
+    expect(html).toContain('data-ph="⟦SYNTH_SECRET_1⟧"')
+    expect(html).toContain('data-revealed="0"')
+    expect(html).toContain(`>${HIDDEN_TEXT}</span>`)
+
+    const container = document.createElement('div')
+    container.innerHTML = html
+    const span = container.querySelector('p .synth-secret-ph')
+    expect(span).not.toBeNull()
+    expect(span?.textContent).toBe(HIDDEN_TEXT)
+  })
+
+  it('fenced code block: span — НАСТОЯЩИЙ элемент внутри <pre><code>, а не экранированный текст', () => {
     const content = '```\nEmail: ⟦SYNTH_SECRET_1⟧\n```'
-    const result = apply(content)
-    expect(result).toContain('Email: ⟦SYNTH_SECRET_1⟧')
-    expect(result).not.toContain('synth-secret-ph')
+    const { html } = render(content, { '⟦SYNTH_SECRET_1⟧': 'user@example.com' })
+    expect(html).toContain('<pre><code>Email: <span class="synth-secret-ph ')
+    expect(html).not.toContain('&lt;span')
+    expect(html).not.toContain('synth-secret-ph">Значение скрыто&lt;/span')
+
+    const container = document.createElement('div')
+    container.innerHTML = html
+    const span = container.querySelector('pre code .synth-secret-ph')
+    expect(span).not.toBeNull()
+    expect(span?.textContent).toBe(HIDDEN_TEXT)
   })
 
-  it('оставляет плейсхолдер буквальным внутри fenced code block с языком', () => {
+  it('fenced code block с языком: span внутри <pre><code>', () => {
     const content = '```text\nТелефон: +7 999 000 00 09\nEmail: ⟦SYNTH_SECRET_1⟧\n```'
-    const result = apply(content)
-    expect(result).toContain('Email: ⟦SYNTH_SECRET_1⟧')
-    expect(result).not.toContain('synth-secret-ph')
+    const { html } = render(content, { '⟦SYNTH_SECRET_1⟧': 'user@example.com' })
+    expect(html).toContain('<pre><code')
+    expect(html).toContain('<span class="synth-secret-ph ')
+    expect(html).not.toContain('&lt;span')
+
+    const container = document.createElement('div')
+    container.innerHTML = html
+    expect(container.querySelector('pre code .synth-secret-ph')).not.toBeNull()
   })
 
-  it('оставляет плейсхолдер буквальным внутри ~~~ блока', () => {
-    const content = '~~~\nEmail: ⟦SYNTH_SECRET_1⟧\n~~~'
-    const result = apply(content)
-    expect(result).toContain('Email: ⟦SYNTH_SECRET_1⟧')
-    expect(result).not.toContain('synth-secret-ph')
+  it('inline code: span внутри <code>', () => {
+    const content = 'Используйте `⟦SYNTH_SECRET_2⟧` в конфиге.'
+    const { html } = render(content, { '⟦SYNTH_SECRET_2⟧': 'token-xyz' })
+    expect(html).toContain('<code><span class="synth-secret-ph ')
+    expect(html).toContain('data-ph="⟦SYNTH_SECRET_2⟧"')
+    expect(html).not.toContain('&lt;span')
+
+    const container = document.createElement('div')
+    container.innerHTML = html
+    const span = container.querySelector('code .synth-secret-ph')
+    expect(span).not.toBeNull()
+    expect(span?.textContent).toBe(HIDDEN_TEXT)
   })
 
-  it('оставляет плейсхолдер буквальным внутри inline code', () => {
-    const content = 'Используйте `⟦SYNTH_SECRET_1⟧` в конфиге.'
-    const result = apply(content)
-    expect(result).toContain('`⟦SYNTH_SECRET_1⟧`')
-    expect(result).not.toContain('synth-secret-ph')
+  it('плейсхолдер без значения в secrets → unavailable-класс и title «Значение недоступно»', () => {
+    const { html } = render('Ключ: ⟦SYNTH_SECRET_9⟧')
+    expect(html).toContain('class="synth-secret-ph ')
+    expect(html).toContain('cursor-default text-muted-foreground')
+    expect(html).toContain('title="Значение недоступно"')
+    expect(html).toContain(`>${HIDDEN_TEXT}</span>`)
   })
 
-  it('заменяет плейсхолдер вне кода (регрессия рабочего случая)', () => {
-    const content = 'Мой email: ⟦SYNTH_SECRET_1⟧, сохрани его.'
-    const result = apply(content)
-    expect(result).toContain('<span class="synth-secret-ph"')
-    expect(result).toContain('Значение скрыто')
-    // Голого плейсхолдера вне data-ph нет (внутри data-ph он остаётся по дизайну).
-    expect(result.replace(/data-ph="[^"]*"/g, '')).not.toContain('⟦SYNTH_SECRET_1⟧')
+  it('несколько плейсхолдеров → несколько маркеров', () => {
+    const { html } = render('A: ⟦SYNTH_SECRET_1⟧ B: ⟦SYNTH_SECRET_2⟧', {
+      '⟦SYNTH_SECRET_1⟧': 'v1',
+      '⟦SYNTH_SECRET_2⟧': 'v2',
+    })
+    const matches = html.match(/class="synth-secret-ph/g)
+    expect(matches).toHaveLength(2)
+    expect(html).toContain('data-ph="⟦SYNTH_SECRET_1⟧"')
+    expect(html).toContain('data-ph="⟦SYNTH_SECRET_2⟧"')
   })
 
-  it('раздельно обрабатывает код и обычный текст в одном сообщении', () => {
-    const content =
-      'Файл создан:\n\n```\nEmail: ⟦SYNTH_SECRET_1⟧\n```\n\nКлюч: ⟦SYNTH_SECRET_1⟧, inline: `⟦SYNTH_SECRET_1⟧`'
-    const result = apply(content)
-    expect(result).toContain('```\nEmail: ⟦SYNTH_SECRET_1⟧\n```')
-    expect(result).toContain('`⟦SYNTH_SECRET_1⟧`')
-    expect(result).toContain('<span class="synth-secret-ph" data-ph="⟦SYNTH_SECRET_1⟧">Значение скрыто</span>')
+  it('сырого HTML нет в textContent ни одного <code>', () => {
+    const content = [
+      '```',
+      'Email: ⟦SYNTH_SECRET_1⟧',
+      '```',
+      '',
+      'Используйте `⟦SYNTH_SECRET_2⟧` в конфиге.',
+    ].join('\n')
+    const { html } = render(content, {
+      '⟦SYNTH_SECRET_1⟧': 'user@example.com',
+      '⟦SYNTH_SECRET_2⟧': 'token-xyz',
+    })
+    for (const text of codeTextContents(html)) {
+      expect(text).not.toContain('<span')
+      expect(text).not.toContain('synth-secret-ph')
+    }
   })
 
-  it('не трогает контент без плейсхолдеров', () => {
+  it('регрессия: контент без плейсхолдеров не меняется и рендерится как обычно', () => {
     const content = '```js\nconst x = 1;\n```\nОбычный `inline` текст.'
-    const result = apply(content)
-    expect(result).toBe(content)
+    const { raw, withSpans, html } = render(content)
+    expect(withSpans).toBe(raw)
+    expect(html).not.toContain('synth-secret-ph')
+    expect(html).toContain('<pre><code')
+    expect(html).toContain('const x = 1;')
+  })
+
+  it('повторные вызовы работают (глобальный regex сбрасывает lastIndex)', () => {
+    const secrets = { '⟦SYNTH_SECRET_1⟧': 'v1' }
+    const first = replaceSecretsInHtml('<p>⟦SYNTH_SECRET_1⟧</p>', secrets, HIDDEN_TEXT)
+    const second = replaceSecretsInHtml('<p>⟦SYNTH_SECRET_1⟧</p>', secrets, HIDDEN_TEXT)
+    expect(first).toContain('synth-secret-ph')
+    expect(second).toContain('synth-secret-ph')
+    expect(SECRET_PLACEHOLDER_REGEX.lastIndex).toBe(0)
   })
 })
