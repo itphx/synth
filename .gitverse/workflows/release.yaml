@@ -135,6 +135,8 @@ jobs:
           pnpm --filter @synth/shared build
           pnpm --filter @synth/core build
           pnpm --filter @synth/ui build
+          pnpm --filter @synth/backend build
+          pnpm --filter @synth/runner build
           pnpm --filter @itphx/synth build
 
       - name: Загрузить бандл как артефакт
@@ -142,12 +144,6 @@ jobs:
         with:
           name: synth-bundle
           path: packages/synth/dist/cli.js
-
-      - name: Загрузить UI как артефакт
-        uses: actions/upload-artifact@v4
-        with:
-          name: synth-ui
-          path: packages/ui/dist/
 
   # --- Генерация CHANGELOG ---
   changelog:
@@ -187,13 +183,16 @@ jobs:
           pnpm --filter @synth/shared build
           pnpm --filter @synth/core build
           pnpm --filter @synth/ui build
+          pnpm --filter @synth/backend build
+          pnpm --filter @synth/runner build
           pnpm --filter @itphx/synth build
 
       - name: Публикация в npmjs.org
         run: |
           npm config set "//registry.npmjs.org/:_authToken" "${{ secrets.NPM_TOKEN }}"
-          cd packages/synth
-          npm publish --access public --registry https://registry.npmjs.org
+          for pkg in shared core ui backend runner synth; do
+            (cd "packages/$pkg" && pnpm publish --access public --registry https://registry.npmjs.org --no-git-checks)
+          done
 
   publish-gitverse-npm:
     name: GitVerse Package Registry
@@ -211,13 +210,16 @@ jobs:
           pnpm --filter @synth/shared build
           pnpm --filter @synth/core build
           pnpm --filter @synth/ui build
+          pnpm --filter @synth/backend build
+          pnpm --filter @synth/runner build
           pnpm --filter @itphx/synth build
 
       - name: Публикация в GitVerse Package Registry
         run: |
           npm config set "//gitverse.ru/api/packages/itphx/npm/:_authToken" "${{ secrets.GV_TOKEN }}"
-          cd packages/synth
-          npm publish --access public --registry https://gitverse.ru/api/packages/itphx/npm/
+          for pkg in shared core ui backend runner synth; do
+            (cd "packages/$pkg" && pnpm publish --access public --registry https://gitverse.ru/api/packages/itphx/npm/ --no-git-checks)
+          done
 
   # --- Публикация Docker ---
   build-docker:
@@ -259,6 +261,7 @@ jobs:
           args: >-
             --context=dir://${{ gitverse.workspace }}
             --dockerfile=Dockerfile
+            --build-arg=SYNTH_VERSION=${{ steps.docker_tags.outputs.version }}
             --destination=gitverse.ru/itphx/synth:${{ steps.docker_tags.outputs.version }}
             --destination=gitverse.ru/itphx/synth:latest
             --snapshot-mode=redo
