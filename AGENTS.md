@@ -29,14 +29,21 @@ synth/
 │   │                              #   HTTP API v2 (Hono), CLI (synth chat/serve)
 │   ├── backend/   @synth/backend  # Hono API Hub: OIDC, RBAC, Runner Registry, LLM Proxy
 │   ├── ui/        @synth/ui       # React 19 SPA + админка (Vite)
-│   └── runner/    @synth/runner   # Gateway: адаптеры opencode/cline, LLM Proxy
-│                                  #   Импортируется in-process из @synth/core
+│   ├── runner/    @synth/runner   # Gateway: адаптеры opencode/cline, LLM Proxy
+│   │                              #   Импортируется in-process из @synth/core
+│   └── synth/     @itphx/synth    # Публикуемая CLI-обёртка (bin: synth). Тонкая —
+│                                  #   зависит от core+ui+shared, не бандлит их, не копирует ассеты
 ├── pnpm-workspace.yaml
 ├── tsconfig.base.json
 ├── eslint.config.js
 └── .prettierrc
 tmp/                               # Каталог для временных файлов. Всегда используй его, а не /tmp в корне ФС
 ```
+
+Все 6 пакетов публикуются в npm (см. «Публикация npm»). `@itphx/synth` — тонкая
+CLI-обёртка над `@synth/core`/`@synth/ui`/`@synth/shared`; она не бандлит core
+внутрь `cli.js` (core/ui/shared — external) и не копирует ассеты (промпты/UI/docs)
+в свой каталог — всё резолвится из npm-зависимостей (см. AD-038).
 
 ### Слои зависимостей
 
@@ -48,6 +55,8 @@ tmp/                               # Каталог для временных ф
 ┌──────┴──────┐
 @synth/backend │ @synth/ui     ←  импортируют core
 @synth/runner (in-process)     ←  опционально импортируется в core
+       ↑
+@itphx/synth   ←  тонкая CLI-обёртка: core + ui + shared (npm-потребители)
 ```
 
 ---
@@ -70,7 +79,7 @@ pnpm test                   # Vitest
 pnpm clean                  # очистка dist/
 ```
 
-Сборка core копирует `prompts/` и `definitions/*.json` в `dist/`; backend — аналогично для `definitions/`.
+Сборка core по-прежнему копирует `prompts/` и `definitions/*.json` в `dist/`; backend — аналогично для `definitions/`. Это **fallback для Docker** (где рядом с `package.json` нет `prompts/`, а есть только `dist/`): источник истины промптов — `packages/core/prompts`, который публикуется в npm через поле `files`. Дубликатов ассетов в репозитории больше нет (см. AD-038).
 
 Логи: `tmp/backend.log`, `tmp/ui.log`, `tmp/core.log`. Каталог `tmp/` не коммитится.
 
@@ -284,6 +293,8 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 | AD-034 | Routing между моделями (content + confidence + cost) ✅ Реализовано |
 | AD-035 | Micro-model first: дешёвый слой перед LLM (правила/embedding) ✅ Реализовано |
 | AD-036 | LLM Gateway: независимый слой безопасности (guard + обфускация + rate limit + аудит) ✅ Реализовано |
+| AD-037 | Security step перед коммитом: git pre-commit hook + маркер-хеш (гарантия проверки) |
+| AD-038 | Монорепо как набор публикуемых npm-пакетов (6 пакетов, pnpm publish, тонкая CLI-обёртка) ✅ Реализовано |
 
 Подробности deprecated решений — в `archive/AGENTS_OLD.md`.
 
@@ -1101,6 +1112,164 @@ llmGateway:
 - ML-детекция секретов (только regex)
 - Распределённый rate limit (per-process)
 
+### AD-037: Security step перед коммитом
+
+**Решение:** гарантированная security-проверка между генерацией кода и коммитом. Три слоя: инструмент `git_commit` с security-сабагентом (основная проверка), git pre-commit hook с маркером-хешем (железная гарантия), автоустановка хука при открытии сессии. Управляется настройками, по умолчанию включено.
+
+**Контекст:** LLM-агент недетерминирован — нельзя полагаться, что он вызовет security-сабагента перед коммитом или не закоммитит через shell в обход инструмента. Гарантию даёт не агент, а уровень git: pre-commit hook, который невозможно обойти, потому что он срабатывает при любом `git commit` — и через инструмент, и через shell.
+
+**Принципы:**
+- **По умолчанию включено.** Контроль безопасности репозиториев активен, пока не выключен в настройках
+- **Настройка:** глобальный тумблер вкл/выкл (только ADMIN), аналогично шлюзу безопасности
+- **Гарантия на уровне git**, а не на уровне агента
+
+**Три слоя:**
+
+```
+agent
+ ├─ git_commit (инструмент)
+ │    ├─ вызывает security-сабагента
+ │    ├─ Critical/High → возврат на генерацию с фидбеком
+ │    ├─ Medium/Low → пропуск с warning в логе
+ │    ├─ OK → пишет маркер .synth/security-checked.json
+ │    │       { hash: sha256(staged files), verdict, timestamp }
+ │    └─ коммит
+ │
+ ├─ shell: git commit ← даже если пойдёт сюда, git запустит hook!
+ │
+ ▼
+git pre-commit hook (уровень git, обойти нельзя)
+ ├─ считает sha256 staged-файлов
+ ├─ сравнивает с маркером
+ ├─ совпало  → коммит разрешён
+ └─ не совпало → БЛОК + stderr:
+       "SECURITY CHECK REQUIRED: run /security-check before commit"
+       (агент видит это как ошибку git commit → обязан отреагировать)
+```
+
+**Маркер-хеш (самопротухающий флаг):**
+
+| Поле | Назначение |
+|---|---|
+| `hash` | sha256(staged files) — что именно проверяли |
+| `verdict` | PASS / WARN (Medium/Low) |
+| `timestamp` | когда проверяли |
+
+Инвалидация **автоматическая**: любое изменение файлов после проверки меняет хеш → hook считает проверку недействительной. Никто не снимает флаг вручную — он самопротухает фактом изменения кода.
+
+**Автоустановка хука:**
+
+```
+Открытие сессии в проекте
+  → раннер сканирует проект на git-репозитории (их может быть несколько)
+  → для каждого: проверяет наличие .git/hooks/pre-commit
+  → если нет — устанавливает guard
+  → генерирует событие repo.guard_installed / repo.guard_ok для каждого репозитория
+```
+
+Установка не зависит от воли LLM — выполняется системой при старте сессии. Хук самодостаточен: живёт в `.git/hooks/`, работает при каждом коммите, не требует запущенного агента.
+
+**Инструмент `repo_setup` (переустановка):**
+- Для случаев, когда репозиторий появился после старта сессии (агент клонировал новый)
+- Переустановка guard, если он был удалён
+- Ручной контроль: `synth repo guard install`
+
+**Закрытие обходов:**
+
+| Обход | Что ловит |
+|---|---|
+| Агент не вызвал сабагента | Маркера нет → hook блокирует |
+| Агент закоммитил через shell | Hook срабатывает — он на уровне git |
+| Файлы изменены после проверки | Хеш не совпал → маркер протух → блок |
+| Несколько репозиториев в проекте | Guard ставится в каждый при старте сессии |
+
+**Без дублирования:** hook не вызывает LLM — он только считает sha256 (микросекунды) и сравнивает с маркером. Проверка одна (в инструменте `git_commit`), hook лишь удостоверяет артефакт.
+
+**Статическая часть hook (опционально):**
+- gitleaks / secret-scan / eslint-security — детерминированные проверки без LLM
+- Выполняются мгновенно вместе с проверкой маркера
+
+**Порядок реализации:**
+1. Инструмент `git_commit` + security-сабагент (основная проверка)
+2. Маркер `.synth/security-checked.json` + запись после проверки
+3. Pre-commit hook: sha256 staged → сравнение → блок/разрешение
+4. Автоустановка при старте сессии + события `repo.guard_*`
+5. Инструмент `repo_setup` для переустановки
+6. Настройка: глобальный тумблер (по умолчанию включено)
+7. Тесты: 3 задачи с небезопасным кодом (токен, логирование, API-запрос)
+
+**Что не делаем в демо:**
+- Фильтры shell-команд (`bash: "git commit*": deny`) — расширение AD-029, отдельной задачей
+- Статический анализ в hook (gitleaks) — опционально, по желанию
+- Подпись маркера ключом (достаточно хеша)
+
+### AD-038: Монорепо как набор публикуемых npm-пакетов ✅ Реализовано
+
+**Решение:** каждый пакет монорепозитория публикуется в npm независимо и владеет
+своими ассетами через поле `files`. Потребитель ставит только `@itphx/synth`, а
+зависимости (`@synth/core`, `@synth/ui`, `@synth/shared`) доставляются как
+транзитивные npm-зависимости. Никакого дублирования файлов и бандла core внутрь CLI.
+
+**Контекст:** исторически `@itphx/synth` собирался как самодостаточный пакет —
+скрипт сборки через `cp -r` копировал в него промпты, собранный UI, docs и README
+из соседних пакетов, а `cli.js` бандлил core через `noExternal`. Это порождало
+несколько источников истины: одни и те же файлы (промпты, UI-ассеты, документация)
+существовали и в `packages/core`, и в `packages/ui`, и в `packages/synth`. Любая
+правка промпта требовала пересборки и перекопирования, а рассинхронизация копий
+давала трудноуловимые баги. Кроме того, бандл core внутрь `cli.js` раздувал пакет
+и ломал дерево зависимостей для npm-потребителей.
+
+**Решение:**
+
+```
+@synth/shared  ←  только контракты (types/schemas/protocols/config)
+       ↑
+@synth/core    ←  владеет prompts/, dictionaries/, definitions/ (files)
+       ↑
+┌──────┴──────┐
+@synth/backend │ @synth/ui   ←  core и ui владеют своими ассетами
+@synth/runner (in-process)
+       ↑
+@itphx/synth   ←  тонкая обёртка: dependencies = core + ui + shared
+                  bin: synth → dist/cli.js (external: core/ui/shared)
+```
+
+**Принципы:**
+- **Каждый пакет владеет своими ассетами.** Ассеты перечислены в поле `files`
+  (`dist`, `prompts`, `dictionaries` и т.д.) и доставляются через npm.
+- **`@itphx/synth` — тонкая обёртка.** В `dependencies` — только `@synth/core`,
+  `@synth/ui`, `@synth/shared` (и runtime-библиотеки). Сборка tsup помечает
+  `@synth/*` как `external` — core **не** бандлится в `cli.js`.
+- **Никакого копирования ассетов.** `cp -r prompts`, `cp -r ui/dist`, копирование
+  README/docs при сборке synth — удалены. В репозитории больше нет идентичных файлов.
+- **Резолвинг из node_modules.** `@synth/core` находит свои промпты по
+  `{packageRoot}/prompts` (поиск package.json вверх от `import.meta.url`, fallback
+  на `dist/prompts` для Docker). `@itphx/synth` резолвит собранный UI через
+  `require.resolve('@synth/ui/package.json')` → `dist/`.
+- **Docker из npm-публикации.** Образ ставит `npm install -g @itphx/synth@<version>`,
+  зависимости резолвятся npm-ом — не из workspace-сборки.
+
+**Порядок публикации** (строгая иерархия зависимостей):
+
+```
+shared → core → ui → backend → runner → synth
+```
+
+**`pnpm publish` вместо `npm publish`:** `npm publish` не переписывает
+`workspace:*` в зависимостях — опубликованные пакеты падают у npm-потребителей
+(не резолвится `workspace:*`). `pnpm publish` автоматически заменяет
+`workspace:*` на фактические версии workspace-пакетов, поэтому используется именно
+он (с флагом `--no-git-checks`, т.к. публикация идёт не из чистого git-дерева).
+
+**Реестры:**
+- npmjs.org: `https://registry.npmjs.org` (токен `NPM_TOKEN`)
+- GitVerse: `https://gitverse.ru/api/packages/itphx/npm/` (токен `GV_TOKEN`)
+
+**Что не делаем:**
+- Не публикуем workspace-сборку как единый артефакт — только npm-пакеты
+- Не копируем ассеты между пакетами при сборке
+- Не используем `noExternal`-бандл core/ui/shared в `@itphx/synth`
+
 ### Отказ от JSON-блока
 
 Механизм JSON-блока (модель возвращает JSON со статусом в конце ответа) не перенесён из прототипа. Причины: хрупкий парсинг, трата токенов, загрязнение промпта. Замена: Tool Use / Function Calling, TSM управляется бэкендом.
@@ -1273,14 +1442,26 @@ $SYNTH_DATA_DIR/
 
 ### Публикация npm
 
-Публикуемый пакет: `@itphx/synth` (из `packages/synth/`).
+Публикуются **все 6 пакетов** монорепозитория в строгом порядке зависимостей:
+
+```
+shared → core → ui → backend → runner → synth
+```
+
+Для публикации используется **`pnpm publish`** (а не `npm publish`), т.к. он
+автоматически переписывает `workspace:*` в зависимостях на фактические версии
+workspace-пакетов — опубликованные пакеты корректно резолвятся npm-потребителями.
+
 Два реестра:
 - `https://registry.npmjs.org` — токен `NPM_TOKEN`
-- `https://npm.gitverse.ru` — токен `GV_TOKEN` (единый для всего GitVerse)
+- `https://gitverse.ru/api/packages/itphx/npm/` — токен `GV_TOKEN` (единый для всего GitVerse)
 
 ### Docker
 
-Образ: `registry.gitverse.ru/itphx/synth:<version>` (latest).
+Образ собирается из npm-публикации: `npm install -g @itphx/synth@<version>`
+(зависимости `@synth/core`/`@synth/ui`/`@synth/shared` ставятся как транзитивные
+npm-зависимости, промпты и UI резолвятся из node_modules) — **не** из
+workspace-сборки. Образ: `registry.gitverse.ru/itphx/synth:<version>` (latest).
 Токен: `GV_TOKEN`.
 
 ---
