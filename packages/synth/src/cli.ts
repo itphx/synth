@@ -1,13 +1,24 @@
 import { Command } from 'commander';
-import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { join, dirname } from 'node:path';
-import { existsSync } from 'node:fs';
 import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@synth/shared';
 import { createStandaloneApp } from '@synth/core/server/app.js';
 import { runSingleChat } from '@synth/core/server/chat.js';
 import { JsonStore } from '@synth/core/storage/json-store.js';
 
-const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+
+/**
+ * Резолвинг корня npm-зависимости по её package.json (через node-резолвер).
+ * Возвращает null, если пакет не установлен.
+ */
+function resolvePackageRoot(pkgName: string): string | null {
+  try {
+    return dirname(require.resolve(`${pkgName}/package.json`));
+  } catch {
+    return null;
+  }
+}
 
 const program = new Command();
 
@@ -20,6 +31,7 @@ program
   .command('serve')
   .description('Запустить HTTP API сервер')
   .option('--port <number>', 'порт сервера', String(defaultConfig.core.port))
+  .option('--host <host>', 'адрес для прослушивания', '0.0.0.0')
   .option('--api-key <key>', 'API-ключ для аутентификации')
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')
@@ -43,8 +55,10 @@ program
     const port = resolvePort(synth, 'SYNTH_CORE_PORT', synth.core.port);
     const apiKey = synth.core.apiKey || process.env.SYNTH_API_KEY || '';
 
-    const promptsDir = join(CURRENT_DIR, '..', 'prompts');
-    const uiDir = join(CURRENT_DIR, '..', 'ui');
+    // UI поставляется как отдельный npm-пакет @synth/ui → резолвим его dist/.
+    // systemPromptsDir не передаём: @synth/core резолвит свои prompts сам (рядом с package.json).
+    const uiRoot = resolvePackageRoot('@synth/ui');
+    const uiDistPath = uiRoot ? join(uiRoot, 'dist') : undefined;
 
     const { server, wss } = await createStandaloneApp({
       port,
@@ -52,8 +66,7 @@ program
       apiKey,
       workspacesRoot: resolveWorkspacesRoot(synth),
       defaultWorkingDir: resolveDefaultWorkspace(synth),
-      uiDistPath: existsSync(uiDir) ? uiDir : undefined,
-      systemPromptsDir: existsSync(promptsDir) ? promptsDir : undefined,
+      uiDistPath,
     });
 
     let shuttingDown = false;
@@ -77,7 +90,7 @@ program
     process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
     process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
 
-    const host = process.env.SYNTH_HOST || '0.0.0.0';
+    const host = options.host || process.env.SYNTH_HOST || '0.0.0.0';
 
     server.listen(port, host, () => {
       console.log(`\n  Откройте http://${host}:${port} в браузере`);

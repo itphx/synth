@@ -1,10 +1,14 @@
 {
   "name": "@synth/core",
   "version": "0.1.11",
-  "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "prompts",
+    "dictionaries"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

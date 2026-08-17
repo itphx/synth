@@ -1,10 +1,12 @@
 {
   "name": "@synth/shared",
   "version": "0.1.11",
-  "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

@@ -15,6 +15,7 @@ program
   .command('serve')
   .description('Запустить HTTP API сервер')
   .option('--port <number>', 'порт сервера', String(defaultConfig.core.port))
+  .option('--host <host>', 'адрес для прослушивания', '0.0.0.0')
   .option('--api-key <key>', 'API-ключ для аутентификации')
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')
@@ -78,7 +79,7 @@ program
     process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
     process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
 
-    const host = process.env.SYNTH_HOST || '0.0.0.0';
+    const host = options.host || process.env.SYNTH_HOST || '0.0.0.0';
 
     server.listen(port, host, () => {
       console.log(`\n  Откройте http://${host}:${port} в браузере`);
