@@ -141,3 +141,13 @@
 - **Сделано:** все 6 пакетов публикуются (shared→core→ui→backend→runner→synth), `pnpm publish` вместо `npm publish` (переписывает workspace:*); `@itphx/synth` — тонкая обёртка (deps core/ui/shared, без noExternal-бандла и без cp); удалены копии `packages/synth/{prompts,docs,README}`; резолвинг systemPromptsDir по package.json + fallback dist/prompts; uiDistPath через require.resolve('@synth/ui'); Docker из `npm install -g @itphx/synth@<version>`; runner + dep @synth/core; --host в serve; AD-037/AD-038 в AGENTS.md
 - **Верификация:** typecheck/lint(0 err)/test (shared 66 + core 599 + ui 26 + backend 148) зелёные; dev.sh core (health 200, агенты) + backend+UI (health 200, UI 200); UI в браузере — вход admin, проект, шапка, панели; npm end-to-end: `pnpm pack` 6 пакетов → установка в чистый каталог → `synth serve` health 200, агенты из node_modules/@synth/core/prompts, UI из node_modules/@synth/ui/dist; `pnpm pack` переписывает workspace:*→0.1.11
 - **Ограничение:** реальная Docker-сборка из npm и публикация в реестры не проверялись (нет опубликованной версии/токенов) — проверяются при релизе
+
+## 2026-08-18 — Релиз 0.1.13: публикация всех пакетов + Docker
+- **Задача:** публикация 6 пакетов в npmjs+GitVerse, Docker-образ, финальные тесты
+- **Тип:** release
+- **Исполнитель:** оркестратор + @fixer
+- **Результат:** PASS (с ограничением GitVerse npm @itphx/synth)
+- **Коммиты:** merge feat/package-split-npm (23eacc0), bump 0.1.13, fix(auth) cookie standalone, переименование @synth→@itphx (d2918fb)
+- **Сделано:** переименование scope @synth/*→@itphx/* (164 файла); npmjs — все 6 @0.1.13; GitVerse npm — 5/6 (shared/core/ui/backend/runner), @itphx/synth 403 no permission (владелец за старым токеном, удаление версий не освободило имя); Docker gitverse.ru/itphx/synth:0.1.13+latest (квота освобождена удалением образов 0.1.8–0.1.12); фикс standalone auth cookie (synth_session) — вход в UI через Docker работает; version-bump.sh пропускает packages/synth (баг, правили вручную)
+- **Верификация:** typecheck/lint/test зелёные (core 608); Docker 0.1.13 health 200, UI 200, spa-login→cookie→projects/sessions 200; end-to-end npmjs install @itphx/synth@0.1.13 + serve работает
+- **Ограничение:** GitVerse npm @itphx/synth пуст (нет прав); пользователю нужно добавить владельца токена или использовать токен владельца пакета
