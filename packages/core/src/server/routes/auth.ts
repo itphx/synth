@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import type { AuthKit } from '../../auth/local.js';
+import type { LocalAuthKit } from '../../auth/local.js';
 
-export function createAuthRoutes(auth: AuthKit): Hono {
+export function createAuthRoutes(auth: LocalAuthKit): Hono {
   const app = new Hono();
 
   app.get('/status', (c) => {
@@ -60,6 +60,9 @@ export function createAuthRoutes(auth: AuthKit): Hono {
       return c.json({ error: { code: 'UNAUTHORIZED', message: 'Неверный API-ключ' } }, 401);
     }
 
+    // Устанавливаем cookie-сессию, чтобы SPA авторизовался на API автоматически
+    auth.setSessionCookie(c);
+
     return c.json({
       user: {
         id: user.id,
@@ -70,7 +73,10 @@ export function createAuthRoutes(auth: AuthKit): Hono {
     });
   });
 
-  app.post('/logout', (c) => c.body(null, 204));
+  app.post('/logout', (c) => {
+    auth.clearSessionCookie(c);
+    return c.body(null, 204);
+  });
 
   app.get('/profile', (c) => {
     const user = auth.getCurrentUser(c);
