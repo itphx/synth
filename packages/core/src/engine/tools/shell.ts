@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { ToolCapability } from '@synth/shared';
 import type { ToolDefinition } from '@synth/shared';
 import { resolvePath, validateInputPath } from './path-utils.js';
+import { deobfuscateText } from './obfuscation.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -32,8 +33,11 @@ export const executeShellTool: ToolDefinition = {
     if (params.cwd !== undefined) validateInputPath(params.cwd, 'cwd');
     const cwd = resolvePath(params.cwd, ctx.workingDir);
 
+    // AD-036: деобфускация в точке потребления — команда может содержать ⟦SYNTH_SECRET_N⟧
+    const command = await deobfuscateText(ctx, params.command);
+
     try {
-      const { stdout, stderr } = await execFileAsync('sh', ['-c', params.command], {
+      const { stdout, stderr } = await execFileAsync('sh', ['-c', command], {
         cwd,
         timeout,
         maxBuffer: 10 * 1024 * 1024,

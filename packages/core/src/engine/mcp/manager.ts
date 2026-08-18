@@ -5,6 +5,8 @@ import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolContext, ToolResult } from '@synth/shared';
 import { McpClient } from './client.js';
 import { info, warning } from '../../logger.js';
+import type { SessionManager } from '../../sessions/manager.js';
+import { ObfuscationMapStore } from '../gateway/obfuscation-map-store.js';
 
 const CIRCUIT_BREAKER_THRESHOLD = 5;
 const CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
@@ -143,8 +145,16 @@ export class McpManager {
         description: `[MCP:${serverName}] ${tool.description}`,
         parameters: z.object({}).passthrough(),
         capabilities: [ToolCapability.MCP],
-        execute: async (params: unknown, _ctx: ToolContext): Promise<ToolResult> => {
-          return client.callTool(tool.name, params as Record<string, unknown>);
+        execute: async (params: unknown, ctx: ToolContext): Promise<ToolResult> => {
+          const args = params as Record<string, unknown>;
+          // AD-036: деобфускация в точке потребления — аргументы могут содержать ⟦SYNTH_SECRET_N⟧
+          const sessionManager = ctx.extra?.sessionManager as SessionManager | undefined;
+          if (sessionManager) {
+            const store = new ObfuscationMapStore(sessionManager);
+            const restored = await store.restoreForArgs(ctx.sessionId, args);
+            return client.callTool(tool.name, restored as Record<string, unknown>);
+          }
+          return client.callTool(tool.name, args);
         },
         jsonSchema: tool.inputSchema,
       };
@@ -260,6 +270,9 @@ export class McpManager {
       return { content: `MCP-сервер "${serverName}" не подключён`, isError: true };
     }
 
+    // TODO(AD-036): здесь нет sessionId — деобфускация аргументов невозможна.
+    // В основном цикле MCP-тулы вызываются через registerTools() → mcpToolDef.execute(),
+    // где деобфускация выполняется на основе ctx.extra.sessionManager.
     return entry.client.callTool(toolName, args);
   }
 }

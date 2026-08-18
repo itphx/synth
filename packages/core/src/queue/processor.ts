@@ -149,6 +149,7 @@ export class QueueProcessor {
             content: message.content.slice(0, 500),
             author: message.author,
             agent_role: message.agentRole,
+            metadata: message.metadata || undefined,
           });
         }
 
@@ -382,9 +383,19 @@ export async function enqueueUserMessage(
   message: Message,
   processorManager: QueueProcessorManager,
   processMessage: ProcessMessageFn,
+  obfuscate?: (sessionId: string, message: Message) => Promise<Message>,
 ): Promise<Session | null> {
   if (!message.metadata) message.metadata = {};
   if (!message.metadata.stream_id) message.metadata.stream_id = generateStreamId();
+  const enqueueStreamId = message.metadata.stream_id;
+
+  // AD-036: обфусцируем user-сообщение ДО сохранения в историю, чтобы в
+  // session.messages и message.added попадал плейсхолдер, а не реальный секрет.
+  // Если gateway выключен — колбэк возвращает сообщение без изменений
+  // (обратная совместимость).
+  if (obfuscate && message.role === MessageRole.USER) {
+    message = await obfuscate(sessionId, message);
+  }
 
   const session = await sessionManager.addPendingMessage(sessionId, message, MAX_PENDING);
   if (!session) return null;
@@ -403,7 +414,7 @@ export async function enqueueUserMessage(
   }
 
   eventBus.publish(sessionId, 'message.queued', {
-    stream_id: message.metadata.stream_id,
+    stream_id: enqueueStreamId,
     pending_count: session.pendingMessages.length,
     message: message.content,
     agent_role: message.agentRole,

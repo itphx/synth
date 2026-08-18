@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { parse } from 'parse5';
 import { ToolCapability } from '@synth/shared';
 import type { ToolDefinition } from '@synth/shared';
+import { deobfuscateText } from './obfuscation.js';
 
 const MAX_RESPONSE_SIZE = 50_000;
 const MAX_FETCH_URLS = 5;
@@ -271,7 +272,7 @@ export const webFetchTool: ToolDefinition = {
     timeout: z.number().int().min(1).max(120).optional().describe('Timeout per URL in seconds (max 120)'),
   }),
   capabilities: [ToolCapability.WEB],
-  async execute(args, _ctx) {
+  async execute(args, ctx) {
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -287,7 +288,9 @@ export const webFetchTool: ToolDefinition = {
     if (rawUrls.length === 0) {
       return { content: `Ошибка аргументов инструмента "${this.name}": укажите url или urls`, isError: true };
     }
-    const urls = rawUrls.slice(0, MAX_FETCH_URLS).map(normalizeUrl);
+    // AD-036: деобфускация в точке потребления — URL может содержать ⟦SYNTH_SECRET_N⟧
+    const restoredUrls = await Promise.all(rawUrls.map((u) => deobfuscateText(ctx, u)));
+    const urls = restoredUrls.slice(0, MAX_FETCH_URLS).map(normalizeUrl);
     const timeoutMs = (params.timeout ?? 30) * 1000;
 
     const blocks: string[] = [];
@@ -370,7 +373,7 @@ export const webSearchTool: ToolDefinition = {
       .describe('Maximum number of results (default: 10)'),
   }),
   capabilities: [ToolCapability.WEB],
-  async execute(args, _ctx) {
+  async execute(args, ctx) {
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -378,24 +381,27 @@ export const webSearchTool: ToolDefinition = {
     const params = parsed.data as { query: string; max_results?: number };
     const limit = params.max_results ?? 10;
 
+    // AD-036: деобфускация в точке потребления — запрос может содержать ⟦SYNTH_SECRET_N⟧
+    const query = await deobfuscateText(ctx, params.query);
+
     try {
       try {
-        const results = await duckDuckGoSearch(params.query, limit);
+        const results = await duckDuckGoSearch(query, limit);
         if (results.length > 0) {
-          return { content: formatSearchResults(params.query, results), metadata: { query: params.query, max_results: limit, source: 'duckduckgo' } };
+          return { content: formatSearchResults(query, results), metadata: { query: params.query, max_results: limit, source: 'duckduckgo' } };
         }
       } catch (err: unknown) {
         // DDG заблокирован или недоступен — пробуем Bing
         try {
-          const results = await bingSearch(params.query, limit);
+          const results = await bingSearch(query, limit);
           if (results.length > 0) {
-            return { content: formatSearchResults(params.query, results), metadata: { query: params.query, max_results: limit, source: 'bing' } };
+            return { content: formatSearchResults(query, results), metadata: { query: params.query, max_results: limit, source: 'bing' } };
           }
         } catch {
           throw err;
         }
       }
-      return { content: `По запросу «${params.query}» ничего не найдено.`, metadata: { query: params.query, max_results: limit } };
+      return { content: `По запросу «${query}» ничего не найдено.`, metadata: { query: params.query, max_results: limit } };
     } catch (err: unknown) {
       return {
         content: `Ошибка веб-поиска: ${(err as Error).message || String(err)}`,

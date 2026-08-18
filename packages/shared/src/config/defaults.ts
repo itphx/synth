@@ -122,6 +122,20 @@ export const defaultConfig: SynthConfig = {
     embedModel: 'local.nomic-embed-text:latest',
     microLlmEnabled: false,
   },
+  llmGateway: {
+    enabled: false,
+    inputMode: 'obfuscate',
+    logPayloads: false,
+    payloadLogPath: '',
+    rateLimit: {
+      userPerMinute: 60,
+      providerPerMinute: 120,
+    },
+    audit: {
+      enabled: true,
+      logPath: '',
+    },
+  },
   permission: {
     rules: {},
     askTimeoutMs: 30_000,

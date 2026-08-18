@@ -146,6 +146,7 @@ export function createSessionRoutes(
 
     const result = await enqueueUserMessage(
       sessionManager, eventBus, sessionId, message, queueManager, processMessage,
+      (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
     );
 
     if (!result) {

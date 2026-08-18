@@ -1,9 +1,11 @@
-import type { Message, Session, ProviderConfig as SharedProviderConfig, SummarizationConfig } from '@synth/shared';
+import type { Message, Session, ProviderConfig as SharedProviderConfig, SummarizationConfig, LLMGatewayConfig } from '@synth/shared';
 import { MessageRole, nowISO, lookupContextWindow, generateId, makeTextPart } from '@synth/shared';
 import type { ContextConfig } from './config.js';
 import type { LLMMessage } from '../../providers/base.js';
 import { BaseProvider, ProviderFactory } from '../../providers/index.js';
 import { info, warning } from '../../logger.js';
+import { GatewayProvider, ObfuscationMapStore } from '../gateway/index.js';
+import type { AuditLogger, RateLimiter } from '../gateway/index.js';
 
 export interface SummarizationResult {
   triggered: boolean;
@@ -24,6 +26,18 @@ export interface SlidingWindowResult {
   limit?: number;
 }
 
+/**
+ * AD-036: gateway-обвязка для суммаризации. Регистрируется оркестратором через
+ * setGatewayHooks — общий AuditLogger/RateLimiter и ObfuscationMapStore сессий.
+ * Если hooks не заданы или gateway выключен — суммаризация идёт напрямую.
+ */
+export interface ContextOptimizerGatewayHooks {
+  config: LLMGatewayConfig;
+  audit: AuditLogger;
+  rateLimiter: RateLimiter;
+  obfMapStore: ObfuscationMapStore;
+}
+
 function toCoreProviderConfig(shared: SharedProviderConfig, model: string): { url: string; apiKey: string; model: string; timeout?: number; name?: string; type?: string } {
   return {
     name: shared.name,
@@ -41,6 +55,7 @@ export class ContextOptimizer {
   private readonly _summarizationConfig: SummarizationConfig;
 
   private _summaryCache = new Map<string, { result: Message; hash: string; at: number }>();
+  private _gatewayHooks: ContextOptimizerGatewayHooks | null = null;
 
   // Константа: 4 символа ≈ 1 токен (приблизительно, fallback)
   private static readonly CHARS_PER_TOKEN = 4;
@@ -53,6 +68,14 @@ export class ContextOptimizer {
     this._contextConfig = contextConfig;
     this._providerLoader = providerLoader;
     this._summarizationConfig = summarizationConfig;
+  }
+
+  /**
+   * AD-036: регистрирует gateway-обвязку для суммаризации (общий аудит,
+   * rate limit, карта обфускации сессий). Вызывается оркестратором.
+   */
+  setGatewayHooks(hooks: ContextOptimizerGatewayHooks | null): void {
+    this._gatewayHooks = hooks;
   }
 
   // ====================================================================
@@ -270,8 +293,10 @@ export class ContextOptimizer {
       let usage: import('@synth/shared').TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
       for await (const chunk of prep.provider.chatAsync(prep.llmMessages, prep.summarizerPrompt)) {
-        content += chunk.content;
-        yield { type: 'chunk', content: chunk.content, model: prep.provider.model, provider: prep.provider.name };
+        // Финальный чанк несёт полный накопленный контент — заменяем, а не складываем,
+        // и не отдаём его как отдельный фрагмент (иначе контент удваивается).
+        content = chunk.isFinal && chunk.content ? chunk.content : content + chunk.content;
+        yield { type: 'chunk', content: chunk.isFinal ? '' : chunk.content, model: prep.provider.model, provider: prep.provider.name };
         if (chunk.model) model = chunk.model;
         if (chunk.usage) usage = chunk.usage;
       }
@@ -551,15 +576,34 @@ export class ContextOptimizer {
     }
 
     try {
-      return ProviderFactory.create(
+      const provider = ProviderFactory.create(
         providerName,
         toCoreProviderConfig(sharedConfig, modelName),
         this._summarizationConfig.temperature,
       );
+      return this._wrapWithGateway(provider, session);
     } catch (e) {
       warning('CONTEXT', `Failed to create summarization provider: ${e}`);
       return null;
     }
+  }
+
+  /**
+   * AD-036: оборачивает провайдер суммаризации в GatewayProvider по тому же
+   * паттерну, что оркестратор в _wrapWithGateway. sessionId/userId берутся из
+   * текущей сессии — карта обфускации привязывается к сессии.
+   */
+  private _wrapWithGateway(provider: BaseProvider, session: Session): BaseProvider {
+    const hooks = this._gatewayHooks;
+    if (!hooks || !hooks.config.enabled) return provider;
+    return new GatewayProvider(provider, hooks.config, {
+      getMap: () => hooks.obfMapStore.get(session.id),
+      saveMap: (map) => hooks.obfMapStore.set(session.id, map),
+      getAudit: () => hooks.audit,
+      getRateLimiter: () => hooks.rateLimiter,
+      sessionId: session.id,
+      userId: session.userId ?? '',
+    });
   }
 
   /**

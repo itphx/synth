@@ -9,6 +9,7 @@ import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { useNotification } from '@/hooks/useNotification'
+import { useAuthStore } from '@/stores/authStore'
 import { QuickSettingsPopup } from '../auth/QuickSettingsPopup'
 import { NotificationPopup } from './NotificationPopup'
 import { GlobalTransportIndicator } from './GlobalTransportIndicator'
@@ -22,9 +23,10 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   const { notify } = useNotification()
   const {
     leftPanel, rightPanel, toggleLeftPanel, toggleRightPanel,
-    setSettingsDialogOpen, centerTabs, activeCenterTabId,
+    setSettingsDialogOpen, setLogsDialogOpen, centerTabs, activeCenterTabId,
     openTab, closeTab,
   } = useUIStore()
+  const { user } = useAuthStore()
   const projects = useProjectsStore((s) => s.projects)
 
   const activeTab = centerTabs.find((tab) => tab.id === activeCenterTabId)
@@ -514,6 +516,16 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
         <GlobalTransportIndicator />
         <NotificationPopup />
         <QuickSettingsPopup onSettingsClick={onSettingsClick} />
+
+        {(user?.roles?.includes('ADMIN') || user?.roles?.includes('AUDITOR')) && (
+          <button
+            onClick={() => setLogsDialogOpen(true)}
+            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+            title={t('header.logs')}
+          >
+            <Icon name="file-list" className="h-5 w-5" />
+          </button>
+        )}
 
         <button
           onClick={() => setSettingsDialogOpen(true)}

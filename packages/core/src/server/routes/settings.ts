@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
-import type { RuntimeSettingsStore } from '../../storage/runtime-settings.js';
+import type { RuntimeSettingsStore, LlmGatewayRuntimeSettings } from '../../storage/runtime-settings.js';
 import type { McpServerToolSettings, McpToolAvailability } from '@synth/shared';
 
 export interface SettingsRoutesDeps {
@@ -8,6 +8,8 @@ export interface SettingsRoutesDeps {
   settingsStore: RuntimeSettingsStore;
   /** Значение по умолчанию (env > config > {dataDir}/workspaces/default), если runtime-настройка не задана. */
   fallbackWorkspace: string;
+  /** Вызывается после успешного PUT /llm-gateway (live-применение runtime-настройки). */
+  onLlmGatewayChange?: (runtime: Partial<LlmGatewayRuntimeSettings>) => void | Promise<void>;
 }
 
 function isValidAvailability(value: unknown): value is McpToolAvailability {
@@ -32,6 +34,22 @@ function isValidMcpServers(servers: unknown): servers is Record<string, McpServe
         if (!isValidAvailability(avail)) return false;
       }
     }
+  }
+  return true;
+}
+
+/** Валидация runtime-настроек LLM Gateway: допустимы только известные поля. */
+function isValidLlmGatewaySettings(value: unknown): value is Partial<LlmGatewayRuntimeSettings> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const s = value as Record<string, unknown>;
+  if (s.enabled !== undefined && typeof s.enabled !== 'boolean') return false;
+  if (s.inputMode !== undefined && s.inputMode !== 'obfuscate' && s.inputMode !== 'block') return false;
+  if (s.logPayloads !== undefined && typeof s.logPayloads !== 'boolean') return false;
+  if (s.rateLimit !== undefined) {
+    const rl = s.rateLimit as Record<string, unknown>;
+    if (!rl || typeof rl !== 'object' || Array.isArray(rl)) return false;
+    if (rl.userPerMinute !== undefined && (!Number.isInteger(rl.userPerMinute) || (rl.userPerMinute as number) < 1)) return false;
+    if (rl.providerPerMinute !== undefined && (!Number.isInteger(rl.providerPerMinute) || (rl.providerPerMinute as number) < 1)) return false;
   }
   return true;
 }
@@ -89,6 +107,35 @@ export function createSettingsRoutes(
 
     await deps.settingsStore.setMcpSettings(servers);
     return c.json({ servers });
+  });
+
+  /**
+   * GET/PUT /api/v2/settings/llm-gateway — глобальные настройки LLM Gateway (AD-036).
+   * Тумблер включается/выключается через UI (раздел «Шлюз безопасности», только ADMIN).
+   * Значение сохраняется в {dataDir}/settings.json (AD-005) и переживает рестарт.
+   */
+  app.get('/llm-gateway', auth.requireAuth, async (c) => {
+    const llmGateway = await deps.settingsStore.getLlmGatewaySettings();
+    return c.json({ llmGateway });
+  });
+
+  app.put('/llm-gateway', auth.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const llmGateway = (body as { llmGateway?: unknown }).llmGateway;
+
+    if (!isValidLlmGatewaySettings(llmGateway)) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'llmGateway: ожидается { enabled?: boolean, inputMode?: "obfuscate"|"block", logPayloads?: boolean, rateLimit?: { userPerMinute, providerPerMinute } }',
+        },
+      }, 400);
+    }
+
+    await deps.settingsStore.setLlmGatewaySettings(llmGateway);
+    // AD-036: live-применение runtime-настройки — оркестратор переконфигурируется без рестарта.
+    await deps.onLlmGatewayChange?.(llmGateway);
+    return c.json({ llmGateway });
   });
 
   return app;

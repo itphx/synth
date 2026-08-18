@@ -17,10 +17,9 @@ export default defineConfig({
     'ws',
     'zod',
     'node:*',
-  ],
-  noExternal: [
     '@synth/core',
     '@synth/shared',
+    '@synth/ui',
   ],
   platform: 'node',
   banner: {

@@ -191,6 +191,9 @@ export interface SessionSettings {
   // === Plan/Act (AD-025, AD-028) ===
   /** Строгость цикла Plan→Build: auto — модель сама решает, strict — план обязателен, off — планирование отключено. */
   planMode?: PlanMode;
+  // === LLM Gateway (AD-036) ===
+  /** Per-session override LLM Gateway (AD-036). */
+  llmGateway?: { enabled?: boolean };
 }
 
 export interface StreamInfo {
@@ -247,6 +250,8 @@ export interface Session {
   mode?: SessionMode;
   /** Todo-список сессии (тул todo_write), как в OpenCode. */
   todos?: TodoItem[];
+  /** Карта обфускации LLM Gateway (AD-036). Живёт всю сессию независимо от глобального тумблера. */
+  obfuscationMap?: Record<string, string>;
   userId?: string;
   ownerId?: string;
   projectId?: string;

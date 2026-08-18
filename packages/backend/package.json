@@ -1,8 +1,10 @@
 {
   "name": "@synth/backend",
   "version": "0.1.11",
-  "private": true,
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "tsx src/main.ts",
     "start": "node dist/main.js",

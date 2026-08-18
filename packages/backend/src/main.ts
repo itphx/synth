@@ -10,7 +10,8 @@ import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator, FileProfileStore,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
-  RuntimeSettingsStore, createSettingsRoutes,
+  RuntimeSettingsStore, createSettingsRoutes, AuditLogger, mergeLlmGatewayConfig,
+  SecretPatternStore,
 } from '@synth/core';
 import type { SummarizationConfig } from '@synth/shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, findConfigPath } from '@synth/shared';
@@ -31,6 +32,9 @@ import { createDebugRoutes } from './routes/debug.js';
 import { createUserRoutes } from './routes/users.js';
 import { createGitRoutes } from './routes/git.js';
 import { createMcpRoutes } from './routes/mcp.js';
+import { createAuditRoutes } from './routes/audit.js';
+import { createLogsRoutes, resolveLogDir } from './routes/logs.js';
+import { createGatewayPatternsRoutes } from './routes/gateway-patterns.js';
 import { YamlMcpConfigStore } from './lib/mcp-config-store.js';
 import { t, getTranslations } from './lib/i18n.js';
 import { ProjectStore } from './storage/project-store.js';
@@ -84,6 +88,9 @@ const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
 const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
 const contextConfig = new ContextConfig({ userDataDir: `${dataDir}/context` });
 const profilesStore = new FileProfileStore({ dataDir });
+
+// AD-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
+const patternStore = new SecretPatternStore({ dataDir });
 
 // Runtime-настройки (AD-005): workspace/mcp из {dataDir}/settings.json (переживают рестарт)
 const settingsStore = new RuntimeSettingsStore({ dataDir });
@@ -160,6 +167,22 @@ const modelPriceLoader = (modelName: string) => {
   return null;
 };
 
+// LLM Gateway: общий AuditLogger создаётся снаружи, чтобы эндпоинт
+// GET /api/v2/audit и оркестратор писали/читали один и тот же JSONL-файл.
+const gatewayAuditLogger = new AuditLogger(
+  backendConfig.synth.llmGateway.audit.logPath || join(dataDir, 'audit', 'llm-gateway.jsonl'),
+);
+
+// Полный лог запросов/ответов LLM (после обфускации) — один JSONL-файл для
+// записи (оркестратор) и чтения (GET /api/v2/logs/llm).
+const gatewayPayloadLogPath = backendConfig.synth.llmGateway.payloadLogPath
+  || join(dataDir, 'audit', 'llm-payloads.jsonl');
+
+// AD-036: runtime-настройка LLM Gateway (тумблер из UI, {dataDir}/settings.json)
+// приоритетнее config.yaml — мёржим при старте, чтобы шлюз применялся к оркестратору.
+const runtimeGateway = await settingsStore.getLlmGatewaySettings();
+const gatewayConfig = mergeLlmGatewayConfig(backendConfig.synth.llmGateway, runtimeGateway);
+
 // Orchestrator
 const toolRegistry = createToolRegistry();
 const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
@@ -181,6 +204,10 @@ const orchestrator = new ChatOrchestrator({
   permissionConfig: backendConfig.synth.permission,
   defaultPlanMode: backendConfig.synth.session.planMode,
   securityConfig: backendConfig.synth.security,
+  gatewayConfig,
+  gatewayAuditLogger,
+  gatewayPayloadLogPath,
+  gatewayPatternStore: patternStore,
 });
 
 const processMessage = orchestrator.createProcessMessage();
@@ -236,10 +263,34 @@ app.route('/api/v2/git', createGitRoutes(auth, projectStore, backendConfig.works
 // MCP routes
 app.route('/api/v2/mcp', createMcpRoutes(auth, mcpConfigStore, mcpManager, sessionManager));
 
+// LLM Gateway audit routes (AD-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные
+app.route('/api/v2/audit', createAuditRoutes(auth, {
+  auditLogPath: gatewayAuditLogger.logPath,
+  sessionExists: async (sessionId: string) => {
+    const session = await sessionManager.getSession(sessionId);
+    return session !== null;
+  },
+  logger: gatewayAuditLogger,
+}));
+
+// Логи сервисов (core/ui/backend) + полный лог запросов/ответов LLM — чтение, только ADMIN/AUDITOR
+app.route('/api/v2/logs', createLogsRoutes(auth, {
+  logDir: resolveLogDir(),
+  payloadLogPath: gatewayPayloadLogPath,
+}));
+
+// LLM Gateway patterns routes (AD-036) — управление regex-паттернами детекции секретов, только ADMIN
+app.route('/api/v2/gateway', createGatewayPatternsRoutes(auth, patternStore));
+
 // Settings routes (runtime-настройки для UI: workspace + mcp; переиспользуем core-реализацию)
 app.route('/api/v2/settings', createSettingsRoutes(auth, {
   settingsStore,
   fallbackWorkspace: join(dataDir, 'workspaces', 'default'),
+  // AD-036: live-применение тумблера LLM Gateway из UI — без рестарта сервера.
+  onLlmGatewayChange: async (runtime) => {
+    const merged = mergeLlmGatewayConfig(backendConfig.synth.llmGateway, runtime);
+    orchestrator.setGatewayConfig(merged);
+  },
 }));
 
 // Глобальный SSE-хаб для всех сессий пользователя
@@ -546,6 +597,7 @@ server.on('upgrade', (request, socket, head) => {
 
               const result = await enqueueUserMessage(
                 sessionManager, eventBus, sid, message, queueManager, processMessage,
+                (msgSid, msg) => orchestrator.obfuscateUserMessageForHistory(msgSid, msg),
               );
 
               if (!result) {

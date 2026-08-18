@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ToolCapability } from '@synth/shared';
 import type { ToolDefinition } from '@synth/shared';
 import { resolvePath, validateInputPath } from './path-utils.js';
+import { deobfuscateText } from './obfuscation.js';
 
 export const grepFilesTool: ToolDefinition = {
   name: 'grep_files',
@@ -22,6 +23,9 @@ export const grepFilesTool: ToolDefinition = {
     if (params.path !== undefined) validateInputPath(params.path, 'path');
     const searchDir = resolvePath(params.path, ctx.workingDir);
 
+    // AD-036: деобфускация в точке потребления — паттерн может содержать ⟦SYNTH_SECRET_N⟧
+    const pattern = await deobfuscateText(ctx, params.pattern);
+
     try {
       const { execFile } = await import('node:child_process');
       const { promisify } = await import('node:util');
@@ -35,7 +39,7 @@ export const grepFilesTool: ToolDefinition = {
         }
       }
 
-      rgArgs.push(params.pattern, searchDir);
+      rgArgs.push(pattern, searchDir);
 
       const { stdout } = await execFileAsync('rg', rgArgs, {
         timeout: 30_000,

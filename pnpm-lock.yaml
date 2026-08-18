@@ -121,6 +121,9 @@ importers:
 
   packages/runner:
     dependencies:
+      '@synth/core':
+        specifier: workspace:*
+        version: link:../core
       '@synth/shared':
         specifier: workspace:*
         version: link:../shared
@@ -162,6 +165,15 @@ importers:
       '@hono/node-server':
         specifier: ^1.18.0
         version: 1.19.14(hono@4.12.21)
+      '@synth/core':
+        specifier: workspace:*
+        version: link:../core
+      '@synth/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@synth/ui':
+        specifier: workspace:*
+        version: link:../ui
       commander:
         specifier: ^14.0.3
         version: 14.0.3
@@ -175,12 +187,6 @@ importers:
         specifier: ^3.24.0
         version: 3.25.76
     devDependencies:
-      '@synth/core':
-        specifier: workspace:*
-        version: link:../core
-      '@synth/shared':
-        specifier: workspace:*
-        version: link:../shared
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.19

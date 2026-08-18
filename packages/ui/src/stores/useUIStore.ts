@@ -78,6 +78,11 @@ interface UIStore {
   settingsPage: string
   setSettingsPage: (page: string) => void
 
+  isLogsDialogOpen: boolean
+  setLogsDialogOpen: (open: boolean) => void
+  logsPage: string
+  setLogsPage: (page: string) => void
+
   forwardMode: ForwardModeState
   enterForwardMode: (sourceSessionId: string, sourceIndices: number[], mode: 'forward' | 'merge') => void
   cancelForwardMode: () => void
@@ -200,6 +205,11 @@ export const useUIStore = create<UIStore>()(
       setSettingsDialogOpen: (open) => set({ isSettingsDialogOpen: open }),
       settingsPage: 'appearance',
       setSettingsPage: (page) => set({ settingsPage: page }),
+
+      isLogsDialogOpen: false,
+      setLogsDialogOpen: (open) => set({ isLogsDialogOpen: open }),
+      logsPage: 'core',
+      setLogsPage: (page) => set({ logsPage: page }),
 
       forwardMode: {
         active: false,

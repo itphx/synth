@@ -7,18 +7,19 @@ import { join, extname } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig } from '@synth/shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig } from '@synth/shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
+  SecretPatternStore,
 } from '../index.js';
 import type { SummarizationConfig } from '@synth/shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } from '@synth/shared';
 import { createLocalAuth } from '../auth/local.js';
 import { JsonStore } from '../storage/json-store.js';
 import { ProjectStore } from '../storage/project-store.js';
-import { RuntimeSettingsStore } from '../storage/runtime-settings.js';
+import { RuntimeSettingsStore, mergeLlmGatewayConfig } from '../storage/runtime-settings.js';
 import { createHealthRoutes } from './routes/health.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createSessionRoutes } from './routes/sessions.js';
@@ -49,6 +50,8 @@ export interface StandaloneConfig {
   defaultPlanMode?: PlanMode;
   /** Секция безопасности (защита от Indirect Prompt Injection) из config.yaml. */
   securityConfig?: SecurityConfig;
+  /** LLM Gateway (AD-036) из config.yaml — глобальный тумблер и конфиг. */
+  gatewayConfig?: LLMGatewayConfig;
   /** Конфигурация MCP-серверов из config.yaml mcp.servers (для probe и загрузки тулов). */
   mcpServers?: Record<string, McpServerConfig>;
 }
@@ -195,6 +198,13 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const defaultWorkingDir = runtimeWorkspace ?? config.defaultWorkingDir ?? join(dataDir, 'workspaces', 'default');
   await mkdir(defaultWorkingDir, { recursive: true });
 
+  // AD-036: runtime-настройка LLM Gateway (тумблер из UI) приоритетнее config.yaml
+  const runtimeGateway = await settingsStore.getLlmGatewaySettings();
+  const gatewayConfig = mergeLlmGatewayConfig(config.gatewayConfig, runtimeGateway);
+
+  // AD-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
+  const patternStore = new SecretPatternStore({ dataDir });
+
   const fileStore = new FileStore({ dataDir });
   const sessionManager = new SessionManager(fileStore, {
     mcpSettingsProvider: () => settingsStore.getMcpSettings(),
@@ -278,6 +288,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     permissionConfig: config.permissionConfig,
     defaultPlanMode: config.defaultPlanMode,
     securityConfig: config.securityConfig,
+    gatewayConfig,
+    gatewayPatternStore: patternStore,
     mcpManager,
   });
 
@@ -319,6 +331,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   app.route('/api/v2/settings', createSettingsRoutes(auth, {
     settingsStore,
     fallbackWorkspace: defaultWorkingDir,
+    // AD-036: live-применение тумблера LLM Gateway из UI — без рестарта сервера.
+    onLlmGatewayChange: async (runtime) => {
+      const merged = mergeLlmGatewayConfig(config.gatewayConfig, runtime);
+      orchestrator.setGatewayConfig(merged);
+    },
   }));
 
   // MCP (probe подключения к серверу)
@@ -564,6 +581,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
                 const result = await enqueueUserMessage(
                   sessionManager, eventBus, sid, message, queueManager, processMessage,
+                  (msgSid, msg) => orchestrator.obfuscateUserMessageForHistory(msgSid, msg),
                 );
 
                 if (!result) {

@@ -1,8 +1,10 @@
 {
   "name": "@synth/runner",
   "version": "0.1.11",
-  "private": true,
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "tsx src/main.ts",
     "start": "node dist/main.js",
@@ -14,6 +16,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@synth/core": "workspace:*",
     "@synth/shared": "workspace:*",
     "commander": "^14.0.3"
   },

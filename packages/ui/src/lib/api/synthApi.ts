@@ -860,6 +860,178 @@ export const synthApi = {
       body: JSON.stringify({ name }),
     })
   },
+
+  // --- LLM Gateway (AD-036) ---
+  async getLlmGatewaySettings(): Promise<LlmGatewaySettings> {
+    return fetchJSON<{ llmGateway: LlmGatewaySettings }>(`${BASE_URL}/settings/llm-gateway`).then((r) => r.llmGateway)
+  },
+
+  async saveLlmGatewaySettings(config: LlmGatewaySettings): Promise<LlmGatewaySettings> {
+    return fetchJSON<{ llmGateway: LlmGatewaySettings }>(`${BASE_URL}/settings/llm-gateway`, {
+      method: 'PUT',
+      body: JSON.stringify({ llmGateway: config }),
+    }).then((r) => r.llmGateway)
+  },
+
+  // --- LLM Gateway: паттерны обфускации (AD-036) ---
+  async getGatewayPatterns(): Promise<{ patterns: SecretPattern[]; isOverridden: boolean; defaultPatterns: SecretPattern[] }> {
+    return fetchJSON<{ patterns: SecretPattern[]; is_overridden: boolean; default_patterns: SecretPattern[] }>(`${BASE_URL}/gateway/patterns`).then((r) => ({
+      patterns: r.patterns,
+      isOverridden: r.is_overridden,
+      defaultPatterns: r.default_patterns,
+    }))
+  },
+
+  async saveGatewayPatterns(patterns: SecretPattern[]): Promise<{ patterns: SecretPattern[]; isOverridden: boolean; saved: boolean }> {
+    return fetchJSON<{ patterns: SecretPattern[]; is_overridden: boolean; saved: boolean }>(`${BASE_URL}/gateway/patterns`, {
+      method: 'PUT',
+      body: JSON.stringify({ patterns }),
+    }).then((r) => ({
+      patterns: r.patterns,
+      isOverridden: r.is_overridden,
+      saved: r.saved,
+    }))
+  },
+
+  async resetGatewayPatterns(): Promise<{ status: string }> {
+    return fetchJSON<{ status: string }>(`${BASE_URL}/gateway/patterns`, {
+      method: 'DELETE',
+    })
+  },
+
+  /** Полная карта обфускации сессии (AD-036): плейсхолдер → реальное значение. Доступ ADMIN/AUDITOR. */
+  async getSessionSecrets(sessionId: string): Promise<SessionSecretsResponse> {
+    return fetchJSON<SessionSecretsResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/secrets`)
+  },
+
+  /** Логирование раскрытия секрета (AD-036, тип 'revealed'). Эндпоинт может отсутствовать — fire-and-forget. */
+  async auditRevealed(sessionId: string | undefined, placeholder: string): Promise<void> {
+    await fetchJSON<void>(`${BASE_URL}/audit/revealed`, {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, placeholder }),
+    })
+  },
+
+  // --- Логи сервисов (GET /api/v2/logs/:name) ---
+  async getLogs(name: string, params?: { tail?: number; search?: string }): Promise<LogsResponse> {
+    const q = new URLSearchParams()
+    if (params?.tail !== undefined) q.set('tail', String(params.tail))
+    if (params?.search) q.set('search', params.search)
+    const qs = q.toString()
+    return fetchJSON<LogsResponse>(`${BASE_URL}/logs/${encodeURIComponent(name)}${qs ? `?${qs}` : ''}`)
+  },
+
+  // --- Аудит LLM Gateway (GET /api/v2/audit) ---
+  async getAudit(params?: {
+    userId?: string
+    sessionId?: string
+    since?: string
+    until?: string
+    limit?: number
+  }): Promise<AuditListResponse> {
+    const q = new URLSearchParams()
+    if (params?.userId) q.set('userId', params.userId)
+    if (params?.sessionId) q.set('sessionId', params.sessionId)
+    if (params?.since) q.set('since', params.since)
+    if (params?.until) q.set('until', params.until)
+    if (params?.limit !== undefined) q.set('limit', String(params.limit))
+    const qs = q.toString()
+    return fetchJSON<AuditListResponse>(`${BASE_URL}/audit${qs ? `?${qs}` : ''}`)
+  },
+
+  // --- Полный лог запросов/ответов LLM (GET /api/v2/logs/llm) ---
+  async getLlmPayloads(params?: { sessionId?: string; limit?: number }): Promise<LlmPayloadListResponse> {
+    const q = new URLSearchParams()
+    if (params?.sessionId) q.set('sessionId', params.sessionId)
+    if (params?.limit !== undefined) q.set('limit', String(params.limit))
+    const qs = q.toString()
+    return fetchJSON<LlmPayloadListResponse>(`${BASE_URL}/logs/llm${qs ? `?${qs}` : ''}`)
+  },
+}
+
+export interface LlmGatewaySettings {
+  enabled: boolean
+  inputMode: 'obfuscate' | 'block'
+  logPayloads?: boolean
+  rateLimit: {
+    userPerMinute: number
+    providerPerMinute: number
+  }
+}
+
+/** Паттерн детекции секретов (AD-036): type — название, regex — source без слешей и флагов (компилируется с 'g'). */
+export interface SecretPattern {
+  type: string
+  regex: string
+}
+
+export interface SessionSecretsResponse {
+  sessionId: string
+  secrets: Record<string, string>
+}
+
+/** Ответ GET /api/v2/logs/:name — хвост лог-файла сервиса. */
+export interface LogsResponse {
+  name: string
+  file: string
+  total: number
+  tail: number
+  lines: string[]
+}
+
+/** Запись журнала аудита LLM Gateway (AD-036). */
+export interface AuditEntry {
+  ts: string
+  type: string
+  sessionId?: string
+  userId?: string
+  provider?: string
+  model?: string
+  secretsFound?: string[]
+  placeholders?: string[]
+  placeholder?: string
+  tokensIn?: number
+  tokensOut?: number
+  costUsd?: number
+  reason?: string
+}
+
+/** Ответ GET /api/v2/audit. */
+export interface AuditListResponse {
+  entries: AuditEntry[]
+  total: number
+}
+
+/** Запись полного лога запросов/ответов LLM (после обфускации). */
+export interface LlmPayloadEntry {
+  ts: string
+  sessionId?: string
+  userId?: string
+  provider?: string
+  model?: string
+  request: {
+    messages: Array<{
+      id?: string
+      role: string
+      content: string
+      [key: string]: unknown
+    }>
+    systemPrompt?: string
+  }
+  response: {
+    content: string
+    usage?: {
+      inputTokens?: number
+      outputTokens?: number
+      totalTokens?: number
+    }
+  }
+}
+
+/** Ответ GET /api/v2/logs/llm. */
+export interface LlmPayloadListResponse {
+  entries: LlmPayloadEntry[]
+  total: number
 }
 
 export interface McpProbedTool {

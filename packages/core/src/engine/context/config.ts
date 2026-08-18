@@ -8,6 +8,37 @@ import { info, warning } from '../../logger.js';
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Резолвинг корня пакета @synth/core по package.json — поиск вверх от startDir.
+ * Работает одинаково при src-запуске (tsx), dist-запуске и в установленном пакете
+ * node_modules/@synth/core (включая Docker-образ, где копируется только dist/).
+ */
+function findPackageRoot(startDir: string): string {
+  let dir = startDir;
+  for (;;) {
+    if (existsSync(join(dir, 'package.json'))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return startDir;
+}
+
+/**
+ * Каталог встроенных промптов: {root}/prompts (источник, публикуется в npm через files).
+ * Fallback на {root}/dist/prompts — сборка core копирует промпты в dist/, поэтому
+ * в Docker-образе (где рядом с package.json нет prompts/, а есть только dist/)
+ * промпты находятся там.
+ */
+function resolveSystemPromptsDir(): string {
+  const root = findPackageRoot(CURRENT_DIR);
+  const candidates = [join(root, 'prompts'), join(root, 'dist', 'prompts')];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return candidates[0]!;
+}
+
 const CATEGORY_DIRS: Record<ContextCategory, string> = {
   user: 'user',
   role: 'roles',
@@ -29,7 +60,7 @@ export class ContextConfig {
   private _enabledFiles: string[] = [];
 
   constructor(options: ContextConfigOptions) {
-    this.systemPromptsDir = options.systemPromptsDir ?? join(CURRENT_DIR, '..', '..', '..', 'prompts');
+    this.systemPromptsDir = options.systemPromptsDir ?? resolveSystemPromptsDir();
     this.userPromptsDir = join(options.userDataDir, 'user');
     this.userRolesDir = join(options.userDataDir, 'roles');
     this.userModesDir = join(options.userDataDir, 'modes');
@@ -360,6 +391,14 @@ export class ContextConfig {
    */
   getRules(language = 'ru'): string {
     return this._readPrompt('RULES', 'system', language) ?? '';
+  }
+
+  /**
+   * AD-036: инструкция по работе с обфусцированными секретами (⟦SYNTH_SECRET_N⟧).
+   * Файлы: prompts/system/GATEWAY.{lang}.md → GATEWAY.md (fallback).
+   */
+  getGatewayInstructions(language = 'ru'): string {
+    return this._readPrompt('GATEWAY', 'system', language) ?? '';
   }
 
   /**

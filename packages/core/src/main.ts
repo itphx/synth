@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@synth/shared';
 import { spawn } from 'node:child_process';
+import { join } from 'node:path';
 import { checkForUpdatesBackground } from './update-checker.js';
 
 const program = new Command();
@@ -14,6 +15,7 @@ program
   .command('serve')
   .description('Запустить HTTP API сервер')
   .option('--port <number>', 'порт сервера', String(defaultConfig.core.port))
+  .option('--host <host>', 'адрес для прослушивания', '0.0.0.0')
   .option('--api-key <key>', 'API-ключ для аутентификации')
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')
@@ -52,6 +54,7 @@ program
       permissionConfig: synth.permission,
       defaultPlanMode: synth.session?.planMode,
       securityConfig: synth.security,
+      gatewayConfig: synth.llmGateway,
       mcpServers: synth.mcp?.servers ?? {},
     });
 
@@ -76,7 +79,7 @@ program
     process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
     process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
 
-    const host = process.env.SYNTH_HOST || '0.0.0.0';
+    const host = options.host || process.env.SYNTH_HOST || '0.0.0.0';
 
     server.listen(port, host, () => {
       console.log(`\n  Откройте http://${host}:${port} в браузере`);
@@ -553,5 +556,63 @@ program
         console.log(`Скопировано ${merged.length} сообщений из сессии ${sourceSessionId} в ${targetId}`);
       }),
   );
+
+program
+  .command('audit')
+  .description('Просмотр аудита LLM Gateway (AD-036)')
+  .option('--tail <n>', 'количество последних записей (по умолчанию 20)')
+  .option('--userId <id>', 'фильтр по пользователю')
+  .option('--sessionId <id>', 'фильтр по сессии')
+  .option('--since <iso>', 'фильтр: записи не раньше ISO-метки времени')
+  .option('--until <iso>', 'фильтр: записи не позже ISO-метки времени')
+  .option('--limit <n>', 'максимальное число записей (если не задан --tail)')
+  .option('--config <path>', 'путь к config.yaml')
+  .option('--data-dir <path>', 'каталог данных')
+  .action(async (options) => {
+    const synth = await loadConfig({ configPath: options.config });
+    const dataDir = options.dataDir || resolveDataDir(synth);
+    await ensureDataDir(dataDir);
+
+    const logPath = synth.llmGateway.audit.logPath || join(dataDir, 'audit', 'llm-gateway.jsonl');
+
+    const tail = options.tail != null ? parseInt(options.tail, 10) : NaN;
+    const limitOpt = options.limit != null ? parseInt(options.limit, 10) : NaN;
+    const limit = Number.isFinite(tail) ? tail : (Number.isFinite(limitOpt) ? limitOpt : 20);
+
+    const { readAuditLog } = await import('./engine/gateway/index.js');
+    const { entries, total } = await readAuditLog(logPath, {
+      userId: options.userId,
+      sessionId: options.sessionId,
+      since: options.since,
+      until: options.until,
+      limit,
+    });
+
+    if (entries.length === 0) {
+      console.log('Нет записей аудита.');
+      return;
+    }
+
+    console.log(`Аудит: ${total} записей по фильтру, показано ${entries.length} (${logPath})`);
+    console.log('─'.repeat(140));
+    for (const e of entries) {
+      const ts = (e.ts || '').substring(0, 19);
+      const placeholders = (e.placeholders || []).join(',');
+      const secrets = (e.secretsFound || []).join(',');
+      console.log(
+        [
+          ts.padEnd(20),
+          (e.type || '').padEnd(14),
+          (e.provider || '').padEnd(12),
+          (e.model || '').padEnd(22),
+          (e.sessionId || '').padEnd(20),
+          (e.userId || '').padEnd(12),
+          placeholders.padEnd(10),
+          secrets,
+          e.reason || '',
+        ].join(' ').trimEnd(),
+      );
+    }
+  });
 
 program.parse();

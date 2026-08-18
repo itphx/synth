@@ -1,13 +1,24 @@
 import { Command } from 'commander';
-import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { join, dirname } from 'node:path';
-import { existsSync } from 'node:fs';
 import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@synth/shared';
 import { createStandaloneApp } from '@synth/core/server/app.js';
 import { runSingleChat } from '@synth/core/server/chat.js';
 import { JsonStore } from '@synth/core/storage/json-store.js';
 
-const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+
+/**
+ * Резолвинг корня npm-зависимости по её package.json (через node-резолвер).
+ * Возвращает null, если пакет не установлен.
+ */
+function resolvePackageRoot(pkgName: string): string | null {
+  try {
+    return dirname(require.resolve(`${pkgName}/package.json`));
+  } catch {
+    return null;
+  }
+}
 
 const program = new Command();
 
@@ -20,6 +31,7 @@ program
   .command('serve')
   .description('Запустить HTTP API сервер')
   .option('--port <number>', 'порт сервера', String(defaultConfig.core.port))
+  .option('--host <host>', 'адрес для прослушивания', '0.0.0.0')
   .option('--api-key <key>', 'API-ключ для аутентификации')
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')
@@ -43,8 +55,10 @@ program
     const port = resolvePort(synth, 'SYNTH_CORE_PORT', synth.core.port);
     const apiKey = synth.core.apiKey || process.env.SYNTH_API_KEY || '';
 
-    const promptsDir = join(CURRENT_DIR, '..', 'prompts');
-    const uiDir = join(CURRENT_DIR, '..', 'ui');
+    // UI поставляется как отдельный npm-пакет @synth/ui → резолвим его dist/.
+    // systemPromptsDir не передаём: @synth/core резолвит свои prompts сам (рядом с package.json).
+    const uiRoot = resolvePackageRoot('@synth/ui');
+    const uiDistPath = uiRoot ? join(uiRoot, 'dist') : undefined;
 
     const { server, wss } = await createStandaloneApp({
       port,
@@ -52,8 +66,7 @@ program
       apiKey,
       workspacesRoot: resolveWorkspacesRoot(synth),
       defaultWorkingDir: resolveDefaultWorkspace(synth),
-      uiDistPath: existsSync(uiDir) ? uiDir : undefined,
-      systemPromptsDir: existsSync(promptsDir) ? promptsDir : undefined,
+      uiDistPath,
     });
 
     let shuttingDown = false;
@@ -77,7 +90,7 @@ program
     process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
     process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
 
-    const host = process.env.SYNTH_HOST || '0.0.0.0';
+    const host = options.host || process.env.SYNTH_HOST || '0.0.0.0';
 
     server.listen(port, host, () => {
       console.log(`\n  Откройте http://${host}:${port} в браузере`);
@@ -207,6 +220,64 @@ providerCmd
 configCmd.addCommand(providerCmd);
 
 program.addCommand(configCmd);
+
+program
+  .command('audit')
+  .description('Просмотр аудита LLM Gateway (AD-036)')
+  .option('--tail <n>', 'количество последних записей (по умолчанию 20)')
+  .option('--userId <id>', 'фильтр по пользователю')
+  .option('--sessionId <id>', 'фильтр по сессии')
+  .option('--since <iso>', 'фильтр: записи не раньше ISO-метки времени')
+  .option('--until <iso>', 'фильтр: записи не позже ISO-метки времени')
+  .option('--limit <n>', 'максимальное число записей (если не задан --tail)')
+  .option('--config <path>', 'путь к config.yaml')
+  .option('--data-dir <path>', 'каталог данных')
+  .action(async (options) => {
+    const synth = await loadConfig({ configPath: options.config });
+    const dataDir = options.dataDir || resolveDataDir(synth);
+    await ensureDataDir(dataDir);
+
+    const logPath = synth.llmGateway.audit.logPath || join(dataDir, 'audit', 'llm-gateway.jsonl');
+
+    const tail = options.tail != null ? parseInt(options.tail, 10) : NaN;
+    const limitOpt = options.limit != null ? parseInt(options.limit, 10) : NaN;
+    const limit = Number.isFinite(tail) ? tail : (Number.isFinite(limitOpt) ? limitOpt : 20);
+
+    const { readAuditLog } = await import('@synth/core/engine/gateway/index.js');
+    const { entries, total } = await readAuditLog(logPath, {
+      userId: options.userId,
+      sessionId: options.sessionId,
+      since: options.since,
+      until: options.until,
+      limit,
+    });
+
+    if (entries.length === 0) {
+      console.log('Нет записей аудита.');
+      return;
+    }
+
+    console.log(`Аудит: ${total} записей по фильтру, показано ${entries.length} (${logPath})`);
+    console.log('─'.repeat(140));
+    for (const e of entries) {
+      const ts = (e.ts || '').substring(0, 19);
+      const placeholders = (e.placeholders || []).join(',');
+      const secrets = (e.secretsFound || []).join(',');
+      console.log(
+        [
+          ts.padEnd(20),
+          (e.type || '').padEnd(14),
+          (e.provider || '').padEnd(12),
+          (e.model || '').padEnd(22),
+          (e.sessionId || '').padEnd(20),
+          (e.userId || '').padEnd(12),
+          placeholders.padEnd(10),
+          secrets,
+          e.reason || '',
+        ].join(' ').trimEnd(),
+      );
+    }
+  });
 
 program.action(async () => {
   await startRepl({});

@@ -137,6 +137,31 @@ export const securityConfigSchema = z.object({
   promptInjection: promptInjectionConfigSchema.default({}),
 });
 
+// --- LLM Gateway (AD-036) ---
+
+export const llmGatewayRateLimitConfigSchema = z.object({
+  userPerMinute: z.number().int().min(1).default(60),
+  providerPerMinute: z.number().int().min(1).default(120),
+});
+
+export const llmGatewayAuditConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  logPath: z.string().default(''), // по умолчанию {dataDir}/audit/llm-gateway.jsonl
+});
+
+export const llmGatewayConfigSchema = z.object({
+  /** Глобальный выключатель LLM Gateway. */
+  enabled: z.boolean().default(false),
+  /** Режим Input Guard: obfuscate (замена на плейсхолдер) | block (запрос блокируется). */
+  inputMode: z.enum(['obfuscate', 'block']).default('obfuscate'),
+  /** Полное логирование запросов и ответов LLM (после обфускации) в JSONL. */
+  logPayloads: z.boolean().default(false),
+  /** Путь к JSONL полного лога; по умолчанию {dataDir}/audit/llm-payloads.jsonl. */
+  payloadLogPath: z.string().default(''),
+  rateLimit: llmGatewayRateLimitConfigSchema.default({}),
+  audit: llmGatewayAuditConfigSchema.default({}),
+});
+
 // --- Router (AD-034) ---
 
 export const routerContentConfigSchema = z.object({
@@ -218,6 +243,7 @@ export const synthConfigSchema = z.object({
   mcp: mcpConfigSchema.default({}),
   router: routerConfigSchema.default({}),
   microFirst: microFirstConfigSchema.default({}),
+  llmGateway: llmGatewayConfigSchema.default({}),
   permission: permissionConfigSchema.default({}),
   security: securityConfigSchema.default({}),
 });
@@ -247,3 +273,6 @@ export type SynthConfig = z.infer<typeof synthConfigSchema>;
 export type PermissionConfig = z.infer<typeof permissionConfigSchema>;
 export type PromptInjectionConfig = z.infer<typeof promptInjectionConfigSchema>;
 export type SecurityConfig = z.infer<typeof securityConfigSchema>;
+export type LLMGatewayRateLimitConfig = z.infer<typeof llmGatewayRateLimitConfigSchema>;
+export type LLMGatewayAuditConfig = z.infer<typeof llmGatewayAuditConfigSchema>;
+export type LLMGatewayConfig = z.infer<typeof llmGatewayConfigSchema>;

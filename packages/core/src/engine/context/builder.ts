@@ -131,6 +131,14 @@ export class ContextBuilder {
     return result;
   }
 
+  /**
+   * AD-036: инструкция по работе с обфусцированными секретами (⟦SYNTH_SECRET_N⟧).
+   * Делегирует ContextConfig.getGatewayInstructions (prompts/system/GATEWAY.{lang}.md).
+   */
+  getGatewayInstructions(language = 'ru'): string {
+    return this._config.getGatewayInstructions(language);
+  }
+
   private _getLanguage(_userId?: string): string {
     return this._defaultLanguage;
   }

@@ -1,5 +1,6 @@
-import React from 'react'
+import React, { useEffect } from 'react'
 import { useUIStore } from '@/stores/useUIStore'
+import { useAuthStore } from '@/stores/authStore'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 import { StatsTab } from './StatsTab'
@@ -7,6 +8,7 @@ import { ContextTab } from './ContextTab'
 import { SessionSettingsTab } from './SessionSettingsTab'
 import { ProjectTab } from './ProjectTab'
 import { ReferencesTab } from './ReferencesTab'
+import { SecretsTab } from './SecretsTab'
 
 const RIGHT_TABS = [
   { id: 'stats', icon: 'bar-chart-2' as const, labelKey: 'rightPanel.tab.stats' },
@@ -20,14 +22,28 @@ const RIGHT_TABS = [
 export const RightPanel: React.FC = () => {
   const { t } = useI18n()
   const { rightPanelTab, setRightPanelTab, centerTabs, activeCenterTabId } = useUIStore()
+  const user = useAuthStore((s) => s.user)
   const activeTab = centerTabs.find((t) => t.id === activeCenterTabId)
   const sessionId = activeTab?.data?.sessionId
+
+  // Вкладка «Словарь обфускации» (AD-036) — только для ADMIN/AUDITOR
+  const canViewSecrets = !!user?.roles?.some((r) => r === 'ADMIN' || r === 'AUDITOR')
+  const tabs = canViewSecrets
+    ? [...RIGHT_TABS, { id: 'secrets', icon: 'shield-keyhole' as const, labelKey: 'rightPanel.tab.secrets' }]
+    : RIGHT_TABS
+
+  // Нормализация: если вкладка secrets недоступна (роль без прав) — сбрасываем на дефолтную
+  useEffect(() => {
+    if (rightPanelTab === 'secrets' && !canViewSecrets) {
+      setRightPanelTab('stats')
+    }
+  }, [rightPanelTab, canViewSecrets, setRightPanelTab])
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-8 shrink-0 items-center justify-center px-2">
         <div className="inline-flex rounded-lg border border-sidebar-border overflow-hidden">
-          {RIGHT_TABS.map((tab) => {
+          {tabs.map((tab) => {
             const active = rightPanelTab === tab.id
             return (
               <button
@@ -54,6 +70,12 @@ export const RightPanel: React.FC = () => {
         {rightPanelTab === 'context' && <ContextTab />}
         {rightPanelTab === 'references' && sessionId && <ReferencesTab sessionId={sessionId} />}
         {rightPanelTab === 'references' && !sessionId && (
+          <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+            {t('reference.empty')}
+          </div>
+        )}
+        {rightPanelTab === 'secrets' && canViewSecrets && sessionId && <SecretsTab sessionId={sessionId} />}
+        {rightPanelTab === 'secrets' && canViewSecrets && !sessionId && (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
             {t('reference.empty')}
           </div>

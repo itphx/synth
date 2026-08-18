@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Icon } from '../icon/Icon'
 import { getToolIcon, getToolDisplayName } from '@/lib/toolIcons'
 import { useI18n } from '@/lib/i18n'
+import { splitBySecretPlaceholders, SecretPlaceholder } from './SecretPlaceholder'
 
 interface ToolCallData {
   name: string
@@ -25,6 +26,25 @@ interface ToolCallData {
 interface ToolCallPartProps {
   toolCall: ToolCallData
   nested?: boolean
+  /** Реальные значения секретов для плейсхолдеров ⟦SYNTH_SECRET_N⟧ (AD-036). */
+  secrets?: Record<string, string>
+  sessionId?: string
+}
+
+/** JSON-строка (аргументы тула) с плейсхолдерами секретов: текст + кликабельные бейджи. */
+function ArgsWithSecrets({ text, secrets, sessionId }: { text: string; secrets?: Record<string, string>; sessionId?: string }) {
+  const segments = splitBySecretPlaceholders(text)
+  return (
+    <>
+      {segments.map((seg, i) =>
+        seg.type === 'text' ? (
+          <span key={i}>{seg.value}</span>
+        ) : (
+          <SecretPlaceholder key={i} placeholder={seg.value} value={secrets?.[seg.value]} sessionId={sessionId} />
+        ),
+      )}
+    </>
+  )
 }
 
 function formatDuration(started?: string, completed?: string): string {
@@ -154,7 +174,7 @@ function SubagentResult({ result, toolCall: _toolCall }: { result: ToolCallData[
   )
 }
 
-export function ToolCallPart({ toolCall, nested }: ToolCallPartProps) {
+export function ToolCallPart({ toolCall, nested, secrets, sessionId }: ToolCallPartProps) {
   const { t } = useI18n()
   const [expanded, setExpanded] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
@@ -303,7 +323,7 @@ export function ToolCallPart({ toolCall, nested }: ToolCallPartProps) {
               )}
               {viewMode === 'args' && (
                 <pre className="text-xs text-muted-foreground whitespace-pre-wrap overflow-x-auto font-mono">
-                  {truncate(argsStr, 4000)}
+                  <ArgsWithSecrets text={truncate(argsStr, 4000)} secrets={secrets} sessionId={sessionId} />
                 </pre>
               )}
               {!isSubagent && viewMode === 'result' && hasResult && diff && (
