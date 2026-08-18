@@ -1456,6 +1456,26 @@ workspace-пакетов — опубликованные пакеты корр�
 - `https://registry.npmjs.org` — токен `NPM_TOKEN`
 - `https://gitverse.ru/api/packages/itphx/npm/` — токен `GV_TOKEN` (единый для всего GitVerse)
 
+#### Токены npmjs (важно, изменения npm 2026)
+
+С 2026 года npm ужесточил требования к публикации (см.
+[changelog](https://github.blog/changelog/2026-07-08-npm-install-time-security-and-gat-bypass2fa-deprecation/)):
+
+- **Старые классические токены без 2FA отозваны.** Для публикации нужен либо
+  **Granular Access Token (GAT) с включённой 2FA** (права `publish` только на
+  нужные пакеты `@itphx/*`, `@synth/*`), либо классический токен при включённой
+  на аккаунте 2FA.
+- **Токены с `bypass 2FA` больше не публикуют напрямую** (с января 2027 — только
+  staged publishing с ручным 2FA-подтверждением). Поэтому при создании токена
+  НЕ выбирать «bypass 2FA» — использовать обычный GAT.
+- **npm v12 (latest)**: `allowScripts`/`--allow-git`/`--allow-remote` выключены
+  по умолчанию. Если при установке пакета нужны lifecycle-скрипты — использовать
+  `npm approve-scripts`/`--allow-scripts`.
+- Долгосрочно npm рекомендует **trusted publishing (OIDC)** или **staged
+  publishing**; для GitVerse-CI пока используется GAT в секрете `NPM_TOKEN`.
+
+Проверка токена: `npm whoami --registry https://registry.npmjs.org`.
+
 ### Docker
 
 Образ собирается из npm-публикации: `npm install -g @itphx/synth@<version>`
