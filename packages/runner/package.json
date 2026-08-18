@@ -1,5 +1,5 @@
 {
-  "name": "@synth/runner",
+  "name": "@itphx/runner",
   "version": "0.1.12",
   "type": "module",
   "files": [
@@ -16,8 +16,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@synth/core": "workspace:*",
-    "@synth/shared": "workspace:*",
+    "@itphx/core": "workspace:*",
+    "@itphx/shared": "workspace:*",
     "commander": "^14.0.3"
   },
   "devDependencies": {

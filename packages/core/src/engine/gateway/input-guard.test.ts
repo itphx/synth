@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 
-import type { LLMGatewayConfig } from '@synth/shared';
+import type { LLMGatewayConfig } from '@itphx/shared';
 
 import type { LLMMessage } from '../../providers/base.js';
 import type { AuditLogger } from './audit-logger.js';

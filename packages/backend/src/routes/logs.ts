@@ -3,7 +3,7 @@ import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import { readPayloadLog } from '@synth/core';
+import { readPayloadLog } from '@itphx/core';
 
 /** Имена лог-файлов, доступные для чтения. Строгий whitelist — никакого path traversal. */
 const LOG_WHITELIST = ['core', 'ui', 'backend'] as const;

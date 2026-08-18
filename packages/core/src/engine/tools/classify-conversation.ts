@@ -4,8 +4,8 @@
  * Устанавливает routingCategory в метаданных сессии.
  */
 import { z } from 'zod';
-import { ToolCapability } from '@synth/shared';
-import type { ToolDefinition, ToolContext, ToolResult } from '@synth/shared';
+import { ToolCapability } from '@itphx/shared';
+import type { ToolDefinition, ToolContext, ToolResult } from '@itphx/shared';
 
 const classifyConversationSchema = z.object({
   category: z.enum(['coding', 'chat', 'research']).describe('Категория текущего разговора'),

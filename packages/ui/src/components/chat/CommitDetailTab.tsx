@@ -3,7 +3,7 @@ import { useGitStore } from '@/stores/gitStore'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 import type { CenterTab } from '@/stores/useUIStore'
-import type { CommitDetail } from '@synth/shared'
+import type { CommitDetail } from '@itphx/shared'
 
 interface CommitDetailTabProps {
   tab: CenterTab

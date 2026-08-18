@@ -2,16 +2,16 @@ import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { writeFile, rename, mkdir, unlink } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { ContextFileInfo, ContextFileContent, ContextCategory } from '@synth/shared';
-import { atomicWrite } from '@synth/shared';
+import type { ContextFileInfo, ContextFileContent, ContextCategory } from '@itphx/shared';
+import { atomicWrite } from '@itphx/shared';
 import { info, warning } from '../../logger.js';
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Резолвинг корня пакета @synth/core по package.json — поиск вверх от startDir.
+ * Резолвинг корня пакета @itphx/core по package.json — поиск вверх от startDir.
  * Работает одинаково при src-запуске (tsx), dist-запуске и в установленном пакете
- * node_modules/@synth/core (включая Docker-образ, где копируется только dist/).
+ * node_modules/@itphx/core (включая Docker-образ, где копируется только dist/).
  */
 function findPackageRoot(startDir: string): string {
   let dir = startDir;

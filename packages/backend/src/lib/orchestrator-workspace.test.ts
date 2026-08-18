@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { ChatOrchestrator, SessionManager, EventBus, FileStore, createToolRegistry } from '@synth/core';
-import type { ContextBuilder } from '@synth/core';
-import type { ToolContext, Session } from '@synth/shared';
+import { ChatOrchestrator, SessionManager, EventBus, FileStore, createToolRegistry } from '@itphx/core';
+import type { ContextBuilder } from '@itphx/core';
+import type { ToolContext, Session } from '@itphx/shared';
 import { ProjectStore } from '../storage/project-store.js';
 
 /**

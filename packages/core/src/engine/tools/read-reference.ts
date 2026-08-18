@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import type { ToolDefinition, ToolContext, ToolResult } from '@synth/shared';
-import { ToolCapability } from '@synth/shared';
+import type { ToolDefinition, ToolContext, ToolResult } from '@itphx/shared';
+import { ToolCapability } from '@itphx/shared';
 import type { SessionManager } from '../../sessions/manager.js';
 
 const paramsSchema = z.object({

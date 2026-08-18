@@ -12,9 +12,9 @@ import { createToolRegistry } from './tools/index.js';
 import { ProviderFactory, BaseProvider } from '../providers/base.js';
 import type { LLMMessage, CancellationToken } from '../providers/base.js';
 import type { ContextBuilder } from './context/builder.js';
-import type { SessionSettings, Session } from '@synth/shared';
-import { generateId, MessageRole, nowISO, makeTextPart } from '@synth/shared';
-import type { Message } from '@synth/shared';
+import type { SessionSettings, Session } from '@itphx/shared';
+import { generateId, MessageRole, nowISO, makeTextPart } from '@itphx/shared';
+import type { Message } from '@itphx/shared';
 
 interface ScriptStep {
   toolCalls?: Array<{ name: string; args: Record<string, unknown> }>;
@@ -46,7 +46,7 @@ class ScriptedProvider extends BaseProvider {
     return script[idx] ?? {};
   }
 
-  async chat(): Promise<import('@synth/shared').LLMResponse> {
+  async chat(): Promise<import('@itphx/shared').LLMResponse> {
     const step = this._currentStep();
     const toolCalls = step.toolCalls?.map((t) => ({
       id: `call_${t.name}_${ScriptedProvider._step}`,
@@ -66,7 +66,7 @@ class ScriptedProvider extends BaseProvider {
     _tools?: Record<string, unknown>[],
     _debugCollector?: unknown,
     _cancellationToken?: CancellationToken,
-  ): AsyncGenerator<import('@synth/shared').LLMChunk> {
+  ): AsyncGenerator<import('@itphx/shared').LLMChunk> {
     const step = this._currentStep();
     const toolCalls = step.toolCalls?.map((t) => ({
       id: `call_${t.name}_${ScriptedProvider._step}`,
@@ -142,7 +142,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
       eventBus,
       contextBuilder: makeCtxBuilder(),
       providerLoader: (name: string) => {
-        return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@synth/shared').ProviderConfig;
+        return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/shared').ProviderConfig;
       },
       toolRegistry,
       permissionConfig: { rules: {}, askTimeoutMs: 1000 },
@@ -305,7 +305,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
       eventBus,
       contextBuilder: makeCtxBuilder(),
       providerLoader: (name: string) => {
-        return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@synth/shared').ProviderConfig;
+        return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/shared').ProviderConfig;
       },
       toolRegistry,
       permissionConfig: { rules: {}, askTimeoutMs: 1000 },
@@ -353,7 +353,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
       eventBus,
       contextBuilder: makeCtxBuilder(),
       providerLoader: (name: string) => {
-        return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@synth/shared').ProviderConfig;
+        return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/shared').ProviderConfig;
       },
       toolRegistry,
       permissionConfig: { rules: {}, askTimeoutMs: 1000 },
@@ -384,7 +384,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
       contextBuilder: makeCtxBuilder(),
       contextConfig,
       providerLoader: (name: string) => {
-        return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@synth/shared').ProviderConfig;
+        return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/shared').ProviderConfig;
       },
       toolRegistry,
       permissionConfig: { rules: {}, askTimeoutMs: 1000 },
@@ -419,7 +419,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
       eventBus,
       contextBuilder: makeCtxBuilder(),
       providerLoader: (name: string) => {
-        return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@synth/shared').ProviderConfig;
+        return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/shared').ProviderConfig;
       },
       toolRegistry,
       permissionConfig: { rules: {}, askTimeoutMs: 1000 },

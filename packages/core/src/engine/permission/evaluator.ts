@@ -1,6 +1,6 @@
 import { relative, resolve, isAbsolute, normalize, sep } from 'node:path';
-import { globMatch, ToolCapability } from '@synth/shared';
-import type { PermissionAction, PermissionConfig, PermissionDecision, PermissionRule, PlanMode, SessionMode, McpServerToolSettings, McpToolAvailability } from '@synth/shared';
+import { globMatch, ToolCapability } from '@itphx/shared';
+import type { PermissionAction, PermissionConfig, PermissionDecision, PermissionRule, PlanMode, SessionMode, McpServerToolSettings, McpToolAvailability } from '@itphx/shared';
 import { resolvePath } from '../tools/path-utils.js';
 import { getToolGroups, TOOL_PATH_PARAMS } from './groups.js';
 

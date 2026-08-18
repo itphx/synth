@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import { atomicWrite, AsyncLock } from '@synth/shared';
+import { atomicWrite, AsyncLock } from '@itphx/shared';
 
 export interface JsonStoreConfig {
   dataDir: string;

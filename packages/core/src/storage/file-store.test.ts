@@ -3,8 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileStore } from './file-store.js';
-import type { Session } from '@synth/shared';
-import { MessageRole, makeTextPart, generateId } from '@synth/shared';
+import type { Session } from '@itphx/shared';
+import { MessageRole, makeTextPart, generateId } from '@itphx/shared';
 
 describe('FileStore', () => {
   let store: FileStore;

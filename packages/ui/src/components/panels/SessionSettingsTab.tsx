@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import type { TodoItem, TodoStatus, TodoPriority } from '@synth/shared'
+import type { TodoItem, TodoStatus, TodoPriority } from '@itphx/shared'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'

@@ -38,10 +38,10 @@ importers:
       '@hono/node-server':
         specifier: ^1.18.0
         version: 1.19.14(hono@4.12.21)
-      '@synth/core':
+      '@itphx/core':
         specifier: workspace:*
         version: link:../core
-      '@synth/shared':
+      '@itphx/shared':
         specifier: workspace:*
         version: link:../shared
       hono:
@@ -84,12 +84,12 @@ importers:
       '@hono/node-server':
         specifier: ^1.18.0
         version: 1.19.14(hono@4.12.21)
+      '@itphx/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(supports-color@10.2.2)(zod@3.25.76)
-      '@synth/shared':
-        specifier: workspace:*
-        version: link:../shared
       commander:
         specifier: ^14.0.3
         version: 14.0.3
@@ -121,10 +121,10 @@ importers:
 
   packages/runner:
     dependencies:
-      '@synth/core':
+      '@itphx/core':
         specifier: workspace:*
         version: link:../core
-      '@synth/shared':
+      '@itphx/shared':
         specifier: workspace:*
         version: link:../shared
       commander:
@@ -165,13 +165,13 @@ importers:
       '@hono/node-server':
         specifier: ^1.18.0
         version: 1.19.14(hono@4.12.21)
-      '@synth/core':
+      '@itphx/core':
         specifier: workspace:*
         version: link:../core
-      '@synth/shared':
+      '@itphx/shared':
         specifier: workspace:*
         version: link:../shared
-      '@synth/ui':
+      '@itphx/ui':
         specifier: workspace:*
         version: link:../ui
       commander:
@@ -214,6 +214,9 @@ importers:
       '@dnd-kit/utilities':
         specifier: ^3.2.2
         version: 3.2.2(react@19.2.6)
+      '@itphx/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@pierre/diffs':
         specifier: 1.1.22
         version: 1.1.22(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
@@ -250,9 +253,6 @@ importers:
       '@remixicon/react':
         specifier: ^4.7.0
         version: 4.9.0(react@19.2.6)
-      '@synth/shared':
-        specifier: workspace:*
-        version: link:../shared
       '@tanstack/react-virtual':
         specifier: ^3.13.24
         version: 3.13.24(react-dom@19.2.6(react@19.2.6))(react@19.2.6)

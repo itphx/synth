@@ -103,10 +103,10 @@ jobs:
       - name: Установка зависимостей
         run: pnpm install --frozen-lockfile
 
-      - name: Сборка @synth/shared и @synth/core
+      - name: Сборка @itphx/shared и @itphx/core
         run: |
-          pnpm --filter @synth/shared build
-          pnpm --filter @synth/core build
+          pnpm --filter @itphx/shared build
+          pnpm --filter @itphx/core build
 
       - name: TypeScript (typecheck)
         run: pnpm typecheck
@@ -132,11 +132,11 @@ jobs:
       - name: Сборка всех пакетов
         run: |
           pnpm install --frozen-lockfile
-          pnpm --filter @synth/shared build
-          pnpm --filter @synth/core build
-          pnpm --filter @synth/ui build
-          pnpm --filter @synth/backend build
-          pnpm --filter @synth/runner build
+          pnpm --filter @itphx/shared build
+          pnpm --filter @itphx/core build
+          pnpm --filter @itphx/ui build
+          pnpm --filter @itphx/backend build
+          pnpm --filter @itphx/runner build
           pnpm --filter @itphx/synth build
 
       - name: Загрузить бандл как артефакт
@@ -180,11 +180,11 @@ jobs:
         run: |
           npm install -g pnpm@latest
           pnpm install --frozen-lockfile
-          pnpm --filter @synth/shared build
-          pnpm --filter @synth/core build
-          pnpm --filter @synth/ui build
-          pnpm --filter @synth/backend build
-          pnpm --filter @synth/runner build
+          pnpm --filter @itphx/shared build
+          pnpm --filter @itphx/core build
+          pnpm --filter @itphx/ui build
+          pnpm --filter @itphx/backend build
+          pnpm --filter @itphx/runner build
           pnpm --filter @itphx/synth build
 
       - name: Публикация в npmjs.org
@@ -207,11 +207,11 @@ jobs:
         run: |
           npm install -g pnpm@latest
           pnpm install --frozen-lockfile
-          pnpm --filter @synth/shared build
-          pnpm --filter @synth/core build
-          pnpm --filter @synth/ui build
-          pnpm --filter @synth/backend build
-          pnpm --filter @synth/runner build
+          pnpm --filter @itphx/shared build
+          pnpm --filter @itphx/core build
+          pnpm --filter @itphx/ui build
+          pnpm --filter @itphx/backend build
+          pnpm --filter @itphx/runner build
           pnpm --filter @itphx/synth build
 
       - name: Публикация в GitVerse Package Registry

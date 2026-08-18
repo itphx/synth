@@ -1,5 +1,5 @@
 {
-  "name": "@synth/core",
+  "name": "@itphx/core",
   "version": "0.1.12",
   "type": "module",
   "main": "./dist/index.js",
@@ -56,7 +56,7 @@
   "dependencies": {
     "@hono/node-server": "^1.18.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@synth/shared": "workspace:*",
+    "@itphx/shared": "workspace:*",
     "commander": "^14.0.3",
     "hono": "^4.9.0",
     "parse5": "^8.0.1",

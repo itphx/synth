@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { stat } from 'node:fs/promises';
 import type { AuthKit } from '../auth/middleware.js';
 import type { ProjectStore } from '../storage/project-store.js';
-import type { SessionManager } from '@synth/core';
+import type { SessionManager } from '@itphx/core';
 import { serializeProject } from '../lib/serialize.js';
 import { t } from '../lib/i18n.js';
 import { WorkspaceResolver } from '../lib/workspace-resolver.js';

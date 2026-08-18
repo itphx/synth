@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventBus, sseEventStream } from './bus.js';
-import type { BusEvent } from '@synth/shared';
+import type { BusEvent } from '@itphx/shared';
 
 describe('EventBus', () => {
   let bus: EventBus;

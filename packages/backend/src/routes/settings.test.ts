@@ -4,8 +4,8 @@ import type { Context, Next } from 'hono';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSettingsRoutes, RuntimeSettingsStore } from '@synth/core';
-import type { SettingsRoutesDeps } from '@synth/core';
+import { createSettingsRoutes, RuntimeSettingsStore } from '@itphx/core';
+import type { SettingsRoutesDeps } from '@itphx/core';
 
 function createMockKit() {
   return {

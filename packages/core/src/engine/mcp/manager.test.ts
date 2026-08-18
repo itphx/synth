@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { McpManager } from './manager.js';
-import type { McpServerConfig, ToolDefinition } from '@synth/shared';
-import { ToolCapability } from '@synth/shared';
+import type { McpServerConfig, ToolDefinition } from '@itphx/shared';
+import { ToolCapability } from '@itphx/shared';
 import type { ToolRegistry } from '../tools/registry.js';
 
 const mockClientConnect = vi.fn<() => Promise<void>>();

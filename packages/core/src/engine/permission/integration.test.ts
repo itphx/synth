@@ -10,9 +10,9 @@ import { createToolRegistry } from '../tools/index.js';
 import { ProviderFactory, BaseProvider } from '../../providers/base.js';
 import type { LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ContextBuilder } from '../context/builder.js';
-import type { PermissionConfig } from '@synth/shared';
-import { generateId, MessageRole, nowISO, makeTextPart } from '@synth/shared';
-import type { Message } from '@synth/shared';
+import type { PermissionConfig } from '@itphx/shared';
+import { generateId, MessageRole, nowISO, makeTextPart } from '@itphx/shared';
+import type { Message } from '@itphx/shared';
 
 /** Провайдер, который сначала «зовёт» write_file, затем отвечает текстом. */
 class MockWriteProvider extends BaseProvider {
@@ -24,7 +24,7 @@ class MockWriteProvider extends BaseProvider {
     _tools?: Record<string, unknown>[],
     _stream?: boolean,
     _debugCollector?: unknown,
-  ): Promise<import('@synth/shared').LLMResponse> {
+  ): Promise<import('@itphx/shared').LLMResponse> {
     let content = 'Готово';
     let toolCalls: Record<string, unknown>[] | undefined;
     if (this._calls === 0) {
@@ -44,7 +44,7 @@ class MockWriteProvider extends BaseProvider {
     _tools?: Record<string, unknown>[],
     _debugCollector?: unknown,
     _cancellationToken?: CancellationToken,
-  ): AsyncGenerator<import('@synth/shared').LLMChunk> {
+  ): AsyncGenerator<import('@itphx/shared').LLMChunk> {
     let content = 'Готово';
     let toolCalls: Record<string, unknown>[] | undefined;
     if (this._calls === 0) {
@@ -115,7 +115,7 @@ describe('ChatOrchestrator × permissions (AD-029) — smoke', () => {
       eventBus,
       contextBuilder: makeCtxBuilder(),
       providerLoader: (name: string) => {
-        return { name, type: 'mockperm', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@synth/shared').ProviderConfig;
+        return { name, type: 'mockperm', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/shared').ProviderConfig;
       },
       toolRegistry,
       permissionConfig,
@@ -275,7 +275,7 @@ class MockDoubleWriteProvider extends BaseProvider {
     _tools?: Record<string, unknown>[],
     _stream?: boolean,
     _debugCollector?: unknown,
-  ): Promise<import('@synth/shared').LLMResponse> {
+  ): Promise<import('@itphx/shared').LLMResponse> {
     const next = this._next();
     this._calls++;
     return { content: next.content, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: next.toolCalls };
@@ -287,7 +287,7 @@ class MockDoubleWriteProvider extends BaseProvider {
     _tools?: Record<string, unknown>[],
     _debugCollector?: unknown,
     _cancellationToken?: CancellationToken,
-  ): AsyncGenerator<import('@synth/shared').LLMChunk> {
+  ): AsyncGenerator<import('@itphx/shared').LLMChunk> {
     const next = this._next();
     this._calls++;
     yield { content: next.content, isFinal: true, toolCalls: next.toolCalls, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
@@ -321,7 +321,7 @@ class MockDenyProvider extends BaseProvider {
     _tools?: Record<string, unknown>[],
     _stream?: boolean,
     _debugCollector?: unknown,
-  ): Promise<import('@synth/shared').LLMResponse> {
+  ): Promise<import('@itphx/shared').LLMResponse> {
     const next = this._next();
     MockDenyProvider.calls++;
     return { content: next.content, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: next.toolCalls };
@@ -333,7 +333,7 @@ class MockDenyProvider extends BaseProvider {
     _tools?: Record<string, unknown>[],
     _debugCollector?: unknown,
     _cancellationToken?: CancellationToken,
-  ): AsyncGenerator<import('@synth/shared').LLMChunk> {
+  ): AsyncGenerator<import('@itphx/shared').LLMChunk> {
     const next = this._next();
     MockDenyProvider.calls++;
     yield { content: next.content, isFinal: true, toolCalls: next.toolCalls, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
@@ -377,7 +377,7 @@ describe('ChatOrchestrator × permissions — once:false и deny (AD-029)', () =
       eventBus,
       contextBuilder: makeCtxBuilder(),
       providerLoader: (name: string) => {
-        return { name, type: providerName, baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@synth/shared').ProviderConfig;
+        return { name, type: providerName, baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/shared').ProviderConfig;
       },
       toolRegistry,
       permissionConfig,

@@ -1,5 +1,5 @@
 {
-  "name": "@synth/backend",
+  "name": "@itphx/backend",
   "version": "0.1.12",
   "type": "module",
   "files": [
@@ -17,8 +17,8 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.18.0",
-    "@synth/core": "workspace:*",
-    "@synth/shared": "workspace:*",
+    "@itphx/core": "workspace:*",
+    "@itphx/shared": "workspace:*",
     "hono": "^4.9.0",
     "hono-rate-limiter": "^0.5.3",
     "js-yaml": "^4.1.1",

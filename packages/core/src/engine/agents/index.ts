@@ -4,8 +4,8 @@ export { isModeApplicable } from './mode.js';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { pickLocalized } from '@synth/shared';
-import type { AgentDefinition, ToolCapability } from '@synth/shared';
+import { pickLocalized } from '@itphx/shared';
+import type { AgentDefinition, ToolCapability } from '@itphx/shared';
 import { AgentRegistry } from './registry.js';
 import type { ToolRegistry } from '../tools/registry.js';
 

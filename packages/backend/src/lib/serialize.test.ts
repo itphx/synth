@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { serializeMessage, serializeSession } from './serialize.js';
-import { MessageRole, generateId, makeTextPart, nowISO, TsmState } from '@synth/shared';
-import type { Message, Session } from '@synth/shared';
+import { MessageRole, generateId, makeTextPart, nowISO, TsmState } from '@itphx/shared';
+import type { Message, Session } from '@itphx/shared';
 
 function makeMsg(overrides: Partial<Message> = {}): Message {
   return {

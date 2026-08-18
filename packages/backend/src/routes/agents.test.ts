@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAgentRoutes } from './agents.js';
 import { JsonStore } from '../storage/json-store.js';
-import type { AgentDefinition } from '@synth/shared';
-import { AgentRegistry } from '@synth/core';
+import type { AgentDefinition } from '@itphx/shared';
+import { AgentRegistry } from '@itphx/core';
 
 function createMockKit() {
   return {

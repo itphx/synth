@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { readSessionReferenceTool } from './read-reference.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
-import type { ToolContext } from '@synth/shared';
-import { generateId, MessageRole, nowISO } from '@synth/shared';
+import type { ToolContext } from '@itphx/shared';
+import { generateId, MessageRole, nowISO } from '@itphx/shared';
 
 describe('read_session_reference', () => {
   let store: FileStore;

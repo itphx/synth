@@ -30,7 +30,7 @@ API Hub системы Synth. Связующее звено между synth-ui,
 | Тестирование | Vitest |
 | Пакетный менеджер | pnpm |
 | Хранилище | JSON-файлы (AD-005) |
-| Типы | @synth/shared |
+| Типы | @itphx/shared |
 
 ## Структура проекта
 
@@ -447,10 +447,10 @@ interface McpServerConfig {
 
 ## Модели данных
 
-Импортируются из `@synth/shared`. Локально определяются только бэкенд-специфичные:
+Импортируются из `@itphx/shared`. Локально определяются только бэкенд-специфичные:
 
 ```typescript
-// @synth/shared
+// @itphx/shared
 export interface Session { ... }
 export interface Message { ... }
 export interface Project { ... }

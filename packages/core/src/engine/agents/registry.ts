@@ -1,4 +1,4 @@
-import type { AgentDefinition, ToolCapability } from '@synth/shared';
+import type { AgentDefinition, ToolCapability } from '@itphx/shared';
 import type { ToolRegistry } from '../tools/registry.js';
 
 export class AgentRegistry {

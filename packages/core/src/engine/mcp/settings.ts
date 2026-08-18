@@ -1,4 +1,4 @@
-import type { McpToolAvailability, McpServerToolSettings } from '@synth/shared';
+import type { McpToolAvailability, McpServerToolSettings } from '@itphx/shared';
 
 /** Полная доступность: инструмент разрешён и в plan, и в act режимах. */
 export function fullMcpAvailability(): McpToolAvailability {

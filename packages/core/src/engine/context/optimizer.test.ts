@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { ContextOptimizer } from './optimizer.js';
 import { ContextConfig } from './config.js';
 import { BaseProvider } from '../../providers/base.js';
-import type { LLMChunk, LLMResponse, Session } from '@synth/shared';
+import type { LLMChunk, LLMResponse, Session } from '@itphx/shared';
 
 /** Мок провайдера: delta-чанки + финальный чанк с ПОЛНЫМ контентом (как реальный openai.ts). */
 class MockStreamProvider extends BaseProvider {

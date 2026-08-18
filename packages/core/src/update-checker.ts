@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { SYNTH_VERSION } from '@synth/shared';
+import { SYNTH_VERSION } from '@itphx/shared';
 
 export interface UpdateInfo {
   currentVersion: string;

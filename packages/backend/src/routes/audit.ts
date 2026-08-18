@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import { readAuditLog, AuditLogger, PLACEHOLDER_PATTERN } from '@synth/core';
+import { readAuditLog, AuditLogger, PLACEHOLDER_PATTERN } from '@itphx/core';
 
 const MAX_LIMIT = 500;
 const DEFAULT_LIMIT = 100;

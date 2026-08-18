@@ -3,8 +3,8 @@
  * Поддерживает стратегии: content, cost, content+cost, auto.
  */
 
-import type { SessionSettings } from '@synth/shared';
-import type { RouterConfig } from '@synth/shared';
+import type { SessionSettings } from '@itphx/shared';
+import type { RouterConfig } from '@itphx/shared';
 import type { ContentClassifier } from './content-classifier.js';
 import type { ProviderPool } from './provider-pool.js';
 import type { QualityChecker, QualityCheckResult } from './quality-checker.js';

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { SessionData } from '@/lib/api/synthApi'
-import type { SessionMode } from '@synth/shared'
+import type { SessionMode } from '@itphx/shared'
 import { synthApi } from '@/lib/api/synthApi'
 import { loadRoutingDefaults, routingDefaultsToSettings } from '@/lib/routingDefaults'
 import { useUIStore } from './useUIStore'

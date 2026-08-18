@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { ToolCapability } from '@synth/shared';
-import type { ToolDefinition, TodoItem } from '@synth/shared';
+import { ToolCapability } from '@itphx/shared';
+import type { ToolDefinition, TodoItem } from '@itphx/shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 

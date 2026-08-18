@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { nowISO, SYNTH_VERSION } from '@synth/shared';
+import { nowISO, SYNTH_VERSION } from '@itphx/shared';
 
 export function createHealthRoutes(): Hono {
   const app = new Hono();

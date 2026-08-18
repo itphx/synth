@@ -1,5 +1,5 @@
-import type { Session, Message, Project, StatusMessage } from '@synth/shared';
-import { isModeApplicable } from '@synth/core';
+import type { Session, Message, Project, StatusMessage } from '@itphx/shared';
+import { isModeApplicable } from '@itphx/core';
 
 /** Минимальный тип реестра агентов для вычисления modeApplicable. */
 export interface SerializeAgentRegistry {

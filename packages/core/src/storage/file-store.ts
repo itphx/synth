@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir, unlink, access, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Session, Message, TsmState, TsmStatus, SessionSettings, Part, SessionOrigin, SessionReference } from '@synth/shared';
-import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts } from '@synth/shared';
+import type { Session, Message, TsmState, TsmStatus, SessionSettings, Part, SessionOrigin, SessionReference } from '@itphx/shared';
+import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts } from '@itphx/shared';
 
 export interface StorageConfig {
   dataDir: string;

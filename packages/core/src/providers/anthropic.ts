@@ -1,4 +1,4 @@
-import type { LLMChunk, LLMResponse, TokenUsage } from '@synth/shared';
+import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/shared';
 import { BaseProvider, type LLMMessage, type CancellationToken } from './base.js';
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';

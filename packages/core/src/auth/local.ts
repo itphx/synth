@@ -1,4 +1,4 @@
-import type { User } from '@synth/shared';
+import type { User } from '@itphx/shared';
 import { createMiddleware } from 'hono/factory';
 
 function extractBearerToken(h: string | undefined): string | null {

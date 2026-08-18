@@ -1,6 +1,6 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@synth/shared';
-import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart } from '@synth/shared';
-import type { RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig } from '@synth/shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@itphx/shared';
+import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart } from '@itphx/shared';
+import type { RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig } from '@itphx/shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
@@ -12,7 +12,7 @@ import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import { ContextConfig } from './context/config.js';
 import type { ToolRegistry } from './tools/registry.js';
-import type { ToolForLLM } from '@synth/shared';
+import type { ToolForLLM } from '@itphx/shared';
 import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
 import { info, warning } from '../logger.js';

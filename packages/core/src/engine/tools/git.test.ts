@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gitStatusTool } from './git.js';
-import type { ToolContext } from '@synth/shared';
+import type { ToolContext } from '@itphx/shared';
 
 const execFileAsync = promisify(execFile);
 

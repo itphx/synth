@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
-import type { AgentDefinition } from '@synth/shared';
-import { loadSystemAgentDefinitions } from '@synth/core';
-import type { AgentRegistry, SessionManager } from '@synth/core';
+import type { AgentDefinition } from '@itphx/shared';
+import { loadSystemAgentDefinitions } from '@itphx/core';
+import type { AgentRegistry, SessionManager } from '@itphx/core';
 import { t } from '../lib/i18n.js';
 
 const BUILTIN_IDS = new Set(loadSystemAgentDefinitions().map((a: AgentDefinition) => a.id));

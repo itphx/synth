@@ -8,7 +8,7 @@ import { createSettingsRoutes } from './settings.js';
 import { RuntimeSettingsStore, mergeLlmGatewayConfig } from '../../storage/runtime-settings.js';
 import type { LlmGatewayRuntimeSettings } from '../../storage/runtime-settings.js';
 import type { AuthKit } from '../../auth/local.js';
-import type { LLMGatewayConfig } from '@synth/shared';
+import type { LLMGatewayConfig } from '@itphx/shared';
 
 function createMockAuth(): AuthKit {
   return {

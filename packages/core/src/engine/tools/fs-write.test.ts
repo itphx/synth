@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile, readFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileTool, createDirectoryTool, deleteFileTool } from './fs-write.js';
-import type { ToolContext } from '@synth/shared';
+import type { ToolContext } from '@itphx/shared';
 
 describe('fs-write tools — path resolution', () => {
   let tmpDir: string;

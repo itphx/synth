@@ -10,7 +10,7 @@ import { ProviderFactory, BaseProvider } from '../../providers/base.js';
 import type { LLMMessage, CancellationToken } from '../../providers/base.js';
 import { GatewayProvider } from '../gateway/index.js';
 import type { AuditLogger, RateLimiter } from '../gateway/index.js';
-import type { LLMGatewayConfig } from '@synth/shared';
+import type { LLMGatewayConfig } from '@itphx/shared';
 
 const noopAudit = (): AuditLogger => ({ append: async () => {} }) as unknown as AuditLogger;
 const noopRateLimiter = (): RateLimiter =>
@@ -23,7 +23,7 @@ class MockPoolProvider extends BaseProvider {
     _tools?: Record<string, unknown>[],
     _stream?: boolean,
     _debugCollector?: unknown,
-  ): Promise<import('@synth/shared').LLMResponse> {
+  ): Promise<import('@itphx/shared').LLMResponse> {
     return { content: 'ok', model: this.model, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
   }
 
@@ -33,7 +33,7 @@ class MockPoolProvider extends BaseProvider {
     _tools?: Record<string, unknown>[],
     _debugCollector?: unknown,
     _cancellationToken?: CancellationToken,
-  ): AsyncGenerator<import('@synth/shared').LLMChunk> {
+  ): AsyncGenerator<import('@itphx/shared').LLMChunk> {
     yield { content: 'ok', isFinal: true, model: this.model, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
   }
 
@@ -54,7 +54,7 @@ function makeGatewayConfig(overrides: Partial<LLMGatewayConfig> = {}): LLMGatewa
   };
 }
 
-function makeLoader(): (name: string) => import('@synth/shared').ProviderConfig | null {
+function makeLoader(): (name: string) => import('@itphx/shared').ProviderConfig | null {
   return (name: string) => {
     if (name !== 'mockpool') return null;
     return {

@@ -1,8 +1,8 @@
 import { readdir, access } from 'node:fs/promises';
 import { basename, join, isAbsolute, normalize, resolve } from 'node:path';
 import { z } from 'zod';
-import { ToolCapability } from '@synth/shared';
-import type { ToolDefinition, ToolContext, Project } from '@synth/shared';
+import { ToolCapability } from '@itphx/shared';
+import type { ToolDefinition, ToolContext, Project } from '@itphx/shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { ProjectStore } from '../../storage/project-store.js';
 import { runGit } from './git.js';

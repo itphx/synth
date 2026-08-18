@@ -8,7 +8,7 @@ import { FileStore } from '../storage/file-store.js';
 import { ProjectStore } from '../storage/project-store.js';
 import { EventBus } from '../events/bus.js';
 import type { ContextBuilder } from './context/builder.js';
-import type { Session } from '@synth/shared';
+import type { Session } from '@itphx/shared';
 
 function makeCtxBuilder(): ContextBuilder {
   return {

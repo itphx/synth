@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import { atomicWrite, AsyncLock } from '@synth/shared';
-import type { McpServerToolSettings, LLMGatewayConfig } from '@synth/shared';
+import { atomicWrite, AsyncLock } from '@itphx/shared';
+import type { McpServerToolSettings, LLMGatewayConfig } from '@itphx/shared';
 
 /** Runtime-настройки LLM Gateway, сохраняемые через UI (раздел «Шлюз безопасности»). */
 export interface LlmGatewayRuntimeSettings {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { SessionMode } from '@synth/shared'
+import type { SessionMode } from '@itphx/shared'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'

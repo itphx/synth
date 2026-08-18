@@ -1,8 +1,8 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isDefaultTitle } from '@synth/shared';
-import type { Session } from '@synth/shared';
+import { isDefaultTitle } from '@itphx/shared';
+import type { Session } from '@itphx/shared';
 import type { SessionManager } from './manager.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../providers/base.js';
 

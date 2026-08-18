@@ -5,7 +5,7 @@
  * Безопасно: если сессия/карта обфускации недоступна — данные не меняются.
  */
 
-import type { ToolContext } from '@synth/shared';
+import type { ToolContext } from '@itphx/shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import { ObfuscationMapStore } from '../gateway/obfuscation-map-store.js';
 

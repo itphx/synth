@@ -1,5 +1,5 @@
-import type { Message, Session, ProviderConfig as SharedProviderConfig, SummarizationConfig, LLMGatewayConfig } from '@synth/shared';
-import { MessageRole, nowISO, lookupContextWindow, generateId, makeTextPart } from '@synth/shared';
+import type { Message, Session, ProviderConfig as SharedProviderConfig, SummarizationConfig, LLMGatewayConfig } from '@itphx/shared';
+import { MessageRole, nowISO, lookupContextWindow, generateId, makeTextPart } from '@itphx/shared';
 import type { ContextConfig } from './config.js';
 import type { LLMMessage } from '../../providers/base.js';
 import { BaseProvider, ProviderFactory } from '../../providers/index.js';
@@ -279,7 +279,7 @@ export class ContextOptimizer {
 
   async *summarizeStream(session: Session): AsyncGenerator<
     | { type: 'chunk'; content: string; model?: string; provider?: string }
-    | { type: 'done'; content: string; model: string; usage: import('@synth/shared').TokenUsage; indices: number[]; provider: string }
+    | { type: 'done'; content: string; model: string; usage: import('@itphx/shared').TokenUsage; indices: number[]; provider: string }
     | { type: 'error'; error: string }
   > {
     const lang = session.settings.language || 'ru';
@@ -290,7 +290,7 @@ export class ContextOptimizer {
       const prep = this._prepareSummarization(session, lang, headCount, tailCount);
       let content = '';
       let model = prep.provider.model;
-      let usage: import('@synth/shared').TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      let usage: import('@itphx/shared').TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
       for await (const chunk of prep.provider.chatAsync(prep.llmMessages, prep.summarizerPrompt)) {
         // Финальный чанк несёт полный накопленный контент — заменяем, а не складываем,

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createProjectRoutes } from './projects.js';
 import { ProjectStore } from '../storage/project-store.js';
-import type { User } from '@synth/shared';
+import type { User } from '@itphx/shared';
 
 const testUser: User = {
   id: 'test-user',

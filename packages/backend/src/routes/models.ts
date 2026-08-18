@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
-import type { ModelConfig, ProviderConfig, ContextSource } from '@synth/shared';
-import { lookupContextWindow } from '@synth/shared';
-import { ProviderFactory } from '@synth/core';
+import type { ModelConfig, ProviderConfig, ContextSource } from '@itphx/shared';
+import { lookupContextWindow } from '@itphx/shared';
+import { ProviderFactory } from '@itphx/core';
 import { t } from '../lib/i18n.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 

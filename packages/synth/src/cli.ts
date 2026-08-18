@@ -1,10 +1,10 @@
 import { Command } from 'commander';
 import { createRequire } from 'node:module';
 import { join, dirname } from 'node:path';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@synth/shared';
-import { createStandaloneApp } from '@synth/core/server/app.js';
-import { runSingleChat } from '@synth/core/server/chat.js';
-import { JsonStore } from '@synth/core/storage/json-store.js';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@itphx/shared';
+import { createStandaloneApp } from '@itphx/core/server/app.js';
+import { runSingleChat } from '@itphx/core/server/chat.js';
+import { JsonStore } from '@itphx/core/storage/json-store.js';
 
 const require = createRequire(import.meta.url);
 
@@ -55,9 +55,9 @@ program
     const port = resolvePort(synth, 'SYNTH_CORE_PORT', synth.core.port);
     const apiKey = synth.core.apiKey || process.env.SYNTH_API_KEY || '';
 
-    // UI поставляется как отдельный npm-пакет @synth/ui → резолвим его dist/.
-    // systemPromptsDir не передаём: @synth/core резолвит свои prompts сам (рядом с package.json).
-    const uiRoot = resolvePackageRoot('@synth/ui');
+    // UI поставляется как отдельный npm-пакет @itphx/ui → резолвим его dist/.
+    // systemPromptsDir не передаём: @itphx/core резолвит свои prompts сам (рядом с package.json).
+    const uiRoot = resolvePackageRoot('@itphx/ui');
     const uiDistPath = uiRoot ? join(uiRoot, 'dist') : undefined;
 
     const { server, wss } = await createStandaloneApp({
@@ -243,7 +243,7 @@ program
     const limitOpt = options.limit != null ? parseInt(options.limit, 10) : NaN;
     const limit = Number.isFinite(tail) ? tail : (Number.isFinite(limitOpt) ? limitOpt : 20);
 
-    const { readAuditLog } = await import('@synth/core/engine/gateway/index.js');
+    const { readAuditLog } = await import('@itphx/core/engine/gateway/index.js');
     const { entries, total } = await readAuditLog(logPath, {
       userId: options.userId,
       sessionId: options.sessionId,

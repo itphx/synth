@@ -7,15 +7,15 @@ import { join, extname } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig } from '@synth/shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig } from '@itphx/shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
   SecretPatternStore,
 } from '../index.js';
-import type { SummarizationConfig } from '@synth/shared';
-import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } from '@synth/shared';
+import type { SummarizationConfig } from '@itphx/shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } from '@itphx/shared';
 import { createLocalAuth } from '../auth/local.js';
 import { JsonStore } from '../storage/json-store.js';
 import { ProjectStore } from '../storage/project-store.js';

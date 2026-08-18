@@ -2,8 +2,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { McpServerConfig } from '@synth/shared';
-import { SYNTH_VERSION } from '@synth/shared';
+import type { McpServerConfig } from '@itphx/shared';
+import { SYNTH_VERSION } from '@itphx/shared';
 import { info, warning, error } from '../../logger.js';
 
 export interface McpToolDef {

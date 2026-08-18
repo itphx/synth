@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { synthApi } from '@/lib/api/synthApi'
-import type { RepoStatus, CommitInfo, CommitDetail } from '@synth/shared'
+import type { RepoStatus, CommitInfo, CommitDetail } from '@itphx/shared'
 
 interface GitStore {
   reposByProject: Record<string, RepoStatus[]>

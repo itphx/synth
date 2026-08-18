@@ -1,8 +1,8 @@
 import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
-import { ToolCapability } from '@synth/shared';
-import type { ToolDefinition } from '@synth/shared';
+import { ToolCapability } from '@itphx/shared';
+import type { ToolDefinition } from '@itphx/shared';
 import { resolvePath, validateInputPath } from './path-utils.js';
 import { deobfuscateText } from './obfuscation.js';
 

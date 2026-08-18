@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { McpClient } from './client.js';
-import type { McpServerConfig } from '@synth/shared';
+import type { McpServerConfig } from '@itphx/shared';
 
 const mockConnect = vi.fn<() => Promise<void>>();
 const mockListTools = vi.fn<() => Promise<{ tools: Array<{ name: string; description?: string; inputSchema: Record<string, unknown> }> }>>();

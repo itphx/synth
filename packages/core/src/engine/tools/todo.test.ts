@@ -6,8 +6,8 @@ import { todoWriteTool } from './todo.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
-import type { ToolContext, TodoItem } from '@synth/shared';
-import { generateId } from '@synth/shared';
+import type { ToolContext, TodoItem } from '@itphx/shared';
+import { generateId } from '@itphx/shared';
 
 describe('todo_write', () => {
   let store: FileStore;

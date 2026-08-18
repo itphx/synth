@@ -1,9 +1,9 @@
 import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ProfileData } from '@synth/shared';
-import type { ProfileStore, CreateProfileParams } from '@synth/shared';
-import { generateId } from '@synth/shared';
+import type { ProfileData } from '@itphx/shared';
+import type { ProfileStore, CreateProfileParams } from '@itphx/shared';
+import { generateId } from '@itphx/shared';
 import { info, warning } from '../logger.js';
 
 interface SerializedProfile {

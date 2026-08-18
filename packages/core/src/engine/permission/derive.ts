@@ -1,4 +1,4 @@
-import type { PermissionConfig, PermissionRule } from '@synth/shared';
+import type { PermissionConfig, PermissionRule } from '@itphx/shared';
 
 export const DEFAULT_ASK_TIMEOUT_MS = 30_000;
 

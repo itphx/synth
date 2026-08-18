@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'node:path';
-import { ToolCapability } from '@synth/shared';
+import { ToolCapability } from '@itphx/shared';
 import { getToolTrust } from './trust.js';
 
 const WS = '/tmp/synth-ws';

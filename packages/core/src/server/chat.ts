@@ -1,16 +1,16 @@
 import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
-import type { SynthConfig } from '@synth/shared';
-import { resolveDefaultWorkspace, resolveWorkspacesRoot } from '@synth/shared';
+import type { SynthConfig } from '@itphx/shared';
+import { resolveDefaultWorkspace, resolveWorkspacesRoot } from '@itphx/shared';
 import {
   FileStore, SessionManager, EventBus,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
   createToolRegistry, createAgentRegistry, SecretPatternStore,
 } from '../index.js';
 import { JsonStore } from '../storage/json-store.js';
-import type { ProviderConfig, ModelConfig, SummarizationConfig } from '@synth/shared';
-import type { Message } from '@synth/shared';
-import { MessageRole, nowISO, generateId, makeTextPart } from '@synth/shared';
+import type { ProviderConfig, ModelConfig, SummarizationConfig } from '@itphx/shared';
+import type { Message } from '@itphx/shared';
+import { MessageRole, nowISO, generateId, makeTextPart } from '@itphx/shared';
 
 export interface SingleChatOptions {
   message: string;

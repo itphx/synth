@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { join } from 'node:path';
 import { PermissionEvaluator, extractPaths, isInsideWorkingDir } from './evaluator.js';
 import { deriveSubagentPermission } from './derive.js';
-import type { PermissionConfig } from '@synth/shared';
-import { globMatch } from '@synth/shared';
+import type { PermissionConfig } from '@itphx/shared';
+import { globMatch } from '@itphx/shared';
 const CWD = '/workspace/project';
 
 function evalCheck(
@@ -247,7 +247,7 @@ describe('PermissionEvaluator — plan mode (AD-025)', () => {
 
 describe('PermissionEvaluator — MCP доступность по режимам (plan/act)', () => {
   function mcpCheck(
-    mcpToolSettings: Record<string, import('@synth/shared').McpServerToolSettings>,
+    mcpToolSettings: Record<string, import('@itphx/shared').McpServerToolSettings>,
     opts: { sessionMode?: 'plan' | 'act' } = {},
   ) {
     return new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 }).check({

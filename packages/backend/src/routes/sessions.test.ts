@@ -5,8 +5,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSessionRoutes } from './sessions.js';
-import { SessionManager, EventBus, FileStore } from '@synth/core';
-import type { User } from '@synth/shared';
+import { SessionManager, EventBus, FileStore } from '@itphx/core';
+import type { User } from '@itphx/shared';
 
 const testUser: User = {
   id: 'test-user',

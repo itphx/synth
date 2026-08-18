@@ -1,6 +1,6 @@
-import type { AuthConfig, TestUser, SynthConfig } from '@synth/shared';
-import { loadConfig, resolveDataDir, resolvePort, resolveWorkspacesRoot } from '@synth/shared';
-import type { LoadConfigOptions } from '@synth/shared/config';
+import type { AuthConfig, TestUser, SynthConfig } from '@itphx/shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveWorkspacesRoot } from '@itphx/shared';
+import type { LoadConfigOptions } from '@itphx/shared/config';
 
 const envStr = (key: string, fallback = ''): string => process.env[key] || fallback;
 const envBool = (key: string, fallback = false): boolean =>

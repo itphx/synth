@@ -1,8 +1,8 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { ToolCapability } from '@synth/shared';
-import type { ToolDefinition } from '@synth/shared';
+import { ToolCapability } from '@itphx/shared';
+import type { ToolDefinition } from '@itphx/shared';
 import { resolvePath, validateInputPath } from './path-utils.js';
 
 export const readFileTool: ToolDefinition = {

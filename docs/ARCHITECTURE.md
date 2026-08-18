@@ -6,27 +6,27 @@ Synth состоит из пяти пакетов в монорепозитор�
 
 | Пакет | Назначение | Стек |
 |-------|-----------|------|
-| **@synth/shared** | Типы, интерфейсы, Zod-схемы, протоколы, конфигурация | TypeScript |
-| **@synth/core** | Автономный движок: сессии, очередь, LLM-провайдеры, TSM, CLI, HTTP API v2 | TypeScript, Hono |
-| **@synth/backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
-| **@synth/ui** | React 19 SPA + админка (рендеринг по ролям) | TypeScript, React 19, Vite |
-| **@synth/runner** | Gateway между бэкендом и движками (opencode, cline, synth-core) | TypeScript, Node.js |
+| **@itphx/shared** | Типы, интерфейсы, Zod-схемы, протоколы, конфигурация | TypeScript |
+| **@itphx/core** | Автономный движок: сессии, очередь, LLM-провайдеры, TSM, CLI, HTTP API v2 | TypeScript, Hono |
+| **@itphx/backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
+| **@itphx/ui** | React 19 SPA + админка (рендеринг по ролям) | TypeScript, React 19, Vite |
+| **@itphx/runner** | Gateway между бэкендом и движками (opencode, cline, synth-core) | TypeScript, Node.js |
 
 ## Архитектурная схема
 
 ```mermaid
 flowchart TB
     subgraph UI["Web-интерфейс"]
-        synth_ui["@synth/ui — React SPA"]
+        synth_ui["@itphx/ui — React SPA"]
     end
 
     subgraph Server["Серверная часть"]
-        synth_backend["@synth/backend — Hono API Hub"]
-        synth_core["@synth/core — автономный движок"]
+        synth_backend["@itphx/backend — Hono API Hub"]
+        synth_core["@itphx/core — автономный движок"]
     end
 
     subgraph Runner["Оркестрация движков"]
-        synth_runner["@synth/runner — Gateway"]
+        synth_runner["@itphx/runner — Gateway"]
         opencode["opencode CLI"]
         cline["cline CLI"]
     end
@@ -87,7 +87,7 @@ synth-core ←→ synthase-runner (in-process) ←→ opencode / cline
 ```
 
 - `synth serve --api-key <key> --runner`
-- In-process импорт @synth/runner
+- In-process импорт @itphx/runner
 - LLM-запросы opencode/cline проксируются через core
 
 ### Гибридный (корпоративный)
@@ -121,11 +121,11 @@ synth/
 ├── eslint.config.js          # линтер
 ├── .prettierrc               # форматтер
 └── packages/
-    ├── shared/   → @synth/shared
-    ├── backend/  → @synth/backend
-    ├── ui/       → @synth/ui
-    ├── runner/   → @synth/runner
-    └── core/     → @synth/core
+    ├── shared/   → @itphx/shared
+    ├── backend/  → @itphx/backend
+    ├── ui/       → @itphx/ui
+    ├── runner/   → @itphx/runner
+    └── core/     → @itphx/core
 ```
 
 ## Модель «Runner»

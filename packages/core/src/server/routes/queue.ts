@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import type { SessionManager, QueueProcessorManager, ChatOrchestrator, EventBus } from '../../index.js';
-import { generateStreamId } from '@synth/shared';
+import { generateStreamId } from '@itphx/shared';
 
 export function createQueueRoutes(
   auth: AuthKit,

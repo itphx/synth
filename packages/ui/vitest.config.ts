@@ -11,7 +11,7 @@ export default defineConfig({
     },
   },
   test: {
-    name: '@synth/ui',
+    name: '@itphx/ui',
     environment: 'jsdom',
     include: ['src/**/*.test.{ts,tsx}'],
     coverage: {
