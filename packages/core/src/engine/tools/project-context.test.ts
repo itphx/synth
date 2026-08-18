@@ -8,7 +8,7 @@ import { getProjectInfoTool, listReposTool } from './project-context.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { ProjectStore } from '../../storage/project-store.js';
-import type { ToolContext } from '@itphx/shared';
+import type { ToolContext } from '@itphx/synth-shared';
 
 const execFileAsync = promisify(execFile);
 

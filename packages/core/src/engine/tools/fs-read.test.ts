@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readFileTool, listDirectoryTool, globTool } from './fs-read.js';
-import type { ToolContext } from '@itphx/shared';
+import type { ToolContext } from '@itphx/synth-shared';
 
 describe('fs-read tools — path resolution', () => {
   let tmpDir: string;

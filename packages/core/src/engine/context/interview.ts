@@ -1,5 +1,5 @@
-import type { ProfileData, InterviewQuestion } from '@itphx/shared';
-import type { ProfileStore } from '@itphx/shared';
+import type { ProfileData, InterviewQuestion } from '@itphx/synth-shared';
+import type { ProfileStore } from '@itphx/synth-shared';
 import { ContextConfig } from './config.js';
 
 export class InterviewManager {

@@ -1,4 +1,4 @@
-# @itphx/core
+# @itphx/synth-core
 
 ## Назначение
 
@@ -24,7 +24,7 @@
 | Валидация | Zod |
 | Тестирование | Vitest |
 | Пакетный менеджер | pnpm |
-| Типы | @itphx/shared |
+| Типы | @itphx/synth-shared |
 
 ---
 
@@ -136,7 +136,7 @@ packages/core/
 ## Standalone API (совместимость с synth-backend API v2)
 
 Движок в standalone-режиме реализует **подмножество** API v2 synth-backend.
-Те же модели ответов из `@itphx/shared`, те же пути, те же форматы ошибок.
+Те же модели ответов из `@itphx/synth-shared`, те же пути, те же форматы ошибок.
 
 ### Поддерживаемые эндпоинты
 
@@ -367,10 +367,10 @@ class ToolRegistry {
 
 ### FileStore
 
-Реализует интерфейсы из `@itphx/shared`:
+Реализует интерфейсы из `@itphx/synth-shared`:
 
 ```typescript
-// @itphx/shared/src/interfaces/storage.ts
+// @itphx/synth-shared/src/interfaces/storage.ts
 interface SessionStore {
   get(id: string): Promise<Session>;
   save(session: Session): Promise<void>;

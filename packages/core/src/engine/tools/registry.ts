@@ -1,4 +1,4 @@
-import type { ToolDefinition, ToolForLLM, ToolCapability } from '@itphx/shared';
+import type { ToolDefinition, ToolForLLM, ToolCapability } from '@itphx/synth-shared';
 import { zodToJsonSchema } from './json-schema.js';
 
 export class ToolRegistry {

@@ -7,7 +7,7 @@
 import type { MicroInput, MicroResult, MicroTaskClass } from '../types.js';
 import type { MicroModel } from './base.js';
 import type { ProviderPool } from '../../provider-pool.js';
-import type { SessionSettings } from '@itphx/shared';
+import type { SessionSettings } from '@itphx/synth-shared';
 import { warning } from '../../../../logger.js';
 
 export interface MicroLlmConfig {

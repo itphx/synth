@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import { createMcpRoutes, type McpConfigStore } from './mcp.js';
-import type { McpServerConfig, SessionSettings } from '@itphx/shared';
+import type { McpServerConfig, SessionSettings } from '@itphx/synth-shared';
 
 function createMockKit() {
   return {

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import type { AuthConfig, User } from '@itphx/shared';
-import type { ProfileStore } from '@itphx/shared';
+import type { AuthConfig, User } from '@itphx/synth-shared';
+import type { ProfileStore } from '@itphx/synth-shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 import { t } from '../lib/i18n.js';
 import { getDefaultLang, setDefaultLang, type Lang } from '../lib/i18n-config.js';

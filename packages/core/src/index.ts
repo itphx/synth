@@ -1,4 +1,4 @@
-// @itphx/core — ядро системы
+// @itphx/synth-core — ядро системы
 // Содержит общую реализацию для standalone и backend режимов
 
 export { FileStore } from './storage/file-store.js';

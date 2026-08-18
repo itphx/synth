@@ -1,4 +1,4 @@
-import { pickLocalized } from '@itphx/shared';
+import { pickLocalized } from '@itphx/synth-shared';
 
 export type Lang = 'en' | 'ru';
 

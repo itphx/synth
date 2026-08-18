@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import type { SecretPattern, SecretPatternStore } from '@itphx/core';
+import type { SecretPattern, SecretPatternStore } from '@itphx/synth-core';
 
 function isValidPattern(p: unknown): p is SecretPattern {
   if (typeof p !== 'object' || p === null) return false;

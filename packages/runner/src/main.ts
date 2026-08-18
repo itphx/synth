@@ -1,4 +1,4 @@
-import { loadConfig, resolvePort } from '@itphx/shared';
+import { loadConfig, resolvePort } from '@itphx/synth-shared';
 import { Command } from 'commander';
 
 const program = new Command();

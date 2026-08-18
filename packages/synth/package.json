@@ -1,6 +1,6 @@
 {
   "name": "@itphx/synth",
-  "version": "0.1.13",
+  "version": "0.2.0",
   "description": "AI-агентная платформа для командной разработки",
   "license": "MIT",
   "type": "module",
@@ -17,9 +17,9 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.18.0",
-    "@itphx/core": "workspace:*",
-    "@itphx/shared": "workspace:*",
-    "@itphx/ui": "workspace:*",
+    "@itphx/synth-core": "workspace:*",
+    "@itphx/synth-shared": "workspace:*",
+    "@itphx/synth-ui": "workspace:*",
     "commander": "^14.0.3",
     "hono": "^4.9.0",
     "ws": "^8.20.1",
@@ -33,10 +33,6 @@
   },
   "engines": {
     "node": ">=22.0.0"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://gitverse.ru/itphx/synth"
   },
   "keywords": [
     "ai",

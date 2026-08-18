@@ -9,9 +9,9 @@ import { WorkspaceResolver } from '../lib/workspace-resolver.js';
 import {
   fsListQuerySchema, fsReadQuerySchema, fsWriteBodySchema,
   fsDeleteQuerySchema, fsMkdirBodySchema, fsDownloadQuerySchema,
-} from '@itphx/shared';
-import type { DirectoryListResult, FileEntry, FileReadResult, FsError } from '@itphx/shared';
-import { FsErrorCode } from '@itphx/shared';
+} from '@itphx/synth-shared';
+import type { DirectoryListResult, FileEntry, FileReadResult, FsError } from '@itphx/synth-shared';
+import { FsErrorCode } from '@itphx/synth-shared';
 
 function makeFsError(code: FsErrorCode, message: string): { error: FsError } {
   return { error: { error: message, code } };

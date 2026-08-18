@@ -1,4 +1,4 @@
-import type { AuthConfig, User } from '@itphx/shared';
+import type { AuthConfig, User } from '@itphx/synth-shared';
 import { createMiddleware } from 'hono/factory';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { t } from '../lib/i18n.js';

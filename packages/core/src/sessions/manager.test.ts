@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionManager } from './manager.js';
 import { FileStore } from '../storage/file-store.js';
-import type { Message } from '@itphx/shared';
-import { MessageRole, generateId, makeTextPart, TsmState, nowISO } from '@itphx/shared';
+import type { Message } from '@itphx/synth-shared';
+import { MessageRole, generateId, makeTextPart, TsmState, nowISO } from '@itphx/synth-shared';
 
 describe('SessionManager', () => {
   let store: FileStore;

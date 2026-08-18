@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import { JsonStore } from '../../storage/json-store.js';
-import type { ModelConfig, ProviderConfig } from '@itphx/shared';
+import type { ModelConfig, ProviderConfig } from '@itphx/synth-shared';
 
 export function createModelRoutes(
   auth: AuthKit,

@@ -12,9 +12,9 @@ import { ProviderFactory, BaseProvider } from '../../providers/base.js';
 import type { LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ContextBuilder } from '../context/builder.js';
 import { ContextConfig } from '../context/config.js';
-import type { SecurityConfig } from '@itphx/shared';
-import { ToolCapability, generateId, MessageRole, nowISO, makeTextPart } from '@itphx/shared';
-import type { Message } from '@itphx/shared';
+import type { SecurityConfig } from '@itphx/synth-shared';
+import { ToolCapability, generateId, MessageRole, nowISO, makeTextPart } from '@itphx/synth-shared';
+import type { Message } from '@itphx/synth-shared';
 
 /** Провайдер: первый вызов — toolCalls (конфигурируемые), далее — финальный текст. */
 class MockIPIProvider extends BaseProvider {
@@ -29,7 +29,7 @@ class MockIPIProvider extends BaseProvider {
     _tools?: Record<string, unknown>[],
     _stream?: boolean,
     _debugCollector?: unknown,
-  ): Promise<import('@itphx/shared').LLMResponse> {
+  ): Promise<import('@itphx/synth-shared').LLMResponse> {
     MockIPIProvider.calls++;
     if (MockIPIProvider.calls === 1 && MockIPIProvider.toolCalls) {
       return { content: '', model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: MockIPIProvider.toolCalls };
@@ -43,7 +43,7 @@ class MockIPIProvider extends BaseProvider {
     _tools?: Record<string, unknown>[],
     _debugCollector?: unknown,
     _cancellationToken?: CancellationToken,
-  ): AsyncGenerator<import('@itphx/shared').LLMChunk> {
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
     MockIPIProvider.calls++;
     MockIPIProvider.capturedSystemPrompt = systemPrompt ?? null;
     MockIPIProvider.capturedMessages = messages;
@@ -95,7 +95,7 @@ function stubWebFetch(content: string) {
     async execute(_args: Record<string, unknown>) {
       return { content, metadata: { urls: ['https://evil.example'] } };
     },
-  } as unknown as import('@itphx/shared').ToolDefinition;
+  } as unknown as import('@itphx/synth-shared').ToolDefinition;
 }
 
 describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
@@ -134,7 +134,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
       contextBuilder: makeCtxBuilder(),
       contextConfig: new ContextConfig({ userDataDir: join(tmpDir, 'context') }),
       providerLoader: (name: string) => {
-        return { name, type: 'mockipi', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/shared').ProviderConfig;
+        return { name, type: 'mockipi', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
       },
       toolRegistry,
       permissionConfig: { rules: {}, askTimeoutMs: 1000 },

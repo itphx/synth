@@ -1,6 +1,6 @@
-import type { Session, TsmState, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings } from '@itphx/shared';
-import { TsmState as TsmStateEnum, getForkedTitle, MessageRole } from '@itphx/shared';
-import { nowISO, generateId, makeTextPart, makePart } from '@itphx/shared';
+import type { Session, TsmState, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings } from '@itphx/synth-shared';
+import { TsmState as TsmStateEnum, getForkedTitle, MessageRole } from '@itphx/synth-shared';
+import { nowISO, generateId, makeTextPart, makePart } from '@itphx/synth-shared';
 import type { FileStore } from '../storage/file-store.js';
 import { mergeMcpToolSettings } from '../engine/mcp/settings.js';
 

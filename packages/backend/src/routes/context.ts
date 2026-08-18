@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import type { ContextConfig } from '@itphx/core';
-import type { ContextCategory } from '@itphx/shared';
+import type { ContextConfig } from '@itphx/synth-core';
+import type { ContextCategory } from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
 
 const VALID_CATEGORIES = new Set<string>(['user', 'role', 'system', 'tsm']);

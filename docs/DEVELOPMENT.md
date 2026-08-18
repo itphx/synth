@@ -18,9 +18,9 @@ pnpm typecheck
 pnpm test
 
 # Сборка пакетов
-pnpm --filter @itphx/shared build
-pnpm --filter @itphx/core build
-pnpm --filter @itphx/ui build
+pnpm --filter @itphx/synth-shared build
+pnpm --filter @itphx/synth-core build
+pnpm --filter @itphx/synth-ui build
 ```
 
 ## dev.sh
@@ -61,13 +61,13 @@ pnpm --filter @itphx/ui build
 
 ```bash
 # synth-backend
-pnpm --filter @itphx/backend dev
+pnpm --filter @itphx/synth-backend dev
 
 # synth-ui
-pnpm --filter @itphx/ui dev
+pnpm --filter @itphx/synth-ui dev
 
 # synth-core (standalone)
-pnpm --filter @itphx/core build
+pnpm --filter @itphx/synth-core build
 node packages/core/dist/main.js serve --api-key "dev-key"
 
 # synth-core (CLI)
@@ -80,11 +80,11 @@ node packages/core/dist/main.js config
 ```
 synth/
 ├── packages/
-│   ├── shared/   → @itphx/shared    # Типы, схемы, конфигурация
-│   ├── core/     → @itphx/core      # Движок, CLI, HTTP API
-│   ├── backend/  → @itphx/backend   # Hono API Hub
-│   ├── ui/       → @itphx/ui        # React SPA
-│   └── runner/   → @itphx/runner    # Gateway движков
+│   ├── shared/   → @itphx/synth-shared    # Типы, схемы, конфигурация
+│   ├── core/     → @itphx/synth-core      # Движок, CLI, HTTP API
+│   ├── backend/  → @itphx/synth-backend   # Hono API Hub
+│   ├── ui/       → @itphx/synth-ui        # React SPA
+│   └── runner/   → @itphx/synth-runner    # Gateway движков
 ├── dev.sh                          # Скрипт разработки
 └── tmp/                            # Логи (не коммитить)
 ```

@@ -5,7 +5,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLogsRoutes } from './logs.js';
-import type { User } from '@itphx/shared';
+import type { User } from '@itphx/synth-shared';
 
 const adminUser: User = {
   id: 'admin',

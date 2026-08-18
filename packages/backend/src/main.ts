@@ -5,17 +5,17 @@ import { Readable } from 'node:stream';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition } from '@itphx/shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator, FileProfileStore,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
   RuntimeSettingsStore, createSettingsRoutes, AuditLogger, mergeLlmGatewayConfig,
   SecretPatternStore,
-} from '@itphx/core';
-import type { SummarizationConfig } from '@itphx/shared';
-import { nowISO, ensureDataDir, MessageRole, generateStreamId, findConfigPath } from '@itphx/shared';
-import type { BusEvent } from '@itphx/shared';
+} from '@itphx/synth-core';
+import type { SummarizationConfig } from '@itphx/synth-shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId, findConfigPath } from '@itphx/synth-shared';
+import type { BusEvent } from '@itphx/synth-shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import { createAuthMiddleware } from './auth/middleware.js';
 import { createAuthRoutes } from './routes/auth.js';
@@ -577,7 +577,7 @@ server.on('upgrade', (request, socket, head) => {
                 return;
               }
 
-              const message: import('@itphx/shared').Message = {
+              const message: import('@itphx/synth-shared').Message = {
                 id: streamId,
                 role: MessageRole.USER,
                 seq: session.messages.length + 1,

@@ -3,7 +3,7 @@ import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { executeShellTool } from './shell.js';
-import type { ToolContext } from '@itphx/shared';
+import type { ToolContext } from '@itphx/synth-shared';
 
 describe('execute_shell — cwd resolution', () => {
   let tmpDir: string;

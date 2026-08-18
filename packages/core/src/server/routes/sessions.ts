@@ -2,8 +2,8 @@ import { ReadableStream } from 'node:stream/web';
 import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer } from '../../index.js';
-import { MessageRole, SESSION_MODES, generateStreamId, nowISO } from '@itphx/shared';
-import type { Message } from '@itphx/shared';
+import { MessageRole, SESSION_MODES, generateStreamId, nowISO } from '@itphx/synth-shared';
+import type { Message } from '@itphx/synth-shared';
 import { enqueueUserMessage, sseEventStream } from '../../index.js';
 import { serializeSession, serializeMessage } from '../serialize.js';
 

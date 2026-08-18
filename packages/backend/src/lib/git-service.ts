@@ -1,7 +1,7 @@
 import { readdir, mkdir } from 'node:fs/promises';
 import { resolve as pathResolve, relative, join } from 'node:path';
 import { simpleGit, type LogResult } from 'simple-git';
-import type { RepoStatus, CommitInfo, CommitDetail, CommitFileInfo } from '@itphx/shared';
+import type { RepoStatus, CommitInfo, CommitDetail, CommitFileInfo } from '@itphx/synth-shared';
 
 function relativeTime(isoDate: string): string {
   const diff = Date.now() - new Date(isoDate).getTime();

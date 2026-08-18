@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { User } from '@itphx/shared';
+import type { User } from '@itphx/synth-shared';
 import { createMiddleware } from 'hono/factory';
 
 // Cookie-сессия standalone: подписанный API-ключ (HMAC-SHA256)

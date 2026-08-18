@@ -5,9 +5,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createGatewayPatternsRoutes } from './gateway-patterns.js';
-import { SecretPatternStore, DEFAULT_PATTERNS } from '@itphx/core';
-import type { SecretPattern } from '@itphx/core';
-import type { User } from '@itphx/shared';
+import { SecretPatternStore, DEFAULT_PATTERNS } from '@itphx/synth-core';
+import type { SecretPattern } from '@itphx/synth-core';
+import type { User } from '@itphx/synth-shared';
 
 const adminUser: User = {
   id: 'admin',

@@ -1,5 +1,5 @@
-import type { Message, Session } from '@itphx/shared';
-import { nowISO, generateStreamId, generateId, MessageRole } from '@itphx/shared';
+import type { Message, Session } from '@itphx/synth-shared';
+import { nowISO, generateStreamId, generateId, MessageRole } from '@itphx/synth-shared';
 import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
 import type { ContextOptimizer } from '../engine/context/optimizer.js';

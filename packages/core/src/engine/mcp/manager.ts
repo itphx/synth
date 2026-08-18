@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import type { McpServerConfig, ToolDefinition } from '@itphx/shared';
-import { ToolCapability } from '@itphx/shared';
+import type { McpServerConfig, ToolDefinition } from '@itphx/synth-shared';
+import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolRegistry } from '../tools/registry.js';
-import type { ToolContext, ToolResult } from '@itphx/shared';
+import type { ToolContext, ToolResult } from '@itphx/synth-shared';
 import { McpClient } from './client.js';
 import { info, warning } from '../../logger.js';
 import type { SessionManager } from '../../sessions/manager.js';

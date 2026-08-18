@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import type { ProfileStore, ProfileData } from '@itphx/shared';
-import { nowISO } from '@itphx/shared';
+import type { ProfileStore, ProfileData } from '@itphx/synth-shared';
+import { nowISO } from '@itphx/synth-shared';
 import { randomUUID } from 'node:crypto';
 import { t } from '../lib/i18n.js';
 

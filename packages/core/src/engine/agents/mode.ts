@@ -1,4 +1,4 @@
-import { ToolCapability } from '@itphx/shared';
+import { ToolCapability } from '@itphx/synth-shared';
 
 /**
  * AD-025: применим ли переключатель Plan/Act/Yolo к агенту.

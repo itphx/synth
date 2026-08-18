@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAuditRoutes } from './audit.js';
 import { createSessionRoutes } from './sessions.js';
-import { SessionManager, EventBus, FileStore, AuditLogger, readAuditLog } from '@itphx/core';
-import type { User } from '@itphx/shared';
+import { SessionManager, EventBus, FileStore, AuditLogger, readAuditLog } from '@itphx/synth-core';
+import type { User } from '@itphx/synth-shared';
 
 const adminUser: User = {
   id: 'admin',

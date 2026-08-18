@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ProjectStore } from './project-store.js';
-import { ProjectRole } from '@itphx/shared';
+import { ProjectRole } from '@itphx/synth-shared';
 
 describe('ProjectStore', () => {
   let store: ProjectStore;

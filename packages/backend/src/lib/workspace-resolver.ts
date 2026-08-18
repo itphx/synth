@@ -1,7 +1,7 @@
 import { resolve, normalize, relative, sep, join } from 'node:path';
 import { stat, readdir, open } from 'node:fs/promises';
-import { FsErrorCode } from '@itphx/shared';
-import type { FsError, FileEntry } from '@itphx/shared';
+import { FsErrorCode } from '@itphx/synth-shared';
+import type { FsError, FileEntry } from '@itphx/synth-shared';
 
 export class WorkspaceResolver {
   constructor(

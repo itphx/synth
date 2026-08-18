@@ -1,13 +1,13 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import type { SessionManager } from '@itphx/core';
-import type { EventBus } from '@itphx/core';
-import type { QueueProcessorManager } from '@itphx/core';
-import type { ChatOrchestrator } from '@itphx/core';
-import type { ContextOptimizer } from '@itphx/core';
-import { MessageRole, SESSION_MODES, generateStreamId, nowISO } from '@itphx/shared';
+import type { SessionManager } from '@itphx/synth-core';
+import type { EventBus } from '@itphx/synth-core';
+import type { QueueProcessorManager } from '@itphx/synth-core';
+import type { ChatOrchestrator } from '@itphx/synth-core';
+import type { ContextOptimizer } from '@itphx/synth-core';
+import { MessageRole, SESSION_MODES, generateStreamId, nowISO } from '@itphx/synth-shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
-import { enqueueUserMessage, sseEventStream } from '@itphx/core';
+import { enqueueUserMessage, sseEventStream } from '@itphx/synth-core';
 import { serializeSession } from '../lib/serialize.js';
 import { t } from '../lib/i18n.js';
 import type { EventHub } from '../events/hub.js';
@@ -344,7 +344,7 @@ export function createSessionRoutes(
     const user = kit.getCurrentUser(c)!;
     const streamId = generateStreamId();
 
-    const sysMsg: import('@itphx/shared').Message = {
+    const sysMsg: import('@itphx/synth-shared').Message = {
       id: streamId,
       role: MessageRole.SYSTEM,
       seq: 0,
@@ -377,7 +377,7 @@ export function createSessionRoutes(
     const user = kit.getCurrentUser(c)!;
     const streamId = generateStreamId();
 
-    const sysMsg: import('@itphx/shared').Message = {
+    const sysMsg: import('@itphx/synth-shared').Message = {
       id: streamId,
       role: MessageRole.SYSTEM,
       seq: 0,

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import { JsonStore } from '../../storage/json-store.js';
-import type { ProviderConfig } from '@itphx/shared';
+import type { ProviderConfig } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../index.js';
 
 function getFaviconUrl(baseUrl?: string): string | undefined {

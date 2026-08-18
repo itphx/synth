@@ -6,8 +6,8 @@ import { taskTool } from './task.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
-import { ToolCapability, MessageRole, generateId, makeTextPart, nowISO } from '@itphx/shared';
-import type { Message, Session } from '@itphx/shared';
+import { ToolCapability, MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
+import type { Message, Session } from '@itphx/synth-shared';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import { createToolRegistry } from './index.js';
 
@@ -704,7 +704,7 @@ describe('taskTool — context modes', () => {
 class MockSubagentAskProvider {
   private _calls = 0;
 
-  async *chatAsync(): AsyncGenerator<import('@itphx/shared').LLMChunk> {
+  async *chatAsync(): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
     this._calls++;
     if (this._calls === 1) {
       yield {
@@ -714,9 +714,9 @@ class MockSubagentAskProvider {
           id: 'call_sub',
           function: { name: 'write_file', arguments: JSON.stringify({ file_path: 'sub.txt', content: 'hello' }) },
         }],
-      } as import('@itphx/shared').LLMChunk;
+      } as import('@itphx/synth-shared').LLMChunk;
     } else {
-      yield { content: 'готово', isFinal: true, toolCalls: [] } as import('@itphx/shared').LLMChunk;
+      yield { content: 'готово', isFinal: true, toolCalls: [] } as import('@itphx/synth-shared').LLMChunk;
     }
   }
 

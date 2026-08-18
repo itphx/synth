@@ -3,7 +3,7 @@
  * (messages + systemPrompt + tools) перед отправкой в LLM.
  */
 
-import { nowISO, type LLMGatewayConfig } from '@itphx/shared';
+import { nowISO, type LLMGatewayConfig } from '@itphx/synth-shared';
 
 import type { LLMMessage } from '../../providers/base.js';
 import { detectSecrets, maskSecret } from './secret-detector.js';

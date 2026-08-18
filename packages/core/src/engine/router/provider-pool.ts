@@ -7,7 +7,7 @@
  * поэтому пул сам GatewayProvider не создаёт.
  */
 
-import type { ProviderConfig as SharedProviderConfig, LLMGatewayConfig } from '@itphx/shared';
+import type { ProviderConfig as SharedProviderConfig, LLMGatewayConfig } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../providers/base.js';
 import type { BaseProvider } from '../../providers/base.js';
 import { toCoreProviderConfig } from './utils.js';

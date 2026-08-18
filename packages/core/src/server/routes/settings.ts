@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import type { RuntimeSettingsStore, LlmGatewayRuntimeSettings } from '../../storage/runtime-settings.js';
-import type { McpServerToolSettings, McpToolAvailability } from '@itphx/shared';
+import type { McpServerToolSettings, McpToolAvailability } from '@itphx/synth-shared';
 
 export interface SettingsRoutesDeps {
   /** Store runtime-настроек ({dataDir}/settings.json). */

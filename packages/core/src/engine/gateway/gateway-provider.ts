@@ -4,7 +4,7 @@
  * Если gateway выключен или что-то в обвязке падает — вызывает inner без изменений.
  */
 
-import { nowISO, type LLMGatewayConfig, type LLMChunk, type LLMResponse, type TokenUsage } from '@itphx/shared';
+import { nowISO, type LLMGatewayConfig, type LLMChunk, type LLMResponse, type TokenUsage } from '@itphx/synth-shared';
 
 import { BaseProvider, type LLMMessage, type CancellationToken } from '../../providers/base.js';
 import type { DebugCollector } from '../../debug.js';

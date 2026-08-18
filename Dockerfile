@@ -1,5 +1,5 @@
 # Образ собирается из опубликованного npm-пакета @itphx/synth.
-# Зависимости (@itphx/core, @itphx/ui, @itphx/shared) ставятся как
+# Зависимости (@itphx/synth-core, @itphx/synth-ui, @itphx/synth-shared) ставятся как
 # транзитивные npm-зависимости глобально, промпты/UI резолвятся оттуда.
 FROM node:22-alpine
 

@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAgentRegistry } from './index.js';
-import type { AgentDefinition } from '@itphx/shared';
+import type { AgentDefinition } from '@itphx/synth-shared';
 
 describe('createAgentRegistry', () => {
   let overridesDir: string;

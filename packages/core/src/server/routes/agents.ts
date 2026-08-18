@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import { JsonStore } from '../../storage/json-store.js';
-import type { AgentDefinition } from '@itphx/shared';
+import type { AgentDefinition } from '@itphx/synth-shared';
 import { loadSystemAgentDefinitions } from '../../engine/agents/index.js';
 import type { AgentRegistry } from '../../engine/agents/index.js';
 

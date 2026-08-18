@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
-import { ToolCapability } from '@itphx/shared';
-import type { ToolDefinition } from '@itphx/shared';
+import { ToolCapability } from '@itphx/synth-shared';
+import type { ToolDefinition } from '@itphx/synth-shared';
 import { resolvePath, validateInputPath } from './path-utils.js';
 import { deobfuscateArgs } from './obfuscation.js';
 

@@ -1,8 +1,8 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { nowISO, ToolCapability } from '@itphx/shared';
-import type { ToolDefinition } from '@itphx/shared';
+import { nowISO, ToolCapability } from '@itphx/synth-shared';
+import type { ToolDefinition } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 

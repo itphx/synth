@@ -1,6 +1,6 @@
-import type { EventBus } from '@itphx/core';
-import type { BusEvent } from '@itphx/shared';
-import type { SessionManager } from '@itphx/core';
+import type { EventBus } from '@itphx/synth-core';
+import type { BusEvent } from '@itphx/synth-shared';
+import type { SessionManager } from '@itphx/synth-core';
 
 export interface EventClient {
   userId: string

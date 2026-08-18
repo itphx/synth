@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart, TsmState } from '@itphx/shared';
-import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig } from '@itphx/shared';
+import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart, TsmState } from '@itphx/synth-shared';
+import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig } from '@itphx/synth-shared';
 import type { AgentRegistry } from '../agents/registry.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ToolRegistry } from './registry.js';
@@ -465,7 +465,7 @@ export const taskTool: ToolDefinition = {
     let childSessionMode: SessionMode = 'act';
     let childPlanApproved = false;
     let childPlanMode: PlanMode = 'auto';
-    let childMcpToolSettings: Record<string, import('@itphx/shared').McpServerToolSettings> | undefined;
+    let childMcpToolSettings: Record<string, import('@itphx/synth-shared').McpServerToolSettings> | undefined;
     if (childSessionId && extra.sessionManager) {
       try {
         const child = await extra.sessionManager.getSession(childSessionId);

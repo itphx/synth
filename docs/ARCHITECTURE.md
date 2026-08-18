@@ -6,27 +6,27 @@ Synth состоит из пяти пакетов в монорепозитор�
 
 | Пакет | Назначение | Стек |
 |-------|-----------|------|
-| **@itphx/shared** | Типы, интерфейсы, Zod-схемы, протоколы, конфигурация | TypeScript |
-| **@itphx/core** | Автономный движок: сессии, очередь, LLM-провайдеры, TSM, CLI, HTTP API v2 | TypeScript, Hono |
-| **@itphx/backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
-| **@itphx/ui** | React 19 SPA + админка (рендеринг по ролям) | TypeScript, React 19, Vite |
-| **@itphx/runner** | Gateway между бэкендом и движками (opencode, cline, synth-core) | TypeScript, Node.js |
+| **@itphx/synth-shared** | Типы, интерфейсы, Zod-схемы, протоколы, конфигурация | TypeScript |
+| **@itphx/synth-core** | Автономный движок: сессии, очередь, LLM-провайдеры, TSM, CLI, HTTP API v2 | TypeScript, Hono |
+| **@itphx/synth-backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
+| **@itphx/synth-ui** | React 19 SPA + админка (рендеринг по ролям) | TypeScript, React 19, Vite |
+| **@itphx/synth-runner** | Gateway между бэкендом и движками (opencode, cline, synth-core) | TypeScript, Node.js |
 
 ## Архитектурная схема
 
 ```mermaid
 flowchart TB
     subgraph UI["Web-интерфейс"]
-        synth_ui["@itphx/ui — React SPA"]
+        synth_ui["@itphx/synth-ui — React SPA"]
     end
 
     subgraph Server["Серверная часть"]
-        synth_backend["@itphx/backend — Hono API Hub"]
-        synth_core["@itphx/core — автономный движок"]
+        synth_backend["@itphx/synth-backend — Hono API Hub"]
+        synth_core["@itphx/synth-core — автономный движок"]
     end
 
     subgraph Runner["Оркестрация движков"]
-        synth_runner["@itphx/runner — Gateway"]
+        synth_runner["@itphx/synth-runner — Gateway"]
         opencode["opencode CLI"]
         cline["cline CLI"]
     end
@@ -87,7 +87,7 @@ synth-core ←→ synthase-runner (in-process) ←→ opencode / cline
 ```
 
 - `synth serve --api-key <key> --runner`
-- In-process импорт @itphx/runner
+- In-process импорт @itphx/synth-runner
 - LLM-запросы opencode/cline проксируются через core
 
 ### Гибридный (корпоративный)
@@ -121,11 +121,11 @@ synth/
 ├── eslint.config.js          # линтер
 ├── .prettierrc               # форматтер
 └── packages/
-    ├── shared/   → @itphx/shared
-    ├── backend/  → @itphx/backend
-    ├── ui/       → @itphx/ui
-    ├── runner/   → @itphx/runner
-    └── core/     → @itphx/core
+    ├── shared/   → @itphx/synth-shared
+    ├── backend/  → @itphx/synth-backend
+    ├── ui/       → @itphx/synth-ui
+    ├── runner/   → @itphx/synth-runner
+    └── core/     → @itphx/synth-core
 ```
 
 ## Модель «Runner»

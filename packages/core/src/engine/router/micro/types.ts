@@ -1,8 +1,8 @@
 /**
  * Типы микро-слоя (AD-035).
- * Реэкспортирует базовые типы из @itphx/shared, добавляет внутренние.
+ * Реэкспортирует базовые типы из @itphx/synth-shared, добавляет внутренние.
  */
-import type { SessionSettings } from '@itphx/shared';
+import type { SessionSettings } from '@itphx/synth-shared';
 
 /** Вид микро-модели: правила, embedding, локальная LLM. */
 export type MicroModelKind = 'rules' | 'embedding' | 'micro_llm';

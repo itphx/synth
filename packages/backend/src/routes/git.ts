@@ -9,8 +9,8 @@ import {
   gitCloneBodySchema,
   gitLogQuerySchema,
   gitCommitQuerySchema,
-} from '@itphx/shared';
-import type { FsError } from '@itphx/shared';
+} from '@itphx/synth-shared';
+import type { FsError } from '@itphx/synth-shared';
 
 export function createGitRoutes(
   kit: AuthKit,

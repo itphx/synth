@@ -17,9 +17,9 @@ export default defineConfig({
     'ws',
     'zod',
     'node:*',
-    '@itphx/core',
-    '@itphx/shared',
-    '@itphx/ui',
+    '@itphx/synth-core',
+    '@itphx/synth-shared',
+    '@itphx/synth-ui',
   ],
   platform: 'node',
   banner: {

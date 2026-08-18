@@ -1,4 +1,4 @@
-import type { TokenUsage, LLMChunk, LLMResponse } from '@itphx/shared';
+import type { TokenUsage, LLMChunk, LLMResponse } from '@itphx/synth-shared';
 import type { DebugCollector } from '../debug.js';
 
 export interface LLMMessage {

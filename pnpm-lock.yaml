@@ -38,10 +38,10 @@ importers:
       '@hono/node-server':
         specifier: ^1.18.0
         version: 1.19.14(hono@4.12.21)
-      '@itphx/core':
+      '@itphx/synth-core':
         specifier: workspace:*
         version: link:../core
-      '@itphx/shared':
+      '@itphx/synth-shared':
         specifier: workspace:*
         version: link:../shared
       hono:
@@ -84,7 +84,7 @@ importers:
       '@hono/node-server':
         specifier: ^1.18.0
         version: 1.19.14(hono@4.12.21)
-      '@itphx/shared':
+      '@itphx/synth-shared':
         specifier: workspace:*
         version: link:../shared
       '@modelcontextprotocol/sdk':
@@ -121,10 +121,10 @@ importers:
 
   packages/runner:
     dependencies:
-      '@itphx/core':
+      '@itphx/synth-core':
         specifier: workspace:*
         version: link:../core
-      '@itphx/shared':
+      '@itphx/synth-shared':
         specifier: workspace:*
         version: link:../shared
       commander:
@@ -165,13 +165,13 @@ importers:
       '@hono/node-server':
         specifier: ^1.18.0
         version: 1.19.14(hono@4.12.21)
-      '@itphx/core':
+      '@itphx/synth-core':
         specifier: workspace:*
         version: link:../core
-      '@itphx/shared':
+      '@itphx/synth-shared':
         specifier: workspace:*
         version: link:../shared
-      '@itphx/ui':
+      '@itphx/synth-ui':
         specifier: workspace:*
         version: link:../ui
       commander:
@@ -214,7 +214,7 @@ importers:
       '@dnd-kit/utilities':
         specifier: ^3.2.2
         version: 3.2.2(react@19.2.6)
-      '@itphx/shared':
+      '@itphx/synth-shared':
         specifier: workspace:*
         version: link:../shared
       '@pierre/diffs':

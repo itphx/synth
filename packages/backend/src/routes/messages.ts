@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import type { SessionManager, ContextOptimizer, EventBus } from '@itphx/core';
+import type { SessionManager, ContextOptimizer, EventBus } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 
 export function createMessageRoutes(

@@ -1,5 +1,5 @@
-import type { BusEvent, EventType } from '@itphx/shared';
-import { nowISO } from '@itphx/shared';
+import type { BusEvent, EventType } from '@itphx/synth-shared';
+import { nowISO } from '@itphx/synth-shared';
 
 type EventHandler = (event: BusEvent) => void;
 

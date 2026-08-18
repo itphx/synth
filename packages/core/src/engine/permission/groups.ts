@@ -1,4 +1,4 @@
-import { ToolCapability } from '@itphx/shared';
+import { ToolCapability } from '@itphx/synth-shared';
 
 /**
  * AD-029: соответствие групп permissions → конкретные имена тулов.

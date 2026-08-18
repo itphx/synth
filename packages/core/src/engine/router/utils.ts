@@ -2,7 +2,7 @@
  * Общие утилиты для подсистемы роутинга (AD-034).
  */
 
-import type { ProviderConfig as SharedProviderConfig } from '@itphx/shared';
+import type { ProviderConfig as SharedProviderConfig } from '@itphx/synth-shared';
 import type { ProviderConfig as CoreProviderConfig } from '../../providers/base.js';
 
 export function toCoreProviderConfig(

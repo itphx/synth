@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm --filter @itphx/backend dev",
+    "dev": "pnpm --filter @itphx/synth-backend dev",
     "build": "pnpm --recursive run build",
-    "build:release": "pnpm --filter @itphx/shared build && pnpm --filter @itphx/core build && pnpm --filter @itphx/ui build && pnpm --filter @itphx/synth build",
+    "build:release": "pnpm --filter @itphx/synth-shared build && pnpm --filter @itphx/synth-core build && pnpm --filter @itphx/synth-ui build && pnpm --filter @itphx/synth build",
     "lint": "pnpm --recursive run lint",
     "typecheck": "pnpm --recursive run typecheck",
     "test": "pnpm --recursive run test",

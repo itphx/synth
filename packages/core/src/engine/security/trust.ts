@@ -7,7 +7,7 @@
  * null (не оборачиваем): системные тулы (plan_enter, plan_exit, todo_write,
  * classify_conversation).
  */
-import { ToolCapability } from '@itphx/shared';
+import { ToolCapability } from '@itphx/synth-shared';
 import { resolvePath } from '../tools/path-utils.js';
 import { isInsideWorkingDir } from '../permission/evaluator.js';
 import type { TrustLevel } from './prompt-injection.js';

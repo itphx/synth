@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { load as parseYaml, dump as stringifyYaml } from 'js-yaml';
-import type { McpServerConfig } from '@itphx/shared';
+import type { McpServerConfig } from '@itphx/synth-shared';
 import type { McpConfigStore } from '../routes/mcp.js';
 
 export class YamlMcpConfigStore implements McpConfigStore {

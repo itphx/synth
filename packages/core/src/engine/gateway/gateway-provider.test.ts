@@ -9,7 +9,7 @@ import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { LLMGatewayConfig, LLMChunk, LLMResponse } from '@itphx/shared';
+import type { LLMGatewayConfig, LLMChunk, LLMResponse } from '@itphx/synth-shared';
 
 import { BaseProvider, type LLMMessage, type CancellationToken } from '../../providers/base.js';
 import { AuditLogger, GatewayProvider, RateLimiter } from './index.js';

@@ -1,4 +1,4 @@
-import type { ToolDefinition } from '@itphx/shared';
+import type { ToolDefinition } from '@itphx/synth-shared';
 import { ToolRegistry } from './registry.js';
 import { readFileTool, listDirectoryTool, globTool } from './fs-read.js';
 import { writeFileTool, editFileTool, createDirectoryTool, deleteFileTool } from './fs-write.js';

@@ -24,13 +24,13 @@
 ```
 synth/
 ├── packages/
-│   ├── shared/    @itphx/shared   # Типы, Zod-схемы, протоколы, конфигурация
-│   ├── core/      @itphx/core     # Ядро: сессии, очередь, LLM, TSM, MCP, FileStore
+│   ├── shared/    @itphx/synth-shared   # Типы, Zod-схемы, протоколы, конфигурация
+│   ├── core/      @itphx/synth-core     # Ядро: сессии, очередь, LLM, TSM, MCP, FileStore
 │   │                              #   HTTP API v2 (Hono), CLI (synth chat/serve)
-│   ├── backend/   @itphx/backend  # Hono API Hub: OIDC, RBAC, Runner Registry, LLM Proxy
-│   ├── ui/        @itphx/ui       # React 19 SPA + админка (Vite)
-│   ├── runner/    @itphx/runner   # Gateway: адаптеры opencode/cline, LLM Proxy
-│   │                              #   Импортируется in-process из @itphx/core
+│   ├── backend/   @itphx/synth-backend  # Hono API Hub: OIDC, RBAC, Runner Registry, LLM Proxy
+│   ├── ui/        @itphx/synth-ui       # React 19 SPA + админка (Vite)
+│   ├── runner/    @itphx/synth-runner   # Gateway: адаптеры opencode/cline, LLM Proxy
+│   │                              #   Импортируется in-process из @itphx/synth-core
 │   └── synth/     @itphx/synth    # Публикуемая CLI-обёртка (bin: synth). Тонкая —
 │                                  #   зависит от core+ui+shared, не бандлит их, не копирует ассеты
 ├── pnpm-workspace.yaml
@@ -41,20 +41,20 @@ tmp/                               # Каталог для временных ф
 ```
 
 Все 6 пакетов публикуются в npm (см. «Публикация npm»). `@itphx/synth` — тонкая
-CLI-обёртка над `@itphx/core`/`@itphx/ui`/`@itphx/shared`; она не бандлит core
+CLI-обёртка над `@itphx/synth-core`/`@itphx/synth-ui`/`@itphx/synth-shared`; она не бандлит core
 внутрь `cli.js` (core/ui/shared — external) и не копирует ассеты (промпты/UI/docs)
 в свой каталог — всё резолвится из npm-зависимостей (см. AD-038).
 
 ### Слои зависимостей
 
 ```
-@itphx/shared  ←  только контракты, никакой логики
+@itphx/synth-shared  ←  только контракты, никакой логики
        ↑
-@itphx/core    ←  импортирует shared, содержит всю общую логику
+@itphx/synth-core    ←  импортирует shared, содержит всю общую логику
        ↑
 ┌──────┴──────┐
-@itphx/backend │ @itphx/ui     ←  импортируют core
-@itphx/runner (in-process)     ←  опционально импортируется в core
+@itphx/synth-backend │ @itphx/synth-ui     ←  импортируют core
+@itphx/synth-runner (in-process)     ←  опционально импортируется в core
        ↑
 @itphx/synth   ←  тонкая CLI-обёртка: core + ui + shared (npm-потребители)
 ```
@@ -270,7 +270,7 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 
 | AD | Суть |
 |----|------|
-| AD-002 | Собственная TSM (Task State Machine), в @itphx/core |
+| AD-002 | Собственная TSM (Task State Machine), в @itphx/synth-core |
 | AD-005 | JSON-файлы как хранилище (атомарная запись через tmp-файл + rename) |
 | AD-008 | WebSocket для real-time событий |
 | AD-009 | SessionEventBus — шина событий сессии |
@@ -279,7 +279,7 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 | AD-018 | Выбор AI-движка на уровне сессии |
 | AD-019 | React 19 SPA с нуля |
 | AD-022 | Единый TypeScript стек + Runner архитектура |
-| AD-023 | Единая система конфигурации (@itphx/shared/config) |
+| AD-023 | Единая система конфигурации (@itphx/synth-shared/config) |
 | AD-024 | Единый транспорт: EventHub (backend) + TransportClient (UI) |
 | AD-025 | Plan/Act как глобальный permission toggle (не отдельные агенты) ✅ Реализовано |
 | AD-026 | Режимы контекста саб-агента: inherit / summary / none |
@@ -300,10 +300,10 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 
 ### AD-022: TypeScript стек + Runner
 
-- **@itphx/core** — автономное ядро: сессии, очередь, LLM-провайдеры, TSM, MCP, HTTP API v2, CLI
-- **@itphx/backend** — облачный API Hub: OIDC, RBAC, Runner Registry, LLM Proxy
-- **@itphx/runner** — мост между бэкендом и движками (opencode, cline, synth-core)
-- **@itphx/ui** — React 19 SPA + админка
+- **@itphx/synth-core** — автономное ядро: сессии, очередь, LLM-провайдеры, TSM, MCP, HTTP API v2, CLI
+- **@itphx/synth-backend** — облачный API Hub: OIDC, RBAC, Runner Registry, LLM Proxy
+- **@itphx/synth-runner** — мост между бэкендом и движками (opencode, cline, synth-core)
+- **@itphx/synth-ui** — React 19 SPA + админка
 
 ### AD-023: Конфигурация
 
@@ -1017,7 +1017,7 @@ micro/
 
 ### AD-036: LLM Gateway — независимый слой безопасности ✅ Реализовано
 
-**Решение:** декоратор `GatewayProvider extends BaseProvider` в `@itphx/core`, оборачивающий все LLM-вызовы (покрывает 11 точек: tool-loop, fallback-эскалация, debug, суммаризация, auto-title, саб-агенты, micro-LLM). Защита данных: детекция секретов, обфускация, деобфускация в точках потребления, rate limiting, аудит и cost tracking. Полностью независимый компонент — не связан с выбором модели, маршрутизацией или фильтрацией запросов. **HTTP-прокси не нужен** — весь LLM-трафик in-process, backend/runner получают gateway «бесплатно» через `ChatOrchestrator`.
+**Решение:** декоратор `GatewayProvider extends BaseProvider` в `@itphx/synth-core`, оборачивающий все LLM-вызовы (покрывает 11 точек: tool-loop, fallback-эскалация, debug, суммаризация, auto-title, саб-агенты, micro-LLM). Защита данных: детекция секретов, обфускация, деобфускация в точках потребления, rate limiting, аудит и cost tracking. Полностью независимый компонент — не связан с выбором модели, маршрутизацией или фильтрацией запросов. **HTTP-прокси не нужен** — весь LLM-трафик in-process, backend/runner получают gateway «бесплатно» через `ChatOrchestrator`.
 
 **Контекст:** промпты и ответы агентов могут содержать секреты (API-ключи, токены, карты, email). При прямом вызове LLM-провайдера секрет уходит наружу и оседает в логах провайдера. Gateway перехватывает трафик и не допускает утечки, при этом пользователи продолжают работать со своими данными внутри доверенной зоны.
 
@@ -1207,7 +1207,7 @@ git pre-commit hook (уровень git, обойти нельзя)
 
 **Решение:** каждый пакет монорепозитория публикуется в npm независимо и владеет
 своими ассетами через поле `files`. Потребитель ставит только `@itphx/synth`, а
-зависимости (`@itphx/core`, `@itphx/ui`, `@itphx/shared`) доставляются как
+зависимости (`@itphx/synth-core`, `@itphx/synth-ui`, `@itphx/synth-shared`) доставляются как
 транзитивные npm-зависимости. Никакого дублирования файлов и бандла core внутрь CLI.
 
 **Контекст:** исторически `@itphx/synth` собирался как самодостаточный пакет —
@@ -1222,13 +1222,13 @@ git pre-commit hook (уровень git, обойти нельзя)
 **Решение:**
 
 ```
-@itphx/shared  ←  только контракты (types/schemas/protocols/config)
+@itphx/synth-shared  ←  только контракты (types/schemas/protocols/config)
        ↑
-@itphx/core    ←  владеет prompts/, dictionaries/, definitions/ (files)
+@itphx/synth-core    ←  владеет prompts/, dictionaries/, definitions/ (files)
        ↑
 ┌──────┴──────┐
-@itphx/backend │ @itphx/ui   ←  core и ui владеют своими ассетами
-@itphx/runner (in-process)
+@itphx/synth-backend │ @itphx/synth-ui   ←  core и ui владеют своими ассетами
+@itphx/synth-runner (in-process)
        ↑
 @itphx/synth   ←  тонкая обёртка: dependencies = core + ui + shared
                   bin: synth → dist/cli.js (external: core/ui/shared)
@@ -1237,15 +1237,15 @@ git pre-commit hook (уровень git, обойти нельзя)
 **Принципы:**
 - **Каждый пакет владеет своими ассетами.** Ассеты перечислены в поле `files`
   (`dist`, `prompts`, `dictionaries` и т.д.) и доставляются через npm.
-- **`@itphx/synth` — тонкая обёртка.** В `dependencies` — только `@itphx/core`,
-  `@itphx/ui`, `@itphx/shared` (и runtime-библиотеки). Сборка tsup помечает
+- **`@itphx/synth` — тонкая обёртка.** В `dependencies` — только `@itphx/synth-core`,
+  `@itphx/synth-ui`, `@itphx/synth-shared` (и runtime-библиотеки). Сборка tsup помечает
   `@itphx/*` как `external` — core **не** бандлится в `cli.js`.
 - **Никакого копирования ассетов.** `cp -r prompts`, `cp -r ui/dist`, копирование
   README/docs при сборке synth — удалены. В репозитории больше нет идентичных файлов.
-- **Резолвинг из node_modules.** `@itphx/core` находит свои промпты по
+- **Резолвинг из node_modules.** `@itphx/synth-core` находит свои промпты по
   `{packageRoot}/prompts` (поиск package.json вверх от `import.meta.url`, fallback
   на `dist/prompts` для Docker). `@itphx/synth` резолвит собранный UI через
-  `require.resolve('@itphx/ui/package.json')` → `dist/`.
+  `require.resolve('@itphx/synth-ui/package.json')` → `dist/`.
 - **Docker из npm-публикации.** Образ ставит `npm install -g @itphx/synth@<version>`,
   зависимости резолвятся npm-ом — не из workspace-сборки.
 
@@ -1317,8 +1317,8 @@ import { readFile } from 'node:fs/promises';
 // 2. Внешние библиотеки
 import { Hono } from 'hono';
 
-// 3. @itphx/shared
-import { type Session } from '@itphx/shared';
+// 3. @itphx/synth-shared
+import { type Session } from '@itphx/synth-shared';
 
 // 4. Локальные модули
 import { SessionStorage } from '../storage/sessions.js';
@@ -1392,7 +1392,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | Веб | `web_fetch`, `web_search` (DuckDuckGo, при anti-bot — fallback на Bing) |
 | Задачи | `task`, `classify_conversation`, `read_session_reference` |
 
-Доступность по группам задаётся в `ToolCapability` (`@itphx/shared`); MCP-инструменты регистрируются с префиксом `{serverName}_{toolName}` и подчиняются настройкам режимов (см. AD-029).
+Доступность по группам задаётся в `ToolCapability` (`@itphx/synth-shared`); MCP-инструменты регистрируются с префиксом `{serverName}_{toolName}` и подчиняются настройкам режимов (см. AD-029).
 
 ---
 
@@ -1438,7 +1438,7 @@ $SYNTH_DATA_DIR/
 1. `packages/shared/src/version.ts` — константа `SYNTH_VERSION`
 2. `packages/*/package.json` — поле `version` во всех 6 пакетах
 
-Все hardcoded строки версии в коде заменены на импорт `SYNTH_VERSION` из `@itphx/shared`.
+Все hardcoded строки версии в коде заменены на импорт `SYNTH_VERSION` из `@itphx/synth-shared`.
 
 ### Публикация npm
 
@@ -1479,9 +1479,9 @@ workspace-пакетов — опубликованные пакеты корр�
 ### Docker
 
 Образ собирается из npm-публикации: `npm install -g @itphx/synth@<version>`
-(зависимости `@itphx/core`/`@itphx/ui`/`@itphx/shared` ставятся как транзитивные
+(зависимости `@itphx/synth-core`/`@itphx/synth-ui`/`@itphx/synth-shared` ставятся как транзитивные
 npm-зависимости, промпты и UI резолвятся из node_modules) — **не** из
-workspace-сборки. Образ: `registry.gitverse.ru/itphx/synth:<version>` (latest).
+workspace-сборки. Образ: `gitverse.ru/itphx/synth:<version>` (latest).
 Токен: `GV_TOKEN`.
 
 ---
@@ -1516,14 +1516,14 @@ workspace-сборки. Образ: `registry.gitverse.ru/itphx/synth:<version>`
 
 ```
 pnpm install --frozen-lockfile
-pnpm --filter @itphx/shared build    # обязательно перед typecheck!
-pnpm --filter @itphx/core build      # нужно для backend и runner
+pnpm --filter @itphx/synth-shared build    # обязательно перед typecheck!
+pnpm --filter @itphx/synth-core build      # нужно для backend и runner
 pnpm typecheck                       # рекурсивно по всем пакетам
 pnpm lint
 pnpm test
 ```
 
-Без сборки `shared` и `core` перед `typecheck` — `@itphx/runner` и `@itphx/backend` не найдут типы.
+Без сборки `shared` и `core` перед `typecheck` — `@itphx/synth-runner` и `@itphx/synth-backend` не найдут типы.
 
 ### Запуск релиза
 

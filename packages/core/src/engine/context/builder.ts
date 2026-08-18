@@ -1,6 +1,6 @@
 import { join } from 'node:path';
-import type { Message, StickyNote } from '@itphx/shared';
-import type { ProfileStore } from '@itphx/shared';
+import type { Message, StickyNote } from '@itphx/synth-shared';
+import type { ProfileStore } from '@itphx/synth-shared';
 import { ContextConfig } from './config.js';
 import { InterviewManager } from './interview.js';
 import type { DebugCollector } from '../../debug.js';

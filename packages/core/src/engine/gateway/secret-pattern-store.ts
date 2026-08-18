@@ -15,7 +15,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { writeFile, rename, mkdir, unlink } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 
-import { atomicWrite } from '@itphx/shared';
+import { atomicWrite } from '@itphx/synth-shared';
 
 import { info, warning } from '../../logger.js';
 import { DEFAULT_PATTERNS } from './secret-detector.js';

@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AuthKit } from '../auth/middleware.js';
-import type { SessionManager, McpManager } from '@itphx/core';
-import type { McpServerConfig } from '@itphx/shared';
+import type { SessionManager, McpManager } from '@itphx/synth-core';
+import type { McpServerConfig } from '@itphx/synth-shared';
 
 const mcpServerConfigSchema = z.object({
   type: z.enum(['stdio', 'sse']),

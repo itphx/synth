@@ -1,5 +1,5 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem } from '@itphx/shared'
+import type { TodoItem } from '@itphx/synth-shared'
 
 const BASE_URL = '/api/v2'
 
@@ -115,9 +115,9 @@ export interface StickyNoteData {
   disabled: boolean
 }
 
-export type { FileEntry, DirectoryListResult, FileReadResult } from '@itphx/shared'
+export type { FileEntry, DirectoryListResult, FileReadResult } from '@itphx/synth-shared'
 
-import type { DirectoryListResult, FileReadResult, FileEntry, RepoStatus, CommitInfo, CommitDetail, SessionMode } from '@itphx/shared'
+import type { DirectoryListResult, FileReadResult, FileEntry, RepoStatus, CommitInfo, CommitDetail, SessionMode } from '@itphx/synth-shared'
 
 export interface GitRepoConfigData {
   path: string

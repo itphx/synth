@@ -19,8 +19,8 @@ import { GatewayProvider, AuditLogger } from './index.js';
 import { DebugCollector } from '../../debug.js';
 import { ContextConfig } from '../context/config.js';
 import { ContextBuilder } from '../context/builder.js';
-import type { Session, Message, LLMGatewayConfig, TokenUsage } from '@itphx/shared';
-import { MessageRole, nowISO } from '@itphx/shared';
+import type { Session, Message, LLMGatewayConfig, TokenUsage } from '@itphx/synth-shared';
+import { MessageRole, nowISO } from '@itphx/synth-shared';
 import { enqueueUserMessage, QueueProcessorManager, type ProcessMessageFn } from '../../queue/processor.js';
 
 class MockGwProvider extends BaseProvider {
@@ -32,7 +32,7 @@ class MockGwProvider extends BaseProvider {
     _tools?: Record<string, unknown>[],
     _stream?: boolean,
     _debugCollector?: unknown,
-  ): Promise<import('@itphx/shared').LLMResponse> {
+  ): Promise<import('@itphx/synth-shared').LLMResponse> {
     return { content: 'ok', model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
   }
 
@@ -42,7 +42,7 @@ class MockGwProvider extends BaseProvider {
     _tools?: Record<string, unknown>[],
     _debugCollector?: unknown,
     _cancellationToken?: CancellationToken,
-  ): AsyncGenerator<import('@itphx/shared').LLMChunk> {
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
     MockGwProvider.capturedSystemPrompt = systemPrompt ?? null;
     yield { content: 'ok', isFinal: true, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
   }

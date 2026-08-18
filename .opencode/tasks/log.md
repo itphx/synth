@@ -152,11 +152,54 @@
 - **Верификация:** typecheck/lint/test зелёные (core 608); Docker 0.1.13 health 200, UI 200, spa-login→cookie→projects/sessions 200; end-to-end npmjs install @itphx/synth@0.1.13 + serve работает
 - **Ограничение:** GitVerse npm @itphx/synth пуст (нет прав); пользователю нужно добавить владельца токена или использовать токен владельца пакета
 
-## Следующая сессия — незакрытые хвосты (2026-08-18)
+## 2026-08-18 — Релиз 0.2.0: переименование пакетов synth-* + решение GitVerse 403
 
-1. **GitVerse npm @itphx/synth — 403 «no permission».** Пакет удалён из gitverse (npm view → 404), но сервер отклоняет создание (сохранилась запись владельца за старым токеном). Три попытки с интервалом 5 мин — стабильно 403. Варианты: добавить владельца текущего GV_TOKEN в права пакета в GitVerse UI; использовать старый токен владельца; либо оставить @itphx/synth только в npmjs (Docker-образ уже в gitverse). После решения: `cd packages/synth && pnpm publish --access public --registry https://gitverse.ru/api/packages/itphx/npm/ --no-git-checks`.
-2. **version-bump.sh пропускает packages/synth** (в bump-коммите 4f71bdb synth остался 0.1.12; правили вручную коммитом 86c779c). Проверить цикл скрипта — почему не обновил synth, чтобы будущие релизы не спотыкались.
-3. **WS /ws/events не читает cookie** (standalone, app.ts:498-508 — аутентификация по Bearer вручную). После входа через cookie события real-time не приходят (данные загружаются, 401 нет). Отдельная задача — перевести WS на getCurrentUser.
-4. **publish.sh вне git** (/mnt/data/Agent/dev/Synth/publish.sh): исправлен check_auth для GitVerse (не поддерживает whoami → 404; теперь продолжает, права проверяются при publish). Скрипт не версионируется — при желании перенести в репозиторий.
-5. **Registry Docker gitverse = `gitverse.ru`** (НЕ registry.gitverse.ru — не резолвится). Обновить AGENTS.md (секция Docker) и publish.sh GITVERSE_DOCKER_REGISTRY, если ещё не поправлено.
-6. **Токены**: npmjs — GAT с 2FA (whoami eeeeka); GitVerse GV_TOKEN записан в ~/.npmrc (`//gitverse.ru/api/packages/itphx/npm/:_authToken`) и в секретах CI/CD. npm v12: allowScripts off — при установке пакетов с lifecycle-скриптами использовать --allow-scripts.
+- **Задача:** закрыть хвосты: 403 GitVerse npm @itphx/synth; переименовать пакеты @itphx/* → @itphx/synth-*; bump 0.2.0; публикация; удаление старых пакетов
+- **Тип:** refactor + release
+- **Исполнитель:** оркестратор + @fixer
+- **Результат:** PASS
+- **Коммиты:** НЕ коммитилось (нет явной просьбы). В рабочем каталоге 165 изменённых файлов.
+
+### Сделано
+
+**1. Переименование пакетов (165 файлов, @fixer):**
+- `@itphx/shared` → `@itphx/synth-shared`, `@itphx/core` → `@itphx/synth-core`, `@itphx/ui` → `@itphx/synth-ui`, `@itphx/backend` → `@itphx/synth-backend`, `@itphx/runner` → `@itphx/synth-runner`
+- `@itphx/synth` остался (не стал synth-synth)
+- Обновлены package.json, импорты (428 вхождений новых имён), CI (ci.yaml/release.yaml), Dockerfile, скрипты (build.sh/publish.sh/dev.sh), AGENTS.md, README, docs
+- Версия: `./version-bump.sh 0.2.0` — version.ts + все 6 package.json
+
+**2. GitVerse npm 403 @itphx/synth — РЕШЕНО (корневая причина найдена):**
+- Документация: `/docs/artifactory/packages-uc/npm-packages-uc`, токены `/docs/collaborative/authentification/tokens`, API пакетов `/docs/developers/public-api/packages` (Authorization: Bearer + Accept: application/vnd.gitverse.object+json;version=latest)
+- **Причина 403**: поле `repository` в packages/synth/package.json (`{"type":"git","url":"https://gitverse.ru/itphx/synth"}`). GitVerse при привязке пакета к репозиторию по repository.url проверяет права и отдаёт 403 «no permission». У остальных 5 пакетов repository отсутствовал — они публиковались. Проверено probes: probe с repository → 403, без repository / с внешним URL → 200.
+- **Фикс**: `repository` удалён из packages/synth/package.json (как у остальных пакетов)
+- **Токены**: T2 (`109f9d97...`) — владелец имени пакета, может создавать пакет «с нуля»; T1 (`4b218cec...`, EeeeKa) — владелец org itphx (права owner, permission_packages: owner), может публиковать новые версии после создания. Оба записаны в этот лог (см. ниже).
+
+**3. Публикация 0.2.0 (все 6 пакетов в обоих реестрах):**
+- npmjs: @itphx/synth-shared, @itphx/synth-core, @itphx/synth-ui, @itphx/synth-backend, @itphx/synth-runner, @itphx/synth — все @0.2.0 ✅
+- GitVerse org itphx: те же 6 @0.2.0 ✅ (synth создан токеном T2, остальные — T1)
+- Docker: `gitverse.ru/itphx/synth:0.2.0` + `:latest` (health 0.2.0, UI 200) ✅
+- End-to-end: `npm install @itphx/synth@0.2.0` → транзитивные synth-core/shared/ui, `synth --version` = 0.2.0, `synth serve` health 200 ✅
+
+**4. Старые пакеты:**
+- GitVerse: удалены полностью (DELETE /orgs/itphx/packages/npm/{name} → 204): @itphx/shared, @itphx/core, @itphx/ui, @itphx/backend, @itphx/runner (были 0.1.13)
+- npmjs: unpublish запрещён политикой npm 2026 (GAT с bypass 2FA не может unpublish, gh.io/npm-gat-bypass2fa-deprecation). Вместо удаления — `npm deprecate` всех 5 @0.1.13 с указанием нового имени. Потребители видят предупреждение при установке.
+- @itphx/synth@0.1.13 в npmjs остался (не deprecated — это тот же пакет, просто новая версия 0.2.0)
+
+**5. version-bump.sh:** проверен в изоляции и на реальном репо — обновляет все 6 пакетов (включая synth). Баг из прошлого релиза не воспроизводится; вероятно, был фикс в прошлой сессии.
+
+**6. Реестр Docker:** publish.sh/build.sh дефолт `GITVERSE_DOCKER_REGISTRY` исправлен `registry.gitverse.ru` → `gitverse.ru`; AGENTS.md секция Docker обновлена.
+
+### Верификация
+- pnpm build 6/6 ✅, typecheck 0 ошибок ✅, lint 0 errors (88 warnings no-explicit-any — предсуществующие) ✅, test **848 passed** (shared 66, ui 26, core 608, backend 148) ✅
+- rg: `@itphx/synth-synth` = 0, старых `@itphx/(shared|core|ui|backend|runner)` = 0 (кроме archive/), новых имён = 428
+- Docker health/UI ✅, npm end-to-end ✅
+
+### Важно для будущих релизов
+- **@itphx/synth в GitVerse**: НЕ добавлять поле `repository` в package.json. Пакет создан токеном T2 (`109f9d97...`); публиковать новые версии может T1 (`4b218cec...`) или T2.
+- Токены GitVerse: T1 = EeeeKa (владелец org itphx, полный доступ), T2 = владелец имени @itphx/synth (ограничен /user 403, но публикует synth). В ~/.npmrc записан старый токен b872d963... (ограничен) — для публикаций использовать T1/T2 (полные значения — вне git, у пользователя).
+- npmjs: старый токен в ~/.npmrc (`//registry.npmjs.org/:_authToken`) — GAT без права unpublish; publish/deprecate работают.
+
+### Остались хвосты (не в скоупе этой задачи)
+- WS /ws/events не читает cookie (standalone, app.ts:498-508) — отдельная задача
+- publish.sh вне git (/mnt/data/Agent/dev/Synth/publish.sh) — перенести в репозиторий при желании
+- Коммит 165 файлов переименования — по запросу пользователя

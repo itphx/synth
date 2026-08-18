@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { parse } from 'parse5';
-import { ToolCapability } from '@itphx/shared';
-import type { ToolDefinition } from '@itphx/shared';
+import { ToolCapability } from '@itphx/synth-shared';
+import type { ToolDefinition } from '@itphx/synth-shared';
 import { deobfuscateText } from './obfuscation.js';
 
 const MAX_RESPONSE_SIZE = 50_000;

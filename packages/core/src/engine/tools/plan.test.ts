@@ -6,8 +6,8 @@ import { planEnterTool, planExitTool, slugifyPlan } from './plan.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
-import type { ToolContext } from '@itphx/shared';
-import { generateId } from '@itphx/shared';
+import type { ToolContext } from '@itphx/synth-shared';
+import { generateId } from '@itphx/synth-shared';
 
 describe('slugifyPlan', () => {
   it('транслитерирует кириллицу в безопасные символы', () => {

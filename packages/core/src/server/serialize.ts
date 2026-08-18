@@ -1,4 +1,4 @@
-import type { Session, Message, Project, StatusMessage } from '@itphx/shared';
+import type { Session, Message, Project, StatusMessage } from '@itphx/synth-shared';
 import { isModeApplicable } from '../engine/agents/mode.js';
 
 /** Минимальный тип реестра агентов для вычисления modeApplicable. */

@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    name: '@itphx/core',
+    name: '@itphx/synth-core',
     include: ['src/**/*.test.ts'],
     coverage: {
       include: ['src/**/*.ts'],

@@ -14,7 +14,7 @@ Synth — система для командной работы с AI-агент
 ```mermaid
 flowchart LR
     UI["React SPA"] --> API["HTTP / WebSocket"]
-    API --> Core["@itphx/core"]
+    API --> Core["@itphx/synth-core"]
     Core --> Ollama["Ollama"]
     Core --> OpenAI["OpenAI"]
     Core --> Anthropic["Anthropic"]

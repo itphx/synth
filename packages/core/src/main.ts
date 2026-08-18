@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { checkForUpdatesBackground } from './update-checker.js';

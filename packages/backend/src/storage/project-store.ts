@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Project, GitRepoConfig } from '@itphx/shared';
-import { ProjectRole, generateId, nowISO, AsyncLock, atomicWrite } from '@itphx/shared';
+import type { Project, GitRepoConfig } from '@itphx/synth-shared';
+import { ProjectRole, generateId, nowISO, AsyncLock, atomicWrite } from '@itphx/synth-shared';
 
 export interface ProjectStoreConfig {
   dataDir: string;
