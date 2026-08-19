@@ -524,6 +524,20 @@ export const synthApi = {
     })
   },
 
+  // API v2: немедленный повтор при backoff (без ожидания паузы)
+  async retryQueueNow(sessionId: string): Promise<void> {
+    await fetchJSON(`${BASE_URL}/queue/${encodeURIComponent(sessionId)}/retry-now`, {
+      method: 'POST',
+    })
+  },
+
+  // API v2: отменить повторные попытки (снять pending, разблокировать)
+  async cancelQueueRetry(sessionId: string): Promise<void> {
+    await fetchJSON(`${BASE_URL}/queue/${encodeURIComponent(sessionId)}/cancel-retry`, {
+      method: 'POST',
+    })
+  },
+
   // Файловая система (API v2 — /fs?project_id=&path=)
   async listDirectory(projectId: string, path?: string, includeHidden?: boolean): Promise<DirectoryListResult> {
     const params = new URLSearchParams({ project_id: projectId })

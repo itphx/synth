@@ -617,10 +617,7 @@ server.on('upgrade', (request, socket, head) => {
               const session = await sessionManager.getSession(sid);
               if (session?.currentStream) {
                 orchestrator.cancel(session.currentStream.streamId);
-                session.currentStream.cancelled = true;
-                await sessionManager.updateSession(session);
               }
-              queueManager.stop(sid);
             })().catch(() => {});
           }
         } catch {

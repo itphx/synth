@@ -113,6 +113,17 @@ start_backend() {
     }
     echo " ok"
 
+    # Backend импортирует @itphx/synth-core из dist — всегда пересобираем
+    # core ПЕРЕД стартом, иначе фиксы в src не попадут в работающий бэкенд.
+    echo -n "  сборка core..."
+    pnpm --filter @itphx/synth-core build >>"$LOGDIR/backend.log" 2>&1 || {
+        echo ""
+        echo "  ОШИБКА: не удалось собрать @itphx/synth-core. Лог:"
+        tail -20 "$LOGDIR/backend.log"
+        exit 1
+    }
+    echo " ok"
+
     # Запускаем tsx напрямую — минуем pnpm, чтобы избежать повторной проверки deps
     "$SYNTH/node_modules/.bin/tsx" packages/backend/src/main.ts >>"$LOGDIR/backend.log" 2>&1 &
     BACKEND_PID=$!

@@ -534,6 +534,7 @@ export const dict = {
   'chat.queue.cleared': 'Queue cleared',
   'chat.queue.resumed': 'Queue processing resumed',
   'chat.queue.returned': 'Queue returned',
+  'chat.queue.empty': 'Queue is empty',
 
   'permission.bar.request': 'Tool "{tool}" requests permission',
   'permission.bar.waiting': '{count} more',
@@ -549,6 +550,12 @@ export const dict = {
 
   'chat.error.rateLimit': 'Rate limit exceeded. Pause {sec}s...',
   'chat.error.retryCount': 'Attempt {current}/{max}',
+  'chat.retry.inProgress': 'Retry {current}/{max} in {sec}s…',
+  'chat.retry.now': 'Retry now',
+  'chat.retry.cancel': 'Cancel',
+  'chat.stream.processing': 'Processing…',
+  'chat.error.retryNow': 'Failed to retry now',
+  'chat.error.cancelRetry': 'Failed to cancel retry',
   'chat.error.loadSession': 'Failed to load session',
   'chat.error.resumeQueue': 'Failed to resume queue',
   'chat.error.clearQueue': 'Failed to clear queue',

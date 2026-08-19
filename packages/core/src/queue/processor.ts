@@ -27,6 +27,9 @@ export class QueueProcessor {
   private _cancelled = false;
   private _retryDelays: RetryDelays = {};
   private _ringBuffer: Map<string, Record<string, unknown>[]> = new Map();
+  private _activeController: AbortController | null = null;
+  private _backoffTimer: ReturnType<typeof setTimeout> | null = null;
+  private _backoffResolver: (() => void) | null = null;
 
   constructor(
     private sessionId: string,
@@ -55,6 +58,76 @@ export class QueueProcessor {
 
   stop(): void {
     this._cancelled = true;
+  }
+
+  /**
+   * Прерывание backoff-паузы: «Повторить сейчас» (немедленный повтор) и
+   * «Отменить» (остановка ретраев) используют общий механизм пробуждения.
+   * Если процессор не спит в backoff — no-op.
+   */
+  retryNow(): void {
+    this.wakeBackoff();
+  }
+
+  /**
+   * Остановка ретраев: прерываем backoff и активный LLM-вызов, удаляем текущее
+   * сообщение из очереди, разблокируем сессию и публикуем финальный stream.error
+   * (can_retry: false) — UI завершает стрим и показывает стандартное уведомление.
+   */
+  async cancelRetry(): Promise<void> {
+    const session = await this.sessionManager.getSession(this.sessionId);
+    const streamId = session?.currentStream?.streamId;
+
+    this._cancelled = true;
+
+    // Порядок важен (фикс гонки): сначала снимаем pending/blocked/currentStream
+    // под локом, и только ПОТОМ будим backoff и абортим активный вызов. Иначе
+    // _run(), проснувшись, доходил до финальной проверки pending раньше, чем
+    // withLock успевал удалить сообщение, и публиковал ложный queue.stalled.
+    await this.sessionManager.withLock(this.sessionId, async (s) => {
+      s.pendingMessages = s.pendingMessages.filter((_, i) => i !== 0);
+      s.status.blocked = undefined;
+      s.status.blockedAt = undefined;
+      s.currentStream = undefined;
+      await this.sessionManager.saveSession(s);
+    });
+
+    this.wakeBackoff();
+    this._activeController?.abort();
+
+    if (streamId) {
+      this.eventBus.publish(this.sessionId, 'stream.error', {
+        stream_id: streamId,
+        error: 'Повторные попытки отменены пользователем',
+        error_type: 'retry_cancelled',
+        can_retry: false,
+        retry_count: this._retryDelays[streamId] || 0,
+      });
+      delete this._retryDelays[streamId];
+    }
+  }
+
+  private wakeBackoff(): void {
+    if (this._backoffTimer) {
+      clearTimeout(this._backoffTimer);
+      this._backoffTimer = null;
+    }
+    if (this._backoffResolver) {
+      const resolve = this._backoffResolver;
+      this._backoffResolver = null;
+      resolve();
+    }
+  }
+
+  private _sleepBackoff(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      this._backoffResolver = resolve;
+      this._backoffTimer = setTimeout(() => {
+        this._backoffTimer = null;
+        this._backoffResolver = null;
+        resolve();
+      }, ms);
+    });
   }
 
   private async _run(): Promise<void> {
@@ -119,6 +192,7 @@ export class QueueProcessor {
       if (!isRetry) {
         // Phase 1 — блокировка и сохранение сообщения (только при первом запуске)
         const isSystemMessage = message.role === MessageRole.SYSTEM;
+        let alreadyInHistory = false;
         session = await this.sessionManager.withLock(this.sessionId, async (s) => {
           s.status.blocked = this.sessionId;
           s.status.blockedAt = nowISO();
@@ -131,7 +205,16 @@ export class QueueProcessor {
           };
           // Системные сообщения НЕ пушить в историю (не user-сообщения)
           if (!isSystemMessage) {
-            s.messages.push(message);
+            // Дедупликация: если сообщение с тем же stream_id уже в истории
+            // (например, после resume зависшей сессии) — не пушим его повторно,
+            // иначе получим дубль в s.messages.
+            const already = s.messages.some(
+              (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
+            );
+            alreadyInHistory = already;
+            if (!already) {
+              s.messages.push(message);
+            }
           }
           s.updatedAt = nowISO();
           await this.sessionManager.saveSession(s);
@@ -141,7 +224,7 @@ export class QueueProcessor {
         if (!session) break;
 
         // Для пользовательских сообщений — уведомить UI о появлении сообщения
-        if (!isSystemMessage) {
+        if (!isSystemMessage && !alreadyInHistory) {
           const userMsgIndex = session.messages.length - 1;
           this.eventBus.publish(this.sessionId, 'message.added', {
             message_index: userMsgIndex,
@@ -179,6 +262,7 @@ export class QueueProcessor {
       try {
         // Phase 2 — вызов LLM через processMessage
         const abortController = new AbortController();
+        this._activeController = abortController;
 
         const result = await this.processMessage(
           session!,
@@ -191,13 +275,14 @@ export class QueueProcessor {
             }
           },
         );
+        this._activeController = null;
 
         // Обработка результата
         if (result.error) {
           const retryCount = (this._retryDelays[streamId] || 0) + 1;
           this._retryDelays[streamId] = retryCount;
 
-          const isRecoverable = this._isRecoverable(result.error);
+          const isRecoverable = this._isRecoverable(result.error, result.errorType);
 
           if (!isRecoverable || retryCount > MAX_RETRIES) {
             // Unrecoverable или исчерпаны попытки — удалить из очереди
@@ -226,9 +311,18 @@ export class QueueProcessor {
             delete this._retryDelays[streamId];
             continue;
           } else {
-            // Recoverable — повторить через backoff
+            // Recoverable — повторить через backoff. Перед паузой публикуем
+            // stream.retry, чтобы UI показал «Повторная попытка N/MAX через X сек»
+            // вместо вечной крутилки (раньше ретраи были полностью скрыты).
             const delay = this._calcBackoff(retryCount);
-            await new Promise((r) => setTimeout(r, delay));
+            this.eventBus.publish(this.sessionId, 'stream.retry', {
+              stream_id: streamId,
+              attempt: retryCount,
+              max_retries: MAX_RETRIES,
+              retry_in: delay,
+              error: result.error,
+            });
+            await this._sleepBackoff(delay);
             continue; // не удаляем из очереди, пробуем снова
           }
         }
@@ -245,10 +339,27 @@ export class QueueProcessor {
 
         delete this._retryDelays[streamId];
       } catch (err) {
-        // Непредвиденная ошибка — чистим и выходим
-        await this.sessionManager.forceReleaseLock(this.sessionId).catch((err) => {
-          console.warn(`[QueueProcessor] Не удалось снять блокировку ${this.sessionId}: ${String(err)}`);
-        });
+        // Непредвиденная ошибка — полная очистка состояния сессии, иначе
+        // currentStream и зависшее pending-сообщение блокируют сессию навсегда:
+        // снимаем blocked, чистим currentStream, удаляем сообщение из очереди
+        // и фиксируем ошибку в last_error.
+        try {
+          await this.sessionManager.withLock(this.sessionId, async (s) => {
+            s.pendingMessages = s.pendingMessages.filter((_, i) => i !== 0);
+            const msg = s.messages.find(
+              (m) => m.metadata?.stream_id === streamId && m.role === 'user',
+            );
+            if (msg) {
+              msg.metadata = { ...msg.metadata, last_error: String(err) };
+            }
+            s.status.blocked = undefined;
+            s.status.blockedAt = undefined;
+            s.currentStream = undefined;
+            await this.sessionManager.saveSession(s);
+          });
+        } catch (lockErr) {
+          console.warn(`[QueueProcessor] Не удалось очистить сессию ${this.sessionId}: ${String(lockErr)}`);
+        }
         this.eventBus.publish(this.sessionId, 'stream.error', {
           stream_id: streamId,
           error: String(err),
@@ -259,6 +370,11 @@ export class QueueProcessor {
         break;
       }
     }
+
+    // Гонка с cancelRetry(): если процессор отменён, не публикуем queue.stalled /
+    // question.asked — отмена уже сняла pending и разблокировала сессию, иначе
+    // UI кратковременно мигает панелью «Обработка остановлена».
+    if (this._cancelled) return;
 
     // Проверка: остались ли pending сообщения
     try {
@@ -286,8 +402,13 @@ export class QueueProcessor {
     }
   }
 
-  private _isRecoverable(errorStr: string): boolean {
+  private _isRecoverable(errorStr: string, errorType?: string): boolean {
     const lower = errorStr.toLowerCase();
+    const unrecoverableTypes = [
+      'provider_not_found', 'model_not_found', 'auth_error',
+      'context_length', 'validation', 'retry_cancelled',
+    ];
+    if (errorType && unrecoverableTypes.includes(errorType)) return false;
     const unrecoverable = [
       'model not found', 'model_not_found', 'does not exist',
       'invalid model', 'unknown model', 'invalid api key',
@@ -351,6 +472,26 @@ export class QueueProcessorManager {
 
   isRunning(sessionId: string): boolean {
     return this._processors.get(sessionId)?.isRunning ?? false;
+  }
+
+  getProcessor(sessionId: string): QueueProcessor | undefined {
+    return this._processors.get(sessionId);
+  }
+
+  /** Немедленный повтор: прервать backoff-паузу, если процессор в ретрае. */
+  retryNow(sessionId: string): boolean {
+    const processor = this._processors.get(sessionId);
+    if (!processor) return false;
+    processor.retryNow();
+    return true;
+  }
+
+  /** Остановить ретраи: прервать backoff, очистить очередь и разблокировать сессию. */
+  async cancelRetry(sessionId: string): Promise<boolean> {
+    const processor = this._processors.get(sessionId);
+    if (!processor) return false;
+    await processor.cancelRetry();
+    return true;
   }
 
   stop(sessionId: string): void {

@@ -537,6 +537,7 @@ export type EventType =
   | 'stream.done'
   | 'stream.cancelled'
   | 'stream.error'
+  | 'stream.retry'
   | 'queue.stalled'
   | 'message.queued'
   | 'permission.asked'

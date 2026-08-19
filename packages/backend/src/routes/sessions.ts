@@ -308,13 +308,14 @@ export function createSessionRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
 
+    // Отмена стрима: прерываем fetch через cancelToken (orchestrator.cancel).
+    // Очистку pendingMessages/blocked/currentStream выполняет сам QueueProcessor —
+    // при cancelled processStream публикует stream.cancelled и возвращает {},
+    // после чего процессор снимает blocked и очищает currentStream в успешной ветке.
+    // НЕ вызываем queueManager.stop() — иначе сессия остаётся «зависшей» (stalled).
     if (session.currentStream) {
       orchestrator.cancel(session.currentStream.streamId);
-      session.currentStream.cancelled = true;
-      await sessionManager.updateSession(session);
     }
-
-    queueManager.stop(session.id);
 
     return c.json({ status: 'aborted' });
   });

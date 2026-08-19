@@ -256,12 +256,15 @@ export class ModelRouter {
     configContent: RouterConfig['content'],
   ): { provider: string; model: string } | null {
     // Приоритет: сессия > routerConfig.content
-    const sessionMapping = (sessionContent as Record<string, { provider: string; model: string } | undefined>)[category];
+    // sessionContent может отсутствовать у сессий со старым/незаполненным
+    // форматом настроек — обращение [category] к undefined падало с
+    // «Cannot read properties of undefined (reading 'chat')».
+    const sessionMapping = (sessionContent as Record<string, { provider: string; model: string } | undefined> | undefined)?.[category];
     if (sessionMapping?.provider && sessionMapping?.model) {
       return sessionMapping;
     }
 
-    const configMapping = (configContent as Record<string, { provider: string; model: string }>)[category];
+    const configMapping = (configContent as Record<string, { provider: string; model: string }> | undefined)?.[category];
     if (configMapping?.provider && configMapping?.model) {
       return configMapping;
     }
