@@ -416,6 +416,7 @@ export const dict = {
   'file.binaryFile': 'Binary file ({size} bytes)',
   'file.upload': 'Upload file',
   'file.download': 'Download',
+  'file.move': 'Move',
   'file.newFolder': 'New folder',
   'file.confirmDelete': 'Delete file «{name}»?',
   'file.loadError': 'File load error',

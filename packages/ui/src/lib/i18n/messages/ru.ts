@@ -415,6 +415,7 @@ export const dict = {
   'file.binaryFile': 'Бинарный файл ({size} байт)',
   'file.upload': 'Загрузить файл',
   'file.download': 'Скачать',
+  'file.move': 'Переместить',
   'file.newFolder': 'Новая папка',
   'file.confirmDelete': 'Удалить файл «{name}»?',
   'file.loadError': 'Ошибка загрузки файла',

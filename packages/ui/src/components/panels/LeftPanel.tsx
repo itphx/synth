@@ -617,6 +617,9 @@ function FilesTab() {
   const [popoverName, setPopoverName] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [activeUploadProject, setActiveUploadProject] = useState<string | null>(null)
+  const [activeUploadPath, setActiveUploadPath] = useState<string>('')
+  const [moveTarget, setMoveTarget] = useState<{ projectId: string; entry: any } | null>(null)
+  const [moveDest, setMoveDest] = useState<string>('')
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null)
   const pendingDeleteRef = useRef<Set<string>>(new Set())
   const [dragState, setDragState] = useState<{ projectId: string; path: string } | null>(null)
@@ -624,6 +627,29 @@ function FilesTab() {
   useEffect(() => { loadProjects() }, [loadProjects])
 
   const workspacedProjects = useMemo(() => projects.filter((p) => p.workspace), [projects])
+
+  const projectDirPaths = useMemo(() => {
+    if (!moveTarget) return []
+    const pid = moveTarget.projectId
+    const prefix = `${pid}/`
+    const dirs = new Set<string>()
+    for (const [key, entries] of Object.entries(treesByProject)) {
+      if (key === pid || key.startsWith(prefix)) {
+        for (const e of entries) {
+          if (e.isDirectory) dirs.add(e.path)
+        }
+      }
+      if (key.startsWith(prefix)) {
+        dirs.add(key.slice(prefix.length))
+      }
+    }
+    const src = moveTarget.entry.path
+    dirs.delete(src)
+    for (const d of [...dirs]) {
+      if (d.startsWith(`${src}/`)) dirs.delete(d)
+    }
+    return [...dirs].sort((a, b) => a.localeCompare(b))
+  }, [treesByProject, moveTarget])
 
   const openFilePathSet = useMemo(() => {
     const set = new Set<string>()
@@ -704,16 +730,18 @@ function FilesTab() {
 
   const fileSize = (size: number) => size > 1024 ? `${(size / 1024).toFixed(1)}k` : `${size}b`
 
-  const handleUpload = (projectId: string) => {
+  const handleUpload = (projectId: string, dirPath = '') => {
     setActiveUploadProject(projectId)
+    setActiveUploadPath(dirPath)
     fileInputRef.current?.click()
   }
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file || !activeUploadProject) return
-    await uploadFile(activeUploadProject, '', file)
+    await uploadFile(activeUploadProject, activeUploadPath, file)
     setActiveUploadProject(null)
+    setActiveUploadPath('')
     e.target.value = ''
   }
 
@@ -759,6 +787,31 @@ function FilesTab() {
     setRenamingPath(null)
     setRenamingProject(null)
     setRenamingEntry(null)
+  }
+
+  const openMoveDialog = (projectId: string, entry: any) => {
+    setMoveTarget({ projectId, entry })
+    setMoveDest('')
+  }
+
+  const handleMoveSubmit = async () => {
+    if (!moveTarget) return
+    const { projectId, entry } = moveTarget
+    const dest = moveDest.trim().replace(/\/+$/, '')
+    const name = entry.path.split('/').pop() || entry.name
+    const targetPath = dest ? `${dest}/${name}` : name
+    if (targetPath !== entry.path) {
+      await moveEntry(projectId, entry.path, targetPath)
+      const oldTabId = `file-${projectId}/${entry.path}`
+      const ui = useUIStore.getState()
+      const existing = ui.centerTabs.find((tab) => tab.id === oldTabId)
+      if (existing) {
+        ui.closeTab(oldTabId)
+        ui.openTab({ id: `file-${projectId}/${targetPath}`, type: 'file-viewer', title: name, data: { filePath: targetPath, projectId } })
+      }
+    }
+    setMoveTarget(null)
+    setMoveDest('')
   }
 
   const handleFileDragStart = (e: React.DragEvent, projectId: string, entry: any) => {
@@ -826,19 +879,20 @@ function FilesTab() {
     const isExpanded = expandedDirs.has(dirKey)
     const isRenaming = renamingPath === entry.path && renamingProject === projectId
 
-    const entryActions: TreeAction[] = [
-      {
+    const entryActions: TreeAction[] = []
+    if (isDir) {
+      entryActions.push({
+        id: `upload-${entry.path}`,
+        icon: 'upload',
+        title: t('file.upload'),
+        onClick: () => handleUpload(projectId, entry.path),
+      })
+      entryActions.push({
         id: `new-file-${entry.path}`,
         icon: 'file-add',
         title: t('files.newFile'),
-        onClick: () => setPopover({
-          type: 'newFile',
-          projectId,
-          parentPath: isDir ? entry.path : entry.path.split('/').slice(0, -1).join('/'),
-        }),
-      },
-    ]
-    if (isDir) {
+        onClick: () => setPopover({ type: 'newFile', projectId, parentPath: entry.path }),
+      })
       entryActions.push({
         id: `new-folder-${entry.path}`,
         icon: 'folder-add',
@@ -855,6 +909,7 @@ function FilesTab() {
         }},
       ] as any),
       'separator' as const,
+      { label: t('file.move'), icon: 'folder-received' as const, onClick: () => openMoveDialog(projectId, entry) },
       { label: t('files.rename'), icon: 'pencil-ai' as const, onClick: () => handleRenameStart(projectId, entry) },
       { label: t('common.delete'), icon: 'delete-bin' as const, onClick: () => {
         pendingDeleteRef.current.add(`${projectId}::${entry.path}`)
@@ -944,6 +999,41 @@ function FilesTab() {
         variant={confirm?.variant ?? 'danger'}
         onConfirm={() => { confirm?.onConfirm(); setConfirm(null) }}
       />
+
+      {moveTarget && (
+        <Dialog open={!!moveTarget} onOpenChange={(open) => { if (!open) { setMoveTarget(null); setMoveDest('') } }}>
+          <DialogContent className="max-w-sm p-4 gap-3" showCloseButton={true}>
+            <h3 className="text-sm font-semibold">Переместить «{moveTarget.entry.name}»</h3>
+            <p className="text-xs text-muted-foreground">{moveTarget.entry.path || '/'}</p>
+            <input
+              type="text"
+              value={moveDest}
+              onChange={(e) => setMoveDest(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => { if (e.key === 'Enter') handleMoveSubmit() }}
+              className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none"
+            />
+            {projectDirPaths.length > 0 && (
+              <div className="flex flex-col gap-1 max-h-40 overflow-y-auto">
+                {projectDirPaths.map((dir) => (
+                  <button
+                    key={dir}
+                    onClick={() => setMoveDest(dir === moveDest ? '' : dir)}
+                    className={`w-full text-left px-2 py-1 rounded text-xs hover:bg-accent flex items-center gap-1.5 ${dir === moveDest ? 'bg-accent' : ''}`}
+                  >
+                    <Icon name="folder" className="h-3 w-3 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{dir}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button onClick={handleMoveSubmit} className="flex-1 rounded bg-primary px-2 py-1 text-xs text-primary-foreground hover:bg-primary/90 transition-colors">{t('file.move')}</button>
+              <button onClick={() => { setMoveTarget(null); setMoveDest('') }} className="flex-1 rounded bg-interactive px-2 py-1 text-xs text-foreground hover:bg-interactive-hover transition-colors">{t('common.cancel')}</button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
 
       <input ref={fileInputRef} type="file" onChange={handleFileChange} className="hidden" />
 
