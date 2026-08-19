@@ -67,8 +67,8 @@ CLI-обёртка над `@itphx/synth-core`/`@itphx/synth-ui`/`@itphx/synth-sh
 
 ```bash
 # Разработка
-./dev.sh                    # backend (:5000) + UI (:5002)
-./dev.sh backend | ui | core | all
+./scripts/dev.sh                    # backend (:5000) + UI (:5002)
+./scripts/dev.sh backend | ui | core | all
 
 # Сборка, тесты, линтинг
 pnpm install                # установка зависимостей
@@ -104,13 +104,14 @@ pnpm clean                  # очистка dist/
 
 ### Скрипт запуска
 
-Корень проекта — `/mnt/data/Agent/dev/Synth`. Запуск через `dev.sh`:
+Скрипты лежат в `synth/scripts/`. Запуск из `synth/` (`./scripts/dev.sh`)
+или из корня проекта (`./synth/scripts/dev.sh`):
 
 ```bash
-./dev.sh            # backend (:5000) + UI (:5002)
-./dev.sh backend    # только backend
-./dev.sh core       # synth-core standalone (:4300)
-./dev.sh all        # backend + UI + core
+./scripts/dev.sh            # backend (:5000) + UI (:5002)
+./scripts/dev.sh backend    # только backend
+./scripts/dev.sh core       # synth-core standalone (:4300)
+./scripts/dev.sh all        # backend + UI + core
 ```
 
 Скрипт устанавливает ключевые переменные окружения:
@@ -214,9 +215,9 @@ AUTH="Authorization: Bearer admin-key-123"
 1. `pnpm typecheck` — проверка типов
 2. `pnpm lint` — линтинг
 3. `pnpm test` — unit-тесты Vitest
-4. Запустить `./dev.sh backend` для API-тестов
+4. Запустить `./scripts/dev.sh backend` для API-тестов
 5. Проверить затронутые эндпоинты через curl
-6. Запустить `./dev.sh` (backend + UI) и быстро проверить UI в браузере —
+6. Запустить `./scripts/dev.sh` (backend + UI) и быстро проверить UI в браузере —
    открыть страницу, убедиться что интерфейс загружается и ключевые элементы
    отображаются корректно.
 
@@ -1420,7 +1421,7 @@ $SYNTH_DATA_DIR/
 
 ## Сборка и публикация
 
-### Скрипты (в корне `/Agent/dev/Synth/`)
+### Скрипты (в `synth/scripts/`)
 
 | Скрипт | Назначение |
 |--------|------------|
@@ -1428,6 +1429,8 @@ $SYNTH_DATA_DIR/
 | `publish.sh` | Публикация в npm. Опции: `--dry-run`, `--no-build`, `--registry=both\|npmjs\|gitverse`, `--docker` |
 | `version-bump.sh` | Bump версии: `./version-bump.sh patch\|minor\|major\|X.Y.Z`. Обновляет `version.ts` + все `package.json` |
 | `dev.sh` | Dev-запуск: backend (:5000) + UI (:5002). Аргументы: `backend\|ui\|core\|all` |
+| `changelog.sh` | Генерация CHANGELOG.md из коммитов между тегами (используется в CI release) |
+| `micro-benchmark.mjs` | Бенчмарк микро-слоя AD-035 (25 запросов, таблица + сводка) |
 
 ### Версионирование
 
@@ -1481,7 +1484,8 @@ workspace-пакетов — опубликованные пакеты корр�
 Образ собирается из npm-публикации: `npm install -g @itphx/synth@<version>`
 (зависимости `@itphx/synth-core`/`@itphx/synth-ui`/`@itphx/synth-shared` ставятся как транзитивные
 npm-зависимости, промпты и UI резолвятся из node_modules) — **не** из
-workspace-сборки. Образ: `gitverse.ru/itphx/synth:<version>` (latest).
+workspace-сборки. Dockerfile: `docker/Dockerfile` (контекст — корень репозитория,
+`.dockerignore` в корне). Образ: `gitverse.ru/itphx/synth:<version>` (latest).
 Токен: `GV_TOKEN`.
 
 ---

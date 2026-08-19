@@ -1,3 +1,57 @@
+# Журнал задач оркестратора
+
+## 2026-08-04
+- **Задача:** Баг — перестал работать просмотрщик и редактор файлов
+- **Тип:** bug
+- **Исполнитель:** @fixer
+- **Результат:** PASS
+- **Коммит:** — (коммит не выполнялся, не было явной просьбы пользователя)
+- **Время:** ~30 мин (две сессии: investigate + fix)
+- **Проблемы:** лимит шагов в первой сессии фиксера (investigate завершён, fix не применён); фикс применён во второй сессии.
+- **Первопричина:** `WorkspaceResolver.isTextFile()` (packages/backend/src/lib/workspace-resolver.ts) классифицировал файлы как бинарные только по whitelist-расширениям → файлы без расширения (Makefile, Dockerfile, LICENSE, README, .npmrc и т.п.) возвращались из `GET /fs/read` как `encoding: "binary"` → UI показывал «Бинарный файл (N байт)» вместо содержимого. Не регрессия — дефект исходной реализации (единственный коммит 854bccf).
+- **Исправление:** isTextFile → async, детекция текстовости по содержимому (NUL-байт в первых 8000 байт, учёт BOM UTF-16) + типовые имена без расширения + whitelist бинарных расширений. Обновлён вызов в packages/backend/src/routes/fs.ts.
+- **Верификация:** pnpm typecheck ✅, lint 0 errors ✅, test (shared 59 / core 215 / backend 79) ✅; curl: Makefile/Dockerfile/LICENSE → utf-8, PNG → binary ✅; live UI-сценарий через Playwright (просмотр + редактирование + сохранение) ✅; тестовые артефакты удалены через API ✅.
+- **Follow-up:** core-standalone `packages/core/src/server/routes/fs.ts` не имеет бинарной детекции и `POST /fs/write` — расхождение контракта standalone, отдельная задача.
+
+## 2026-08-04 (вторая правка)
+- **Задача:** Баг — область редактирования файла не на всю ширину центральной области, а узкая полоса
+- **Тип:** bug (layout)
+- **Исполнитель:** @fixer
+- **Результат:** PASS
+- **Коммит:** — (коммит не выполнялся, не было явной просьбы пользователя)
+- **Время:** ~15 мин
+- **Проблемы:** нет
+- **Первопричина:** корневой div табов `flex h-full flex-col bg-background` без `flex-1` (FileEditorTab.tsx:137, FileViewerTab.tsx:73); в flex-row контейнере CenterPanel.tsx:52 flex-item без grow не растягивается по ширине → textarea `w-full` (100% от авто-родителя) схлопывалась в узкую полосу (223px при main 1000px). Тот же паттерн в CommitDetailTab.tsx:73 — потенциально тот же баг (вне скоупа).
+- **Исправление:** добавлен `flex-1` к корневому контейнеру FileEditorTab и FileViewerTab (паттерн как в ChatTab).
+- **Верификация:** pnpm test 353 passed ✅; typecheck ✅; lint 0 errors ✅; Playwright: textarea 223px → 1000px (скриншоты tmp/editor-before.png, tmp/editor-after.png, viewer-*.png) ✅.
+- **Follow-up:** CommitDetailTab.tsx:73 — аналогичная правка одной строкой при желании.
+
+## 2026-08-04 (третья правка)
+- **Задача:** Нет возможности сохранить изменения в файле — нужна кнопка «Сохранить» на верхней панели
+- **Тип:** bug (UI)
+- **Исполнитель:** @fixer
+- **Результат:** PASS
+- **Коммит:** — (коммит не выполнялся, не было явной просьбы пользователя)
+- **Время:** ~20 мин
+- **Проблемы:** нет
+- **Первопричина:** иконка `save` не была зарегистрирована в `iconMap` (packages/ui/src/components/icon/Icon.tsx) → `<Icon name="save" />` возвращал null → кнопка сохранения в Header рендерилась как пустой невидимый участок 8×8 px. Цепочка сохранения (editingState → CustomEvent synth:save-file → FileEditorTab.doSave → POST /fs/write) работала, но кнопка была невидима.
+- **Исправление:** Icon.tsx — добавлен RiSaveLine в iconMap (заодно починил невидимую иконку save в DebugPanel); Header.tsx — кнопка заменена на явную «Сохранить» (текст + иконка, состояния disabled/активна/Сохранение...).
+- **Верификация:** pnpm test ✅; typecheck ✅; lint 0 errors ✅; build ✅; Playwright: кнопка 93×21 px видима, POST /fs/write 200, файл обновился; скриншоты tmp/before-fix-header.png, tmp/after-fix-dirty-header.png, tmp/after-fix-saved-header.png ✅.
+
+## Коммиты (2026-08-04, ветка feat/ad-035-micro-model-first)
+- `2ea85a8` fix: определение текстовых файлов по содержимому (workspace-resolver, routes/fs)
+- `1a130b4` fix(ui): редактор и просмотрщик файлов на всю ширину центральной области
+- `2b5536a` fix(ui): видимая кнопка «Сохранить» в панели редактора (иконка save в iconMap)
+- `8b6c357` docs: ссылка на документацию маршрутизации в README
+- `.opencode/` (лог задач оркестратора) в коммиты не входил — служебный, не часть кодовой базы.
+
+## Merge в master (2026-08-04)
+- Ветка: `feat/ad-035-micro-model-first` → `master` с `--no-ff`
+- Merge-коммит: `04a5fb4` — merge: feat/ad-035-micro-model-first — AD-035 micro-model first + фиксы файлов
+- Перед merge локальный master обновлён до origin/master (fast-forward, 39 коммитов)
+- Конфликтов нет (ветка содержала origin/master целиком)
+- Итог: master опережает origin/master на 51 коммит (39 + 11 из ветки + 1 merge). Пуш не выполнялся.
+
 
 ## 2026-08-05 — AD-036 LLM Gateway (ветка feat/ad-036-llm-gateway)
 - **Задача:** AD-036 — LLM Gateway: независимый слой безопасности
@@ -203,3 +257,62 @@
 - WS /ws/events не читает cookie (standalone, app.ts:498-508) — отдельная задача
 - publish.sh вне git (/mnt/data/Agent/dev/Synth/publish.sh) — перенести в репозиторий при желании
 - Коммит 165 файлов переименования — по запросу пользователя
+
+## 2026-08-19 — Уборка каталога проекта (cleanup)
+- **Задача:** Прибраться: удалить мусорные каталоги, перенести скрипты и Dockerfile в репозиторий
+- **Тип:** refactor (cleanup)
+- **Исполнитель:** оркестратор
+- **Результат:** PASS
+- **Коммит:** — (изменения в git-репо готовы, коммит не выполнялся — не было явной просьбы)
+- **Время:** ~40 мин
+- **Ключевое:**
+  - Удалены (корень проекта): test/ (дубликат synth/test + тестовые txt-файлы), test-results/ (кэш Playwright), tmp/ (скриншоты/логи/разовые скрипты), synth-test/ (разовый Python-тест WS старого стека), loops/ (40 JSON Cursor-loops, не используются)
+  - Удалены (репозиторий synth): data/ (runtime-данные, в .gitignore, не используются — dataDir в корне проекта), src/ (только __pycache__ от Python-legacy), tmp/ (логи/скриншоты/repro-скрипты), node_modules/.modules.sync-conflict-*.yaml
+  - Скрипты build.sh, dev.sh, publish.sh, version-bump.sh перенесены из корня в synth/ (SYNTH="$ROOT/synth" → SYNTH="$ROOT")
+  - Dockerfile → synth/docker/Dockerfile (git mv, история сохранена); обновлены docker-compose.yml (build: context+dockerfile), build.sh/publish.sh (путь -f), release.yaml (--dockerfile=docker/Dockerfile), AGENTS.md (пути скриптов, tmp, Docker)
+- **Верификация:** bash -n 4 скриптов ✅, docker-compose YAML ✅, pnpm typecheck ✅, lint 0 errors ✅, test (shared+core 608 + ui 26 + backend 148) ✅
+- **Проблемы:** нет
+
+> Примечание: с 2026-08-19 журнал ведётся в репозитории (synth/.opencode/tasks/log.md).
+> Корневой .opencode/tasks/log.md — симлинк на этот файл.
+
+## 2026-08-19 — Очистка .opencode (Plugin SDK)
+- **Задача:** разобраться с .opencode/node_modules и удалить, если не нужно
+- **Тип:** cleanup
+- **Исполнитель:** оркестратор
+- **Результат:** PASS
+- **Коммит:** — (в git-репо изменений нет — удалялись файлы вне репозитория)
+- **Время:** ~5 мин
+- **Ключевое:**
+  - `.opencode/node_modules` (62 МБ) — зависимости `@opencode-ai/plugin` (Plugin SDK opencode), установленные 14.08. Плагинов нет, ничего не импортирует, конфиг opencode не ссылается — не используется
+  - Удалены: `.opencode/node_modules`, `.opencode/package.json`, `.opencode/package-lock.json` (все в .gitignore, восстановление — npm install)
+  - `.opencode/` теперь: только `.gitignore` + `tasks/` (log.md — симлинк на synth/.opencode/tasks/log.md)
+- **Проблемы:** нет
+
+## 2026-08-19 — Удаление synth/config.yaml
+- **Задача:** разобраться, нужен ли локальный config.yaml в корне репозитория
+- **Тип:** cleanup
+- **Исполнитель:** оркестратор
+- **Результат:** PASS
+- **Коммит:** — (файл был в .gitignore, не трекался)
+- **Время:** ~5 мин
+- **Ключевое:**
+  - `synth/config.yaml` полностью повторял дефолты `packages/shared/src/config/defaults.ts` (mcp.servers {}, llmGateway: enabled=false, inputMode=obfuscate, rateLimit 60/120, audit enabled, logPath '') — ничего не переопределял
+  - Файл в .gitignore (не трекается), на поведение не влиял — удалён
+  - Если нужен шаблон — документировать как config.example.yaml (отдельное решение)
+- **Проблемы:** нет
+
+## 2026-08-19 — Перенос скриптов в synth/scripts + аудит scripts/ и test/
+- **Задача:** перенести build.sh/dev.sh/publish.sh/version-bump.sh в synth/scripts; проверить актуальность changelog.sh, micro-benchmark.mjs и synth/test
+- **Тип:** refactor (cleanup)
+- **Исполнитель:** оркестратор
+- **Результат:** PASS
+- **Коммит:** — (ожидает явной просьбы)
+- **Время:** ~25 мин
+- **Ключевое:**
+  - 4 скрипта перенесены в synth/scripts/; ROOT="$(dirname $0)/.." во всех; publish.sh → bash "$ROOT/scripts/build.sh"
+  - AGENTS.md (разделы «Команды», «Скрипт запуска», «Скрипты», стадия Verify) и docs/DEVELOPMENT.md обновлены на ./scripts/dev.sh
+  - changelog.sh — нужен (CI release.yaml:161), актуален
+  - micro-benchmark.mjs — актуален (работает через tsx, exit 0; AD-035, упомянут в AGENTS.md)
+  - synth/test: api-smoke.sh и ui-e2e.mjs актуальны (все эндпоинты живы: /health, projects CRUD, sessions CRUD), но никто не ссылается — ручные smoke-инструменты; решение по судьбе — у пользователя
+- **Проблемы:** нет

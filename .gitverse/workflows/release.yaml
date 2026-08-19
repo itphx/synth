@@ -260,7 +260,7 @@ jobs:
         with:
           args: >-
             --context=dir://${{ gitverse.workspace }}
-            --dockerfile=Dockerfile
+            --dockerfile=docker/Dockerfile
             --build-arg=SYNTH_VERSION=${{ steps.docker_tags.outputs.version }}
             --destination=gitverse.ru/itphx/synth:${{ steps.docker_tags.outputs.version }}
             --destination=gitverse.ru/itphx/synth:latest

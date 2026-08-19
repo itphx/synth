@@ -25,14 +25,14 @@ pnpm --filter @itphx/synth-ui build
 
 ## dev.sh
 
-Универсальный скрипт для разработки:
+Универсальный скрипт для разработки (в `scripts/dev.sh`):
 
 ```bash
-./dev.sh            # backend (:5000) + UI (:5002)
-./dev.sh backend    # только бэкенд
-./dev.sh ui         # только UI
-./dev.sh core       # synth-core standalone
-./dev.sh all        # backend + UI + core
+./scripts/dev.sh            # backend (:5000) + UI (:5002)
+./scripts/dev.sh backend    # только бэкенд
+./scripts/dev.sh ui         # только UI
+./scripts/dev.sh core       # synth-core standalone
+./scripts/dev.sh all        # backend + UI + core
 ```
 
 Логи пишутся в `tmp/backend.log`, `tmp/ui.log`, `tmp/core.log`. При перезапуске очищаются. При Ctrl+C выводятся пути к логам.
@@ -85,8 +85,12 @@ synth/
 │   ├── backend/  → @itphx/synth-backend   # Hono API Hub
 │   ├── ui/       → @itphx/synth-ui        # React SPA
 │   └── runner/   → @itphx/synth-runner    # Gateway движков
-├── dev.sh                          # Скрипт разработки
-└── tmp/                            # Логи (не коммитить)
+├── scripts/
+│   ├── dev.sh                  # Скрипт разработки
+│   ├── build.sh                # Полная сборка
+│   ├── publish.sh              # Публикация в npm
+│   └── version-bump.sh         # Bump версии
+└── tmp/                        # Логи (не коммитить)
 ```
 
 ## Стандарты кода

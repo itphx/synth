@@ -1,6 +1,8 @@
 services:
   synth:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: synth
     ports:
       - "4300:4300"
