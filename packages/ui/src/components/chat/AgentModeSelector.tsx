@@ -48,7 +48,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
   return (
     <DropdownMenu.Root open={open} onOpenChange={setOpen}>
       <DropdownMenu.Trigger asChild>
-        <button className="model-selector-trigger flex items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0">
+        <button className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0">
           {activeAgent?.icon ? (
             <Icon
               name={activeAgent.icon}

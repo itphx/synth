@@ -121,9 +121,13 @@ export interface TodoItem {
   priority: TodoPriority;
 }
 
+export type ReasoningLevel = 'default' | 'none' | 'low' | 'medium' | 'high';
+
 export interface SessionSettings {
   provider?: string;
   model?: string;
+  /** Уровень размышлений модели. Для openai/generic — reasoning_effort, anthropic — thinking, ollama — think. */
+  reasoningLevel?: ReasoningLevel;
   temperature: number;
   maxTokens: number;
   systemPrompt?: string;

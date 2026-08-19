@@ -16,6 +16,7 @@ export const tokenUsageSchema = z.object({
 export const sessionSettingsSchema = z.object({
   provider: z.string().optional(),
   model: z.string().optional(),
+  reasoningLevel: z.enum(['default', 'none', 'low', 'medium', 'high']).optional(),
   temperature: z.number().min(0).max(2).default(0.7),
   maxTokens: z.number().int().min(1).max(200000).default(4096),
   systemPrompt: z.string().optional(),
@@ -68,7 +69,10 @@ export const sessionUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   projectId: z.string().optional(),
   engine: z.enum(['synth', 'opencode', 'cline']).optional(),
-  settings: sessionSettingsSchema.partial().optional(),
+  // passthrough: настройки сессии содержат поля вне sessionSettingsSchema
+  // (mcpServers, routing*, microFirst, embedding*, permission, mcpToolSettings, llmGateway),
+  // их нельзя терять при PATCH — известные поля валидируются, неизвестные пропускаются.
+  settings: sessionSettingsSchema.partial().passthrough().optional(),
 });
 
 export const gitRepoConfigSchema = z.object({

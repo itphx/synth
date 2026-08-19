@@ -7,7 +7,7 @@
  * поэтому пул сам GatewayProvider не создаёт.
  */
 
-import type { ProviderConfig as SharedProviderConfig, LLMGatewayConfig } from '@itphx/synth-shared';
+import type { ProviderConfig as SharedProviderConfig, LLMGatewayConfig, ReasoningLevel } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../providers/base.js';
 import type { BaseProvider } from '../../providers/base.js';
 import { toCoreProviderConfig } from './utils.js';
@@ -32,8 +32,9 @@ export class ProviderPool {
     providerName: string,
     modelName: string,
     temperature?: number,
+    reasoningLevel?: ReasoningLevel,
   ): BaseProvider | null {
-    const cacheKey = `${providerName}:${modelName}`;
+    const cacheKey = `${providerName}:${modelName}:${reasoningLevel ?? 'none'}`;
     const cached = this._cache.get(cacheKey);
     if (cached) return cached;
 
@@ -41,7 +42,11 @@ export class ProviderPool {
     if (!sharedConfig) return null;
 
     try {
-      const coreConfig = toCoreProviderConfig(sharedConfig, modelName || sharedConfig.defaultModel || '');
+      const coreConfig = toCoreProviderConfig(
+        sharedConfig,
+        modelName || sharedConfig.defaultModel || '',
+        reasoningLevel,
+      );
       const provider = ProviderFactory.create(
         providerName,
         coreConfig,

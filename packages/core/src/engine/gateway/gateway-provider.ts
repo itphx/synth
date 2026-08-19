@@ -61,6 +61,7 @@ export class GatewayProvider extends BaseProvider {
       topK: inner.topK,
       name: inner.name,
       type: inner.type,
+      reasoningLevel: inner.reasoningLevel,
     });
     this._inner = inner;
     this._config = config;

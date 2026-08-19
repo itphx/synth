@@ -1,4 +1,4 @@
-import type { TokenUsage, LLMChunk, LLMResponse } from '@itphx/synth-shared';
+import type { TokenUsage, LLMChunk, LLMResponse, ReasoningLevel } from '@itphx/synth-shared';
 import type { DebugCollector } from '../debug.js';
 
 export interface LLMMessage {
@@ -36,6 +36,7 @@ export interface ProviderConfig {
   temperature?: number;
   topP?: number;
   topK?: number;
+  reasoningLevel?: ReasoningLevel;
 }
 
 export abstract class BaseProvider {
@@ -48,6 +49,7 @@ export abstract class BaseProvider {
   topK?: number;
   name: string;
   type: string;
+  reasoningLevel: ReasoningLevel;
 
   constructor(params: {
     url: string;
@@ -59,6 +61,7 @@ export abstract class BaseProvider {
     topK?: number;
     name?: string;
     type?: string;
+    reasoningLevel?: ReasoningLevel;
   }) {
     this.url = params.url;
     this.apiKey = params.apiKey;
@@ -69,6 +72,7 @@ export abstract class BaseProvider {
     this.topK = params.topK;
     this.name = params.name ?? 'unknown';
     this.type = params.type ?? 'generic';
+    this.reasoningLevel = params.reasoningLevel ?? 'default';
   }
 
   abstract chat(
@@ -141,6 +145,7 @@ export class ProviderFactory {
       topK,
       name: config.name || name,
       type: providerType,
+      reasoningLevel: config.reasoningLevel,
     });
   }
 

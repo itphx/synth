@@ -24,6 +24,7 @@ export class OpenAIProvider extends BaseProvider {
       messages: formattedMessages,
       temperature: this.temperature,
     };
+    if (this.reasoningLevel && this.reasoningLevel !== 'default') body.reasoning_effort = this.reasoningLevel;
     if (this.topP !== undefined) body.top_p = this.topP;
     if (this.topK !== undefined) body.top_k = this.topK;
     if (tools?.length) body.tools = tools;
@@ -75,6 +76,7 @@ export class OpenAIProvider extends BaseProvider {
       temperature: this.temperature,
       stream: true,
     };
+    if (this.reasoningLevel && this.reasoningLevel !== 'default') body.reasoning_effort = this.reasoningLevel;
     if (this.topP !== undefined) body.top_p = this.topP;
     if (this.topK !== undefined) body.top_k = this.topK;
     if (tools?.length) body.tools = tools;

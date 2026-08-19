@@ -2,12 +2,13 @@
  * Общие утилиты для подсистемы роутинга (AD-034).
  */
 
-import type { ProviderConfig as SharedProviderConfig } from '@itphx/synth-shared';
+import type { ProviderConfig as SharedProviderConfig, ReasoningLevel } from '@itphx/synth-shared';
 import type { ProviderConfig as CoreProviderConfig } from '../../providers/base.js';
 
 export function toCoreProviderConfig(
   shared: SharedProviderConfig,
   model: string,
+  reasoningLevel?: ReasoningLevel,
 ): CoreProviderConfig {
   return {
     name: shared.name,
@@ -16,5 +17,6 @@ export function toCoreProviderConfig(
     apiKey: shared.apiKey || '',
     model,
     timeout: shared.timeout,
+    reasoningLevel,
   };
 }

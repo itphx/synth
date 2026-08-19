@@ -573,9 +573,9 @@ export const dict = {
   'common.inDevelopment': 'В разработке',
 
   // Chat input footer
-  'chat.footer.attach': 'Прикрепить (в разработке)',
-  'chat.footer.expand': 'Развернуть (в разработке)',
-  'chat.footer.approve': 'Авто-одобрение (в разработке)',
+  'chat.footer.attach': 'Прикрепить',
+  'chat.footer.expand': 'Развернуть',
+  'chat.footer.collapse': 'Свернуть',
   'chat.footer.mode': 'Режим',
 
   // Plan/Act режим сессии (AD-025)
@@ -637,6 +637,14 @@ export const dict = {
   'chat.modelControls.resetToDefault': 'Сбросить на умолчание',
   'chat.modelControls.noAgentsFound': 'Агенты не найдены',
   'chat.modelControls.agentProjectOnly': 'Доступен только в проекте',
+
+  // Уровень размышлений
+  'chat.reasoning.title': 'Уровень размышлений',
+  'chat.reasoning.default': 'По умолчанию',
+  'chat.reasoning.none': 'Нет',
+  'chat.reasoning.low': 'Низкий',
+  'chat.reasoning.medium': 'Средний',
+  'chat.reasoning.high': 'Высокий',
 
   // Notification settings
   'notifications.title': 'Уведомления',

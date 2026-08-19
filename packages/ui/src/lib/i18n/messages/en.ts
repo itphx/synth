@@ -576,9 +576,9 @@ export const dict = {
   'chat.queue.returnInDev': 'Return queue — in development',
 
   // Chat input footer
-  'chat.footer.attach': 'Attach (in development)',
-  'chat.footer.expand': 'Expand (in development)',
-  'chat.footer.approve': 'Auto-approve (in development)',
+  'chat.footer.attach': 'Attach',
+  'chat.footer.expand': 'Expand',
+  'chat.footer.collapse': 'Collapse',
   'chat.footer.mode': 'Mode',
 
   // Session Plan/Act mode (AD-025)
@@ -640,6 +640,14 @@ export const dict = {
   'chat.modelControls.resetToDefault': 'Reset to default',
   'chat.modelControls.noAgentsFound': 'No agents found',
   'chat.modelControls.agentProjectOnly': 'Available in project only',
+
+  // Reasoning level
+  'chat.reasoning.title': 'Reasoning level',
+  'chat.reasoning.default': 'Default',
+  'chat.reasoning.none': 'None',
+  'chat.reasoning.low': 'Low',
+  'chat.reasoning.medium': 'Medium',
+  'chat.reasoning.high': 'High',
 
   // Notification settings
   'notifications.title': 'Notifications',

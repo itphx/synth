@@ -2,7 +2,7 @@ import { ReadableStream } from 'node:stream/web';
 import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer } from '../../index.js';
-import { MessageRole, SESSION_MODES, generateStreamId, nowISO } from '@itphx/synth-shared';
+import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
 import { enqueueUserMessage, sseEventStream } from '../../index.js';
 import { serializeSession, serializeMessage } from '../serialize.js';
@@ -59,6 +59,19 @@ export function createSessionRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
     }
     const body = await c.req.json().catch(() => ({}));
+
+    // Валидация тела PATCH (sessionUpdateSchema): невалидные settings/engine/name → 400.
+    // title/mode/project_id не входят в схему и обрабатываются отдельно ниже из body.
+    const parsed = sessionUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Некорректные данные: ' + parsed.error.issues.map(i => i.path.join('.') + ' ' + i.message).join('; '),
+        },
+      }, 400);
+    }
+
     if (body.project_id !== undefined || body.projectId !== undefined) {
       session.projectId = body.project_id ?? body.projectId;
     }
@@ -79,8 +92,8 @@ export function createSessionRoutes(
       }
       session.mode = body.mode;
     }
-    if (body.settings !== undefined) {
-      session.settings = { ...session.settings, ...(body.settings as Partial<typeof session.settings>) };
+    if (parsed.data.settings !== undefined) {
+      session.settings = { ...session.settings, ...parsed.data.settings };
     }
     await sessionManager.updateSession(session);
     eventBus.publish(session.id, 'session.updated', serializeSession(session, { agentRegistry }));

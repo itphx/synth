@@ -17,7 +17,7 @@ const MODE_OPTIONS: ModeOption[] = [
   {
     mode: 'plan',
     labelKey: 'chat.mode.plan',
-    icon: 'shield',
+    icon: 'todo',
     activeClass: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
   },
   {
@@ -76,7 +76,7 @@ export function PlanActModeToggle({ sessionId }: { sessionId: string }) {
 
   return (
     <div
-      className={`flex items-center gap-0.5 rounded-lg border border-border/80 bg-surface-subtle p-0.5 transition-opacity ${
+      className={`flex shrink-0 items-center gap-0.5 rounded-lg border border-border/80 bg-surface-subtle p-0.5 transition-opacity ${
         disabled ? 'opacity-60' : ''
       }`}
       role="group"
@@ -101,7 +101,7 @@ export function PlanActModeToggle({ sessionId }: { sessionId: string }) {
             }`}
           >
             <Icon name={opt.icon} className="size-3 shrink-0" />
-            {t(opt.labelKey)}
+            <span className="@max-[212px]:hidden">{t(opt.labelKey)}</span>
           </button>
         )
       })}

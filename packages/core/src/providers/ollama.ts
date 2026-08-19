@@ -23,6 +23,8 @@ export class OllamaProvider extends BaseProvider {
       temperature: this.temperature,
       stream: !!stream,
     };
+    if (this.reasoningLevel === 'low') body.think = true;
+    else if (this.reasoningLevel === 'none') body.think = false;
     if (systemPrompt) body.system = systemPrompt;
     if (tools?.length) body.tools = this._formatTools(tools);
 
@@ -70,6 +72,8 @@ export class OllamaProvider extends BaseProvider {
       temperature: this.temperature,
       stream: true,
     };
+    if (this.reasoningLevel === 'low') body.think = true;
+    else if (this.reasoningLevel === 'none') body.think = false;
     if (systemPrompt) body.system = systemPrompt;
     if (tools?.length) body.tools = this._formatTools(tools);
 

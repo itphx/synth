@@ -68,6 +68,7 @@ export function ChatTab({ tab }: ChatTabProps) {
   const [sessionOrigin, setSessionOrigin] = useState<string | null>(null)
   const isSubagent = sessionOrigin === 'subagent'
   const isReadOnly = isSubagent
+  const [inputExpanded, setInputExpanded] = useState(false)
 
   const agentsRef = useRef<AgentInfo[]>([])
   const forkingRef = useRef(false)
@@ -540,29 +541,31 @@ export function ChatTab({ tab }: ChatTabProps) {
         />
       )}
 
-      <MessageList
-        messages={messages}
-        streams={streams}
-        onCopy={handleCopy}
-        onToggle={handleToggle}
-        onPin={handlePin}
-        onDelete={handleDelete}
-        onRetry={handleRetry}
-        onDebug={handleDebug}
-        onFork={handleFork}
-        readOnly={isReadOnly}
-        onStop={handleStop}
-        isSubagent={isSubagent}
-        selectionMode={selectionMode}
-        selectedIndices={selectedIndices}
-        onToggleSelect={handleToggleSelect}
-        onSelectRange={handleSelectRange}
-        retry={streamRetry}
-        onRetryNow={handleRetryNow}
-        onCancelRetry={handleCancelRetry}
-      />
+      {!inputExpanded && (
+        <MessageList
+          messages={messages}
+          streams={streams}
+          onCopy={handleCopy}
+          onToggle={handleToggle}
+          onPin={handlePin}
+          onDelete={handleDelete}
+          onRetry={handleRetry}
+          onDebug={handleDebug}
+          onFork={handleFork}
+          readOnly={isReadOnly}
+          onStop={handleStop}
+          isSubagent={isSubagent}
+          selectionMode={selectionMode}
+          selectedIndices={selectedIndices}
+          onToggleSelect={handleToggleSelect}
+          onSelectRange={handleSelectRange}
+          retry={streamRetry}
+          onRetryNow={handleRetryNow}
+          onCancelRetry={handleCancelRetry}
+        />
+      )}
 
-      {!isSubagent && (
+      {!inputExpanded && !isSubagent && (
         <QueuePanel
           pending={pending}
           isStalled={queue?.isStalled ?? false}
@@ -574,7 +577,7 @@ export function ChatTab({ tab }: ChatTabProps) {
         />
       )}
 
-      {!isSubagent && (
+      {!inputExpanded && !isSubagent && (
         <PermissionRequestBar sessionId={sessionId} />
       )}
 
@@ -591,6 +594,8 @@ export function ChatTab({ tab }: ChatTabProps) {
           onStop={handleStop}
           onStopQueue={handleStopAll}
           onCreateNote={handleCreateNote}
+          expanded={inputExpanded}
+          onToggleExpand={() => setInputExpanded((v) => !v)}
         />
       )}
 

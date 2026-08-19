@@ -7,6 +7,7 @@ import { MentionPopup } from './MentionPopup'
 import { ModelSelector } from './ModelSelector'
 import { AgentModeSelector } from './AgentModeSelector'
 import { PlanActModeToggle } from './PlanActModeToggle'
+import { ReasoningLevelSelector } from './ReasoningLevelSelector'
 import type { AgentInfo } from '@/lib/api/synthApi'
 
 interface ChatInputProps {
@@ -17,6 +18,8 @@ interface ChatInputProps {
   onStop: () => void
   onStopQueue?: () => void
   onCreateNote: (text: string) => void
+  expanded?: boolean
+  onToggleExpand?: () => void
 }
 
 interface TagPart {
@@ -117,6 +120,8 @@ export function ChatInput({
   onStop,
   onStopQueue,
   onCreateNote,
+  expanded,
+  onToggleExpand,
 }: ChatInputProps) {
   const { t } = useI18n()
   const [value, setValue] = useState('')
@@ -134,9 +139,15 @@ export function ChatInput({
   const autoResize = useCallback(() => {
     const el = textareaRef.current
     if (!el) return
+    // В развёрнутом режиме textarea растягивается на всю высоту (класс h-full),
+    // авто-рост отключён — сбрасываем инлайн-высоту, чтобы не перекрывать класс.
+    if (expanded) {
+      el.style.height = ''
+      return
+    }
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
-  }, [])
+  }, [expanded])
 
   useEffect(() => {
     autoResize()
@@ -303,18 +314,24 @@ export function ChatInput({
 
   return (
     <div
-      className="shrink-0 relative overflow-visible mx-auto mt-2 mb-2 w-4/5"
+      className={`relative overflow-visible mx-auto mt-2 mb-2 w-4/5 ${
+        expanded ? 'flex-1 flex h-full' : 'shrink-0'
+      }`}
     >
       <div
-        className="relative overflow-visible rounded-xl border border-border/80 bg-surface-subtle focus-within:border-primary/50 px-2 py-2"
+        className={`relative overflow-visible rounded-xl border border-border/80 bg-surface-subtle focus-within:border-primary/50 px-2 py-2 w-full @container ${
+          expanded ? 'flex flex-col h-full' : ''
+        }`}
         style={{
           borderRadius: CHAT_INPUT_RADIUS,
         }}
       >
-        <div className="pt-1 pl-2 pr-2 relative">
+        <div className={`pt-1 pl-2 pr-2 relative ${expanded ? 'flex-1 min-h-0' : ''}`}>
           <textarea
             ref={textareaRef}
-            className="overlay-scrollbar-target w-full resize-none border-0 bg-transparent px-0 py-0 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-0 min-h-[52px]"
+            className={`overlay-scrollbar-target w-full resize-none border-0 bg-transparent px-0 py-0 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-0 min-h-[52px] ${
+              expanded ? 'h-full' : ''
+            }`}
             placeholder={t('chat.input.placeholder')}
             rows={1}
             value={value}
@@ -340,21 +357,28 @@ export function ChatInput({
         </div>
 
         <div
-          className="flex items-center justify-between gap-1.5"
+          className={`flex flex-wrap items-center justify-between gap-1.5 ${
+            expanded ? 'mt-auto' : ''
+          }`}
         >
-          <div className="flex items-center gap-0.5">
+          <div className="flex shrink-0 items-center gap-0.5">
             <FooterBtn icon="attachment-2" title={t('chat.footer.attach')} />
-            <FooterBtn icon="fullscreen" title={t('chat.footer.expand')} />
-            <FooterBtn icon="shield-check" title={t('chat.footer.approve')} />
+            <FooterBtn
+              icon={expanded ? 'fullscreen-exit' : 'fullscreen'}
+              title={expanded ? t('chat.footer.collapse') : t('chat.footer.expand')}
+              onClick={onToggleExpand}
+              disabled={!onToggleExpand}
+            />
           </div>
 
-          <div className="flex items-center gap-3 pr-1">
+          <div className="flex flex-wrap items-center justify-end gap-1.5 pr-1 min-w-0 ml-auto">
             <PlanActModeToggle sessionId={sessionId} />
+            <ReasoningLevelSelector sessionId={sessionId} />
             <ModelSelector sessionId={sessionId} />
             <AgentModeSelector sessionId={sessionId} />
 
             {isStreaming ? (
-              <div className="flex items-center gap-0.5">
+              <div className="flex shrink-0 items-center gap-0.5">
                 <button
                   onClick={handleEnqueue}
                   disabled={!value.trim()}
@@ -373,7 +397,7 @@ export function ChatInput({
               </div>
             ) : (
               <>
-              <div className="flex items-center gap-0.5">
+              <div className="flex shrink-0 items-center gap-0.5">
                 <button
                   onClick={handleCreateNote}
                   disabled={!value.trim()}
@@ -399,12 +423,23 @@ export function ChatInput({
   )
 }
 
-function FooterBtn({ icon, title }: { icon: string; title: string }) {
+function FooterBtn({
+  icon,
+  title,
+  onClick,
+  disabled = true,
+}: {
+  icon: string
+  title: string
+  onClick?: () => void
+  disabled?: boolean
+}) {
   return (
     <button
       className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-30"
       title={title}
-      disabled
+      onClick={onClick}
+      disabled={disabled}
     >
       <Icon name={icon} className="size-4" />
     </button>

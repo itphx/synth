@@ -1,6 +1,6 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@itphx/synth-shared';
 import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart } from '@itphx/synth-shared';
-import type { RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig } from '@itphx/synth-shared';
+import type { RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
@@ -97,7 +97,7 @@ export interface ProcessMessageResult {
   canRetry?: boolean;
 }
 
-function toCoreProviderConfig(shared: SharedProviderConfig, model: string): CoreProviderConfig {
+function toCoreProviderConfig(shared: SharedProviderConfig, model: string, reasoningLevel?: ReasoningLevel): CoreProviderConfig {
   return {
     name: shared.name,
     type: shared.type,
@@ -105,6 +105,7 @@ function toCoreProviderConfig(shared: SharedProviderConfig, model: string): Core
     apiKey: shared.apiKey || '',
     model,
     timeout: shared.timeout,
+    reasoningLevel,
   };
 }
 
@@ -1194,7 +1195,7 @@ export class ChatOrchestrator {
               reason: 'escalation_fallback',
               strategy: 'default',
             };
-            const fbProvider = this._router.getProvider(fbDecision);
+            const fbProvider = this._router.getProvider(fbDecision, undefined, session.settings.reasoningLevel);
             if (fbProvider) {
               // Перевызываем LLM с fallback-моделью (без стриминга в UI)
               try {
@@ -1627,7 +1628,7 @@ export class ChatOrchestrator {
     try {
       const provider = ProviderFactory.create(
         providerName,
-        toCoreProviderConfig(sharedConfig, modelName || sharedConfig.defaultModel || ''),
+        toCoreProviderConfig(sharedConfig, modelName || sharedConfig.defaultModel || '', session.settings.reasoningLevel),
         session.settings.temperature,
       );
       return this._wrapWithGateway(provider, session);
@@ -1680,7 +1681,7 @@ export class ChatOrchestrator {
         toolCalls: toolCallNames,
       });
 
-      let provider = this._router.getProvider(decision);
+      let provider = this._router.getProvider(decision, undefined, session.settings.reasoningLevel);
       if (provider) {
         provider = this._wrapWithGateway(provider, session);
         return {

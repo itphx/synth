@@ -159,6 +159,34 @@ describe('Session API Routes (PATCH mode)', () => {
       expect(res.status).toBe(400);
     });
 
+    it('отклоняет невалидный settings.reasoningLevel', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      const res = await app.request(`/api/v2/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: { reasoningLevel: 'bogus' } }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      const reloaded = await sessionManager.getSession(session.id);
+      expect(reloaded?.settings.reasoningLevel).toBeUndefined();
+    });
+
+    it('обновляет валидные settings и сохраняет их', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      const res = await app.request(`/api/v2/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: { reasoningLevel: 'medium' } }),
+      });
+      expect(res.status).toBe(200);
+      const reloaded = await sessionManager.getSession(session.id);
+      expect(reloaded?.settings.reasoningLevel).toBe('medium');
+    });
+
     it('mode обновляется вместе с другими полями в одном PATCH', async () => {
       const { app, sessionManager } = createTestApp(tmpDir);
       const session = await sessionManager.createSession({ title: 'Old', userId: 'local' });

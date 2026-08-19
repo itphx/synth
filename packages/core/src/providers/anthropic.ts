@@ -49,6 +49,8 @@ export class AnthropicProvider extends BaseProvider {
       temperature: this.temperature,
       max_tokens: 4096,
     };
+    if (this.reasoningLevel === 'high') body.thinking = { type: 'enabled', budget_tokens: 8192 };
+    else if (this.reasoningLevel === 'none') body.thinking = { type: 'disabled' };
     if (this.topP !== undefined) body.top_p = this.topP;
     if (systemPrompt) body.system = systemPrompt;
     if (tools?.length) body.tools = this._formatTools(tools);
@@ -99,6 +101,8 @@ export class AnthropicProvider extends BaseProvider {
       max_tokens: 4096,
       stream: true,
     };
+    if (this.reasoningLevel === 'high') body.thinking = { type: 'enabled', budget_tokens: 8192 };
+    else if (this.reasoningLevel === 'none') body.thinking = { type: 'disabled' };
     if (this.topP !== undefined) body.top_p = this.topP;
     if (systemPrompt) body.system = systemPrompt;
     if (tools?.length) body.tools = this._formatTools(tools);

@@ -5,7 +5,7 @@ import type { EventBus } from '@itphx/synth-core';
 import type { QueueProcessorManager } from '@itphx/synth-core';
 import type { ChatOrchestrator } from '@itphx/synth-core';
 import type { ContextOptimizer } from '@itphx/synth-core';
-import { MessageRole, SESSION_MODES, generateStreamId, nowISO } from '@itphx/synth-shared';
+import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema } from '@itphx/synth-shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 import { enqueueUserMessage, sseEventStream } from '@itphx/synth-core';
 import { serializeSession } from '../lib/serialize.js';
@@ -90,6 +90,18 @@ export function createSessionRoutes(
     }
     const body = await c.req.json().catch(() => ({}));
 
+    // Валидация тела PATCH (sessionUpdateSchema): невалидные settings/engine/name → 400.
+    // title/mode/project_id не входят в схему и обрабатываются отдельно ниже из body.
+    const parsed = sessionUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Некорректные данные: ' + parsed.error.issues.map(i => i.path.join('.') + ' ' + i.message).join('; '),
+        },
+      }, 400);
+    }
+
     if (body.project_id !== undefined || body.projectId !== undefined) {
       session.projectId = body.project_id ?? body.projectId;
     }
@@ -104,8 +116,8 @@ export function createSessionRoutes(
       }
       session.mode = body.mode;
     }
-    if (body.settings !== undefined) {
-      session.settings = { ...session.settings, ...(body.settings as Partial<typeof session.settings>) };
+    if (parsed.data.settings !== undefined) {
+      session.settings = { ...session.settings, ...parsed.data.settings };
     }
 
     await sessionManager.updateSession(session);

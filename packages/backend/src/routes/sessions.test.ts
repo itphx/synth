@@ -225,6 +225,35 @@ describe('Session API Routes', () => {
       const persisted = await sessionManager.getSession(session.id);
       expect(persisted?.mode).toBeUndefined();
     });
+
+    it('возвращает 400 VALIDATION_ERROR для невалидного settings.reasoningLevel', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'Mode', userId: 'test-user' });
+      const res = await app.request(`/api/v2/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: { reasoningLevel: 'bogus' } }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.message).toContain('reasoningLevel');
+      const persisted = await sessionManager.getSession(session.id);
+      expect(persisted?.settings.reasoningLevel).toBeUndefined();
+    });
+
+    it('обновляет валидные settings и сохраняет их', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'Mode', userId: 'test-user' });
+      const res = await app.request(`/api/v2/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: { reasoningLevel: 'high' } }),
+      });
+      expect(res.status).toBe(200);
+      const persisted = await sessionManager.getSession(session.id);
+      expect(persisted?.settings.reasoningLevel).toBe('high');
+    });
   });
 
   describe('DELETE /api/v2/sessions/:id', () => {

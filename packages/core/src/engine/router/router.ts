@@ -3,7 +3,7 @@
  * Поддерживает стратегии: content, cost, content+cost, auto.
  */
 
-import type { SessionSettings } from '@itphx/synth-shared';
+import type { SessionSettings, ReasoningLevel } from '@itphx/synth-shared';
 import type { RouterConfig } from '@itphx/synth-shared';
 import type { ContentClassifier } from './content-classifier.js';
 import type { ProviderPool } from './provider-pool.js';
@@ -78,8 +78,8 @@ export class ModelRouter {
     }
   }
 
-  getProvider(decision: RoutingDecision, temperature?: number): BaseProvider | null {
-    return this._pool.getProvider(decision.providerName, decision.modelName, temperature);
+  getProvider(decision: RoutingDecision, temperature?: number, reasoningLevel?: ReasoningLevel): BaseProvider | null {
+    return this._pool.getProvider(decision.providerName, decision.modelName, temperature, reasoningLevel);
   }
 
   async checkQuality(content: string, decision: RoutingDecision, sessionSettings?: SessionSettings): Promise<QualityCheckResult> {
@@ -91,7 +91,7 @@ export class ModelRouter {
       checks: sessionEscalation?.checks ?? globalEscalation.checks,
       minLength: sessionEscalation?.minLength ?? globalEscalation.minLength,
     };
-    const provider = this._pool.getProvider(decision.providerName, decision.modelName);
+    const provider = this._pool.getProvider(decision.providerName, decision.modelName, undefined, sessionSettings?.reasoningLevel);
 
     return this._qualityChecker.check({
       content,

@@ -55,9 +55,33 @@ export function MessageList({
   onCancelRetry,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const chatZoneRef = useRef<HTMLDivElement>(null)
+  const [btnLeft, setBtnLeft] = useState<number | null>(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const lastClickedRef = useRef<number | null>(null)
+
+  // Кнопка «Вниз»: чуть правее правой границы зоны чата; если места справа нет — внутрь зоны.
+  useEffect(() => {
+    const container = containerRef.current
+    const zone = chatZoneRef.current
+    if (!container || !zone) return
+
+    const update = () => {
+      const cw = container.clientWidth
+      const zw = zone.clientWidth
+      const zoneRight = (cw - zw) / 2 + zw
+      const btnW = 36
+      const gap = 8
+      setBtnLeft(cw - zoneRight >= btnW + gap ? zoneRight + gap : cw - btnW - gap)
+    }
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(container)
+    ro.observe(zone)
+    return () => ro.disconnect()
+  }, [])
 
   const streamEntries = Object.values(streams).filter((s) => s.isStreaming && s.hasContent)
   const streamContentSize = streamEntries.reduce((sum, s) => sum + s.content.length + s.reasoningBlocks.reduce((rsum, r) => rsum + r.text.length, 0), 0)
@@ -158,46 +182,46 @@ export function MessageList({
   }, [onCopy, onToggle, onPin, onDelete, onRetry, onDebug, onFork, readOnly, isSubagent, selectionMode, selectedIndices, handleToggleSelect, streams, retry, onRetryNow, onCancelRetry])
 
   return (
-    <div className="relative flex-1 overflow-hidden">
+    <div ref={containerRef} className="relative flex-1 overflow-hidden">
       <ScrollableOverlay
         ref={scrollRef as unknown as React.Ref<HTMLElement>}
         outerClassName="h-full"
         className="overflow-y-auto overflow-x-hidden chat-scroll-container"
         onScroll={handleScroll}
       >
-        <div
-          className="relative w-full"
-          style={{
-            height: shouldVirtualize ? `${virtualizer.getTotalSize()}px` : 'auto',
-          }}
-        >
-          {shouldVirtualize ? (
-            <div
-              className="absolute top-0 left-0 w-full"
-              style={{
-                transform: `translateY(${virtualItems[0]?.start ?? 0}px)`,
-              }}
-            >
-              {virtualItems.map((vi) => {
-                const msg = messages[vi.index]
-                if (!msg) return null
-                return (
-                  <div key={msg.id || msg.index} data-index={vi.index} ref={virtualizer.measureElement}>
-                    <ChatMessage {...chatMsgProps(msg)} />
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            messages.map((msg) => (
-              <ChatMessage
-                key={msg.id || `${msg.role}-${msg.index}-${msg.created_at}`}
-                {...chatMsgProps(msg)}
-              />
-            ))
-          )}
-
-        </div>
+        <div ref={chatZoneRef} className="mx-auto w-full max-w-[50vw]">
+          <div
+            className="relative w-full"
+            style={{
+              height: shouldVirtualize ? `${virtualizer.getTotalSize()}px` : 'auto',
+            }}
+          >
+            {shouldVirtualize ? (
+              <div
+                className="absolute top-0 left-0 w-full"
+                style={{
+                  transform: `translateY(${virtualItems[0]?.start ?? 0}px)`,
+                }}
+              >
+                {virtualItems.map((vi) => {
+                  const msg = messages[vi.index]
+                  if (!msg) return null
+                  return (
+                    <div key={msg.id || msg.index} data-index={vi.index} ref={virtualizer.measureElement}>
+                      <ChatMessage {...chatMsgProps(msg)} />
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              messages.map((msg) => (
+                <ChatMessage
+                  key={msg.id || `${msg.role}-${msg.index}-${msg.created_at}`}
+                  {...chatMsgProps(msg)}
+                />
+              ))
+            )}
+          </div>
 
           {streamEntries.map((stream) => (
             <StreamingPlaceholder
@@ -209,9 +233,10 @@ export function MessageList({
               onCancelRetry={onCancelRetry}
             />
           ))}
+        </div>
       </ScrollableOverlay>
 
-      <ScrollToBottomButton visible={showScrollBtn} onClick={() => scrollToBottom()} />
+      <ScrollToBottomButton visible={showScrollBtn} onClick={() => scrollToBottom()} left={btnLeft ?? undefined} />
     </div>
   )
 }
