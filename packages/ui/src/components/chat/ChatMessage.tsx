@@ -7,7 +7,7 @@ import { MessageActions } from './MessageActions'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
 import { SubagentPart, type SubagentPartData } from './SubagentPart'
-import { RetryStatus, ProcessingStatus } from './RetryStatus'
+import { RetryStatus } from './RetryStatus'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/chatStore'
 import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
@@ -278,7 +278,12 @@ function ChatMessageInner({
         )}
 
         {isUser && (
-          <MessageHeader message={message} isSubagent={isSubagent} onOriginClick={handleOriginClick} />
+          <MessageHeader
+            message={message}
+            isSubagent={isSubagent}
+            onOriginClick={handleOriginClick}
+            processing={pending?.status === 'processing'}
+          />
         )}
 
         {displayContent && (
@@ -295,16 +300,12 @@ function ChatMessageInner({
           )
         )}
 
-        {isUser && pending && (
-          pending.status === 'retrying' && pending.retry ? (
-            <RetryStatus
-              retry={pending.retry}
-              onRetryNow={pending.onRetryNow}
-              onCancelRetry={pending.onCancelRetry}
-            />
-          ) : (
-            <ProcessingStatus />
-          )
+        {isUser && pending && pending.status === 'retrying' && pending.retry && (
+          <RetryStatus
+            retry={pending.retry}
+            onRetryNow={pending.onRetryNow}
+            onCancelRetry={pending.onCancelRetry}
+          />
         )}
 
         {showActions && (

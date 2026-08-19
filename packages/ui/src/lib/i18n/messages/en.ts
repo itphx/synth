@@ -553,7 +553,6 @@ export const dict = {
   'chat.retry.inProgress': 'Retry {current}/{max} in {sec}s…',
   'chat.retry.now': 'Retry now',
   'chat.retry.cancel': 'Cancel',
-  'chat.stream.processing': 'Processing…',
   'chat.error.retryNow': 'Failed to retry now',
   'chat.error.cancelRetry': 'Failed to cancel retry',
   'chat.error.loadSession': 'Failed to load session',

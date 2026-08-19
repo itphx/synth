@@ -14,6 +14,8 @@ interface MessageHeaderProps {
   isSubagent?: boolean
   /** Клик по origin-бейджу — открыть родительскую сессию */
   onOriginClick?: () => void
+  /** true — вместо времени показать индикатор обработки (три прыгающие точки) */
+  processing?: boolean
 }
 
 function resolveAuthor(): string {
@@ -21,7 +23,7 @@ function resolveAuthor(): string {
   return profile?.display_name || user?.username || ''
 }
 
-function MessageHeaderInner({ message, isSubagent, onOriginClick }: MessageHeaderProps) {
+function MessageHeaderInner({ message, isSubagent, onOriginClick, processing }: MessageHeaderProps) {
   const time = message.timestamp || message.created_at
   const formatted = time
     ? new Date(time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
@@ -108,7 +110,7 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick }: MessageHeade
         <QualityBadge qa_pass={message.qa_pass} qa_reason={message.qa_reason} />
       )}
 
-      {formatted || (message.origin === 'merged' || message.origin === 'crosspost') ? (
+      {formatted || processing || message.origin === 'merged' || message.origin === 'crosspost' ? (
         <span className="ml-auto inline-flex items-center gap-1">
           {(message.origin === 'merged' || message.origin === 'crosspost') && (
             <button
@@ -126,9 +128,15 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick }: MessageHeade
               {message.origin === 'merged' ? 'Скопировано' : 'Связано'}
             </button>
           )}
-          {formatted && (
+          {processing ? (
+            <span className="ml-auto inline-flex gap-0.5">
+              <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
+            </span>
+          ) : formatted ? (
             <span className="tabular-nums">{formatted}</span>
-          )}
+          ) : null}
         </span>
       ) : null}
     </div>

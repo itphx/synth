@@ -548,7 +548,6 @@ export const dict = {
   'chat.retry.inProgress': 'Повторная попытка {current}/{max} через {sec} с…',
   'chat.retry.now': 'Повторить сейчас',
   'chat.retry.cancel': 'Отменить',
-  'chat.stream.processing': 'Обработка…',
   'chat.error.retryNow': 'Не удалось выполнить повторную попытку',
   'chat.error.cancelRetry': 'Не удалось отменить повторные попытки',
   'chat.stream.error': 'Ошибка',
@@ -641,7 +640,7 @@ export const dict = {
   // Уровень размышлений
   'chat.reasoning.title': 'Уровень размышлений',
   'chat.reasoning.default': 'По умолчанию',
-  'chat.reasoning.none': 'Нет',
+  'chat.reasoning.none': 'Отключено',
   'chat.reasoning.low': 'Низкий',
   'chat.reasoning.medium': 'Средний',
   'chat.reasoning.high': 'Высокий',

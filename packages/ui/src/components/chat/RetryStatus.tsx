@@ -67,14 +67,3 @@ export function RetryStatus({
     </div>
   )
 }
-
-/** Статус «обработка…» — показывается в user-сообщении, пока провайдер молчит. */
-export function ProcessingStatus({ className }: { className?: string }) {
-  const { t } = useI18n()
-  return (
-    <div className={cn('flex items-center gap-1.5 mt-2 pt-1.5 border-t border-border/30', className)}>
-      <Icon name="loader-2" className="size-3.5 animate-spin text-muted-foreground" />
-      <span className="text-xs text-muted-foreground">{t('chat.stream.processing')}</span>
-    </div>
-  )
-}
