@@ -7,7 +7,7 @@ export type TransportMode = 'auto' | 'ws' | 'sse'
 
 const LEFT_PANEL_MIN_WIDTH = 280
 const LEFT_PANEL_MAX_WIDTH = 500
-const RIGHT_PANEL_MIN_WIDTH = 280
+const RIGHT_PANEL_MIN_WIDTH = 320
 const RIGHT_PANEL_MAX_WIDTH = 860
 
 interface LeftPanelState {
@@ -331,12 +331,12 @@ export const useUIStore = create<UIStore>()(
           ...current,
           leftPanel: {
             ...current.leftPanel,
-            width: (p?.leftPanelWidth as number) ?? current.leftPanel.width,
+            width: Math.min(current.leftPanel.maxWidth, Math.max(current.leftPanel.minWidth, (p?.leftPanelWidth as number) ?? current.leftPanel.width)),
             isOpen: (p?.leftPanelIsOpen as boolean) ?? current.leftPanel.isOpen,
           },
           rightPanel: {
             ...current.rightPanel,
-            width: (p?.rightPanelWidth as number) ?? current.rightPanel.width,
+            width: Math.min(current.rightPanel.maxWidth, Math.max(current.rightPanel.minWidth, (p?.rightPanelWidth as number) ?? current.rightPanel.width)),
             isOpen: (p?.rightPanelIsOpen as boolean) ?? current.rightPanel.isOpen,
           },
           leftPanelTab: (p?.leftPanelTab as string) ?? current.leftPanelTab,
