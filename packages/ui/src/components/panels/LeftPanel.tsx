@@ -10,6 +10,7 @@ import { useChatStore } from '@/stores/chatStore'
 import { useNotificationStore } from '@/stores/notificationStore'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
+import { useAdaptiveIcons } from '@/hooks/useAdaptiveIcons'
 import { synthApi } from '@/lib/api/synthApi'
 import { PROJECT_ICON_MAP, PROJECT_COLOR_MAP } from '@/lib/projectMeta'
 import { formatRelativeTime, parseISODate } from '@/lib/formatDate'
@@ -1568,10 +1569,13 @@ export const LeftPanel: React.FC = () => {
   const { t } = useI18n()
   const { leftPanelTab, setLeftPanelTab } = useUIStore()
 
+  const containerRef = useRef<HTMLDivElement>(null)
+  const iconsOnly = useAdaptiveIcons(containerRef)
+
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-8 shrink-0 items-center justify-center px-2">
-        <div className="inline-flex rounded-lg border border-sidebar-border overflow-hidden">
+      <div ref={containerRef} className="flex h-8 shrink-0 items-center px-2">
+        <div data-tab-row className="flex w-full rounded-lg border border-sidebar-border overflow-hidden">
           {LEFT_TABS.map((tab) => {
             const active = leftPanelTab === tab.id
             return (
@@ -1579,13 +1583,15 @@ export const LeftPanel: React.FC = () => {
                 key={tab.id}
                 onClick={() => setLeftPanelTab(tab.id)}
                 title={t(tab.labelKey)}
-                className={`flex items-center justify-center gap-1.5 px-3 py-1 text-xs transition-colors
-                  border-r border-sidebar-border last:border-r-0 flex-1 min-w-0 max-w-[150px]
+                className={`flex items-center justify-center gap-1.5 py-1 text-xs transition-colors
+                  border-r border-sidebar-border last:border-r-0
+                  flex-1
+                  ${iconsOnly ? 'min-w-0 px-2' : 'min-w-[72px] px-3'}
                   ${active ? 'bg-primary/15 text-foreground' : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'}
                 `}
               >
                 <Icon name={tab.icon} className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">{t(tab.labelKey)}</span>
+                {!iconsOnly && <span data-tab-label className="truncate">{t(tab.labelKey)}</span>}
               </button>
             )
           })}

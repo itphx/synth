@@ -1,8 +1,9 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useRef } from 'react'
 import { useUIStore } from '@/stores/useUIStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
+import { useAdaptiveIcons } from '@/hooks/useAdaptiveIcons'
 import { StatsTab } from './StatsTab'
 import { ContextTab } from './ContextTab'
 import { SessionSettingsTab } from './SessionSettingsTab'
@@ -26,7 +27,7 @@ export const RightPanel: React.FC = () => {
   const activeTab = centerTabs.find((t) => t.id === activeCenterTabId)
   const sessionId = activeTab?.data?.sessionId
 
-  // Вкладка «Словарь обфускации» (AD-036) — только для ADMIN/AUDITOR
+  // Вкладка «Безопасность» (AD-036) — только для ADMIN/AUDITOR
   const canViewSecrets = !!user?.roles?.some((r) => r === 'ADMIN' || r === 'AUDITOR')
   const tabs = canViewSecrets
     ? [...RIGHT_TABS, { id: 'secrets', icon: 'shield-keyhole' as const, labelKey: 'rightPanel.tab.secrets' }]
@@ -39,28 +40,40 @@ export const RightPanel: React.FC = () => {
     }
   }, [rightPanelTab, canViewSecrets, setRightPanelTab])
 
+  const firstRow = tabs.slice(0, 4)
+  const secondRow = tabs.slice(4)
+
+  const containerRef = useRef<HTMLDivElement>(null)
+  const iconsOnly = useAdaptiveIcons(containerRef)
+
+  const renderTab = (tab: (typeof tabs)[number]) => {
+    const active = rightPanelTab === tab.id
+    return (
+      <button
+        key={tab.id}
+        onClick={() => setRightPanelTab(tab.id)}
+        title={t(tab.labelKey)}
+        className={`flex items-center justify-center gap-1.5 py-1 text-xs transition-colors
+          border-r border-sidebar-border last:border-r-0
+          flex-1
+          ${iconsOnly ? 'min-w-0 px-2' : 'min-w-[72px] px-3'}
+          ${active ? 'bg-primary/15 text-foreground' : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'}
+        `}
+      >
+        <Icon name={tab.icon} className="h-3.5 w-3.5 shrink-0" />
+        {!iconsOnly && <span data-tab-label className="truncate">{t(tab.labelKey)}</span>}
+      </button>
+    )
+  }
+
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-8 shrink-0 items-center justify-center px-2">
-        <div className="inline-flex rounded-lg border border-sidebar-border overflow-hidden">
-          {tabs.map((tab) => {
-            const active = rightPanelTab === tab.id
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setRightPanelTab(tab.id)}
-                title={t(tab.labelKey)}
-                className={`flex items-center justify-center gap-1.5 px-3 py-1 text-xs transition-colors
-                  border-r border-sidebar-border last:border-r-0
-                  flex-1 min-w-0 max-w-[150px]
-                  ${active ? 'bg-primary/15 text-foreground' : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'}
-                `}
-              >
-                <Icon name={tab.icon} className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">{t(tab.labelKey)}</span>
-              </button>
-            )
-          })}
+      <div ref={containerRef} className="flex flex-col gap-1 shrink-0 px-2 py-1">
+        <div data-tab-row className="flex w-full rounded-lg border border-sidebar-border overflow-hidden">
+          {firstRow.map(renderTab)}
+        </div>
+        <div data-tab-row className="flex w-full rounded-lg border border-sidebar-border overflow-hidden">
+          {secondRow.map(renderTab)}
         </div>
       </div>
       <div className="flex-1 overflow-y-auto">
