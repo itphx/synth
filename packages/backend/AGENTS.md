@@ -17,7 +17,6 @@ API Hub системы Synth. Связующее звено между synth-ui,
 - Не выполняет LLM-вызовы напрямую (движок работает отдельно)
 - Не рендерит HTML (админка в synth-ui)
 - Не управляет процессами движков (это synth-runner)
-- Не работает с файловой системой пользователя (это synth-runner)
 
 ## Технологический стек
 
@@ -316,6 +315,15 @@ data: {"content": "...", "model": "...", "usage": {...}, "message_index": 5}
 |-------|------|------------|
 | `GET` | `/fs?project_id=&path=` | Список файлов в директории |
 | `GET` | `/fs/read?project_id=&path=` | Содержимое файла |
+| `POST` | `/fs/write` | Запись файла. Тело: `{ projectId, path, content }` |
+| `POST` | `/fs/upload` | Загрузка файла (multipart: `project_id`, `path`, `file`) |
+| `GET` | `/fs/download?project_id=&path=` | Скачивание файла (stream, `Content-Disposition: attachment`) |
+| `DELETE` | `/fs?project_id=&path=` | Удаление файла или пустой директории |
+| `POST` | `/fs/mkdir` | Создание директории. Тело: `{ projectId, path }` |
+| `POST` | `/fs/move` | Перемещение/переименование. Тело: `{ projectId, sourcePath, targetPath }` |
+| `GET` | `/fs/workspace-root` | Список поддиректорий корня workspace |
+| `GET` | `/fs/workspace-root/browse?path=` | Список поддиректорий внутри корня |
+| `POST` | `/fs/workspace-root/mkdir` | Создать директорию в корне. Тело: `{ path }` |
 
 ---
 

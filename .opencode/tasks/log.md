@@ -316,3 +316,33 @@
   - micro-benchmark.mjs — актуален (работает через tsx, exit 0; AD-035, упомянут в AGENTS.md)
   - synth/test: api-smoke.sh и ui-e2e.mjs актуальны (все эндпоинты живы: /health, projects CRUD, sessions CRUD), но никто не ссылается — ручные smoke-инструменты; решение по судьбе — у пользователя
 - **Проблемы:** нет
+
+## 2026-08-19 — Редактор файлов только для чтения + upload/download в standalone core
+- **Задача:** «не работает редактор файлов, файлы открываются только для чтения» + реализовать загрузку файлов через UI/API + проверить скачивание через API
+- **Тип:** bug + feature
+- **Исполнитель:** @tester (диагностика/верификация), @researcher (прототип t11), @fixer (реализация)
+- **Результат:** PASS
+- **Коммит:** 217f8cc (ветка fix/file-editor-upload)
+- **Время:** ~60 мин
+- **Ключевое:**
+  - UI → backend :5000: редактор/сохранение/upload/download работали (QA подтвердил) — баг воспроизводился только при подключении UI к core standalone :4300
+  - Причина: packages/core/src/server/routes/fs.ts имел только GET /fs и GET /fs/read; write/upload/download/mkdir/move/delete → 404 → «файлы только для чтения»
+  - В backend эти эндпоинты уже были; в прототипе t11 upload/download файлов проекта отсутствовали вовсе
+  - Фикс: в core добавлены POST /fs/write, POST /fs/upload, GET /fs/download, DELETE /fs, POST /fs/mkdir, POST /fs/move с единой защитой resolveSafe() от path traversal и единым форматом ошибок
+  - Документация: core/AGENTS.md и backend/AGENTS.md приведены в соответствие с реальными FS-эндпоинтами
+  - Верификация: core API (200/201/403/401/409/400 — все сценарии), UI-смоук (редактор→сохранить→загрузить→скачать, 0 ошибок консоли), регрессия: typecheck PASS, lint 0 errors, 848 тестов зелёные
+- **Проблемы:**
+  - API-ключ core в ~/.config/synth/config.yaml пустой — без --api-key core недоступен по auth (конфигурационный нюанс, не баг фикса)
+
+## 2026-08-19 — Дерево файлов: upload у папок, убрать new-file у файлов, пункт «Переместить»
+- **Задача:** кнопка «Загрузить файл» у каждой папки; убрать «Создать файл» у файлов; добавить «Переместить» в контекстное меню файлов и папок
+- **Тип:** feature (UI)
+- **Исполнитель:** @fixer (реализация), @tester (UI-верификация)
+- **Результат:** PASS
+- **Коммит:** ожидает (см. git log ветки fix/file-editor-upload)
+- **Время:** ~45 мин
+- **Ключевое:**
+  - packages/ui/src/components/panels/LeftPanel.tsx: handleUpload принимает dirPath, activeUploadPath; upload-кнопка у каждой папки; entryActions только для isDir (upload/new-file/new-folder); в контекстное меню добавлен «Переместить» (file.move) с диалогом выбора директории (projectDirPaths, исключение себя/подпапок, обновление открытой вкладки)
+  - i18n: file.move добавлен в ru.ts/en.ts
+  - Верификация: 8/8 UI-проверок PASS (upload в папку, hover файла без иконок создания, контекстные меню, перемещение файла/папки в т.ч. в корень, обновление вкладки); регрессия сохранения (POST /fs/write 200) и скачивания PASS; typecheck/lint UI чисто
+- **Проблемы:** нет
