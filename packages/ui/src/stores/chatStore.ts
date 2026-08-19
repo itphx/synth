@@ -77,6 +77,9 @@ export interface StreamState {
   reasoningBlocks: ReasoningBlockData[]
   intermediateTextBlocks: IntermediateTextBlockData[]
   isStreaming: boolean
+  /** true, когда пришёл первый непустой chunk (content или reasoning) — признак, что провайдер начал отвечать */
+  hasContent: boolean
+  isRetrying?: boolean
   model?: string
   provider?: string
   usage?: { input_tokens: number; output_tokens: number; total_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number }
@@ -109,6 +112,16 @@ export interface StreamError {
   userCanRetry?: boolean
 }
 
+/** Статус повторной попытки (событие stream.retry): «Повторная попытка N/MAX через X сек». */
+export interface StreamRetry {
+  streamId: string
+  attempt: number
+  maxRetries: number
+  /** Задержка backoff в миллисекундах */
+  retryInMs: number
+  error?: string
+}
+
 export interface QueueState {
   pendingCount: number
   isStalled: boolean
@@ -125,6 +138,7 @@ interface ChatStore {
   queueBySession: Record<string, QueueState>
   pendingBySession: Record<string, QueuedMessage[]>
   errorBySession: Record<string, StreamError | null>
+  retryBySession: Record<string, StreamRetry | null>
   stickyNotesBySession: Record<string, StickyNoteData[]>
   summarizationPendingBySession: Record<string, boolean>
   debugModalSessionId: string | null
@@ -142,6 +156,8 @@ interface ChatStore {
   cancelStream: (sessionId: string, streamId: string) => void
   addStreamError: (sessionId: string, error: StreamError) => void
   clearStreamError: (sessionId: string) => void
+  setStreamRetry: (sessionId: string, retry: StreamRetry | null) => void
+  setStreamRetrying: (sessionId: string, streamId: string, isRetrying: boolean) => void
   addMessage: (sessionId: string, message: MessageData) => void
   setPendingMessages: (sessionId: string, pending: QueuedMessage[]) => void
   setQueueStalled: (sessionId: string, pendingCount: number) => void
@@ -176,6 +192,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   queueBySession: {},
   pendingBySession: {},
   errorBySession: {},
+  retryBySession: {},
   stickyNotesBySession: {},
   summarizationPendingBySession: {},
   debugModalSessionId: null,
@@ -207,6 +224,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         reasoningBlocks: [],
         intermediateTextBlocks: [],
         isStreaming: true,
+        hasContent: false,
         model,
         provider,
         toolCalls: [],
@@ -235,10 +253,14 @@ export const useChatStore = create<ChatStore>((set) => ({
           }
         }
       }
+      const nextHasContent = existing.hasContent
+        || (typeof content === 'string' && content.length > 0)
+        || (typeof reasoning === 'string' && reasoning.trim().length > 0)
       sessionStreams[streamId] = {
         ...existing,
         content: existing.content + content,
         reasoningBlocks: nextBlocks,
+        hasContent: nextHasContent,
         model: model || existing.model,
         provider: provider || existing.provider,
       }
@@ -431,6 +453,20 @@ export const useChatStore = create<ChatStore>((set) => ({
       errorBySession: { ...s.errorBySession, [sessionId]: null },
     })),
 
+  setStreamRetry: (sessionId, retry) =>
+    set((s) => ({
+      retryBySession: { ...s.retryBySession, [sessionId]: retry },
+    })),
+
+  setStreamRetrying: (sessionId, streamId, isRetrying) =>
+    set((s) => {
+      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
+      const existing = sessionStreams[streamId]
+      if (!existing) return s
+      sessionStreams[streamId] = { ...existing, isRetrying }
+      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
+    }),
+
   addMessage: (sessionId, message) =>
     set((s) => {
       const msgs = [...(s.messagesBySession[sessionId] || [])]
@@ -510,7 +546,9 @@ export const useChatStore = create<ChatStore>((set) => ({
       delete pendingBySession[sessionId]
       const errorBySession = { ...s.errorBySession }
       delete errorBySession[sessionId]
-      return { messagesBySession, streamingBySession, queueBySession, pendingBySession, errorBySession }
+      const retryBySession = { ...s.retryBySession }
+      delete retryBySession[sessionId]
+      return { messagesBySession, streamingBySession, queueBySession, pendingBySession, errorBySession, retryBySession }
     }),
 
   setStickyNotes: (sessionId, notes) =>

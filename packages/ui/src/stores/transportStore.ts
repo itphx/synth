@@ -8,6 +8,7 @@ import type { TransportMode } from './useUIStore'
 import type { StreamDoneMetadata, MessageData } from './chatStore'
 import { synthApi } from '@/lib/api/synthApi'
 import type { SessionData } from '@/lib/api/synthApi'
+import { notifyMessage } from '@/hooks/useNotification'
 
 type EventDispatcher = (event: WSEvent) => void
 
@@ -52,7 +53,9 @@ function createDispatcher(): EventDispatcher {
       updateStreamChunk,
       finishStream,
       cancelStream,
-      addStreamError,
+      clearStreamError,
+      setStreamRetry,
+      setStreamRetrying,
       setQueueStalled,
       setSummarizationPending,
       updateQueueCount,
@@ -100,6 +103,8 @@ function createDispatcher(): EventDispatcher {
         const agentRole = (payload.agent_role as string) || null
         const metadata = payload.metadata as Record<string, unknown> | undefined
         startStream(sid, payload.stream_id as string, agentRole, payload.model as string | undefined, payload.provider as string | undefined)
+        // Новая попытка — сбрасываем статус ретрая предыдущей
+        setStreamRetry(sid, null)
         if (metadata?.type === 'summary') {
           const s = useChatStore.getState()
           const sessionStreams = { ...(s.streamingBySession[sid] || {}) }
@@ -113,12 +118,28 @@ function createDispatcher(): EventDispatcher {
         const qs = useChatStore.getState().queueBySession[sid]
         if (qs && qs.pendingCount > 0) {
           removeFirstPending(sid)
-          useChatStore.setState((s) => ({
-            queueBySession: {
-              ...s.queueBySession,
-              [sid]: { ...qs, isStalled: false },
-            },
-          }))
+          if (metadata?.type === 'summary') {
+            // Суммаризация — системное сообщение, счётчик user-сообщений не
+            // декрементируем; только сбрасываем stalled.
+            useChatStore.setState((s) => ({
+              queueBySession: {
+                ...s.queueBySession,
+                [sid]: { ...qs, isStalled: false },
+              },
+            }))
+          } else {
+            const nextCount = qs.pendingCount - 1
+            if (nextCount <= 0) {
+              useChatStore.getState().clearQueueState(sid)
+            } else {
+              useChatStore.setState((s) => ({
+                queueBySession: {
+                  ...s.queueBySession,
+                  [sid]: { ...qs, pendingCount: nextCount, isStalled: false },
+                },
+              }))
+            }
+          }
         }
         break
       }
@@ -161,6 +182,8 @@ function createDispatcher(): EventDispatcher {
           intermediate_text_blocks: (payload.intermediate_text_blocks as Array<{ text: string; iteration: number }>) || undefined,
         }
         finishStream(sid, payload.stream_id as string, metadata)
+        setStreamRetry(sid, null)
+        clearStreamError(sid)
 
         const pendingCount = payload.pending_count as number | undefined
         if (pendingCount !== undefined && pendingCount > 0) {
@@ -174,21 +197,48 @@ function createDispatcher(): EventDispatcher {
       case 'stream_cancelled':
       case 'stream.cancelled': {
         cancelStream(sid, payload.stream_id as string)
+        setStreamRetry(sid, null)
         break
       }
 
       case 'stream_error':
       case 'stream.error': {
-        addStreamError(sid, {
-          streamId: payload.stream_id as string,
-          error: (payload.error as string) || 'Unknown error',
-          errorType: (payload.error_type as string) || 'unknown',
-          retryIn: payload.retry_in as number | undefined,
-          retryCount: (payload.retry_count as number) || 0,
-          maxRetries: (payload.max_retries as number) || 3,
-          canRetry: (payload.can_retry as boolean) || false,
-          userCanRetry: payload.user_can_retry as boolean | undefined,
+        const streamId = payload.stream_id as string
+        const error = (payload.error as string) || 'Unknown error'
+        const canRetry = Boolean(payload.can_retry)
+
+        if (canRetry) {
+          // Recoverable-ошибка: бэкенд продолжит ретраи. Стрим НЕ завершаем,
+          // ничего пользователю не показываем — статус ретрая придёт событием
+          // stream.retry (отобразится в user-сообщении).
+          break
+        }
+
+        // Финальная ошибка (неrecoverable / исчерпаны попытки / отменено):
+        // завершаем стрим, убираем ретраи и индикатор обработки, показываем
+        // стандартное уведомление (toast + история).
+        setStreamRetry(sid, null)
+        setStreamRetrying(sid, streamId, false)
+        cancelStream(sid, streamId)
+        notifyMessage({ text: error, type: 'error', category: 'error', sessionId: sid })
+        break
+      }
+
+      case 'stream_retry':
+      case 'stream.retry': {
+        const streamId = payload.stream_id as string
+        const retryInMs = (payload.retry_in as number) || 5000
+        const attempt = (payload.attempt as number) || 1
+        const maxRetries = (payload.max_retries as number) || 3
+
+        setStreamRetry(sid, {
+          streamId,
+          attempt,
+          maxRetries,
+          retryInMs,
+          error: payload.error as string | undefined,
         })
+        setStreamRetrying(sid, streamId, true)
         break
       }
 

@@ -7,9 +7,10 @@ import { MessageActions } from './MessageActions'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
 import { SubagentPart, type SubagentPartData } from './SubagentPart'
+import { RetryStatus, ProcessingStatus } from './RetryStatus'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/chatStore'
-import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData } from '@/stores/chatStore'
+import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { useMemo } from 'react'
 import { Icon } from '@/components/icon/Icon'
@@ -67,6 +68,18 @@ interface ChatMessageProps {
   selectionMode?: boolean
   isSelected?: boolean
   onToggleSelect?: (shiftKey: boolean) => void
+  /**
+   * Статус активного стрима, связанного с этим user-сообщением (по metadata.stream_id),
+   * пока провайдер ещё не вернул ни одного чанка. null — статус не показываем.
+   */
+  pending?: PendingStreamStatus | null
+}
+
+export interface PendingStreamStatus {
+  status: 'processing' | 'retrying'
+  retry?: StreamRetry | null
+  onRetryNow?: () => void
+  onCancelRetry?: () => void
 }
 
 function ChatMessageInner({
@@ -83,6 +96,7 @@ function ChatMessageInner({
   selectionMode,
   isSelected,
   onToggleSelect,
+  pending,
 }: ChatMessageProps) {
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
@@ -278,6 +292,18 @@ function ChatMessageInner({
             />
           ) : (
             <SecretMarkdown content={displayContent} secrets={secrets} sessionId={sessionId} />
+          )
+        )}
+
+        {isUser && pending && (
+          pending.status === 'retrying' && pending.retry ? (
+            <RetryStatus
+              retry={pending.retry}
+              onRetryNow={pending.onRetryNow}
+              onCancelRetry={pending.onCancelRetry}
+            />
+          ) : (
+            <ProcessingStatus />
           )
         )}
 

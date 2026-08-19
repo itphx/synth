@@ -28,7 +28,7 @@ export function ChatTab({ tab }: ChatTabProps) {
     streamingBySession,
     queueBySession,
     pendingBySession,
-    errorBySession,
+    retryBySession,
     stickyNotesBySession,
     summarizationPendingBySession,
     debugModalSessionId,
@@ -44,6 +44,8 @@ export function ChatTab({ tab }: ChatTabProps) {
     openDebugModal,
     closeDebugModal,
     setRetryInput,
+    setStreamRetry,
+    setStreamRetrying,
   } = useChatStore()
 
   const sessionId = tab.data.sessionId || tab.id
@@ -52,7 +54,7 @@ export function ChatTab({ tab }: ChatTabProps) {
   const queue = queueBySession[sessionId]
   const pending = pendingBySession[sessionId] || []
   const stickyNotes = stickyNotesBySession[sessionId] || []
-  const streamError = errorBySession[sessionId]
+  const streamRetry = retryBySession[sessionId]
   const summarizationPending = summarizationPendingBySession[sessionId] || false
   const isStreaming = Object.values(streams).some((s) => s.isStreaming)
   const debugMessage = debugModalSessionId && debugModalMessageIndex != null
@@ -175,6 +177,8 @@ export function ChatTab({ tab }: ChatTabProps) {
         }
 
         const { selectedModelName, selectedProviderName } = useProvidersStore.getState()
+        useChatStore.getState().clearStreamError(sessionId)
+        useChatStore.getState().setStreamRetry(sessionId, null)
         await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined)
         notify({ text: t('chat.message.sent'), type: 'info', category: 'message', sessionId })
       } catch (e) {
@@ -185,12 +189,44 @@ export function ChatTab({ tab }: ChatTabProps) {
   )
 
   const handleStop = useCallback(async () => {
+    // Во время ретрая «Стоп» = отмена повторных попыток (иначе abort оставит
+    // pending-сообщение и сессия зависнет до queue.stalled).
+    const retry = useChatStore.getState().retryBySession[sessionId]
+    if (retry) {
+      try {
+        await synthApi.cancelQueueRetry(sessionId)
+        setStreamRetry(sessionId, null)
+      } catch {
+        // ignore
+      }
+      return
+    }
     try {
       useTransportStore.getState().cancel(sessionId)
     } catch {
       // ignore
     }
-  }, [sessionId])
+  }, [sessionId, setStreamRetry])
+
+  const handleRetryNow = useCallback(async () => {
+    try {
+      await synthApi.retryQueueNow(sessionId)
+      // Стрим снова «работает»: статус ретрая снимем по следующему
+      // stream.retry (если снова упадёт) или stream.done (если получится).
+      setStreamRetrying(sessionId, streamRetry?.streamId || '', false)
+    } catch {
+      notify({ text: t('chat.error.retryNow'), type: 'error', category: 'error', sessionId })
+    }
+  }, [sessionId, streamRetry, setStreamRetrying, notify, t])
+
+  const handleCancelRetry = useCallback(async () => {
+    try {
+      await synthApi.cancelQueueRetry(sessionId)
+      setStreamRetry(sessionId, null)
+    } catch {
+      notify({ text: t('chat.error.cancelRetry'), type: 'error', category: 'error', sessionId })
+    }
+  }, [sessionId, setStreamRetry, notify, t])
 
   const handleStopAll = useCallback(async () => {
     try {
@@ -338,6 +374,8 @@ export function ChatTab({ tab }: ChatTabProps) {
         setPendingMessages(sessionId, [])
         clearQueueState(sessionId)
         notify({ text: t('chat.queue.returned'), type: 'success', category: 'queue', sessionId })
+      } else {
+        notify({ text: t('chat.queue.empty'), type: 'info', category: 'queue', sessionId })
       }
     } catch {
       notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
@@ -346,9 +384,7 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   const handleReturnMsg = useCallback(async (uiIndex: number) => {
     try {
-      const hasActiveStream = Object.values(streamingBySession[sessionId] || {}).some((s) => s.isStreaming)
-      const backendIndex = hasActiveStream ? uiIndex + 1 : uiIndex
-      const resp = await synthApi.returnQueue(sessionId, backendIndex)
+      const resp = await synthApi.returnQueue(sessionId, uiIndex)
       const data = resp as { texts?: string[] }
       if (data?.texts && data.texts.length > 0) {
         setRetryInput(sessionId, data.texts[0])
@@ -363,11 +399,13 @@ export function ChatTab({ tab }: ChatTabProps) {
           }
         }
         notify({ text: t('chat.queue.returned'), type: 'success', category: 'queue', sessionId })
+      } else {
+        notify({ text: t('chat.queue.empty'), type: 'info', category: 'queue', sessionId })
       }
     } catch {
       notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
     }
-  }, [sessionId, streamingBySession, setPendingMessages, setRetryInput, notify, t])
+  }, [sessionId, setPendingMessages, setRetryInput, notify, t])
 
   // --- Selection mode handlers ---
 
@@ -493,19 +531,6 @@ export function ChatTab({ tab }: ChatTabProps) {
         </div>
       )}
 
-      {streamError && streamError.canRetry && streamError.retryIn ? (
-        <div className="flex items-center gap-2 px-4 py-2 bg-yellow-500/10 border-b border-yellow-500/20">
-          <span className="text-xs text-yellow-600 dark:text-yellow-400">
-            {t('chat.error.rateLimit', { sec: String(streamError.retryIn) })}
-            {' '}
-            {t('chat.error.retryCount', {
-              current: String(streamError.retryCount),
-              max: String(streamError.maxRetries),
-            })}
-          </span>
-        </div>
-      ) : null}
-
       {stickyNotes.length > 0 && (
         <StickyNotesPanel
           notes={stickyNotes}
@@ -532,6 +557,9 @@ export function ChatTab({ tab }: ChatTabProps) {
         selectedIndices={selectedIndices}
         onToggleSelect={handleToggleSelect}
         onSelectRange={handleSelectRange}
+        retry={streamRetry}
+        onRetryNow={handleRetryNow}
+        onCancelRetry={handleCancelRetry}
       />
 
       {!isSubagent && (

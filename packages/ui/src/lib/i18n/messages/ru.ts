@@ -529,6 +529,7 @@ export const dict = {
   'chat.queue.cleared': 'Очередь очищена',
   'chat.queue.resumed': 'Обработка очереди возобновлена',
   'chat.queue.returned': 'Очередь возвращена',
+  'chat.queue.empty': 'Очередь пуста',
 
   'permission.bar.request': 'Инструмент «{tool}» запрашивает разрешение',
   'permission.bar.waiting': 'ещё {count}',
@@ -544,6 +545,13 @@ export const dict = {
 
   'chat.error.rateLimit': 'Превышен лимит запросов. Пауза {sec}с...',
   'chat.error.retryCount': 'Попытка {current}/{max}',
+  'chat.retry.inProgress': 'Повторная попытка {current}/{max} через {sec} с…',
+  'chat.retry.now': 'Повторить сейчас',
+  'chat.retry.cancel': 'Отменить',
+  'chat.stream.processing': 'Обработка…',
+  'chat.error.retryNow': 'Не удалось выполнить повторную попытку',
+  'chat.error.cancelRetry': 'Не удалось отменить повторные попытки',
+  'chat.stream.error': 'Ошибка',
   'chat.error.loadSession': 'Ошибка загрузки сессии',
   'chat.error.resumeQueue': 'Ошибка возобновления очереди',
   'chat.error.clearQueue': 'Ошибка очистки очереди',

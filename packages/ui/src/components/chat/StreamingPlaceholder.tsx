@@ -8,7 +8,8 @@ import { ToolCallPart } from './ToolCallPart'
 import { MarkdownContent } from './MarkdownContent'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
-import type { StreamState, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData } from '@/stores/chatStore'
+import { RetryStatus } from './RetryStatus'
+import type { StreamState, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
 
 interface ToolCallNode {
   call: LiveToolCall
@@ -104,9 +105,13 @@ function buildTimeline(
 interface StreamingPlaceholderProps {
   stream: StreamState
   onStop: () => void
+  /** Статус повторной попытки: показываем вместо «крутилки» */
+  retry?: StreamRetry | null
+  onRetryNow?: () => void
+  onCancelRetry?: () => void
 }
 
-export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderProps) {
+export function StreamingPlaceholder({ stream, onStop, retry, onRetryNow, onCancelRetry }: StreamingPlaceholderProps) {
   const agents = useAgentsStore((s) => s.agents)
   const providers = useProvidersStore((s) => s.providers)
   const { t } = useI18n()
@@ -114,6 +119,7 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
 
   const isSummary = stream.agentRole === 'summary'
   const isDebug = stream.agentRole === 'debug'
+  const isRetrying = stream.isRetrying && retry != null
 
   const agentInfo = !isSummary && !isDebug && stream.agentRole
     ? agents.find((a) => a.id === stream.agentRole)
@@ -184,9 +190,13 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
           )}
 
           <span className="ml-auto inline-flex gap-0.5">
-            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
-            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
-            <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
+            {!isRetrying && (
+              <>
+                <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="size-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
+              </>
+            )}
           </span>
         </div>
 
@@ -218,13 +228,19 @@ export function StreamingPlaceholder({ stream, onStop }: StreamingPlaceholderPro
 
         {stream.isStreaming && (
           <div className="flex items-center gap-0.5 mt-2 pt-1.5 border-t border-border/30">
-            <button
-              onClick={onStop}
-              title={t('chat.input.stop')}
-              className="rounded p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-            >
-              <Icon name="stop" className="size-3.5" />
-            </button>
+            {isRetrying && retry ? (
+              <div className="w-full">
+                <RetryStatus retry={retry} onRetryNow={onRetryNow} onCancelRetry={onCancelRetry} />
+              </div>
+            ) : (
+              <button
+                onClick={onStop}
+                title={t('chat.input.stop')}
+                className="rounded p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+              >
+                <Icon name="stop" className="size-3.5" />
+              </button>
+            )}
           </div>
         )}
       </div>

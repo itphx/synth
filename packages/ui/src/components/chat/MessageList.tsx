@@ -1,10 +1,10 @@
 import { useRef, useCallback, useState, useEffect } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ChatMessage } from './ChatMessage'
+import { ChatMessage, type PendingStreamStatus } from './ChatMessage'
 import { StreamingPlaceholder } from './StreamingPlaceholder'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { ScrollableOverlay } from '../ui/ScrollableOverlay'
-import type { MessageData, StreamState } from '@/stores/chatStore'
+import type { MessageData, StreamState, StreamRetry } from '@/stores/chatStore'
 
 interface MessageListProps {
   messages: MessageData[]
@@ -24,6 +24,10 @@ interface MessageListProps {
   selectedIndices?: Set<number>
   onToggleSelect?: (index: number, shiftKey: boolean) => void
   onSelectRange?: (from: number, to: number) => void
+  /** Статус повторной попытки (stream.retry) — показываем вместо «крутилки» */
+  retry?: StreamRetry | null
+  onRetryNow?: () => void
+  onCancelRetry?: () => void
 }
 
 const VIRTUALIZE_THRESHOLD = 30
@@ -46,13 +50,16 @@ export function MessageList({
   selectedIndices,
   onToggleSelect,
   onSelectRange,
+  retry,
+  onRetryNow,
+  onCancelRetry,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const lastClickedRef = useRef<number | null>(null)
 
-  const streamEntries = Object.values(streams).filter((s) => s.isStreaming)
+  const streamEntries = Object.values(streams).filter((s) => s.isStreaming && s.hasContent)
   const streamContentSize = streamEntries.reduce((sum, s) => sum + s.content.length + s.reasoningBlocks.reduce((rsum, r) => rsum + r.text.length, 0), 0)
 
   const virtualizer = useVirtualizer({
@@ -115,21 +122,40 @@ export function MessageList({
     lastClickedRef.current = index
   }, [onToggleSelect, onSelectRange])
 
-  const chatMsgProps = useCallback((msg: MessageData) => ({
-    message: msg,
-    onCopy: () => onCopy(msg),
-    onToggle: () => onToggle(msg),
-    onPin: () => onPin(msg),
-    onDelete: () => onDelete(msg),
-    onRetry: () => onRetry(msg),
-    onDebug: () => onDebug(msg),
-    onFork: () => onFork(msg),
-    readOnly,
-    isSubagent,
-    selectionMode,
-    isSelected: selectedIndices?.has(msg.index) ?? false,
-    onToggleSelect: (shiftKey: boolean) => handleToggleSelect(msg.index, shiftKey),
-  }), [onCopy, onToggle, onPin, onDelete, onRetry, onDebug, onFork, readOnly, isSubagent, selectionMode, selectedIndices, handleToggleSelect])
+  const chatMsgProps = useCallback((msg: MessageData) => {
+    // Связываем user-сообщение с активным стримом через metadata.stream_id.
+    // Пока провайдер молчит (нет ни одного чанка) — показываем статус/кнопки в сообщении.
+    let pending: PendingStreamStatus | null = null
+    if (msg.role === 'user') {
+      const streamId = msg.metadata?.stream_id as string | undefined
+      if (streamId) {
+        const s = streams[streamId]
+        if (s && s.isStreaming && !s.hasContent) {
+          const r = retry && retry.streamId === streamId ? retry : null
+          pending = r
+            ? { status: 'retrying', retry: r, onRetryNow, onCancelRetry }
+            : { status: 'processing' }
+        }
+      }
+    }
+
+    return {
+      message: msg,
+      onCopy: () => onCopy(msg),
+      onToggle: () => onToggle(msg),
+      onPin: () => onPin(msg),
+      onDelete: () => onDelete(msg),
+      onRetry: () => onRetry(msg),
+      onDebug: () => onDebug(msg),
+      onFork: () => onFork(msg),
+      readOnly,
+      isSubagent,
+      selectionMode,
+      isSelected: selectedIndices?.has(msg.index) ?? false,
+      onToggleSelect: (shiftKey: boolean) => handleToggleSelect(msg.index, shiftKey),
+      pending,
+    }
+  }, [onCopy, onToggle, onPin, onDelete, onRetry, onDebug, onFork, readOnly, isSubagent, selectionMode, selectedIndices, handleToggleSelect, streams, retry, onRetryNow, onCancelRetry])
 
   return (
     <div className="relative flex-1 overflow-hidden">
@@ -174,7 +200,14 @@ export function MessageList({
         </div>
 
           {streamEntries.map((stream) => (
-            <StreamingPlaceholder key={stream.streamId} stream={stream} onStop={onStop} />
+            <StreamingPlaceholder
+              key={stream.streamId}
+              stream={stream}
+              onStop={onStop}
+              retry={retry?.streamId === stream.streamId ? retry : null}
+              onRetryNow={onRetryNow}
+              onCancelRetry={onCancelRetry}
+            />
           ))}
       </ScrollableOverlay>
 
