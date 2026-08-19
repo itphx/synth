@@ -783,11 +783,7 @@ export class ChatOrchestrator {
           }
 
           this._cancellationTokens.delete(streamId);
-          return {
-            error: errMsg,
-            errorType: this._classifyError(errMsg),
-            canRetry: this._isRecoverable(errMsg),
-          };
+          return this._handleLlmFailure(session.id, streamId, e, publishChunk);
         }
 
         if (cancelToken.cancelled) {
@@ -1366,11 +1362,8 @@ export class ChatOrchestrator {
     } catch (e) {
       const errMsg = String(e);
       warning('ORCHESTRATOR', `Unexpected error: ${errMsg}`);
-      return {
-        error: errMsg,
-        errorType: 'internal',
-        canRetry: false,
-      };
+      this._cancellationTokens.delete(streamId);
+      return this._handleLlmFailure(session.id, streamId, e, publishChunk);
     }
   }
 
@@ -1447,7 +1440,8 @@ export class ChatOrchestrator {
       }
     } catch (e) {
       warning('ORCHESTRATOR', `Debug system message stream error: ${e}`);
-      return { error: String(e), errorType: this._classifyError(String(e)), canRetry: this._isRecoverable(String(e)) };
+      this._cancellationTokens.delete(streamId);
+      return this._handleLlmFailure(session.id, streamId, e, publishChunk);
     }
 
     if (cancelToken.cancelled) {
@@ -1553,7 +1547,8 @@ export class ChatOrchestrator {
       }
     } catch (e) {
       warning('ORCHESTRATOR', `Summarization stream error: ${e}`);
-      return { error: String(e), errorType: this._classifyError(String(e)), canRetry: this._isRecoverable(String(e)) };
+      this._cancellationTokens.delete(streamId);
+      return this._handleLlmFailure(session.id, streamId, e, publishChunk);
     }
 
     if (cancelToken.cancelled) {
@@ -1931,12 +1926,72 @@ export class ChatOrchestrator {
   private _classifyError(errMsg: string): string {
     const lower = errMsg.toLowerCase();
     if (lower.includes('rate') || lower.includes('limit') || lower.includes('429')) return 'rate_limit';
+    if (lower.includes('abort') || lower.includes('operation was aborted')) return 'timeout';
     if (lower.includes('timeout') || lower.includes('timed out')) return 'timeout';
+    if (lower.includes('fetch failed') || lower.includes('network') || lower.includes('econnrefused') || lower.includes('enotfound') || lower.includes('eai_again')) return 'network_error';
     if (lower.includes('502') || lower.includes('503') || lower.includes('bad gateway')) return 'server_error';
     if (lower.includes('context length') || lower.includes('too long')) return 'context_length';
     if (lower.includes('401') || lower.includes('403') || lower.includes('auth')) return 'auth_error';
     if (lower.includes('model') && (lower.includes('not found') || lower.includes('invalid'))) return 'model_not_found';
     return 'unknown';
+  }
+
+  /**
+   * Человекочитаемое описание ошибки LLM (таймаут/обрыв соединения, сетевая
+   * ошибка). Для остальных ошибок — исходный текст.
+   */
+  private _formatLlmError(error: unknown): string {
+    const raw = error instanceof Error ? error.message : String(error);
+    const lower = raw.toLowerCase();
+    if (lower.includes('abort') || lower.includes('operation was aborted') || lower.includes('timed out') || lower.includes('timeout')) {
+      return 'Таймаут или обрыв соединения с LLM-провайдером';
+    }
+    if (lower.includes('fetch failed') || lower.includes('network') || lower.includes('econnrefused') || lower.includes('enotfound') || lower.includes('eai_again')) {
+      return 'Не удалось подключиться к LLM-провайдеру (сетевая ошибка)';
+    }
+    return raw;
+  }
+
+  /**
+   * Единая обработка ошибки LLM-стрима: публикует stream.error (UI получает
+   * человекочитаемую ошибку вместо вечного «Стоп»), пишет last_error в
+   * user-сообщение сессии (по stream_id) и возвращает ProcessMessageResult.
+   * Если ошибка recoverable — session разблокируется на уровне QueueProcessor
+   * после исчерпания попыток; сессия не остаётся заблокированной навсегда.
+   */
+  private async _handleLlmFailure(
+    sessionId: string,
+    streamId: string,
+    error: unknown,
+    publishChunk: (event: string, data: Record<string, unknown>) => void,
+  ): Promise<ProcessMessageResult> {
+    const rawError = error instanceof Error ? error.message : String(error);
+    const humanError = this._formatLlmError(error);
+    const errorType = this._classifyError(rawError);
+    const canRetry = this._isRecoverable(rawError);
+
+    try {
+      await this._sessionManager.withLock(sessionId, async (s) => {
+        const userMsg = s.messages.find(
+          (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
+        );
+        if (userMsg) {
+          userMsg.metadata = { ...userMsg.metadata, last_error: humanError };
+          await this._sessionManager.saveSession(s);
+        }
+      });
+    } catch (err) {
+      warning('ORCHESTRATOR', `Не удалось записать last_error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    publishChunk('stream.error', {
+      stream_id: streamId,
+      error: humanError,
+      error_type: errorType,
+      can_retry: canRetry,
+    });
+
+    return { error: humanError, errorType, canRetry };
   }
 
   private _isRecoverable(errMsg: string): boolean {

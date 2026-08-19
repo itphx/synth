@@ -90,13 +90,32 @@ export class OpenAIProvider extends BaseProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
 
+    // Кнопка «Стоп»: отмена пользователя (cancellationToken.cancel) немедленно
+    // прерывает висящий fetch/reader.read() через AbortController — иначе
+    // reader.read() висит до таймаута 120с и отмена не работает.
+    if (cancellationToken) {
+      const originalCancel = cancellationToken.cancel.bind(cancellationToken);
+      cancellationToken.cancel = () => {
+        originalCancel();
+        controller.abort();
+      };
+    }
+
     try {
-      const resp = await fetch(this.url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+      let resp: Response;
+      try {
+        resp = await fetch(this.url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } catch (e) {
+        // Отмена пользователя — abort() из cancellationToken до/во время fetch:
+        // молча завершаем генератор, не превращая в stream.error.
+        if (cancellationToken?.cancelled) return;
+        throw e;
+      }
 
       if (!resp.ok) {
         const errorText = await resp.text();
@@ -203,7 +222,14 @@ export class OpenAIProvider extends BaseProvider {
           }
         }
       } catch (e) {
-        info('OPENAI', `Стрим прерван: ${e}`);
+        // Ошибки чтения стрима (таймаут/обрыв сети/AbortError) пробрасываем
+        // наружу — иначе генератор «успешно» завершится с пустым ответом и
+        // оркестратор не узнает о сбое провайдера. При пользовательской
+        // отмене (cancellationToken) молча выходим.
+        if (!cancellationToken?.cancelled) {
+          info('OPENAI', `Стрим прерван: ${e}`);
+          throw e;
+        }
       } finally {
         reader.releaseLock();
       }
