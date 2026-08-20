@@ -1,8 +1,7 @@
 import { z } from 'zod';
-import { MessageRole, TsmState, GlobalRole, ProjectRole, StatusMessageType } from '../types/index.js';
+import { MessageRole, GlobalRole, ProjectRole, StatusMessageType } from '../types/index.js';
 
 export const messageRoleSchema = z.nativeEnum(MessageRole);
-export const tsmStateSchema = z.nativeEnum(TsmState);
 export const globalRoleSchema = z.nativeEnum(GlobalRole);
 export const projectRoleSchema = z.nativeEnum(ProjectRole);
 export const statusMessageTypeSchema = z.nativeEnum(StatusMessageType);
@@ -38,23 +37,6 @@ export const sessionSettingsSchema = z.object({
   language: z.string().optional(),
   // === Plan/Act (AD-025) ===
   planMode: z.enum(['auto', 'strict', 'off']).optional(),
-});
-
-export const tsmStatusSchema = z.object({
-  state: tsmStateSchema,
-  iteration: z.number().int().min(0).default(0),
-  validationAttempts: z.number().int().min(0).default(0),
-  lastError: z.string().optional(),
-  project: z.string().optional(),
-  taskName: z.string().default(''),
-  progress: z.number().min(0).max(1).optional(),
-  approvedPlan: z.string().optional(),
-  alreadyDone: z.string().optional(),
-  currentlyDoing: z.string().optional(),
-  currentTaskInfo: z.string().optional(),
-  updatedProjectInfo: z.string().optional(),
-  blocked: z.string().optional(),
-  blockedAt: z.string().optional(),
 });
 
 export const sessionCreateSchema = z.object({

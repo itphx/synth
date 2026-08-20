@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { SessionManager } from './manager.js';
 import { FileStore } from '../storage/file-store.js';
 import type { Message } from '@itphx/synth-shared';
-import { MessageRole, generateId, makeTextPart, TsmState, nowISO } from '@itphx/synth-shared';
+import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 
 describe('SessionManager', () => {
   let store: FileStore;
@@ -42,7 +42,7 @@ describe('SessionManager', () => {
     expect(session.id).toBeDefined();
     expect(session.title).toBe('Test');
     expect(session.engine).toBe('synth');
-    expect(session.status.state).toBe('planning');
+    expect(session.status).toEqual({});
     expect(session.settings.temperature).toBe(0.7);
   });
 
@@ -355,16 +355,6 @@ describe('AD-033: Session forking and branching', () => {
     expect(fork.messages[0]!.content).toBe('A');
     expect(fork.messages[1]!.content).toBe('B');
     expect(fork.messages[2]!.content).toBe('C');
-  });
-
-  it('forkSession сбрасывает TSM в PLANNING', async () => {
-    const parent = await manager.createSession({ title: 'Parent' });
-    await manager.updateTsmState(parent.id, TsmState.EXECUTION);
-
-    const fork = await manager.forkSession(parent.id, {});
-    expect(fork.status.state).toBe('planning');
-    expect(fork.status.iteration).toBe(0);
-    expect(fork.status.validationAttempts).toBe(0);
   });
 
   it('forkSession очищает pendingMessages', async () => {

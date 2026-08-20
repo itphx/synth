@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { serializeMessage, serializeSession } from './serialize.js';
-import { MessageRole, generateId, makeTextPart, nowISO, TsmState } from '@itphx/synth-shared';
+import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { Message, Session } from '@itphx/synth-shared';
 
 function makeMsg(overrides: Partial<Message> = {}): Message {
@@ -34,7 +34,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     messages: [],
     pendingMessages: [],
     currentStream: null,
-    status: { state: TsmState.PLANNING, iteration: 0, validationAttempts: 0 },
+    status: {},
     settings: {},
     stickyNotes: [],
     summarizationPending: false,

@@ -4,13 +4,6 @@ import { synthApi, type SessionData } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 
-const TSM_COLORS: Record<string, string> = {
-  planning: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
-  execution: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
-  validation: 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300',
-  done: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300',
-}
-
 export const SessionsPanel = () => {
   const { t } = useI18n()
   const [sessions, setSessions] = useState<SessionData[]>([])
@@ -91,15 +84,12 @@ export const SessionsPanel = () => {
                         </code>
                         <span className={cn(
                           "px-1.5 py-0.5 rounded text-[10px] font-medium",
-                          TSM_COLORS[s.status.state] || 'bg-slate-100 text-slate-600'
+                          isBlocked
+                            ? "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300"
+                            : "bg-slate-100 text-slate-600"
                         )}>
-                          {s.status.state}
+                          {isBlocked ? t('admin.sessions.blocked') : '—'}
                         </span>
-                        {isBlocked && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300">
-                            {t('admin.sessions.blocked')}
-                          </span>
-                        )}
                       </div>
                       <div className="flex gap-3 text-xs text-muted-foreground mt-1">
                         <span>{t('admin.sessions.messageCount', { count: s.messages?.length || 0 })}</span>

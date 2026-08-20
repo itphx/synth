@@ -13,13 +13,6 @@ export enum MessageRole {
   ERROR = 'error',
 }
 
-export enum TsmState {
-  PLANNING = 'planning',
-  EXECUTION = 'execution',
-  VALIDATION = 'validation',
-  DONE = 'done',
-}
-
 export enum GlobalRole {
   ADMIN = 'ADMIN',
   USER = 'USER',
@@ -86,19 +79,7 @@ export interface Message {
 }
 
 // --- Session ---
-export interface TsmStatus {
-  state: TsmState;
-  iteration: number;
-  validationAttempts: number;
-  lastError?: string;
-  project?: string;
-  taskName: string;
-  progress?: number;
-  approvedPlan?: string;
-  alreadyDone?: string;
-  currentlyDoing?: string;
-  currentTaskInfo?: string;
-  updatedProjectInfo?: string;
+export interface SessionStatus {
   blocked?: string;
   blockedAt?: string;
 }
@@ -220,7 +201,6 @@ export interface Checkpoint {
   id: string;
   sessionId: string;
   messages: Message[];
-  tsmState: TsmState;
   createdAt: string;
 }
 
@@ -262,7 +242,7 @@ export interface Session {
   engine: 'synth' | 'opencode' | 'cline';
   messages: Message[];
   pendingMessages: Message[];
-  status: TsmStatus;
+  status: SessionStatus;
   settings: SessionSettings;
   mcpServers?: string[];
   checkpoints: Checkpoint[];
@@ -421,7 +401,7 @@ export interface ProviderConfig {
 
 export type ContextSource = 'api' | 'reference' | 'manual' | 'unknown';
 
-export type ContextCategory = 'user' | 'role' | 'system' | 'tsm';
+export type ContextCategory = 'user' | 'role' | 'system';
 
 export interface ContextFileInfo {
   filename: string;

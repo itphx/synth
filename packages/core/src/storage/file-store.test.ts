@@ -29,12 +29,7 @@ describe('FileStore', () => {
       engine: 'synth' as Session['engine'],
       messages: [],
       pendingMessages: [],
-      status: {
-        state: 'planning' as Session['status']['state'],
-        iteration: 0,
-        validationAttempts: 0,
-        taskName: '',
-      },
+      status: {},
       settings: {
         temperature: 0.7,
         maxTokens: 4096,

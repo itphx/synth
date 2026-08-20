@@ -70,7 +70,7 @@ packages/backend/
 │   │   ├── chat.ts          # WS /ws/chat — обработчик чата
 │   │   └── runner.ts        # WS /ws/runner — обработчик раннера
 │   ├── sessions/
-│   │   ├── manager.ts       # SessionManager (CRUD, блокировки, TSM)
+│   │   ├── manager.ts       # SessionManager (CRUD, блокировки)
 │   │   └── storage.ts       # SessionStorage (JSON файлы)
 │   ├── projects/
 │   │   ├── manager.ts       # ProjectManager (CRUD, участники)
@@ -465,7 +465,7 @@ export interface Project { ... }
 export interface User { ... }
 export interface AgentDefinition { ... }
 export interface QueueItem { ... }
-export interface TSMStatus { ... }
+export interface SessionStatus { ... }
 export interface SessionSettings { ... }
 
 // synth-backend локальные

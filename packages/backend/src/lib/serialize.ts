@@ -39,7 +39,6 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
         }
       : null,
     status: {
-      state: session.status.state,
       blocked: session.status.blocked || null,
     },
     settings: session.settings,

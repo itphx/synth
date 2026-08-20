@@ -901,7 +901,6 @@ export const dict = {
   'admin.context.userFiles': 'Пользовательские',
   'admin.context.rolesFiles': 'Роли',
   'admin.context.systemFiles': 'Системные',
-  'admin.context.tsmFiles': 'TSM',
   'admin.context.newFile': 'Новый файл',
   'admin.context.fileName': 'Имя файла',
   'admin.context.content': 'Содержимое',

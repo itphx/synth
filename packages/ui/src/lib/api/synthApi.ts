@@ -89,7 +89,6 @@ export interface SessionData {
   }>
   pending_messages: unknown[]
   status: {
-    state: string
     blocked: string | null
   }
   settings: Record<string, unknown>
