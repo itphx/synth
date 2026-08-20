@@ -295,8 +295,8 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 | AD-036 | LLM Gateway: независимый слой безопасности (guard + обфускация + rate limit + аудит) ✅ Реализовано |
 | AD-037 | Security step перед коммитом: git pre-commit hook + маркер-хеш (гарантия проверки) |
 | AD-038 | Монорепо как набор публикуемых npm-пакетов (6 пакетов, pnpm publish, тонкая CLI-обёртка) ✅ Реализовано |
-| AD-039 | План — в проекте, todo — в сессии, состояние через инструменты (замена TSM) |
-| AD-040 | Сессии без проекта: контекст, подсказка, перенос между проектами |
+| AD-039 | План — в проекте, todo — в сессии, состояние через инструменты (замена TSM) ✅ Реализовано |
+| AD-040 | Сессии без проекта: контекст, подсказка, перенос между проектами ✅ Реализовано |
 
 Подробности deprecated решений — в `archive/AGENTS_OLD.md`.
 
@@ -1459,7 +1459,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | Shell | `execute_shell` |
 | Git | `git_status`, `git_diff`, `git_log`, `git_commit`, `git_push`, `git_pull`, `git_checkout`, `git_branch_list`, `git_show`, `git_blame`, `git_stash` |
 | План/ToDo | `plan_enter`, `plan_exit`, `plan_read`, `plan_list`, `plan_write`, `todo_write`, `todo_list`, `todo_add`, `todo_update`, `todo_delete` |
-| Проект | `get_project_info`, `list_repos` |
+| Проект | `get_project_info`, `list_repos`, `project_create`, `project_attach` |
 | Веб | `web_fetch`, `web_search` (DuckDuckGo, при anti-bot — fallback на Bing) |
 | Задачи | `task`, `classify_conversation`, `read_session_reference` |
 

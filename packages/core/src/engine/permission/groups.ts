@@ -25,6 +25,8 @@ const RUNTIME_TOOLS = [
   'todo_add',
   'todo_update',
   'todo_delete',
+  'project_create',
+  'project_attach',
 ];
 
 export const PERMISSION_GROUPS: Record<string, string[]> = {

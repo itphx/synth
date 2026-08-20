@@ -550,6 +550,7 @@ export type EventType =
   | 'session.reference.added'
   | 'session.reference.removed'
   | 'session.messages.merged'
+  | 'session.moved'
   | 'message.added'
   | 'message.updated'
   | 'child.message.added'

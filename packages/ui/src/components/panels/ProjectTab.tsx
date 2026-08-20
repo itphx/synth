@@ -22,8 +22,19 @@ export function ProjectTab() {
   const [loading, setLoading] = useState(false)
   const [workspaceDraft, setWorkspaceDraft] = useState('')
   const [saving, setSaving] = useState(false)
+  const [creating, setCreating] = useState(false)
 
   const projectId = session?.project_id ?? null
+  const projects = useProjectsStore((s) => s.projects)
+
+  useEffect(() => {
+    if (!projectId) {
+      useProjectsStore
+        .getState()
+        .loadProjects()
+        .catch(() => {})
+    }
+  }, [projectId])
 
   useEffect(() => {
     let cancelled = false
@@ -64,12 +75,64 @@ export function ProjectTab() {
   }
 
   if (!projectId) {
+    const handleCreateProject = async () => {
+      const name = window.prompt(t('projectTab.noProject.prompt'))?.trim()
+      if (!name) return
+      setCreating(true)
+      try {
+        const created = await useProjectsStore.getState().createProject({ name })
+        if (!created) {
+          notify({ text: t('projectTab.noProject.createError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
+          return
+        }
+        const updated = await useSessionsStore.getState().moveSession(session.id, created.id)
+        if (!updated) {
+          notify({ text: t('projectTab.noProject.moveError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
+          return
+        }
+        notify({ text: t('projectTab.noProject.created'), type: 'success', category: 'system', sessionId: sessionId || undefined })
+      } finally {
+        setCreating(false)
+      }
+    }
+
+    const handleAttachProject = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const targetId = e.target.value
+      if (!targetId) return
+      const updated = await useSessionsStore.getState().moveSession(session.id, targetId)
+      if (!updated) {
+        notify({ text: t('projectTab.noProject.moveError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
+        return
+      }
+      notify({ text: t('projectTab.noProject.attached'), type: 'success', category: 'system', sessionId: sessionId || undefined })
+    }
+
     return (
       <div className="p-4 space-y-4">
         <Section title={t('rightPanel.tab.project')}>
-          <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center">
+          <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center space-y-3">
             <div className="text-xs text-muted-foreground">{t('projectTab.noProject.title')}</div>
-            <div className="mt-1 text-[10px] text-muted-foreground/60">{t('projectTab.noProject.hint')}</div>
+            <div className="text-[10px] text-muted-foreground/60">{t('projectTab.noProject.hint')}</div>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleCreateProject}
+                disabled={creating}
+                className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
+              >
+                {creating ? t('projectTab.noProject.creating') : t('projectTab.noProject.create')}
+              </button>
+              <select
+                value=""
+                onChange={handleAttachProject}
+                className="w-full rounded-md bg-input border border-border px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="" disabled>{t('projectTab.noProject.attachPlaceholder')}</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
           </div>
         </Section>
         <PlanSection project={project} />

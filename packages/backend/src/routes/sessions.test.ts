@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSessionRoutes } from './sessions.js';
 import { SessionManager, EventBus, FileStore } from '@itphx/synth-core';
+import { ProjectStore } from '../storage/project-store.js';
 import type { User } from '@itphx/synth-shared';
 
 const testUser: User = {
@@ -61,6 +62,7 @@ function createTestApp(tmpDir: string) {
   const kit = createMockKit();
   const fileStore = new FileStore({ dataDir: tmpDir });
   const sessionManager = new SessionManager(fileStore);
+  const projectStore = new ProjectStore({ dataDir: tmpDir });
   const eventBus = new EventBus();
   const queueManager = createMockQueueManager();
   const orchestrator = createMockOrchestrator();
@@ -74,10 +76,12 @@ function createTestApp(tmpDir: string) {
     orchestrator.createProcessMessage(),
     orchestrator as any,
     eventHub as any,
+    undefined,
+    projectStore,
   );
 
   app.route('/api/v2/sessions', sessionRoutes);
-  return { app, sessionManager, eventBus, queueManager, orchestrator, eventHub, fileStore };
+  return { app, sessionManager, projectStore, eventBus, queueManager, orchestrator, eventHub, fileStore };
 }
 
 describe('Session API Routes', () => {
@@ -253,6 +257,82 @@ describe('Session API Routes', () => {
       expect(res.status).toBe(200);
       const persisted = await sessionManager.getSession(session.id);
       expect(persisted?.settings.reasoningLevel).toBe('high');
+    });
+
+    it('привязывает сессию к существующему проекту', async () => {
+      const { app, sessionManager, projectStore } = createTestApp(tmpDir);
+      const project = projectStore.create('Proj', 'test-user');
+      await projectStore.save(project);
+      const session = await sessionManager.createSession({ title: 'S', userId: 'test-user' });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: project.id }),
+      });
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.project_id).toBe(project.id);
+    });
+
+    it('валидирует несуществующий проект и возвращает 400 PROJECT_NOT_FOUND', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'S', userId: 'test-user' });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: 'missing' }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('PROJECT_NOT_FOUND');
+    });
+
+    it('смена проекта сбрасывает planApproved', async () => {
+      const { app, sessionManager, projectStore } = createTestApp(tmpDir);
+      const p1 = projectStore.create('P1', 'test-user');
+      const p2 = projectStore.create('P2', 'test-user');
+      await projectStore.save(p1);
+      await projectStore.save(p2);
+
+      const session = await sessionManager.createSession({ title: 'S', userId: 'test-user', projectId: p1.id });
+      await sessionManager.updateSession({ ...session, planApproved: true });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: p2.id }),
+      });
+      expect(res.status).toBe(200);
+      const persisted = await sessionManager.getSession(session.id);
+      expect(persisted?.projectId).toBe(p2.id);
+      expect(persisted?.planApproved).toBe(false);
+    });
+
+    it('публикует session.moved при смене проекта', async () => {
+      const { app, sessionManager, projectStore, eventBus } = createTestApp(tmpDir);
+      const p1 = projectStore.create('P1', 'test-user');
+      const p2 = projectStore.create('P2', 'test-user');
+      await projectStore.save(p1);
+      await projectStore.save(p2);
+
+      const session = await sessionManager.createSession({ title: 'S', userId: 'test-user', projectId: p1.id });
+
+      let moved: Record<string, unknown> | undefined;
+      eventBus.subscribe(session.id, (e) => {
+        if (e.type === 'session.moved') moved = e.data as Record<string, unknown>;
+      });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: p2.id }),
+      });
+      expect(res.status).toBe(200);
+      expect(moved).toBeTruthy();
+      expect(moved?.project_id).toBe(p2.id);
+      expect(moved?.prev_project_id).toBe(p1.id);
     });
   });
 
