@@ -1,6 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { ToolCapability } from '@itphx/synth-shared';
-import type { ToolDefinition, ToolContext } from '@itphx/synth-shared';
+import { nowISO, ToolCapability } from '@itphx/synth-shared';
+import type {
+  ToolDefinition,
+  ToolContext,
+  Project,
+  ProjectLogEntry,
+  Session,
+} from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import type { ProjectStore } from '../../storage/project-store.js';
@@ -43,6 +50,37 @@ function argError(toolName: string, issues: z.ZodIssue[]): string {
   return `Ошибка аргументов инструмента "${toolName}": ${issues
     .map((i) => `${i.path.join('.') || 'root'}: ${i.message}`)
     .join('; ')}`;
+}
+
+const NO_PROJECT_LOG_ERROR = 'Проект отсутствует: лог доступен только в проекте';
+const NO_PROJECT_INVARIANTS_ERROR = 'Проект отсутствует: инварианты доступны только в проекте';
+
+/** Загружает сессию и её проект. project === null, если проекта нет (или сессия не найдена). */
+async function loadSessionProject(
+  ctx: ToolContext,
+): Promise<{ session: Session | null; project: Project | null }> {
+  const extra = getSessionExtra(ctx);
+  if (!extra.projectStore || !extra.sessionManager) {
+    return { session: null, project: null };
+  }
+  const sessionId = ctx.sessionId || extra.sessionId;
+  if (!sessionId) return { session: null, project: null };
+  try {
+    const session = await extra.sessionManager.getSession(sessionId);
+    if (!session) return { session: null, project: null };
+    if (!session.projectId) return { session, project: null };
+    const project = await extra.projectStore.load(session.projectId);
+    return { session, project };
+  } catch {
+    return { session: null, project: null };
+  }
+}
+
+function missingDepsError(toolName: string): { content: string; isError: true } {
+  return {
+    content: `Ошибка: менеджер сессий или хранилище проектов недоступно для ${toolName}`,
+    isError: true,
+  };
 }
 
 const projectCreateSchema = z.object({
@@ -164,5 +202,166 @@ export const projectAttachTool: ToolDefinition = {
       content: `Сессия привязана к проекту "${project.name}".`,
       metadata: { id: project.id, name: project.name },
     };
+  },
+};
+
+const projectLogWriteSchema = z.object({
+  text: z.string().min(1).describe('Log entry text'),
+});
+
+export const projectLogWriteTool: ToolDefinition = {
+  name: 'project_log_write',
+  description:
+    'Append an entry to the project work log. The log is a chronological record of work '
+    + 'done in the project (stored in the project, visible in the UI). Requires the session '
+    + 'to be attached to a project.',
+  parameters: projectLogWriteSchema,
+  capabilities: [ToolCapability.RUNTIME],
+  async execute(args, ctx) {
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: argError(this.name, parsed.error.issues), isError: true };
+    }
+    const params = parsed.data as { text: string };
+
+    const extra = getSessionExtra(ctx);
+    if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
+      return missingDepsError(this.name);
+    }
+
+    const { session, project } = await loadSessionProject(ctx);
+    if (!project) {
+      return { content: NO_PROJECT_LOG_ERROR, isError: true };
+    }
+
+    const entry: ProjectLogEntry = {
+      id: randomUUID(),
+      text: params.text,
+      createdAt: nowISO(),
+      sessionId: extra.sessionId,
+      author: session?.settings.agentRole || 'assistant',
+    };
+
+    const log = project.log ?? [];
+    log.push(entry);
+    project.log = log;
+    project.updatedAt = nowISO();
+
+    try {
+      await extra.projectStore.save(project);
+    } catch (err) {
+      return {
+        content: `Ошибка сохранения лога проекта: ${err instanceof Error ? err.message : String(err)}`,
+        isError: true,
+      };
+    }
+
+    return {
+      content: `Запись добавлена в лог проекта. Всего записей: ${log.length}.`,
+      metadata: { entry, count: log.length },
+    };
+  },
+};
+
+export const projectLogReadTool: ToolDefinition = {
+  name: 'project_log_read',
+  description:
+    'Return the project work log as markdown. Each line is "- {createdAt} — {text}". '
+    + 'Requires the session to be attached to a project.',
+  parameters: z.object({}),
+  capabilities: [ToolCapability.RUNTIME],
+  async execute(_args, ctx) {
+    const extra = getSessionExtra(ctx);
+    if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
+      return missingDepsError(this.name);
+    }
+
+    const { project } = await loadSessionProject(ctx);
+    if (!project) {
+      return { content: NO_PROJECT_LOG_ERROR, isError: true };
+    }
+
+    const log = project.log ?? [];
+    if (log.length === 0) {
+      return { content: 'Лог пуст', metadata: { count: 0 } };
+    }
+
+    const lines = log.map((e) => `- ${e.createdAt} — ${e.text}`);
+    return {
+      content: `Лог проекта (${log.length}):\n${lines.join('\n')}`,
+      metadata: { count: log.length },
+    };
+  },
+};
+
+export const projectInvariantsReadTool: ToolDefinition = {
+  name: 'project_invariants_read',
+  description:
+    'Return the project invariants — the rules and constraints the model must follow while '
+    + 'working on the project. Requires the session to be attached to a project.',
+  parameters: z.object({}),
+  capabilities: [ToolCapability.RUNTIME],
+  async execute(_args, ctx) {
+    const extra = getSessionExtra(ctx);
+    if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
+      return missingDepsError(this.name);
+    }
+
+    const { project } = await loadSessionProject(ctx);
+    if (!project) {
+      return { content: NO_PROJECT_INVARIANTS_ERROR, isError: true };
+    }
+
+    const invariants = project.invariants?.trim();
+    if (!invariants) {
+      return { content: 'Инварианты не заданы' };
+    }
+
+    return { content: invariants };
+  },
+};
+
+const projectInvariantsWriteSchema = z.object({
+  invariants: z.string().describe('Project invariants text'),
+});
+
+export const projectInvariantsWriteTool: ToolDefinition = {
+  name: 'project_invariants_write',
+  description:
+    'Set the project invariants — the rules and constraints the model must follow while '
+    + 'working on the project. Replaces the existing value. Requires the session to be '
+    + 'attached to a project.',
+  parameters: projectInvariantsWriteSchema,
+  capabilities: [ToolCapability.RUNTIME],
+  async execute(args, ctx) {
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: argError(this.name, parsed.error.issues), isError: true };
+    }
+    const params = parsed.data as { invariants: string };
+
+    const extra = getSessionExtra(ctx);
+    if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
+      return missingDepsError(this.name);
+    }
+
+    const { project } = await loadSessionProject(ctx);
+    if (!project) {
+      return { content: NO_PROJECT_INVARIANTS_ERROR, isError: true };
+    }
+
+    project.invariants = params.invariants;
+    project.updatedAt = nowISO();
+
+    try {
+      await extra.projectStore.save(project);
+    } catch (err) {
+      return {
+        content: `Ошибка сохранения инвариантов: ${err instanceof Error ? err.message : String(err)}`,
+        isError: true,
+      };
+    }
+
+    return { content: 'Инварианты проекта сохранены.' };
   },
 };

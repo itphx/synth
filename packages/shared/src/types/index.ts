@@ -313,6 +313,14 @@ export interface StatusMessage {
   timestamp: string;
 }
 
+export interface ProjectLogEntry {
+  id: string;
+  text: string;
+  createdAt: string;
+  sessionId?: string;
+  author?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -328,6 +336,8 @@ export interface Project {
   statusMessages: StatusMessage[];
   /** Kanban-план проекта (AD-039). Владеет проектом, а не сессией. */
   plan?: ProjectPlan;
+  /** Лог работ проекта (ведётся моделью через project_log_write). */
+  log?: ProjectLogEntry[];
   createdAt: string;
   updatedAt: string;
 }

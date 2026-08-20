@@ -23,6 +23,8 @@ export function ProjectTab() {
   const [workspaceDraft, setWorkspaceDraft] = useState('')
   const [saving, setSaving] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [invariantsDraft, setInvariantsDraft] = useState('')
+  const [invariantsSaving, setInvariantsSaving] = useState(false)
 
   const projectId = session?.project_id ?? null
   const projects = useProjectsStore((s) => s.projects)
@@ -42,6 +44,7 @@ export function ProjectTab() {
     if (!projectId) {
       setProject(null)
       setWorkspaceDraft('')
+      setInvariantsDraft('')
       return
     }
 
@@ -53,6 +56,7 @@ export function ProjectTab() {
         if (cancelled) return
         setProject(p)
         setWorkspaceDraft(p?.workspace || '')
+        setInvariantsDraft(p?.invariants || '')
       })
       .catch(() => {
         if (!cancelled) notify({ text: t('projectTab.loadError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
@@ -170,6 +174,25 @@ export function ProjectTab() {
     }
   }
 
+  const handleSaveInvariants = async () => {
+    if (!project) return
+    setInvariantsSaving(true)
+    try {
+      const updated = await synthApi.updateProject(project.id, { invariants: invariantsDraft })
+      setProject(updated)
+      setInvariantsDraft(updated.invariants || '')
+      useProjectsStore.setState((s) => ({
+        projects: s.projects.map((p) => (p.id === updated.id ? updated : p)),
+      }))
+      notify({ text: t('projectTab.invariants.saved'), type: 'success', category: 'system', sessionId: sessionId || undefined })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      notify({ text: `${t('common.saveError')}: ${msg}`, type: 'error', category: 'error', sessionId: sessionId || undefined })
+    } finally {
+      setInvariantsSaving(false)
+    }
+  }
+
   return (
     <div className="flex flex-col gap-4 p-3">
       <Section title={t('rightPanel.tab.project')}>
@@ -200,6 +223,32 @@ export function ProjectTab() {
         <div className="text-[10px] text-muted-foreground/60">{t('projectTab.workspace.hint')}</div>
       </Section>
 
+      <Section title={t('projectTab.invariants.title')}>
+        <div className="flex flex-col gap-2">
+          <textarea
+            value={invariantsDraft}
+            onChange={(e) => setInvariantsDraft(e.target.value)}
+            placeholder={t('projectTab.invariants.placeholder')}
+            rows={4}
+            className="w-full rounded-md bg-input border border-border px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-y"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[10px] text-muted-foreground/60">{t('projectTab.invariants.hint')}</div>
+            <button
+              onClick={handleSaveInvariants}
+              disabled={invariantsSaving}
+              className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
+            >
+              {invariantsSaving ? t('projectTab.invariants.saving') : t('projectTab.invariants.save')}
+            </button>
+          </div>
+        </div>
+      </Section>
+
+      <Section title={t('projectTab.log.title')}>
+        <ProjectLogBlock project={project} />
+      </Section>
+
       <PlanSection project={project} />
     </div>
   )
@@ -211,6 +260,31 @@ function PlanSection({ project }: { project: ProjectData | null }) {
     <Section title={t('sessionTab.plan.title')}>
       <ProjectPlanBlock plan={project?.plan ?? null} />
     </Section>
+  )
+}
+
+function ProjectLogBlock({ project }: { project: ProjectData | null }) {
+  const { t } = useI18n()
+  const log = project?.log ?? []
+  const sorted = [...log].sort((a, b) => b.created_at.localeCompare(a.created_at))
+
+  if (sorted.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-border px-3 py-2">
+        <div className="text-xs text-muted-foreground">{t('projectTab.log.hint')}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {sorted.map((entry) => (
+        <div key={entry.id} className="rounded-md border border-border bg-input px-2 py-1.5">
+          <div className="text-[10px] text-muted-foreground/60">{entry.created_at}</div>
+          <div className="text-xs">{entry.text}</div>
+        </div>
+      ))}
+    </div>
   )
 }
 

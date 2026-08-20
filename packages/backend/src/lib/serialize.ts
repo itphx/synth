@@ -129,6 +129,13 @@ export function serializeProject(project: Project) {
       type: sm.type,
       timestamp: sm.timestamp,
     })),
+    log: (project.log || []).map((e) => ({
+      id: e.id,
+      text: e.text,
+      created_at: e.createdAt,
+      session_id: e.sessionId || null,
+      author: e.author || null,
+    })),
     plan: project.plan ?? null,
     created_at: project.createdAt,
     updated_at: project.updatedAt,

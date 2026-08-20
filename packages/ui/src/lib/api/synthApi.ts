@@ -39,6 +39,7 @@ export interface ProjectData {
     type: string
     timestamp: string
   }>
+  log?: { id: string; text: string; created_at: string; session_id?: string | null; author?: string | null }[] | null
   plan: ProjectPlan | null
   created_at: string
   updated_at: string

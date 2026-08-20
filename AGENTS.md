@@ -1460,6 +1460,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | Git | `git_status`, `git_diff`, `git_log`, `git_commit`, `git_push`, `git_pull`, `git_checkout`, `git_branch_list`, `git_show`, `git_blame`, `git_stash` |
 | План/ToDo | `plan_enter`, `plan_exit`, `plan_read`, `plan_list`, `plan_write`, `todo_write`, `todo_list`, `todo_add`, `todo_update`, `todo_delete` |
 | Проект | `get_project_info`, `list_repos`, `project_create`, `project_attach` |
+| Лог/Инварианты | `project_log_write`, `project_log_read`, `project_invariants_read`, `project_invariants_write` |
 | Веб | `web_fetch`, `web_search` (DuckDuckGo, при anti-bot — fallback на Bing) |
 | Задачи | `task`, `classify_conversation`, `read_session_reference` |
 

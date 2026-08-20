@@ -484,6 +484,13 @@ export class ChatOrchestrator {
         lines.push(`Проект: ${project.name}`);
         lines.push(`ID проекта: ${session.projectId}`);
         lines.push(`Рабочий каталог: ${project.workspace || workingDir}`);
+
+        const invariants = project.invariants?.trim();
+        if (invariants) {
+          lines.push('');
+          lines.push(lang === 'en' ? '[PROJECT INVARIANTS]' : '[ИНВАРИАНТЫ ПРОЕКТА]');
+          lines.push(project.invariants);
+        }
       } else {
         lines.push('[КОНТЕКСТ СЕССИИ]');
         lines.push(`Проект: не найден (id: ${session.projectId})`);

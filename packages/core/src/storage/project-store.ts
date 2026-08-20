@@ -108,6 +108,7 @@ export class ProjectStore {
         ],
         items: [],
       },
+      log: [],
       createdAt: nowISO(),
       updatedAt: nowISO(),
     };
