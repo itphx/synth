@@ -113,16 +113,8 @@ export class PermissionEvaluator {
     const isFile = paths.length > 0;
 
     // AD-025: plan-рестрикция применяется поверх конфига. В режиме plan (или
-    // strict без утверждённого плана) все write/edit/delete тулы и git-запись → deny,
-    // единственное исключение — файлы .synth/plans/*.md для edit-тулов.
+    // strict без утверждённого плана) все write/edit/delete тулы и git-запись → deny.
     if (isPlanRestricted(sessionMode, planMode, planApproved) && isPlanBlockedTool(toolName, capabilities)) {
-      if (isEditTool(toolName, capabilities) && isFile && paths.some((p) => matchPathPattern('.synth/plans/*.md', p, workingDir))) {
-        return {
-          action: 'allow',
-          reason: 'plan mode: запись в .synth/plans/*.md разрешена',
-          matchedRule: 'plan.plans',
-        };
-      }
       const restrictionSource = sessionMode === 'plan' ? 'режим plan' : 'strict: план не утверждён';
       return {
         action: 'deny',

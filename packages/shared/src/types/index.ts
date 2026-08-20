@@ -230,9 +230,8 @@ export interface Session {
   sessionOrigin: SessionOrigin;
   parentId?: string;
   branchPoint?: string;
-  planPath?: string;
-  /** Содержимое утверждённого плана (AD-027) — встраивается в system prompt. */
-  planContent?: string;
+  /** Флаг «план утверждён через plan_exit» (AD-039), нужен для strict-режима AD-028. */
+  planApproved?: boolean;
   /** Текущий runtime-режим сессии (AD-025): 'plan' — только чтение, 'act' — полный доступ. */
   mode?: SessionMode;
   /** Todo-список сессии (тул todo_write), как в OpenCode. */
@@ -327,8 +326,44 @@ export interface Project {
   workspace?: string;
   repos?: GitRepoConfig[];
   statusMessages: StatusMessage[];
+  /** Kanban-план проекта (AD-039). Владеет проектом, а не сессией. */
+  plan?: ProjectPlan;
   createdAt: string;
   updatedAt: string;
+}
+
+// --- Plan (AD-039) ---
+export interface PlanColumn {
+  id: string;
+  name: string;
+  order: number;
+  wipLimit?: number;
+}
+
+export interface PlanDependency {
+  projectId?: string;       // пусто = тот же проект
+  itemId: string;           // пункт, от которого зависит текущий
+  relation: 'blocked_by' | 'blocks' | 'relates_to';
+}
+
+export interface PlanItem {
+  id: string;
+  title: string;
+  description?: string;
+  columnId: string;         // статус = колонка
+  priority: 'high' | 'medium' | 'low';
+  order: number;
+  dependsOn: PlanDependency[];
+  tags?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectPlan {
+  version: number;
+  updatedAt: string;
+  columns: PlanColumn[];
+  items: PlanItem[];
 }
 
 // --- User & Auth ---

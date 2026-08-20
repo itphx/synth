@@ -13,7 +13,7 @@ import { notifyMessage } from '@/hooks/useNotification'
 type EventDispatcher = (event: WSEvent) => void
 
 // Полный refresh сессии с сервера после событий плана/ToDo (plan.approved,
-// plan.updated, todos.updated). Гарантирует актуальность plan_content/todos/mode
+// plan.updated, todos.updated). Гарантирует актуальность todos/mode/plan_approved
 // в сторе независимо от содержимого payload события.
 function refreshSessionFromApi(sid: string) {
   synthApi.getSession(sid)
@@ -314,16 +314,20 @@ function createDispatcher(): EventDispatcher {
         break
       }
 
-      // План утверждён (AD-027, план пишется в .synth/plans/ и в состояние сессии).
-      // plan.updated / todos.updated — будущие события W14 (план изменён / todo_write),
-      // закладываем обработку заранее: мгновенный patch из payload + полный refresh.
+      // План утверждён (AD-039): план живёт в проекте (project.plan), событие
+      // plan.approved несёт только session_id/project_id — достаточно полного
+      // refresh сессии (план проекта рендерится во вкладке «Проект» отдельно).
       case 'plan.approved':
-      case 'plan.updated':
+      case 'plan.updated': {
+        refreshSessionFromApi(sid)
+        break
+      }
+
+      // Todo обновлён (todo_write/todo_add/todo_update/todo_delete): мгновенный
+      // patch из payload + полный refresh.
       case 'todos.updated': {
         const patch = payload as Record<string, unknown>
         const sessionPatch: Record<string, unknown> = {}
-        if (patch.plan_path !== undefined) sessionPatch.plan_path = patch.plan_path
-        if (patch.plan_content !== undefined) sessionPatch.plan_content = patch.plan_content
         if (patch.todos !== undefined) sessionPatch.todos = patch.todos
         if (patch.mode !== undefined) sessionPatch.mode = patch.mode
         if (Object.keys(sessionPatch).length > 0) {

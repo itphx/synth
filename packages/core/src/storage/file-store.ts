@@ -62,8 +62,7 @@ interface SerializedSession {
   title?: string;
   parent_id?: string;
   branch_point?: string;
-  plan_path?: string;
-  plan_content?: string;
+  plan_approved?: boolean;
   mode?: string;
   todos?: unknown[];
   /** Карта обфускации LLM Gateway (AD-036). */
@@ -241,8 +240,7 @@ function serializeSession(session: Session): SerializedSession {
     title: session.title,
     parent_id: session.parentId,
     branch_point: session.branchPoint,
-    plan_path: session.planPath,
-    plan_content: session.planContent,
+    plan_approved: session.planApproved,
     mode: session.mode,
     todos: session.todos,
     obfuscation_map: session.obfuscationMap,
@@ -308,8 +306,7 @@ function deserializeSession(data: SerializedSession): Session {
     title: data.title,
     parentId: data.parent_id,
     branchPoint: data.branch_point,
-    planPath: data.plan_path,
-    planContent: data.plan_content,
+    planApproved: data.plan_approved,
     mode: data.mode as Session['mode'],
     todos: data.todos as Session['todos'],
     obfuscationMap: data.obfuscation_map,

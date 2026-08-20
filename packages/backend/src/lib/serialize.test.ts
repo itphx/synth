@@ -28,7 +28,6 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     sessionOrigin: 'user',
     parentId: null,
     branchPoint: null,
-    planPath: null,
     userId: null,
     ownerId: null,
     messages: [],

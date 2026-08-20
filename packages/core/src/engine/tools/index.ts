@@ -22,7 +22,7 @@ import { taskTool } from './task.js';
 import { classifyConversationTool } from './classify-conversation.js';
 import { readSessionReferenceTool } from './read-reference.js';
 import { getProjectInfoTool, listReposTool } from './project-context.js';
-import { planEnterTool, planExitTool } from './plan.js';
+import { planEnterTool, planExitTool, planReadTool, planListTool, planWriteTool } from './plan.js';
 import { todoWriteTool, todoListTool, todoAddTool, todoUpdateTool, todoDeleteTool } from './todo.js';
 
 export { ToolRegistry } from './registry.js';
@@ -58,6 +58,9 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   readSessionReferenceTool,
   planEnterTool,
   planExitTool,
+  planReadTool,
+  planListTool,
+  planWriteTool,
   todoWriteTool,
   todoListTool,
   todoAddTool,

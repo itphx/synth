@@ -18,7 +18,7 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
     name: session.title || null,
     parent_id: session.parentId || null,
     branch_point: session.branchPoint || null,
-    plan_path: session.planPath || null,
+    plan_approved: session.planApproved ?? false,
     session_origin: session.sessionOrigin,
     user_id: session.userId || null,
     owner_id: session.ownerId || null,
@@ -129,6 +129,7 @@ export function serializeProject(project: Project) {
       type: sm.type,
       timestamp: sm.timestamp,
     })),
+    plan: project.plan ?? null,
     created_at: project.createdAt,
     updated_at: project.updatedAt,
   };

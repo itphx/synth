@@ -12,6 +12,7 @@ import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import { ContextConfig } from './context/config.js';
 import type { ToolRegistry } from './tools/registry.js';
+import { renderPlanMarkdown } from './tools/plan.js';
 import type { ToolForLLM } from '@itphx/synth-shared';
 import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
@@ -380,18 +381,17 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-025/AD-027: добавляет в system prompt блоки режима Plan/Act и
-   * утверждённого плана. Вызывается при старте обработки и пересобирается
-   * после plan_enter/plan_exit в текущей итерации.
+   * AD-025/AD-039: добавляет в system prompt блоки режима Plan/Act и
+   * утверждённого плана проекта. Вызывается при старте обработки и
+   * пересобирается после plan_enter/plan_exit в текущей итерации.
    */
-  private _buildPlanSystemPrompt(
+  private async _buildPlanSystemPrompt(
     base: string,
     session: Session,
     planMode: PlanMode,
     sessionMode: SessionMode,
     planApproved: boolean,
-    planContent?: string,
-  ): string {
+  ): Promise<string> {
     const parts: string[] = [];
 
     // AD-025: промпт текущего режима загружается из контекстных файлов
@@ -405,8 +405,8 @@ export class ChatOrchestrator {
       parts.push(
         '[MODE: PLAN]\n'
         + 'Ты в режиме планирования: чтение и исследование разрешены, но запись/изменение файлов '
-        + 'заблокированы (единственное исключение — .synth/plans/*.md). Изучи задачу, составь план '
-        + 'и утверди его через plan_exit(plan="..."), чтобы перейти в режим act.',
+        + 'заблокированы. Работай с планом проекта через plan_read/plan_write. Заверши через plan_exit, '
+        + 'чтобы перейти в режим act.',
       );
     }
 
@@ -431,13 +431,30 @@ export class ChatOrchestrator {
       }
     }
 
-    const approvedPlan = planContent ?? session.planContent;
+    // AD-039: блок [APPROVED PLAN] собирается из плана проекта (project.plan).
+    const approvedPlan = await this._renderProjectPlan(session);
     if (approvedPlan) {
       parts.push(`[APPROVED PLAN]\n${approvedPlan}`);
     }
 
     if (parts.length === 0) return base;
     return `${base}\n\n${parts.join('\n\n')}`;
+  }
+
+  /**
+   * AD-039: markdown-рендер плана проекта. Null — если проекта нет, нет plan
+   * или план пуст (нет пунктов).
+   */
+  private async _renderProjectPlan(session: Session): Promise<string | null> {
+    if (!session.projectId || !this._projectStore) return null;
+    try {
+      const project = await this._projectStore.load(session.projectId);
+      const plan = project?.plan;
+      if (!plan || plan.items.length === 0) return null;
+      return renderPlanMarkdown(plan);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -530,7 +547,7 @@ export class ChatOrchestrator {
     // AD-025: режим Plan/Act — runtime-состояние сессии + строгость из настроек
     const planMode: PlanMode = session.settings.planMode ?? this._defaultPlanMode ?? 'auto';
     let sessionMode: SessionMode = session.mode ?? 'act';
-    let planApproved = Boolean(session.planContent);
+    let planApproved = Boolean(session.planApproved);
 
     // AD-029: permissions — сессионный override приоритетнее глобального конфига.
     // Конфиг может быть расширен «разрешить в сессии» (once:false) в процессе
@@ -699,8 +716,8 @@ export class ChatOrchestrator {
         }
       }
 
-      // AD-025/AD-027: блоки режима Plan/Act + утверждённый план
-      finalSystemPrompt = this._buildPlanSystemPrompt(
+      // AD-025/AD-039: блоки режима Plan/Act + утверждённый план проекта
+      finalSystemPrompt = await this._buildPlanSystemPrompt(
         finalSystemPrompt, session, planMode, sessionMode, planApproved,
       );
 
@@ -1165,22 +1182,18 @@ export class ChatOrchestrator {
             }
           }
 
-          // AD-025/AD-027: обновляем локальный режим после plan_enter/plan_exit,
+          // AD-025/AD-039: обновляем локальный режим после plan_enter/plan_exit,
           // чтобы ограничения и system prompt применились к следующим тулам/итерациям.
           if (!toolResult.isError && toolName === 'plan_enter') {
             sessionMode = 'plan';
-            finalSystemPrompt = this._buildPlanSystemPrompt(
+            finalSystemPrompt = await this._buildPlanSystemPrompt(
               finalSystemPrompt, session, planMode, sessionMode, planApproved,
             );
           } else if (!toolResult.isError && toolName === 'plan_exit') {
-            const meta = (toolResult.metadata ?? {}) as Record<string, unknown>;
-            const planContent = typeof meta.plan_content === 'string' ? meta.plan_content : undefined;
-            if (planContent) {
-              planApproved = true;
-              sessionMode = 'act';
-            }
-            finalSystemPrompt = this._buildPlanSystemPrompt(
-              finalSystemPrompt, session, planMode, sessionMode, planApproved, planContent,
+            planApproved = true;
+            sessionMode = 'act';
+            finalSystemPrompt = await this._buildPlanSystemPrompt(
+              finalSystemPrompt, session, planMode, sessionMode, planApproved,
             );
           }
 

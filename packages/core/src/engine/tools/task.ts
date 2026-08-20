@@ -471,7 +471,7 @@ export const taskTool: ToolDefinition = {
         const child = await extra.sessionManager.getSession(childSessionId);
         if (child) {
           childSessionMode = child.mode ?? 'act';
-          childPlanApproved = Boolean(child.planContent);
+          childPlanApproved = Boolean(child.planApproved);
           childPlanMode = child.settings.planMode ?? 'auto';
           childMcpToolSettings = child.settings.mcpToolSettings;
         }

@@ -4,9 +4,9 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useNotification } from '@/hooks/useNotification'
-import { synthApi, type ProjectData, type SessionData } from '@/lib/api/synthApi'
+import { synthApi, type ProjectData } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
-import { MarkdownContent } from '../chat/MarkdownContent'
+import type { ProjectPlan } from '@itphx/synth-shared'
 
 export function ProjectTab() {
   const { t } = useI18n()
@@ -72,7 +72,7 @@ export function ProjectTab() {
             <div className="mt-1 text-[10px] text-muted-foreground/60">{t('projectTab.noProject.hint')}</div>
           </div>
         </Section>
-        <PlanSection session={session} />
+        <PlanSection project={project} />
       </div>
     )
   }
@@ -137,16 +137,16 @@ export function ProjectTab() {
         <div className="text-[10px] text-muted-foreground/60">{t('projectTab.workspace.hint')}</div>
       </Section>
 
-      <PlanSection session={session} />
+      <PlanSection project={project} />
     </div>
   )
 }
 
-function PlanSection({ session }: { session: SessionData }) {
+function PlanSection({ project }: { project: ProjectData | null }) {
   const { t } = useI18n()
   return (
     <Section title={t('sessionTab.plan.title')}>
-      <SessionPlanBlock planPath={session.plan_path} planContent={session.plan_content} />
+      <ProjectPlanBlock plan={project?.plan ?? null} />
     </Section>
   )
 }
@@ -169,12 +169,19 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
   )
 }
 
-function SessionPlanBlock({ planPath, planContent }: { planPath?: string | null; planContent?: string | null }) {
+const PRIORITY_LABELS: Record<string, string> = {
+  high: 'высокий',
+  medium: 'средний',
+  low: 'низкий',
+}
+
+function ProjectPlanBlock({ plan }: { plan: ProjectPlan | null }) {
   const { t } = useI18n()
   const [collapsed, setCollapsed] = useState(false)
-  const hasPlan = Boolean(planContent?.trim())
+  const items = plan?.items ?? []
+  const columns = [...(plan?.columns ?? [])].sort((a, b) => a.order - b.order)
 
-  if (!hasPlan) {
+  if (!plan || items.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-border px-3 py-2">
         <div className="text-xs text-muted-foreground">{t('sessionTab.plan.empty')}</div>
@@ -186,16 +193,39 @@ function SessionPlanBlock({ planPath, planContent }: { planPath?: string | null;
   return (
     <div className="rounded-lg border border-border bg-input p-2.5">
       <div className="flex items-start gap-1.5">
-        <div className="min-w-0 flex-1 space-y-1">
-          {planPath && (
-            <div className="flex items-center gap-1 text-[10px] text-muted-foreground/70" title={planPath}>
-              <Icon name="file-text" className="size-3 shrink-0" />
-              <span className="truncate font-mono">{planPath}</span>
-            </div>
-          )}
-          <div className={`overflow-y-auto pr-1 ${collapsed ? 'max-h-24' : 'max-h-48'}`}>
-            <MarkdownContent content={planContent || ''} className="text-xs" />
-          </div>
+        <div className={`min-w-0 flex-1 space-y-2 overflow-y-auto pr-1 ${collapsed ? 'max-h-24' : 'max-h-48'}`}>
+          {columns.map((col) => {
+            const colItems = items
+              .filter((i) => i.columnId === col.id)
+              .sort((a, b) => a.order - b.order)
+            return (
+              <div key={col.id}>
+                <div className="mb-1 flex items-center gap-1.5 text-[10px] text-muted-foreground/80">
+                  <span className="font-medium">{col.name}</span>
+                  <span className="text-muted-foreground/50">({colItems.length})</span>
+                </div>
+                {colItems.length === 0 ? (
+                  <div className="text-[10px] text-muted-foreground/50">—</div>
+                ) : (
+                  <ul className="space-y-1">
+                    {colItems.map((item) => (
+                      <li key={item.id} className="rounded-md bg-background/60 px-2 py-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[9px] font-medium uppercase text-muted-foreground">
+                            {PRIORITY_LABELS[item.priority] ?? item.priority}
+                          </span>
+                          <span className="text-xs">{item.title}</span>
+                        </div>
+                        {item.description && (
+                          <div className="mt-0.5 text-[10px] text-muted-foreground/70">{item.description}</div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )
+          })}
         </div>
         <button
           type="button"

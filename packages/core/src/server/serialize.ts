@@ -18,8 +18,7 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
     name: session.title || null,
     parent_id: session.parentId || null,
     branch_point: session.branchPoint || null,
-    plan_path: session.planPath || null,
-    plan_content: session.planContent || null,
+    plan_approved: session.planApproved ?? false,
     mode: session.mode || 'act',
     /** AD-025: применим ли переключатель режимов к агенту сессии (по capabilities). */
     mode_applicable: isModeApplicable(agent),
@@ -138,6 +137,7 @@ export function serializeProject(project: Project) {
       type: sm.type,
       timestamp: sm.timestamp,
     })),
+    plan: project.plan ?? null,
     created_at: project.createdAt,
     updated_at: project.updatedAt,
   };

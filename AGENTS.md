@@ -347,7 +347,7 @@ agents:
 
 | Режим | Поведение | Переключение |
 |---|---|---|
-| `plan` | **Read-only.** Все write/edit/delete → deny. Синт исследует, задаёт вопросы, пишет план в `.synth/plans/`. Единственное исключение — сам plan-файл | Пользователь (`/plan`) или синт через tool `plan_enter` |
+| `plan` | **Read-only.** Все write/edit/delete → deny. Синт исследует, задаёт вопросы, работает с планом проекта через `plan_read`/`plan_write` | Пользователь (`/plan`) или синт через tool `plan_enter` |
 | `act` | **Полный доступ.** Набор тулов из конфига синта + глобальные permissions | Пользователь (`/act`) или tool `plan_exit` |
 | `yolo` | **Автоподтверждение.** Все ask → allow автоматически (без события `permission.asked` и ожидания пользователя), deny остаётся deny | Пользователь (`/yolo`) |
 | `auto` | Синт **сам решает**, когда войти в план. Вызывает `plan_enter` если задача сложная, требует исследования или архитектурных решений | Автоматически (аналог EnterPlanModeTool) |
@@ -481,7 +481,6 @@ permission:
   # Редактирование (переопределяется в plan mode)
   edit:
     "*": "deny"                   # plan mode: ничего не трогаем
-    ".synth/plans/*.md": "allow"  #   кроме plan-файла
 ```
 
 **Три уровня действия (action):**
@@ -565,7 +564,7 @@ export default function myPlugin(synth: SynthPlugin) {
 Ты verification specialist. Твоя задача — НЕ подтвердить что всё работает,
 а ПОПЫТАТЬСЯ СЛОМАТЬ.
 
-1. Прочитай план реализации из .synth/plans/ — это критерий успеха
+1. Прочитай план реализации из project.plan — это критерий успеха
 2. Запусти build, полный test suite, linter, typecheck
 3. Примени стратегию проверки под тип изменений:
    - Frontend: подними dev server → проверь через браузер → curl API
@@ -1459,7 +1458,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | Поиск | `grep_files`, `glob` |
 | Shell | `execute_shell` |
 | Git | `git_status`, `git_diff`, `git_log`, `git_commit`, `git_push`, `git_pull`, `git_checkout`, `git_branch_list`, `git_show`, `git_blame`, `git_stash` |
-| План/ToDo | `plan_enter`, `plan_exit`, `todo_write`, `todo_list`, `todo_add`, `todo_update`, `todo_delete` |
+| План/ToDo | `plan_enter`, `plan_exit`, `plan_read`, `plan_list`, `plan_write`, `todo_write`, `todo_list`, `todo_add`, `todo_update`, `todo_delete` |
 | Проект | `get_project_info`, `list_repos` |
 | Веб | `web_fetch`, `web_search` (DuckDuckGo, при anti-bot — fallback на Bing) |
 | Задачи | `task`, `classify_conversation`, `read_session_reference` |

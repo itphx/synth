@@ -179,10 +179,10 @@ describe('PermissionEvaluator — plan mode (AD-025)', () => {
     expect(planCheck('create_directory', { path: 'new' }, { sessionMode: 'plan' }).action).toBe('deny');
   });
 
-  it('mode=plan разрешает запись в .synth/plans/*.md', () => {
+  it('mode=plan блокирует запись в .synth/plans/*.md (AD-039: план в проекте, .synth не пишется)', () => {
     const d = planCheck('write_file', { file_path: '.synth/plans/2026-01-01-100000-plan.md', content: 'x' }, { sessionMode: 'plan' });
-    expect(d.action).toBe('allow');
-    expect(d.matchedRule).toBe('plan.plans');
+    expect(d.action).toBe('deny');
+    expect(d.matchedRule).toBe('plan.deny');
   });
 
   it('mode=plan не блокирует read-тулы', () => {
@@ -192,7 +192,7 @@ describe('PermissionEvaluator — plan mode (AD-025)', () => {
 
   it('mode=plan не блокирует plan_enter/plan_exit (сами управляют режимом)', () => {
     expect(planCheck('plan_enter', {}, { sessionMode: 'plan' }).action).toBe('allow');
-    expect(planCheck('plan_exit', { plan: 'x' }, { sessionMode: 'plan' }).action).toBe('allow');
+    expect(planCheck('plan_exit', {}, { sessionMode: 'plan' }).action).toBe('allow');
   });
 
   it('strict без утверждённого плана блокирует write', () => {
