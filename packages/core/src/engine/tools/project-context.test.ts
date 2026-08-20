@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, basename } from 'node:path';
+import { join } from 'node:path';
 import { getProjectInfoTool, listReposTool } from './project-context.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
@@ -45,10 +45,21 @@ describe('project-context tools', () => {
     await execFileAsync('git', ['commit', '-q', '-m', 'initial'], { cwd: dir });
   }
 
-  it('get_project_info: возвращает имя и путь рабочего каталога', async () => {
+  it('get_project_info: без проекта возвращает честный статус и рабочий каталог', async () => {
     const result = await getProjectInfoTool.execute({}, makeCtx());
-    expect(result.content).toContain(`# Проект: ${basename(tmpDir)}`);
-    expect(result.content).toContain(`- Путь: ${tmpDir}`);
+    expect(result.content).toContain('# Проект: отсутствует');
+    expect(result.content).toContain(`- Рабочий каталог: ${tmpDir}`);
+    expect(result.content).toContain('План недоступен');
+  });
+
+  it('get_project_info: проект указан, но не найден', async () => {
+    const session = await sessionManager.createSession({ projectId: 'missing-id', title: 'S' });
+    const result = await getProjectInfoTool.execute({}, makeCtx({
+      sessionId: session.id,
+      extra: { sessionManager, projectStore, sessionId: session.id },
+    }));
+    expect(result.content).toContain('# Проект: не найден (id: missing-id)');
+    expect(result.content).toContain(`- Рабочий каталог: ${tmpDir}`);
   });
 
   it('get_project_info: определяет git-репозиторий в рабочем каталоге', async () => {

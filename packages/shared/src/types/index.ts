@@ -97,9 +97,12 @@ export const TODO_PRIORITIES = ['high', 'medium', 'low'] as const;
 export type TodoPriority = (typeof TODO_PRIORITIES)[number];
 
 export interface TodoItem {
+  id: string;
   content: string;
   status: TodoStatus;
   priority: TodoPriority;
+  /** Связь с пунктом плана проекта (AD-039). */
+  planItemId?: string;
 }
 
 export type ReasoningLevel = 'default' | 'none' | 'low' | 'medium' | 'high';

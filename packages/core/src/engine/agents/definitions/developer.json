@@ -15,7 +15,8 @@
     "shell",
     "git_read",
     "git_write",
-    "mcp"
+    "mcp",
+    "runtime"
   ],
   "icon": "code-s-slash",
   "color": "--status-info",

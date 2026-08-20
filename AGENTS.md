@@ -356,7 +356,7 @@ agents:
 
 **Системный промпт режима:** контекстные файлы `prompts/modes/{plan,act,yolo}.md` (встроенные, копируются в `dist/`), переопределяются через `{dataDir}/context/modes/{mode}.md` и локализованные `{mode}.{lang}.md`. Встраиваются в system prompt через `_buildPlanSystemPrompt`.
 
-**События:** `plan.approved` (план утверждён через `plan_exit`), `todos.updated` (обновлён список ToDo через `todo_write`).
+**События:** `plan.approved` (план утверждён через `plan_exit`), `todos.updated` (обновлён список ToDo через todo-инструменты `todo_write`/`todo_add`/`todo_update`/`todo_delete`).
 
 **Почему не N×2 агентов:** создание отдельных plan-версий для каждого синта даёт квадратичный рост конфигурации. С глобальным toggle — N синтов × 3 режима = те же N в конфиге, а режим переключается сессионно.
 
@@ -1459,7 +1459,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | Поиск | `grep_files`, `glob` |
 | Shell | `execute_shell` |
 | Git | `git_status`, `git_diff`, `git_log`, `git_commit`, `git_push`, `git_pull`, `git_checkout`, `git_branch_list`, `git_show`, `git_blame`, `git_stash` |
-| План/ToDo | `plan_enter`, `plan_exit`, `todo_write` |
+| План/ToDo | `plan_enter`, `plan_exit`, `todo_write`, `todo_list`, `todo_add`, `todo_update`, `todo_delete` |
 | Проект | `get_project_info`, `list_repos` |
 | Веб | `web_fetch`, `web_search` (DuckDuckGo, при anti-bot — fallback на Bing) |
 | Задачи | `task`, `classify_conversation`, `read_session_reference` |

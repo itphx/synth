@@ -13,7 +13,19 @@ const WRITE_TOOLS = ['write_file', 'edit_file', 'create_directory', 'delete_file
 const GIT_READ_TOOLS = ['git_status', 'git_diff', 'git_log', 'git_branch_list', 'git_show', 'git_blame'];
 const GIT_WRITE_TOOLS = ['git_commit', 'git_push', 'git_pull', 'git_checkout', 'git_stash'];
 const GIT_TOOLS = [...GIT_READ_TOOLS, ...GIT_WRITE_TOOLS];
-const RUNTIME_TOOLS = ['classify_conversation', 'read_session_reference', 'get_project_info', 'list_repos'];
+const RUNTIME_TOOLS = [
+  'classify_conversation',
+  'read_session_reference',
+  'get_project_info',
+  'list_repos',
+  'plan_enter',
+  'plan_exit',
+  'todo_write',
+  'todo_list',
+  'todo_add',
+  'todo_update',
+  'todo_delete',
+];
 
 export const PERMISSION_GROUPS: Record<string, string[]> = {
   read: READ_TOOLS,

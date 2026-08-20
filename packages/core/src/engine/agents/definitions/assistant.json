@@ -17,7 +17,8 @@
     "git_read",
     "git_write",
     "task",
-    "mcp"
+    "mcp",
+    "runtime"
   ],
   "icon": "robot-3",
   "color": "--status-success",

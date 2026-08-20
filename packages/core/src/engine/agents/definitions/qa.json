@@ -14,7 +14,8 @@
     "search",
     "shell",
     "git_read",
-    "mcp"
+    "mcp",
+    "runtime"
   ],
   "icon": "bug",
   "color": "--syntax-number",

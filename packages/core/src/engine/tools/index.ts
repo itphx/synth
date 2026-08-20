@@ -23,7 +23,7 @@ import { classifyConversationTool } from './classify-conversation.js';
 import { readSessionReferenceTool } from './read-reference.js';
 import { getProjectInfoTool, listReposTool } from './project-context.js';
 import { planEnterTool, planExitTool } from './plan.js';
-import { todoWriteTool } from './todo.js';
+import { todoWriteTool, todoListTool, todoAddTool, todoUpdateTool, todoDeleteTool } from './todo.js';
 
 export { ToolRegistry } from './registry.js';
 export { zodToJsonSchema } from './json-schema.js';
@@ -59,6 +59,10 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   planEnterTool,
   planExitTool,
   todoWriteTool,
+  todoListTool,
+  todoAddTool,
+  todoUpdateTool,
+  todoDeleteTool,
 ];
 
 export function createToolRegistry(): ToolRegistry {

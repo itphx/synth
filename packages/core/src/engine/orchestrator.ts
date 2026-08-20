@@ -441,6 +441,68 @@ export class ChatOrchestrator {
   }
 
   /**
+   * AD-040: добавляет в system prompt контекстный блок сессии — наличие/отсутствие
+   * проекта, рабочий каталог и ограничения. Вызывается после резолва workingDir.
+   */
+  private async _buildSessionContextPrompt(
+    base: string,
+    session: Session,
+    workingDir: string,
+  ): Promise<string> {
+    const lang = session.settings.language || 'ru';
+    const lines: string[] = [];
+
+    if (session.projectId) {
+      let project: Project | null = null;
+      if (this._projectStore) {
+        try {
+          project = await this._projectStore.load(session.projectId);
+        } catch {
+          project = null;
+        }
+      }
+
+      if (project) {
+        lines.push('[КОНТЕКСТ СЕССИИ]');
+        lines.push(`Проект: ${project.name}`);
+        lines.push(`ID проекта: ${session.projectId}`);
+        lines.push(`Рабочий каталог: ${project.workspace || workingDir}`);
+      } else {
+        lines.push('[КОНТЕКСТ СЕССИИ]');
+        lines.push(`Проект: не найден (id: ${session.projectId})`);
+        lines.push(`Рабочий каталог: ${workingDir}`);
+      }
+    } else if (lang === 'en') {
+      lines.push('[SESSION CONTEXT]');
+      lines.push('Project: none');
+      lines.push(`Working directory: ${workingDir}`);
+      lines.push(
+        'Limitations: a plan is unavailable (the plan is bound to a project). '
+        + 'File and git tools operate within the working directory. Todo is available.',
+      );
+      lines.push(
+        'If the task requires long-term work with files, git, or a plan — suggest that the user '
+        + 'create a project and move the session into it.',
+      );
+    } else {
+      lines.push('[КОНТЕКСТ СЕССИИ]');
+      lines.push('Проект: отсутствует');
+      lines.push(`Рабочий каталог: ${workingDir}`);
+      lines.push(
+        'Ограничения: план недоступен (план привязан к проекту). '
+        + 'Файловые и git-инструменты работают в рамках рабочего каталога. Todo доступен.',
+      );
+      lines.push(
+        'Если задача требует длительной работы с файлами, git или планом — предложи пользователю '
+        + 'создать проект и перенести сессию в него.',
+      );
+    }
+
+    if (lines.length === 0) return base;
+    return `${base}\n\n${lines.join('\n')}`;
+  }
+
+  /**
    * processMessage callback для QueueProcessor.
    */
   createProcessMessage(): (
@@ -641,6 +703,9 @@ export class ChatOrchestrator {
       finalSystemPrompt = this._buildPlanSystemPrompt(
         finalSystemPrompt, session, planMode, sessionMode, planApproved,
       );
+
+      // AD-040: контекстный блок сессии (проект/рабочий каталог/ограничения)
+      finalSystemPrompt = await this._buildSessionContextPrompt(finalSystemPrompt, session, workingDir);
 
       // 3. Convert messages for LLM (без summary — они уже в system prompt)
       const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);

@@ -15,7 +15,8 @@
     "shell",
     "git_read",
     "git_write",
-    "mcp"
+    "mcp",
+    "runtime"
   ],
   "icon": "server",
   "color": "--syntax-type",

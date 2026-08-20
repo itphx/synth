@@ -12,7 +12,8 @@
     "file_read",
     "search",
     "web",
-    "mcp"
+    "mcp",
+    "runtime"
   ],
   "icon": "clipboard",
   "color": "--primary",

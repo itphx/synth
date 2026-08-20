@@ -343,7 +343,7 @@ export const dict = {
   'sessionTab.plan.expand': 'Expand',
   'sessionTab.todos.title': 'ToDo',
   'sessionTab.todos.empty': 'No tasks',
-  'sessionTab.todos.hint': 'The todo list will appear after todo_write',
+  'sessionTab.todos.hint': 'The todo list will appear after using the todo tools (todo_add / todo_write)',
   'sessionTab.todo.status.pending': 'Pending',
   'sessionTab.todo.status.in_progress': 'In progress',
   'sessionTab.todo.status.completed': 'Completed',

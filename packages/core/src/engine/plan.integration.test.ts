@@ -284,7 +284,11 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
       ],
       { planMode: 'auto' },
     );
-    expect(session?.todos).toEqual(todos);
+    expect(session?.todos).toHaveLength(1);
+    expect(session?.todos?.[0]?.content).toBe('шаг 1');
+    expect(session?.todos?.[0]?.status).toBe('pending');
+    expect(session?.todos?.[0]?.priority).toBe('high');
+    expect(session?.todos?.[0]?.id).toBeTruthy();
   });
 
   it('рабочий каталог проекта (project.workspace) перекрывает defaultWorkingDir', async () => {

@@ -342,7 +342,7 @@ export const dict = {
   'sessionTab.plan.expand': 'Развернуть',
   'sessionTab.todos.title': 'ToDo',
   'sessionTab.todos.empty': 'Задач нет',
-  'sessionTab.todos.hint': 'Список задач появится после todo_write',
+  'sessionTab.todos.hint': 'Список задач появится после использования todo-инструментов (todo_add / todo_write)',
   'sessionTab.todo.status.pending': 'Ожидает',
   'sessionTab.todo.status.in_progress': 'В работе',
   'sessionTab.todo.status.completed': 'Выполнено',
