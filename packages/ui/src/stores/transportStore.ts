@@ -328,6 +328,9 @@ function createDispatcher(): EventDispatcher {
         if (patch.summarization_pending === false) {
           setSummarizationPending(sid, false)
         }
+        if (typeof patch.name === 'string' && patch.name) {
+          useUIStore.getState().updateTabTitle(`chat-${sid}`, patch.name)
+        }
         break
       }
 
