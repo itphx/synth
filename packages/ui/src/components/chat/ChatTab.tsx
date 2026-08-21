@@ -57,6 +57,8 @@ export function ChatTab({ tab }: ChatTabProps) {
   const streamRetry = retryBySession[sessionId]
   const summarizationPending = summarizationPendingBySession[sessionId] || false
   const isStreaming = Object.values(streams).some((s) => s.isStreaming)
+  const hasActiveStream = Object.values(streams).some((s) => s.isStreaming)
+  const isEmpty = messages.length === 0 && !hasActiveStream && pending.length === 0 && !summarizationPending
   const debugMessage = debugModalSessionId && debugModalMessageIndex != null
     ? messages.find((m) => m.index === debugModalMessageIndex) ?? null
     : null
@@ -541,62 +543,80 @@ export function ChatTab({ tab }: ChatTabProps) {
         />
       )}
 
-      {!inputExpanded && (
-        <MessageList
-          messages={messages}
-          streams={streams}
-          onCopy={handleCopy}
-          onToggle={handleToggle}
-          onPin={handlePin}
-          onDelete={handleDelete}
-          onRetry={handleRetry}
-          onDebug={handleDebug}
-          onFork={handleFork}
-          readOnly={isReadOnly}
-          onStop={handleStop}
-          isSubagent={isSubagent}
-          selectionMode={selectionMode}
-          selectedIndices={selectedIndices}
-          onToggleSelect={handleToggleSelect}
-          onSelectRange={handleSelectRange}
-          retry={streamRetry}
-          onRetryNow={handleRetryNow}
-          onCancelRetry={handleCancelRetry}
-        />
-      )}
-
-      {!inputExpanded && !isSubagent && (
-        <QueuePanel
-          pending={pending}
-          isStalled={queue?.isStalled ?? false}
-          pendingCount={queue?.pendingCount ?? 0}
-          onResume={handleResumeQueue}
-          onClear={handleClearQueue}
-          onReturnAll={handleReturnQueue}
-          onReturnMsg={handleReturnMsg}
-        />
-      )}
-
-      {!inputExpanded && !isSubagent && (
-        <PermissionRequestBar sessionId={sessionId} />
-      )}
-
-      {isSubagent ? (
-        <div className="shrink-0 mx-auto mt-2 mb-2 w-4/5 rounded-xl border border-border/60 bg-surface-subtle px-4 py-3 text-center">
-          <p className="text-xs text-muted-foreground">{t('chat.input.readOnly')}</p>
+      {isEmpty && !isSubagent ? (
+        <div className="flex flex-1 items-center justify-center px-4">
+          <ChatInput
+            sessionId={sessionId}
+            agents={agentsRef.current}
+            isStreaming={isStreaming}
+            onSend={handleSend}
+            onStop={handleStop}
+            onStopQueue={handleStopAll}
+            onCreateNote={handleCreateNote}
+            expanded={false}
+            onToggleExpand={() => setInputExpanded((v) => !v)}
+          />
         </div>
       ) : (
-        <ChatInput
-          sessionId={sessionId}
-          agents={agentsRef.current}
-          isStreaming={isStreaming}
-          onSend={handleSend}
-          onStop={handleStop}
-          onStopQueue={handleStopAll}
-          onCreateNote={handleCreateNote}
-          expanded={inputExpanded}
-          onToggleExpand={() => setInputExpanded((v) => !v)}
-        />
+        <>
+          {!inputExpanded && (
+            <MessageList
+              messages={messages}
+              streams={streams}
+              onCopy={handleCopy}
+              onToggle={handleToggle}
+              onPin={handlePin}
+              onDelete={handleDelete}
+              onRetry={handleRetry}
+              onDebug={handleDebug}
+              onFork={handleFork}
+              readOnly={isReadOnly}
+              onStop={handleStop}
+              isSubagent={isSubagent}
+              selectionMode={selectionMode}
+              selectedIndices={selectedIndices}
+              onToggleSelect={handleToggleSelect}
+              onSelectRange={handleSelectRange}
+              retry={streamRetry}
+              onRetryNow={handleRetryNow}
+              onCancelRetry={handleCancelRetry}
+            />
+          )}
+
+          {!inputExpanded && !isSubagent && (
+            <QueuePanel
+              pending={pending}
+              isStalled={queue?.isStalled ?? false}
+              pendingCount={queue?.pendingCount ?? 0}
+              onResume={handleResumeQueue}
+              onClear={handleClearQueue}
+              onReturnAll={handleReturnQueue}
+              onReturnMsg={handleReturnMsg}
+            />
+          )}
+
+          {!inputExpanded && !isSubagent && (
+            <PermissionRequestBar sessionId={sessionId} />
+          )}
+
+          {isSubagent ? (
+            <div className="shrink-0 mx-auto mt-2 mb-2 w-4/5 rounded-xl border border-border/60 bg-surface-subtle px-4 py-3 text-center">
+              <p className="text-xs text-muted-foreground">{t('chat.input.readOnly')}</p>
+            </div>
+          ) : (
+            <ChatInput
+              sessionId={sessionId}
+              agents={agentsRef.current}
+              isStreaming={isStreaming}
+              onSend={handleSend}
+              onStop={handleStop}
+              onStopQueue={handleStopAll}
+              onCreateNote={handleCreateNote}
+              expanded={inputExpanded}
+              onToggleExpand={() => setInputExpanded((v) => !v)}
+            />
+          )}
+        </>
       )}
 
       {debugMessage?.debug_data && Object.keys(debugMessage.debug_data).length > 0 && (
