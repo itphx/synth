@@ -35,7 +35,8 @@ export const SessionsPanel = () => {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col h-full min-h-0">
+      <div className="shrink-0 space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-semibold">{t('admin.sessions.title')}</h3>
@@ -49,7 +50,9 @@ export const SessionsPanel = () => {
           {t('admin.sessions.refresh')}
         </button>
       </div>
+      </div>
 
+      <div className="flex-1 overflow-y-auto min-h-0 overscroll-behavior-contain mt-4">
       {loading ? (
         <div className="space-y-2">
           {[1,2,3].map((i) => (
@@ -137,6 +140,7 @@ export const SessionsPanel = () => {
           })}
         </div>
       )}
+      </div>
     </div>
   )
 }

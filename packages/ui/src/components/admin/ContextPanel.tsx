@@ -140,7 +140,8 @@ export const ContextPanel = () => {
   const filtered = files.filter(f => f.category === activeTab || !activeTab)
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col h-full min-h-0">
+      <div className="shrink-0 space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-semibold">{t('admin.context.title')}</h3>
@@ -170,7 +171,9 @@ export const ContextPanel = () => {
           </button>
         ))}
       </div>
+      </div>
 
+      <div className="flex-1 overflow-y-auto min-h-0 overscroll-behavior-contain mt-4">
       {showCreate && (
         <div className="bg-background rounded-lg border p-4 space-y-3">
           <h4 className="font-medium text-sm">{t('admin.context.newFile')}</h4>
@@ -254,6 +257,7 @@ export const ContextPanel = () => {
           ))}
         </div>
       )}
+      </div>
     </div>
   )
 }
