@@ -239,7 +239,9 @@ function ProjectsTab() {
         { label: t('leftPanel.rename'), icon: 'pencil-ai', onClick: () => { setRenamingId(session.id); setRenameValue(session.name || session.id) } },
         { label: t('leftPanel.forkSession'), icon: 'git-branch', onClick: async () => {
           const result = await forkSession(session.id)
-          if (result) { setRenamingId(result.id); setRenameValue(result.id) }
+          if (result) {
+            openTab({ id: `chat-${result.id}`, type: 'chat', title: result.name || result.id, data: { sessionId: result.id, projectId: result.project_id || undefined } })
+          }
         }},
         { label: t('leftPanel.clearSession'), icon: 'close', onClick: () => setConfirm({
           title: t('leftPanel.clearSession'),
