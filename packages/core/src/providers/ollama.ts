@@ -173,7 +173,10 @@ export class OllamaProvider extends BaseProvider {
                     type: 'function',
                     function: {
                       name: (tc.function as Record<string, unknown>)?.name,
-                      arguments: (tc.function as Record<string, unknown>)?.arguments,
+                      // Строку → объект: единообразие с _parseResponse.
+                      arguments: this._normalizeToolArguments(
+                        (tc.function as Record<string, unknown>)?.arguments,
+                      ),
                     },
                   });
                 }
@@ -330,6 +333,21 @@ export class OllamaProvider extends BaseProvider {
     return Number.isFinite(num) && num > 0 ? num : undefined;
   }
 
+  /**
+   * Нормализует function.arguments в tool_calls: JSON-строка → объект.
+   * Сборка Ollama (0.32.x, llama-server c --spec-type draft-mtp) принимает
+   * только объект и падает с 400 «can't find closing '}'» на строке.
+   * Если парсинг не удался — оставляем строку как есть (не роняем запрос).
+   */
+  private _normalizeToolArguments(args: unknown): unknown {
+    if (typeof args !== 'string') return args;
+    try {
+      return JSON.parse(args);
+    } catch {
+      return args;
+    }
+  }
+
   private _formatMessages(messages: LLMMessage[]): Array<Record<string, unknown>> {
     const formatted: Array<Record<string, unknown>> = [];
 
@@ -347,7 +365,21 @@ export class OllamaProvider extends BaseProvider {
       }
 
       const entry: Record<string, unknown> = { role: msg.role, content: msg.content };
-      if (msg.toolUse) entry.tool_calls = msg.toolUse;
+      if (msg.toolUse) {
+        // Старые сессии хранят arguments строкой — приводим к объекту
+        // перед отправкой, иначе Ollama вернёт 400.
+        entry.tool_calls = msg.toolUse.map((tc) => {
+          const fn = tc.function as Record<string, unknown> | undefined;
+          if (!fn || typeof fn.arguments === 'undefined') return tc;
+          return {
+            ...tc,
+            function: {
+              ...fn,
+              arguments: this._normalizeToolArguments(fn.arguments),
+            },
+          };
+        });
+      }
       formatted.push(entry);
     }
 
@@ -371,7 +403,11 @@ export class OllamaProvider extends BaseProvider {
         type: 'function',
         function: {
           name: (tc.function as Record<string, unknown>)?.name,
-          arguments: (tc.function as Record<string, unknown>)?.arguments,
+          // Строку → объект, чтобы в сессию сохранялись объекты (единообразие)
+          // и повторная отправка не ломалась.
+          arguments: this._normalizeToolArguments(
+            (tc.function as Record<string, unknown>)?.arguments,
+          ),
         },
       }));
     }
