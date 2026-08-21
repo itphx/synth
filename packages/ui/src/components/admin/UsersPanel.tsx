@@ -206,7 +206,8 @@ export const UsersPanel = () => {
   )
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col h-full min-h-0">
+      <div className="shrink-0 space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-semibold">{t('admin.users.title')}</h3>
@@ -216,7 +217,9 @@ export const UsersPanel = () => {
           <Icon name="add" className="size-3.5" />{t('admin.users.add')}
         </button>
       </div>
+      </div>
 
+      <div className="flex-1 overflow-y-auto min-h-0 overscroll-behavior-contain mt-4">
       {error && !creating && !expanded && (
         <div className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-lg p-4 text-sm text-amber-700 dark:text-amber-300">
           {error}
@@ -296,6 +299,7 @@ export const UsersPanel = () => {
           ))}
         </div>
       )}
+      </div>
     </div>
   )
 }

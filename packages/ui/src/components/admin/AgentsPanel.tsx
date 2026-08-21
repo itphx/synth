@@ -147,7 +147,6 @@ export const AgentsPanel = () => {
     setForm(emptyForm())
     setCreating(true)
     setError('')
-    setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
   }
 
   const handleEdit = async (a: AgentInfo) => {
@@ -160,8 +159,16 @@ export const AgentsPanel = () => {
     }
     setExpanded(a.id)
     setCreating(false)
-    setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
   }
+
+  // Скролл к форме после монтирования (создание или редактирование).
+  // useEffect срабатывает после коммита рендера, когда formRef.current уже не null
+  // (setTimeout(0) в React 19 мог выполниться до монтирования формы).
+  useEffect(() => {
+    if (creating || expanded) {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [creating, expanded])
 
   const handleCancel = () => {
     setExpanded(null)
@@ -473,7 +480,8 @@ export const AgentsPanel = () => {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col h-full min-h-0">
+      <div className="shrink-0 space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-semibold">{t('admin.agents.title')}</h3>
@@ -490,7 +498,9 @@ export const AgentsPanel = () => {
           </button>
         </div>
       </div>
+      </div>
 
+      <div className="flex-1 overflow-y-auto min-h-0 overscroll-behavior-contain mt-4">
       {(creating || expanded) && renderForm()}
 
       {loading ? (
@@ -595,6 +605,7 @@ export const AgentsPanel = () => {
           ))}
         </div>
       )}
+      </div>
     </div>
   )
 }

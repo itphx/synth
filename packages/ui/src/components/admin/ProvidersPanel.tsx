@@ -144,7 +144,8 @@ export const ProvidersPanel = () => {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col h-full min-h-0">
+      <div className="shrink-0 space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-semibold">{t('admin.providers.title')}</h3>
@@ -154,7 +155,9 @@ export const ProvidersPanel = () => {
           <Icon name="add" className="size-3.5" />{t('admin.providers.add')}
         </button>
       </div>
+      </div>
 
+      <div className="flex-1 overflow-y-auto min-h-0 overscroll-behavior-contain mt-4">
       {showForm && (
         <div className="bg-background rounded-lg border p-4 space-y-4">
           <div className="flex items-center justify-between">
@@ -371,6 +374,7 @@ export const ProvidersPanel = () => {
           ))}
         </div>
       )}
+      </div>
     </div>
   )
 }
