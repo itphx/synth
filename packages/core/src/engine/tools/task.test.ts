@@ -14,7 +14,7 @@ import { createToolRegistry } from './index.js';
 /** Минимальный тип для мока AgentRegistry — только поля, используемые в taskTool */
 interface MockAgentDef {
   id: string;
-  agentMode: string;
+  agentMode: string | string[];
   subagentPrompt?: string;
   maxSteps?: number;
 }
@@ -39,7 +39,7 @@ function makeMockAgentRegistry(subagents: string[] = ['explore']): MockAgentRegi
       if (subagents.includes(id)) {
         return {
           id,
-          agentMode: 'subagent' as const,
+          agentMode: ['subagent'],
           subagentPrompt: 'You are a test subagent.',
           maxSteps: 1,
         };
@@ -494,6 +494,25 @@ describe('taskTool — context modes', () => {
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('не найден');
+  });
+
+  it('возвращает ошибку, если агент не имеет класса subagent', async () => {
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'developer' },
+      {
+        ...baseCtx,
+        extra: {
+          provider: makeMockProvider(),
+          agentRegistry: {
+            get: () => ({ id: 'developer', agentMode: ['primary'] }),
+            getSubagents: () => [{ id: 'explore' }],
+            getToolsForAgent: () => [],
+          } as unknown as MockAgentRegistry,
+        },
+      },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('не может использоваться как сабагент');
   });
 
   // ─── EventBus: session.created публикуется в родительскую сессию ──

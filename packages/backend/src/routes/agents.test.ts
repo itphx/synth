@@ -130,6 +130,52 @@ describe('Agent API Routes — синхронизация с AgentRegistry', () 
     expect(registry.get('bankassistadv')?.contextFile).toBe('BANKASSIST_ADVANCED.md');
   });
 
+  it('GET /agents отдаёт только основных (primary)', async () => {
+    const app = createTestApp(registry);
+    const res = await app.request('/api/v2/agents');
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    const ids = body.agents.map((a: any) => a.id);
+    expect(ids).toContain('assistant');
+    expect(ids).toContain('developer');
+    expect(ids).not.toContain('general'); // subagent
+    expect(ids).not.toContain('explore'); // subagent
+    expect(ids).not.toContain('title'); // system
+    for (const a of body.agents) {
+      expect(Array.isArray(a.agent_mode)).toBe(true);
+      expect(a.agent_mode).toContain('primary');
+    }
+  });
+
+  it('GET /agents/all отдаёт всех агентов (включая subagent и system)', async () => {
+    const app = createTestApp(registry);
+    const res = await app.request('/api/v2/agents/all');
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    const ids = body.agents.map((a: any) => a.id);
+    expect(ids).toContain('assistant');
+    expect(ids).toContain('general');
+    expect(ids).toContain('explore');
+    expect(ids).toContain('title');
+    const title = body.agents.find((a: any) => a.id === 'title');
+    expect(title.agent_mode).toEqual(['system']);
+    const general = body.agents.find((a: any) => a.id === 'general');
+    expect(general.agent_mode).toEqual(['subagent']);
+  });
+
+  it('POST /agents принимает agent_mode массивом', async () => {
+    const app = createTestApp(registry);
+    const res = await app.request('/api/v2/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'hybrid', display_name: 'Гибрид', agent_mode: ['primary', 'subagent'] }),
+    });
+    expect(res.status).toBe(201);
+    const agent: any = await res.json();
+    expect(agent.agentMode).toEqual(['primary', 'subagent']);
+    expect(registry.get('hybrid')?.agentMode).toEqual(['primary', 'subagent']);
+  });
+
   it('DELETE /agents/:id убирает custom-агента из registry', async () => {
     const app = createTestApp(registry);
     await app.request('/api/v2/agents', {
