@@ -52,10 +52,11 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   const sessionModelId = (activeSession?.settings as Record<string, unknown>)?.model as string | undefined
   const effectiveModel = sessionModelId || selectedModelName
 
-  const contextWindow = useMemo(() => {
-    const m = providersModels.find((m) => m.id === effectiveModel || m.name === effectiveModel)
-    return m?.context_window ?? 200_000
+  const contextWindowModel = useMemo(() => {
+    return providersModels.find((m) => m.id === effectiveModel || m.name === effectiveModel)
   }, [providersModels, effectiveModel])
+
+  const contextWindow = contextWindowModel?.context_window ?? 200_000
 
   const lastInputTokens = useMemo(() => {
     const msgs = sessionId ? messagesBySession[sessionId] || [] : []
@@ -69,6 +70,9 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   }, [messagesBySession, sessionId])
 
   const windowPercent = contextWindow > 0 ? Math.round((lastInputTokens / contextWindow) * 100) : 0
+  // Предупреждение только при реальном окне модели (не фолбэк 200_000)
+  const hasRealContextWindow = !!contextWindowModel?.context_window && contextWindowModel.context_window > 0
+  const nearContextLimit = hasRealContextWindow && windowPercent >= 90
   const [summarizing, setSummarizing] = useState(false)
   const canSummarize = activeSession?.can_summarize ?? false
   const isSubagentSession = activeSession?.session_origin === 'subagent'
@@ -308,11 +312,13 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
               >
                 <div className="h-1.5 w-12 rounded-full bg-foreground/10 overflow-hidden">
                   <div
-                    className="h-1.5 rounded-full bg-primary transition-all"
+                    className={cn('h-1.5 rounded-full transition-all', nearContextLimit ? 'bg-destructive' : 'bg-primary')}
                     style={{ width: `${Math.min(windowPercent, 100)}%` }}
                   />
                 </div>
-                <span className="text-[10px] tabular-nums text-muted-foreground">{windowPercent}%</span>
+                <span className={cn('text-[10px] tabular-nums', nearContextLimit ? 'text-destructive' : 'text-muted-foreground')}>
+                  {windowPercent}%
+                </span>
               </div>
               {!isSubagentSession && (
                 <button

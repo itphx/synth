@@ -47,7 +47,7 @@ export class AnthropicProvider extends BaseProvider {
       model: this.model,
       messages: formattedMessages,
       temperature: this.temperature,
-      max_tokens: 4096,
+      max_tokens: this.maxTokens ?? 4096,
     };
     if (this.reasoningLevel === 'high') body.thinking = { type: 'enabled', budget_tokens: 8192 };
     else if (this.reasoningLevel === 'none') body.thinking = { type: 'disabled' };
@@ -98,7 +98,7 @@ export class AnthropicProvider extends BaseProvider {
       model: this.model,
       messages: formattedMessages,
       temperature: this.temperature,
-      max_tokens: 4096,
+      max_tokens: this.maxTokens ?? 4096,
       stream: true,
     };
     if (this.reasoningLevel === 'high') body.thinking = { type: 'enabled', budget_tokens: 8192 };

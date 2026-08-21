@@ -70,13 +70,23 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
 
   const providerLoader = (name: string): ProviderConfig | null => providerCache.get(name) ?? null;
 
+  // Загрузчик сохранённого контекстного окна модели (ModelConfig.contextWindow)
+  const modelWindowLoader = (modelName: string): number => {
+    for (const m of modelCache.values()) {
+      if (m.name === modelName || m.id === modelName) {
+        return m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 0;
+      }
+    }
+    return 0;
+  };
+
   const summarizationConfig: SummarizationConfig = {
     provider: providerName,
     model: modelName,
     temperature: 0.3,
     promptFile: 'SUMMARIZER',
   };
-  const contextOptimizer = new ContextOptimizer(contextConfig, providerLoader, summarizationConfig);
+  const contextOptimizer = new ContextOptimizer(contextConfig, providerLoader, summarizationConfig, modelWindowLoader);
 
   const modelPriceLoader = (mn: string) => {
     for (const m of modelCache.values()) {

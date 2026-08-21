@@ -29,6 +29,7 @@ export class OpenAIProvider extends BaseProvider {
     if (this.topK !== undefined) body.top_k = this.topK;
     if (tools?.length) body.tools = tools;
     if (stream) body.stream = true;
+    if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
 
     const headers = this._getHeaders();
     debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
@@ -80,6 +81,7 @@ export class OpenAIProvider extends BaseProvider {
     if (this.topP !== undefined) body.top_p = this.topP;
     if (this.topK !== undefined) body.top_k = this.topK;
     if (tools?.length) body.tools = tools;
+    if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
 
     const headers = this._getHeaders();
     debugCollector?.captureApiRequest(this.url, 'POST', headers, body);

@@ -580,6 +580,7 @@ export type EventType =
   | 'context.summarization_pending'
   | 'context.summarized'
   | 'context.sliding_window_applied'
+  | 'context.limit_warning'
   | 'context.sticky_note_added'
   | 'context.sticky_note_updated'
   | 'context.sticky_note_deleted'

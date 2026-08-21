@@ -181,12 +181,22 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
 
       try {
         const instance = ProviderFactory.create(provider.name, providerConfig);
-        const modelIds = await instance.listModels();
+        const models = await instance.listModelsDetailed();
 
-        for (const modelId of modelIds) {
+        for (const model of models) {
+          const modelId = model.id;
           const fullId = `${provider.name}/${modelId}`;
           const existing = await modelStore.load(fullId);
           const { window, source } = lookupContextWindow(modelId);
+          // Окно, сообщённое самим провайдером (Ollama /api/tags), приоритетнее
+          // справочника и ручных значений; 0/undefined означает «неизвестно».
+          const apiWindow = typeof model.contextWindow === 'number' && model.contextWindow > 0
+            ? model.contextWindow
+            : 0;
+          const resolvedWindow = apiWindow > 0 ? apiWindow : window;
+          const resolvedSource: ContextSource = apiWindow > 0
+            ? 'api'
+            : (source !== 'unknown' ? source : 'unknown');
 
           if (!existing) {
             // Новая модель
@@ -197,10 +207,17 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
               description: '',
               enabled: true,
               isDefault: false,
-              contextWindow: window,
-              contextSource: source !== 'unknown' ? source : 'unknown',
+              contextWindow: resolvedWindow,
+              contextSource: resolvedSource,
             });
             totalNew++;
+            totalFetched++;
+          } else if (apiWindow > 0 && existing.contextWindow !== apiWindow) {
+            // Провайдер сообщил реальное окно — оно приоритетнее справочника/ручного
+            existing.contextWindow = apiWindow;
+            existing.contextSource = 'api';
+            await modelStore.save(fullId, existing);
+            totalEnriched++;
             totalFetched++;
           } else if ((existing.contextWindow ?? 0) === 0 && window > 0) {
             // Обогащаем существующую модель справочными данными

@@ -78,8 +78,14 @@ export class ModelRouter {
     }
   }
 
-  getProvider(decision: RoutingDecision, temperature?: number, reasoningLevel?: ReasoningLevel): BaseProvider | null {
-    return this._pool.getProvider(decision.providerName, decision.modelName, temperature, reasoningLevel);
+  getProvider(
+    decision: RoutingDecision,
+    temperature?: number,
+    reasoningLevel?: ReasoningLevel,
+    maxTokens?: number,
+    numCtx?: number,
+  ): BaseProvider | null {
+    return this._pool.getProvider(decision.providerName, decision.modelName, temperature, reasoningLevel, maxTokens, numCtx);
   }
 
   async checkQuality(content: string, decision: RoutingDecision, sessionSettings?: SessionSettings): Promise<QualityCheckResult> {

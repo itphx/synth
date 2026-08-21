@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react'
+import { cn } from '@/lib/utils'
 import { useChatStore } from '@/stores/chatStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -52,6 +53,9 @@ export const StatsTab: React.FC = () => {
   const contextWindowMax = contextWindowModel?.context_window ?? 200_000
   const lastInputTokens = lastAssistantMsg?.usage?.input_tokens ?? 0
   const windowPercent = contextWindowMax > 0 ? (lastInputTokens / contextWindowMax) * 100 : 0
+  // Предупреждение только при реальном окне модели (не фолбэк 200_000)
+  const hasRealContextWindow = !!contextWindowModel?.context_window && contextWindowModel.context_window > 0
+  const isContextNearLimit = hasRealContextWindow && windowPercent >= 90
 
   const sessionProjectId = activeSession?.project_id
 
@@ -78,10 +82,15 @@ export const StatsTab: React.FC = () => {
             </div>
             <div className="h-2 w-full rounded-full bg-foreground/10">
               <div
-                className="h-2 rounded-full bg-primary transition-all"
+                className={cn('h-2 rounded-full transition-all', isContextNearLimit ? 'bg-destructive' : 'bg-primary')}
                 style={{ width: `${Math.min(windowPercent, 100)}%` }}
               />
             </div>
+            {isContextNearLimit && (
+              <div className="mt-1 text-[11px] text-destructive">
+                Лимит контекста близко
+              </div>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
             <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={fmt(lastInputTokens)} />

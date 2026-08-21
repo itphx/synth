@@ -214,7 +214,8 @@ function createDispatcher(): EventDispatcher {
       case 'stream_error':
       case 'stream.error': {
         const streamId = payload.stream_id as string
-        const error = (payload.error as string) || 'Unknown error'
+        const errorType = (payload.error_type as string) || ''
+        const rawError = (payload.error as string) || 'Unknown error'
         const canRetry = Boolean(payload.can_retry)
 
         if (canRetry) {
@@ -223,6 +224,12 @@ function createDispatcher(): EventDispatcher {
           // stream.retry (отобразится в user-сообщении).
           break
         }
+
+        // Ошибка переполнения контекстного окна — показываем дружелюбный текст
+        // вместо сырого сообщения провайдера.
+        const error = errorType === 'context_length'
+          ? 'Контекстное окно модели превышено. Начните новую сессию или сократите историю'
+          : rawError
 
         // Финальная ошибка (неrecoverable / исчерпаны попытки / отменено):
         // завершаем стрим, убираем ретраи и индикатор обработки, показываем

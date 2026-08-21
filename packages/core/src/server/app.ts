@@ -246,13 +246,23 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     modelCache.set(m.id, m);
   });
 
+  // Загрузчик сохранённого контекстного окна модели (ModelConfig.contextWindow)
+  const modelWindowLoader = (modelName: string): number => {
+    for (const m of modelCache.values()) {
+      if (m.name === modelName || m.id === modelName) {
+        return m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 0;
+      }
+    }
+    return 0;
+  };
+
   const summarizationConfig: SummarizationConfig = {
     provider: '',
     model: '',
     temperature: 0.3,
     promptFile: 'SUMMARIZER',
   };
-  const contextOptimizer = new ContextOptimizer(contextConfig, providerLoader, summarizationConfig);
+  const contextOptimizer = new ContextOptimizer(contextConfig, providerLoader, summarizationConfig, modelWindowLoader);
   queueManager.setContextOptimizer(contextOptimizer);
 
   const modelPriceLoader = (modelName: string) => {

@@ -53,6 +53,11 @@ export class ContextOptimizer {
   private readonly _contextConfig: ContextConfig;
   private readonly _providerLoader: (name: string) => SharedProviderConfig | null;
   private readonly _summarizationConfig: SummarizationConfig;
+  /**
+   * Возвращает сохранённое контекстное окно модели (ModelConfig.contextWindow).
+   * Если неизвестно (0/undefined) — ContextOptimizer использует справочник.
+   */
+  private readonly _modelWindowLoader: ((modelId: string) => number) | null;
 
   private _summaryCache = new Map<string, { result: Message; hash: string; at: number }>();
   private _gatewayHooks: ContextOptimizerGatewayHooks | null = null;
@@ -64,10 +69,12 @@ export class ContextOptimizer {
     contextConfig: ContextConfig,
     providerLoader: (name: string) => SharedProviderConfig | null,
     summarizationConfig: SummarizationConfig,
+    modelWindowLoader?: (modelId: string) => number,
   ) {
     this._contextConfig = contextConfig;
     this._providerLoader = providerLoader;
     this._summarizationConfig = summarizationConfig;
+    this._modelWindowLoader = modelWindowLoader ?? null;
   }
 
   /**
@@ -406,6 +413,10 @@ export class ContextOptimizer {
 
   getContextWindow(modelId?: string): number {
     if (!modelId) return 0;
+    // Приоритет: сохранённое окно модели (ModelConfig.contextWindow из API/вручную),
+    // иначе справочник известных моделей.
+    const saved = this._modelWindowLoader?.(modelId) ?? 0;
+    if (saved > 0) return saved;
     const result = lookupContextWindow(modelId);
     return result.window;
   }

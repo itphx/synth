@@ -37,6 +37,10 @@ export interface ProviderConfig {
   topP?: number;
   topK?: number;
   reasoningLevel?: ReasoningLevel;
+  /** Лимит выходных токенов (max_tokens у OpenAI/Anthropic). */
+  maxTokens?: number;
+  /** Размер контекста модели (num_ctx у Ollama). */
+  numCtx?: number;
 }
 
 export abstract class BaseProvider {
@@ -50,6 +54,8 @@ export abstract class BaseProvider {
   name: string;
   type: string;
   reasoningLevel: ReasoningLevel;
+  maxTokens?: number;
+  numCtx?: number;
 
   constructor(params: {
     url: string;
@@ -62,6 +68,8 @@ export abstract class BaseProvider {
     name?: string;
     type?: string;
     reasoningLevel?: ReasoningLevel;
+    maxTokens?: number;
+    numCtx?: number;
   }) {
     this.url = params.url;
     this.apiKey = params.apiKey;
@@ -73,6 +81,8 @@ export abstract class BaseProvider {
     this.name = params.name ?? 'unknown';
     this.type = params.type ?? 'generic';
     this.reasoningLevel = params.reasoningLevel ?? 'default';
+    this.maxTokens = params.maxTokens;
+    this.numCtx = params.numCtx;
   }
 
   abstract chat(
@@ -99,6 +109,15 @@ export abstract class BaseProvider {
 
   async listModels(): Promise<string[]> {
     return [];
+  }
+
+  /**
+   * Список моделей с известным контекстным окном (если провайдер его отдаёт).
+   * Базовая реализация не знает окон — возвращает только идентификаторы.
+   */
+  async listModelsDetailed(): Promise<Array<{ id: string; contextWindow?: number }>> {
+    const ids = await this.listModels();
+    return ids.map((id) => ({ id }));
   }
 }
 
@@ -146,6 +165,8 @@ export class ProviderFactory {
       name: config.name || name,
       type: providerType,
       reasoningLevel: config.reasoningLevel,
+      maxTokens: config.maxTokens,
+      numCtx: config.numCtx,
     });
   }
 

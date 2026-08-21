@@ -33,8 +33,10 @@ export class ProviderPool {
     modelName: string,
     temperature?: number,
     reasoningLevel?: ReasoningLevel,
+    maxTokens?: number,
+    numCtx?: number,
   ): BaseProvider | null {
-    const cacheKey = `${providerName}:${modelName}:${reasoningLevel ?? 'none'}`;
+    const cacheKey = `${providerName}:${modelName}:${reasoningLevel ?? 'none'}:${maxTokens ?? ''}:${numCtx ?? ''}`;
     const cached = this._cache.get(cacheKey);
     if (cached) return cached;
 
@@ -47,6 +49,8 @@ export class ProviderPool {
         modelName || sharedConfig.defaultModel || '',
         reasoningLevel,
       );
+      coreConfig.maxTokens = maxTokens;
+      coreConfig.numCtx = numCtx;
       const provider = ProviderFactory.create(
         providerName,
         coreConfig,
