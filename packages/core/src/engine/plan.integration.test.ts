@@ -421,6 +421,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
       sessionManager,
       eventBus,
       contextBuilder: makeCtxBuilder(),
+      contextConfig: new ContextConfig({ userDataDir: tmpDir }),
       providerLoader: (name: string) => {
         return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
       },
@@ -440,6 +441,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     // strict + план уже утверждён → write разрешён, план в первом же промпте
     expect(ScriptedProvider.prompts()[0]).toContain('[APPROVED PLAN]');
     expect(ScriptedProvider.prompts()[0]).toContain('план из проекта');
+    expect(ScriptedProvider.prompts()[0]).toContain('[PLAN MODE: STRICT]');
     expect(ScriptedProvider.prompts()[0]).toContain('План утверждён');
   });
 

@@ -18,3 +18,5 @@ Denied (deny) rules remain in force: **do not** perform deny actions.
 Work autonomously and fast: do not stop on confirmations that would be ask.
 Be especially careful about the consequences of changes — no confirmation is required, so
 verify results yourself and do not perform explicitly denied (deny) operations.
+Maintain the todo list: plan when necessary, execute steps and update their statuses
+immediately (`todo_update`) — do not leave finished steps in their old state.

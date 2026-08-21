@@ -553,3 +553,19 @@
 - **Дыры QA (закрыты фиксером):** B1 обход plan через `;`/`&&`; B2 deniedCommandPrefixes только с начала строки; B3 shellPolicy не у саб-агентов; B4 sudo/find -delete/sh -c/eval; B5 тулы саб-агента без фильтра режима.
 - **Верификация:** typecheck ✅ (6 пакетов); lint 0 errors ✅; test: core 788 / backend 170 / ui 29 / shared 66 ✅; адверсальный QA 34+ кейсов (обходы, денлист, обёртки, саб-агенты) PASS; сборка core → dist/prompts/system/MODE_*.{ru,en}.md ✅.
 - **Проблемы/оговорки:** `$(...)`-динамика не резолвится (осознанное ограничение дизайна) — возможно блокировать в plan отдельной задачей; для применения изменений нужна пересборка core + перезапуск dev-серверов.
+
+## 2026-08-22 (шестая правка) — PLAN MODE в контекстные файлы + PLAN_GUIDE/TODO
+- **Задача:** «Текст заметок про PLAN MODE захардкожен? Если да — надо переделать: брать из системных контекстных файлов, с поддержкой языков. Проверить источник APPROVED PLAN. В заметках про план и todo — инструкция об обновлении при выполнении задач. Модель ничего не знает о todo и отличии от плана — дополнить инструкции.»
+- **Тип:** feature (core — промпты + оркестратор + тулы)
+- **Исполнитель:** @fixer (2 итерации), оркестратор
+- **Результат:** PASS
+- **Ветка:** fix/mode-tools-shell-security (продолжение)
+- **Суть:**
+  1. **PLAN MODE убран из хардкода**: `[PLAN MODE: AUTO]`/`[PLAN MODE: STRICT]` (2 варианта) жили строкой в orchestrator.ts, только русский. Теперь — контекстные файлы `prompts/system/PLAN_MODE_AUTO.{ru,en}.md`, `PLAN_MODE_STRICT_APPROVED.{ru,en}.md`, `PLAN_MODE_STRICT_NOT_APPROVED.{ru,en}.md`; метод `ContextConfig.getPlanModePrompt(planMode, planApproved, language)` (off → null; override user/system → встроенный).
+  2. **APPROVED PLAN — источник подтверждён**: `project.plan` (AD-039, план в проекте) → `_renderProjectPlan` → `renderPlanMarkdown`. Менять не потребовалось.
+  3. **Блок [TODO]** в system prompt: `session.todos` рендерится через `renderTodosMarkdown` (todo.ts) → `[TODO]` (раньше модель видела todo только через `todo_list`).
+  4. **PLAN_GUIDE.{ru,en}.md** — справочник «План и Todo»: план = стратегия проекта (kanban, project.plan), todo = оперативные шаги сессии (session.todos), отличие, правила ведения (декомпозиция → статусы → синхронизация через planItemId). Вставляется ВСЕГДА (по решению пользователя), не только при наличии плана/todo.
+  5. **MODE_PLAN/ACT/YOLO.{ru,en}.md** — DIRECT INSTRUCTION дополнены: план + декомпозиция в todo; планирование доступно в любом режиме (пользователь уточнил: «в act/yolo модель тоже может планировать»).
+  6. **Описания тулов todo_*** — добавлен контекст «оперативный список задач сессии, в отличие от плана проекта; planItemId связывает с пунктом плана».
+- **Верификация:** typecheck ✅ (6 пакетов); lint 0 errors ✅; test: core 805 / backend 170 / ui 29 / shared 66 ✅; build core → dist/prompts/system/PLAN_GUIDE/PLAN_MODE/MODE_* обновлены ✅.
+- **Follow-up:** для применения в рантайме нужна пересборка core + перезапуск dev-серверов; наработки двух подзадач (PLAN MODE в файлы + PLAN_GUIDE/TODO) будут слиты в master --no-ff.

@@ -16,3 +16,5 @@ confirmation (ask) — request it and wait for the user's decision.
 [DIRECT INSTRUCTION]
 Execute the task and make changes. If confirmation is required — request it via ask
 and wait for the answer; do not perform denied (deny) actions.
+Plan when necessary right in act mode: the plan via `plan_write`, steps in the todo list via
+`todo_add`. After completing a step, update its status in the todo list (`todo_update`).

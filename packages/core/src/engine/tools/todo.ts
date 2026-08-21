@@ -90,6 +90,17 @@ function requireSessionManager(
 }
 
 /**
+ * Markdown-представление списка todo для system prompt (AD-039):
+ * строка на пункт `- [статус] [приоритет] содержание`. Пустой список → null.
+ */
+export function renderTodosMarkdown(todos: TodoItem[]): string | null {
+  if (!todos || todos.length === 0) return null;
+  return todos
+    .map((t) => `- [${STATUS_LABELS[t.status]}] [${PRIORITY_LABELS[t.priority]}] ${t.content}`)
+    .join('\n');
+}
+
+/**
  * todo_write — полная замена списка задач сессии (обратная совместимость).
  * Пункты без id получают сгенерированный id.
  */
@@ -97,6 +108,8 @@ export const todoWriteTool: ToolDefinition = {
   name: 'todo_write',
   description:
     'Replace the session todo list with the given items. '
+    + 'The todo list is the operational task list of this session (distinct from the project plan '
+    + 'stored in project.plan); use planItemId to link an item to a plan item. '
     + 'The list is stored in the session state (not a file) and can be read by the UI. '
     + 'Item ids are generated automatically if not provided. '
     + 'Returns the resulting todo list as JSON.',
@@ -149,6 +162,8 @@ export const todoListTool: ToolDefinition = {
   name: 'todo_list',
   description:
     'Return the current session todo list as a human-readable text. '
+    + 'The todo list is the operational task list of this session (distinct from the project plan '
+    + 'stored in project.plan); items may be linked to plan items via planItemId. '
     + 'Items without an id (legacy data) get a generated id in the response.',
   parameters: z.object({}),
   capabilities: [ToolCapability.RUNTIME],
@@ -189,7 +204,10 @@ export const todoListTool: ToolDefinition = {
 export const todoAddTool: ToolDefinition = {
   name: 'todo_add',
   description:
-    'Add one or more items to the session todo list. Accepts a single item or an array of items '
+    'Add one or more items to the session todo list. '
+    + 'The todo list is the operational task list of this session (distinct from the project plan '
+    + 'stored in project.plan); use planItemId to link an item to a plan item. '
+    + 'Accepts a single item or an array of items '
     + '{ content, status?, priority?, planItemId? }. status defaults to "pending", priority to "medium". '
     + 'Item ids are generated automatically. Returns the resulting todo list as JSON.',
   parameters: z.object({
@@ -244,7 +262,10 @@ export const todoAddTool: ToolDefinition = {
 export const todoUpdateTool: ToolDefinition = {
   name: 'todo_update',
   description:
-    'Update a todo item by id. Parameters: { id, content?, status?, priority?, planItemId? }. '
+    'Update a todo item by id. '
+    + 'The todo list is the operational task list of this session (distinct from the project plan '
+    + 'stored in project.plan); use planItemId to link an item to a plan item. '
+    + 'Parameters: { id, content?, status?, priority?, planItemId? }. '
     + 'Returns the resulting todo list as JSON. Errors if the item is not found.',
   parameters: z.object({
     id: z.string().describe('Id of the todo item to update'),
@@ -324,7 +345,10 @@ export const todoUpdateTool: ToolDefinition = {
 export const todoDeleteTool: ToolDefinition = {
   name: 'todo_delete',
   description:
-    'Delete todo items by id. Accepts a single id or an array of ids. '
+    'Delete todo items by id. '
+    + 'The todo list is the operational task list of this session (distinct from the project plan '
+    + 'stored in project.plan); items are removed from the session state, not from the project plan. '
+    + 'Accepts a single id or an array of ids. '
     + 'Returns the resulting todo list as JSON. Errors if none of the ids are found.',
   parameters: z.object({
     ids: z.union([z.string(), z.array(z.string())])

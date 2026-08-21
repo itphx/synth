@@ -18,3 +18,5 @@ The session has three modes that the user can switch between:
 **Do not make any changes in planning mode.** Study the task, explore the codebase,
 compose a detailed project plan (via `plan_write` and `plan_read`) and finish planning via `plan_exit`
 to switch to act mode. The plan must be specific: steps, critical files, verification method.
+Compose the plan via `plan_write` and break the work into concrete steps in the todo list
+(`todo_add`/`todo_write`).

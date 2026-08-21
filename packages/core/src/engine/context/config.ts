@@ -426,4 +426,66 @@ export class ContextConfig {
     // 2. Встроенный prompts/system/MODE_{X}.{lang}.md
     return this._readPrompt(stem, 'system', language);
   }
+
+  /**
+   * AD-028/AD-039: промпт строгости цикла Plan→Build (auto/strict).
+   *
+   * Файлы: prompts/system/PLAN_MODE_AUTO.{lang}.md,
+   * prompts/system/PLAN_MODE_STRICT_APPROVED.{lang}.md,
+   * prompts/system/PLAN_MODE_STRICT_NOT_APPROVED.{lang}.md — только локализованные
+   * (базовых PLAN_MODE_*.md нет). Override через {userDataDir}/user/system/ —
+   * стандартный механизм system-категории, проверяется первым.
+   *
+   * Приоритет: override локализованный → override базовый → встроенный локализованный.
+   * planMode 'off' → null (планирование отключено, блок не нужен).
+   * Неизвестный язык → null (нет локализованного файла).
+   */
+  getPlanModePrompt(
+    planMode: 'auto' | 'strict' | 'off',
+    planApproved: boolean,
+    language = 'ru',
+  ): string | null {
+    if (planMode === 'off') return null;
+    const stem = planMode === 'auto'
+      ? 'PLAN_MODE_AUTO'
+      : planApproved
+        ? 'PLAN_MODE_STRICT_APPROVED'
+        : 'PLAN_MODE_STRICT_NOT_APPROVED';
+
+    // 1. Пользовательский override system-категории
+    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
+    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
+    if (overrideLocalized) {
+      const content = this._readFile(overrideLocalized);
+      if (content) return content;
+    }
+    const overrideContent = this._readFile(overridePath);
+    if (overrideContent) return overrideContent;
+
+    // 2. Встроенный prompts/system/{stem}.{lang}.md
+    return this._readPrompt(stem, 'system', language);
+  }
+
+  /**
+   * AD-039: инструкция по обновлению плана и todo.
+   * Файлы: prompts/system/PLAN_GUIDE.{lang}.md — только локализованные
+   * (базового PLAN_GUIDE.md нет). Override через {userDataDir}/user/system/.
+   * Возвращает null, если файл не найден (неизвестный язык).
+   */
+  getPlanGuide(language = 'ru'): string | null {
+    const stem = 'PLAN_GUIDE';
+
+    // 1. Пользовательский override system-категории
+    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
+    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
+    if (overrideLocalized) {
+      const content = this._readFile(overrideLocalized);
+      if (content) return content;
+    }
+    const overrideContent = this._readFile(overridePath);
+    if (overrideContent) return overrideContent;
+
+    // 2. Встроенный prompts/system/PLAN_GUIDE.{lang}.md
+    return this._readPrompt(stem, 'system', language);
+  }
 }

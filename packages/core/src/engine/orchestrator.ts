@@ -14,6 +14,7 @@ import { ContextOptimizer } from './context/optimizer.js';
 import { ContextConfig } from './context/config.js';
 import type { ToolRegistry } from './tools/registry.js';
 import { renderPlanMarkdown } from './tools/plan.js';
+import { renderTodosMarkdown } from './tools/todo.js';
 import type { ToolForLLM } from '@itphx/synth-shared';
 import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
@@ -428,31 +429,33 @@ export class ChatOrchestrator {
       parts.push(modePrompt);
     }
 
-    if (planMode === 'auto') {
-      parts.push(
-        '[PLAN MODE: AUTO]\n'
-        + 'Если задача сложная, затрагивает несколько файлов или требует архитектурных решений — '
-        + 'вызови plan_enter перед изменениями. Для простых фиксов — делай сразу.',
-      );
-    } else if (planMode === 'strict') {
-      if (planApproved) {
-        parts.push(
-          '[PLAN MODE: STRICT]\n'
-          + 'План утверждён — ты можешь вносить изменения в соответствии с ним.',
-        );
-      } else {
-        parts.push(
-          '[PLAN MODE: STRICT]\n'
-          + 'Перед любым изменением файлов план обязателен: вызови plan_enter, составь план и утверди '
-          + 'его через plan_exit. До утверждения плана запись файлов заблокирована (чтение разрешено).',
-        );
-      }
+    // AD-028/AD-039: промпт строгости цикла Plan→Build загружается из contextConfig
+    // (prompts/system/PLAN_MODE_{AUTO,STRICT_APPROVED,STRICT_NOT_APPROVED}.{lang}.md,
+    // переопределяемые через dataDir/context/user/system). planMode 'off' → null —
+    // блок не добавляется.
+    const planModePrompt = this._contextConfig?.getPlanModePrompt(planMode, planApproved, language) ?? null;
+    if (planModePrompt) {
+      parts.push(planModePrompt);
     }
 
     // AD-039: блок [APPROVED PLAN] собирается из плана проекта (project.plan).
     const approvedPlan = await this._renderProjectPlan(session);
     if (approvedPlan) {
       parts.push(`[APPROVED PLAN]\n${approvedPlan}`);
+    }
+
+    // AD-039: блок [TODO] собирается из session.todos.
+    const todosMarkdown = renderTodosMarkdown(session.todos ?? []);
+    if (todosMarkdown) {
+      parts.push(`[TODO]\n${todosMarkdown}`);
+    }
+
+    // AD-039: инструкция по ведению плана и todo (PLAN_GUIDE) встраивается
+    // всегда, когда доступен контекст (contextConfig), независимо от наличия
+    // плана или todo — модель должна знать разницу между ними с первого запроса.
+    const guide = this._contextConfig?.getPlanGuide(language) ?? null;
+    if (guide) {
+      parts.push(guide);
     }
 
     if (parts.length === 0) return base;

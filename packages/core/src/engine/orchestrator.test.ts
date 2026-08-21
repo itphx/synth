@@ -14,7 +14,7 @@ import type { ContextBuilder } from './context/builder.js';
 import { ContextConfig } from './context/config.js';
 import { createToolRegistry } from './tools/index.js';
 import { generateId, MessageRole, nowISO, makeTextPart, ToolCapability } from '@itphx/synth-shared';
-import type { Session, Message, SecurityConfig } from '@itphx/synth-shared';
+import type { Session, Message, SecurityConfig, SessionSettings } from '@itphx/synth-shared';
 
 function makeCtxBuilder(): ContextBuilder {
   return {
@@ -805,5 +805,143 @@ describe('ChatOrchestrator — фильтрация тулов по режиму
 
     await runMode('yolo', [{ content: 'готово' }]);
     expect(ModeToolsProvider.capturedPrompts()[0]).not.toContain('[MODE: YOLO]');
+  });
+});
+
+describe('ChatOrchestrator — блоки PLAN MODE/TODO/PLAN_GUIDE в system prompt (AD-028/AD-039)', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-plan-prompt-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    ProviderFactory.register('modetools', ModeToolsProvider);
+  });
+
+  afterEach(async () => {
+    ProviderFactory['_providers'].delete('modetools');
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function runPlanPrompt(
+    settings: Partial<SessionSettings> = {},
+    opts: {
+      contextConfig?: ContextConfig;
+      defaultPlanMode?: 'auto' | 'strict' | 'off';
+      planApproved?: boolean;
+      todos?: Session['todos'];
+    } = {},
+  ): Promise<string[]> {
+    ModeToolsProvider.configure([{ content: 'готово' }]);
+
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus: new EventBus(),
+      contextBuilder: makeCtxBuilder(),
+      contextConfig: opts.contextConfig,
+      providerLoader: (name: string) => {
+        return { name, type: 'modetools', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
+      },
+      toolRegistry: createToolRegistry(),
+      permissionConfig: { rules: {}, askTimeoutMs: 1000 },
+      defaultPlanMode: opts.defaultPlanMode,
+      defaultWorkingDir: tmpDir,
+    });
+
+    const session = await sessionManager.createSession({
+      title: 'PlanPrompt',
+      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'assistant', ...settings },
+    });
+    if (opts.planApproved !== undefined) {
+      session.planApproved = opts.planApproved;
+    }
+    if (opts.todos !== undefined) {
+      session.todos = opts.todos;
+    }
+    await sessionManager.updateSession(session);
+
+    const msg = makeUserMsg();
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+    const processMessage = orchestrator.createProcessMessage();
+    const result = await processMessage(fresh, msg, new AbortController().signal, () => {});
+    expect(result.error).toBeUndefined();
+    return ModeToolsProvider.capturedPrompts();
+  }
+
+  it('auto + contextConfig → [PLAN MODE: AUTO] в system prompt', async () => {
+    const prompts = await runPlanPrompt(
+      { planMode: 'auto' },
+      { contextConfig: new ContextConfig({ userDataDir: tmpDir }) },
+    );
+    expect(prompts[0]).toContain('[PLAN MODE: AUTO]');
+    expect(prompts[0]).toContain('plan_enter');
+  });
+
+  it('strict без утверждённого плана → [PLAN MODE: STRICT] с требованием плана', async () => {
+    const prompts = await runPlanPrompt(
+      { planMode: 'strict' },
+      { contextConfig: new ContextConfig({ userDataDir: tmpDir }) },
+    );
+    expect(prompts[0]).toContain('[PLAN MODE: STRICT]');
+    expect(prompts[0]).toContain('план обязателен');
+  });
+
+  it('strict + план утверждён → [PLAN MODE: STRICT] с "План утверждён"', async () => {
+    const prompts = await runPlanPrompt(
+      { planMode: 'strict' },
+      { contextConfig: new ContextConfig({ userDataDir: tmpDir }), planApproved: true },
+    );
+    expect(prompts[0]).toContain('[PLAN MODE: STRICT]');
+    expect(prompts[0]).toContain('План утверждён');
+    expect(prompts[0]).not.toContain('план обязателен');
+  });
+
+  it('planMode off → блок [PLAN MODE] не добавляется, но [PLAN GUIDE] присутствует', async () => {
+    const prompts = await runPlanPrompt(
+      { planMode: 'off' },
+      { contextConfig: new ContextConfig({ userDataDir: tmpDir }) },
+    );
+    expect(prompts[0]).not.toContain('[PLAN MODE:');
+    expect(prompts[0]).toContain('[PLAN GUIDE]');
+  });
+
+  it('session.todos → блок [TODO] в system prompt; [PLAN GUIDE] присутствует всегда с contextConfig', async () => {
+    const prompts = await runPlanPrompt(
+      { planMode: 'auto' },
+      {
+        contextConfig: new ContextConfig({ userDataDir: tmpDir }),
+        todos: [
+          { id: 't1', content: 'шаг 1', status: 'pending', priority: 'high' },
+          { id: 't2', content: 'шаг 2', status: 'completed', priority: 'low' },
+        ],
+      },
+    );
+    expect(prompts[0]).toContain('[TODO]');
+    expect(prompts[0]).toContain('- [ожидает] [высокий] шаг 1');
+    expect(prompts[0]).toContain('- [выполнено] [низкий] шаг 2');
+    expect(prompts[0]).toContain('[PLAN GUIDE]');
+  });
+
+  it('[PLAN GUIDE] добавляется даже без плана и без todo (при наличии contextConfig)', async () => {
+    const prompts = await runPlanPrompt(
+      { planMode: 'auto' },
+      { contextConfig: new ContextConfig({ userDataDir: tmpDir }) },
+    );
+    expect(prompts[0]).toContain('[PLAN GUIDE]');
+    expect(prompts[0]).not.toContain('[TODO]');
+    expect(prompts[0]).not.toContain('[APPROVED PLAN]');
+  });
+
+  it('без contextConfig блоки PLAN MODE и PLAN_GUIDE не добавляются', async () => {
+    const prompts = await runPlanPrompt(
+      { planMode: 'auto' },
+      { todos: [{ id: 't1', content: 'шаг 1', status: 'pending', priority: 'high' }] },
+    );
+    expect(prompts[0]).not.toContain('[PLAN MODE: AUTO]');
+    expect(prompts[0]).not.toContain('[PLAN MODE: STRICT]');
+    expect(prompts[0]).not.toContain('[PLAN GUIDE]');
+    // TODO не зависит от contextConfig — блок всё равно есть
+    expect(prompts[0]).toContain('[TODO]');
   });
 });

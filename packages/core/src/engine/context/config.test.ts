@@ -177,3 +177,127 @@ describe('ContextConfig.getRules / getRoutingInstructions (локализаци�
     expect(config.getRoutingInstructions('fr')).toBe('');
   });
 });
+
+describe('ContextConfig.getPlanModePrompt / getPlanGuide (AD-028/AD-039)', () => {
+  let userDataDir: string;
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'synth-plan-mode-'));
+  });
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true });
+  });
+
+  it('auto → PLAN_MODE_AUTO.ru.md с маркером [PLAN MODE: AUTO]', async () => {
+    const config = new ContextConfig({ userDataDir });
+    const prompt = config.getPlanModePrompt('auto', false, 'ru');
+    expect(prompt).not.toBeNull();
+    expect(prompt!).toContain('[PLAN MODE: AUTO]');
+    expect(prompt!).toContain('plan_enter');
+  });
+
+  it('strict approved → PLAN_MODE_STRICT_APPROVED, strict not approved → PLAN_MODE_STRICT_NOT_APPROVED', async () => {
+    const config = new ContextConfig({ userDataDir });
+
+    const approved = config.getPlanModePrompt('strict', true, 'ru')!;
+    expect(approved).toContain('[PLAN MODE: STRICT]');
+    expect(approved).toContain('План утверждён');
+
+    const notApproved = config.getPlanModePrompt('strict', false, 'ru')!;
+    expect(notApproved).toContain('[PLAN MODE: STRICT]');
+    expect(notApproved).toContain('план обязателен');
+    expect(notApproved).toContain('запись файлов заблокирована');
+  });
+
+  it('off → null (планирование отключено)', async () => {
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getPlanModePrompt('off', false, 'ru')).toBeNull();
+    expect(config.getPlanModePrompt('off', true, 'ru')).toBeNull();
+  });
+
+  it('неизвестный язык → null (нет PLAN_MODE_AUTO.fr.md и базового файла)', async () => {
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getPlanModePrompt('auto', false, 'fr')).toBeNull();
+    expect(config.getPlanModePrompt('strict', true, 'fr')).toBeNull();
+    expect(config.getPlanModePrompt('strict', false, 'fr')).toBeNull();
+  });
+
+  it('en → английский контент из PLAN_MODE_*.en.md', async () => {
+    const config = new ContextConfig({ userDataDir });
+
+    const auto = config.getPlanModePrompt('auto', false, 'en')!;
+    expect(auto).toContain('[PLAN MODE: AUTO]');
+    expect(auto).toContain('plan_enter');
+    expect(auto).not.toContain('Ты работаешь');
+
+    const approved = config.getPlanModePrompt('strict', true, 'en')!;
+    expect(approved).toContain('The plan is approved');
+
+    const notApproved = config.getPlanModePrompt('strict', false, 'en')!;
+    expect(notApproved).toContain('A plan is mandatory');
+  });
+
+  it('override из system-категории приоритетнее встроенного', async () => {
+    await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
+    await writeFile(join(userDataDir, 'user', 'system', 'PLAN_MODE_AUTO.md'), 'ПОЛЬЗОВАТЕЛЬСКИЙ AUTO', 'utf-8');
+
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getPlanModePrompt('auto', false, 'ru')).toBe('ПОЛЬЗОВАТЕЛЬСКИЙ AUTO');
+  });
+
+  it('локализованный override приоритетнее базового override', async () => {
+    await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
+    await writeFile(join(userDataDir, 'user', 'system', 'PLAN_MODE_AUTO.md'), 'BASE OVERRIDE', 'utf-8');
+    await writeFile(join(userDataDir, 'user', 'system', 'PLAN_MODE_AUTO.en.md'), 'EN OVERRIDE', 'utf-8');
+
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getPlanModePrompt('auto', false, 'en')).toBe('EN OVERRIDE');
+    expect(config.getPlanModePrompt('auto', false, 'ru')).toBe('BASE OVERRIDE');
+  });
+
+  it('getPlanGuide: ru → русский контент, en → английский, fr → null', async () => {
+    const config = new ContextConfig({ userDataDir });
+
+    const ru = config.getPlanGuide('ru');
+    expect(ru).not.toBeNull();
+    expect(ru!).toContain('[PLAN GUIDE]');
+    expect(ru!).toContain('project.plan');
+    expect(ru!).toContain('session.todos');
+
+    const en = config.getPlanGuide('en');
+    expect(en).not.toBeNull();
+    expect(en!).toContain('[PLAN GUIDE]');
+    expect(en!).toContain('The plan belongs to the project');
+
+    expect(config.getPlanGuide('fr')).toBeNull();
+  });
+
+  it('getPlanGuide: override из system-категории приоритетнее встроенного', async () => {
+    await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
+    await writeFile(join(userDataDir, 'user', 'system', 'PLAN_GUIDE.md'), 'ПОЛЬЗОВАТЕЛЬСКИЙ GUIDE', 'utf-8');
+
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getPlanGuide('ru')).toBe('ПОЛЬЗОВАТЕЛЬСКИЙ GUIDE');
+  });
+
+  it('listAllFiles включает локализованные PLAN_MODE_* и PLAN_GUIDE, без базовых', async () => {
+    const config = new ContextConfig({ userDataDir });
+    const names = config.listAllFiles().map((f) => f.filename);
+
+    for (const localized of [
+      'PLAN_MODE_AUTO.ru.md', 'PLAN_MODE_AUTO.en.md',
+      'PLAN_MODE_STRICT_APPROVED.ru.md', 'PLAN_MODE_STRICT_APPROVED.en.md',
+      'PLAN_MODE_STRICT_NOT_APPROVED.ru.md', 'PLAN_MODE_STRICT_NOT_APPROVED.en.md',
+      'PLAN_GUIDE.ru.md', 'PLAN_GUIDE.en.md',
+    ]) {
+      expect(names, localized).toContain(localized);
+    }
+    for (const base of [
+      'PLAN_MODE_AUTO.md', 'PLAN_MODE_STRICT_APPROVED.md',
+      'PLAN_MODE_STRICT_NOT_APPROVED.md', 'PLAN_GUIDE.md',
+    ]) {
+      expect(names, base).not.toContain(base);
+    }
+  });
+});
