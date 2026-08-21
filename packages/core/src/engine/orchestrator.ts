@@ -803,6 +803,7 @@ export class ChatOrchestrator {
       let finalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       let finalModel: string | undefined;
       const allToolCalls: Array<Record<string, unknown>> = [];
+      const allRawToolCalls: Array<{ iteration: number; calls: Record<string, unknown>[] }> = [];
       let stopAfterDeny = false;
       let denyStopReason: string | undefined;
 
@@ -865,22 +866,24 @@ export class ChatOrchestrator {
           const errMsg = String(e);
           warning('ORCHESTRATOR', `LLM stream error: ${errMsg}`);
 
-          if (accumulatedContent || accumulatedReasoning) {
-            await this._saveAssistantMessage(
-              session.id, accumulatedContent, streamId, effectiveAgentRole,
-              finalUsage, chunkModel, accumulatedReasoning, debugCollector, true, providerName,
-            );
-          }
-
           this._cancellationTokens.delete(streamId);
           return this._handleLlmFailure(session.id, streamId, e, publishChunk);
         }
 
         if (cancelToken.cancelled) {
-          if (accumulatedContent || accumulatedReasoning) {
+          // Отмена: сохраняем уже выполненные tool-вызовы (персистентность
+          // tool-chain) — иначе timeline вызовов пропадает из истории.
+          await this._persistToolChain(
+            session.id, streamId, providerName, effectiveAgentRole,
+            chunkModel ?? finalModel,
+            allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
+          );
+
+          if (accumulatedContent || accumulatedReasoning || allToolCalls.length > 0) {
             await this._saveAssistantMessage(
               session.id, accumulatedContent, streamId, effectiveAgentRole,
               finalUsage, chunkModel, accumulatedReasoning, debugCollector, true, providerName,
+              MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
             );
           }
 
@@ -908,6 +911,7 @@ export class ChatOrchestrator {
         if (accumulatedContent) {
           allIntermediateTexts.push({ text: accumulatedContent, iteration: toolIteration });
         }
+        allRawToolCalls.push({ iteration: toolIteration, calls: toolCalls });
 
         // Tool calls detected — execute them
         debugCollector.captureRawModelResponse(
@@ -1109,15 +1113,6 @@ export class ChatOrchestrator {
             }
           }
 
-          publishChunk('tool_call.result', {
-            stream_id: streamId,
-            session_id: session.id,
-            call_id: tcId,
-            name: toolName,
-            result: toolResult,
-            iteration: toolIteration,
-          });
-
           // IPI-защита: оборачиваем tool-контент по матрице доверия + детектируем
           // подозрительные паттерны (флаг/sanitize/block по конфигу).
           if (this._securityConfig.promptInjection.enabled && !toolResult.isError) {
@@ -1173,6 +1168,19 @@ export class ChatOrchestrator {
               }
             }
           }
+
+          // Публикуем результат ПОСЛЕ IPI-обёртки: живой UI (tool_call.result)
+          // должен получать тот же контент, что сохраняется в историю
+          // (metadata.tool_results и tool-chain tool-сообщения), иначе при
+          // перезагрузке вид результата меняется.
+          publishChunk('tool_call.result', {
+            stream_id: streamId,
+            session_id: session.id,
+            call_id: tcId,
+            name: toolName,
+            result: toolResult,
+            iteration: toolIteration,
+          });
 
           // classify_conversation: сохраняем категорию в настройках сессии (AD-034)
           if (toolName === 'classify_conversation' && !toolResult.isError) {
@@ -1322,6 +1330,16 @@ export class ChatOrchestrator {
           });
         }
       }
+
+      // 7.8. Персистентность tool-chain (Вариант B): настоящие пары
+      // «assistant с toolCalls + tool-результаты» в session.messages, чтобы
+      // _sessionMessagesToLlm на следующем запросе выдавал OpenAI-совместимый
+      // диалог. Промежуточные сообщения помечаются metadata.tool_chain=true —
+      // UI их скрывает (визуализация уже есть в финальном сообщении).
+      await this._persistToolChain(
+        session.id, streamId, providerName, effectiveAgentRole, finalModel,
+        allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
+      );
 
       // 8. Save final assistant message
       const reasoningJoined = allReasoning.map((r) => r.text).join('\n\n---\n\n');
@@ -1883,6 +1901,81 @@ export class ChatOrchestrator {
     }
   }
 
+  /**
+   * Персистентность tool-chain (Вариант B): настоящие пары
+   * «assistant с toolCalls + tool-результаты» в session.messages, чтобы
+   * _sessionMessagesToLlm на следующем запросе выдавал OpenAI-совместимый
+   * диалог. Промежуточные сообщения помечаются metadata.tool_chain=true —
+   * UI их скрывает (визуализация уже есть в финальном сообщении).
+   * Вызывается и в успешном пути, и при отмене (уже выполненные итерации).
+   */
+  private async _persistToolChain(
+    sessionId: string,
+    streamId: string,
+    providerName: string,
+    agentRole: string | undefined,
+    finalModel: string | undefined,
+    allRawToolCalls: Array<{ iteration: number; calls: Record<string, unknown>[] }>,
+    allToolCalls: Array<Record<string, unknown>>,
+    allIntermediateTexts: Array<{ text: string; iteration: number }>,
+    allReasoning: Array<{ text: string; iteration: number }>,
+  ): Promise<void> {
+    for (const raw of allRawToolCalls) {
+      const iteration = raw.iteration;
+      const iterText = allIntermediateTexts.find((t) => t.iteration === iteration)?.text ?? '';
+      const iterReasoning = allReasoning.find((r) => r.iteration === iteration)?.text;
+
+      const assistantMsg: Message = {
+        id: generateId(),
+        role: MessageRole.ASSISTANT,
+        seq: 0,
+        origin: 'local',
+        parts: [makeTextPart(iterText)],
+        content: iterText,
+        toolCalls: raw.calls,
+        createdAt: nowISO(),
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        model: finalModel,
+        provider: providerName,
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        agentRole,
+        metadata: { stream_id: streamId, tool_chain: true },
+        ...(iterReasoning ? { reasoning: iterReasoning } : {}),
+      };
+      await this._sessionManager.addMessage(sessionId, assistantMsg);
+
+      for (const tc of allToolCalls.filter((t) => t.iteration === iteration)) {
+        const toolContent = String((tc.result as { content?: string } | undefined)?.content ?? '');
+        const toolMsg: Message = {
+          id: generateId(),
+          role: MessageRole.TOOL,
+          seq: 0,
+          origin: 'local',
+          parts: [makeTextPart(toolContent)],
+          content: toolContent,
+          toolCallId: tc.id as string,
+          createdAt: nowISO(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          model: finalModel,
+          provider: providerName,
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          agentRole,
+          metadata: {
+            stream_id: streamId,
+            tool_chain: true,
+            tool_name: tc.name,
+            args: tc.args,
+          },
+        };
+        await this._sessionManager.addMessage(sessionId, toolMsg);
+      }
+    }
+  }
+
   private async _saveAssistantMessage(
     sessionId: string,
     content: string,
@@ -2039,17 +2132,19 @@ export class ChatOrchestrator {
   }
 
   /**
-   * Единая обработка ошибки LLM-стрима: публикует stream.error (UI получает
-   * человекочитаемую ошибку вместо вечного «Стоп»), пишет last_error в
-   * user-сообщение сессии (по stream_id) и возвращает ProcessMessageResult.
-   * Если ошибка recoverable — session разблокируется на уровне QueueProcessor
-   * после исчерпания попыток; сессия не остаётся заблокированной навсегда.
+   * Единая обработка ошибки LLM-стрима: пишет last_error в user-сообщение
+   * сессии (по stream_id) и возвращает ProcessMessageResult. Публикация
+   * финального исхода (stream.retry для recoverable / stream.error для
+   * non-recoverable) — зона ответственности QueueProcessor, чтобы не было
+   * двойной публикации stream.error. Если ошибка recoverable — session
+   * разблокируется на уровне QueueProcessor после исчерпания попыток; сессия
+   * не остаётся заблокированной навсегда.
    */
   private async _handleLlmFailure(
     sessionId: string,
     streamId: string,
     error: unknown,
-    publishChunk: (event: string, data: Record<string, unknown>) => void,
+    _publishChunk: (event: string, data: Record<string, unknown>) => void,
   ): Promise<ProcessMessageResult> {
     const rawError = error instanceof Error ? error.message : String(error);
     const humanError = this._formatLlmError(error);
@@ -2069,13 +2164,6 @@ export class ChatOrchestrator {
     } catch (err) {
       warning('ORCHESTRATOR', `Не удалось записать last_error: ${err instanceof Error ? err.message : String(err)}`);
     }
-
-    publishChunk('stream.error', {
-      stream_id: streamId,
-      error: humanError,
-      error_type: errorType,
-      can_retry: canRetry,
-    });
 
     return { error: humanError, errorType, canRetry };
   }

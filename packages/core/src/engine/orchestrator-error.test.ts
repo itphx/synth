@@ -40,6 +40,36 @@ class FailingProvider extends BaseProvider {
   }
 }
 
+/** Провайдер, который выдаёт частичный контент И потом падает — регрессия на
+ * «разделение ответа на 2»: раньше частичный assistant сохранялся, затем
+ * сохранялся ещё и полный после ретрая. */
+class PartialContentFailingProvider extends BaseProvider {
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _stream?: boolean,
+    _debugCollector?: unknown,
+  ): Promise<import('@itphx/synth-shared').LLMResponse> {
+    throw new Error('AbortError: This operation was aborted');
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _cancellationToken?: CancellationToken,
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    yield { content: 'частичный ответ до обрыва', isFinal: false, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, model: this.model };
+    throw new Error('AbortError: This operation was aborted');
+  }
+
+  getProviderName(): string {
+    return 'mockpartial';
+  }
+}
+
 function makeCtxBuilder(): ContextBuilder {
   return {
     buildSystemPrompt: async () => 'system prompt',
@@ -75,14 +105,16 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
     sessionManager = new SessionManager(store);
     eventBus = new EventBus();
     ProviderFactory.register('mockfail', FailingProvider);
+    ProviderFactory.register('mockpartial', PartialContentFailingProvider);
   });
 
   afterEach(async () => {
     ProviderFactory['_providers'].delete('mockfail');
+    ProviderFactory['_providers'].delete('mockpartial');
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function run(): Promise<{
+  async function run(providerType = 'mockfail'): Promise<{
     result: Awaited<ReturnType<ReturnType<ChatOrchestrator['createProcessMessage']>>>;
     chunks: Array<{ event: string; data: Record<string, unknown> }>;
     sessionId: string;
@@ -93,14 +125,14 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
       eventBus,
       contextBuilder: makeCtxBuilder(),
       providerLoader: (name: string) => {
-        return { name, type: 'mockfail', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
+        return { name, type: providerType, baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
       },
       defaultWorkingDir: tmpDir,
     });
 
     const session = await sessionManager.createSession({
       title: 'Err',
-      settings: { provider: 'mockfail', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+      settings: { provider: providerType, model: 'm', systemPrompt: 'test', agentRole: 'developer' },
     });
     const msg = makeMessage();
     await sessionManager.addMessage(session.id, msg);
@@ -128,18 +160,25 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
     expect(result.errorType).toBe('timeout');
   });
 
-  it('публикует stream.error с человекочитаемым текстом', async () => {
-    const { chunks, streamId } = await run();
+  it('НЕ публикует stream.error из оркестратора (единый источник — QueueProcessor)', async () => {
+    const { chunks } = await run();
     const err = chunks.find((c) => c.event === 'stream.error');
-    expect(err).toBeDefined();
-    expect(err!.data.stream_id).toBe(streamId);
-    expect(err!.data.error).toContain('LLM-провайдер');
-    expect(err!.data.error_type).toBe('timeout');
+    expect(err).toBeUndefined();
   });
 
   it('записывает last_error в user-сообщение сессии', async () => {
     const { sessionId } = await run();
     const session = await sessionManager.getSession(sessionId);
+    const userMsg = session!.messages.find((m) => m.role === MessageRole.USER);
+    expect(userMsg).toBeDefined();
+    expect(userMsg!.metadata?.last_error).toContain('LLM-провайдер');
+  });
+
+  it('при ошибке стрима с частичным контентом НЕ создаёт assistant-сообщение', async () => {
+    const { sessionId } = await run('mockpartial');
+    const session = await sessionManager.getSession(sessionId);
+    const assistants = session!.messages.filter((m) => m.role === MessageRole.ASSISTANT);
+    expect(assistants).toHaveLength(0);
     const userMsg = session!.messages.find((m) => m.role === MessageRole.USER);
     expect(userMsg).toBeDefined();
     expect(userMsg!.metadata?.last_error).toContain('LLM-провайдер');

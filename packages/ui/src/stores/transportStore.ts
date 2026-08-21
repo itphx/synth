@@ -88,6 +88,7 @@ function createDispatcher(): EventDispatcher {
           provider: payload.provider as string | undefined,
           reasoning: (payload.reasoning as string) || undefined,
           intermediate_text_blocks: payload.intermediate_text_blocks as Array<{ text: string; iteration: number }> | undefined,
+          tool_calls: (payload.tool_calls as MessageData['tool_calls']) ?? null,
           metadata: payload.metadata as Record<string, unknown> | undefined,
           disabled: false,
           pinned: false,
@@ -146,9 +147,18 @@ function createDispatcher(): EventDispatcher {
 
       case 'stream_chunk':
       case 'stream.chunk': {
+        const streamId = payload.stream_id as string
+        // Стрим реально пошёл после ретрая — сбрасываем «зависшую» надпись о
+        // повторе (stream.done мог не дойти/быть потерян при разрыве транспорта).
+        const retry = useChatStore.getState().retryBySession[sid]
+        const streamState = useChatStore.getState().streamingBySession[sid]?.[streamId]
+        if (retry && (retry.streamId === streamId || streamState?.isRetrying)) {
+          setStreamRetry(sid, null)
+          setStreamRetrying(sid, streamId, false)
+        }
         updateStreamChunk(
           sid,
-          payload.stream_id as string,
+          streamId,
           (payload.content as string) || '',
           (payload.reasoning as string) || '',
           payload.model as string | undefined,
