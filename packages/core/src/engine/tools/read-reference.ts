@@ -13,7 +13,7 @@ export const readSessionReferenceTool: ToolDefinition = {
   name: 'read_session_reference',
   description: 'Читает содержимое referenced-сессии (сессии, на которую есть ссылка). Используй когда видишь в контексте блок session_reference.',
   parameters: paramsSchema,
-  capabilities: [ToolCapability.FILE_READ],
+  capabilities: [ToolCapability.RUNTIME],
   async execute(params, ctx: ToolContext): Promise<ToolResult> {
     const sessionManager = ctx.extra?.sessionManager as SessionManager | undefined;
     if (!sessionManager) {

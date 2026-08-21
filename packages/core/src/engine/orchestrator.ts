@@ -14,6 +14,7 @@ import { ContextOptimizer } from './context/optimizer.js';
 import { ContextConfig } from './context/config.js';
 import type { ToolRegistry } from './tools/registry.js';
 import { renderPlanMarkdown } from './tools/plan.js';
+import { renderTodosMarkdown } from './tools/todo.js';
 import type { ToolForLLM } from '@itphx/synth-shared';
 import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
@@ -29,11 +30,13 @@ import { TaskClassifier } from './router/micro/task-classifier.js';
 import { RulesModel, EmbeddingModel, MicroLlmModel } from './router/micro/models/index.js';
 import type { MicroModel } from './router/micro/models/base.js';
 import type { RoutingDecision } from './router/router.js';
-import { PermissionEvaluator } from './permission/evaluator.js';
+import { PermissionEvaluator, isPlanRestricted, isPlanBlockedTool, getMcpToolAvailability } from './permission/evaluator.js';
 import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine } from './security/prompt-injection.js';
+import { loadShellPolicy } from './security/shell-guard.js';
+import type { ShellPolicy } from './security/shell-guard.js';
 import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, PLACEHOLDER_PATTERN, type SecretPatternStore } from './gateway/index.js';
 
 const MAX_DOOM_LOOP_COUNT = 3;
@@ -152,10 +155,29 @@ export class ChatOrchestrator {
   /** Внешний audit-logger (backend/runner) — переиспользуется при live-включении gateway. */
   private readonly _gatewayAuditExternal: AuditLogger | null;
   private _providerPool: ProviderPool | null;
+  /** Shell-политика (денлист путей/команд) — ленивая загрузка с кэшем. */
+  private _shellPolicy: ShellPolicy | null = null;
+  private _shellPolicyLoaded = false;
 
   /** Публичный доступ к реестру агентов (для сериализации modeApplicable). */
   get agentRegistry(): AgentRegistry | null {
     return this._agentRegistry;
+  }
+
+  /**
+   * Shell-политика для execute_shell: системный дефолт definitions/shell-policy.json
+   * + override {dataDir}/context/shell-policy.json. Ленивая загрузка с кэшем;
+   * при недоступности dataDir/файлов — системный дефолт (или пустая политика).
+   */
+  private _getShellPolicy(): ShellPolicy | null {
+    if (this._shellPolicyLoaded) return this._shellPolicy;
+    this._shellPolicyLoaded = true;
+    try {
+      this._shellPolicy = loadShellPolicy({ overridePath: join(this._dataDir, 'context', 'shell-policy.json') });
+    } catch {
+      this._shellPolicy = null;
+    }
+    return this._shellPolicy;
   }
 
   constructor(options: OrchestratorOptions) {
@@ -397,41 +419,23 @@ export class ChatOrchestrator {
   ): Promise<string> {
     const parts: string[] = [];
 
-    // AD-025: промпт текущего режима загружается из контекстных файлов
-    // (prompts/modes/{mode}.md, переопределяемые через dataDir/context/modes).
-    // Если файл не найден — fallback на встроенный текст ниже.
+    // AD-025: промпт текущего режима загружается из contextConfig.getModePrompt
+    // (prompts/system/MODE_{PLAN,ACT,YOLO}.{lang}.md, переопределяемые через dataDir/context/user/system).
+    // Если getModePrompt вернул null (нет contextConfig или файла) — блок режима
+    // не добавляется ни для одного режима.
     const language = session.settings.language || 'ru';
     const modePrompt = this._contextConfig?.getModePrompt(sessionMode, language) ?? null;
     if (modePrompt) {
       parts.push(modePrompt);
-    } else if (sessionMode === 'plan') {
-      parts.push(
-        '[MODE: PLAN]\n'
-        + 'Ты в режиме планирования: чтение и исследование разрешены, но запись/изменение файлов '
-        + 'заблокированы. Работай с планом проекта через plan_read/plan_write. Заверши через plan_exit, '
-        + 'чтобы перейти в режим act.',
-      );
     }
 
-    if (planMode === 'auto') {
-      parts.push(
-        '[PLAN MODE: AUTO]\n'
-        + 'Если задача сложная, затрагивает несколько файлов или требует архитектурных решений — '
-        + 'вызови plan_enter перед изменениями. Для простых фиксов — делай сразу.',
-      );
-    } else if (planMode === 'strict') {
-      if (planApproved) {
-        parts.push(
-          '[PLAN MODE: STRICT]\n'
-          + 'План утверждён — ты можешь вносить изменения в соответствии с ним.',
-        );
-      } else {
-        parts.push(
-          '[PLAN MODE: STRICT]\n'
-          + 'Перед любым изменением файлов план обязателен: вызови plan_enter, составь план и утверди '
-          + 'его через plan_exit. До утверждения плана запись файлов заблокирована (чтение разрешено).',
-        );
-      }
+    // AD-028/AD-039: промпт строгости цикла Plan→Build загружается из contextConfig
+    // (prompts/system/PLAN_MODE_{AUTO,STRICT_APPROVED,STRICT_NOT_APPROVED}.{lang}.md,
+    // переопределяемые через dataDir/context/user/system). planMode 'off' → null —
+    // блок не добавляется.
+    const planModePrompt = this._contextConfig?.getPlanModePrompt(planMode, planApproved, language) ?? null;
+    if (planModePrompt) {
+      parts.push(planModePrompt);
     }
 
     // AD-039: блок [APPROVED PLAN] собирается из плана проекта (project.plan).
@@ -440,8 +444,64 @@ export class ChatOrchestrator {
       parts.push(`[APPROVED PLAN]\n${approvedPlan}`);
     }
 
+    // AD-039: блок [TODO] собирается из session.todos.
+    const todosMarkdown = renderTodosMarkdown(session.todos ?? []);
+    if (todosMarkdown) {
+      parts.push(`[TODO]\n${todosMarkdown}`);
+    }
+
+    // AD-039: инструкция по ведению плана и todo (PLAN_GUIDE) встраивается
+    // всегда, когда доступен контекст (contextConfig), независимо от наличия
+    // плана или todo — модель должна знать разницу между ними с первого запроса.
+    const guide = this._contextConfig?.getPlanGuide(language) ?? null;
+    if (guide) {
+      parts.push(guide);
+    }
+
     if (parts.length === 0) return base;
     return `${base}\n\n${parts.join('\n\n')}`;
+  }
+
+  /**
+   * AD-025: фильтрует список тулов, передаваемых LLM, по текущему режиму сессии.
+   * В plan-режиме (или strict без утверждённого плана) из списка убираются
+   * write/edit-тулы и git-запись (группы edit/git_write) — модель не видит
+   * инструментов, которые всё равно будут отклонены PermissionEvaluator'ом.
+   * MCP-инструменты фильтруются по настройкам доступности (plan/act).
+   * Режимы act/yolo — полный список без изменений.
+   */
+  private _filterToolsByMode(
+    tools: ToolForLLM[] | undefined,
+    session: Session,
+    sessionMode: SessionMode,
+    planMode: PlanMode,
+    planApproved: boolean,
+  ): ToolForLLM[] | undefined {
+    if (!tools || tools.length === 0) return tools;
+    // Рестрикция не активна (act/yolo/off) — полный список тулов.
+    if (!isPlanRestricted(sessionMode, planMode, planApproved)) return tools;
+
+    const mcpToolSettings = session.settings.mcpToolSettings;
+    const result: ToolForLLM[] = [];
+    for (const tool of tools) {
+      const toolName = tool.function.name;
+      const toolDef = this._toolRegistry?.get(toolName);
+      const capabilities = toolDef?.capabilities;
+
+      // Edit-группа (write/edit/delete) и git-запись блокируются в plan-режиме —
+      // скрываем их от модели, чтобы она не пыталась их вызывать.
+      if (isPlanBlockedTool(toolName, capabilities)) continue;
+
+      // MCP-инструменты: в plan-режиме недоступный по настройкам тул убираем из
+      // списка (консистентно с PermissionEvaluator: modeKey = 'plan').
+      if (capabilities?.includes(ToolCapability.MCP) && mcpToolSettings) {
+        const availability = getMcpToolAvailability(mcpToolSettings, toolName);
+        if (availability && !availability.plan) continue;
+      }
+
+      result.push(tool);
+    }
+    return result;
   }
 
   /**
@@ -769,22 +829,25 @@ export class ChatOrchestrator {
         }
       }
 
-      // 4. Get tools from registry, filtered by agent capabilities
-      let tools: ToolForLLM[] | undefined;
+      // 4. Get tools from registry, filtered by agent capabilities.
+      // baseTools — полный набор по агентам; tools — с учётом режима сессии
+      // (AD-025): пересобирается из baseTools после plan_enter/plan_exit.
+      let baseTools: ToolForLLM[] | undefined;
       if (this._toolRegistry) {
         if (this._agentRegistry && effectiveAgentRole) {
-          tools = this._agentRegistry.getToolsForAgent(effectiveAgentRole);
+          baseTools = this._agentRegistry.getToolsForAgent(effectiveAgentRole);
         }
-        if (tools === undefined) {
+        if (baseTools === undefined) {
           // Агент не найден в реестре — отдаём только встроенные инструменты (без MCP)
           const allNonMcp = Object.values(ToolCapability).filter(
             (c) => c !== ToolCapability.MCP,
           );
-          tools = this._toolRegistry.filterByCapabilities(allNonMcp);
-        } else if (tools.length === 0) {
-          tools = [];
+          baseTools = this._toolRegistry.filterByCapabilities(allNonMcp);
+        } else if (baseTools.length === 0) {
+          baseTools = [];
         }
       }
+      let tools = this._filterToolsByMode(baseTools, session, sessionMode, planMode, planApproved);
 
       // 5. Create cancellation token
       const cancelToken: CancellationToken = {
@@ -1005,6 +1068,7 @@ export class ChatOrchestrator {
             planMode,
             planApproved,
             mcpToolSettings: session.settings.mcpToolSettings,
+            shellPolicy: this._getShellPolicy() ?? undefined,
           });
 
           let executeTool = permissionDecision.action === 'allow';
@@ -1105,6 +1169,7 @@ export class ChatOrchestrator {
                       sessionId: session.id,
                       toolRegistry: this._toolRegistry,
                       permissionConfig: effectivePermissionConfig,
+                      shellPolicy: this._getShellPolicy() ?? undefined,
                     },
                   });
                 } catch (execError) {
@@ -1207,18 +1272,21 @@ export class ChatOrchestrator {
           }
 
           // AD-025/AD-039: обновляем локальный режим после plan_enter/plan_exit,
-          // чтобы ограничения и system prompt применились к следующим тулам/итерациям.
+          // чтобы ограничения, system prompt и список тулов применились к
+          // следующим тулам/итерациям.
           if (!toolResult.isError && toolName === 'plan_enter') {
             sessionMode = 'plan';
             finalSystemPrompt = await this._buildPlanSystemPrompt(
               finalSystemPrompt, session, planMode, sessionMode, planApproved,
             );
+            tools = this._filterToolsByMode(baseTools, session, sessionMode, planMode, planApproved);
           } else if (!toolResult.isError && toolName === 'plan_exit') {
             planApproved = true;
             sessionMode = 'act';
             finalSystemPrompt = await this._buildPlanSystemPrompt(
               finalSystemPrompt, session, planMode, sessionMode, planApproved,
             );
+            tools = this._filterToolsByMode(baseTools, session, sessionMode, planMode, planApproved);
           }
 
           allToolCalls.push({

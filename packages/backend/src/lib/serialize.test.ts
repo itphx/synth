@@ -140,10 +140,10 @@ describe('serializeSession — mode_applicable (AD-025)', () => {
     expect(serialized.mode_applicable).toBe(false);
   });
 
-  it('агент с web → mode_applicable=true', () => {
+  it('агент только с web (read-only) → mode_applicable=false (web не мутирует)', () => {
     const session = makeSession({ settings: { agentRole: 'agent' } as never });
     const serialized = serializeSession(session, { agentRegistry: registry(['file_read', 'search', 'web', 'mcp']) });
-    expect(serialized.mode_applicable).toBe(true);
+    expect(serialized.mode_applicable).toBe(false);
   });
 
   it('агент с shell → mode_applicable=true', () => {

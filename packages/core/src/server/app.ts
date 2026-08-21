@@ -286,6 +286,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     sessionManager,
     eventBus,
     contextBuilder,
+    contextConfig,
     providerLoader,
     contextOptimizer,
     modelPriceLoader,

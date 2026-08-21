@@ -878,3 +878,173 @@ describe('taskTool × permissions саб-агента (AD-029)', () => {
     unsub();
   });
 });
+
+/** Провайдер саб-агента: первый вызов — execute_shell с cat ~/.ssh/id_rsa. */
+class MockSubagentShellProvider {
+  private _calls = 0;
+
+  async *chatAsync(): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    this._calls++;
+    if (this._calls === 1) {
+      yield {
+        content: '',
+        isFinal: true,
+        toolCalls: [{
+          id: 'call_shell',
+          function: { name: 'execute_shell', arguments: JSON.stringify({ command: 'cat ~/.ssh/id_rsa' }) },
+        }],
+      } as import('@itphx/synth-shared').LLMChunk;
+    } else {
+      yield { content: 'готово', isFinal: true, toolCalls: [] } as import('@itphx/synth-shared').LLMChunk;
+    }
+  }
+
+  model = 'test-model';
+  name = 'test-provider';
+}
+
+describe('taskTool × shellPolicy саб-агента (B3/B5)', () => {
+  let store: FileStore;
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  const SHELL_POLICY = {
+    deniedPaths: ['~/.ssh/id_rsa'],
+    deniedPrefixes: ['~/.ssh'],
+    approvalPaths: [],
+    deniedCommandPrefixes: [],
+  } as import('../security/shell-guard.js').ShellPolicy;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-task-shell-'));
+    store = new FileStore({ dataDir: tmpDir });
+    sessionManager = new SessionManager(store);
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('B3: shellPolicy родителя применяется к execute_shell саб-агента (deny на cat ~/.ssh/id_rsa)', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const toolRegistry = createToolRegistry();
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'прочитай ключ', subagent_type: 'explore' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: new MockSubagentShellProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          toolRegistry,
+          shellPolicy: SHELL_POLICY,
+        },
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    const childId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childId))!;
+    const toolMsg = child.messages.find((m) => m.role === MessageRole.TOOL);
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg!.content).toContain('Permission denied');
+    expect(toolMsg!.content).toContain('id_rsa');
+  });
+
+  it('B5: саб-агент в plan-режиме не получает write/git-тулы (режимная фильтрация)', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    parent.mode = 'plan';
+    await sessionManager.updateSession(parent);
+
+    let capturedTools: unknown;
+    const capturingProvider = {
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: unknown, _system: unknown, tools: unknown) {
+        capturedTools = tools;
+        yield { isFinal: true, content: 'OK', toolCalls: [] };
+      }),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+
+    const toolRegistry = createToolRegistry();
+    const agentRegistry = {
+      ...makeMockAgentRegistry(),
+      getToolsForAgent: () => toolRegistry.toLLMFormat(),
+    } as unknown as MockAgentRegistry;
+
+    await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: capturingProvider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry,
+          toolRegistry,
+        },
+      },
+    );
+
+    const names = (capturedTools as Array<{ function: { name: string } }>).map((t) => t.function.name);
+    expect(names).not.toContain('write_file');
+    expect(names).not.toContain('edit_file');
+    expect(names).not.toContain('git_commit');
+    expect(names).toContain('read_file');
+    expect(names).toContain('execute_shell');
+  });
+
+  it('B5: в act-режиме список тулов не фильтруется', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    let capturedTools: unknown;
+    const capturingProvider = {
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: unknown, _system: unknown, tools: unknown) {
+        capturedTools = tools;
+        yield { isFinal: true, content: 'OK', toolCalls: [] };
+      }),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+
+    const toolRegistry = createToolRegistry();
+    const agentRegistry = {
+      ...makeMockAgentRegistry(),
+      getToolsForAgent: () => toolRegistry.toLLMFormat(),
+    } as unknown as MockAgentRegistry;
+
+    await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: capturingProvider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry,
+          toolRegistry,
+        },
+      },
+    );
+
+    const names = (capturedTools as Array<{ function: { name: string } }>).map((t) => t.function.name);
+    expect(names).toContain('write_file');
+    expect(names).toContain('git_commit');
+    expect(names).toContain('read_file');
+  });
+});

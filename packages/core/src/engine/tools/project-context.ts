@@ -148,7 +148,7 @@ export const getProjectInfoTool: ToolDefinition = {
   description:
     'Get information about the current project of the session: name, path, id, and git repository if present.',
   parameters: z.object({}),
-  capabilities: [ToolCapability.FILE_READ],
+  capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
     const parts: string[] = [];
 
@@ -207,7 +207,7 @@ export const listReposTool: ToolDefinition = {
     'List git repositories related to the project. If the project has configured repos — lists them, '
     + 'otherwise scans the working directory for git repositories.',
   parameters: z.object({}),
-  capabilities: [ToolCapability.GIT_READ],
+  capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
     const parts: string[] = [];
 

@@ -112,6 +112,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     sessionManager,
     eventBus,
     contextBuilder,
+    contextConfig,
     providerLoader,
     contextOptimizer,
     modelPriceLoader,

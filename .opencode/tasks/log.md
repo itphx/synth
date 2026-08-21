@@ -536,3 +536,36 @@
 - **Первопричина:** обработчик `session.updated` (transportStore) патчил сессию в сторе (дерево), но не обновлял `centerTabs[].title`; ручное переименование делало это отдельно (LeftPanel.onRenameCommit → updateTabTitle), событийный путь — нет.
 - **Исправление:** в case 'session.updated' при непустом строковом `name` в payload — `useUIStore.getState().updateTabTitle('chat-'+sid, name)`. Закрывает и автопереименование, и любое переименование через API. Вкладка не открыта / name нет — безопасно.
 - **Верификация:** typecheck ✅; lint 0 errors ✅; test: ui 29 / core 685 / backend 170 ✅.
+
+## 2026-08-21 (пятая правка) — Режимы Plan/Act/YOLO + capabilities + безопасность execute_shell
+- **Задача:** «Переключатели режимов Plan/Act/YOLO не работают. Модель не видит изменений в доступности, как и описания текущего режима. Пересмотреть capabilities. Прикрутить к shell фильтрацию и безопасность (по opencode/hermes).»
+- **Тип:** bug + feature + refactor
+- **Исполнитель:** @fixer (5 итераций), @tester (2 верификации, нашёл дыры B1–B5), оркестратор
+- **Результат:** PASS
+- **Ветка:** fix/mode-tools-shell-security (из master, 44bb8b5)
+- **Коммит:** 9bb89ae (fix: режимы Plan/Act/YOLO — фильтрация тулов и описания режимов в system prompt, ревью capabilities, безопасность execute_shell)
+- **Ключевое:**
+  1. **Режимы Plan/Act/YOLO** (orchestrator.ts): список тулов LLM фильтруется по режиму (`_filterToolsByMode`: plan → убирает edit/git_write + MCP с availability.plan=false) и пересобирается после plan_enter/plan_exit в tool-цикле (раньше — только system prompt).
+  2. **contextConfig не передавался в ChatOrchestrator** (core app.ts, chat.ts, backend main.ts) → `_contextConfig = null` → `getModePrompt` недоступен → описания режимов НЕ попадали в системный промпт (в реальной сессии «Разговор о разном»: system=3581 символов без [MODE: YOLO], debug через api_request.body.system). Фикс: `contextConfig` передан во все 3 точки.
+  3. **Файлы режимов**: `prompts/modes/{plan,act,yolo}.md` → `prompts/system/MODE_{PLAN,ACT,YOLO}.{ru,en}.md` (стиль RULES/GATEWAY); базовые файлы без языка удалены (MODE_*.md, RULES.md, ROUTING.md — дубликаты/устаревшие); встроенный fallback [MODE: PLAN] удалён (блок режима грузится только из getModePrompt).
+  4. **Capabilities**: `read_session_reference`/`get_project_info`/`list_repos` → RUNTIME (были file_read/git_read, рассинхрон с permission-группами); `isModeApplicable` — web больше не «мутирующий» (только SHELL||FILE_WRITE); по решению пользователя: analyst+git_read, assistant−shell, auditor+web, developer+web+task, devops+task, explore+git_read, general−runtime, pm+file_write+git_write+task, qa+web+task.
+  5. **Безопасность execute_shell**: `security/shell-guard.ts` — shlex-токенизатор, `splitShellSegments` (; / && / & / | вне кавычек), извлечение путей (~, $HOME, $PWD, динамика → unknown), `isMutatingCommand` (в т.ч. рекурсивный разбор `sh -c`/`eval`/`sudo`, `find -delete/-exec`), `checkShellCommand`; файл-политика `definitions/shell-policy.json` (deniedPaths/deniedPrefixes/approvalPaths/deniedCommandPrefixes, полный hermes-набор) + override `{dataDir}/context/shell-policy.json`; интеграция через PermissionEvaluator (plan-режим блокирует мутирующие, префиксные правила `permission.rules.shell`, денлист поверх конфига); shellPolicy проброшен саб-агентам (task.ts), тулы саб-агента фильтруются по режиму.
+- **Дыры QA (закрыты фиксером):** B1 обход plan через `;`/`&&`; B2 deniedCommandPrefixes только с начала строки; B3 shellPolicy не у саб-агентов; B4 sudo/find -delete/sh -c/eval; B5 тулы саб-агента без фильтра режима.
+- **Верификация:** typecheck ✅ (6 пакетов); lint 0 errors ✅; test: core 788 / backend 170 / ui 29 / shared 66 ✅; адверсальный QA 34+ кейсов (обходы, денлист, обёртки, саб-агенты) PASS; сборка core → dist/prompts/system/MODE_*.{ru,en}.md ✅.
+- **Проблемы/оговорки:** `$(...)`-динамика не резолвится (осознанное ограничение дизайна) — возможно блокировать в plan отдельной задачей; для применения изменений нужна пересборка core + перезапуск dev-серверов.
+
+## 2026-08-22 (шестая правка) — PLAN MODE в контекстные файлы + PLAN_GUIDE/TODO
+- **Задача:** «Текст заметок про PLAN MODE захардкожен? Если да — надо переделать: брать из системных контекстных файлов, с поддержкой языков. Проверить источник APPROVED PLAN. В заметках про план и todo — инструкция об обновлении при выполнении задач. Модель ничего не знает о todo и отличии от плана — дополнить инструкции.»
+- **Тип:** feature (core — промпты + оркестратор + тулы)
+- **Исполнитель:** @fixer (2 итерации), оркестратор
+- **Результат:** PASS
+- **Ветка:** fix/mode-tools-shell-security (продолжение)
+- **Суть:**
+  1. **PLAN MODE убран из хардкода**: `[PLAN MODE: AUTO]`/`[PLAN MODE: STRICT]` (2 варианта) жили строкой в orchestrator.ts, только русский. Теперь — контекстные файлы `prompts/system/PLAN_MODE_AUTO.{ru,en}.md`, `PLAN_MODE_STRICT_APPROVED.{ru,en}.md`, `PLAN_MODE_STRICT_NOT_APPROVED.{ru,en}.md`; метод `ContextConfig.getPlanModePrompt(planMode, planApproved, language)` (off → null; override user/system → встроенный).
+  2. **APPROVED PLAN — источник подтверждён**: `project.plan` (AD-039, план в проекте) → `_renderProjectPlan` → `renderPlanMarkdown`. Менять не потребовалось.
+  3. **Блок [TODO]** в system prompt: `session.todos` рендерится через `renderTodosMarkdown` (todo.ts) → `[TODO]` (раньше модель видела todo только через `todo_list`).
+  4. **PLAN_GUIDE.{ru,en}.md** — справочник «План и Todo»: план = стратегия проекта (kanban, project.plan), todo = оперативные шаги сессии (session.todos), отличие, правила ведения (декомпозиция → статусы → синхронизация через planItemId). Вставляется ВСЕГДА (по решению пользователя), не только при наличии плана/todo.
+  5. **MODE_PLAN/ACT/YOLO.{ru,en}.md** — DIRECT INSTRUCTION дополнены: план + декомпозиция в todo; планирование доступно в любом режиме (пользователь уточнил: «в act/yolo модель тоже может планировать»).
+  6. **Описания тулов todo_*** — добавлен контекст «оперативный список задач сессии, в отличие от плана проекта; planItemId связывает с пунктом плана».
+- **Верификация:** typecheck ✅ (6 пакетов); lint 0 errors ✅; test: core 805 / backend 170 / ui 29 / shared 66 ✅; build core → dist/prompts/system/PLAN_GUIDE/PLAN_MODE/MODE_* обновлены ✅.
+- **Follow-up:** для применения в рантайме нужна пересборка core + перезапуск dev-серверов; наработки двух подзадач (PLAN MODE в файлы + PLAN_GUIDE/TODO) будут слиты в master --no-ff.

@@ -15,3 +15,19 @@ export type {
 } from './prompt-injection.js';
 export { getToolTrust } from './trust.js';
 export type { ToolTrustInfo } from './trust.js';
+export {
+  tokenizeCommand,
+  extractCommandPaths,
+  isMutatingCommand,
+  loadShellPolicy,
+  checkShellCommand,
+  matchShellCommandPattern,
+  clearShellPolicyCache,
+  DEFAULT_POLICY,
+} from './shell-guard.js';
+export type {
+  ShellPolicy,
+  ShellPolicyOptions,
+  ExtractedPath,
+  ShellCheckResult,
+} from './shell-guard.js';

@@ -13,7 +13,9 @@
     "file_write",
     "search",
     "shell",
+    "web",
     "git_read",
+    "task",
     "mcp",
     "runtime"
   ],

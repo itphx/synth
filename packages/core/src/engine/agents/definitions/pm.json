@@ -10,8 +10,11 @@
   },
   "capabilities": [
     "file_read",
+    "file_write",
     "search",
     "web",
+    "git_write",
+    "task",
     "mcp",
     "runtime"
   ],
