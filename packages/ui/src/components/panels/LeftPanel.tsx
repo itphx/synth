@@ -239,7 +239,9 @@ function ProjectsTab() {
         { label: t('leftPanel.rename'), icon: 'pencil-ai', onClick: () => { setRenamingId(session.id); setRenameValue(session.name || session.id) } },
         { label: t('leftPanel.forkSession'), icon: 'git-branch', onClick: async () => {
           const result = await forkSession(session.id)
-          if (result) { setRenamingId(result.id); setRenameValue(result.id) }
+          if (result) {
+            openTab({ id: `chat-${result.id}`, type: 'chat', title: result.name || result.id, data: { sessionId: result.id, projectId: result.project_id || undefined } })
+          }
         }},
         { label: t('leftPanel.clearSession'), icon: 'close', onClick: () => setConfirm({
           title: t('leftPanel.clearSession'),
@@ -414,7 +416,7 @@ function ProjectsTab() {
           const uiState = useUIStore.getState()
           if (uiState.collapsedProjects.has('__none__')) uiState.toggleProjectCollapse('__none__')
           const result = await createSession({ project_id: null })
-          if (result) { setRenamingId(result.id); setRenameValue(result.id) }
+          if (result) openTab({ id: 'chat-' + result.id, type: 'chat', title: result.name || result.id, data: { sessionId: result.id, projectId: result.project_id || undefined } })
         }}
         onDropSession={async (sessionId) => { await moveSession(sessionId, null) }}
         t={t}
@@ -443,20 +445,20 @@ function ProjectsTab() {
               const uiState = useUIStore.getState()
               if (uiState.collapsedProjects.has(project.id)) uiState.toggleProjectCollapse(project.id)
               const result = await createSession({ project_id: project.id })
-              if (result) { setRenamingId(result.id); setRenameValue(result.id) }
+              if (result) openTab({ id: 'chat-' + result.id, type: 'chat', title: result.name || result.id, data: { sessionId: result.id, projectId: result.project_id || undefined } })
             }}
             onDropSession={async (sessionId) => { await moveSession(sessionId, project.id) }}
             projectActions={[
               { id: 'new-session', icon: 'add' as const, title: t('leftPanel.newSession'), onClick: async () => {
                 const result = await createSession({ project_id: project.id })
-                if (result) { setRenamingId(result.id); setRenameValue(result.id) }
+                if (result) openTab({ id: 'chat-' + result.id, type: 'chat', title: result.name || result.id, data: { sessionId: result.id, projectId: result.project_id || undefined } })
               }},
             ]}
             projectContextItems={[
               { label: t('leftPanel.editProject'), icon: 'settings-3' as const, onClick: () => { setEditingProject({ ...project }) } },
               { label: t('leftPanel.newSession'), icon: 'add' as const, onClick: async () => {
                 const result = await createSession({ project_id: project.id })
-                if (result) { setRenamingId(result.id); setRenameValue(result.id) }
+                if (result) openTab({ id: 'chat-' + result.id, type: 'chat', title: result.name || result.id, data: { sessionId: result.id, projectId: result.project_id || undefined } })
               }},
               'separator' as const,
               { label: t('leftPanel.delete'), icon: 'delete-bin' as const, onClick: () => setConfirm({

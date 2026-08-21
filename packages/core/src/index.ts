@@ -46,7 +46,7 @@ export { ModelRouter, ContentClassifier, ProviderPool, QualityChecker } from './
 export type { RoutingRequest, RoutingDecision, ContentCategory, ClassifyRequest, ClassifyResult, QualityCheckInput, QualityCheckResult } from './engine/router/index.js';
 
 export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
-export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions, isModeApplicable } from './engine/agents/index.js';
+export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions, normalizeAgentModes, isModeApplicable } from './engine/agents/index.js';
 export { McpClient, McpManager } from './engine/mcp/index.js';
 export type { McpToolDef, McpToolResult } from './engine/mcp/index.js';
 

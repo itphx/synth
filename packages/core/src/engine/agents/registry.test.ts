@@ -94,4 +94,35 @@ describe('createAgentRegistry', () => {
     expect(registry.get('@bankassist')).toBeUndefined();
     expect(registry.list().map((a) => a.id)).not.toContain('@bankassist');
   });
+
+  it('agentMode нормализуется в массив при регистрации', async () => {
+    const registry = createAgentRegistry(undefined, overridesDir);
+
+    // title — системный (из дефиниции), assistant — основной по дефолту
+    expect(registry.get('title')?.agentMode).toEqual(['system']);
+    expect(registry.get('assistant')?.agentMode).toEqual(['primary']);
+    expect(registry.get('general')?.agentMode).toEqual(['subagent']);
+  });
+
+  it('list({ mode }) фильтрует по классам агентов', async () => {
+    const registry = createAgentRegistry(undefined, overridesDir);
+
+    const primaryIds = registry.list({ mode: 'primary' }).map((a) => a.id);
+    expect(primaryIds).toContain('assistant');
+    expect(primaryIds).not.toContain('general');
+    expect(primaryIds).not.toContain('title');
+
+    const subagentIds = registry.list({ mode: 'subagent' }).map((a) => a.id);
+    expect(subagentIds).toContain('general');
+    expect(subagentIds).not.toContain('assistant');
+
+    const systemIds = registry.list({ mode: 'system' }).map((a) => a.id);
+    expect(systemIds).toContain('title');
+    expect(systemIds).not.toContain('assistant');
+
+    const allIds = registry.list({ mode: 'all' }).map((a) => a.id);
+    expect(allIds).toContain('title');
+    expect(allIds).toContain('assistant');
+    expect(allIds).toContain('general');
+  });
 });

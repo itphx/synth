@@ -38,12 +38,14 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
     ? sortedAgents.filter((a) => {
         const q = searchQuery.toLowerCase()
         return (
+          a.agent_mode == null || a.agent_mode.includes('primary')
+        ) && (
           a.display_name.toLowerCase().includes(q) ||
           a.id.toLowerCase().includes(q) ||
           (a.description && a.description.toLowerCase().includes(q))
         )
       })
-    : sortedAgents.filter((a) => a.agent_mode !== 'subagent')
+    : sortedAgents.filter((a) => a.agent_mode == null || a.agent_mode.includes('primary'))
 
   return (
     <DropdownMenu.Root open={open} onOpenChange={setOpen}>

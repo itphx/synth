@@ -22,6 +22,7 @@ export const ProjectsTabToolbar: React.FC = () => {
   const { createProject } = useProjectsStore()
   const { createSession } = useSessionsStore()
   const { collapsedProjects } = useUIStore()
+  const openTab = useUIStore((s) => s.openTab)
 
   const [popover, setPopover] = useState<PopoverType>(null)
   const [projectName, setProjectName] = useState('')
@@ -38,7 +39,15 @@ export const ProjectsTabToolbar: React.FC = () => {
   const handleCreateSession = async () => {
     const name = sessionName.trim() || undefined
     const result = await createSession({ name, project_id: sessionProjectId })
-    if (result) setPopover(null)
+    if (result) {
+      setPopover(null)
+      openTab({
+        id: 'chat-' + result.id,
+        type: 'chat',
+        title: result.name || result.id,
+        data: { sessionId: result.id, projectId: result.project_id || undefined },
+      })
+    }
   }
 
   const handleOpenChange = (type: PopoverType) => (open: boolean) => {

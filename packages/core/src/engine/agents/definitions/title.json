@@ -12,8 +12,8 @@
   "icon": "pencil",
   "color": "#6b7280",
   "contextFile": "title",
-  "hidden": true,
   "temperature": 0.3,
-  "agentMode": "primary",
+  "reasoningLevel": "none",
+  "agentMode": ["system"],
   "sshKeys": []
 }

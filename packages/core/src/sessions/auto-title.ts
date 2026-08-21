@@ -28,16 +28,16 @@ export async function autoTitleSession(
   session: Session,
   manager: SessionManager,
   provider: BaseProvider,
-): Promise<void> {
+): Promise<string | null> {
   try {
-    if (session.parentId) return;
-    if (!isDefaultTitle(session.title)) return;
+    if (session.parentId) return null;
+    if (!isDefaultTitle(session.title)) return null;
 
     const userMsgs = session.messages.filter(
       (m) => m.role === 'user' && !m.metadata?.synthetic,
     );
-    if (userMsgs.length === 0) return;
-    if (userMsgs.length > 1) return;
+    if (userMsgs.length === 0) return null;
+    if (userMsgs.length > 1) return null;
 
     const firstUser = userMsgs[0]!;
     const firstAssistant = session.messages.find(
@@ -85,15 +85,16 @@ export async function autoTitleSession(
       || '';
 
     text = text.replace(/^["']|["']$/g, '').trim();
-    if (!text) return;
+    if (!text) return null;
 
     const title = text.length > 100 ? text.substring(0, 97) + '...' : text;
 
     const current = await manager.getSession(session.id);
-    if (!current || !isDefaultTitle(current.title)) return;
+    if (!current || !isDefaultTitle(current.title)) return null;
 
     await manager.renameSession(session.id, title);
+    return title;
   } catch {
-    // daemon — ошибки не всплывают
+    return null;
   }
 }

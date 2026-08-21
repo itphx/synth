@@ -5,11 +5,14 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pickLocalized } from '@itphx/synth-shared';
-import type { AgentDefinition, ToolCapability } from '@itphx/synth-shared';
+import type { AgentDefinition, ReasoningLevel, ToolCapability } from '@itphx/synth-shared';
 import { AgentRegistry } from './registry.js';
 import type { ToolRegistry } from '../tools/registry.js';
 
 const DEFINITIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'definitions');
+
+import { normalizeAgentModes } from './normalize.js';
+export { normalizeAgentModes };
 
 interface AgentDefFile {
   id: string;
@@ -19,10 +22,10 @@ interface AgentDefFile {
   icon: string;
   color: string;
   contextFile: string;
-  hidden?: boolean;
-  agentMode?: 'primary' | 'subagent' | 'all';
+  agentMode?: string | string[];
   subagentPrompt?: string;
   maxSteps?: number;
+  reasoningLevel?: ReasoningLevel;
 }
 
 export function loadSystemAgentDefinitions(): AgentDefinition[] {
@@ -42,12 +45,12 @@ export function loadSystemAgentDefinitions(): AgentDefinition[] {
       color: def.color,
       contextFile: def.contextFile,
       enabled: true,
-      hidden: def.hidden ?? false,
       sshKeys: [],
       isOverridden: false,
-      agentMode: def.agentMode,
+      agentMode: normalizeAgentModes(def.agentMode),
       subagentPrompt: def.subagentPrompt,
       maxSteps: def.maxSteps,
+      reasoningLevel: def.reasoningLevel,
     });
   }
 
@@ -68,7 +71,9 @@ export function createAgentRegistry(
     if (!existsSync(overridePath)) return sysAgent;
     try {
       const override = JSON.parse(readFileSync(overridePath, 'utf-8')) as AgentDefinition;
-      return { ...sysAgent, ...override };
+      const merged = { ...sysAgent, ...override };
+      merged.agentMode = normalizeAgentModes(merged.agentMode);
+      return merged;
     } catch {
       return sysAgent;
     }

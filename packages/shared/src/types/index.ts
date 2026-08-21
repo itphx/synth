@@ -413,19 +413,22 @@ export interface AuthConfig {
 }
 
 // --- Agent ---
+export type AgentMode = 'primary' | 'subagent' | 'system';
+
 export interface AgentDefinition {
   id: string;
   displayName: string;
   contextFile?: string;
   capabilities: ToolCapability[];
   enabled: boolean;
-  hidden?: boolean;
   provider?: string;
   model?: string;
   temperature?: number;
   topP?: number;
   topK?: number;
-  agentMode?: 'primary' | 'subagent' | 'all';
+  /** Уровень размышлений агента. Не задано — используется session.settings.reasoningLevel. */
+  reasoningLevel?: ReasoningLevel;
+  agentMode?: AgentMode | AgentMode[];
   subagentPrompt?: string;
   maxSteps?: number; // 0 = без ограничений, undefined = default (0 для primary, 15 для subagent)
   sshKeys: string[];

@@ -2,10 +2,31 @@ import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import { JsonStore } from '../../storage/json-store.js';
 import type { AgentDefinition } from '@itphx/synth-shared';
-import { loadSystemAgentDefinitions } from '../../engine/agents/index.js';
+import { loadSystemAgentDefinitions, normalizeAgentModes } from '../../engine/agents/index.js';
 import type { AgentRegistry } from '../../engine/agents/index.js';
 
 const AGENT_ID_REGEX = /^[a-z0-9_-]+$/;
+
+const AGENT_FIELDS = (a: AgentDefinition) => ({
+  id: a.id,
+  display_name: a.displayName,
+  capabilities: a.capabilities,
+  enabled: a.enabled,
+  icon: a.icon || null,
+  color: a.color || null,
+  description: a.description || null,
+  available: true,
+  mode: 'simple' as const,
+  agent_mode: normalizeAgentModes(a.agentMode),
+  subagent_prompt: a.subagentPrompt || null,
+  max_steps: a.maxSteps ?? null,
+  provider: a.provider || null,
+  model: a.model || null,
+  reasoning_level: a.reasoningLevel ?? null,
+  context_file: a.contextFile || null,
+  is_builtin: true,
+  is_overridden: a.isOverridden,
+});
 
 export function createAgentRoutes(
   auth: AuthKit,
@@ -15,7 +36,7 @@ export function createAgentRoutes(
   const app = new Hono();
   const BUILTIN_AGENTS = loadSystemAgentDefinitions();
 
-  app.get('/', auth.requireAuth, async (c) => {
+  async function resolveAgents(): Promise<AgentDefinition[]> {
     const overrides = await agentStore.list();
     const agents = BUILTIN_AGENTS.map((builtin) => {
       const override = overrides.find((o) => o.id === builtin.id);
@@ -27,27 +48,24 @@ export function createAgentRoutes(
         agents.push({ ...o, isOverridden: true });
       }
     }
+    return agents;
+  }
+
+  // Все агенты (для админки) — регистрируем до /:id-подобных маршрутов
+  app.get('/all', auth.requireAuth, async (c) => {
+    return c.json({
+      agents: (await resolveAgents()).map(AGENT_FIELDS),
+      default_agent: 'developer',
+    });
+  });
+
+  // Только основные агенты (класс primary) — для чата
+  app.get('/', auth.requireAuth, async (c) => {
+    const agents = (await resolveAgents())
+      .filter((a) => normalizeAgentModes(a.agentMode).includes('primary'));
 
     return c.json({
-      agents: agents.map((a) => ({
-        id: a.id,
-        display_name: a.displayName,
-        capabilities: a.capabilities,
-        enabled: a.enabled,
-        icon: a.icon || null,
-        color: a.color || null,
-        description: a.description || null,
-        available: true,
-        mode: 'simple' as const,
-        agent_mode: a.agentMode || null,
-        subagent_prompt: a.subagentPrompt || null,
-        max_steps: a.maxSteps ?? null,
-        provider: a.provider || null,
-        model: a.model || null,
-        context_file: a.contextFile || null,
-        is_builtin: true,
-        is_overridden: a.isOverridden,
-      })),
+      agents: agents.map(AGENT_FIELDS),
       default_agent: 'developer',
     });
   });
@@ -73,12 +91,13 @@ export function createAgentRoutes(
       model: body.model ?? existing?.model,
       temperature: body.temperature ?? existing?.temperature,
       topP: body.top_p ?? body.topP ?? existing?.topP,
+      reasoningLevel: body.reasoning_level ?? body.reasoningLevel ?? existing?.reasoningLevel,
       sshKeys: body.ssh_keys ?? body.sshKeys ?? existing?.sshKeys ?? [],
       isOverridden: true,
       icon: body.icon ?? existing?.icon,
       color: body.color ?? existing?.color,
       description: body.description ?? existing?.description,
-      agentMode: body.agent_mode ?? body.agentMode ?? existing?.agentMode,
+      agentMode: normalizeAgentModes(body.agent_mode ?? body.agentMode ?? existing?.agentMode),
       subagentPrompt: body.subagent_prompt ?? body.subagentPrompt ?? existing?.subagentPrompt,
       maxSteps: body.max_steps ?? body.maxSteps ?? existing?.maxSteps,
     };

@@ -155,6 +155,8 @@ export interface UsersListResponse {
   users: UserInfo[]
 }
 
+export type AgentMode = 'primary' | 'subagent' | 'system'
+
 export interface AgentInfo {
   id: string
   display_name: string
@@ -165,7 +167,8 @@ export interface AgentInfo {
   description: string | null
   available: boolean
   mode: 'simple' | 'orchestrator'
-  agent_mode: 'primary' | 'subagent' | 'all' | null
+  agent_mode: AgentMode[] | null
+  reasoning_level?: string | null
   subagent_prompt: string | null
   max_steps: number | null
   provider: string | null
@@ -675,6 +678,11 @@ export const synthApi = {
   async getAgents(sessionId?: string): Promise<AgentsListResponse> {
     const params = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''
     return fetchJSON<AgentsListResponse>(`${BASE_URL}/agents${params}`)
+  },
+
+  // Все агенты (для админки, GET /agents/all)
+  async getAllAgents(): Promise<AgentsListResponse> {
+    return fetchJSON<AgentsListResponse>(`${BASE_URL}/agents/all`)
   },
 
   // Провайдеры и модели
