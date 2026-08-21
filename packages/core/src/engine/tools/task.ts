@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
 import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig } from '@itphx/synth-shared';
 import type { AgentRegistry } from '../agents/registry.js';
+import { normalizeAgentModes } from '../agents/normalize.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ToolRegistry } from './registry.js';
 import type { SessionManager } from '../../sessions/manager.js';
@@ -151,9 +152,9 @@ export const taskTool: ToolDefinition = {
       };
     }
 
-    if (agentDef.agentMode !== 'subagent' && agentDef.agentMode !== 'all') {
+    if (!normalizeAgentModes(agentDef.agentMode).includes('subagent')) {
       return {
-        content: `Агент "${params.subagent_type}" не может использоваться как сабагент (agentMode: ${agentDef.agentMode ?? 'primary'})`,
+        content: `Агент "${params.subagent_type}" не может использоваться как сабагент (классы: ${agentDef.agentMode})`,
         isError: true,
       };
     }

@@ -18,11 +18,12 @@ export function MentionPopup({ query, agents, position, onSelect, onClose }: Men
   const [highlightedIdx, setHighlightedIdx] = useState(0)
 
   const filtered = useMemo(() => {
-    if (!query) return agents.filter((a) => a.enabled)
+    if (!query) return agents.filter((a) => a.enabled && (a.agent_mode == null || a.agent_mode.includes('primary')))
     const q = query.toLowerCase()
     return agents.filter(
       (a) =>
         a.enabled &&
+        (a.agent_mode == null || a.agent_mode.includes('primary')) &&
         (a.id.toLowerCase().includes(q) ||
           a.display_name.toLowerCase().includes(q))
     )

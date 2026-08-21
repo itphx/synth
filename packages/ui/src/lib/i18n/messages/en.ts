@@ -884,6 +884,7 @@ export const dict = {
   'admin.agents.notSelected': '(not selected)',
   'admin.agents.reset': 'Reset',
   'admin.agents.system': 'system',
+  'admin.agents.builtin': 'built-in',
   'admin.agents.modified': 'modified',
   'admin.agents.noCapabilities': 'no capabilities',
   'admin.agents.confirmReset': 'Reset agent «{name}» to default settings?',
@@ -902,7 +903,7 @@ export const dict = {
   'admin.agents.agentMode': 'Agent type',
   'admin.agents.agentMode.primary': 'Primary',
   'admin.agents.agentMode.subagent': 'Subagent',
-  'admin.agents.agentMode.all': 'Primary + Subagent',
+  'admin.agents.agentMode.system': 'System',
   'admin.agents.subagentPrompt': 'Subagent prompt',
   'admin.agents.maxSteps': 'Max steps',
   'admin.agents.stepsCount': 'Steps',
@@ -912,6 +913,7 @@ export const dict = {
   'admin.agents.filter.all': 'All',
   'admin.agents.filter.agents': 'Agents',
   'admin.agents.filter.subagents': 'Subagents',
+  'admin.agents.filter.system': 'System',
   'admin.agents.filter.subagents_count': '{count} subagents',
 
   // Context

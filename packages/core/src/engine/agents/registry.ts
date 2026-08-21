@@ -1,5 +1,8 @@
 import type { AgentDefinition, ToolCapability } from '@itphx/synth-shared';
+import { normalizeAgentModes } from './normalize.js';
 import type { ToolRegistry } from '../tools/registry.js';
+
+export type AgentListFilterMode = 'primary' | 'subagent' | 'system' | 'all';
 
 export class AgentRegistry {
   private readonly _agents = new Map<string, AgentDefinition>();
@@ -10,7 +13,8 @@ export class AgentRegistry {
   }
 
   register(agent: AgentDefinition): void {
-    this._agents.set(agent.id, agent);
+    // Всегда храним agentMode как нормализованный массив
+    this._agents.set(agent.id, { ...agent, agentMode: normalizeAgentModes(agent.agentMode) });
   }
 
   unregister(id: string): void {
@@ -27,15 +31,15 @@ export class AgentRegistry {
     return this._agents.get(id);
   }
 
-  list(filter?: { mode?: 'primary' | 'subagent' | 'all' }): AgentDefinition[] {
+  list(filter?: { mode?: AgentListFilterMode }): AgentDefinition[] {
     let agents = [...this._agents.values()].filter((a) => a.enabled);
 
     if (filter?.mode) {
+      const mode = filter.mode;
       agents = agents.filter((a) => {
-        const agentMode = a.agentMode ?? 'primary';
-        if (filter.mode === 'all') return true;
-        if (filter.mode === 'subagent') return agentMode === 'subagent' || agentMode === 'all';
-        return agentMode === 'primary' || agentMode === 'all';
+        const modes = normalizeAgentModes(a.agentMode);
+        if (mode === 'all') return true;
+        return modes.includes(mode);
       });
     }
 

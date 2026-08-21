@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { synthApi, type AgentInfo, type ProviderInfo, type ModelGroup } from '@/lib/api/synthApi'
+import { synthApi, type AgentInfo, type AgentMode, type ProviderInfo, type ModelGroup } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { IconPicker } from './IconPicker'
 import { ColorPicker } from './ColorPicker'
@@ -15,8 +15,16 @@ function normalizeAgentId(raw: string): string {
   return raw.toLowerCase().replace(/[^a-z0-9_-]/g, '')
 }
 
-const AGENT_MODES = ['primary', 'subagent', 'all'] as const
-type FilterMode = 'all' | 'agents' | 'subagents'
+const AGENT_MODES: AgentMode[] = ['primary', 'subagent', 'system']
+type FilterMode = 'all' | 'agents' | 'subagents' | 'system'
+
+/** Нормализует agentMode из API (массив/null/строка для legacy) в массив классов */
+function toAgentModes(value: AgentMode[] | string | null | undefined): AgentMode[] {
+  if (Array.isArray(value)) return value.length > 0 ? value : ['primary']
+  if (value === 'all') return ['primary', 'subagent']
+  if (value === 'primary' || value === 'subagent' || value === 'system') return [value]
+  return ['primary']
+}
 
 interface AgentForm {
   id: string
@@ -27,7 +35,7 @@ interface AgentForm {
   temperature: number
   top_p: number
   top_k: number
-  agent_mode: 'primary' | 'subagent' | 'all'
+  agent_mode: AgentMode[]
   context_file: string
   capabilities: string[]
   subagent_prompt: string
@@ -39,12 +47,12 @@ interface AgentForm {
 const emptyForm = (): AgentForm => ({
   id: '', display_name: '', description: '', provider: '', model: '',
   temperature: 0.7, top_p: 0, top_k: 0,
-  agent_mode: 'primary', context_file: '',
+  agent_mode: ['primary'], context_file: '',
   capabilities: [], subagent_prompt: '', max_steps: 0, icon: '', color: '',
 })
 
 function buildForm(a: AgentInfo, detail?: Record<string, unknown> | null): AgentForm {
-  const agentMode = (a.agent_mode || (detail?.agentMode as string) || 'primary') as AgentForm['agent_mode']
+  const agentMode = toAgentModes(a.agent_mode || (detail?.agentMode as string) || 'primary')
   return {
     id: a.id,
     display_name: a.display_name || '',
@@ -81,16 +89,20 @@ export const AgentsPanel = () => {
 
   const filteredAgents = useMemo(() => {
     if (filterMode === 'all') return agents
-    if (filterMode === 'subagents') return agents.filter((a) => a.agent_mode === 'subagent' || a.agent_mode === 'all')
-    return agents.filter((a) => !a.agent_mode || a.agent_mode === 'primary' || a.agent_mode === 'all')
+    if (filterMode === 'agents') return agents.filter((a) => a.agent_mode == null || a.agent_mode.includes('primary'))
+    if (filterMode === 'subagents') return agents.filter((a) => a.agent_mode?.includes('subagent'))
+    return agents.filter((a) => a.agent_mode?.includes('system'))
   }, [agents, filterMode])
 
-  const hasSubagents = useMemo(() => agents.some((a) => a.agent_mode === 'subagent' || a.agent_mode === 'all'), [agents])
+  const hasSubOrSystem = useMemo(
+    () => agents.some((a) => a.agent_mode?.includes('subagent') || a.agent_mode?.includes('system')),
+    [agents],
+  )
 
   const load = async () => {
     setLoading(true)
     try {
-      const data = await synthApi.getAgents()
+      const data = await synthApi.getAllAgents()
       setAgents(data.agents || [])
     } finally {
       setLoading(false)
@@ -168,7 +180,7 @@ export const AgentsPanel = () => {
           agent_mode: form.agent_mode,
           context_file: form.context_file || undefined,
           capabilities: form.capabilities,
-          subagent_prompt: form.agent_mode !== 'primary' ? form.subagent_prompt : undefined,
+          subagent_prompt: form.agent_mode.includes('subagent') ? form.subagent_prompt : undefined,
           max_steps: form.max_steps,
           icon: form.icon || undefined,
           color: form.color || undefined,
@@ -218,7 +230,7 @@ export const AgentsPanel = () => {
     return group?.models || []
   }
 
-  const showSubagentFields = form.agent_mode === 'subagent' || form.agent_mode === 'all'
+  const showSubagentFields = form.agent_mode.includes('subagent')
 
   const renderForm = () => (
     <div ref={formRef} className="bg-background rounded-lg border p-4 space-y-3">
@@ -255,16 +267,37 @@ export const AgentsPanel = () => {
             className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
         </div>
 
-        {/* Agent mode */}
+        {/* Agent modes (мультиклассы) */}
         <div>
-          <label className="text-xs text-muted-foreground">{t('admin.agents.agentMode')}</label>
-          <select value={form.agent_mode}
-            onChange={(e) => setForm({ ...form, agent_mode: e.target.value as AgentForm['agent_mode'] })}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-            {AGENT_MODES.map((m) => (
-              <option key={m} value={m}>{t(`admin.agents.agentMode.${m}`)}</option>
-            ))}
-          </select>
+          <label className="text-xs text-muted-foreground block mb-1">{t('admin.agents.agentMode')}</label>
+          <div className="flex flex-wrap gap-2">
+            {AGENT_MODES.map((m) => {
+              const checked = form.agent_mode.includes(m)
+              return (
+                <label key={m} className={cn(
+                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs cursor-pointer select-none transition-colors",
+                  checked
+                    ? "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/40 dark:text-blue-300 dark:border-blue-800"
+                    : "bg-muted text-muted-foreground border-transparent hover:bg-interactive-hover",
+                )}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => {
+                      setForm((f) => ({
+                        ...f,
+                        agent_mode: checked
+                          ? f.agent_mode.filter((x) => x !== m)
+                          : [...f.agent_mode, m],
+                      }))
+                    }}
+                    className="accent-blue-600"
+                  />
+                  {t(`admin.agents.agentMode.${m}`)}
+                </label>
+              )
+            })}
+          </div>
         </div>
 
         {/* Provider select */}
@@ -386,10 +419,10 @@ export const AgentsPanel = () => {
   )
 
   const renderFilterTabs = () => {
-    if (!hasSubagents) return null
+    if (!hasSubOrSystem) return null
     return (
       <div className="flex gap-1 bg-muted rounded-lg p-0.5">
-        {(['all', 'agents', 'subagents'] as const).map((m) => (
+        {(['all', 'agents', 'subagents', 'system'] as const).map((m) => (
           <button key={m} onClick={() => setFilterMode(m)} className={cn(
             'px-3 py-1 rounded-md text-xs font-medium transition-colors',
             filterMode === m
@@ -454,20 +487,19 @@ export const AgentsPanel = () => {
 
                 {/* Badges row */}
                 <div className="flex flex-wrap gap-1 mb-2">
-                  {/* Agent mode badge */}
-                  {a.agent_mode && a.agent_mode !== 'primary' && (
-                    <span className={cn(
-                      'px-1.5 py-0.5 rounded text-[10px] font-medium',
-                      a.agent_mode === 'subagent'
-                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300'
-                        : 'bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300'
-                    )}>
-                      {t(`admin.agents.agentMode.${a.agent_mode}`)}
-                    </span>
-                  )}
-                  {(!a.agent_mode || a.agent_mode === 'primary') && (
+                  {(!a.agent_mode || a.agent_mode.includes('primary')) && (
                     <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
                       {t('admin.agents.agentMode.primary')}
+                    </span>
+                  )}
+                  {a.agent_mode?.includes('subagent') && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">
+                      {t('admin.agents.agentMode.subagent')}
+                    </span>
+                  )}
+                  {a.agent_mode?.includes('system') && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300">
+                      {t('admin.agents.system')}
                     </span>
                   )}
                   {a.provider && (
@@ -480,7 +512,7 @@ export const AgentsPanel = () => {
                     <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300">{a.context_file}</span>
                   )}
                   {a.is_builtin && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400">{t('admin.agents.system')}</span>
+                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400">{t('admin.agents.builtin')}</span>
                   )}
                   {a.is_builtin && a.is_overridden && (
                     <span className="px-1.5 py-0.5 rounded text-[10px] bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300">{t('admin.agents.modified')}</span>

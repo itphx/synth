@@ -11,6 +11,9 @@ import type { ToolRegistry } from '../tools/registry.js';
 
 const DEFINITIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'definitions');
 
+import { normalizeAgentModes } from './normalize.js';
+export { normalizeAgentModes };
+
 interface AgentDefFile {
   id: string;
   displayName: Record<string, string>;
@@ -19,8 +22,7 @@ interface AgentDefFile {
   icon: string;
   color: string;
   contextFile: string;
-  hidden?: boolean;
-  agentMode?: 'primary' | 'subagent' | 'all';
+  agentMode?: string | string[];
   subagentPrompt?: string;
   maxSteps?: number;
 }
@@ -42,10 +44,9 @@ export function loadSystemAgentDefinitions(): AgentDefinition[] {
       color: def.color,
       contextFile: def.contextFile,
       enabled: true,
-      hidden: def.hidden ?? false,
       sshKeys: [],
       isOverridden: false,
-      agentMode: def.agentMode,
+      agentMode: normalizeAgentModes(def.agentMode),
       subagentPrompt: def.subagentPrompt,
       maxSteps: def.maxSteps,
     });
@@ -68,7 +69,9 @@ export function createAgentRegistry(
     if (!existsSync(overridePath)) return sysAgent;
     try {
       const override = JSON.parse(readFileSync(overridePath, 'utf-8')) as AgentDefinition;
-      return { ...sysAgent, ...override };
+      const merged = { ...sysAgent, ...override };
+      merged.agentMode = normalizeAgentModes(merged.agentMode);
+      return merged;
     } catch {
       return sysAgent;
     }

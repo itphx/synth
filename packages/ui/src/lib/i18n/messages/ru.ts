@@ -881,6 +881,7 @@ export const dict = {
   'admin.agents.notSelected': '(не выбрана)',
   'admin.agents.reset': 'Сбросить',
   'admin.agents.system': 'системный',
+  'admin.agents.builtin': 'встроенный',
   'admin.agents.modified': 'изменён',
   'admin.agents.noCapabilities': 'нет возможностей',
   'admin.agents.confirmReset': 'Сбросить агента «{name}» к настройкам по умолчанию?',
@@ -899,7 +900,7 @@ export const dict = {
   'admin.agents.agentMode': 'Тип агента',
   'admin.agents.agentMode.primary': 'Основной',
   'admin.agents.agentMode.subagent': 'Сабагент',
-  'admin.agents.agentMode.all': 'Осн. + сабагент',
+  'admin.agents.agentMode.system': 'Системный',
   'admin.agents.subagentPrompt': 'Промпт сабагента',
   'admin.agents.maxSteps': 'Макс. шагов',
   'admin.agents.stepsCount': 'Количество шагов',
@@ -909,6 +910,7 @@ export const dict = {
   'admin.agents.filter.all': 'Все',
   'admin.agents.filter.agents': 'Агенты',
   'admin.agents.filter.subagents': 'Сабагенты',
+  'admin.agents.filter.system': 'Системные',
   'admin.agents.filter.subagents_count': '{count} сабагентов',
 
   // Context
