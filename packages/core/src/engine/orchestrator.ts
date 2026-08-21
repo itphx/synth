@@ -1398,7 +1398,16 @@ export class ChatOrchestrator {
           (m) => m.role === MessageRole.USER && !m.metadata?.synthetic,
         ).length;
         if (userMsgCount === 1) {
-          autoTitleSession(updatedSession, this._sessionManager, provider).catch(() => {});
+          autoTitleSession(updatedSession, this._sessionManager, provider)
+            .then((title) => {
+              if (title) {
+                this._eventBus.publish(updatedSession.id, 'session.updated', {
+                  session_id: updatedSession.id,
+                  name: title,
+                });
+              }
+            })
+            .catch(() => {});
         }
       }
 
