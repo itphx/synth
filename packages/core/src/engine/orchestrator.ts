@@ -1,5 +1,5 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@itphx/synth-shared';
-import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart } from '@itphx/synth-shared';
+import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart, lookupContextWindow } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
@@ -7,6 +7,7 @@ import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
 import { DebugCollector } from '../debug.js';
 import { ProviderFactory } from '../providers/base.js';
+import { ContextLengthExceededError } from '../providers/exceptions.js';
 import type { LLMMessage, CancellationToken, ProviderConfig as CoreProviderConfig, BaseProvider } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
@@ -37,6 +38,8 @@ import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfusca
 
 const MAX_DOOM_LOOP_COUNT = 3;
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
+/** Порог заполненности контекстного окна (%), после которого публикуем context.limit_warning. */
+const CONTEXT_LIMIT_WARNING_PERCENT = 90;
 
 export interface ModelPricing {
   inputPrice?: number;
@@ -806,6 +809,9 @@ export class ChatOrchestrator {
       const allRawToolCalls: Array<{ iteration: number; calls: Record<string, unknown>[] }> = [];
       let stopAfterDeny = false;
       let denyStopReason: string | undefined;
+
+      // Предупреждение о заполненности контекстного окна (fire-and-forget, не блокирует вызов)
+      this._publishContextLimitWarning(session.id, routeResult.modelName, messagesForLlm);
 
       while (toolIteration < maxIterations) {
         if (cancelToken.cancelled) break;
@@ -1729,15 +1735,54 @@ export class ChatOrchestrator {
     if (!sharedConfig) return null;
 
     try {
+      const effectiveModel = modelName || sharedConfig.defaultModel || '';
+      const contextWindow = this._resolveModelContextWindow(effectiveModel);
       const provider = ProviderFactory.create(
         providerName,
-        toCoreProviderConfig(sharedConfig, modelName || sharedConfig.defaultModel || '', session.settings.reasoningLevel),
+        {
+          ...toCoreProviderConfig(sharedConfig, effectiveModel, session.settings.reasoningLevel),
+          maxTokens: session.settings.maxTokens,
+          numCtx: contextWindow > 0 ? contextWindow : undefined,
+        },
         session.settings.temperature,
       );
       return this._wrapWithGateway(provider, session);
     } catch (e) {
       warning('ORCHESTRATOR', `Failed to create provider ${providerName}: ${e}`);
       return null;
+    }
+  }
+
+  /**
+   * Размер контекстного окна модели: приоритет у сохранённого значения
+   * (ModelConfig.contextWindow через оптимизатор), иначе справочник.
+   */
+  private _resolveModelContextWindow(modelName: string): number {
+    const window = this._optimizer?.getContextWindow(modelName);
+    if (window && window > 0) return window;
+    return lookupContextWindow(modelName).window;
+  }
+
+  /**
+   * Публикует context.limit_warning, когда оценка токенов контекста достигла
+   * порога (CONTEXT_LIMIT_WARNING_PERCENT) от окна модели. Уведомление не
+   * блокирует вызов LLM — это fire-and-forget сигнал для UI.
+   */
+  private _publishContextLimitWarning(sessionId: string, modelName: string, messages: Message[]): void {
+    if (!this._optimizer) return;
+    const contextWindow = this._resolveModelContextWindow(modelName);
+    if (!(contextWindow > 0)) return;
+
+    const estimatedTokens = this._optimizer.estimateTokens(messages);
+    if (estimatedTokens <= 0) return;
+
+    const percent = Math.round((estimatedTokens / contextWindow) * 100);
+    if (percent >= CONTEXT_LIMIT_WARNING_PERCENT) {
+      this._eventBus.publish(sessionId, 'context.limit_warning', {
+        percent,
+        context_window: contextWindow,
+        estimated_tokens: estimatedTokens,
+      });
     }
   }
 
@@ -1784,7 +1829,14 @@ export class ChatOrchestrator {
         toolCalls: toolCallNames,
       });
 
-      let provider = this._router.getProvider(decision, undefined, session.settings.reasoningLevel);
+      const routedWindow = this._resolveModelContextWindow(decision.modelName);
+      let provider = this._router.getProvider(
+        decision,
+        undefined,
+        session.settings.reasoningLevel,
+        session.settings.maxTokens,
+        routedWindow > 0 ? routedWindow : undefined,
+      );
       if (provider) {
         provider = this._wrapWithGateway(provider, session);
         return {
@@ -2148,7 +2200,12 @@ export class ChatOrchestrator {
   ): Promise<ProcessMessageResult> {
     const rawError = error instanceof Error ? error.message : String(error);
     const humanError = this._formatLlmError(error);
-    const errorType = this._classifyError(rawError);
+    // ContextLengthExceededError несёт русское сообщение («Контекстное окно
+    // превышено») — текстовый классификатор его не распознаёт, поэтому тип
+    // определяем по классу ошибки, чтобы UI показал дружелюбное сообщение.
+    const errorType = error instanceof ContextLengthExceededError
+      ? 'context_length'
+      : this._classifyError(rawError);
     const canRetry = this._isRecoverable(rawError);
 
     try {

@@ -177,6 +177,10 @@ export class GatewayProvider extends BaseProvider {
     return this._inner.listModels();
   }
 
+  async listModelsDetailed(): Promise<Array<{ id: string; contextWindow?: number }>> {
+    return this._inner.listModelsDetailed();
+  }
+
   private async _prepare(
     messages: LLMMessage[],
     systemPrompt: string | undefined,

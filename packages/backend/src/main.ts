@@ -144,9 +144,19 @@ const modelCache = new Map<string, ModelConfig>();
   modelCache.set(m.id, m);
 });
 
+// Загрузчик сохранённого контекстного окна модели (ModelConfig.contextWindow)
+const modelWindowLoader = (modelName: string): number => {
+  for (const m of modelCache.values()) {
+    if (m.name === modelName || m.id === modelName) {
+      return m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 0;
+    }
+  }
+  return 0;
+};
+
 // ContextOptimizer
 const summarizationConfig: SummarizationConfig = backendConfig.synth.summarization;
-const contextOptimizer = new ContextOptimizer(contextConfig, providerLoader, summarizationConfig);
+const contextOptimizer = new ContextOptimizer(contextConfig, providerLoader, summarizationConfig, modelWindowLoader);
 
 // Set ContextOptimizer on QueueProcessorManager
 queueManager.setContextOptimizer(contextOptimizer);

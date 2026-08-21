@@ -90,7 +90,9 @@ export function createModelRoutes(
       description: body.description ?? existing?.description ?? '',
       enabled: body.enabled ?? existing?.enabled ?? true,
       isDefault: body.is_default ?? body.isDefault ?? existing?.isDefault ?? false,
-      contextWindow: body.context_window ?? body.contextWindow ?? existing?.contextWindow,
+      contextWindow: 'context_window' in body
+        ? (body.context_window ?? undefined)
+        : (body.contextWindow ?? existing?.contextWindow),
       contextSource: body.context_source ?? body.contextSource ?? existing?.contextSource ?? (body.context_window ? 'manual' : 'unknown'),
       maxOutputTokens: body.max_output_tokens ?? body.maxOutputTokens ?? existing?.maxOutputTokens,
       inputPrice: body.input_price ?? body.inputPrice ?? existing?.inputPrice,

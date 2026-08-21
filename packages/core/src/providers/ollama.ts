@@ -27,6 +27,7 @@ export class OllamaProvider extends BaseProvider {
     else if (this.reasoningLevel === 'none') body.think = false;
     if (systemPrompt) body.system = systemPrompt;
     if (tools?.length) body.tools = this._formatTools(tools);
+    if (this.numCtx && this.numCtx > 0) body.options = { num_ctx: this.numCtx };
 
     const headers = { 'Content-Type': 'application/json' };
     debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
@@ -76,6 +77,7 @@ export class OllamaProvider extends BaseProvider {
     else if (this.reasoningLevel === 'none') body.think = false;
     if (systemPrompt) body.system = systemPrompt;
     if (tools?.length) body.tools = this._formatTools(tools);
+    if (this.numCtx && this.numCtx > 0) body.options = { num_ctx: this.numCtx };
 
     const headers = { 'Content-Type': 'application/json' };
     debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
@@ -87,6 +89,10 @@ export class OllamaProvider extends BaseProvider {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
+
+    // Таймаут — только на ожидание первого чанка. Как только стрим пошёл,
+    // таймер снимается, дальше стрим длится сколько нужно.
+    let firstChunkReceived = false;
 
     // Кнопка «Стоп»: отмена пользователя (cancellationToken.cancel) немедленно
     // прерывает висящий fetch/reader.read() через AbortController — иначе
@@ -152,6 +158,10 @@ export class OllamaProvider extends BaseProvider {
               const msg = chunkData.message as Record<string, unknown> | undefined;
 
               if (msg?.content && typeof msg.content === 'string') {
+                if (!firstChunkReceived) {
+                  firstChunkReceived = true;
+                  clearTimeout(timer);
+                }
                 const hasReasoning = !!accumulatedReasoning;
                 accumulatedContent += msg.content;
                 yield {
@@ -165,19 +175,30 @@ export class OllamaProvider extends BaseProvider {
               }
 
               if (msg?.tool_calls) {
+                if (!firstChunkReceived) {
+                  firstChunkReceived = true;
+                  clearTimeout(timer);
+                }
                 for (const tc of msg.tool_calls as Record<string, unknown>[]) {
                   accumulatedToolCalls.push({
                     id: tc.id,
                     type: 'function',
                     function: {
                       name: (tc.function as Record<string, unknown>)?.name,
-                      arguments: (tc.function as Record<string, unknown>)?.arguments,
+                      // Строку → объект: единообразие с _parseResponse.
+                      arguments: this._normalizeToolArguments(
+                        (tc.function as Record<string, unknown>)?.arguments,
+                      ),
                     },
                   });
                 }
               }
 
               if (msg?.thinking && typeof msg.thinking === 'string') {
+                if (!firstChunkReceived) {
+                  firstChunkReceived = true;
+                  clearTimeout(timer);
+                }
                 accumulatedReasoning += msg.thinking;
                 debugCollector?.captureReasoning(accumulatedReasoning);
                 yield {
@@ -267,6 +288,16 @@ export class OllamaProvider extends BaseProvider {
   }
 
   async listModels(): Promise<string[]> {
+    const models = await this.listModelsDetailed();
+    return models.map((m) => m.id);
+  }
+
+  /**
+   * Список моделей с контекстным окном из /api/tags.
+   * Ollama отдаёт context_length внутри details.context_length
+   * (а в некоторых версиях — в model_info.context_length).
+   */
+  async listModelsDetailed(): Promise<Array<{ id: string; contextWindow?: number }>> {
     const baseUrl = this.url.replace('/api/chat', '').replace('/v1/chat/completions', '');
     const tagsUrl = `${baseUrl}/api/tags`;
 
@@ -278,14 +309,59 @@ export class OllamaProvider extends BaseProvider {
       clearTimeout(timer);
 
       if (resp.ok) {
-        const data = await resp.json() as { models?: Array<{ name: string }> };
-        return (data.models || []).map((m) => m.name).filter(Boolean);
+        const data = await resp.json() as {
+          models?: Array<{
+            name: string;
+            details?: { context_length?: number };
+            model_info?: Record<string, unknown>;
+          }>;
+        };
+        return (data.models || [])
+          .map((m) => ({
+            id: m.name,
+            contextWindow: this._extractContextWindow(m),
+          }))
+          .filter((m) => m.id);
       }
     } catch {
       // fall through
     }
 
     return [];
+  }
+
+  /**
+   * Извлекает размер контекстного окна из записи /api/tags.
+   * Поле может лежать в details.context_length или model_info
+   * (context_length / ContextLength / llama.context_length) — берём
+   * первый числовой вариант. Если окно неизвестно — возвращаем undefined.
+   */
+  private _extractContextWindow(model: {
+    details?: { context_length?: number };
+    model_info?: Record<string, unknown>;
+  }): number | undefined {
+    const info = model.model_info ?? {};
+    const raw = model.details?.context_length
+      ?? info.context_length
+      ?? info.ContextLength
+      ?? info['llama.context_length'];
+    const num = typeof raw === 'number' ? raw : Number(raw);
+    return Number.isFinite(num) && num > 0 ? num : undefined;
+  }
+
+  /**
+   * Нормализует function.arguments в tool_calls: JSON-строка → объект.
+   * Сборка Ollama (0.32.x, llama-server c --spec-type draft-mtp) принимает
+   * только объект и падает с 400 «can't find closing '}'» на строке.
+   * Если парсинг не удался — оставляем строку как есть (не роняем запрос).
+   */
+  private _normalizeToolArguments(args: unknown): unknown {
+    if (typeof args !== 'string') return args;
+    try {
+      return JSON.parse(args);
+    } catch {
+      return args;
+    }
   }
 
   private _formatMessages(messages: LLMMessage[]): Array<Record<string, unknown>> {
@@ -305,7 +381,21 @@ export class OllamaProvider extends BaseProvider {
       }
 
       const entry: Record<string, unknown> = { role: msg.role, content: msg.content };
-      if (msg.toolUse) entry.tool_calls = msg.toolUse;
+      if (msg.toolUse) {
+        // Старые сессии хранят arguments строкой — приводим к объекту
+        // перед отправкой, иначе Ollama вернёт 400.
+        entry.tool_calls = msg.toolUse.map((tc) => {
+          const fn = tc.function as Record<string, unknown> | undefined;
+          if (!fn || typeof fn.arguments === 'undefined') return tc;
+          return {
+            ...tc,
+            function: {
+              ...fn,
+              arguments: this._normalizeToolArguments(fn.arguments),
+            },
+          };
+        });
+      }
       formatted.push(entry);
     }
 
@@ -329,7 +419,11 @@ export class OllamaProvider extends BaseProvider {
         type: 'function',
         function: {
           name: (tc.function as Record<string, unknown>)?.name,
-          arguments: (tc.function as Record<string, unknown>)?.arguments,
+          // Строку → объект, чтобы в сессию сохранялись объекты (единообразие)
+          // и повторная отправка не ломалась.
+          arguments: this._normalizeToolArguments(
+            (tc.function as Record<string, unknown>)?.arguments,
+          ),
         },
       }));
     }

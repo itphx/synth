@@ -154,7 +154,7 @@ export const ModelsPanel = () => {
           prev.map((g) => ({
             ...g,
             models: g.models.map((m) =>
-              m.id === modelId ? { ...m, [field]: num } : m,
+              m.id === modelId ? { ...m, [fieldMap[field]]: num } : m,
             ),
           }))
         )
@@ -168,11 +168,17 @@ export const ModelsPanel = () => {
     const num = value === '' ? undefined : parseInt(value, 10)
     if (value !== '' && (isNaN(num!) || num! < 0)) return
 
+    // Ручной ввод (не пустое значение) — всегда помечаем как manual, чтобы
+    // следующий fetch не затёр значение провайдером. Очистка поля — сброс к
+    // unknown (context_window: null удаляет сохранённое окно на бэкенде).
+    const contextWindow = num !== undefined ? num : null
+    const contextSource = num !== undefined ? 'manual' : 'unknown'
+
     setGroups((prev) =>
       prev.map((g) => ({
         ...g,
         models: g.models.map((m) =>
-          m.id === model.id ? { ...m, context_window: num, context_source: num && model.context_source !== 'api' ? 'manual' : model.context_source } : m,
+          m.id === model.id ? { ...m, context_window: contextWindow ?? undefined, context_source: contextSource } : m,
         ),
       }))
     )
@@ -182,8 +188,8 @@ export const ModelsPanel = () => {
         method: 'POST',
         body: JSON.stringify({
           id: model.id,
-          context_window: num,
-          context_source: num && model.context_source !== 'api' ? 'manual' : model.context_source,
+          context_window: contextWindow,
+          context_source: contextSource,
         }),
       })
     } catch { /* ignore */ }
@@ -265,7 +271,8 @@ export const ModelsPanel = () => {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col h-full min-h-0">
+      <div className="shrink-0 space-y-4">
       {/* Заголовок */}
       <div className="flex items-center justify-between">
         <div>
@@ -418,7 +425,10 @@ export const ModelsPanel = () => {
         </div>
       )}
 
+      </div>
+
       {/* Содержимое */}
+      <div className="flex-1 overflow-y-auto min-h-0 overscroll-behavior-contain mt-4">
       {loading ? (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
@@ -648,6 +658,7 @@ export const ModelsPanel = () => {
           })}
         </div>
       )}
+      </div>
     </div>
   )
 }
