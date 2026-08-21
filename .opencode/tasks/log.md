@@ -435,6 +435,35 @@
 - **Проблемы/оговорки:**
   - Для гарантированного отключения размышлений qwen3.5:9b использовать провайдер `ollama` (нативный, think:false работает) или внешнюю `routerai.qwen/qwen3.5-9b`.
 
+## 2026-08-20/21 — Ветка refactor/remove-tsm: AD-039/AD-040 (замена TSM) + фикс tool-chain
+- **Задача:** заменить TSM-механизм: план — в проекте (`project.plan`), todo — в сессии, состояние через инструменты; сессии без проекта; лог проекта и инварианты; фикс персистентности tool-chain
+- **Тип:** refactor + feature + bugfix (core + shared + UI)
+- **Исполнитель:** @fixer (реализация), оркестратор (ветка, merge)
+- **Результат:** PASS (запись добавлена ретроспективно при подготовке merge; коммиты ветки содержат работу и тесты)
+- **Коммиты (7, от 2026-08-20 15:15 → 2026-08-21 11:04):**
+  - `382e0d1` docs: AD-039/AD-040 (план в проекте, todo в сессии, замена TSM)
+  - `355cbd5` refactor: удалён TSM-слой (TsmState/TsmStatus/updateTsmState)
+  - `a81f36f` feat: ядро состояний — todo_* CRUD, контекстный блок сессии, permission-группа RUNTIME (AD-039/040)
+  - `c405048` feat: план в проекте — kanban-структура project.plan, инструменты plan_read/list/write (AD-039/040)
+  - `8034215` feat: сессии без проекта — project_create/project_attach, перенос с валидацией + событие session.moved, UI-действия (AD-040)
+  - `be5a264` feat: лог проекта (project_log_write/read) + инварианты в system prompt и инструменты (AD-040)
+  - `ceb156f` fix: правильная персистентность tool-chain, атомарность скользящего окна, обработка ошибок и отмены
+- **Ключевое:**
+  - TSM удалён: `planContent`/`planPath` из сессии убраны, план живёт в `project.plan` (kanban), todo — в `session.todos`
+  - Инструменты: `plan_read`/`plan_list`/`plan_write`, `todo_*` CRUD, `project_create`/`project_attach`, `project_log_write/read`, инварианты в system prompt
+  - Контекстный блок сессии: наличие/отсутствие проекта, рабочий каталог; `get_project_info` честно сообщает «проект отсутствует»
+  - Перенос сессии между проектами (`PATCH /sessions/:id` `project_id`): todo остаётся, план берётся от нового проекта, событие `session.moved`
+  - UI: вкладка «Проект» для сессий без проекта (создать/привязать), метка «без проекта»
+  - Фикс tool-chain: пары assistant(toolCalls)→tool→final assistant персистятся в `session.messages` (metadata.tool_chain), скользящее окно атомарно по «ходу», отмена сохраняет tool-вызовы, stream.error публикуется один раз
+- **Верификация:** по коммитам — тесты (tool-chain персистентность, атомарность окна, отмена с тулами, plan/todo/project-manage — новые suite); AGENTS.md обновлён (AD-039/040)
+- **Проблемы:** лог не велся в процессе — записи добавлены ретроспективно; перед merge запланирована проверка typecheck/lint/test
+
+## Merge в master (2026-08-21)
+- Ветка: `refactor/remove-tsm` → `master` с `--no-ff`
+- Merge-коммит: `9b297b3` — merge: refactor/remove-tsm — AD-039/040 (план в проекте, todo в сессии, замена TSM) + фикс tool-chain
+- Конфликтов нет (ветка содержала master целиком; локальный master впереди origin/master на 61 коммит, push не выполнялся)
+- Итог: в master вошли 7 коммитов ветки (docs AD-039/040, refactor TSM, todo CRUD, project.plan, project_create/attach, project_log, tool-chain fix). Файлов: 65, +3518/−618
+
 ## 2026-08-19 — Индикатор обработки вместо слова «Обработка» в user-сообщении
 - **Задача:** после отправки сообщения вместо текстового статуса «Обработка…» рисовать индикатор обработки (три прыгающие точки) в шапке user-сообщения на месте времени — как в ответах ассистента.
 - **Тип:** feature/bugfix (UI)
@@ -449,3 +478,61 @@
 - **Проблемы/оговорки:**
   - Окно processing у провайдера mocktimeout очень короткое (~0–200 мс), затем уходит в retry — на сетевых провайдерах точки видны дольше; это поведение провайдера, не правки.
   - В QA-сессию `qa-mocktimeout-fresh` добавлены тестовые сообщения для проверки состояния processing (сессия предназначена для таких проверок).
+
+## 2026-08-21
+- **Задача:** Автоименование сессий + классы агентов (primary/subagent/system) + флоу новой сессии
+- **Тип:** feature (UI + core + API)
+- **Исполнитель:** @fixer
+- **Результат:** PASS
+- **Коммиты:** 91077ad, df3b5c9, dec9717, 7287cc4 (ветка feat/agent-classes-session-flow)
+- **Время:** ~1.5 ч
+- **Проблемы:** dev-серверы :5000/:4300 не перезапущены (работают со старым кодом); UI в браузере не проверен визуально (нужен пересборка backend + перезапуск); forkSession из контекстного меню LeftPanel (~стр. 242) тоже вызывает setRenamingId — вне скоупа (только createSession).
+- **Суть:**
+  - Классы агентов: `AgentMode = 'primary' | 'subagent' | 'system'`, `agentMode` — строка или массив (мультиклассы). `'all'` удалён из модели (при чтении старых данных нормализуется в ['primary','subagent']). `hidden` удалён из типов и определений. title.json → `agentMode: ["system"]`.
+  - `GET /agents` отдаёт только основных (primary); новый `GET /agents/all` — все (для админки). `normalizeAgentModes()` — новый модуль core, экспортируется из пакета.
+  - Убрано принудительное переименование после создания сессии (4 места LeftPanel) → автооткрытие вкладки; ProjectsTabToolbar — тоже openTab.
+  - Пустая сессия: область ввода по центру (ChatTab), без MessageList/QueuePanel/PermissionBar.
+  - Админка: мультиселект классов чекбоксами, фильтры all/agents/subagents/system, бейджи «системный» (класс) и «встроенный» (builtin).
+- **Верификация:** typecheck ✅ (6 пакетов); lint 0 errors ✅; test: shared 66 / core 685 / backend 170 / ui 29 ✅; smoke API на standalone core :4311: GET /agents → только primary, GET /agents/all → все (title = ['system']).
+- **Follow-up:** пересобрать backend (`pnpm --filter @itphx/synth-backend build`) и перезапустить dev (./scripts/dev.sh all); визуальная проверка админки «Агенты» и создания сессии; решить судьбу setRenamingId в forkSession.
+
+## 2026-08-21 (вторая правка)
+- **Задача:** Автопереименование не обновляет имя в дереве сразу; форк сессии из контекстного меню делал переименование вместо открытия вкладки
+- **Тип:** bug (core + UI)
+- **Исполнитель:** @fixer
+- **Результат:** PASS
+- **Коммиты:** 69660c3, fff1165 (ветка feat/agent-classes-session-flow)
+- **Время:** ~25 мин
+- **Проблемы:** нет
+- **Первопричина:** `autoTitleSession` переименовывал сессию через `manager.renameSession()` (просто сохраняет title, без событий) — в отличие от ручного PATCH, который публикует `session.updated` с полным объектом. UI не получал события → дерево держало старое имя до перезагрузки списка.
+- **Исправление:** `autoTitleSession` возвращает `string | null`; в orchestrator после успешного переименования публикуется `session.updated { session_id, name }` (fire-and-forget, stream.done не задерживается). UI менять не потребовалось (обработчик session.updated уже патчит `name`). LeftPanel: пункт «Форк» теперь открывает вкладку `chat-{id}` вместо `setRenamingId` (паттерн как в createSession/ChatTab).
+- **Верификация:** typecheck ✅ (6 пакетов); lint 0 errors ✅; test: core 685 / backend 170 / ui 29 / shared 66 ✅.
+- **Follow-up:** `.opencode/tasks/log.md` остаётся незакоммиченным (служебный); dev-окружение :5000/:4300 всё ещё работает со старым кодом — нужен перезапуск ./scripts/dev.sh all + визуальная проверка.
+
+## 2026-08-21 (третья правка)
+- **Задача:** Переключатель размышлений (reasoning) у агентов; генератор заголовков без размышлений
+- **Тип:** feature (core + UI + API)
+- **Исполнитель:** @fixer
+- **Результат:** PASS
+- **Коммиты:** 4fe9dc7, 51dcc14 (ветка feat/agent-classes-session-flow)
+- **Время:** ~40 мин
+- **Проблемы:** `loadSystemAgentDefinitions()` терял поля temperature/topP/topK/reasoningLevel при ручном маппинге — исправлено (+reasoningLevel переносится). Авто-тайтл использовал провайдер основной сессии → reasoningLevel title-агента не применялся — исправлено: перед autoTitleSession создаётся провайдер с reasoningLevel из title.json через _getProvider.
+- **Суть:**
+  - `AgentDefinition.reasoningLevel?: ReasoningLevel`; API отдаёт `reasoning_level` (core+backend GET/POST); UI AgentInfo + форма агента.
+  - title.json → `"reasoningLevel": "none"`.
+  - Оркестратор: `effectiveReasoningLevel = agentDef?.reasoningLevel ?? session.settings.reasoningLevel` — применяется в _getProvider/_routeProvider/fallback-эскалации; сабагенты наследуют reasoningLevel агента через childRoutingOverrides (task.ts).
+  - Форма агента: селект «Размышления» — провайдер не выбран → [Не задано, Отключено]; выбран → + уровни по типу провайдера (openai/generic: low/medium/high, anthropic: high, ollama: low; без default).
+- **Верификация:** typecheck ✅ (6 пакетов); lint 0 errors ✅; test: core 685 / backend 170 / ui 29 / shared 66 ✅; API curl: title.reasoning_level = "none", POST reasoning_level сохраняется ✅.
+- **Follow-up:** dev-окружение :5000/:4300 всё ещё старый код — нужен перезапуск ./scripts/dev.sh all и визуальная проверка (админка «Агенты», создание сессии, центрированный ввод, автоименование).
+
+## 2026-08-21 (четвёртая правка)
+- **Задача:** Имя сессии не обновляется на открытой вкладке при переименовании (авто/событийном)
+- **Тип:** bug (UI)
+- **Исполнитель:** @fixer
+- **Результат:** PASS
+- **Коммит:** 5834bc4 (ветка feat/agent-classes-session-flow)
+- **Время:** ~10 мин
+- **Проблемы:** нет
+- **Первопричина:** обработчик `session.updated` (transportStore) патчил сессию в сторе (дерево), но не обновлял `centerTabs[].title`; ручное переименование делало это отдельно (LeftPanel.onRenameCommit → updateTabTitle), событийный путь — нет.
+- **Исправление:** в case 'session.updated' при непустом строковом `name` в payload — `useUIStore.getState().updateTabTitle('chat-'+sid, name)`. Закрывает и автопереименование, и любое переименование через API. Вкладка не открыта / name нет — безопасно.
+- **Верификация:** typecheck ✅; lint 0 errors ✅; test: ui 29 / core 685 / backend 170 ✅.
