@@ -6,7 +6,7 @@ import { readSessionReferenceTool } from './read-reference.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import type { ToolContext } from '@itphx/synth-shared';
-import { generateId, MessageRole, nowISO } from '@itphx/synth-shared';
+import { generateId, MessageRole, nowISO, ToolCapability } from '@itphx/synth-shared';
 
 describe('read_session_reference', () => {
   let store: FileStore;
@@ -24,6 +24,10 @@ describe('read_session_reference', () => {
 
   afterEach(async () => {
     await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('capability RUNTIME (группа runtime, а не file_read)', () => {
+    expect(readSessionReferenceTool.capabilities).toEqual([ToolCapability.RUNTIME]);
   });
 
   function makeCtx(): ToolContext {

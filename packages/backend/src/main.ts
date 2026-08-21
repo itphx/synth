@@ -201,6 +201,7 @@ const orchestrator = new ChatOrchestrator({
   sessionManager,
   eventBus,
   contextBuilder,
+  contextConfig,
   providerLoader,
   contextOptimizer,
   modelPriceLoader,

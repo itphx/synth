@@ -9,6 +9,7 @@ import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import type { ToolContext } from '@itphx/synth-shared';
+import { ToolCapability } from '@itphx/synth-shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -35,6 +36,11 @@ describe('project-context tools', () => {
       ...overrides,
     };
   }
+
+  it('capability RUNTIME (группа runtime, а не file_read/git_read)', () => {
+    expect(getProjectInfoTool.capabilities).toEqual([ToolCapability.RUNTIME]);
+    expect(listReposTool.capabilities).toEqual([ToolCapability.RUNTIME]);
+  });
 
   async function initGitRepo(dir: string): Promise<void> {
     await execFileAsync('git', ['init', '-q'], { cwd: dir });

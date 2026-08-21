@@ -54,7 +54,6 @@ export class ContextConfig {
   readonly systemPromptsDir: string;
   readonly userPromptsDir: string;
   readonly userRolesDir: string;
-  readonly userModesDir: string;
 
   private _enabledFiles: string[] = [];
 
@@ -62,7 +61,6 @@ export class ContextConfig {
     this.systemPromptsDir = options.systemPromptsDir ?? resolveSystemPromptsDir();
     this.userPromptsDir = join(options.userDataDir, 'user');
     this.userRolesDir = join(options.userDataDir, 'roles');
-    this.userModesDir = join(options.userDataDir, 'modes');
     this._enabledFiles = ['SOUL.md', 'COMPANY.md', 'ABOUT.md'];
   }
 
@@ -386,7 +384,8 @@ export class ContextConfig {
 
   /**
    * Глобальная секция [RULES] защиты от Indirect Prompt Injection.
-   * Файлы: prompts/system/RULES.{lang}.md → RULES.md (fallback).
+   * Файлы: prompts/system/RULES.{lang}.md (только локализованные, базового
+   * RULES.md нет). Если для языка нет локализации — возвращается пустая строка ''.
    */
   getRules(language = 'ru'): string {
     return this._readPrompt('RULES', 'system', language) ?? '';
@@ -403,31 +402,28 @@ export class ContextConfig {
   /**
    * AD-025: системный промпт режима сессии (plan/act/yolo).
    *
-   * Приоритет (по аналогии с getRolePrompt):
-   *   1. Пользовательский override: {userDataDir}/modes/{mode}.{lang}.md → {mode}.md
-   *   2. Встроенный: {systemPromptsDir}/modes/{mode}.{lang}.md → {mode}.md
-   * Возвращает null, если файл не найден (fallback на встроенный текст движка).
+   * Файлы: prompts/system/MODE_{PLAN,ACT,YOLO}.{lang}.md — только локализованные
+   * (базовых MODE_{X}.md больше нет). Override через {userDataDir}/user/system/
+   * MODE_{X}.md и MODE_{X}.{lang}.md — стандартный механизм system-категории
+   * (сохранение через saveFile/getFile/UI), проверяется первым.
+   *
+   * Приоритет: override локализованный → override базовый → встроенный локализованный.
+   * Возвращает null, если файл не найден (неизвестный язык или режим).
    */
   getModePrompt(mode: string, language = 'ru'): string | null {
-    const stem = mode;
+    const stem = `MODE_${mode.toUpperCase()}`;
 
-    // 1. Пользовательский override
-    const userBasePath = join(this.userModesDir, `${stem}.md`);
-    const userLocalized = this._getLocalizedPath(userBasePath, stem, language);
-    if (userLocalized) {
-      const content = this._readFile(userLocalized);
+    // 1. Пользовательский override system-категории
+    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
+    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
+    if (overrideLocalized) {
+      const content = this._readFile(overrideLocalized);
       if (content) return content;
     }
-    const userContent = this._readFile(userBasePath);
-    if (userContent) return userContent;
+    const overrideContent = this._readFile(overridePath);
+    if (overrideContent) return overrideContent;
 
-    // 2. Встроенный prompts/modes/
-    const systemBasePath = join(this.systemPromptsDir, 'modes', `${stem}.md`);
-    const systemLocalized = this._getLocalizedPath(systemBasePath, stem, language);
-    if (systemLocalized) {
-      const content = this._readFile(systemLocalized);
-      if (content) return content;
-    }
-    return this._readFile(systemBasePath);
+    // 2. Встроенный prompts/system/MODE_{X}.{lang}.md
+    return this._readPrompt(stem, 'system', language);
   }
 }

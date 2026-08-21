@@ -3,6 +3,8 @@ import { globMatch, ToolCapability } from '@itphx/synth-shared';
 import type { PermissionAction, PermissionConfig, PermissionDecision, PermissionRule, PlanMode, SessionMode, McpServerToolSettings, McpToolAvailability } from '@itphx/synth-shared';
 import { resolvePath } from '../tools/path-utils.js';
 import { getToolGroups, TOOL_PATH_PARAMS } from './groups.js';
+import { checkShellCommand, isMutatingCommand, tokenizeCommand, matchShellCommandPattern } from '../security/shell-guard.js';
+import type { ShellPolicy } from '../security/shell-guard.js';
 
 export interface PermissionCheckInput {
   toolName: string;
@@ -17,6 +19,8 @@ export interface PermissionCheckInput {
   planApproved?: boolean;
   /** Доступность MCP-инструментов по режимам plan/act (serverName → настройки). */
   mcpToolSettings?: Record<string, McpServerToolSettings>;
+  /** Политика безопасности execute_shell (денлист путей/команд). Опционально. */
+  shellPolicy?: ShellPolicy;
 }
 
 /**
@@ -108,9 +112,17 @@ export class PermissionEvaluator {
   }
 
   private _computeDecision(input: PermissionCheckInput): PermissionDecision {
-    const { toolName, params, workingDir, capabilities, sessionMode, planMode, planApproved, mcpToolSettings } = input;
+    const { toolName, params, workingDir, capabilities, sessionMode, planMode, planApproved, mcpToolSettings, shellPolicy } = input;
     const paths = extractPaths(toolName, params, workingDir);
     const isFile = paths.length > 0;
+
+    // Командный контекст execute_shell: сама команда и каталог выполнения.
+    const shellCommand = toolName === 'execute_shell' && typeof params.command === 'string'
+      ? params.command
+      : undefined;
+    const shellCwd = toolName === 'execute_shell'
+      ? (typeof params.cwd === 'string' && params.cwd.trim() !== '' ? resolvePath(params.cwd, workingDir) : workingDir)
+      : workingDir;
 
     // AD-025: plan-рестрикция применяется поверх конфига. В режиме plan (или
     // strict без утверждённого плана) все write/edit/delete тулы и git-запись → deny.
@@ -121,6 +133,25 @@ export class PermissionEvaluator {
         reason: `plan mode: запись файлов заблокирована (${restrictionSource})`,
         matchedRule: 'plan.deny',
       };
+    }
+
+    // AD-025: в plan-режиме мутирующие shell-команды запрещены, read-only разрешены.
+    if (shellCommand !== undefined && isPlanRestricted(sessionMode, planMode, planApproved)
+      && isMutatingCommand(tokenizeCommand(shellCommand), shellCommand)) {
+      return {
+        action: 'deny',
+        reason: 'plan mode: shell-команда изменяет состояние',
+        matchedRule: 'plan.shell-deny',
+      };
+    }
+
+    // Денлист shell-политики: критичный deny/ask поверх конфига (как
+    // plan-рестрикция). ApprovalPaths → ask, всё остальное из политики → deny.
+    if (shellCommand !== undefined && shellPolicy) {
+      const sc = checkShellCommand(shellCommand, shellCwd, shellPolicy);
+      if (sc.action !== 'allow') {
+        return { action: sc.action, reason: sc.reason, matchedRule: sc.matchedRule };
+      }
     }
 
     // MCP-доступность по режимам (настройки сессии): в plan-режиме инструмент
@@ -162,8 +193,15 @@ export class PermissionEvaluator {
     for (const group of getToolGroups(toolName, capabilities)) {
       const groupRule = this._config.rules[group];
       if (groupRule === undefined) continue;
-      const d = this._resolveRule(group, groupRule, isFile ? paths : [], workingDir);
-      if (d) return d;
+      // Для execute_shell правила группы shell матчатся по КОМАНДЕ (префиксы
+      // токенов), а не по cwd-пути: "npm install *" → ask, "*" → любая команда.
+      if (shellCommand !== undefined && group === 'shell') {
+        const d = this._resolveShellRule(group, groupRule, shellCommand, workingDir);
+        if (d) return d;
+      } else {
+        const d = this._resolveRule(group, groupRule, isFile ? paths : [], workingDir);
+        if (d) return d;
+      }
     }
 
     // 4. Глобальный '*'
@@ -213,6 +251,44 @@ export class PermissionEvaluator {
             matchedRule: `${key}.${pattern}`,
           };
         }
+      }
+    }
+    if (starAction) {
+      return {
+        action: starAction,
+        reason: `правило "${key}.*" → ${starAction}`,
+        matchedRule: `${key}.*`,
+      };
+    }
+    return undefined;
+  }
+
+  /**
+   * Разрешение правил группы shell для execute_shell: паттерны матчатся по
+   * команде (а не по пути). Поддержан префиксный синтаксис "git commit *".
+   */
+  private _resolveShellRule(
+    key: string,
+    rule: PermissionRule,
+    command: string,
+    _workingDir: string,
+  ): PermissionDecision | undefined {
+    if (typeof rule === 'string') {
+      return { action: rule, reason: `правило "${key}" → ${rule}`, matchedRule: key };
+    }
+
+    let starAction: PermissionAction | undefined;
+    for (const [pattern, action] of Object.entries(rule)) {
+      if (pattern === '*') {
+        starAction = action;
+        continue;
+      }
+      if (matchShellCommandPattern(pattern, command)) {
+        return {
+          action,
+          reason: `правило "${key}.${pattern}" → ${action} (команда: ${command})`,
+          matchedRule: `${key}.${pattern}`,
+        };
       }
     }
     if (starAction) {

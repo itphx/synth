@@ -443,7 +443,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     expect(ScriptedProvider.prompts()[0]).toContain('План утверждён');
   });
 
-  it('mode prompt из контекстных файлов (prompts/modes/plan.md) встраивается в system prompt', async () => {
+  it('mode prompt из системных контекстных файлов (prompts/system/MODE_PLAN.ru.md) встраивается в system prompt', async () => {
     const contextConfig = new ContextConfig({ userDataDir: tmpDir });
     ScriptedProvider.configure([{ content: 'готово' }]);
 
@@ -480,7 +480,49 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     expect(prompts[0]).toContain('Не вноси никаких изменений');
   });
 
-  it('fallback: без contextConfig режим plan использует встроенный текст', async () => {
+  it.each(['act', 'yolo'] as const)('mode prompt из системных контекстных файлов (prompts/system/MODE_%s.ru.md) встраивается в system prompt', async (mode) => {
+    const contextConfig = new ContextConfig({ userDataDir: tmpDir });
+    ScriptedProvider.configure([{ content: 'готово' }]);
+
+    const toolRegistry = createToolRegistry();
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus,
+      contextBuilder: makeCtxBuilder(),
+      contextConfig,
+      providerLoader: (name: string) => {
+        return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
+      },
+      toolRegistry,
+      permissionConfig: { rules: {}, askTimeoutMs: 1000 },
+      defaultWorkingDir: tmpDir,
+    });
+
+    const session = await sessionManager.createSession({
+      title: `ModePrompt${mode.toUpperCase()}`,
+      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'developer', planMode: 'auto' },
+    });
+    session.mode = mode;
+    await sessionManager.updateSession(session);
+    const msg = makeMessage();
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+    const processMessage = orchestrator.createProcessMessage();
+    const result = await processMessage(fresh, msg, new AbortController().signal, () => {});
+    expect(result.error).toBeUndefined();
+
+    const prompts = ScriptedProvider.prompts();
+    expect(prompts.length).toBeGreaterThanOrEqual(1);
+    const header = `[MODE: ${mode.toUpperCase()}]`;
+    expect(prompts[0]).toContain(header);
+    if (mode === 'act') {
+      expect(prompts[0]).toContain('Ты работаешь в режиме **act** — полного доступа.');
+    } else {
+      expect(prompts[0]).toContain('Ты работаешь в режиме **yolo** — полного доступа с автоматическим подтверждением запросов.');
+    }
+  });
+
+  it('без contextConfig блок [MODE: PLAN] не добавляется (fallback удалён)', async () => {
     ScriptedProvider.configure([{ content: 'готово' }]);
 
     const toolRegistry = createToolRegistry();
@@ -497,7 +539,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     });
 
     const session = await sessionManager.createSession({
-      title: 'ModeFallback',
+      title: 'ModeNoFallback',
       settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'developer', planMode: 'auto' },
     });
     session.mode = 'plan';
@@ -510,7 +552,6 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     expect(result.error).toBeUndefined();
 
     const prompts = ScriptedProvider.prompts();
-    expect(prompts[0]).toContain('[MODE: PLAN]');
-    expect(prompts[0]).toContain('Работай с планом проекта через plan_read/plan_write');
+    expect(prompts[0]).not.toContain('[MODE: PLAN]');
   });
 });

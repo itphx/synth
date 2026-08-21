@@ -4,7 +4,15 @@ import { PermissionEvaluator, extractPaths, isInsideWorkingDir } from './evaluat
 import { deriveSubagentPermission } from './derive.js';
 import type { PermissionConfig } from '@itphx/synth-shared';
 import { globMatch } from '@itphx/synth-shared';
+import type { ShellPolicy } from '../security/shell-guard.js';
 const CWD = '/workspace/project';
+
+const SHELL_POLICY: ShellPolicy = {
+  deniedPaths: ['~/.ssh/id_rsa', '~/.ssh/id_ed25519', '~/.git-credentials', '/etc/passwd', '/etc/shadow', '/etc/sudoers'],
+  deniedPrefixes: ['~/.ssh', '~/.aws', '~/.gnupg', '/etc/sudoers.d'],
+  approvalPaths: ['~/.ssh/config'],
+  deniedCommandPrefixes: ['rm -rf /', 'chmod -R 777 /', 'sudo rm -rf /', 'find / -delete', 'find / -exec'],
+};
 
 function evalCheck(
   config: PermissionConfig,
@@ -382,6 +390,155 @@ describe('PermissionEvaluator — yolo mode (AD-025)', () => {
     const cfg: PermissionConfig = { rules: {}, askTimeoutMs: 30_000 };
     const d = yoloCheck(cfg, 'write_file', { file_path: 'a.txt', content: 'x' }, { planMode: 'strict', planApproved: false });
     expect(d.action).toBe('deny');
+  });
+});
+
+describe('PermissionEvaluator — shell-безопасность (execute_shell)', () => {
+  function shellCheck(
+    command: string,
+    opts: {
+      policy?: ShellPolicy;
+      sessionMode?: 'plan' | 'act' | 'yolo';
+      planMode?: 'auto' | 'strict' | 'off';
+      planApproved?: boolean;
+      config?: PermissionConfig;
+      params?: Record<string, unknown>;
+    } = {},
+  ) {
+    return new PermissionEvaluator(opts.config ?? { rules: {}, askTimeoutMs: 30_000 }).check({
+      toolName: 'execute_shell',
+      params: { command, ...opts.params },
+      workingDir: CWD,
+      sessionMode: opts.sessionMode ?? 'act',
+      planMode: opts.planMode ?? 'auto',
+      planApproved: opts.planApproved ?? false,
+      shellPolicy: opts.policy,
+    });
+  }
+
+  it('plan-режим + мутирующая команда → deny', () => {
+    const d = shellCheck('rm -rf x', { sessionMode: 'plan', policy: SHELL_POLICY });
+    expect(d.action).toBe('deny');
+    expect(d.matchedRule).toBe('plan.shell-deny');
+    expect(d.reason).toContain('plan mode');
+  });
+
+  it('plan-режим + read-only команда → allow', () => {
+    expect(shellCheck('ls -la', { sessionMode: 'plan', policy: SHELL_POLICY }).action).toBe('allow');
+    expect(shellCheck('git status', { sessionMode: 'plan', policy: SHELL_POLICY }).action).toBe('allow');
+  });
+
+  it('strict без утверждённого плана + мутирующая команда → deny', () => {
+    expect(shellCheck('npm install x', { planMode: 'strict', planApproved: false }).action).toBe('deny');
+  });
+
+  it('strict с утверждённым планом разрешает мутирующую команду', () => {
+    expect(shellCheck('npm install x', { planMode: 'strict', planApproved: true }).action).toBe('allow');
+  });
+
+  it('act-режим не блокирует мутирующие команды без политики', () => {
+    expect(shellCheck('rm -rf x').action).toBe('allow');
+  });
+
+  it('permission.rules.shell: "npm install *": "ask"', () => {
+    const cfg: PermissionConfig = {
+      rules: { shell: { '*': 'allow', 'npm install *': 'ask' } },
+      askTimeoutMs: 30_000,
+    };
+    const d = shellCheck('npm install express', { config: cfg });
+    expect(d.action).toBe('ask');
+    expect(d.matchedRule).toBe('shell.npm install *');
+    expect(shellCheck('ls -la', { config: cfg }).action).toBe('allow');
+    expect(shellCheck('git commit -m x', { config: cfg }).action).toBe('allow');
+  });
+
+  it('permission.rules.shell: "git commit *": "deny" по префиксу', () => {
+    const cfg: PermissionConfig = {
+      rules: { shell: { '*': 'allow', 'git commit *': 'deny' } },
+      askTimeoutMs: 30_000,
+    };
+    expect(shellCheck('git commit -m "x"', { config: cfg }).action).toBe('deny');
+    expect(shellCheck('git status', { config: cfg }).action).toBe('allow');
+  });
+
+  it('permission.rules.shell строковое значение работает', () => {
+    const cfg: PermissionConfig = { rules: { shell: 'ask' }, askTimeoutMs: 30_000 };
+    expect(shellCheck('ls', { config: cfg }).action).toBe('ask');
+  });
+
+  it('денлист: cat ~/.ssh/id_rsa → deny (с shellPolicy)', () => {
+    const d = shellCheck('cat ~/.ssh/id_rsa', { policy: SHELL_POLICY });
+    expect(d.action).toBe('deny');
+    expect(d.matchedRule).toBe('shell-policy.deny');
+  });
+
+  it('денлист: cat /etc/passwd → deny', () => {
+    expect(shellCheck('cat /etc/passwd', { policy: SHELL_POLICY }).action).toBe('deny');
+  });
+
+  it('денлист: cat ~/.aws/credentials → deny (префикс)', () => {
+    expect(shellCheck('cat ~/.aws/credentials', { policy: SHELL_POLICY }).action).toBe('deny');
+  });
+
+  it('approvalPaths: cat ~/.ssh/config → ask', () => {
+    const d = shellCheck('cat ~/.ssh/config', { policy: SHELL_POLICY });
+    expect(d.action).toBe('ask');
+    expect(d.matchedRule).toBe('shell-policy.approve');
+  });
+
+  it('deniedCommandPrefixes: rm -rf / → deny поверх конфига allow', () => {
+    const cfg: PermissionConfig = { rules: { shell: 'allow' }, askTimeoutMs: 30_000 };
+    const d = shellCheck('rm -rf /', { policy: SHELL_POLICY, config: cfg });
+    expect(d.action).toBe('deny');
+  });
+
+  it('денлист deny приоритетнее группового allow-правила', () => {
+    const cfg: PermissionConfig = { rules: { shell: 'allow' }, askTimeoutMs: 30_000 };
+    expect(shellCheck('cat ~/.ssh/id_rsa', { policy: SHELL_POLICY, config: cfg }).action).toBe('deny');
+  });
+
+  it('без shellPolicy — обратная совместимость: денлист не применяется', () => {
+    expect(shellCheck('cat ~/.ssh/id_rsa').action).toBe('allow');
+  });
+
+  it('в yolo-режиме ask от approvalPaths автоподтверждается, deny остаётся deny', () => {
+    expect(shellCheck('cat ~/.ssh/config', { policy: SHELL_POLICY, sessionMode: 'yolo' }).action).toBe('allow');
+    expect(shellCheck('cat ~/.ssh/id_rsa', { policy: SHELL_POLICY, sessionMode: 'yolo' }).action).toBe('deny');
+  });
+
+  it('B1: plan + "echo x; rm -rf /" — deny (мутирующий сегмент после ;)', () => {
+    const d = shellCheck('echo x; rm -rf /', { sessionMode: 'plan', policy: SHELL_POLICY });
+    expect(d.action).toBe('deny');
+    expect(d.matchedRule).toBe('plan.shell-deny');
+  });
+
+  it('B1: plan + "cd / && rm -rf /" — deny', () => {
+    const d = shellCheck('cd / && rm -rf /', { sessionMode: 'plan', policy: SHELL_POLICY });
+    expect(d.action).toBe('deny');
+    expect(d.matchedRule).toBe('plan.shell-deny');
+  });
+
+  it('B1: plan + read-only команды с разделителями — allow', () => {
+    expect(shellCheck('echo a; echo b', { sessionMode: 'plan', policy: SHELL_POLICY }).action).toBe('allow');
+    expect(shellCheck('git status && git diff', { sessionMode: 'plan', policy: SHELL_POLICY }).action).toBe('allow');
+  });
+
+  it('B2: act + "echo x; rm -rf /" — deny через денлист в любом сегменте', () => {
+    const d = shellCheck('echo x; rm -rf /', { policy: SHELL_POLICY });
+    expect(d.action).toBe('deny');
+    expect(d.matchedRule).toBe('shell-policy.deny');
+  });
+
+  it('B4: sh -c/eval/sudo/find — deny поверх политики в act', () => {
+    expect(shellCheck("sh -c 'rm -rf /'", { policy: SHELL_POLICY }).action).toBe('deny');
+    expect(shellCheck("eval 'rm -rf /'", { policy: SHELL_POLICY }).action).toBe('deny');
+    expect(shellCheck('sudo rm -rf /', { policy: SHELL_POLICY }).action).toBe('deny');
+    expect(shellCheck('find / -delete', { policy: SHELL_POLICY }).action).toBe('deny');
+  });
+
+  it('B4: легитимные sh -c/eval не блокируются', () => {
+    expect(shellCheck("sh -c 'echo hi'", { policy: SHELL_POLICY }).action).toBe('allow');
+    expect(shellCheck("eval 'echo hi'", { policy: SHELL_POLICY }).action).toBe('allow');
   });
 });
 

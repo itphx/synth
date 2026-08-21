@@ -11,6 +11,8 @@
   "capabilities": [
     "file_read",
     "search",
+    "web",
+    "git_read",
     "mcp",
     "runtime"
   ],

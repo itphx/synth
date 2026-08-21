@@ -558,3 +558,252 @@ describe('ChatOrchestrator — tool_call.result публикуется посл�
     expect(persistedContent).toBe(eventResult.content);
   });
 });
+
+/**
+ * Мок-провайдер для тестов фильтрации тулов по режиму (AD-025):
+ * выполняет заданный сценарий шагов и захватывает список тулов и system prompt
+ * каждого вызова chatAsync (статически — ProviderFactory создаёт новый инстанс).
+ */
+class ModeToolsProvider extends BaseProvider {
+  private static _script: Array<{
+    toolCalls?: Array<{ name: string; args: Record<string, unknown> }>;
+    content?: string;
+  }> = [];
+  private static _step = 0;
+  private static _capturedTools: Array<Record<string, unknown>[] | undefined> = [];
+  private static _capturedPrompts: string[] = [];
+
+  static configure(
+    script: Array<{
+      toolCalls?: Array<{ name: string; args: Record<string, unknown> }>;
+      content?: string;
+    }>,
+  ): void {
+    this._script = script;
+    this._step = 0;
+    this._capturedTools = [];
+    this._capturedPrompts = [];
+  }
+
+  static capturedTools(): Array<Record<string, unknown>[] | undefined> {
+    return this._capturedTools;
+  }
+
+  static capturedPrompts(): string[] {
+    return this._capturedPrompts;
+  }
+
+  private _currentStep() {
+    const idx = Math.min(ModeToolsProvider._step, Math.max(0, ModeToolsProvider._script.length - 1));
+    return ModeToolsProvider._script[idx] ?? {};
+  }
+
+  async chat(): Promise<import('@itphx/synth-shared').LLMResponse> {
+    return { content: 'done', model: this.model, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    systemPrompt?: string,
+    tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _cancellationToken?: CancellationToken,
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    const step = this._currentStep();
+    ModeToolsProvider._capturedTools.push(tools);
+    ModeToolsProvider._capturedPrompts.push(systemPrompt ?? '');
+    ModeToolsProvider._step++;
+    const toolCalls = step.toolCalls?.map((t) => ({
+      id: `call_${t.name}_${ModeToolsProvider._step}`,
+      type: 'function',
+      function: { name: t.name, arguments: JSON.stringify(t.args) },
+    }));
+    yield {
+      content: step.content ?? '',
+      isFinal: true,
+      model: this.model,
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      toolCalls,
+    };
+  }
+
+  getProviderName(): string {
+    return 'modetools';
+  }
+}
+
+function toolNamesOf(
+  tools: Array<Record<string, unknown>[] | undefined>,
+  index: number,
+): string[] {
+  const list = tools[index];
+  return (list ?? [])
+    .map((t) => (t.function as { name?: string } | undefined)?.name)
+    .filter((n): n is string => Boolean(n));
+}
+
+const WRITE_TOOLS = ['write_file', 'edit_file', 'create_directory', 'delete_file'];
+const GIT_WRITE_TOOLS = ['git_commit', 'git_push', 'git_pull', 'git_checkout', 'git_stash'];
+
+describe('ChatOrchestrator — фильтрация тулов по режиму (AD-025)', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-mode-tools-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    ProviderFactory.register('modetools', ModeToolsProvider);
+  });
+
+  afterEach(async () => {
+    ProviderFactory['_providers'].delete('modetools');
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function runMode(
+    mode: 'plan' | 'act' | 'yolo',
+    script: Array<{ toolCalls?: Array<{ name: string; args: Record<string, unknown> }>; content?: string }>,
+  ): Promise<void> {
+    ModeToolsProvider.configure(script);
+
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus: new EventBus(),
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: (name: string) => {
+        return { name, type: 'modetools', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
+      },
+      toolRegistry: createToolRegistry(),
+      permissionConfig: { rules: {}, askTimeoutMs: 1000 },
+      defaultWorkingDir: tmpDir,
+    });
+
+    const session = await sessionManager.createSession({
+      title: 'ModeTools',
+      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'assistant' },
+    });
+    session.mode = mode;
+    await sessionManager.updateSession(session);
+    const msg = makeUserMsg();
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+
+    const processMessage = orchestrator.createProcessMessage();
+    const result = await processMessage(fresh, msg, new AbortController().signal, () => {});
+    expect(result.error).toBeUndefined();
+  }
+
+  it('plan: список тулов не содержит write/edit/git_write, но содержит read/shell/git_read', async () => {
+    await runMode('plan', [{ content: 'готово' }]);
+
+    const names = toolNamesOf(ModeToolsProvider.capturedTools(), 0);
+    for (const t of [...WRITE_TOOLS, ...GIT_WRITE_TOOLS]) {
+      expect(names).not.toContain(t);
+    }
+    expect(names).toContain('read_file');
+    expect(names).toContain('execute_shell');
+    expect(names).toContain('git_status');
+  });
+
+  it('strict без утверждённого плана: список тулов урезан так же, как в plan', async () => {
+    ModeToolsProvider.configure([{ content: 'готово' }]);
+
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus: new EventBus(),
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: (name: string) => {
+        return { name, type: 'modetools', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
+      },
+      toolRegistry: createToolRegistry(),
+      permissionConfig: { rules: {}, askTimeoutMs: 1000 },
+      defaultPlanMode: 'strict',
+      defaultWorkingDir: tmpDir,
+    });
+
+    const session = await sessionManager.createSession({
+      title: 'StrictNoPlan',
+      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'assistant' },
+    });
+    const msg = makeUserMsg();
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+    const processMessage = orchestrator.createProcessMessage();
+    const result = await processMessage(fresh, msg, new AbortController().signal, () => {});
+    expect(result.error).toBeUndefined();
+
+    const names = toolNamesOf(ModeToolsProvider.capturedTools(), 0);
+    for (const t of [...WRITE_TOOLS, ...GIT_WRITE_TOOLS]) {
+      expect(names).not.toContain(t);
+    }
+    expect(names).toContain('read_file');
+  });
+
+  it('act: список тулов полный (содержит write и git_write)', async () => {
+    await runMode('act', [{ content: 'готово' }]);
+
+    const names = toolNamesOf(ModeToolsProvider.capturedTools(), 0);
+    for (const t of [...WRITE_TOOLS, ...GIT_WRITE_TOOLS]) {
+      expect(names).toContain(t);
+    }
+  });
+
+  it('yolo: список тулов полный (содержит write и git_write)', async () => {
+    await runMode('yolo', [{ content: 'готово' }]);
+
+    const names = toolNamesOf(ModeToolsProvider.capturedTools(), 0);
+    for (const t of [...WRITE_TOOLS, ...GIT_WRITE_TOOLS]) {
+      expect(names).toContain(t);
+    }
+  });
+
+  it('plan_enter в цикле пересобирает список тулов для следующей итерации', async () => {
+    await runMode('act', [
+      { toolCalls: [{ name: 'plan_enter', args: {} }] },
+      { content: 'готово' },
+    ]);
+
+    const all = ModeToolsProvider.capturedTools();
+    expect(all.length).toBeGreaterThanOrEqual(2);
+
+    // Первый вызов — режим act: полный список
+    const firstNames = toolNamesOf(all, 0);
+    expect(firstNames).toContain('write_file');
+    expect(firstNames).toContain('git_commit');
+
+    // Второй вызов — после plan_enter (режим plan): write/git_write убраны
+    const secondNames = toolNamesOf(all, 1);
+    for (const t of [...WRITE_TOOLS, ...GIT_WRITE_TOOLS]) {
+      expect(secondNames).not.toContain(t);
+    }
+    expect(secondNames).toContain('read_file');
+  });
+
+  it('plan_exit в цикле возвращает полный список тулов (act)', async () => {
+    await runMode('plan', [
+      { toolCalls: [{ name: 'plan_exit', args: {} }] },
+      { content: 'готово' },
+    ]);
+
+    const all = ModeToolsProvider.capturedTools();
+    expect(all.length).toBeGreaterThanOrEqual(2);
+
+    const firstNames = toolNamesOf(all, 0);
+    expect(firstNames).not.toContain('write_file');
+
+    const secondNames = toolNamesOf(all, 1);
+    expect(secondNames).toContain('write_file');
+    expect(secondNames).toContain('git_commit');
+  });
+
+  it('без contextConfig описание режима не добавляется ни для одного режима', async () => {
+    await runMode('plan', [{ content: 'готово' }]);
+    expect(ModeToolsProvider.capturedPrompts()[0]).not.toContain('[MODE: PLAN]');
+
+    await runMode('act', [{ content: 'готово' }]);
+    expect(ModeToolsProvider.capturedPrompts()[0]).not.toContain('[MODE: ACT]');
+
+    await runMode('yolo', [{ content: 'готово' }]);
+    expect(ModeToolsProvider.capturedPrompts()[0]).not.toContain('[MODE: YOLO]');
+  });
+});

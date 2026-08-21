@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
-import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig } from '@itphx/synth-shared';
+import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, ToolForLLM } from '@itphx/synth-shared';
 import type { AgentRegistry } from '../agents/registry.js';
 import { normalizeAgentModes } from '../agents/normalize.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
@@ -11,9 +11,10 @@ import type { ContextOptimizer } from '../context/optimizer.js';
 import type { ContextConfig } from '../context/config.js';
 import type { ModelRouter } from '../router/router.js';
 import { deriveSubagentPermission } from '../permission/derive.js';
-import { PermissionEvaluator } from '../permission/evaluator.js';
+import { PermissionEvaluator, isPlanRestricted, isPlanBlockedTool, getMcpToolAvailability } from '../permission/evaluator.js';
 import { PermissionApprovalManager } from '../permission/approval.js';
 import { serializeSession, serializeMessage } from '../../server/serialize.js';
+import type { ShellPolicy } from '../security/shell-guard.js';
 
 export interface TaskExtra {
   provider: BaseProvider;
@@ -38,6 +39,8 @@ export interface TaskExtra {
   permissionConfig?: PermissionConfig;
   /** Секция безопасности (защита от Indirect Prompt Injection) из config.yaml. */
   securityConfig?: SecurityConfig;
+  /** Политика безопасности execute_shell (денлист путей/команд) родительской сессии. */
+  shellPolicy?: ShellPolicy;
 }
 
 type ContextMode = 'none' | 'inherit' | 'summary' | 'last_n';
@@ -162,7 +165,7 @@ export const taskTool: ToolDefinition = {
     const contextMode: ContextMode = params.context_mode || 'none';
     const contextCount = params.context_count || DEFAULT_LAST_N;
     const systemPrompt = agentDef.subagentPrompt || '';
-    const tools = extra.agentRegistry.getToolsForAgent(agentDef.id);
+    let tools: ToolForLLM[] | undefined = extra.agentRegistry.getToolsForAgent(agentDef.id);
     const maxSteps = agentDef.maxSteps ?? DEFAULT_SUBAGENT_MAX_STEPS;
     const effectiveMaxSteps = (maxSteps === 0)
       ? Number.POSITIVE_INFINITY
@@ -482,6 +485,27 @@ export const taskTool: ToolDefinition = {
       }
     }
 
+    // B5: режимная фильтрация списка тулов саб-агента (аналог
+    // orchestrator._filterToolsByMode). В plan-режиме (или strict без
+    // утверждённого плана) скрываем write/edit-тулы и git-запись — модель не
+    // видит инструменты, которые всё равно будут отклонены evaluator'ом.
+    if (isPlanRestricted(childSessionMode, childPlanMode, childPlanApproved) && tools) {
+      const filtered: ToolForLLM[] = [];
+      for (const tool of tools) {
+        const toolName = tool.function.name;
+        const toolDef = extra.toolRegistry?.get(toolName);
+        const capabilities = toolDef?.capabilities;
+        if (isPlanBlockedTool(toolName, capabilities)) continue;
+        // MCP-инструменты: в plan-режиме недоступный по настройкам тул убираем.
+        if (capabilities?.includes(ToolCapability.MCP) && childMcpToolSettings) {
+          const availability = getMcpToolAvailability(childMcpToolSettings, toolName);
+          if (availability && !availability.plan) continue;
+        }
+        filtered.push(tool);
+      }
+      tools = filtered;
+    }
+
     try {
       let finalContent = '';
       let iteration = 0;
@@ -694,6 +718,7 @@ export const taskTool: ToolDefinition = {
             planMode: childPlanMode,
             planApproved: childPlanApproved,
             mcpToolSettings: childMcpToolSettings,
+            shellPolicy: extra.shellPolicy ?? undefined,
           });
 
           if (permissionDecision.action === 'deny') {
