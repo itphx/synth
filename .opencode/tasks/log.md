@@ -543,6 +543,7 @@
 - **Исполнитель:** @fixer (5 итераций), @tester (2 верификации, нашёл дыры B1–B5), оркестратор
 - **Результат:** PASS
 - **Ветка:** fix/mode-tools-shell-security (из master, 44bb8b5)
+- **Коммит:** 9bb89ae (fix: режимы Plan/Act/YOLO — фильтрация тулов и описания режимов в system prompt, ревью capabilities, безопасность execute_shell)
 - **Ключевое:**
   1. **Режимы Plan/Act/YOLO** (orchestrator.ts): список тулов LLM фильтруется по режиму (`_filterToolsByMode`: plan → убирает edit/git_write + MCP с availability.plan=false) и пересобирается после plan_enter/plan_exit в tool-цикле (раньше — только system prompt).
   2. **contextConfig не передавался в ChatOrchestrator** (core app.ts, chat.ts, backend main.ts) → `_contextConfig = null` → `getModePrompt` недоступен → описания режимов НЕ попадали в системный промпт (в реальной сессии «Разговор о разном»: system=3581 символов без [MODE: YOLO], debug через api_request.body.system). Фикс: `contextConfig` передан во все 3 точки.
