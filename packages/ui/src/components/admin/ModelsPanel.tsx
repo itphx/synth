@@ -154,7 +154,7 @@ export const ModelsPanel = () => {
           prev.map((g) => ({
             ...g,
             models: g.models.map((m) =>
-              m.id === modelId ? { ...m, [field]: num } : m,
+              m.id === modelId ? { ...m, [fieldMap[field]]: num } : m,
             ),
           }))
         )
@@ -168,11 +168,17 @@ export const ModelsPanel = () => {
     const num = value === '' ? undefined : parseInt(value, 10)
     if (value !== '' && (isNaN(num!) || num! < 0)) return
 
+    // Ручной ввод (не пустое значение) — всегда помечаем как manual, чтобы
+    // следующий fetch не затёр значение провайдером. Очистка поля — сброс к
+    // unknown (context_window: null удаляет сохранённое окно на бэкенде).
+    const contextWindow = num !== undefined ? num : null
+    const contextSource = num !== undefined ? 'manual' : 'unknown'
+
     setGroups((prev) =>
       prev.map((g) => ({
         ...g,
         models: g.models.map((m) =>
-          m.id === model.id ? { ...m, context_window: num, context_source: num && model.context_source !== 'api' ? 'manual' : model.context_source } : m,
+          m.id === model.id ? { ...m, context_window: contextWindow ?? undefined, context_source: contextSource } : m,
         ),
       }))
     )
@@ -182,8 +188,8 @@ export const ModelsPanel = () => {
         method: 'POST',
         body: JSON.stringify({
           id: model.id,
-          context_window: num,
-          context_source: num && model.context_source !== 'api' ? 'manual' : model.context_source,
+          context_window: contextWindow,
+          context_source: contextSource,
         }),
       })
     } catch { /* ignore */ }

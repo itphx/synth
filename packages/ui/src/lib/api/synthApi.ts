@@ -1,5 +1,6 @@
 import type { MessageData } from '@/stores/chatStore'
 import type { TodoItem, ProjectPlan } from '@itphx/synth-shared'
+import { normalizeModelInfo } from './modelNormalize'
 
 const BASE_URL = '/api/v2'
 
@@ -683,8 +684,13 @@ export const synthApi = {
   },
 
   async getModels(): Promise<ModelGroup[]> {
-    const data = await fetchJSON<{ groups: ModelGroup[] }>(`${BASE_URL}/models`)
-    return data.groups || []
+    const data = await fetchJSON<{
+      groups: Array<{ provider: ProviderGroupInfo; models: Array<Record<string, unknown>> }>
+    }>(`${BASE_URL}/models`)
+    return (data.groups || []).map((g) => ({
+      provider: g.provider,
+      models: g.models.map((m) => normalizeModelInfo(m) as unknown as ModelInfo),
+    }))
   },
 
   // Пользователи (admin)
