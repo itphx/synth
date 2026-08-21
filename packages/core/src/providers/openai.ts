@@ -94,6 +94,10 @@ export class OpenAIProvider extends BaseProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
 
+    // Таймаут — только на ожидание первого чанка. Как только стрим пошёл,
+    // таймер снимается, дальше стрим длится сколько нужно.
+    let firstChunkReceived = false;
+
     // Кнопка «Стоп»: отмена пользователя (cancellationToken.cancel) немедленно
     // прерывает висящий fetch/reader.read() через AbortController — иначе
     // reader.read() висит до таймаута 120с и отмена не работает.
@@ -164,6 +168,10 @@ export class OpenAIProvider extends BaseProvider {
               if (delta) {
                 if (delta.reasoning_content && typeof delta.reasoning_content === 'string') {
                   if (delta.reasoning_content === '.' || delta.reasoning_content === '.\n') continue;
+                  if (!firstChunkReceived) {
+                    firstChunkReceived = true;
+                    clearTimeout(timer);
+                  }
                   accumulatedReasoning += delta.reasoning_content;
                   yield {
                     content: '',
@@ -174,6 +182,10 @@ export class OpenAIProvider extends BaseProvider {
                 }
 
                 if (delta.content && typeof delta.content === 'string') {
+                  if (!firstChunkReceived) {
+                    firstChunkReceived = true;
+                    clearTimeout(timer);
+                  }
                   accumulatedContent += delta.content;
                   yield {
                     content: delta.content,
@@ -185,6 +197,10 @@ export class OpenAIProvider extends BaseProvider {
                 }
 
                 if (delta.tool_calls) {
+                  if (!firstChunkReceived) {
+                    firstChunkReceived = true;
+                    clearTimeout(timer);
+                  }
                   for (const tc of delta.tool_calls as Array<Record<string, unknown>>) {
                     const tcIndex = tc.index as number;
                     const func = tc.function as Record<string, unknown> | undefined;

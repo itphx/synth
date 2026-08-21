@@ -90,6 +90,10 @@ export class OllamaProvider extends BaseProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
 
+    // Таймаут — только на ожидание первого чанка. Как только стрим пошёл,
+    // таймер снимается, дальше стрим длится сколько нужно.
+    let firstChunkReceived = false;
+
     // Кнопка «Стоп»: отмена пользователя (cancellationToken.cancel) немедленно
     // прерывает висящий fetch/reader.read() через AbortController — иначе
     // reader.read() висит до таймаута 120с и отмена не работает.
@@ -154,6 +158,10 @@ export class OllamaProvider extends BaseProvider {
               const msg = chunkData.message as Record<string, unknown> | undefined;
 
               if (msg?.content && typeof msg.content === 'string') {
+                if (!firstChunkReceived) {
+                  firstChunkReceived = true;
+                  clearTimeout(timer);
+                }
                 const hasReasoning = !!accumulatedReasoning;
                 accumulatedContent += msg.content;
                 yield {
@@ -167,6 +175,10 @@ export class OllamaProvider extends BaseProvider {
               }
 
               if (msg?.tool_calls) {
+                if (!firstChunkReceived) {
+                  firstChunkReceived = true;
+                  clearTimeout(timer);
+                }
                 for (const tc of msg.tool_calls as Record<string, unknown>[]) {
                   accumulatedToolCalls.push({
                     id: tc.id,
@@ -183,6 +195,10 @@ export class OllamaProvider extends BaseProvider {
               }
 
               if (msg?.thinking && typeof msg.thinking === 'string') {
+                if (!firstChunkReceived) {
+                  firstChunkReceived = true;
+                  clearTimeout(timer);
+                }
                 accumulatedReasoning += msg.thinking;
                 debugCollector?.captureReasoning(accumulatedReasoning);
                 yield {

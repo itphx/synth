@@ -121,6 +121,10 @@ export class AnthropicProvider extends BaseProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
 
+    // Таймаут — только на ожидание первого чанка. Как только стрим пошёл,
+    // таймер снимается, дальше стрим длится сколько нужно.
+    let firstChunkReceived = false;
+
     try {
       const resp = await fetch(this.url, {
         method: 'POST',
@@ -178,6 +182,13 @@ export class AnthropicProvider extends BaseProvider {
 
               if (eventType === 'content_block_start') {
                 const block = chunkData.content_block as Record<string, unknown> | undefined;
+                // Старт thinking/tool_use блока — стрим пошёл, таймер больше не нужен.
+                if (block?.type === 'thinking' || block?.type === 'tool_use') {
+                  if (!firstChunkReceived) {
+                    firstChunkReceived = true;
+                    clearTimeout(timer);
+                  }
+                }
                 if (block?.type === 'thinking') {
                   accumulatedReasoning = '';
                 } else if (block?.type === 'tool_use') {
@@ -203,6 +214,10 @@ export class AnthropicProvider extends BaseProvider {
                 if (deltaType === 'thinking_delta') {
                   const thinking = String(delta?.thinking ?? '');
                   if (thinking) {
+                    if (!firstChunkReceived) {
+                      firstChunkReceived = true;
+                      clearTimeout(timer);
+                    }
                     accumulatedReasoning += thinking;
                     yield {
                       content: '',
@@ -214,6 +229,10 @@ export class AnthropicProvider extends BaseProvider {
                 } else if (deltaType === 'text_delta') {
                   const text = String(delta?.text ?? '');
                   if (text) {
+                    if (!firstChunkReceived) {
+                      firstChunkReceived = true;
+                      clearTimeout(timer);
+                    }
                     accumulatedContent += text;
                     yield {
                       content: text,
