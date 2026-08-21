@@ -1401,7 +1401,13 @@ export class ChatOrchestrator {
           (m) => m.role === MessageRole.USER && !m.metadata?.synthetic,
         ).length;
         if (userMsgCount === 1) {
-          autoTitleSession(updatedSession, this._sessionManager, provider)
+          const titleAgentDef = this._agentRegistry?.get('title');
+          let titleProvider = provider;
+          if (titleAgentDef?.reasoningLevel && providerName) {
+            const tp = this._getProvider(providerName, updatedSession, titleAgentDef.reasoningLevel);
+            if (tp) titleProvider = tp;
+          }
+          autoTitleSession(updatedSession, this._sessionManager, titleProvider)
             .then((title) => {
               if (title) {
                 this._eventBus.publish(updatedSession.id, 'session.updated', {
