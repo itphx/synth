@@ -571,6 +571,9 @@ export class ChatOrchestrator {
       ? agentMaxSteps
       : DEFAULT_MAX_ITERATIONS;
 
+    // Уровень размышлений агента: если агент не задал — берём настройку сессии
+    const effectiveReasoningLevel = agentDef?.reasoningLevel ?? session.settings.reasoningLevel;
+
     const debugCollector = new DebugCollector(session.settings.debugEnabled);
 
     // --- Обработка системных сообщений (суммаризация, шедулер, etc.) ---
@@ -578,7 +581,7 @@ export class ChatOrchestrator {
       return this._handleSummarization(session, message, signal, publishChunk, debugCollector, streamId);
     }
     if (message.role === MessageRole.SYSTEM && message.metadata?.type === 'debug_system_message') {
-      return this._handleDebugSystemMessage(session, message, signal, publishChunk, debugCollector, streamId);
+      return this._handleDebugSystemMessage(session, message, signal, publishChunk, debugCollector, streamId, effectiveReasoningLevel);
     }
 
     // --- AD-035: Micro-first — пробуем ответить без LLM ---
@@ -666,7 +669,7 @@ export class ChatOrchestrator {
 
     try {
       // 1. Get provider (через роутер если доступен, иначе напрямую)
-      const routeResult = this._routeProvider(session, message);
+      const routeResult = this._routeProvider(session, message, effectiveReasoningLevel);
       if (!routeResult) {
         const providerName = (message.provider as string) || session.settings.provider || '';
         return {
@@ -1294,7 +1297,7 @@ export class ChatOrchestrator {
               reason: 'escalation_fallback',
               strategy: 'default',
             };
-            const fbProvider = this._router.getProvider(fbDecision, undefined, session.settings.reasoningLevel);
+            const fbProvider = this._router.getProvider(fbDecision, undefined, effectiveReasoningLevel);
             if (fbProvider) {
               // Перевызываем LLM с fallback-моделью (без стриминга в UI)
               try {
@@ -1498,9 +1501,10 @@ export class ChatOrchestrator {
     publishChunk: (event: string, data: Record<string, unknown>) => void,
     debugCollector: DebugCollector,
     streamId: string,
+    reasoningLevel?: ReasoningLevel,
   ): Promise<ProcessMessageResult> {
     const providerName = (message.provider as string) || session.settings.provider || '';
-    const provider = this._getProvider(providerName, session);
+    const provider = this._getProvider(providerName, session, reasoningLevel);
     if (!provider) {
       return {
         error: `Провайдер ${providerName || 'не указан'} не найден или не настроен`,
@@ -1738,7 +1742,7 @@ export class ChatOrchestrator {
     return {};
   }
 
-  private _getProvider(providerName: string, session: Session) {
+  private _getProvider(providerName: string, session: Session, reasoningLevel?: ReasoningLevel) {
     const modelName = session.settings.model || '';
     const sharedConfig = this._providerLoader(providerName);
     if (!sharedConfig) return null;
@@ -1749,7 +1753,7 @@ export class ChatOrchestrator {
       const provider = ProviderFactory.create(
         providerName,
         {
-          ...toCoreProviderConfig(sharedConfig, effectiveModel, session.settings.reasoningLevel),
+          ...toCoreProviderConfig(sharedConfig, effectiveModel, reasoningLevel ?? session.settings.reasoningLevel),
           maxTokens: session.settings.maxTokens,
           numCtx: contextWindow > 0 ? contextWindow : undefined,
         },
@@ -1825,6 +1829,7 @@ export class ChatOrchestrator {
   private _routeProvider(
     session: Session,
     message: Message,
+    reasoningLevel?: ReasoningLevel,
   ): { provider: BaseProvider; providerName: string; modelName: string; decision?: RoutingDecision } | null {
     if (this._router && session.settings.routingEnabled !== false) {
       const toolCallNames = message.toolCalls?.map((tc) => {
@@ -1842,7 +1847,7 @@ export class ChatOrchestrator {
       let provider = this._router.getProvider(
         decision,
         undefined,
-        session.settings.reasoningLevel,
+        reasoningLevel ?? session.settings.reasoningLevel,
         session.settings.maxTokens,
         routedWindow > 0 ? routedWindow : undefined,
       );
@@ -1860,7 +1865,7 @@ export class ChatOrchestrator {
       // (например, категория не имеет маппинга в routingContent),
       // используем стандартный _getProvider() для провайдера сессии
       const fallbackName = session.settings.provider || '';
-      provider = this._getProvider(fallbackName, session);
+      provider = this._getProvider(fallbackName, session, reasoningLevel);
       if (provider) {
         return {
           provider,
@@ -1873,7 +1878,7 @@ export class ChatOrchestrator {
 
     // Fallback: старый метод (если роутер недоступен или все пути выше не сработали)
     const providerName = (message.provider as string) || session.settings.provider || '';
-    const provider = this._getProvider(providerName, session);
+    const provider = this._getProvider(providerName, session, reasoningLevel);
     if (!provider) return null;
 
     return {

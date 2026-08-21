@@ -5,7 +5,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pickLocalized } from '@itphx/synth-shared';
-import type { AgentDefinition, ToolCapability } from '@itphx/synth-shared';
+import type { AgentDefinition, ReasoningLevel, ToolCapability } from '@itphx/synth-shared';
 import { AgentRegistry } from './registry.js';
 import type { ToolRegistry } from '../tools/registry.js';
 
@@ -25,6 +25,7 @@ interface AgentDefFile {
   agentMode?: string | string[];
   subagentPrompt?: string;
   maxSteps?: number;
+  reasoningLevel?: ReasoningLevel;
 }
 
 export function loadSystemAgentDefinitions(): AgentDefinition[] {
@@ -49,6 +50,7 @@ export function loadSystemAgentDefinitions(): AgentDefinition[] {
       agentMode: normalizeAgentModes(def.agentMode),
       subagentPrompt: def.subagentPrompt,
       maxSteps: def.maxSteps,
+      reasoningLevel: def.reasoningLevel,
     });
   }
 

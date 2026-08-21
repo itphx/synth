@@ -13,6 +13,7 @@
   "color": "#6b7280",
   "contextFile": "title",
   "temperature": 0.3,
+  "reasoningLevel": "none",
   "agentMode": ["system"],
   "sshKeys": []
 }

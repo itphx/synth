@@ -426,6 +426,8 @@ export interface AgentDefinition {
   temperature?: number;
   topP?: number;
   topK?: number;
+  /** Уровень размышлений агента. Не задано — используется session.settings.reasoningLevel. */
+  reasoningLevel?: ReasoningLevel;
   agentMode?: AgentMode | AgentMode[];
   subagentPrompt?: string;
   maxSteps?: number; // 0 = без ограничений, undefined = default (0 для primary, 15 для subagent)

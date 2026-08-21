@@ -11,6 +11,14 @@ const CAP_KEYS = [
   'git_read', 'git_write', 'web', 'task', 'mcp',
 ]
 
+// Доступные уровни размышлений по типу провайдера (без 'default' — он не хранится в агенте)
+const REASONING_BY_PROVIDER_TYPE: Record<string, string[]> = {
+  openai: ['low', 'medium', 'high'],
+  generic: ['low', 'medium', 'high'],
+  anthropic: ['high'],
+  ollama: ['low'],
+}
+
 function normalizeAgentId(raw: string): string {
   return raw.toLowerCase().replace(/[^a-z0-9_-]/g, '')
 }
@@ -35,6 +43,7 @@ interface AgentForm {
   temperature: number
   top_p: number
   top_k: number
+  reasoning_level: string
   agent_mode: AgentMode[]
   context_file: string
   capabilities: string[]
@@ -46,7 +55,7 @@ interface AgentForm {
 
 const emptyForm = (): AgentForm => ({
   id: '', display_name: '', description: '', provider: '', model: '',
-  temperature: 0.7, top_p: 0, top_k: 0,
+  temperature: 0.7, top_p: 0, top_k: 0, reasoning_level: '',
   agent_mode: ['primary'], context_file: '',
   capabilities: [], subagent_prompt: '', max_steps: 0, icon: '', color: '',
 })
@@ -62,6 +71,7 @@ function buildForm(a: AgentInfo, detail?: Record<string, unknown> | null): Agent
     temperature: (detail?.temperature as number) ?? 0.7,
     top_p: (detail?.topP as number) ?? 0,
     top_k: (detail?.topK as number) ?? 0,
+    reasoning_level: (a.reasoning_level || (detail?.reasoningLevel as string) || ''),
     agent_mode: agentMode,
     context_file: a.context_file || (detail?.contextFile as string) || '',
     capabilities: (detail?.capabilities as string[]) || a.capabilities,
@@ -175,6 +185,7 @@ export const AgentsPanel = () => {
           temperature: form.temperature,
           top_p: form.top_p || undefined,
           top_k: form.top_k || undefined,
+          reasoning_level: form.reasoning_level || undefined,
           // legacy mode, kept for backward compat — always "simple"
           mode: 'simple',
           agent_mode: form.agent_mode,
@@ -228,6 +239,14 @@ export const AgentsPanel = () => {
     if (!form.provider) return []
     const group = models.find((g) => g.provider === form.provider)
     return group?.models || []
+  }
+
+  // Варианты уровня размышлений: провайдер не выбран → только «не задано»/«отключено»,
+  // выбран → плюс уровни, поддерживаемые типом провайдера
+  const reasoningOptions = (): string[] => {
+    if (!form.provider) return ['', 'none']
+    const type = providers.find((p) => p.name === form.provider)?.type
+    return Array.from(new Set(['', 'none', ...(REASONING_BY_PROVIDER_TYPE[type ?? ''] ?? [])]))
   }
 
   const showSubagentFields = form.agent_mode.includes('subagent')
@@ -352,6 +371,23 @@ export const AgentsPanel = () => {
           <input type="number" min="0" max="1000" step="1" value={form.top_k || ''}
             onChange={(e) => setForm({ ...form, top_k: e.target.value ? parseInt(e.target.value) : 0 })}
             className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+        </div>
+
+        {/* Reasoning level */}
+        <div>
+          <label className="text-xs text-muted-foreground">{t('admin.agents.reasoning')}</label>
+          <select value={form.reasoning_level} onChange={(e) => setForm({ ...form, reasoning_level: e.target.value })}
+            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+            {reasoningOptions().map((level) => (
+              <option key={level} value={level}>
+                {level === ''
+                  ? t('admin.agents.reasoning.unset')
+                  : level === 'none'
+                    ? t('admin.agents.reasoning.none')
+                    : t(`chat.reasoning.${level}`)}
+              </option>
+            ))}
+          </select>
         </div>
 
         {/* Max steps — для всех режимов, 0 = без ограничений */}

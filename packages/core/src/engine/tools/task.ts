@@ -173,6 +173,7 @@ export const taskTool: ToolDefinition = {
     const childRoutingOverrides: Partial<SessionSettings> = {};
     if (params.model) childRoutingOverrides.model = params.model;
     if (params.provider) childRoutingOverrides.provider = params.provider;
+    if (agentDef?.reasoningLevel) childRoutingOverrides.reasoningLevel = agentDef.reasoningLevel;
     if (params.routing_strategy) {
       if (params.routing_strategy === 'none') {
         childRoutingOverrides.routingEnabled = false;
