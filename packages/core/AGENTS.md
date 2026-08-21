@@ -300,26 +300,11 @@ class ChatOrchestrator {
   constructor(
     provider: BaseProvider,
     contextBuilder: ContextBuilder,
-    tsm: TSM,
     tools: ToolRegistry
   );
 
   async processSync(session: Session, message: Message): Promise<LLMResponse>;
   async *processStream(session: Session, message: Message, cancelToken: CancelToken): AsyncGenerator<LLMChunk>;
-}
-```
-
-### TSM (Task State Machine)
-
-Состояния: `PLANNING → EXECUTION → VALIDATION → DONE`
-
-```typescript
-// src/engine/tsm.ts
-enum TsmState { PLANNING, EXECUTION, VALIDATION, DONE }
-
-class TSM {
-  transition(current: TsmState, next: TsmState): TsmState;
-  getSystemPrompt(state: TsmState, context: TsmContext): string;
 }
 ```
 

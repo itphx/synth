@@ -4,7 +4,7 @@ import type { ContextConfig } from '@itphx/synth-core';
 import type { ContextCategory } from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
 
-const VALID_CATEGORIES = new Set<string>(['user', 'role', 'system', 'tsm']);
+const VALID_CATEGORIES = new Set<string>(['user', 'role', 'system']);
 
 function parseCategory(s: string | undefined): ContextCategory {
   if (s && VALID_CATEGORIES.has(s)) return s as ContextCategory;

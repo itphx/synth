@@ -55,7 +55,6 @@ export const defaultConfig: SynthConfig = {
       ROUTES: 'WARNING',
       ORCHESTRATOR: 'INFO',
       CHAT_STREAM: 'WARNING',
-      TSM: 'INFO',
       STORAGE: 'WARNING',
       DEBUG: 'DEBUG',
       WEBSOCKET: 'INFO',

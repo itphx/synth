@@ -86,8 +86,13 @@ export function MessageList({
   const streamEntries = Object.values(streams).filter((s) => s.isStreaming && s.hasContent)
   const streamContentSize = streamEntries.reduce((sum, s) => sum + s.content.length + s.reasoningBlocks.reduce((rsum, r) => rsum + r.text.length, 0), 0)
 
+  // Служебные сообщения tool-chain (metadata.tool_chain === true) не рендерятся
+  // отдельными пузырями — их визуальное представление уже в финальном сообщении
+  // (tool_calls / reasoning_blocks / intermediate_text_blocks).
+  const visibleMessages = messages.filter((m) => !(m.metadata && m.metadata.tool_chain === true))
+
   const virtualizer = useVirtualizer({
-    count: messages.length,
+    count: visibleMessages.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 200,
     overscan: OVERSCAN,
@@ -132,7 +137,7 @@ export function MessageList({
     }
   }, [messages, streamContentSize, streamEntries.length, autoScroll, scrollToBottom])
 
-  const shouldVirtualize = messages.length > VIRTUALIZE_THRESHOLD
+  const shouldVirtualize = visibleMessages.length > VIRTUALIZE_THRESHOLD
   const virtualItems = virtualizer.getVirtualItems()
 
   const handleToggleSelect = useCallback((index: number, shiftKey: boolean) => {
@@ -204,7 +209,7 @@ export function MessageList({
                 }}
               >
                 {virtualItems.map((vi) => {
-                  const msg = messages[vi.index]
+                  const msg = visibleMessages[vi.index]
                   if (!msg) return null
                   return (
                     <div key={msg.id || msg.index} data-index={vi.index} ref={virtualizer.measureElement}>
@@ -214,7 +219,7 @@ export function MessageList({
                 })}
               </div>
             ) : (
-              messages.map((msg) => (
+              visibleMessages.map((msg) => (
                 <ChatMessage
                   key={msg.id || `${msg.role}-${msg.index}-${msg.created_at}`}
                   {...chatMsgProps(msg)}

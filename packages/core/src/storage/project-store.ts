@@ -97,6 +97,18 @@ export class ProjectStore {
       workspace: data?.workspace,
       repos: data?.repos,
       statusMessages: [],
+      plan: {
+        version: 1,
+        updatedAt: nowISO(),
+        columns: [
+          { id: 'backlog', name: 'Бэклог', order: 0 },
+          { id: 'todo', name: 'К выполнению', order: 1 },
+          { id: 'in_progress', name: 'В работе', order: 2 },
+          { id: 'done', name: 'Готово', order: 3 },
+        ],
+        items: [],
+      },
+      log: [],
       createdAt: nowISO(),
       updatedAt: nowISO(),
     };

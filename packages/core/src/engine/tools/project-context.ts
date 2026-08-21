@@ -1,5 +1,5 @@
 import { readdir, access } from 'node:fs/promises';
-import { basename, join, isAbsolute, normalize, resolve } from 'node:path';
+import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition, ToolContext, Project } from '@itphx/synth-shared';
@@ -158,27 +158,30 @@ export const getProjectInfoTool: ToolDefinition = {
     const extra = ctx.extra as ProjectContextExtra | undefined;
     const projectDir = resolveWorkspaceDir(project, extra?.workspacesRoot, ctx.workingDir);
 
+    // AD-040: различаем «проекта нет» и «проект указан, но не найден».
+    const sessionId = ctx.sessionId || extra?.sessionId;
+    let sessionProjectId: string | undefined;
+    if (sessionId && extra?.sessionManager) {
+      try {
+        const session = await extra.sessionManager.getSession(sessionId);
+        sessionProjectId = session?.projectId ?? undefined;
+      } catch {
+        // сессию не определить — пропускаем
+      }
+    }
+
     if (project) {
       parts.push(`# Проект: ${project.name}`);
       parts.push(`- ID: ${project.id}`);
       if (project.workspace) parts.push(`- Рабочий каталог проекта: ${projectDir}`);
       if (project.description) parts.push(`- Описание: ${project.description}`);
+    } else if (sessionProjectId) {
+      parts.push(`# Проект: не найден (id: ${sessionProjectId})`);
+      parts.push(`- Рабочий каталог: ${ctx.workingDir}`);
     } else {
-      const name = basename(ctx.workingDir) || ctx.workingDir;
-      parts.push(`# Проект: ${name}`);
-      parts.push(`- Путь: ${ctx.workingDir}`);
-
-      const sessionId = ctx.sessionId || extra?.sessionId;
-      if (sessionId && extra?.sessionManager) {
-        try {
-          const session = await extra.sessionManager.getSession(sessionId);
-          if (session?.projectId) {
-            parts.push(`- ID: ${session.projectId}`);
-          }
-        } catch {
-          // сессию не определить — пропускаем
-        }
-      }
+      parts.push(`# Проект: отсутствует`);
+      parts.push(`- Рабочий каталог: ${ctx.workingDir}`);
+      parts.push(`- План недоступен (план привязан к проекту). Чтобы работать с планом — создайте проект.`);
     }
 
     const repo = await detectRepoInfo(projectDir);

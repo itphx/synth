@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename, mkdir, unlink, access, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Session, Message, TsmState, TsmStatus, SessionSettings, Part, SessionOrigin, SessionReference } from '@itphx/synth-shared';
+import type { Session, Message, SessionStatus, SessionSettings, Part, SessionOrigin, SessionReference } from '@itphx/synth-shared';
 import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts } from '@itphx/synth-shared';
 
 export interface StorageConfig {
@@ -62,8 +62,7 @@ interface SerializedSession {
   title?: string;
   parent_id?: string;
   branch_point?: string;
-  plan_path?: string;
-  plan_content?: string;
+  plan_approved?: boolean;
   mode?: string;
   todos?: unknown[];
   /** Карта обфускации LLM Gateway (AD-036). */
@@ -110,7 +109,6 @@ interface SerializedCheckpoint {
   id: string;
   session_id: string;
   messages: SerializedMessage[];
-  tsm_state: string;
   created_at: string;
 }
 
@@ -242,8 +240,7 @@ function serializeSession(session: Session): SerializedSession {
     title: session.title,
     parent_id: session.parentId,
     branch_point: session.branchPoint,
-    plan_path: session.planPath,
-    plan_content: session.planContent,
+    plan_approved: session.planApproved,
     mode: session.mode,
     todos: session.todos,
     obfuscation_map: session.obfuscationMap,
@@ -268,7 +265,6 @@ function serializeSession(session: Session): SerializedSession {
       id: c.id,
       session_id: c.sessionId,
       messages: c.messages.map(serializeMessage),
-      tsm_state: c.tsmState,
       created_at: c.createdAt,
     })),
     sticky_notes: session.stickyNotes.map((n) => ({
@@ -310,8 +306,7 @@ function deserializeSession(data: SerializedSession): Session {
     title: data.title,
     parentId: data.parent_id,
     branchPoint: data.branch_point,
-    planPath: data.plan_path,
-    planContent: data.plan_content,
+    planApproved: data.plan_approved,
     mode: data.mode as Session['mode'],
     todos: data.todos as Session['todos'],
     obfuscationMap: data.obfuscation_map,
@@ -322,13 +317,12 @@ function deserializeSession(data: SerializedSession): Session {
     engine: data.engine as Session['engine'],
     messages: data.messages.map(deserializeMessage),
     pendingMessages: data.pending_messages.map(deserializeMessage),
-    status: data.status as unknown as TsmStatus,
+    status: data.status as unknown as SessionStatus,
     settings: data.settings as unknown as SessionSettings,
     checkpoints: (data.checkpoints || []).map((c: SerializedCheckpoint) => ({
       id: c.id,
       sessionId: c.session_id,
       messages: c.messages.map(deserializeMessage),
-      tsmState: c.tsm_state as TsmState,
       createdAt: c.created_at,
     })),
     references: (data.references || []).map((ref: SerializedSessionReference): SessionReference => ({

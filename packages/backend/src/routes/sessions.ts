@@ -11,6 +11,7 @@ import { enqueueUserMessage, sseEventStream } from '@itphx/synth-core';
 import { serializeSession } from '../lib/serialize.js';
 import { t } from '../lib/i18n.js';
 import type { EventHub } from '../events/hub.js';
+import type { ProjectStore } from '../storage/project-store.js';
 
 export function createSessionRoutes(
   kit: AuthKit,
@@ -21,6 +22,7 @@ export function createSessionRoutes(
   orchestrator: ChatOrchestrator,
   eventHub: EventHub,
   contextOptimizer?: ContextOptimizer,
+  projectStore?: ProjectStore,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -102,8 +104,31 @@ export function createSessionRoutes(
       }, 400);
     }
 
+    // AD-040: перенос сессии между проектами (project_id). Валидируем существование
+    // нового проекта и публикуем session.moved при фактической смене проекта.
+    const prevProjectId = session.projectId;
+    let projectChanged = false;
     if (body.project_id !== undefined || body.projectId !== undefined) {
-      session.projectId = body.project_id ?? body.projectId;
+      const newProjectId: string | null | undefined = body.project_id ?? body.projectId;
+      if (newProjectId) {
+        if (!projectStore) {
+          return c.json({
+            error: { code: 'INTERNAL_ERROR', message: 'Хранилище проектов недоступно' },
+          }, 500);
+        }
+        const existing = await projectStore.load(newProjectId);
+        if (!existing) {
+          return c.json({
+            error: { code: 'PROJECT_NOT_FOUND', message: 'Проект не найден' },
+          }, 400);
+        }
+      }
+      const resolved = newProjectId || undefined;
+      if (prevProjectId !== resolved) {
+        session.projectId = resolved;
+        session.planApproved = false;
+        projectChanged = true;
+      }
     }
     if (body.name !== undefined) session.title = body.name;
     if (body.title !== undefined) session.title = body.title;
@@ -122,6 +147,13 @@ export function createSessionRoutes(
 
     await sessionManager.updateSession(session);
     eventBus.publish(session.id, 'session.updated', serializeSession(session, { agentRegistry }));
+    if (projectChanged) {
+      eventBus.publish(session.id, 'session.moved', {
+        session_id: session.id,
+        project_id: session.projectId ?? null,
+        prev_project_id: prevProjectId ?? null,
+      });
+    }
     return c.json(serializeSession(session, { agentRegistry }));
   });
 

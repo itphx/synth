@@ -23,14 +23,12 @@ const CATEGORIES = [
   { id: 'user' },
   { id: 'role' },
   { id: 'system' },
-  { id: 'tsm' },
 ] as const
 
 const CATEGORY_LABEL_KEYS: Record<string, string> = {
   user: 'admin.context.userFiles',
   role: 'admin.context.rolesFiles',
   system: 'admin.context.systemFiles',
-  tsm: 'admin.context.tsmFiles',
 }
 
 export const ContextPanel = () => {

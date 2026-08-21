@@ -22,8 +22,9 @@ import { taskTool } from './task.js';
 import { classifyConversationTool } from './classify-conversation.js';
 import { readSessionReferenceTool } from './read-reference.js';
 import { getProjectInfoTool, listReposTool } from './project-context.js';
-import { planEnterTool, planExitTool } from './plan.js';
-import { todoWriteTool } from './todo.js';
+import { planEnterTool, planExitTool, planReadTool, planListTool, planWriteTool } from './plan.js';
+import { todoWriteTool, todoListTool, todoAddTool, todoUpdateTool, todoDeleteTool } from './todo.js';
+import { projectCreateTool, projectAttachTool, projectLogWriteTool, projectLogReadTool, projectInvariantsReadTool, projectInvariantsWriteTool } from './project-manage.js';
 
 export { ToolRegistry } from './registry.js';
 export { zodToJsonSchema } from './json-schema.js';
@@ -58,7 +59,20 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   readSessionReferenceTool,
   planEnterTool,
   planExitTool,
+  planReadTool,
+  planListTool,
+  planWriteTool,
   todoWriteTool,
+  todoListTool,
+  todoAddTool,
+  todoUpdateTool,
+  todoDeleteTool,
+  projectCreateTool,
+  projectAttachTool,
+  projectLogWriteTool,
+  projectLogReadTool,
+  projectInvariantsReadTool,
+  projectInvariantsWriteTool,
 ];
 
 export function createToolRegistry(): ToolRegistry {

@@ -12,6 +12,7 @@ import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import { ContextConfig } from './context/config.js';
 import type { ToolRegistry } from './tools/registry.js';
+import { renderPlanMarkdown } from './tools/plan.js';
 import type { ToolForLLM } from '@itphx/synth-shared';
 import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
@@ -380,18 +381,17 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-025/AD-027: добавляет в system prompt блоки режима Plan/Act и
-   * утверждённого плана. Вызывается при старте обработки и пересобирается
-   * после plan_enter/plan_exit в текущей итерации.
+   * AD-025/AD-039: добавляет в system prompt блоки режима Plan/Act и
+   * утверждённого плана проекта. Вызывается при старте обработки и
+   * пересобирается после plan_enter/plan_exit в текущей итерации.
    */
-  private _buildPlanSystemPrompt(
+  private async _buildPlanSystemPrompt(
     base: string,
     session: Session,
     planMode: PlanMode,
     sessionMode: SessionMode,
     planApproved: boolean,
-    planContent?: string,
-  ): string {
+  ): Promise<string> {
     const parts: string[] = [];
 
     // AD-025: промпт текущего режима загружается из контекстных файлов
@@ -405,8 +405,8 @@ export class ChatOrchestrator {
       parts.push(
         '[MODE: PLAN]\n'
         + 'Ты в режиме планирования: чтение и исследование разрешены, но запись/изменение файлов '
-        + 'заблокированы (единственное исключение — .synth/plans/*.md). Изучи задачу, составь план '
-        + 'и утверди его через plan_exit(plan="..."), чтобы перейти в режим act.',
+        + 'заблокированы. Работай с планом проекта через plan_read/plan_write. Заверши через plan_exit, '
+        + 'чтобы перейти в режим act.',
       );
     }
 
@@ -431,13 +431,99 @@ export class ChatOrchestrator {
       }
     }
 
-    const approvedPlan = planContent ?? session.planContent;
+    // AD-039: блок [APPROVED PLAN] собирается из плана проекта (project.plan).
+    const approvedPlan = await this._renderProjectPlan(session);
     if (approvedPlan) {
       parts.push(`[APPROVED PLAN]\n${approvedPlan}`);
     }
 
     if (parts.length === 0) return base;
     return `${base}\n\n${parts.join('\n\n')}`;
+  }
+
+  /**
+   * AD-039: markdown-рендер плана проекта. Null — если проекта нет, нет plan
+   * или план пуст (нет пунктов).
+   */
+  private async _renderProjectPlan(session: Session): Promise<string | null> {
+    if (!session.projectId || !this._projectStore) return null;
+    try {
+      const project = await this._projectStore.load(session.projectId);
+      const plan = project?.plan;
+      if (!plan || plan.items.length === 0) return null;
+      return renderPlanMarkdown(plan);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * AD-040: добавляет в system prompt контекстный блок сессии — наличие/отсутствие
+   * проекта, рабочий каталог и ограничения. Вызывается после резолва workingDir.
+   */
+  private async _buildSessionContextPrompt(
+    base: string,
+    session: Session,
+    workingDir: string,
+  ): Promise<string> {
+    const lang = session.settings.language || 'ru';
+    const lines: string[] = [];
+
+    if (session.projectId) {
+      let project: Project | null = null;
+      if (this._projectStore) {
+        try {
+          project = await this._projectStore.load(session.projectId);
+        } catch {
+          project = null;
+        }
+      }
+
+      if (project) {
+        lines.push('[КОНТЕКСТ СЕССИИ]');
+        lines.push(`Проект: ${project.name}`);
+        lines.push(`ID проекта: ${session.projectId}`);
+        lines.push(`Рабочий каталог: ${project.workspace || workingDir}`);
+
+        const invariants = project.invariants?.trim();
+        if (invariants) {
+          lines.push('');
+          lines.push(lang === 'en' ? '[PROJECT INVARIANTS]' : '[ИНВАРИАНТЫ ПРОЕКТА]');
+          lines.push(project.invariants);
+        }
+      } else {
+        lines.push('[КОНТЕКСТ СЕССИИ]');
+        lines.push(`Проект: не найден (id: ${session.projectId})`);
+        lines.push(`Рабочий каталог: ${workingDir}`);
+      }
+    } else if (lang === 'en') {
+      lines.push('[SESSION CONTEXT]');
+      lines.push('Project: none');
+      lines.push(`Working directory: ${workingDir}`);
+      lines.push(
+        'Limitations: a plan is unavailable (the plan is bound to a project). '
+        + 'File and git tools operate within the working directory. Todo is available.',
+      );
+      lines.push(
+        'If the task requires long-term work with files, git, or a plan — suggest that the user '
+        + 'create a project and move the session into it.',
+      );
+    } else {
+      lines.push('[КОНТЕКСТ СЕССИИ]');
+      lines.push('Проект: отсутствует');
+      lines.push(`Рабочий каталог: ${workingDir}`);
+      lines.push(
+        'Ограничения: план недоступен (план привязан к проекту). '
+        + 'Файловые и git-инструменты работают в рамках рабочего каталога. Todo доступен.',
+      );
+      lines.push(
+        'Если задача требует длительной работы с файлами, git или планом — предложи пользователю '
+        + 'создать проект и перенести сессию в него.',
+      );
+    }
+
+    if (lines.length === 0) return base;
+    return `${base}\n\n${lines.join('\n')}`;
   }
 
   /**
@@ -468,7 +554,7 @@ export class ChatOrchestrator {
     // AD-025: режим Plan/Act — runtime-состояние сессии + строгость из настроек
     const planMode: PlanMode = session.settings.planMode ?? this._defaultPlanMode ?? 'auto';
     let sessionMode: SessionMode = session.mode ?? 'act';
-    let planApproved = Boolean(session.planContent);
+    let planApproved = Boolean(session.planApproved);
 
     // AD-029: permissions — сессионный override приоритетнее глобального конфига.
     // Конфиг может быть расширен «разрешить в сессии» (once:false) в процессе
@@ -637,10 +723,13 @@ export class ChatOrchestrator {
         }
       }
 
-      // AD-025/AD-027: блоки режима Plan/Act + утверждённый план
-      finalSystemPrompt = this._buildPlanSystemPrompt(
+      // AD-025/AD-039: блоки режима Plan/Act + утверждённый план проекта
+      finalSystemPrompt = await this._buildPlanSystemPrompt(
         finalSystemPrompt, session, planMode, sessionMode, planApproved,
       );
+
+      // AD-040: контекстный блок сессии (проект/рабочий каталог/ограничения)
+      finalSystemPrompt = await this._buildSessionContextPrompt(finalSystemPrompt, session, workingDir);
 
       // 3. Convert messages for LLM (без summary — они уже в system prompt)
       const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
@@ -714,6 +803,7 @@ export class ChatOrchestrator {
       let finalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       let finalModel: string | undefined;
       const allToolCalls: Array<Record<string, unknown>> = [];
+      const allRawToolCalls: Array<{ iteration: number; calls: Record<string, unknown>[] }> = [];
       let stopAfterDeny = false;
       let denyStopReason: string | undefined;
 
@@ -776,22 +866,24 @@ export class ChatOrchestrator {
           const errMsg = String(e);
           warning('ORCHESTRATOR', `LLM stream error: ${errMsg}`);
 
-          if (accumulatedContent || accumulatedReasoning) {
-            await this._saveAssistantMessage(
-              session.id, accumulatedContent, streamId, effectiveAgentRole,
-              finalUsage, chunkModel, accumulatedReasoning, debugCollector, true, providerName,
-            );
-          }
-
           this._cancellationTokens.delete(streamId);
           return this._handleLlmFailure(session.id, streamId, e, publishChunk);
         }
 
         if (cancelToken.cancelled) {
-          if (accumulatedContent || accumulatedReasoning) {
+          // Отмена: сохраняем уже выполненные tool-вызовы (персистентность
+          // tool-chain) — иначе timeline вызовов пропадает из истории.
+          await this._persistToolChain(
+            session.id, streamId, providerName, effectiveAgentRole,
+            chunkModel ?? finalModel,
+            allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
+          );
+
+          if (accumulatedContent || accumulatedReasoning || allToolCalls.length > 0) {
             await this._saveAssistantMessage(
               session.id, accumulatedContent, streamId, effectiveAgentRole,
               finalUsage, chunkModel, accumulatedReasoning, debugCollector, true, providerName,
+              MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
             );
           }
 
@@ -819,6 +911,7 @@ export class ChatOrchestrator {
         if (accumulatedContent) {
           allIntermediateTexts.push({ text: accumulatedContent, iteration: toolIteration });
         }
+        allRawToolCalls.push({ iteration: toolIteration, calls: toolCalls });
 
         // Tool calls detected — execute them
         debugCollector.captureRawModelResponse(
@@ -1020,15 +1113,6 @@ export class ChatOrchestrator {
             }
           }
 
-          publishChunk('tool_call.result', {
-            stream_id: streamId,
-            session_id: session.id,
-            call_id: tcId,
-            name: toolName,
-            result: toolResult,
-            iteration: toolIteration,
-          });
-
           // IPI-защита: оборачиваем tool-контент по матрице доверия + детектируем
           // подозрительные паттерны (флаг/sanitize/block по конфигу).
           if (this._securityConfig.promptInjection.enabled && !toolResult.isError) {
@@ -1085,6 +1169,19 @@ export class ChatOrchestrator {
             }
           }
 
+          // Публикуем результат ПОСЛЕ IPI-обёртки: живой UI (tool_call.result)
+          // должен получать тот же контент, что сохраняется в историю
+          // (metadata.tool_results и tool-chain tool-сообщения), иначе при
+          // перезагрузке вид результата меняется.
+          publishChunk('tool_call.result', {
+            stream_id: streamId,
+            session_id: session.id,
+            call_id: tcId,
+            name: toolName,
+            result: toolResult,
+            iteration: toolIteration,
+          });
+
           // classify_conversation: сохраняем категорию в настройках сессии (AD-034)
           if (toolName === 'classify_conversation' && !toolResult.isError) {
             const cat = (toolResult.metadata?.routingCategory as string) || undefined;
@@ -1100,22 +1197,18 @@ export class ChatOrchestrator {
             }
           }
 
-          // AD-025/AD-027: обновляем локальный режим после plan_enter/plan_exit,
+          // AD-025/AD-039: обновляем локальный режим после plan_enter/plan_exit,
           // чтобы ограничения и system prompt применились к следующим тулам/итерациям.
           if (!toolResult.isError && toolName === 'plan_enter') {
             sessionMode = 'plan';
-            finalSystemPrompt = this._buildPlanSystemPrompt(
+            finalSystemPrompt = await this._buildPlanSystemPrompt(
               finalSystemPrompt, session, planMode, sessionMode, planApproved,
             );
           } else if (!toolResult.isError && toolName === 'plan_exit') {
-            const meta = (toolResult.metadata ?? {}) as Record<string, unknown>;
-            const planContent = typeof meta.plan_content === 'string' ? meta.plan_content : undefined;
-            if (planContent) {
-              planApproved = true;
-              sessionMode = 'act';
-            }
-            finalSystemPrompt = this._buildPlanSystemPrompt(
-              finalSystemPrompt, session, planMode, sessionMode, planApproved, planContent,
+            planApproved = true;
+            sessionMode = 'act';
+            finalSystemPrompt = await this._buildPlanSystemPrompt(
+              finalSystemPrompt, session, planMode, sessionMode, planApproved,
             );
           }
 
@@ -1237,6 +1330,16 @@ export class ChatOrchestrator {
           });
         }
       }
+
+      // 7.8. Персистентность tool-chain (Вариант B): настоящие пары
+      // «assistant с toolCalls + tool-результаты» в session.messages, чтобы
+      // _sessionMessagesToLlm на следующем запросе выдавал OpenAI-совместимый
+      // диалог. Промежуточные сообщения помечаются metadata.tool_chain=true —
+      // UI их скрывает (визуализация уже есть в финальном сообщении).
+      await this._persistToolChain(
+        session.id, streamId, providerName, effectiveAgentRole, finalModel,
+        allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
+      );
 
       // 8. Save final assistant message
       const reasoningJoined = allReasoning.map((r) => r.text).join('\n\n---\n\n');
@@ -1798,6 +1901,81 @@ export class ChatOrchestrator {
     }
   }
 
+  /**
+   * Персистентность tool-chain (Вариант B): настоящие пары
+   * «assistant с toolCalls + tool-результаты» в session.messages, чтобы
+   * _sessionMessagesToLlm на следующем запросе выдавал OpenAI-совместимый
+   * диалог. Промежуточные сообщения помечаются metadata.tool_chain=true —
+   * UI их скрывает (визуализация уже есть в финальном сообщении).
+   * Вызывается и в успешном пути, и при отмене (уже выполненные итерации).
+   */
+  private async _persistToolChain(
+    sessionId: string,
+    streamId: string,
+    providerName: string,
+    agentRole: string | undefined,
+    finalModel: string | undefined,
+    allRawToolCalls: Array<{ iteration: number; calls: Record<string, unknown>[] }>,
+    allToolCalls: Array<Record<string, unknown>>,
+    allIntermediateTexts: Array<{ text: string; iteration: number }>,
+    allReasoning: Array<{ text: string; iteration: number }>,
+  ): Promise<void> {
+    for (const raw of allRawToolCalls) {
+      const iteration = raw.iteration;
+      const iterText = allIntermediateTexts.find((t) => t.iteration === iteration)?.text ?? '';
+      const iterReasoning = allReasoning.find((r) => r.iteration === iteration)?.text;
+
+      const assistantMsg: Message = {
+        id: generateId(),
+        role: MessageRole.ASSISTANT,
+        seq: 0,
+        origin: 'local',
+        parts: [makeTextPart(iterText)],
+        content: iterText,
+        toolCalls: raw.calls,
+        createdAt: nowISO(),
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        model: finalModel,
+        provider: providerName,
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        agentRole,
+        metadata: { stream_id: streamId, tool_chain: true },
+        ...(iterReasoning ? { reasoning: iterReasoning } : {}),
+      };
+      await this._sessionManager.addMessage(sessionId, assistantMsg);
+
+      for (const tc of allToolCalls.filter((t) => t.iteration === iteration)) {
+        const toolContent = String((tc.result as { content?: string } | undefined)?.content ?? '');
+        const toolMsg: Message = {
+          id: generateId(),
+          role: MessageRole.TOOL,
+          seq: 0,
+          origin: 'local',
+          parts: [makeTextPart(toolContent)],
+          content: toolContent,
+          toolCallId: tc.id as string,
+          createdAt: nowISO(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          model: finalModel,
+          provider: providerName,
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          agentRole,
+          metadata: {
+            stream_id: streamId,
+            tool_chain: true,
+            tool_name: tc.name,
+            args: tc.args,
+          },
+        };
+        await this._sessionManager.addMessage(sessionId, toolMsg);
+      }
+    }
+  }
+
   private async _saveAssistantMessage(
     sessionId: string,
     content: string,
@@ -1954,17 +2132,19 @@ export class ChatOrchestrator {
   }
 
   /**
-   * Единая обработка ошибки LLM-стрима: публикует stream.error (UI получает
-   * человекочитаемую ошибку вместо вечного «Стоп»), пишет last_error в
-   * user-сообщение сессии (по stream_id) и возвращает ProcessMessageResult.
-   * Если ошибка recoverable — session разблокируется на уровне QueueProcessor
-   * после исчерпания попыток; сессия не остаётся заблокированной навсегда.
+   * Единая обработка ошибки LLM-стрима: пишет last_error в user-сообщение
+   * сессии (по stream_id) и возвращает ProcessMessageResult. Публикация
+   * финального исхода (stream.retry для recoverable / stream.error для
+   * non-recoverable) — зона ответственности QueueProcessor, чтобы не было
+   * двойной публикации stream.error. Если ошибка recoverable — session
+   * разблокируется на уровне QueueProcessor после исчерпания попыток; сессия
+   * не остаётся заблокированной навсегда.
    */
   private async _handleLlmFailure(
     sessionId: string,
     streamId: string,
     error: unknown,
-    publishChunk: (event: string, data: Record<string, unknown>) => void,
+    _publishChunk: (event: string, data: Record<string, unknown>) => void,
   ): Promise<ProcessMessageResult> {
     const rawError = error instanceof Error ? error.message : String(error);
     const humanError = this._formatLlmError(error);
@@ -1984,13 +2164,6 @@ export class ChatOrchestrator {
     } catch (err) {
       warning('ORCHESTRATOR', `Не удалось записать last_error: ${err instanceof Error ? err.message : String(err)}`);
     }
-
-    publishChunk('stream.error', {
-      stream_id: streamId,
-      error: humanError,
-      error_type: errorType,
-      can_retry: canRetry,
-    });
 
     return { error: humanError, errorType, canRetry };
   }

@@ -1,15 +1,8 @@
-import type { Session, TsmState, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings } from '@itphx/synth-shared';
-import { TsmState as TsmStateEnum, getForkedTitle, MessageRole } from '@itphx/synth-shared';
+import type { Session, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings } from '@itphx/synth-shared';
+import { getForkedTitle, MessageRole } from '@itphx/synth-shared';
 import { nowISO, generateId, makeTextPart, makePart } from '@itphx/synth-shared';
 import type { FileStore } from '../storage/file-store.js';
 import { mergeMcpToolSettings } from '../engine/mcp/settings.js';
-
-const VALID_TSM_TRANSITIONS: Record<TsmState, TsmState[]> = {
-  [TsmStateEnum.PLANNING]: [TsmStateEnum.EXECUTION],
-  [TsmStateEnum.EXECUTION]: [TsmStateEnum.VALIDATION, TsmStateEnum.PLANNING],
-  [TsmStateEnum.VALIDATION]: [TsmStateEnum.DONE, TsmStateEnum.EXECUTION],
-  [TsmStateEnum.DONE]: [],
-};
 
 export interface SessionManagerOptions {
   /** Поставщик глобальных настроек доступности MCP-серверов (runtime settings). */
@@ -69,12 +62,7 @@ export class SessionManager {
       engine: (data.engine || 'synth') as Session['engine'],
       messages: [],
       pendingMessages: [],
-      status: {
-        state: TsmStateEnum.PLANNING,
-        iteration: 0,
-        validationAttempts: 0,
-        taskName: '',
-      },
+      status: {},
       settings: {
         temperature: data.settings?.temperature ?? 0.7,
         maxTokens: data.settings?.maxTokens ?? 4096,
@@ -247,27 +235,12 @@ export class SessionManager {
     });
   }
 
-  async updateTsmState(sessionId: string, newState: TsmState): Promise<Session | null> {
-    return this.withLock(sessionId, async (session) => {
-      const valid = VALID_TSM_TRANSITIONS[session.status.state as TsmState] || [];
-      if (!valid.includes(newState)) throw new Error(`Invalid TSM transition: ${session.status.state} → ${newState}`);
-      session.status.state = newState;
-      if (newState === 'execution') {
-        session.status.iteration += 1;
-      }
-      session.updatedAt = nowISO();
-      await this.store.save(session);
-      return session;
-    });
-  }
-
   async createCheckpoint(sessionId: string): Promise<Session | null> {
     return this.withLock(sessionId, async (session) => {
       const checkpoint: Checkpoint = {
         id: generateId(),
         sessionId: session.id,
         messages: JSON.parse(JSON.stringify(session.messages)),
-        tsmState: session.status.state as TsmState,
         createdAt: nowISO(),
       };
       session.checkpoints.push(checkpoint);
@@ -282,7 +255,6 @@ export class SessionManager {
       const checkpoint = session.checkpoints.find((c) => c.id === checkpointId);
       if (!checkpoint) throw new Error(`Checkpoint ${checkpointId} not found`);
       session.messages = JSON.parse(JSON.stringify(checkpoint.messages));
-      session.status.state = checkpoint.tsmState;
       session.updatedAt = nowISO();
       await this.store.save(session);
       return session;
@@ -561,9 +533,6 @@ export class SessionManager {
         .map((n) => ({ ...structuredClone(n), id: generateId() }));
 
       forked.pendingMessages = [];
-      forked.status.state = TsmStateEnum.PLANNING;
-      forked.status.iteration = 0;
-      forked.status.validationAttempts = 0;
 
       await this.store.save(forked);
       return forked;

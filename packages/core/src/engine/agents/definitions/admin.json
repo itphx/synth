@@ -16,7 +16,8 @@
     "git_read",
     "git_write",
     "task",
-    "mcp"
+    "mcp",
+    "runtime"
   ],
   "icon": "shield-keyhole",
   "color": "--status-error",

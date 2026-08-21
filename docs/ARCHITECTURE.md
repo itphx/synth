@@ -7,7 +7,7 @@ Synth состоит из пяти пакетов в монорепозитор�
 | Пакет | Назначение | Стек |
 |-------|-----------|------|
 | **@itphx/synth-shared** | Типы, интерфейсы, Zod-схемы, протоколы, конфигурация | TypeScript |
-| **@itphx/synth-core** | Автономный движок: сессии, очередь, LLM-провайдеры, TSM, CLI, HTTP API v2 | TypeScript, Hono |
+| **@itphx/synth-core** | Автономный движок: сессии, очередь, LLM-провайдеры, CLI, HTTP API v2 | TypeScript, Hono |
 | **@itphx/synth-backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
 | **@itphx/synth-ui** | React 19 SPA + админка (рендеринг по ролям) | TypeScript, React 19, Vite |
 | **@itphx/synth-runner** | Gateway между бэкендом и движками (opencode, cline, synth-core) | TypeScript, Node.js |

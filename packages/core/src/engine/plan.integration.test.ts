@@ -198,7 +198,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     expect(await exists(join(tmpDir, 'a.txt'))).toBe(false);
   });
 
-  it('запись в .synth/plans/ разрешена в режиме plan', async () => {
+  it('запись в .synth/plans/ заблокирована в режиме plan (AD-039: .synth не пишется)', async () => {
     const { deniedRules } = await runScript(
       [
         {
@@ -211,43 +211,87 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
       ],
       { planMode: 'auto' },
     );
-    expect(deniedRules).not.toContain('plan.deny');
-    expect(await exists(join(tmpDir, '.synth/plans/2026-01-01-100000-plan.md'))).toBe(true);
+    expect(deniedRules).toContain('plan.deny');
+    expect(await exists(join(tmpDir, '.synth/plans/2026-01-01-100000-plan.md'))).toBe(false);
   });
 
-  it('plan_exit пишет файл, переводит в act и встраивает план в system prompt', async () => {
-    const planText = '# Починить auth\n\n1. Найти причину\n2. Исправить\n3. Прогнать тесты';
-    const { session } = await runScript(
-      [
-        { toolCalls: [{ name: 'plan_exit', args: { plan: planText } }] },
-        { toolCalls: [{ name: 'write_file', args: writeArgs('b.txt') }] },
-        { content: 'готово' },
+  it('plan_exit переводит в act, ставит planApproved и встраивает план проекта в system prompt', async () => {
+    const projectStore = new ProjectStore({ dataDir: tmpDir });
+    const project = projectStore.create('Proj', 'u1');
+    project.plan = {
+      version: 1,
+      updatedAt: nowISO(),
+      columns: [
+        { id: 'backlog', name: 'Бэклог', order: 0 },
+        { id: 'done', name: 'Готово', order: 3 },
       ],
-      { planMode: 'auto' },
-    );
+      items: [
+        {
+          id: 'p1',
+          title: 'Найти причину',
+          columnId: 'backlog',
+          priority: 'high',
+          order: 0,
+          dependsOn: [],
+          createdAt: nowISO(),
+          updatedAt: nowISO(),
+        },
+      ],
+    };
+    await projectStore.save(project);
 
-    expect(session?.mode).toBe('act');
-    expect(session?.planContent).toBe(planText);
-    expect(session?.planPath).toBeTruthy();
+    ScriptedProvider.configure([
+      { toolCalls: [{ name: 'plan_exit', args: {} }] },
+      { toolCalls: [{ name: 'write_file', args: writeArgs('b.txt') }] },
+      { content: 'готово' },
+    ]);
 
-    await expect(readFile(session!.planPath!, 'utf-8')).resolves.toContain(planText);
+    const toolRegistry = createToolRegistry();
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus,
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: (name: string) => {
+        return { name, type: 'scripted', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
+      },
+      toolRegistry,
+      permissionConfig: { rules: {}, askTimeoutMs: 1000 },
+      projectStore,
+      defaultWorkingDir: tmpDir,
+    });
+
+    const session = await sessionManager.createSession({
+      title: 'Plan',
+      settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'developer', planMode: 'auto' },
+    });
+    session.projectId = project.id;
+    await sessionManager.updateSession(session);
+    const msg = makeMessage();
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+
+    const processMessage = orchestrator.createProcessMessage();
+    const result = await processMessage(fresh, msg, new AbortController().signal, () => {});
+    expect(result.error).toBeUndefined();
+
+    const final = await sessionManager.getSession(session.id);
+    expect(final?.mode).toBe('act');
+    expect(final?.planApproved).toBe(true);
     await expect(readFile(join(tmpDir, 'b.txt'), 'utf-8')).resolves.toBe('data');
 
-    // system prompt второго вызова (после plan_exit) содержит утверждённый план (AD-027)
+    // system prompt содержит план проекта (AD-039)
     const prompts = ScriptedProvider.prompts();
-    expect(prompts.length).toBeGreaterThanOrEqual(2);
-    expect(prompts[1]).toContain('[APPROVED PLAN]');
-    expect(prompts[1]).toContain(planText);
+    expect(prompts[0]).toContain('[APPROVED PLAN]');
+    expect(prompts[0]).toContain('Найти причину');
   });
 
   it('strict: write заблокирован до утверждения плана, разрешён после', async () => {
-    const planText = 'план для strict режима';
     const { deniedRules, session } = await runScript(
       [
         { toolCalls: [{ name: 'write_file', args: writeArgs('c1.txt') }] },
         { toolCalls: [{ name: 'plan_enter', args: {} }] },
         { toolCalls: [{ name: 'write_file', args: writeArgs('c2.txt') }] },
-        { toolCalls: [{ name: 'plan_exit', args: { plan: planText } }] },
+        { toolCalls: [{ name: 'plan_exit', args: {} }] },
         { toolCalls: [{ name: 'write_file', args: writeArgs('c3.txt') }] },
         { content: 'готово' },
       ],
@@ -259,7 +303,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     expect(await exists(join(tmpDir, 'c2.txt'))).toBe(false);
     expect(await exists(join(tmpDir, 'c3.txt'))).toBe(true);
     expect(session?.mode).toBe('act');
-    expect(session?.planContent).toBe(planText);
+    expect(session?.planApproved).toBe(true);
   });
 
   it('off: планирование отключено, write не блокируется', async () => {
@@ -284,7 +328,11 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
       ],
       { planMode: 'auto' },
     );
-    expect(session?.todos).toEqual(todos);
+    expect(session?.todos).toHaveLength(1);
+    expect(session?.todos?.[0]?.content).toBe('шаг 1');
+    expect(session?.todos?.[0]?.status).toBe('pending');
+    expect(session?.todos?.[0]?.priority).toBe('high');
+    expect(session?.todos?.[0]?.id).toBeTruthy();
   });
 
   it('рабочий каталог проекта (project.workspace) перекрывает defaultWorkingDir', async () => {
@@ -334,17 +382,38 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     await expect(exists(join(wsDefault, 'x.txt'))).resolves.toBe(false);
   });
 
-  it('при возобновлении сессии утверждённый план встраивается в system prompt', async () => {
-    const planText = 'план из предыдущей сессии';
+  it('при возобновлении сессии план проекта встраивается в system prompt', async () => {
+    const projectStore = new ProjectStore({ dataDir: tmpDir });
+    const project = projectStore.create('Proj', 'u1');
+    project.plan = {
+      version: 1,
+      updatedAt: nowISO(),
+      columns: [
+        { id: 'backlog', name: 'Бэклог', order: 0 },
+        { id: 'done', name: 'Готово', order: 3 },
+      ],
+      items: [
+        {
+          id: 'p1',
+          title: 'план из проекта',
+          columnId: 'backlog',
+          priority: 'medium',
+          order: 0,
+          dependsOn: [],
+          createdAt: nowISO(),
+          updatedAt: nowISO(),
+        },
+      ],
+    };
+    await projectStore.save(project);
+
     const session = await sessionManager.createSession({
       title: 'Resume',
       settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'developer', planMode: 'strict' },
     });
-    await sessionManager.withLock(session.id, async (s) => {
-      s.planContent = planText;
-      s.planPath = join(tmpDir, '.synth', 'plans', 'old.md');
-      await sessionManager.saveSession(s);
-    });
+    session.projectId = project.id;
+    session.planApproved = true;
+    await sessionManager.updateSession(session);
 
     ScriptedProvider.configure([{ content: 'готово' }]);
     const toolRegistry = createToolRegistry();
@@ -357,6 +426,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
       },
       toolRegistry,
       permissionConfig: { rules: {}, askTimeoutMs: 1000 },
+      projectStore,
       defaultWorkingDir: tmpDir,
     });
 
@@ -369,7 +439,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
 
     // strict + план уже утверждён → write разрешён, план в первом же промпте
     expect(ScriptedProvider.prompts()[0]).toContain('[APPROVED PLAN]');
-    expect(ScriptedProvider.prompts()[0]).toContain(planText);
+    expect(ScriptedProvider.prompts()[0]).toContain('план из проекта');
     expect(ScriptedProvider.prompts()[0]).toContain('План утверждён');
   });
 
@@ -441,6 +511,6 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
 
     const prompts = ScriptedProvider.prompts();
     expect(prompts[0]).toContain('[MODE: PLAN]');
-    expect(prompts[0]).toContain('Изучи задачу, составь план');
+    expect(prompts[0]).toContain('Работай с планом проекта через plan_read/plan_write');
   });
 });

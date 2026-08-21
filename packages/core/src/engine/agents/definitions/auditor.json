@@ -11,7 +11,8 @@
   "capabilities": [
     "file_read",
     "search",
-    "mcp"
+    "mcp",
+    "runtime"
   ],
   "icon": "shield-check",
   "color": "--status-warning",

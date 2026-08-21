@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart, TsmState } from '@itphx/synth-shared';
+import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
 import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig } from '@itphx/synth-shared';
 import type { AgentRegistry } from '../agents/registry.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
@@ -471,7 +471,7 @@ export const taskTool: ToolDefinition = {
         const child = await extra.sessionManager.getSession(childSessionId);
         if (child) {
           childSessionMode = child.mode ?? 'act';
-          childPlanApproved = Boolean(child.planContent);
+          childPlanApproved = Boolean(child.planApproved);
           childPlanMode = child.settings.planMode ?? 'auto';
           childMcpToolSettings = child.settings.mcpToolSettings;
         }
@@ -974,19 +974,17 @@ export const taskTool: ToolDefinition = {
         }
       }
 
-      // Финализировать дочернюю сессию — обновить TSM
+      // Финализировать дочернюю сессию
       if (childSessionId && extra.sessionManager) {
         try {
           const childSession = await extra.sessionManager.getSession(childSessionId);
           if (childSession) {
-            childSession.status.state = TsmState.DONE;
             childSession.updatedAt = nowISO();
             await extra.sessionManager.updateSession(childSession);
 
             if (extra.eventBus) {
               extra.eventBus.publish(childSessionId, 'session.updated', {
                 session_id: childSessionId,
-                status: { state: TsmState.DONE },
               });
               extra.eventBus.publish(extra.sessionId!, 'child.session.updated', {
                 session: serializeSession(childSession),

@@ -648,7 +648,7 @@ function SessionTodosBlock({ todos }: { todos?: TodoItem[] | null }) {
         const statusStyle = TODO_STATUS_STYLES[todo.status]
         const priorityStyle = TODO_PRIORITY_STYLES[todo.priority] || TODO_PRIORITY_STYLES.low
         return (
-          <div key={i} className="flex items-start gap-2 rounded-lg border border-border/60 bg-input px-2.5 py-1.5">
+          <div key={todo.id ?? i} className="flex items-start gap-2 rounded-lg border border-border/60 bg-input px-2.5 py-1.5">
             <span className={`mt-0.5 inline-flex shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${statusStyle.className}`}>
               {t(statusStyle.labelKey)}
             </span>

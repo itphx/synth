@@ -300,7 +300,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   // Sessions
   app.route('/api/v2/sessions', createSessionRoutes(
-    auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer,
+    auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore,
   ));
 
   // Projects

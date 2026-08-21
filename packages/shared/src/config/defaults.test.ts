@@ -43,7 +43,6 @@ describe('defaultConfig', () => {
   it('logging.groups содержит все ожидаемые группы', () => {
     expect(defaultConfig.logging.groups).toHaveProperty('ORCHESTRATOR');
     expect(defaultConfig.logging.groups).toHaveProperty('CHAT_STREAM');
-    expect(defaultConfig.logging.groups).toHaveProperty('TSM');
   });
 
   it('context.enabledFiles содержит стандартные файлы', () => {

@@ -43,7 +43,6 @@ const CATEGORY_DIRS: Record<ContextCategory, string> = {
   user: 'user',
   role: 'roles',
   system: 'system',
-  tsm: 'tsm',
 };
 
 interface ContextConfigOptions {
@@ -123,7 +122,7 @@ export class ContextConfig {
       } catch { /* ignore */ }
     }
 
-    for (const category of ['role', 'system', 'tsm'] as const) {
+    for (const category of ['role', 'system'] as const) {
       const systemDir = this._resolveSystemPath(category);
       if (!existsSync(systemDir)) continue;
 
@@ -170,9 +169,9 @@ export class ContextConfig {
       } catch { /* ignore */ }
     }
 
-    // Осиротевшие overrides в system/tsm поддиректориях userPromptsDir
+    // Осиротевшие overrides в system поддиректории userPromptsDir
     const seenByCategory: Record<string, Set<string>> = {};
-    for (const cat of ['system', 'tsm'] as const) {
+    for (const cat of ['system'] as const) {
       seenByCategory[cat] = new Set(files.filter(f => f.category === cat).map(f => f.filename));
       const overrideDir = join(this.userPromptsDir, CATEGORY_DIRS[cat]);
       if (existsSync(overrideDir)) {

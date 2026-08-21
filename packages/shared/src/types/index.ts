@@ -13,13 +13,6 @@ export enum MessageRole {
   ERROR = 'error',
 }
 
-export enum TsmState {
-  PLANNING = 'planning',
-  EXECUTION = 'execution',
-  VALIDATION = 'validation',
-  DONE = 'done',
-}
-
 export enum GlobalRole {
   ADMIN = 'ADMIN',
   USER = 'USER',
@@ -86,19 +79,7 @@ export interface Message {
 }
 
 // --- Session ---
-export interface TsmStatus {
-  state: TsmState;
-  iteration: number;
-  validationAttempts: number;
-  lastError?: string;
-  project?: string;
-  taskName: string;
-  progress?: number;
-  approvedPlan?: string;
-  alreadyDone?: string;
-  currentlyDoing?: string;
-  currentTaskInfo?: string;
-  updatedProjectInfo?: string;
+export interface SessionStatus {
   blocked?: string;
   blockedAt?: string;
 }
@@ -116,9 +97,12 @@ export const TODO_PRIORITIES = ['high', 'medium', 'low'] as const;
 export type TodoPriority = (typeof TODO_PRIORITIES)[number];
 
 export interface TodoItem {
+  id: string;
   content: string;
   status: TodoStatus;
   priority: TodoPriority;
+  /** Связь с пунктом плана проекта (AD-039). */
+  planItemId?: string;
 }
 
 export type ReasoningLevel = 'default' | 'none' | 'low' | 'medium' | 'high';
@@ -220,7 +204,6 @@ export interface Checkpoint {
   id: string;
   sessionId: string;
   messages: Message[];
-  tsmState: TsmState;
   createdAt: string;
 }
 
@@ -247,9 +230,8 @@ export interface Session {
   sessionOrigin: SessionOrigin;
   parentId?: string;
   branchPoint?: string;
-  planPath?: string;
-  /** Содержимое утверждённого плана (AD-027) — встраивается в system prompt. */
-  planContent?: string;
+  /** Флаг «план утверждён через plan_exit» (AD-039), нужен для strict-режима AD-028. */
+  planApproved?: boolean;
   /** Текущий runtime-режим сессии (AD-025): 'plan' — только чтение, 'act' — полный доступ. */
   mode?: SessionMode;
   /** Todo-список сессии (тул todo_write), как в OpenCode. */
@@ -262,7 +244,7 @@ export interface Session {
   engine: 'synth' | 'opencode' | 'cline';
   messages: Message[];
   pendingMessages: Message[];
-  status: TsmStatus;
+  status: SessionStatus;
   settings: SessionSettings;
   mcpServers?: string[];
   checkpoints: Checkpoint[];
@@ -331,6 +313,14 @@ export interface StatusMessage {
   timestamp: string;
 }
 
+export interface ProjectLogEntry {
+  id: string;
+  text: string;
+  createdAt: string;
+  sessionId?: string;
+  author?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -344,8 +334,46 @@ export interface Project {
   workspace?: string;
   repos?: GitRepoConfig[];
   statusMessages: StatusMessage[];
+  /** Kanban-план проекта (AD-039). Владеет проектом, а не сессией. */
+  plan?: ProjectPlan;
+  /** Лог работ проекта (ведётся моделью через project_log_write). */
+  log?: ProjectLogEntry[];
   createdAt: string;
   updatedAt: string;
+}
+
+// --- Plan (AD-039) ---
+export interface PlanColumn {
+  id: string;
+  name: string;
+  order: number;
+  wipLimit?: number;
+}
+
+export interface PlanDependency {
+  projectId?: string;       // пусто = тот же проект
+  itemId: string;           // пункт, от которого зависит текущий
+  relation: 'blocked_by' | 'blocks' | 'relates_to';
+}
+
+export interface PlanItem {
+  id: string;
+  title: string;
+  description?: string;
+  columnId: string;         // статус = колонка
+  priority: 'high' | 'medium' | 'low';
+  order: number;
+  dependsOn: PlanDependency[];
+  tags?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectPlan {
+  version: number;
+  updatedAt: string;
+  columns: PlanColumn[];
+  items: PlanItem[];
 }
 
 // --- User & Auth ---
@@ -421,7 +449,7 @@ export interface ProviderConfig {
 
 export type ContextSource = 'api' | 'reference' | 'manual' | 'unknown';
 
-export type ContextCategory = 'user' | 'role' | 'system' | 'tsm';
+export type ContextCategory = 'user' | 'role' | 'system';
 
 export interface ContextFileInfo {
   filename: string;
@@ -532,6 +560,7 @@ export type EventType =
   | 'session.reference.added'
   | 'session.reference.removed'
   | 'session.messages.merged'
+  | 'session.moved'
   | 'message.added'
   | 'message.updated'
   | 'child.message.added'

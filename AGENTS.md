@@ -25,7 +25,7 @@
 synth/
 ├── packages/
 │   ├── shared/    @itphx/synth-shared   # Типы, Zod-схемы, протоколы, конфигурация
-│   ├── core/      @itphx/synth-core     # Ядро: сессии, очередь, LLM, TSM, MCP, FileStore
+│   ├── core/      @itphx/synth-core     # Ядро: сессии, очередь, LLM, MCP, FileStore
 │   │                              #   HTTP API v2 (Hono), CLI (synth chat/serve)
 │   ├── backend/   @itphx/synth-backend  # Hono API Hub: OIDC, RBAC, Runner Registry, LLM Proxy
 │   ├── ui/        @itphx/synth-ui       # React 19 SPA + админка (Vite)
@@ -271,7 +271,6 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 
 | AD | Суть |
 |----|------|
-| AD-002 | Собственная TSM (Task State Machine), в @itphx/synth-core |
 | AD-005 | JSON-файлы как хранилище (атомарная запись через tmp-файл + rename) |
 | AD-008 | WebSocket для real-time событий |
 | AD-009 | SessionEventBus — шина событий сессии |
@@ -284,7 +283,7 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 | AD-024 | Единый транспорт: EventHub (backend) + TransportClient (UI) |
 | AD-025 | Plan/Act как глобальный permission toggle (не отдельные агенты) ✅ Реализовано |
 | AD-026 | Режимы контекста саб-агента: inherit / summary / none |
-| AD-027 | Двойная передача плана: диск + system prompt ✅ Реализовано |
+| AD-027 | Двойная передача плана: диск + system prompt ⚠️ Переопределено AD-039 (план — в проекте) |
 | AD-028 | Настраиваемая строгость цикла Plan→Build: auto / strict / off ✅ Реализовано |
 | AD-029 | Гранулярные permissions: allow/deny/ask per tool + file patterns ✅ Реализовано |
 | AD-030 | Hooks для событий агента (pre/post tool use, session, plan, spawn) |
@@ -296,12 +295,14 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 | AD-036 | LLM Gateway: независимый слой безопасности (guard + обфускация + rate limit + аудит) ✅ Реализовано |
 | AD-037 | Security step перед коммитом: git pre-commit hook + маркер-хеш (гарантия проверки) |
 | AD-038 | Монорепо как набор публикуемых npm-пакетов (6 пакетов, pnpm publish, тонкая CLI-обёртка) ✅ Реализовано |
+| AD-039 | План — в проекте, todo — в сессии, состояние через инструменты (замена TSM) ✅ Реализовано |
+| AD-040 | Сессии без проекта: контекст, подсказка, перенос между проектами ✅ Реализовано |
 
 Подробности deprecated решений — в `archive/AGENTS_OLD.md`.
 
 ### AD-022: TypeScript стек + Runner
 
-- **@itphx/synth-core** — автономное ядро: сессии, очередь, LLM-провайдеры, TSM, MCP, HTTP API v2, CLI
+- **@itphx/synth-core** — автономное ядро: сессии, очередь, LLM-провайдеры, MCP, HTTP API v2, CLI
 - **@itphx/synth-backend** — облачный API Hub: OIDC, RBAC, Runner Registry, LLM Proxy
 - **@itphx/synth-runner** — мост между бэкендом и движками (opencode, cline, synth-core)
 - **@itphx/synth-ui** — React 19 SPA + админка
@@ -346,7 +347,7 @@ agents:
 
 | Режим | Поведение | Переключение |
 |---|---|---|
-| `plan` | **Read-only.** Все write/edit/delete → deny. Синт исследует, задаёт вопросы, пишет план в `.synth/plans/`. Единственное исключение — сам plan-файл | Пользователь (`/plan`) или синт через tool `plan_enter` |
+| `plan` | **Read-only.** Все write/edit/delete → deny. Синт исследует, задаёт вопросы, работает с планом проекта через `plan_read`/`plan_write` | Пользователь (`/plan`) или синт через tool `plan_enter` |
 | `act` | **Полный доступ.** Набор тулов из конфига синта + глобальные permissions | Пользователь (`/act`) или tool `plan_exit` |
 | `yolo` | **Автоподтверждение.** Все ask → allow автоматически (без события `permission.asked` и ожидания пользователя), deny остаётся deny | Пользователь (`/yolo`) |
 | `auto` | Синт **сам решает**, когда войти в план. Вызывает `plan_enter` если задача сложная, требует исследования или архитектурных решений | Автоматически (аналог EnterPlanModeTool) |
@@ -355,7 +356,7 @@ agents:
 
 **Системный промпт режима:** контекстные файлы `prompts/modes/{plan,act,yolo}.md` (встроенные, копируются в `dist/`), переопределяются через `{dataDir}/context/modes/{mode}.md` и локализованные `{mode}.{lang}.md`. Встраиваются в system prompt через `_buildPlanSystemPrompt`.
 
-**События:** `plan.approved` (план утверждён через `plan_exit`), `todos.updated` (обновлён список ToDo через `todo_write`).
+**События:** `plan.approved` (план утверждён через `plan_exit`), `todos.updated` (обновлён список ToDo через todo-инструменты `todo_write`/`todo_add`/`todo_update`/`todo_delete`).
 
 **Почему не N×2 агентов:** создание отдельных plan-версий для каждого синта даёт квадратичный рост конфигурации. С глобальным toggle — N синтов × 3 режима = те же N в конфиге, а режим переключается сессионно.
 
@@ -382,6 +383,8 @@ synth task "Продолжи рефакторинг"   --context inherit
 **Внутренняя механика:** `summary` реализуется через дополнительный вызов LLM (быстрой/дешёвой модели) для компрессии контекста перед spawn-ом саб-агента. Саммари кешируется до следующего значимого изменения родительской сессии.
 
 ### AD-027: Двойная передача плана
+
+> ⚠️ **Переопределено AD-039:** план хранится в проекте (`project.plan`), файлы `.synth/plans/` не используются; в system prompt план попадает из `project.plan`.
 
 **Решение:** после утверждения план записывается в файл `.synth/plans/{timestamp}-{slug}.md` **и** вставляется в system prompt исполнителя.
 
@@ -478,7 +481,6 @@ permission:
   # Редактирование (переопределяется в plan mode)
   edit:
     "*": "deny"                   # plan mode: ничего не трогаем
-    ".synth/plans/*.md": "allow"  #   кроме plan-файла
 ```
 
 **Три уровня действия (action):**
@@ -562,7 +564,7 @@ export default function myPlugin(synth: SynthPlugin) {
 Ты verification specialist. Твоя задача — НЕ подтвердить что всё работает,
 а ПОПЫТАТЬСЯ СЛОМАТЬ.
 
-1. Прочитай план реализации из .synth/plans/ — это критерий успеха
+1. Прочитай план реализации из project.plan — это критерий успеха
 2. Запусти build, полный test suite, linter, typecheck
 3. Примени стратегию проверки под тип изменений:
    - Frontend: подними dev server → проверь через браузер → curl API
@@ -1271,9 +1273,77 @@ shared → core → ui → backend → runner → synth
 - Не копируем ассеты между пакетами при сборке
 - Не используем `noExternal`-бандл core/ui/shared в `@itphx/synth`
 
+### AD-039: План — в проекте, todo — в сессии, состояние через инструменты (замена TSM)
+
+**Решение:** вместо TSM-протокола прототипа (JSON-блок статуса + парсинг текста + отдельные промпты по состояниям) — модель, в которой:
+
+- **План принадлежит проекту**, **todo — сессии**.
+- Состояние/режим, план и todo управляются **инструментами** (`plan_*`, `todo_*`, переключение режима), а не JSON-блоком в ответе модели.
+- Инструкции (когда планировать, как декомпозировать задачу в todo, когда предложить завести проект) — в системном промпте: роль агента + mode-промпты + контекстный блок сессии. Отдельного слоя TSM-промптов нет.
+
+**Контекст:** AD-002 (собственная TSM) не оправдал себя в прототипе: валидация переходов была мёртвым кодом, JSON-блок хрупко парсился (regex, построчный fallback, видимый JSON в streaming), `next_state` отбрасывался. Тот же результат достигается надёжнее: режим (plan/act/yolo) — глобальный permission toggle (AD-025), план и todo — структурированные данные под управлением инструментов.
+
+**Модель данных:**
+
+```ts
+// Проект владеет планом (kanban-основа)
+interface ProjectPlan {
+  version: number;
+  updatedAt: string;
+  columns: PlanColumn[];   // колонки доски
+  items: PlanItem[];       // пункты плана
+}
+interface PlanColumn { id: string; name: string; order: number; wipLimit?: number }
+interface PlanItem {
+  id: string; title: string; description?: string;
+  columnId: string; priority: 'high' | 'medium' | 'low'; order: number;
+  dependsOn: PlanDependency[]; tags?: string[];
+  createdAt: string; updatedAt: string;
+}
+interface PlanDependency { projectId?: string; itemId: string; relation: 'blocked_by' | 'blocks' | 'relates_to' }
+
+// Сессия владеет todo
+interface TodoItem {
+  id: string; content: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+  priority: 'high' | 'medium' | 'low';
+  planItemId?: string;   // связь с пунктом плана проекта
+}
+```
+
+**Хранение:** план — поле `project.plan` (JSON проекта), todo — поле `session.todos` (JSON сессии). **Без файлов `.synth/` в workspace** — данные живут в самих сущностях (атомарная запись AD-005; слабая привязка к ФС, упрощённая миграция на БД, AD-032). `planContent`/`planPath` из сессии — удаляются.
+
+**Инструменты:**
+- `plan_*` — работа с планом проекта: `plan_read`/`plan_list`, `plan_write` (создание/редактирование пунктов, перемещение по колонкам, зависимости), `plan_export` (markdown-представление).
+- `todo_*` — работа с todo сессии: `todo_list`, `todo_add`, `todo_update` (статус/порядок/`planItemId`), `todo_delete`, `todo_export`.
+- `plan_enter` / `plan_exit` — **только** переключение режима сессии (plan ↔ act), без записи файлов. План пишется отдельным `plan_write`; `plan_exit` завершает планирование (событие `plan.approved` — сигнал «план зафиксирован»).
+- В system prompt: блок `[APPROVED PLAN]` собирается из `project.plan`, блок todo — из сессии; контекстный блок сессии сообщает наличие/отсутствие проекта и рабочий каталог.
+
+**Переопределяет:** AD-027 (план хранится в проекте, не на диске; в system prompt — из `project.plan`). **Отменяет AD-002:** TSM-слой (`TsmState`, `updateTsmState`, категория `tsm` в конфиге) удаляется.
+
+### AD-040: Сессии без проекта и перенос между проектами
+
+**Решение:** `projectId` сессии опционален — сессия без проекта штатный сценарий. Модель всегда знает свой контекст:
+
+- В system prompt встраивается **контекстный блок сессии**: есть/нет проекта, имя проекта, рабочий каталог, ограничения (план доступен только при проекте; файловые/git-тулы работают в рамках рабочего каталога).
+- Если задача требует плана или длительной работы с файлами — модель **подсказывает пользователю** завести проект или перенести сессию; может инициировать через инструменты `project_create` / `project_attach` (с permission ask).
+- `get_project_info` в сессии без проекта возвращает честный статус «проект отсутствует» + рабочий каталог (не «Проект: default»).
+
+**Перенос сессии между проектами** (`PATCH /sessions/:id` `project_id`, drag&drop в UI):
+- **todo остаётся** с сессией; **план берётся от нового проекта** (`planItemId` в todo, ссылающийся на пункты старого плана, игнорируется, если пункт не найден).
+- При смене проекта валидируется его существование; `planPath`/`planContent` (если ещё есть) сбрасываются; публикуется событие `session.moved`.
+- Сессия без проекта: todo есть, плана нет.
+
+**UI:** вкладка «Проект» для сессии без проекта — действия «Создать проект» / «Привязать к проекту»; визуальная метка «без проекта»; файловый браузер доступен через проекты с workspace.
+
+**Порядок реализации:**
+1. Ядро состояний: удаление TSM-слоя, контекстный блок сессии, `todo_*` CRUD, доступность plan/todo/project-тулов (permission-группа `RUNTIME`, capability `runtime` встроенным агентам).
+2. Проект-контейнер: `project.plan` (kanban-структура), `plan_*` инструменты, лог проекта, инварианты/лимиты/метки доступа.
+3. Сессии без проекта: подсказка + перенос + UI.
+
 ### Отказ от JSON-блока
 
-Механизм JSON-блока (модель возвращает JSON со статусом в конце ответа) не перенесён из прототипа. Причины: хрупкий парсинг, трата токенов, загрязнение промпта. Замена: Tool Use / Function Calling, TSM управляется бэкендом.
+Механизм JSON-блока (модель возвращает JSON со статусом в конце ответа) не перенесён из прототипа. Причины: хрупкий парсинг, трата токенов, загрязнение промпта. Замена: Tool Use / Function Calling — состояние, план и todo управляются инструментами (см. AD-039).
 
 ---
 
@@ -1388,8 +1458,9 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | Поиск | `grep_files`, `glob` |
 | Shell | `execute_shell` |
 | Git | `git_status`, `git_diff`, `git_log`, `git_commit`, `git_push`, `git_pull`, `git_checkout`, `git_branch_list`, `git_show`, `git_blame`, `git_stash` |
-| План/ToDo | `plan_enter`, `plan_exit`, `todo_write` |
-| Проект | `get_project_info`, `list_repos` |
+| План/ToDo | `plan_enter`, `plan_exit`, `plan_read`, `plan_list`, `plan_write`, `todo_write`, `todo_list`, `todo_add`, `todo_update`, `todo_delete` |
+| Проект | `get_project_info`, `list_repos`, `project_create`, `project_attach` |
+| Лог/Инварианты | `project_log_write`, `project_log_read`, `project_invariants_read`, `project_invariants_write` |
 | Веб | `web_fetch`, `web_search` (DuckDuckGo, при anti-bot — fallback на Bing) |
 | Задачи | `task`, `classify_conversation`, `read_session_reference` |
 

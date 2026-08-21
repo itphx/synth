@@ -22,7 +22,6 @@ const DEFAULT_GROUPS: Record<string, string> = {
   ROUTES: 'WARNING',
   ORCHESTRATOR: 'INFO',
   CHAT_STREAM: 'WARNING',
-  TSM: 'INFO',
   STORAGE: 'WARNING',
   DEBUG: 'DEBUG',
   WEBSOCKET: 'INFO',

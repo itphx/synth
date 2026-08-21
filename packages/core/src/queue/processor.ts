@@ -282,7 +282,9 @@ export class QueueProcessor {
           const retryCount = (this._retryDelays[streamId] || 0) + 1;
           this._retryDelays[streamId] = retryCount;
 
-          const isRecoverable = this._isRecoverable(result.error, result.errorType);
+          const isRecoverable = result.canRetry !== undefined
+            ? result.canRetry
+            : this._isRecoverable(result.error, result.errorType);
 
           if (!isRecoverable || retryCount > MAX_RETRIES) {
             // Unrecoverable или исчерпаны попытки — удалить из очереди
@@ -327,9 +329,15 @@ export class QueueProcessor {
           }
         }
 
-        // Успех — удалить сообщение из очереди
+        // Успех — удалить сообщение из очереди и очистить устаревший last_error
         await this.sessionManager.withLock(this.sessionId, async (s) => {
           s.pendingMessages = s.pendingMessages.filter((_, i) => i !== 0);
+          const userMsg = s.messages.find(
+            (m) => m.metadata?.stream_id === streamId && m.role === MessageRole.USER,
+          );
+          if (userMsg?.metadata?.last_error) {
+            delete userMsg.metadata.last_error;
+          }
           s.status.blocked = undefined;
           s.status.blockedAt = undefined;
           s.currentStream = undefined;

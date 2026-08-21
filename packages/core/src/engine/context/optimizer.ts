@@ -147,20 +147,7 @@ export class ContextOptimizer {
       const threshold = session.settings.slidingWindowTokenThreshold;
       const contextWindow = this.getContextWindow(model);
       const maxTokens = contextWindow > 0 ? Math.floor(contextWindow * (threshold / 100)) : 128000;
-      const active = this._getAllActiveMessages(session);
-      let cumulative = 0;
-      const windowMessages: Message[] = [];
-      for (let i = active.length - 1; i >= 0; i--) {
-        const msg = active[i]!;
-        const tokens = this._estimateMessageTokens(msg);
-        if (cumulative + tokens <= maxTokens || windowMessages.length === 0) {
-          windowMessages.unshift(msg);
-          cumulative += tokens;
-        } else {
-          break;
-        }
-      }
-      keepMessages = windowMessages;
+      keepMessages = this._selectWindowByTurns(this._getAllActiveMessages(session), maxTokens);
     } else {
       const limit = session.settings.slidingWindowMessageLimit;
       const userMessages = this._getActiveUserMessages(session.messages);
@@ -440,6 +427,53 @@ export class ContextOptimizer {
     return Math.ceil(msg.content.length / ContextOptimizer.CHARS_PER_TOKEN);
   }
 
+  /**
+   * Группирует подряд идущие сообщения с одинаковым metadata.stream_id в одну
+   * группу («ход»); сообщение без stream_id — отдельная группа (singleton).
+   * «Ход» = user-сообщение + вся его tool-chain + финальный ответ (все делят
+   * stream_id и идут подряд).
+   */
+  private _groupTurnsByStreamId(messages: Message[]): Message[][] {
+    const groups: Message[][] = [];
+    let current: Message[] = [];
+    let currentStreamId: string | undefined;
+    for (const m of messages) {
+      const streamId = m.metadata?.stream_id as string | undefined;
+      if (streamId === undefined || streamId !== currentStreamId) {
+        if (current.length > 0) groups.push(current);
+        current = [m];
+        currentStreamId = streamId;
+      } else {
+        current.push(m);
+      }
+    }
+    if (current.length > 0) groups.push(current);
+    return groups;
+  }
+
+  /**
+   * Выбирает сообщения для токен-окна по «ходам»: группы с конца добавляются
+   * целиком, пока хватает бюджета. Самая свежая группа добавляется всегда —
+   * tool-chain никогда не обрезается на середине (иначе невалидный
+   * OpenAI-диалог: assistant(toolUse) без tool-результатов и наоборот).
+   */
+  private _selectWindowByTurns(allActive: Message[], maxTokens: number): Message[] {
+    const groups = this._groupTurnsByStreamId(allActive);
+    const windowMessages: Message[] = [];
+    let cumulative = 0;
+    for (let i = groups.length - 1; i >= 0; i--) {
+      const group = groups[i]!;
+      const groupTokens = group.reduce((sum, m) => sum + this._estimateMessageTokens(m), 0);
+      if (cumulative + groupTokens <= maxTokens || windowMessages.length === 0) {
+        windowMessages.unshift(...group);
+        cumulative += groupTokens;
+      } else {
+        break;
+      }
+    }
+    return windowMessages;
+  }
+
   private _getLastRequestTokens(session: Session): number {
     for (let i = session.messages.length - 1; i >= 0; i--) {
       const msg = session.messages[i]!;
@@ -503,18 +537,7 @@ export class ContextOptimizer {
       const threshold = session.settings.slidingWindowTokenThreshold;
       const contextWindow = this.getContextWindow(session.settings.model);
       const maxTokens = contextWindow > 0 ? Math.floor(contextWindow * (threshold / 100)) : 128000;
-      windowMessages = [];
-      let cumulative = 0;
-      for (let i = allActive.length - 1; i >= 0; i--) {
-        const msg = allActive[i]!;
-        const tokens = this._estimateMessageTokens(msg);
-        if (cumulative + tokens <= maxTokens || windowMessages.length === 0) {
-          windowMessages.unshift(msg);
-          cumulative += tokens;
-        } else {
-          break;
-        }
-      }
+      windowMessages = this._selectWindowByTurns(allActive, maxTokens);
     } else {
       const limit = session.settings.slidingWindowMessageLimit;
       const userMessages = this._getActiveUserMessages(allActive);

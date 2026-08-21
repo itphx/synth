@@ -1,5 +1,5 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem } from '@itphx/synth-shared'
+import type { TodoItem, ProjectPlan } from '@itphx/synth-shared'
 
 const BASE_URL = '/api/v2'
 
@@ -39,6 +39,8 @@ export interface ProjectData {
     type: string
     timestamp: string
   }>
+  log?: { id: string; text: string; created_at: string; session_id?: string | null; author?: string | null }[] | null
+  plan: ProjectPlan | null
   created_at: string
   updated_at: string
 }
@@ -48,9 +50,8 @@ export interface SessionData {
   name: string | null
   parent_id?: string | null
   branch_point?: string | null
-  plan_path?: string | null
-  /** Содержимое утверждённого плана (AD-027), сериализуется как plan_content. */
-  plan_content?: string | null
+  /** Флаг «план утверждён через plan_exit» (AD-039), сериализуется как plan_approved. */
+  plan_approved?: boolean | null
   /** Todo-список сессии (тул todo_write), сериализуется как todos. */
   todos?: TodoItem[] | null
   session_origin?: string | null
@@ -89,7 +90,6 @@ export interface SessionData {
   }>
   pending_messages: unknown[]
   status: {
-    state: string
     blocked: string | null
   }
   settings: Record<string, unknown>
