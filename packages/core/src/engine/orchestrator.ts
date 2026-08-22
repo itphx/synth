@@ -610,7 +610,7 @@ export class ChatOrchestrator {
     publishChunk: (event: string, data: Record<string, unknown>) => void,
   ): Promise<ProcessMessageResult> {
     const streamId = (message.metadata?.stream_id as string) || 'unknown';
-    const effectiveAgentRole = message.agentRole || session.settings.agentRole || 'assistant';
+    const effectiveAgentRole = message.agentRole || session.settings.agentRole;
     const author = message.author || 'unknown';
     const workingDir = await this._resolveWorkingDir(session);
 
@@ -834,16 +834,14 @@ export class ChatOrchestrator {
       // (AD-025): пересобирается из baseTools после plan_enter/plan_exit.
       let baseTools: ToolForLLM[] | undefined;
       if (this._toolRegistry) {
-        if (this._agentRegistry && effectiveAgentRole) {
-          baseTools = this._agentRegistry.getToolsForAgent(effectiveAgentRole);
-        }
-        if (baseTools === undefined) {
-          // Агент не найден в реестре — отдаём только встроенные инструменты (без MCP)
-          const allNonMcp = Object.values(ToolCapability).filter(
-            (c) => c !== ToolCapability.MCP,
-          );
-          baseTools = this._toolRegistry.filterByCapabilities(allNonMcp);
-        } else if (baseTools.length === 0) {
+        // agentRole всегда определён при нормальной работе (пользователь, @-mention,
+        // сабагент). Если агент НЕ найден в реестре или role undefined — модель получает
+        // НИКАКИХ инструментов. Никакого молчаливого fallback на «все non-MCP», иначе
+        // агент без shell видит execute_shell и «гадает по именам» вместо честного ответа.
+        const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
+        if (agentDef && effectiveAgentRole) {
+          baseTools = this._agentRegistry!.getToolsForAgent(effectiveAgentRole);
+        } else {
           baseTools = [];
         }
       }

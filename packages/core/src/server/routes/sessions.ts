@@ -4,7 +4,7 @@ import type { AuthKit } from '../../auth/local.js';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer } from '../../index.js';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
-import { enqueueUserMessage, sseEventStream } from '../../index.js';
+import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID } from '../../index.js';
 import { serializeSession, serializeMessage } from '../serialize.js';
 import type { ProjectStore } from '../../storage/project-store.js';
 
@@ -38,7 +38,7 @@ export function createSessionRoutes(
       engine: body.engine || 'synth',
       parentId: body.parent_id || body.parentId || undefined,
       sessionOrigin: body.session_origin || body.sessionOrigin || undefined,
-      settings: body.settings,
+      settings: { ...body.settings, agentRole: body.settings?.agentRole ?? DEFAULT_AGENT_ID },
     });
     session.userId = LOCAL_USER_ID;
     session.ownerId = LOCAL_USER_ID;

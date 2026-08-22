@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import { JsonStore } from '../../storage/json-store.js';
 import type { AgentDefinition } from '@itphx/synth-shared';
-import { loadSystemAgentDefinitions, normalizeAgentModes } from '../../engine/agents/index.js';
+import { loadSystemAgentDefinitions, normalizeAgentModes, DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
 import type { AgentRegistry } from '../../engine/agents/index.js';
 
 const AGENT_ID_REGEX = /^[a-z0-9_-]+$/;
@@ -55,7 +55,7 @@ export function createAgentRoutes(
   app.get('/all', auth.requireAuth, async (c) => {
     return c.json({
       agents: (await resolveAgents()).map(AGENT_FIELDS),
-      default_agent: 'developer',
+      default_agent: DEFAULT_AGENT_ID,
     });
   });
 
@@ -66,7 +66,7 @@ export function createAgentRoutes(
 
     return c.json({
       agents: agents.map(AGENT_FIELDS),
-      default_agent: 'developer',
+      default_agent: DEFAULT_AGENT_ID,
     });
   });
 

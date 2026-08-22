@@ -1,6 +1,9 @@
 export { AgentRegistry } from './registry.js';
 export { isModeApplicable } from './mode.js';
 
+/** Стартовый агент новой сессии (и `default_agent` в ответах /agents). */
+export const DEFAULT_AGENT_ID = 'developer';
+
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
