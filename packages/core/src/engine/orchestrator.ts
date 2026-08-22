@@ -875,6 +875,8 @@ export class ChatOrchestrator {
       const allRawToolCalls: Array<{ iteration: number; calls: Record<string, unknown>[] }> = [];
       let stopAfterDeny = false;
       let denyStopReason: string | undefined;
+      /** Были ли deny-отказы за цикл (для осмысленного fallback пустого ответа). */
+      let hadDeny = false;
 
       // Предупреждение о заполненности контекстного окна (fire-and-forget, не блокирует вызов)
       this._publishContextLimitWarning(session.id, routeResult.modelName, messagesForLlm);
@@ -951,17 +953,27 @@ export class ChatOrchestrator {
             allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
           );
 
-          if (accumulatedContent || accumulatedReasoning || allToolCalls.length > 0) {
+          // Баг: накопленный текст ВСЕХ итераций (завершённые + текущая
+          // незавершённая), а не только последней. Иначе при стопе в истории
+          // остаётся обрывок на случайном месте, хотя пользователь видел весь
+          // текст в UI до стопа (тексты завершённых итераций лежат в
+          // allIntermediateTexts и раньше не попадали в content).
+          const partialContent = this._joinAccumulatedTexts(allIntermediateTexts, accumulatedContent);
+
+          // При отмене НЕ кладём allIntermediateTexts в metadata
+          // (intermediate_text_blocks): они уже вошли в partialContent, иначе
+          // UI (режим 'bottom') склеит их с content повторно — дубль.
+          if (partialContent || accumulatedReasoning || allToolCalls.length > 0) {
             await this._saveAssistantMessage(
-              session.id, accumulatedContent, streamId, effectiveAgentRole,
+              session.id, partialContent, streamId, effectiveAgentRole,
               finalUsage, chunkModel, accumulatedReasoning, debugCollector, true, providerName,
-              MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
+              MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
             );
           }
 
           publishChunk('stream.cancelled', {
             stream_id: streamId,
-            content: accumulatedContent,
+            content: partialContent,
           });
 
           this._cancellationTokens.delete(streamId);
@@ -1023,41 +1035,12 @@ export class ChatOrchestrator {
             toolArgs = func.arguments || {};
           }
 
-          // Doom loop detection
-          const doomKey = `${toolName}:${JSON.stringify(toolArgs)}`;
-          const doomCount = (doomLoopTracker.get(doomKey) || 0) + 1;
-          doomLoopTracker.set(doomKey, doomCount);
-
-          if (doomCount >= MAX_DOOM_LOOP_COUNT) {
-            warning('ORCHESTRATOR', `Doom loop detected: ${toolName} called ${doomCount} times with same args`);
-            currentMessages.push({
-              id: '',
-              role: 'tool',
-              content: `Ошибка: инструмент "${toolName}" вызван ${doomCount} раз(а) с одинаковыми аргументами. Цикл прерван.`,
-              usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-              disabled: false,
-              pinned: false,
-              branchId: '',
-              toolCallId: tcId,
-            });
-            continue;
-          }
-
-          const tcStartedAt = new Date().toISOString();
-
-          publishChunk('tool_call.started', {
-            stream_id: streamId,
-            session_id: session.id,
-            call_id: tcId,
-            name: toolName,
-            arguments: toolArgs,
-            iteration: toolIteration,
-          });
-
           const toolDef = this._toolRegistry?.get(toolName);
           let toolResult: { content: string; isError?: boolean; metadata?: Record<string, unknown> };
 
-          // AD-029: гранулярные permissions — проверяем перед выполнением тула.
+          // AD-029: гранулярные permissions — проверяем ДО doom loop, чтобы
+          // deny-повторы не блокировались безликим «Цикл прерван», а получали
+          // полноценный feedback (tool_call.result) с объяснением политики.
           // AD-025: учитываем текущий режим Plan/Act и строгость плана.
           const permissionDecision = permissionEvaluator.check({
             toolName,
@@ -1069,6 +1052,42 @@ export class ChatOrchestrator {
             planApproved,
             mcpToolSettings: session.settings.mcpToolSettings,
             shellPolicy: this._getShellPolicy() ?? undefined,
+          });
+
+          // Doom loop detection — только для вызовов, НЕ заблокированных
+          // политикой. Deny-вызовы исключены: каждая попытка должна получать
+          // понятный feedback с объяснением причины запрета, а не «Цикл
+          // прерван». Механика для повторяющихся легальных вызовов сохраняется.
+          if (permissionDecision.action !== 'deny') {
+            const doomKey = `${toolName}:${JSON.stringify(toolArgs)}`;
+            const doomCount = (doomLoopTracker.get(doomKey) || 0) + 1;
+            doomLoopTracker.set(doomKey, doomCount);
+
+            if (doomCount >= MAX_DOOM_LOOP_COUNT) {
+              warning('ORCHESTRATOR', `Doom loop detected: ${toolName} called ${doomCount} times with same args`);
+              currentMessages.push({
+                id: '',
+                role: 'tool',
+                content: `Ошибка: инструмент "${toolName}" вызван ${doomCount} раз(а) с одинаковыми аргументами. Цикл прерван.`,
+                usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                disabled: false,
+                pinned: false,
+                branchId: '',
+                toolCallId: tcId,
+              });
+              continue;
+            }
+          }
+
+          const tcStartedAt = new Date().toISOString();
+
+          publishChunk('tool_call.started', {
+            stream_id: streamId,
+            session_id: session.id,
+            call_id: tcId,
+            name: toolName,
+            arguments: toolArgs,
+            iteration: toolIteration,
           });
 
           let executeTool = permissionDecision.action === 'allow';
@@ -1118,7 +1137,7 @@ export class ChatOrchestrator {
               matched_rule: permissionDecision.matchedRule,
             });
             toolResult = {
-              content: `Permission denied: ${deniedReason}`,
+              content: `Permission denied: ${deniedReason}. Действие запрещено политикой безопасности. Не повторяйте вызов, выберите другой способ или объясните пользователю.`,
               isError: true,
               metadata: {
                 permission: {
@@ -1128,6 +1147,7 @@ export class ChatOrchestrator {
                 },
               },
             };
+            hadDeny = true;
           } else {
             if (toolDef) {
               const parsed = toolDef.parameters.safeParse(toolArgs);
@@ -1342,6 +1362,16 @@ export class ChatOrchestrator {
       // причину в финальном сообщении (история tool_result уже собрана).
       if (stopAfterDeny && !finalContent) {
         finalContent = `Обработка остановлена: ${denyStopReason ?? 'пользователь отклонил запрос'}`;
+      }
+
+      // Защита от пустого финального ответа: если цикл завершился (в т.ч.
+      // через doom loop / лимит итераций / модель вернула пустой контент)
+      // с пустым finalContent — подставляем осмысленное сообщение, чтобы
+      // в истории не оставалось пустого assistant-сообщения.
+      if (!finalContent) {
+        finalContent = hadDeny
+          ? 'Не удалось выполнить: действие заблокировано политикой безопасности'
+          : 'Не удалось выполнить запрос: ответ модели пуст';
       }
 
       // 7.5. Quality check + escalation (AD-034)
@@ -2114,6 +2144,21 @@ export class ChatOrchestrator {
         await this._sessionManager.addMessage(sessionId, toolMsg);
       }
     }
+  }
+
+  /**
+   * Склейка накопленного текста: все завершённые итерации (allIntermediateTexts)
+   * + текст текущей (незавершённой) итерации. Пустые фрагменты пропускаются.
+   * Используется при отмене (abort), чтобы в истории сохранялся полный
+   * частичный ответ, а не только обрывок последней итерации.
+   */
+  private _joinAccumulatedTexts(
+    intermediateTexts: Array<{ text: string; iteration: number }>,
+    current: string,
+  ): string {
+    const parts = [...intermediateTexts.map((t) => t.text), current]
+      .filter((t) => t && t.trim().length > 0);
+    return parts.join('\n\n');
   }
 
   private async _saveAssistantMessage(
