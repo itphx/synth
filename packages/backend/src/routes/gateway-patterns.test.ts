@@ -89,13 +89,13 @@ describe('Gateway Patterns API Routes (AD-036)', () => {
   }
 
   describe('GET /api/v2/gateway/patterns', () => {
-    it('без override возвращает дефолтные паттерны (10) и is_overridden=false', async () => {
+    it('без override возвращает дефолтные паттерны (9) и is_overridden=false', async () => {
       const res = await createApp(adminUser).request('/api/v2/gateway/patterns');
       expect(res.status).toBe(200);
       const body: any = await res.json();
       expect(body.is_overridden).toBe(false);
       expect(body.patterns).toEqual(defaultAsStrings());
-      expect(body.patterns).toHaveLength(10);
+      expect(body.patterns).toHaveLength(9);
       expect(body.default_patterns).toEqual(defaultAsStrings());
     });
 
