@@ -569,3 +569,79 @@
   6. **Описания тулов todo_*** — добавлен контекст «оперативный список задач сессии, в отличие от плана проекта; planItemId связывает с пунктом плана».
 - **Верификация:** typecheck ✅ (6 пакетов); lint 0 errors ✅; test: core 805 / backend 170 / ui 29 / shared 66 ✅; build core → dist/prompts/system/PLAN_GUIDE/PLAN_MODE/MODE_* обновлены ✅.
 - **Follow-up:** для применения в рантайме нужна пересборка core + перезапуск dev-серверов; наработки двух подзадач (PLAN MODE в файлы + PLAN_GUIDE/TODO) будут слиты в master --no-ff.
+
+## 2026-08-22 (седьмая правка) — deny-цикл при заблокированной shell-команде + полный частичный ответ при стопе
+- **Задача:** «Защита от опасных команд работает, но не так как ожидается: если модель пытается выполнить запрещённую команду через shell — блокируется, возвращается ошибка как при обрыве соединения, идут повторные попытки (3), потом пустой результат, модель не понимает, пробует снова — по кругу. При стопе сохраняется только обрывок вместо полного частичного ответа с неудачными попытками.»
+- **Тип:** bug (core)
+- **Исполнитель:** @fixer (2 итерации), оркестратор
+- **Результат:** PASS
+- **Ветка:** fix/deny-feedback-abort-partial (из master)
+- **Коммит:** dbf9702
+- **Время:** ~35 мин
+- **Первопричина:**
+  1. **Doom loop срабатывал раньше permission check** (orchestrator.ts): на 3-м одинаковом deny-вызове тул блокировался безликим «Ошибка: инструмент вызван 3 раз(а)... Цикл прерван» без tool_call.started/result и без объяснения политики → модель не понимала причину, продолжала, финальный ответ часто пустой. В UI deny выглядел как «обрыв соединения + повторные отправки».
+  2. **При abort** `_saveAssistantMessage` получал только `accumulatedContent` (текст ТЕКУЩЕЙ LLM-итерации, сбрасывается каждую итерацию), тексты завершённых итераций лежали в `allIntermediateTexts` и терялись из content → в истории оставался обрывок на случайном месте.
+- **Исправление:**
+  1. Permission check перенесён выше doom loop; doom-счётчик инкрементируется и «Цикл прерван» применяется только для НЕ-deny повторяющихся вызовов. Deny-повторы получают полноценный tool_call.started+result.
+  2. Deny toolResult дополнен инструкцией модели: «Permission denied: {reason}. Действие запрещено политикой безопасности. Не повторяйте вызов, выберите другой способ или объясните пользователю.» + флаг hadDeny.
+  3. Защита от пустого финального ответа: `finalContent` подставляется («Не удалось выполнить: действие заблокировано политикой безопасности» / «Не удалось выполнить запрос: ответ модели пуст»).
+  4. При abort в `_saveAssistantMessage` и `stream.cancelled` передаётся `_joinAccumulatedTexts(allIntermediateTexts, accumulatedContent)` — полный текст всех итераций; intermediate_text_blocks в metadata при отмене НЕ дублируются (они уже в content).
+- **Тесты:** orchestrator-deny-abort.test.ts (4 теста: deny 3+ раза без «Цикл прерван» и с fallback; abort с полным текстом + deny в tool_results; doom loop для не-deny сохранён; пустой ответ без deny).
+- **Верификация:** typecheck ✅ (6 пакетов); lint 0 errors ✅; test: core 809 / backend 170 / ui 29 / shared 66 ✅; repro tmp/repro-deny.ts (3 deny + объяснение, без doom loop) и tmp/repro-stop.ts (полный текст в content, без дублей) ✅.
+- **Риски:** deny-повторы больше не ограничиваются doom loop (при maxIterations=Infinity упрямая модель может повторять много раз, но каждая попытка получает понятный feedback; maxSteps агента ограничивает); пустой ответ теперь проходит в QA-эскалацию (роутер) — при необходимости исключить fallback-тексты.
+- **Follow-up:** пересборка core + перезапуск dev-серверов; при необходимости слить ветку в master --no-ff.
+
+## 2026-08-22 (восьмая правка) — агент всегда определяется в сессии (нет fallback на assistant) + default_agent
+- **Задача:** «Сессия "Доступность bash-инструмента" — модель не видит shell, хотя он включён у агента. В другой сессии модель пыталась вызвать shell с вариациями имён, возвращалась ошибка и повторные попытки.»
+- **Тип:** bug (core + backend + UI)
+- **Исполнитель:** @fixer (2 итерации), оркестратор
+- **Результат:** PASS (core/API/UI), живой LLM-ответ не подтверждён (провайдер itphx недоступен из среды)
+- **Ветка:** fix/agent-role-fallback (из master)
+- **Коммит:** 82bfdbe
+- **Время:** ~50 мин
+- **Первопричина (2 уровня):**
+  1. `orchestrator.ts:613` — молчаливый fallback `|| 'assistant'`. При `agentRole` undefined (гонка loadAgents в UI, запрос не из UI) агент становился `assistant`, у которого НЕТ `shell` capability → модель не видела `execute_shell` → либо честно «нет bash», либо гадала по именам (`bash`/`shell`/`execute_command`) → «Инструмент не найден» → серия красных вызовов. Добавлен коммитом `0c26e79`.
+  2. `backend/src/routes/agents.ts` — ветка «сессия без проекта → только assistant, default_agent='assistant'» навязывала assistant и игнорировала per-message выбор агента.
+- **Исправление:**
+  1. Убран `|| 'assistant'`: `effectiveAgentRole = message.agentRole || session.settings.agentRole`. При undefined/не-найденном агенте — НОЛЬ тулов (модель только текст, без «все non-MCP»). Ветка «без проекта → assistant» удалена.
+  2. `DEFAULT_AGENT_ID = 'developer'` (export из `@itphx/synth-core`); `default_agent` в `/agents` (core+backend) → `DEFAULT_AGENT_ID`.
+  3. `POST /api/v2/sessions` (core+backend) — `settings.agentRole = body.settings?.agentRole ?? DEFAULT_AGENT_ID` (новая сессия всегда с агентом по умолчанию).
+  4. UI: `agentsStore.defaultAgentId` из `default_agent`; `ChatTab.handleSend` → `agentRole || activeAgentId || defaultAgentId` (закрыта гонка).
+- **Тесты:** `orchestrator.test.ts` — блок «agentRole определяет набор инструментов (нет fallback на assistant)»: assistant → без execute_shell, undefined/not-found → 0 тулов, developer → execute_shell.
+- **Верификация:** typecheck ✅ (6 пакетов); lint 0 errors ✅; test: core 809 / backend 170 / ui 29 / shared 66 ✅; API: default_agent=developer ✅, новая сессия settings.agentRole=developer ✅, current_stream.agent_role=developer ✅; UI: активный агент «Разработчик» по умолчанию ✅.
+- **Ограничение:** живой ответ модели («видит ли shell») не подтверждён — провайдер itphx (ai.itphx.ru) недоступен из этой среды (прямой вызов пуст). Проверить в среде с рабочим LLM: спросить модель «есть ли bash» в сессии с agent=developer — должна ответить про execute_shell.
+- **Follow-up:** backend `AgentModeSelector.tsx:25` захардкожен `defaultAgent = agents.find(a => a.id === 'assistant')` (визуальный дефолт сброса агента) — при желании заменить на defaultAgentId; рассинхрон projectId/project_id в хранении сессий (отдельный баг). Merge обеих веток (deny-feedback-abort-partial + agent-role-fallback) в master --no-ff.
+
+## 2026-08-22 (девятая правка) — диагностика: почему модель не видит execute_shell на провайдере itphx
+- **Задача:** «Посмотри последний ответ в сессии "Разговор о разном". Изучи дебаг. Почему модель не увидела инструмент shell?»
+- **Тип:** research/диагностика (провайдер itphx)
+- **Исполнитель:** оркестратор
+- **Результат:** диагноз получен (ограничение провайдера, НЕ баг фикса)
+- **Ветка:** fix/agent-role-fallback
+- **Время:** ~40 мин
+- **Наблюдение (сессия «Разговор о разном», msg 40/42):**
+  - `api_request.body.tools` → 43 тула, ВКЛЮЧАЯ `execute_shell`; role в system prompt = DEVELOPER. Инструменты формируются и передаются корректно (фикс работает).
+  - `api_response.tool_calls` → None; `raw_model_response` → «нет shell-инструмента», модель не упоминает НИ ОДНОГО из 43 тулов (ни read_file, ни web_fetch).
+- **Причина:** провайдер `itphx` (https://ai.itphx.ru/api) НЕ поддерживает tool-calling в стриминговом режиме. Проверено прямыми запросами:
+  - `stream:false` + tools → модель видит и называет `execute_shell`;
+  - `stream:true` + tools → **0 tool_calls**, пустой контент (проверено на `omn.qwen3.8:27b`, `deepseek-v4-flash`, `omn.nemotron-3-nano`, `omn.qwen3:14b`).
+  - Orchestrator вызывает LLM через `chatAsync` → всегда `stream:true`, поэтому tools (хоть и передаются в body) не обрабатываются моделью.
+- **Вывод:** это ограничение провайдера/моделей itphx (function-calling не работает в SSE-стриме), касается всех тулов, не только shell. НЕ баг фикса agent-role-fallback.
+- **Направления:** 1) прокси itphx должен поддерживать tool_calls в stream:true; 2) использовать провайдера с рабочим function-calling в стриме (напр. локальный ollama — проверить); 3) временный обход — не-стриминговый вызов при наличии tools (ломает UX печати).
+- **Примечание:** обе ветки наработок закоммичены отдельно: fix/deny-feedback-abort-partial (dbf9702) и fix/agent-role-fallback (82bfdbe). Журнал (.opencode/tasks/log.md) — служебный.
+
+## 2026-08-22 (десятая правка) — fix: отключён base64-детектор секретов (ложное срабатывание на путях ФС)
+- **Задача:** «Модель получила верный result от shell, но выдала бред. Разобраться.» + «Просто отключи regexp детектирующий base64»
+- **Тип:** bug fix (AD-036 LLM Gateway)
+- **Исполнитель:** @fixer
+- **Результат:** PASS (тесты/typecheck/lint зелёные)
+- **Ветка:** fix/agent-role-fallback
+- **Инструменты (независимая проверка):**
+  - Tools в itphx (Open WebUI, type=openai) **работают** в `stream:true` (finish_reason=tool_calls при max_tokens=2000). Прежний вывод «не поддерживает tools в стриме» был **неверен**: при малом max_tokens у reasoning-модели qwen3.8:27b весь бюджет уходил в reasoning_content, не доходя до tool_calls.
+  - Провайдер OpenAI-совместим; гипотеза про контекст 4k для ЭТОГО случая не подтвердилась.
+- **Корень бреда в сессии «Разговор о разном» (msg 48→50):**
+  - `execute_shell(pwd)` вернул `/mnt/data/Agent/dev/Synth/data/workspaces/WS1`.
+  - LLM Gateway обфусцировал путь в `⟦SYNTH_SECRET_1⟧` (карта: ⟦SYNTH_SECRET_1⟧ → WS1) — **ложное срабатывание base64-детектора**: путь длиной ≥40 из только `[A-Za-z0-9+/]` похож на base64-строку.
+  - Модель увидела плейсхолдер вместо пути, его значение не знает → галлюцинация `/home/oleg/go/src/git.silencedocs.io/pulse` (нет нигде в сессии).
+- **Фикс:** удалён паттерн base64 из `DEFAULT_PATTERNS` и мёртвое условие `type !== 'base64'`; добавлен регрессионный тест «путь ФС WS1 не детектится как секрет».
+- **Файлы:** packages/core/src/engine/gateway/secret-detector.ts, secret-detector.test.ts

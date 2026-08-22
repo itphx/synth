@@ -4,6 +4,7 @@ import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
 interface AgentsStore {
   agents: AgentInfo[]
   activeAgentId: string | null
+  defaultAgentId: string | null
   loading: boolean
   loadAgents: (sessionId?: string) => Promise<void>
   setActiveAgentId: (id: string | null) => void
@@ -12,13 +13,14 @@ interface AgentsStore {
 export const useAgentsStore = create<AgentsStore>((set) => ({
   agents: [],
   activeAgentId: null,
+  defaultAgentId: null,
   loading: false,
 
   loadAgents: async (sessionId?: string) => {
     set({ loading: true })
     try {
       const { agents, default_agent } = await synthApi.getAgents(sessionId)
-      set({ agents, loading: false, activeAgentId: default_agent })
+      set({ agents, loading: false, activeAgentId: default_agent, defaultAgentId: default_agent })
     } catch {
       set({ loading: false })
     }

@@ -7,7 +7,7 @@ import type { ChatOrchestrator } from '@itphx/synth-core';
 import type { ContextOptimizer } from '@itphx/synth-core';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema } from '@itphx/synth-shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
-import { enqueueUserMessage, sseEventStream } from '@itphx/synth-core';
+import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID } from '@itphx/synth-core';
 import { serializeSession } from '../lib/serialize.js';
 import { t } from '../lib/i18n.js';
 import type { EventHub } from '../events/hub.js';
@@ -49,7 +49,7 @@ export function createSessionRoutes(
       engine: body.engine || 'synth',
       parentId: body.parent_id || body.parentId || undefined,
       sessionOrigin: body.session_origin || body.sessionOrigin || undefined,
-      settings: body.settings,
+      settings: { ...body.settings, agentRole: body.settings?.agentRole ?? DEFAULT_AGENT_ID },
       userId: user.id,
       ownerId: user.id,
     });

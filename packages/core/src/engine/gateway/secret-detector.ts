@@ -24,7 +24,6 @@ export const DEFAULT_PATTERNS: SecretDetectorPattern[] = [
   { type: 'bearer', regex: /\bBearer\s+[A-Za-z0-9\-._~+/]{20,}/g },
   { type: 'email', regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
   { type: 'card', regex: /\b\d{13,16}\b/g },
-  { type: 'base64', regex: /[A-Za-z0-9+/]{40,}={0,2}/g },
 ];
 
 /**
@@ -36,7 +35,7 @@ function _toRegExp(regex: RegExp | string): RegExp {
   return regex.global ? regex : new RegExp(regex.source, 'g');
 }
 
-/** base64-подобная строка — только если без пробелов (regex уже исключает пробелы). */
+/** Проверка валидности номера карты по Luhn (для card-паттерна). */
 function _isValidLuhn(candidate: string): boolean {
   if (!/^\d+$/.test(candidate)) return false;
 
@@ -78,7 +77,7 @@ export function detectSecrets(
 
       if (type === 'card') {
         if (!_isValidLuhn(raw)) continue;
-      } else if (type !== 'email' && type !== 'base64') {
+      } else if (type !== 'email') {
         if (raw.length < MIN_KEY_LENGTH) continue;
       }
 

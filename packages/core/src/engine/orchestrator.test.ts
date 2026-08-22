@@ -13,6 +13,7 @@ import type { LLMMessage, CancellationToken } from '../providers/base.js';
 import type { ContextBuilder } from './context/builder.js';
 import { ContextConfig } from './context/config.js';
 import { createToolRegistry } from './tools/index.js';
+import { createAgentRegistry } from './agents/index.js';
 import { generateId, MessageRole, nowISO, makeTextPart, ToolCapability } from '@itphx/synth-shared';
 import type { Session, Message, SecurityConfig, SessionSettings } from '@itphx/synth-shared';
 
@@ -666,6 +667,7 @@ describe('ChatOrchestrator — фильтрация тулов по режиму
   ): Promise<void> {
     ModeToolsProvider.configure(script);
 
+    const toolRegistry = createToolRegistry();
     const orchestrator = new ChatOrchestrator({
       sessionManager,
       eventBus: new EventBus(),
@@ -673,14 +675,15 @@ describe('ChatOrchestrator — фильтрация тулов по режиму
       providerLoader: (name: string) => {
         return { name, type: 'modetools', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
       },
-      toolRegistry: createToolRegistry(),
+      toolRegistry,
+      agentRegistry: createAgentRegistry(toolRegistry),
       permissionConfig: { rules: {}, askTimeoutMs: 1000 },
       defaultWorkingDir: tmpDir,
     });
 
     const session = await sessionManager.createSession({
       title: 'ModeTools',
-      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'assistant' },
+      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
     });
     session.mode = mode;
     await sessionManager.updateSession(session);
@@ -708,6 +711,7 @@ describe('ChatOrchestrator — фильтрация тулов по режиму
   it('strict без утверждённого плана: список тулов урезан так же, как в plan', async () => {
     ModeToolsProvider.configure([{ content: 'готово' }]);
 
+    const toolRegistry = createToolRegistry();
     const orchestrator = new ChatOrchestrator({
       sessionManager,
       eventBus: new EventBus(),
@@ -715,7 +719,8 @@ describe('ChatOrchestrator — фильтрация тулов по режиму
       providerLoader: (name: string) => {
         return { name, type: 'modetools', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
       },
-      toolRegistry: createToolRegistry(),
+      toolRegistry,
+      agentRegistry: createAgentRegistry(toolRegistry),
       permissionConfig: { rules: {}, askTimeoutMs: 1000 },
       defaultPlanMode: 'strict',
       defaultWorkingDir: tmpDir,
@@ -723,7 +728,7 @@ describe('ChatOrchestrator — фильтрация тулов по режиму
 
     const session = await sessionManager.createSession({
       title: 'StrictNoPlan',
-      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'assistant' },
+      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
     });
     const msg = makeUserMsg();
     await sessionManager.addMessage(session.id, msg);
@@ -808,6 +813,75 @@ describe('ChatOrchestrator — фильтрация тулов по режиму
   });
 });
 
+// Баг: orchestrator.ts:613 — `|| 'assistant'` + fallback на «все non-MCP» давали
+// агенту без shell инструмент execute_shell (и «гадали по именам» вместо честного
+// ответа «инструмент не найден»). Проверяем, что при заданном/не заданном agentRole
+// модель получает РОВНО те инструменты, что принадлежат агенту (или ничего).
+describe('ChatOrchestrator — agentRole определяет набор инструментов (нет fallback на assistant)', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-agentrole-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    ProviderFactory.register('agenttools', ModeToolsProvider);
+  });
+
+  afterEach(async () => {
+    ProviderFactory['_providers'].delete('agenttools');
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function runAgentRole(agentRole: string | undefined): Promise<string[]> {
+    ModeToolsProvider.configure([{ content: 'готово' }]);
+    const toolRegistry = createToolRegistry();
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus: new EventBus(),
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: (name: string) => {
+        return { name, type: 'agenttools', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
+      },
+      toolRegistry,
+      agentRegistry: createAgentRegistry(toolRegistry),
+      permissionConfig: { rules: {}, askTimeoutMs: 1000 },
+      defaultWorkingDir: tmpDir,
+    });
+
+    const settings: Partial<SessionSettings> = { provider: 'agenttools', model: 'm', systemPrompt: 'test' };
+    if (agentRole !== undefined) settings.agentRole = agentRole;
+    const session = await sessionManager.createSession({ title: 'AgentRole', settings });
+    const msg = makeUserMsg();
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+    const processMessage = orchestrator.createProcessMessage();
+    const result = await processMessage(fresh, msg, new AbortController().signal, () => {});
+    expect(result.error).toBeUndefined();
+    return toolNamesOf(ModeToolsProvider.capturedTools(), 0);
+  }
+
+  it('assistant (агент без shell): в переданных модели тулах НЕТ execute_shell', async () => {
+    const names = await runAgentRole('assistant');
+    expect(names).not.toContain('execute_shell');
+    expect(names).toContain('read_file');
+  });
+
+  it('agentRole=undefined (аварийный случай): модель получает НОЛЬ тулов (только текст), не ошибку', async () => {
+    const names = await runAgentRole(undefined);
+    expect(names).toEqual([]);
+  });
+
+  it('agentRole задан, но агент не найден в реестре: модель получает НОЛЬ тулов (не «все non-MCP»)', async () => {
+    const names = await runAgentRole('no-such-agent');
+    expect(names).toEqual([]);
+  });
+
+  it('developer: execute_shell присутствует в переданных тулах', async () => {
+    const names = await runAgentRole('developer');
+    expect(names).toContain('execute_shell');
+  });
+});
+
 describe('ChatOrchestrator — блоки PLAN MODE/TODO/PLAN_GUIDE в system prompt (AD-028/AD-039)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
@@ -834,6 +908,7 @@ describe('ChatOrchestrator — блоки PLAN MODE/TODO/PLAN_GUIDE в system pr
   ): Promise<string[]> {
     ModeToolsProvider.configure([{ content: 'готово' }]);
 
+    const toolRegistry = createToolRegistry();
     const orchestrator = new ChatOrchestrator({
       sessionManager,
       eventBus: new EventBus(),
@@ -842,7 +917,8 @@ describe('ChatOrchestrator — блоки PLAN MODE/TODO/PLAN_GUIDE в system pr
       providerLoader: (name: string) => {
         return { name, type: 'modetools', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
       },
-      toolRegistry: createToolRegistry(),
+      toolRegistry,
+      agentRegistry: createAgentRegistry(toolRegistry),
       permissionConfig: { rules: {}, askTimeoutMs: 1000 },
       defaultPlanMode: opts.defaultPlanMode,
       defaultWorkingDir: tmpDir,
@@ -850,7 +926,7 @@ describe('ChatOrchestrator — блоки PLAN MODE/TODO/PLAN_GUIDE в system pr
 
     const session = await sessionManager.createSession({
       title: 'PlanPrompt',
-      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'assistant', ...settings },
+      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'developer', ...settings },
     });
     if (opts.planApproved !== undefined) {
       session.planApproved = opts.planApproved;

@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
 import type { AgentDefinition } from '@itphx/synth-shared';
-import { loadSystemAgentDefinitions, normalizeAgentModes } from '@itphx/synth-core';
+import { loadSystemAgentDefinitions, normalizeAgentModes, DEFAULT_AGENT_ID } from '@itphx/synth-core';
 import type { AgentRegistry, SessionManager } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 
@@ -66,7 +66,7 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
     const agents = await resolveAgents();
     return c.json({
       agents: agents.map(AGENT_FIELDS),
-      default_agent: 'developer',
+      default_agent: DEFAULT_AGENT_ID,
     });
   });
 
@@ -74,25 +74,11 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
   app.get('/', kit.requireAuth, async (c) => {
     const agents = await resolveAgents();
 
-    // Если передан session_id и сессия без проекта — только assistant
-    const sessionId = c.req.query('session_id');
-    if (sessionId && sessionManager) {
-      const session = await sessionManager.getSession(sessionId);
-      if (session && !session.projectId) {
-        return c.json({
-          agents: agents
-            .filter((a) => a.id === 'assistant')
-            .map(AGENT_FIELDS),
-          default_agent: 'assistant',
-        });
-      }
-    }
-
     return c.json({
       agents: agents
         .filter((a) => normalizeAgentModes(a.agentMode).includes('primary'))
         .map(AGENT_FIELDS),
-      default_agent: 'developer',
+      default_agent: DEFAULT_AGENT_ID,
     });
   });
 

@@ -15,7 +15,6 @@ const GOOGLE_KEY = 'AIza' + 'C'.repeat(35); // 35 [0-9A-Za-z_-]
 const EMAIL = 'user@example.com';
 const CARD_VALID = '4111111111111111'; // VISA, Luhn-валидна
 const CARD_INVALID = '4111111111111112'; // Luhn невалидна
-const BASE64_LONG = 'A'.repeat(45); // >= 40 base64-символов
 const BEARER_TOKEN = 'Bearer ' + 'x'.repeat(24);
 
 describe('detectSecrets', () => {
@@ -45,10 +44,6 @@ describe('detectSecrets', () => {
 
   it('НЕ находит невалидную по Luhn карту', () => {
     expect(detectSecrets(`номер ${CARD_INVALID}`)).toEqual([]);
-  });
-
-  it('находит длинную base64-строку', () => {
-    expect(detectSecrets(`base64=${BASE64_LONG}`)).toContain(BASE64_LONG);
   });
 
   it('находит Bearer-токен', () => {
@@ -97,6 +92,11 @@ describe('detectSecrets', () => {
 
   it('пустой список паттернов → ничего не детектится', () => {
     expect(detectSecrets(`ключ ${SK_KEY}`, [])).toEqual([]);
+  });
+
+  it('НЕ детектит длинный путь ФС как base64-секрет (регрессия: WS1)', () => {
+    expect(detectSecrets('/mnt/data/Agent/dev/Synth/data/workspaces/WS1')).toEqual([]);
+    expect(detectSecrets('дефолт /mnt/data/Agent/dev/Synth/data/workspaces/WS1 для работы')).toEqual([]);
   });
 });
 

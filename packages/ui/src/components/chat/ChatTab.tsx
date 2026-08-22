@@ -167,8 +167,8 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   const handleSend = useCallback(
     async (text: string, agentRole?: string) => {
-      const { activeAgentId } = useAgentsStore.getState()
-      const effectiveAgentRole = agentRole || activeAgentId || undefined
+      const { activeAgentId, defaultAgentId } = useAgentsStore.getState()
+      const effectiveAgentRole = agentRole || activeAgentId || defaultAgentId || undefined
 
       // Сообщение пользователя появляется в чате только когда сервер
       // начинает его обработку (event message.added из QueueProcessor)
