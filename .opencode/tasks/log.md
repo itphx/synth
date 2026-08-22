@@ -629,3 +629,19 @@
 - **Вывод:** это ограничение провайдера/моделей itphx (function-calling не работает в SSE-стриме), касается всех тулов, не только shell. НЕ баг фикса agent-role-fallback.
 - **Направления:** 1) прокси itphx должен поддерживать tool_calls в stream:true; 2) использовать провайдера с рабочим function-calling в стриме (напр. локальный ollama — проверить); 3) временный обход — не-стриминговый вызов при наличии tools (ломает UX печати).
 - **Примечание:** обе ветки наработок закоммичены отдельно: fix/deny-feedback-abort-partial (dbf9702) и fix/agent-role-fallback (82bfdbe). Журнал (.opencode/tasks/log.md) — служебный.
+
+## 2026-08-22 (десятая правка) — fix: отключён base64-детектор секретов (ложное срабатывание на путях ФС)
+- **Задача:** «Модель получила верный result от shell, но выдала бред. Разобраться.» + «Просто отключи regexp детектирующий base64»
+- **Тип:** bug fix (AD-036 LLM Gateway)
+- **Исполнитель:** @fixer
+- **Результат:** PASS (тесты/typecheck/lint зелёные)
+- **Ветка:** fix/agent-role-fallback
+- **Инструменты (независимая проверка):**
+  - Tools в itphx (Open WebUI, type=openai) **работают** в `stream:true` (finish_reason=tool_calls при max_tokens=2000). Прежний вывод «не поддерживает tools в стриме» был **неверен**: при малом max_tokens у reasoning-модели qwen3.8:27b весь бюджет уходил в reasoning_content, не доходя до tool_calls.
+  - Провайдер OpenAI-совместим; гипотеза про контекст 4k для ЭТОГО случая не подтвердилась.
+- **Корень бреда в сессии «Разговор о разном» (msg 48→50):**
+  - `execute_shell(pwd)` вернул `/mnt/data/Agent/dev/Synth/data/workspaces/WS1`.
+  - LLM Gateway обфусцировал путь в `⟦SYNTH_SECRET_1⟧` (карта: ⟦SYNTH_SECRET_1⟧ → WS1) — **ложное срабатывание base64-детектора**: путь длиной ≥40 из только `[A-Za-z0-9+/]` похож на base64-строку.
+  - Модель увидела плейсхолдер вместо пути, его значение не знает → галлюцинация `/home/oleg/go/src/git.silencedocs.io/pulse` (нет нигде в сессии).
+- **Фикс:** удалён паттерн base64 из `DEFAULT_PATTERNS` и мёртвое условие `type !== 'base64'`; добавлен регрессионный тест «путь ФС WS1 не детектится как секрет».
+- **Файлы:** packages/core/src/engine/gateway/secret-detector.ts, secret-detector.test.ts
