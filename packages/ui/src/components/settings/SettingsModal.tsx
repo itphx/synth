@@ -11,7 +11,7 @@ import { NotificationSettings } from "./NotificationSettings"
 import { ChatSettings } from "./ChatSettings"
 import { RoutingSettings } from "./RoutingSettings"
 import { MicroFirstDefaults } from "./MicroFirstDefaults"
-import { GatewaySettings } from "./GatewaySettings"
+import { SecuritySettings } from "./SecuritySettings"
 import { McpSettings } from "./McpSettings"
 import { DashboardPanel } from "../admin/DashboardPanel"
 import { SessionsPanel } from "../admin/SessionsPanel"
@@ -39,7 +39,7 @@ const CATEGORIES: CategoryItem[] = [
   { id: "microFirst", labelKey: "settings.category.microFirst", icon: "cpu" },
   { id: "routing", labelKey: "settings.category.routing", icon: "git-branch" },
   { id: "mcp", labelKey: "settings.category.mcp", icon: "tools" },
-  { id: "gateway", labelKey: "settings.category.gateway", icon: "shield-keyhole", roles: ["ADMIN"] },
+  { id: "security", labelKey: "settings.category.security", icon: "shield-keyhole", roles: ["ADMIN"] },
   // Admin sections below
   { id: "dashboard", labelKey: "settings.category.dashboard", icon: "home", roles: ["ADMIN", "LEAD"] },
   { id: "sessions", labelKey: "settings.category.sessions", icon: "chat-new", roles: ["ADMIN", "LEAD"] },
@@ -120,7 +120,7 @@ export const SettingsModal = () => {
             {settingsPage === "routing" && <RoutingSettings />}
             {settingsPage === "microFirst" && <MicroFirstDefaults />}
             {settingsPage === "mcp" && <McpSettings />}
-            {settingsPage === "gateway" && <GatewaySettings />}
+            {settingsPage === "security" && <SecuritySettings />}
             {settingsPage === "dashboard" && <DashboardPanel />}
             {settingsPage === "sessions" && <SessionsPanel />}
             {settingsPage === "projects" && <ProjectsPanel />}

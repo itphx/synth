@@ -1,0 +1,36 @@
+{
+  "deniedPaths": [
+    "~/.ssh/authorized_keys",
+    "~/.ssh/id_rsa",
+    "~/.ssh/id_ed25519",
+    "~/.git-credentials",
+    "~/.netrc",
+    "~/.pgpass",
+    "~/.npmrc",
+    "~/.pypirc",
+    "/etc/sudoers",
+    "/etc/passwd",
+    "/etc/shadow"
+  ],
+  "deniedPrefixes": [
+    "~/.ssh",
+    "~/.aws",
+    "~/.gnupg",
+    "~/.kube",
+    "~/.docker",
+    "~/.azure",
+    "~/.config/gh",
+    "~/.config/gcloud",
+    "/etc/sudoers.d",
+    "/etc/systemd"
+  ],
+  "approvalPaths": ["~/.ssh/config"],
+  "deniedCommandPrefixes": [
+    "rm -rf /",
+    "chmod -R 777 /",
+    "sudo rm -rf /",
+    "find / -delete",
+    "find / -exec",
+    ":(){ :|:& };:"
+  ]
+}

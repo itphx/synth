@@ -15,6 +15,7 @@ import { PermissionEvaluator, isPlanRestricted, isPlanBlockedTool, getMcpToolAva
 import { PermissionApprovalManager } from '../permission/approval.js';
 import { serializeSession, serializeMessage } from '../../server/serialize.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
+import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
 
 export interface TaskExtra {
   provider: BaseProvider;
@@ -41,6 +42,10 @@ export interface TaskExtra {
   securityConfig?: SecurityConfig;
   /** Политика безопасности execute_shell (денлист путей/команд) родительской сессии. */
   shellPolicy?: ShellPolicy;
+  /** Единая политика защищённых путей (СКВОЗНАЯ проверка файловых тулов) родительской сессии. */
+  protectedPaths?: ProtectedPathsPolicy;
+  /** Тумблер полного отключения защищённых путей (default true). */
+  protectedPathsEnabled?: boolean;
 }
 
 type ContextMode = 'none' | 'inherit' | 'summary' | 'last_n';
@@ -719,6 +724,8 @@ export const taskTool: ToolDefinition = {
             planApproved: childPlanApproved,
             mcpToolSettings: childMcpToolSettings,
             shellPolicy: extra.shellPolicy ?? undefined,
+            protectedPaths: extra.protectedPaths ?? undefined,
+            protectedPathsEnabled: extra.protectedPathsEnabled,
           });
 
           if (permissionDecision.action === 'deny') {

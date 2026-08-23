@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { McpServerToolSettings, LLMGatewayConfig } from '@itphx/synth-shared';
+import type { McpServerToolSettings, LLMGatewayConfig, SecurityConfig } from '@itphx/synth-shared';
 
 /** Runtime-настройки LLM Gateway, сохраняемые через UI (раздел «Шлюз безопасности»). */
 export interface LlmGatewayRuntimeSettings {
@@ -15,6 +15,13 @@ export interface LlmGatewayRuntimeSettings {
   };
 }
 
+/** Runtime-настройки секции «Безопасность», сохраняемые через UI. */
+export interface SecurityRuntimeSettings {
+  protectedPaths?: {
+    enabled: boolean;
+  };
+}
+
 export interface RuntimeSettings {
   /** Рабочий каталог по умолчанию, заданный через UI (раздел «Проекты»). */
   workspace?: string;
@@ -22,6 +29,8 @@ export interface RuntimeSettings {
   mcpServers?: Record<string, McpServerToolSettings>;
   /** Глобальный тумблер LLM Gateway (AD-036): включается/выключается через UI (только ADMIN). */
   llmGateway?: Partial<LlmGatewayRuntimeSettings>;
+  /** Глобальные настройки секции «Безопасность» (защищённые пути). */
+  security?: Partial<SecurityRuntimeSettings>;
 }
 
 /**
@@ -46,6 +55,25 @@ export function mergeLlmGatewayConfig(
       providerPerMinute: runtime.rateLimit?.providerPerMinute ?? base?.rateLimit?.providerPerMinute ?? 120,
     },
     audit: base?.audit ?? { enabled: true, logPath: '' },
+  };
+}
+
+/**
+ * Мёржит runtime-настройки секции «Безопасность» (protectedPaths.enabled) поверх
+ * конфига из config.yaml. Runtime приоритетнее. Возвращает undefined, если ни
+ * конфига, ни runtime-настроек нет.
+ */
+export function mergeSecurityConfig(
+  base: SecurityConfig | undefined,
+  runtime: Partial<SecurityRuntimeSettings>,
+): SecurityConfig | undefined {
+  const hasRuntime = !!runtime && Object.keys(runtime).length > 0;
+  if (!base && !hasRuntime) return undefined;
+  return {
+    promptInjection: base?.promptInjection ?? { enabled: true, wrapContent: true, mode: 'flag' },
+    protectedPaths: {
+      enabled: runtime.protectedPaths?.enabled ?? base?.protectedPaths?.enabled ?? true,
+    },
   };
 }
 
@@ -107,6 +135,15 @@ export class RuntimeSettingsStore {
 
   async setLlmGatewaySettings(config: Partial<LlmGatewayRuntimeSettings>): Promise<void> {
     await this._update((current) => ({ ...current, llmGateway: config }));
+  }
+
+  async getSecuritySettings(): Promise<Partial<SecurityRuntimeSettings>> {
+    const settings = await this.load();
+    return settings.security ?? {};
+  }
+
+  async setSecuritySettings(config: Partial<SecurityRuntimeSettings>): Promise<void> {
+    await this._update((current) => ({ ...current, security: config }));
   }
 
   private async _update(mutate: (current: RuntimeSettings) => RuntimeSettings): Promise<void> {

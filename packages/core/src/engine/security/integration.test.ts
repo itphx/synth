@@ -170,7 +170,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
 
   it('web_fetch с инъекцией — контент обёрнут [CONTENT] + [WARN] (режим flag)', async () => {
     await runSession(
-      { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' } },
+      { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true } },
       [{
         id: 'call_web',
         function: {
@@ -194,7 +194,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
 
   it('[RULES] больше не добавляется кодом — в мок-сборке system prompt без [RULES] (секция живёт в ролевых промптах)', async () => {
     await runSession(
-      { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' } },
+      { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true } },
       [],
     );
     const sp = MockIPIProvider.capturedSystemPrompt ?? '';
@@ -223,7 +223,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
   it('read_file внутри workingDir — trust: trusted, без WARN', async () => {
     await writeFile(join(tmpDir, 'notes.txt'), 'обычный текст проекта\n');
     await runSession(
-      { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' } },
+      { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true } },
       [{
         id: 'call_read',
         function: { name: 'read_file', arguments: JSON.stringify({ file_path: 'notes.txt' }) },
@@ -237,7 +237,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
 
   it('read_file вне workingDir — trust: untrusted', async () => {
     await runSession(
-      { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' } },
+      { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true } },
       [{
         id: 'call_read2',
         function: { name: 'read_file', arguments: JSON.stringify({ file_path: '/etc/hostname' }) },
@@ -248,7 +248,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
 
   it('block mode — подозрительный результат блокируется (isError)', async () => {
     await runSession(
-      { promptInjection: { enabled: true, wrapContent: true, mode: 'block' } },
+      { promptInjection: { enabled: true, wrapContent: true, mode: 'block' }, protectedPaths: { enabled: true } },
       [{
         id: 'call_web2',
         function: {
@@ -266,7 +266,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
 
   it('sanitize mode — подозрительные фрагменты заменяются', async () => {
     await runSession(
-      { promptInjection: { enabled: true, wrapContent: true, mode: 'sanitize' } },
+      { promptInjection: { enabled: true, wrapContent: true, mode: 'sanitize' }, protectedPaths: { enabled: true } },
       [{
         id: 'call_web3',
         function: {
@@ -284,7 +284,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
 
   it('security disabled — контент не оборачивается, RULES нет', async () => {
     await runSession(
-      { promptInjection: { enabled: false, wrapContent: true, mode: 'flag' } },
+      { promptInjection: { enabled: false, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true } },
       [{
         id: 'call_web4',
         function: {
@@ -304,7 +304,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
 
   it('wrapContent=false — WARN есть, обёртки нет, RULES не добавляется кодом', async () => {
     await runSession(
-      { promptInjection: { enabled: true, wrapContent: false, mode: 'flag' } },
+      { promptInjection: { enabled: true, wrapContent: false, mode: 'flag' }, protectedPaths: { enabled: true } },
       [{
         id: 'call_web5',
         function: {

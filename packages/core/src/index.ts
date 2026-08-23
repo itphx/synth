@@ -59,12 +59,26 @@ export {
 } from './engine/permission/index.js';
 export type { PermissionCheckInput, ApprovalRequest, ApprovalDecision } from './engine/permission/index.js';
 
+export {
+  loadProtectedPaths,
+  checkPath,
+  clearProtectedPathsCache,
+  ProtectedPathsStore,
+} from './engine/security/index.js';
+export type {
+  ProtectedPathsPolicy,
+  ProtectedPathCheckResult,
+  ProtectedPathsOverride,
+  ProtectedPathsStoreOptions,
+  ProtectedPathsRaw,
+} from './engine/security/index.js';
+
 export { FileProfileStore } from './storage/profile-store.js';
 export { JsonStore } from './storage/json-store.js';
 export type { JsonStoreConfig } from './storage/json-store.js';
 export { ProjectStore } from './storage/project-store.js';
 export type { ProjectStoreConfig } from './storage/project-store.js';
-export { RuntimeSettingsStore, mergeLlmGatewayConfig } from './storage/runtime-settings.js';
+export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig } from './storage/runtime-settings.js';
 export type { RuntimeSettings, LlmGatewayRuntimeSettings } from './storage/runtime-settings.js';
 export { createLocalAuth } from './auth/local.js';
 export type { AuthKit, LocalAuthConfig } from './auth/local.js';

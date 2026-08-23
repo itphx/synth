@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
-import type { RuntimeSettingsStore, LlmGatewayRuntimeSettings } from '../../storage/runtime-settings.js';
+import type { RuntimeSettingsStore, LlmGatewayRuntimeSettings, SecurityRuntimeSettings } from '../../storage/runtime-settings.js';
+import type { ProtectedPathsStore } from '../../engine/security/protected-paths-store.js';
+import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
 import type { McpServerToolSettings, McpToolAvailability } from '@itphx/synth-shared';
 
 export interface SettingsRoutesDeps {
@@ -10,6 +12,10 @@ export interface SettingsRoutesDeps {
   fallbackWorkspace: string;
   /** Вызывается после успешного PUT /llm-gateway (live-применение runtime-настройки). */
   onLlmGatewayChange?: (runtime: Partial<LlmGatewayRuntimeSettings>) => void | Promise<void>;
+  /** Вызывается после успешного PUT /security (live-применение тумблера защищённых путей). */
+  onSecurityChange?: (runtime: Partial<SecurityRuntimeSettings>) => void | Promise<void>;
+  /** Store override политики защищённых путей ({dataDir}/security/protected-paths.json). */
+  protectedPathsStore?: ProtectedPathsStore;
 }
 
 function isValidAvailability(value: unknown): value is McpToolAvailability {
@@ -50,6 +56,44 @@ function isValidLlmGatewaySettings(value: unknown): value is Partial<LlmGatewayR
     if (!rl || typeof rl !== 'object' || Array.isArray(rl)) return false;
     if (rl.userPerMinute !== undefined && (!Number.isInteger(rl.userPerMinute) || (rl.userPerMinute as number) < 1)) return false;
     if (rl.providerPerMinute !== undefined && (!Number.isInteger(rl.providerPerMinute) || (rl.providerPerMinute as number) < 1)) return false;
+  }
+  return true;
+}
+
+/** Валидация runtime-настроек секции «Безопасность»: допустимо только protectedPaths.enabled. */
+function isValidSecuritySettings(value: unknown): value is Partial<SecurityRuntimeSettings> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const s = value as Record<string, unknown>;
+  if (s.protectedPaths !== undefined) {
+    const pp = s.protectedPaths as Record<string, unknown>;
+    if (!pp || typeof pp !== 'object' || Array.isArray(pp)) return false;
+    if (pp.enabled !== undefined && typeof pp.enabled !== 'boolean') return false;
+  }
+  return true;
+}
+
+/** Валидация эффективной политики защищённых путей: четырёх списков строк. */
+function isValidProtectedPathsPolicy(value: unknown): value is ProtectedPathsPolicy {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const p = value as Record<string, unknown>;
+  const isStringArray = (v: unknown): boolean => Array.isArray(v) && v.every((x) => typeof x === 'string');
+  return isStringArray(p.deniedPaths) && isStringArray(p.deniedPrefixes)
+    && isStringArray(p.approvalPaths) && isStringArray(p.deniedCommandPrefixes);
+}
+
+/** Валидация сырого override (add/remove): add/remove — объекты с массивами строк, version — число. */
+function isValidProtectedPathsOverride(value: unknown): value is { version?: number; add: Record<string, unknown>; remove: Record<string, unknown> } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const o = value as Record<string, unknown>;
+  if (o.version !== undefined && typeof o.version !== 'number') return false;
+  const isStringArray = (v: unknown): boolean => v === undefined || (Array.isArray(v) && v.every((x) => typeof x === 'string'));
+  for (const section of ['add', 'remove'] as const) {
+    const s = o[section];
+    if (s === undefined) continue;
+    if (!s || typeof s !== 'object' || Array.isArray(s)) return false;
+    const sp = s as Record<string, unknown>;
+    if (!isStringArray(sp.deniedPaths) || !isStringArray(sp.deniedPrefixes)
+      || !isStringArray(sp.approvalPaths) || !isStringArray(sp.deniedCommandPrefixes)) return false;
   }
   return true;
 }
@@ -136,6 +180,93 @@ export function createSettingsRoutes(
     // AD-036: live-применение runtime-настройки — оркестратор переконфигурируется без рестарта.
     await deps.onLlmGatewayChange?.(llmGateway);
     return c.json({ llmGateway });
+  });
+
+  /**
+   * GET/PUT /api/v2/settings/security — глобальные настройки секции «Безопасность».
+   * Тумблер защищённых путей включается/выключается через UI (только ADMIN).
+   * Значение сохраняется в {dataDir}/settings.json (AD-005) и переживает рестарт.
+   */
+  app.get('/security', auth.requireAuth, async (c) => {
+    const security = await deps.settingsStore.getSecuritySettings();
+    return c.json({ security: { protectedPaths: { enabled: security.protectedPaths?.enabled ?? true } } });
+  });
+
+  app.put('/security', auth.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const security = (body as { security?: unknown }).security;
+
+    if (!isValidSecuritySettings(security)) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'security: ожидается { protectedPaths?: { enabled?: boolean } }',
+        },
+      }, 400);
+    }
+
+    await deps.settingsStore.setSecuritySettings(security);
+    // Live-применение тумблера защищённых путей — оркестратор переконфигурируется без рестарта.
+    await deps.onSecurityChange?.(security);
+    return c.json({ security: { protectedPaths: { enabled: security.protectedPaths?.enabled ?? true } } });
+  });
+
+  /**
+   * GET/PUT/DELETE /api/v2/settings/protected-paths — override политики защищённых
+   * путей ({dataDir}/security/protected-paths.json, формат add/remove, version: 1).
+   * GET — эффективная политика + системный base + признак override;
+   * PUT — сохранить эффективную политику (каскад вычисляется относительно base);
+   * DELETE — сбросить к системной политике.
+   */
+  app.get('/protected-paths', auth.requireAuth, async (c) => {
+    if (!deps.protectedPathsStore) {
+      return c.json({ error: { code: 'NOT_AVAILABLE', message: 'protectedPathsStore не доступен в standalone-режиме' } }, 404);
+    }
+    const raw = deps.protectedPathsStore.getRaw();
+    return c.json({
+      policy: raw.policy,
+      base: raw.base,
+      is_overridden: raw.isOverridden,
+    });
+  });
+
+  app.put('/protected-paths', auth.requireAuth, async (c) => {
+    if (!deps.protectedPathsStore) {
+      return c.json({ error: { code: 'NOT_AVAILABLE', message: 'protectedPathsStore не доступен в standalone-режиме' } }, 404);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const policy = (body as { policy?: unknown }).policy;
+
+    // Поддерживаем два формата: эффективная политика (policy) ИЛИ сырой override (add/remove).
+    if (isValidProtectedPathsPolicy(policy)) {
+      const ok = await deps.protectedPathsStore.savePolicy(policy);
+      if (!ok) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Не удалось сохранить политику защищённых путей' } }, 400);
+      }
+    } else if (isValidProtectedPathsOverride(body)) {
+      const ok = await deps.protectedPathsStore.saveRawOverride(body as Partial<ProtectedPathsOverride>);
+      if (!ok) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Не удалось сохранить override защищённых путей' } }, 400);
+      }
+    } else {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'ожидается { policy: { deniedPaths, deniedPrefixes, approvalPaths, deniedCommandPrefixes } } или { version, add, remove }',
+        },
+      }, 400);
+    }
+
+    const raw = deps.protectedPathsStore.getRaw();
+    return c.json({ policy: raw.policy, base: raw.base, is_overridden: raw.isOverridden, saved: true });
+  });
+
+  app.delete('/protected-paths', auth.requireAuth, async (c) => {
+    if (!deps.protectedPathsStore) {
+      return c.json({ error: { code: 'NOT_AVAILABLE', message: 'protectedPathsStore не доступен в standalone-режиме' } }, 404);
+    }
+    await deps.protectedPathsStore.reset();
+    return c.json({ status: 'restored' });
   });
 
   return app;

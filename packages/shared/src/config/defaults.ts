@@ -145,5 +145,8 @@ export const defaultConfig: SynthConfig = {
       wrapContent: true,
       mode: 'flag',
     },
+    protectedPaths: {
+      enabled: true,
+    },
   },
 };

@@ -11,6 +11,7 @@ import { JsonStore } from '../storage/json-store.js';
 import type { ProviderConfig, ModelConfig, SummarizationConfig } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
+import { mergeSecurityConfig, RuntimeSettingsStore } from '../storage/runtime-settings.js';
 
 export interface SingleChatOptions {
   message: string;
@@ -108,6 +109,12 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   // AD-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
   const patternStore = new SecretPatternStore({ dataDir });
 
+  // Защищённые пути: runtime-настройка protectedPaths.enabled приоритетнее config.yaml.
+  // RuntimeSettingsStore читает {dataDir}/settings.json — если файла нет, возвращает {}.
+  const settingsStore = new RuntimeSettingsStore({ dataDir });
+  const runtimeSecurity = await settingsStore.getSecuritySettings();
+  const effectiveSecurityConfig = mergeSecurityConfig(options.config.security, runtimeSecurity);
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -123,7 +130,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     workspacesRoot,
     permissionConfig: options.config.permission,
     defaultPlanMode: options.config.session?.planMode,
-    securityConfig: options.config.security,
+    securityConfig: effectiveSecurityConfig,
     gatewayConfig: options.config.llmGateway,
     gatewayPatternStore: patternStore,
   });

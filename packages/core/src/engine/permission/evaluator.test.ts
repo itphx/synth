@@ -5,6 +5,7 @@ import { deriveSubagentPermission } from './derive.js';
 import type { PermissionConfig } from '@itphx/synth-shared';
 import { globMatch } from '@itphx/synth-shared';
 import type { ShellPolicy } from '../security/shell-guard.js';
+import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
 const CWD = '/workspace/project';
 
 const SHELL_POLICY: ShellPolicy = {
@@ -593,3 +594,79 @@ describe('extractPaths / isInsideWorkingDir', () => {
     expect(isInsideWorkingDir('/tmp/x', CWD)).toBe(false);
   });
 });
+
+describe('PermissionEvaluator — защищённые пути (ProtectedPaths)', () => {
+  const PROTECTED: ProtectedPathsPolicy = {
+    deniedPaths: ['~/.ssh/id_rsa', '~/.ssh/id_ed25519', '/etc/passwd', '/etc/shadow'],
+    deniedPrefixes: ['~/.ssh', '~/.aws', '~/.gnupg'],
+    approvalPaths: ['~/.ssh/config'],
+    deniedCommandPrefixes: ['rm -rf /'],
+  };
+
+  function fileCheck(
+    toolName: string,
+    params: Record<string, unknown>,
+    opts: { protectedPaths?: ProtectedPathsPolicy; protectedPathsEnabled?: boolean; config?: PermissionConfig } = {},
+  ) {
+    return new PermissionEvaluator(opts.config ?? { rules: {}, askTimeoutMs: 30_000 }).check({
+      toolName,
+      params,
+      workingDir: CWD,
+      protectedPaths: opts.protectedPaths,
+      protectedPathsEnabled: opts.protectedPathsEnabled,
+    });
+  }
+
+  it('read_file ~/.ssh/id_rsa → deny даже при пустых permission.rules', () => {
+    const d = fileCheck('read_file', { file_path: '~/.ssh/id_rsa' }, { protectedPaths: PROTECTED });
+    expect(d.action).toBe('deny');
+    expect(d.matchedRule).toBe('protected-paths.deny');
+    expect(d.reason).toContain('защищённый путь');
+  });
+
+  it('write_file /etc/passwd → deny', () => {
+    const d = fileCheck('write_file', { file_path: '/etc/passwd' }, { protectedPaths: PROTECTED });
+    expect(d.action).toBe('deny');
+    expect(d.matchedRule).toBe('protected-paths.deny');
+  });
+
+  it('read_file ~/.ssh/authorized_keys → deny (префикс директории)', () => {
+    const d = fileCheck('read_file', { file_path: '~/.ssh/authorized_keys' }, { protectedPaths: PROTECTED });
+    expect(d.action).toBe('deny');
+  });
+
+  it('read_file ~/.ssh/config → ask (approvalPaths)', () => {
+    const d = fileCheck('read_file', { file_path: '~/.ssh/config' }, { protectedPaths: PROTECTED });
+    expect(d.action).toBe('ask');
+    expect(d.matchedRule).toBe('protected-paths.ask');
+  });
+
+  it('защита недоступна если protectedPathsEnabled=false → allow для запрещённого пути', () => {
+    const d = fileCheck('read_file', { file_path: '~/.ssh/id_rsa' }, { protectedPaths: PROTECTED, protectedPathsEnabled: false });
+    expect(d.action).toBe('allow');
+  });
+
+  it('без protectedPaths — обратная совместимость: путь не блокируется', () => {
+    const d = fileCheck('read_file', { file_path: '~/.ssh/id_rsa' });
+    expect(d.action).toBe('allow');
+  });
+
+  it('execute_shell cat ~/.ssh/id_rsa → deny (shell-policy = protected policy)', () => {
+    const d = new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 }).check({
+      toolName: 'execute_shell',
+      params: { command: 'cat ~/.ssh/id_rsa' },
+      workingDir: CWD,
+      shellPolicy: PROTECTED,
+      protectedPaths: PROTECTED,
+      protectedPathsEnabled: true,
+    });
+    expect(d.action).toBe('deny');
+  });
+
+  it('write_file /etc/passwd при protectedPathsEnabled=false и пустых правилах → allow', () => {
+    const d = fileCheck('write_file', { file_path: '/etc/passwd' }, { protectedPaths: PROTECTED, protectedPathsEnabled: false, config: EMPTY_CFG });
+    expect(d.action).toBe('allow');
+  });
+});
+
+const EMPTY_CFG: PermissionConfig = { rules: {}, askTimeoutMs: 30_000 };

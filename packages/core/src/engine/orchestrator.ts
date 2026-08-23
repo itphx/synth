@@ -35,8 +35,8 @@ import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine } from './security/prompt-injection.js';
-import { loadShellPolicy } from './security/shell-guard.js';
-import type { ShellPolicy } from './security/shell-guard.js';
+import { loadProtectedPaths } from './security/protected-paths.js';
+import type { ProtectedPathsPolicy } from './security/protected-paths.js';
 import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, PLACEHOLDER_PATTERN, type SecretPatternStore } from './gateway/index.js';
 
 const MAX_DOOM_LOOP_COUNT = 3;
@@ -142,7 +142,7 @@ export class ChatOrchestrator {
   private readonly _permissionConfig: PermissionConfig;
   private readonly _approvalManager: PermissionApprovalManager;
   private readonly _defaultPlanMode: PlanMode;
-  private readonly _securityConfig: SecurityConfig;
+  private _securityConfig: SecurityConfig;
   private readonly _dictionaryStore: DictionaryStore;
   private _gatewayConfig: LLMGatewayConfig | null;
   private _obfMapStore: ObfuscationMapStore | null;
@@ -155,9 +155,9 @@ export class ChatOrchestrator {
   /** Внешний audit-logger (backend/runner) — переиспользуется при live-включении gateway. */
   private readonly _gatewayAuditExternal: AuditLogger | null;
   private _providerPool: ProviderPool | null;
-  /** Shell-политика (денлист путей/команд) — ленивая загрузка с кэшем. */
-  private _shellPolicy: ShellPolicy | null = null;
-  private _shellPolicyLoaded = false;
+  /** Политика защищённых путей (СКВОЗНАЯ проверка файловых тулов + shell) — ленивая загрузка с кэшем. */
+  private _protectedPaths: ProtectedPathsPolicy | null = null;
+  private _protectedPathsLoaded = false;
 
   /** Публичный доступ к реестру агентов (для сериализации modeApplicable). */
   get agentRegistry(): AgentRegistry | null {
@@ -165,19 +165,24 @@ export class ChatOrchestrator {
   }
 
   /**
-   * Shell-политика для execute_shell: системный дефолт definitions/shell-policy.json
-   * + override {dataDir}/context/shell-policy.json. Ленивая загрузка с кэшем;
-   * при недоступности dataDir/файлов — системный дефолт (или пустая политика).
+   * Политика защищённых путей: системный дефолт definitions/protected-paths.json
+   * + override {dataDir}/security/protected-paths.json (каскад add/remove).
+   * Ленивая загрузка с кэшем; при недоступности dataDir/файлов — системный дефолт.
    */
-  private _getShellPolicy(): ShellPolicy | null {
-    if (this._shellPolicyLoaded) return this._shellPolicy;
-    this._shellPolicyLoaded = true;
+  private _getProtectedPaths(): ProtectedPathsPolicy | null {
+    if (this._protectedPathsLoaded) return this._protectedPaths;
+    this._protectedPathsLoaded = true;
     try {
-      this._shellPolicy = loadShellPolicy({ overridePath: join(this._dataDir, 'context', 'shell-policy.json') });
+      this._protectedPaths = loadProtectedPaths({ overridePath: join(this._dataDir, 'security', 'protected-paths.json') });
     } catch {
-      this._shellPolicy = null;
+      this._protectedPaths = null;
     }
-    return this._shellPolicy;
+    return this._protectedPaths;
+  }
+
+  /** Включена ли защита защищённых путей (тумблер полного отключения). */
+  private _getProtectedPathsEnabled(): boolean {
+    return this._securityConfig.protectedPaths?.enabled ?? true;
   }
 
   constructor(options: OrchestratorOptions) {
@@ -199,7 +204,7 @@ export class ChatOrchestrator {
     this._approvalManager = new PermissionApprovalManager(this._eventBus);
     this._defaultPlanMode = options.defaultPlanMode ?? 'auto';
     this._securityConfig = options.securityConfig
-      ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' } };
+      ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true } };
     this._dataDir = options.dataDir || '/var/synth/data';
     this._gatewayPayloadLogPath = options.gatewayPayloadLogPath
       ?? join(options.dataDir || '/var/synth/data', 'audit', 'llm-payloads.jsonl');
@@ -289,7 +294,6 @@ export class ChatOrchestrator {
   setGatewayConfig(config: LLMGatewayConfig | null | undefined): void {
     const gatewayConfig = config?.enabled ? config : null;
     this._gatewayConfig = gatewayConfig;
-
     if (gatewayConfig) {
       // Карта обфускации живёт в сессиях (Session.obfuscationMap) — не теряется,
       // поэтому store не пересоздаём, если он уже есть.
@@ -341,6 +345,15 @@ export class ChatOrchestrator {
   /** AD-036: включён ли LLM Gateway (runtime-тумблер / конфиг). */
   isGatewayEnabled(): boolean {
     return !!this._gatewayConfig;
+  }
+
+  /**
+   * Live-переключение секции «Безопасность» (runtime-настройка из UI).
+   * Обновляет тумблер защищённых путей без рестарта сервера.
+   */
+  setSecurityConfig(config: SecurityConfig | null | undefined): void {
+    this._securityConfig = config
+      ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true } };
   }
 
   /**
@@ -1049,7 +1062,9 @@ export class ChatOrchestrator {
             planMode,
             planApproved,
             mcpToolSettings: session.settings.mcpToolSettings,
-            shellPolicy: this._getShellPolicy() ?? undefined,
+            shellPolicy: this._getProtectedPaths() ?? undefined,
+            protectedPaths: this._getProtectedPaths() ?? undefined,
+            protectedPathsEnabled: this._getProtectedPathsEnabled(),
           });
 
           // Doom loop detection — только для вызовов, НЕ заблокированных
@@ -1187,7 +1202,9 @@ export class ChatOrchestrator {
                       sessionId: session.id,
                       toolRegistry: this._toolRegistry,
                       permissionConfig: effectivePermissionConfig,
-                      shellPolicy: this._getShellPolicy() ?? undefined,
+                      shellPolicy: this._getProtectedPaths() ?? undefined,
+                      protectedPaths: this._getProtectedPaths() ?? undefined,
+                      protectedPathsEnabled: this._getProtectedPathsEnabled(),
                     },
                   });
                 } catch (execError) {

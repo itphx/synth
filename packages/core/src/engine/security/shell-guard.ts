@@ -56,7 +56,7 @@ export const DEFAULT_POLICY: ShellPolicy = {
 const HOME = os.homedir();
 
 /** Резолвит `~`/`~/...` в абсолютный путь (для записей политики). */
-function expandHome(p: string): string {
+export function expandHome(p: string): string {
   if (p === '~') return HOME;
   if (p.startsWith('~/')) return join(HOME, p.slice(2));
   return p;
@@ -220,7 +220,7 @@ function hasUnresolvedDynamic(text: string): boolean {
 }
 
 /** Пытается зарезолвить токен в абсолютный путь. */
-function tryResolvePath(token: string, cwd: string): ExtractedPath | null {
+export function tryResolvePath(token: string, cwd: string): ExtractedPath | null {
   if (token === '') return null;
 
   let base = '';
@@ -390,7 +390,7 @@ export function isMutatingCommand(tokens: string[], command: string): boolean {
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 
 /** Поиск корня пакета @itphx/synth-core по package.json вверх (как в context/config.ts). */
-function findPackageRoot(startDir: string): string {
+export function findPackageRoot(startDir: string): string {
   let dir = startDir;
   for (;;) {
     if (existsSync(join(dir, 'package.json'))) return dir;
@@ -406,7 +406,7 @@ function findPackageRoot(startDir: string): string {
  * в npm через files) с fallback на {root}/dist/definitions (Docker: рядом с
  * package.json только dist/).
  */
-function resolveSystemDefinitionsDir(): string {
+export function resolveSystemDefinitionsDir(): string {
   const root = findPackageRoot(CURRENT_DIR);
   const candidates = [join(root, 'definitions'), join(root, 'dist', 'definitions')];
   for (const candidate of candidates) {

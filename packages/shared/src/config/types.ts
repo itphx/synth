@@ -133,8 +133,14 @@ export const promptInjectionConfigSchema = z.object({
   mode: z.enum(['flag', 'sanitize', 'block']).default('flag'),
 });
 
+export const protectedPathsConfigSchema = z.object({
+  /** Глобальный выключатель защиты защищённых путей (сквозная проверка файловых тулов). */
+  enabled: z.boolean().default(true),
+});
+
 export const securityConfigSchema = z.object({
   promptInjection: promptInjectionConfigSchema.default({}),
+  protectedPaths: protectedPathsConfigSchema.default({}),
 });
 
 // --- LLM Gateway (AD-036) ---
@@ -272,6 +278,7 @@ export type MicroFirstConfig = z.infer<typeof microFirstConfigSchema>;
 export type SynthConfig = z.infer<typeof synthConfigSchema>;
 export type PermissionConfig = z.infer<typeof permissionConfigSchema>;
 export type PromptInjectionConfig = z.infer<typeof promptInjectionConfigSchema>;
+export type ProtectedPathsConfig = z.infer<typeof protectedPathsConfigSchema>;
 export type SecurityConfig = z.infer<typeof securityConfigSchema>;
 export type LLMGatewayRateLimitConfig = z.infer<typeof llmGatewayRateLimitConfigSchema>;
 export type LLMGatewayAuditConfig = z.infer<typeof llmGatewayAuditConfigSchema>;

@@ -645,3 +645,20 @@
   - Модель увидела плейсхолдер вместо пути, его значение не знает → галлюцинация `/home/oleg/go/src/git.silencedocs.io/pulse` (нет нигде в сессии).
 - **Фикс:** удалён паттерн base64 из `DEFAULT_PATTERNS` и мёртвое условие `type !== 'base64'`; добавлен регрессионный тест «путь ФС WS1 не детектится как секрет».
 - **Файлы:** packages/core/src/engine/gateway/secret-detector.ts, secret-detector.test.ts
+
+## 2026-08-23 — feat: единая блокировка защищённых путей + секция «Безопасность»
+- **Задача:** «Улучшить блокировку обращения к защищённым путям» (работа не только в shell, но и у файловых тулов; редактируемый список путей; переименовать «Шлюз безопасности» → «Безопасность»; переопределение по аналогии с контекстными файлами; отключение защиты; по умолчанию вкл.)
+- **Тип:** feature
+- **Исполнитель:** @fixer (+ независимый API smoke оркестратора)
+- **Результат:** PASS (build/typecheck/lint/test + API-эндпоинты)
+- **Ветка:** основная (master/main)
+- **Принятые решения:** каскадное слияние (база + add − remove), жёсткий deny выше permission.rules, тумблер полного отключения (default true), охват всех файловых тулов + shell, override в `{dataDir}/security/protected-paths.json`.
+- **Что сделано:**
+  - Общий слой `packages/core/src/engine/security/protected-paths.ts` (каскад `{version:1, add, remove}`, резолв `~`/`$HOME`/`$PWD`, приоритет deny>ask>prefix).
+  - Системный список `definitions/protected-paths.json`; override `{dataDir}/security/protected-paths.json` через `ProtectedPathsStore`; миграция legacy `context/shell-policy.json`.
+  - `PermissionEvaluator` — жёсткий deny для read/write/edit/delete/glob/grep/git/shell до permission-rules; подсказка модели попросить пользователя изменить список.
+  - Конфиг/runtime `security.protectedPaths.enabled` (default true) + live-применение (core и backend).
+  - UI: `GatewaySettings.tsx` → `SecuritySettings.tsx`, секция «Безопасность», подсекция «Защищённые пути» + тумблер; локали ru/en; API `get/saveSecuritySettings`, `get/save/resetProtectedPaths`.
+  - Backend-фикс: `createSettingsRoutes` теперь получает `protectedPathsStore` + `onSecurityChange` (раньше — 404/тумблер не применялся).
+- **Файлы:** packages/core/src/engine/security/{protected-paths.ts,protected-paths-store.ts,protected-paths.test.ts,integration.test.ts,shell-guard.ts,index.ts}; packages/core/src/engine/permission/{evaluator.ts,evaluator.test.ts}; packages/core/src/{index.ts,server/app.ts,server/chat.ts,server/routes/settings.ts,storage/runtime-settings.ts,tools/task.ts,engine/orchestrator.ts}; packages/core/{package.json,definitions/protected-paths.json}; packages/shared/src/{config/types.ts,config/defaults.ts,index.ts}; packages/backend/src/main.ts; packages/ui/src/{components/settings/SecuritySettings.tsx,components/settings/SettingsModal.tsx,lib/api/synthApi.ts,lib/i18n/messages/ru.ts,lib/i18n/messages/en.ts}
+- **Проверка:** `pnpm build` (6 пакетов), `pnpm typecheck`, `pnpm lint` (0 errors), `pnpm test` (shared 66 / core 840 / ui 29 / backend 170); curl: `GET/PUT/DELETE /api/v2/settings/protected-paths` → 200, `GET/PUT /api/v2/settings/security` → 200.

@@ -44,6 +44,7 @@ export {
   type MicroFirstConfig,
   type SecurityConfig,
   type PromptInjectionConfig,
+  type ProtectedPathsConfig,
   type LLMGatewayConfig,
   type LLMGatewayRateLimitConfig,
   type LLMGatewayAuditConfig,

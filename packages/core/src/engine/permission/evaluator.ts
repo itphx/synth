@@ -5,6 +5,8 @@ import { resolvePath } from '../tools/path-utils.js';
 import { getToolGroups, TOOL_PATH_PARAMS } from './groups.js';
 import { checkShellCommand, isMutatingCommand, tokenizeCommand, matchShellCommandPattern } from '../security/shell-guard.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
+import { checkPath } from '../security/protected-paths.js';
+import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
 
 export interface PermissionCheckInput {
   toolName: string;
@@ -21,6 +23,10 @@ export interface PermissionCheckInput {
   mcpToolSettings?: Record<string, McpServerToolSettings>;
   /** Политика безопасности execute_shell (денлист путей/команд). Опционально. */
   shellPolicy?: ShellPolicy;
+  /** Единая политика защищённых путей (AD: ProtectedPaths) для всех файловых тулов. Опционально. */
+  protectedPaths?: ProtectedPathsPolicy;
+  /** Тумблер полного отключения защищённых путей (default true). false — проверка путей пропускается. */
+  protectedPathsEnabled?: boolean;
 }
 
 /**
@@ -112,7 +118,7 @@ export class PermissionEvaluator {
   }
 
   private _computeDecision(input: PermissionCheckInput): PermissionDecision {
-    const { toolName, params, workingDir, capabilities, sessionMode, planMode, planApproved, mcpToolSettings, shellPolicy } = input;
+    const { toolName, params, workingDir, capabilities, sessionMode, planMode, planApproved, mcpToolSettings, shellPolicy, protectedPaths, protectedPathsEnabled } = input;
     const paths = extractPaths(toolName, params, workingDir);
     const isFile = paths.length > 0;
 
@@ -151,6 +157,32 @@ export class PermissionEvaluator {
       const sc = checkShellCommand(shellCommand, shellCwd, shellPolicy);
       if (sc.action !== 'allow') {
         return { action: sc.action, reason: sc.reason, matchedRule: sc.matchedRule };
+      }
+    }
+
+    // Защищённые пути (ProtectedPaths): единый слой для ВСЕХ файловых тулов.
+    // Жёсткий deny/ask ПОВЕРХ permission.rules (не переопределяется правилами).
+    // Тумблер protectedPathsEnabled === false — проверка пропускается полностью.
+    // Проверяем СЫРЫЕ параметры-пути (до resolvePath), чтобы checkPath мог раскрыть
+    // `~`, `$HOME`, `$PWD` и относительные пути (extractPaths резолвит без `~`).
+    if (protectedPaths && protectedPathsEnabled !== false) {
+      const rawPaths: string[] = [];
+      for (const name of (TOOL_PATH_PARAMS[toolName] ?? [])) {
+        const v = params[name];
+        if (typeof v === 'string' && v.trim() !== '') rawPaths.push(v);
+      }
+      for (const p of rawPaths) {
+        const cp = checkPath(p, workingDir, protectedPaths);
+        if (cp.action === 'deny') {
+          return {
+            action: 'deny',
+            reason: `${cp.reason}. Это защищённый путь. Если доступ должен быть разрешён — попроси пользователя изменить список защищённых путей в настройках безопасности.`,
+            matchedRule: cp.matchedRule,
+          };
+        }
+        if (cp.action === 'ask') {
+          return { action: 'ask', reason: cp.reason, matchedRule: cp.matchedRule };
+        }
       }
     }
 

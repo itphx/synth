@@ -927,6 +927,36 @@ export const synthApi = {
     })
   },
 
+  // --- Безопасность: секция «Защищённые пути» ---
+  async getSecuritySettings(): Promise<SecuritySettings> {
+    return fetchJSON<{ security: SecuritySettings }>(`${BASE_URL}/settings/security`).then((r) => r.security)
+  },
+
+  async saveSecuritySettings(cfg: SecuritySettings): Promise<SecuritySettings> {
+    return fetchJSON<{ security: SecuritySettings }>(`${BASE_URL}/settings/security`, {
+      method: 'PUT',
+      body: JSON.stringify({ security: cfg }),
+    }).then((r) => r.security)
+  },
+
+  async getProtectedPaths(): Promise<ProtectedPathsRaw> {
+    const r = await fetchJSON<{ policy: ProtectedPathsPolicy; base: ProtectedPathsPolicy; is_overridden: boolean }>(`${BASE_URL}/settings/protected-paths`)
+    return { policy: r.policy, base: r.base, isOverridden: r.is_overridden }
+  },
+
+  async saveProtectedPaths(policy: ProtectedPathsPolicy): Promise<ProtectedPathsPolicy> {
+    return fetchJSON<{ policy: ProtectedPathsPolicy }>(`${BASE_URL}/settings/protected-paths`, {
+      method: 'PUT',
+      body: JSON.stringify({ policy }),
+    }).then((r) => r.policy)
+  },
+
+  async resetProtectedPaths(): Promise<{ status: string }> {
+    return fetchJSON<{ status: string }>(`${BASE_URL}/settings/protected-paths`, {
+      method: 'DELETE',
+    })
+  },
+
   /** Полная карта обфускации сессии (AD-036): плейсхолдер → реальное значение. Доступ ADMIN/AUDITOR. */
   async getSessionSecrets(sessionId: string): Promise<SessionSecretsResponse> {
     return fetchJSON<SessionSecretsResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/secrets`)
@@ -991,6 +1021,28 @@ export interface LlmGatewaySettings {
 export interface SecretPattern {
   type: string
   regex: string
+}
+
+/** Runtime-настройки секции «Безопасность» (тумблер защищённых путей). */
+export interface SecuritySettings {
+  protectedPaths: {
+    enabled: boolean
+  }
+}
+
+/** Эффективная политика защищённых путей (списки строк). */
+export interface ProtectedPathsPolicy {
+  deniedPaths: string[]
+  deniedPrefixes: string[]
+  approvalPaths: string[]
+  deniedCommandPrefixes: string[]
+}
+
+/** Ответ GET /api/v2/settings/protected-paths. */
+export interface ProtectedPathsRaw {
+  policy: ProtectedPathsPolicy
+  base: ProtectedPathsPolicy
+  isOverridden: boolean
 }
 
 export interface SessionSecretsResponse {

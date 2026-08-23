@@ -11,6 +11,7 @@ import {
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator, FileProfileStore,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
   RuntimeSettingsStore, createSettingsRoutes, AuditLogger, mergeLlmGatewayConfig,
+  mergeSecurityConfig, ProtectedPathsStore,
   SecretPatternStore,
 } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
@@ -193,6 +194,12 @@ const gatewayPayloadLogPath = backendConfig.synth.llmGateway.payloadLogPath
 const runtimeGateway = await settingsStore.getLlmGatewaySettings();
 const gatewayConfig = mergeLlmGatewayConfig(backendConfig.synth.llmGateway, runtimeGateway);
 
+// AD-040: runtime-настройка защищённых путей (тумблер из UI, {dataDir}/settings.json)
+// приоритетнее config.yaml — мёржим при старте, чтобы защита применялась к оркестратору.
+const runtimeSecurity = await settingsStore.getSecuritySettings();
+const securityConfig = mergeSecurityConfig(backendConfig.synth.security, runtimeSecurity);
+const protectedPathsStore = new ProtectedPathsStore({ dataDir });
+
 // Orchestrator
 const toolRegistry = createToolRegistry();
 const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
@@ -214,7 +221,7 @@ const orchestrator = new ChatOrchestrator({
   routerConfig: backendConfig.synth.router,
   permissionConfig: backendConfig.synth.permission,
   defaultPlanMode: backendConfig.synth.session.planMode,
-  securityConfig: backendConfig.synth.security,
+  securityConfig,
   gatewayConfig,
   gatewayAuditLogger,
   gatewayPayloadLogPath,
@@ -302,6 +309,12 @@ app.route('/api/v2/settings', createSettingsRoutes(auth, {
     const merged = mergeLlmGatewayConfig(backendConfig.synth.llmGateway, runtime);
     orchestrator.setGatewayConfig(merged);
   },
+  // live-применение тумблера защищённых путей из UI — без рестарта сервера.
+  onSecurityChange: async (runtime) => {
+    const merged = mergeSecurityConfig(backendConfig.synth.security, runtime);
+    orchestrator.setSecurityConfig(merged);
+  },
+  protectedPathsStore,
 }));
 
 // Глобальный SSE-хаб для всех сессий пользователя

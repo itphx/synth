@@ -12,14 +12,14 @@ import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
-  SecretPatternStore,
+  SecretPatternStore, ProtectedPathsStore,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } from '@itphx/synth-shared';
 import { createLocalAuth } from '../auth/local.js';
 import { JsonStore } from '../storage/json-store.js';
 import { ProjectStore } from '../storage/project-store.js';
-import { RuntimeSettingsStore, mergeLlmGatewayConfig } from '../storage/runtime-settings.js';
+import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig } from '../storage/runtime-settings.js';
 import { createHealthRoutes } from './routes/health.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createSessionRoutes } from './routes/sessions.js';
@@ -202,8 +202,15 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const runtimeGateway = await settingsStore.getLlmGatewaySettings();
   const gatewayConfig = mergeLlmGatewayConfig(config.gatewayConfig, runtimeGateway);
 
+  // Защищённые пути: runtime-настройка protectedPaths.enabled (тумблер из UI) приоритетнее config.yaml
+  const runtimeSecurity = await settingsStore.getSecuritySettings();
+  const effectiveSecurityConfig = mergeSecurityConfig(config.securityConfig, runtimeSecurity);
+
   // AD-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
   const patternStore = new SecretPatternStore({ dataDir });
+
+  // Защищённые пути: store override-политики (add/remove) + миграция legacy shell-policy
+  const protectedPathsStore = new ProtectedPathsStore({ dataDir });
 
   const fileStore = new FileStore({ dataDir });
   const sessionManager = new SessionManager(fileStore, {
@@ -298,7 +305,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
     permissionConfig: config.permissionConfig,
     defaultPlanMode: config.defaultPlanMode,
-    securityConfig: config.securityConfig,
+    securityConfig: effectiveSecurityConfig,
     gatewayConfig,
     gatewayPatternStore: patternStore,
     mcpManager,
@@ -347,6 +354,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       const merged = mergeLlmGatewayConfig(config.gatewayConfig, runtime);
       orchestrator.setGatewayConfig(merged);
     },
+    // Live-применение тумблера защищённых путей из UI — без рестарта сервера.
+    onSecurityChange: async (runtime) => {
+      const merged = mergeSecurityConfig(config.securityConfig, runtime);
+      orchestrator.setSecurityConfig(merged);
+    },
+    protectedPathsStore,
   }));
 
   // MCP (probe подключения к серверу)
