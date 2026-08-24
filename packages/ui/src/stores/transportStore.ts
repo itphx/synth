@@ -33,6 +33,7 @@ interface TransportState {
   sendMessage: (sessionId: string, text: string, agentRole?: string, provider?: string, model?: string) => Promise<void>
   cancel: (sessionId: string) => void
   sendPermissionReply: (sessionId: string, approvalId: string, approved: boolean, once?: boolean) => void
+  sendPermissionHold: (sessionId: string, approvalId: string) => void
   markSessionOpen: (sid: string) => void
   markSessionClosed: (sid: string) => void
 }
@@ -287,7 +288,7 @@ function createDispatcher(): EventDispatcher {
           || (payload.params as Record<string, unknown>)
           || {}
         const reason = (payload.reason as string) || ''
-        const timeoutMs = (payload.ask_timeout_ms as number) || PERMISSION_ASK_TIMEOUT_MS
+        const timeoutMs = (payload.ask_timeout_ms as number | undefined) ?? PERMISSION_ASK_TIMEOUT_MS
 
         usePermissionStore.getState().addRequest(sid, {
           approvalId,
@@ -584,6 +585,17 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     } else {
       // Нет WS-соединения: backend сам сбросит ask по таймауту.
       console.warn('[TransportStore] sendPermissionReply: WS not connected, request will time out', sessionId, approvalId)
+    }
+  },
+
+  sendPermissionHold: (sessionId, approvalId) => {
+    if (transport && transportReady && transport.getTransport() === 'ws') {
+      console.debug('[TransportStore] sendPermissionHold via WS:', sessionId, approvalId)
+      transport.sendPermissionHold(sessionId, approvalId)
+    } else {
+      // Нет WS-соединения: остановить таймер не получится — сохраняем hold локально,
+      // бэкенд сбросит ask по таймауту.
+      console.warn('[TransportStore] sendPermissionHold: WS not connected', sessionId, approvalId)
     }
   },
 

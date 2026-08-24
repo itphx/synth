@@ -578,6 +578,7 @@ export type EventType =
   | 'message.queued'
   | 'permission.asked'
   | 'permission.replied'
+  | 'permission.hold'
   | 'question.asked'
   | 'question.replied'
   | 'context.summarization_pending'

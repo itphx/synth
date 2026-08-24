@@ -643,6 +643,32 @@ server.on('upgrade', (request, socket, head) => {
                 orchestrator.cancel(session.currentStream.streamId);
               }
             })().catch(() => {});
+          } else if (msg.type === 'permission_reply') {
+            const sid = msg.session_id;
+            const approvalId = msg.approval_id;
+            if (!sid || !approvalId) return;
+
+            // Новый формат: { action: 'allow'|'deny', once?: boolean }.
+            // Старый формат { approved: boolean } остаётся совместимым.
+            const action = msg.action === 'allow' || msg.action === 'deny' ? msg.action : undefined;
+            eventBus.publish(sid, 'permission.replied', {
+              approval_id: approvalId,
+              session_id: sid,
+              approved: action !== undefined ? action === 'allow' : msg.approved === true,
+              ...(action ? { action } : {}),
+              ...(typeof msg.once === 'boolean' ? { once: msg.once } : {}),
+            });
+          } else if (msg.type === 'permission_hold') {
+            const sid = msg.session_id;
+            const approvalId = msg.approval_id;
+            if (!sid || !approvalId) return;
+
+            // «Остановить таймер»: publish permission.hold — оркестратор снимает
+            // авто-отклонение по таймауту, запрос ждёт ответа пользователя.
+            eventBus.publish(sid, 'permission.hold', {
+              approval_id: approvalId,
+              session_id: sid,
+            });
           }
         } catch {
           // ignore parse errors

@@ -108,6 +108,19 @@ export class TransportClient {
     }))
   }
 
+  /**
+   * «Остановить таймер» (permission_hold): снимает авто-отклонение ask по таймауту
+   * на бэкенде — запрос подтверждения остаётся на панели и ждёт ответа пользователя.
+   */
+  sendPermissionHold(sessionId: string, approvalId: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    this.ws.send(JSON.stringify({
+      type: 'permission_hold',
+      session_id: sessionId,
+      approval_id: approvalId,
+    }))
+  }
+
   private connectWS(): void {
     this.cleanupTransport()
     this.transport = 'ws'
