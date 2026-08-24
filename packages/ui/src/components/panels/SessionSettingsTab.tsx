@@ -337,17 +337,18 @@ export function SessionSettingsTab() {
               {askTimeoutEnabled ? t('sessionSettings.askTimeoutEnabled') : t('sessionSettings.askTimeoutDisabled')}
             </span>
           </label>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-xs text-foreground">{t('sessionSettings.askTimeoutSeconds')}</span>
-            <input
-              type="number"
-              min={0}
-              value={askTimeoutSec}
-              disabled={!askTimeoutEnabled}
-              onChange={(e) => setAskTimeoutSec(e.target.value)}
-              className="w-24 shrink-0 rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
-            />
-          </div>
+          {askTimeoutEnabled && (
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-foreground">{t('sessionSettings.askTimeoutSeconds')}</span>
+              <input
+                type="number"
+                min={0}
+                value={askTimeoutSec}
+                onChange={(e) => setAskTimeoutSec(e.target.value)}
+                className="w-24 shrink-0 rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+            </div>
+          )}
         </Section>
 
         {/* Сессионные одобрения (AD-029) */}

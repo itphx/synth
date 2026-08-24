@@ -137,6 +137,8 @@ export function SecuritySettings() {
   // --- Защищённые пути ---
   const [security, setSecurity] = useState<SecuritySettingsType>(DEFAULT_SECURITY)
   const [askTimeoutSec, setAskTimeoutSec] = useState<string>('')
+  // Вкл/Выкл таймаута подтверждения (0 = выключен → запросы ждут ответа бесконечно)
+  const [askTimeoutEnabled, setAskTimeoutEnabled] = useState(true)
   const [securityLoading, setSecurityLoading] = useState(true)
   const [securitySaving, setSecuritySaving] = useState(false)
   const [policy, setPolicy] = useState<ProtectedPathsPolicy>(EMPTY_POLICY)
@@ -206,6 +208,7 @@ export function SecuritySettings() {
           askTimeoutMs: cfg.askTimeoutMs,
         })
         setAskTimeoutSec(cfg.askTimeoutMs !== undefined ? String(Math.round(cfg.askTimeoutMs / 1000)) : '')
+        setAskTimeoutEnabled(cfg.askTimeoutMs !== 0)
       })
       .catch(() => {})
       .finally(() => {
@@ -305,9 +308,16 @@ export function SecuritySettings() {
 
   const handleSecuritySave = async () => {
     const trimmed = askTimeoutSec.trim()
-    const askTimeoutMs = trimmed === ''
-      ? undefined
-      : (Number(trimmed) || 0) * 1000
+    // ВКЛ и пустое поле → undefined (глобальный дефолт 30 с). ВКЛ и значение → ms.
+    // ВЫКЛ → 0 (без таймаута, ждём ответа бесконечно).
+    let askTimeoutMs: number | undefined
+    if (!askTimeoutEnabled) {
+      askTimeoutMs = 0
+    } else if (trimmed === '') {
+      askTimeoutMs = undefined
+    } else {
+      askTimeoutMs = (Number(trimmed) || 0) * 1000
+    }
     setSecuritySaving(true)
     try {
       await synthApi.saveSecuritySettings({ ...security, askTimeoutMs })
@@ -564,22 +574,31 @@ export function SecuritySettings() {
           </span>
         </label>
 
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex flex-col gap-0.5">
-            <span className="text-sm text-foreground">Таймаут подтверждения (сек)</span>
-            <span className="text-xs text-muted-foreground">
-              Авто-отклонение запроса подтверждения (ask), если пользователь не ответил. Пусто = глобальный дефолт 30 с.
-            </span>
-          </div>
-          <input
-            type="number"
-            min={0}
-            value={askTimeoutSec}
-            onChange={(e) => setAskTimeoutSec(e.target.value)}
-            placeholder="30"
-            className="w-24 shrink-0 rounded-md bg-input border border-border px-2 py-1.5 text-sm text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
+        <div className="text-sm font-medium">{t('sessionSettings.askTimeout')}</div>
+
+        <label className="flex items-center gap-3 cursor-pointer">
+          <Toggle
+            enabled={askTimeoutEnabled}
+            onToggle={() => setAskTimeoutEnabled(!askTimeoutEnabled)}
           />
-        </div>
+          <span className="text-sm text-foreground">
+            {askTimeoutEnabled ? t('sessionSettings.askTimeoutEnabled') : t('sessionSettings.askTimeoutDisabled')}
+          </span>
+        </label>
+
+        {askTimeoutEnabled && (
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm text-foreground">{t('sessionSettings.askTimeoutSeconds')}</span>
+            <input
+              type="number"
+              min={0}
+              value={askTimeoutSec}
+              onChange={(e) => setAskTimeoutSec(e.target.value)}
+              placeholder="30"
+              className="w-20 rounded-md bg-input border border-border px-2 py-0.5 text-xs text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+          </div>
+        )}
 
         {policyLoadError && (
           <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{policyLoadError}</div>
