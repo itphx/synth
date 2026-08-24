@@ -1,6 +1,6 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@itphx/synth-shared';
 import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart, lookupContextWindow } from '@itphx/synth-shared';
-import type { RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision } from '@itphx/synth-shared';
+import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
@@ -30,7 +30,7 @@ import { TaskClassifier } from './router/micro/task-classifier.js';
 import { RulesModel, EmbeddingModel, MicroLlmModel } from './router/micro/models/index.js';
 import type { MicroModel } from './router/micro/models/base.js';
 import type { RoutingDecision } from './router/router.js';
-import { PermissionEvaluator, isPlanRestricted, isPlanBlockedTool, getMcpToolAvailability } from './permission/evaluator.js';
+import { PermissionEvaluator, isPlanRestricted, isPlanBlockedTool, getMcpToolAvailability, extractPaths } from './permission/evaluator.js';
 import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { getToolTrust } from './security/trust.js';
@@ -139,7 +139,7 @@ export class ChatOrchestrator {
   private readonly _projectStore: ProjectStoreLike | null;
   private readonly _defaultWorkingDir: string;
   private readonly _workspacesRoot: string;
-  private readonly _permissionConfig: PermissionConfig;
+  private _permissionConfig: PermissionConfig;
   private readonly _approvalManager: PermissionApprovalManager;
   private readonly _defaultPlanMode: PlanMode;
   private _securityConfig: SecurityConfig;
@@ -364,6 +364,15 @@ export class ChatOrchestrator {
   setSecurityConfig(config: SecurityConfig | null | undefined): void {
     this._securityConfig = config
       ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true } };
+  }
+
+  /**
+   * AD-029: live-применение глобального таймаута подтверждения (runtime-настройка
+   * из UI, раздел «Безопасность»). Обновляет дефолтный permission-конфиг, который
+   * наследуют сессии без собственного пер-сессионного permission-конфига.
+   */
+  setDefaultPermissionTimeout(askTimeoutMs: number): void {
+    this._permissionConfig = { ...this._permissionConfig, askTimeoutMs };
   }
 
   /**
@@ -1138,7 +1147,7 @@ export class ChatOrchestrator {
               // «Разрешить в сессии» (once:false) — добавляем allow-правило для
               // тула в permission-конфиг сессии, чтобы не спрашивать повторно.
               if (approval.once === false) {
-                effectivePermissionConfig = await this._grantSessionToolAllow(session, toolName);
+                effectivePermissionConfig = await this._grantSessionToolAllow(session, toolName, toolArgs, workingDir);
                 permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig);
               }
             } else {
@@ -2398,30 +2407,71 @@ export class ChatOrchestrator {
     return !unrecoverable.some((p) => lower.includes(p));
   }
 
+  /** Строит permission-конфиг с добавленным грантом для заданной базы правил. */
+  private _applyToolAllow(
+    cfg: PermissionConfig | undefined,
+    toolName: string,
+    paths: string[],
+  ): PermissionConfig {
+    const base = cfg ?? {
+      rules: { ...this._permissionConfig.rules },
+      askTimeoutMs: this._permissionConfig.askTimeoutMs,
+    };
+    const rules = { ...base.rules };
+    if (paths.length > 0) {
+      if (rules[toolName] !== 'allow') {
+        const existing = (typeof rules[toolName] === 'object' && rules[toolName])
+          ? { ...(rules[toolName] as Record<string, string>) }
+          : {};
+        for (const p of paths) existing[p] = 'allow';
+        rules[toolName] = existing as PermissionRule;
+      }
+    } else {
+      rules[toolName] = 'allow';
+    }
+    return { ...base, rules };
+  }
+
   /**
-   * AD-029: «Разрешить в сессии» (once:false). Добавляет allow-правило для тула
-   * в permission-конфиг сессии и сохраняет его. Если у сессии не было своего
-   * конфига — наследует глобальные правила, чтобы не потерять их при оверрайде.
+   * AD-029: «Разрешить в сессии» (once:false). Если у вызова есть файловые
+   * параметры — одобряет КОНКРЕТНЫЕ абсолютные пути (правило-объект
+   * `rules[tool] = { path: 'allow' }`), иначе (shell/task/mcp) — весь тул.
+   * Если тул уже разрешён полностью ('allow') — не понижает до пути.
    */
   private async _grantSessionToolAllow(
     session: Session,
     toolName: string,
+    toolArgs: Record<string, unknown>,
+    workingDir: string,
   ): Promise<PermissionConfig> {
-    let cfg: PermissionConfig | undefined = session.settings.permission;
-    if (!cfg) {
-      cfg = {
-        rules: { ...this._permissionConfig.rules },
-        askTimeoutMs: this._permissionConfig.askTimeoutMs,
-      };
-    }
-    const next: PermissionConfig = {
-      ...cfg,
-      rules: { ...cfg.rules, [toolName]: 'allow' },
-    };
+    const paths = extractPaths(toolName, toolArgs, workingDir);
+    const next = this._applyToolAllow(session.settings.permission, toolName, paths);
+
     await this._sessionManager.withLock(session.id, async (s) => {
       s.settings.permission = next;
       await this._sessionManager.saveSession(s);
+      this._eventBus.publish(session.id, 'session.updated', {
+        session_id: session.id,
+        settings: s.settings,
+      });
     });
+
+    // AD-029: «Разрешить в сессии» для сабагентской (дочерней) сессии
+    // распространяется и на родителя (parentId): путь в правиле — абсолютный
+    // канонический, поэтому грант совпадёт при чтении того же файла и родителем,
+    // и ребёнком. Родительский грант обновляет и effectivePermissionConfig, и
+    // PermissionEvaluator при следующей обработке (сессия сохраняется в store).
+    if (session.parentId) {
+      await this._sessionManager.withLock(session.parentId, async (parent) => {
+        parent.settings.permission = this._applyToolAllow(parent.settings.permission, toolName, paths);
+        await this._sessionManager.saveSession(parent);
+        this._eventBus.publish(parent.id, 'session.updated', {
+          session_id: parent.id,
+          settings: parent.settings,
+        });
+      });
+    }
+
     return next;
   }
 }

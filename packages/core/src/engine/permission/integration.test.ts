@@ -1,18 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, access } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { ChatOrchestrator } from '../orchestrator.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
+import { PermissionEvaluator, extractPaths } from '../permission/evaluator.js';
 import { createToolRegistry } from '../tools/index.js';
 import { ProviderFactory, BaseProvider } from '../../providers/base.js';
 import type { LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ContextBuilder } from '../context/builder.js';
-import type { PermissionConfig } from '@itphx/synth-shared';
+import type { PermissionConfig, PermissionRule } from '@itphx/synth-shared';
 import { generateId, MessageRole, nowISO, makeTextPart } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
+
+const HOME = homedir();
 
 /** Провайдер, который сначала «зовёт» write_file, затем отвечает текстом. */
 class MockWriteProvider extends BaseProvider {
@@ -344,6 +347,52 @@ class MockDenyProvider extends BaseProvider {
   }
 }
 
+/** Провайдер: первый вызов — read_file ~/.ssh/config, второй — текст. */
+class MockReadProvider extends BaseProvider {
+  private _calls = 0;
+
+  private _next(): { content: string; toolCalls?: Record<string, unknown>[] } {
+    if (this._calls === 0) {
+      return {
+        content: '',
+        toolCalls: [{
+          id: 'call_read',
+          function: { name: 'read_file', arguments: JSON.stringify({ file_path: '~/.ssh/config' }) },
+        }],
+      };
+    }
+    return { content: 'Готово' };
+  }
+
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _stream?: boolean,
+    _debugCollector?: unknown,
+  ): Promise<import('@itphx/synth-shared').LLMResponse> {
+    const next = this._next();
+    this._calls++;
+    return { content: next.content, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: next.toolCalls };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _cancellationToken?: CancellationToken,
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    const next = this._next();
+    this._calls++;
+    yield { content: next.content, isFinal: true, toolCalls: next.toolCalls, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+  }
+
+  getProviderName(): string {
+    return 'mockread';
+  }
+}
+
 describe('ChatOrchestrator × permissions — once:false и deny (AD-029)', () => {
   let store: FileStore;
   let sessionManager: SessionManager;
@@ -357,12 +406,14 @@ describe('ChatOrchestrator × permissions — once:false и deny (AD-029)', () =
     eventBus = new EventBus();
     ProviderFactory.register('mockdouble', MockDoubleWriteProvider);
     ProviderFactory.register('mockdeny', MockDenyProvider);
+    ProviderFactory.register('mockread', MockReadProvider);
     MockDenyProvider.calls = 0;
   });
 
   afterEach(async () => {
     ProviderFactory['_providers'].delete('mockdouble');
     ProviderFactory['_providers'].delete('mockdeny');
+    ProviderFactory['_providers'].delete('mockread');
     await rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -405,6 +456,7 @@ describe('ChatOrchestrator × permissions — once:false и deny (AD-029)', () =
     let sessionId = '';
     const asked: Array<Record<string, unknown>> = [];
     const unsubs: Array<() => void> = [];
+    const updates: Array<Record<string, unknown>> = [];
     const { result } = await runRaw('mockdouble', { rules: { write_file: 'ask' }, askTimeoutMs: 2000 }, {
       onSession: (id) => {
         sessionId = id;
@@ -418,15 +470,148 @@ describe('ChatOrchestrator × permissions — once:false и deny (AD-029)', () =
               once: false,
             });
           }
+          if (e.type === 'session.updated') {
+            updates.push(e.data as Record<string, unknown>);
+          }
         }));
       },
     });
     expect(result.error).toBeUndefined();
     expect(asked.length).toBe(1);
     const session = (await sessionManager.getSession(sessionId))!;
-    expect(session.settings.permission?.rules.write_file).toBe('allow');
+    // Грант одобряет КОНКРЕТНЫЙ путь, а не весь тул: правило-объект { путь: 'allow' }
+    const absPath0 = extractPaths('write_file', { file_path: 'double0.txt' }, tmpDir)[0]!;
+    const writeRule = session.settings.permission?.rules.write_file as Record<string, string> | undefined;
+    expect(writeRule).toBeDefined();
+    expect(writeRule).toEqual({ [absPath0]: 'allow' });
+    // Тот же путь через PermissionEvaluator → allow; другой путь → не allow (ask по '*')
+    const evalCfg: PermissionConfig = { rules: { write_file: writeRule as PermissionRule, '*': 'ask' }, askTimeoutMs: 1000 };
+    expect(new PermissionEvaluator(evalCfg).check({ toolName: 'write_file', params: { file_path: 'double0.txt' }, workingDir: tmpDir }).action).toBe('allow');
+    expect(new PermissionEvaluator(evalCfg).check({ toolName: 'write_file', params: { file_path: 'double1.txt' }, workingDir: tmpDir }).action).toBe('ask');
+    // При гранте публикуется session.updated с обновлённым permission-конфигом
+    const lastUpdate = updates.at(-1);
+    expect(lastUpdate).toBeDefined();
+    expect(lastUpdate!.session_id).toBe(sessionId);
+    const updatedSettings = lastUpdate!.settings as { permission?: { rules?: Record<string, Record<string, string>> } } | undefined;
+    expect(updatedSettings?.permission?.rules?.write_file).toEqual({ [absPath0]: 'allow' });
     await expect(readFile(join(tmpDir, 'double1.txt'), 'utf-8')).resolves.toBe('x');
     for (const unsub of unsubs) unsub();
+  });
+
+  it('once:false для read_file ~/.ssh/config — грант пишет канонический HOME-путь', async () => {
+    let sessionId = '';
+    const unsubs: Array<() => void> = [];
+    const updates: Array<Record<string, unknown>> = [];
+    const { result } = await runRaw('mockread', { rules: { read_file: 'ask' }, askTimeoutMs: 2000 }, {
+      onSession: (id) => {
+        sessionId = id;
+        unsubs.push(eventBus.subscribe(id, (e) => {
+          if (e.type === 'permission.asked') {
+            eventBus.publish(id, 'permission.replied', {
+              approval_id: (e.data as Record<string, unknown>).approval_id as string,
+              session_id: id,
+              action: 'allow',
+              once: false,
+            });
+          }
+          if (e.type === 'session.updated') {
+            updates.push(e.data as Record<string, unknown>);
+          }
+        }));
+      },
+    });
+    expect(result.error).toBeUndefined();
+    const session = (await sessionManager.getSession(sessionId))!;
+    // Тильда раскрывается: пишется канонический <HOME>/.ssh/config, а не <workingDir>/~/.ssh/config
+    const canonical = join(HOME, '.ssh/config');
+    const readRule = session.settings.permission?.rules.read_file as Record<string, string> | undefined;
+    expect(readRule).toBeDefined();
+    expect(readRule).toEqual({ [canonical]: 'allow' });
+    // Повторный вызов read_file (тильда И абсолютный путь) → allow
+    const evalCfg: PermissionConfig = { rules: { read_file: readRule as PermissionRule, '*': 'ask' }, askTimeoutMs: 1000 };
+    expect(new PermissionEvaluator(evalCfg).check({ toolName: 'read_file', params: { file_path: '~/.ssh/config' }, workingDir: tmpDir }).action).toBe('allow');
+    expect(new PermissionEvaluator(evalCfg).check({ toolName: 'read_file', params: { file_path: canonical }, workingDir: tmpDir }).action).toBe('allow');
+    const lastUpdate = updates.at(-1);
+    expect(lastUpdate).toBeDefined();
+    const updatedSettings = lastUpdate!.settings as { permission?: { rules?: Record<string, Record<string, string>> } } | undefined;
+    expect(updatedSettings?.permission?.rules?.read_file).toEqual({ [canonical]: 'allow' });
+    for (const unsub of unsubs) unsub();
+  });
+
+  it('ask в дочерней сессии (parentId) с once:false — грант появляется и в родителе', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const child = await sessionManager.createSession({
+      title: 'Child',
+      parentId: parent.id,
+      settings: { provider: 'mockread', model: 'm', systemPrompt: 'test', agentRole: 'explore' },
+    });
+
+    const asked: Array<Record<string, unknown>> = [];
+    const childUpdates: Array<Record<string, unknown>> = [];
+    const parentUpdates: Array<Record<string, unknown>> = [];
+    const unsubChild = eventBus.subscribe(child.id, (e) => {
+      if (e.type === 'permission.asked') {
+        asked.push(e.data as Record<string, unknown>);
+        eventBus.publish(child.id, 'permission.replied', {
+          approval_id: (e.data as Record<string, unknown>).approval_id as string,
+          session_id: child.id,
+          action: 'allow',
+          once: false,
+        });
+      }
+      if (e.type === 'session.updated') childUpdates.push(e.data as Record<string, unknown>);
+    });
+    const unsubParent = eventBus.subscribe(parent.id, (e) => {
+      if (e.type === 'session.updated') parentUpdates.push(e.data as Record<string, unknown>);
+    });
+
+    const toolRegistry = createToolRegistry();
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus,
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: (name: string) => {
+        return { name, type: 'mockread', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
+      },
+      toolRegistry,
+      permissionConfig: { rules: { read_file: 'ask' }, askTimeoutMs: 2000 },
+      defaultWorkingDir: tmpDir,
+    });
+
+    const msg = makeMessage();
+    await sessionManager.addMessage(child.id, msg);
+    const freshChild = (await sessionManager.getSession(child.id))!;
+    const processMessage = orchestrator.createProcessMessage();
+    const result = await processMessage(freshChild, msg, new AbortController().signal, () => {});
+    expect(result.error).toBeUndefined();
+
+    expect(asked.length).toBe(1);
+    const canonical = join(HOME, '.ssh/config');
+    const childSession = (await sessionManager.getSession(child.id))!;
+    const parentSession = (await sessionManager.getSession(parent.id))!;
+
+    const childRule = childSession.settings.permission?.rules.read_file as Record<string, string> | undefined;
+    expect(childRule).toEqual({ [canonical]: 'allow' });
+    const parentRule = parentSession.settings.permission?.rules.read_file as Record<string, string> | undefined;
+    expect(parentRule).toEqual({ [canonical]: 'allow' });
+
+    // Повторный вызов read_file того же пути через PermissionEvaluator → allow
+    const childEval: PermissionConfig = { rules: { read_file: childRule as PermissionRule, '*': 'ask' }, askTimeoutMs: 1000 };
+    expect(new PermissionEvaluator(childEval).check({ toolName: 'read_file', params: { file_path: canonical }, workingDir: tmpDir }).action).toBe('allow');
+    const parentEval: PermissionConfig = { rules: { read_file: parentRule as PermissionRule, '*': 'ask' }, askTimeoutMs: 1000 };
+    expect(new PermissionEvaluator(parentEval).check({ toolName: 'read_file', params: { file_path: canonical }, workingDir: tmpDir }).action).toBe('allow');
+
+    // session.updated опубликован и для дочерней, и для родительской сессии
+    const lastChildUpdate = childUpdates.at(-1);
+    expect(lastChildUpdate).toBeDefined();
+    expect(lastChildUpdate!.session_id).toBe(child.id);
+    const lastParentUpdate = parentUpdates.at(-1);
+    expect(lastParentUpdate).toBeDefined();
+    expect(lastParentUpdate!.session_id).toBe(parent.id);
+    const parentUpdatedSettings = lastParentUpdate!.settings as { permission?: { rules?: Record<string, Record<string, string>> } } | undefined;
+    expect(parentUpdatedSettings?.permission?.rules?.read_file).toEqual({ [canonical]: 'allow' });
+
+    for (const unsub of [unsubChild, unsubParent]) unsub();
   });
 
   it('ask + once:true — allow только один раз, повторный вызов снова спрашивает', async () => {
