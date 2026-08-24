@@ -587,6 +587,11 @@ export const dict = {
   'permission.bar.deny': 'Deny',
   'permission.bar.allowOnceHint': 'Allow this call once',
   'permission.bar.allowSessionHint': 'Allow calls within this session',
+  'permission.bar.stopTimer': 'Stop timer',
+  'permission.bar.stopTimerHint': 'Disable auto-deny by timeout and wait for your answer',
+  'permission.bar.noTimeout': 'waiting without timeout',
+  'permission.bar.timeoutTitle': 'Time until request auto-denied',
+  'permission.bar.grantedForSession': 'Tool {tool} allowed for the session',
 
   'chat.error.rateLimit': 'Rate limit exceeded. Pause {sec}s...',
   'chat.error.retryCount': 'Attempt {current}/{max}',
@@ -657,6 +662,10 @@ export const dict = {
   'sessionSettings.saveError': 'Save error',
   'sessionSettings.saving': 'Saving...',
   'sessionSettings.notLoaded': 'Session not loaded',
+  'sessionSettings.askTimeout': 'Approval timeout',
+  'sessionSettings.askTimeoutSeconds': 'Approval timeout (sec)',
+  'sessionSettings.askTimeoutEnabled': 'Enabled',
+  'sessionSettings.askTimeoutDisabled': 'Disabled',
 
   // Chat settings
   'chatSettings.intermediateTextDisplay': 'Intermediate responses',

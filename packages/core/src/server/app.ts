@@ -354,10 +354,14 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       const merged = mergeLlmGatewayConfig(config.gatewayConfig, runtime);
       orchestrator.setGatewayConfig(merged);
     },
-    // Live-применение тумблера защищённых путей из UI — без рестарта сервера.
+    // Live-применение тумблера защищённых путей + таймаута подтверждения из UI —
+    // без рестарта сервера.
     onSecurityChange: async (runtime) => {
       const merged = mergeSecurityConfig(config.securityConfig, runtime);
       orchestrator.setSecurityConfig(merged);
+      if (merged?.askTimeoutMs !== undefined) {
+        orchestrator.setDefaultPermissionTimeout(merged.askTimeoutMs);
+      }
     },
     protectedPathsStore,
   }));

@@ -5,8 +5,8 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSettingsRoutes } from './settings.js';
-import { RuntimeSettingsStore, mergeLlmGatewayConfig } from '../../storage/runtime-settings.js';
-import type { LlmGatewayRuntimeSettings } from '../../storage/runtime-settings.js';
+import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig } from '../../storage/runtime-settings.js';
+import type { LlmGatewayRuntimeSettings, SecurityRuntimeSettings } from '../../storage/runtime-settings.js';
 import type { AuthKit } from '../../auth/local.js';
 import type { LLMGatewayConfig } from '@itphx/synth-shared';
 
@@ -276,6 +276,79 @@ describe('Settings API Routes (workspace)', () => {
       const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
       const mcp = await restartedStore.getMcpSettings();
       expect(mcp.gitlab?.default).toEqual({ plan: false, act: true });
+    });
+  });
+
+  describe('Security (askTimeoutMs)', () => {
+    it('GET /api/v2/settings/security возвращает дефолт askTimeoutMs=30000', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/security');
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.security.protectedPaths.enabled).toBe(true);
+      expect(body.security.askTimeoutMs).toBe(30000);
+    });
+
+    it('PUT /api/v2/settings/security сохраняет askTimeoutMs и GET возвращает его (переживает рестарт)', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const put = await app.request('/api/v2/settings/security', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ security: { protectedPaths: { enabled: false }, askTimeoutMs: 15000 } }),
+      });
+      expect(put.status).toBe(200);
+
+      const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const runtime = await restartedStore.getSecuritySettings();
+      expect(runtime.protectedPaths?.enabled).toBe(false);
+      expect(runtime.askTimeoutMs).toBe(15000);
+    });
+
+    it('PUT /api/v2/settings/security отклоняет невалидный askTimeoutMs (отрицательный/не целое)', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const negative = await app.request('/api/v2/settings/security', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ security: { askTimeoutMs: -1 } }),
+      });
+      expect(negative.status).toBe(400);
+      const negativeBody: any = await negative.json();
+      expect(negativeBody.error.code).toBe('VALIDATION_ERROR');
+
+      const fractional = await app.request('/api/v2/settings/security', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ security: { askTimeoutMs: 12.5 } }),
+      });
+      expect(fractional.status).toBe(400);
+    });
+
+    it('PUT /api/v2/settings/security вызывает onSecurityChange с runtime-настройкой (live-применение)', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const onSecurityChange = vi.fn(async (_runtime: Partial<SecurityRuntimeSettings>) => {});
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        onSecurityChange,
+      }));
+
+      const res = await app.request('/api/v2/settings/security', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ security: { askTimeoutMs: 20000 } }),
+      });
+      expect(res.status).toBe(200);
+      expect(onSecurityChange).toHaveBeenCalledTimes(1);
+      expect(onSecurityChange).toHaveBeenCalledWith({ askTimeoutMs: 20000 });
+    });
+
+    it('mergeSecurityConfig пробрасывает askTimeoutMs (runtime приоритетнее, дефолт 30000)', () => {
+      const withAsk = mergeSecurityConfig(undefined, { askTimeoutMs: 5000 });
+      expect(withAsk?.askTimeoutMs).toBe(5000);
+
+      const defaultAsk = mergeSecurityConfig(undefined, { protectedPaths: { enabled: true } });
+      expect(defaultAsk?.askTimeoutMs).toBe(30000);
     });
   });
 

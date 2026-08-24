@@ -2,6 +2,7 @@ import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
 import type { McpServerToolSettings, LLMGatewayConfig, SecurityConfig } from '@itphx/synth-shared';
+import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 
 /** Runtime-настройки LLM Gateway, сохраняемые через UI (раздел «Шлюз безопасности»). */
 export interface LlmGatewayRuntimeSettings {
@@ -20,6 +21,8 @@ export interface SecurityRuntimeSettings {
   protectedPaths?: {
     enabled: boolean;
   };
+  /** Глобальный дефолт таймаута подтверждения ask (мс). Переживает рестарт. */
+  askTimeoutMs?: number;
 }
 
 export interface RuntimeSettings {
@@ -59,14 +62,18 @@ export function mergeLlmGatewayConfig(
 }
 
 /**
- * Мёржит runtime-настройки секции «Безопасность» (protectedPaths.enabled) поверх
- * конфига из config.yaml. Runtime приоритетнее. Возвращает undefined, если ни
- * конфига, ни runtime-настроек нет.
+ * Мёржит runtime-настройки секции «Безопасность» (protectedPaths.enabled,
+ * askTimeoutMs) поверх конфига из config.yaml. Runtime приоритетнее. Возвращает
+ * undefined, если ни конфига, ни runtime-настроек нет.
+ *
+ * askTimeoutMs не входит в SecurityConfig (это permission-настройка), поэтому
+ * возвращается как доп. поле — потребитель (onSecurityChange) пробрасывает его
+ * в дефолтный permission-конфиг оркестратора.
  */
 export function mergeSecurityConfig(
   base: SecurityConfig | undefined,
   runtime: Partial<SecurityRuntimeSettings>,
-): SecurityConfig | undefined {
+): (SecurityConfig & { askTimeoutMs?: number }) | undefined {
   const hasRuntime = !!runtime && Object.keys(runtime).length > 0;
   if (!base && !hasRuntime) return undefined;
   return {
@@ -74,6 +81,9 @@ export function mergeSecurityConfig(
     protectedPaths: {
       enabled: runtime.protectedPaths?.enabled ?? base?.protectedPaths?.enabled ?? true,
     },
+    askTimeoutMs: runtime.askTimeoutMs
+      ?? (base as SecurityConfig & { askTimeoutMs?: number })?.askTimeoutMs
+      ?? DEFAULT_ASK_TIMEOUT_MS,
   };
 }
 

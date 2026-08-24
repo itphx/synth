@@ -1023,11 +1023,13 @@ export interface SecretPattern {
   regex: string
 }
 
-/** Runtime-настройки секции «Безопасность» (тумблер защищённых путей). */
+/** Runtime-настройки секции «Безопасность» (тумблер защищённых путей + таймаут подтверждения). */
 export interface SecuritySettings {
   protectedPaths: {
     enabled: boolean
   }
+  /** Глобальный дефолт таймаута подтверждения ask (мс). */
+  askTimeoutMs?: number
 }
 
 /** Эффективная политика защищённых путей (списки строк). */

@@ -582,6 +582,11 @@ export const dict = {
   'permission.bar.deny': 'Запретить',
   'permission.bar.allowOnceHint': 'Разрешить вызов один раз',
   'permission.bar.allowSessionHint': 'Разрешить вызовы в рамках этой сессии',
+  'permission.bar.stopTimer': 'Остановить таймер',
+  'permission.bar.stopTimerHint': 'Снять авто-отклонение по таймауту и ждать ответа',
+  'permission.bar.noTimeout': 'ожидание без таймаута',
+  'permission.bar.timeoutTitle': 'Время до авто-отклонения запроса',
+  'permission.bar.grantedForSession': 'Инструмент {tool} разрешён для сессии',
 
   'chat.error.rateLimit': 'Превышен лимит запросов. Пауза {sec}с...',
   'chat.error.retryCount': 'Попытка {current}/{max}',
@@ -654,6 +659,10 @@ export const dict = {
   'sessionSettings.saveError': 'Ошибка сохранения',
   'sessionSettings.saving': 'Сохранение...',
   'sessionSettings.notLoaded': 'Сессия не загружена',
+  'sessionSettings.askTimeout': 'Таймаут подтверждения',
+  'sessionSettings.askTimeoutSeconds': 'Таймаут подтверждения (сек)',
+  'sessionSettings.askTimeoutEnabled': 'Включено',
+  'sessionSettings.askTimeoutDisabled': 'Выключено',
 
   // Chat settings
   'chatSettings.intermediateTextDisplay': 'Промежуточные ответы',

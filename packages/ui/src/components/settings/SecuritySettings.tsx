@@ -136,6 +136,7 @@ export function SecuritySettings() {
 
   // --- Защищённые пути ---
   const [security, setSecurity] = useState<SecuritySettingsType>(DEFAULT_SECURITY)
+  const [askTimeoutSec, setAskTimeoutSec] = useState<string>('')
   const [securityLoading, setSecurityLoading] = useState(true)
   const [securitySaving, setSecuritySaving] = useState(false)
   const [policy, setPolicy] = useState<ProtectedPathsPolicy>(EMPTY_POLICY)
@@ -202,7 +203,9 @@ export function SecuritySettings() {
           protectedPaths: {
             enabled: cfg.protectedPaths?.enabled ?? DEFAULT_SECURITY.protectedPaths.enabled,
           },
+          askTimeoutMs: cfg.askTimeoutMs,
         })
+        setAskTimeoutSec(cfg.askTimeoutMs !== undefined ? String(Math.round(cfg.askTimeoutMs / 1000)) : '')
       })
       .catch(() => {})
       .finally(() => {
@@ -301,9 +304,13 @@ export function SecuritySettings() {
   }
 
   const handleSecuritySave = async () => {
+    const trimmed = askTimeoutSec.trim()
+    const askTimeoutMs = trimmed === ''
+      ? undefined
+      : (Number(trimmed) || 0) * 1000
     setSecuritySaving(true)
     try {
-      await synthApi.saveSecuritySettings(security)
+      await synthApi.saveSecuritySettings({ ...security, askTimeoutMs })
       notify({ text: t('common.saved'), type: 'success', category: 'system' })
     } catch (e) {
       notify({
@@ -556,6 +563,23 @@ export function SecuritySettings() {
             {security.protectedPaths.enabled ? t('common.enabled') : t('common.disabled')}
           </span>
         </label>
+
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-sm text-foreground">Таймаут подтверждения (сек)</span>
+            <span className="text-xs text-muted-foreground">
+              Авто-отклонение запроса подтверждения (ask), если пользователь не ответил. Пусто = глобальный дефолт 30 с.
+            </span>
+          </div>
+          <input
+            type="number"
+            min={0}
+            value={askTimeoutSec}
+            onChange={(e) => setAskTimeoutSec(e.target.value)}
+            placeholder="30"
+            className="w-24 shrink-0 rounded-md bg-input border border-border px-2 py-1.5 text-sm text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+        </div>
 
         {policyLoadError && (
           <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{policyLoadError}</div>

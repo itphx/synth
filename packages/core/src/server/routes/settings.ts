@@ -60,7 +60,7 @@ function isValidLlmGatewaySettings(value: unknown): value is Partial<LlmGatewayR
   return true;
 }
 
-/** Валидация runtime-настроек секции «Безопасность»: допустимо только protectedPaths.enabled. */
+/** Валидация runtime-настроек секции «Безопасность»: protectedPaths.enabled + askTimeoutMs. */
 function isValidSecuritySettings(value: unknown): value is Partial<SecurityRuntimeSettings> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const s = value as Record<string, unknown>;
@@ -69,6 +69,7 @@ function isValidSecuritySettings(value: unknown): value is Partial<SecurityRunti
     if (!pp || typeof pp !== 'object' || Array.isArray(pp)) return false;
     if (pp.enabled !== undefined && typeof pp.enabled !== 'boolean') return false;
   }
+  if (s.askTimeoutMs !== undefined && (!Number.isInteger(s.askTimeoutMs) || (s.askTimeoutMs as number) < 0)) return false;
   return true;
 }
 
@@ -184,12 +185,18 @@ export function createSettingsRoutes(
 
   /**
    * GET/PUT /api/v2/settings/security — глобальные настройки секции «Безопасность».
-   * Тумблер защищённых путей включается/выключается через UI (только ADMIN).
-   * Значение сохраняется в {dataDir}/settings.json (AD-005) и переживает рестарт.
+   * Тумблер защищённых путей + глобальный таймаут подтверждения (askTimeoutMs)
+   * настраиваются через UI (только ADMIN). Значение сохраняется в
+   * {dataDir}/settings.json (AD-005) и переживает рестарт.
    */
   app.get('/security', auth.requireAuth, async (c) => {
     const security = await deps.settingsStore.getSecuritySettings();
-    return c.json({ security: { protectedPaths: { enabled: security.protectedPaths?.enabled ?? true } } });
+    return c.json({
+      security: {
+        protectedPaths: { enabled: security.protectedPaths?.enabled ?? true },
+        askTimeoutMs: security.askTimeoutMs ?? 30_000,
+      },
+    });
   });
 
   app.put('/security', auth.requireAuth, async (c) => {
@@ -200,15 +207,21 @@ export function createSettingsRoutes(
       return c.json({
         error: {
           code: 'VALIDATION_ERROR',
-          message: 'security: ожидается { protectedPaths?: { enabled?: boolean } }',
+          message: 'security: ожидается { protectedPaths?: { enabled?: boolean }, askTimeoutMs?: number }',
         },
       }, 400);
     }
 
     await deps.settingsStore.setSecuritySettings(security);
-    // Live-применение тумблера защищённых путей — оркестратор переконфигурируется без рестарта.
+    // Live-применение тумблера защищённых путей + таймаута подтверждения —
+    // оркестратор переконфигурируется без рестарта.
     await deps.onSecurityChange?.(security);
-    return c.json({ security: { protectedPaths: { enabled: security.protectedPaths?.enabled ?? true } } });
+    return c.json({
+      security: {
+        protectedPaths: { enabled: security.protectedPaths?.enabled ?? true },
+        askTimeoutMs: security.askTimeoutMs,
+      },
+    });
   });
 
   /**

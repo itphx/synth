@@ -70,6 +70,12 @@ export function SessionSettingsTab() {
   const [embeddingEnabled, setEmbeddingEnabled] = useState(false)
   const [embedProvider, setEmbedProvider] = useState('')
   const [embedModel, setEmbedModel] = useState('')
+  // Таймаут подтверждения (сек)
+  const [askTimeoutSec, setAskTimeoutSec] = useState<string>('')
+  // Вкл/Выкл таймаута подтверждения (0 = выключен → запросы ждут ответа бесконечно)
+  const [askTimeoutEnabled, setAskTimeoutEnabled] = useState(true)
+  // Глобальный дефолт таймаута подтверждения из «Безопасность»
+  const [defaultAskTimeoutMs, setDefaultAskTimeoutMs] = useState(30_000)
 
   const activeTabId = useUIStore((s) => s.activeCenterTabId)
   const centerTabs = useUIStore((s) => s.centerTabs)
@@ -92,6 +98,12 @@ export function SessionSettingsTab() {
       }).catch(() => {})
     }
   }, [sessionId])
+
+  useEffect(() => {
+    synthApi.getSecuritySettings()
+      .then((s) => setDefaultAskTimeoutMs(s.askTimeoutMs ?? 30_000))
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (session && session.settings) {
@@ -148,8 +160,14 @@ export function SessionSettingsTab() {
       if (ee !== undefined) setEmbeddingEnabled(ee)
       if (ep) setEmbedProvider(ep)
       if (em) setEmbedModel(em)
+      // Таймаут подтверждения: per-session override, иначе глобальный дефолт.
+      // askTimeoutMs === 0 → «таймаут выключен» (toggle off).
+      const permCfg = session.settings.permission as { askTimeoutMs?: number } | undefined
+      const effMs = permCfg?.askTimeoutMs !== undefined ? permCfg.askTimeoutMs : defaultAskTimeoutMs
+      setAskTimeoutEnabled(permCfg?.askTimeoutMs !== 0)
+      setAskTimeoutSec(String(Math.round(effMs / 1000)))
     }
-  }, [session])
+  }, [session, defaultAskTimeoutMs])
 
   const handleSave = async () => {
     if (!sessionId) return
@@ -159,7 +177,33 @@ export function SessionSettingsTab() {
     }
     setSaving(true)
     try {
-      await synthApi.updateSession(sessionId, {
+      // Per-session таймаут подтверждения (askTimeoutMs). ВКЛ: применяется таймаут
+      // из поля (значение, равное глобальному дефолту, не пишем как override —
+      // сессия следует дефолту). ВЫКЛ: askTimeoutMs=0 («без таймаута», ждём ответа
+      // бесконечно) — override пишем всегда.
+      const currentPermission = session.settings.permission as Record<string, unknown> | undefined
+      const enteredMs = Math.round((Number(askTimeoutSec) || 0) * 1000)
+      let permissionSettings: Record<string, unknown> | undefined
+      if (askTimeoutEnabled) {
+        // ВКЛ: применяется таймаут из поля. Значение, равное глобальному дефолту,
+        // не пишем как override (сессия следует дефолту) — как и раньше.
+        if (enteredMs === defaultAskTimeoutMs) {
+          if (currentPermission && 'askTimeoutMs' in currentPermission) {
+            const rest = { ...currentPermission }
+            delete rest.askTimeoutMs
+            permissionSettings = rest
+          } else {
+            permissionSettings = currentPermission
+          }
+        } else {
+          permissionSettings = { ...(currentPermission ?? {}), askTimeoutMs: enteredMs }
+        }
+      } else {
+        // ВЫКЛ: таймаут отключён (0 = «без таймаута»), override пишем всегда.
+        permissionSettings = { ...(currentPermission ?? {}), askTimeoutMs: 0 }
+      }
+
+      const updated = await synthApi.updateSession(sessionId, {
         settings: {
           ...(session.settings as Record<string, unknown>),
           provider: selectedProviderName,
@@ -196,8 +240,10 @@ export function SessionSettingsTab() {
           embeddingEnabled,
           embedProvider,
           embedModel,
+          ...(permissionSettings ? { permission: permissionSettings } : {}),
         },
       })
+      useSessionsStore.getState().upsertSession(updated)
       notify({ text: t('sessionSettings.saved'), type: 'success', category: 'system', sessionId: sessionId || undefined })
     } catch {
       notify({ text: t('sessionSettings.saveError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
@@ -219,6 +265,44 @@ export function SessionSettingsTab() {
       notify({ text: t('chat.error.clearSession'), type: 'error', category: 'error', sessionId })
     }
   }, [sessionId, notify, t])
+
+  // Сессионные одобрения (AD-029): allow-правила, добавленные при «Разрешить в сессии».
+  // Правило может быть строкой ('allow' — весь тул) или объектом { путь: 'allow' }
+  // (конкретный путь). Панель показывает «тул: путь» для объектных правил.
+  const sessionPermission = session?.settings.permission as { rules?: Record<string, string | Record<string, string>>; askTimeoutMs?: number } | undefined
+  const sessionAllowRules = sessionPermission?.rules
+    ? Object.entries(sessionPermission.rules).flatMap(([tool, value]) => {
+        if (typeof value === 'string') return value === 'allow' ? [{ label: tool, tool, path: undefined as string | undefined }] : []
+        if (value && typeof value === 'object') {
+          return Object.entries(value as Record<string, string>)
+            .filter(([, a]) => a === 'allow')
+            .map(([path]) => ({ label: `${tool}: ${path}`, tool, path }))
+        }
+        return []
+      })
+    : []
+
+  const handleRemoveAllowRule = async (rule: { tool: string; path?: string }) => {
+    if (!sessionId || !session) return
+    const rules = { ...(sessionPermission?.rules ?? {}) }
+    if (rule.path !== undefined) {
+      const obj = { ...(rules[rule.tool] as Record<string, string> | undefined ?? {}) }
+      delete obj[rule.path]
+      if (Object.keys(obj).length === 0) delete rules[rule.tool]
+      else rules[rule.tool] = obj
+    } else {
+      delete rules[rule.tool]
+    }
+    const nextPermission = { ...(sessionPermission ?? {}), rules }
+    try {
+      const updated = await synthApi.updateSession(sessionId, {
+        settings: { ...session.settings, permission: nextPermission },
+      })
+      useSessionsStore.getState().upsertSession(updated)
+    } catch {
+      notify({ text: t('sessionSettings.saveError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
+    }
+  }
 
   if (!session) {
     return (
@@ -243,6 +327,53 @@ export function SessionSettingsTab() {
 
         <Section title={t('sessionSettings.providerModel')}>
           <ModelSelector sessionId={sessionId} />
+        </Section>
+
+        {/* Таймаут подтверждения (ask) */}
+        <Section title={t('sessionSettings.askTimeout')}>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <Toggle enabled={askTimeoutEnabled} onToggle={() => setAskTimeoutEnabled(!askTimeoutEnabled)} />
+            <span className="text-xs text-foreground">
+              {askTimeoutEnabled ? t('sessionSettings.askTimeoutEnabled') : t('sessionSettings.askTimeoutDisabled')}
+            </span>
+          </label>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs text-foreground">{t('sessionSettings.askTimeoutSeconds')}</span>
+            <input
+              type="number"
+              min={0}
+              value={askTimeoutSec}
+              disabled={!askTimeoutEnabled}
+              onChange={(e) => setAskTimeoutSec(e.target.value)}
+              className="w-24 shrink-0 rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+            />
+          </div>
+        </Section>
+
+        {/* Сессионные одобрения (AD-029) */}
+        <Section title="Сессионные одобрения">
+          {sessionAllowRules.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border px-3 py-2">
+              <div className="text-xs text-muted-foreground">Нет одобренных инструментов</div>
+              <div className="mt-0.5 text-[10px] text-muted-foreground/60">
+                Allow-правила появляются после «Разрешить в сессии» в панели подтверждения
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {sessionAllowRules.map((rule) => (
+                <div key={rule.tool + (rule.path ?? '')} className="flex items-center gap-2 rounded-lg border border-border/60 bg-input px-2.5 py-1.5">
+                  <span className="min-w-0 flex-1 truncate text-xs text-foreground font-mono">{rule.label}</span>
+                  <button
+                    onClick={() => handleRemoveAllowRule(rule)}
+                    className="shrink-0 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                  >
+                    Удалить
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </Section>
 
         {/* Быстрые ответы */}
