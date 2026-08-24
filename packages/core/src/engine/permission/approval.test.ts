@@ -81,6 +81,24 @@ describe('PermissionApprovalManager — ask flow', () => {
     expect(decision.timeout).toBe(true);
   });
 
+  it('timeoutMs=0 — ждёт ответа бесконечно, без авто-отклонения', async () => {
+    const asked: Array<Record<string, unknown>> = [];
+    bus.subscribe('s1', (e) => {
+      if (e.type === 'permission.asked') asked.push(e.data as Record<string, unknown>);
+    });
+    const pending = manager.waitForDecision('s1', request, 0);
+    await new Promise((r) => setTimeout(r, 80));
+    // поле ask_timeout_ms в событии передаётся как 0 («без таймаута»)
+    expect(asked.at(-1)?.ask_timeout_ms).toBe(0);
+    // авто-отклонения нет — отвечаем спустя время, большее «обычного» таймаута
+    bus.publish('s1', 'permission.replied', {
+      approval_id: 'approval_1', session_id: 's1', action: 'allow', once: false,
+    });
+    const decision = await pending;
+    expect(decision.approved).toBe(true);
+    expect(decision.timeout).toBeUndefined();
+  });
+
   it('ответ с action=allow + once=false — решение с action/once', async () => {
     bus.subscribe('s1', () => {});
     const pending = manager.waitForDecision('s1', request, 1000);
@@ -151,5 +169,47 @@ describe('PermissionApprovalManager — ask flow', () => {
     bus.publish('s1', 'permission.replied', { approval_id: 'approval_1', approved: true });
     await pending;
     expect(spy).toHaveBeenCalled();
+  });
+
+  it('permission.hold останавливает таймаут: allow после паузы резолвит без timeout', async () => {
+    bus.subscribe('s1', () => {});
+    const pending = manager.waitForDecision('s1', request, 50);
+    await new Promise((r) => setTimeout(r, 10));
+    bus.publish('s1', 'permission.hold', { approval_id: 'approval_1', session_id: 's1' });
+    // ждём дольше исходного таймаута — авто-отклонения быть не должно
+    await new Promise((r) => setTimeout(r, 80));
+    bus.publish('s1', 'permission.replied', {
+      approval_id: 'approval_1', session_id: 's1', action: 'allow', once: false,
+    });
+    const decision = await pending;
+    expect(decision.approved).toBe(true);
+    expect(decision.timeout).toBeUndefined();
+    expect(decision.action).toBe('allow');
+    expect(decision.once).toBe(false);
+  });
+
+  it('после permission.hold ответ deny по-прежнему резолвит отказом', async () => {
+    bus.subscribe('s1', () => {});
+    const pending = manager.waitForDecision('s1', request, 50);
+    await new Promise((r) => setTimeout(r, 10));
+    bus.publish('s1', 'permission.hold', { approval_id: 'approval_1', session_id: 's1' });
+    await new Promise((r) => setTimeout(r, 80));
+    bus.publish('s1', 'permission.replied', {
+      approval_id: 'approval_1', session_id: 's1', action: 'deny',
+    });
+    const decision = await pending;
+    expect(decision.approved).toBe(false);
+    expect(decision.action).toBe('deny');
+    expect(decision.timeout).toBeUndefined();
+  });
+
+  it('чужой approval_id в permission.hold игнорируется', async () => {
+    bus.subscribe('s1', () => {});
+    const pending = manager.waitForDecision('s1', request, 50);
+    await new Promise((r) => setTimeout(r, 10));
+    bus.publish('s1', 'permission.hold', { approval_id: 'approval_other', session_id: 's1' });
+    // чужой hold не останавливает таймаут — запрос уходит в timeout
+    const decision = await pending;
+    expect(decision.timeout).toBe(true);
   });
 });

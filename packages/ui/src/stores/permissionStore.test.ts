@@ -50,6 +50,19 @@ describe('permissionStore', () => {
     expect(usePermissionStore.getState().requestsBySession['s1']).toBeUndefined()
   })
 
+  it('timeoutMs=0 — запрос без авто-скрытия, живёт до ответа', () => {
+    const store = usePermissionStore.getState()
+    store.addRequest('s1', makeRequest('a1', 'read_file', 0))
+
+    expect(usePermissionStore.getState().requestsBySession['s1']).toHaveLength(1)
+    // Даже спустя «большой» таймаут запрос не убирается автоматически
+    vi.advanceTimersByTime(120_000)
+    expect(usePermissionStore.getState().requestsBySession['s1']).toHaveLength(1)
+    // Убирается только явным removeRequest
+    store.removeRequest('s1', 'a1')
+    expect(usePermissionStore.getState().requestsBySession['s1']).toBeUndefined()
+  })
+
   it('removeRequest переходит к следующему запросу и очищает таймер текущего', () => {
     const store = usePermissionStore.getState()
     store.addRequest('s1', makeRequest('a1', 'read_file', 30_000))

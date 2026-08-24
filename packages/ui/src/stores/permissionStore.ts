@@ -9,6 +9,8 @@ export interface PermissionRequest {
   reason: string
   askedAt: string
   timeoutMs: number
+  /** true — пользователь нажал «Остановить таймер»: UI-таймер снят, запрос живёт до ответа. */
+  held?: boolean
 }
 
 interface PermissionStore {
@@ -18,6 +20,8 @@ interface PermissionStore {
   addRequest: (sessionId: string, req: PermissionRequest) => void
   removeRequest: (sessionId: string, approvalId: string) => void
   clearSession: (sessionId: string) => void
+  /** «Остановить таймер»: снять UI-таймер для approvalId и пометить запрос как held. */
+  holdRequest: (sessionId: string, approvalId: string) => void
 }
 
 /** Таймеры истечения по approval_id (вне состояния, чтобы не вызывать ре-рендеры). */
@@ -47,9 +51,12 @@ export const usePermissionStore = create<PermissionStore>()((set, get) => ({
 
     // Таймаут ask: если пользователь не ответил — запрос убирается из полосы.
     // Backend самостоятельно сбросит ask по таймауту (approved:false).
-    expiryTimers.set(req.approvalId, setTimeout(() => {
-      get().removeRequest(sessionId, req.approvalId)
-    }, req.timeoutMs))
+    // timeoutMs <= 0 → «без таймаута»: таймер не ставим, запрос живёт до ответа.
+    if (req.timeoutMs > 0) {
+      expiryTimers.set(req.approvalId, setTimeout(() => {
+        get().removeRequest(sessionId, req.approvalId)
+      }, req.timeoutMs))
+    }
   },
 
   removeRequest: (sessionId, approvalId) => {
@@ -82,5 +89,17 @@ export const usePermissionStore = create<PermissionStore>()((set, get) => ({
       delete requestsBySession[sessionId]
       return { requestsBySession }
     })
+  },
+
+  holdRequest: (sessionId, approvalId) => {
+    clearExpiryTimer(approvalId)
+    const requests = get().requestsBySession[sessionId]
+    if (!requests) return
+    const next = requests.map((r) =>
+      r.approvalId === approvalId ? { ...r, held: true } : r,
+    )
+    set((s) => ({
+      requestsBySession: { ...s.requestsBySession, [sessionId]: next },
+    }))
   },
 }))

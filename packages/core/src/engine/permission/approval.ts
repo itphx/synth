@@ -41,20 +41,24 @@ export class PermissionApprovalManager {
 
     return new Promise<ApprovalDecision>((resolve) => {
       let done = false;
+      let held = false;
       let unsub: () => void = () => {};
-
-      const timer = setTimeout(() => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        unsub();
-        resolve({ approved: false, timeout: true });
-      }, timeoutMs);
+      // AD-029: askTimeoutMs <= 0 (0 = «таймаут выключен») — таймер не ставим,
+      // ждём permission.replied бесконечно (без авто-отклонения).
+      const timer = typeof timeoutMs === 'number' && timeoutMs > 0
+        ? setTimeout(() => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            unsub();
+            resolve({ approved: false, timeout: true });
+          }, timeoutMs)
+        : undefined;
 
       const finish = (decision: ApprovalDecision): void => {
         if (done) return;
         done = true;
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         unsub();
         resolve(decision);
       };
@@ -62,9 +66,22 @@ export class PermissionApprovalManager {
       // Подписка ДО публикации: EventBus.publish синхронный, иначе ответ
       // мгновенного подписчика (имитация UI) был бы потерян.
       unsub = this._eventBus.subscribe(sessionId, (event) => {
-        if (event.type !== 'permission.replied') return;
+        if (done) return;
         const data = event.data as Record<string, unknown>;
         if (data.approval_id !== request.approvalId) return;
+
+        // «Остановить таймер» (permission.hold): прекращаем авто-отклонение по
+        // таймауту. Запрос остаётся на паузе до тех пор, пока не придёт
+        // permission.replied; затем finish(decision) разрешает как обычно.
+        if (event.type === 'permission.hold') {
+          if (!held) {
+            held = true;
+            if (timer) clearTimeout(timer);
+          }
+          return;
+        }
+
+        if (event.type !== 'permission.replied') return;
         const action = data.action === 'allow' || data.action === 'deny' ? data.action : undefined;
         const decision: ApprovalDecision = {
           approved: action !== undefined ? action === 'allow' : data.approved === true,
