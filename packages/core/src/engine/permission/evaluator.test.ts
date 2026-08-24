@@ -621,7 +621,8 @@ describe('PermissionEvaluator — защищённые пути (ProtectedPaths)
     const d = fileCheck('read_file', { file_path: '~/.ssh/id_rsa' }, { protectedPaths: PROTECTED });
     expect(d.action).toBe('deny');
     expect(d.matchedRule).toBe('protected-paths.deny');
-    expect(d.reason).toContain('защищённый путь');
+    expect(d.messageId).toBe('deny-protected-path');
+    expect(d.params?.path).toContain('.ssh/id_rsa');
   });
 
   it('write_file /etc/passwd → deny', () => {

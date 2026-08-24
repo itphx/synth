@@ -40,6 +40,8 @@ export interface TaskExtra {
   permissionConfig?: PermissionConfig;
   /** Секция безопасности (защита от Indirect Prompt Injection) из config.yaml. */
   securityConfig?: SecurityConfig;
+  /** Язык сессии (для локализованных сообщений безопасности). */
+  language?: string;
   /** Политика безопасности execute_shell (денлист путей/команд) родительской сессии. */
   shellPolicy?: ShellPolicy;
   /** Единая политика защищённых путей (СКВОЗНАЯ проверка файловых тулов) родительской сессии. */
@@ -730,7 +732,10 @@ export const taskTool: ToolDefinition = {
 
           if (permissionDecision.action === 'deny') {
             toolResult = {
-              content: `Permission denied: ${permissionDecision.reason}`,
+              content: extra.contextConfig && permissionDecision.messageId
+                ? (extra.contextConfig.getSecurityMessage(permissionDecision.messageId, extra.language || 'ru', permissionDecision.params)
+                  ?? `Permission denied: ${permissionDecision.reason}`)
+                : `Permission denied: ${permissionDecision.reason}`,
               isError: true,
               metadata: {
                 permission: {
@@ -743,6 +748,10 @@ export const taskTool: ToolDefinition = {
           } else if (permissionDecision.action === 'ask') {
             // ask публикуется в родительскую сессию (extra.sessionId) —
             // пользователь основной сессии видит запрос и отвечает.
+            const approvalAskReason = extra.contextConfig && permissionDecision.messageId
+              ? (extra.contextConfig.getSecurityMessage(permissionDecision.messageId, extra.language || 'ru', permissionDecision.params)
+                ?? permissionDecision.reason)
+              : permissionDecision.reason;
             const approval = await childApprovalManager.waitForDecision(
               extra.sessionId!,
               {
@@ -750,7 +759,7 @@ export const taskTool: ToolDefinition = {
                 callId: tcId,
                 toolName,
                 arguments: toolArgs,
-                reason: permissionDecision.reason,
+                reason: approvalAskReason,
               },
               derivedPermission.askTimeoutMs,
             );
@@ -803,8 +812,12 @@ export const taskTool: ToolDefinition = {
                 : approval.noSubscribers
                   ? 'нет подключённого пользователя для подтверждения'
                   : 'отклонено пользователем';
+              const baseDeny = extra.contextConfig && permissionDecision.messageId
+                ? (extra.contextConfig.getSecurityMessage(permissionDecision.messageId, extra.language || 'ru', permissionDecision.params)
+                  ?? `Permission denied: ${permissionDecision.reason}`)
+                : `Permission denied: ${permissionDecision.reason}`;
               toolResult = {
-                content: `Permission denied: ${permissionDecision.reason} (${why})`,
+                content: `${baseDeny} (${why})`,
                 isError: true,
                 metadata: {
                   permission: {

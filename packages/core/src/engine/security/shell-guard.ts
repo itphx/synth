@@ -43,6 +43,10 @@ export interface ShellCheckResult {
   reason: string;
   matchedRule?: string;
   deniedPath?: string;
+  /** Идентификатор локализованного сообщения (deny-command и т.д.). */
+  messageId?: string;
+  /** Параметры подстановки в сообщение ({{path}}, {{dir}}, {{command}}). */
+  params?: Record<string, string>;
 }
 
 /** Пустая политика — fallback, если файлы не найдены или невалидны. */
@@ -521,6 +525,8 @@ function deniedByPrefix(prefix: string): ShellCheckResult {
     reason: `Команда запрещена политикой shell: префикс "${prefix}"`,
     matchedRule: 'shell-policy.deny',
     deniedPath: prefix,
+    messageId: 'deny-command',
+    params: { command: prefix },
   };
 }
 
@@ -572,6 +578,8 @@ function checkShellSegment(
         reason: `Доступ запрещён политикой shell: путь "${hit}" защищён`,
         matchedRule: 'shell-policy.deny',
         deniedPath: hit,
+        messageId: 'deny-protected-path',
+        params: { path: normalize(hit) },
       };
     }
   }
@@ -587,6 +595,8 @@ function checkShellSegment(
         reason: `Путь "${hit}" требует подтверждения по политике shell`,
         matchedRule: 'shell-policy.approve',
         deniedPath: hit,
+        messageId: 'ask-protected-path',
+        params: { path: normalize(hit) },
       };
     }
   }
@@ -605,6 +615,8 @@ function checkShellSegment(
         reason: `Доступ запрещён политикой shell: путь "${norm}" в защищённой директории "${hit}"`,
         matchedRule: 'shell-policy.deny',
         deniedPath: hit,
+        messageId: 'deny-protected-dir',
+        params: { path: norm, dir: normalize(hit) },
       };
     }
   }

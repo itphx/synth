@@ -1,0 +1,1 @@
+Permission denied: Access denied: the path «{{path}}» is located inside the protected directory «{{dir}}». It is a protected path. If access should be granted — ask the user to change the list of protected paths in the security settings. The action is prohibited by the security policy. Do not repeat the call, choose another way, or explain it to the user.

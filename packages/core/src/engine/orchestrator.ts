@@ -1,6 +1,6 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@itphx/synth-shared';
 import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart, lookupContextWindow } from '@itphx/synth-shared';
-import type { RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel } from '@itphx/synth-shared';
+import type { RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
@@ -183,6 +183,16 @@ export class ChatOrchestrator {
   /** Включена ли защита защищённых путей (тумблер полного отключения). */
   private _getProtectedPathsEnabled(): boolean {
     return this._securityConfig.protectedPaths?.enabled ?? true;
+  }
+
+  /**
+   * Локализованный текст сообщения безопасности для model/UI. Для решений с
+   * messageId (защищённые пути, запрещённые команды) берётся из промпт-файла;
+   * иначе — обычный reason. Текст включает префикс "Permission denied/required".
+   */
+  private _securityMessage(decision: PermissionDecision, lang: string): string | undefined {
+    if (!decision.messageId) return undefined;
+    return this._contextConfig?.getSecurityMessage(decision.messageId, lang, decision.params) ?? undefined;
   }
 
   constructor(options: OrchestratorOptions) {
@@ -1108,7 +1118,8 @@ export class ChatOrchestrator {
           let userDenied = false;
 
           if (permissionDecision.action === 'deny') {
-            deniedReason = permissionDecision.reason;
+            deniedReason = this._securityMessage(permissionDecision, session.settings.language || 'ru')
+              ?? `Permission denied: ${permissionDecision.reason}`;
           } else if (permissionDecision.action === 'ask') {
             const approval = await this._approvalManager.waitForDecision(
               session.id,
@@ -1117,7 +1128,8 @@ export class ChatOrchestrator {
                 callId: tcId,
                 toolName,
                 arguments: toolArgs,
-                reason: permissionDecision.reason,
+                reason: this._securityMessage(permissionDecision, session.settings.language || 'ru')
+                  ?? permissionDecision.reason,
               },
               effectivePermissionConfig.askTimeoutMs,
             );
@@ -1135,7 +1147,9 @@ export class ChatOrchestrator {
                 : approval.noSubscribers
                   ? 'нет подключённого пользователя для подтверждения'
                   : 'отклонено пользователем';
-              deniedReason = `${permissionDecision.reason} (${why})`;
+              const baseDeny = this._securityMessage(permissionDecision, session.settings.language || 'ru')
+                ?? `Permission denied: ${permissionDecision.reason}`;
+              deniedReason = `${baseDeny} (${why})`;
               userDenied = !approval.timeout && !approval.noSubscribers;
             }
           }
@@ -1150,12 +1164,12 @@ export class ChatOrchestrator {
               matched_rule: permissionDecision.matchedRule,
             });
             toolResult = {
-              content: `Permission denied: ${deniedReason}. Действие запрещено политикой безопасности. Не повторяйте вызов, выберите другой способ или объясните пользователю.`,
+              content: deniedReason ?? 'Доступ запрещён политикой безопасности',
               isError: true,
               metadata: {
                 permission: {
                   action: 'deny',
-                  reason: deniedReason,
+                  reason: deniedReason ?? '',
                   matched_rule: permissionDecision.matchedRule,
                 },
               },
@@ -1196,6 +1210,7 @@ export class ChatOrchestrator {
                       routerConfig: this._routerConfig ?? undefined,
                       contextConfig: this._contextConfig ?? undefined,
                       securityConfig: this._securityConfig,
+                      language: session.settings.language || 'ru',
                       publish: (type: string, data: Record<string, unknown>) =>
                         publishChunk(type as never, data),
                       streamId,

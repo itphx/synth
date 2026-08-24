@@ -400,6 +400,52 @@ export class ContextConfig {
   }
 
   /**
+   * Локализованные сообщения безопасности (deny/ask защищённых путей, запрещённых
+   * команд). Файлы: prompts/security/{messageId}.{lang}.md → {messageId}.md.
+   * Override через {userDataDir}/user/system/security/{messageId}.md и
+   * {messageId}.{lang}.md — проверяется первым.
+   *
+   * Плейсхолдеры {{path}}, {{dir}}, {{command}}, {{reason}} заменяются значениями
+   * из params (replace-подстановка через split/join — безопасно для `$`-символов).
+   * Возвращает null, если файл не найден.
+   */
+  getSecurityMessage(messageId: string, language = 'ru', params?: Record<string, string>): string | null {
+    const stem = messageId;
+
+    // 1. Пользовательский override system-категории (каталог security/)
+    const overridePath = this._resolveOverridePath('system', `security/${stem}.md`);
+    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
+    if (overrideLocalized) {
+      const content = this._readFile(overrideLocalized);
+      if (content) return this._substParams(content, params);
+    }
+    const overrideContent = this._readFile(overridePath);
+    if (overrideContent) return this._substParams(overrideContent, params);
+
+    // 2. Встроенный prompts/security/{stem}.{lang}.md → {stem}.md
+    const basePath = join(this.systemPromptsDir, 'security', `${stem}.md`);
+    const localized = this._getLocalizedPath(basePath, stem, language);
+    if (localized) {
+      const content = this._readFile(localized);
+      if (content) return this._substParams(content, params);
+    }
+    const baseContent = this._readFile(basePath);
+    if (baseContent) return this._substParams(baseContent, params);
+
+    return null;
+  }
+
+  /** Заменяет {{key}} на значения из params (split/join — без интерпретации `$`). */
+  private _substParams(content: string, params?: Record<string, string>): string {
+    if (!params) return content;
+    let out = content;
+    for (const [key, value] of Object.entries(params)) {
+      out = out.split(`{{${key}}}`).join(value);
+    }
+    return out;
+  }
+
+  /**
    * AD-025: системный промпт режима сессии (plan/act/yolo).
    *
    * Файлы: prompts/system/MODE_{PLAN,ACT,YOLO}.{lang}.md — только локализованные

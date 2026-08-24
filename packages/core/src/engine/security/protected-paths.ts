@@ -36,7 +36,12 @@ export interface ProtectedPathsPolicy {
 /** Результат checkPath. */
 export interface ProtectedPathCheckResult {
   action: 'allow' | 'deny' | 'ask';
-  reason: string;
+  /** Человекочитаемая причина (fallback, без локализации). */
+  reason?: string;
+  /** Идентификатор локализованного сообщения (deny-protected-path и т.д.). */
+  messageId?: string;
+  /** Параметры подстановки в сообщение ({{path}}, {{dir}}). */
+  params?: Record<string, string>;
   matchedRule?: string;
 }
 
@@ -198,7 +203,8 @@ export function checkPath(path: string, cwd: string, policy: ProtectedPathsPolic
     if (normalize(denied) === norm) {
       return {
         action: 'deny',
-        reason: `Доступ запрещён: путь "${norm}" защищён`,
+        messageId: 'deny-protected-path',
+        params: { path: norm },
         matchedRule: 'protected-paths.deny',
       };
     }
@@ -208,7 +214,8 @@ export function checkPath(path: string, cwd: string, policy: ProtectedPathsPolic
     if (normalize(approval) === norm) {
       return {
         action: 'ask',
-        reason: `Путь "${norm}" требует подтверждения по политике защищённых путей`,
+        messageId: 'ask-protected-path',
+        params: { path: norm },
         matchedRule: 'protected-paths.ask',
       };
     }
@@ -219,7 +226,8 @@ export function checkPath(path: string, cwd: string, policy: ProtectedPathsPolic
     if (norm === normalizedPrefix || norm.startsWith(normalizedPrefix.endsWith(sep) ? normalizedPrefix : normalizedPrefix + sep)) {
       return {
         action: 'deny',
-        reason: `Доступ запрещён: путь "${norm}" в защищённой директории "${normalizedPrefix}"`,
+        messageId: 'deny-protected-dir',
+        params: { path: norm, dir: normalizedPrefix },
         matchedRule: 'protected-paths.deny',
       };
     }

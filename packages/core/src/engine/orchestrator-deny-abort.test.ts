@@ -7,6 +7,7 @@ import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { EventBus } from '../events/bus.js';
 import { createToolRegistry } from './tools/index.js';
+import { ContextConfig } from './context/config.js';
 import { ProviderFactory, BaseProvider } from '../providers/base.js';
 import type { LLMMessage, CancellationToken } from '../providers/base.js';
 import type { ContextBuilder } from './context/builder.js';
@@ -226,6 +227,7 @@ async function makeHarness(providerName: string): Promise<Harness> {
     toolRegistry: createToolRegistry(),
     permissionConfig: { rules: {}, askTimeoutMs: 1000 } as PermissionConfig,
     defaultWorkingDir: tmpDir,
+    contextConfig: new ContextConfig({ userDataDir: join(tmpDir, 'context') }),
   });
   const session = await sessionManager.createSession({
     title: 'DenyAbort',

@@ -156,7 +156,13 @@ export class PermissionEvaluator {
     if (shellCommand !== undefined && shellPolicy) {
       const sc = checkShellCommand(shellCommand, shellCwd, shellPolicy);
       if (sc.action !== 'allow') {
-        return { action: sc.action, reason: sc.reason, matchedRule: sc.matchedRule };
+        return {
+          action: sc.action,
+          reason: sc.reason,
+          matchedRule: sc.matchedRule,
+          messageId: sc.messageId,
+          params: sc.params,
+        };
       }
     }
 
@@ -176,12 +182,20 @@ export class PermissionEvaluator {
         if (cp.action === 'deny') {
           return {
             action: 'deny',
-            reason: `${cp.reason}. Это защищённый путь. Если доступ должен быть разрешён — попроси пользователя изменить список защищённых путей в настройках безопасности.`,
+            reason: cp.reason ?? '',
             matchedRule: cp.matchedRule,
+            messageId: cp.messageId,
+            params: cp.params,
           };
         }
         if (cp.action === 'ask') {
-          return { action: 'ask', reason: cp.reason, matchedRule: cp.matchedRule };
+          return {
+            action: 'ask',
+            reason: cp.reason ?? '',
+            matchedRule: cp.matchedRule,
+            messageId: cp.messageId,
+            params: cp.params,
+          };
         }
       }
     }

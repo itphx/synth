@@ -38,6 +38,10 @@ export interface PermissionDecision {
   reason: string;
   /** Ключ правила, которое сработало (имя тула, группа, паттерн или '*'). */
   matchedRule?: string;
+  /** Идентификатор локализованного сообщения (deny-protected-path и т.д.). */
+  messageId?: string;
+  /** Параметры подстановки в сообщение ({{path}}, {{dir}}, {{command}}). */
+  params?: Record<string, string>;
 }
 
 /**

@@ -662,3 +662,17 @@
   - Backend-фикс: `createSettingsRoutes` теперь получает `protectedPathsStore` + `onSecurityChange` (раньше — 404/тумблер не применялся).
 - **Файлы:** packages/core/src/engine/security/{protected-paths.ts,protected-paths-store.ts,protected-paths.test.ts,integration.test.ts,shell-guard.ts,index.ts}; packages/core/src/engine/permission/{evaluator.ts,evaluator.test.ts}; packages/core/src/{index.ts,server/app.ts,server/chat.ts,server/routes/settings.ts,storage/runtime-settings.ts,tools/task.ts,engine/orchestrator.ts}; packages/core/{package.json,definitions/protected-paths.json}; packages/shared/src/{config/types.ts,config/defaults.ts,index.ts}; packages/backend/src/main.ts; packages/ui/src/{components/settings/SecuritySettings.tsx,components/settings/SettingsModal.tsx,lib/api/synthApi.ts,lib/i18n/messages/ru.ts,lib/i18n/messages/en.ts}
 - **Проверка:** `pnpm build` (6 пакетов), `pnpm typecheck`, `pnpm lint` (0 errors), `pnpm test` (shared 66 / core 840 / ui 29 / backend 170); curl: `GET/PUT/DELETE /api/v2/settings/protected-paths` → 200, `GET/PUT /api/v2/settings/security` → 200.
+
+## 2026-08-23 — fix: сообщения защиты путей вынесены в локализуемые промпт-файлы
+- **Задача:** «Текст Permission denied при чтении защищённого файла должен браться из системного контекстного файла и иметь перевод на английский»
+- **Тип:** refactor/feature (локализация сообщений отказов)
+- **Исполнитель:** @fixer
+- **Результат:** PASS (build/typecheck/lint/test)
+- **Ветка:** основная
+- **Что сделано:**
+  - Промпт-файлы `packages/core/prompts/security/{deny-protected-path,deny-protected-dir,ask-protected-path,deny-command}.{ru,en}.md` — каждый содержит весь текст сообщения целиком; обращение к модели в ед. числе («не повторяй», «выбери», «объясни»).
+  - `ContextConfig.getSecurityMessage(messageId, language, params)` — каскад override `{dataDir}/context/user/system/security/{id}.{lang}.md` → встроенный `prompts/security/{id}.{lang}.md`; подстановка `{{path}}`/`{{dir}}`/`{{command}}`.
+  - `checkPath` (protected-paths.ts) и `checkShellCommand` (shell-guard.ts) теперь возвращают `messageId`/`params` вместо захардкоженной строки; `PermissionDecision` расширен полями `messageId`/`params`.
+  - `evaluator.ts` убрана захардкоженная подсказка и лишняя точка; `orchestrator.ts` и `task.ts` используют единый `getSecurityMessage` → текст main и саб-агентов идентичен.
+- **Файлы:** packages/core/prompts/security/*.{ru,en}.md; packages/core/src/engine/{context/config.ts,context/config.security.test.ts,security/protected-paths.ts,security/shell-guard.ts,permission/evaluator.ts,orchestrator.ts,tools/task.ts,permission/evaluator.test.ts,security/protected-paths.test.ts,orchestrator-deny-abort.test.ts}; packages/shared/src/types/permission.ts
+- **Проверка:** `pnpm build` (6 пакетов), `pnpm typecheck`, `pnpm lint` (0 errors), `pnpm test` (shared 66 / core 850 / ui 29 / backend 170). Пример ru: «Permission denied: Доступ запрещён: путь «/etc/passwd» защищён … Не повторяй вызов, выбери другой способ»; en: «Access denied … Do not repeat the call». Двойная точка `..` устранена.

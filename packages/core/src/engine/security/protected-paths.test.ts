@@ -23,22 +23,26 @@ describe('checkPath — приоритет deny > ask > deniedPrefixes', () => {
     const d = checkPath('~/.ssh/id_rsa', CWD, basePolicy());
     expect(d.action).toBe('deny');
     expect(d.matchedRule).toBe('protected-paths.deny');
+    expect(d.messageId).toBe('deny-protected-path');
   });
 
   it('approvalPaths → ask', () => {
     const d = checkPath('~/.ssh/config', CWD, basePolicy());
     expect(d.action).toBe('ask');
     expect(d.matchedRule).toBe('protected-paths.ask');
+    expect(d.messageId).toBe('ask-protected-path');
   });
 
   it('deniedPrefixes (директория) → deny, но approvalPaths проверяется раньше', () => {
     // .ssh/config под префиксом ~/.ssh, но должен дать ask (approvalPaths раньше)
     const d = checkPath('~/.ssh/config', CWD, basePolicy());
     expect(d.action).toBe('ask');
-    // файл вне approvalPaths, внутри deniedPrefixes — deny
+    // файл вне approvalPaths, внутри deniedPrefixes — deny (deny-protected-dir)
     const d2 = checkPath('~/.ssh/authorized_keys', CWD, basePolicy());
     expect(d2.action).toBe('deny');
     expect(d2.matchedRule).toBe('protected-paths.deny');
+    expect(d2.messageId).toBe('deny-protected-dir');
+    expect(d2.params?.dir).toContain('.ssh');
   });
 
   it('обычный путь → allow', () => {
@@ -50,7 +54,8 @@ describe('checkPath — резолв путей', () => {
   it('~ расширяется в домашний каталог', () => {
     const d = checkPath('~/.ssh/id_rsa', CWD, basePolicy());
     expect(d.action).toBe('deny');
-    expect(d.reason).toContain(join(HOME, '.ssh', 'id_rsa'));
+    expect(d.messageId).toBe('deny-protected-path');
+    expect(d.params?.path).toBe(join(HOME, '.ssh', 'id_rsa'));
   });
 
   it('$HOME расширяется в домашний каталог', () => {
