@@ -708,3 +708,14 @@
   - `evaluator.ts` убрана захардкоженная подсказка и лишняя точка; `orchestrator.ts` и `task.ts` используют единый `getSecurityMessage` → текст main и саб-агентов идентичен.
 - **Файлы:** packages/core/prompts/security/*.{ru,en}.md; packages/core/src/engine/{context/config.ts,context/config.security.test.ts,security/protected-paths.ts,security/shell-guard.ts,permission/evaluator.ts,orchestrator.ts,tools/task.ts,permission/evaluator.test.ts,security/protected-paths.test.ts,orchestrator-deny-abort.test.ts}; packages/shared/src/types/permission.ts
 - **Проверка:** `pnpm build` (6 пакетов), `pnpm typecheck`, `pnpm lint` (0 errors), `pnpm test` (shared 66 / core 850 / ui 29 / backend 170). Пример ru: «Permission denied: Доступ запрещён: путь «/etc/passwd» защищён … Не повторяй вызов, выбери другой способ»; en: «Access denied … Do not repeat the call». Двойная точка `..` устранена.
+
+## 2026-08-27
+- **Задача:** Стоп во время работы сабагента не прерывает его
+- **Тип:** bug + feature (прерывание тулов)
+- **Исполнитель:** @fixer (2 вызова: задача A — сабагент, задача B — все тулы)
+- **Результат:** PASS (typecheck ✓, lint 0 errors ✓, test 1157 passed ✓, core 891: +19 новых тестов)
+- **Коммит:** не сделан — ждёт явной просьбы пользователя
+- **Задача A:** оживлён AbortSignal (toolAbortController, двунаправленная связь cancelToken↔signal), task.ts реагирует на abort (частичный стрим сохраняется, tool_result: stopped_by_user + partial_output + steps_completed + child_session_id), ошибка провайдера сабагента → isError tool_result с child_session_id (без retry), родитель публикует stream.cancelled, child_session_id добавлен в обычный task_result
+- **Задача B:** tools/abort.ts (хелперы), shell/git/project-context/web/search — реальный сигнал (SIGTERM процессам, abort fetch, подавление ретраев DDG/Bing), fs-read/fs-write/plan/todo/read-reference/project-manage/classify — guard на входе; 26 execute
+- **Проблемы:** нет. Нюанс: у Session нет статусного поля завершения — прерывание выражено metadata-маркерами сообщений
+- **Ожидают решения:** коммит; отдельная задача — retry сабагента при ошибке провайдера (3 попытки) + уведомление пользователя + resume дочерней сессии (UI + API)
