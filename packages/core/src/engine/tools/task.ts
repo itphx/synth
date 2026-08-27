@@ -470,6 +470,17 @@ export const taskTool: ToolDefinition = {
 
     const cancelToken: CancellationToken = { cancelled: false, cancel: () => { cancelToken.cancelled = true; } };
 
+    // Связка локального cancel-токена саб-агента с родительским сигналом отмены:
+    // «Стоп» в родительской сессии (POST /sessions/:id/abort → orchestrator.cancel
+    // → внутренний toolAbortController.abort → ctx.abortSignal) должен немедленно
+    // прерывать LLM-стрим саб-агента и его цикл, а не ждать завершения всех шагов.
+    const isAborted = () => cancelToken.cancelled || ctx.abortSignal?.aborted === true;
+    if (ctx.abortSignal?.aborted) {
+      cancelToken.cancel();
+    } else {
+      ctx.abortSignal?.addEventListener('abort', () => cancelToken.cancel(), { once: true });
+    }
+
     // ─── Permissions саб-агента (AD-029): проверка перед каждым tool_call ──
     // Дочерняя сессия наследует permissions родителя (deriveSubagentPermission).
     // ask-запросы публикуются в EventBus РОДИТЕЛЬСКОЙ сессии — подтверждение
@@ -515,6 +526,47 @@ export const taskTool: ToolDefinition = {
       tools = filtered;
     }
 
+    // Финализация дочерней сессии: обновление updatedAt + события для UI.
+    // Отдельного статусного поля «завершена/прервана» у сессии нет
+    // (SessionStatus — только процессная блокировка blocked/blockedAt),
+    // поэтому факт прерывания/ошибки фиксируется metadata-маркерами
+    // в сообщениях истории дочерней сессии.
+    const finalizeChildSession = async (): Promise<void> => {
+      if (!childSessionId || !extra.sessionManager) return;
+      try {
+        const childSession = await extra.sessionManager.getSession(childSessionId);
+        if (childSession) {
+          childSession.updatedAt = nowISO();
+          await extra.sessionManager.updateSession(childSession);
+
+          if (extra.eventBus) {
+            extra.eventBus.publish(childSessionId, 'session.updated', {
+              session_id: childSessionId,
+            });
+            extra.eventBus.publish(extra.sessionId!, 'child.session.updated', {
+              session: serializeSession(childSession),
+            });
+          }
+        }
+      } catch {
+        // не фатально
+      }
+    };
+
+    /** Добавить сообщение в дочернюю сессию + опубликовать события. */
+    const addChildMessage = async (msg: Message): Promise<void> => {
+      if (!childSessionId || !extra.sessionManager) return;
+      try {
+        const updated = await extra.sessionManager.addMessage(childSessionId, msg);
+        if (updated && extra.eventBus) {
+          const idx = updated.messages.length - 1;
+          await publishMessageAdded(extra.eventBus, extra.sessionId!, childSessionId, updated.messages[idx]!, idx, updated);
+        }
+      } catch {
+        // не фатально
+      }
+    };
+
     try {
       let finalContent = '';
       let iteration = 0;
@@ -530,8 +582,92 @@ export const taskTool: ToolDefinition = {
         started_at?: string; completed_at?: string; iteration: number;
       }> = [];
 
+      // Завершение по отмене (Стоп в родительской сессии): сохранить частичный
+      // текст (если есть), поставить маркер прерывания в историю дочерней
+      // сессии, финализировать её (без статуса completed) и вернуть родителю
+      // tool_result с маркером остановки, частичным ответом и списком шагов.
+      const finishAborted = async (
+        partialContent: string,
+        partialReasoning: string,
+      ): Promise<ToolResult> => {
+        // 1. Частичный стрим оборванной итерации — в историю дочерней сессии
+        if (partialContent) {
+          await addChildMessage({
+            id: generateId(),
+            role: MessageRole.ASSISTANT,
+            seq: 0,
+            origin: 'local',
+            parts: [makeTextPart(partialContent)],
+            content: partialContent,
+            createdAt: nowISO(),
+            disabled: false,
+            pinned: false,
+            hidden: false,
+            agentRole: params.subagent_type,
+            ...(partialReasoning ? { reasoning: partialReasoning } : {}),
+            metadata: {
+              stream_id: extra.streamId,
+              partial: true,
+              interrupted: true,
+            },
+          });
+        }
+
+        // 2. Маркер прерывания в историю дочерней сессии
+        const stopMarkerText = 'Задача остановлена пользователем';
+        await addChildMessage({
+          id: generateId(),
+          role: MessageRole.INFO,
+          seq: 0,
+          origin: 'local',
+          parts: [makeTextPart(stopMarkerText)],
+          content: stopMarkerText,
+          createdAt: nowISO(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          agentRole: params.subagent_type,
+          metadata: {
+            stream_id: extra.streamId,
+            stopped_by: 'user',
+            interrupted: true,
+          },
+        });
+
+        // 3. Финализация дочерней сессии
+        await finalizeChildSession();
+
+        // 4. tool_result родителю: маркер отмены + частичный текст + шаги + id сессии
+        const stepsCompleted = allSubagentToolCalls.length > 0
+          ? allSubagentToolCalls.map((t) => t.name).join(', ')
+          : 'нет';
+        return {
+          content: [
+            '<task_result>',
+            `<summary>${params.description}</summary>`,
+            '<status>stopped_by_user</status>',
+            ...(childSessionId ? [`<child_session_id>${childSessionId}</child_session_id>`] : []),
+            ...(partialContent ? [`<partial_output>\n${partialContent}\n</partial_output>`] : []),
+            `<steps_completed>${stepsCompleted}</steps_completed>`,
+            'Задача остановлена пользователем до завершения. Выше — частичный ответ сабагента, выполненные шаги перечислены; детали и история — в дочерней сессии.',
+            '</task_result>',
+          ].join('\n'),
+          metadata: {
+            subagent_type: params.subagent_type,
+            description: params.description,
+            context_mode: contextMode,
+            steps: iteration,
+            child_session_id: childSessionId,
+            stopped_by: 'user',
+            interrupted: true,
+            tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
+            partial_output: partialContent || undefined,
+          },
+        };
+      };
+
       while (iteration < effectiveMaxSteps) {
-        if (cancelToken.cancelled) break;
+        if (isAborted()) break;
 
         let accumulatedContent = '';
         let toolCalls: Record<string, unknown>[] | undefined = [];
@@ -547,7 +683,7 @@ export const taskTool: ToolDefinition = {
             undefined,
             cancelToken,
           )) {
-            if (cancelToken.cancelled) break;
+            if (isAborted()) break;
             if (chunk.isFinal) {
               accumulatedContent = chunk.content;
               reasoning = (chunk as unknown as Record<string, unknown>).reasoning as string || reasoning;
@@ -580,14 +716,56 @@ export const taskTool: ToolDefinition = {
             }
           }
         } catch (err) {
+          // Ошибка провайдера внутри саб-агента: фиксируем в истории дочерней
+          // сессии, финализируем её и возвращаем родителю tool_result с
+          // описанием ошибки и child_session_id — родитель должен знать, что
+          // работа не завершена и почему. Без retry-логики (отдельная задача).
+          const errText = `Ошибка выполнения сабагента "${params.subagent_type}": ${String(err)}`;
+          await addChildMessage({
+            id: generateId(),
+            role: MessageRole.ERROR,
+            seq: 0,
+            origin: 'local',
+            parts: [makeTextPart(errText)],
+            content: errText,
+            createdAt: nowISO(),
+            disabled: false,
+            pinned: false,
+            hidden: false,
+            agentRole: params.subagent_type,
+            metadata: { stream_id: extra.streamId, error: true },
+          });
+          await finalizeChildSession();
           return {
-            content: `Ошибка выполнения сабагента "${params.subagent_type}": ${String(err)}`,
+            content: [
+              '<task_result>',
+              `<summary>${params.description}</summary>`,
+              '<status>error</status>',
+              ...(childSessionId ? [`<child_session_id>${childSessionId}</child_session_id>`] : []),
+              errText,
+              '</task_result>',
+            ].join('\n'),
             isError: true,
-            metadata: { subagent_type: params.subagent_type },
+            metadata: {
+              subagent_type: params.subagent_type,
+              description: params.description,
+              context_mode: contextMode,
+              steps: iteration,
+              child_session_id: childSessionId,
+              error: true,
+              tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
+            },
           };
         }
 
-        if (cancelToken.cancelled) break;
+        // Отмена (Стоп в родительской сессии): сохраняем частичный текст
+        // ТЕКУЩЕЙ итерации, ставим маркер прерывания в историю дочерней
+        // сессии, финализируем её (без статуса completed) и возвращаем
+        // родителю tool_result с маркером остановки, частичным ответом и
+        // списком выполненных шагов.
+        if (isAborted()) {
+          return await finishAborted(accumulatedContent, reasoning);
+        }
 
         // Единая итерация для размышлений, промежуточного текста и вызовов
         // инструментов этого шага — иначе в UI (и в дочерней сессии) ломается
@@ -995,6 +1173,13 @@ export const taskTool: ToolDefinition = {
         if (subagentDenied) break;
       }
 
+      // Отмена до/после цикла (например сигнал уже абортирован на входе или
+      // пришёл во время исполнения тулов саб-агента) — тот же протокол
+      // прерывания, что и при отмене во время стрима.
+      if (isAborted()) {
+        return await finishAborted('', '');
+      }
+
       if (subagentDenied && !finalContent) {
         finalContent = 'Обработка остановлена: пользователь отклонил запрос на выполнение инструмента';
       }
@@ -1086,26 +1271,7 @@ export const taskTool: ToolDefinition = {
       }
 
       // Финализировать дочернюю сессию
-      if (childSessionId && extra.sessionManager) {
-        try {
-          const childSession = await extra.sessionManager.getSession(childSessionId);
-          if (childSession) {
-            childSession.updatedAt = nowISO();
-            await extra.sessionManager.updateSession(childSession);
-
-            if (extra.eventBus) {
-              extra.eventBus.publish(childSessionId, 'session.updated', {
-                session_id: childSessionId,
-              });
-              extra.eventBus.publish(extra.sessionId!, 'child.session.updated', {
-                session: serializeSession(childSession),
-              });
-            }
-          }
-        } catch {
-          // не фатально
-        }
-      }
+      await finalizeChildSession();
 
       // ─── Формирование результата tool_result ──────────────────────
       const qualityBlock = qaPass !== undefined
@@ -1117,9 +1283,14 @@ export const taskTool: ToolDefinition = {
       const qaWarningText = qaPass === false
         ? `\n\n⚠️ Ответ не прошёл контроль качества: ${qaReason || 'неизвестная причина'}`
         : '';
+      // ID дочерней сессии в content — родительская модель может прочитать
+      // историю саб-агента тулом read_session_reference.
+      const childSessionBlock = childSessionId
+        ? `<child_session_id>${childSessionId}</child_session_id>\n`
+        : '';
 
       return {
-        content: `<task_result>\n<summary>${params.description}</summary>\n${qualityBlock}${routedByBlock}\n${qualityOutput}${qaWarningText}\n</task_result>`,
+        content: `<task_result>\n<summary>${params.description}</summary>\n${qualityBlock}${routedByBlock}${childSessionBlock}\n${qualityOutput}${qaWarningText}\n</task_result>`,
         metadata: {
           subagent_type: params.subagent_type,
           description: params.description,

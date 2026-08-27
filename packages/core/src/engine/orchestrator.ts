@@ -880,10 +880,17 @@ export class ChatOrchestrator {
       let tools = this._filterToolsByMode(baseTools, session, sessionMode, planMode, planApproved);
 
       // 5. Create cancellation token
+      // Внутренний AbortController: абортится и по cancelToken.cancel()
+      // (POST /sessions/:id/abort → orchestrator.cancel), и по внешнему signal
+      // (cancelRetry в QueueProcessor). Его signal передаётся в тулы
+      // (ctx.abortSignal) — долгие тулы (например task/сабагент) подписываются
+      // на него и прерываются сразу, не дожидаясь завершения.
+      const toolAbortController = new AbortController();
       const cancelToken: CancellationToken = {
         cancelled: false,
         cancel: () => {
           cancelToken.cancelled = true;
+          toolAbortController.abort();
         },
       };
       this._cancellationTokens.set(streamId, cancelToken);
@@ -891,6 +898,8 @@ export class ChatOrchestrator {
       signal.addEventListener('abort', () => {
         cancelToken.cancel();
       }, { once: true });
+      // signal мог быть уже абортирован до входа (гонка с отменой из очереди)
+      if (signal.aborted) cancelToken.cancel();
 
       // 6. Tool loop — stream LLM, execute tools, continue until no tool calls
       let toolIteration = 0;
@@ -907,6 +916,8 @@ export class ChatOrchestrator {
       let denyStopReason: string | undefined;
       /** Были ли deny-отказы за цикл (для осмысленного fallback пустого ответа). */
       let hadDeny = false;
+      /** Отмена пришла во время исполнения тула — завершать обработку как отмену. */
+      let cancelledDuringTool = false;
 
       // Предупреждение о заполненности контекстного окна (fire-and-forget, не блокирует вызов)
       this._publishContextLimitWarning(session.id, routeResult.modelName, messagesForLlm);
@@ -1197,7 +1208,10 @@ export class ChatOrchestrator {
                   toolResult = await toolDef.execute(parsed.data, {
                     sessionId: session.id,
                     messageId: (message.metadata?.stream_id as string) || streamId,
-                    abortSignal: signal,
+                    // Живой сигнал отмены: абортится как по /abort (cancel()),
+                    // так и по cancelRetry (внешний signal). Без этого тулы
+                    // (task/сабагент) не узнают о «Стоп» до своего завершения.
+                    abortSignal: toolAbortController.signal,
                     agentRole: effectiveAgentRole,
                     workingDir,
                     dataDir: this._modelPriceLoader ? undefined : undefined,
@@ -1247,6 +1261,33 @@ export class ChatOrchestrator {
                 isError: true,
               };
             }
+          }
+
+          // Отмена пришла ВО ВРЕМЯ исполнения тула (например task/сабагент).
+          // Фиксируем результат (цепочка тулов сохранится в истории), публикуем
+          // tool_call.result (UI видит, чем тул завершился) и прекращаем
+          // дальнейшие тулы/итерации — обработка завершится как отмена (ниже),
+          // а не как обычное завершение с «ответ модели пуст».
+          if (cancelToken.cancelled || toolAbortController.signal.aborted) {
+            allToolCalls.push({
+              name: toolName,
+              args: toolArgs,
+              id: tcId,
+              result: toolResult,
+              started_at: tcStartedAt,
+              completed_at: new Date().toISOString(),
+              iteration: toolIteration,
+            });
+            publishChunk('tool_call.result', {
+              stream_id: streamId,
+              session_id: session.id,
+              call_id: tcId,
+              name: toolName,
+              result: toolResult,
+              iteration: toolIteration,
+            });
+            cancelledDuringTool = true;
+            break;
           }
 
           // IPI-защита: оборачиваем tool-контент по матрице доверия + детектируем
@@ -1384,6 +1425,13 @@ export class ChatOrchestrator {
           }
         }
 
+        // Отмена между тулами итерации (например во время IPI-обработки) —
+        // тоже завершаем как отмену, а не идём на следующую LLM-итерацию.
+        if (!stopAfterDeny && (cancelToken.cancelled || toolAbortController.signal.aborted)) {
+          cancelledDuringTool = true;
+          break;
+        }
+
         publishChunk('tool_call.loop', {
           stream_id: streamId,
           session_id: session.id,
@@ -1393,6 +1441,37 @@ export class ChatOrchestrator {
 
         toolIteration++;
         if (stopAfterDeny) break;
+      }
+
+      // Отмена во время исполнения тула: завершаем ровно как ветку отмены
+      // (persist tool-chain + stream.cancelled), а не как обычное завершение
+      // с подставленным «Не удалось выполнить запрос: ответ модели пуст».
+      if (cancelledDuringTool) {
+        await this._persistToolChain(
+          session.id, streamId, providerName, effectiveAgentRole,
+          finalModel,
+          allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
+        );
+
+        const partialContent = this._joinAccumulatedTexts(allIntermediateTexts, '');
+
+        // Промежуточные тексты уже вошли в partialContent — как в ветке отмены
+        // выше, НЕ дублируем их в metadata.intermediate_text_blocks.
+        if (partialContent || allToolCalls.length > 0) {
+          await this._saveAssistantMessage(
+            session.id, partialContent, streamId, effectiveAgentRole,
+            finalUsage, finalModel, allReasoning.map((r) => r.text).join('\n\n---\n\n'), debugCollector, true, providerName,
+            MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
+          );
+        }
+
+        publishChunk('stream.cancelled', {
+          stream_id: streamId,
+          content: partialContent,
+        });
+
+        this._cancellationTokens.delete(streamId);
+        return {};
       }
 
       // 7. Handle max iterations exceeded

@@ -1048,3 +1048,246 @@ describe('taskTool × shellPolicy саб-агента (B3/B5)', () => {
     expect(names).toContain('read_file');
   });
 });
+
+/**
+ * Провайдер саб-агента, реагирующий на отмену (cancelToken):
+ * итерация 0 — текст + вызов read_file; итерация 1 — длинный стрим,
+ * который прекращается сразу после отмены (раньше игнорировал её).
+ */
+function makeAbortableSubagentProvider(state: { calls: number }) {
+  return {
+    model: 'test-model',
+    name: 'test-provider',
+    chatAsync: vi.fn().mockImplementation(async function* (
+      _messages: unknown,
+      _systemPrompt: unknown,
+      _tools: unknown,
+      _debugCollector: unknown,
+      ct?: { cancelled: boolean },
+    ) {
+      const n = state.calls++;
+      if (n === 0) {
+        yield {
+          isFinal: true,
+          content: 'Изучаю файлы проекта...',
+          toolCalls: [{
+            id: 'sub_call_1',
+            function: { name: 'read_file', arguments: JSON.stringify({ file_path: 'a.txt' }) },
+          }],
+        };
+        return;
+      }
+      yield { isFinal: false, content: 'Частичный ответ: начал работу. ' };
+      for (let i = 0; i < 300; i++) {
+        if (ct?.cancelled) return;
+        yield { isFinal: false, content: `фрагмент-${i} ` };
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      yield { isFinal: true, content: 'РАБОТА ЗАВЕРШЕНА ПОЛНОСТЬЮ', toolCalls: [] };
+    }),
+  };
+}
+
+describe('taskTool × отмена и ошибки (abort / provider error)', () => {
+  let store: FileStore;
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-task-abort-'));
+    store = new FileStore({ dataDir: tmpDir });
+    sessionManager = new SessionManager(store);
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeMultiStepRegistry(): MockAgentRegistry {
+    return {
+      get: (id: string) => {
+        if (id === 'explore') {
+          return { id, agentMode: ['subagent'], subagentPrompt: 'You are a test subagent.', maxSteps: 5 };
+        }
+        return undefined;
+      },
+      getSubagents: () => [{ id: 'explore' }],
+      getToolsForAgent: () => [],
+    };
+  }
+
+  it('abort во время работы task: сабагент останавливается, tool_result содержит маркер отмены, частичный текст, шаги и child_session_id', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const state = { calls: 0 };
+    const provider = makeAbortableSubagentProvider(state);
+    const ac = new AbortController();
+
+    const promise = taskTool.execute(
+      { description: 'long task', prompt: 'hello', subagent_type: 'explore' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: ac.signal,
+        workingDir: tmpDir,
+        extra: {
+          provider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMultiStepRegistry(),
+          toolRegistry: createToolRegistry(),
+        },
+      },
+    );
+
+    // Ждём запуска второй итерации (долгий стрим), затем «Стоп»
+    await vi.waitFor(() => expect(state.calls).toBe(2), { timeout: 3000 });
+    ac.abort();
+    const result = await promise;
+
+    // Сабагент НЕ прошёл все итерации: третья LLM-итерация не началась
+    expect(state.calls).toBe(2);
+    expect(result.isError).toBeFalsy();
+
+    // tool_result: маркер отмены + частичный текст + шаги + child_session_id
+    expect(result.content).toContain('<status>stopped_by_user</status>');
+    expect(result.content).toContain('<child_session_id>');
+    expect(result.content).toContain('Частичный ответ: начал работу');
+    expect(result.content).toContain('<steps_completed>');
+    expect(result.content).toContain('read_file');
+    expect(result.content).not.toContain('РАБОТА ЗАВЕРШЕНА ПОЛНОСТЬЮ');
+
+    // metadata-маркеры
+    expect(result.metadata!.stopped_by).toBe('user');
+    expect(result.metadata!.interrupted).toBe(true);
+    expect(result.metadata!.child_session_id).toBeDefined();
+    const toolCalls = result.metadata!.tool_calls as Array<{ name: string }>;
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]!.name).toBe('read_file');
+
+    // Частичный стрим оборванной итерации сохранён в истории дочерней сессии
+    const childSessionId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childSessionId))!;
+    expect(child).toBeDefined();
+    const partialMsg = child.messages.find((m) => m.metadata?.partial === true);
+    expect(partialMsg).toBeDefined();
+    expect(partialMsg!.content).toContain('Частичный ответ: начал работу');
+    // Промпт и выполненный tool-call тоже в истории дочерней сессии
+    expect(child.messages.some((m) => m.role === MessageRole.USER && m.content === 'hello')).toBe(true);
+    expect(child.messages.some((m) => m.role === MessageRole.TOOL)).toBe(true);
+    // Маркер прерывания
+    const stopMarker = child.messages.find((m) => m.metadata?.stopped_by === 'user');
+    expect(stopMarker).toBeDefined();
+    // Последним сообщением должен быть маркер остановки (частичный текст перед ним)
+    expect(child.messages[child.messages.length - 1]!.metadata?.stopped_by).toBe('user');
+  });
+
+  it('abort по внешнему сигналу уже в aborted-состоянии: task немедленно останавливается', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const state = { calls: 0 };
+    const provider = makeAbortableSubagentProvider(state);
+    const ac = new AbortController();
+    ac.abort();
+
+    const result = await taskTool.execute(
+      { description: 'pre-aborted', prompt: 'hello', subagent_type: 'explore' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: ac.signal,
+        workingDir: tmpDir,
+        extra: {
+          provider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMultiStepRegistry(),
+          toolRegistry: createToolRegistry(),
+        },
+      },
+    );
+
+    // Провайдер вообще не вызван — отмена наступила до первого стрима
+    expect(state.calls).toBe(0);
+    expect(result.content).toContain('<status>stopped_by_user</status>');
+    expect(result.content).toContain('<child_session_id>');
+    expect(result.metadata!.stopped_by).toBe('user');
+  });
+
+  it('ошибка провайдера внутри task: tool_result содержит описание ошибки + child_session_id, история дочерней сессии сохранена', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const provider = {
+      model: 'test-model',
+      name: 'test-provider',
+      chatAsync: vi.fn().mockImplementation(async function* () {
+        yield { isFinal: false, content: '' };
+        throw new Error('provider down');
+      }),
+    };
+
+    const result = await taskTool.execute(
+      { description: 'broken task', prompt: 'hello', subagent_type: 'explore' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMultiStepRegistry(),
+          toolRegistry: createToolRegistry(),
+        },
+      },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('provider down');
+    expect(result.content).toContain('<status>error</status>');
+    expect(result.content).toContain('<child_session_id>');
+
+    const childSessionId = result.metadata!.child_session_id as string;
+    expect(childSessionId).toBeDefined();
+    expect(result.metadata!.error).toBe(true);
+
+    // История дочерней сессии сохранена: промпт + сообщение об ошибке
+    const child = (await sessionManager.getSession(childSessionId))!;
+    expect(child.messages.some((m) => m.role === MessageRole.USER && m.content === 'hello')).toBe(true);
+    const errMsg = child.messages.find((m) => m.metadata?.error === true);
+    expect(errMsg).toBeDefined();
+    expect(errMsg!.content).toContain('provider down');
+  });
+
+  it('обычный (не прерванный) результат содержит child_session_id в content внутри <task_result>', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: makeMockProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+        },
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('<task_result>');
+    expect(result.content).toContain('</task_result>');
+    const match = result.content.match(/<child_session_id>([^<]+)<\/child_session_id>/);
+    expect(match).not.toBeNull();
+    // id из content совпадает с id из metadata
+    expect(match![1]).toBe(result.metadata!.child_session_id);
+  });
+});

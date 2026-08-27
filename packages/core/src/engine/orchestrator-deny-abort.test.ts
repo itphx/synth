@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { z } from 'zod';
 import { ChatOrchestrator } from './orchestrator.js';
 import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
@@ -11,9 +12,8 @@ import { ContextConfig } from './context/config.js';
 import { ProviderFactory, BaseProvider } from '../providers/base.js';
 import type { LLMMessage, CancellationToken } from '../providers/base.js';
 import type { ContextBuilder } from './context/builder.js';
-import type { PermissionConfig } from '@itphx/synth-shared';
-import { generateId, MessageRole, nowISO, makeTextPart } from '@itphx/synth-shared';
-import type { Message } from '@itphx/synth-shared';
+import type { PermissionConfig, ToolDefinition, Message } from '@itphx/synth-shared';
+import { generateId, MessageRole, nowISO, makeTextPart, ToolCapability } from '@itphx/synth-shared';
 
 function makeCtxBuilder(): ContextBuilder {
   return {
@@ -385,5 +385,153 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     expect(assistant).toBeDefined();
     expect(assistant!.content).toBe('Не удалось выполнить запрос: ответ модели пуст');
     await rm(h.tmpDir, { recursive: true, force: true });
+  });
+});
+
+/** Тул, который «работает», пока его не прервут через ctx.abortSignal. */
+function makeSlowAbortableTool(): ToolDefinition {
+  return {
+    name: 'slow_tool',
+    description: 'тестовый долгий тул — завершается при отмене',
+    parameters: z.object({}),
+    capabilities: [ToolCapability.RUNTIME],
+    async execute(_args: Record<string, unknown>, ctx: { abortSignal?: AbortSignal }) {
+      await new Promise<void>((resolve) => {
+        if (ctx.abortSignal?.aborted) {
+          resolve();
+          return;
+        }
+        ctx.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+      return { content: 'slow_tool: прерван отменой' };
+    },
+  } as unknown as ToolDefinition;
+}
+
+/**
+ * Провайдер для теста отмены ВО ВРЕМЯ исполнения тула:
+ * вызов 0 — текст + slow_tool; вызов 1 — не должен произойти
+ * (если баг вернулся, провайдер повиснет до отмены — тест это детектирует).
+ */
+class MockToolCancelProvider extends BaseProvider {
+  static calls = 0;
+
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+  ): Promise<import('@itphx/synth-shared').LLMResponse> {
+    return { content: '', model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    ct?: CancellationToken,
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    const n = MockToolCancelProvider.calls++;
+    if (n === 0) {
+      yield {
+        content: 'Запускаю долгий тул', isFinal: true,
+        toolCalls: [{ id: 'call_slow', function: { name: 'slow_tool', arguments: '{}' } }],
+        model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      };
+      return;
+    }
+    // Второй итерации быть не должно: до её начала отмена уже зафиксирована.
+    // Если баг вернулся — цикл родителя дойдёт сюда и провайдер повиснет.
+    while (!ct?.cancelled) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    return;
+  }
+
+  getProviderName(): string {
+    return 'mocktoolcancel';
+  }
+}
+
+describe('ChatOrchestrator: отмена во время исполнения тула', () => {
+  beforeEach(() => {
+    ProviderFactory.register('mocktoolcancel', MockToolCancelProvider);
+    MockToolCancelProvider.calls = 0;
+  });
+
+  afterEach(async () => {
+    ProviderFactory['_providers'].delete('mocktoolcancel');
+  });
+
+  it('abort во время тулa: публикуется stream.cancelled (не «ответ модели пуст» через stream.done), tool-chain сохранён', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'synth-tool-cancel-'));
+    const store = new FileStore({ dataDir: tmpDir });
+    const sessionManager = new SessionManager(store);
+    const eventBus = new EventBus();
+    const toolRegistry = createToolRegistry();
+    toolRegistry.register(makeSlowAbortableTool());
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus,
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: (name: string) => {
+        return { name, type: 'mocktoolcancel', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
+      },
+      toolRegistry,
+      permissionConfig: { rules: {}, askTimeoutMs: 1000 } as PermissionConfig,
+      defaultWorkingDir: tmpDir,
+      contextConfig: new ContextConfig({ userDataDir: join(tmpDir, 'context') }),
+    });
+    const session = await sessionManager.createSession({
+      title: 'ToolCancel',
+      settings: { provider: 'mocktoolcancel', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+    });
+    const msg = makeMessage();
+    await sessionManager.addMessage(session.id, msg);
+
+    const ac = new AbortController();
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const processMessage = orchestrator.createProcessMessage();
+    const fresh = (await sessionManager.getSession(session.id))!;
+    const userMsg = fresh.messages.find((m) => m.role === MessageRole.USER)!;
+
+    const promise = processMessage(fresh, userMsg, ac.signal, (event, data) => {
+      chunks.push({ event, data });
+      // Тул запущен — жмём «Стоп»
+      if (event === 'tool_call.started') {
+        setTimeout(() => ac.abort(), 10);
+      }
+    });
+    await promise;
+
+    // Сабагент-тул прерван, вторая LLM-итерация не началась
+    expect(MockToolCancelProvider.calls).toBe(1);
+
+    // Завершение — как отмена: stream.cancelled, БЕЗ stream.done с «ответ модели пуст»
+    const cancelled = chunks.find((c) => c.event === 'stream.cancelled');
+    expect(cancelled).toBeDefined();
+    expect((cancelled!.data as Record<string, unknown>).stream_id).toBe(
+      (msg.metadata as Record<string, unknown>).stream_id,
+    );
+    const done = chunks.find((c) => c.event === 'stream.done');
+    expect(done).toBeUndefined();
+
+    // Результат тулa опубликован (UI видит, чем тул завершился)
+    const toolResult = chunks.find((c) => c.event === 'tool_call.result');
+    expect(toolResult).toBeDefined();
+    expect(((toolResult!.data as Record<string, unknown>).result as { content: string }).content)
+      .toContain('прерван отменой');
+
+    // История: tool-chain сохранён (assistant с toolCalls + tool), без фейкового финала
+    const updated = (await sessionManager.getSession(session.id))!;
+    const toolMsg = updated.messages.find((m) => m.role === MessageRole.TOOL);
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg!.content).toContain('прерван отменой');
+    const cancelledAssistant = [...updated.messages].reverse().find(
+      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+    );
+    expect(cancelledAssistant).toBeDefined();
+    expect(cancelledAssistant!.metadata?.tool_results).toBeDefined();
+    await rm(tmpDir, { recursive: true, force: true });
   });
 });
