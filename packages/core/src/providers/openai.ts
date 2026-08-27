@@ -323,8 +323,31 @@ export class OpenAIProvider extends BaseProvider {
         content: msg.content,
       };
 
-      if (msg.toolUse) entry.tool_calls = msg.toolUse;
+      if (msg.toolUse) {
+        // Нормализация function.arguments: объект → JSON-строка. OpenAI-совместимые
+        // API (DeepSeek через open-webui) требуют строку и возвращают 400
+        // «invalid type: map, expected a string» на объекте. Строку не трогаем,
+        // невалидное/undefined оставляем как есть — запрос не роняем.
+        entry.tool_calls = msg.toolUse.map((tc) => {
+          const fn = tc.function as Record<string, unknown> | undefined;
+          if (!fn || typeof fn.arguments !== 'object' || fn.arguments === null) return tc;
+          try {
+            return {
+              ...tc,
+              function: { ...fn, arguments: JSON.stringify(fn.arguments) },
+            };
+          } catch {
+            return tc;
+          }
+        });
+      }
       if (msg.toolCallId) entry.tool_call_id = msg.toolCallId;
+
+      // DeepSeek reasoning-модели требуют возврат reasoning_content в повторной
+      // истории (иначе 400 «The reasoning_content ... must be passed back»).
+      if (msg.role === 'assistant' && msg.reasoning) {
+        entry.reasoning_content = msg.reasoning;
+      }
 
       formatted.push(entry);
     }
