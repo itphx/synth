@@ -1,5 +1,37 @@
 # Журнал задач оркестратора
 
+## 2026-08-25 (продолжение) — fix: провайдер itphx / deepseek-v4-flash, вторая волна
+- **Задача:** «Та же ошибка. Вероятно проблема в конкретной сессии. Изучи Сессию Разговор о разном. Протестируй, разберись.»
+- **Тип:** bug
+- **Исполнитель:** @fixer (диагностика/сквозной тест — оркестратор)
+- **Результат:** PASS (build/typecheck/lint/test + реальный ретрай сессии через API ✅)
+- **Коммит:** — (не выполнялся, нет явной просьбы; в дереве чужие незакоммиченные правки)
+- **Первопричина (воспроизведена):** после первого фикса (object-arguments) всплыла следующая ошибка: `Invalid schema for function 'plan_write': schema must be a JSON Schema of 'type: object', got 'type: string'`. `zodToJsonSchema` (`packages/core/src/engine/tools/json-schema.ts`) не обрабатывал `z.discriminatedUnion` — схема `planWriteSchema` (plan.ts:250) проваливалась в fallback `{type:'string'}`. DeepSeek строго валидирует tool-схемы и требует верхнеуровневый `type:'object'` (проверено реальными запросами: `{type:'string'}` → ошибка; верхнеуровневый `{anyOf:[...]}` → тоже «got type: null»; `{type:'object', properties, required:['action']}` → принимается). Вложенные `z.union` в todo.ts DeepSeek принимает (nested anyOf — ок), их не трогали.
+- **Исправление:**
+  - `packages/core/src/engine/tools/json-schema.ts`: ветка `instanceof z.ZodDiscriminatedUnion` перед fallback — слияние properties всех вариантов, `properties[discriminator] = {type:'string', enum:[все значения]}`, `required:[discriminator]` (поля вариантов опциональны, иначе create_item.title стал бы обязательным для delete_item). Runtime-валидация не меняется (`safeParse` строгий discriminated union).
+  - Новый тест `packages/core/src/engine/tools/json-schema.test.ts` (4 кейса).
+  - Предыдущий фикс (openai.ts arguments→string + reasoning_content, orchestrator.ts reasoning-проброс) — в рабочем дереве, работает.
+- **Проверка:** `pnpm build`/`typecheck` ✅; `pnpm lint` 0 errors ✅; `pnpm test` 1138 (core 872) ✅; сквозной тест: перезапуск backend+core с новым кодом, ретрай сообщения [144] сессии «Разговор о разном» через API → `stream.done`, модель deepseek.deepseek-v4-flash выполнила задачу (запустила subagent explore для чтения ~/.ssh/config), 1208 чанков, без ошибок; контрольный запрос → «Всё работает.». Сообщения [145-148] сохранены без `last_error`.
+- **Замечание про «This model does not support image»:** так DeepSeek отвечает на `image_url`-части контента (воспроизведено тестовым запросом); в коде synth генерации image_url нет (grep). Вероятно, была одной из 400-ошибок в цепочке неработоспособности (пользователь видел разные ошибки) либо приходила от запроса с изображением извне. После фиксов не воспроизводится. Если повторится — отдельная диагностика (проверить, не попадает ли data:image URI в контент).
+
+## 2026-08-25 — fix: провайдер itphx / deepseek.deepseek-v4-flash
+- **Задача:** «Перестал работать провайдер itphx, в частности модель deepseek.deepseek-v4-flash». Лог провайдера: `publish_model_provider_request_failed ... url=https://api.deepseek.com model=deepseek-v4-flash ... "This model does not support image"`; лог бэкенда: `messages[20]: invalid type: map, expected a string`.
+- **Тип:** bug
+- **Исполнитель:** @fixer (диагностика и сквозная проверка — оркестратор)
+- **Результат:** PASS (typecheck ✅, lint 0 errors ✅, test 1134 ✅, сквозная проверка через реальный open-webui → DeepSeek ✅)
+- **Коммит:** — (не выполнялся, нет явной просьбы; в рабочем дереве чужие незакоммиченные правки feat fix/subagent-display — task.ts, StreamingPlaceholder.tsx, callId в orchestrator.ts — их не трогали)
+- **Первопричина (воспроизведена):**
+  - Коммит `74df4ba` (21.08) добавил в Ollama-провайдер нормализацию `function.arguments` **строка → объект** при разборе ответов (`_parseResponse`, `chatAsync`). Объекты сохраняются в `toolCalls` сессии (`_persistToolChain`).
+  - При переигровке истории на OpenAI-совместимый провайдер (itphx → open-webui → api.deepseek.com) `openai.ts _formatMessages` передавал `tool_calls[].function.arguments` **объектом**, а API DeepSeek требует **JSON-строку** → HTTP 400 `messages[N]: invalid type: map, expected a string`. Точное тело synth → open-webui воспроизводило ошибку 1-в-1.
+  - Дополнительно: DeepSeek reasoning-модели (deepseek-v4-flash) требуют возврата `reasoning_content` в повторных assistant-сообщениях → иначе 400 `The reasoning_content in the thinking mode must be passed back to the API`. Воспроизведено: добавление `reasoning_content` устраняет ошибку.
+- **Исправление:**
+  - `packages/core/src/providers/openai.ts _formatMessages`: `tool_calls` маппятся, объектные `function.arguments` сериализуются в JSON-строку (try/catch, циклические ссылки не роняют); строка/null/undefined/число — как есть. Для `role=assistant` с `msg.reasoning` добавляется `reasoning_content`.
+  - `packages/core/src/engine/orchestrator.ts _sessionMessagesToLlm`: проброс `reasoning: msg.reasoning` для own-сообщений ассистента.
+  - Новый тест `packages/core/src/providers/openai.test.ts` (4 кейса, стиль ollama.test.ts).
+  - `ollama.ts` НЕ менялся (его поведение нужно для Ollama; с фиксом openai.ts хранение объектов безвредно).
+- **Проверка:** `pnpm typecheck` ✅; `pnpm lint` 0 errors ✅; `pnpm test` (shared 66 / core 868 / ui 30 / backend 170) ✅; сквозной прогон реального тела сессии через исправленный `_formatMessages` → 0 объектных arguments / 8 строк / 24 reasoning_content → POST в open-webui → DeepSeek ответил 200 с reasoning_content ✅ (до фикса — `messages[20]: invalid type: map`).
+- **Замечание про «This model does not support image»:** так DeepSeek отвечает на `image_url`-части контента (воспроизведено тестовым запросом). В коде synth генерации image_url нет (grep) — вероятно, изображение/data:image URI попадало в контент иным путём (внешний источник). Отдельная задача, если воспроизведётся.
+
 ## 2026-08-04
 - **Задача:** Баг — перестал работать просмотрщик и редактор файлов
 - **Тип:** bug
