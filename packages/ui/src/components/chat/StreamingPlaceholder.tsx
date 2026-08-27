@@ -5,6 +5,7 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { ProviderIcon } from '@/components/admin/ProviderIcon'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
+import { SubagentPart, type SubagentPartData } from './SubagentPart'
 import { MarkdownContent } from './MarkdownContent'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
@@ -36,31 +37,54 @@ function buildToolCallTree(calls: LiveToolCall[]): ToolCallNode[] {
   return roots
 }
 
+/** Собираем данные саб-агента из live-узла `task` — стриминг рендерится как итоговый SubagentPart. */
+function toSubagentPartData(node: ToolCallNode): SubagentPartData {
+  const args = node.call.args as Record<string, unknown>
+  const meta = (node.call.result?.metadata as Record<string, unknown>) || {}
+  return {
+    name: (args?.subagent_type as string) || 'task',
+    prompt: args?.prompt as string | undefined,
+    response: (meta.final_content as string) || (meta.description as string) || '',
+    sessionId: meta.child_session_id as string | undefined,
+    reasoning_blocks: node.call.subagentReasoningBlocks,
+    intermediate_text_blocks: node.call.subagentIntermediateTextBlocks,
+    tool_calls: (node.children || []).map((c) => ({
+      name: c.call.name,
+      args: c.call.args,
+      id: c.call.callId,
+      result: c.call.result,
+      started_at: c.call.startedAt,
+      completed_at: c.call.completedAt,
+      iteration: c.call.iteration ?? 0,
+    })),
+    description: meta.description as string | undefined,
+  }
+}
+
 function ToolCallTreeNode({ node }: { node: ToolCallNode }) {
+  const isTask = node.call.name === 'task'
+
+  // Саб-агент во время стрима рисуем как итоговый SubagentPart: PROMPT вместо
+  // JSON-аргументов, без двойной обводки, сам сворачивается по клику на заголовок.
+  if (isTask) {
+    return <SubagentPart subagent={toSubagentPartData(node)} />
+  }
+
   return (
-    <div>
-      <ToolCallPart
-        toolCall={{
-          name: node.call.name,
-          args: node.call.args,
-          id: node.call.callId,
-          callId: node.call.callId,
-          status: node.call.status,
-          result: node.call.result,
-          startedAt: node.call.startedAt,
-          completedAt: node.call.completedAt,
-          iteration: node.call.iteration,
-          parentCallId: node.call.parentCallId,
-        }}
-      />
-      {node.children.length > 0 && (
-        <div className="ml-3 border-l-2 border-muted/50 pl-2">
-          {node.children.map((child) => (
-            <ToolCallTreeNode key={child.call.callId} node={child} />
-          ))}
-        </div>
-      )}
-    </div>
+    <ToolCallPart
+      toolCall={{
+        name: node.call.name,
+        args: node.call.args,
+        id: node.call.callId,
+        callId: node.call.callId,
+        status: node.call.status,
+        result: node.call.result,
+        startedAt: node.call.startedAt,
+        completedAt: node.call.completedAt,
+        iteration: node.call.iteration,
+        parentCallId: node.call.parentCallId,
+      }}
+    />
   )
 }
 
@@ -71,19 +95,24 @@ function buildTimeline(
 ): Array<
   | { type: 'reasoning'; data: ReasoningBlockData }
   | { type: 'intermediate_text'; data: IntermediateTextBlockData }
-  | { type: 'tool_calls'; calls: LiveToolCall[] }
+  | { type: 'tool_tree'; roots: ToolCallNode[] }
 > {
+  // Строим ДЕРЕВО тул-вызовов глобально (по всем итерациям): внутренние вызовы
+  // саб-агента (`parentCallId` → `task`) вкладываются под родителя независимо
+  // от собственной нумерации итераций и не занимают отдельного слота таймлайна.
+  const roots = buildToolCallTree(toolCalls)
+
   const items: Array<
     | { type: 'reasoning'; data: ReasoningBlockData }
     | { type: 'intermediate_text'; data: IntermediateTextBlockData }
-    | { type: 'tool_calls'; calls: LiveToolCall[] }
+    | { type: 'tool_tree'; roots: ToolCallNode[] }
   > = []
 
   const maxIter = Math.max(
     0,
     ...reasoningBlocks.map((r) => r.iteration),
     ...intermediateTextBlocks.map((it) => it.iteration),
-    ...toolCalls.map((tc) => tc.iteration),
+    ...roots.map((r) => r.call.iteration),
   )
 
   for (let iter = 0; iter <= maxIter; iter++) {
@@ -93,9 +122,9 @@ function buildTimeline(
     for (const it of intermediateTextBlocks) {
       if (it.iteration === iter) items.push({ type: 'intermediate_text', data: it })
     }
-    const iterToolCalls = toolCalls.filter((tc) => tc.iteration === iter)
-    if (iterToolCalls.length > 0) {
-      items.push({ type: 'tool_calls', calls: iterToolCalls })
+    const iterRoots = roots.filter((r) => r.call.iteration === iter)
+    if (iterRoots.length > 0) {
+      items.push({ type: 'tool_tree', roots: iterRoots })
     }
   }
 
@@ -211,11 +240,10 @@ export function StreamingPlaceholder({ stream, onStop, retry, onRetryNow, onCanc
               </div>
             )
           }
-          if (item.type === 'tool_calls') {
-            const toolTree = buildToolCallTree(item.calls)
+          if (item.type === 'tool_tree') {
             return (
               <div key={`t${i}`} className="mb-2">
-                {toolTree.map((node) => (
+                {item.roots.map((node) => (
                   <ToolCallTreeNode key={node.call.callId} node={node} />
                 ))}
               </div>

@@ -29,6 +29,8 @@ interface ToolCallPartProps {
   /** Реальные значения секретов для плейсхолдеров ⟦SYNTH_SECRET_N⟧ (AD-036). */
   secrets?: Record<string, string>
   sessionId?: string
+  /** Вложенный контент (например, активность саб-агента) — рендерится ВНУТРИ карточки, под заголовком. */
+  children?: React.ReactNode
 }
 
 /** JSON-строка (аргументы тула) с плейсхолдерами секретов: текст + кликабельные бейджи. */
@@ -174,7 +176,7 @@ function SubagentResult({ result, toolCall: _toolCall }: { result: ToolCallData[
   )
 }
 
-export function ToolCallPart({ toolCall, nested, secrets, sessionId }: ToolCallPartProps) {
+export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }: ToolCallPartProps) {
   const { t } = useI18n()
   const [expanded, setExpanded] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
@@ -342,6 +344,7 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId }: ToolCallP
                 </div>
               )}
             </div>
+            {children}
           </div>
         )}
       </div>

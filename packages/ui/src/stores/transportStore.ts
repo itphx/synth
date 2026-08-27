@@ -64,6 +64,7 @@ function createDispatcher(): EventDispatcher {
       removeFirstPending,
       addToolCall,
       updateToolCallResult,
+      updateToolCallSubagentProgress,
     } = useChatStore.getState()
 
     switch (type) {
@@ -386,6 +387,30 @@ function createDispatcher(): EventDispatcher {
       case 'tool_call_started': {
         const streamId = payload.stream_id as string
         if (!streamId) break
+        // Комментарий/текст модели перед вызовом тула (например, «Запускаю сабагента…»)
+        // коммитим в intermediateTextBlocks на итерации тула сразу, а не только в
+        // tool_call.loop (который срабатывает ПОСЛЕ завершения итерации). Иначе этот
+        // текст до конца работы тула висит в displayContent внизу блока и ломает
+        // порядок (комментарий оказывается ниже блока сабагента).
+        if (!payload.parent_call_id) {
+          useChatStore.setState((s) => {
+            const sessionStreams = { ...(s.streamingBySession[sid] || {}) }
+            const existing = sessionStreams[streamId]
+            if (!existing) return s
+            const iteration = (payload.iteration as number) || 0
+            const segmentText = existing.content.slice(existing._lastContentLen)
+            const nextBlocks = segmentText.trim()
+              ? [...existing.intermediateTextBlocks, { text: segmentText, iteration }]
+              : existing.intermediateTextBlocks
+            const prevLen = existing.content.length
+            sessionStreams[streamId] = {
+              ...existing,
+              intermediateTextBlocks: nextBlocks,
+              _lastContentLen: prevLen,
+            }
+            return { streamingBySession: { ...s.streamingBySession, [sid]: sessionStreams } }
+          })
+        }
         addToolCall(sid, streamId, {
           callId: payload.call_id as string,
           name: payload.name as string,
@@ -407,6 +432,25 @@ function createDispatcher(): EventDispatcher {
           isError: (payload.result as Record<string, unknown>)?.isError as boolean,
           metadata: (payload.result as Record<string, unknown>)?.metadata as Record<string, unknown> | undefined,
         })
+        break
+      }
+
+      case 'subagent.progress':
+      case 'subagent_progress': {
+        // Стриминг размышлений/промежуточного текста саб-агента родителю —
+        // вкладываются в блок `task` (по parent_call_id, т.е. call_id задачи).
+        const streamId = payload.stream_id as string
+        if (!streamId) break
+        updateToolCallSubagentProgress(
+          sid,
+          streamId,
+          (payload.parent_call_id as string) || '',
+          {
+            reasoning: (payload.reasoning as string) || '',
+            content: (payload.content as string) || '',
+            iteration: (payload.iteration as number) || 0,
+          },
+        )
         break
       }
 

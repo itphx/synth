@@ -35,6 +35,8 @@ export interface TaskExtra {
   publish?: (type: string, data: Record<string, unknown>) => void;
   streamId?: string;
   sessionId?: string;
+  /** ID собственного tool-вызова `task` — как parent_call_id для внутренних вызовов саб-агента. */
+  callId?: string;
   callerAgentRole?: string;
   /** Permissions родительской сессии (AD-029) — наследуются саб-агентом с deny-дополнениями. */
   permissionConfig?: PermissionConfig;
@@ -534,6 +536,8 @@ export const taskTool: ToolDefinition = {
         let accumulatedContent = '';
         let toolCalls: Record<string, unknown>[] | undefined = [];
         let reasoning = '';
+        let lastPublishedReasoning = '';
+        let lastPublishedContentLen = 0;
 
         try {
           for await (const chunk of effectiveProvider.chatAsync(
@@ -549,9 +553,30 @@ export const taskTool: ToolDefinition = {
               reasoning = (chunk as unknown as Record<string, unknown>).reasoning as string || reasoning;
             } else {
               accumulatedContent += chunk.content;
+              const chunkReasoning = (chunk as unknown as Record<string, unknown>).reasoning as string | undefined;
+              if (chunkReasoning) reasoning = chunkReasoning;
             }
             if (chunk.toolCalls && chunk.toolCalls.length > 0) {
               toolCalls = chunk.toolCalls;
+            }
+
+            // Стримим размышления/промежуточный текст саб-агента РОДИТЕЛЮ,
+            // чтобы в блоке `task` (по parent_call_id) они были видны во время работы.
+            if (publish) {
+              const liveReasoning = reasoning || '';
+              const liveContent = accumulatedContent || '';
+              if (liveReasoning !== lastPublishedReasoning || liveContent.length !== lastPublishedContentLen) {
+                publish('subagent.progress', {
+                  stream_id: extra.streamId,
+                  session_id: extra.sessionId,
+                  parent_call_id: extra.callId,
+                  reasoning: liveReasoning,
+                  content: liveContent,
+                  iteration,
+                });
+                lastPublishedReasoning = liveReasoning;
+                lastPublishedContentLen = liveContent.length;
+              }
             }
           }
         } catch (err) {
@@ -564,8 +589,12 @@ export const taskTool: ToolDefinition = {
 
         if (cancelToken.cancelled) break;
 
+        // Единая итерация для размышлений, промежуточного текста и вызовов
+        // инструментов этого шага — иначе в UI (и в дочерней сессии) ломается
+        // порядок: размышления идут на step N, а вызовы — на N+1.
+        const stepIteration = iteration;
         if (reasoning) {
-          allSubagentReasoning.push({ text: reasoning, iteration });
+          allSubagentReasoning.push({ text: reasoning, iteration: stepIteration });
         }
 
         if (!toolCalls || toolCalls.length === 0) {
@@ -587,7 +616,21 @@ export const taskTool: ToolDefinition = {
                 pinned: false,
                 hidden: false,
                 agentRole: params.subagent_type,
-                reasoning: reasoning || undefined,
+                // Все размышления сабагента (по итерациям), склеенные в поле
+                // reasoning — UI дочерней сессии показывает их блоками
+                // (ReasoningBlock разбивает по «\n\n---\n\n»). Без этого размышления
+                // остаются только в скрытых tool_chain-сообщениях и теряются.
+                reasoning: allSubagentReasoning.length > 0
+                  ? allSubagentReasoning.map((r) => r.text).join('\n\n---\n\n')
+                  : undefined,
+                // Как в _persistToolChain родителя: финальное сообщение несёт
+                // свёрнутую цепочку тулов, чтобы UI дочерней сессии отрисовал её
+                // так же аккуратно, как финал родительской.
+                metadata: {
+                  stream_id: extra.streamId,
+                  ...(allSubagentToolCalls.length > 0 ? { tool_results: allSubagentToolCalls } : {}),
+                  ...(allSubagentIntermediateTexts.length > 0 ? { intermediate_text_blocks: allSubagentIntermediateTexts } : {}),
+                },
               };
               const updated = await extra.sessionManager.addMessage(childSessionId, assistantMsg);
               if (updated && extra.eventBus) {
@@ -623,6 +666,11 @@ export const taskTool: ToolDefinition = {
               hidden: false,
               agentRole: params.subagent_type,
               reasoning: reasoning || undefined,
+              // OpenAI-совместимая цепочка: assistant(toolCalls) → tool.
+              // tool_chain=true — UI дочерней сессии скрывает промежуточные
+              // сообщения (визуализация уже в финальном с tool_results).
+              toolCalls,
+              metadata: { stream_id: extra.streamId, tool_chain: true },
             };
             const updated = await extra.sessionManager.addMessage(childSessionId, assistantMsg);
             if (updated && extra.eventBus) {
@@ -688,6 +736,12 @@ export const taskTool: ToolDefinition = {
                   pinned: false,
                   hidden: false,
                   toolCallId: tcId,
+                  metadata: {
+                    stream_id: extra.streamId,
+                    tool_chain: true,
+                    tool_name: toolName,
+                    args: toolArgs,
+                  },
                 };
                 const updated = await extra.sessionManager.addMessage(childSessionId, toolResultMsg);
                 if (updated && extra.eventBus) {
@@ -707,7 +761,10 @@ export const taskTool: ToolDefinition = {
             call_id: tcId,
             name: toolName,
             arguments: toolArgs,
-            iteration,
+            iteration: stepIteration,
+            // Вложенность внутренних вызовов саб-агента под блоком `task`
+            // в родительском стриме (UI строит дерево по parent_call_id).
+            parent_call_id: extra.callId,
           });
 
           const toolDef = extra.toolRegistry?.get(toolName);
@@ -866,7 +923,8 @@ export const taskTool: ToolDefinition = {
             call_id: tcId,
             name: toolName,
             result: toolResult,
-            iteration,
+            iteration: stepIteration,
+            parent_call_id: extra.callId,
           });
 
           allSubagentToolCalls.push({
@@ -876,7 +934,7 @@ export const taskTool: ToolDefinition = {
             result: { content: toolResult.content, isError: toolResult.isError },
             started_at: tcStartedAt,
             completed_at: new Date().toISOString(),
-            iteration,
+            iteration: stepIteration,
           });
 
           const toolResultLLMMsg: LLMMessage = {
@@ -903,6 +961,12 @@ export const taskTool: ToolDefinition = {
                 pinned: false,
                 hidden: false,
                 toolCallId: tcId,
+                metadata: {
+                  stream_id: extra.streamId,
+                  tool_chain: true,
+                  tool_name: toolName,
+                  args: toolArgs,
+                },
               };
               const updated = await extra.sessionManager.addMessage(childSessionId, toolResultMsg);
               if (updated && extra.eventBus) {
@@ -924,7 +988,7 @@ export const taskTool: ToolDefinition = {
         publish?.('tool_call.loop', {
           stream_id: extra.streamId,
           session_id: extra.sessionId,
-          iteration,
+          iteration: stepIteration,
           total_tool_calls: toolCalls.length,
         });
 

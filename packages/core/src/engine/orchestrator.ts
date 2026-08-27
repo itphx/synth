@@ -1224,6 +1224,9 @@ export class ChatOrchestrator {
                         publishChunk(type as never, data),
                       streamId,
                       sessionId: session.id,
+                      // ID собственного tool-вызова — для вложенности вызовов
+                      // саб-агента под блоком `task` в родительском стриме.
+                      callId: tcId,
                       toolRegistry: this._toolRegistry,
                       permissionConfig: effectivePermissionConfig,
                       shellPolicy: this._getProtectedPaths() ?? undefined,
@@ -2076,6 +2079,7 @@ export class ChatOrchestrator {
         branchId: '',
         toolUse: isOwnMessage ? msg.toolCalls : undefined,
         toolCallId: isOwnMessage ? msg.toolCallId : undefined,
+        reasoning: isOwnMessage && llmRole === MessageRole.ASSISTANT ? msg.reasoning : undefined,
         agentRole: msg.agentRole,
       });
     }

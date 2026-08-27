@@ -68,6 +68,10 @@ export interface LiveToolCall {
   completedAt?: string
   iteration: number
   parentCallId?: string
+  /** Размышления саб-агента, стримящиеся внутри блока `task` (во время выполнения). */
+  subagentReasoningBlocks?: ReasoningBlockData[]
+  /** Промежуточный текст саб-агента, стримящийся внутри блока `task`. */
+  subagentIntermediateTextBlocks?: IntermediateTextBlockData[]
 }
 
 export interface StreamState {
@@ -152,6 +156,7 @@ interface ChatStore {
   updateStreamChunk: (sessionId: string, streamId: string, content: string, reasoning: string, model?: string, provider?: string, iteration?: number) => void
   addToolCall: (sessionId: string, streamId: string, tc: LiveToolCall) => void
   updateToolCallResult: (sessionId: string, streamId: string, callId: string, result: { content: string; isError?: boolean; metadata?: Record<string, unknown> }) => void
+  updateToolCallSubagentProgress: (sessionId: string, streamId: string, callId: string, patch: { reasoning?: string; content?: string; iteration?: number }) => void
   finishStream: (sessionId: string, streamId: string, metadata: StreamDoneMetadata) => void
   cancelStream: (sessionId: string, streamId: string) => void
   addStreamError: (sessionId: string, error: StreamError) => void
@@ -272,9 +277,20 @@ export const useChatStore = create<ChatStore>((set) => ({
       const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
       const existing = sessionStreams[streamId]
       if (!existing) return s
+      const idx = existing.toolCalls.findIndex((c) => c.callId === tc.callId)
+      let toolCalls: LiveToolCall[]
+      if (idx >= 0) {
+        // Дедупликация по callId: повторный tool_call.started для того же вызова
+        // обновляет узел (статус/итерация), а не создаёт «призрачный» дубль
+        // (например, при переизлучении read_file reason-моделью в стриме).
+        toolCalls = [...existing.toolCalls]
+        toolCalls[idx] = { ...toolCalls[idx]!, ...tc }
+      } else {
+        toolCalls = [...existing.toolCalls, tc]
+      }
       sessionStreams[streamId] = {
         ...existing,
-        toolCalls: [...existing.toolCalls, tc],
+        toolCalls,
       }
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
@@ -293,6 +309,49 @@ export const useChatStore = create<ChatStore>((set) => ({
         result,
         completedAt: new Date().toISOString(),
       }
+      sessionStreams[streamId] = { ...existing, toolCalls: updated }
+      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
+    }),
+
+  updateToolCallSubagentProgress: (sessionId, streamId, callId, patch) =>
+    set((s) => {
+      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
+      const existing = sessionStreams[streamId]
+      if (!existing) return s
+      const idx = existing.toolCalls.findIndex((tc) => tc.callId === callId)
+      if (idx === -1) return s
+      const tc = existing.toolCalls[idx]!
+      const updated = [...existing.toolCalls]
+
+      // Размышления саб-агента: накапливаем по итерациям (как reasoningBlocks основного стрима).
+      let reasoningBlocks = tc.subagentReasoningBlocks ? [...tc.subagentReasoningBlocks] : []
+      if (patch.reasoning && patch.reasoning.trim()) {
+        const iter = patch.iteration ?? 0
+        if (reasoningBlocks.length === 0) {
+          reasoningBlocks = [{ text: patch.reasoning, iteration: iter }]
+        } else {
+          const last = reasoningBlocks[reasoningBlocks.length - 1]!
+          if (last.iteration === iter && patch.reasoning.length >= last.text.length) {
+            reasoningBlocks = [...reasoningBlocks.slice(0, -1), { ...last, text: patch.reasoning }]
+          } else {
+            reasoningBlocks = [...reasoningBlocks, { text: patch.reasoning, iteration: iter }]
+          }
+        }
+      }
+
+      // Промежуточный текст саб-агента.
+      let intermediateTextBlocks = tc.subagentIntermediateTextBlocks ? [...tc.subagentIntermediateTextBlocks] : []
+      if (patch.content && patch.content.trim()) {
+        const iter = patch.iteration ?? 0
+        const lastText = intermediateTextBlocks[intermediateTextBlocks.length - 1]
+        if (lastText && lastText.iteration === iter) {
+          intermediateTextBlocks = [...intermediateTextBlocks.slice(0, -1), { ...lastText, text: patch.content }]
+        } else {
+          intermediateTextBlocks = [...intermediateTextBlocks, { text: patch.content, iteration: iter }]
+        }
+      }
+
+      updated[idx] = { ...tc, subagentReasoningBlocks: reasoningBlocks, subagentIntermediateTextBlocks: intermediateTextBlocks }
       sessionStreams[streamId] = { ...existing, toolCalls: updated }
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
