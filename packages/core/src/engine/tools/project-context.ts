@@ -6,6 +6,7 @@ import type { ToolDefinition, ToolContext, Project } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { ProjectStore } from '../../storage/project-store.js';
 import { runGit } from './git.js';
+import { isAborted, abortedResult } from './abort.js';
 
 interface ProjectContextExtra {
   sessionManager?: SessionManager;
@@ -52,7 +53,7 @@ interface RepoInfo {
   lastCommit?: string;
 }
 
-async function detectRepoInfo(dir: string): Promise<RepoInfo | null> {
+async function detectRepoInfo(dir: string, signal?: AbortSignal): Promise<RepoInfo | null> {
   let isRepo = false;
   try {
     await access(join(dir, '.git'));
@@ -64,28 +65,28 @@ async function detectRepoInfo(dir: string): Promise<RepoInfo | null> {
   const info: RepoInfo = { path: dir, isRepo, hasChanges: false };
 
   try {
-    const branch = (await runGit(['branch', '--show-current'], dir)).stdout.trim();
+    const branch = (await runGit(['branch', '--show-current'], dir, signal)).stdout.trim();
     if (branch) info.branch = branch;
   } catch {
     // ветку не определить — пропускаем
   }
 
   try {
-    const remoteUrl = (await runGit(['remote', 'get-url', 'origin'], dir)).stdout.trim();
+    const remoteUrl = (await runGit(['remote', 'get-url', 'origin'], dir, signal)).stdout.trim();
     if (remoteUrl) info.remoteUrl = remoteUrl;
   } catch {
     // remote не настроен — пропускаем
   }
 
   try {
-    const status = (await runGit(['status', '--porcelain'], dir)).stdout;
+    const status = (await runGit(['status', '--porcelain'], dir, signal)).stdout;
     info.hasChanges = status.trim().length > 0;
   } catch {
     // статус не определить — пропускаем
   }
 
   try {
-    const lastCommit = (await runGit(['log', '-1', '--oneline'], dir)).stdout.trim();
+    const lastCommit = (await runGit(['log', '-1', '--oneline'], dir, signal)).stdout.trim();
     if (lastCommit) info.lastCommit = lastCommit;
   } catch {
     // нет коммитов — пропускаем
@@ -94,10 +95,10 @@ async function detectRepoInfo(dir: string): Promise<RepoInfo | null> {
   return info;
 }
 
-async function findReposInDir(root: string): Promise<RepoInfo[]> {
+async function findReposInDir(root: string, signal?: AbortSignal): Promise<RepoInfo[]> {
   const repos: RepoInfo[] = [];
 
-  const rootRepo = await detectRepoInfo(root);
+  const rootRepo = await detectRepoInfo(root, signal);
   if (rootRepo) repos.push(rootRepo);
 
   let entries;
@@ -110,7 +111,7 @@ async function findReposInDir(root: string): Promise<RepoInfo[]> {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     if (SKIP_DIRS.has(entry.name)) continue;
-    const repo = await detectRepoInfo(join(root, entry.name));
+    const repo = await detectRepoInfo(join(root, entry.name), signal);
     if (repo) repos.push(repo);
   }
 
@@ -150,6 +151,8 @@ export const getProjectInfoTool: ToolDefinition = {
   parameters: z.object({}),
   capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
+    // «Стоп» пришёл до запуска — не начинаем выполнение (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parts: string[] = [];
 
     const project = await loadProject(ctx);
@@ -184,7 +187,7 @@ export const getProjectInfoTool: ToolDefinition = {
       parts.push(`- План недоступен (план привязан к проекту). Чтобы работать с планом — создайте проект.`);
     }
 
-    const repo = await detectRepoInfo(projectDir);
+    const repo = await detectRepoInfo(projectDir, ctx.abortSignal);
     if (repo) {
       parts.push('');
       parts.push('## Git-репозиторий');
@@ -209,6 +212,8 @@ export const listReposTool: ToolDefinition = {
   parameters: z.object({}),
   capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
+    // «Стоп» пришёл до запуска — не начинаем выполнение (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parts: string[] = [];
 
     const project = await loadProject(ctx);
@@ -223,7 +228,7 @@ export const listReposTool: ToolDefinition = {
         // Относительные пути репозиториев резолвим относительно рабочего
         // каталога проекта, чтобы git-детект искал в правильном месте.
         const repoPath = resolveRepoPath(repoCfg.path, projectDir);
-        const repo = await detectRepoInfo(repoPath);
+        const repo = await detectRepoInfo(repoPath, ctx.abortSignal);
         if (repo) {
           parts.push(formatRepo(repo, repoPath));
         } else {
@@ -231,7 +236,7 @@ export const listReposTool: ToolDefinition = {
         }
       }
     } else {
-      const repos = await findReposInDir(projectDir);
+      const repos = await findReposInDir(projectDir, ctx.abortSignal);
       if (repos.length === 0) {
         return {
           content: `Git-репозитории в "${projectDir}" не найдены`,

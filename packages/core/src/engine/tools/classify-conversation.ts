@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition, ToolContext, ToolResult } from '@itphx/synth-shared';
+import { isAborted, abortedResult } from './abort.js';
 
 const classifyConversationSchema = z.object({
   category: z.enum(['coding', 'chat', 'research']).describe('Категория текущего разговора'),
@@ -20,8 +21,10 @@ export const classifyConversationTool: ToolDefinition = {
   parameters: classifyConversationSchema,
   execute: async (
     params: unknown,
-    _context: ToolContext,
+    ctx: ToolContext,
   ): Promise<ToolResult> => {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult('classify_conversation');
     const parsed = classifyConversationSchema.parse(params);
     return {
       content: JSON.stringify({

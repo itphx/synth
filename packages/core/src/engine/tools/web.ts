@@ -3,6 +3,7 @@ import { parse } from 'parse5';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
 import { deobfuscateText } from './obfuscation.js';
+import { isAborted, isAbortError, signalAborted, abortedResult } from './abort.js';
 
 const MAX_RESPONSE_SIZE = 50_000;
 const MAX_FETCH_URLS = 5;
@@ -110,11 +111,30 @@ function isDdgChallenge(html: string, status: number): boolean {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function duckDuckGoSearch(query: string, limit: number, attempts = SEARCH_ATTEMPTS): Promise<SearchResult[]> {
+/**
+ * Связать внешний AbortSignal («Стоп» сессии) с локальным таймаут-контроллером:
+ * при внешнем abort локальный контроллер тоже абортируется, fetch прерывается.
+ * Возвращает функцию снятия подписки.
+ */
+function linkSignal(controller: AbortController, external?: AbortSignal): () => void {
+  if (!external) return () => {};
+  if (external.aborted) {
+    controller.abort();
+    return () => {};
+  }
+  const onAbort = () => controller.abort();
+  external.addEventListener('abort', onAbort, { once: true });
+  return () => external.removeEventListener('abort', onAbort);
+}
+
+async function duckDuckGoSearch(query: string, limit: number, abortSignal?: AbortSignal, attempts = SEARCH_ATTEMPTS): Promise<SearchResult[]> {
   let lastError = '';
   for (let attempt = 0; attempt < attempts; attempt++) {
+    // «Стоп» пришёл между попытками — ретраи не выполняем
+    if (signalAborted(abortSignal)) throw new DOMException('Aborted', 'AbortError');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);
+    const unlink = linkSignal(controller, abortSignal);
 
     try {
       const response = await fetch(DDG_SEARCH_URL, {
@@ -144,6 +164,7 @@ async function duckDuckGoSearch(query: string, limit: number, attempts = SEARCH_
       lastError = (err as Error).message || String(err);
     } finally {
       clearTimeout(timer);
+      unlink();
     }
 
     await sleep(SEARCH_RETRY_DELAY_MS);
@@ -192,9 +213,10 @@ export function parseBingResults(html: string, limit: number): SearchResult[] {
   return results;
 }
 
-async function bingSearch(query: string, limit: number): Promise<SearchResult[]> {
+async function bingSearch(query: string, limit: number, abortSignal?: AbortSignal): Promise<SearchResult[]> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
+  const unlink = linkSignal(controller, abortSignal);
 
   try {
     const url = `${BING_SEARCH_URL}?q=${encodeURIComponent(query)}&count=${limit}`;
@@ -211,6 +233,7 @@ async function bingSearch(query: string, limit: number): Promise<SearchResult[]>
     return parseBingResults(html, limit);
   } finally {
     clearTimeout(timer);
+    unlink();
   }
 }
 
@@ -273,6 +296,8 @@ export const webFetchTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.WEB],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — fetch не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -296,8 +321,12 @@ export const webFetchTool: ToolDefinition = {
     const blocks: string[] = [];
 
     for (const url of urls) {
+      // «Стоп» пришёл между URL — оставшиеся не загружаем
+      if (isAborted(ctx)) return abortedResult(this.name, blocks.join('\n\n---\n\n') || undefined);
+
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const unlink = linkSignal(controller, ctx.abortSignal);
 
       try {
         const response = await fetch(url, {
@@ -305,6 +334,7 @@ export const webFetchTool: ToolDefinition = {
           headers: BROWSER_HEADERS,
         });
         clearTimeout(timer);
+        unlink();
 
         if (!response.ok) {
           blocks.push(`### ${url}\n\n❌ HTTP ${response.status} ${response.statusText}`);
@@ -342,7 +372,12 @@ export const webFetchTool: ToolDefinition = {
         blocks.push(`### ${url}\n\n${content}`);
       } catch (err: unknown) {
         clearTimeout(timer);
+        unlink();
         const error = err as Error;
+        if (isAbortError(err) && isAborted(ctx)) {
+          // «Стоп» — единый маркер прерывания + частичные блоки
+          return abortedResult(this.name, blocks.join('\n\n---\n\n') || undefined);
+        }
         if (error.name === 'AbortError') {
           blocks.push(`### ${url}\n\n❌ Таймаут`);
         } else {
@@ -374,6 +409,8 @@ export const webSearchTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.WEB],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — поиск не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -386,14 +423,16 @@ export const webSearchTool: ToolDefinition = {
 
     try {
       try {
-        const results = await duckDuckGoSearch(query, limit);
+        const results = await duckDuckGoSearch(query, limit, ctx.abortSignal);
         if (results.length > 0) {
           return { content: formatSearchResults(query, results), metadata: { query: params.query, max_results: limit, source: 'duckduckgo' } };
         }
       } catch (err: unknown) {
+        // «Стоп» — фолбэк на Bing не выполняем
+        if (signalAborted(ctx.abortSignal)) return abortedResult(this.name);
         // DDG заблокирован или недоступен — пробуем Bing
         try {
-          const results = await bingSearch(query, limit);
+          const results = await bingSearch(query, limit, ctx.abortSignal);
           if (results.length > 0) {
             return { content: formatSearchResults(query, results), metadata: { query: params.query, max_results: limit, source: 'bing' } };
           }
@@ -403,6 +442,8 @@ export const webSearchTool: ToolDefinition = {
       }
       return { content: `По запросу «${query}» ничего не найдено.`, metadata: { query: params.query, max_results: limit } };
     } catch (err: unknown) {
+      // «Стоп» — единый маркер прерывания, а не «ошибка веб-поиска»
+      if (signalAborted(ctx.abortSignal)) return abortedResult(this.name);
       return {
         content: `Ошибка веб-поиска: ${(err as Error).message || String(err)}`,
         isError: true,

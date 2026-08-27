@@ -5,6 +5,7 @@ import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
 import { resolvePath, validateInputPath } from './path-utils.js';
 import { deobfuscateText } from './obfuscation.js';
+import { isAborted, abortedResult } from './abort.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -24,6 +25,8 @@ export const executeShellTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.SHELL],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — команда не стартует (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -40,6 +43,9 @@ export const executeShellTool: ToolDefinition = {
       const { stdout, stderr } = await execFileAsync('sh', ['-c', command], {
         cwd,
         timeout,
+        // «Стоп» (POST /sessions/:id/abort → toolAbortController.abort) убивает
+        // процесс SIGTERM — зомби-процессов не остаётся.
+        signal: ctx.abortSignal,
         maxBuffer: 10 * 1024 * 1024,
         env: { ...process.env, HOME: process.env.HOME || '/root' },
       });
@@ -58,6 +64,13 @@ export const executeShellTool: ToolDefinition = {
       };
     } catch (err: unknown) {
       const execError = err as { stdout?: string; stderr?: string; killed?: boolean; code?: number; message?: string };
+
+      // Прерывание по «Стоп» — вернуть единый маркер отмены + частичный вывод
+      if (isAborted(ctx)) {
+        const partial = [execError.stdout, execError.stderr].filter(Boolean).join('\n');
+        return abortedResult(this.name, partial || undefined);
+      }
+
       let output = '';
       if (execError.stdout) output += execError.stdout;
       if (execError.stderr) output += (output ? '\n--- stderr ---\n' : '') + execError.stderr;

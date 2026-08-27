@@ -4,6 +4,7 @@ import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition, TodoItem, TodoStatus, TodoPriority } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
+import { isAborted, abortedResult } from './abort.js';
 
 export interface TodoToolExtra {
   sessionManager?: SessionManager;
@@ -118,6 +119,8 @@ export const todoWriteTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: argError(this.name, parsed.error.issues), isError: true };
@@ -168,6 +171,8 @@ export const todoListTool: ToolDefinition = {
   parameters: z.object({}),
   capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const extra = ctx.extra as TodoToolExtra | undefined;
 
     const missing = requireSessionManager(extra, this.name);
@@ -216,6 +221,8 @@ export const todoAddTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: argError(this.name, parsed.error.issues), isError: true };
@@ -276,6 +283,8 @@ export const todoUpdateTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: argError(this.name, parsed.error.issues), isError: true };
@@ -356,6 +365,8 @@ export const todoDeleteTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: argError(this.name, parsed.error.issues), isError: true };

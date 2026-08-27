@@ -12,6 +12,7 @@ import type {
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import type { ProjectStore } from '../../storage/project-store.js';
+import { isAborted, abortedResult } from './abort.js';
 
 export interface PlanToolExtra {
   sessionManager?: SessionManager;
@@ -142,6 +143,8 @@ export const planEnterTool: ToolDefinition = {
   parameters: z.object({}).describe('No parameters required'),
   capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const extra = ctx.extra as PlanToolExtra | undefined;
     if (!extra?.sessionManager || !extra.sessionId) {
       return {
@@ -171,6 +174,8 @@ export const planExitTool: ToolDefinition = {
   parameters: z.object({}).describe('No parameters required'),
   capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const extra = ctx.extra as PlanToolExtra | undefined;
     if (!extra?.sessionManager || !extra.sessionId) {
       return { content: 'Ошибка: менеджер сессий недоступен для plan_exit', isError: true };
@@ -212,6 +217,8 @@ export const planReadTool: ToolDefinition = {
   parameters: z.object({}),
   capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const project = await getProjectForSession(ctx);
     if (!project) {
       return { content: 'Проект отсутствует: план недоступен (план привязан к проекту)' };
@@ -229,6 +236,8 @@ export const planListTool: ToolDefinition = {
   parameters: z.object({}),
   capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const project = await getProjectForSession(ctx);
     if (!project) {
       return {
@@ -371,6 +380,8 @@ export const planWriteTool: ToolDefinition = {
   parameters: planWriteSchema,
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: argError(this.name, parsed.error.issues), isError: true };

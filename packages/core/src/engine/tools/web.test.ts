@@ -1,5 +1,24 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { parseDuckDuckGoResults, parseBingResults, webSearchTool, webFetchTool } from './web.js';
+import type { ToolContext } from '@itphx/synth-shared';
+
+function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+  return {
+    sessionId: 's1',
+    messageId: 'm1',
+    workingDir: '/tmp',
+    ...overrides,
+  };
+}
+
+/** fetch-мок, висящий вечно, пока не придёт abort — имитация медленного сервера. */
+function hangingFetchMock() {
+  return vi.fn((_url: string | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => {
+      reject(new DOMException('This operation was aborted', 'AbortError'));
+    });
+  }));
+}
 
 function initToBody(init?: RequestInit): URLSearchParams {
   return init?.body as URLSearchParams;
@@ -281,5 +300,111 @@ describe('webFetchTool', () => {
     expect(result.isError).toBeFalsy();
     expect(fetchMock).toHaveBeenCalledWith('https://example.com', expect.anything());
     expect(result.content).toContain('### https://example.com');
+  });
+});
+
+describe('web tools — прерывание по «Стоп» (abortSignal)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('web_fetch: abort во время fetch — tool_result содержит маркер прерывания', async () => {
+    const fetchMock = hangingFetchMock();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const ac = new AbortController();
+    const promise = webFetchTool.execute({ url: 'https://slow.example' }, makeCtx({ abortSignal: ac.signal }));
+
+    // Даём fetch начаться, затем «Стоп»
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    ac.abort();
+
+    const result = await promise;
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('<status>stopped_by_user</status>');
+    expect(result.metadata?.stopped_by).toBe('user');
+    expect(result.metadata?.interrupted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('web_fetch: pre-aborted — fetch не вызывается, мгновенный маркер прерывания', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const ac = new AbortController();
+    ac.abort();
+
+    const result = await webFetchTool.execute(
+      { url: 'https://example.com' },
+      makeCtx({ abortSignal: ac.signal }),
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.metadata?.stopped_by).toBe('user');
+    expect(result.metadata?.interrupted).toBe(true);
+  });
+
+  it('web_fetch: при abort после первого URL — прерывание с частичными блоками', async () => {
+    // Первый URL отвечает быстро, второй висит до «Стопа»
+    const hanging = hangingFetchMock();
+    const fetchMock = vi.fn((url: string | URL, init?: RequestInit) => {
+      if (String(url).startsWith('https://fast.example')) {
+        return Promise.resolve(new Response('fast page', {
+          status: 200,
+          headers: { 'content-type': 'text/plain' },
+        }));
+      }
+      return hanging(url, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const ac = new AbortController();
+    const promise = webFetchTool.execute(
+      { urls: ['https://fast.example', 'https://slow.example'] },
+      makeCtx({ abortSignal: ac.signal }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    ac.abort();
+
+    const result = await promise;
+
+    expect(result.metadata?.stopped_by).toBe('user');
+    expect(result.metadata?.interrupted).toBe(true);
+    // Частичный результат: успевший URL — в partial_output
+    expect(result.metadata?.partial_output).toContain('fast page');
+  });
+
+  it('web_search: abort во время DuckDuckGo — фолбэк на Bing не выполняется, маркер прерывания', async () => {
+    const fetchMock = hangingFetchMock();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const ac = new AbortController();
+    const promise = webSearchTool.execute({ query: 'test' }, makeCtx({ abortSignal: ac.signal }));
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    ac.abort();
+
+    const result = await promise;
+
+    expect(result.metadata?.stopped_by).toBe('user');
+    expect(result.metadata?.interrupted).toBe(true);
+    // Только DuckDuckGo вызван — Bing после «Стопа» не дёргается
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]![0])).toContain('duckduckgo');
+  });
+
+  it('web_search: pre-aborted — fetch не вызывается', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const ac = new AbortController();
+    ac.abort();
+
+    const result = await webSearchTool.execute({ query: 'test' }, makeCtx({ abortSignal: ac.signal }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.metadata?.interrupted).toBe(true);
   });
 });

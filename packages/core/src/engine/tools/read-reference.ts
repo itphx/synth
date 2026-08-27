@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { ToolDefinition, ToolContext, ToolResult } from '@itphx/synth-shared';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
+import { isAborted, abortedResult } from './abort.js';
 
 const paramsSchema = z.object({
   session_id: z.string().describe('ID сессии, на которую есть ссылка'),
@@ -15,6 +16,8 @@ export const readSessionReferenceTool: ToolDefinition = {
   parameters: paramsSchema,
   capabilities: [ToolCapability.RUNTIME],
   async execute(params, ctx: ToolContext): Promise<ToolResult> {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const sessionManager = ctx.extra?.sessionManager as SessionManager | undefined;
     if (!sessionManager) {
       return { content: 'SessionManager недоступен', isError: true };

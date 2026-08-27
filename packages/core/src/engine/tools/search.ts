@@ -3,6 +3,7 @@ import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
 import { resolvePath, validateInputPath } from './path-utils.js';
 import { deobfuscateText } from './obfuscation.js';
+import { isAborted, abortedResult } from './abort.js';
 
 export const grepFilesTool: ToolDefinition = {
   name: 'grep_files',
@@ -15,6 +16,8 @@ export const grepFilesTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.SEARCH],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — поиск не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -43,6 +46,8 @@ export const grepFilesTool: ToolDefinition = {
 
       const { stdout } = await execFileAsync('rg', rgArgs, {
         timeout: 30_000,
+        // «Стоп» (toolAbortController.abort) убивает процесс SIGTERM
+        signal: ctx.abortSignal,
         maxBuffer: 10 * 1024 * 1024,
       });
 
@@ -61,6 +66,8 @@ export const grepFilesTool: ToolDefinition = {
         metadata: { pattern: params.pattern, matches: lines.length },
       };
     } catch (err: unknown) {
+      // Прерывание по «Стоп» — единый маркер отмены, не «ошибка поиска»
+      if (isAborted(ctx)) return abortedResult(this.name);
       const execError = err as { code?: number; stderr?: string };
       if (execError.code === 1) {
         return { content: '(совпадений не найдено)', metadata: { pattern: params.pattern, matches: 0 } };

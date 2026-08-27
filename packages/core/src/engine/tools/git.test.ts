@@ -53,3 +53,50 @@ describe('git tools — path resolution', () => {
     expect(result.metadata!.cwd).toBe(tmpDir);
   });
 });
+
+describe('git tools — прерывание по «Стоп» (abortSignal)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-git-abort-'));
+    await execFileAsync('git', ['init', '-q'], { cwd: tmpDir });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmpDir });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: tmpDir });
+    await writeFile(join(tmpDir, 'README.md'), '# Test\n');
+    await execFileAsync('git', ['add', '.'], { cwd: tmpDir });
+    await execFileAsync('git', ['commit', '-q', '-m', 'initial'], { cwd: tmpDir });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      ...overrides,
+    };
+  }
+
+  it('git_status: pre-aborted — мгновенный маркер прерывания, git не запускается', async () => {
+    const ac = new AbortController();
+    ac.abort();
+
+    const result = await gitStatusTool.execute({}, makeCtx({ abortSignal: ac.signal }));
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('<status>stopped_by_user</status>');
+    expect(result.metadata?.stopped_by).toBe('user');
+    expect(result.metadata?.interrupted).toBe(true);
+    // cwd в metadata не проставлен — runGit не выполнялся
+    expect(result.metadata?.cwd).toBeUndefined();
+  });
+
+  it('git_status: без abortSignal — работает как раньше (обратная совместимость)', async () => {
+    const result = await gitStatusTool.execute({}, makeCtx());
+    expect(result.isError).toBeFalsy();
+    expect(result.metadata?.interrupted).toBeUndefined();
+  });
+});
