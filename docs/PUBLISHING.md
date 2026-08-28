@@ -1,0 +1,134 @@
+# Публикация и релиз
+
+Руководство для разработчика/поддержки: как собирать, публиковать и выпускать релизы Synth. Все команды выполняются из корня монорепозитория (`synth/`).
+
+## Порядок публикации пакетов
+
+Публикуются **все 6 пакетов** в строгом порядке зависимостей:
+
+```
+shared → core → ui → backend → runner → synth
+```
+
+Порядок задан иерархией зависимостей: `@itphx/synth-shared` — фундамент, `@itphx/synth-core` импортирует shared, `@itphx/synth-backend`/`@itphx/synth-ui`/`@itphx/synth-runner` импортируют core, `@itphx/synth` — тонкая обёртка над core/ui/shared (AD-038).
+
+## `pnpm publish` вместо `npm publish`
+
+`npm publish` **не переписывает** `workspace:*` в зависимостях — опубликованные пакеты падают у npm-потребителей (не резолвится `workspace:*`). `pnpm publish` автоматически заменяет `workspace:*` на фактические версии workspace-пакетов, поэтому используется именно он.
+
+Скрипты публикации используют флаг `--no-git-checks` (публикация идёт не из чистого git-дерева).
+
+## Реестры
+
+| Реестр | URL | Токен |
+|--------|-----|-------|
+| npmjs.org | `https://registry.npmjs.org` | `NPM_TOKEN` |
+| GitVerse Package Registry | `https://gitverse.ru/api/packages/itphx/npm/` | `GV_TOKEN` |
+
+Значения токенов хранятся в секретах репозитория (GitVerse CI) и в локальном окружении. **Никогда не указывайте значения токенов в документации, коде или коммитах.**
+
+Проверка токена npmjs: `npm whoami --registry https://registry.npmjs.org`.
+
+## Требования npm 2026 (важно)
+
+С 2026 года npm ужесточил требования к публикации:
+
+- **Старые классические токены без 2FA отозваны.** Для публикации нужен **Granular Access Token (GAT) с включённой 2FA** (права `publish` только на нужные пакеты `@itphx/*`) либо классический токен при включённой на аккаунте 2FA.
+- **Токены с `bypass 2FA` не публикуют напрямую** (с января 2027 — только staged publishing с ручным 2FA-подтверждением). При создании токена НЕ выбирать «bypass 2FA» — использовать обычный GAT.
+- **Токены GAT без права `unpublish`** не могут удалить опубликованную версию — вместо `npm unpublish` использовать `npm deprecate` (см. [Диагностика](TROUBLESHOOTING.md)).
+- **npm v12**: `allowScripts`/`--allow-git`/`--allow-remote` выключены по умолчанию. Если при установке пакета нужны lifecycle-скрипты — `npm approve-scripts`/`--allow-scripts`.
+
+## Docker-образ
+
+Образ собирается из опубликованного npm-пакета: `npm install -g @itphx/synth@<version>` (зависимости `@itphx/synth-core`/`@itphx/synth-ui`/`@itphx/synth-shared` ставятся как транзитивные, промпты и UI резолвятся из node_modules). Dockerfile: `docker/Dockerfile`.
+
+Реестр Docker — **`gitverse.ru`** (не `registry.gitverse.ru`!). Образ:
+
+```
+gitverse.ru/itphx/synth:<version>
+gitverse.ru/itphx/synth:latest
+```
+
+## Скрипты
+
+Все скрипты — в `synth/scripts/`.
+
+### `version-bump.sh` — bump версии
+
+```bash
+./scripts/version-bump.sh patch | minor | major | X.Y.Z
+./scripts/version-bump.sh --dry-run 0.3.1   # проверка без изменений
+```
+
+Обновляет:
+1. `packages/shared/src/version.ts` — константу `SYNTH_VERSION`
+2. `packages/*/package.json` — поле `version` во всех 6 пакетах
+
+Единый источник версии — `SYNTH_VERSION` в `packages/shared/src/version.ts` (импортируется из `@itphx/synth-shared`).
+
+### `build.sh` — сборка
+
+```bash
+./scripts/build.sh                # полная сборка
+./scripts/build.sh --check        # сборка + проверка типов и тестов
+./scripts/build.sh --clean        # очистить dist перед сборкой
+./scripts/build.sh --docker       # сборка + Docker-образ
+./scripts/build.sh --docker-tag <tag>
+./scripts/build.sh --docker-registry <registry>
+```
+
+Результат: `packages/synth/dist/cli.js` (исполняемый CLI).
+
+### `publish.sh` — публикация
+
+```bash
+./scripts/publish.sh                          # сборка + публикация (оба реестра)
+./scripts/publish.sh --dry-run                # проверка без реальной публикации
+./scripts/publish.sh --no-build               # без пересборки
+./scripts/publish.sh --registry=npmjs | gitverse | both
+./scripts/publish.sh --docker                 # также Docker-образ
+./scripts/publish.sh --docker-tag <tag>
+```
+
+Переменные окружения: `NPM_TOKEN`, `GV_TOKEN`, `NPM_REGISTRY`, `GITVERSE_NPM_REGISTRY`, `GITVERSE_DOCKER_REGISTRY`.
+
+Особенность: GitVerse npm-реестр не поддерживает `/-/whoami` (404) — авторизация проверяется реальной публикацией.
+
+## CI/CD (GitVerse)
+
+Workflow-файлы: `.gitverse/workflows/ci.yaml` (push/PR: typecheck, lint, тесты) и `.gitverse/workflows/release.yaml` (релиз).
+
+### Запуск релиза
+
+1. **Dry-run:** `workflow_dispatch` с `dry_run: true` — проверка без публикации
+2. **Реальная публикация:** `workflow_dispatch` с `dry_run: false` (входы: `bump` patch/minor/major, `pre_release`)
+3. **Автоматически:** создать тег `vX.Y.Z` и запушить — workflow запустится по push тега (пропускает bump-стадию, версия берётся из тега)
+
+Релизный workflow: bump версии (version.ts + package.json) → CI-проверки → сборка → CHANGELOG → публикация npmjs → публикация GitVerse npm → Docker (kaniko, `gitverse.ru/itphx/synth`) → создание GitVerse Release.
+
+### Особенности GitVerse CI
+
+1. **`actions/setup-node@v4` не использовать** — вместо этого `npm install -g pnpm@latest`
+2. **`${{ env.VAR }}` не работает** — резолвится в Go-строку `%!t(string=...)`. Значения хардкодить.
+3. **`${...}` в inline bash** — GitVerse парсит как Go-шаблон, скрипт падает. Сложный bash выносить в отдельный файл (см. `scripts/changelog.sh`).
+4. **`${GITHUB_REF_NAME}`** — синтаксис GitHub; в GitVerse: `echo "${{ gitverse.ref }}" | sed 's|refs/tags/v||'`
+5. Версия Node.js в раннере: 22 (предустановлена).
+
+### Секреты
+
+| Secret | Назначение |
+|--------|------------|
+| `NPM_TOKEN` | Публикация в npmjs.org |
+| `GV_TOKEN` | Единый токен GitVerse (API, Docker Registry, npm registry, git push от бота) |
+
+Префикс `GITVERSE_` запрещён в именах секретов GitVerse — использовать `GV_`.
+
+## Важно: поле `repository` в package.json
+
+Для публикации в GitVerse Package Registry поле `repository` в `package.json` **должно отсутствовать**: GitVerse при привязке пакета к репозиторию по `repository.url` проверяет права и отдаёт 403 «no permission». Во всех 6 пакетах поле `repository` удалено — не добавляйте его обратно.
+
+## Локальная проверка перед пушем
+
+```bash
+pnpm typecheck && pnpm lint && pnpm test
+```

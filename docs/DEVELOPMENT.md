@@ -17,31 +17,34 @@ pnpm typecheck
 # Запуск тестов
 pnpm test
 
-# Сборка пакетов
-pnpm --filter @itphx/synth-shared build
-pnpm --filter @itphx/synth-core build
-pnpm --filter @itphx/synth-ui build
+# Сборка всех пакетов
+pnpm build
+
+# Линтинг
+pnpm lint
 ```
 
 ## dev.sh
 
-Универсальный скрипт для разработки (в `scripts/dev.sh`):
+Универсальный скрипт для разработки — `synth/scripts/dev.sh`:
 
 ```bash
 ./scripts/dev.sh            # backend (:5000) + UI (:5002)
 ./scripts/dev.sh backend    # только бэкенд
 ./scripts/dev.sh ui         # только UI
-./scripts/dev.sh core       # synth-core standalone
+./scripts/dev.sh core       # synth-core standalone (:4300)
 ./scripts/dev.sh all        # backend + UI + core
 ```
 
-Логи пишутся в `tmp/backend.log`, `tmp/ui.log`, `tmp/core.log`. При перезапуске очищаются. При Ctrl+C выводятся пути к логам.
+Логи пишутся в `tmp/backend.log`, `tmp/ui.log`, `tmp/core.log` (внутри `synth/`). При перезапуске очищаются. При Ctrl+C выводятся пути к логам.
 
 ### Переменные окружения dev.sh
 
-- `SYNTH_DATA_DIR` — каталог данных (по умолчанию вне репозитория)
 - `SYNTH_AUTH_DEBUG=true` — режим отладки с тестовыми пользователями
-- `SYNTH_PORT`, `SYNTH_CORE_PORT`, `SYNTH_RUNNER_PORT` — порты
+- `SYNTH_DATA_DIR=/home/eof/dev/Synth/data` — каталог данных вне репозитория
+- `SYNTH_LOG_DIR=$ROOT/tmp` — каталог логов (эндпоинт `/api/v2/logs`)
+- `SYNTH_PORT=5000`, `SYNTH_CORE_PORT=4300`, `SYNTH_RUNNER_PORT=5200`, `VITE_PORT=5002`
+- `SYNTH_HOST=0.0.0.0` — хост для всех сервисов
 
 ### Режим отладки auth
 
@@ -59,6 +62,20 @@ pnpm --filter @itphx/synth-ui build
 
 ## Ручной запуск
 
+Основной путь — через тонкую CLI-обёртку `@itphx/synth` (UI резолвится из `@itphx/synth-ui` автоматически):
+
+```bash
+# Сборка + запуск standalone-сервера
+pnpm --filter @itphx/synth build
+node packages/synth/dist/cli.js serve --api-key "dev-key"
+
+# CLI-чат через обёртку
+node packages/synth/dist/cli.js chat "привет"
+node packages/synth/dist/cli.js config provider list
+```
+
+Запуск отдельных компонентов:
+
 ```bash
 # synth-backend
 pnpm --filter @itphx/synth-backend dev
@@ -66,11 +83,9 @@ pnpm --filter @itphx/synth-backend dev
 # synth-ui
 pnpm --filter @itphx/synth-ui dev
 
-# synth-core (standalone)
+# synth-core (standalone, CLI ядра)
 pnpm --filter @itphx/synth-core build
 node packages/core/dist/main.js serve --api-key "dev-key"
-
-# synth-core (CLI)
 node packages/core/dist/main.js chat "привет"
 node packages/core/dist/main.js config
 ```
@@ -80,16 +95,19 @@ node packages/core/dist/main.js config
 ```
 synth/
 ├── packages/
-│   ├── shared/   → @itphx/synth-shared    # Типы, схемы, конфигурация
-│   ├── core/     → @itphx/synth-core      # Движок, CLI, HTTP API
-│   ├── backend/  → @itphx/synth-backend   # Hono API Hub
-│   ├── ui/       → @itphx/synth-ui        # React SPA
-│   └── runner/   → @itphx/synth-runner    # Gateway движков
+│   ├── shared/   → @itphx/synth-shared    # Типы, Zod-схемы, протоколы, конфигурация
+│   ├── core/     → @itphx/synth-core      # Движок, CLI, HTTP API v2, MCP, FileStore
+│   ├── backend/  → @itphx/synth-backend   # Hono API Hub: OIDC, RBAC, Runner Registry
+│   ├── ui/       → @itphx/synth-ui        # React 19 SPA + админка (Vite)
+│   ├── runner/   → @itphx/synth-runner    # Gateway движков (opencode, cline); in-process из core
+│   └── synth/    → @itphx/synth           # Тонкая CLI-обёртка (bin: synth), не бандлит core
 ├── scripts/
 │   ├── dev.sh                  # Скрипт разработки
 │   ├── build.sh                # Полная сборка
 │   ├── publish.sh              # Публикация в npm
-│   └── version-bump.sh         # Bump версии
+│   ├── version-bump.sh         # Bump версии
+│   ├── changelog.sh            # Генерация CHANGELOG (для CI release)
+│   └── micro-benchmark.mjs     # Бенчмарк микро-слоя (AD-035)
 └── tmp/                        # Логи (не коммитить)
 ```
 
@@ -97,8 +115,8 @@ synth/
 
 - **Язык:** TypeScript (strict mode)
 - **Линтер:** ESLint — `pnpm lint`
-- **Форматтер:** Prettier — `pnpm format`
-- **Сборка:** TypeScript Compiler (`tsc`)
+- **Форматтер:** Prettier (конфиг `.prettierrc`; отдельного скрипта `pnpm format` нет)
+- **Сборка:** tsup / TypeScript — `pnpm build`
 - **Тесты:** Vitest — `pnpm test`
 
 Документация ведётся на русском языке.

@@ -5,7 +5,7 @@
 # Synth
 
 **Корпоративная AI-агентная платформа.**  
-*Статус: MVP — активная разработка, ядро стабильно.*
+*Статус: MVP — активная разработка, ядро стабильно. Версия: 0.3.0.*
 
 Synth — система для командной работы с AI-агентами. Легко разворачивается на инфраструктуре компании, но при этом работает и на личной машине — без бэкенда, Keycloak и Kubernetes.
 
@@ -13,12 +13,13 @@ Synth — система для командной работы с AI-агент
 
 ```mermaid
 flowchart LR
+    CLI["@itphx/synth CLI"] --> Core["@itphx/synth-core"]
     UI["React SPA"] --> API["HTTP / WebSocket"]
-    API --> Core["@itphx/synth-core"]
+    API --> Core
     Core --> Ollama["Ollama"]
     Core --> OpenAI["OpenAI"]
     Core --> Anthropic["Anthropic"]
-    Core --> Runners["opencode / cline / loop"]
+    Core --> Runners["opencode / cline"]
 ```
 
 ---
@@ -28,17 +29,13 @@ flowchart LR
 | Область | Возможность |
 |---------|-------------|
 | **Централизация** | Единый хаб для всех AI-агентов команды. Коллаборация: несколько пользователей в одной сессии, история — на сервере |
-| **PostgreSQL** | Надёжное хранилище сессий, проектов, метаданных. Отказоустойчивость и консистентность |
-| **Аудит** | Каждый LLM-запрос логируется. Кто, когда, какой модели, сколько токенов — полная прозрачность |
-| **Kanban** | Управление задачами агентов через Kanban-доску. Статусы, назначения, приоритеты |
+| **История и метаданные** | JSON-файлы с атомарной записью (AD-005): сессии, проекты, провайдеры, модели. Нормализованная схема на SQLite (AD-032) — в планах |
+| **Аудит** | Каждый LLM-запрос логируется (AD-036): кто, когда, какой модели, сколько токенов — полная прозрачность |
+| **Планирование** | План проекта с kanban-структурой (AD-039): колонки, приоритеты, зависимости; todo — в сессии. Управляется инструментами `plan_*`/`todo_*` |
 | **MCP** | Поддержка Model Context Protocol — подключаемые инструменты и источники данных |
-| **RAG** | Retrieval Augmented Generation — поиск по базе знаний для более точных ответов |
-| **Skills** | Переиспользуемые навыки — упакованные сценарии (код-ревью, деплой, тестирование) |
-| **Loops** | Циклические агентные пайплайны — задача уходит агенту, результат проверяется, цикл повторяется до достижения критерия |
 | **Развёртывание** | Четыре сценария: облачный (K8s), локальный (одна команда), гибридный (корпоративный хаб + ПК сотрудника), внешние движки |
 | **Безопасность** | Многоуровневая: RBAC (ADMIN/USER/LEAD/AUDITOR), OIDC, API-ключи, изоляция раннеров |
 | **Контроль кода** | Агент показывает и поясняет каждый шаг. Пользователь понимает что делает AI, а не слепо принимает |
-| **Обучение** | Система анализирует паттерны использования и предлагает оптимизации: какой провайдер/модель эффективнее, какие навыки стоит подключить |
 
 ---
 
@@ -50,10 +47,10 @@ flowchart LR
 npm i -g @itphx/synth
 
 # Запуск с Ollama (локальные модели)
-ollama pull qwen3.5
+ollama pull qwen3:14b
 
 SYNTH_PROVIDER_OLLAMA_URL=http://localhost:11434/v1 \
-SYNTH_PROVIDER_OLLAMA_MODEL=qwen3.5 \
+SYNTH_PROVIDER_OLLAMA_MODEL=qwen3:14b \
 SYNTH_PROVIDER_OLLAMA_TYPE=ollama \
 SYNTH_API_KEY=my-secret-key \
 synth serve
@@ -77,8 +74,12 @@ docker compose up -d
 git clone <repo-url> synth && cd synth
 pnpm install
 pnpm build
-node packages/core/dist/main.js serve --api-key my-secret-key --ui packages/ui/dist
+
+# Запуск через тонкую CLI-обёртку (@itphx/synth): UI резолвится из @itphx/synth-ui автоматически
+node packages/synth/dist/cli.js serve --api-key my-secret-key
 ```
+
+Для разработки используйте `./scripts/dev.sh` (backend + UI, порты и переменные настроены).
 
 **Требования:** Node.js >= 22, pnpm >= 11
 
@@ -88,14 +89,16 @@ node packages/core/dist/main.js serve --api-key my-secret-key --ui packages/ui/d
 
 ```bash
 # Одноразовый запрос
-synth chat "привет" --provider ollama --model qwen3.5
+synth chat "привет" --provider ollama --model qwen3:14b
 
 # Интерактивный режим
-synth chat --provider ollama --model qwen3.5
+synth chat --provider ollama --model qwen3:14b
 
 # Просто synth — сразу в интерактивный чат
 synth
 ```
+
+Подробнее о настройке провайдеров — [LLM-провайдеры](docs/LLM_PROVIDERS.md) и [Быстрый старт](docs/QUICKSTART.md).
 
 ---
 
@@ -103,11 +106,14 @@ synth
 
 | Раздел | О чём |
 |--------|-------|
+| [Быстрый старт](docs/QUICKSTART.md) | Установка, настройка провайдера, первый запуск |
 | [Архитектура](docs/ARCHITECTURE.md) | Компоненты, сценарии развёртывания, полная схема |
 | [Конфигурация](docs/CONFIGURATION.md) | Переменные окружения, `config.yaml`, приоритет настроек |
 | [LLM-провайдеры](docs/LLM_PROVIDERS.md) | Ollama, OpenAI, Anthropic — настройка и модели |
 | [Разработка](docs/DEVELOPMENT.md) | Сборка, тесты, `dev.sh`, структура монорепозитория |
 | [Маршрутизация](docs/ROUTING.md) | Быстрые ответы, выбор модели, эмбеддинги |
+| [Публикация и релиз](docs/PUBLISHING.md) | npm-пакеты, Docker, CI-релиз |
+| [Диагностика](docs/TROUBLESHOOTING.md) | Известные проблемы и решения |
 | [Архитектурные решения](AGENTS.md) | AD, мотивировка, история решений |
 
 ---
