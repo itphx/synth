@@ -737,7 +737,7 @@
 - **Тип:** refactor + docs
 - **Исполнитель:** оркестратор (оценка + AD) + @fixer (2 задачи)
 - **Результат:** PASS — typecheck 6/6, lint 0 errors, тесты 1288 passed (shared 72, core 959, ui 87, backend 170)
-- **Коммит:** — (не выполнялся, нет явной просьбы; в дереве чужие незакоммиченные правки i18n/resume)
+- **Коммит:** 6edc9ef (feat: локализация ядра + resume саб-агента при ошибках провайдера + AD-041; ветка fix/subagent-display → master, merge с --no-ff)
 - **Сделано:**
   - **Таксономия ошибок (задача 1):** единая точка истины `llm-error.ts` — `isLlmErrorRecoverable(error, errMsg?, errorType?)`; `UNRECOVERABLE_PATTERNS` объединены (из llm-error + processor); `UNRECOVERABLE_TYPES` + `validation`; экспорт `LLM_MAX_ATTEMPTS=3`/`LLM_RETRY_DELAYS_MS=[5s,15s,30s]`. `orchestrator._handleLlmFailure` и `processor._isRecoverable` делегируют сюда, инлайновые списки удалены; `task.ts` — реэкспорт-алиасы. Новый `llm-error.test.ts`.
   - **Локализация (задача 2, уточнённая схема):** контракт в `shared/src/i18n/index.ts` — `ENGINE_MESSAGE_KEYS` (201 ключ, `as const`), `ENGINE_MESSAGE_PARAMS`, `extractParams`, тип `EngineMessageKey`, реэкспорт `MessageI18n`; subpath-экспорт `@itphx/synth-shared/i18n`. `core/system-messages.ts` — `as const satisfies Record<SystemMessageKey,string>`, `SystemMessageKey = EngineMessageKey`. Автопроверка синхронизации: тест core (ключи set-равны + params) и тест ui (каждый ключ в ru.ts, params совпадают; en — деградация на content). **Текст НЕ перемещён:** en остаётся в core, ru в ui; в shared только контракт.
