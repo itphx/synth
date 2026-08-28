@@ -78,7 +78,7 @@ describe('checkPath — резолв путей', () => {
   it('динамический путь ($(...) / ${...}) — не блокируется (source unknown)', () => {
     const d = checkPath('$(echo ~)/.ssh/id_rsa', CWD, basePolicy());
     expect(d.action).toBe('allow');
-    expect(d.reason).toContain('динамику');
+    expect(d.reason).toContain('dynamic parts');
   });
 });
 

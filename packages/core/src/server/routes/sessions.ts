@@ -4,7 +4,7 @@ import type { AuthKit } from '../../auth/local.js';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer } from '../../index.js';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
-import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID } from '../../index.js';
+import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError } from '../../index.js';
 import { serializeSession, serializeMessage } from '../serialize.js';
 import type { ProjectStore } from '../../storage/project-store.js';
 
@@ -281,6 +281,21 @@ export function createSessionRoutes(
       orchestrator.cancel(session.currentStream.streamId);
     }
     return c.json({ status: 'aborted' });
+  });
+
+  // POST /api/v2/sessions/:id/resume-subagent — возобновить прерванную/ошибочную
+  // дочернюю сессию саб-агента (B2). Валидация + блокировка синхронно, прогон —
+  // в фоне; итог resume пишется в родительскую сессию.
+  app.post('/:id/resume-subagent', auth.requireAuth, async (c) => {
+    try {
+      const result = await orchestrator.startSubagentResume(c.req.param('id'));
+      return c.json(result, 202);
+    } catch (err) {
+      if (err instanceof SubagentResumeError) {
+        return c.json({ error: { code: err.code, message: err.message } }, err.httpStatus as 400 | 404 | 409);
+      }
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: String(err) } }, 500);
+    }
   });
 
   app.post('/:id/summarize', auth.requireAuth, async (c) => {

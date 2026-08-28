@@ -2,6 +2,8 @@ import { z } from 'zod';
 import type { ToolDefinition, ToolContext, ToolResult } from '@itphx/synth-shared';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
+import { isAborted, abortedResult } from './abort.js';
+import { t as sm } from '../system-messages.js';
 
 const paramsSchema = z.object({
   session_id: z.string().describe('ID сессии, на которую есть ссылка'),
@@ -15,15 +17,17 @@ export const readSessionReferenceTool: ToolDefinition = {
   parameters: paramsSchema,
   capabilities: [ToolCapability.RUNTIME],
   async execute(params, ctx: ToolContext): Promise<ToolResult> {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const sessionManager = ctx.extra?.sessionManager as SessionManager | undefined;
     if (!sessionManager) {
-      return { content: 'SessionManager недоступен', isError: true };
+      return { content: sm('reference.session_manager_unavailable'), isError: true };
     }
 
     const p = params as z.infer<typeof paramsSchema>;
     const session = await sessionManager.getSession(p.session_id);
     if (!session) {
-      return { content: `Сессия ${p.session_id} не найдена`, isError: true };
+      return { content: sm('reference.session_not_found', { id: p.session_id }), isError: true };
     }
 
     let messages = session.messages.filter((m) => !m.hidden && !m.disabled);
@@ -34,7 +38,7 @@ export const readSessionReferenceTool: ToolDefinition = {
     }
 
     if (messages.length === 0) {
-      return { content: `В сессии ${p.session_id} нет сообщений в указанном диапазоне` };
+      return { content: sm('reference.no_messages', { id: p.session_id }) };
     }
 
     const formatted = messages
@@ -44,6 +48,6 @@ export const readSessionReferenceTool: ToolDefinition = {
       })
       .join('\n---\n');
 
-    return { content: `# Сессия: ${session.title || session.id}\n\n${formatted}` };
+    return { content: sm('reference.session_title', { title: session.title || session.id }) + `\n\n${formatted}` };
   },
 };

@@ -20,6 +20,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, normalize, sep } from 'node:path';
 
 import { tryResolvePath, resolveSystemDefinitionsDir } from './shell-guard.js';
+import { t as sm } from '../system-messages.js';
 
 /** Политика защищённых путей (структурно совпадает с ShellPolicy). */
 export interface ProtectedPathsPolicy {
@@ -188,10 +189,10 @@ function resolvePolicyEntry(entry: string, cwd: string): string {
 export function checkPath(path: string, cwd: string, policy: ProtectedPathsPolicy): ProtectedPathCheckResult {
   const resolved = tryResolvePath(path, cwd);
   if (!resolved) {
-    return { action: 'allow', reason: 'путь не поддаётся резолву — не блокируем' };
+    return { action: 'allow', reason: sm('protectedpaths.unresolvable') };
   }
   if (resolved.source !== 'literal') {
-    return { action: 'allow', reason: 'путь содержит динамику — не удалось проверить (не блокируем)' };
+    return { action: 'allow', reason: sm('protectedpaths.dynamic') };
   }
 
   const norm = normalize(resolved.path);
@@ -233,7 +234,7 @@ export function checkPath(path: string, cwd: string, policy: ProtectedPathsPolic
     }
   }
 
-  return { action: 'allow', reason: 'путь не нарушает политику защищённых путей' };
+  return { action: 'allow', reason: sm('protectedpaths.allow_default') };
 }
 
 /** Вспомогательный экспорт для ProtectedPathsStore: каталог системных definitions. */

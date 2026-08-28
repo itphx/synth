@@ -8,21 +8,27 @@ import type { BaseProvider, LLMMessage, CancellationToken } from '../providers/b
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-function loadTitlePrompt(): string {
+/**
+ * Промпт генерации заголовка по языку сессии: TITLE.{lang}.md → TITLE.ru.md
+ * (легаси-дефолт). Промпт — локализуемый ассет (как роли), не системное сообщение.
+ */
+function loadTitlePrompt(language?: string): string {
+  const lang = language === 'en' ? 'en' : 'ru';
   const paths = [
-    join(__dirname, '..', 'engine', 'context', 'prompts', 'roles', 'TITLE.ru.md'),
+    join(__dirname, '..', 'engine', 'context', 'prompts', 'roles', `TITLE.${lang}.md`),
     join(__dirname, '..', 'engine', 'agents', 'definitions', 'title.txt'),
-    join(__dirname, '..', '..', 'prompts', 'roles', 'TITLE.ru.md'),
+    join(__dirname, '..', '..', 'prompts', 'roles', `TITLE.${lang}.md`),
   ];
   for (const p of paths) {
     if (existsSync(p)) {
       return readFileSync(p, 'utf-8');
     }
   }
+  if (lang === 'en') {
+    return 'Generate a short title (3-7 words) for this conversation. Return only the title, no explanations.';
+  }
   return 'Сгенерируй краткий заголовок (3-7 слов) для этого диалога. Верни только заголовок, без пояснений.';
 }
-
-const TITLE_SYSTEM_PROMPT = loadTitlePrompt();
 
 export async function autoTitleSession(
   session: Session,
@@ -49,7 +55,10 @@ export async function autoTitleSession(
     if (firstAssistant) {
       promptParts.push(firstAssistant.content.substring(0, 500));
     }
-    const userContent = `Сгенерируй краткий заголовок для этого диалога:\n\n${promptParts.join('\n\n')}`;
+    const lang = session.settings.language === 'en' ? 'en' : 'ru';
+    const userContent = lang === 'en'
+      ? `Generate a short title for this conversation:\n\n${promptParts.join('\n\n')}`
+      : `Сгенерируй краткий заголовок для этого диалога:\n\n${promptParts.join('\n\n')}`;
 
     const messages: LLMMessage[] = [
       {
@@ -70,7 +79,7 @@ export async function autoTitleSession(
 
     const response = await provider.chat(
       messages,
-      TITLE_SYSTEM_PROMPT,
+      loadTitlePrompt(session.settings.language),
       undefined,
       false,
       undefined,

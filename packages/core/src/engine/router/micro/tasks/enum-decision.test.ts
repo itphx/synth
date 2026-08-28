@@ -84,7 +84,7 @@ describe('handleEnumDecision', () => {
     };
     const result = handleEnumDecision(input);
     expect(result.answer).toBeTruthy();
-    expect(['Да.', 'Подтверждено.', 'Принято.']).toContain(result.answer);
+    expect(['Yes.', 'Confirmed.', 'Accepted.']).toContain(result.answer);
   });
 
   it('генерирует answer для mode_plan, а не эхо запроса', () => {
@@ -98,6 +98,6 @@ describe('handleEnumDecision', () => {
     };
     const result = handleEnumDecision(input);
     expect(result.answer).toBeTruthy();
-    expect(result.answer).toContain('режим планирования');
+    expect(result.answer).toContain('planning mode');
   });
 });

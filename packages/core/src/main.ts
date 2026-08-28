@@ -3,6 +3,7 @@ import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resol
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { checkForUpdatesBackground } from './update-checker.js';
+import { t as sm } from './engine/system-messages.js';
 
 const program = new Command();
 
@@ -349,7 +350,7 @@ program
         console.log(`ID                                    Название                              Сообщений  Последняя активность`);
         console.log('─'.repeat(120));
         for (const s of sessions) {
-          const title = (s.title || 'Новая сессия').substring(0, 38).padEnd(38);
+          const title = (s.title || sm('session.default_title')).substring(0, 38).padEnd(38);
           const msgCount = String(s.messages.length).padStart(9);
           const updated = s.updatedAt?.substring(0, 19) || '-';
           const parent = s.parentId ? ` [fork от ${s.parentId.substring(0, 12)}...]` : '';
@@ -431,7 +432,7 @@ program
         console.log(`ID                                    Название                              Сообщений`);
         console.log('─'.repeat(90));
         for (const c of children) {
-          const title = (c.title || 'Новая сессия').substring(0, 38).padEnd(38);
+          const title = (c.title || sm('session.default_title')).substring(0, 38).padEnd(38);
           const msgCount = String(c.messages.length).padStart(9);
           console.log(`${c.id.padEnd(38)} ${title} ${msgCount}`);
         }

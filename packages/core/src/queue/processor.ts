@@ -1,10 +1,11 @@
 import type { Message, Session } from '@itphx/synth-shared';
 import { nowISO, generateStreamId, generateId, MessageRole } from '@itphx/synth-shared';
 import type { SessionManager } from '../sessions/manager.js';
+import { t as sm } from '../engine/system-messages.js';
 import type { EventBus } from '../events/bus.js';
 import type { ContextOptimizer } from '../engine/context/optimizer.js';
+import { isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from '../engine/llm-error.js';
 
-const MAX_RETRIES = 3;
 const MAX_PENDING = 5;
 
 interface RetryDelays {
@@ -98,7 +99,7 @@ export class QueueProcessor {
     if (streamId) {
       this.eventBus.publish(this.sessionId, 'stream.error', {
         stream_id: streamId,
-        error: 'Повторные попытки отменены пользователем',
+        error: sm('session.retry_cancelled'),
         error_type: 'retry_cancelled',
         can_retry: false,
         retry_count: this._retryDelays[streamId] || 0,
@@ -286,7 +287,7 @@ export class QueueProcessor {
             ? result.canRetry
             : this._isRecoverable(result.error, result.errorType);
 
-          if (!isRecoverable || retryCount > MAX_RETRIES) {
+          if (!isRecoverable || retryCount > LLM_MAX_ATTEMPTS) {
             // Unrecoverable или исчерпаны попытки — удалить из очереди
             await this.sessionManager.withLock(this.sessionId, async (s) => {
               s.pendingMessages = s.pendingMessages.filter((_, i) => i !== 0);
@@ -320,7 +321,7 @@ export class QueueProcessor {
             this.eventBus.publish(this.sessionId, 'stream.retry', {
               stream_id: streamId,
               attempt: retryCount,
-              max_retries: MAX_RETRIES,
+              max_retries: LLM_MAX_ATTEMPTS,
               retry_in: delay,
               error: result.error,
             });
@@ -411,26 +412,15 @@ export class QueueProcessor {
   }
 
   private _isRecoverable(errorStr: string, errorType?: string): boolean {
-    const lower = errorStr.toLowerCase();
-    const unrecoverableTypes = [
-      'provider_not_found', 'model_not_found', 'auth_error',
-      'context_length', 'validation', 'retry_cancelled',
-    ];
-    if (errorType && unrecoverableTypes.includes(errorType)) return false;
-    const unrecoverable = [
-      'model not found', 'model_not_found', 'does not exist',
-      'invalid model', 'unknown model', 'invalid api key',
-      'incorrect api key', '401', 'authentication', 'unauthorized',
-      'missing field', 'failed to deserialize', 'invalid type',
-      'unknown field', 'bad request', 'validation',
-      'err_invalid_arg_type', 'cannot read properties',
-      'is not a function', 'is not defined',
-    ];
-    return !unrecoverable.some((p) => lower.includes(p));
+    // Единая точка истины — таксономия в llm-error.ts (та же, что в
+    // саб-агенте task.ts и оркестраторе). Здесь только делегирование.
+    return isLlmErrorRecoverable(undefined, errorStr, errorType);
   }
 
   private _calcBackoff(attempt: number): number {
-    const delays = [5000, 15000, 30000, 60000];
+    // Политика задержек — из общего списка LLM_RETRY_DELAYS_MS (первые 3).
+    // Для 4-й попытки и позже сохраняем прежнее поведение (60с).
+    const delays = [...LLM_RETRY_DELAYS_MS, 60000];
     return delays[Math.min(attempt - 1, delays.length - 1)]!;
   }
 

@@ -187,7 +187,7 @@ describe('GatewayProvider (AD-036)', () => {
     const res = await gw.chat([makeMessage(`мой ключ ${SK_KEY}`)]);
 
     expect(MockCaptureProvider.calls).toBe(0);
-    expect(res.content).toContain('Обнаружены секреты');
+    expect(res.content).toContain('Secrets detected in the request');
     expect(res.content).not.toContain(SK_KEY);
   });
 
@@ -200,7 +200,7 @@ describe('GatewayProvider (AD-036)', () => {
     }
 
     expect(MockCaptureProvider.calls).toBe(0);
-    expect(chunks.join('')).toContain('Обнаружены секреты');
+    expect(chunks.join('')).toContain('Secrets detected in the request');
   });
 
   it('стрим: чанки идут как есть, output guard на финальном собранном ответе', async () => {
@@ -222,7 +222,7 @@ describe('GatewayProvider (AD-036)', () => {
     }
     expect(chunks2).toEqual([`здесь ключ ${SK_KEY}`]); // чанки идут как есть
     expect(auditSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'output_guard', reason: 'секреты в ответе модели' }),
+      expect.objectContaining({ type: 'output_guard', reason: 'secrets in the model response' }),
     );
   });
 

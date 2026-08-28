@@ -1,6 +1,7 @@
 import type { Session, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings } from '@itphx/synth-shared';
 import { getForkedTitle, MessageRole } from '@itphx/synth-shared';
 import { nowISO, generateId, makeTextPart, makePart } from '@itphx/synth-shared';
+import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type { FileStore } from '../storage/file-store.js';
 import { mergeMcpToolSettings } from '../engine/mcp/settings.js';
 
@@ -54,7 +55,7 @@ export class SessionManager {
     const mcpToolSettings = await this._resolveMcpToolSettings(data.settings?.mcpToolSettings);
     const session: Session = {
       id: generateId(),
-      title: data.title || 'Новая сессия',
+      title: data.title || sm('session.default_title'),
       sessionOrigin: data.sessionOrigin || 'user',
       parentId: data.parentId,
       userId: data.userId || '',
@@ -301,7 +302,7 @@ export class SessionManager {
       if (!source) throw new Error(`Source session ${sourceSessionId} not found`);
 
       const range: [number, number] = options.messageRange || [1, source.messages.length];
-      const label = options.label || source.title || 'Сессия';
+      const label = options.label || source.title || sm('session.reference_label');
 
       let autoSummary: string | undefined;
       if (options.autoSummarize && range[0] <= range[1]) {
@@ -340,12 +341,16 @@ export class SessionManager {
           messageRange: ref.messageRange,
           autoSummary: ref.autoSummary,
         })],
-        content: `Ссылка на сессию: ${label} (${sourceSessionId}, сообщения ${range[0]}-${range[1]})`,
+        content: sm('session.reference_link', { label, id: sourceSessionId, from: String(range[0]), to: String(range[1]) }),
         createdAt: nowISO(),
         disabled: false,
         pinned: false,
         hidden: false,
-        metadata: { type: 'session_reference', session_id: sourceSessionId },
+        metadata: {
+          type: 'session_reference',
+          session_id: sourceSessionId,
+          i18n: i18nMeta('session.reference_link', { label, id: sourceSessionId, from: String(range[0]), to: String(range[1]) }),
+        },
       };
       if (options.position === 'before') {
         target.messages.unshift(refMessage);

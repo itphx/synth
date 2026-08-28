@@ -120,7 +120,7 @@ describe('applyPolicy', () => {
 
   it('buildWarnLine формирует строку [WARN] для вставки перед [CONTENT]', () => {
     const line = buildWarnLine(['ignore all previous instructions', 'act as', 'reveal', 'x', 'y', 'z']);
-    expect(line).toBe('[WARN: обнаружены признаки prompt injection: ignore all previous instructions, act as, reveal, x, y]');
+    expect(line).toBe('[WARN: prompt injection signs detected: ignore all previous instructions, act as, reveal, x, y]');
     // Не более 5 совпадений в предупреждении
     expect((line.match(/,/g) ?? []).length).toBe(4);
   });

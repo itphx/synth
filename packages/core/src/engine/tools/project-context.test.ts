@@ -53,9 +53,9 @@ describe('project-context tools', () => {
 
   it('get_project_info: без проекта возвращает честный статус и рабочий каталог', async () => {
     const result = await getProjectInfoTool.execute({}, makeCtx());
-    expect(result.content).toContain('# Проект: отсутствует');
-    expect(result.content).toContain(`- Рабочий каталог: ${tmpDir}`);
-    expect(result.content).toContain('План недоступен');
+    expect(result.content).toContain('# Project: none');
+    expect(result.content).toContain(`- Working directory: ${tmpDir}`);
+    expect(result.content).toContain('The plan is unavailable');
   });
 
   it('get_project_info: проект указан, но не найден', async () => {
@@ -64,15 +64,15 @@ describe('project-context tools', () => {
       sessionId: session.id,
       extra: { sessionManager, projectStore, sessionId: session.id },
     }));
-    expect(result.content).toContain('# Проект: не найден (id: missing-id)');
-    expect(result.content).toContain(`- Рабочий каталог: ${tmpDir}`);
+    expect(result.content).toContain('# Project: not found (id: missing-id)');
+    expect(result.content).toContain(`- Working directory: ${tmpDir}`);
   });
 
   it('get_project_info: определяет git-репозиторий в рабочем каталоге', async () => {
     await initGitRepo(tmpDir);
     const result = await getProjectInfoTool.execute({}, makeCtx());
-    expect(result.content).toContain('Git-репозиторий');
-    expect(result.content).toContain('- Ветка:');
+    expect(result.content).toContain('Git repository');
+    expect(result.content).toContain('- Branch:');
     expect(result.content).toContain('initial');
   });
 
@@ -86,9 +86,9 @@ describe('project-context tools', () => {
       extra: { sessionManager, projectStore, sessionId: session.id },
     }));
 
-    expect(result.content).toContain('# Проект: TestProject');
+    expect(result.content).toContain('# Project: TestProject');
     expect(result.content).toContain(`- ID: ${project.id}`);
-    expect(result.content).toContain(`- Рабочий каталог проекта: ${tmpDir}`);
+    expect(result.content).toContain(`- Project working directory: ${tmpDir}`);
     expect(result.metadata?.projectWorkspace).toBe(tmpDir);
   });
 
@@ -106,9 +106,9 @@ describe('project-context tools', () => {
       extra: { sessionManager, projectStore, sessionId: session.id },
     }));
 
-    expect(result.content).toContain('# Проект: WsProject');
-    expect(result.content).toContain(`- Рабочий каталог проекта: ${wsDir}`);
-    expect(result.content).toContain('Git-репозиторий');
+    expect(result.content).toContain('# Project: WsProject');
+    expect(result.content).toContain(`- Project working directory: ${wsDir}`);
+    expect(result.content).toContain('Git repository');
     expect(result.content).toContain(wsDir);
     expect(result.metadata?.workingDir).toBe(tmpDir);
     expect(result.metadata?.projectWorkspace).toBe(wsDir);
@@ -131,15 +131,15 @@ describe('project-context tools', () => {
     await initGitRepo(sub);
 
     const result = await listReposTool.execute({}, makeCtx());
-    expect(result.content).toContain('# Git-репозитории');
+    expect(result.content).toContain('# Git repositories');
     expect(result.content).toContain(tmpDir);
     expect(result.content).toContain(sub);
-    expect(result.content).toContain('- Ветка:');
+    expect(result.content).toContain('- Branch:');
   });
 
   it('list_repos: возвращает сообщение, если репозитории не найдены', async () => {
     const result = await listReposTool.execute({}, makeCtx());
-    expect(result.content).toContain('не найдены');
+    expect(result.content).toContain('No git repositories in');
   });
 
   it('list_repos: использует repos из проекта при наличии ProjectStore', async () => {
@@ -153,8 +153,8 @@ describe('project-context tools', () => {
       extra: { sessionManager, projectStore, sessionId: session.id },
     }));
 
-    expect(result.content).toContain('# Репозитории проекта TestProject:');
-    expect(result.content).toContain('- Ветка:');
+    expect(result.content).toContain('# Repositories of project TestProject:');
+    expect(result.content).toContain('- Branch:');
   });
 
   it('get_project_info: относительный workspace резолвится относительно workspacesRoot', async () => {
@@ -172,8 +172,8 @@ describe('project-context tools', () => {
       extra: { sessionManager, projectStore, sessionId: session.id, workspacesRoot: wsRoot },
     }));
 
-    expect(result.content).toContain(`- Рабочий каталог проекта: ${wsDir}`);
-    expect(result.content).toContain('Git-репозиторий');
+    expect(result.content).toContain(`- Project working directory: ${wsDir}`);
+    expect(result.content).toContain('Git repository');
     expect(result.metadata?.projectWorkspace).toBe(wsDir);
   });
 
@@ -196,9 +196,9 @@ describe('project-context tools', () => {
       extra: { sessionManager, projectStore, sessionId: session.id, workspacesRoot: wsRoot },
     }));
 
-    expect(result.content).toContain('# Репозитории проекта RelRepos:');
+    expect(result.content).toContain('# Repositories of project RelRepos:');
     expect(result.content).toContain(subrepo);
-    expect(result.content).toContain('- Ветка:');
+    expect(result.content).toContain('- Branch:');
     expect(result.metadata?.projectWorkspace).toBe(wsDir);
   });
 
@@ -215,9 +215,9 @@ describe('project-context tools', () => {
       extra: { sessionManager, projectStore, sessionId: session.id },
     }));
 
-    expect(result.content).toContain(`# Git-репозитории в ${wsDir}:`);
+    expect(result.content).toContain(`# Git repositories in ${wsDir}:`);
     expect(result.content).toContain(wsDir);
-    expect(result.content).toContain('- Ветка:');
+    expect(result.content).toContain('- Branch:');
     expect(result.metadata?.projectWorkspace).toBe(wsDir);
   });
 });

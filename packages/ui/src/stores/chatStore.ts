@@ -68,6 +68,10 @@ export interface LiveToolCall {
   completedAt?: string
   iteration: number
   parentCallId?: string
+  /** Размышления саб-агента, стримящиеся внутри блока `task` (во время выполнения). */
+  subagentReasoningBlocks?: ReasoningBlockData[]
+  /** Промежуточный текст саб-агента, стримящийся внутри блока `task`. */
+  subagentIntermediateTextBlocks?: IntermediateTextBlockData[]
 }
 
 export interface StreamState {
@@ -122,6 +126,33 @@ export interface StreamRetry {
   error?: string
 }
 
+/** Статус повторной попытки саб-агента (событие subagent.retry). */
+export interface SubagentRetryState {
+  /** call_id тула `task` в родительской сессии (parent_call_id); в дочерней сессии при resume отсутствует. */
+  callId?: string
+  childSessionId?: string
+  attempt: number
+  maxRetries: number
+  /** Задержка backoff в миллисекундах */
+  retryInMs: number
+  errorType?: string
+  error?: string
+}
+
+/** Активное возобновление дочерней сессии (событие subagent.resume.started). */
+export interface SubagentResumeState {
+  childSessionId: string
+  parentSessionId: string
+  streamId: string
+}
+
+/** Финальная ошибка стрима (событие stream.error с can_retry: false) — плашка над полем ввода. */
+export interface FinalStreamError {
+  streamId: string
+  error: string
+  errorType: string
+}
+
 export interface QueueState {
   pendingCount: number
   isStalled: boolean
@@ -139,6 +170,9 @@ interface ChatStore {
   pendingBySession: Record<string, QueuedMessage[]>
   errorBySession: Record<string, StreamError | null>
   retryBySession: Record<string, StreamRetry | null>
+  subagentRetryBySession: Record<string, SubagentRetryState | null>
+  subagentResumingBySession: Record<string, SubagentResumeState | null>
+  finalErrorBySession: Record<string, FinalStreamError | null>
   stickyNotesBySession: Record<string, StickyNoteData[]>
   summarizationPendingBySession: Record<string, boolean>
   debugModalSessionId: string | null
@@ -152,12 +186,16 @@ interface ChatStore {
   updateStreamChunk: (sessionId: string, streamId: string, content: string, reasoning: string, model?: string, provider?: string, iteration?: number) => void
   addToolCall: (sessionId: string, streamId: string, tc: LiveToolCall) => void
   updateToolCallResult: (sessionId: string, streamId: string, callId: string, result: { content: string; isError?: boolean; metadata?: Record<string, unknown> }) => void
+  updateToolCallSubagentProgress: (sessionId: string, streamId: string, callId: string, patch: { reasoning?: string; content?: string; iteration?: number }) => void
   finishStream: (sessionId: string, streamId: string, metadata: StreamDoneMetadata) => void
   cancelStream: (sessionId: string, streamId: string) => void
   addStreamError: (sessionId: string, error: StreamError) => void
   clearStreamError: (sessionId: string) => void
   setStreamRetry: (sessionId: string, retry: StreamRetry | null) => void
   setStreamRetrying: (sessionId: string, streamId: string, isRetrying: boolean) => void
+  setSubagentRetry: (sessionId: string, retry: SubagentRetryState | null) => void
+  setSubagentResuming: (sessionId: string, state: SubagentResumeState | null) => void
+  setFinalStreamError: (sessionId: string, error: FinalStreamError | null) => void
   addMessage: (sessionId: string, message: MessageData) => void
   setPendingMessages: (sessionId: string, pending: QueuedMessage[]) => void
   setQueueStalled: (sessionId: string, pendingCount: number) => void
@@ -193,6 +231,9 @@ export const useChatStore = create<ChatStore>((set) => ({
   pendingBySession: {},
   errorBySession: {},
   retryBySession: {},
+  subagentRetryBySession: {},
+  subagentResumingBySession: {},
+  finalErrorBySession: {},
   stickyNotesBySession: {},
   summarizationPendingBySession: {},
   debugModalSessionId: null,
@@ -272,9 +313,20 @@ export const useChatStore = create<ChatStore>((set) => ({
       const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
       const existing = sessionStreams[streamId]
       if (!existing) return s
+      const idx = existing.toolCalls.findIndex((c) => c.callId === tc.callId)
+      let toolCalls: LiveToolCall[]
+      if (idx >= 0) {
+        // Дедупликация по callId: повторный tool_call.started для того же вызова
+        // обновляет узел (статус/итерация), а не создаёт «призрачный» дубль
+        // (например, при переизлучении read_file reason-моделью в стриме).
+        toolCalls = [...existing.toolCalls]
+        toolCalls[idx] = { ...toolCalls[idx]!, ...tc }
+      } else {
+        toolCalls = [...existing.toolCalls, tc]
+      }
       sessionStreams[streamId] = {
         ...existing,
-        toolCalls: [...existing.toolCalls, tc],
+        toolCalls,
       }
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
@@ -293,6 +345,49 @@ export const useChatStore = create<ChatStore>((set) => ({
         result,
         completedAt: new Date().toISOString(),
       }
+      sessionStreams[streamId] = { ...existing, toolCalls: updated }
+      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
+    }),
+
+  updateToolCallSubagentProgress: (sessionId, streamId, callId, patch) =>
+    set((s) => {
+      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
+      const existing = sessionStreams[streamId]
+      if (!existing) return s
+      const idx = existing.toolCalls.findIndex((tc) => tc.callId === callId)
+      if (idx === -1) return s
+      const tc = existing.toolCalls[idx]!
+      const updated = [...existing.toolCalls]
+
+      // Размышления саб-агента: накапливаем по итерациям (как reasoningBlocks основного стрима).
+      let reasoningBlocks = tc.subagentReasoningBlocks ? [...tc.subagentReasoningBlocks] : []
+      if (patch.reasoning && patch.reasoning.trim()) {
+        const iter = patch.iteration ?? 0
+        if (reasoningBlocks.length === 0) {
+          reasoningBlocks = [{ text: patch.reasoning, iteration: iter }]
+        } else {
+          const last = reasoningBlocks[reasoningBlocks.length - 1]!
+          if (last.iteration === iter && patch.reasoning.length >= last.text.length) {
+            reasoningBlocks = [...reasoningBlocks.slice(0, -1), { ...last, text: patch.reasoning }]
+          } else {
+            reasoningBlocks = [...reasoningBlocks, { text: patch.reasoning, iteration: iter }]
+          }
+        }
+      }
+
+      // Промежуточный текст саб-агента.
+      let intermediateTextBlocks = tc.subagentIntermediateTextBlocks ? [...tc.subagentIntermediateTextBlocks] : []
+      if (patch.content && patch.content.trim()) {
+        const iter = patch.iteration ?? 0
+        const lastText = intermediateTextBlocks[intermediateTextBlocks.length - 1]
+        if (lastText && lastText.iteration === iter) {
+          intermediateTextBlocks = [...intermediateTextBlocks.slice(0, -1), { ...lastText, text: patch.content }]
+        } else {
+          intermediateTextBlocks = [...intermediateTextBlocks, { text: patch.content, iteration: iter }]
+        }
+      }
+
+      updated[idx] = { ...tc, subagentReasoningBlocks: reasoningBlocks, subagentIntermediateTextBlocks: intermediateTextBlocks }
       sessionStreams[streamId] = { ...existing, toolCalls: updated }
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
@@ -467,6 +562,27 @@ export const useChatStore = create<ChatStore>((set) => ({
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
 
+  setSubagentRetry: (sessionId, retry) =>
+    set((s) => ({
+      subagentRetryBySession: { ...s.subagentRetryBySession, [sessionId]: retry },
+    })),
+
+  setSubagentResuming: (sessionId, state) =>
+    set((s) => ({
+      subagentResumingBySession: { ...s.subagentResumingBySession, [sessionId]: state },
+    })),
+
+  setFinalStreamError: (sessionId, error) =>
+    set((s) => {
+      const prev = s.finalErrorBySession[sessionId]
+      // no-op если значение не меняется — иначе лишние перерендеры на каждом chunk
+      if (prev === error || (prev === null && error === null)) return s
+      if (prev && error && prev.streamId === error.streamId && prev.error === error.error && prev.errorType === error.errorType) return s
+      return {
+        finalErrorBySession: { ...s.finalErrorBySession, [sessionId]: error },
+      }
+    }),
+
   addMessage: (sessionId, message) =>
     set((s) => {
       const msgs = [...(s.messagesBySession[sessionId] || [])]
@@ -548,7 +664,13 @@ export const useChatStore = create<ChatStore>((set) => ({
       delete errorBySession[sessionId]
       const retryBySession = { ...s.retryBySession }
       delete retryBySession[sessionId]
-      return { messagesBySession, streamingBySession, queueBySession, pendingBySession, errorBySession, retryBySession }
+      const subagentRetryBySession = { ...s.subagentRetryBySession }
+      delete subagentRetryBySession[sessionId]
+      const subagentResumingBySession = { ...s.subagentResumingBySession }
+      delete subagentResumingBySession[sessionId]
+      const finalErrorBySession = { ...s.finalErrorBySession }
+      delete finalErrorBySession[sessionId]
+      return { messagesBySession, streamingBySession, queueBySession, pendingBySession, errorBySession, retryBySession, subagentRetryBySession, subagentResumingBySession, finalErrorBySession }
     }),
 
   setStickyNotes: (sessionId, notes) =>

@@ -560,6 +560,19 @@ export const dict = {
   'chat.subagent.title': 'Сабагент',
   'chat.subagent.steps': 'шагов',
   'chat.subagent.open': 'Открыть',
+  'chat.subagent.errorStopped': 'Сабагент остановлен: ошибка провайдера',
+  'chat.subagent.errorAttempts': 'попыток: {attempts}/{max}',
+  'chat.subagent.resume': 'Продолжить',
+  'chat.subagent.resuming': 'Возобновление…',
+  'chat.subagent.stop': 'Остановить',
+  'chat.subagent.resumeFailed': 'Не удалось возобновить сабагента',
+
+  'chat.streamError.generic': 'Обработка остановлена: ошибка провайдера',
+  'chat.streamError.contextLength': 'Контекстное окно модели превышено. Начните новую сессию или сократите историю',
+  'chat.streamError.authFailed': 'Ошибка аутентификации провайдера. Проверьте API-ключ в настройках провайдера',
+  'chat.streamError.retry': 'Повторить',
+  'chat.streamError.retrySent': 'Запрос отправлен повторно',
+  'chat.error.retryLast': 'Не удалось повторить запрос:',
 
   'chat.queue.stalled': 'Обработка остановлена: {count} сообщ.',
   'chat.queue.pending': 'В очереди: {count}',
@@ -1118,4 +1131,257 @@ export const dict = {
   'routing.subagent.modelAuto': 'Авто (как у агента)',
   'routing.quality.pass': 'Качество: OK',
   'routing.quality.fail': 'Качество: ошибка',
+
+  // ============================================================
+  // Системные сообщения ядра (metadata.i18n, i18n ядра).
+  // Источник ключей: packages/core/src/engine/system-messages.ts.
+  // en-версии в en.ts нет: content от движка уже на английском —
+  // при отсутствии ключа рендер падает на content (resolveI18n).
+  // Плейсхолдеры {param} — точно как в core.
+  // ============================================================
+
+  // --- Сессия: статусы, заголовки, ссылки ---
+  'session.max_iterations': '(достигнут лимит итераций инструментов)',
+  'session.stopped': 'Обработка остановлена: {reason}',
+  'session.stopped_reason_denied': 'пользователь отклонил запрос',
+  'session.denied_blocked': 'Не удалось продолжить: действие заблокировано политикой безопасности',
+  'session.empty_response': 'Не удалось выполнить запрос: ответ модели пуст',
+  'session.dialog_title': 'Диалог — {id}',
+  'session.default_title': 'Новая сессия',
+  'session.reference_label': 'Сессия',
+  'session.reference_link': 'Ссылка на сессию: {label} ({id}, сообщения {from}-{to})',
+  'session.retry_cancelled': 'Повторы отменены пользователем',
+  'session.subtask_title': 'Подзадача: {description}',
+
+  // --- Сабагент (task) ---
+  'task.stopped_by_user': 'Задача остановлена пользователем',
+  'task.stopped_before_completion':
+    'Задача была остановлена пользователем до завершения. Выше приведён частичный ответ сабагента; выполненные шаги перечислены. Подробности и история — в дочерней сессии.',
+  'task.stopped_by_deny': 'Обработка остановлена: пользователь отклонил запрос на выполнение инструмента',
+  'task.empty_response': '(пустой ответ сабагента)',
+  'task.subagent_exec_error': 'Ошибка выполнения сабагента «{type}»: {error}',
+  'task.subagent_not_found': 'Сабагент «{type}» не найден. Доступные типы: {types}',
+  'task.subagent_not_allowed': 'Агент «{type}» не может использоваться как сабагент (режимы: {modes})',
+  'task.deps_unavailable': 'Ошибка: провайдер или реестр агентов недоступны для запуска сабагента',
+  'task.subagent_exec_error_after_retries': 'Ошибка выполнения сабагента «{type}» после {attempts} попыток: {error}',
+
+  // --- Возобновление дочерней сессии саб-агента (resume) ---
+  'task.resume_marker': 'Возобнови прерванную задачу. Продолжи с того места, где остановился.',
+  'task.resume_result': 'Возобновлённый сабагент «{type}» завершён. Результат:\n\n{summary}',
+  'task.resume_failed': 'Возобновлённый сабагент «{type}» завершился ошибкой: {error}',
+  'task.resume_aborted': 'Возобновлённый сабагент «{type}» был остановлен пользователем до завершения.',
+  'task.resume_session_not_found': 'Сессия {id} не найдена',
+  'task.resume_no_parent': 'Сессия {id} не является дочерней (нет родительской сессии) — возобновление неприменимо',
+  'task.resume_parent_not_found': 'Родительская сессия {id} не найдена — невозможно возобновить дочернюю сессию',
+  'task.resume_locked': 'Сессия {id} занята или уже возобновляется',
+  'task.resume_agent_not_found': 'Агент «{type}» не найден или не может использоваться как сабагент',
+  'task.resume_provider_unavailable': 'Провайдер не настроен для сессии {id} — возобновление невозможно',
+
+  // --- Тулы: общие ошибки и результаты ---
+  'tool.args_error': 'Ошибка аргументов инструмента «{tool}»: {issues}',
+  'tool.exec_error': 'Ошибка выполнения инструмента «{tool}»: {error}',
+  'tool.not_found': 'Инструмент «{tool}» не найден',
+  'tool.permission_denied_default': 'Доступ запрещён политикой безопасности',
+  'tool.doom_loop': 'Ошибка: инструмент «{tool}» вызван {count} раз(а) с теми же аргументами. Цикл прерван.',
+  'tool.empty_output': '(пустой вывод)',
+  'tool.output_truncated': '\n... (вывод усечён)',
+  'tool.shell_error': 'Ошибка: {message}',
+  'tool.command_failed_default': 'Команда завершилась с ошибкой',
+  'tool.aborted': 'Выполнение прервано пользователем.',
+  'tool.classified': 'Диалог классифицирован как «{category}»',
+
+  // --- Файлы (fs-write) ---
+  'fs.file_written': 'Файл записан: {path} ({lines} строк, {bytes} байт)',
+  'fs.file_edited': 'Файл изменён: {path} ({count} замен)',
+  'fs.replace_not_found': 'Ошибка: заменяемая строка не найдена в файле «{path}»',
+  'fs.replace_multiple': 'Ошибка: найдено {count} совпадений заменяемой строки. Уточните контекст для уникального совпадения.',
+  'fs.dir_created': 'Каталог создан: {path}',
+  'fs.file_deleted': 'Файл удалён: {path}',
+
+  // --- Чтение файлов (fs-read) ---
+  'fsread.empty_directory': '(пустой каталог)',
+  'fsread.no_files': '(файлы не найдены)',
+  'fsread.glob_error': '(ошибка поиска файлов)',
+
+  // --- Веб (web_fetch / web_search) ---
+  'web.duckduckgo_blocked': 'DuckDuckGo временно блокирует запросы (anti-bot защита)',
+  'web.search_failed': 'Не удалось получить результаты от DuckDuckGo',
+  'web.search_results': 'Результаты поиска по запросу «{query}» ({count}):\n\n{items}',
+  'web.fetch_args_url_required': 'укажите url или urls',
+  'web.js_framework_warning': '\n\n⚠️ Сайт использует JavaScript-фреймворк — часть содержимого может быть недоступна без выполнения JS.',
+  'web.low_content_warning': '\n\n⚠️ На странице очень мало текстового содержимого (возможно, JavaScript-рендеринг).',
+  'web.content_truncated': '\n... (содержимое усечено)',
+  'web.block_timeout': '❌ Превышен таймаут',
+  'web.block_error': '❌ Ошибка загрузки: {error}',
+  'web.fetch_all_failed': 'Не удалось загрузить ни один из URL',
+  'web.no_results': 'По запросу «{query}» ничего не найдено.',
+  'web.search_error': 'Ошибка веб-поиска: {error}',
+
+  // --- Поиск ---
+  'search.no_matches': '(совпадений не найдено)',
+  'search.matches_truncated': '... (показаны 200 из {total} совпадений)',
+  'search.rg_not_installed': '(rg (ripgrep) не установлен. Поиск недоступен)',
+  'search.error': 'Ошибка поиска: {error}',
+
+  // --- План ---
+  'plan.enter_success':
+    'Режим планирования включён: запись файлов заблокирована, чтение разрешено. Исследуйте задачу, работайте с планом через plan_read/plan_write и завершите через plan_exit, чтобы вернуться в режим выполнения.',
+  'plan.exit_success': 'План утверждён. Включён режим выполнения: запись файлов разрешена.',
+  'plan.session_manager_unavailable': 'Ошибка: менеджер сессий недоступен для {tool}',
+  'plan.enter_failed': 'Ошибка: не удалось перевести сессию в режим планирования',
+  'plan.exit_failed': 'Ошибка: не удалось перевести сессию в режим выполнения',
+  'plan.project_store_unavailable': 'Ошибка: хранилище проектов недоступно для plan_write',
+  'plan.no_project': 'Ошибка: нет проекта (план принадлежит проекту)',
+  'plan.no_project_read': 'Нет проекта: план недоступен (план принадлежит проекту)',
+  'plan.column_not_found': 'Ошибка: колонка «{columnId}» не найдена',
+  'plan.item_not_found': 'Ошибка: пункт плана с id «{itemId}» не найден',
+  'plan.save_error': 'Ошибка сохранения плана: {error}',
+  'plan.markdown_title': '# План (v{version})',
+  'plan.markdown_empty': 'Нет пунктов',
+  'plan.markdown_column_empty': '(пусто)',
+  'plan.markdown_dependencies': '  - Зависимости: {deps}',
+  'plan.default_column_backlog': 'Бэклог',
+  'plan.default_column_todo': 'К выполнению',
+  'plan.default_column_in_progress': 'В работе',
+  'plan.default_column_done': 'Готово',
+
+  // --- Todo ---
+  'todo.save_error': 'Ошибка сохранения списка todo: {error}',
+  'todo.read_error': 'Ошибка чтения списка todo: {error}',
+  'todo.list_empty': 'Список todo пуст',
+  'todo.list': 'Список todo ({count}):\n{items}',
+  'todo.item_not_found': 'Ошибка: пункт todo с id «{id}» не найден',
+  'todo.items_not_found': 'Ошибка: пункты todo с id «{ids}» не найдены',
+  'todo.status_pending': 'ожидает',
+  'todo.status_in_progress': 'в работе',
+  'todo.status_completed': 'готово',
+  'todo.status_cancelled': 'отменено',
+  'todo.priority_high': 'высокий',
+  'todo.priority_medium': 'средний',
+  'todo.priority_low': 'низкий',
+
+  // --- Проект ---
+  'project.deps_unavailable': 'Ошибка: менеджер сессий или хранилище проектов недоступны для {tool}',
+  'project.session_read_error': 'Ошибка: не удалось прочитать сессию',
+  'project.session_not_found': 'Ошибка: сессия не найдена',
+  'project.save_error': 'Ошибка сохранения проекта: {error}',
+  'project.created': 'Проект «{name}» создан и привязан к сессии.\n{json}',
+  'project.read_error': 'Ошибка: не удалось прочитать проект',
+  'project.not_found': 'Проект {id} не найден',
+  'project.attached': 'Сессия привязана к проекту «{name}».',
+  'project.log_no_project': 'Нет проекта: журнал доступен только внутри проекта',
+  'project.log_save_error': 'Ошибка сохранения журнала проекта: {error}',
+  'project.log_added': 'Запись журнала добавлена. Всего записей: {count}.',
+  'project.log_empty': 'Журнал пуст',
+  'project.log_list': 'Журнал проекта ({count}):\n{items}',
+  'project.invariants_no_project': 'Нет проекта: инварианты доступны только внутри проекта',
+  'project.invariants_empty': 'Инварианты не заданы',
+  'project.invariants_saved': 'Инварианты проекта сохранены.',
+  'project.invariants_save_error': 'Ошибка сохранения инвариантов: {error}',
+
+  // --- Контекст проекта (get_project_info / list_repos) ---
+  'projectctx.info_title': '# Проект: {name}',
+  'projectctx.info_id': '- ID: {id}',
+  'projectctx.info_workspace': '- Рабочий каталог проекта: {dir}',
+  'projectctx.info_description': '- Описание: {description}',
+  'projectctx.not_found': '# Проект: не найден (id: {id})',
+  'projectctx.missing': '# Проект: отсутствует',
+  'projectctx.working_dir': '- Рабочий каталог: {dir}',
+  'projectctx.no_plan_hint': '- План недоступен (план принадлежит проекту). Для работы с планом — создайте проект.',
+  'projectctx.git_section': '## Git-репозиторий',
+  'projectctx.repo_branch': '  - Ветка: {branch}',
+  'projectctx.repo_remote': '  - Remote: {url}',
+  'projectctx.repo_state': '  - Состояние: {state}',
+  'projectctx.repo_state_dirty': 'есть изменения',
+  'projectctx.repo_state_clean': 'чисто',
+  'projectctx.repo_last_commit': '  - Последний коммит: {commit}',
+  'projectctx.repos_title': '# Репозитории проекта {name}:',
+  'projectctx.repo_not_found': '- {path} (не найден или не git-репозиторий)',
+  'projectctx.repos_none': 'В «{dir}» нет git-репозиториев',
+  'projectctx.repos_found': '# Git-репозитории в {dir}:',
+
+  // --- Ссылки на сессии ---
+  'reference.session_manager_unavailable': 'SessionManager недоступен',
+  'reference.session_not_found': 'Сессия {id} не найдена',
+  'reference.no_messages': 'В сессии {id} нет сообщений в указанном диапазоне',
+  'reference.session_title': '# Сессия: {title}',
+
+  // --- Permissions (evaluator) ---
+  'permission.yolo_auto_approved': '{reason} (режим yolo: одобрено автоматически)',
+  'permission.plan_write_blocked': 'режим планирования: запись файлов заблокирована ({source})',
+  'permission.plan_source_mode': 'режим планирования',
+  'permission.plan_source_strict': 'strict: план не утверждён',
+  'permission.plan_shell_denied': 'режим планирования: shell-команда изменяет состояние',
+  'permission.mcp_unavailable': 'MCP-инструмент недоступен в режиме {mode}',
+  'permission.no_rules': 'нет правил доступа для «{tool}» — разрешено по умолчанию',
+  'permission.rule_matched': 'правило «{key}» → {action}',
+  'permission.rule_pattern_matched': 'правило «{key}.{pattern}» → {action} (путь: {path})',
+  'permission.rule_prefix_matched': 'правило «{key}.*» → {action}',
+  'permission.rule_command_matched': 'правило «{key}.{pattern}» → {action} (команда: {command})',
+  'permission.ask_timeout': 'истекло время ожидания подтверждения',
+  'permission.ask_no_subscribers': 'нет подключённого пользователя для подтверждения',
+  'permission.ask_denied': 'отклонено пользователем',
+
+  // --- Shell-политика (shell-guard) ---
+  'shellguard.allow_default': 'команда не нарушает shell-политику',
+  'shellguard.deny_prefix': 'Команда запрещена shell-политикой: префикс «{prefix}»',
+  'shellguard.deny_path': 'Доступ запрещён shell-политикой: путь «{path}» защищён',
+  'shellguard.ask_path': 'Путь «{path}» требует подтверждения согласно shell-политике',
+  'shellguard.deny_dir': 'Доступ запрещён shell-политикой: путь «{path}» находится в защищённом каталоге «{dir}»',
+
+  // --- Защищённые пути (protected-paths) ---
+  'protectedpaths.unresolvable': 'путь не удаётся разрешить — не блокируем',
+  'protectedpaths.dynamic': 'путь содержит динамические части — проверить не удалось (не блокируем)',
+  'protectedpaths.allow_default': 'путь не нарушает политику защищённых путей',
+
+  // --- Prompt injection ---
+  'security.warn_prefix': '[ВНИМАНИЕ: обнаружены признаки prompt injection',
+  'security.injection_blocked': '[ЗАБЛОКИРОВАНО] Результат инструмента «{tool}» заблокирован: обнаружены признаки prompt injection ({matches})',
+
+  // --- LLM Gateway ---
+  'gateway.input_blocked': 'В запросе обнаружены секреты ({reason}). Запрос заблокирован LLM Gateway.',
+  'gateway.rate_limit_warning': '⚠️ Превышен лимит запросов. Повторите попытку позже.',
+  'gateway.output_secrets_reason': 'секреты в ответе модели',
+
+  // --- Router / провайдеры ---
+  'router.timeout': 'Таймаут или разрыв соединения с LLM-провайдером',
+  'router.network_error': 'Не удалось подключиться к LLM-провайдеру (сетевая ошибка)',
+  'router.provider_not_found': 'Провайдер {provider} не найден или не настроен',
+  'router.provider_unspecified': 'не указан',
+  'router.escalation': 'Эскалация на {provider}/{model}: {reason}',
+  'router.context_length_exceeded': 'Превышено окно контекста',
+  'router.rate_limit_exceeded': 'Превышен лимит частоты запросов',
+
+  // --- Quality check (AD-034) ---
+  'qc.min_length_ok': 'Длина ответа {length} >= {min}',
+  'qc.min_length_fail_detail': 'Ответ короче {min} символов ({length})',
+  'qc.min_length_fail': 'Ответ короче {min} символов',
+  'qc.constraint_empty': 'Ответ пуст или содержит только пробельные символы',
+  'qc.constraint_parse_error': 'Ответ содержит явную ошибку разбора: {snippet}',
+  'qc.constraint_ok': 'Ограничения пройдены',
+  'qc.self_check_skipped': 'Самопроверка пропущена: провайдер не указан',
+  'qc.self_check_unparsed': 'Не удалось разобрать оценку: «{score}» — считаем пройденной',
+  'qc.self_check_low': 'Оценка самопроверки: {score}/10 (порог: 5)',
+  'qc.self_check_low_reason': 'Самооценка модели низкая: {score}/10',
+  'qc.self_check_ok': 'Оценка самопроверки: {score}/10',
+  'qc.self_check_error': 'Ошибка самопроверки: {error} — считаем пройденной',
+  'qc.all_passed': 'Все проверки пройдены',
+
+  // --- Микро-слой (AD-035) ---
+  'micro.greeting': 'Привет! Чем могу помочь?',
+  'micro.farewell': 'До встречи! Обращайтесь, когда буду нужен.',
+  'micro.thanks': 'Пожалуйста! Рад помочь.',
+  'micro.enum.yes': 'Да.',
+  'micro.enum.no': 'Нет.',
+  'micro.enum.approve': 'Одобряю.',
+  'micro.enum.reject': 'Отклоняю.',
+  'micro.enum.mode_plan': 'Перехожу в режим планирования. Исследую задачу и составляю план.',
+  'micro.enum.mode_act': 'Перехожу в режим выполнения. Приступаю к работе.',
+  'micro.intent.question': 'Хороший вопрос. Мне нужно больше контекста для точного ответа — что именно вас интересует?',
+  'micro.intent.command': 'Понял. В чём конкретно задача? Опишите, что нужно сделать.',
+  'micro.intent.review': 'Понял, нужен ревью. Покажите фрагмент кода, и я оценю его качество.',
+  'micro.intent.explain': 'Понял, нужно объяснение. О каком фрагменте/понятии идёт речь?',
+  'micro.intent.debug': 'Похоже на задачу отладки. Опишите ошибку или приложите лог — разберёмся.',
+  'micro.intent.fix': 'Понял, нужно исправить баг. Покажите проблемный код — найдём причину.',
+  'micro.intent.test': 'Понял, нужны тесты. Укажите функцию или модуль — напишу тесты.',
 };

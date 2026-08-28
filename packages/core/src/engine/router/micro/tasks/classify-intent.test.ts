@@ -30,7 +30,7 @@ describe('handleClassifyIntent', () => {
       signals: ['keyword:проверь'],
     };
     const result = handleClassifyIntent(input);
-    expect(result.signals.some((s) => s.includes('Ревью'))).toBe(true);
+    expect(result.signals.some((s) => s.includes('Review'))).toBe(true);
   });
 
   it('работает с неизвестным интентом', () => {
@@ -83,7 +83,7 @@ describe('handleClassifyIntent', () => {
     };
     const result = handleClassifyIntent(input);
     expect(result.answer).toBeTruthy();
-    expect(result.answer).toContain('ревью');
+    expect(result.answer).toContain('review');
   });
 
   it('генерирует answer для "fix", а не эхо запроса', () => {
@@ -97,7 +97,7 @@ describe('handleClassifyIntent', () => {
     };
     const result = handleClassifyIntent(input);
     expect(result.answer).toBeTruthy();
-    expect(result.answer).toContain('исправить');
+    expect(result.answer).toContain('fix');
   });
 
   it('генерирует fallback answer для неизвестного интента', () => {
@@ -110,6 +110,6 @@ describe('handleClassifyIntent', () => {
       signals: [],
     };
     const result = handleClassifyIntent(input);
-    expect(result.answer).toBe('Интент: unknown');
+    expect(result.answer).toBe('Intent: unknown');
   });
 });

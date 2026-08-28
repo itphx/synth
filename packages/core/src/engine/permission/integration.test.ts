@@ -671,14 +671,14 @@ describe('ChatOrchestrator × permissions — once:false и deny (AD-029)', () =
     const done = chunks.find((c) => c.event === 'stream.done');
     expect(done).toBeDefined();
     expect(done!.data.stopped_by_deny).toBe(true);
-    expect(done!.data.deny_reason).toContain('отклонено пользователем');
+    expect(done!.data.deny_reason).toContain('denied by the user');
 
     // История сохранена: финальное сообщение ассистента с tool_results
     const session = (await sessionManager.getSession(sessionId))!;
     const assistant = [...session.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT);
     expect(assistant).toBeDefined();
     expect((assistant!.metadata as Record<string, unknown>).tool_results).toBeDefined();
-    expect(assistant!.content).toContain('Обработка остановлена');
+    expect(assistant!.content).toContain('Processing stopped');
     for (const unsub of unsubs) unsub();
   });
 

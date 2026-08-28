@@ -88,7 +88,6 @@ packages/core/
 │   │       ├── agents.ts
 │   │       ├── queue.ts
 │   │       ├── fs.ts
-│   │       ├── i18n.ts
 │   │       ├── context.ts
 │   │       └── profile.ts
 │   ├── auth/
@@ -155,7 +154,6 @@ packages/core/
 | providers | `GET /api/v2/providers`, `GET /api/v2/models` | — |
 | agents | `GET /api/v2/agents` | — |
 | fs | `GET /api/v2/fs?path=`, `GET /api/v2/fs/read?path=`, `POST /api/v2/fs/write`, `POST /api/v2/fs/upload`, `GET /api/v2/fs/download?path=`, `POST /api/v2/fs/mkdir`, `POST /api/v2/fs/move`, `DELETE /api/v2/fs?path=` | Прямой доступ к ФС (чтение, запись, загрузка, скачивание) |
-| i18n | `GET /api/v2/i18n/*` | — |
 | profile | `GET /api/v2/profile` | Локальный профиль |
 
 ### Не поддерживаются в standalone

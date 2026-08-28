@@ -89,9 +89,9 @@ describe('ChatOrchestrator workspace (backend main.ts сценарий)', () => 
     };
 
     const result = await tool!.execute({}, ctx);
-    expect(result.content).toContain('# Проект: Тестовый проект');
+    expect(result.content).toContain('# Project: Тестовый проект');
     expect(result.content).toContain(`- ID: ${project.id}`);
-    expect(result.content).toContain(`- Рабочий каталог проекта: ${resolve(wsRoot, 'WS1')}`);
+    expect(result.content).toContain(`- Project working directory: ${resolve(wsRoot, 'WS1')}`);
     expect(result.metadata?.projectWorkspace).toBe(resolve(wsRoot, 'WS1'));
   });
 });

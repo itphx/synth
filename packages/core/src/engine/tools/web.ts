@@ -3,6 +3,8 @@ import { parse } from 'parse5';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
 import { deobfuscateText } from './obfuscation.js';
+import { isAborted, isAbortError, signalAborted, abortedResult } from './abort.js';
+import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 const MAX_RESPONSE_SIZE = 50_000;
 const MAX_FETCH_URLS = 5;
@@ -110,11 +112,30 @@ function isDdgChallenge(html: string, status: number): boolean {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function duckDuckGoSearch(query: string, limit: number, attempts = SEARCH_ATTEMPTS): Promise<SearchResult[]> {
+/**
+ * Связать внешний AbortSignal («Стоп» сессии) с локальным таймаут-контроллером:
+ * при внешнем abort локальный контроллер тоже абортируется, fetch прерывается.
+ * Возвращает функцию снятия подписки.
+ */
+function linkSignal(controller: AbortController, external?: AbortSignal): () => void {
+  if (!external) return () => {};
+  if (external.aborted) {
+    controller.abort();
+    return () => {};
+  }
+  const onAbort = () => controller.abort();
+  external.addEventListener('abort', onAbort, { once: true });
+  return () => external.removeEventListener('abort', onAbort);
+}
+
+async function duckDuckGoSearch(query: string, limit: number, abortSignal?: AbortSignal, attempts = SEARCH_ATTEMPTS): Promise<SearchResult[]> {
   let lastError = '';
   for (let attempt = 0; attempt < attempts; attempt++) {
+    // «Стоп» пришёл между попытками — ретраи не выполняем
+    if (signalAborted(abortSignal)) throw new DOMException('Aborted', 'AbortError');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);
+    const unlink = linkSignal(controller, abortSignal);
 
     try {
       const response = await fetch(DDG_SEARCH_URL, {
@@ -130,7 +151,7 @@ async function duckDuckGoSearch(query: string, limit: number, attempts = SEARCH_
       const html = await response.text();
 
       if (isDdgChallenge(html, response.status)) {
-        lastError = 'DuckDuckGo временно блокирует запросы (anti-bot challenge)';
+        lastError = sm('web.duckduckgo_blocked');
         continue;
       }
 
@@ -144,11 +165,12 @@ async function duckDuckGoSearch(query: string, limit: number, attempts = SEARCH_
       lastError = (err as Error).message || String(err);
     } finally {
       clearTimeout(timer);
+      unlink();
     }
 
     await sleep(SEARCH_RETRY_DELAY_MS);
   }
-  throw new Error(lastError || 'Не удалось получить результаты от DuckDuckGo');
+  throw new Error(lastError || sm('web.search_failed'));
 }
 
 // ─── Парсинг Bing HTML (fallback для web_search) ────────────────────────────
@@ -192,9 +214,10 @@ export function parseBingResults(html: string, limit: number): SearchResult[] {
   return results;
 }
 
-async function bingSearch(query: string, limit: number): Promise<SearchResult[]> {
+async function bingSearch(query: string, limit: number, abortSignal?: AbortSignal): Promise<SearchResult[]> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
+  const unlink = linkSignal(controller, abortSignal);
 
   try {
     const url = `${BING_SEARCH_URL}?q=${encodeURIComponent(query)}&count=${limit}`;
@@ -211,6 +234,7 @@ async function bingSearch(query: string, limit: number): Promise<SearchResult[]>
     return parseBingResults(html, limit);
   } finally {
     clearTimeout(timer);
+    unlink();
   }
 }
 
@@ -222,7 +246,7 @@ function formatSearchResults(query: string, results: SearchResult[]): string {
     return lines.join('\n');
   });
 
-  return `Результаты поиска «${query}» (${results.length}):\n\n${parts.join('\n\n')}`;
+  return sm('web.search_results', { query, count: String(results.length), items: parts.join('\n\n') });
 }
 
 // ─── Очистка HTML для web_fetch ─────────────────────────────────────────────
@@ -273,9 +297,11 @@ export const webFetchTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.WEB],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — fetch не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
     }
     const params = parsed.data as {
       url?: string;
@@ -286,7 +312,7 @@ export const webFetchTool: ToolDefinition = {
 
     const rawUrls = params.urls && params.urls.length > 0 ? params.urls : (params.url ? [params.url] : []);
     if (rawUrls.length === 0) {
-      return { content: `Ошибка аргументов инструмента "${this.name}": укажите url или urls`, isError: true };
+      return { content: sm('tool.args_error', { tool: this.name, issues: sm('web.fetch_args_url_required') }), isError: true, metadata: { i18n: i18nMeta('web.fetch_args_url_required') } };
     }
     // AD-036: деобфускация в точке потребления — URL может содержать ⟦SYNTH_SECRET_N⟧
     const restoredUrls = await Promise.all(rawUrls.map((u) => deobfuscateText(ctx, u)));
@@ -296,8 +322,12 @@ export const webFetchTool: ToolDefinition = {
     const blocks: string[] = [];
 
     for (const url of urls) {
+      // «Стоп» пришёл между URL — оставшиеся не загружаем
+      if (isAborted(ctx)) return abortedResult(this.name, blocks.join('\n\n---\n\n') || undefined);
+
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const unlink = linkSignal(controller, ctx.abortSignal);
 
       try {
         const response = await fetch(url, {
@@ -305,6 +335,7 @@ export const webFetchTool: ToolDefinition = {
           headers: BROWSER_HEADERS,
         });
         clearTimeout(timer);
+        unlink();
 
         if (!response.ok) {
           blocks.push(`### ${url}\n\n❌ HTTP ${response.status} ${response.statusText}`);
@@ -327,32 +358,37 @@ export const webFetchTool: ToolDefinition = {
           const isSpa = detectSpa(rawText);
           const textRatio = content.length / Math.max(rawText.length, 1);
           if (isSpa) {
-            content += '\n\n⚠️ Сайт использует JavaScript-фреймворк — часть контента может быть недоступна без выполнения JS.';
+            content += sm('web.js_framework_warning');
           } else if (textRatio < 0.02) {
-            content += '\n\n⚠️ На странице очень мало текстового контента (возможно, JavaScript-рендеринг).';
+            content += sm('web.low_content_warning');
           }
         } else {
           content = rawText;
         }
 
         if (content.length > MAX_RESPONSE_SIZE) {
-          content = content.slice(0, MAX_RESPONSE_SIZE) + '\n... (содержимое обрезано)';
+          content = content.slice(0, MAX_RESPONSE_SIZE) + sm('web.content_truncated');
         }
 
         blocks.push(`### ${url}\n\n${content}`);
       } catch (err: unknown) {
         clearTimeout(timer);
+        unlink();
         const error = err as Error;
+        if (isAbortError(err) && isAborted(ctx)) {
+          // «Стоп» — единый маркер прерывания + частичные блоки
+          return abortedResult(this.name, blocks.join('\n\n---\n\n') || undefined);
+        }
         if (error.name === 'AbortError') {
-          blocks.push(`### ${url}\n\n❌ Таймаут`);
+          blocks.push(`### ${url}\n\n${sm('web.block_timeout')}`);
         } else {
-          blocks.push(`### ${url}\n\n❌ Ошибка загрузки: ${error.message || String(err)}`);
+          blocks.push(`### ${url}\n\n${sm('web.block_error', { error: error.message || String(err) })}`);
         }
       }
     }
 
     if (blocks.length === 0) {
-      return { content: 'Не удалось загрузить ни один URL', isError: true };
+      return { content: sm('web.fetch_all_failed'), isError: true, metadata: { i18n: i18nMeta('web.fetch_all_failed') } };
     }
 
     return {
@@ -374,9 +410,11 @@ export const webSearchTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.WEB],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — поиск не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
     }
     const params = parsed.data as { query: string; max_results?: number };
     const limit = params.max_results ?? 10;
@@ -386,14 +424,16 @@ export const webSearchTool: ToolDefinition = {
 
     try {
       try {
-        const results = await duckDuckGoSearch(query, limit);
+        const results = await duckDuckGoSearch(query, limit, ctx.abortSignal);
         if (results.length > 0) {
           return { content: formatSearchResults(query, results), metadata: { query: params.query, max_results: limit, source: 'duckduckgo' } };
         }
       } catch (err: unknown) {
+        // «Стоп» — фолбэк на Bing не выполняем
+        if (signalAborted(ctx.abortSignal)) return abortedResult(this.name);
         // DDG заблокирован или недоступен — пробуем Bing
         try {
-          const results = await bingSearch(query, limit);
+          const results = await bingSearch(query, limit, ctx.abortSignal);
           if (results.length > 0) {
             return { content: formatSearchResults(query, results), metadata: { query: params.query, max_results: limit, source: 'bing' } };
           }
@@ -401,10 +441,12 @@ export const webSearchTool: ToolDefinition = {
           throw err;
         }
       }
-      return { content: `По запросу «${query}» ничего не найдено.`, metadata: { query: params.query, max_results: limit } };
+      return { content: sm('web.no_results', { query }), metadata: { query: params.query, max_results: limit, i18n: i18nMeta('web.no_results', { query }) } };
     } catch (err: unknown) {
+      // «Стоп» — единый маркер прерывания, а не «ошибка веб-поиска»
+      if (signalAborted(ctx.abortSignal)) return abortedResult(this.name);
       return {
-        content: `Ошибка веб-поиска: ${(err as Error).message || String(err)}`,
+        content: sm('web.search_error', { error: (err as Error).message || String(err) }),
         isError: true,
         metadata: { query: params.query },
       };

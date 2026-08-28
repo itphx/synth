@@ -5,6 +5,8 @@ import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
 import { resolvePath, validateInputPath } from './path-utils.js';
 import { deobfuscateText } from './obfuscation.js';
+import { isAborted, abortedResult } from './abort.js';
+import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 function generateUnifiedDiff(oldText: string, newText: string, filePath: string): string {
   const oldLines = oldText.split('\n');
@@ -71,9 +73,11 @@ export const writeFileTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.FILE_WRITE],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
     }
     const params = parsed.data as { file_path: string; content: string };
     validateInputPath(params.file_path, 'file_path');
@@ -88,8 +92,13 @@ export const writeFileTool: ToolDefinition = {
 
     const lines = content.split('\n');
     return {
-      content: `Файл записан: ${params.file_path} (${lines.length} строк, ${content.length} байт)`,
-      metadata: { path: resolvedPath, lines: lines.length, bytes: content.length },
+      content: sm('fs.file_written', { path: params.file_path, lines: String(lines.length), bytes: String(content.length) }),
+      metadata: {
+        path: resolvedPath,
+        lines: lines.length,
+        bytes: content.length,
+        i18n: i18nMeta('fs.file_written', { path: params.file_path, lines: String(lines.length), bytes: String(content.length) }),
+      },
     };
   },
 };
@@ -106,9 +115,11 @@ export const editFileTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.FILE_WRITE],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
     }
     const params = parsed.data as { file_path: string; old_string: string; new_string: string; replace_all?: boolean };
     validateInputPath(params.file_path, 'file_path');
@@ -124,26 +135,32 @@ export const editFileTool: ToolDefinition = {
     if (params.replace_all) {
       const count = content.split(oldString).length - 1;
       if (count === 0) {
-        return { content: `Ошибка: строка для замены не найдена в файле "${params.file_path}"`, isError: true };
+        return { content: sm('fs.replace_not_found', { path: params.file_path }), isError: true, metadata: { i18n: i18nMeta('fs.replace_not_found', { path: params.file_path }) } };
       }
       const newContent = content.replaceAll(oldString, newString);
       await writeFile(resolvedPath, newContent, 'utf-8');
 
       const diff = generateUnifiedDiff(content, newContent, params.file_path);
       return {
-        content: `Файл изменён: ${params.file_path} (${count} замен)`,
-        metadata: { path: resolvedPath, replacements: count, diff },
+        content: sm('fs.file_edited', { path: params.file_path, count: String(count) }),
+        metadata: {
+          path: resolvedPath,
+          replacements: count,
+          diff,
+          i18n: i18nMeta('fs.file_edited', { path: params.file_path, count: String(count) }),
+        },
       };
     }
 
     const occurrences = content.split(oldString).length - 1;
     if (occurrences === 0) {
-      return { content: `Ошибка: строка для замены не найдена в файле "${params.file_path}"`, isError: true };
+      return { content: sm('fs.replace_not_found', { path: params.file_path }), isError: true, metadata: { i18n: i18nMeta('fs.replace_not_found', { path: params.file_path }) } };
     }
     if (occurrences > 1) {
       return {
-        content: `Ошибка: найдено ${occurrences} совпадений строки для замены. Укажите больше контекста для уникального совпадения.`,
+        content: sm('fs.replace_multiple', { count: String(occurrences) }),
         isError: true,
+        metadata: { i18n: i18nMeta('fs.replace_multiple', { count: String(occurrences) }) },
       };
     }
 
@@ -152,8 +169,13 @@ export const editFileTool: ToolDefinition = {
 
     const diff = generateUnifiedDiff(content, newContent, params.file_path);
     return {
-      content: `Файл изменён: ${params.file_path} (1 замена)`,
-      metadata: { path: resolvedPath, replacements: 1, diff },
+      content: sm('fs.file_edited', { path: params.file_path, count: '1' }),
+      metadata: {
+        path: resolvedPath,
+        replacements: 1,
+        diff,
+        i18n: i18nMeta('fs.file_edited', { path: params.file_path, count: '1' }),
+      },
     };
   },
 };
@@ -166,9 +188,11 @@ export const createDirectoryTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.FILE_WRITE],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
     }
     const params = parsed.data as { path: string };
     validateInputPath(params.path, 'path');
@@ -176,8 +200,8 @@ export const createDirectoryTool: ToolDefinition = {
 
     await mkdir(resolvedPath, { recursive: true });
     return {
-      content: `Директория создана: ${params.path}`,
-      metadata: { path: resolvedPath },
+      content: sm('fs.dir_created', { path: params.path }),
+      metadata: { path: resolvedPath, i18n: i18nMeta('fs.dir_created', { path: params.path }) },
     };
   },
 };
@@ -190,9 +214,11 @@ export const deleteFileTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.FILE_WRITE],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
     }
     const params = parsed.data as { file_path: string };
     validateInputPath(params.file_path, 'file_path');
@@ -200,8 +226,8 @@ export const deleteFileTool: ToolDefinition = {
 
     await rm(resolvedPath, { force: false });
     return {
-      content: `Файл удалён: ${params.file_path}`,
-      metadata: { path: resolvedPath },
+      content: sm('fs.file_deleted', { path: params.file_path }),
+      metadata: { path: resolvedPath, i18n: i18nMeta('fs.file_deleted', { path: params.file_path }) },
     };
   },
 };

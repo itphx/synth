@@ -144,5 +144,49 @@ function _convert(schema: z.ZodTypeAny): JsonSchema {
     return { type: 'string', description: description || 'any value' };
   }
 
+  if (processed instanceof z.ZodDiscriminatedUnion) {
+    // discriminatedUnion → объектная схема с единым enum-дискриминатором.
+    // Без этого схема падала в fallback {type:'string'}, а DeepSeek строго
+    // требует верхнеуровневый type:'object' для tool-параметров.
+    const options = processed._def.options as z.ZodTypeAny[];
+    const discriminator = processed._def.discriminator;
+    const properties: Record<string, JsonSchema> = {};
+    const values: string[] = [];
+
+    for (const opt of options) {
+      const converted = _convert(opt);
+      if (!('properties' in converted) || converted.type !== 'object') continue;
+      // Сливаем properties всех вариантов; уже существующие ключи не перезаписываем.
+      for (const [key, value] of Object.entries(converted.properties)) {
+        if (!(key in properties)) {
+          properties[key] = value;
+        }
+      }
+      // Значение дискриминатора каждого варианта — из enum[0] literal-поля.
+      const disc = converted.properties[discriminator];
+      if (disc && 'enum' in disc && disc.enum && disc.enum.length > 0) {
+        values.push(disc.enum[0]!);
+      }
+    }
+
+    const result: {
+      type: 'object';
+      description?: string;
+      properties: Record<string, JsonSchema>;
+      required?: string[];
+    } = {
+      type: 'object',
+      properties: {
+        ...properties,
+        [discriminator]: { type: 'string', enum: values },
+      },
+      // Остальные поля вариантов опциональны — required только дискриминатор,
+      // иначе create_item.title станет обязательным для delete_item.
+      required: [discriminator],
+    };
+    if (description) result.description = description;
+    return result;
+  }
+
   return { type: 'string', description: description || '' };
 }

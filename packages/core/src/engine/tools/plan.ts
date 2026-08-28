@@ -12,6 +12,8 @@ import type {
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import type { ProjectStore } from '../../storage/project-store.js';
+import { isAborted, abortedResult } from './abort.js';
+import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 export interface PlanToolExtra {
   sessionManager?: SessionManager;
@@ -21,10 +23,10 @@ export interface PlanToolExtra {
 }
 
 const DEFAULT_COLUMNS: PlanColumn[] = [
-  { id: 'backlog', name: 'Бэклог', order: 0 },
-  { id: 'todo', name: 'К выполнению', order: 1 },
-  { id: 'in_progress', name: 'В работе', order: 2 },
-  { id: 'done', name: 'Готово', order: 3 },
+  { id: 'backlog', name: sm('plan.default_column_backlog'), order: 0 },
+  { id: 'todo', name: sm('plan.default_column_todo'), order: 1 },
+  { id: 'in_progress', name: sm('plan.default_column_in_progress'), order: 2 },
+  { id: 'done', name: sm('plan.default_column_done'), order: 3 },
 ];
 
 const PLAN_PRIORITIES = ['high', 'medium', 'low'] as const;
@@ -60,12 +62,12 @@ async function savePlan(projectStore: ProjectStore, project: Project, plan: Proj
  * список пунктов `[priority] title` (+ description и зависимости при наличии).
  */
 export function renderPlanMarkdown(plan: ProjectPlan): string {
-  const lines: string[] = [`# План (v${plan.version})`];
+  const lines: string[] = [sm('plan.markdown_title', { version: String(plan.version) })];
   const columns = [...plan.columns].sort((a, b) => a.order - b.order);
 
   if (plan.items.length === 0) {
     lines.push('');
-    lines.push('Пунктов нет');
+    lines.push(sm('plan.markdown_empty'));
     return lines.join('\n');
   }
 
@@ -76,7 +78,7 @@ export function renderPlanMarkdown(plan: ProjectPlan): string {
     lines.push('');
     lines.push(`## ${col.name}`);
     if (colItems.length === 0) {
-      lines.push('(пусто)');
+      lines.push(sm('plan.markdown_column_empty'));
       continue;
     }
     for (const item of colItems) {
@@ -88,7 +90,7 @@ export function renderPlanMarkdown(plan: ProjectPlan): string {
         const deps = item.dependsOn
           .map((d) => `${d.relation}: ${d.projectId ? `${d.projectId}/` : ''}${d.itemId}`)
           .join(', ');
-        lines.push(`  - Зависимости: ${deps}`);
+        lines.push(sm('plan.markdown_dependencies', { deps }));
       }
     }
   }
@@ -128,9 +130,9 @@ async function updateSessionMode(
 }
 
 function argError(toolName: string, issues: z.ZodIssue[]): string {
-  return `Ошибка аргументов инструмента "${toolName}": ${issues
+  return sm('tool.args_error', { tool: toolName, issues: issues
     .map((i) => `${i.path.join('.') || 'root'}: ${i.message}`)
-    .join('; ')}`;
+    .join('; ') });
 }
 
 export const planEnterTool: ToolDefinition = {
@@ -142,22 +144,21 @@ export const planEnterTool: ToolDefinition = {
   parameters: z.object({}).describe('No parameters required'),
   capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const extra = ctx.extra as PlanToolExtra | undefined;
     if (!extra?.sessionManager || !extra.sessionId) {
       return {
-        content: 'Ошибка: менеджер сессий недоступен для plan_enter',
+        content: sm('plan.session_manager_unavailable', { tool: 'plan_enter' }),
         isError: true,
       };
     }
     const ok = await updateSessionMode(extra.sessionManager, extra.sessionId, { mode: 'plan' });
     if (!ok) {
-      return { content: 'Ошибка: не удалось переключить сессию в режим plan', isError: true };
+      return { content: sm('plan.enter_failed'), isError: true, metadata: { i18n: i18nMeta('plan.enter_failed') } };
     }
     return {
-      content:
-        'Режим plan активирован: запись файлов заблокирована, чтение разрешено. '
-        + 'Исследуй задачу, работай с планом через plan_read/plan_write и заверши через plan_exit '
-        + 'для перехода в режим act.',
+      content: sm('plan.enter_success'),
       metadata: { mode: 'plan' },
     };
   },
@@ -171,9 +172,11 @@ export const planExitTool: ToolDefinition = {
   parameters: z.object({}).describe('No parameters required'),
   capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const extra = ctx.extra as PlanToolExtra | undefined;
     if (!extra?.sessionManager || !extra.sessionId) {
-      return { content: 'Ошибка: менеджер сессий недоступен для plan_exit', isError: true };
+      return { content: sm('plan.session_manager_unavailable', { tool: 'plan_exit' }), isError: true, metadata: { i18n: i18nMeta('plan.session_manager_unavailable', { tool: 'plan_exit' }) } };
     }
 
     const ok = await updateSessionMode(extra.sessionManager, extra.sessionId, {
@@ -181,7 +184,7 @@ export const planExitTool: ToolDefinition = {
       planApproved: true,
     });
     if (!ok) {
-      return { content: 'Ошибка: не удалось переключить сессию в режим act', isError: true };
+      return { content: sm('plan.exit_failed'), isError: true, metadata: { i18n: i18nMeta('plan.exit_failed') } };
     }
 
     let projectId = '';
@@ -198,7 +201,7 @@ export const planExitTool: ToolDefinition = {
     });
 
     return {
-      content: 'План утверждён. Режим act активирован: запись файлов разрешена.',
+      content: sm('plan.exit_success'),
       metadata: { mode: 'act', plan_approved: true },
     };
   },
@@ -212,9 +215,11 @@ export const planReadTool: ToolDefinition = {
   parameters: z.object({}),
   capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const project = await getProjectForSession(ctx);
     if (!project) {
-      return { content: 'Проект отсутствует: план недоступен (план привязан к проекту)' };
+      return { content: sm('plan.no_project_read'), metadata: { i18n: i18nMeta('plan.no_project_read') } };
     }
     const plan = getPlan(project);
     return { content: renderPlanMarkdown(plan), metadata: { plan } };
@@ -229,10 +234,12 @@ export const planListTool: ToolDefinition = {
   parameters: z.object({}),
   capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const project = await getProjectForSession(ctx);
     if (!project) {
       return {
-        content: 'Проект отсутствует: план недоступен (план привязан к проекту)',
+        content: sm('plan.no_project_read'),
         isError: true,
       };
     }
@@ -293,7 +300,7 @@ function applyPlanWrite(plan: ProjectPlan, params: PlanWriteInput): { error?: st
     case 'create_item': {
       const columnId = params.columnId ?? 'backlog';
       const column = plan.columns.find((c) => c.id === columnId);
-      if (!column) return { error: `Ошибка: колонка "${columnId}" не найдена` };
+      if (!column) return { error: sm('plan.column_not_found', { columnId }) };
       const maxOrder = plan.items
         .filter((i) => i.columnId === columnId)
         .reduce((max, i) => Math.max(max, i.order), -1);
@@ -314,7 +321,7 @@ function applyPlanWrite(plan: ProjectPlan, params: PlanWriteInput): { error?: st
     }
     case 'update_item': {
       const item = plan.items.find((i) => i.id === params.itemId);
-      if (!item) return { error: `Ошибка: пункт плана с id "${params.itemId}" не найден` };
+      if (!item) return { error: sm('plan.item_not_found', { itemId: params.itemId }) };
       if (params.title !== undefined) item.title = params.title;
       if (params.description !== undefined) item.description = params.description;
       if (params.priority !== undefined) item.priority = params.priority;
@@ -324,9 +331,9 @@ function applyPlanWrite(plan: ProjectPlan, params: PlanWriteInput): { error?: st
     }
     case 'move_item': {
       const item = plan.items.find((i) => i.id === params.itemId);
-      if (!item) return { error: `Ошибка: пункт плана с id "${params.itemId}" не найден` };
+      if (!item) return { error: sm('plan.item_not_found', { itemId: params.itemId }) };
       const column = plan.columns.find((c) => c.id === params.columnId);
-      if (!column) return { error: `Ошибка: колонка "${params.columnId}" не найдена` };
+      if (!column) return { error: sm('plan.column_not_found', { columnId: params.columnId }) };
       item.columnId = params.columnId;
       if (params.order !== undefined) item.order = params.order;
       item.updatedAt = nowISO();
@@ -334,13 +341,13 @@ function applyPlanWrite(plan: ProjectPlan, params: PlanWriteInput): { error?: st
     }
     case 'delete_item': {
       const idx = plan.items.findIndex((i) => i.id === params.itemId);
-      if (idx < 0) return { error: `Ошибка: пункт плана с id "${params.itemId}" не найден` };
+      if (idx < 0) return { error: sm('plan.item_not_found', { itemId: params.itemId }) };
       plan.items.splice(idx, 1);
       return {};
     }
     case 'set_dependencies': {
       const item = plan.items.find((i) => i.id === params.itemId);
-      if (!item) return { error: `Ошибка: пункт плана с id "${params.itemId}" не найден` };
+      if (!item) return { error: sm('plan.item_not_found', { itemId: params.itemId }) };
       item.dependsOn = params.dependsOn;
       item.updatedAt = nowISO();
       return {};
@@ -371,6 +378,8 @@ export const planWriteTool: ToolDefinition = {
   parameters: planWriteSchema,
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: argError(this.name, parsed.error.issues), isError: true };
@@ -378,12 +387,12 @@ export const planWriteTool: ToolDefinition = {
     const params = parsed.data as PlanWriteInput;
     const extra = ctx.extra as PlanToolExtra | undefined;
     if (!extra?.projectStore) {
-      return { content: 'Ошибка: хранилище проектов недоступно для plan_write', isError: true };
+      return { content: sm('plan.project_store_unavailable'), isError: true, metadata: { i18n: i18nMeta('plan.project_store_unavailable') } };
     }
 
     const project = await getProjectForSession(ctx);
     if (!project) {
-      return { content: 'Ошибка: проект отсутствует (план привязан к проекту)', isError: true };
+      return { content: sm('plan.no_project'), isError: true, metadata: { i18n: i18nMeta('plan.no_project') } };
     }
     const plan = getPlan(project);
 
@@ -396,7 +405,7 @@ export const planWriteTool: ToolDefinition = {
       await savePlan(extra.projectStore, project, plan);
     } catch (err) {
       return {
-        content: `Ошибка сохранения плана: ${err instanceof Error ? err.message : String(err)}`,
+        content: sm('plan.save_error', { error: err instanceof Error ? err.message : String(err) }),
         isError: true,
       };
     }

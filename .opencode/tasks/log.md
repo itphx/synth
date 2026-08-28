@@ -1,5 +1,37 @@
 # Журнал задач оркестратора
 
+## 2026-08-25 (продолжение) — fix: провайдер itphx / deepseek-v4-flash, вторая волна
+- **Задача:** «Та же ошибка. Вероятно проблема в конкретной сессии. Изучи Сессию Разговор о разном. Протестируй, разберись.»
+- **Тип:** bug
+- **Исполнитель:** @fixer (диагностика/сквозной тест — оркестратор)
+- **Результат:** PASS (build/typecheck/lint/test + реальный ретрай сессии через API ✅)
+- **Коммит:** — (не выполнялся, нет явной просьбы; в дереве чужие незакоммиченные правки)
+- **Первопричина (воспроизведена):** после первого фикса (object-arguments) всплыла следующая ошибка: `Invalid schema for function 'plan_write': schema must be a JSON Schema of 'type: object', got 'type: string'`. `zodToJsonSchema` (`packages/core/src/engine/tools/json-schema.ts`) не обрабатывал `z.discriminatedUnion` — схема `planWriteSchema` (plan.ts:250) проваливалась в fallback `{type:'string'}`. DeepSeek строго валидирует tool-схемы и требует верхнеуровневый `type:'object'` (проверено реальными запросами: `{type:'string'}` → ошибка; верхнеуровневый `{anyOf:[...]}` → тоже «got type: null»; `{type:'object', properties, required:['action']}` → принимается). Вложенные `z.union` в todo.ts DeepSeek принимает (nested anyOf — ок), их не трогали.
+- **Исправление:**
+  - `packages/core/src/engine/tools/json-schema.ts`: ветка `instanceof z.ZodDiscriminatedUnion` перед fallback — слияние properties всех вариантов, `properties[discriminator] = {type:'string', enum:[все значения]}`, `required:[discriminator]` (поля вариантов опциональны, иначе create_item.title стал бы обязательным для delete_item). Runtime-валидация не меняется (`safeParse` строгий discriminated union).
+  - Новый тест `packages/core/src/engine/tools/json-schema.test.ts` (4 кейса).
+  - Предыдущий фикс (openai.ts arguments→string + reasoning_content, orchestrator.ts reasoning-проброс) — в рабочем дереве, работает.
+- **Проверка:** `pnpm build`/`typecheck` ✅; `pnpm lint` 0 errors ✅; `pnpm test` 1138 (core 872) ✅; сквозной тест: перезапуск backend+core с новым кодом, ретрай сообщения [144] сессии «Разговор о разном» через API → `stream.done`, модель deepseek.deepseek-v4-flash выполнила задачу (запустила subagent explore для чтения ~/.ssh/config), 1208 чанков, без ошибок; контрольный запрос → «Всё работает.». Сообщения [145-148] сохранены без `last_error`.
+- **Замечание про «This model does not support image»:** так DeepSeek отвечает на `image_url`-части контента (воспроизведено тестовым запросом); в коде synth генерации image_url нет (grep). Вероятно, была одной из 400-ошибок в цепочке неработоспособности (пользователь видел разные ошибки) либо приходила от запроса с изображением извне. После фиксов не воспроизводится. Если повторится — отдельная диагностика (проверить, не попадает ли data:image URI в контент).
+
+## 2026-08-25 — fix: провайдер itphx / deepseek.deepseek-v4-flash
+- **Задача:** «Перестал работать провайдер itphx, в частности модель deepseek.deepseek-v4-flash». Лог провайдера: `publish_model_provider_request_failed ... url=https://api.deepseek.com model=deepseek-v4-flash ... "This model does not support image"`; лог бэкенда: `messages[20]: invalid type: map, expected a string`.
+- **Тип:** bug
+- **Исполнитель:** @fixer (диагностика и сквозная проверка — оркестратор)
+- **Результат:** PASS (typecheck ✅, lint 0 errors ✅, test 1134 ✅, сквозная проверка через реальный open-webui → DeepSeek ✅)
+- **Коммит:** — (не выполнялся, нет явной просьбы; в рабочем дереве чужие незакоммиченные правки feat fix/subagent-display — task.ts, StreamingPlaceholder.tsx, callId в orchestrator.ts — их не трогали)
+- **Первопричина (воспроизведена):**
+  - Коммит `74df4ba` (21.08) добавил в Ollama-провайдер нормализацию `function.arguments` **строка → объект** при разборе ответов (`_parseResponse`, `chatAsync`). Объекты сохраняются в `toolCalls` сессии (`_persistToolChain`).
+  - При переигровке истории на OpenAI-совместимый провайдер (itphx → open-webui → api.deepseek.com) `openai.ts _formatMessages` передавал `tool_calls[].function.arguments` **объектом**, а API DeepSeek требует **JSON-строку** → HTTP 400 `messages[N]: invalid type: map, expected a string`. Точное тело synth → open-webui воспроизводило ошибку 1-в-1.
+  - Дополнительно: DeepSeek reasoning-модели (deepseek-v4-flash) требуют возврата `reasoning_content` в повторных assistant-сообщениях → иначе 400 `The reasoning_content in the thinking mode must be passed back to the API`. Воспроизведено: добавление `reasoning_content` устраняет ошибку.
+- **Исправление:**
+  - `packages/core/src/providers/openai.ts _formatMessages`: `tool_calls` маппятся, объектные `function.arguments` сериализуются в JSON-строку (try/catch, циклические ссылки не роняют); строка/null/undefined/число — как есть. Для `role=assistant` с `msg.reasoning` добавляется `reasoning_content`.
+  - `packages/core/src/engine/orchestrator.ts _sessionMessagesToLlm`: проброс `reasoning: msg.reasoning` для own-сообщений ассистента.
+  - Новый тест `packages/core/src/providers/openai.test.ts` (4 кейса, стиль ollama.test.ts).
+  - `ollama.ts` НЕ менялся (его поведение нужно для Ollama; с фиксом openai.ts хранение объектов безвредно).
+- **Проверка:** `pnpm typecheck` ✅; `pnpm lint` 0 errors ✅; `pnpm test` (shared 66 / core 868 / ui 30 / backend 170) ✅; сквозной прогон реального тела сессии через исправленный `_formatMessages` → 0 объектных arguments / 8 строк / 24 reasoning_content → POST в open-webui → DeepSeek ответил 200 с reasoning_content ✅ (до фикса — `messages[20]: invalid type: map`).
+- **Замечание про «This model does not support image»:** так DeepSeek отвечает на `image_url`-части контента (воспроизведено тестовым запросом). В коде synth генерации image_url нет (grep) — вероятно, изображение/data:image URI попадало в контент иным путём (внешний источник). Отдельная задача, если воспроизведётся.
+
 ## 2026-08-04
 - **Задача:** Баг — перестал работать просмотрщик и редактор файлов
 - **Тип:** bug
@@ -676,3 +708,39 @@
   - `evaluator.ts` убрана захардкоженная подсказка и лишняя точка; `orchestrator.ts` и `task.ts` используют единый `getSecurityMessage` → текст main и саб-агентов идентичен.
 - **Файлы:** packages/core/prompts/security/*.{ru,en}.md; packages/core/src/engine/{context/config.ts,context/config.security.test.ts,security/protected-paths.ts,security/shell-guard.ts,permission/evaluator.ts,orchestrator.ts,tools/task.ts,permission/evaluator.test.ts,security/protected-paths.test.ts,orchestrator-deny-abort.test.ts}; packages/shared/src/types/permission.ts
 - **Проверка:** `pnpm build` (6 пакетов), `pnpm typecheck`, `pnpm lint` (0 errors), `pnpm test` (shared 66 / core 850 / ui 29 / backend 170). Пример ru: «Permission denied: Доступ запрещён: путь «/etc/passwd» защищён … Не повторяй вызов, выбери другой способ»; en: «Access denied … Do not repeat the call». Двойная точка `..` устранена.
+
+## 2026-08-27
+- **Задача:** Стоп во время работы сабагента не прерывает его
+- **Тип:** bug + feature (прерывание тулов)
+- **Исполнитель:** @fixer (2 вызова: задача A — сабагент, задача B — все тулы)
+- **Результат:** PASS (typecheck ✓, lint 0 errors ✓, test 1157 passed ✓, core 891: +19 новых тестов)
+- **Коммит:** не сделан — ждёт явной просьбы пользователя
+- **Задача A:** оживлён AbortSignal (toolAbortController, двунаправленная связь cancelToken↔signal), task.ts реагирует на abort (частичный стрим сохраняется, tool_result: stopped_by_user + partial_output + steps_completed + child_session_id), ошибка провайдера сабагента → isError tool_result с child_session_id (без retry), родитель публикует stream.cancelled, child_session_id добавлен в обычный task_result
+- **Задача B:** tools/abort.ts (хелперы), shell/git/project-context/web/search — реальный сигнал (SIGTERM процессам, abort fetch, подавление ретраев DDG/Bing), fs-read/fs-write/plan/todo/read-reference/project-manage/classify — guard на входе; 26 execute
+- **Проблемы:** нет. Нюанс: у Session нет статусного поля завершения — прерывание выражено metadata-маркерами сообщений
+- **Ожидают решения:** коммит; отдельная задача — retry сабагента при ошибке провайдера (3 попытки) + уведомление пользователя + resume дочерней сессии (UI + API)
+
+## 2026-08-27 (сессия 2) — i18n core + resume при ошибках провайдера
+- **Задачи:** A-core, A-ui, B-core, B-ui (все @fixer, B-core с продолжением сессии после лимита шагов)
+- **Результат:** PASS — typecheck 6/6, lint 0 errors, тесты 1233 passed (shared 66, ui 85, core 912, backend 170; +101 новых)
+- **Коммит:** не сделан — ждёт команды
+- **A-core:** SystemMessages (190 ключей, engine/system-messages.ts), MessageI18n в shared, все системные строки движка → en-content + metadata.i18n; починена потеря ToolResult.metadata при персистентности; auto-title по session.language (TITLE.en.md), subagents *.en.md; мёртвый /api/v2/i18n удалён. Промпты ролей/режимов остались локализуемыми (осознанно)
+- **A-ui:** resolveI18n (hasOwnProperty-защита), 190 ru-ключей, ветки рендера в ChatMessage/ToolCallPart; en-локаль → content без дублей словаря
+- **B-core:** retry 3x (5/15/30с, recoverable-only, backoff-сон порциями с проверкой отмены, событие subagent.retry); рефакторинг task.ts → runSubagent(); task-resume.ts (validate + runSubagentResume: маркер resume → общий цикл → итог INFO metadata.type='subagent_resumed_result' в родителя); orchestrator.startSubagentResume (блокировки, abort-совместимость); POST /sessions/:id/resume-subagent (202/400/404/409) в core+backend
+- **B-ui:** StreamErrorPanel (осн. агент, кнопка Повторить = disable старого + re-enqueue последнего user с last_error), SubagentPart (retry N/3 + Продолжить + Остановить), SubagentResumeBar (над заглушкой дочерней сессии); transportStore: subagent.retry/resume.*; i18n-ключи ru+en
+- **Верификация:** curl-smoke (404 nonexistent, 400 NO_PARENT, abort 200), UI smoke через Playwright (логин, сессии, дочерняя сессия с read-only заглушкой)
+- **Проблемы:** dev.sh из bash-инструмента не выживает (сессия убивает потомков) — запуск напрямую пакетными dev-командами через setsid
+- **Открытое:** tool descriptions classify_conversation/read_session_reference на ru (вне схемы «не трогать descriptions»); промпт-блоки [КОНТЕКСТ СЕССИИ]/[PARENT NOTES] на ru (классифицированы как промпты); retry-now/cancel-retry для resume — не делалось; визуальная проверка плашек с реальной ошибкой провайдера — требует LLM-запроса
+
+## 2026-08-28 — AD-041: унификация таксономии ошибок LLM + контракт локализации
+- **Задача:** независимая оценка последних изменений → унифицировать таксономию ошибок и локализацию строк движка, зафиксировать AD-041 в AGENTS.md.
+- **Тип:** refactor + docs
+- **Исполнитель:** оркестратор (оценка + AD) + @fixer (2 задачи)
+- **Результат:** PASS — typecheck 6/6, lint 0 errors, тесты 1288 passed (shared 72, core 959, ui 87, backend 170)
+- **Коммит:** 6edc9ef (feat: локализация ядра + resume саб-агента при ошибках провайдера + AD-041; ветка fix/subagent-display → master, merge с --no-ff)
+- **Сделано:**
+  - **Таксономия ошибок (задача 1):** единая точка истины `llm-error.ts` — `isLlmErrorRecoverable(error, errMsg?, errorType?)`; `UNRECOVERABLE_PATTERNS` объединены (из llm-error + processor); `UNRECOVERABLE_TYPES` + `validation`; экспорт `LLM_MAX_ATTEMPTS=3`/`LLM_RETRY_DELAYS_MS=[5s,15s,30s]`. `orchestrator._handleLlmFailure` и `processor._isRecoverable` делегируют сюда, инлайновые списки удалены; `task.ts` — реэкспорт-алиасы. Новый `llm-error.test.ts`.
+  - **Локализация (задача 2, уточнённая схема):** контракт в `shared/src/i18n/index.ts` — `ENGINE_MESSAGE_KEYS` (201 ключ, `as const`), `ENGINE_MESSAGE_PARAMS`, `extractParams`, тип `EngineMessageKey`, реэкспорт `MessageI18n`; subpath-экспорт `@itphx/synth-shared/i18n`. `core/system-messages.ts` — `as const satisfies Record<SystemMessageKey,string>`, `SystemMessageKey = EngineMessageKey`. Автопроверка синхронизации: тест core (ключи set-равны + params) и тест ui (каждый ключ в ru.ts, params совпадают; en — деградация на content). **Текст НЕ перемещён:** en остаётся в core, ru в ui; в shared только контракт.
+  - **AGENTS.md:** добавлен AD-041 (строка в таблице + секция после «Отказ от JSON-блока», перед `## Аутентификация`).
+- **Важно (решение по размещению строк):** изначальный план предполагал переезд каталога в shared. При реализации выяснилось, что ru-переводы потребляет только UI, en-шаблоны — только движок, поэтому **текст не переносился**; в shared вынесен только контракт (ключи+params+утилита). Это соответствует принципу «shared = только контракты» (AD-038) и снимает риск переписывания словарной загрузки UI. Зафиксировано в AD-041.
+- **Проблемы:** нет. Открытое (из прошлой сессии) не затрагивалось.

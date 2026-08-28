@@ -5,13 +5,15 @@ import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
 import { resolvePath, validateInputPath } from './path-utils.js';
 import { deobfuscateArgs } from './obfuscation.js';
+import { isAborted, abortedResult } from './abort.js';
 
 const execFileAsync = promisify(execFile);
 
 const MAX_GIT_OUTPUT = 20_000;
 
-export async function runGit(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
-  return execFileAsync('git', args, { cwd, timeout: 30_000, maxBuffer: 10 * 1024 * 1024 });
+/** Обёртка git-команд: signal (если передан) убивает процесс SIGTERM по «Стоп». */
+export async function runGit(args: string[], cwd: string, signal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
+  return execFileAsync('git', args, { cwd, timeout: 30_000, signal, maxBuffer: 10 * 1024 * 1024 });
 }
 
 function truncateOutput(output: string): string {
@@ -27,6 +29,8 @@ export const gitStatusTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — git-команда не стартует (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -36,12 +40,14 @@ export const gitStatusTool: ToolDefinition = {
     const cwd = resolvePath(params.path, ctx.workingDir);
 
     try {
-      const { stdout } = await runGit(['status', '--porcelain', '--branch'], cwd);
+      const { stdout } = await runGit(['status', '--porcelain', '--branch'], cwd, ctx.abortSignal);
       return {
         content: stdout || '(чистая рабочая директория)',
         metadata: { cwd, hasChanges: stdout.length > 0 },
       };
     } catch (err: unknown) {
+      // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
+      if (isAborted(ctx)) return abortedResult(this.name);
       return {
         content: `Ошибка git status: ${(err as Error).message}`,
         isError: true,
@@ -61,6 +67,8 @@ export const gitDiffTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — git-команда не стартует (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -74,7 +82,7 @@ export const gitDiffTool: ToolDefinition = {
       if (params.staged) diffArgs.push('--staged');
       if (params.commit) diffArgs.push(params.commit);
 
-      const { stdout } = await runGit(diffArgs, cwd);
+      const { stdout } = await runGit(diffArgs, cwd, ctx.abortSignal);
       const output = stdout || '(нет изменений)';
 
       return {
@@ -82,6 +90,8 @@ export const gitDiffTool: ToolDefinition = {
         metadata: { cwd, hasChanges: stdout.length > 0 },
       };
     } catch (err: unknown) {
+      // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
+      if (isAborted(ctx)) return abortedResult(this.name);
       return {
         content: `Ошибка git diff: ${(err as Error).message}`,
         isError: true,
@@ -101,6 +111,8 @@ export const gitLogTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — git-команда не стартует (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -113,12 +125,15 @@ export const gitLogTool: ToolDefinition = {
       const { stdout } = await runGit(
         ['log', `-${params.max_count ?? 10}`, '--oneline', '--decorate'],
         cwd,
+        ctx.abortSignal,
       );
       return {
         content: stdout || '(нет коммитов)',
         metadata: { cwd, count: stdout.split('\n').filter(Boolean).length },
       };
     } catch (err: unknown) {
+      // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
+      if (isAborted(ctx)) return abortedResult(this.name);
       return {
         content: `Ошибка git log: ${(err as Error).message}`,
         isError: true,
@@ -138,6 +153,8 @@ export const gitCommitTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — git-команда не стартует (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -153,12 +170,14 @@ export const gitCommitTool: ToolDefinition = {
       const commitArgs = ['commit', '-m', restored.message];
       if (restored.allow_empty) commitArgs.push('--allow-empty');
 
-      const { stdout, stderr } = await runGit(commitArgs, cwd);
+      const { stdout, stderr } = await runGit(commitArgs, cwd, ctx.abortSignal);
       return {
         content: stdout || stderr || 'Коммит создан',
         metadata: { cwd, message: params.message },
       };
     } catch (err: unknown) {
+      // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
+      if (isAborted(ctx)) return abortedResult(this.name);
       return {
         content: `Ошибка git commit: ${(err as Error).message}`,
         isError: true,
@@ -178,6 +197,8 @@ export const gitPushTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — git-команда не стартует (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -193,12 +214,14 @@ export const gitPushTool: ToolDefinition = {
       const pushArgs = ['push', restored.remote ?? 'origin'];
       if (restored.branch) pushArgs.push(restored.branch);
 
-      const { stdout, stderr } = await runGit(pushArgs, cwd);
+      const { stdout, stderr } = await runGit(pushArgs, cwd, ctx.abortSignal);
       return {
         content: stdout || stderr || 'git push выполнен',
         metadata: { cwd, remote: params.remote, branch: params.branch },
       };
     } catch (err: unknown) {
+      // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
+      if (isAborted(ctx)) return abortedResult(this.name);
       return {
         content: `Ошибка git push: ${(err as Error).message}`,
         isError: true,
@@ -218,6 +241,8 @@ export const gitPullTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — git-команда не стартует (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -233,12 +258,14 @@ export const gitPullTool: ToolDefinition = {
       const pullArgs = ['pull', restored.remote ?? 'origin'];
       if (restored.branch) pullArgs.push(restored.branch);
 
-      const { stdout, stderr } = await runGit(pullArgs, cwd);
+      const { stdout, stderr } = await runGit(pullArgs, cwd, ctx.abortSignal);
       return {
         content: stdout || stderr || 'git pull выполнен',
         metadata: { cwd, remote: params.remote, branch: params.branch },
       };
     } catch (err: unknown) {
+      // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
+      if (isAborted(ctx)) return abortedResult(this.name);
       return {
         content: `Ошибка git pull: ${(err as Error).message}`,
         isError: true,
@@ -258,6 +285,8 @@ export const gitCheckoutTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — git-команда не стартует (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -274,12 +303,14 @@ export const gitCheckoutTool: ToolDefinition = {
       if (restored.create_branch) checkoutArgs.push('-b');
       checkoutArgs.push(restored.target);
 
-      const { stdout, stderr } = await runGit(checkoutArgs, cwd);
+      const { stdout, stderr } = await runGit(checkoutArgs, cwd, ctx.abortSignal);
       return {
         content: stdout || stderr || `Переключён на ${params.target}`,
         metadata: { cwd, target: params.target, createdBranch: params.create_branch },
       };
     } catch (err: unknown) {
+      // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
+      if (isAborted(ctx)) return abortedResult(this.name);
       return {
         content: `Ошибка git checkout: ${(err as Error).message}`,
         isError: true,
@@ -299,6 +330,8 @@ export const gitBranchListTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — git-команда не стартует (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -317,7 +350,7 @@ export const gitBranchListTool: ToolDefinition = {
         branchArgs.push('--format=%(refname:short)');
       }
 
-      const { stdout, stderr } = await runGit(branchArgs, cwd);
+      const { stdout, stderr } = await runGit(branchArgs, cwd, ctx.abortSignal);
       if (stderr) {
         return { content: `Ошибка git branch: ${stderr.trim()}`, isError: true, metadata: { cwd } };
       }
@@ -328,7 +361,7 @@ export const gitBranchListTool: ToolDefinition = {
 
       let output = stdout.trimEnd();
       if (!params.verbose && !params.all) {
-        const current = (await runGit(['branch', '--show-current'], cwd)).stdout.trim();
+        const current = (await runGit(['branch', '--show-current'], cwd, ctx.abortSignal)).stdout.trim();
         if (current) {
           output = stdout
             .split('\n')
@@ -340,6 +373,8 @@ export const gitBranchListTool: ToolDefinition = {
 
       return { content: truncateOutput(output), metadata: { cwd, count: stdout.split('\n').filter(Boolean).length } };
     } catch (err: unknown) {
+      // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
+      if (isAborted(ctx)) return abortedResult(this.name);
       return {
         content: `Ошибка git branch: ${(err as Error).message}`,
         isError: true,
@@ -359,6 +394,8 @@ export const gitShowTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — git-команда не стартует (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -372,7 +409,7 @@ export const gitShowTool: ToolDefinition = {
       if (params.stat) showArgs.push('--stat');
       showArgs.push(params.object ?? 'HEAD');
 
-      const { stdout, stderr } = await runGit(showArgs, cwd);
+      const { stdout, stderr } = await runGit(showArgs, cwd, ctx.abortSignal);
       if (stderr) {
         return { content: `Ошибка git show: ${stderr.trim()}`, isError: true, metadata: { cwd } };
       }
@@ -382,6 +419,8 @@ export const gitShowTool: ToolDefinition = {
         metadata: { cwd, object: params.object },
       };
     } catch (err: unknown) {
+      // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
+      if (isAborted(ctx)) return abortedResult(this.name);
       return {
         content: `Ошибка git show: ${(err as Error).message}`,
         isError: true,
@@ -402,6 +441,8 @@ export const gitBlameTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — git-команда не стартует (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -416,7 +457,7 @@ export const gitBlameTool: ToolDefinition = {
       if (params.line_range) blameArgs.push('-L', params.line_range);
       blameArgs.push('--', params.file);
 
-      const { stdout, stderr } = await runGit(blameArgs, cwd);
+      const { stdout, stderr } = await runGit(blameArgs, cwd, ctx.abortSignal);
       if (stderr) {
         return { content: `Ошибка git blame: ${stderr.trim()}`, isError: true, metadata: { cwd, file: params.file } };
       }
@@ -426,6 +467,8 @@ export const gitBlameTool: ToolDefinition = {
         metadata: { cwd, file: params.file, count: stdout.split('\n').filter(Boolean).length },
       };
     } catch (err: unknown) {
+      // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
+      if (isAborted(ctx)) return abortedResult(this.name);
       return {
         content: `Ошибка git blame: ${(err as Error).message}`,
         isError: true,
@@ -448,6 +491,8 @@ export const gitStashTool: ToolDefinition = {
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — git-команда не стартует (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
@@ -472,7 +517,7 @@ export const gitStashTool: ToolDefinition = {
 
       if (action === 'list') {
         stashArgs.push('list');
-        result = await runGit(stashArgs, cwd);
+        result = await runGit(stashArgs, cwd, ctx.abortSignal);
         if (result.stderr) {
           return { content: `Ошибка git stash: ${result.stderr.trim()}`, isError: true, metadata: { cwd } };
         }
@@ -482,7 +527,7 @@ export const gitStashTool: ToolDefinition = {
       if (action === 'show') {
         stashArgs.push('show');
         if (restored.stash_index !== undefined) stashArgs.push(`stash@{${restored.stash_index}}`);
-        result = await runGit(stashArgs, cwd);
+        result = await runGit(stashArgs, cwd, ctx.abortSignal);
         if (result.stderr) {
           return { content: `Ошибка git stash: ${result.stderr.trim()}`, isError: true, metadata: { cwd } };
         }
@@ -492,7 +537,7 @@ export const gitStashTool: ToolDefinition = {
       if (action === 'drop' || action === 'pop' || action === 'apply') {
         stashArgs.push(action);
         if (restored.stash_index !== undefined) stashArgs.push(`stash@{${restored.stash_index}}`);
-        result = await runGit(stashArgs, cwd);
+        result = await runGit(stashArgs, cwd, ctx.abortSignal);
         if (result.stderr) {
           return { content: `Ошибка git stash: ${result.stderr.trim()}`, isError: true, metadata: { cwd } };
         }
@@ -505,12 +550,14 @@ export const gitStashTool: ToolDefinition = {
       } else {
         stashArgs.push('push');
       }
-      result = await runGit(stashArgs, cwd);
+      result = await runGit(stashArgs, cwd, ctx.abortSignal);
       if (result.stderr) {
         return { content: `Ошибка git stash: ${result.stderr.trim()}`, isError: true, metadata: { cwd } };
       }
       return { content: truncateOutput(result.stdout.trim() || 'Изменения сохранены в stash'), metadata: { cwd } };
     } catch (err: unknown) {
+      // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
+      if (isAborted(ctx)) return abortedResult(this.name);
       return {
         content: `Ошибка git stash: ${(err as Error).message}`,
         isError: true,

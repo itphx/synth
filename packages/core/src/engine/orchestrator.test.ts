@@ -994,8 +994,8 @@ describe('ChatOrchestrator — блоки PLAN MODE/TODO/PLAN_GUIDE в system pr
       },
     );
     expect(prompts[0]).toContain('[TODO]');
-    expect(prompts[0]).toContain('- [ожидает] [высокий] шаг 1');
-    expect(prompts[0]).toContain('- [выполнено] [низкий] шаг 2');
+    expect(prompts[0]).toContain('- [pending] [high] шаг 1');
+    expect(prompts[0]).toContain('- [done] [low] шаг 2');
     expect(prompts[0]).toContain('[PLAN GUIDE]');
   });
 

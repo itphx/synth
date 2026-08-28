@@ -18,6 +18,7 @@ import { join, dirname, resolve, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { globMatch } from '@itphx/synth-shared';
+import { t as sm } from '../system-messages.js';
 
 /** Политика безопасности execute_shell. */
 export interface ShellPolicy {
@@ -503,7 +504,7 @@ export function checkShellCommand(command: string, cwd: string, policy: ShellPol
 
   const segments = splitShellSegments(command);
   if (segments.length === 0) {
-    return { action: 'allow', reason: 'команда не противоречит политике shell' };
+    return { action: 'allow', reason: sm('shellguard.allow_default') };
   }
 
   const deniedPaths = policy.deniedPaths.map(expandHome);
@@ -515,14 +516,14 @@ export function checkShellCommand(command: string, cwd: string, policy: ShellPol
     if (result) return result;
   }
 
-  return { action: 'allow', reason: 'команда не противоречит политике shell' };
+  return { action: 'allow', reason: sm('shellguard.allow_default') };
 }
 
 /** Формирует deny-результат для записи deniedCommandPrefixes. */
 function deniedByPrefix(prefix: string): ShellCheckResult {
   return {
     action: 'deny',
-    reason: `Команда запрещена политикой shell: префикс "${prefix}"`,
+    reason: sm('shellguard.deny_prefix', { prefix }),
     matchedRule: 'shell-policy.deny',
     deniedPath: prefix,
     messageId: 'deny-command',
@@ -575,7 +576,7 @@ function checkShellSegment(
     if (hit) {
       return {
         action: 'deny',
-        reason: `Доступ запрещён политикой shell: путь "${hit}" защищён`,
+        reason: sm('shellguard.deny_path', { path: hit }),
         matchedRule: 'shell-policy.deny',
         deniedPath: hit,
         messageId: 'deny-protected-path',
@@ -592,7 +593,7 @@ function checkShellSegment(
     if (hit) {
       return {
         action: 'ask',
-        reason: `Путь "${hit}" требует подтверждения по политике shell`,
+        reason: sm('shellguard.ask_path', { path: hit }),
         matchedRule: 'shell-policy.approve',
         deniedPath: hit,
         messageId: 'ask-protected-path',
@@ -612,7 +613,7 @@ function checkShellSegment(
     if (hit) {
       return {
         action: 'deny',
-        reason: `Доступ запрещён политикой shell: путь "${norm}" в защищённой директории "${hit}"`,
+        reason: sm('shellguard.deny_dir', { path: norm, dir: hit }),
         matchedRule: 'shell-policy.deny',
         deniedPath: hit,
         messageId: 'deny-protected-dir',

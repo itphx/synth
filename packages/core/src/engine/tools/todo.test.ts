@@ -182,14 +182,14 @@ describe('todo tools', () => {
       const result = await todoListTool.execute({}, makeCtx());
       expect(result.isError).toBeUndefined();
       expect(result.content).toContain('Найти первопричину');
-      expect(result.content).toContain('в работе');
-      expect(result.content).toContain('высокий');
+      expect(result.content).toContain('in progress');
+      expect(result.content).toContain('high');
     });
 
     it('пустой список', async () => {
       const result = await todoListTool.execute({}, makeCtx());
       expect(result.isError).toBeUndefined();
-      expect(result.content).toContain('пуст');
+      expect(result.content).toContain('Todo list is empty');
     });
   });
 
@@ -214,7 +214,7 @@ describe('todo tools', () => {
     it('несуществующий id — ошибка', async () => {
       const result = await todoUpdateTool.execute({ id: 'missing', content: 'x' }, makeCtx());
       expect(result.isError).toBe(true);
-      expect(result.content).toContain('не найден');
+      expect(result.content).toContain('not found');
     });
   });
 

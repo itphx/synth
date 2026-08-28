@@ -11,6 +11,8 @@ import type {
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import type { ProjectStore } from '../../storage/project-store.js';
+import { isAborted, abortedResult } from './abort.js';
+import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 export interface ProjectManageExtra {
   sessionManager?: SessionManager;
@@ -47,13 +49,13 @@ export async function attachSessionToProject(
 }
 
 function argError(toolName: string, issues: z.ZodIssue[]): string {
-  return `Ошибка аргументов инструмента "${toolName}": ${issues
+  return sm('tool.args_error', { tool: toolName, issues: issues
     .map((i) => `${i.path.join('.') || 'root'}: ${i.message}`)
-    .join('; ')}`;
+    .join('; ') });
 }
 
-const NO_PROJECT_LOG_ERROR = 'Проект отсутствует: лог доступен только в проекте';
-const NO_PROJECT_INVARIANTS_ERROR = 'Проект отсутствует: инварианты доступны только в проекте';
+const NO_PROJECT_LOG_ERROR = sm('project.log_no_project');
+const NO_PROJECT_INVARIANTS_ERROR = sm('project.invariants_no_project');
 
 /** Загружает сессию и её проект. project === null, если проекта нет (или сессия не найдена). */
 async function loadSessionProject(
@@ -78,7 +80,7 @@ async function loadSessionProject(
 
 function missingDepsError(toolName: string): { content: string; isError: true } {
   return {
-    content: `Ошибка: менеджер сессий или хранилище проектов недоступно для ${toolName}`,
+    content: sm('project.deps_unavailable', { tool: toolName }),
     isError: true,
   };
 }
@@ -102,6 +104,8 @@ export const projectCreateTool: ToolDefinition = {
   parameters: projectCreateSchema,
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: argError(this.name, parsed.error.issues), isError: true };
@@ -111,7 +115,7 @@ export const projectCreateTool: ToolDefinition = {
     const extra = getSessionExtra(ctx);
     if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
       return {
-        content: 'Ошибка: менеджер сессий или хранилище проектов недоступно для project_create',
+        content: sm('project.deps_unavailable', { tool: 'project_create' }),
         isError: true,
       };
     }
@@ -120,10 +124,10 @@ export const projectCreateTool: ToolDefinition = {
     try {
       session = await extra.sessionManager.getSession(extra.sessionId);
     } catch {
-      return { content: 'Ошибка: не удалось прочитать сессию', isError: true };
+      return { content: sm('project.session_read_error'), isError: true };
     }
     if (!session) {
-      return { content: 'Ошибка: сессия не найдена', isError: true };
+      return { content: sm('project.session_not_found'), isError: true };
     }
 
     const ownerId = session.ownerId || session.userId || 'local';
@@ -136,7 +140,7 @@ export const projectCreateTool: ToolDefinition = {
       await extra.projectStore.save(project);
     } catch (err) {
       return {
-        content: `Ошибка сохранения проекта: ${err instanceof Error ? err.message : String(err)}`,
+        content: sm('project.save_error', { error: err instanceof Error ? err.message : String(err) }),
         isError: true,
       };
     }
@@ -151,7 +155,7 @@ export const projectCreateTool: ToolDefinition = {
 
     const summary = { id: project.id, name: project.name, workspace: project.workspace ?? null };
     return {
-      content: `Проект "${project.name}" создан и привязан к сессии.\n${JSON.stringify(summary)}`,
+      content: sm('project.created', { name: project.name, json: JSON.stringify(summary) }),
       metadata: summary,
     };
   },
@@ -166,6 +170,8 @@ export const projectAttachTool: ToolDefinition = {
   parameters: projectAttachSchema,
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: argError(this.name, parsed.error.issues), isError: true };
@@ -175,7 +181,7 @@ export const projectAttachTool: ToolDefinition = {
     const extra = getSessionExtra(ctx);
     if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
       return {
-        content: 'Ошибка: менеджер сессий или хранилище проектов недоступно для project_attach',
+        content: sm('project.deps_unavailable', { tool: 'project_attach' }),
         isError: true,
       };
     }
@@ -184,10 +190,10 @@ export const projectAttachTool: ToolDefinition = {
     try {
       project = await extra.projectStore.load(params.projectId);
     } catch {
-      return { content: 'Ошибка: не удалось прочитать проект', isError: true };
+      return { content: sm('project.read_error'), isError: true };
     }
     if (!project) {
-      return { content: `Проект ${params.projectId} не найден`, isError: true };
+      return { content: sm('project.not_found', { id: params.projectId }), isError: true, metadata: { i18n: i18nMeta('project.not_found', { id: params.projectId }) } };
     }
 
     await attachSessionToProject(
@@ -199,7 +205,7 @@ export const projectAttachTool: ToolDefinition = {
     );
 
     return {
-      content: `Сессия привязана к проекту "${project.name}".`,
+      content: sm('project.attached', { name: project.name }),
       metadata: { id: project.id, name: project.name },
     };
   },
@@ -218,6 +224,8 @@ export const projectLogWriteTool: ToolDefinition = {
   parameters: projectLogWriteSchema,
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: argError(this.name, parsed.error.issues), isError: true };
@@ -251,13 +259,13 @@ export const projectLogWriteTool: ToolDefinition = {
       await extra.projectStore.save(project);
     } catch (err) {
       return {
-        content: `Ошибка сохранения лога проекта: ${err instanceof Error ? err.message : String(err)}`,
+        content: sm('project.log_save_error', { error: err instanceof Error ? err.message : String(err) }),
         isError: true,
       };
     }
 
     return {
-      content: `Запись добавлена в лог проекта. Всего записей: ${log.length}.`,
+      content: sm('project.log_added', { count: String(log.length) }),
       metadata: { entry, count: log.length },
     };
   },
@@ -271,6 +279,8 @@ export const projectLogReadTool: ToolDefinition = {
   parameters: z.object({}),
   capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const extra = getSessionExtra(ctx);
     if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
       return missingDepsError(this.name);
@@ -283,12 +293,12 @@ export const projectLogReadTool: ToolDefinition = {
 
     const log = project.log ?? [];
     if (log.length === 0) {
-      return { content: 'Лог пуст', metadata: { count: 0 } };
+      return { content: sm('project.log_empty'), metadata: { count: 0, i18n: i18nMeta('project.log_empty') } };
     }
 
     const lines = log.map((e) => `- ${e.createdAt} — ${e.text}`);
     return {
-      content: `Лог проекта (${log.length}):\n${lines.join('\n')}`,
+      content: sm('project.log_list', { count: String(log.length), items: lines.join('\n') }),
       metadata: { count: log.length },
     };
   },
@@ -302,6 +312,8 @@ export const projectInvariantsReadTool: ToolDefinition = {
   parameters: z.object({}),
   capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const extra = getSessionExtra(ctx);
     if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
       return missingDepsError(this.name);
@@ -314,7 +326,7 @@ export const projectInvariantsReadTool: ToolDefinition = {
 
     const invariants = project.invariants?.trim();
     if (!invariants) {
-      return { content: 'Инварианты не заданы' };
+      return { content: sm('project.invariants_empty'), metadata: { i18n: i18nMeta('project.invariants_empty') } };
     }
 
     return { content: invariants };
@@ -334,6 +346,8 @@ export const projectInvariantsWriteTool: ToolDefinition = {
   parameters: projectInvariantsWriteSchema,
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: argError(this.name, parsed.error.issues), isError: true };
@@ -357,11 +371,11 @@ export const projectInvariantsWriteTool: ToolDefinition = {
       await extra.projectStore.save(project);
     } catch (err) {
       return {
-        content: `Ошибка сохранения инвариантов: ${err instanceof Error ? err.message : String(err)}`,
+        content: sm('project.invariants_save_error', { error: err instanceof Error ? err.message : String(err) }),
         isError: true,
       };
     }
 
-    return { content: 'Инварианты проекта сохранены.' };
+    return { content: sm('project.invariants_saved'), metadata: { i18n: i18nMeta('project.invariants_saved') } };
   },
 };
