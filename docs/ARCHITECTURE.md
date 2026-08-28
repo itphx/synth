@@ -2,7 +2,7 @@
 
 ## Компоненты
 
-Synth состоит из пяти пакетов в монорепозитории:
+Synth состоит из шести пакетов в монорепозитории:
 
 | Пакет | Назначение | Стек |
 |-------|-----------|------|
@@ -11,6 +11,7 @@ Synth состоит из пяти пакетов в монорепозитор�
 | **@itphx/synth-backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
 | **@itphx/synth-ui** | React 19 SPA + админка (рендеринг по ролям) | TypeScript, React 19, Vite |
 | **@itphx/synth-runner** | Gateway между бэкендом и движками (opencode, cline, synth-core) | TypeScript, Node.js |
+| **@itphx/synth** | Публикуемая тонкая CLI-обёртка (`bin: synth`) над core/ui/shared (AD-038). Не бандлит core, не копирует ассеты | TypeScript, commander |
 
 ## Архитектурная схема
 
@@ -31,6 +32,10 @@ flowchart TB
         cline["cline CLI"]
     end
 
+    subgraph CLI["Публикуемый CLI"]
+        synth_cli["@itphx/synth — тонкая обёртка (bin: synth)"]
+    end
+
     subgraph LLM["LLM-провайдеры"]
         ollama["Ollama (локально)"]
         openai["OpenAI API"]
@@ -40,6 +45,8 @@ flowchart TB
 
     synth_ui -->|HTTP + WebSocket| synth_backend
     synth_ui -->|HTTP API v2| synth_core
+
+    synth_cli -->|serve/chat/config| synth_core
 
     synth_backend -->|WebSocket control| synth_runner
     synth_core -->|in-process| synth_runner
@@ -83,12 +90,17 @@ synth-ui (localhost) ←→ synth-core (:4300)
 ### Локальный + внешние движки
 
 ```
-synth-core ←→ synthase-runner (in-process) ←→ opencode / cline
+synth-core ←→ synth-runner (in-process) ←→ opencode / cline
 ```
 
-- `synth serve --api-key <key> --runner`
-- In-process импорт @itphx/synth-runner
+- In-process импорт @itphx/synth-runner при запуске core с флагом `--runner`
 - LLM-запросы opencode/cline проксируются через core
+
+Запуск — через CLI ядра (у публичной обёртки `synth` флага `--runner` нет):
+
+```bash
+node packages/core/dist/main.js serve --api-key <key> --runner
+```
 
 ### Гибридный (корпоративный)
 
@@ -120,12 +132,14 @@ synth/
 ├── tsconfig.base.json        # общий конфиг TypeScript
 ├── eslint.config.js          # линтер
 ├── .prettierrc               # форматтер
+├── scripts/                  # build.sh, dev.sh, publish.sh, version-bump.sh, changelog.sh
 └── packages/
     ├── shared/   → @itphx/synth-shared
+    ├── core/     → @itphx/synth-core
     ├── backend/  → @itphx/synth-backend
     ├── ui/       → @itphx/synth-ui
     ├── runner/   → @itphx/synth-runner
-    └── core/     → @itphx/synth-core
+    └── synth/    → @itphx/synth (тонкая CLI-обёртка, bin: synth)
 ```
 
 ## Модель «Runner»
