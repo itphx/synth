@@ -169,7 +169,7 @@ jobs:
   # --- Публикация npm ---
   publish-npmjs:
     name: npmjs.org
-    needs: [build, changelog]
+    needs: [build]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -194,7 +194,7 @@ jobs:
 
   publish-gitverse-npm:
     name: GitVerse Package Registry
-    needs: [build, changelog]
+    needs: [build]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -222,7 +222,7 @@ jobs:
   # поэтому ждём публикации npmjs — иначе гонка: kaniko не находит пакет (ETARGET)
   build-docker:
     name: Docker образ
-    needs: [build, changelog, publish-npmjs]
+    needs: [build, publish-npmjs]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
