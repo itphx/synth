@@ -222,9 +222,11 @@ jobs:
           done
 
   # --- Публикация Docker ---
+  # Docker-образ ставит @itphx/synth@<version> из npmjs (npm install -g),
+  # поэтому ждём публикации npmjs — иначе гонка: kaniko не находит пакет (ETARGET)
   build-docker:
     name: Docker образ
-    needs: [build, changelog]
+    needs: [build, changelog, publish-npmjs]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
