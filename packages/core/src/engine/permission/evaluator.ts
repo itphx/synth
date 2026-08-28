@@ -2,6 +2,7 @@ import { relative, resolve, isAbsolute, normalize, sep } from 'node:path';
 import { globMatch, ToolCapability } from '@itphx/synth-shared';
 import type { PermissionAction, PermissionConfig, PermissionDecision, PermissionRule, PlanMode, SessionMode, McpServerToolSettings, McpToolAvailability } from '@itphx/synth-shared';
 import { resolvePath } from '../tools/path-utils.js';
+import { t as sm } from '../system-messages.js';
 import { getToolGroups, TOOL_PATH_PARAMS } from './groups.js';
 import { checkShellCommand, isMutatingCommand, tokenizeCommand, matchShellCommandPattern } from '../security/shell-guard.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
@@ -111,7 +112,7 @@ export class PermissionEvaluator {
       return {
         ...decision,
         action: 'allow',
-        reason: `${decision.reason} (yolo-режим: автоподтверждение)`,
+        reason: sm('permission.yolo_auto_approved', { reason: decision.reason }),
       };
     }
     return decision;
@@ -133,10 +134,10 @@ export class PermissionEvaluator {
     // AD-025: plan-рестрикция применяется поверх конфига. В режиме plan (или
     // strict без утверждённого плана) все write/edit/delete тулы и git-запись → deny.
     if (isPlanRestricted(sessionMode, planMode, planApproved) && isPlanBlockedTool(toolName, capabilities)) {
-      const restrictionSource = sessionMode === 'plan' ? 'режим plan' : 'strict: план не утверждён';
+      const restrictionSource = sessionMode === 'plan' ? sm('permission.plan_source_mode') : sm('permission.plan_source_strict');
       return {
         action: 'deny',
-        reason: `plan mode: запись файлов заблокирована (${restrictionSource})`,
+        reason: sm('permission.plan_write_blocked', { source: restrictionSource }),
         matchedRule: 'plan.deny',
       };
     }
@@ -146,7 +147,7 @@ export class PermissionEvaluator {
       && isMutatingCommand(tokenizeCommand(shellCommand), shellCommand)) {
       return {
         action: 'deny',
-        reason: 'plan mode: shell-команда изменяет состояние',
+        reason: sm('permission.plan_shell_denied'),
         matchedRule: 'plan.shell-deny',
       };
     }
@@ -209,7 +210,7 @@ export class PermissionEvaluator {
         if (!availability[modeKey]) {
           return {
             action: 'deny',
-            reason: `MCP-инструмент недоступен в режиме ${modeKey}`,
+            reason: sm('permission.mcp_unavailable', { mode: modeKey }),
             matchedRule: 'mcp.mode',
           };
         }
@@ -260,7 +261,7 @@ export class PermissionEvaluator {
     // 5. Дефолт: allow
     return {
       action: 'allow',
-      reason: `нет правил permissions для "${toolName}" — разрешено по умолчанию`,
+      reason: sm('permission.no_rules', { tool: toolName }),
     };
   }
 
@@ -271,14 +272,14 @@ export class PermissionEvaluator {
     workingDir: string,
   ): PermissionDecision | undefined {
     if (typeof rule === 'string') {
-      return { action: rule, reason: `правило "${key}" → ${rule}`, matchedRule: key };
+      return { action: rule, reason: sm('permission.rule_matched', { key, action: rule }), matchedRule: key };
     }
 
     // Объект — файловые паттерны. Для тулов без путей учитываем только '*'.
     if (paths.length === 0) {
       const star = rule['*'];
       if (star) {
-        return { action: star, reason: `правило "${key}.*" → ${star}`, matchedRule: `${key}.*` };
+        return { action: star, reason: sm('permission.rule_prefix_matched', { key, action: star }), matchedRule: `${key}.*` };
       }
       return undefined;
     }
@@ -293,7 +294,7 @@ export class PermissionEvaluator {
         if (matchPathPattern(pattern, p, workingDir)) {
           return {
             action,
-            reason: `правило "${key}.${pattern}" → ${action} (путь: ${p})`,
+            reason: sm('permission.rule_pattern_matched', { key, pattern, action, path: p }),
             matchedRule: `${key}.${pattern}`,
           };
         }
@@ -302,7 +303,7 @@ export class PermissionEvaluator {
     if (starAction) {
       return {
         action: starAction,
-        reason: `правило "${key}.*" → ${starAction}`,
+        reason: sm('permission.rule_prefix_matched', { key, action: starAction }),
         matchedRule: `${key}.*`,
       };
     }
@@ -320,7 +321,7 @@ export class PermissionEvaluator {
     _workingDir: string,
   ): PermissionDecision | undefined {
     if (typeof rule === 'string') {
-      return { action: rule, reason: `правило "${key}" → ${rule}`, matchedRule: key };
+      return { action: rule, reason: sm('permission.rule_matched', { key, action: rule }), matchedRule: key };
     }
 
     let starAction: PermissionAction | undefined;
@@ -332,7 +333,7 @@ export class PermissionEvaluator {
       if (matchShellCommandPattern(pattern, command)) {
         return {
           action,
-          reason: `правило "${key}.${pattern}" → ${action} (команда: ${command})`,
+          reason: sm('permission.rule_command_matched', { key, pattern, action, command }),
           matchedRule: `${key}.${pattern}`,
         };
       }
@@ -340,7 +341,7 @@ export class PermissionEvaluator {
     if (starAction) {
       return {
         action: starAction,
-        reason: `правило "${key}.*" → ${starAction}`,
+        reason: sm('permission.rule_prefix_matched', { key, action: starAction }),
         matchedRule: `${key}.*`,
       };
     }

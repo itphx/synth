@@ -7,6 +7,7 @@ import type { SessionManager } from '../../sessions/manager.js';
 import type { ProjectStore } from '../../storage/project-store.js';
 import { runGit } from './git.js';
 import { isAborted, abortedResult } from './abort.js';
+import { t as sm } from '../system-messages.js';
 
 interface ProjectContextExtra {
   sessionManager?: SessionManager;
@@ -137,10 +138,10 @@ async function loadProject(ctx: ToolContext): Promise<Project | undefined> {
 
 function formatRepo(repo: RepoInfo, label?: string): string {
   const lines = [`- ${label ?? repo.path}`];
-  if (repo.branch) lines.push(`  - Ветка: ${repo.branch}`);
-  if (repo.remoteUrl) lines.push(`  - Remote: ${repo.remoteUrl}`);
-  lines.push(`  - Состояние: ${repo.hasChanges ? 'есть изменения' : 'чисто'}`);
-  if (repo.lastCommit) lines.push(`  - Последний коммит: ${repo.lastCommit}`);
+  if (repo.branch) lines.push(sm('projectctx.repo_branch', { branch: repo.branch }));
+  if (repo.remoteUrl) lines.push(sm('projectctx.repo_remote', { url: repo.remoteUrl }));
+  lines.push(sm('projectctx.repo_state', { state: repo.hasChanges ? sm('projectctx.repo_state_dirty') : sm('projectctx.repo_state_clean') }));
+  if (repo.lastCommit) lines.push(sm('projectctx.repo_last_commit', { commit: repo.lastCommit }));
   return lines.join('\n');
 }
 
@@ -174,23 +175,23 @@ export const getProjectInfoTool: ToolDefinition = {
     }
 
     if (project) {
-      parts.push(`# Проект: ${project.name}`);
-      parts.push(`- ID: ${project.id}`);
-      if (project.workspace) parts.push(`- Рабочий каталог проекта: ${projectDir}`);
-      if (project.description) parts.push(`- Описание: ${project.description}`);
+      parts.push(sm('projectctx.info_title', { name: project.name }));
+      parts.push(sm('projectctx.info_id', { id: project.id }));
+      if (project.workspace) parts.push(sm('projectctx.info_workspace', { dir: projectDir }));
+      if (project.description) parts.push(sm('projectctx.info_description', { description: project.description }));
     } else if (sessionProjectId) {
-      parts.push(`# Проект: не найден (id: ${sessionProjectId})`);
-      parts.push(`- Рабочий каталог: ${ctx.workingDir}`);
+      parts.push(sm('projectctx.not_found', { id: sessionProjectId }));
+      parts.push(sm('projectctx.working_dir', { dir: ctx.workingDir }));
     } else {
-      parts.push(`# Проект: отсутствует`);
-      parts.push(`- Рабочий каталог: ${ctx.workingDir}`);
-      parts.push(`- План недоступен (план привязан к проекту). Чтобы работать с планом — создайте проект.`);
+      parts.push(sm('projectctx.missing'));
+      parts.push(sm('projectctx.working_dir', { dir: ctx.workingDir }));
+      parts.push(sm('projectctx.no_plan_hint'));
     }
 
     const repo = await detectRepoInfo(projectDir, ctx.abortSignal);
     if (repo) {
       parts.push('');
-      parts.push('## Git-репозиторий');
+      parts.push(sm('projectctx.git_section'));
       parts.push(formatRepo(repo, projectDir));
     }
 
@@ -223,7 +224,7 @@ export const listReposTool: ToolDefinition = {
     const projectDir = resolveWorkspaceDir(project, extra?.workspacesRoot, ctx.workingDir);
 
     if (project?.repos && project.repos.length > 0) {
-      parts.push(`# Репозитории проекта ${project.name}:`);
+      parts.push(sm('projectctx.repos_title', { name: project.name }));
       for (const repoCfg of project.repos) {
         // Относительные пути репозиториев резолвим относительно рабочего
         // каталога проекта, чтобы git-детект искал в правильном месте.
@@ -232,14 +233,14 @@ export const listReposTool: ToolDefinition = {
         if (repo) {
           parts.push(formatRepo(repo, repoPath));
         } else {
-          parts.push(`- ${repoPath} (не найден или не git-репозиторий)`);
+          parts.push(sm('projectctx.repo_not_found', { path: repoPath }));
         }
       }
     } else {
       const repos = await findReposInDir(projectDir, ctx.abortSignal);
       if (repos.length === 0) {
         return {
-          content: `Git-репозитории в "${projectDir}" не найдены`,
+          content: sm('projectctx.repos_none', { dir: projectDir }),
           metadata: {
             workingDir: ctx.workingDir,
             ...(project?.workspace ? { projectWorkspace: projectDir } : {}),
@@ -247,7 +248,7 @@ export const listReposTool: ToolDefinition = {
           },
         };
       }
-      parts.push(`# Git-репозитории в ${projectDir}:`);
+      parts.push(sm('projectctx.repos_found', { dir: projectDir }));
       for (const repo of repos) {
         parts.push(formatRepo(repo, repo.path));
       }

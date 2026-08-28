@@ -151,7 +151,7 @@ describe('webSearchTool', () => {
     });
 
     expect(result.isError).toBeFalsy();
-    expect(result.content).toContain('Результаты поиска «example domain» (2):');
+    expect(result.content).toContain('Search results for "example domain" (2):');
     expect(result.content).toContain('**Example Domain**');
     expect(result.content).toContain('example.com');
 
@@ -281,7 +281,7 @@ describe('webFetchTool', () => {
     );
 
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('url или urls');
+    expect(result.content).toContain('specify url or urls');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

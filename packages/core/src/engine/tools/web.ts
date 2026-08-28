@@ -4,6 +4,7 @@ import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, isAbortError, signalAborted, abortedResult } from './abort.js';
+import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 const MAX_RESPONSE_SIZE = 50_000;
 const MAX_FETCH_URLS = 5;
@@ -150,7 +151,7 @@ async function duckDuckGoSearch(query: string, limit: number, abortSignal?: Abor
       const html = await response.text();
 
       if (isDdgChallenge(html, response.status)) {
-        lastError = 'DuckDuckGo временно блокирует запросы (anti-bot challenge)';
+        lastError = sm('web.duckduckgo_blocked');
         continue;
       }
 
@@ -169,7 +170,7 @@ async function duckDuckGoSearch(query: string, limit: number, abortSignal?: Abor
 
     await sleep(SEARCH_RETRY_DELAY_MS);
   }
-  throw new Error(lastError || 'Не удалось получить результаты от DuckDuckGo');
+  throw new Error(lastError || sm('web.search_failed'));
 }
 
 // ─── Парсинг Bing HTML (fallback для web_search) ────────────────────────────
@@ -245,7 +246,7 @@ function formatSearchResults(query: string, results: SearchResult[]): string {
     return lines.join('\n');
   });
 
-  return `Результаты поиска «${query}» (${results.length}):\n\n${parts.join('\n\n')}`;
+  return sm('web.search_results', { query, count: String(results.length), items: parts.join('\n\n') });
 }
 
 // ─── Очистка HTML для web_fetch ─────────────────────────────────────────────
@@ -300,7 +301,7 @@ export const webFetchTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
     }
     const params = parsed.data as {
       url?: string;
@@ -311,7 +312,7 @@ export const webFetchTool: ToolDefinition = {
 
     const rawUrls = params.urls && params.urls.length > 0 ? params.urls : (params.url ? [params.url] : []);
     if (rawUrls.length === 0) {
-      return { content: `Ошибка аргументов инструмента "${this.name}": укажите url или urls`, isError: true };
+      return { content: sm('tool.args_error', { tool: this.name, issues: sm('web.fetch_args_url_required') }), isError: true, metadata: { i18n: i18nMeta('web.fetch_args_url_required') } };
     }
     // AD-036: деобфускация в точке потребления — URL может содержать ⟦SYNTH_SECRET_N⟧
     const restoredUrls = await Promise.all(rawUrls.map((u) => deobfuscateText(ctx, u)));
@@ -357,16 +358,16 @@ export const webFetchTool: ToolDefinition = {
           const isSpa = detectSpa(rawText);
           const textRatio = content.length / Math.max(rawText.length, 1);
           if (isSpa) {
-            content += '\n\n⚠️ Сайт использует JavaScript-фреймворк — часть контента может быть недоступна без выполнения JS.';
+            content += sm('web.js_framework_warning');
           } else if (textRatio < 0.02) {
-            content += '\n\n⚠️ На странице очень мало текстового контента (возможно, JavaScript-рендеринг).';
+            content += sm('web.low_content_warning');
           }
         } else {
           content = rawText;
         }
 
         if (content.length > MAX_RESPONSE_SIZE) {
-          content = content.slice(0, MAX_RESPONSE_SIZE) + '\n... (содержимое обрезано)';
+          content = content.slice(0, MAX_RESPONSE_SIZE) + sm('web.content_truncated');
         }
 
         blocks.push(`### ${url}\n\n${content}`);
@@ -379,15 +380,15 @@ export const webFetchTool: ToolDefinition = {
           return abortedResult(this.name, blocks.join('\n\n---\n\n') || undefined);
         }
         if (error.name === 'AbortError') {
-          blocks.push(`### ${url}\n\n❌ Таймаут`);
+          blocks.push(`### ${url}\n\n${sm('web.block_timeout')}`);
         } else {
-          blocks.push(`### ${url}\n\n❌ Ошибка загрузки: ${error.message || String(err)}`);
+          blocks.push(`### ${url}\n\n${sm('web.block_error', { error: error.message || String(err) })}`);
         }
       }
     }
 
     if (blocks.length === 0) {
-      return { content: 'Не удалось загрузить ни один URL', isError: true };
+      return { content: sm('web.fetch_all_failed'), isError: true, metadata: { i18n: i18nMeta('web.fetch_all_failed') } };
     }
 
     return {
@@ -413,7 +414,7 @@ export const webSearchTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
     }
     const params = parsed.data as { query: string; max_results?: number };
     const limit = params.max_results ?? 10;
@@ -440,12 +441,12 @@ export const webSearchTool: ToolDefinition = {
           throw err;
         }
       }
-      return { content: `По запросу «${query}» ничего не найдено.`, metadata: { query: params.query, max_results: limit } };
+      return { content: sm('web.no_results', { query }), metadata: { query: params.query, max_results: limit, i18n: i18nMeta('web.no_results', { query }) } };
     } catch (err: unknown) {
       // «Стоп» — единый маркер прерывания, а не «ошибка веб-поиска»
       if (signalAborted(ctx.abortSignal)) return abortedResult(this.name);
       return {
-        content: `Ошибка веб-поиска: ${(err as Error).message || String(err)}`,
+        content: sm('web.search_error', { error: (err as Error).message || String(err) }),
         isError: true,
         metadata: { query: params.query },
       };

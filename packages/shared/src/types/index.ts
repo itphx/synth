@@ -45,6 +45,16 @@ export interface Part {
 // --- MessageOrigin ---
 export type MessageOrigin = 'local' | 'inherited' | 'merged' | 'crosspost';
 
+/**
+ * metadata.i18n сообщения/tool_result (i18n ядра): стабильный en-like ключ
+ * системного сообщения + параметры подстановки. UI рендерит перевод по ключу
+ * (formatMessage), fallback — на content (en). Плейсхолдеры — `{param}`.
+ */
+export interface MessageI18n {
+  key: string;
+  params?: Record<string, string>;
+}
+
 // --- SessionOrigin ---
 export type SessionOrigin = 'user' | 'fork' | 'subagent';
 
@@ -591,6 +601,10 @@ export type EventType =
   | 'tool_call.started'
   | 'tool_call.result'
   | 'tool_call.loop'
+  | 'subagent.progress'
+  | 'subagent.retry'
+  | 'subagent.resume.started'
+  | 'subagent.resume.finished'
   | 'permission.asked'
   | 'permission.replied'
   | 'permission.denied'

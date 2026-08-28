@@ -126,6 +126,33 @@ export interface StreamRetry {
   error?: string
 }
 
+/** Статус повторной попытки саб-агента (событие subagent.retry). */
+export interface SubagentRetryState {
+  /** call_id тула `task` в родительской сессии (parent_call_id); в дочерней сессии при resume отсутствует. */
+  callId?: string
+  childSessionId?: string
+  attempt: number
+  maxRetries: number
+  /** Задержка backoff в миллисекундах */
+  retryInMs: number
+  errorType?: string
+  error?: string
+}
+
+/** Активное возобновление дочерней сессии (событие subagent.resume.started). */
+export interface SubagentResumeState {
+  childSessionId: string
+  parentSessionId: string
+  streamId: string
+}
+
+/** Финальная ошибка стрима (событие stream.error с can_retry: false) — плашка над полем ввода. */
+export interface FinalStreamError {
+  streamId: string
+  error: string
+  errorType: string
+}
+
 export interface QueueState {
   pendingCount: number
   isStalled: boolean
@@ -143,6 +170,9 @@ interface ChatStore {
   pendingBySession: Record<string, QueuedMessage[]>
   errorBySession: Record<string, StreamError | null>
   retryBySession: Record<string, StreamRetry | null>
+  subagentRetryBySession: Record<string, SubagentRetryState | null>
+  subagentResumingBySession: Record<string, SubagentResumeState | null>
+  finalErrorBySession: Record<string, FinalStreamError | null>
   stickyNotesBySession: Record<string, StickyNoteData[]>
   summarizationPendingBySession: Record<string, boolean>
   debugModalSessionId: string | null
@@ -163,6 +193,9 @@ interface ChatStore {
   clearStreamError: (sessionId: string) => void
   setStreamRetry: (sessionId: string, retry: StreamRetry | null) => void
   setStreamRetrying: (sessionId: string, streamId: string, isRetrying: boolean) => void
+  setSubagentRetry: (sessionId: string, retry: SubagentRetryState | null) => void
+  setSubagentResuming: (sessionId: string, state: SubagentResumeState | null) => void
+  setFinalStreamError: (sessionId: string, error: FinalStreamError | null) => void
   addMessage: (sessionId: string, message: MessageData) => void
   setPendingMessages: (sessionId: string, pending: QueuedMessage[]) => void
   setQueueStalled: (sessionId: string, pendingCount: number) => void
@@ -198,6 +231,9 @@ export const useChatStore = create<ChatStore>((set) => ({
   pendingBySession: {},
   errorBySession: {},
   retryBySession: {},
+  subagentRetryBySession: {},
+  subagentResumingBySession: {},
+  finalErrorBySession: {},
   stickyNotesBySession: {},
   summarizationPendingBySession: {},
   debugModalSessionId: null,
@@ -526,6 +562,27 @@ export const useChatStore = create<ChatStore>((set) => ({
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
 
+  setSubagentRetry: (sessionId, retry) =>
+    set((s) => ({
+      subagentRetryBySession: { ...s.subagentRetryBySession, [sessionId]: retry },
+    })),
+
+  setSubagentResuming: (sessionId, state) =>
+    set((s) => ({
+      subagentResumingBySession: { ...s.subagentResumingBySession, [sessionId]: state },
+    })),
+
+  setFinalStreamError: (sessionId, error) =>
+    set((s) => {
+      const prev = s.finalErrorBySession[sessionId]
+      // no-op если значение не меняется — иначе лишние перерендеры на каждом chunk
+      if (prev === error || (prev === null && error === null)) return s
+      if (prev && error && prev.streamId === error.streamId && prev.error === error.error && prev.errorType === error.errorType) return s
+      return {
+        finalErrorBySession: { ...s.finalErrorBySession, [sessionId]: error },
+      }
+    }),
+
   addMessage: (sessionId, message) =>
     set((s) => {
       const msgs = [...(s.messagesBySession[sessionId] || [])]
@@ -607,7 +664,13 @@ export const useChatStore = create<ChatStore>((set) => ({
       delete errorBySession[sessionId]
       const retryBySession = { ...s.retryBySession }
       delete retryBySession[sessionId]
-      return { messagesBySession, streamingBySession, queueBySession, pendingBySession, errorBySession, retryBySession }
+      const subagentRetryBySession = { ...s.subagentRetryBySession }
+      delete subagentRetryBySession[sessionId]
+      const subagentResumingBySession = { ...s.subagentResumingBySession }
+      delete subagentResumingBySession[sessionId]
+      const finalErrorBySession = { ...s.finalErrorBySession }
+      delete finalErrorBySession[sessionId]
+      return { messagesBySession, streamingBySession, queueBySession, pendingBySession, errorBySession, retryBySession, subagentRetryBySession, subagentResumingBySession, finalErrorBySession }
     }),
 
   setStickyNotes: (sessionId, notes) =>

@@ -5,6 +5,7 @@
  */
 
 import type { BaseProvider } from '../../providers/base.js';
+import { t as sm } from '../system-messages.js';
 import { warning } from '../../logger.js';
 
 export interface QualityCheckInput {
@@ -30,11 +31,11 @@ export class QualityChecker {
         case 'min_length': {
           const passed = content.length >= minLength;
           const detail = passed
-            ? `Длина ответа ${content.length} >= ${minLength}`
-            : `Ответ короче ${minLength} символов (${content.length})`;
+            ? sm('qc.min_length_ok', { length: String(content.length), min: String(minLength) })
+            : sm('qc.min_length_fail_detail', { min: String(minLength), length: String(content.length) });
           results.push({ check: 'min_length', pass: passed, detail });
           if (!passed) {
-            return { pass: false, reason: `Ответ короче ${minLength} символов`, checkResults: results };
+            return { pass: false, reason: sm('qc.min_length_fail', { min: String(minLength) }), checkResults: results };
           }
           break;
         }
@@ -50,17 +51,17 @@ export class QualityChecker {
           let constraintDetail = '';
 
           if (!constraintPass) {
-            constraintDetail = 'Ответ пустой или содержит только пробелы';
+            constraintDetail = sm('qc.constraint_empty');
           } else {
             for (const pattern of errorPatterns) {
               if (pattern.test(trimmed)) {
                 constraintPass = false;
-                constraintDetail = `Ответ содержит явную ошибку парсинга: ${trimmed.slice(0, 100)}`;
+                constraintDetail = sm('qc.constraint_parse_error', { snippet: trimmed.slice(0, 100) });
                 break;
               }
             }
             if (constraintPass) {
-              constraintDetail = 'Ограничения пройдены';
+              constraintDetail = sm('qc.constraint_ok');
             }
           }
 
@@ -76,13 +77,13 @@ export class QualityChecker {
             results.push({
               check: 'self_check',
               pass: true,
-              detail: 'Self-check пропущен: провайдер не указан',
+              detail: sm('qc.self_check_skipped'),
             });
             break;
           }
 
           try {
-            const selfCheckPrompt = `Оцени качество этого ответа по шкале 1-10. Ответь только числом.\n\nОтвет: ${content}`;
+            const selfCheckPrompt = `Rate the quality of this answer on a scale of 1-10. Reply with the number only.\n\nAnswer: ${content}`;
             const messages = [
               {
                 id: '',
@@ -103,24 +104,24 @@ export class QualityChecker {
               results.push({
                 check: 'self_check',
                 pass: true,
-                detail: `Не удалось распарсить оценку: "${scoreStr.slice(0, 50)}" — считаем пройденным`,
+                detail: sm('qc.self_check_unparsed', { score: scoreStr.slice(0, 50) }),
               });
             } else if (score < 5) {
               results.push({
                 check: 'self_check',
                 pass: false,
-                detail: `Self-check оценка: ${score}/10 (порог: 5)`,
+                detail: sm('qc.self_check_low', { score: String(score) }),
               });
               return {
                 pass: false,
-                reason: `Самооценка модели низкая: ${score}/10`,
+                reason: sm('qc.self_check_low_reason', { score: String(score) }),
                 checkResults: results,
               };
             } else {
               results.push({
                 check: 'self_check',
                 pass: true,
-                detail: `Self-check оценка: ${score}/10`,
+                detail: sm('qc.self_check_ok', { score: String(score) }),
               });
             }
           } catch (err) {
@@ -128,7 +129,7 @@ export class QualityChecker {
             results.push({
               check: 'self_check',
               pass: true,
-              detail: `Ошибка self-check: ${String(err).slice(0, 100)} — считаем пройденным`,
+              detail: sm('qc.self_check_error', { error: String(err).slice(0, 100) }),
             });
           }
           break;
@@ -136,6 +137,6 @@ export class QualityChecker {
       }
     }
 
-    return { pass: true, reason: 'Все проверки пройдены', checkResults: results };
+    return { pass: true, reason: sm('qc.all_passed'), checkResults: results };
   }
 }

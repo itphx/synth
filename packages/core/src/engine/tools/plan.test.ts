@@ -174,7 +174,7 @@ describe('plan_read / plan_list / plan_write', () => {
       await sessionManager.saveSession(s);
     });
     const result = await planReadTool.execute({}, makeCtx());
-    expect(result.content).toContain('Проект отсутствует');
+    expect(result.content).toContain('No project');
   });
 
   it('plan_write create_item / move_item / delete_item', async () => {
@@ -212,7 +212,7 @@ describe('plan_read / plan_list / plan_write', () => {
       makeCtx(),
     );
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('колонка');
+    expect(result.content).toContain('column');
   });
 
   it('plan_write update_item меняет поля', async () => {
@@ -254,6 +254,6 @@ describe('plan_read / plan_list / plan_write', () => {
     });
     const result = await planWriteTool.execute({ action: 'create_item', title: 'x' }, makeCtx());
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('проект');
+    expect(result.content).toContain('project');
   });
 });

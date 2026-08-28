@@ -31,6 +31,8 @@ export interface MicroResult {
   label?: string;
   confidence: number; // 0-1
   answer?: string; // готовый ответ (если OK)
+  /** Ключ SystemMessages для локализации ответа на UI (metadata.i18n). */
+  i18nKey?: string;
   usage?: {
     inputTokens: number;
     outputTokens: number;

@@ -7,7 +7,7 @@ import type { ChatOrchestrator } from '@itphx/synth-core';
 import type { ContextOptimizer } from '@itphx/synth-core';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema } from '@itphx/synth-shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
-import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID } from '@itphx/synth-core';
+import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError } from '@itphx/synth-core';
 import { serializeSession } from '../lib/serialize.js';
 import { t } from '../lib/i18n.js';
 import type { EventHub } from '../events/hub.js';
@@ -362,6 +362,21 @@ export function createSessionRoutes(
     }
 
     return c.json({ status: 'aborted' });
+  });
+
+  // POST /api/v2/sessions/:id/resume-subagent — возобновить прерванную/ошибочную
+  // дочернюю сессию саб-агента. Валидация + блокировка синхронно, прогон — в фоне;
+  // итог resume пишется в родительскую сессию. 202/400/404/409.
+  app.post('/:id/resume-subagent', kit.requireAuth, async (c) => {
+    try {
+      const result = await orchestrator.startSubagentResume(c.req.param('id'));
+      return c.json(result, 202);
+    } catch (err) {
+      if (err instanceof SubagentResumeError) {
+        return c.json({ error: { code: err.code, message: err.message } }, err.httpStatus as 400 | 404 | 409);
+      }
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: String(err) } }, 500);
+    }
   });
 
   // POST /api/v2/sessions/:id/summarize — запросить суммаризацию (через очередь)

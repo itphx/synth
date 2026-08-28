@@ -495,6 +495,18 @@ export const synthApi = {
     })
   },
 
+  // API v2: возобновить прерванную/ошибочную дочернюю сессию саб-агента (202, выполнение фоновое)
+  async resumeSubagent(childSessionId: string): Promise<{
+    status: string
+    child_session_id: string
+    parent_session_id: string
+    stream_id: string
+  }> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(childSessionId)}/resume-subagent`, {
+      method: 'POST',
+    })
+  },
+
   // API v2: status
   async getChatStatus(sessionId: string): Promise<ChatStatusResponse> {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/status`)

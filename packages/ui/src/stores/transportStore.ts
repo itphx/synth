@@ -38,7 +38,8 @@ interface TransportState {
   markSessionClosed: (sid: string) => void
 }
 
-function createDispatcher(): EventDispatcher {
+// Экспортируется для юнит-тестов редьюсеров (subagent.retry / subagent.resume.*).
+export function createDispatcher(): EventDispatcher {
   return (event: WSEvent) => {
     try {
     const type = event.type
@@ -65,6 +66,9 @@ function createDispatcher(): EventDispatcher {
       addToolCall,
       updateToolCallResult,
       updateToolCallSubagentProgress,
+      setSubagentRetry,
+      setSubagentResuming,
+      setFinalStreamError,
     } = useChatStore.getState()
 
     switch (type) {
@@ -108,6 +112,8 @@ function createDispatcher(): EventDispatcher {
         startStream(sid, payload.stream_id as string, agentRole, payload.model as string | undefined, payload.provider as string | undefined)
         // Новая попытка — сбрасываем статус ретрая предыдущей
         setStreamRetry(sid, null)
+        // Новый стрим — плашка финальной ошибки больше не актуальна
+        setFinalStreamError(sid, null)
         if (metadata?.type === 'summary') {
           const s = useChatStore.getState()
           const sessionStreams = { ...(s.streamingBySession[sid] || {}) }
@@ -158,6 +164,8 @@ function createDispatcher(): EventDispatcher {
           setStreamRetry(sid, null)
           setStreamRetrying(sid, streamId, false)
         }
+        // Чанки идут — финальная ошибка прошлой попытки больше не актуальна
+        setFinalStreamError(sid, null)
         updateStreamChunk(
           sid,
           streamId,
@@ -196,6 +204,7 @@ function createDispatcher(): EventDispatcher {
         finishStream(sid, payload.stream_id as string, metadata)
         setStreamRetry(sid, null)
         clearStreamError(sid)
+        setFinalStreamError(sid, null)
 
         const pendingCount = payload.pending_count as number | undefined
         if (pendingCount !== undefined && pendingCount > 0) {
@@ -235,10 +244,12 @@ function createDispatcher(): EventDispatcher {
 
         // Финальная ошибка (неrecoverable / исчерпаны попытки / отменено):
         // завершаем стрим, убираем ретраи и индикатор обработки, показываем
-        // стандартное уведомление (toast + история).
+        // стандартное уведомление (toast + история) и плашку над полем ввода
+        // с возможностью повторить (для recoverable error_type — см. StreamErrorPanel).
         setStreamRetry(sid, null)
         setStreamRetrying(sid, streamId, false)
         cancelStream(sid, streamId)
+        setFinalStreamError(sid, { streamId, error: rawError, errorType: errorType || 'unknown' })
         notifyMessage({ text: error, type: 'error', category: 'error', sessionId: sid })
         break
       }
@@ -432,6 +443,11 @@ function createDispatcher(): EventDispatcher {
           isError: (payload.result as Record<string, unknown>)?.isError as boolean,
           metadata: (payload.result as Record<string, unknown>)?.metadata as Record<string, unknown> | undefined,
         })
+        // Тул завершён (в т.ч. isError) — статус ожидания ретрая этого саб-агента снят
+        const taskRetry = useChatStore.getState().subagentRetryBySession[sid]
+        if (taskRetry && taskRetry.callId && taskRetry.callId === (payload.call_id as string)) {
+          setSubagentRetry(sid, null)
+        }
         break
       }
 
@@ -451,6 +467,57 @@ function createDispatcher(): EventDispatcher {
             iteration: (payload.iteration as number) || 0,
           },
         )
+        break
+      }
+
+      case 'subagent.retry':
+      case 'subagent_retry': {
+        // Повторная попытка провайдера внутри саб-агента: показываем в блоке
+        // саб-агента «Повторная попытка N/M через Xс». Привязка к блоку — по
+        // parent_call_id (call_id тула task в родителе); в дочерней сессии при
+        // resume parent_call_id отсутствует — состояние на уровне сессии.
+        setSubagentRetry(sid, {
+          callId: (payload.parent_call_id as string) || undefined,
+          childSessionId: (payload.child_session_id as string) || undefined,
+          attempt: (payload.attempt as number) || 1,
+          maxRetries: (payload.max_retries as number) || 3,
+          retryInMs: (payload.retry_in as number) || 5000,
+          errorType: payload.error_type as string | undefined,
+          error: payload.error as string | undefined,
+        })
+        break
+      }
+
+      case 'subagent.resume.started': {
+        // Возобновление дочерней сессии пошло: событие публикуется в обе сессии
+        // (родительскую и дочернюю). Состояние выставляем по обоим id — страховка
+        // на случай отсутствия подписки на одну из них.
+        const state = {
+          childSessionId: (payload.child_session_id as string) || sid,
+          parentSessionId: (payload.parent_session_id as string) || sid,
+          streamId: (payload.stream_id as string) || '',
+        }
+        setSubagentResuming(sid, state)
+        if (state.childSessionId && state.childSessionId !== sid) {
+          setSubagentResuming(state.childSessionId, state)
+        }
+        break
+      }
+
+      case 'subagent.resume.finished': {
+        // Возобновление завершено: снимаем состояние плашки, статус ретрая и
+        // обновляем родительскую сессию (итоговое INFO-сообщение приходит
+        // отдельным message.added — refresh гарантирует консистентность стора).
+        const childId = payload.child_session_id as string | undefined
+        const parentId = payload.parent_session_id as string | undefined
+        setSubagentResuming(sid, null)
+        setSubagentRetry(sid, null)
+        if (childId && childId !== sid) {
+          setSubagentResuming(childId, null)
+          setSubagentRetry(childId, null)
+        }
+        if (parentId) refreshSessionFromApi(parentId)
+        if (sid !== parentId) refreshSessionFromApi(sid)
         break
       }
 

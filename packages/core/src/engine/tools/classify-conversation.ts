@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition, ToolContext, ToolResult } from '@itphx/synth-shared';
 import { isAborted, abortedResult } from './abort.js';
+import { t as sm } from '../system-messages.js';
 
 const classifyConversationSchema = z.object({
   category: z.enum(['coding', 'chat', 'research']).describe('Категория текущего разговора'),
@@ -29,7 +30,7 @@ export const classifyConversationTool: ToolDefinition = {
     return {
       content: JSON.stringify({
         routingCategory: parsed.category,
-        message: `Разговор классифицирован как "${parsed.category}"`,
+        message: sm('tool.classified', { category: parsed.category }),
       }),
       metadata: { routingCategory: parsed.category },
     };

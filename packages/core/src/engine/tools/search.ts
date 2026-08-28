@@ -4,6 +4,7 @@ import type { ToolDefinition } from '@itphx/synth-shared';
 import { resolvePath, validateInputPath } from './path-utils.js';
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
+import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 export const grepFilesTool: ToolDefinition = {
   name: 'grep_files',
@@ -20,7 +21,7 @@ export const grepFilesTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
     }
     const params = parsed.data as { pattern: string; path?: string; include?: string };
     if (params.path !== undefined) validateInputPath(params.path, 'path');
@@ -54,7 +55,7 @@ export const grepFilesTool: ToolDefinition = {
       const lines = stdout.split('\n').filter(Boolean);
       if (lines.length > 200) {
         const truncated = lines.slice(0, 200);
-        truncated.push(`... (показано 200 из ${lines.length} совпадений)`);
+        truncated.push(sm('search.matches_truncated', { total: String(lines.length) }));
         return {
           content: truncated.join('\n'),
           metadata: { pattern: params.pattern, matches: lines.length, truncated: true },
@@ -62,7 +63,7 @@ export const grepFilesTool: ToolDefinition = {
       }
 
       return {
-        content: lines.length > 0 ? lines.join('\n') : '(совпадений не найдено)',
+        content: lines.length > 0 ? lines.join('\n') : sm('search.no_matches'),
         metadata: { pattern: params.pattern, matches: lines.length },
       };
     } catch (err: unknown) {
@@ -70,13 +71,13 @@ export const grepFilesTool: ToolDefinition = {
       if (isAborted(ctx)) return abortedResult(this.name);
       const execError = err as { code?: number; stderr?: string };
       if (execError.code === 1) {
-        return { content: '(совпадений не найдено)', metadata: { pattern: params.pattern, matches: 0 } };
+        return { content: sm('search.no_matches'), metadata: { pattern: params.pattern, matches: 0 } };
       }
       if (execError.code === 127 || (execError.stderr && execError.stderr.includes('not found'))) {
-        return { content: '(rg (ripgrep) не установлен. Поиск недоступен)', isError: true };
+        return { content: sm('search.rg_not_installed'), isError: true, metadata: { i18n: i18nMeta('search.rg_not_installed') } };
       }
       return {
-        content: `Ошибка поиска: ${execError.stderr || String(err)}`,
+        content: sm('search.error', { error: execError.stderr || String(err) }),
         isError: true,
         metadata: { pattern: params.pattern },
       };

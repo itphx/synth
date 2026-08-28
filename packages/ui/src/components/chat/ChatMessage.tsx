@@ -10,6 +10,7 @@ import { SubagentPart, type SubagentPartData } from './SubagentPart'
 import { RetryStatus } from './RetryStatus'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/chatStore'
+import { useResolveI18n } from '@/lib/i18n'
 import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { useMemo } from 'react'
@@ -109,6 +110,9 @@ function ChatMessageInner({
 
   // LLM Gateway (AD-036): реальные значения секретов для плейсхолдеров ⟦SYNTH_SECRET_N⟧.
   const secrets = (message.metadata?.secrets as Record<string, string> | undefined) ?? undefined
+  // i18n ядра: metadata.i18n → перевод по ключу (fallback — content).
+  const resolveI18nText = useResolveI18n()
+  const i18nMeta = message.metadata?.i18n
   const activeTab = useUIStore((s) => s.centerTabs.find((t) => t.id === s.activeCenterTabId))
   const sessionId = (activeTab?.data?.sessionId as string) || undefined
 
@@ -164,6 +168,14 @@ function ChatMessageInner({
       prompt: tc.args?.prompt as string | undefined,
       response: (meta.final_content as string) || (meta.description as string) || '',
       sessionId,
+      callId: tc.callId,
+      errorInfo: {
+        isError: tc.result?.isError === true || meta.error === true,
+        attempts: meta.attempts as number | undefined,
+        maxRetries: meta.max_retries as number | undefined,
+        errorType: meta.error_type as string | undefined,
+        error: meta.error as string | undefined,
+      },
       reasoning_blocks: meta.reasoning_blocks as Array<{ text: string; iteration: number }> | undefined,
       intermediate_text_blocks: meta.intermediate_text_blocks as Array<{ text: string; iteration: number }> | undefined,
       tool_calls: meta.tool_calls as Array<{
@@ -296,7 +308,11 @@ function ChatMessageInner({
               metadata={message.metadata as Record<string, unknown> | undefined}
             />
           ) : (
-            <SecretMarkdown content={displayContent} secrets={secrets} sessionId={sessionId} />
+            <SecretMarkdown
+              content={resolveI18nText(i18nMeta, displayContent)}
+              secrets={secrets}
+              sessionId={sessionId}
+            />
           )
         )}
 

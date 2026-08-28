@@ -6,6 +6,7 @@
  */
 
 import type { ToolContext, ToolResult } from '@itphx/synth-shared';
+import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 /** Проверить, абортирован ли сигнал отмены (быстрые тулы — проверка на входе). */
 export function isAborted(ctx: ToolContext): boolean {
@@ -33,7 +34,7 @@ export function abortedResult(toolName: string, partialOutput?: string): ToolRes
   const parts = [
     '<status>stopped_by_user</status>',
     ...(partialOutput ? [`<partial_output>\n${partialOutput}\n</partial_output>`] : []),
-    'Выполнение прервано пользователем.',
+    sm('tool.aborted'),
   ];
   return {
     content: parts.join('\n'),
@@ -42,6 +43,7 @@ export function abortedResult(toolName: string, partialOutput?: string): ToolRes
       stopped_by: 'user',
       interrupted: true,
       partial_output: partialOutput || undefined,
+      i18n: i18nMeta('tool.aborted'),
     },
   };
 }

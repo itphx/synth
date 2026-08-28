@@ -7,6 +7,7 @@ import { nowISO, type LLMGatewayConfig } from '@itphx/synth-shared';
 
 import type { LLMMessage } from '../../providers/base.js';
 import { detectSecrets, maskSecret } from './secret-detector.js';
+import { t as sm } from '../system-messages.js';
 import { obfuscateSecrets } from './obfuscator.js';
 import type { AuditLogger } from './audit-logger.js';
 import type { SecretPattern } from './secret-pattern-store.js';
@@ -88,7 +89,7 @@ export async function runInputGuard(
       secretsFound: allFound,
       blocked: {
         reason,
-        message: `Обнаружены секреты в запросе (${reason}). Запрос заблокирован LLM Gateway.`,
+        message: sm('gateway.input_blocked', { reason }),
       },
     };
   }

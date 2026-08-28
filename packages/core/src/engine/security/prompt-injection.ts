@@ -8,6 +8,7 @@
  * - applyPolicy: применение политики flag / sanitize / block.
  */
 import type { DictionaryStore } from '../router/dictionary-store.js';
+import { t as sm } from '../system-messages.js';
 
 export type TrustLevel = 'trusted' | 'untrusted';
 
@@ -21,7 +22,7 @@ export interface InjectionDetection {
 export const CONTENT_START = '[CONTENT |';
 export const CONTENT_END = '[CONTENT END]';
 
-export const WARN_PREFIX = '[WARN: обнаружены признаки prompt injection';
+export const WARN_PREFIX = sm('security.warn_prefix');
 
 /**
  * Формирует строку предупреждения о подозрительном контенте.

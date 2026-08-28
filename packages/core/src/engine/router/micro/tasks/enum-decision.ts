@@ -3,6 +3,7 @@
  * Проверяет, что лейбл валидный (в допустимом наборе).
  */
 import type { MicroResult } from '../types.js';
+import { t as sm, type SystemMessageKey } from '../../../system-messages.js';
 
 /** Допустимые лейблы для enum-решений. */
 const VALID_LABELS = new Set([
@@ -10,14 +11,17 @@ const VALID_LABELS = new Set([
   'mode_plan', 'mode_act',
 ]);
 
-/** Готовые ответы для каждого валидного лейбла (аналог small-talk). */
-const ENUM_ANSWERS: Record<string, string[]> = {
-  yes: ['Да.', 'Подтверждено.', 'Принято.'],
-  no: ['Нет.', 'Отклонено.'],
-  approve: ['Утверждено.', 'Продолжаем.'],
-  reject: ['Отклонено.', 'Отменено.'],
-  mode_plan: ['Переключаюсь в режим планирования. Исследую и составляю план.'],
-  mode_act: ['Переключаюсь в рабочий режим. Выполняю.'],
+/**
+ * Готовые ответы для каждого валидного лейбла (аналог small-talk).
+ * Канонический текст — из словаря SystemMessages (en); локализация — через i18nKey.
+ */
+const ENUM_ANSWERS: Record<string, { key: SystemMessageKey; variants: string[] }> = {
+  yes: { key: 'micro.enum.yes', variants: [sm('micro.enum.yes'), 'Confirmed.', 'Accepted.'] },
+  no: { key: 'micro.enum.no', variants: [sm('micro.enum.no'), 'Rejected.'] },
+  approve: { key: 'micro.enum.approve', variants: [sm('micro.enum.approve'), 'Proceeding.'] },
+  reject: { key: 'micro.enum.reject', variants: [sm('micro.enum.reject'), 'Cancelled.'] },
+  mode_plan: { key: 'micro.enum.mode_plan', variants: [sm('micro.enum.mode_plan')] },
+  mode_act: { key: 'micro.enum.mode_act', variants: [sm('micro.enum.mode_act')] },
 };
 
 export function handleEnumDecision(modelResult: MicroResult): MicroResult {
@@ -35,12 +39,14 @@ export function handleEnumDecision(modelResult: MicroResult): MicroResult {
   }
 
   // Валидный лейбл — нормализуем, генерируем осмысленный ответ и возвращаем
-  const choices = ENUM_ANSWERS[label] ?? [`${label}`];
+  const entry = ENUM_ANSWERS[label];
+  const choices = entry?.variants ?? [label];
   const answer = choices[Math.floor(Math.random() * choices.length)]!;
 
   return {
     ...modelResult,
     answer,
+    i18nKey: entry?.key,
     signals: [...modelResult.signals, `valid_enum:${label}`],
   };
 }

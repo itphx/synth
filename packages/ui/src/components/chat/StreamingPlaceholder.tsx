@@ -46,6 +46,15 @@ function toSubagentPartData(node: ToolCallNode): SubagentPartData {
     prompt: args?.prompt as string | undefined,
     response: (meta.final_content as string) || (meta.description as string) || '',
     sessionId: meta.child_session_id as string | undefined,
+    callId: node.call.callId,
+    live: true,
+    errorInfo: {
+      isError: node.call.result?.isError === true || meta.error === true,
+      attempts: meta.attempts as number | undefined,
+      maxRetries: meta.max_retries as number | undefined,
+      errorType: meta.error_type as string | undefined,
+      error: meta.error as string | undefined,
+    },
     reasoning_blocks: node.call.subagentReasoningBlocks,
     intermediate_text_blocks: node.call.subagentIntermediateTextBlocks,
     tool_calls: (node.children || []).map((c) => ({

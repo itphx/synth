@@ -227,7 +227,7 @@ describe('taskTool — context modes', () => {
       { ...baseCtx, extra: {} },
     );
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('провайдер');
+    expect(result.content).toContain('provider or agent registry unavailable');
   });
 
   // ─── SessionManager: mode 'inherit' создаёт форк с сообщениями ─────
@@ -493,7 +493,7 @@ describe('taskTool — context modes', () => {
       },
     );
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('не найден');
+    expect(result.content).toContain('not found');
   });
 
   it('возвращает ошибку, если агент не имеет класса subagent', async () => {
@@ -512,7 +512,7 @@ describe('taskTool — context modes', () => {
       },
     );
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('не может использоваться как сабагент');
+    expect(result.content).toContain('cannot be used as a subagent');
   });
 
   // ─── EventBus: session.created публикуется в родительскую сессию ──
@@ -1241,6 +1241,8 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
           sessionId: parent.id,
           agentRegistry: makeMultiStepRegistry(),
           toolRegistry: createToolRegistry(),
+          // Быстрый backoff — дефолтные 5/15/30с сделали бы тест медленным
+          retry: { maxRetries: 3, delaysMs: [10, 10, 10] },
         },
       },
     );
@@ -1249,6 +1251,10 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
     expect(result.content).toContain('provider down');
     expect(result.content).toContain('<status>error</status>');
     expect(result.content).toContain('<child_session_id>');
+    // Retry исчерпан: 3 попытки прежде чем вернуть ошибку
+    expect(provider.chatAsync).toHaveBeenCalledTimes(3);
+    expect(result.metadata!.attempts).toBe(3);
+    expect(result.metadata!.max_retries).toBe(3);
 
     const childSessionId = result.metadata!.child_session_id as string;
     expect(childSessionId).toBeDefined();
@@ -1260,6 +1266,7 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
     const errMsg = child.messages.find((m) => m.metadata?.error === true);
     expect(errMsg).toBeDefined();
     expect(errMsg!.content).toContain('provider down');
+    expect(errMsg!.metadata!.attempts).toBe(3);
   });
 
   it('обычный (не прерванный) результат содержит child_session_id в content внутри <task_result>', async () => {

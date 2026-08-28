@@ -1,5 +1,5 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@itphx/synth-shared';
-import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart, lookupContextWindow } from '@itphx/synth-shared';
+import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
@@ -33,11 +33,14 @@ import type { RoutingDecision } from './router/router.js';
 import { PermissionEvaluator, isPlanRestricted, isPlanBlockedTool, getMcpToolAvailability, extractPaths } from './permission/evaluator.js';
 import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
+import { classifyLlmError, isLlmErrorRecoverable } from './llm-error.js';
+import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
 import type { ProtectedPathsPolicy } from './security/protected-paths.js';
 import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, PLACEHOLDER_PATTERN, type SecretPatternStore } from './gateway/index.js';
+import { t as sm, i18n as i18nMeta } from './system-messages.js';
 
 const MAX_DOOM_LOOP_COUNT = 3;
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
@@ -701,6 +704,9 @@ export class ChatOrchestrator {
         // Сохраняем сообщение ассистента
         const microMetadata: Record<string, unknown> = {
           stream_id: streamId,
+          ...(microResult.microResult.i18nKey
+            ? { i18n: i18nMeta(microResult.microResult.i18nKey) }
+            : {}),
           micro_first: {
             label: microResult.microResult.label,
             confidence: microResult.microResult.confidence,
@@ -738,7 +744,7 @@ export class ChatOrchestrator {
         // Авто-тайтл если это первое сообщение
         if (session.messages.filter((m) => m.role === MessageRole.USER).length <= 1) {
           try {
-            session.title = `Диалог — ${session.id.slice(0, 8)}`;
+            session.title = sm('session.dialog_title', { id: session.id.slice(0, 8) });
             await this._sessionManager.saveSession(session);
           } catch {
             // ok
@@ -765,7 +771,7 @@ export class ChatOrchestrator {
       if (!routeResult) {
         const providerName = (message.provider as string) || session.settings.provider || '';
         return {
-          error: `Провайдер ${providerName || 'не указан'} не найден или не настроен`,
+          error: sm('router.provider_not_found', { provider: providerName || sm('router.provider_unspecified') }),
           errorType: 'provider_not_found',
           canRetry: false,
         };
@@ -914,6 +920,8 @@ export class ChatOrchestrator {
       const allRawToolCalls: Array<{ iteration: number; calls: Record<string, unknown>[] }> = [];
       let stopAfterDeny = false;
       let denyStopReason: string | undefined;
+      /** metadata.i18n подставленного финального фоллбека (лимит итераций / deny / пустой ответ). */
+      let fallbackI18n: ReturnType<typeof i18nMeta> | undefined;
       /** Были ли deny-отказы за цикл (для осмысленного fallback пустого ответа). */
       let hadDeny = false;
       /** Отмена пришла во время исполнения тула — завершать обработку как отмену. */
@@ -1111,7 +1119,7 @@ export class ChatOrchestrator {
               currentMessages.push({
                 id: '',
                 role: 'tool',
-                content: `Ошибка: инструмент "${toolName}" вызван ${doomCount} раз(а) с одинаковыми аргументами. Цикл прерван.`,
+                content: sm('tool.doom_loop', { tool: toolName, count: String(doomCount) }),
                 usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
                 disabled: false,
                 pinned: false,
@@ -1138,7 +1146,7 @@ export class ChatOrchestrator {
           let userDenied = false;
 
           if (permissionDecision.action === 'deny') {
-            deniedReason = this._securityMessage(permissionDecision, session.settings.language || 'ru')
+            deniedReason = this._securityMessage(permissionDecision, 'en')
               ?? `Permission denied: ${permissionDecision.reason}`;
           } else if (permissionDecision.action === 'ask') {
             const approval = await this._approvalManager.waitForDecision(
@@ -1148,7 +1156,7 @@ export class ChatOrchestrator {
                 callId: tcId,
                 toolName,
                 arguments: toolArgs,
-                reason: this._securityMessage(permissionDecision, session.settings.language || 'ru')
+                reason: this._securityMessage(permissionDecision, 'en')
                   ?? permissionDecision.reason,
               },
               effectivePermissionConfig.askTimeoutMs,
@@ -1163,11 +1171,11 @@ export class ChatOrchestrator {
               }
             } else {
               const why = approval.timeout
-                ? 'истекло время ожидания подтверждения'
+                ? sm('permission.ask_timeout')
                 : approval.noSubscribers
-                  ? 'нет подключённого пользователя для подтверждения'
-                  : 'отклонено пользователем';
-              const baseDeny = this._securityMessage(permissionDecision, session.settings.language || 'ru')
+                  ? sm('permission.ask_no_subscribers')
+                  : sm('permission.ask_denied');
+              const baseDeny = this._securityMessage(permissionDecision, 'en')
                 ?? `Permission denied: ${permissionDecision.reason}`;
               deniedReason = `${baseDeny} (${why})`;
               userDenied = !approval.timeout && !approval.noSubscribers;
@@ -1184,9 +1192,12 @@ export class ChatOrchestrator {
               matched_rule: permissionDecision.matchedRule,
             });
             toolResult = {
-              content: deniedReason ?? 'Доступ запрещён политикой безопасности',
+              content: deniedReason ?? sm('tool.permission_denied_default'),
               isError: true,
               metadata: {
+                ...(permissionDecision.messageId
+                  ? { i18n: i18nMeta(`security.${permissionDecision.messageId.replaceAll('-', '_')}`, permissionDecision.params as Record<string, string> | undefined) }
+                  : { i18n: i18nMeta('tool.permission_denied_default') }),
                 permission: {
                   action: 'deny',
                   reason: deniedReason ?? '',
@@ -1196,12 +1207,13 @@ export class ChatOrchestrator {
             };
             hadDeny = true;
           } else {
-            if (toolDef) {
+              if (toolDef) {
               const parsed = toolDef.parameters.safeParse(toolArgs);
               if (!parsed.success) {
                 toolResult = {
-                  content: `Ошибка аргументов инструмента "${toolName}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`,
+                  content: sm('tool.args_error', { tool: toolName, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }),
                   isError: true,
+                  metadata: { i18n: i18nMeta('tool.args_error', { tool: toolName }) },
                 };
               } else {
                 try {
@@ -1250,15 +1262,17 @@ export class ChatOrchestrator {
                   });
                 } catch (execError) {
                   toolResult = {
-                    content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
+                    content: sm('tool.exec_error', { tool: toolName, error: String(execError) }),
                     isError: true,
+                    metadata: { i18n: i18nMeta('tool.exec_error', { tool: toolName }) },
                   };
                 }
               }
             } else {
               toolResult = {
-                content: `Инструмент "${toolName}" не найден`,
+                content: sm('tool.not_found', { tool: toolName }),
                 isError: true,
+                metadata: { i18n: i18nMeta('tool.not_found', { tool: toolName }) },
               };
             }
           }
@@ -1316,10 +1330,11 @@ export class ChatOrchestrator {
 
               if (applied.blocked) {
                 toolResult = {
-                  content: `[BLOCKED] Результат инструмента "${toolName}" заблокирован: обнаружены признаки prompt injection (${detection.matches.slice(0, 5).join(', ')})`,
+                  content: sm('security.injection_blocked', { tool: toolName, matches: detection.matches.slice(0, 5).join(', ') }),
                   isError: true,
                   metadata: {
                     ...toolResult.metadata,
+                    i18n: i18nMeta('security.injection_blocked', { tool: toolName }),
                     injection_suspicious: true,
                     injection_matches: detection.matches,
                   },
@@ -1476,13 +1491,16 @@ export class ChatOrchestrator {
 
       // 7. Handle max iterations exceeded
       if (toolIteration >= maxIterations && !finalContent) {
-        finalContent = '(достигнут лимит итераций инструментов)';
+        finalContent = sm('session.max_iterations');
+        fallbackI18n = i18nMeta('session.max_iterations');
       }
 
       // AD-029: пользователь отклонил ask — обработка завершена. Фиксируем
       // причину в финальном сообщении (история tool_result уже собрана).
       if (stopAfterDeny && !finalContent) {
-        finalContent = `Обработка остановлена: ${denyStopReason ?? 'пользователь отклонил запрос'}`;
+        const reason = denyStopReason ?? sm('session.stopped_reason_denied');
+        finalContent = sm('session.stopped', { reason });
+        fallbackI18n = i18nMeta('session.stopped', { reason });
       }
 
       // Защита от пустого финального ответа: если цикл завершился (в т.ч.
@@ -1491,8 +1509,9 @@ export class ChatOrchestrator {
       // в истории не оставалось пустого assistant-сообщения.
       if (!finalContent) {
         finalContent = hadDeny
-          ? 'Не удалось выполнить: действие заблокировано политикой безопасности'
-          : 'Не удалось выполнить запрос: ответ модели пуст';
+          ? sm('session.denied_blocked')
+          : sm('session.empty_response');
+        fallbackI18n = i18nMeta(hadDeny ? 'session.denied_blocked' : 'session.empty_response');
       }
 
       // 7.5. Quality check + escalation (AD-034)
@@ -1529,7 +1548,7 @@ export class ChatOrchestrator {
                 if (fbResponse.content) {
                   finalContent = fbResponse.content;
                   qaPass = true;
-                  qaReason = `Эскалация на ${fallbackProvider}/${fallbackModel}: ${qaResult.reason}`;
+                  qaReason = sm('router.escalation', { provider: fallbackProvider, model: fallbackModel, reason: qaResult.reason });
                   if (fbResponse.usage) finalUsage = fbResponse.usage;
                   if (fbResponse.model) finalModel = fbResponse.model;
                 }
@@ -1575,7 +1594,7 @@ export class ChatOrchestrator {
         session.id, finalContent, streamId, effectiveAgentRole,
         finalUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
         MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
-        qaPass, qaReason,
+        qaPass, qaReason, fallbackI18n ? { i18n: fallbackI18n } : undefined,
       );
 
       // Получаем актуальную сессию после сохранения
@@ -1719,6 +1738,126 @@ export class ChatOrchestrator {
     if (token) token.cancel();
   }
 
+  /**
+   * Регистрация внешнего cancel-токена (resume саб-агента): позволяет отменить
+   * фоновый прогон обычным путём — orchestrator.cancel(streamId) из
+   * POST /sessions/:id/abort (токен ищется в общей карте по streamId).
+   */
+  registerCancelToken(streamId: string, token: CancellationToken): void {
+    this._cancellationTokens.set(streamId, token);
+  }
+
+  unregisterCancelToken(streamId: string): void {
+    this._cancellationTokens.delete(streamId);
+  }
+
+  /**
+   * B2: возобновление прерванной/ошибочной дочерней сессии саб-агента.
+   * Валидация и захват блокировки — синхронно (ошибки маппятся route-ом в
+   * 400/404/409), выполнение — фоновое (mimo очереди: у дочерней сессии нет
+   * своего QueueProcessor). Защита от двойного resume — acquireLock +
+   * currentStream (последний также делает сессию abort-совместимой).
+   */
+  async startSubagentResume(childSessionId: string): Promise<{
+    status: 'started';
+    child_session_id: string;
+    parent_session_id: string;
+    stream_id: string;
+  }> {
+    const deps = this._subagentResumeDeps();
+    const { child, parent } = await validateSubagentResume(deps, childSessionId);
+
+    const streamId = generateStreamId();
+    const processId = `resume:${streamId}`;
+
+    // Атомарный захват — защита от гонки параллельных resume-запросов
+    const acquired = await this._sessionManager.acquireLock(childSessionId, processId);
+    if (!acquired) {
+      throw new SubagentResumeError('LOCKED', sm('task.resume_locked', { id: childSessionId }));
+    }
+
+    // currentStream — маркер активности для UI и abort-механики
+    await this._sessionManager.withLock(childSessionId, async (s) => {
+      s.currentStream = {
+        streamId,
+        message: sm('task.resume_marker'),
+        agentRole: s.settings.agentRole,
+        startedAt: nowISO(),
+        cancelled: false,
+      };
+      await this._sessionManager.saveSession(s);
+    });
+
+    // Отмена: orchestrator.cancel(streamId) → resumeAbort.abort() →
+    // runSubagent видит отмену (стрим + backoff-пауза) → finishAborted.
+    const resumeAbort = new AbortController();
+    const cancelToken: CancellationToken = {
+      cancelled: false,
+      cancel: () => {
+        cancelToken.cancelled = true;
+        resumeAbort.abort();
+      },
+    };
+    this.registerCancelToken(streamId, cancelToken);
+
+    const freshChild = (await this._sessionManager.getSession(childSessionId)) ?? child;
+
+    void runSubagentResume(deps, {
+      child: freshChild,
+      parent,
+      streamId,
+      abortSignal: resumeAbort.signal,
+    })
+      .catch((err) => {
+        warning('ORCHESTRATOR', `subagent resume failed: ${err instanceof Error ? err.message : String(err)}`);
+        this._eventBus.publish(childSessionId, 'stream.error', {
+          stream_id: streamId,
+          error: String(err),
+          error_type: 'resume_failed',
+          can_retry: false,
+        });
+      })
+      .finally(async () => {
+        this.unregisterCancelToken(streamId);
+        try {
+          await this._sessionManager.withLock(childSessionId, async (s) => {
+            s.currentStream = undefined;
+            await this._sessionManager.saveSession(s);
+          });
+        } catch { /* сессия могла быть удалена */ }
+        try {
+          await this._sessionManager.releaseLock(childSessionId, processId);
+        } catch { /* ignore */ }
+      });
+
+    return {
+      status: 'started',
+      child_session_id: childSessionId,
+      parent_session_id: parent.id,
+      stream_id: streamId,
+    };
+  }
+
+  /** Зависимости resume из приватных резолверов оркестратора. */
+  private _subagentResumeDeps(): SubagentResumeDeps {
+    return {
+      sessionManager: this._sessionManager,
+      eventBus: this._eventBus,
+      agentRegistry: this._agentRegistry ?? ({ get: () => undefined } as unknown as AgentRegistry),
+      toolRegistry: this._toolRegistry ?? undefined,
+      contextConfig: this._contextConfig ?? undefined,
+      contextOptimizer: this._optimizer ?? undefined,
+      routerConfig: this._routerConfig ?? undefined,
+      securityConfig: this._securityConfig,
+      permissionConfig: this._permissionConfig,
+      shellPolicy: this._getProtectedPaths() ?? undefined,
+      protectedPaths: this._getProtectedPaths() ?? undefined,
+      protectedPathsEnabled: this._getProtectedPathsEnabled(),
+      getProvider: (child) => this._getProvider(child.settings.provider || '', child, child.settings.reasoningLevel),
+      getWorkingDir: (child) => this._resolveWorkingDir(child),
+    };
+  }
+
   private async _handleDebugSystemMessage(
     session: Session,
     message: Message,
@@ -1732,7 +1871,7 @@ export class ChatOrchestrator {
     const provider = this._getProvider(providerName, session, reasoningLevel);
     if (!provider) {
       return {
-        error: `Провайдер ${providerName || 'не указан'} не найден или не настроен`,
+        error: sm('router.provider_not_found', { provider: providerName || sm('router.provider_unspecified') }),
         errorType: 'provider_not_found',
         canRetry: false,
       };
@@ -2240,6 +2379,9 @@ export class ChatOrchestrator {
 
       for (const tc of allToolCalls.filter((t) => t.iteration === iteration)) {
         const toolContent = String((tc.result as { content?: string } | undefined)?.content ?? '');
+        // metadata ToolResult (в т.ч. i18n) пробрасывается в metadata сообщения —
+        // иначе локализационные ключи не доходят до истории и UI.
+        const toolResultMeta = (tc.result as { metadata?: Record<string, unknown> } | undefined)?.metadata;
         const toolMsg: Message = {
           id: generateId(),
           role: MessageRole.TOOL,
@@ -2257,6 +2399,7 @@ export class ChatOrchestrator {
           usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
           agentRole,
           metadata: {
+            ...(toolResultMeta ?? {}),
             stream_id: streamId,
             tool_chain: true,
             tool_name: tc.name,
@@ -2301,6 +2444,8 @@ export class ChatOrchestrator {
     intermediateTextBlocks?: Array<{ text: string; iteration: number }>,
     qaPass?: boolean,
     qaReason?: string,
+    /** Дополнительные поля metadata (например metadata.i18n фоллбек-статусов). */
+    metadataExtra?: Record<string, unknown>,
   ): Promise<string> {
     const finalContent = content;
 
@@ -2314,7 +2459,7 @@ export class ChatOrchestrator {
 
     const debugInfo = debugCollector.getDebugInfo();
 
-    const metadata: Record<string, unknown> = { stream_id: streamId };
+    const metadata: Record<string, unknown> = { stream_id: streamId, ...metadataExtra };
     if (toolResults && toolResults.length > 0) {
       metadata.tool_results = toolResults;
     }
@@ -2410,16 +2555,8 @@ export class ChatOrchestrator {
   }
 
   private _classifyError(errMsg: string): string {
-    const lower = errMsg.toLowerCase();
-    if (lower.includes('rate') || lower.includes('limit') || lower.includes('429')) return 'rate_limit';
-    if (lower.includes('abort') || lower.includes('operation was aborted')) return 'timeout';
-    if (lower.includes('timeout') || lower.includes('timed out')) return 'timeout';
-    if (lower.includes('fetch failed') || lower.includes('network') || lower.includes('econnrefused') || lower.includes('enotfound') || lower.includes('eai_again')) return 'network_error';
-    if (lower.includes('502') || lower.includes('503') || lower.includes('bad gateway')) return 'server_error';
-    if (lower.includes('context length') || lower.includes('too long')) return 'context_length';
-    if (lower.includes('401') || lower.includes('403') || lower.includes('auth')) return 'auth_error';
-    if (lower.includes('model') && (lower.includes('not found') || lower.includes('invalid'))) return 'model_not_found';
-    return 'unknown';
+    // Общий хелпер (используется также retry-циклом саб-агента) — таксономия единая
+    return classifyLlmError(errMsg);
   }
 
   /**
@@ -2430,10 +2567,10 @@ export class ChatOrchestrator {
     const raw = error instanceof Error ? error.message : String(error);
     const lower = raw.toLowerCase();
     if (lower.includes('abort') || lower.includes('operation was aborted') || lower.includes('timed out') || lower.includes('timeout')) {
-      return 'Таймаут или обрыв соединения с LLM-провайдером';
+      return sm('router.timeout');
     }
     if (lower.includes('fetch failed') || lower.includes('network') || lower.includes('econnrefused') || lower.includes('enotfound') || lower.includes('eai_again')) {
-      return 'Не удалось подключиться к LLM-провайдеру (сетевая ошибка)';
+      return sm('router.network_error');
     }
     return raw;
   }
@@ -2461,7 +2598,7 @@ export class ChatOrchestrator {
     const errorType = error instanceof ContextLengthExceededError
       ? 'context_length'
       : this._classifyError(rawError);
-    const canRetry = this._isRecoverable(rawError);
+    const canRetry = isLlmErrorRecoverable(error, rawError, errorType);
 
     try {
       await this._sessionManager.withLock(sessionId, async (s) => {
@@ -2478,16 +2615,6 @@ export class ChatOrchestrator {
     }
 
     return { error: humanError, errorType, canRetry };
-  }
-
-  private _isRecoverable(errMsg: string): boolean {
-    const lower = errMsg.toLowerCase();
-    const unrecoverable = [
-      'model not found', 'model_not_found', 'does not exist',
-      'invalid model', 'unknown model', 'invalid api key',
-      'incorrect api key', '401', 'authentication', 'unauthorized',
-    ];
-    return !unrecoverable.some((p) => lower.includes(p));
   }
 
   /** Строит permission-конфиг с добавленным грантом для заданной базы правил. */

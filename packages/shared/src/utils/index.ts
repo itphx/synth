@@ -82,12 +82,18 @@ export function pickLocalized<V>(record: Record<string, V>, lang: string, fallba
 
 // --- Session title helpers ---
 
-const DEFAULT_TITLE = 'Новая сессия';
-const CHILD_TITLE_PREFIX = 'Дочерняя сессия';
+/** Дефольный заголовок новой сессии (en — системные сообщения ядра на en). */
+const DEFAULT_TITLE = 'New session';
+/** Легаси-варианты дефолтного заголовка (старые сессии в хранилище). */
+const LEGACY_DEFAULT_TITLES = ['Новая сессия'];
+/** Префиксы служебных дочерних сессий (текущий + легаси). */
+const CHILD_TITLE_PREFIXES = ['Child session', 'Дочерняя сессия'];
 
 export function isDefaultTitle(title?: string): boolean {
   if (!title) return true;
-  return title === DEFAULT_TITLE || title.startsWith(CHILD_TITLE_PREFIX);
+  return title === DEFAULT_TITLE
+    || LEGACY_DEFAULT_TITLES.includes(title)
+    || CHILD_TITLE_PREFIXES.some((p) => title.startsWith(p));
 }
 
 export function getForkedTitle(title?: string, existingTitles?: string[]): string {

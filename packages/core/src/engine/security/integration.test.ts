@@ -183,10 +183,10 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
 
     const tool = toolMessages()[0];
     expect(tool).toContain('[CONTENT | SOURCE: web | URL: https://evil.example | trust: untrusted]');
-    expect(tool).toContain('[WARN: обнаружены признаки prompt injection');
+    expect(tool).toContain('[WARN: prompt injection signs detected');
     expect(tool).toContain('[CONTENT END]');
     // [WARN] идёт ПЕРЕД блоком [CONTENT | ...]
-    const warnIdx = tool!.indexOf('[WARN: обнаружены признаки prompt injection');
+    const warnIdx = tool!.indexOf('[WARN: prompt injection signs detected');
     const contentIdx = tool!.indexOf('[CONTENT | SOURCE: web');
     expect(warnIdx).toBeGreaterThanOrEqual(0);
     expect(contentIdx).toBeGreaterThan(warnIdx);
@@ -317,7 +317,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
 
     const tool = toolMessages()[0];
     expect(tool).not.toContain('[CONTENT |');
-    expect(tool).toContain('[WARN: обнаружены признаки prompt injection');
+    expect(tool).toContain('[WARN: prompt injection signs detected');
     expect(MockIPIProvider.capturedSystemPrompt ?? '').not.toContain('[RULES]');
   });
 });

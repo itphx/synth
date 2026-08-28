@@ -1,6 +1,7 @@
 // @itphx/synth-shared — общие типы, интерфейсы, схемы, протоколы, конфигурация
 
 export * from './types/index.js';
+export * from './i18n/index.js';
 export {
   type ToolDefinition,
   type ToolForLLM,

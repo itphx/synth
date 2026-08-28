@@ -5,6 +5,7 @@ import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
 import { resolvePath, validateInputPath } from './path-utils.js';
 import { isAborted, abortedResult } from './abort.js';
+import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 export const readFileTool: ToolDefinition = {
   name: 'read_file',
@@ -21,7 +22,7 @@ export const readFileTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
     }
     const params = parsed.data as { file_path?: string; offset?: number; limit?: number };
     if (params.file_path !== undefined) validateInputPath(params.file_path, 'file_path');
@@ -63,7 +64,7 @@ export const listDirectoryTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
     }
     const params = parsed.data as { path?: string };
     if (params.path !== undefined) validateInputPath(params.path, 'path');
@@ -88,7 +89,7 @@ export const listDirectoryTool: ToolDefinition = {
     }
 
     return {
-      content: lines.join('\n') || '(пустая директория)',
+      content: lines.join('\n') || sm('fsread.empty_directory'),
       metadata: { path: resolvedPath, count: entries.length },
     };
   },
@@ -108,7 +109,7 @@ export const globTool: ToolDefinition = {
     if (isAborted(ctx)) return abortedResult(this.name);
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
     }
     const params = parsed.data as { pattern: string; path?: string };
     if (params.path !== undefined) validateInputPath(params.path, 'path');
@@ -126,12 +127,12 @@ export const globTool: ToolDefinition = {
       }
 
       return {
-        content: files.length > 0 ? files.join('\n') : '(файлы не найдены)',
+        content: files.length > 0 ? files.join('\n') : sm('fsread.no_files'),
         metadata: { pattern: params.pattern, count: files.length },
       };
     } catch {
       return {
-        content: '(ошибка поиска файлов)',
+        content: sm('fsread.glob_error'),
         isError: true,
         metadata: { pattern: params.pattern },
       };

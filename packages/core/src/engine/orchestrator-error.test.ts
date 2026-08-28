@@ -155,7 +155,7 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
   it('возвращает человекочитаемую ошибку вместо сырого AbortError', async () => {
     const { result } = await run();
     expect(result.error).toBeDefined();
-    expect(result.error).toContain('LLM-провайдер');
+    expect(result.error).toContain('LLM provider');
     expect(result.error).not.toContain('aborted');
     expect(result.errorType).toBe('timeout');
   });
@@ -171,7 +171,7 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
     const session = await sessionManager.getSession(sessionId);
     const userMsg = session!.messages.find((m) => m.role === MessageRole.USER);
     expect(userMsg).toBeDefined();
-    expect(userMsg!.metadata?.last_error).toContain('LLM-провайдер');
+    expect(userMsg!.metadata?.last_error).toContain('LLM provider');
   });
 
   it('при ошибке стрима с частичным контентом НЕ создаёт assistant-сообщение', async () => {
@@ -181,6 +181,6 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
     expect(assistants).toHaveLength(0);
     const userMsg = session!.messages.find((m) => m.role === MessageRole.USER);
     expect(userMsg).toBeDefined();
-    expect(userMsg!.metadata?.last_error).toContain('LLM-провайдер');
+    expect(userMsg!.metadata?.last_error).toContain('LLM provider');
   });
 });

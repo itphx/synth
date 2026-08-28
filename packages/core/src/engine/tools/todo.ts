@@ -5,6 +5,7 @@ import type { ToolDefinition, TodoItem, TodoStatus, TodoPriority } from '@itphx/
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import { isAborted, abortedResult } from './abort.js';
+import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 export interface TodoToolExtra {
   sessionManager?: SessionManager;
@@ -16,16 +17,16 @@ const TODO_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'] as co
 const TODO_PRIORITIES = ['high', 'medium', 'low'] as const;
 
 const STATUS_LABELS: Record<TodoStatus, string> = {
-  pending: 'ожидает',
-  in_progress: 'в работе',
-  completed: 'выполнено',
-  cancelled: 'отменено',
+  pending: sm('todo.status_pending'),
+  in_progress: sm('todo.status_in_progress'),
+  completed: sm('todo.status_completed'),
+  cancelled: sm('todo.status_cancelled'),
 };
 
 const PRIORITY_LABELS: Record<TodoPriority, string> = {
-  high: 'высокий',
-  medium: 'средний',
-  low: 'низкий',
+  high: sm('todo.priority_high'),
+  medium: sm('todo.priority_medium'),
+  low: sm('todo.priority_low'),
 };
 
 /**
@@ -75,17 +76,17 @@ function normalizeTodos(todos: TodoItem[] | undefined): TodoItem[] {
 }
 
 function argError(toolName: string, issues: z.ZodIssue[]): string {
-  return `Ошибка аргументов инструмента "${toolName}": ${issues
+  return sm('tool.args_error', { tool: toolName, issues: issues
     .map((i) => `${i.path.join('.') || 'root'}: ${i.message}`)
-    .join('; ')}`;
+    .join('; ') });
 }
 
 function requireSessionManager(
   extra: TodoToolExtra | undefined,
   toolName: string,
-): { content: string; isError: true } | null {
+): { content: string; isError: true; metadata?: Record<string, unknown> } | null {
   if (!extra?.sessionManager || !extra.sessionId) {
-    return { content: `Ошибка: менеджер сессий недоступен для ${toolName}`, isError: true };
+    return { content: sm('plan.session_manager_unavailable', { tool: toolName }), isError: true, metadata: { i18n: i18nMeta('plan.session_manager_unavailable', { tool: toolName }) } };
   }
   return null;
 }
@@ -140,7 +141,7 @@ export const todoWriteTool: ToolDefinition = {
       });
     } catch (err) {
       return {
-        content: `Ошибка сохранения todo-списка: ${err instanceof Error ? err.message : String(err)}`,
+        content: sm('todo.save_error', { error: err instanceof Error ? err.message : String(err) }),
         isError: true,
       };
     }
@@ -184,20 +185,20 @@ export const todoListTool: ToolDefinition = {
       todos = normalizeTodos(session?.todos);
     } catch (err) {
       return {
-        content: `Ошибка чтения todo-списка: ${err instanceof Error ? err.message : String(err)}`,
+        content: sm('todo.read_error', { error: err instanceof Error ? err.message : String(err) }),
         isError: true,
       };
     }
 
     if (todos.length === 0) {
-      return { content: 'Todo-список пуст', metadata: { todos } };
+      return { content: sm('todo.list_empty'), metadata: { todos, i18n: i18nMeta('todo.list_empty') } };
     }
 
     const lines = todos.map(
       (t) => `- ${t.content} [${STATUS_LABELS[t.status]}, ${PRIORITY_LABELS[t.priority]}]`,
     );
     return {
-      content: `Todo-список (${todos.length}):\n${lines.join('\n')}`,
+      content: sm('todo.list', { count: String(todos.length), items: lines.join('\n') }),
       metadata: { todos },
     };
   },
@@ -246,7 +247,7 @@ export const todoAddTool: ToolDefinition = {
       });
     } catch (err) {
       return {
-        content: `Ошибка сохранения todo-списка: ${err instanceof Error ? err.message : String(err)}`,
+        content: sm('todo.save_error', { error: err instanceof Error ? err.message : String(err) }),
         isError: true,
       };
     }
@@ -324,14 +325,14 @@ export const todoUpdateTool: ToolDefinition = {
       });
     } catch (err) {
       return {
-        content: `Ошибка сохранения todo-списка: ${err instanceof Error ? err.message : String(err)}`,
+        content: sm('todo.save_error', { error: err instanceof Error ? err.message : String(err) }),
         isError: true,
       };
     }
 
     if (!found) {
       return {
-        content: `Ошибка: пункт todo с id "${params.id}" не найден`,
+        content: sm('todo.item_not_found', { id: params.id }),
         isError: true,
       };
     }
@@ -394,14 +395,14 @@ export const todoDeleteTool: ToolDefinition = {
       });
     } catch (err) {
       return {
-        content: `Ошибка сохранения todo-списка: ${err instanceof Error ? err.message : String(err)}`,
+        content: sm('todo.save_error', { error: err instanceof Error ? err.message : String(err) }),
         isError: true,
       };
     }
 
     if (removed === 0) {
       return {
-        content: `Ошибка: пункты todo с id "${ids.join('", "')}" не найдены`,
+        content: sm('todo.items_not_found', { ids: ids.join('", "') }),
         isError: true,
       };
     }

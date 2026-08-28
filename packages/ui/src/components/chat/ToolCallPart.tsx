@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Icon } from '../icon/Icon'
 import { getToolIcon, getToolDisplayName } from '@/lib/toolIcons'
-import { useI18n } from '@/lib/i18n'
+import { useI18n, useResolveI18n } from '@/lib/i18n'
 import { splitBySecretPlaceholders, SecretPlaceholder } from './SecretPlaceholder'
 
 interface ToolCallData {
@@ -178,6 +178,8 @@ function SubagentResult({ result, toolCall: _toolCall }: { result: ToolCallData[
 
 export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }: ToolCallPartProps) {
   const { t } = useI18n()
+  // i18n ядра: metadata.i18n у tool_result → перевод по ключу (fallback — content).
+  const resolveI18nText = useResolveI18n()
   const [expanded, setExpanded] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
   const [viewMode, setViewMode] = useState<'args' | 'result'>('args')
@@ -195,6 +197,9 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
 
   const argsStr = JSON.stringify(toolCall.args, null, 2)
   const resultStr = toolCall.result?.content || ''
+  const localizedResult = toolCall.result
+    ? resolveI18nText(toolCall.result.metadata?.i18n, resultStr)
+    : ''
 
   const toolIcon = isSubagent ? 'robot-2' : getToolIcon(toolCall.name)
   const toolDisplayName = getToolDisplayName(toolCall.name)
@@ -319,7 +324,7 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
                 <div className="space-y-3">
                   <SubagentResult result={toolCall.result} toolCall={toolCall} />
                   <div className="text-xs text-muted-foreground whitespace-pre-wrap">
-                    {truncate(resultStr, 4000)}
+                    {truncate(localizedResult, 4000)}
                   </div>
                 </div>
               )}
@@ -335,7 +340,7 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
                 <pre className={`text-xs whitespace-pre-wrap overflow-x-auto font-mono ${
                   isError ? 'text-red-400' : 'text-muted-foreground'
                 }`}>
-                  {truncate(resultStr, 4000)}
+                  {truncate(localizedResult, 4000)}
                 </pre>
               )}
               {!hasResult && viewMode === 'result' && (

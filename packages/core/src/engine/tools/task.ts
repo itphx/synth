@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
-import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, ToolForLLM } from '@itphx/synth-shared';
+import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, ToolForLLM, ToolContext } from '@itphx/synth-shared';
 import type { AgentRegistry } from '../agents/registry.js';
 import { normalizeAgentModes } from '../agents/normalize.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
@@ -10,12 +10,16 @@ import { EventBus } from '../../events/bus.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import type { ContextConfig } from '../context/config.js';
 import type { ModelRouter } from '../router/router.js';
+import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from '../llm-error.js';
 import { deriveSubagentPermission } from '../permission/derive.js';
 import { PermissionEvaluator, isPlanRestricted, isPlanBlockedTool, getMcpToolAvailability } from '../permission/evaluator.js';
 import { PermissionApprovalManager } from '../permission/approval.js';
 import { serializeSession, serializeMessage } from '../../server/serialize.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
 import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 export interface TaskExtra {
   provider: BaseProvider;
@@ -50,6 +54,8 @@ export interface TaskExtra {
   protectedPaths?: ProtectedPathsPolicy;
   /** Тумблер полного отключения защищённых путей (default true). */
   protectedPathsEnabled?: boolean;
+  /** Override retry-параметров саб-агента (по умолчанию 3 попытки, backoff 5/15/30с). */
+  retry?: SubagentRetryConfig;
 }
 
 type ContextMode = 'none' | 'inherit' | 'summary' | 'last_n';
@@ -57,7 +63,45 @@ type ContextMode = 'none' | 'inherit' | 'summary' | 'last_n';
 const DEFAULT_SUBAGENT_MAX_STEPS = 15;
 const DEFAULT_LAST_N = 4;
 
-function messageToLLMMessage(msg: Message): LLMMessage {
+/** Retry саб-агента: максимум попыток LLM-вызова (единая политика — LLM_MAX_ATTEMPTS). */
+export const SUBAGENT_MAX_ATTEMPTS = LLM_MAX_ATTEMPTS;
+/** Backoff между попытками (единая политика — LLM_RETRY_DELAYS_MS). */
+export const SUBAGENT_RETRY_DELAYS_MS = LLM_RETRY_DELAYS_MS;
+
+/** Параметры retry-цикла LLM-вызова саб-агента. */
+export interface SubagentRetryConfig {
+  /** Максимум попыток (включая первую). */
+  maxRetries: number;
+  /** Задержки между попытками, мс (index = попытка - 1). */
+  delaysMs: number[];
+}
+
+/**
+ * Промпт саб-агента по языку сессии: prompts/subagents/{type}.{lang}.md →
+ * {type}.md → agentDef.subagentPrompt (definitions JSON, легаси).
+ * Каталог промптов — systemPromptsDir из ContextConfig (резолв prompts/ или dist/prompts).
+ */
+export function resolveSubagentPrompt(
+  agentDef: { subagentPrompt?: string },
+  subagentType: string,
+  language: string | undefined,
+  systemPromptsDir: string | undefined,
+): string {
+  if (systemPromptsDir) {
+    const lang = language === 'en' ? 'en' : 'ru';
+    const localizedPath = join(systemPromptsDir, 'subagents', `${subagentType}.${lang}.md`);
+    if (existsSync(localizedPath)) {
+      try { return readFileSync(localizedPath, 'utf-8'); } catch { /* fallback ниже */ }
+    }
+    const basePath = join(systemPromptsDir, 'subagents', `${subagentType}.md`);
+    if (existsSync(basePath)) {
+      try { return readFileSync(basePath, 'utf-8'); } catch { /* fallback ниже */ }
+    }
+  }
+  return agentDef.subagentPrompt || '';
+}
+
+export function messageToLLMMessage(msg: Message): LLMMessage {
   const roleMap: Record<string, LLMMessage['role']> = {
     [MessageRole.USER]: 'user',
     [MessageRole.ASSISTANT]: 'assistant',
@@ -78,10 +122,11 @@ function messageToLLMMessage(msg: Message): LLMMessage {
     pinned: false,
     branchId: '',
     toolCallId: msg.toolCallId,
+    toolUse: msg.toolCalls,
   };
 }
 
-async function publishMessageAdded(
+export async function publishMessageAdded(
   eventBus: EventBus,
   parentSessionId: string,
   childSessionId: string,
@@ -134,7 +179,7 @@ export const taskTool: ToolDefinition = {
   async execute(args, ctx) {
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
-      return { content: `Ошибка аргументов инструмента "${this.name}": ${parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`, isError: true };
+      return { content: sm('tool.args_error', { tool: this.name, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }), isError: true, metadata: { i18n: i18nMeta('tool.args_error', { tool: this.name }) } };
     }
     const params = parsed.data as {
       description: string;
@@ -151,7 +196,7 @@ export const taskTool: ToolDefinition = {
 
     if (!extra?.provider || !extra?.agentRegistry) {
       return {
-        content: 'Ошибка: провайдер или реестр агентов недоступны для запуска сабагента',
+        content: sm('task.deps_unavailable'),
         isError: true,
       };
     }
@@ -159,27 +204,28 @@ export const taskTool: ToolDefinition = {
     const agentDef = extra.agentRegistry.get(params.subagent_type);
     if (!agentDef) {
       return {
-        content: `Сабагент "${params.subagent_type}" не найден. Доступные типы: ${extra.agentRegistry.getSubagents().map((a) => a.id).join(', ')}`,
+        content: sm('task.subagent_not_found', { type: params.subagent_type, types: extra.agentRegistry.getSubagents().map((a) => a.id).join(', ') }),
         isError: true,
       };
     }
 
     if (!normalizeAgentModes(agentDef.agentMode).includes('subagent')) {
       return {
-        content: `Агент "${params.subagent_type}" не может использоваться как сабагент (классы: ${agentDef.agentMode})`,
+        content: sm('task.subagent_not_allowed', { type: params.subagent_type, modes: String(agentDef.agentMode) }),
         isError: true,
       };
     }
 
     const contextMode: ContextMode = params.context_mode || 'none';
     const contextCount = params.context_count || DEFAULT_LAST_N;
-    const systemPrompt = agentDef.subagentPrompt || '';
-    let tools: ToolForLLM[] | undefined = extra.agentRegistry.getToolsForAgent(agentDef.id);
+    const systemPrompt = resolveSubagentPrompt(
+      agentDef,
+      params.subagent_type,
+      extra.parentSessionSettings?.language,
+      extra.contextConfig?.systemPromptsDir,
+    );
+    const tools: ToolForLLM[] | undefined = extra.agentRegistry.getToolsForAgent(agentDef.id);
     const maxSteps = agentDef.maxSteps ?? DEFAULT_SUBAGENT_MAX_STEPS;
-    const effectiveMaxSteps = (maxSteps === 0)
-      ? Number.POSITIVE_INFINITY
-      : maxSteps;
-    const publish = extra.publish;
 
     // ─── Настройки роутинга для дочерней сессии (AD-034 Фаза 4) ──
     const childRoutingOverrides: Partial<SessionSettings> = {};
@@ -227,7 +273,7 @@ export const taskTool: ToolDefinition = {
 
           if (effectiveMode === 'inherit') {
             const fork = await extra.sessionManager.forkSession(extra.sessionId, {
-              title: `Подзадача: ${params.description}`,
+              title: sm('session.subtask_title', { description: params.description }),
             });
             fork.sessionOrigin = 'subagent';
             fork.userId = parentSession.userId;
@@ -241,7 +287,7 @@ export const taskTool: ToolDefinition = {
             const startIdx = Math.max(0, parentSession.messages.length - contextCount);
             const fork = await extra.sessionManager.forkSession(extra.sessionId, {
               messageIndex: startIdx,
-              title: `Подзадача: ${params.description}`,
+              title: sm('session.subtask_title', { description: params.description }),
             });
             fork.sessionOrigin = 'subagent';
             fork.userId = parentSession.userId;
@@ -253,7 +299,7 @@ export const taskTool: ToolDefinition = {
             childMessages = fork.messages;
           } else if (effectiveMode === 'summary') {
             const fork = await extra.sessionManager.forkSession(extra.sessionId, {
-              title: `Подзадача: ${params.description}`,
+              title: sm('session.subtask_title', { description: params.description }),
             });
             fork.sessionOrigin = 'subagent';
             fork.userId = parentSession.userId;
@@ -299,7 +345,7 @@ export const taskTool: ToolDefinition = {
           } else {
             // none mode (default)
             const child = await extra.sessionManager.createSession({
-              title: `Подзадача: ${params.description}`,
+              title: sm('session.subtask_title', { description: params.description }),
               projectId: parentSession.projectId,
               engine: parentSession.engine,
               parentId: extra.sessionId,
@@ -468,213 +514,335 @@ export const taskTool: ToolDefinition = {
       }
     }
 
-    const cancelToken: CancellationToken = { cancelled: false, cancel: () => { cancelToken.cancelled = true; } };
+    // ─── Запуск цикла саб-агента: общий код для task и resume (ниже) ──
+    return runSubagent({
+      subagentType: params.subagent_type,
+      description: params.description,
+      contextMode,
+      maxSteps,
+      systemPrompt,
+      llmSystemPrompt,
+      initialMessages: messages.slice(1),
+      provider: effectiveProvider,
+      tools,
+      childSessionId,
+      parentSessionId: extra.sessionId!,
+      routingDecisionInfo,
+      extra,
+      ctx,
+      retry: extra.retry,
+    });
+  },
+};
 
-    // Связка локального cancel-токена саб-агента с родительским сигналом отмены:
-    // «Стоп» в родительской сессии (POST /sessions/:id/abort → orchestrator.cancel
-    // → внутренний toolAbortController.abort → ctx.abortSignal) должен немедленно
-    // прерывать LLM-стрим саб-агента и его цикл, а не ждать завершения всех шагов.
-    const isAborted = () => cancelToken.cancelled || ctx.abortSignal?.aborted === true;
-    if (ctx.abortSignal?.aborted) {
-      cancelToken.cancel();
-    } else {
-      ctx.abortSignal?.addEventListener('abort', () => cancelToken.cancel(), { once: true });
-    }
+/**
+ * runSubagent — цикл выполнения саб-агента, общий для тула `task` и для
+ * возобновления прерванной дочерней сессии (task-resume.ts).
+ *
+ * Включает: связку cancel-токена с родительским сигналом отмены, permissions
+ * дочерней сессии (AD-029), режимную фильтрацию тулов, tool-loop со стримом
+ * прогресса родителю, retry-цикл LLM-вызова (recoverable → backoff, аналог
+ * QueueProcessor), обработку отмены (finishAborted), quality check/эскалацию
+ * (AD-034) и формирование tool_result.
+ */
+export interface SubagentRunConfig {
+  /** Тип саб-агента (id в реестре агентов). */
+  subagentType: string;
+  description: string;
+  contextMode: ContextMode;
+  /** Лимит шагов агента (0/undefined — без ограничений). */
+  maxSteps?: number;
+  /** Сырой системный промпт саб-агента (второй аргумент chatAsync). */
+  systemPrompt: string;
+  /** Расширенный системный промпт (заметки/роутинг) — messages[0]. */
+  llmSystemPrompt: string;
+  /** Начальные LLM-сообщения БЕЗ system: история дочерней сессии + user-промпт. */
+  initialMessages: LLMMessage[];
+  /** Провайдер саб-агента (уже резолвнутый роутером/оркестратором). */
+  provider: BaseProvider;
+  tools?: ToolForLLM[];
+  /** Дочерняя сессия (если есть) — в неё пишется история саб-агента. */
+  childSessionId?: string;
+  /** Сессия для child.*-событий (у task — родитель, у resume — родитель resumed-сессии). */
+  parentSessionId: string;
+  /** Начальное routing-решение (AD-034) — для QA/эскалации. */
+  routingDecisionInfo?: { providerName: string; modelName: string; strategy: string };
+  extra: TaskExtra;
+  ctx: ToolContext;
+  /** Override retry-параметров (иначе extra.retry или дефолт 3 попытки / 5-15-30с). */
+  retry?: SubagentRetryConfig;
+}
 
-    // ─── Permissions саб-агента (AD-029): проверка перед каждым tool_call ──
-    // Дочерняя сессия наследует permissions родителя (deriveSubagentPermission).
-    // ask-запросы публикуются в EventBus РОДИТЕЛЬСКОЙ сессии — подтверждение
-    // видит пользователь основной сессии, approval_id связывает ответ.
-    const childEvaluator = new PermissionEvaluator(derivedPermission);
-    const childApprovalManager = new PermissionApprovalManager(extra.eventBus ?? new EventBus());
-    let childSessionMode: SessionMode = 'act';
-    let childPlanApproved = false;
-    let childPlanMode: PlanMode = 'auto';
-    let childMcpToolSettings: Record<string, import('@itphx/synth-shared').McpServerToolSettings> | undefined;
-    if (childSessionId && extra.sessionManager) {
-      try {
-        const child = await extra.sessionManager.getSession(childSessionId);
-        if (child) {
-          childSessionMode = child.mode ?? 'act';
-          childPlanApproved = Boolean(child.planApproved);
-          childPlanMode = child.settings.planMode ?? 'auto';
-          childMcpToolSettings = child.settings.mcpToolSettings;
-        }
-      } catch {
-        // не фатально — остаёмся в act/auto
-      }
-    }
+/** Пауза backoff порциями с проверкой отмены. Возвращает true, если отмена. */
+async function sleepAbortable(ms: number, isAborted: () => boolean): Promise<boolean> {
+  const SLICE_MS = 200;
+  let waited = 0;
+  while (waited < ms) {
+    if (isAborted()) return true;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(SLICE_MS, ms - waited)));
+    waited += SLICE_MS;
+  }
+  return isAborted();
+}
 
-    // B5: режимная фильтрация списка тулов саб-агента (аналог
-    // orchestrator._filterToolsByMode). В plan-режиме (или strict без
-    // утверждённого плана) скрываем write/edit-тулы и git-запись — модель не
-    // видит инструменты, которые всё равно будут отклонены evaluator'ом.
-    if (isPlanRestricted(childSessionMode, childPlanMode, childPlanApproved) && tools) {
-      const filtered: ToolForLLM[] = [];
-      for (const tool of tools) {
-        const toolName = tool.function.name;
-        const toolDef = extra.toolRegistry?.get(toolName);
-        const capabilities = toolDef?.capabilities;
-        if (isPlanBlockedTool(toolName, capabilities)) continue;
-        // MCP-инструменты: в plan-режиме недоступный по настройкам тул убираем.
-        if (capabilities?.includes(ToolCapability.MCP) && childMcpToolSettings) {
-          const availability = getMcpToolAvailability(childMcpToolSettings, toolName);
-          if (availability && !availability.plan) continue;
-        }
-        filtered.push(tool);
-      }
-      tools = filtered;
-    }
+export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult> {
+  const {
+    subagentType, description, contextMode, maxSteps,
+    systemPrompt, llmSystemPrompt, initialMessages,
+    provider: effectiveProvider,
+    tools: toolsInput,
+    childSessionId, parentSessionId,
+    extra, ctx,
+  } = config;
+  let tools = toolsInput;
+  let routingDecisionInfo = config.routingDecisionInfo;
+  const publish = extra.publish;
 
-    // Финализация дочерней сессии: обновление updatedAt + события для UI.
-    // Отдельного статусного поля «завершена/прервана» у сессии нет
-    // (SessionStatus — только процессная блокировка blocked/blockedAt),
-    // поэтому факт прерывания/ошибки фиксируется metadata-маркерами
-    // в сообщениях истории дочерней сессии.
-    const finalizeChildSession = async (): Promise<void> => {
-      if (!childSessionId || !extra.sessionManager) return;
-      try {
-        const childSession = await extra.sessionManager.getSession(childSessionId);
-        if (childSession) {
-          childSession.updatedAt = nowISO();
-          await extra.sessionManager.updateSession(childSession);
+  const effectiveMaxSteps = (!maxSteps || maxSteps === 0)
+    ? Number.POSITIVE_INFINITY
+    : maxSteps;
 
-          if (extra.eventBus) {
-            extra.eventBus.publish(childSessionId, 'session.updated', {
-              session_id: childSessionId,
-            });
-            extra.eventBus.publish(extra.sessionId!, 'child.session.updated', {
-              session: serializeSession(childSession),
-            });
-          }
-        }
-      } catch {
-        // не фатально
-      }
-    };
+  // ─── Retry-параметры (аналог QueueProcessor: 3 попытки, backoff 5/15/30с) ──
+  const retryCfg = config.retry ?? extra.retry
+    ?? { maxRetries: LLM_MAX_ATTEMPTS, delaysMs: LLM_RETRY_DELAYS_MS };
+  const retryMaxAttempts = Math.max(1, retryCfg.maxRetries);
+  const retryDelaysMs = retryCfg.delaysMs.length > 0 ? retryCfg.delaysMs : LLM_RETRY_DELAYS_MS;
 
-    /** Добавить сообщение в дочернюю сессию + опубликовать события. */
-    const addChildMessage = async (msg: Message): Promise<void> => {
-      if (!childSessionId || !extra.sessionManager) return;
-      try {
-        const updated = await extra.sessionManager.addMessage(childSessionId, msg);
-        if (updated && extra.eventBus) {
-          const idx = updated.messages.length - 1;
-          await publishMessageAdded(extra.eventBus, extra.sessionId!, childSessionId, updated.messages[idx]!, idx, updated);
-        }
-      } catch {
-        // не фатально
-      }
-    };
+  // ─── Permissions дочерней сессии (AD-029): родитель + deny-дополнения ──
+  const derivedPermission = deriveSubagentPermission(extra.permissionConfig);
 
+  // ─── LLM-сообщения: system + начальные (история/промпт) ─────────
+  const messages: LLMMessage[] = [
+    {
+      id: '',
+      role: 'system' as const,
+      content: llmSystemPrompt,
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      disabled: false,
+      pinned: false,
+      branchId: '',
+    },
+    ...initialMessages,
+  ];
+
+  const cancelToken: CancellationToken = { cancelled: false, cancel: () => { cancelToken.cancelled = true; } };
+
+  // Связка локального cancel-токена саб-агента с родительским сигналом отмены:
+  // «Стоп» в родительской сессии (POST /sessions/:id/abort → orchestrator.cancel
+  // → внутренний toolAbortController.abort → ctx.abortSignal) должен немедленно
+  // прерывать LLM-стрим саб-агента и его цикл, а не ждать завершения всех шагов.
+  const isAborted = () => cancelToken.cancelled || ctx.abortSignal?.aborted === true;
+  if (ctx.abortSignal?.aborted) {
+    cancelToken.cancel();
+  } else {
+    ctx.abortSignal?.addEventListener('abort', () => cancelToken.cancel(), { once: true });
+  }
+
+  // ─── Permissions саб-агента (AD-029): проверка перед каждым tool_call ──
+  // Дочерняя сессия наследует permissions родителя (deriveSubagentPermission).
+  // ask-запросы публикуются в EventBus РОДИТЕЛЬСКОЙ сессии — подтверждение
+  // видит пользователь основной сессии, approval_id связывает ответ.
+  const childEvaluator = new PermissionEvaluator(derivedPermission);
+  const childApprovalManager = new PermissionApprovalManager(extra.eventBus ?? new EventBus());
+  let childSessionMode: SessionMode = 'act';
+  let childPlanApproved = false;
+  let childPlanMode: PlanMode = 'auto';
+  let childMcpToolSettings: Record<string, import('@itphx/synth-shared').McpServerToolSettings> | undefined;
+  if (childSessionId && extra.sessionManager) {
     try {
-      let finalContent = '';
-      let iteration = 0;
-      const doomTracker = new Map<string, number>();
-      let subagentReasoning = '';
-      let subagentDenied = false;
+      const child = await extra.sessionManager.getSession(childSessionId);
+      if (child) {
+        childSessionMode = child.mode ?? 'act';
+        childPlanApproved = Boolean(child.planApproved);
+        childPlanMode = child.settings.planMode ?? 'auto';
+        childMcpToolSettings = child.settings.mcpToolSettings;
+      }
+    } catch {
+      // не фатально — остаёмся в act/auto
+    }
+  }
 
-      const allSubagentReasoning: Array<{ text: string; iteration: number }> = [];
-      const allSubagentIntermediateTexts: Array<{ text: string; iteration: number }> = [];
-      const allSubagentToolCalls: Array<{
-        name: string; args: Record<string, unknown>; id?: string;
-        result?: { content: string; isError?: boolean };
-        started_at?: string; completed_at?: string; iteration: number;
-      }> = [];
+  // B5: режимная фильтрация списка тулов саб-агента (аналог
+  // orchestrator._filterToolsByMode). В plan-режиме (или strict без
+  // утверждённого плана) скрываем write/edit-тулы и git-запись — модель не
+  // видит инструменты, которые всё равно будут отклонены evaluator'ом.
+  if (isPlanRestricted(childSessionMode, childPlanMode, childPlanApproved) && tools) {
+    const filtered: ToolForLLM[] = [];
+    for (const tool of tools) {
+      const toolName = tool.function.name;
+      const toolDef = extra.toolRegistry?.get(toolName);
+      const capabilities = toolDef?.capabilities;
+      if (isPlanBlockedTool(toolName, capabilities)) continue;
+      // MCP-инструменты: в plan-режиме недоступный по настройкам тул убираем.
+      if (capabilities?.includes(ToolCapability.MCP) && childMcpToolSettings) {
+        const availability = getMcpToolAvailability(childMcpToolSettings, toolName);
+        if (availability && !availability.plan) continue;
+      }
+      filtered.push(tool);
+    }
+    tools = filtered;
+  }
 
-      // Завершение по отмене (Стоп в родительской сессии): сохранить частичный
-      // текст (если есть), поставить маркер прерывания в историю дочерней
-      // сессии, финализировать её (без статуса completed) и вернуть родителю
-      // tool_result с маркером остановки, частичным ответом и списком шагов.
-      const finishAborted = async (
-        partialContent: string,
-        partialReasoning: string,
-      ): Promise<ToolResult> => {
-        // 1. Частичный стрим оборванной итерации — в историю дочерней сессии
-        if (partialContent) {
-          await addChildMessage({
-            id: generateId(),
-            role: MessageRole.ASSISTANT,
-            seq: 0,
-            origin: 'local',
-            parts: [makeTextPart(partialContent)],
-            content: partialContent,
-            createdAt: nowISO(),
-            disabled: false,
-            pinned: false,
-            hidden: false,
-            agentRole: params.subagent_type,
-            ...(partialReasoning ? { reasoning: partialReasoning } : {}),
-            metadata: {
-              stream_id: extra.streamId,
-              partial: true,
-              interrupted: true,
-            },
+  // Финализация дочерней сессии: обновление updatedAt + события для UI.
+  // Отдельного статусного поля «завершена/прервана» у сессии нет
+  // (SessionStatus — только процессная блокировка blocked/blockedAt),
+  // поэтому факт прерывания/ошибки фиксируется metadata-маркерами
+  // в сообщениях истории дочерней сессии.
+  const finalizeChildSession = async (): Promise<void> => {
+    if (!childSessionId || !extra.sessionManager) return;
+    try {
+      const childSession = await extra.sessionManager.getSession(childSessionId);
+      if (childSession) {
+        childSession.updatedAt = nowISO();
+        await extra.sessionManager.updateSession(childSession);
+
+        if (extra.eventBus) {
+          extra.eventBus.publish(childSessionId, 'session.updated', {
+            session_id: childSessionId,
+          });
+          extra.eventBus.publish(parentSessionId, 'child.session.updated', {
+            session: serializeSession(childSession),
           });
         }
+      }
+    } catch {
+      // не фатально
+    }
+  };
 
-        // 2. Маркер прерывания в историю дочерней сессии
-        const stopMarkerText = 'Задача остановлена пользователем';
+  /** Добавить сообщение в дочернюю сессию + опубликовать события. */
+  const addChildMessage = async (msg: Message): Promise<void> => {
+    if (!childSessionId || !extra.sessionManager) return;
+    try {
+      const updated = await extra.sessionManager.addMessage(childSessionId, msg);
+      if (updated && extra.eventBus) {
+        const idx = updated.messages.length - 1;
+        await publishMessageAdded(extra.eventBus, parentSessionId, childSessionId, updated.messages[idx]!, idx, updated);
+      }
+    } catch {
+      // не фатально
+    }
+  };
+
+  try {
+    let finalContent = '';
+    let iteration = 0;
+    const doomTracker = new Map<string, number>();
+    let subagentReasoning = '';
+    let subagentDenied = false;
+
+    const allSubagentReasoning: Array<{ text: string; iteration: number }> = [];
+    const allSubagentIntermediateTexts: Array<{ text: string; iteration: number }> = [];
+    const allSubagentToolCalls: Array<{
+      name: string; args: Record<string, unknown>; id?: string;
+      result?: { content: string; isError?: boolean };
+      started_at?: string; completed_at?: string; iteration: number;
+    }> = [];
+
+    // Завершение по отмене (Стоп в родительской сессии): сохранить частичный
+    // текст (если есть), поставить маркер прерывания в историю дочерней
+    // сессии, финализировать её (без статуса completed) и вернуть родителю
+    // tool_result с маркером остановки, частичным ответом и списком шагов.
+    const finishAborted = async (
+      partialContent: string,
+      partialReasoning: string,
+    ): Promise<ToolResult> => {
+      // 1. Частичный стрим оборванной итерации — в историю дочерней сессии
+      if (partialContent) {
         await addChildMessage({
           id: generateId(),
-          role: MessageRole.INFO,
+          role: MessageRole.ASSISTANT,
           seq: 0,
           origin: 'local',
-          parts: [makeTextPart(stopMarkerText)],
-          content: stopMarkerText,
+          parts: [makeTextPart(partialContent)],
+          content: partialContent,
           createdAt: nowISO(),
           disabled: false,
           pinned: false,
           hidden: false,
-          agentRole: params.subagent_type,
+          agentRole: subagentType,
+          ...(partialReasoning ? { reasoning: partialReasoning } : {}),
           metadata: {
             stream_id: extra.streamId,
-            stopped_by: 'user',
+            partial: true,
             interrupted: true,
           },
         });
+      }
 
-        // 3. Финализация дочерней сессии
-        await finalizeChildSession();
+      // 2. Маркер прерывания в историю дочерней сессии
+      const stopMarkerText = sm('task.stopped_by_user');
+      await addChildMessage({
+        id: generateId(),
+        role: MessageRole.INFO,
+        seq: 0,
+        origin: 'local',
+        parts: [makeTextPart(stopMarkerText)],
+        content: stopMarkerText,
+        createdAt: nowISO(),
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        agentRole: subagentType,
+        metadata: {
+          stream_id: extra.streamId,
+          stopped_by: 'user',
+          interrupted: true,
+          i18n: i18nMeta('task.stopped_by_user'),
+        },
+      });
 
-        // 4. tool_result родителю: маркер отмены + частичный текст + шаги + id сессии
-        const stepsCompleted = allSubagentToolCalls.length > 0
-          ? allSubagentToolCalls.map((t) => t.name).join(', ')
-          : 'нет';
-        return {
-          content: [
-            '<task_result>',
-            `<summary>${params.description}</summary>`,
-            '<status>stopped_by_user</status>',
-            ...(childSessionId ? [`<child_session_id>${childSessionId}</child_session_id>`] : []),
-            ...(partialContent ? [`<partial_output>\n${partialContent}\n</partial_output>`] : []),
-            `<steps_completed>${stepsCompleted}</steps_completed>`,
-            'Задача остановлена пользователем до завершения. Выше — частичный ответ сабагента, выполненные шаги перечислены; детали и история — в дочерней сессии.',
-            '</task_result>',
-          ].join('\n'),
-          metadata: {
-            subagent_type: params.subagent_type,
-            description: params.description,
-            context_mode: contextMode,
-            steps: iteration,
-            child_session_id: childSessionId,
-            stopped_by: 'user',
-            interrupted: true,
-            tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
-            partial_output: partialContent || undefined,
-          },
-        };
+      // 3. Финализация дочерней сессии
+      await finalizeChildSession();
+
+      // 4. tool_result родителю: маркер отмены + частичный текст + шаги + id сессии
+      const stepsCompleted = allSubagentToolCalls.length > 0
+        ? allSubagentToolCalls.map((t) => t.name).join(', ')
+        : 'none';
+      return {
+        content: [
+          '<task_result>',
+          `<summary>${description}</summary>`,
+          '<status>stopped_by_user</status>',
+          ...(childSessionId ? [`<child_session_id>${childSessionId}</child_session_id>`] : []),
+          ...(partialContent ? [`<partial_output>\n${partialContent}\n</partial_output>`] : []),
+          `<steps_completed>${stepsCompleted}</steps_completed>`,
+          sm('task.stopped_before_completion'),
+          '</task_result>',
+        ].join('\n'),
+        metadata: {
+          subagent_type: subagentType,
+          description: description,
+          context_mode: contextMode,
+          steps: iteration,
+          child_session_id: childSessionId,
+          stopped_by: 'user',
+          interrupted: true,
+          tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
+          partial_output: partialContent || undefined,
+        },
       };
+    };
 
-      while (iteration < effectiveMaxSteps) {
+    while (iteration < effectiveMaxSteps) {
+      if (isAborted()) break;
+
+      let accumulatedContent = '';
+      let toolCalls: Record<string, unknown>[] | undefined = [];
+      let reasoning = '';
+      let lastPublishedReasoning = '';
+      let lastPublishedContentLen = 0;
+
+      // ─── LLM-вызов с retry (B1, аналог QueueProcessor) ──────────────
+      // Recoverable-ошибки (network/timeout/rate_limit/server_error) ретраятся
+      // до retryMaxAttempts попыток с backoff; unrecoverable (auth/
+      // model_not_found/context_length) — сразу финальная ошибка. Backoff-пауза
+      // спит порциями с проверкой отмены: «Стоп» прерывает ожидание мгновенно.
+      // Событие subagent.retry и паузы НЕ пишут ничего в историю дочерней
+      // сессии — мусорные сообщения не создаются (только финальный ERROR).
+      let llmFailure: { error: unknown; errorType: string; attempts: number } | null = null;
+      for (let attempt = 1; attempt <= retryMaxAttempts; attempt++) {
         if (isAborted()) break;
-
-        let accumulatedContent = '';
-        let toolCalls: Record<string, unknown>[] | undefined = [];
-        let reasoning = '';
-        let lastPublishedReasoning = '';
-        let lastPublishedContentLen = 0;
-
         try {
           for await (const chunk of effectiveProvider.chatAsync(
             messages,
@@ -715,120 +883,123 @@ export const taskTool: ToolDefinition = {
               }
             }
           }
-        } catch (err) {
-          // Ошибка провайдера внутри саб-агента: фиксируем в истории дочерней
-          // сессии, финализируем её и возвращаем родителю tool_result с
-          // описанием ошибки и child_session_id — родитель должен знать, что
-          // работа не завершена и почему. Без retry-логики (отдельная задача).
-          const errText = `Ошибка выполнения сабагента "${params.subagent_type}": ${String(err)}`;
-          await addChildMessage({
-            id: generateId(),
-            role: MessageRole.ERROR,
-            seq: 0,
-            origin: 'local',
-            parts: [makeTextPart(errText)],
-            content: errText,
-            createdAt: nowISO(),
-            disabled: false,
-            pinned: false,
-            hidden: false,
-            agentRole: params.subagent_type,
-            metadata: { stream_id: extra.streamId, error: true },
-          });
-          await finalizeChildSession();
-          return {
-            content: [
-              '<task_result>',
-              `<summary>${params.description}</summary>`,
-              '<status>error</status>',
-              ...(childSessionId ? [`<child_session_id>${childSessionId}</child_session_id>`] : []),
-              errText,
-              '</task_result>',
-            ].join('\n'),
-            isError: true,
-            metadata: {
-              subagent_type: params.subagent_type,
-              description: params.description,
-              context_mode: contextMode,
-              steps: iteration,
-              child_session_id: childSessionId,
-              error: true,
-              tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
-            },
-          };
-        }
-
-        // Отмена (Стоп в родительской сессии): сохраняем частичный текст
-        // ТЕКУЩЕЙ итерации, ставим маркер прерывания в историю дочерней
-        // сессии, финализируем её (без статуса completed) и возвращаем
-        // родителю tool_result с маркером остановки, частичным ответом и
-        // списком выполненных шагов.
-        if (isAborted()) {
-          return await finishAborted(accumulatedContent, reasoning);
-        }
-
-        // Единая итерация для размышлений, промежуточного текста и вызовов
-        // инструментов этого шага — иначе в UI (и в дочерней сессии) ломается
-        // порядок: размышления идут на step N, а вызовы — на N+1.
-        const stepIteration = iteration;
-        if (reasoning) {
-          allSubagentReasoning.push({ text: reasoning, iteration: stepIteration });
-        }
-
-        if (!toolCalls || toolCalls.length === 0) {
-          finalContent = accumulatedContent;
-          if (reasoning) subagentReasoning = reasoning;
-
-          // Сохранить финальный ответ ассистента в дочернюю сессию
-          if (childSessionId && extra.sessionManager) {
-            try {
-              const assistantMsg: Message = {
-                id: generateId(),
-                role: MessageRole.ASSISTANT,
-                seq: 0,
-                origin: 'local',
-                parts: [makeTextPart(accumulatedContent)],
-                content: accumulatedContent,
-                createdAt: nowISO(),
-                disabled: false,
-                pinned: false,
-                hidden: false,
-                agentRole: params.subagent_type,
-                // Все размышления сабагента (по итерациям), склеенные в поле
-                // reasoning — UI дочерней сессии показывает их блоками
-                // (ReasoningBlock разбивает по «\n\n---\n\n»). Без этого размышления
-                // остаются только в скрытых tool_chain-сообщениях и теряются.
-                reasoning: allSubagentReasoning.length > 0
-                  ? allSubagentReasoning.map((r) => r.text).join('\n\n---\n\n')
-                  : undefined,
-                // Как в _persistToolChain родителя: финальное сообщение несёт
-                // свёрнутую цепочку тулов, чтобы UI дочерней сессии отрисовал её
-                // так же аккуратно, как финал родительской.
-                metadata: {
-                  stream_id: extra.streamId,
-                  ...(allSubagentToolCalls.length > 0 ? { tool_results: allSubagentToolCalls } : {}),
-                  ...(allSubagentIntermediateTexts.length > 0 ? { intermediate_text_blocks: allSubagentIntermediateTexts } : {}),
-                },
-              };
-              const updated = await extra.sessionManager.addMessage(childSessionId, assistantMsg);
-              if (updated && extra.eventBus) {
-                const idx = updated.messages.length - 1;
-                await publishMessageAdded(extra.eventBus, extra.sessionId!, childSessionId, updated.messages[idx]!, idx, updated);
-              }
-            } catch {
-              // не фатально
-            }
-          }
+          llmFailure = null;
           break;
+        } catch (err) {
+          // Прерывание пользователем во время стрима (провайдер бросил
+          // AbortError) — не ошибка, обработается через finishAborted ниже.
+          if (isAborted()) break;
+          const rawError = err instanceof Error ? err.message : String(err);
+          const errorType = classifyLlmError(rawError);
+          if (!isLlmErrorRecoverable(err, rawError) || attempt >= retryMaxAttempts) {
+            // Unrecoverable или попытки исчерпаны — финальная ошибка
+            llmFailure = { error: err, errorType, attempts: attempt };
+            break;
+          }
+          const delay = retryDelaysMs[Math.min(attempt - 1, retryDelaysMs.length - 1)] ?? 0;
+          publish?.('subagent.retry', {
+            stream_id: extra.streamId,
+            session_id: extra.sessionId,
+            child_session_id: childSessionId,
+            parent_call_id: extra.callId,
+            attempt,
+            max_retries: retryMaxAttempts,
+            retry_in: delay,
+            error_type: errorType,
+            error: rawError,
+          });
+          if (await sleepAbortable(delay, isAborted)) break;
+          // Сброс частичного контекста неудавшейся попытки
+          accumulatedContent = '';
+          reasoning = '';
+          toolCalls = [];
+          lastPublishedReasoning = '';
+          lastPublishedContentLen = 0;
         }
+      }
 
-        if (accumulatedContent) {
-          allSubagentIntermediateTexts.push({ text: accumulatedContent, iteration });
-        }
+      if (llmFailure) {
+        // Ошибка провайдера внутри саб-агента (после retry-цикла): фиксируем
+        // в истории дочерней сессии, финализируем её и возвращаем родителю
+        // tool_result с описанием ошибки, счётчиком попыток и child_session_id.
+        const attempts = llmFailure.attempts;
+        const errParams = { type: subagentType, error: String(llmFailure.error) };
+        const errKey = attempts > 1
+          ? 'task.subagent_exec_error_after_retries' as const
+          : 'task.subagent_exec_error' as const;
+        const errText = attempts > 1
+          ? sm(errKey, { ...errParams, attempts: String(attempts) })
+          : sm(errKey, errParams);
+        await addChildMessage({
+          id: generateId(),
+          role: MessageRole.ERROR,
+          seq: 0,
+          origin: 'local',
+          parts: [makeTextPart(errText)],
+          content: errText,
+          createdAt: nowISO(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          agentRole: subagentType,
+          metadata: {
+            stream_id: extra.streamId,
+            error: true,
+            attempts,
+            max_retries: retryMaxAttempts,
+            error_type: llmFailure.errorType,
+            i18n: i18nMeta(errKey, attempts > 1 ? { ...errParams, attempts: String(attempts) } : errParams),
+          },
+        });
+        await finalizeChildSession();
+        return {
+          content: [
+            '<task_result>',
+            `<summary>${description}</summary>`,
+            '<status>error</status>',
+            ...(childSessionId ? [`<child_session_id>${childSessionId}</child_session_id>`] : []),
+            `<attempts>${attempts}</attempts>`,
+            errText,
+            '</task_result>',
+          ].join('\n'),
+          isError: true,
+          metadata: {
+            subagent_type: subagentType,
+            description: description,
+            context_mode: contextMode,
+            steps: iteration,
+            child_session_id: childSessionId,
+            error: true,
+            attempts,
+            max_retries: retryMaxAttempts,
+            error_type: llmFailure.errorType,
+            tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
+          },
+        };
+      }
 
-        iteration++;
+      // Отмена (Стоп в родительской сессии): сохраняем частичный текст
+      // ТЕКУЩЕЙ итерации, ставим маркер прерывания в историю дочерней
+      // сессии, финализируем её (без статуса completed) и возвращаем
+      // родителю tool_result с маркером остановки, частичным ответом и
+      // списком выполненных шагов.
+      if (isAborted()) {
+        return await finishAborted(accumulatedContent, reasoning);
+      }
 
-        // Сохранить ответ ассистента с tool calls в дочернюю сессию
+      // Единая итерация для размышлений, промежуточного текста и вызовов
+      // инструментов этого шага — иначе в UI (и в дочерней сессии) ломается
+      // порядок: размышления идут на step N, а вызовы — на N+1.
+      const stepIteration = iteration;
+      if (reasoning) {
+        allSubagentReasoning.push({ text: reasoning, iteration: stepIteration });
+      }
+
+      if (!toolCalls || toolCalls.length === 0) {
+        finalContent = accumulatedContent;
+        if (reasoning) subagentReasoning = reasoning;
+
+        // Сохранить финальный ответ ассистента в дочернюю сессию
         if (childSessionId && extra.sessionManager) {
           try {
             const assistantMsg: Message = {
@@ -836,295 +1007,119 @@ export const taskTool: ToolDefinition = {
               role: MessageRole.ASSISTANT,
               seq: 0,
               origin: 'local',
-              parts: [makeTextPart(accumulatedContent || '')],
-              content: accumulatedContent || '',
+              parts: [makeTextPart(accumulatedContent)],
+              content: accumulatedContent,
               createdAt: nowISO(),
               disabled: false,
               pinned: false,
               hidden: false,
-              agentRole: params.subagent_type,
-              reasoning: reasoning || undefined,
-              // OpenAI-совместимая цепочка: assistant(toolCalls) → tool.
-              // tool_chain=true — UI дочерней сессии скрывает промежуточные
-              // сообщения (визуализация уже в финальном с tool_results).
-              toolCalls,
-              metadata: { stream_id: extra.streamId, tool_chain: true },
+              agentRole: subagentType,
+              // Все размышления сабагента (по итерациям), склеенные в поле
+              // reasoning — UI дочерней сессии показывает их блоками
+              // (ReasoningBlock разбивает по «\n\n---\n\n»). Без этого размышления
+              // остаются только в скрытых tool_chain-сообщениях и теряются.
+              reasoning: allSubagentReasoning.length > 0
+                ? allSubagentReasoning.map((r) => r.text).join('\n\n---\n\n')
+                : undefined,
+              // Как в _persistToolChain родителя: финальное сообщение несёт
+              // свёрнутую цепочку тулов, чтобы UI дочерней сессии отрисовал её
+              // так же аккуратно, как финал родительской.
+              metadata: {
+                stream_id: extra.streamId,
+                ...(allSubagentToolCalls.length > 0 ? { tool_results: allSubagentToolCalls } : {}),
+                ...(allSubagentIntermediateTexts.length > 0 ? { intermediate_text_blocks: allSubagentIntermediateTexts } : {}),
+              },
             };
             const updated = await extra.sessionManager.addMessage(childSessionId, assistantMsg);
             if (updated && extra.eventBus) {
               const idx = updated.messages.length - 1;
-              await publishMessageAdded(extra.eventBus, extra.sessionId!, childSessionId, updated.messages[idx]!, idx, updated);
+              await publishMessageAdded(extra.eventBus, parentSessionId, childSessionId, updated.messages[idx]!, idx, updated);
             }
           } catch {
             // не фатально
           }
         }
+        break;
+      }
 
-        messages.push({
-          id: '',
-          role: 'assistant',
-          content: accumulatedContent || '',
-          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-          disabled: false,
-          pinned: false,
-          branchId: '',
-          toolUse: toolCalls,
-        });
+      if (accumulatedContent) {
+        allSubagentIntermediateTexts.push({ text: accumulatedContent, iteration });
+      }
 
-        for (const tc of toolCalls) {
-          const tcId = (tc.id as string) || `subcall_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-          const func = tc.function as { name: string; arguments: string | Record<string, unknown> } | undefined;
-          if (!func?.name) continue;
+      iteration++;
 
-          const toolName = func.name;
-          let toolArgs: Record<string, unknown>;
-          if (typeof func.arguments === 'string') {
-            try { toolArgs = JSON.parse(func.arguments); } catch { toolArgs = {}; }
-          } else {
-            toolArgs = func.arguments || {};
+      // Сохранить ответ ассистента с tool calls в дочернюю сессию
+      if (childSessionId && extra.sessionManager) {
+        try {
+          const assistantMsg: Message = {
+            id: generateId(),
+            role: MessageRole.ASSISTANT,
+            seq: 0,
+            origin: 'local',
+            parts: [makeTextPart(accumulatedContent || '')],
+            content: accumulatedContent || '',
+            createdAt: nowISO(),
+            disabled: false,
+            pinned: false,
+            hidden: false,
+            agentRole: subagentType,
+            reasoning: reasoning || undefined,
+            // OpenAI-совместимая цепочка: assistant(toolCalls) → tool.
+            // tool_chain=true — UI дочерней сессии скрывает промежуточные
+            // сообщения (визуализация уже в финальном с tool_results).
+            toolCalls,
+            metadata: { stream_id: extra.streamId, tool_chain: true },
+          };
+          const updated = await extra.sessionManager.addMessage(childSessionId, assistantMsg);
+          if (updated && extra.eventBus) {
+            const idx = updated.messages.length - 1;
+            await publishMessageAdded(extra.eventBus, parentSessionId, childSessionId, updated.messages[idx]!, idx, updated);
           }
+        } catch {
+          // не фатально
+        }
+      }
 
-          const tcStartedAt = new Date().toISOString();
+      messages.push({
+        id: '',
+        role: 'assistant',
+        content: accumulatedContent || '',
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        disabled: false,
+        pinned: false,
+        branchId: '',
+        toolUse: toolCalls,
+      });
 
-          const doomKey = `${toolName}:${JSON.stringify(toolArgs)}`;
-          const doomCount = (doomTracker.get(doomKey) || 0) + 1;
-          doomTracker.set(doomKey, doomCount);
+      for (const tc of toolCalls) {
+        const tcId = (tc.id as string) || `subcall_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const func = tc.function as { name: string; arguments: string | Record<string, unknown> } | undefined;
+        if (!func?.name) continue;
 
-          if (doomCount >= 3) {
-            const doomMsg: LLMMessage = {
-              id: '', role: 'tool',
-              content: `Ошибка: инструмент "${toolName}" вызван ${doomCount} раз(а) с одинаковыми аргументами. Цикл прерван.`,
-              usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-              disabled: false, pinned: false, branchId: '',
-              toolCallId: tcId,
-            };
-            messages.push(doomMsg);
+        const toolName = func.name;
+        let toolArgs: Record<string, unknown>;
+        if (typeof func.arguments === 'string') {
+          try { toolArgs = JSON.parse(func.arguments); } catch { toolArgs = {}; }
+        } else {
+          toolArgs = func.arguments || {};
+        }
 
-            if (childSessionId && extra.sessionManager) {
-              try {
-                const toolResultMsg: Message = {
-                  id: generateId(),
-                  role: MessageRole.TOOL,
-                  seq: 0,
-                  origin: 'local',
-                  parts: [makeTextPart(doomMsg.content)],
-                  content: doomMsg.content,
-                  createdAt: nowISO(),
-                  disabled: false,
-                  pinned: false,
-                  hidden: false,
-                  toolCallId: tcId,
-                  metadata: {
-                    stream_id: extra.streamId,
-                    tool_chain: true,
-                    tool_name: toolName,
-                    args: toolArgs,
-                  },
-                };
-                const updated = await extra.sessionManager.addMessage(childSessionId, toolResultMsg);
-                if (updated && extra.eventBus) {
-                  const idx = updated.messages.length - 1;
-                  await publishMessageAdded(extra.eventBus, extra.sessionId!, childSessionId, updated.messages[idx]!, idx, updated);
-                }
-              } catch {
-                // не фатально
-              }
-            }
-            continue;
-          }
+        const tcStartedAt = new Date().toISOString();
 
-          publish?.('tool_call.started', {
-            stream_id: extra.streamId,
-            session_id: extra.sessionId,
-            call_id: tcId,
-            name: toolName,
-            arguments: toolArgs,
-            iteration: stepIteration,
-            // Вложенность внутренних вызовов саб-агента под блоком `task`
-            // в родительском стриме (UI строит дерево по parent_call_id).
-            parent_call_id: extra.callId,
-          });
+        const doomKey = `${toolName}:${JSON.stringify(toolArgs)}`;
+        const doomCount = (doomTracker.get(doomKey) || 0) + 1;
+        doomTracker.set(doomKey, doomCount);
 
-          const toolDef = extra.toolRegistry?.get(toolName);
-          let toolResult: ToolResult;
-          let subagentUserDenied = false;
-
-          // AD-029: permission-check саб-агента — permissions дочерней сессии
-          // (родитель + deny-дополнения) применяются к каждому tool_call.
-          const permissionDecision = childEvaluator.check({
-            toolName,
-            params: toolArgs,
-            workingDir: ctx.workingDir,
-            capabilities: toolDef?.capabilities,
-            sessionMode: childSessionMode,
-            planMode: childPlanMode,
-            planApproved: childPlanApproved,
-            mcpToolSettings: childMcpToolSettings,
-            shellPolicy: extra.shellPolicy ?? undefined,
-            protectedPaths: extra.protectedPaths ?? undefined,
-            protectedPathsEnabled: extra.protectedPathsEnabled,
-          });
-
-          if (permissionDecision.action === 'deny') {
-            toolResult = {
-              content: extra.contextConfig && permissionDecision.messageId
-                ? (extra.contextConfig.getSecurityMessage(permissionDecision.messageId, extra.language || 'ru', permissionDecision.params)
-                  ?? `Permission denied: ${permissionDecision.reason}`)
-                : `Permission denied: ${permissionDecision.reason}`,
-              isError: true,
-              metadata: {
-                permission: {
-                  action: 'deny',
-                  reason: permissionDecision.reason,
-                  matched_rule: permissionDecision.matchedRule,
-                },
-              },
-            };
-          } else if (permissionDecision.action === 'ask') {
-            // ask публикуется в родительскую сессию (extra.sessionId) —
-            // пользователь основной сессии видит запрос и отвечает.
-            const approvalAskReason = extra.contextConfig && permissionDecision.messageId
-              ? (extra.contextConfig.getSecurityMessage(permissionDecision.messageId, extra.language || 'ru', permissionDecision.params)
-                ?? permissionDecision.reason)
-              : permissionDecision.reason;
-            const approval = await childApprovalManager.waitForDecision(
-              extra.sessionId!,
-              {
-                approvalId: `approval_${tcId}`,
-                callId: tcId,
-                toolName,
-                arguments: toolArgs,
-                reason: approvalAskReason,
-              },
-              derivedPermission.askTimeoutMs,
-            );
-            if (approval.approved) {
-              if (approval.once === false) {
-                // «Разрешить в сессии» — allow-правило в permissions дочерней сессии
-                derivedPermission.rules[toolName] = 'allow';
-                if (childSessionId && extra.sessionManager) {
-                  try {
-                    const child = await extra.sessionManager.getSession(childSessionId);
-                    if (child) {
-                      child.settings.permission = { ...derivedPermission };
-                      await extra.sessionManager.updateSession(child);
-                    }
-                  } catch {
-                    // не фатально
-                  }
-                }
-              }
-              if (toolDef) {
-                const parsed2 = toolDef.parameters.safeParse(toolArgs);
-                if (!parsed2.success) {
-                  toolResult = {
-                    content: `Ошибка аргументов инструмента "${toolName}": ${parsed2.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`,
-                    isError: true,
-                  };
-                } else {
-                  try {
-                    toolResult = await toolDef.execute(parsed2.data, {
-                      ...ctx,
-                      abortSignal: ctx.abortSignal,
-                      extra: extra as unknown as Record<string, unknown>,
-                    });
-                  } catch (execError) {
-                    toolResult = {
-                      content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
-                      isError: true,
-                    };
-                  }
-                }
-              } else {
-                toolResult = {
-                  content: `Инструмент "${toolName}" не найден`,
-                  isError: true,
-                };
-              }
-            } else {
-              const why = approval.timeout
-                ? 'истекло время ожидания подтверждения'
-                : approval.noSubscribers
-                  ? 'нет подключённого пользователя для подтверждения'
-                  : 'отклонено пользователем';
-              const baseDeny = extra.contextConfig && permissionDecision.messageId
-                ? (extra.contextConfig.getSecurityMessage(permissionDecision.messageId, extra.language || 'ru', permissionDecision.params)
-                  ?? `Permission denied: ${permissionDecision.reason}`)
-                : `Permission denied: ${permissionDecision.reason}`;
-              toolResult = {
-                content: `${baseDeny} (${why})`,
-                isError: true,
-                metadata: {
-                  permission: {
-                    action: 'deny',
-                    reason: permissionDecision.reason,
-                    matched_rule: permissionDecision.matchedRule,
-                  },
-                },
-              };
-              subagentUserDenied = !approval.timeout && !approval.noSubscribers;
-            }
-          } else {
-            // allow — обычное выполнение
-            if (toolDef) {
-              const parsed2 = toolDef.parameters.safeParse(toolArgs);
-              if (!parsed2.success) {
-                toolResult = {
-                  content: `Ошибка аргументов инструмента "${toolName}": ${parsed2.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ')}`,
-                  isError: true,
-                };
-              } else {
-                try {
-                  toolResult = await toolDef.execute(parsed2.data, {
-                    ...ctx,
-                    abortSignal: ctx.abortSignal,
-                    extra: extra as unknown as Record<string, unknown>,
-                  });
-                } catch (execError) {
-                  toolResult = {
-                    content: `Ошибка исполнения инструмента "${toolName}": ${String(execError)}`,
-                    isError: true,
-                  };
-                }
-              }
-            } else {
-              toolResult = {
-                content: `Инструмент "${toolName}" не найден`,
-                isError: true,
-              };
-            }
-          }
-
-          publish?.('tool_call.result', {
-            stream_id: extra.streamId,
-            session_id: extra.sessionId,
-            call_id: tcId,
-            name: toolName,
-            result: toolResult,
-            iteration: stepIteration,
-            parent_call_id: extra.callId,
-          });
-
-          allSubagentToolCalls.push({
-            name: toolName,
-            args: toolArgs,
-            id: tcId,
-            result: { content: toolResult.content, isError: toolResult.isError },
-            started_at: tcStartedAt,
-            completed_at: new Date().toISOString(),
-            iteration: stepIteration,
-          });
-
-          const toolResultLLMMsg: LLMMessage = {
+        if (doomCount >= 3) {
+          const doomMsg: LLMMessage = {
             id: '', role: 'tool',
-            content: toolResult.content,
+            content: sm('tool.doom_loop', { tool: toolName, count: String(doomCount) }),
             usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
             disabled: false, pinned: false, branchId: '',
             toolCallId: tcId,
           };
-          messages.push(toolResultLLMMsg);
+          messages.push(doomMsg);
 
-          // Сохранить tool_result в дочернюю сессию
           if (childSessionId && extra.sessionManager) {
             try {
               const toolResultMsg: Message = {
@@ -1132,8 +1127,8 @@ export const taskTool: ToolDefinition = {
                 role: MessageRole.TOOL,
                 seq: 0,
                 origin: 'local',
-                parts: [makeTextPart(toolResult.content)],
-                content: toolResult.content,
+                parts: [makeTextPart(doomMsg.content)],
+                content: doomMsg.content,
                 createdAt: nowISO(),
                 disabled: false,
                 pinned: false,
@@ -1149,172 +1144,407 @@ export const taskTool: ToolDefinition = {
               const updated = await extra.sessionManager.addMessage(childSessionId, toolResultMsg);
               if (updated && extra.eventBus) {
                 const idx = updated.messages.length - 1;
-                await publishMessageAdded(extra.eventBus, extra.sessionId!, childSessionId, updated.messages[idx]!, idx, updated);
+                await publishMessageAdded(extra.eventBus, parentSessionId, childSessionId, updated.messages[idx]!, idx, updated);
               }
             } catch {
               // не фатально
             }
           }
-
-          // AD-029: пользователь отклонил ask саб-агента — прекращаем выполнение.
-          if (subagentUserDenied) {
-            subagentDenied = true;
-            break;
-          }
+          continue;
         }
 
-        publish?.('tool_call.loop', {
+        publish?.('tool_call.started', {
           stream_id: extra.streamId,
           session_id: extra.sessionId,
+          call_id: tcId,
+          name: toolName,
+          arguments: toolArgs,
           iteration: stepIteration,
-          total_tool_calls: toolCalls.length,
+          // Вложенность внутренних вызовов саб-агента под блоком `task`
+          // в родительском стриме (UI строит дерево по parent_call_id).
+          parent_call_id: extra.callId,
         });
 
-        if (subagentDenied) break;
-      }
+        const toolDef = extra.toolRegistry?.get(toolName);
+        let toolResult: ToolResult;
+        let subagentUserDenied = false;
 
-      // Отмена до/после цикла (например сигнал уже абортирован на входе или
-      // пришёл во время исполнения тулов саб-агента) — тот же протокол
-      // прерывания, что и при отмене во время стрима.
-      if (isAborted()) {
-        return await finishAborted('', '');
-      }
+        // AD-029: permission-check саб-агента — permissions дочерней сессии
+        // (родитель + deny-дополнения) применяются к каждому tool_call.
+        const permissionDecision = childEvaluator.check({
+          toolName,
+          params: toolArgs,
+          workingDir: ctx.workingDir,
+          capabilities: toolDef?.capabilities,
+          sessionMode: childSessionMode,
+          planMode: childPlanMode,
+          planApproved: childPlanApproved,
+          mcpToolSettings: childMcpToolSettings,
+          shellPolicy: extra.shellPolicy ?? undefined,
+          protectedPaths: extra.protectedPaths ?? undefined,
+          protectedPathsEnabled: extra.protectedPathsEnabled,
+        });
 
-      if (subagentDenied && !finalContent) {
-        finalContent = 'Обработка остановлена: пользователь отклонил запрос на выполнение инструмента';
-      }
-
-      const output = finalContent || '(пустой ответ сабагента)';
-
-      // ─── Quality check результата саб-агента (AD-034 Фаза 4) ─────
-      let qaPass: boolean | undefined;
-      let qaReason: string | undefined;
-      let qualityOutput = output;
-      const escalationCfg = extra.routerConfig?.escalation;
-      const sessionEscalation = extra.parentSessionSettings?.routingEscalation;
-      const escalationEnabled = sessionEscalation?.enabled ?? escalationCfg?.enabled ?? false;
-
-      if (extra.modelRouter && escalationEnabled && finalContent && routingDecisionInfo) {
-        try {
-          const qaResult = await extra.modelRouter.checkQuality(finalContent, {
-            providerName: routingDecisionInfo.providerName,
-            modelName: routingDecisionInfo.modelName,
-            reason: routingDecisionInfo.strategy,
-            strategy: routingDecisionInfo.strategy,
-          }, extra.parentSessionSettings);
-          qaPass = qaResult.pass;
-          qaReason = qaResult.reason;
-
-          // Пометить QA-информацию в дочерней сессии
-          if (childSessionId && extra.sessionManager) {
-            try {
-              const childSession = await extra.sessionManager.getSession(childSessionId);
-              if (childSession) {
-                const lastAssistantMsg = [...childSession.messages].reverse()
-                  .find(m => m.role === MessageRole.ASSISTANT);
-                if (lastAssistantMsg) {
-                  lastAssistantMsg.qa_pass = qaResult.pass;
-                  lastAssistantMsg.qa_reason = qaResult.reason;
-                  await extra.sessionManager.updateSession(childSession);
-                }
-              }
-            } catch {
-              // не фатально
-            }
-          }
-
-          // Эскалация на fallback-модель при FAIL
-          if (!qaResult.pass) {
-            const fallbackProvider = sessionEscalation?.fallbackProvider || escalationCfg?.fallbackProvider;
-            const fallbackModel = sessionEscalation?.fallbackModel || escalationCfg?.fallbackModel;
-            if (fallbackProvider && fallbackModel && extra.modelRouter) {
-              const fbDecision = {
-                providerName: fallbackProvider,
-                modelName: fallbackModel,
-                reason: 'escalation_fallback',
-                strategy: 'default',
-              };
-              const fbEffectiveProvider = extra.modelRouter.getProvider(fbDecision);
-              if (fbEffectiveProvider) {
+        if (permissionDecision.action === 'deny') {
+          toolResult = {
+            content: extra.contextConfig && permissionDecision.messageId
+              ? (extra.contextConfig.getSecurityMessage(permissionDecision.messageId, 'en', permissionDecision.params)
+                ?? `Permission denied: ${permissionDecision.reason}`)
+              : `Permission denied: ${permissionDecision.reason}`,
+            isError: true,
+            metadata: {
+              ...(permissionDecision.messageId
+                ? { i18n: i18nMeta(`security.${permissionDecision.messageId.replaceAll('-', '_')}`, permissionDecision.params as Record<string, string> | undefined) }
+                : { i18n: i18nMeta('tool.permission_denied_default') }),
+              permission: {
+                action: 'deny',
+                reason: permissionDecision.reason,
+                matched_rule: permissionDecision.matchedRule,
+              },
+            },
+          };
+        } else if (permissionDecision.action === 'ask') {
+          // ask публикуется в родительскую сессию (extra.sessionId) —
+          // пользователь основной сессии видит запрос и отвечает.
+          const approvalAskReason = extra.contextConfig && permissionDecision.messageId
+            ? (extra.contextConfig.getSecurityMessage(permissionDecision.messageId, 'en', permissionDecision.params)
+              ?? permissionDecision.reason)
+            : permissionDecision.reason;
+          const approval = await childApprovalManager.waitForDecision(
+            extra.sessionId!,
+            {
+              approvalId: `approval_${tcId}`,
+              callId: tcId,
+              toolName,
+              arguments: toolArgs,
+              reason: approvalAskReason,
+            },
+            derivedPermission.askTimeoutMs,
+          );
+          if (approval.approved) {
+            if (approval.once === false) {
+              // «Разрешить в сессии» — allow-правило в permissions дочерней сессии
+              derivedPermission.rules[toolName] = 'allow';
+              if (childSessionId && extra.sessionManager) {
                 try {
-                  // Перевызываем с fallback-моделью (только последний user-запрос)
-                  const fbMessages: LLMMessage[] = [messages[0]!];
-                  // Добавляем только user-сообщение без tool-результатов
-                  const userMsg = messages.find(m => m.role === 'user');
-                  if (userMsg) fbMessages.push(userMsg);
-                  const fbResponse = await fbEffectiveProvider.chat(
-                    fbMessages,
-                    systemPrompt || undefined,
-                    undefined,
-                    false,
-                  );
-                  if (fbResponse.content) {
-                    finalContent = fbResponse.content;
-                    qualityOutput = fbResponse.content;
-                    qaPass = true;
-                    qaReason = `Эскалация на ${fallbackProvider}/${fallbackModel}: ${qaResult.reason}`;
-                    routingDecisionInfo = {
-                      providerName: fallbackProvider,
-                      modelName: fallbackModel,
-                      strategy: 'escalation_fallback',
-                    };
+                  const child = await extra.sessionManager.getSession(childSessionId);
+                  if (child) {
+                    child.settings.permission = { ...derivedPermission };
+                    await extra.sessionManager.updateSession(child);
                   }
                 } catch {
-                  // fallback не удался, оставляем оригинальный ответ
+                  // не фатально
                 }
               }
             }
+            if (toolDef) {
+              const parsed2 = toolDef.parameters.safeParse(toolArgs);
+              if (!parsed2.success) {
+                toolResult = {
+                  content: sm('tool.args_error', { tool: toolName, issues: parsed2.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }),
+                  isError: true,
+                  metadata: { i18n: i18nMeta('tool.args_error', { tool: toolName }) },
+                };
+              } else {
+                try {
+                  toolResult = await toolDef.execute(parsed2.data, {
+                    ...ctx,
+                    abortSignal: ctx.abortSignal,
+                    extra: extra as unknown as Record<string, unknown>,
+                  });
+                } catch (execError) {
+                  toolResult = {
+                    content: sm('tool.exec_error', { tool: toolName, error: String(execError) }),
+                    isError: true,
+                    metadata: { i18n: i18nMeta('tool.exec_error', { tool: toolName }) },
+                  };
+                }
+              }
+            } else {
+              toolResult = {
+                content: sm('tool.not_found', { tool: toolName }),
+                isError: true,
+                metadata: { i18n: i18nMeta('tool.not_found', { tool: toolName }) },
+              };
+            }
+          } else {
+            const why = approval.timeout
+              ? sm('permission.ask_timeout')
+              : approval.noSubscribers
+                ? sm('permission.ask_no_subscribers')
+                : sm('permission.ask_denied');
+            const baseDeny = extra.contextConfig && permissionDecision.messageId
+              ? (extra.contextConfig.getSecurityMessage(permissionDecision.messageId, 'en', permissionDecision.params)
+                ?? `Permission denied: ${permissionDecision.reason}`)
+              : `Permission denied: ${permissionDecision.reason}`;
+            toolResult = {
+              content: `${baseDeny} (${why})`,
+              isError: true,
+              metadata: {
+                ...(permissionDecision.messageId
+                  ? { i18n: i18nMeta(`security.${permissionDecision.messageId.replaceAll('-', '_')}`, permissionDecision.params as Record<string, string> | undefined) }
+                  : {}),
+                permission: {
+                  action: 'deny',
+                  reason: permissionDecision.reason,
+                  matched_rule: permissionDecision.matchedRule,
+                },
+              },
+            };
+            subagentUserDenied = !approval.timeout && !approval.noSubscribers;
           }
-        } catch {
-          // QA не удался, не блокируем
+        } else {
+          // allow — обычное выполнение
+          if (toolDef) {
+            const parsed2 = toolDef.parameters.safeParse(toolArgs);
+            if (!parsed2.success) {
+              toolResult = {
+                content: sm('tool.args_error', { tool: toolName, issues: parsed2.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }),
+                isError: true,
+              };
+            } else {
+              try {
+                toolResult = await toolDef.execute(parsed2.data, {
+                  ...ctx,
+                  abortSignal: ctx.abortSignal,
+                  extra: extra as unknown as Record<string, unknown>,
+                });
+              } catch (execError) {
+                toolResult = {
+                  content: sm('tool.exec_error', { tool: toolName, error: String(execError) }),
+                  isError: true,
+                  metadata: { i18n: i18nMeta('tool.exec_error', { tool: toolName }) },
+                };
+              }
+            }
+          } else {
+            toolResult = {
+              content: sm('tool.not_found', { tool: toolName }),
+              isError: true,
+              metadata: { i18n: i18nMeta('tool.not_found', { tool: toolName }) },
+            };
+          }
+        }
+
+        publish?.('tool_call.result', {
+          stream_id: extra.streamId,
+          session_id: extra.sessionId,
+          call_id: tcId,
+          name: toolName,
+          result: toolResult,
+          iteration: stepIteration,
+          parent_call_id: extra.callId,
+        });
+
+        allSubagentToolCalls.push({
+          name: toolName,
+          args: toolArgs,
+          id: tcId,
+          result: { content: toolResult.content, isError: toolResult.isError },
+          started_at: tcStartedAt,
+          completed_at: new Date().toISOString(),
+          iteration: stepIteration,
+        });
+
+        const toolResultLLMMsg: LLMMessage = {
+          id: '', role: 'tool',
+          content: toolResult.content,
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          disabled: false, pinned: false, branchId: '',
+          toolCallId: tcId,
+        };
+        messages.push(toolResultLLMMsg);
+
+        // Сохранить tool_result в дочернюю сессию
+        if (childSessionId && extra.sessionManager) {
+          try {
+            const toolResultMsg: Message = {
+              id: generateId(),
+              role: MessageRole.TOOL,
+              seq: 0,
+              origin: 'local',
+              parts: [makeTextPart(toolResult.content)],
+              content: toolResult.content,
+              createdAt: nowISO(),
+              disabled: false,
+              pinned: false,
+              hidden: false,
+              toolCallId: tcId,
+              metadata: {
+                stream_id: extra.streamId,
+                tool_chain: true,
+                tool_name: toolName,
+                args: toolArgs,
+              },
+            };
+            const updated = await extra.sessionManager.addMessage(childSessionId, toolResultMsg);
+            if (updated && extra.eventBus) {
+              const idx = updated.messages.length - 1;
+              await publishMessageAdded(extra.eventBus, parentSessionId, childSessionId, updated.messages[idx]!, idx, updated);
+            }
+          } catch {
+            // не фатально
+          }
+        }
+
+        // AD-029: пользователь отклонил ask саб-агента — прекращаем выполнение.
+        if (subagentUserDenied) {
+          subagentDenied = true;
+          break;
         }
       }
 
-      // Финализировать дочернюю сессию
-      await finalizeChildSession();
+      publish?.('tool_call.loop', {
+        stream_id: extra.streamId,
+        session_id: extra.sessionId,
+        iteration: stepIteration,
+        total_tool_calls: toolCalls.length,
+      });
 
-      // ─── Формирование результата tool_result ──────────────────────
-      const qualityBlock = qaPass !== undefined
-        ? `<quality pass="${qaPass}" reason="${qaReason || ''}"/>\n`
-        : '';
-      const routedByBlock = routingDecisionInfo && routingDecisionInfo.strategy !== 'default'
-        ? `<routed_by strategy="${routingDecisionInfo.strategy}" provider="${routingDecisionInfo.providerName}" model="${routingDecisionInfo.modelName}"/>\n`
-        : '';
-      const qaWarningText = qaPass === false
-        ? `\n\n⚠️ Ответ не прошёл контроль качества: ${qaReason || 'неизвестная причина'}`
-        : '';
-      // ID дочерней сессии в content — родительская модель может прочитать
-      // историю саб-агента тулом read_session_reference.
-      const childSessionBlock = childSessionId
-        ? `<child_session_id>${childSessionId}</child_session_id>\n`
-        : '';
-
-      return {
-        content: `<task_result>\n<summary>${params.description}</summary>\n${qualityBlock}${routedByBlock}${childSessionBlock}\n${qualityOutput}${qaWarningText}\n</task_result>`,
-        metadata: {
-          subagent_type: params.subagent_type,
-          description: params.description,
-          context_mode: contextMode,
-          steps: iteration,
-          child_session_id: childSessionId,
-          reasoning: subagentReasoning || undefined,
-          reasoning_blocks: allSubagentReasoning.length > 0 ? allSubagentReasoning : undefined,
-          intermediate_text_blocks: allSubagentIntermediateTexts.length > 0 ? allSubagentIntermediateTexts : undefined,
-          tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
-          final_content: finalContent || undefined,
-          qa_pass: qaPass,
-          qa_reason: qaReason || undefined,
-          routing_strategy: routingDecisionInfo?.strategy,
-          routing_provider: routingDecisionInfo?.providerName,
-          routing_model: routingDecisionInfo?.modelName,
-        },
-      };
-    } catch (err: unknown) {
-      return {
-        content: `Ошибка выполнения сабагента "${params.subagent_type}": ${String(err)}`,
-        isError: true,
-        metadata: { subagent_type: params.subagent_type },
-      };
+      if (subagentDenied) break;
     }
-  },
-};
+
+    // Отмена до/после цикла (например сигнал уже абортирован на входе или
+    // пришёл во время исполнения тулов саб-агента) — тот же протокол
+    // прерывания, что и при отмене во время стрима.
+    if (isAborted()) {
+      return await finishAborted('', '');
+    }
+
+    if (subagentDenied && !finalContent) {
+      finalContent = sm('task.stopped_by_deny');
+    }
+
+    const output = finalContent || sm('task.empty_response');
+
+    // ─── Quality check результата саб-агента (AD-034 Фаза 4) ─────
+    let qaPass: boolean | undefined;
+    let qaReason: string | undefined;
+    let qualityOutput = output;
+    const escalationCfg = extra.routerConfig?.escalation;
+    const sessionEscalation = extra.parentSessionSettings?.routingEscalation;
+    const escalationEnabled = sessionEscalation?.enabled ?? escalationCfg?.enabled ?? false;
+
+    if (extra.modelRouter && escalationEnabled && finalContent && routingDecisionInfo) {
+      try {
+        const qaResult = await extra.modelRouter.checkQuality(finalContent, {
+          providerName: routingDecisionInfo.providerName,
+          modelName: routingDecisionInfo.modelName,
+          reason: routingDecisionInfo.strategy,
+          strategy: routingDecisionInfo.strategy,
+        }, extra.parentSessionSettings);
+        qaPass = qaResult.pass;
+        qaReason = qaResult.reason;
+
+        // Пометить QA-информацию в дочерней сессии
+        if (childSessionId && extra.sessionManager) {
+          try {
+            const childSession = await extra.sessionManager.getSession(childSessionId);
+            if (childSession) {
+              const lastAssistantMsg = [...childSession.messages].reverse()
+                .find(m => m.role === MessageRole.ASSISTANT);
+              if (lastAssistantMsg) {
+                lastAssistantMsg.qa_pass = qaResult.pass;
+                lastAssistantMsg.qa_reason = qaResult.reason;
+                await extra.sessionManager.updateSession(childSession);
+              }
+            }
+          } catch {
+            // не фатально
+          }
+        }
+
+        // Эскалация на fallback-модель при FAIL
+        if (!qaResult.pass) {
+          const fallbackProvider = sessionEscalation?.fallbackProvider || escalationCfg?.fallbackProvider;
+          const fallbackModel = sessionEscalation?.fallbackModel || escalationCfg?.fallbackModel;
+          if (fallbackProvider && fallbackModel && extra.modelRouter) {
+            const fbDecision = {
+              providerName: fallbackProvider,
+              modelName: fallbackModel,
+              reason: 'escalation_fallback',
+              strategy: 'default',
+            };
+            const fbEffectiveProvider = extra.modelRouter.getProvider(fbDecision);
+            if (fbEffectiveProvider) {
+              try {
+                // Перевызываем с fallback-моделью (только последний user-запрос)
+                const fbMessages: LLMMessage[] = [messages[0]!];
+                // Добавляем только user-сообщение без tool-результатов
+                const userMsg = messages.find(m => m.role === 'user');
+                if (userMsg) fbMessages.push(userMsg);
+                const fbResponse = await fbEffectiveProvider.chat(
+                  fbMessages,
+                  systemPrompt || undefined,
+                  undefined,
+                  false,
+                );
+                if (fbResponse.content) {
+                  finalContent = fbResponse.content;
+                  qualityOutput = fbResponse.content;
+                  qaPass = true;
+                  qaReason = sm('router.escalation', { provider: fallbackProvider, model: fallbackModel, reason: qaResult.reason });
+                  routingDecisionInfo = {
+                    providerName: fallbackProvider,
+                    modelName: fallbackModel,
+                    strategy: 'escalation_fallback',
+                  };
+                }
+              } catch {
+                // fallback не удался, оставляем оригинальный ответ
+              }
+            }
+          }
+        }
+      } catch {
+        // QA не удался, не блокируем
+      }
+    }
+
+    // Финализировать дочернюю сессию
+    await finalizeChildSession();
+
+    // ─── Формирование результата tool_result ──────────────────────
+    const qualityBlock = qaPass !== undefined
+      ? `<quality pass="${qaPass}" reason="${qaReason || ''}"/>\n`
+      : '';
+    const routedByBlock = routingDecisionInfo && routingDecisionInfo.strategy !== 'default'
+      ? `<routed_by strategy="${routingDecisionInfo.strategy}" provider="${routingDecisionInfo.providerName}" model="${routingDecisionInfo.modelName}"/>\n`
+      : '';
+    const qaWarningText = qaPass === false
+      ? `\n\n⚠️ Response failed the quality check: ${qaReason || 'unknown reason'}`
+      : '';
+    // ID дочерней сессии в content — родительская модель может прочитать
+    // историю саб-агента тулом read_session_reference.
+    const childSessionBlock = childSessionId
+      ? `<child_session_id>${childSessionId}</child_session_id>\n`
+      : '';
+
+    return {
+      content: `<task_result>\n<summary>${description}</summary>\n${qualityBlock}${routedByBlock}${childSessionBlock}\n${qualityOutput}${qaWarningText}\n</task_result>`,
+      metadata: {
+        subagent_type: subagentType,
+        description: description,
+        context_mode: contextMode,
+        steps: iteration,
+        child_session_id: childSessionId,
+        reasoning: subagentReasoning || undefined,
+        reasoning_blocks: allSubagentReasoning.length > 0 ? allSubagentReasoning : undefined,
+        intermediate_text_blocks: allSubagentIntermediateTexts.length > 0 ? allSubagentIntermediateTexts : undefined,
+        tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
+        final_content: finalContent || undefined,
+        qa_pass: qaPass,
+        qa_reason: qaReason || undefined,
+        routing_strategy: routingDecisionInfo?.strategy,
+        routing_provider: routingDecisionInfo?.providerName,
+        routing_model: routingDecisionInfo?.modelName,
+      },
+    };
+  } catch (err: unknown) {
+    return {
+      content: sm('task.subagent_exec_error', { type: subagentType, error: String(err) }),
+      isError: true,
+      metadata: { subagent_type: subagentType },
+    };
+  }
+}

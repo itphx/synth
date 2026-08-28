@@ -29,7 +29,6 @@ import { createModelRoutes } from './routes/models.js';
 import { createAgentRoutes } from './routes/agents.js';
 import { createFsRoutes } from './routes/fs.js';
 import { createQueueRoutes } from './routes/queue.js';
-import { createI18nRoutes } from './routes/i18n.js';
 import { createUpdateRoutes } from './routes/updates.js';
 import { createMessageRoutes } from './routes/messages.js';
 import { createSettingsRoutes } from './routes/settings.js';
@@ -182,8 +181,6 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // Auth routes — без auth (только spa-login проверяет ключ сам)
   app.route('/auth', createAuthRoutes(auth));
 
-  // i18n — без auth
-  app.route('/api/v2/i18n', createI18nRoutes());
 
   // Всё остальное требует аутентификации
   app.use('/api/*', auth.requireAuth);

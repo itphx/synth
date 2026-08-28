@@ -57,7 +57,7 @@ describe('read_session_reference', () => {
 
     const result = await readSessionReferenceTool.execute({ session_id: ref.id }, makeCtx());
     expect(result.isError).toBeUndefined();
-    expect(result.content).toContain('# Сессия: Ref');
+    expect(result.content).toContain('# Session: Ref');
     expect(result.content).toContain('содержимое referenced-сессии');
   });
 

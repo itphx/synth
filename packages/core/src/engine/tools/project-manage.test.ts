@@ -102,7 +102,7 @@ describe('project_create / project_attach', () => {
   it('project_attach к несуществующему проекту — ошибка', async () => {
     const result = await projectAttachTool.execute({ projectId: 'missing' }, makeCtx());
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('не найден');
+    expect(result.content).toContain('not found');
   });
 
   it('project_attach публикует session.moved', async () => {
@@ -187,7 +187,7 @@ describe('project_log / project_invariants', () => {
 
     const result = await projectLogWriteTool.execute({ text: 'X' }, makeCtx());
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('Проект отсутствует');
+    expect(result.content).toContain('No project');
   });
 
   it('project_log_read рендерит markdown', async () => {
@@ -196,7 +196,7 @@ describe('project_log / project_invariants', () => {
 
     const result = await projectLogReadTool.execute({}, makeCtx());
     expect(result.isError).toBeUndefined();
-    expect(result.content).toContain('Лог проекта (2)');
+    expect(result.content).toContain('Project log (2)');
     expect(result.content).toContain('— Запись 1');
     expect(result.content).toContain('— Запись 2');
   });
@@ -204,7 +204,7 @@ describe('project_log / project_invariants', () => {
   it('project_log_read пустой лог → «Лог пуст»', async () => {
     const result = await projectLogReadTool.execute({}, makeCtx());
     expect(result.isError).toBeUndefined();
-    expect(result.content).toBe('Лог пуст');
+    expect(result.content).toBe('Log is empty');
   });
 
   it('project_invariants_read возвращает инварианты', async () => {
@@ -218,7 +218,7 @@ describe('project_log / project_invariants', () => {
   it('project_invariants_read пустые → «Инварианты не заданы»', async () => {
     const result = await projectInvariantsReadTool.execute({}, makeCtx());
     expect(result.isError).toBeUndefined();
-    expect(result.content).toBe('Инварианты не заданы');
+    expect(result.content).toBe('Invariants are not set');
   });
 
   it('project_invariants_write устанавливает project.invariants', async () => {

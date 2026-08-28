@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useAgentsStore } from '@/stores/agentsStore'
@@ -13,6 +13,8 @@ import { DebugModal } from './DebugModal'
 import { QueuePanel } from './QueuePanel'
 import { PermissionRequestBar } from './PermissionRequestBar'
 import { StickyNotesPanel } from './StickyNotesPanel'
+import { StreamErrorPanel } from './StreamErrorPanel'
+import { SubagentResumeBar, type SubagentSessionError } from './SubagentResumeBar'
 import type { CenterTab } from '@/stores/useUIStore'
 import { useUIStore } from '@/stores/useUIStore'
 
@@ -29,6 +31,7 @@ export function ChatTab({ tab }: ChatTabProps) {
     queueBySession,
     pendingBySession,
     retryBySession,
+    finalErrorBySession,
     stickyNotesBySession,
     summarizationPendingBySession,
     debugModalSessionId,
@@ -56,12 +59,25 @@ export function ChatTab({ tab }: ChatTabProps) {
   const stickyNotes = stickyNotesBySession[sessionId] || []
   const streamRetry = retryBySession[sessionId]
   const summarizationPending = summarizationPendingBySession[sessionId] || false
+  const finalError = finalErrorBySession[sessionId] || null
   const isStreaming = Object.values(streams).some((s) => s.isStreaming)
   const hasActiveStream = Object.values(streams).some((s) => s.isStreaming)
   const isEmpty = messages.length === 0 && !hasActiveStream && pending.length === 0 && !summarizationPending
   const debugMessage = debugModalSessionId && debugModalMessageIndex != null
     ? messages.find((m) => m.index === debugModalMessageIndex) ?? null
     : null
+
+  // B8: последнее сообщение дочерней сессии — ошибка провайдера → плашка «Продолжить»
+  const lastSessionError = useMemo<SubagentSessionError | null>(() => {
+    const last = messages[messages.length - 1]
+    if (!last || !(last.role === 'error' || last.metadata?.error === true)) return null
+    return {
+      attempts: last.metadata?.attempts as number | undefined,
+      maxRetries: last.metadata?.max_retries as number | undefined,
+      errorType: last.metadata?.error_type as string | undefined,
+      error: (last.metadata?.error as string) || last.content,
+    }
+  }, [messages])
 
   const selectionState = useChatStore(s => s.selectionBySession[sessionId])
   const selectionMode = selectionState?.mode ?? false
@@ -230,6 +246,55 @@ export function ChatTab({ tab }: ChatTabProps) {
       notify({ text: t('chat.error.cancelRetry'), type: 'error', category: 'error', sessionId })
     }
   }, [sessionId, setStreamRetry, notify, t])
+
+  // B6: повторная отправка последнего user-сообщения, упавшего с финальной ошибкой.
+  // Существующий POST /messages/:sid/:idx/retry не re-enqueue (он отключает сообщения
+  // и возвращает текст в input), поэтому композиция из существующих эндпоинтов:
+  // disable «упавшего» сообщения (не дублируем его в контексте) → повторная отправка
+  // его текста через prompt (сообщение встаёт в очередь заново).
+  const handleRetryLastFailed = useCallback(async () => {
+    const msgs = useChatStore.getState().messagesBySession[sessionId] || []
+    const lastFailed = [...msgs].reverse().find(
+      (m) => m.role === 'user' && m.metadata?.last_error,
+    )
+    if (!lastFailed) {
+      useChatStore.getState().setFinalStreamError(sessionId, null)
+      return
+    }
+    try {
+      if (lastFailed.disabled === false) {
+        await synthApi.toggleMessage(sessionId, lastFailed.index)
+      }
+      const { selectedModelName, selectedProviderName } = useProvidersStore.getState()
+      await synthApi.enqueueMessage(sessionId, lastFailed.content, {
+        agentRole: lastFailed.agent_role || undefined,
+        provider: selectedProviderName || lastFailed.provider || undefined,
+        model: selectedModelName || lastFailed.model || undefined,
+      })
+      useChatStore.getState().setFinalStreamError(sessionId, null)
+      notify({ text: t('chat.streamError.retrySent'), type: 'info', category: 'message', sessionId })
+    } catch (e) {
+      notify({ text: `${t('chat.error.retryLast')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
+    }
+  }, [sessionId, notify, t])
+
+  // B8: возобновление дочерней сессии (плашка в дочерней сессии)
+  const handleResumeSubagent = useCallback(async () => {
+    try {
+      await synthApi.resumeSubagent(sessionId)
+      // Состояние «Возобновление…» придёт событием subagent.resume.started
+    } catch (e) {
+      notify({ text: `${t('chat.subagent.resumeFailed')}: ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
+    }
+  }, [sessionId, notify, t])
+
+  const handleStopSubagentResume = useCallback(async () => {
+    try {
+      await synthApi.stopGeneration(sessionId)
+    } catch {
+      // ignore
+    }
+  }, [sessionId])
 
   const handleStopAll = useCallback(async () => {
     try {
@@ -583,6 +648,14 @@ export function ChatTab({ tab }: ChatTabProps) {
             />
           )}
 
+          {!inputExpanded && !isSubagent && finalError && (
+            <StreamErrorPanel
+              error={finalError.error}
+              errorType={finalError.errorType}
+              onRetry={handleRetryLastFailed}
+            />
+          )}
+
           {!inputExpanded && !isSubagent && (
             <QueuePanel
               pending={pending}
@@ -600,9 +673,17 @@ export function ChatTab({ tab }: ChatTabProps) {
           )}
 
           {isSubagent ? (
-            <div className="shrink-0 mx-auto mt-2 mb-2 w-4/5 rounded-xl border border-border/60 bg-surface-subtle px-4 py-3 text-center">
-              <p className="text-xs text-muted-foreground">{t('chat.input.readOnly')}</p>
-            </div>
+            <>
+              <SubagentResumeBar
+                sessionId={sessionId}
+                lastError={lastSessionError}
+                onResume={handleResumeSubagent}
+                onStop={handleStopSubagentResume}
+              />
+              <div className="shrink-0 mx-auto mt-2 mb-2 w-4/5 rounded-xl border border-border/60 bg-surface-subtle px-4 py-3 text-center">
+                <p className="text-xs text-muted-foreground">{t('chat.input.readOnly')}</p>
+              </div>
+            </>
           ) : (
             <ChatInput
               sessionId={sessionId}

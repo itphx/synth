@@ -9,6 +9,7 @@ import { nowISO, type LLMGatewayConfig, type LLMChunk, type LLMResponse, type To
 import { BaseProvider, type LLMMessage, type CancellationToken } from '../../providers/base.js';
 import type { DebugCollector } from '../../debug.js';
 import { warning } from '../../logger.js';
+import { t as sm } from '../system-messages.js';
 import { runInputGuard } from './input-guard.js';
 import { runOutputGuard } from './output-guard.js';
 import { maskSecret } from './secret-detector.js';
@@ -43,7 +44,7 @@ interface PreparedCall {
   patterns?: SecretPattern[];
 }
 
-const RATE_LIMIT_WARNING = '⚠️ Rate limit exceeded. Повторите запрос позже.';
+const RATE_LIMIT_WARNING = sm('gateway.rate_limit_warning');
 
 export class GatewayProvider extends BaseProvider {
   private readonly _inner: BaseProvider;
@@ -275,7 +276,7 @@ export class GatewayProvider extends BaseProvider {
           provider: this.getProviderName(),
           model: this.model,
           secretsFound: output.found.map(maskSecret),
-          reason: 'секреты в ответе модели',
+          reason: sm('gateway.output_secrets_reason'),
         });
       }
 

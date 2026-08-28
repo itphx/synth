@@ -282,7 +282,7 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
       expect(r.isError).toBe(true);
       expect(r.content).toContain('Permission denied');
       // Инструкция модели для deny
-      expect(r.content).toContain('Действие запрещено политикой безопасности');
+      expect(r.content).toContain('The action is prohibited by the security policy');
       // Никаких «Цикл прерван» без объяснения
       expect(r.content).not.toContain('Цикл прерван');
     }
@@ -292,14 +292,14 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
 
     // Пустой финальный ответ модели подставлен
     const done = chunks.find((c) => c.event === 'stream.done')!;
-    expect(done.data.content).toBe('Не удалось выполнить: действие заблокировано политикой безопасности');
+    expect(done.data.content).toBe('Could not proceed: the action was blocked by the security policy');
 
     // В истории нет пустого assistant-сообщения
     const session = (await h.sessionManager.getSession(h.sessionId))!;
     const assistant = [...session.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain);
     expect(assistant).toBeDefined();
     expect(assistant!.content.length).toBeGreaterThan(0);
-    expect(assistant!.content).toContain('Не удалось выполнить');
+    expect(assistant!.content).toContain('Could not proceed');
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
@@ -378,12 +378,12 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     expect(result.error).toBeUndefined();
 
     const done = chunks.find((c) => c.event === 'stream.done')!;
-    expect(done.data.content).toBe('Не удалось выполнить запрос: ответ модели пуст');
+    expect(done.data.content).toBe('Could not complete the request: the model response was empty');
 
     const session = (await h.sessionManager.getSession(h.sessionId))!;
     const assistant = [...session.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT);
     expect(assistant).toBeDefined();
-    expect(assistant!.content).toBe('Не удалось выполнить запрос: ответ модели пуст');
+    expect(assistant!.content).toBe('Could not complete the request: the model response was empty');
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 });

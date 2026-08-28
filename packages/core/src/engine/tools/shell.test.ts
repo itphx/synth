@@ -126,7 +126,7 @@ describe('execute_shell — прерывание по «Стоп» (abortSignal)
     );
 
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('Ошибка');
+    expect(result.content).toContain('Error');
     expect(result.metadata?.interrupted).toBeUndefined();
     expect(result.metadata?.stopped_by).toBeUndefined();
   });

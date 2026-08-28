@@ -719,3 +719,28 @@
 - **Задача B:** tools/abort.ts (хелперы), shell/git/project-context/web/search — реальный сигнал (SIGTERM процессам, abort fetch, подавление ретраев DDG/Bing), fs-read/fs-write/plan/todo/read-reference/project-manage/classify — guard на входе; 26 execute
 - **Проблемы:** нет. Нюанс: у Session нет статусного поля завершения — прерывание выражено metadata-маркерами сообщений
 - **Ожидают решения:** коммит; отдельная задача — retry сабагента при ошибке провайдера (3 попытки) + уведомление пользователя + resume дочерней сессии (UI + API)
+
+## 2026-08-27 (сессия 2) — i18n core + resume при ошибках провайдера
+- **Задачи:** A-core, A-ui, B-core, B-ui (все @fixer, B-core с продолжением сессии после лимита шагов)
+- **Результат:** PASS — typecheck 6/6, lint 0 errors, тесты 1233 passed (shared 66, ui 85, core 912, backend 170; +101 новых)
+- **Коммит:** не сделан — ждёт команды
+- **A-core:** SystemMessages (190 ключей, engine/system-messages.ts), MessageI18n в shared, все системные строки движка → en-content + metadata.i18n; починена потеря ToolResult.metadata при персистентности; auto-title по session.language (TITLE.en.md), subagents *.en.md; мёртвый /api/v2/i18n удалён. Промпты ролей/режимов остались локализуемыми (осознанно)
+- **A-ui:** resolveI18n (hasOwnProperty-защита), 190 ru-ключей, ветки рендера в ChatMessage/ToolCallPart; en-локаль → content без дублей словаря
+- **B-core:** retry 3x (5/15/30с, recoverable-only, backoff-сон порциями с проверкой отмены, событие subagent.retry); рефакторинг task.ts → runSubagent(); task-resume.ts (validate + runSubagentResume: маркер resume → общий цикл → итог INFO metadata.type='subagent_resumed_result' в родителя); orchestrator.startSubagentResume (блокировки, abort-совместимость); POST /sessions/:id/resume-subagent (202/400/404/409) в core+backend
+- **B-ui:** StreamErrorPanel (осн. агент, кнопка Повторить = disable старого + re-enqueue последнего user с last_error), SubagentPart (retry N/3 + Продолжить + Остановить), SubagentResumeBar (над заглушкой дочерней сессии); transportStore: subagent.retry/resume.*; i18n-ключи ru+en
+- **Верификация:** curl-smoke (404 nonexistent, 400 NO_PARENT, abort 200), UI smoke через Playwright (логин, сессии, дочерняя сессия с read-only заглушкой)
+- **Проблемы:** dev.sh из bash-инструмента не выживает (сессия убивает потомков) — запуск напрямую пакетными dev-командами через setsid
+- **Открытое:** tool descriptions classify_conversation/read_session_reference на ru (вне схемы «не трогать descriptions»); промпт-блоки [КОНТЕКСТ СЕССИИ]/[PARENT NOTES] на ru (классифицированы как промпты); retry-now/cancel-retry для resume — не делалось; визуальная проверка плашек с реальной ошибкой провайдера — требует LLM-запроса
+
+## 2026-08-28 — AD-041: унификация таксономии ошибок LLM + контракт локализации
+- **Задача:** независимая оценка последних изменений → унифицировать таксономию ошибок и локализацию строк движка, зафиксировать AD-041 в AGENTS.md.
+- **Тип:** refactor + docs
+- **Исполнитель:** оркестратор (оценка + AD) + @fixer (2 задачи)
+- **Результат:** PASS — typecheck 6/6, lint 0 errors, тесты 1288 passed (shared 72, core 959, ui 87, backend 170)
+- **Коммит:** — (не выполнялся, нет явной просьбы; в дереве чужие незакоммиченные правки i18n/resume)
+- **Сделано:**
+  - **Таксономия ошибок (задача 1):** единая точка истины `llm-error.ts` — `isLlmErrorRecoverable(error, errMsg?, errorType?)`; `UNRECOVERABLE_PATTERNS` объединены (из llm-error + processor); `UNRECOVERABLE_TYPES` + `validation`; экспорт `LLM_MAX_ATTEMPTS=3`/`LLM_RETRY_DELAYS_MS=[5s,15s,30s]`. `orchestrator._handleLlmFailure` и `processor._isRecoverable` делегируют сюда, инлайновые списки удалены; `task.ts` — реэкспорт-алиасы. Новый `llm-error.test.ts`.
+  - **Локализация (задача 2, уточнённая схема):** контракт в `shared/src/i18n/index.ts` — `ENGINE_MESSAGE_KEYS` (201 ключ, `as const`), `ENGINE_MESSAGE_PARAMS`, `extractParams`, тип `EngineMessageKey`, реэкспорт `MessageI18n`; subpath-экспорт `@itphx/synth-shared/i18n`. `core/system-messages.ts` — `as const satisfies Record<SystemMessageKey,string>`, `SystemMessageKey = EngineMessageKey`. Автопроверка синхронизации: тест core (ключи set-равны + params) и тест ui (каждый ключ в ru.ts, params совпадают; en — деградация на content). **Текст НЕ перемещён:** en остаётся в core, ru в ui; в shared только контракт.
+  - **AGENTS.md:** добавлен AD-041 (строка в таблице + секция после «Отказ от JSON-блока», перед `## Аутентификация`).
+- **Важно (решение по размещению строк):** изначальный план предполагал переезд каталога в shared. При реализации выяснилось, что ru-переводы потребляет только UI, en-шаблоны — только движок, поэтому **текст не переносился**; в shared вынесен только контракт (ключи+params+утилита). Это соответствует принципу «shared = только контракты» (AD-038) и снимает риск переписывания словарной загрузки UI. Зафиксировано в AD-041.
+- **Проблемы:** нет. Открытое (из прошлой сессии) не затрагивалось.
