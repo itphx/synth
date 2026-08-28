@@ -190,9 +190,7 @@ jobs:
       - name: Публикация в npmjs.org
         run: |
           npm config set "//registry.npmjs.org/:_authToken" "${{ secrets.NPM_TOKEN }}"
-          for pkg in shared core ui backend runner synth; do
-            (cd "packages/$pkg" && pnpm publish --access public --registry https://registry.npmjs.org --no-git-checks)
-          done
+          bash scripts/publish-packages.sh https://registry.npmjs.org
 
   publish-gitverse-npm:
     name: GitVerse Package Registry
@@ -217,9 +215,7 @@ jobs:
       - name: Публикация в GitVerse Package Registry
         run: |
           npm config set "//gitverse.ru/api/packages/itphx/npm/:_authToken" "${{ secrets.GV_TOKEN }}"
-          for pkg in shared core ui backend runner synth; do
-            (cd "packages/$pkg" && pnpm publish --access public --registry https://gitverse.ru/api/packages/itphx/npm/ --no-git-checks)
-          done
+          bash scripts/publish-packages.sh https://gitverse.ru/api/packages/itphx/npm/
 
   # --- Публикация Docker ---
   # Docker-образ ставит @itphx/synth@<version> из npmjs (npm install -g),
