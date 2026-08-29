@@ -197,20 +197,21 @@ publish_docker() {
     echo "[4/4] Docker ($GITVERSE_DOCKER_REGISTRY)..."
 
     TAG="${DOCKER_TAG:-$PKG_VERSION}"
-    IMAGE="$GITVERSE_DOCKER_REGISTRY/itphx/synth:$TAG"
 
-    # Сборка образа
-    if [ -f "$SYNTH/docker/Dockerfile" ]; then
-        docker build -t "$IMAGE" -f "$SYNTH/docker/Dockerfile" "$SYNTH" || die "Сборка Docker-образа не удалась"
-        if [ "$TAG" != "latest" ]; then
-            docker tag "$IMAGE" "$GITVERSE_DOCKER_REGISTRY/itphx/synth:latest"
-        fi
-    else
-        die "Dockerfile не найден: $SYNTH/docker/Dockerfile"
-    fi
+    # Набор образов: (имя-образа, Dockerfile). Три сервиса: synth (standalone core),
+    # synth-backend (API Hub), synth-ui (SPA).
+    IMAGES=(
+        "$GITVERSE_DOCKER_REGISTRY/itphx/synth:$TAG|$SYNTH/docker/Dockerfile"
+        "$GITVERSE_DOCKER_REGISTRY/itphx/synth-backend:$TAG|$SYNTH/docker/Dockerfile.backend"
+        "$GITVERSE_DOCKER_REGISTRY/itphx/synth-ui:$TAG|$SYNTH/docker/Dockerfile.ui"
+    )
 
     if $DRY_RUN; then
-        echo "  --dry-run: образ $IMAGE собран, публикация пропущена"
+        for img in "${IMAGES[@]}"; do
+            name="${img%%|*}"; df="${img#*|}"
+            [ -f "$df" ] || die "Dockerfile не найден: $df"
+            echo "  --dry-run: $name (из $df) собран, публикация пропущена"
+        done
         return 0
     fi
 
@@ -223,15 +224,22 @@ publish_docker() {
         return 1
     fi
 
-    echo "  Публикация $IMAGE..."
-    docker push "$IMAGE" || die "Публикация Docker-образа не удалась"
+    for img in "${IMAGES[@]}"; do
+        name="${img%%|*}"; df="${img#*|}"
+        [ -f "$df" ] || die "Dockerfile не найден: $df"
+        echo "  Сборка $name (из $df)..."
+        docker build -t "$name" -f "$df" "$SYNTH" || die "Сборка Docker-образа не удалась: $name"
+        echo "  Публикация $name..."
+        docker push "$name" || die "Публикация Docker-образа не удалась: $name"
+        if [ "$TAG" != "latest" ]; then
+            latest="${name%:*}:latest"
+            echo "  Публикация latest ($latest)..."
+            docker tag "$name" "$latest"
+            docker push "$latest" || true
+        fi
+        echo "  Опубликовано: $name"
+    done
 
-    if [ "$TAG" != "latest" ]; then
-        echo "  Публикация latest..."
-        docker push "$GITVERSE_DOCKER_REGISTRY/itphx/synth:latest" || true
-    fi
-
-    echo "  Опубликовано: $IMAGE"
     echo ""
     return 0
 }
@@ -252,5 +260,7 @@ else
     echo ""
     echo "Docker:"
     echo "  docker pull $GITVERSE_DOCKER_REGISTRY/itphx/synth:$PKG_VERSION"
+    echo "  docker pull $GITVERSE_DOCKER_REGISTRY/itphx/synth-backend:$PKG_VERSION"
+    echo "  docker pull $GITVERSE_DOCKER_REGISTRY/itphx/synth-ui:$PKG_VERSION"
     echo "  docker run -p 4300:4300 $GITVERSE_DOCKER_REGISTRY/itphx/synth:$PKG_VERSION"
 fi

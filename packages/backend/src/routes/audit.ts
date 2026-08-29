@@ -70,7 +70,7 @@ export function createAuditRoutes(kit: AuthKit, deps: AuditRoutesDeps): Hono {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
     }
 
-    const user = kit.getCurrentUser(c);
+    const user = await kit.getCurrentUser(c);
     await deps.logger.append({
       ts: new Date().toISOString(),
       type: 'revealed',

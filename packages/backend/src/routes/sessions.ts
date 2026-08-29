@@ -29,7 +29,7 @@ export function createSessionRoutes(
 
   // GET /api/v2/sessions — список сессий
   app.get('/', kit.requireAuth, async (c) => {
-    const user = kit.getCurrentUser(c)!;
+    const user = (await kit.getCurrentUser(c))!;
     const projectId = c.req.query('project_id');
     const sessions = await sessionManager.listSessions({
       projectId: projectId || undefined,
@@ -40,7 +40,7 @@ export function createSessionRoutes(
 
   // POST /api/v2/sessions — создать
   app.post('/', kit.requireAuth, async (c) => {
-    const user = kit.getCurrentUser(c)!;
+    const user = (await kit.getCurrentUser(c))!;
     const body = await c.req.json().catch(() => ({}));
 
     const session = await sessionManager.createSession({
@@ -167,7 +167,7 @@ export function createSessionRoutes(
     queueManager.stop(session.id);
 
     // Оповещаем клиентов об удалении сессии
-    const user = kit.getCurrentUser(c)!;
+    const user = (await kit.getCurrentUser(c))!;
     eventBus.publish(session.id, 'session.deleted', { session_id: session.id });
 
     // Отписываем клиентов от удалённой сессии
@@ -178,7 +178,7 @@ export function createSessionRoutes(
 
   // POST /api/v2/sessions/:id/fork — ответвление сессии
   app.post('/:id/fork', kit.requireAuth, async (c) => {
-    const user = kit.getCurrentUser(c)!;
+    const user = (await kit.getCurrentUser(c))!;
     const body = await c.req.json().catch(() => ({}));
     const fork = await sessionManager.forkSession(c.req.param('id'), {
       messageId: body.message_id ?? body.messageId,
@@ -221,7 +221,7 @@ export function createSessionRoutes(
 
   // POST /api/v2/sessions/:id/prompt — отправить сообщение (очередь + SSE-стрим)
   app.post('/:id/prompt', kit.requireAuth, createRateLimiter(30, 60_000), async (c) => {
-    const user = kit.getCurrentUser(c)!;
+    const user = (await kit.getCurrentUser(c))!;
     const body = await c.req.json().catch(() => ({}));
     const content = body.content?.trim();
 
@@ -401,7 +401,7 @@ export function createSessionRoutes(
       }, 400);
     }
 
-    const user = kit.getCurrentUser(c)!;
+    const user = (await kit.getCurrentUser(c))!;
     const streamId = generateStreamId();
 
     const sysMsg: import('@itphx/synth-shared').Message = {
@@ -434,7 +434,7 @@ export function createSessionRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
 
-    const user = kit.getCurrentUser(c)!;
+    const user = (await kit.getCurrentUser(c))!;
     const streamId = generateStreamId();
 
     const sysMsg: import('@itphx/synth-shared').Message = {

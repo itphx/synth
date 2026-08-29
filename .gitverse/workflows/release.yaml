@@ -251,7 +251,7 @@ jobs:
           "
           chmod 600 "${{ gitverse.workspace }}/.docker/config.json"
 
-      - name: Сборка и публикация Docker образа (kaniko)
+      - name: Сборка и публикация Docker образа synth (kaniko)
         uses: docker://gcr.io/kaniko-project/executor:v1.24.0
         env:
           DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
@@ -262,6 +262,36 @@ jobs:
             --build-arg=SYNTH_VERSION=${{ steps.docker_tags.outputs.version }}
             --destination=gitverse.ru/itphx/synth:${{ steps.docker_tags.outputs.version }}
             --destination=gitverse.ru/itphx/synth:latest
+            --snapshot-mode=redo
+            --push-retry=3
+            --verbosity=info
+
+      - name: Сборка и публикация Docker образа synth-backend (kaniko)
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.backend
+            --build-arg=SYNTH_BACKEND_VERSION=${{ steps.docker_tags.outputs.version }}
+            --destination=gitverse.ru/itphx/synth-backend:${{ steps.docker_tags.outputs.version }}
+            --destination=gitverse.ru/itphx/synth-backend:latest
+            --snapshot-mode=redo
+            --push-retry=3
+            --verbosity=info
+
+      - name: Сборка и публикация Docker образа synth-ui (kaniko)
+        uses: docker://gcr.io/kaniko-project/executor:v1.24.0
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
+        with:
+          args: >-
+            --context=dir://${{ gitverse.workspace }}
+            --dockerfile=docker/Dockerfile.ui
+            --build-arg=SYNTH_UI_VERSION=${{ steps.docker_tags.outputs.version }}
+            --destination=gitverse.ru/itphx/synth-ui:${{ steps.docker_tags.outputs.version }}
+            --destination=gitverse.ru/itphx/synth-ui:latest
             --snapshot-mode=redo
             --push-retry=3
             --verbosity=info

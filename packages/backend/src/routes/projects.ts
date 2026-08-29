@@ -44,14 +44,14 @@ export function createProjectRoutes(
 
   // GET /api/v2/projects — список проектов
   app.get('/', kit.requireAuth, async (c) => {
-    const user = kit.getCurrentUser(c)!;
+    const user = (await kit.getCurrentUser(c))!;
     const projects = await store.list(user.id);
     return c.json(projects.map(serializeProject));
   });
 
   // POST /api/v2/projects — создать
   app.post('/', kit.requireAuth, async (c) => {
-    const user = kit.getCurrentUser(c)!;
+    const user = (await kit.getCurrentUser(c))!;
     const body = await c.req.json().catch(() => ({}));
 
     const name = body.name?.trim();

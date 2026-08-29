@@ -2,6 +2,7 @@ import type { AuthConfig, User } from '@itphx/synth-shared';
 import { createMiddleware } from 'hono/factory';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { t } from '../lib/i18n.js';
+import { createLazyOidcClient } from './oidc.js';
 
 const SESSION_COOKIE = 'user_session';
 
@@ -25,8 +26,11 @@ function extractBearerToken(h: string | undefined): string | null {
 }
 
 export function createAuthMiddleware(config: AuthConfig) {
+  // Ленивый OIDC-клиент (мемоизация, безопасно при отсутствии oidc — null)
+  const getOidcClient = createLazyOidcClient(config.oidc);
+
   // Определить пользователя из запроса
-  const getCurrentUser = (c: { req: { header(name: string): string | undefined } }): User | null => {
+  const getCurrentUser = async (c: { req: { header(name: string): string | undefined } }): Promise<User | null> => {
     // 1. Cookie-сессия
     const sessionId = typeof getCookie === 'function'
       ? getCookie(c as Parameters<typeof getCookie>[0], SESSION_COOKIE)
@@ -61,7 +65,26 @@ export function createAuthMiddleware(config: AuthConfig) {
     if (config.oidc?.enabled) {
       const token = extractBearerToken(c.req.header('Authorization'));
       if (token) {
-        // TODO: OIDC validate
+        const client = getOidcClient();
+        if (client) {
+          try {
+            const oidcUser = await client.verifyToken(token);
+            return {
+              id: oidcUser.id,
+              username: oidcUser.username,
+              email: oidcUser.email,
+              roles: oidcUser.roles,
+              preferredLanguage: 'ru',
+              createdAt: new Date().toISOString(),
+              teamRole: oidcUser.roles[0] || 'USER',
+              notes: '',
+              interviewCompleted: false,
+            };
+          } catch {
+            // Некорректный/истёкший JWT — пользователь не аутентифицирован
+            return null;
+          }
+        }
       }
     }
 
@@ -87,14 +110,14 @@ export function createAuthMiddleware(config: AuthConfig) {
 
   // Middleware: прикрепить пользователя к контексту (без ошибки)
   const attachUser = createMiddleware(async (c, next) => {
-    const user = getCurrentUser(c);
+    const user = await getCurrentUser(c);
     if (user) c.set('user', user);
     await next();
   });
 
   // Middleware: требовать аутентификации
   const requireAuth = createMiddleware(async (c, next) => {
-    const user = getCurrentUser(c);
+    const user = await getCurrentUser(c);
     if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED', message: t('auth.unauthorized', undefined, c) } }, 401);
     }

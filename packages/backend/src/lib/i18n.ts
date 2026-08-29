@@ -45,6 +45,9 @@ const en: Dictionary = {
   'auth.unauthorized': 'Authentication required',
   'auth.forbidden': 'Access denied',
   'auth.invalidApiKey': 'Invalid API key',
+  'auth.oidcDisabled': 'OIDC is disabled',
+  'auth.oidcStateMismatch': 'OIDC state mismatch',
+  'auth.oidcExchangeFailed': 'OIDC authentication failed',
 
   // Locales
   'locales.ru.nativeName': 'Russian',
@@ -98,6 +101,9 @@ const ru: Dictionary = {
   'auth.unauthorized': 'Требуется аутентификация',
   'auth.forbidden': 'Доступ запрещён',
   'auth.invalidApiKey': 'Неверный API-ключ',
+  'auth.oidcDisabled': 'OIDC отключён',
+  'auth.oidcStateMismatch': 'Сбой проверки state в OIDC',
+  'auth.oidcExchangeFailed': 'Не удалось пройти OIDC-аутентификацию',
 
   // Locales
   'locales.ru.nativeName': 'Русский',

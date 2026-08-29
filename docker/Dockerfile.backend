@@ -1,0 +1,28 @@
+# Образ synth-backend: @itphx/synth-backend (API Hub: OIDC/RBAC/движок).
+# Зависимости (@itphx/synth-core, @itphx/synth-shared) ставятся транзитивно как npm-зависимости.
+FROM node:22-alpine
+
+ARG SYNTH_BACKEND_VERSION=latest
+
+# CA внутренней инфраструктуры добавляется в рантайме через NODE_EXTRA_CA_CERTS
+# (ConfigMap-монтирование) — поэтому в образе базовый truststore Node только.
+
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+RUN npm install -g @itphx/synth-backend@${SYNTH_BACKEND_VERSION}
+
+ENV NODE_ENV=production
+ENV SYNTH_DATA_DIR=/var/synth/data
+# Порт по умолчанию для API Hub (env SYNTH_PORT переопределяется в чарте).
+ENV SYNTH_PORT=5000
+
+# Truststore: Node подхватит доп. CA из переменной (если смонтирован ConfigMap).
+# Путь переопределяется в чарте через mount; по умолчанию — пусто.
+# ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/itphx-ca.crt
+
+EXPOSE 5000
+
+VOLUME ["/var/synth/data"]
+
+# Запуск из глобально установленного npm-пакета (нет bin/main — пути через npm root -g).
+CMD ["sh", "-c", "node $(npm root -g)/@itphx/synth-backend/dist/main.js"]

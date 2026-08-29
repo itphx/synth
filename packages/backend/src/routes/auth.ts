@@ -3,18 +3,68 @@ import type { AuthKit } from '../auth/middleware.js';
 import type { AuthConfig, User } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
+import { createLazyOidcClient, oidcUserToUser } from '../auth/oidc.js';
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { t } from '../lib/i18n.js';
 import { getDefaultLang, setDefaultLang, type Lang } from '../lib/i18n-config.js';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
+const OIDC_STATE_COOKIE = 'oidc_state';
+
 export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: ProfileStore, dataDir?: string): Hono {
   const app = new Hono();
   const avatarsDir = dataDir ? join(dataDir, 'auth', 'avatars') : null;
+  const getOidcClient = createLazyOidcClient(config.oidc);
+
+  // GET /auth/login — редирект на Keycloak authorize endpoint
+  app.get('/login', async (c) => {
+    const client = getOidcClient();
+    if (!client) {
+      return c.json({ error: { code: 'BAD_REQUEST', message: t('auth.oidcDisabled', undefined, c) } }, 400);
+    }
+    const state = crypto.randomUUID();
+    setCookie(c, OIDC_STATE_COOKIE, state, {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'Lax',
+      maxAge: 600,
+    });
+    const authorizeUrl = await client.authorizeUrl(state);
+    return c.redirect(authorizeUrl);
+  });
+
+  // GET /auth/callback — обмен кода на токены, верификация, создание сессии
+  app.get('/callback', async (c) => {
+    const code = c.req.query('code');
+    const state = c.req.query('state');
+    const cookieState = getCookie(c, OIDC_STATE_COOKIE);
+    deleteCookie(c, OIDC_STATE_COOKIE, { path: '/' });
+    if (!code || !state || state !== cookieState) {
+      return c.json({ error: { code: 'BAD_REQUEST', message: t('auth.oidcStateMismatch', undefined, c) } }, 400);
+    }
+
+    const client = getOidcClient();
+    if (!client) {
+      return c.json({ error: { code: 'BAD_REQUEST', message: t('auth.oidcDisabled', undefined, c) } }, 400);
+    }
+
+    try {
+      const { id_token: idToken } = await client.exchangeCode(code);
+      const oidcUser = await client.verifyToken(idToken);
+      const user: User = oidcUserToUser(oidcUser);
+      const sessionId = kit.createSession(user);
+      kit.setSessionCookie(c, sessionId);
+      return c.redirect('/');
+    } catch (err) {
+      console.error('[auth/callback] OIDC callback error:', err);
+      return c.json({ error: { code: 'UNAUTHORIZED', message: t('auth.oidcExchangeFailed', undefined, c) } }, 401);
+    }
+  });
 
   // GET /auth/status — статус аутентификации
-  app.get('/status', (c) => {
-    const user = kit.getCurrentUser(c);
+  app.get('/status', async (c) => {
+    const user = await kit.getCurrentUser(c);
     return c.json({
       authenticated: !!user,
       debug_mode: config.debugMode,
@@ -29,8 +79,8 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
   });
 
   // GET /auth/session — проверка cookie-сессии
-  app.get('/session', (c) => {
-    const user = kit.getCurrentUser(c);
+  app.get('/session', async (c) => {
+    const user = await kit.getCurrentUser(c);
     if (!user) {
       return c.json({ user: null }, 401);
     }
@@ -45,8 +95,8 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
   });
 
   // GET /auth/me — текущий пользователь
-  app.get('/me', (c) => {
-    const user = kit.getCurrentUser(c);
+  app.get('/me', async (c) => {
+    const user = await kit.getCurrentUser(c);
     if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
     }
@@ -126,7 +176,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
 
   // GET /auth/profile
   app.get('/profile', async (c) => {
-    const user = kit.getCurrentUser(c);
+    const user = await kit.getCurrentUser(c);
     if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
     }
@@ -154,7 +204,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
 
   // PUT /auth/profile
   app.put('/profile', async (c) => {
-    const user = kit.getCurrentUser(c);
+    const user = await kit.getCurrentUser(c);
     if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
     }
@@ -201,7 +251,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
 
   // PATCH /auth/profile/preferences
   app.patch('/profile/preferences', async (c) => {
-    const user = kit.getCurrentUser(c);
+    const user = await kit.getCurrentUser(c);
     if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
     }
@@ -222,7 +272,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
 
   // DELETE /auth/profile/preferences
   app.delete('/profile/preferences', async (c) => {
-    const user = kit.getCurrentUser(c);
+    const user = await kit.getCurrentUser(c);
     if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
     }
@@ -281,7 +331,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
 
   // GET /auth/profile/avatar — отдаёт файл аватара
   app.get('/profile/avatar', async (c) => {
-    const user = kit.getCurrentUser(c);
+    const user = await kit.getCurrentUser(c);
     if (!user) return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
     if (!avatarsDir) return c.body(null, 404);
 
@@ -298,7 +348,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
 
   // POST /auth/profile/avatar — сохраняет аватар (binary)
   app.post('/profile/avatar', async (c) => {
-    const user = kit.getCurrentUser(c);
+    const user = await kit.getCurrentUser(c);
     if (!user) return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
     if (!avatarsDir) return c.json({ error: { code: 'INTERNAL_ERROR' } }, 500);
 
