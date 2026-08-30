@@ -48,6 +48,9 @@ const en: Dictionary = {
   'auth.oidcDisabled': 'OIDC is disabled',
   'auth.oidcStateMismatch': 'OIDC state mismatch',
   'auth.oidcExchangeFailed': 'OIDC authentication failed',
+  'auth.credentialsRequired': 'Enter username and password',
+  'auth.oidcLoginFailed': 'Invalid username or password',
+  'auth.spaLoginDisabled': 'Use single sign-on (SSO)',
 
   // Locales
   'locales.ru.nativeName': 'Russian',
@@ -104,6 +107,9 @@ const ru: Dictionary = {
   'auth.oidcDisabled': 'OIDC отключён',
   'auth.oidcStateMismatch': 'Сбой проверки state в OIDC',
   'auth.oidcExchangeFailed': 'Не удалось пройти OIDC-аутентификацию',
+  'auth.credentialsRequired': 'Введите логин и пароль',
+  'auth.oidcLoginFailed': 'Неверный логин или пароль',
+  'auth.spaLoginDisabled': 'Используйте единый вход (SSO)',
 
   // Locales
   'locales.ru.nativeName': 'Русский',

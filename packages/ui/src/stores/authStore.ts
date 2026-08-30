@@ -12,6 +12,7 @@ interface AuthState {
 
   initialize: () => Promise<void>
   login: (apiKey: string, username?: string) => Promise<void>
+  loginWithPassword: (username: string, password: string) => Promise<void>
   logout: () => Promise<void>
   clearError: () => void
 }
@@ -51,6 +52,26 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ isLoading: true, error: null })
     try {
       const response = await api.spaLogin({ api_key: apiKey, username })
+      set({
+        user: response.user,
+        isAuthenticated: true,
+        isLoading: false,
+      })
+      await profileService.initialize()
+      set({ isInitialized: true })
+    } catch (err) {
+      set({
+        error: err instanceof Error ? err.message : 'Login failed',
+        isLoading: false,
+        isInitialized: true,
+      })
+    }
+  },
+
+  loginWithPassword: async (username: string, password: string) => {
+    set({ isLoading: true, error: null })
+    try {
+      const response = await api.loginWithPassword(username, password)
       set({
         user: response.user,
         isAuthenticated: true,

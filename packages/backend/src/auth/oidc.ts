@@ -100,6 +100,36 @@ export class OidcClient {
   }
 
   /**
+   * POST token_endpoint — вход по логину/паролю (ROPC, Resource Owner Password Credentials).
+   * scope: 'openid' обязателен — без него Keycloak не возвращает id_token (только access_token).
+   */
+  async exchangePassword(username: string, password: string): Promise<OidcTokenResult> {
+    const discovery = await this.getDiscovery();
+    const body = new URLSearchParams({
+      grant_type: 'password',
+      client_id: this.config.clientId,
+      client_secret: this.config.clientSecret,
+      username,
+      password,
+      scope: 'openid',
+    });
+    const res = await fetch(discovery.token_endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`OIDC ROPC failed: ${res.status} ${text}`);
+    }
+    const data = (await res.json()) as Partial<OidcTokenResult>;
+    if (!data.id_token || !data.access_token) {
+      throw new Error('OIDC ROPC не вернул id_token/access_token');
+    }
+    return { id_token: data.id_token, access_token: data.access_token };
+  }
+
+  /**
    * Проверка JWT (id_token) через JWKS провайдера.
    * Возвращает User-подобный объект: id, username, email, roles.
    */

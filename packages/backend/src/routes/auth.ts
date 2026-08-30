@@ -34,6 +34,31 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
     return c.redirect(authorizeUrl);
   });
 
+  // POST /auth/login — вход по логину/паролю (ROPC) без редиректа на Keycloak
+  app.post('/login', async (c) => {
+    const client = getOidcClient();
+    if (!client) {
+      return c.json({ error: { code: 'BAD_REQUEST', message: t('auth.oidcDisabled', undefined, c) } }, 400);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const username = body.username ?? body.login;
+    const password = body.password;
+    if (!username || !password) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('auth.credentialsRequired', undefined, c) } }, 400);
+    }
+    try {
+      const { id_token: idToken } = await client.exchangePassword(username, password);
+      const oidcUser = await client.verifyToken(idToken);
+      const user: User = oidcUserToUser(oidcUser);
+      const sessionId = kit.createSession(user);
+      kit.setSessionCookie(c, sessionId);
+      return c.json({ user: { id: user.id, username: user.username, email: user.email, roles: user.roles } });
+    } catch (err) {
+      console.error('[auth/login] ROPC error:', err);
+      return c.json({ error: { code: 'UNAUTHORIZED', message: t('auth.oidcLoginFailed', undefined, c) } }, 401);
+    }
+  });
+
   // GET /auth/callback — обмен кода на токены, верификация, создание сессии
   app.get('/callback', async (c) => {
     const code = c.req.query('code');
@@ -110,6 +135,10 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
 
   // POST /auth/spa-login — SPA-логин
   app.post('/spa-login', createRateLimiter(5, 60_000), async (c) => {
+    if (config.oidc?.enabled) {
+      return c.json({ error: { code: 'FORBIDDEN', message: t('auth.spaLoginDisabled', undefined, c) } }, 403);
+    }
+
     const body = await c.req.json().catch(() => ({}));
     const apiKey: string | undefined = body.api_key || body.apiKey;
 

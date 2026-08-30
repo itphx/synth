@@ -90,6 +90,13 @@ export const api = {
     })
   },
 
+  async loginWithPassword(username: string, password: string): Promise<SPALoginResponse> {
+    return fetchJSON<SPALoginResponse>(`${BASE_URL}/login`, {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    })
+  },
+
   async logout(): Promise<void> {
     await fetch(`${BASE_URL}/logout`, {
       method: 'POST',
