@@ -130,14 +130,26 @@ export class OidcClient {
   }
 
   /**
-   * Проверка JWT (id_token) через JWKS провайдера.
+   * Проверка JWT (id_token или access_token) через JWKS провайдера.
    * Возвращает User-подобный объект: id, username, email, roles.
    */
   async verifyToken(token: string): Promise<OidcUser> {
     const discovery = await this.getDiscovery();
     const jwks = createRemoteJWKSet(new URL(discovery.jwks_uri));
     const { payload } = await jwtVerify(token, jwks);
-    return extractUser(payload);
+    return extractUser(payload, this.config.clientId);
+  }
+
+  /**
+   * Проверка пары id_token + access_token через JWKS провайдера.
+   * Роли: из id_token, если пусто — из access_token (client roles учитываются).
+   */
+  async verifyTokens(idToken: string, accessToken: string): Promise<OidcUser> {
+    const discovery = await this.getDiscovery();
+    const jwks = createRemoteJWKSet(new URL(discovery.jwks_uri));
+    const { payload: idPayload } = await jwtVerify(idToken, jwks);
+    const { payload: accessPayload } = await jwtVerify(accessToken, jwks);
+    return extractUserFromTokens(idPayload, accessPayload, this.config.clientId);
   }
 }
 
@@ -150,12 +162,38 @@ export interface OidcUser {
 }
 
 /**
+ * Извлечь известные роли из payload токена Keycloak:
+ * realm_access.roles + resource_access.<clientId>.roles (client roles).
+ * Нормализация в ВЕРХНИЙ РЕГИСТР + фильтр KNOWN_ROLES, без дубликатов. Дефолт не применяется.
+ */
+function extractKnownRoles(payload: Record<string, unknown>, clientId?: string): string[] {
+  const realmAccess = (payload.realm_access ?? {}) as Record<string, unknown>;
+  const rawRoles = Array.isArray(realmAccess.roles)
+    ? (realmAccess.roles as unknown[]).filter((r): r is string => typeof r === 'string')
+    : [];
+
+  if (clientId) {
+    const resourceAccess = (payload.resource_access ?? {}) as Record<string, unknown>;
+    const clientAccess = (resourceAccess[clientId] ?? {}) as Record<string, unknown>;
+    if (Array.isArray(clientAccess.roles)) {
+      rawRoles.push(...clientAccess.roles.filter((r): r is string => typeof r === 'string'));
+    }
+  }
+
+  const roles = rawRoles
+    .map((r) => r.toUpperCase())
+    .filter((r): r is string => (KNOWN_ROLES as readonly string[]).includes(r));
+
+  return [...new Set(roles)];
+}
+
+/**
  * Извлечь пользователя из payload id_token Keycloak:
  * - username = preferred_username (fallback email, sub)
- * - roles = realm_access.roles → ВЕРХНИЙ РЕГИСТР + фильтр известных (ADMIN/USER/LEAD/AUDITOR)
+ * - roles = realm_access.roles + resource_access.<clientId>.roles → ВЕРХНИЙ РЕГИСТР + фильтр известных (ADMIN/USER/LEAD/AUDITOR)
  * - если ролей нет — дефолт ['USER']
  */
-function extractUser(payload: Record<string, unknown>): OidcUser {
+export function extractUser(payload: Record<string, unknown>, clientId?: string): OidcUser {
   const sub = typeof payload.sub === 'string' ? payload.sub : '';
   const email = typeof payload.email === 'string' ? payload.email : undefined;
   const preferredUsername = typeof payload.preferred_username === 'string'
@@ -163,14 +201,7 @@ function extractUser(payload: Record<string, unknown>): OidcUser {
     : undefined;
   const username = preferredUsername || email || sub || '';
 
-  const realmAccess = (payload.realm_access ?? {}) as Record<string, unknown>;
-  const rawRoles = Array.isArray(realmAccess.roles)
-    ? (realmAccess.roles as unknown[]).filter((r): r is string => typeof r === 'string')
-    : [];
-
-  const roles = rawRoles
-    .map((r) => r.toUpperCase())
-    .filter((r): r is string => (KNOWN_ROLES as readonly string[]).includes(r));
+  const roles = extractKnownRoles(payload, clientId);
 
   return {
     id: sub || username || 'oidc-user',
@@ -178,6 +209,22 @@ function extractUser(payload: Record<string, unknown>): OidcUser {
     email,
     roles: roles.length > 0 ? roles : ['USER'],
   };
+}
+
+/**
+ * Объединить роли из id_token и access_token: роли из id_token, если пусто — из access_token.
+ * Поля id/username/email берутся из id_token.
+ */
+export function extractUserFromTokens(
+  idPayload: Record<string, unknown>,
+  accessPayload: Record<string, unknown>,
+  clientId?: string,
+): OidcUser {
+  const idRoles = extractKnownRoles(idPayload, clientId);
+  const accessRoles = extractKnownRoles(accessPayload, clientId);
+  const roles = idRoles.length > 0 ? idRoles : accessRoles;
+  const user = extractUser(idPayload, clientId);
+  return { ...user, roles: roles.length > 0 ? roles : ['USER'] };
 }
 
 /**
