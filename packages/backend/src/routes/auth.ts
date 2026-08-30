@@ -47,8 +47,8 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
       return c.json({ error: { code: 'VALIDATION_ERROR', message: t('auth.credentialsRequired', undefined, c) } }, 400);
     }
     try {
-      const { id_token: idToken } = await client.exchangePassword(username, password);
-      const oidcUser = await client.verifyToken(idToken);
+      const { id_token: idToken, access_token: accessToken } = await client.exchangePassword(username, password);
+      const oidcUser = await client.verifyTokens(idToken, accessToken);
       const user: User = oidcUserToUser(oidcUser);
       const sessionId = kit.createSession(user);
       kit.setSessionCookie(c, sessionId);
@@ -75,8 +75,8 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
     }
 
     try {
-      const { id_token: idToken } = await client.exchangeCode(code);
-      const oidcUser = await client.verifyToken(idToken);
+      const { id_token: idToken, access_token: accessToken } = await client.exchangeCode(code);
+      const oidcUser = await client.verifyTokens(idToken, accessToken);
       const user: User = oidcUserToUser(oidcUser);
       const sessionId = kit.createSession(user);
       kit.setSessionCookie(c, sessionId);

@@ -109,6 +109,7 @@ synth
 | [Быстрый старт](docs/QUICKSTART.md) | Установка, настройка провайдера, первый запуск |
 | [Архитектура](docs/ARCHITECTURE.md) | Компоненты, сценарии развёртывания, полная схема |
 | [Конфигурация](docs/CONFIGURATION.md) | Переменные окружения, `config.yaml`, приоритет настроек |
+| [Keycloak (OIDC)](docs/KEYCLOAK.md) | Настройка Keycloak, выдача ролей, параметры Synth для связки |
 | [LLM-провайдеры](docs/LLM_PROVIDERS.md) | Ollama, OpenAI, Anthropic — настройка и модели |
 | [Разработка](docs/DEVELOPMENT.md) | Сборка, тесты, `dev.sh`, структура монорепозитория |
 | [Маршрутизация](docs/ROUTING.md) | Быстрые ответы, выбор модели, эмбеддинги |

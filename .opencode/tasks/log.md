@@ -744,3 +744,77 @@
   - **AGENTS.md:** добавлен AD-041 (строка в таблице + секция после «Отказ от JSON-блока», перед `## Аутентификация`).
 - **Важно (решение по размещению строк):** изначальный план предполагал переезд каталога в shared. При реализации выяснилось, что ru-переводы потребляет только UI, en-шаблоны — только движок, поэтому **текст не переносился**; в shared вынесен только контракт (ключи+params+утилита). Это соответствует принципу «shared = только контракты» (AD-038) и снимает риск переписывания словарной загрузки UI. Зафиксировано в AD-041.
 - **Проблемы:** нет. Открытое (из прошлой сессии) не затрагивалось.
+
+## 2026-08-28 — Релиз v0.3.0
+- **Задача:** выкатить новый релиз (117 коммитов после origin/master, версия 0.2.0 была «сожжена» невалидной публикацией 18.08)
+- **Тип:** release
+- **Исполнитель:** оркестратор (+ @fixer не привлекался; правки workflow — оркестратор)
+- **Результат:** PASS — релиз v0.3.0 опубликован
+- **Коммиты:** 63d035a (bump 0.3.0), 2e4f63d (merge docs/developer-documentation --no-ff), 6bf25e7 (fix ci: docker ждёт npmjs), ed27d98 (fix ci: идемпотентная публикация npm), cc4d672 (fix ci: npm/docker не зависят от changelog-артефакта)
+- **Что сделано:**
+  - Версия: 0.2.0 → **0.3.0** (version-bump.sh, 7 файлов), т.к. 0.2.0 уже занята в npmjs (опубликована 18.08 без тега, не из master)
+  - Пуш master (122 коммита: 117 + bump + docs + 3 ci-фикса) → CI зелёный (typecheck/lint/1288 тестов)
+  - Dry-run release (workflow_dispatch dry_run=true) → PASS
+  - Полный release по тегу v0.3.0 (несколько прогонов из-за блокеров):
+    - **npmjs.org: 6/6 пакетов 0.3.0** ✅ (потребовалось: включить 2FA на аккаунте + GAT с bypass 2FA — см. ниже)
+    - **GitVerse npm: 6/6 пакетов 0.3.0** ✅
+    - **Docker: gitverse.ru/itphx/synth:0.3.0 (+latest)** ✅ (kaniko)
+    - **GitVerse Release v0.3.0** ✅ создан вручную (https://gitverse.ru/itphx/synth/releases/tag/v0.3.0)
+  - CI-фиксы (3):
+    - build-docker needs [build, changelog, publish-npmjs] — устранение гонки ETARGET (kaniko стартовал раньше публикации npmjs)
+    - publish-packages.sh — идемпотентная публикация (пропуск уже опубликованных версий), повторные прогоны не падают на already-exists
+    - npm/docker не зависят от changelog-артефакта (upload-artifact@v4 ненадёжен на части раннеров GitVerse — GHES-ошибка)
+- **Проблемы/уроки:**
+  - **npmjs 2026:** для публикации из CI нужен **GAT с bypass 2FA** (без bypass при включённой 2FA каждый publish требует OTP — в CI не работает; при выключенной 2FA — 403). В AGENTS.md рекомендация «обычный GAT без bypass» неверна для CI — требует уточнения (см. «Открытое»).
+  - **GitVerse Actions:** rerun через API/MCP недоступен (404) — перезапуск пайплайна через удаление+пересоздание тега vX.Y.Z.
+  - **GitVerse Release:** джоба create-release падает с 403 (GV_TOKEN в секретах без прав на создание релизов) — релиз создан вручную через API.
+  - **MCP:** gitverse MCP блокирует большие тела (создание релиза с полным CHANGELOG — Access Blocked); gitea MCP подключён к другому инстансу (не находит репо/пакеты).
+  - Старые npm-токены (npm_Vp29…, npm_Qw8V…) светились в чате — подлежат отзыву.
+- **Открытое:**
+  - deprecate npmjs 0.2.0 (старая публикация) — команды переданы пользователю (нужен рабочий токен)
+  - GV_TOKEN в секретах — обновить с правами на releases (или релизы создавать вручную)
+  - AGENTS.md — уточнить раздел про npm-токены (GAT с bypass 2FA для CI; OIDC как целевой путь)
+  - create-release в CI всё ещё зависит от changelog-артефакта (может падать на раннерах без artifact v4) — на будущее: генерировать changelog прямо в create-release
+
+## 2026-08-29/30 — Managed-деплой (backend + ui) в K3s через Fleet + OIDC Keycloak (ROPC)
+- **Задача:** перевести деплой с standalone (`synth serve`) на managed (backend + ui), подружить с Keycloak (OIDC), убрать fallback на API-key
+- **Тип:** feature / инфраструктура
+- **Исполнитель:** оркестратор + @fixer (OIDC/ROPC/UI) + @tester (верификация)
+- **Результат:** PASS
+- **Коммиты (synth, gitverse):**
+  - `5c6532d` feat(backend): OIDC (Keycloak) + managed-образы backend/ui
+  - `8f0da73` fix(docker): backend/ui собираются из исходников монорепо (pnpm deploy) + chmod
+  - `611164f` feat(auth): вход по логину/паролю (ROPC) и полный отказ от API-key при OIDC
+- **Коммиты (synth-deploy, gitea):**
+  - `a73d243` feat: managed-схема (backend + ui) с OIDC Keycloak и CA
+  - `5d66537` fix: образы backend/ui из GitVerse → Gitea, реестр приватный
+  - `392f8a0` fix(ui): nginx:alpine требует root — убран runAsUser/runAsNonRoot
+  - `1062da3` fix: imagePullPolicy Always — поды всегда перетягивают актуальный образ
+  - `65f129b` fix(ca): полная цепочка доверия для keycloak — root ITPHAX CA + промежуточный ITPHX SRV CA
+  - `2b79715` fix: убран fallback на API-key (продуктовое развёртывание — только OIDC ROPC)
+- **Ветки:** синth — master; synth-deploy — main
+- **Ключевое:**
+  - Архитектура: `synth serve` (standalone core) → **backend** (@itphx/synth-backend :5000, OIDC/RBAC/встроенный движок) + **ui** (@itphx/synth-ui :8080, SPA под nginx, проксирует /api /ws /auth /admin /health на backend). Раннер (TODO-заглушка) не используется.
+  - **Чарт multi-service**: backend-deployment/service/pvc, ui-deployment/service, ingress (один хост `synth.k3s.itphx.loc`: `/` → ui, rest → backend через nginx), configmap (`synth-env` OIDC+провайдеры, `synth-itphx-ca`), sealedsecret.
+  - **OIDC backend**: `auth/oidc.ts` (OidcClient: discovery, authorizeUrl, exchangeCode, `exchangePassword` (ROPC + `scope=openid` — без него Keycloak не отдаёт id_token), verifyToken через jose/JWKS); маппинг ролей `realm_access.roles` (нижний регистр) → `ADMIN/USER/LEAD/AUDITOR`, дефолт `USER`.
+  - **ROPC**: `POST /auth/login` {username,password} → Keycloak grant_type=password → verify → cookie `user_session`. `POST /auth/spa-login` (API-key) при oidc.enabled → 403. Fallback на API-key **полностью убран** (env, чарт, sealedsecret).
+  - **UI**: `LoginForm` при oidc_enabled — форма логин/пароль (без API-ключа и debug-селекта); `client.loginWithPassword`, `authStore.loginWithPassword`.
+  - **CA**: `synth-itphx-ca` ConfigMap (root ITPHAX CA + промежуточный ITPHX SRV CA — leaf keycloak подписан SRV CA) → mount + `NODE_EXTRA_CA_CERTS`; без intermediate `UNABLE_TO_VERIFY_LEAF_SIGNATURE`.
+  - **Образы**: собраны из исходников монорепо (Dockerfile.backend: pnpm deploy --legacy + chmod a+rX; Dockerfile.ui: vite build) и запушены в **Gitea** Docker-реестр `git.itphx.ru/itphx/synth-backend|synth-ui:0.3.0` (GitVerse registry — 403 для новых образов). Реестр приватный → imagePullSecret `git.itphx.ru`.
+  - **Publish/CI**: `scripts/publish.sh` + `.gitverse/workflows/release.yaml` — 3 образа (synth, synth-backend, synth-ui) через kaniko.
+- **Верификация (в кластере):**
+  - `deploy/synth-backend` 1/1, `deploy/synth-ui` 1/1; UI `/` 200.
+  - `/auth/status` → `{"oidc_enabled":true,"debug_mode":false}`.
+  - `POST /auth/login` `lucky`/`1qaz2wsx#EDC` → 200, `roles:["USER"]`, cookie `user_session` (HttpOnly;Secure;SameSite=Lax); `/auth/session` с cookie → USER; неверный пароль → 401; `POST /auth/spa-login` с api-key → 403.
+  - env-провайдеры из `SYNTH_PROVIDER_*` → в логе `[env] провайдер: ollama → http://owu.itphx.loc:11434`.
+  - typecheck/lint/test (backend 170, ui 87) PASS; helm lint/template PASS.
+- **Проблемы/уроки:**
+  - **GitVerse Docker 403** для новых образов (synth-backend/synth-ui): место/права — перенос реестра в **Gitea** (`git.itphx.ru`), приватный образ → imagePullSecret.
+  - **npm-пакет @itphx/synth-backend@0.3.0 без OIDC** — Docker из npm не содержал OIDC-код (404 на /auth/login); перешёл на сборку из исходников.
+  - **pnpm deploy** требует `--legacy` (v10+ иначе ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE); файлы mode 770 → chmod a+rX для runAsUser 1000.
+  - **nginx:alpine** не может работать как non-root (PID 1) — для ui убран runAsUser/runAsNonRoot.
+  - **CA**: leaf keycloak подписан промежуточным `ITPHX SRV CA`, а не root — нужны оба (root + intermediate) в truststore.
+- **Открытое:**
+  - TLS-сертификат для ingress `synth.k3s.itphx.loc` (сейчас без HTTPS-серта — браузер ругается); при желании дать от внутреннего CA или cert-manager.
+  - CI-сборка 3 образов на GitVerse может снова упереться в лимит — на будущее перевести на Gitea registry или освободить место.
+  - Убедиться, что у пользователей realm `synth` выданы роли (admin/user/lead/auditor) — иначе в JWT только `USER`.
