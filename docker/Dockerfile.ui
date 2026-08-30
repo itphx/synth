@@ -18,6 +18,9 @@ FROM nginx:alpine
 
 # Собранный SPA (vite) + конфиг nginx с прокси на backend.
 COPY --from=build /repo/packages/ui/dist /usr/share/nginx/html
+# Гарантируем читаемость статики для nginx-воркера независимо от прав в контексте сборки
+# (аналог защиты в Dockerfile.backend: chmod -R a+rX /app).
+RUN chmod -R a+rX /usr/share/nginx/html
 COPY docker/nginx-ui.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 8080
