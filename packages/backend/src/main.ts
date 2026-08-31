@@ -13,6 +13,7 @@ import {
   RuntimeSettingsStore, createSettingsRoutes, AuditLogger, mergeLlmGatewayConfig,
   mergeSecurityConfig, ProtectedPathsStore,
   SecretPatternStore,
+  RateLimiter,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
@@ -37,6 +38,8 @@ import { createMcpRoutes } from './routes/mcp.js';
 import { createAuditRoutes } from './routes/audit.js';
 import { createLogsRoutes, resolveLogDir } from './routes/logs.js';
 import { createGatewayPatternsRoutes } from './routes/gateway-patterns.js';
+import { createLlmRoutes } from './routes/llm.js';
+import { createRateLimiter } from './middleware/rate-limiter.js';
 import { YamlMcpConfigStore } from './lib/mcp-config-store.js';
 import { t, getTranslations } from './lib/i18n.js';
 import { ProjectStore } from './storage/project-store.js';
@@ -224,6 +227,16 @@ const modelWindowLoader = (modelName: string): number => {
   return 0;
 };
 
+// Резолв модели по id или имени (для LLM Proxy — гибридный режим).
+const modelLoader = (model: string): ModelConfig | null => {
+  const byId = modelCache.get(model);
+  if (byId) return byId;
+  for (const m of modelCache.values()) {
+    if (m.name === model) return m;
+  }
+  return null;
+};
+
 // ContextOptimizer
 const summarizationConfig: SummarizationConfig = backendConfig.synth.summarization;
 const contextOptimizer = new ContextOptimizer(contextConfig, providerLoader, summarizationConfig, modelWindowLoader);
@@ -368,6 +381,25 @@ app.route('/api/v2/logs', createLogsRoutes(auth, {
 
 // LLM Gateway patterns routes (AD-036) — управление regex-паттернами детекции секретов, только ADMIN
 app.route('/api/v2/gateway', createGatewayPatternsRoutes(auth, patternStore));
+
+// LLM Proxy (гибридный режим, Часть 5) — OpenAI-совместимый POST /api/v2/llm/chat/completions.
+// Локальный core гоняет LLM-запросы централизованно через LLM Gateway (AD-036):
+// обфускация/блокировка секретов, rate limit, аудит, полный payload-лог.
+app.route('/api/v2/llm', createLlmRoutes(auth, {
+  providerLoader,
+  modelLoader,
+  // mergeLlmGatewayConfig может вернуть undefined, если ни base, ни runtime не заданы —
+  // но schema с default({}) гарантирует base, поэтому подставляем его.
+  gatewayConfig: gatewayConfig ?? backendConfig.synth.llmGateway,
+  gatewayAuditLogger,
+  gatewayRateLimiter: new RateLimiter(
+    (gatewayConfig ?? backendConfig.synth.llmGateway).rateLimit.userPerMinute,
+    (gatewayConfig ?? backendConfig.synth.llmGateway).rateLimit.providerPerMinute,
+  ),
+  gatewayPayloadLogPath,
+  patternStore,
+  rateLimiter: createRateLimiter(120, 60_000),
+}));
 
 // Settings routes (runtime-настройки для UI: workspace + mcp; переиспользуем core-реализацию)
 app.route('/api/v2/settings', createSettingsRoutes(auth as unknown as CoreAuthKit, {
