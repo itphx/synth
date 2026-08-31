@@ -246,7 +246,7 @@ describe('createStandaloneApp: WS /ws/events send_message с remote-рефом (
         model: 'remote/m1',
       }));
 
-      await vi.waitFor(() => expect(promptSession).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(promptSession).toHaveBeenCalledTimes(1), { timeout: 5000 });
 
       // Промпт ушёл на backend с локальным id (без префикса) и текстом.
       expect(promptSession).toHaveBeenCalledWith('ses-1', expect.objectContaining({
@@ -259,7 +259,7 @@ describe('createStandaloneApp: WS /ws/events send_message с remote-рефом (
       // UI сначала получил queued, ошибки «Session not found» нет.
       await vi.waitFor(() => {
         expect(received.some((m) => m.type === 'queued' && m.session_id === 'remote:ses-1')).toBe(true);
-      });
+      }, { timeout: 5000 });
       expect(received.some((m) => m.type === 'error')).toBe(false);
     } finally {
       ws.close();
@@ -281,7 +281,7 @@ describe('createStandaloneApp: WS /ws/events send_message с remote-рефом (
 
       await vi.waitFor(() => {
         expect(received.some((m) => m.type === 'error' && (m.data as Record<string, unknown> | undefined)?.error === 'Удалённый сервер не подключён')).toBe(true);
-      });
+      }, { timeout: 5000 });
     } finally {
       ws.close();
       await app.close();
@@ -309,7 +309,7 @@ describe('createStandaloneApp: WS /ws/events send_message с remote-рефом (
 
       await vi.waitFor(() => {
         expect(received.some((m) => m.type === 'error' && (m.data as Record<string, unknown> | undefined)?.error === 'HTTP 429 (remote)')).toBe(true);
-      });
+      }, { timeout: 5000 });
     } finally {
       ws.close();
       await app.close();

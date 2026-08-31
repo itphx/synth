@@ -586,6 +586,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       }
       const headers = Object.fromEntries(response.headers.entries());
       res.writeHead(response.status, headers);
+      // SSE/долгоживущие стримы: при chunked-кодировании Node не сбрасывает
+      // заголовки в сокет до первого write()/end(). Для пустого начала стрима
+      // (SSE до первого события/keepalive) клиент иначе не получит заголовки
+      // вовсе — сбрасываем head принудительно.
+      res.flushHeaders();
       if (response.body) {
         const reader = response.body.getReader();
         const pump = async () => {
