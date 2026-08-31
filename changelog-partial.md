@@ -1,0 +1,147 @@
+## 0.3.0 (2026-08-28)
+
+### Новые возможности
+- feat: локализация ядра + resume саб-агента при ошибках провайдера + AD-041
+- feat: прерывание инструментов по стопу — shell, git, web, поиск, файлы
+- feat: выключатель таймаута подтверждения в настройках (+ подзаголовок, размер поля) и скрытие поля в прав. панели
+- feat: настраиваемый таймаут подтверждения (глобальный + per-session) и список сессионных одобрений
+- feat: панель подтверждения — обратный таймер, кнопка «Остановить таймер», без таймаута (askTimeoutMs=0)
+- feat: единая блокировка защищённых путей + секция «Безопасность» в настройках
+- feat(ui): фиксированные заголовки в настройках, скролл к форме агента
+- feat: переключатель размышлений у агентов, генератор заголовков без размышлений
+- feat: центрированный ввод в пустой сессии
+- feat: убрано принудительное переименование новой сессии, автооткрытие вкладки
+- feat: классы агентов primary/subagent/system (мультиклассы), /agents отдаёт только основных
+- feat: контекстное окно модели — получение у провайдера, учёт в рантайме с предупреждением, передача num_ctx/max_tokens
+- feat: лог проекта (project_log_write/read) + инварианты в system prompt и инструменты (AD-040)
+- feat: сессии без проекта — инструменты project_create/project_attach, перенос с валидацией + событие session.moved, UI-действия (AD-040)
+- feat: план в проекте — kanban-структура project.plan, инструменты plan_read/list/write (AD-039/040)
+- feat: ядро состояний — todo_* CRUD, контекстный блок сессии, permission-группа RUNTIME (AD-039/040)
+- feat(ui): индикатор обработки в шапке user-сообщения, «Отключено» для уровня размышлений
+- feat: чат и область ввода — ширина 50vw, адаптивность, кнопки, уровень размышлений
+- feat(ui): новая модель жизненного цикла сообщения — статус и кнопки ретрая в user-сообщении, крутилка только после первого chunk, ошибки через стандартные уведомления, иконки+тултипы
+- feat(ui): вкладки панелей в 2 ряда с адаптивной шириной и fallback на иконки, minWidth правой панели 320, недостающие переводы
+- feat(ui): загрузка файла в конкретную папку, убраны кнопки создания у файлов, пункт «Переместить» в контекстном меню
+- feat(core): полный набор FS-эндпоинтов (write/upload/download/mkdir/move/delete) в standalone
+- feat(packages): разделение на публикуемые npm-пакеты без дублирования ассетов
+- feat: полное логирование запросов/ответов LLM + доработка окна логов
+- feat: модальное окно «Логи и аудит» (core/ui/backend/audit)
+- feat(gateway): инструкция модели об обфускации + real-time раскрытие токенов в UI (AD-036)
+- feat(gateway): редактируемый список паттернов обфускации (AD-036)
+- feat(gateway): AD-036 LLM Gateway — независимый слой безопасности
+- feat(security): [RULES] в контекстные файлы всех агентов (ru/en, включая субагентов), убрана общая вставка из кода, [WARN] перед блоком [CONTENT]
+- feat(security): защита от Indirect Prompt Injection — обёртка [CONTENT]/[CONTENT END] с trust-матрицей, секция [RULES] в system prompt, детектор на словарях injection.{ru,en}.yaml (flag/sanitize/block), конфиг security.promptInjection
+- feat(ui): вкладка «Проект» в правой панели — настройка рабочего каталога проекта (PUT /projects/:id), перенос плана из «Сессия»
+- feat: режим yolo (автоподтверждение), mode_applicable для read-only агентов, промпты режимов (переопределяемые), события todos.updated; UI: панель «Сессия» с планом/ToDo, трёхрежимный toggle (plan/act/yolo, деактивация)
+- feat(backend): портированы эндпоинты mode (PATCH sessions), settings/workspace, settings/mcp, mcp/probe — UI работает с backend :5000
+- feat: MCP API (GET/PUT settings/mcp, POST mcp/probe, McpManager в standalone, merge глобальных настроек в сессии), UI настройки доступности MCP-инструментов по режимам, проектные тулы жёстко привязаны к project.workspace
+- feat: permissions по режимам (git-write в plan, once:false, deny завершает обработку, саб-агенты через permission-check+ask в основную сессию, MCP-модель по режимам), API PATCH mode + settings/workspace, UI toggle plan/act и настройка рабочего каталога
+- feat: рабочий каталог по умолчанию (env SYNTH_DEFAULT_WORKSPACE / config / {DATA}/workspaces/default), починка web-тулов (DDG anti-bot → fallback Bing, normalize URL), UI ask-полоса подтверждений
+- feat: встроенные тулы (git, проектный контекст, web из synth-mcp), рабочий каталог по умолчанию, AD-029 permissions, AD-025 Plan/Act + AD-027 план + todo_write
+- feat: пользовательская документация маршрутизации + UI-доработки быстрых ответов
+- feat: AD-035 Micro-model first — двухуровневый каскад перед LLM (правила/embedding) ✅
+- feat: classify_conversation tool + словари в YAML + приоритет модель>keyword
+- feat: AD-034 Routing между моделями — MVP
+- feat(ui): улучшены элементы ветвления и ссылок на сессии
+- feat(AD-033): Reference и Smart Paste — ветвление и межсессионное слияние
+- feat: наследование sticky-заметок дочерними сессиями сабагентов
+- feat: режимы контекста саб-агента (inherit/summary/last_n/none) + живое сохранение истории дочерних сессий
+- feat: сессии — ветвление, форк от сообщений, read-only для сабагентов
+- feat: дерево сессий, fork-роуты, исправление публикации событий для дочерних сессий
+- feat: модель частей (parts), ветвление сессий, авто-заголовок, саб-агенты как сессии
+
+### Исправления
+- fix(ci): идемпотентная публикация npm (publish-packages.sh пропускает опубликованные версии) — повторные прогоны release не падают
+- fix(ci): docker-джоба ждёт публикации npmjs — устранение гонки ETARGET (npm install -g @itphx/synth@version)
+- fix: остановка сабагента по стопу — AbortSignal стал живым, частичный результат сохраняется
+- fix: zodToJsonSchema обрабатывает z.discriminatedUnion — валидная object-схема plan_write (DeepSeek)
+- fix: openai-провайдер — function.arguments объект → JSON-строка, проброс reasoning_content для reasoning-моделей (deepseek-v4-flash через itphx)
+- fix: отображение суб-агента — единый SubagentPart в стриминге, интерливинг и порядок
+- fix: грант «разрешить в сессии» по конкретному пути + общий грант для модели и сабагента, раскрытие ~/$HOME/$PWD в resolvePath
+- fix: подтверждение (ask) доходит до оркестратора — backend /ws/events обрабатывает permission_reply/permission_hold
+- fix: сообщения защиты путей вынесены в локализуемые промпт-файлы (ru/en)
+- fix: отключён base64-детектор секретов — ложное срабатывание на длинных путях ФС (WS1) вместо секрета, модель получала плейсхолдер и галлюцинировала (AD-036)
+- fix: агент всегда определяется в сессии — убран fallback на 'assistant' (без shell); default_agent=developer при создании сессии; убрано навязывание assistant для сессий без проекта (core+backend+UI)
+- fix: deny-цикл при заблокированной shell-команде (понятный feedback вместо «Цикл прерван», без пустого ответа) и полный частичный ответ при стопе
+- fix: PLAN MODE из контекстных файлов (ru/en), блок TODO и PLAN_GUIDE в system prompt, инструкции модели про план и todo
+- fix: режимы Plan/Act/YOLO — фильтрация тулов и описания режимов в system prompt, ревью capabilities, безопасность execute_shell
+- fix: заголовок вкладки обновляется при переименовании сессии через session.updated
+- fix: автоименование заголовков учитывает reasoningLevel генератора заголовков
+- fix: форк сессии из контекстного меню открывает вкладку вместо переименования
+- fix: автопереименование публикует session.updated — имя в дереве обновляется сразу
+- fix: таймаут стрима только на ожидание первого чанка, а не на весь запрос
+- fix: нормализация function.arguments в tool_calls для Ollama
+- fix: сохранение контекстного окна модели в настройках
+- fix: в настройках «Модели» прокручивается только список, шапка зафиксирована
+- fix: правильная персистентность tool-chain, атомарность скользящего окна, обработка ошибок и отмены
+- fix(core): очередь — дедупликация сообщений по stream_id, resume без дублей, return всех pending + удаление из истории, cancel/abort с корректной очисткой, устранена гонка queue.stalled
+- fix(core): обработка ошибок LLM и мгновенная отмена — _handleLlmFailure, связь cancellationToken↔AbortController, optional chaining в router (TypeError reading 'chat')
+- fix: packages/synth/package.json — версия 0.1.13 (не попал в bump)
+- fix(auth): cookie-сессия в standalone (spa-login) — вход в UI через synth serve/Docker работает
+- fix(context): summarizeStream не дублирует контент финального чанка
+- fix(gateway): полный лог LLM не дублирует контент ответа
+- fix(gateway): маркер «Значение скрыто» рендерится и внутри code-блоков (AD-036)
+- fix(gateway): плейсхолдер в code-блоке не превращается в сырой HTML (AD-036)
+- fix(gateway): слитный рендер секретов в ответах ассистента (AD-036)
+- fix(gateway): live-применение настроек, обфускация user-сообщений в истории (AD-036)
+- fix(backend): projectStore (+permissionConfig, defaultPlanMode) переданы в ChatOrchestrator — проект загружается, workingDir=WS1; ProjectStoreLike
+- fix: резолв относительного project.workspace относительно workspacesRoot (WS1 → {DATA}/workspaces/WS1), нормализация workspace при сохранении, проектные тулы показывают абсолютные пути
+- fix(ui/backend): MCP секция доступности строится от серверов конфига, POST /mcp/servers синхронизирует mcpManager
+- fix(ui): toggle plan/act персистентен после reload — getSession кладётся в sessionsStore (upsertSession)
+- fix(ui): видимая кнопка «Сохранить» в панели редактора файлов (иконка save не была в iconMap)
+- fix(ui): редактор и просмотрщик файлов растянуты на всю ширину центральной области
+- fix: определение текстовых файлов по содержимому (файлы без расширения считались бинарными)
+- fix: синхронизация AgentRegistry при изменении агентов через API
+- fix: валидация и нормализация id агента
+- fix: contextFile custom-агента попадает в системный промпт
+- fix: retry и операции с сообщениями в core-standalone
+- fix: маршрутизация по умолчанию выключена в новых сессиях
+- fix(ui): доступность и layout настроек — aria, radio-группы, overflow, локализация
+- fix: keyword-классификатор приоритетнее classify_conversation, minLength из сессии
+- fix: проброс routerConfig в backend, fallback на default provider
+- fix: dropdown bg-interactive→bg-input, system prompt через контекстные файлы
+- fix(ui): добавлена переменная --color-interactive в тему, настройки роутинга всегда видны
+- fix(ui): убран бэйдж inherited, убраны эмодзи, бэйдж прижат вправо ко времени
+- fix(ui): починены чекбоксы MergeModal и перенесены origin-бейджи в MessageHeader
+- fix: добавлен скролл в дерево слева (LeftPanel)
+- fix: исключены артефакты сборки UI из репозитория (packages/synth/ui)
+- fix: унаследованные сообщения в summary-режиме отключаются (disabled) вместо скрытия (hidden)
+- fix: устранены проблемы тестового покрытия и линтинга для summary context mode
+- fix: баги производительности и тестовое покрытие проектов/сессий
+- fix: message_index для форка сессий — приоритетнее messageId, включение ответа ассистента в форк
+- fix: добавлено поле session_origin в backend сериализацию
+- fix: EventBus логирует потерю событий для всех типов (не только stream)
+- fix: parent_id в backend-сериализации, бэйдж вызывающего агента в дочерних сессиях
+- fix: виртуализация списка сообщений — увеличена зона overscan и порог включения
+
+### Прочее
+- docs: аудит и актуализация документации (скилл developer-documentation)
+- chore: bump version to v0.3.0
+- docs: журнал задач — AD-041 (коммит 6edc9ef, merge ветки в master)
+- docs: журнал задач — остановка сабагента и прерывание тулов
+- docs: журнал задач оркестратора — фикс провайдера itphx/deepseek-v4-flash (две волны: arguments/reasoning_content + discriminatedUnion plan_write)
+- docs: журнал задач оркестратора — диагностика itphx/tools (нет tool_calls в стриминге), записи по deny/abort и agent-role-fallback
+- docs: журнал задач оркестратора — режимы Plan/Act/YOLO, capabilities, безопасность execute_shell
+- docs: журнал задач оркестратора (сессия 2026-08-21)
+- refactor: удалён TSM-слой (TsmState/TsmStatus/updateTsmState) — состояние, план и todo через инструменты
+- docs: добавлены AD-039/AD-040 (план в проекте, todo в сессии, замена TSM)
+- chore(dev): сборка core до старта backend в dev.sh
+- docs: журнал задач — файловый редактор и дерево файлов
+- refactor: cleanup — перенос скриптов в scripts/ и Dockerfile в docker/, удаление мусора, объединение журнала задач
+- refactor(packages): переименование пакетов @itphx/synth-* + bump 0.2.0
+- docs: журнал задач — хвосты для следующей сессии
+- docs: журнал задач — релиз 0.1.13
+- chore: bump version to v0.1.13
+- refactor(packages): переименование scope @synth/* → @itphx/* (единая org itphx)
+- docs: требования к токенам npmjs (2FA/GAT/npm v12) — починка публикации
+- chore: bump version to v0.1.12
+- docs: AD-037 + AD-038 — разделение пакетов и публикация npm
+- docs(prompts): секция [RULES] → [CONTENT RULES] в ролевых файлах агентов (перемещена после [PRINCIPLES]), тест обновлён, TITLE приведён к единому маркеру
+- refactor(prompts): секции system prompt # → [] (роли, системные шаблоны, режимы, классификация/план/роутинг) — единый стиль меток
+- docs: AGENTS.md — режимы plan/act/yolo, modeApplicable, промпты режимов, рабочий каталог, permissions (once:false/deny/саб-агенты/MCP), панель «Сессия», runtime API
+- docs: пометки tmp/ и реализованных AD-033/034 в AGENTS.md
+- docs: добавлена ссылка на документацию маршрутизации в README
+- docs: задокументирован AD-034 Routing между моделями
+- refactor: кнопка слияния всегда видна, синий бэйдж merged, контекст не скрывается при выделении
+- refactor: групповые операции с сообщениями, выделение и forward mode
+- chore: предсуществующие правки конфигурации
