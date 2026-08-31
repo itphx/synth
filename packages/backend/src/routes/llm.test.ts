@@ -60,6 +60,10 @@ class FakeProvider extends BaseProvider {
   throwError: Error | null = null;
   /** Если true — chat/chatAsync возвращают последнее user-сообщение (для теста обфускации). */
   echoUserContent = false;
+  /** Если задан — chat/chatAsync возвращают tool_calls (OpenAI-формат). */
+  toolCalls: Record<string, unknown>[] | null = null;
+  /** Если задан — chat/chatAsync возвращают reasoning_content. */
+  reasoning: string | undefined;
   lastMessages: LLMMessage[] = [];
 
   constructor(model = 'fake-model') {
@@ -85,6 +89,8 @@ class FakeProvider extends BaseProvider {
       content,
       model: this.model,
       usage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 },
+      ...(this.toolCalls ? { toolCalls: this.toolCalls } : {}),
+      ...(this.reasoning ? { reasoning: this.reasoning } : {}),
     };
   }
 
@@ -104,11 +110,15 @@ class FakeProvider extends BaseProvider {
       content,
       isFinal: false,
       usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      ...(this.toolCalls ? { toolCalls: this.toolCalls } : {}),
+      ...(this.reasoning ? { reasoning: this.reasoning } : {}),
     };
     yield {
       content: '',
       isFinal: true,
       usage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 },
+      ...(this.toolCalls ? { toolCalls: this.toolCalls } : {}),
+      ...(this.reasoning ? { reasoning: this.reasoning } : {}),
     };
   }
 }
@@ -321,6 +331,54 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
       expect(fake.lastMessages.map((m) => m.role)).toEqual(['system', 'user']);
       expect(fake.lastMessages[1]?.content).toBe('привет');
     });
+
+    it('tool-цикл: tool_calls/tool_call_id/reasoning_content доходят до провайдера', async () => {
+      const fake = new FakeProvider();
+      const { app } = createTestContext(userUser, { fakeProvider: fake });
+      await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              { id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } },
+            ],
+            reasoning_content: 'подумал и решил прочитать файл',
+          },
+          { role: 'tool', content: 'содержимое файла', tool_call_id: 'call_1' },
+          { role: 'user', content: 'продолжай' },
+        ],
+      }));
+
+      const assistant = fake.lastMessages[0]!;
+      expect(assistant.toolUse).toEqual([
+        { id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } },
+      ]);
+      expect(assistant.reasoning).toBe('подумал и решил прочитать файл');
+      const toolMsg = fake.lastMessages[1]!;
+      expect(toolMsg.role).toBe('tool');
+      expect(toolMsg.toolCallId).toBe('call_1');
+      expect(toolMsg.content).toBe('содержимое файла');
+    });
+
+    it('non-stream: tool_calls/reasoning_content пробрасываются в choices[0].message', async () => {
+      const fake = new FakeProvider();
+      fake.toolCalls = [
+        { id: 'call_2', type: 'function', function: { name: 'edit_file', arguments: '{"path":"b.ts"}' } },
+      ];
+      fake.reasoning = 'надо отредактировать';
+      const { app } = createTestContext(userUser, { fakeProvider: fake });
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'исправь' }],
+      }));
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.choices[0].message.tool_calls).toEqual(fake.toolCalls);
+      expect(body.choices[0].message.reasoning_content).toBe('надо отредактировать');
+      expect(body.choices[0].message.content).toBe('Ответ fake-провайдера');
+    });
   });
 
   describe('stream успех', () => {
@@ -365,6 +423,40 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
       expect(res.status).toBe(200);
       const text = await res.text();
       expect(text).toContain('RATE_LIMITED');
+      expect(text.trimEnd().endsWith('data: [DONE]')).toBe(true);
+    });
+
+    it('stream: tool_calls/reasoning_content пробрасываются в choices[0].delta', async () => {
+      const fake = new FakeProvider();
+      fake.toolCalls = [
+        { index: 0, id: 'call_3', type: 'function', function: { name: 'grep_files', arguments: '{"pattern":"x"}' } },
+      ];
+      fake.reasoning = 'надо поискать';
+      const { app } = createTestContext(userUser, { fakeProvider: fake });
+
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'найди' }],
+        stream: true,
+      }));
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      const lines = text.split('\n').filter((l) => l.startsWith('data: '));
+      const parsed = lines
+        .filter((l) => !l.includes('[DONE]'))
+        .map((l) => JSON.parse(l.slice(6)));
+
+      // Контент-дельта как раньше.
+      const contentChunk = parsed.find((c: any) => c.choices?.[0]?.delta?.content === 'Привет');
+      expect(contentChunk).toBeDefined();
+      // Отдельный дельта-чанк с накопленными tool_calls/reasoning (один раз).
+      const toolChunk = parsed.find((c: any) => Array.isArray(c.choices?.[0]?.delta?.tool_calls));
+      expect(toolChunk).toBeDefined();
+      expect(toolChunk.choices[0].delta.tool_calls).toEqual(fake.toolCalls);
+      expect(toolChunk.choices[0].delta.reasoning_content).toBe('надо поискать');
+      // Финальный чанк — как раньше.
+      const last = parsed[parsed.length - 1]!;
+      expect(last.choices[0].finish_reason).toBe('stop');
       expect(text.trimEnd().endsWith('data: [DONE]')).toBe(true);
     });
   });

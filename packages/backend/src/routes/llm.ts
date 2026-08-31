@@ -35,13 +35,26 @@ import type {
  * обфускация/блокировка секретов, rate limit, аудит, полный payload-лог.
  */
 
+/**
+ * Сообщение chat/completions (подмножество OpenAI API). Помимо role/content
+ * принимает поля tool-цикла: tool_calls (ассистент), tool_call_id (tool-роль),
+ * reasoning_content (DeepSeek-стиль — должно возвращаться в повторной истории).
+ * Zod-strip режет неописанные ключи, поэтому все поля объявлены явно.
+ */
+const chatMessageSchema = z.object({
+  role: z.string().min(1),
+  content: z.string().nullable(),
+  tool_calls: z.array(z.record(z.unknown())).optional(),
+  tool_call_id: z.string().optional(),
+  reasoning_content: z.string().optional(),
+  name: z.string().optional(),
+});
+type ChatMessageInput = z.infer<typeof chatMessageSchema>;
+
 /** Тело запроса chat/completions (подмножество OpenAI API). */
 const chatCompletionsSchema = z.object({
   model: z.string().min(1),
-  messages: z.array(z.object({
-    role: z.string().min(1),
-    content: z.string(),
-  })).min(1),
+  messages: z.array(chatMessageSchema).min(1),
   temperature: z.number().optional(),
   max_tokens: z.number().int().positive().optional(),
   top_p: z.number().optional(),
@@ -108,18 +121,30 @@ function toOpenAiUsage(usage: TokenUsage): Record<string, number> {
   };
 }
 
-/** Конвертация OpenAI-сообщений {role, content} в LLMMessage ядра. */
-function toLlmMessages(raw: Array<{ role: string; content: string }>): LLMMessage[] {
+/**
+ * Конвертация OpenAI-сообщений в LLMMessage ядра. Из tool-полей заполняются
+ * toolUse/toolCallId/reasoning — по аналогии с OpenAIProvider._formatMessages,
+ * чтобы tool-цикл «ассистент вернул tool_calls → история с tool_result → снова
+ * запрос» работал через прокси. content: null (типично для assistant с
+ * tool_calls) приводится к пустой строке — поле LLMMessage.content обязательное.
+ */
+function toLlmMessages(raw: ChatMessageInput[]): LLMMessage[] {
   const ts = Date.now();
-  return raw.map((m, i) => ({
-    id: `llm-proxy-${ts}-${i}`,
-    role: m.role,
-    content: m.content,
-    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-    disabled: false,
-    pinned: false,
-    branchId: 'llm-proxy',
-  }));
+  return raw.map((m, i) => {
+    const msg: LLMMessage = {
+      id: `llm-proxy-${ts}-${i}`,
+      role: m.role,
+      content: m.content ?? '',
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      disabled: false,
+      pinned: false,
+      branchId: 'llm-proxy',
+    };
+    if (m.tool_calls && m.tool_calls.length > 0) msg.toolUse = m.tool_calls;
+    if (m.tool_call_id) msg.toolCallId = m.tool_call_id;
+    if (m.reasoning_content) msg.reasoning = m.reasoning_content;
+    return msg;
+  });
 }
 
 export function createLlmRoutes(kit: AuthKit, deps: LlmRoutesDeps): Hono {
@@ -219,12 +244,17 @@ export function createLlmRoutes(kit: AuthKit, deps: LlmRoutesDeps): Hono {
       const response = await provider.chat(messages, undefined, tools, false);
       const map = transientMap.get('proxy') ?? {};
       const content = deobfuscateSecrets(response.content, map);
+      // Симметрично OpenAIProvider._parseResponse: tool_calls → message.tool_calls,
+      // reasoning → message.reasoning_content (клиент передаст их обратно в истории).
+      const message: Record<string, unknown> = { role: 'assistant', content };
+      if (response.toolCalls && response.toolCalls.length > 0) message.tool_calls = response.toolCalls;
+      if (response.reasoning) message.reasoning_content = response.reasoning;
       return c.json({
         id: `chatcmpl-${crypto.randomUUID()}`,
         object: 'chat.completion',
         created: Math.floor(Date.now() / 1000),
         model: body.model,
-        choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
+        choices: [{ index: 0, message, finish_reason: 'stop' }],
         usage: toOpenAiUsage(response.usage),
       });
     } catch (err) {
@@ -272,10 +302,18 @@ function streamCompletions(
         const encoder = new TextEncoder();
         const send = (obj: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
         let finalUsage: TokenUsage | undefined;
+        // Накопленные tool_calls/reasoning: провайдер (OpenAIProvider) отдаёт полный
+        // массив в каждом content-чанке и в финальном чанке. Прокси шлёт их ОДИН раз
+        // отдельным дельта-чанком — иначе RemoteProvider при инкрементальном накоплении
+        // (merge по index + конкатенация arguments) продублирует аргументы.
+        let accumulatedToolCalls: Record<string, unknown>[] | undefined;
+        let accumulatedReasoning: string | undefined;
 
         try {
           for await (const chunk of provider.chatAsync(messages, undefined, tools, undefined, cancellationToken)) {
             if (chunk.usage) finalUsage = chunk.usage;
+            if (chunk.toolCalls && chunk.toolCalls.length > 0) accumulatedToolCalls = chunk.toolCalls;
+            if (chunk.reasoning) accumulatedReasoning = chunk.reasoning;
             if (chunk.isFinal) continue;
             if (!chunk.content) continue;
 
@@ -289,6 +327,20 @@ function streamCompletions(
               created,
               model,
               choices: [{ index: 0, delta: { content }, finish_reason: null }],
+            });
+          }
+
+          // Дельта-чанк с tool_calls/reasoning (OpenAI-формат choices[0].delta.tool_calls).
+          const delta: Record<string, unknown> = {};
+          if (accumulatedToolCalls && accumulatedToolCalls.length > 0) delta.tool_calls = accumulatedToolCalls;
+          if (accumulatedReasoning) delta.reasoning_content = accumulatedReasoning;
+          if (Object.keys(delta).length > 0) {
+            send({
+              id,
+              object: 'chat.completion.chunk',
+              created,
+              model,
+              choices: [{ index: 0, delta, finish_reason: null }],
             });
           }
 

@@ -111,6 +111,26 @@ describe('Project API Routes', () => {
       });
       expect(res.status).toBe(400);
     });
+
+    it('создаёт проект с планом (AD-039) и сохраняет его в store', async () => {
+      const plan = {
+        version: 1,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        columns: [{ id: 'c1', name: 'Колонка', order: 0 }],
+        items: [{ id: 'i1', title: 'шаг', columnId: 'c1', priority: 'medium', order: 1, dependsOn: [], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }],
+      };
+      const { app, store } = createTestApp();
+      const res = await app.request('/api/v2/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Planned', plan }),
+      });
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      expect(body.plan).toEqual(plan);
+      const stored = await store.load(body.id);
+      expect(stored?.plan).toEqual(plan);
+    });
   });
 
   describe('GET /api/v2/projects/:id', () => {
@@ -158,6 +178,28 @@ describe('Project API Routes', () => {
         body: JSON.stringify({ name: 'Updated' }),
       });
       expect(res.status).toBe(404);
+    });
+
+    it('PUT обновляет план проекта', async () => {
+      const plan = {
+        version: 2,
+        updatedAt: '2026-02-01T00:00:00.000Z',
+        columns: [{ id: 'todo', name: 'К выполнению', order: 0 }],
+        items: [],
+      };
+      const { app, store } = createTestApp();
+      const project = store.create('PlanUpdate', 'test-user');
+      await store.save(project);
+      const res = await app.request(`/api/v2/projects/${project.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan }),
+      });
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.plan).toEqual(plan);
+      const stored = await store.load(project.id);
+      expect(stored?.plan).toEqual(plan);
     });
   });
 

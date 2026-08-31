@@ -1,12 +1,21 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import { resolve } from 'node:path';
 import { stat } from 'node:fs/promises';
 import type { AuthKit } from '../auth/middleware.js';
 import type { ProjectStore } from '../storage/project-store.js';
 import type { SessionManager } from '@itphx/synth-core';
+import type { Project } from '@itphx/synth-shared';
 import { serializeProject } from '../lib/serialize.js';
 import { t } from '../lib/i18n.js';
 import { WorkspaceResolver } from '../lib/workspace-resolver.js';
+
+/**
+ * План проекта (AD-039): структурированный объект ProjectPlan, создаётся/редактируется
+ * движком (plan_write). Отдельной zod-схемы в shared нет — принимаем произвольный
+ * объект (перенос между мирами), null очищает план.
+ */
+const planFieldSchema = z.unknown().nullable().optional();
 
 export function createProjectRoutes(
   kit: AuthKit,
@@ -73,6 +82,10 @@ export function createProjectRoutes(
       workspace: body.workspace || undefined,
       repos: body.repos || undefined,
     });
+    const planResult = planFieldSchema.safeParse(body.plan);
+    if (planResult.success && planResult.data !== undefined) {
+      project.plan = (planResult.data ?? undefined) as Project['plan'] | undefined;
+    }
     await store.save(project);
 
     return c.json(serializeProject(project), 201);
@@ -111,6 +124,10 @@ export function createProjectRoutes(
       project.workspace = body.workspace || undefined;
     }
     if (body.repos !== undefined) project.repos = body.repos;
+    const planResult = planFieldSchema.safeParse(body.plan);
+    if (planResult.success && planResult.data !== undefined) {
+      project.plan = (planResult.data ?? undefined) as Project['plan'] | undefined;
+    }
     project.updatedAt = new Date().toISOString();
 
     await store.save(project);
