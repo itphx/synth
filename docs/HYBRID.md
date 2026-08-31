@@ -1,7 +1,7 @@
 # Гибридный режим (HYBRID)
 
-> Черновик требований. Ветка: `feat/hybrid-mode`. Дата: 2026-08-31.
-> Статус: согласование. Пока НЕ реализовано.
+> Требования и статус реализации. Ветка: `feat/hybrid-mode`. Дата: 2026-08-31.
+> Статус: реализовано (T1–T10 ✅), интеграционные тесты (T11) — в работе.
 
 ## Цель
 
@@ -172,8 +172,8 @@ synth project fork <remote-id> --local
 | T6 — RemoteProvider | ✅ | `RemoteProvider` в core, инъекция `synth-remote` in-memory, политика запрета локальных провайдеров (`remote.llm=server`), слияние моделей |
 | T7 — RemoteEventBridge | ✅ | `EventBus.subscribeAll`, SSE-мост backend → локальный EventBus → UI, реконнект с backoff, переписывание id в `remote:<id>` |
 | T8 — publish/fork | ✅ | `synth project publish/fork`, backend export/import сессий, прямая синхронизация файлов (walk + fsWrite/fsUpload/fsDownload), e2e подтверждён |
-| T9 — offline-деградация | ⏳ | Частично: списки деградируют (локальный мир + warn), статус-индикатор в UI; полная доработка/политика — остаётся |
-| T10 — документация | ⏳ | HYBRID.md (этот файл); README/ARCHITECTURE/AGENTS — остаётся |
+| T9 — offline-деградация | ✅ | Списки деградируют (локальный мир + warn), явные remote-операции → 502 OFFLINE (remoteErrorToHttp), `getToken()` не роняет поток при ошибке refresh, UI: баннер «сервер недоступен», селектор «где создать» → только «Локально», remote-сущности приглушены (opacity + тултип), индикатор красный |
+| T10 — документация | ✅ | README.md, ARCHITECTURE.md, AGENTS.md, CONFIGURATION.md — гибрид описан как реализованный сценарий |
 | T11 — интеграционные тесты | ⏳ | Unit/route-тесты по каждой части есть; отдельный интеграционный сценарий «core+backend» — остаётся |
 
 ## Открытые вопросы → решено (2026-08-31)

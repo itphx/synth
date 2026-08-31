@@ -102,17 +102,70 @@ synth-core ←→ synth-runner (in-process) ←→ opencode / cline
 node packages/core/dist/main.js serve --api-key <key> --runner
 ```
 
-### Гибридный (корпоративный)
+### Гибридный (локально + корпоративный сервер)
 
-```
-synth-backend (корпоративный сервер) ←→ synth-ui (браузер)
-                                          ↕
-                             synth-core (ПК сотрудника, как раннер + клиент)
+Реализовано (ветка `feat/hybrid-mode`; требования и статус — [HYBRID.md](HYBRID.md)).
+
+Сценарий: пользователь запускает `synth serve` на своей машине и подключает его
+к корпоративному серверу (`synth serve --connect https://synth.k3s.itphx.loc`).
+Локальный core становится **агрегатором двух миров**: локальные и удалённые
+(backend) проекты/сессии доступны из одного локального UI. Удалённые сессии
+исполняются сервером, локальные — локальным движком, но их LLM-запросы идут
+через **LLM Proxy** на сервере (централизованные ключи, модели и аудит, AD-036).
+
+```mermaid
+flowchart LR
+    subgraph User["Машина пользователя"]
+        UI["@itphx/synth-ui (localhost)"]
+        Core["@itphx/synth-core (serve :4300)"]
+        WorldLocal["Локальный мир: проекты/сессии/файлы"]
+        RemoteClient["RemoteBackendClient (/api/v2/*)"]
+        EventBridge["RemoteEventBridge (SSE)"]
+        UI --> Core
+        Core --> WorldLocal
+        Core --> RemoteClient
+        Core --> EventBridge
+    end
+    subgraph Server["Корпоративный сервер (K3s)"]
+        Backend["@itphx/synth-backend (:5000)"]
+        OIDC["OIDC / Keycloak (device flow)"]
+        LLMProxy["LLM Proxy: POST /api/v2/llm/chat/completions"]
+        Gateway["Gateway AD-036 (аудит, обфускация, rate limit)"]
+        Providers["Центральные провайдеры (ключи на сервере)"]
+        RemoteSessions["Удалённые сессии (ChatOrchestrator)"]
+        SSE["События: GET /api/v2/events (SSE)"]
+    end
+    RemoteClient -->|HTTPS /api/v2/*| Backend
+    EventBridge -->|SSE| SSE
+    Core -->|LLM-запросы локальных сессий| LLMProxy
+    Backend --> OIDC
+    LLMProxy --> Gateway
+    Gateway --> Providers
+    Backend --> RemoteSessions
 ```
 
-- Core на машине сотрудника — доступ к внутренним сервисам, VPN, файлам
-- Сессии и аудит — централизованы на корпоративном бэкенде
-- API-ключи провайдеров хранятся только на сервере
+Ключевые элементы:
+
+- **Агрегация миров:** у каждой сущности поле `origin: 'local'|'remote'`,
+  удалённые id — `remote:<uuid>` (исключают коллизии UUID между мирами); списки
+  проектов/сессий объединяются, запросы маршрутизируются по миру.
+- **RemoteBackendClient** (`packages/core/src/remote/client.ts`) — HTTP-клиент
+  к `/api/v2/*` сервера: auth (OIDC device flow / API-ключ), таймауты, ретраи,
+  ошибки «сервер недоступен».
+- **RemoteEventBridge** (`packages/core/src/remote/event-bridge.ts`) — транслирует
+  SSE сервера в локальный EventBus; события удалённых сессий переписываются в
+  `remote:<id>` и доходят до UI.
+- **LLM Proxy** (`packages/backend/src/routes/llm.ts`) — OpenAI-совместимый
+  `POST /api/v2/llm/chat/completions`; прогоняет запросы через Gateway (AD-036).
+  При `remote.llm: server` локальные провайдеры запрещены полностью.
+- **publish / fork** (`packages/core/src/remote/transfer.ts`) —
+  `synth project publish <id> --remote` (локальный проект → сервер) и
+  `synth project fork <id> --remote` (удалённый проект → локально); переносят
+  проект + сессии + файлы (backend: `GET /sessions/:id/export`,
+  `POST /sessions/import`).
+- **Статус и offline:** `GET /api/v2/hybrid/status` →
+  `{ enabled, connected, backendUrl, user }`; при недоступности сервера локальный
+  мир работает, явные remote-операции возвращают 502 OFFLINE.
 
 ## Ключевые решения (AD)
 

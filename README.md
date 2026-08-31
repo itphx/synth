@@ -119,6 +119,23 @@ synth
 
 ---
 
+## Гибридный режим (локально + сервер)
+
+Synth подключается к корпоративному серверу (например `https://synth.k3s.itphx.loc`),
+объединяя локальные и удалённые проекты/сессии в одном UI. LLM-запросы
+централизованы — идут через сервер (ключи, модели и аудит — только на нём).
+
+```bash
+synth connect --backend https://synth.k3s.itphx.loc \
+  --oidc-issuer https://keycloak.itphx.loc/realms/synth \
+  --oidc-client-id synth
+synth serve --connect https://synth.k3s.itphx.loc
+```
+
+Подробнее — [docs/HYBRID.md](docs/HYBRID.md).
+
+---
+
 ## Лицензия
 
 MIT
