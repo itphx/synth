@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { WebSocket } from 'ws';
 import { createStandaloneApp, injectRemoteProvider } from './app.js';
 import { JsonStore } from '../storage/json-store.js';
 import { clearRemoteTokenProviders } from '../providers/remote.js';
@@ -179,6 +180,139 @@ describe('createStandaloneApp: RemoteEventBridge (гибрид, Часть 7)', 
     } finally {
       abort.abort();
       await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+describe('createStandaloneApp: WS /ws/events send_message с remote-рефом (гибрид)', () => {
+  function connectWs(port: number, apiKey: string): Promise<WebSocket> {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      ws.on('open', () => resolve(ws));
+      ws.on('error', reject);
+    });
+  }
+
+  function collect(ws: WebSocket): Array<Record<string, unknown>> {
+    const received: Array<Record<string, unknown>> = [];
+    ws.on('message', (raw: Buffer) => {
+      try { received.push(JSON.parse(raw.toString())); } catch { /* ignore */ }
+    });
+    return received;
+  }
+
+  async function startServer(config: Record<string, unknown>) {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-ws-remote-'));
+    const { server } = await createStandaloneApp({
+      port: 0,
+      dataDir: dir,
+      apiKey: 'test-key',
+      ...config,
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    return {
+      dir,
+      server,
+      port,
+      close: async () => {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await rm(dir, { recursive: true, force: true }).catch(() => {});
+      },
+    };
+  }
+
+  it('remote:<id>: promptSession вызывается с локальным id и текстом, локальный оркестратор не трогается', async () => {
+    const promptSession = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    const fakeRemote = {
+      backendUrl: 'https://backend.test',
+      request: vi.fn().mockResolvedValue(new Response(null, { status: 200 })),
+      promptSession,
+    } as unknown as RemoteBackendClient;
+
+    const app = await startServer({ remoteClient: fakeRemote, remoteGetToken: async () => 'tok' });
+    const ws = await connectWs(app.port, 'test-key');
+    const received = collect(ws);
+
+    try {
+      ws.send(JSON.stringify({
+        type: 'send_message',
+        session_id: 'remote:ses-1',
+        content: 'привет удалённой сессии',
+        agent_role: 'developer',
+        model: 'remote/m1',
+      }));
+
+      await vi.waitFor(() => expect(promptSession).toHaveBeenCalledTimes(1));
+
+      // Промпт ушёл на backend с локальным id (без префикса) и текстом.
+      expect(promptSession).toHaveBeenCalledWith('ses-1', expect.objectContaining({
+        content: 'привет удалённой сессии',
+        messageId: expect.any(String),
+        agent: 'developer',
+        model: 'remote/m1',
+      }));
+
+      // UI сначала получил queued, ошибки «Session not found» нет.
+      await vi.waitFor(() => {
+        expect(received.some((m) => m.type === 'queued' && m.session_id === 'remote:ses-1')).toBe(true);
+      });
+      expect(received.some((m) => m.type === 'error')).toBe(false);
+    } finally {
+      ws.close();
+      await app.close();
+    }
+  });
+
+  it('remote:<id> без remoteClient → error «Удалённый сервер не подключён»', async () => {
+    const app = await startServer({});
+    const ws = await connectWs(app.port, 'test-key');
+    const received = collect(ws);
+
+    try {
+      ws.send(JSON.stringify({
+        type: 'send_message',
+        session_id: 'remote:ses-1',
+        content: 'привет',
+      }));
+
+      await vi.waitFor(() => {
+        expect(received.some((m) => m.type === 'error' && (m.data as Record<string, unknown> | undefined)?.error === 'Удалённый сервер не подключён')).toBe(true);
+      });
+    } finally {
+      ws.close();
+      await app.close();
+    }
+  });
+
+  it('ошибка promptSession → WS error в формате локальных ошибок', async () => {
+    const promptSession = vi.fn().mockRejectedValue(new Error('HTTP 429 (remote)'));
+    const fakeRemote = {
+      backendUrl: 'https://backend.test',
+      request: vi.fn().mockResolvedValue(new Response(null, { status: 200 })),
+      promptSession,
+    } as unknown as RemoteBackendClient;
+
+    const app = await startServer({ remoteClient: fakeRemote, remoteGetToken: async () => 'tok' });
+    const ws = await connectWs(app.port, 'test-key');
+    const received = collect(ws);
+
+    try {
+      ws.send(JSON.stringify({
+        type: 'send_message',
+        session_id: 'remote:ses-1',
+        content: 'привет',
+      }));
+
+      await vi.waitFor(() => {
+        expect(received.some((m) => m.type === 'error' && (m.data as Record<string, unknown> | undefined)?.error === 'HTTP 429 (remote)')).toBe(true);
+      });
+    } finally {
+      ws.close();
+      await app.close();
     }
   });
 });

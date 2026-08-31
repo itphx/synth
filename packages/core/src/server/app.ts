@@ -19,6 +19,7 @@ import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } fr
 import { createLocalAuth } from '../auth/local.js';
 import type { RemoteBackendClient } from '../remote/client.js';
 import { RemoteEventBridge } from '../remote/event-bridge.js';
+import { isRemoteRef, toLocalId } from '../remote/aggregate.js';
 import { setRemoteTokenProvider } from '../providers/remote.js';
 import { JsonStore } from '../storage/json-store.js';
 import { ProjectStore } from '../storage/project-store.js';
@@ -672,6 +673,39 @@ export async function createStandaloneApp(config: StandaloneConfig) {
               }));
 
               (async () => {
+                // Гибрид: remote-сессия (`remote:<id>`) — промпт уходит на удалённый
+                // backend (raw Response, тело не читаем), события возвращаются через
+                // RemoteEventBridge. Локальный оркестратор не запускается.
+                if (isRemoteRef(sid)) {
+                  const remote = config.remoteClient;
+                  if (!remote) {
+                    ws.send(JSON.stringify({
+                      type: 'error',
+                      session_id: sid,
+                      data: { error: 'Удалённый сервер не подключён' },
+                      timestamp: nowISO(),
+                    }));
+                    return;
+                  }
+                  try {
+                    await remote.promptSession(toLocalId(sid), {
+                      content: msg.content.trim(),
+                      messageId: streamId,
+                      ...(msg.agent_role ? { agent: msg.agent_role } : {}),
+                      ...(msg.provider ? { provider: msg.provider } : {}),
+                      ...(msg.model ? { model: msg.model } : {}),
+                    });
+                  } catch (err) {
+                    ws.send(JSON.stringify({
+                      type: 'error',
+                      session_id: sid,
+                      data: { error: err instanceof Error ? err.message : String(err) },
+                      timestamp: nowISO(),
+                    }));
+                  }
+                  return;
+                }
+
                 const session = await sessionManager.getSession(sid);
                 if (!session) {
                   ws.send(JSON.stringify({
