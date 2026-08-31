@@ -818,3 +818,26 @@
   - TLS-сертификат для ingress `synth.k3s.itphx.loc` (сейчас без HTTPS-серта — браузер ругается); при желании дать от внутреннего CA или cert-manager.
   - CI-сборка 3 образов на GitVerse может снова упереться в лимит — на будущее перевести на Gitea registry или освободить место.
   - Убедиться, что у пользователей realm `synth` выданы роли (admin/user/lead/auditor) — иначе в JWT только `USER`.
+
+## 2026-08-31 — fix: в K3s доступны не все брендовые иконки провайдеров
+- **Задача:** «Баг: в развернутом в K3s экземпляре доступны не все брэндовые иконки провайдеров.»
+- **Тип:** bug
+- **Исполнитель:** @fixer
+- **Результат:** PASS
+- **Коммит:** `0991d7b` fix(docker): гарантированная читаемость статики UI для nginx-воркера (+ образ `git.itphx.ru/itphx/synth-ui:0.3.0` пересобран и задеплоен)
+- **Первопричина (воспроизведена в кластере):** в поде `synth-ui` все 13 SVG на месте, но 6 из них (deepseek, google, meta, minimax, mistral, ollama) имели права `-rw-rwS---` (mode 2660, setgid, без чтения для others) — nginx-воркер (пользователь `nginx`, не root) отдавал на них **403**; остальные 7 (mode 674) работали. «Битые» права пришли из рабочей копии монорепо (те же 2660) через Docker `COPY`, который сохраняет права исходника. В git-индексе все файлы 100644 — git не отслеживает setgid/group-биты, поэтому расхождение было невидимо. В `Dockerfile.backend` защита `chmod -R a+rX /app` уже была, в `Dockerfile.ui` — отсутствовала.
+- **Исправление:**
+  - `docker/Dockerfile.ui`: добавлен `RUN chmod -R a+rX /usr/share/nginx/html` (аналог защиты backend, страхует от рецидива при любых правах в контексте сборки).
+  - Права всех 13 иконок в рабочей копии и в `dist/` нормализованы `chmod 644`.
+- **Проверка:** образ `synth-ui:0.3.0` пересобран, внутри `/usr/share/nginx/html/assets/providers/` все файлы `-rw-r--r--`; curl всех 13 иконок внутри пода и снаружи через `https://synth.k3s.itphx.loc` → все **200** (до фикса — 403 на 6). rollout restart deploy/synth-ui прошёл успешно.
+- **Открытое:** CI-сборка образа synth-ui на GitVerse (kaniko) идёт из чистого git-checkout (права 644) — рецидива не будет; локальные сборки из рабочей копии теперь также безопасны благодаря chmod в Dockerfile.ui.
+
+## 2026-08-31 — feat: гибридный режим (локальный synth ↔ сервер K3s) — T1–T8
+- **Задача:** «Реализовать гибридный режим: локальный synth подключается к серверу в K3s; доступны локальные и удалённые проекты; LLM централизован.»
+- **Тип:** feature
+- **Исполнитель:** @orchestrator → @fixer (8 задач)
+- **Результат:** PASS
+- **Коммит:** см. коммиты ветки feat/hybrid-mode (T1–T8)
+- **Что сделано:** конфиг `remote` (shared); RemoteBackendClient + OIDC device flow + credentials (core/remote); CLI `serve --connect`/`connect`/`disconnect`/`project publish|fork` (core+synth); агрегация миров с `origin` и namespace `remote:<id>` (core server); UI (OriginBadge, HybridStatusIndicator, подтверждения, селектор мира); LLM Proxy `POST /api/v2/llm/chat/completions` (backend, Gateway AD-036); RemoteProvider + запрет локальных провайдеров; RemoteEventBridge (SSE→EventBus→UI); publish/fork с переносом проекта+сессий+файлов (e2e подтверждён).
+- **Проверка:** pnpm test — shared 72 / core 1081 / ui 92 / backend 201; typecheck+lint чисто; e2e publish→fork на dev-backend (история сообщений и todos перенесены).
+- **Требования:** docs/HYBRID.md (ветка feat/hybrid-mode).
