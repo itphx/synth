@@ -232,6 +232,36 @@ export const routerConfigSchema = z.object({
   subagent: routerSubagentConfigSchema.default({}),
 });
 
+// --- Remote (гибридный режим) ---
+
+export const remoteConfigSchema = z.object({
+  /** Включён ли гибридный режим: локальный core подключается к удалённому backend. */
+  enabled: z.boolean().default(false),
+  /** Базовый URL удалённого backend (например https://synth.k3s.itphx.loc). */
+  backendUrl: z.string().default(''),
+  auth: z
+    .object({
+      type: z.enum(['device', 'api_key']).default('device'),
+      apiKey: z.string().default(''),
+      /** OIDC issuer (Keycloak realm), напр. https://keycloak.itphx.loc/realms/synth. Для device flow. */
+      issuer: z.string().default(''),
+      /** OIDC client_id (public client). Для device flow. */
+      clientId: z.string().default(''),
+    })
+    .default({}),
+  /** Куда идут LLM-запросы локальных сессий: server (централизация) | local. По умолчанию server. */
+  llm: z.enum(['server', 'local']).default('server'),
+  worlds: z
+    .object({
+      local: z.boolean().default(true),
+      remote: z.boolean().default(true),
+    })
+    .default({}),
+  /** Путь к файлу credentials (пусто → ~/.config/synth/credentials.json). */
+  credentialsPath: z.string().default(''),
+  timeoutMs: z.number().int().min(1).default(15000),
+});
+
 export const synthConfigSchema = z.object({
   server: serverConfigSchema.default({}),
   storage: storageConfigSchema.default({}),
@@ -248,6 +278,7 @@ export const synthConfigSchema = z.object({
   summarization: summarizationConfigSchema.default({}),
   mcp: mcpConfigSchema.default({}),
   router: routerConfigSchema.default({}),
+  remote: remoteConfigSchema.default({}),
   microFirst: microFirstConfigSchema.default({}),
   llmGateway: llmGatewayConfigSchema.default({}),
   permission: permissionConfigSchema.default({}),
@@ -274,6 +305,7 @@ export type RouterEscalationConfig = z.infer<typeof routerEscalationConfigSchema
 export type RouterCostConfig = z.infer<typeof routerCostConfigSchema>;
 export type RouterSubagentConfig = z.infer<typeof routerSubagentConfigSchema>;
 export type RouterConfig = z.infer<typeof routerConfigSchema>;
+export type RemoteConfig = z.infer<typeof remoteConfigSchema>;
 export type MicroFirstConfig = z.infer<typeof microFirstConfigSchema>;
 export type SynthConfig = z.infer<typeof synthConfigSchema>;
 export type PermissionConfig = z.infer<typeof permissionConfigSchema>;

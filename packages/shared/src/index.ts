@@ -42,6 +42,7 @@ export {
   type RouterEscalationConfig,
   type RouterCostConfig,
   type RouterSubagentConfig,
+  type RemoteConfig,
   type MicroFirstConfig,
   type SecurityConfig,
   type PromptInjectionConfig,
