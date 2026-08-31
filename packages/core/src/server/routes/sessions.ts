@@ -1,5 +1,6 @@
 import { ReadableStream } from 'node:stream/web';
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer } from '../../index.js';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema } from '@itphx/synth-shared';
@@ -7,8 +8,21 @@ import type { Message } from '@itphx/synth-shared';
 import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError } from '../../index.js';
 import { serializeSession, serializeMessage } from '../serialize.js';
 import type { ProjectStore } from '../../storage/project-store.js';
+import { isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
+import { RemoteError } from '../../remote/types.js';
+import type { RemoteBackendClient } from '../../remote/client.js';
 
 const LOCAL_USER_ID = 'local';
+
+/** Преобразовать RemoteError в HTTP-ответ API v2; не-RemoteError → undefined (пробросить дальше). */
+function mapRemoteError(c: Context, err: unknown): Response | undefined {
+  const http = remoteErrorToHttp(err);
+  if (!http) return undefined;
+  return c.json(
+    { error: { code: http.code, message: err instanceof Error ? err.message : String(err) } },
+    http.status as 400 | 401 | 404 | 409 | 500 | 502,
+  );
+}
 
 export function createSessionRoutes(
   auth: AuthKit,
@@ -19,19 +33,69 @@ export function createSessionRoutes(
   orchestrator: ChatOrchestrator,
   contextOptimizer?: ContextOptimizer,
   projectStore?: ProjectStore,
+  remoteClient?: RemoteBackendClient,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
 
   app.get('/', auth.requireAuth, async (c) => {
+    const projectId = c.req.query('project_id') || undefined;
     const sessions = await sessionManager.listSessions({
       userId: LOCAL_USER_ID,
     });
-    return c.json(sessions.map((s) => serializeSession(s, { agentRegistry })));
+
+    // Запрос удалённого мира без настроенного гибрида — ошибка, а не локальный список.
+    if (projectId && isRemoteRef(projectId) && !remoteClient) {
+      return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+    }
+
+    if (!remoteClient) {
+      return c.json(sessions.map((s) => serializeSession(s, { agentRegistry })));
+    }
+
+    try {
+      if (projectId && isRemoteRef(projectId)) {
+        const remote = (await remoteClient.listSessions(toLocalId(projectId))) as Array<Record<string, unknown>>;
+        return c.json(mergeItems([], remote, { remoteProjectId: projectId }));
+      }
+      // Локальные сериализуем в DTO ДО объединения — иначе в merged-список
+      // попадут сырые Session (camelCase) рядом с remote-DTO (snake_case).
+      const localDto = sessions.map((s) => serializeSession(s, { agentRegistry }));
+      const remote = (await remoteClient.listSessions(projectId)) as Array<Record<string, unknown>>;
+      return c.json(mergeItems(localDto, remote));
+    } catch (err) {
+      // Offline-деградация: сервер недоступен — отдаём локальный мир.
+      if (err instanceof RemoteError) {
+        console.warn(`[hybrid] удалённый backend недоступен (${err.code}): ${err.message}`);
+        if (projectId && isRemoteRef(projectId)) return c.json([]);
+        return c.json(sessions.map((s) => serializeSession(s, { agentRegistry })));
+      }
+      throw err;
+    }
   });
 
   app.post('/', auth.requireAuth, async (c) => {
     const body = await c.req.json().catch(() => ({}));
+
+    // Гибрид: создание удалённой сессии на backend.
+    if (body.origin === 'remote') {
+      if (!remoteClient) {
+        return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+      }
+      const forwarded: Record<string, unknown> = { ...body };
+      delete forwarded.origin;
+      if (typeof forwarded.project_id === 'string') forwarded.project_id = toLocalId(forwarded.project_id);
+      if (typeof forwarded.projectId === 'string') forwarded.projectId = toLocalId(forwarded.projectId);
+      try {
+        const created = (await remoteClient.createSession(forwarded)) as Record<string, unknown>;
+        return c.json(toRemote(created), 201);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const session = await sessionManager.createSession({
       title: body.name || body.title || undefined,
       projectId: body.project_id || body.projectId || undefined,
@@ -48,7 +112,21 @@ export function createSessionRoutes(
   });
 
   app.get('/:id', auth.requireAuth, async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
+    const id = c.req.param('id');
+    if (isRemoteRef(id)) {
+      if (!remoteClient) {
+        return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+      }
+      try {
+        const remote = (await remoteClient.getSession(toLocalId(id))) as Record<string, unknown>;
+        return c.json(toRemote(remote));
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+    const session = await sessionManager.getSession(id);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
     }
@@ -56,7 +134,22 @@ export function createSessionRoutes(
   });
 
   app.patch('/:id', auth.requireAuth, async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
+    const id = c.req.param('id');
+    if (isRemoteRef(id)) {
+      if (!remoteClient) {
+        return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+      }
+      const body = await c.req.json().catch(() => ({}));
+      try {
+        const updated = (await remoteClient.updateSession(toLocalId(id), body)) as Record<string, unknown>;
+        return c.json(toRemote(updated));
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+    const session = await sessionManager.getSession(id);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
     }
@@ -133,7 +226,21 @@ export function createSessionRoutes(
   });
 
   app.delete('/:id', auth.requireAuth, async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
+    const id = c.req.param('id');
+    if (isRemoteRef(id)) {
+      if (!remoteClient) {
+        return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+      }
+      try {
+        await remoteClient.deleteSession(toLocalId(id));
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+      return c.body(null, 204);
+    }
+    const session = await sessionManager.getSession(id);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
     }
@@ -156,6 +263,24 @@ export function createSessionRoutes(
   });
 
   app.post('/:id/prompt', auth.requireAuth, async (c) => {
+    const sessionId = c.req.param('id');
+
+    // Гибрид: удалённая сессия исполняется backend — пробрасываем upstream Response
+    // как есть (SSE-стрим), без локального оркестратора.
+    if (isRemoteRef(sessionId)) {
+      if (!remoteClient) {
+        return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+      }
+      const body = await c.req.json().catch(() => ({}));
+      try {
+        return await remoteClient.promptSession(toLocalId(sessionId), body, { signal: c.req.raw.signal });
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const body = await c.req.json().catch(() => ({}));
     const content = body.content?.trim();
 
@@ -163,7 +288,6 @@ export function createSessionRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Контент обязателен' } }, 400);
     }
 
-    const sessionId = c.req.param('id');
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
@@ -238,7 +362,24 @@ export function createSessionRoutes(
   });
 
   app.get('/:id/messages', auth.requireAuth, async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
+    const id = c.req.param('id');
+    if (isRemoteRef(id)) {
+      if (!remoteClient) {
+        return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+      }
+      try {
+        const result = (await remoteClient.getSessionMessages(toLocalId(id))) as Record<string, unknown>;
+        // session_id в ответе — ссылка на сущность: приводим к remote-ref.
+        const out = { ...result };
+        if (typeof out.session_id === 'string') out.session_id = toRemoteRef(out.session_id);
+        return c.json(out);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+    const session = await sessionManager.getSession(id);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
     }
@@ -268,7 +409,21 @@ export function createSessionRoutes(
   });
 
   app.post('/:id/abort', auth.requireAuth, async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
+    const id = c.req.param('id');
+    if (isRemoteRef(id)) {
+      if (!remoteClient) {
+        return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+      }
+      try {
+        const result = await remoteClient.abortSession(toLocalId(id));
+        return c.json(result);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+    const session = await sessionManager.getSession(id);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
     }
@@ -299,7 +454,21 @@ export function createSessionRoutes(
   });
 
   app.post('/:id/summarize', auth.requireAuth, async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
+    const id = c.req.param('id');
+    if (isRemoteRef(id)) {
+      if (!remoteClient) {
+        return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+      }
+      try {
+        const result = await remoteClient.summarizeSession(toLocalId(id));
+        return c.json(result);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+    const session = await sessionManager.getSession(id);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
     }

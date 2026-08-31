@@ -17,10 +17,14 @@ import {
 import type { SummarizationConfig } from '@itphx/synth-shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } from '@itphx/synth-shared';
 import { createLocalAuth } from '../auth/local.js';
+import type { RemoteBackendClient } from '../remote/client.js';
+import { RemoteEventBridge } from '../remote/event-bridge.js';
+import { setRemoteTokenProvider } from '../providers/remote.js';
 import { JsonStore } from '../storage/json-store.js';
 import { ProjectStore } from '../storage/project-store.js';
 import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig } from '../storage/runtime-settings.js';
 import { createHealthRoutes } from './routes/health.js';
+import { createHybridRoutes } from './routes/hybrid.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createSessionRoutes } from './routes/sessions.js';
 import { createProjectRoutes } from './routes/projects.js';
@@ -53,6 +57,35 @@ export interface StandaloneConfig {
   gatewayConfig?: LLMGatewayConfig;
   /** Конфигурация MCP-серверов из config.yaml mcp.servers (для probe и загрузки тулов). */
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * Клиент к удалённому backend (гибридный режим, `serve --connect`).
+   * Пока только храним/экспонируем — агрегация миров в отдельной задаче.
+   */
+  remoteClient?: RemoteBackendClient;
+  /**
+   * Поставщик токена для RemoteEventBridge (обычно RemoteSession.getToken).
+   * Нужен, когда bridge создаётся внутри app.ts из remoteClient.
+   */
+  remoteGetToken?: () => Promise<string | null>;
+  /**
+   * Готовый RemoteEventBridge (гибрид, Часть 7). Если передан — используется как есть;
+   * иначе создаётся внутри из remoteClient + eventBus + remoteGetToken.
+   */
+  remoteEventBridge?: RemoteEventBridge;
+  /**
+   * Виртуальный удалённый LLM-провайдер (гибрид, `remote.llm=server`).
+   * Добавляется в providerCache/modelCache in-memory, не пишется в store.
+   */
+  remoteProvider?: {
+    /** Конфиг провайдера: { name: 'synth-remote', type: 'remote', baseUrl: backendUrl, apiKey: '', enabled: true }. */
+    provider: ProviderConfig;
+    /** Модели, которые сервер отдаёт (смерживаются в models-роут). */
+    models?: ModelConfig[];
+    /** Поставщик токена (обычно RemoteSession.getToken) — автообновление в рантайме. */
+    getToken?: () => Promise<string | null>;
+  };
+  /** Политика гибрида: запретить локальные провайдеры (все LLM — через remote). */
+  remoteBlockLocalProviders?: boolean;
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -164,6 +197,31 @@ async function syncProvidersFromEnv(
   }
 }
 
+/**
+ * Инъекция виртуального remote-провайдера в кэши (Часть 6).
+ * Добавляет провайдера в providerCache и его модели в modelCache — только
+ * in-memory, в JsonStore не пишется. Регистрирует поставщика токена для
+ * RemoteProvider, создаваемых через ProviderFactory. Возвращает имя
+ * remote-провайдера (для политики blockLocalProviders) или undefined.
+ */
+export function injectRemoteProvider(
+  providerCache: Map<string, ProviderConfig>,
+  modelCache: Map<string, ModelConfig>,
+  remoteProvider?: NonNullable<StandaloneConfig['remoteProvider']>,
+): string | undefined {
+  if (!remoteProvider) return undefined;
+
+  const rp = remoteProvider.provider;
+  providerCache.set(rp.name, { ...rp, enabled: rp.enabled ?? true });
+  if (remoteProvider.getToken) {
+    setRemoteTokenProvider(rp.name, remoteProvider.getToken);
+  }
+  for (const m of remoteProvider.models ?? []) {
+    modelCache.set(m.id, m);
+  }
+  return rp.name;
+}
+
 export async function createStandaloneApp(config: StandaloneConfig) {
   const app = new Hono();
   const auth = createLocalAuth({ apiKey: config.apiKey });
@@ -177,6 +235,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // Health — без auth
   const healthRoutes = createHealthRoutes();
   app.route('/', healthRoutes);
+
+  // Hybrid status — без auth (как health): UI опрашивает статус подключения
+  // к удалённому backend до аутентификации.
+  const hybridRoutes = createHybridRoutes(config.remoteClient);
+  app.route('/', hybridRoutes);
 
   // Auth routes — без auth (только spa-login проверяет ключ сам)
   app.route('/auth', createAuthRoutes(auth));
@@ -231,12 +294,26 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const eventBus = new EventBus();
   const queueManager = new QueueProcessorManager();
 
+  // Гибрид (Часть 7): мост событий удалённого backend → локальный EventBus.
+  // Создаётся здесь (нужен eventBus), стартует в CLI после server.listen.
+  let remoteEventBridge: RemoteEventBridge | undefined;
+  if (config.remoteClient) {
+    remoteEventBridge = config.remoteEventBridge ?? new RemoteEventBridge({
+      client: config.remoteClient,
+      getToken: config.remoteGetToken ?? (async () => null),
+      eventBus,
+      backendUrl: config.remoteClient.backendUrl,
+    });
+  }
+
   const contextBuilder = new ContextBuilder(contextConfig, {
     projectDataDir: `${dataDir}/projects`,
     defaultLanguage: 'ru',
   });
 
   const providerLoader = (name: string): ProviderConfig | null => {
+    // Политика «все LLM — через сервер»: локальные провайдеры для движка запрещены.
+    if (config.remoteBlockLocalProviders && remoteProviderName && name !== remoteProviderName) return null;
     return providerCache.get(name) ?? null;
   };
 
@@ -249,6 +326,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   (await modelStore.list()).forEach((m) => {
     modelCache.set(m.id, m);
   });
+
+  // Гибрид (Часть 6): виртуальный remote-провайдер — in-memory, не в store.
+  const remoteProviderName = injectRemoteProvider(providerCache, modelCache, config.remoteProvider);
 
   // Загрузчик сохранённого контекстного окна модели (ModelConfig.contextWindow)
   const modelWindowLoader = (modelName: string): number => {
@@ -316,31 +396,36 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // Sessions
   app.route('/api/v2/sessions', createSessionRoutes(
     auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore,
+    config.remoteClient,
   ));
 
   // Projects
-  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore));
+  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, config.remoteClient));
 
   // Providers
   app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, true));
 
   // Models
-  app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore));
+  app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, {
+    extraModels: config.remoteProvider?.models,
+    extraProviders: config.remoteProvider ? [config.remoteProvider.provider] : undefined,
+    onlyRemoteModels: config.remoteBlockLocalProviders && !!config.remoteProvider,
+  }));
 
   // Agents
   app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry));
 
   // FS
-  app.route('/api/v2/fs', createFsRoutes(auth, config.workspacesRoot));
+  app.route('/api/v2/fs', createFsRoutes(auth, config.workspacesRoot, config.remoteClient));
 
   // Queue
-  app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage));
+  app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage, config.remoteClient));
 
   // Updates
   app.route('/api/v2/updates', createUpdateRoutes(auth, dataDir));
 
   // Messages (batch operations)
-  app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager));
+  app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager, config.remoteClient));
 
   // Settings (runtime-настройки для UI, раздел «Проекты»)
   app.route('/api/v2/settings', createSettingsRoutes(auth, {
@@ -375,7 +460,6 @@ export async function createStandaloneApp(config: StandaloneConfig) {
         async start(controller) {
           const encoder = new TextEncoder();
 
-          const allSessions = await sessionManager.listSessions({ userId: 'local' });
           const unsubs: Array<() => void> = [];
 
           const handler = (event: { type: string; data: Record<string, unknown>; sessionId: string; timestamp: string }) => {
@@ -387,8 +471,15 @@ export async function createStandaloneApp(config: StandaloneConfig) {
             }
           };
 
-          for (const s of allSessions) {
-            unsubs.push(eventBus.subscribe(s.id, handler));
+          if (config.remoteClient) {
+            // Гибрид: события удалённых сессий (remote:<id>) публикует мост,
+            // локальных — оркестратор. Только subscribeAll — без дублей.
+            unsubs.push(eventBus.subscribeAll(handler));
+          } else {
+            const allSessions = await sessionManager.listSessions({ userId: 'local' });
+            for (const s of allSessions) {
+              unsubs.push(eventBus.subscribe(s.id, handler));
+            }
           }
 
           const keepalive = setInterval(() => {
@@ -535,7 +626,6 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       wss.handleUpgrade(request, socket, head, async (ws: WebSocket) => {
         const clientId = `ws-events-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-        const allSessions = await sessionManager.listSessions({ userId: 'local' });
         const unsubs: Array<() => void> = [];
 
         const handler = (event: { type: string; data: Record<string, unknown> }) => {
@@ -546,8 +636,15 @@ export async function createStandaloneApp(config: StandaloneConfig) {
           } catch { /* ignore */ }
         };
 
-        for (const s of allSessions) {
-          unsubs.push(eventBus.subscribe(s.id, handler));
+        if (config.remoteClient) {
+          // Гибрид: события удалённых сессий (remote:<id>) публикует мост —
+          // подписываемся на все события (без дублей для локальных).
+          unsubs.push(eventBus.subscribeAll(handler));
+        } else {
+          const allSessions = await sessionManager.listSessions({ userId: 'local' });
+          for (const s of allSessions) {
+            unsubs.push(eventBus.subscribe(s.id, handler));
+          }
         }
 
         ws.send(JSON.stringify({
@@ -673,6 +770,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   if (config.uiDistPath && existsSync(config.uiDistPath)) {
     console.log(`  ui: serving from ${config.uiDistPath}`);
   }
+  if (config.remoteClient) {
+    console.log(`  remote: подключён к удалённому backend (гибридный режим)`);
+  }
 
-  return { app, server, wss, port };
+  return { app, server, wss, port, remoteClient: config.remoteClient, eventBus, remoteEventBridge };
 }

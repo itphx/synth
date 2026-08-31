@@ -3,7 +3,25 @@ import { mkdir, readdir, readFile, rename, rmdir, stat, unlink, writeFile } from
 import { basename, join, relative, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
+import { isRemoteRef, toLocalId, remoteErrorToHttp } from '../../remote/aggregate.js';
+import type { RemoteBackendClient } from '../../remote/client.js';
+
+/** Преобразовать RemoteError в HTTP-ответ API v2; не-RemoteError → undefined (пробросить дальше). */
+function mapRemoteError(c: Context, err: unknown): Response | undefined {
+  const http = remoteErrorToHttp(err);
+  if (!http) return undefined;
+  return c.json(
+    { error: { code: http.code, message: err instanceof Error ? err.message : String(err) } },
+    http.status as 400 | 401 | 404 | 409 | 500 | 502,
+  );
+}
+
+/** 502, если гибрид не настроен, иначе undefined — обрабатываем удалённую сессию. */
+function remoteUnavailable(c: Context): Response | undefined {
+  return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+}
 
 /** Резолвит путь относительно root и проверяет, что результат внутри root. */
 function resolveSafe(root: string, p: string): string | null {
@@ -13,12 +31,25 @@ function resolveSafe(root: string, p: string): string | null {
   return full;
 }
 
-export function createFsRoutes(auth: AuthKit, workspacesRoot?: string): Hono {
+export function createFsRoutes(auth: AuthKit, workspacesRoot?: string, remoteClient?: RemoteBackendClient): Hono {
   const app = new Hono();
   const root = workspacesRoot || process.cwd();
 
   // GET / — список файлов в директории
   app.get('/', auth.requireAuth, async (c) => {
+    const projectId = c.req.query('project_id');
+    if (projectId && isRemoteRef(projectId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.fsList({ projectId: toLocalId(projectId), path: c.req.query('path') || '' });
+        return c.json(result);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const path = c.req.query('path') || '';
     const fullPath = resolveSafe(root, path);
     if (!fullPath) {
@@ -58,6 +89,19 @@ export function createFsRoutes(auth: AuthKit, workspacesRoot?: string): Hono {
 
   // GET /read — содержимое файла
   app.get('/read', auth.requireAuth, async (c) => {
+    const projectId = c.req.query('project_id');
+    if (projectId && isRemoteRef(projectId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.fsRead({ projectId: toLocalId(projectId), path: c.req.query('path') || '' });
+        return c.json(result);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const filePath = c.req.query('path') || '';
     const fullPath = resolveSafe(root, filePath);
     if (!fullPath) {
@@ -79,6 +123,23 @@ export function createFsRoutes(auth: AuthKit, workspacesRoot?: string): Hono {
   // POST /write — запись файла
   app.post('/write', auth.requireAuth, async (c) => {
     const body = await c.req.json().catch(() => null);
+    const projectId = body?.projectId || body?.project_id;
+    if (typeof projectId === 'string' && isRemoteRef(projectId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.fsWrite({
+          projectId: toLocalId(projectId),
+          path: body?.path,
+          content: body?.content,
+        });
+        return c.json(result, 200);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const path = body?.path;
     const content = body?.content;
     if (typeof path !== 'string' || !path || typeof content !== 'string') {
@@ -102,10 +163,30 @@ export function createFsRoutes(auth: AuthKit, workspacesRoot?: string): Hono {
 
   // POST /upload — загрузка файла (multipart)
   app.post('/upload', auth.requireAuth, async (c) => {
-    const formData = await c.req.parseBody({ all: true });
-    const dirPath = typeof formData.path === 'string' ? formData.path : '';
-    const file = formData.file;
-    const uploadedFile = Array.isArray(file) ? file[0] : file;
+    const formData = await c.req.formData();
+    const projectIdField = formData.get('project_id');
+    const projectId = typeof projectIdField === 'string' ? projectIdField : undefined;
+
+    // Гибрид: файлы удалённого проекта загружаются на backend (multipart as есть).
+    if (projectId && isRemoteRef(projectId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const fd = new FormData();
+        for (const [k, v] of formData.entries()) {
+          fd.set(k, k === 'project_id' ? toLocalId(String(v)) : v);
+        }
+        const result = await remoteClient.fsUpload(fd);
+        return c.json(result, 201);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
+    const dirPath = typeof formData.get('path') === 'string' ? String(formData.get('path')) : '';
+    const file = formData.get('file');
+    const uploadedFile = file;
 
     if (!uploadedFile || typeof uploadedFile === 'string') {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Файл не передан' } }, 400);
@@ -143,6 +224,21 @@ export function createFsRoutes(auth: AuthKit, workspacesRoot?: string): Hono {
 
   // GET /download — скачивание файла
   app.get('/download', auth.requireAuth, async (c) => {
+    const projectId = c.req.query('project_id');
+    if (projectId && isRemoteRef(projectId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        return await remoteClient.fsDownload(
+          { projectId: toLocalId(projectId), path: c.req.query('path') || '' },
+          { signal: c.req.raw.signal },
+        );
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const filePath = c.req.query('path') || '';
     const fullPath = resolveSafe(root, filePath);
     if (!fullPath) {
@@ -174,6 +270,19 @@ export function createFsRoutes(auth: AuthKit, workspacesRoot?: string): Hono {
 
   // DELETE / — удаление файла или пустой директории
   app.delete('/', auth.requireAuth, async (c) => {
+    const projectId = c.req.query('project_id');
+    if (projectId && isRemoteRef(projectId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.fsDelete({ projectId: toLocalId(projectId), path: c.req.query('path') || '' });
+        return c.json(result, 200);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const path = c.req.query('path') || '';
     const fullPath = resolveSafe(root, path);
     if (!fullPath) {
@@ -205,6 +314,19 @@ export function createFsRoutes(auth: AuthKit, workspacesRoot?: string): Hono {
   // POST /mkdir — создание директории
   app.post('/mkdir', auth.requireAuth, async (c) => {
     const body = await c.req.json().catch(() => null);
+    const projectId = body?.projectId || body?.project_id;
+    if (typeof projectId === 'string' && isRemoteRef(projectId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.fsMkdir({ projectId: toLocalId(projectId), path: body?.path });
+        return c.json(result, 201);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const path = body?.path;
     if (typeof path !== 'string' || !path) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Ожидается поле path' } }, 400);
@@ -237,6 +359,23 @@ export function createFsRoutes(auth: AuthKit, workspacesRoot?: string): Hono {
   // POST /move — перемещение/переименование
   app.post('/move', auth.requireAuth, async (c) => {
     const body = await c.req.json().catch(() => null);
+    const projectId = body?.projectId || body?.project_id;
+    if (typeof projectId === 'string' && isRemoteRef(projectId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.fsMove({
+          projectId: toLocalId(projectId),
+          sourcePath: body?.sourcePath,
+          targetPath: body?.targetPath,
+        });
+        return c.json(result, 200);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const sourcePath = body?.sourcePath;
     const targetPath = body?.targetPath;
     if (typeof sourcePath !== 'string' || !sourcePath || typeof targetPath !== 'string' || !targetPath) {

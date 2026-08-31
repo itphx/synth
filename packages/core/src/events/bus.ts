@@ -9,6 +9,7 @@ type EventHandler = (event: BusEvent) => void;
  */
 export class EventBus {
   private _subscribers = new Map<string, Set<EventHandler>>();
+  private _globalSubscribers = new Set<EventHandler>();
 
   subscribe(sessionId: string, handler: EventHandler): () => void {
     if (!this._subscribers.has(sessionId)) {
@@ -19,6 +20,20 @@ export class EventBus {
 
     return () => {
       this.unsubscribe(sessionId, handler);
+    };
+  }
+
+  /**
+   * Подписка на ВСЕ события (без привязки к sessionId). Используется
+   * гибридным режимом: RemoteEventBridge публикует события удалённых сессий
+   * под `remote:<id>`, и локальный /api/v2/events должен доставлять их UI.
+   */
+  subscribeAll(handler: EventHandler): () => void {
+    this._globalSubscribers.add(handler);
+    console.debug(`[EventBus] subscribeAll, globalHandlers=${this._globalSubscribers.size}`);
+
+    return () => {
+      this._globalSubscribers.delete(handler);
     };
   }
 
@@ -38,16 +53,26 @@ export class EventBus {
     };
 
     const handlers = this._subscribers.get(sessionId);
-    if (!handlers) {
+    const hasGlobal = this._globalSubscribers.size > 0;
+    if (!handlers && !hasGlobal) {
       console.warn(`[EventBus] publish ${type} for ${sessionId.slice(0, 8)}: 0 subscribers — EVENT LOST`);
       return;
     }
 
     if (type.startsWith('stream.')) {
-      console.debug(`[EventBus] publish ${type} for ${sessionId.slice(0, 8)}: ${handlers.size} subscriber(s)`);
+      const count = (handlers?.size ?? 0) + this._globalSubscribers.size;
+      console.debug(`[EventBus] publish ${type} for ${sessionId.slice(0, 8)}: ${count} subscriber(s)`);
     }
 
-    for (const handler of handlers) {
+    for (const handler of handlers ?? []) {
+      try {
+        handler(event);
+      } catch {
+        // Упавший обработчик не должен ломать остальных
+      }
+    }
+
+    for (const handler of this._globalSubscribers) {
       try {
         handler(event);
       } catch {

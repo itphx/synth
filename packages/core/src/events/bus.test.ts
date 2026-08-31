@@ -83,6 +83,64 @@ describe('EventBus', () => {
     expect(bus.subscriberCount('s1')).toBe(0);
     expect(bus.activeSessions()).not.toContain('s1');
   });
+
+  it('subscribeAll: получает события всех сессий (без привязки к sessionId)', () => {
+    const handler = vi.fn();
+    const unsubscribe = bus.subscribeAll(handler);
+    expect(typeof unsubscribe).toBe('function');
+
+    bus.publish('s1', 'stream.chunk', { content: 'a' });
+    bus.publish('s2', 'session.updated', { name: 'x' });
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[0]?.[0].sessionId).toBe('s1');
+    expect(handler.mock.calls[1]?.[0].sessionId).toBe('s2');
+  });
+
+  it('subscribeAll: отписка останавливает доставку', () => {
+    const handler = vi.fn();
+    const unsubscribe = bus.subscribeAll(handler);
+    unsubscribe();
+
+    bus.publish('s1', 'stream.chunk', {});
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('subscribeAll: упавший глобальный обработчик не ломает остальных', () => {
+    const bad = vi.fn(() => {
+      throw new Error('boom');
+    });
+    const good = vi.fn();
+    bus.subscribeAll(bad);
+    bus.subscribeAll(good);
+
+    expect(() => bus.publish('s1', 'stream.chunk', {})).not.toThrow();
+    expect(bad).toHaveBeenCalledTimes(1);
+    expect(good).toHaveBeenCalledTimes(1);
+  });
+
+  it('publish с глобальным подписчиком не считает событие потерянным', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const handler = vi.fn();
+    bus.subscribeAll(handler);
+
+    bus.publish('unknown-session', 'session.updated', {});
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('session-подписчик и глобальный подписчик оба получают событие (без дублей для одного)', () => {
+    const sessionHandler = vi.fn();
+    const globalHandler = vi.fn();
+    bus.subscribe('s1', sessionHandler);
+    bus.subscribeAll(globalHandler);
+
+    bus.publish('s1', 'stream.chunk', {});
+
+    expect(sessionHandler).toHaveBeenCalledTimes(1);
+    expect(globalHandler).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('sseEventStream', () => {

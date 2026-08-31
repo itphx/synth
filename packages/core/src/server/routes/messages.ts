@@ -1,10 +1,29 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import type { SessionManager } from '../../index.js';
+import { isRemoteRef, toLocalId, remoteErrorToHttp } from '../../remote/aggregate.js';
+import type { RemoteBackendClient } from '../../remote/client.js';
+
+/** Преобразовать RemoteError в HTTP-ответ API v2; не-RemoteError → undefined (пробросить дальше). */
+function mapRemoteError(c: Context, err: unknown): Response | undefined {
+  const http = remoteErrorToHttp(err);
+  if (!http) return undefined;
+  return c.json(
+    { error: { code: http.code, message: err instanceof Error ? err.message : String(err) } },
+    http.status as 400 | 401 | 404 | 409 | 500 | 502,
+  );
+}
+
+/** 502, если гибрид не настроен, иначе undefined — обрабатываем удалённую сессию. */
+function remoteUnavailable(c: Context): Response | undefined {
+  return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+}
 
 export function createMessageRoutes(
   auth: AuthKit,
   sessionManager: SessionManager,
+  remoteClient?: RemoteBackendClient,
 ): Hono {
   const app = new Hono();
 
@@ -12,6 +31,19 @@ export function createMessageRoutes(
   app.post('/:sessionId/batch', auth.requireAuth, async (c) => {
     const sessionId = c.req.param('sessionId');
     const body = await c.req.json<{ action: string; indices: number[]; state?: boolean }>();
+
+    if (isRemoteRef(sessionId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.messagesBatch(toLocalId(sessionId), body as Record<string, unknown>);
+        return c.json(result, 200);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const { action, indices, state } = body;
 
     if (!['pin', 'toggle', 'delete'].includes(action)) {
@@ -39,6 +71,18 @@ export function createMessageRoutes(
     const sessionId = c.req.param('sessionId');
     const index = parseInt(c.req.param('index'), 10);
 
+    if (isRemoteRef(sessionId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.messageToggle(toLocalId(sessionId), index);
+        return c.json(result, 200);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
@@ -60,6 +104,18 @@ export function createMessageRoutes(
   app.patch('/:sessionId/:index/pin', auth.requireAuth, async (c) => {
     const sessionId = c.req.param('sessionId');
     const index = parseInt(c.req.param('index'), 10);
+
+    if (isRemoteRef(sessionId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.messagePin(toLocalId(sessionId), index);
+        return c.json(result, 200);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
 
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
@@ -83,6 +139,18 @@ export function createMessageRoutes(
     const sessionId = c.req.param('sessionId');
     const index = parseInt(c.req.param('index'), 10);
 
+    if (isRemoteRef(sessionId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.messageDelete(toLocalId(sessionId), index);
+        return c.json(result, 200);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
@@ -104,6 +172,18 @@ export function createMessageRoutes(
   app.post('/:sessionId/:index/retry', auth.requireAuth, async (c) => {
     const sessionId = c.req.param('sessionId');
     const index = parseInt(c.req.param('index'), 10);
+
+    if (isRemoteRef(sessionId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.messageRetry(toLocalId(sessionId), index);
+        return c.json(result, 200);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
 
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
@@ -131,6 +211,18 @@ export function createMessageRoutes(
   app.get('/:sessionId/:index/debug', auth.requireAuth, async (c) => {
     const sessionId = c.req.param('sessionId');
     const index = parseInt(c.req.param('index'), 10);
+
+    if (isRemoteRef(sessionId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.messageDebug(toLocalId(sessionId), index);
+        return c.json(result, 200);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
 
     const session = await sessionManager.getSession(sessionId);
     if (!session) {

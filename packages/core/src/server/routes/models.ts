@@ -3,18 +3,49 @@ import type { AuthKit } from '../../auth/local.js';
 import { JsonStore } from '../../storage/json-store.js';
 import type { ModelConfig, ProviderConfig } from '@itphx/synth-shared';
 
+export interface ModelRoutesOptions {
+  /** Виртуальные модели (например, remote-модели через LLM Proxy) — добавляются к store-моделям. */
+  extraModels?: ModelConfig[];
+  /** Виртуальные провайдеры (например, synth-remote) — для группировки extraModels. */
+  extraProviders?: ProviderConfig[];
+  /** Показывать только extraModels (политика «все LLM — через remote»). */
+  onlyRemoteModels?: boolean;
+}
+
 export function createModelRoutes(
   auth: AuthKit,
   modelStore: JsonStore<ModelConfig>,
   providerStore: JsonStore<ProviderConfig>,
+  opts?: ModelRoutesOptions,
 ): Hono {
   const app = new Hono();
+  const extraModels = opts?.extraModels ?? [];
+  const extraProviders = opts?.extraProviders ?? [];
+  const onlyRemoteModels = opts?.onlyRemoteModels ?? false;
 
   app.get('/', auth.requireAuth, async (c) => {
     const filterProvider = c.req.query('provider');
     const onlyEnabled = c.req.query('enabled_only') === 'true' || c.req.query('enabled_only') === '1';
 
-    const [models, providers] = await Promise.all([modelStore.list(), providerStore.list()]);
+    const [storeModels, storeProviders] = await Promise.all([modelStore.list(), providerStore.list()]);
+
+    // Слияние store + extra (без дубликатов по id). При onlyRemoteModels
+    // локальные модели скрываются — остаются только remote.
+    const models: ModelConfig[] = [];
+    const seenModels = new Set<string>();
+    for (const m of onlyRemoteModels ? extraModels : [...storeModels, ...extraModels]) {
+      if (seenModels.has(m.id)) continue;
+      seenModels.add(m.id);
+      models.push(m);
+    }
+
+    const providers: ProviderConfig[] = [];
+    const seenProviders = new Set<string>();
+    for (const p of onlyRemoteModels ? extraProviders : [...storeProviders, ...extraProviders]) {
+      if (seenProviders.has(p.name)) continue;
+      seenProviders.add(p.name);
+      providers.push(p);
+    }
 
     const providerMap = new Map<string, ProviderConfig>();
     for (const p of providers) {
