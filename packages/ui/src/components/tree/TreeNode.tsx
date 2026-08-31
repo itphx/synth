@@ -57,6 +57,8 @@ export function TreeNode({
   suffix,
   badge,
 
+  title,
+
   isActive,
   isTabOpen,
   isSelected,
@@ -132,6 +134,7 @@ export function TreeNode({
         className,
         rowClassName,
       )}
+      title={title}
       draggable={draggable && !selectionMode}
       onDragStart={(e) => { if (!selectionMode) onDragStart?.(e) }}
       onDragOver={onDragOver}

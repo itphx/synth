@@ -8,6 +8,7 @@ import { useFilesStore } from '@/stores/filesStore'
 import { useGitStore } from '@/stores/gitStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useNotificationStore } from '@/stores/notificationStore'
+import { useHybridStore, selectIsOffline } from '@/stores/hybridStore'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 import { useAdaptiveIcons } from '@/hooks/useAdaptiveIcons'
@@ -76,6 +77,7 @@ function ProjectsTab() {
   const queueBySession = useChatStore((s) => s.queueBySession)
   const sessionUnread = useNotificationStore((s) => s.sessionUnread)
   const clearSessionUnread = useNotificationStore((s) => s.clearSessionUnread)
+  const isOffline = useHybridStore(selectIsOffline)
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -202,6 +204,8 @@ function ProjectsTab() {
     const isSubagent = session.session_origin === 'subagent'
     const isForwardSource = forwardMode.active && session.id === forwardMode.sourceSessionId
     const isForwardTarget = forwardMode.active && !isForwardSource
+    // Offline-деградация: remote-сессии недоступны — приглушаем и помечаем тултипом.
+    const isOfflineRemote = isOffline && session.origin === 'remote'
     return {
       id: `session:${session.id}`,
       label: session.name || session.id,
@@ -237,7 +241,9 @@ function ProjectsTab() {
       className: cn(
         isForwardSource && 'opacity-40 pointer-events-none',
         isForwardTarget && 'cursor-pointer hover:bg-primary/10',
+        isOfflineRemote && 'opacity-60',
       ),
+      title: isOfflineRemote ? t('hybrid.unavailableNode') : undefined,
       contextItems: [
         { label: t('leftPanel.rename'), icon: 'pencil-ai', onClick: () => { setRenamingId(session.id); setRenameValue(session.name || session.id) } },
         { label: t('leftPanel.forkSession'), icon: 'git-branch', onClick: async () => {
@@ -445,6 +451,7 @@ function ProjectsTab() {
             toggleSessionExpand={toggleSessionExpand}
             projectId={project.id}
             origin={project.origin}
+            offline={isOffline}
             onCreateSession={async () => {
               const uiState = useUIStore.getState()
               if (uiState.collapsedProjects.has(project.id)) uiState.toggleProjectCollapse(project.id)
@@ -528,7 +535,7 @@ function GroupNode({
   expandedSessions, toggleSessionExpand,
   projectId, onCreateSession, onDropSession,
   projectActions, projectContextItems, t,
-  origin,
+  origin, offline,
 }: {
   id: string; label: string; icon: string; iconColor?: string
   isCollapsed: boolean; onToggle: () => void
@@ -539,6 +546,7 @@ function GroupNode({
   projectId: string | null; onCreateSession: () => void; onDropSession: (sid: string) => void
   projectActions?: TreeAction[]; projectContextItems?: any[]
   origin?: EntityOrigin
+  offline?: boolean
   t: any
 }) {
   const expandKey = projectId ? `project:${projectId}` : `group:__none__`
@@ -551,6 +559,9 @@ function GroupNode({
   const actions = projectActions ?? [
     { id: 'new-session', icon: 'add' as const, title: t('leftPanel.newSession'), onClick: onCreateSession },
   ]
+
+  // Offline-деградация: remote-проект недоступен — приглушаем и помечаем тултипом.
+  const isOfflineNode = offline && origin === 'remote'
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -576,6 +587,8 @@ function GroupNode({
     badge: <OriginBadge origin={origin} />,
     actions,
     contextItems: projectContextItems,
+    className: isOfflineNode ? 'opacity-60' : undefined,
+    title: isOfflineNode ? t('hybrid.unavailableNode') : undefined,
   }
 
   return (

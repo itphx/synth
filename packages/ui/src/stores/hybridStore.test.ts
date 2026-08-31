@@ -6,7 +6,7 @@ vi.mock('@/lib/api/synthApi', () => ({
   },
 }))
 
-import { useHybridStore } from './hybridStore'
+import { useHybridStore, selectIsOffline } from './hybridStore'
 import { synthApi } from '@/lib/api/synthApi'
 
 const ENABLED_CONNECTED = {
@@ -21,7 +21,7 @@ describe('hybridStore', () => {
     vi.useFakeTimers()
     vi.clearAllMocks()
     useHybridStore.getState().stopPolling()
-    useHybridStore.setState({ enabled: false, connected: false, backendUrl: null, user: null, loading: false })
+    useHybridStore.setState({ enabled: false, connected: false, backendUrl: null, user: null, loading: false, lastCheckedAt: null })
   })
 
   afterEach(() => {
@@ -68,31 +68,61 @@ describe('hybridStore', () => {
   it('startPolling: сразу грузит статус, затем опрашивает по интервалу; stopPolling останавливает', async () => {
     vi.mocked(synthApi.getHybridStatus).mockResolvedValue(ENABLED_CONNECTED)
 
-    useHybridStore.getState().startPolling(1_000)
+    // Интервал 10с > кеш-окно 5с — каждый тик реальный запрос (не кеш).
+    useHybridStore.getState().startPolling(10_000)
     expect(vi.mocked(synthApi.getHybridStatus)).toHaveBeenCalledTimes(1)
 
-    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(10_000)
     expect(vi.mocked(synthApi.getHybridStatus)).toHaveBeenCalledTimes(2)
 
-    await vi.advanceTimersByTimeAsync(3_000)
+    await vi.advanceTimersByTimeAsync(30_000)
     expect(vi.mocked(synthApi.getHybridStatus)).toHaveBeenCalledTimes(5)
 
     useHybridStore.getState().stopPolling()
-    await vi.advanceTimersByTimeAsync(5_000)
+    await vi.advanceTimersByTimeAsync(50_000)
     expect(vi.mocked(synthApi.getHybridStatus)).toHaveBeenCalledTimes(5)
   })
 
   it('повторный startPolling не плодит интервалы (stopPolling внутри)', async () => {
     vi.mocked(synthApi.getHybridStatus).mockResolvedValue(ENABLED_CONNECTED)
 
-    useHybridStore.getState().startPolling(1_000)
-    useHybridStore.getState().startPolling(1_000)
+    useHybridStore.getState().startPolling(10_000)
+    useHybridStore.getState().startPolling(10_000)
+    // Второй startPolling: немедленный loadStatus попадает в кеш (< 5с) — fetch не дублируется.
     const callsAfterStart = vi.mocked(synthApi.getHybridStatus).mock.calls.length
-    expect(callsAfterStart).toBe(2)
+    expect(callsAfterStart).toBe(1)
 
-    await vi.advanceTimersByTimeAsync(2_000)
+    await vi.advanceTimersByTimeAsync(20_000)
     // За 2 тика — ровно 2 дополнительных вызова (один активный интервал)
     const total = vi.mocked(synthApi.getHybridStatus).mock.calls.length
     expect(total - callsAfterStart).toBe(2)
+  })
+
+  it('loadStatus: повторный вызов в пределах 5с возвращает кеш (без fetch)', async () => {
+    vi.mocked(synthApi.getHybridStatus).mockResolvedValue(ENABLED_CONNECTED)
+
+    await useHybridStore.getState().loadStatus()
+    expect(vi.mocked(synthApi.getHybridStatus)).toHaveBeenCalledTimes(1)
+
+    // Сразу повторный вызов — кеш свежий, fetch не делается.
+    await useHybridStore.getState().loadStatus()
+    expect(vi.mocked(synthApi.getHybridStatus)).toHaveBeenCalledTimes(1)
+
+    // Ровно 5с — окно истекло, следующий вызов делает запрос.
+    await vi.advanceTimersByTimeAsync(5_000)
+    await useHybridStore.getState().loadStatus()
+    expect(vi.mocked(synthApi.getHybridStatus)).toHaveBeenCalledTimes(2)
+
+    // 4999мс — всё ещё кеш.
+    await vi.advanceTimersByTimeAsync(4_999)
+    await useHybridStore.getState().loadStatus()
+    expect(vi.mocked(synthApi.getHybridStatus)).toHaveBeenCalledTimes(2)
+  })
+
+  it('selectIsOffline: enabled && !connected', () => {
+    const s = useHybridStore.getState()
+    expect(selectIsOffline({ ...s, enabled: true, connected: false })).toBe(true)
+    expect(selectIsOffline({ ...s, enabled: true, connected: true })).toBe(false)
+    expect(selectIsOffline({ ...s, enabled: false, connected: false })).toBe(false)
   })
 })

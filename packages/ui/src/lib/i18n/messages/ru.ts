@@ -676,6 +676,10 @@ export const dict = {
   'hybrid.createWhere': 'Где создать',
   'hybrid.createLocal': 'Локально',
   'hybrid.createRemote': 'На сервере',
+  'hybrid.offline': 'Сервер недоступен — удалённые проекты и сессии неактивны',
+  'hybrid.offlineBanner': 'Сервер недоступен — удалённые проекты/сессии неактивны. Локальные работают.',
+  'hybrid.offlineShort': 'Сервер недоступен',
+  'hybrid.unavailableNode': 'недоступен',
 
   // Session settings
   'sessionSettings.providerModel': 'Провайдер и модель',

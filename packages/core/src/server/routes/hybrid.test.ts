@@ -11,6 +11,7 @@ import { SessionManager, EventBus, FileStore } from '../../index.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import type { AuthKit } from '../../auth/local.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
+import { RemoteError } from '../../remote/types.js';
 
 function createMockAuth(): AuthKit {
   return {
@@ -341,6 +342,73 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       expect(body.messages[0].content).toBe('hi');
       expect(remote.getSessionMessages).toHaveBeenCalledWith('rs-1');
     });
+  });
+});
+
+describe('Remote-роуты: единый маппинг ошибок через remoteErrorToHttp (Часть 9)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-hybrid-err-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('RemoteError(OFFLINE) при GET remote-сессии → 502 { error: { code: OFFLINE } }', async () => {
+    const remote = createFakeRemoteClient({
+      getSession: vi.fn().mockRejectedValue(new RemoteError('Сервер недоступен: network down', 'OFFLINE')),
+    });
+    const { app } = createTestApp(remote, tmpDir);
+
+    const res = await app.request('/api/v2/sessions/remote:rs-1');
+    expect(res.status).toBe(502);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('OFFLINE');
+    expect(body.error.message).toContain('Сервер недоступен');
+  });
+
+  it('RemoteError(UNAUTHORIZED) при GET remote-проекта → 401 { error: { code: UNAUTHORIZED } }', async () => {
+    const remote = createFakeRemoteClient({
+      getProject: vi.fn().mockRejectedValue(new RemoteError('Не авторизован на удалённом сервере', 'UNAUTHORIZED')),
+    });
+    const { app } = createTestApp(remote, tmpDir);
+
+    const res = await app.request('/api/v2/projects/remote:rp-1');
+    expect(res.status).toBe(401);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('UNAUTHORIZED');
+  });
+
+  it('RemoteError(OFFLINE) при POST remote-создании сессии → 502, не 500', async () => {
+    const remote = createFakeRemoteClient({
+      createSession: vi.fn().mockRejectedValue(new RemoteError('Сервер недоступен: timeout', 'OFFLINE')),
+    });
+    const { app } = createTestApp(remote, tmpDir);
+
+    const res = await app.request('/api/v2/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ origin: 'remote', name: 'X' }),
+    });
+    expect(res.status).toBe(502);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('OFFLINE');
+  });
+
+  it('не-RemoteError (внутренняя ошибка) → 500 (Hono error handler), НЕ 502 OFFLINE', async () => {
+    const remote = createFakeRemoteClient({
+      getSession: vi.fn().mockRejectedValue(new Error('boom')),
+    });
+    const { app } = createTestApp(remote, tmpDir);
+
+    const res = await app.request('/api/v2/sessions/remote:rs-1');
+    // Внутренняя ошибка не маппится в OFFLINE — Hono отдаёт generic 500.
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(text).not.toContain('OFFLINE');
   });
 });
 

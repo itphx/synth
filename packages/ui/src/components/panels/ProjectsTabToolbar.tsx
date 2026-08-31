@@ -4,7 +4,7 @@ import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover
 import { useSessionsTreeStore } from '@/stores/useSessionsTreeStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
-import { useHybridStore } from '@/stores/hybridStore'
+import { useHybridStore, selectIsOffline } from '@/stores/hybridStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useI18n } from '@/lib/i18n'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
@@ -12,24 +12,26 @@ import type { EntityOrigin } from '@/lib/api/synthApi'
 
 type PopoverType = null | 'project' | 'session'
 
-/** Селектор «где создать» (гибридный режим): Локально / На сервере. */
-function OriginSelector({ value, onChange }: { value: EntityOrigin; onChange: (v: EntityOrigin) => void }) {
+/** Селектор «где создать» (гибридный режим): Локально / На сервере. При offline — только «Локально». */
+function OriginSelector({ value, onChange, offline }: { value: EntityOrigin; onChange: (v: EntityOrigin) => void; offline: boolean }) {
   const { t } = useI18n()
+  const shownValue = offline ? ('local' as EntityOrigin) : value
   return (
     <div className="flex flex-col gap-1">
       <span className="text-[0.65rem] text-muted-foreground">{t('hybrid.createWhere')}</span>
-      <Select value={value} onValueChange={(v) => onChange((v || 'local') as EntityOrigin)}>
-        <SelectTrigger size="sm" className="w-full text-xs border-0 bg-interactive rounded">
+      <Select value={shownValue} onValueChange={(v) => onChange((v || 'local') as EntityOrigin)}>
+        <SelectTrigger size="sm" disabled={offline} className="w-full text-xs border-0 bg-interactive rounded">
           <span className="truncate flex-1 text-left">
-            {value === 'remote' ? t('hybrid.createRemote') : t('hybrid.createLocal')}
+            {shownValue === 'remote' ? t('hybrid.createRemote') : t('hybrid.createLocal')}
           </span>
           <Icon name="arrow-down-s" className="size-3.5 opacity-50 shrink-0" />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="local">{t('hybrid.createLocal')}</SelectItem>
-          <SelectItem value="remote">{t('hybrid.createRemote')}</SelectItem>
+          {!offline && <SelectItem value="remote">{t('hybrid.createRemote')}</SelectItem>}
         </SelectContent>
       </Select>
+      {offline && <span className="text-[0.65rem] text-destructive">{t('hybrid.offlineShort')}</span>}
     </div>
   )
 }
@@ -47,6 +49,7 @@ export const ProjectsTabToolbar: React.FC = () => {
   const { createSession } = useSessionsStore()
   const { collapsedProjects } = useUIStore()
   const hybridEnabled = useHybridStore((s) => s.enabled)
+  const isOffline = useHybridStore(selectIsOffline)
   const openTab = useUIStore((s) => s.openTab)
 
   const [popover, setPopover] = useState<PopoverType>(null)
@@ -144,7 +147,7 @@ export const ProjectsTabToolbar: React.FC = () => {
               placeholder={t('leftPanel.projectName')}
               className="rounded bg-interactive px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground outline-none w-full"
             />
-            {hybridEnabled && <OriginSelector value={createOrigin} onChange={setCreateOrigin} />}
+            {hybridEnabled && <OriginSelector value={createOrigin} onChange={setCreateOrigin} offline={isOffline} />}
             <button type="submit" className="self-end rounded px-3 py-1 text-xs text-primary hover:bg-primary/10">
               {t('common.create')}
             </button>
@@ -201,7 +204,7 @@ export const ProjectsTabToolbar: React.FC = () => {
                 ))}
               </SelectContent>
             </Select>
-            {hybridEnabled && <OriginSelector value={createOrigin} onChange={setCreateOrigin} />}
+            {hybridEnabled && <OriginSelector value={createOrigin} onChange={setCreateOrigin} offline={isOffline} />}
             <button type="submit" className="self-end rounded px-3 py-1 text-xs text-primary hover:bg-primary/10">
               {t('common.create')}
             </button>

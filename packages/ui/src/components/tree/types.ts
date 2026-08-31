@@ -33,6 +33,8 @@ export interface TreeNodeBase {
   suffix?: string
   /** Компактный бейдж рядом с label (например, OriginBadge для удалённых сущностей). */
   badge?: React.ReactNode
+  /** Тултип на строке узла (например, «недоступен» для remote-сущностей при offline). */
+  title?: string
 
   isActive?: boolean
   isTabOpen?: boolean

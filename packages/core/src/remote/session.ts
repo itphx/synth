@@ -201,28 +201,36 @@ export class RemoteSession {
       return this._accessToken;
     }
     if (this._refreshToken && this._issuer && this._clientId) {
-      const refreshed = await refreshAccessToken(this._issuer, this._clientId, this._refreshToken);
-      this._accessToken = refreshed.accessToken;
-      if (refreshed.refreshToken) this._refreshToken = refreshed.refreshToken;
-      this._expiresAt = refreshed.expiresIn
-        ? new Date(Date.now() + refreshed.expiresIn * 1000).toISOString()
-        : undefined;
+      try {
+        const refreshed = await refreshAccessToken(this._issuer, this._clientId, this._refreshToken);
+        this._accessToken = refreshed.accessToken;
+        if (refreshed.refreshToken) this._refreshToken = refreshed.refreshToken;
+        this._expiresAt = refreshed.expiresIn
+          ? new Date(Date.now() + refreshed.expiresIn * 1000).toISOString()
+          : undefined;
 
-      // Персист: обновляем сохранённые credentials, если есть (иначе после
-      // рестарта сессия возьмёт протухший токен из файла).
-      const existing = await loadCredentials(this.backendUrl, this._credentialsPath);
-      if (existing) {
-        await saveCredentials(
-          {
-            ...existing,
-            accessToken: refreshed.accessToken,
-            refreshToken: refreshed.refreshToken ?? existing.refreshToken,
-            expiresAt: this._expiresAt,
-          },
-          this._credentialsPath,
-        );
+        // Персист: обновляем сохранённые credentials, если есть (иначе после
+        // рестарта сессия возьмёт протухший токен из файла).
+        const existing = await loadCredentials(this.backendUrl, this._credentialsPath);
+        if (existing) {
+          await saveCredentials(
+            {
+              ...existing,
+              accessToken: refreshed.accessToken,
+              refreshToken: refreshed.refreshToken ?? existing.refreshToken,
+              expiresAt: this._expiresAt,
+            },
+            this._credentialsPath,
+          );
+        }
+        return refreshed.accessToken;
+      } catch {
+        // Ошибка refresh (RemoteError('AUTH') — невалидный/истёкший refresh token,
+        // либо сеть недоступна) НЕ роняем поток: возвращаем null. Запрос уйдёт без
+        // токена и получит 401/ошибку сети (UNAUTHORIZED/OFFLINE), а RemoteProvider
+        // бросит ProviderError «токен истёк» — корректная offline-деградация.
+        return null;
       }
-      return refreshed.accessToken;
     }
     return null;
   }

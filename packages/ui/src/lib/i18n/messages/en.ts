@@ -679,6 +679,10 @@ export const dict = {
   'hybrid.createWhere': 'Create where',
   'hybrid.createLocal': 'Local',
   'hybrid.createRemote': 'On server',
+  'hybrid.offline': 'Server unavailable — remote projects and sessions are inactive',
+  'hybrid.offlineBanner': 'Server unavailable — remote projects/sessions are inactive. Local ones still work.',
+  'hybrid.offlineShort': 'Server unavailable',
+  'hybrid.unavailableNode': 'unavailable',
 
   // Session settings
   'sessionSettings.providerModel': 'Provider & Model',

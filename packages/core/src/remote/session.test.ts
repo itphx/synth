@@ -400,4 +400,55 @@ describe('RemoteSession.getToken (Часть 6)', () => {
 
     expect(await session.getToken()).toBeNull();
   });
+
+  it('refresh недействителен (RemoteError AUTH) → null, без исключения', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    await saveCredentials({
+      backendUrl: 'https://backend.test',
+      accessToken: 'at-soon-expired',
+      refreshToken: 'rt-dead',
+      expiresAt: '2026-01-01T00:00:30.000Z',
+    }, credsPath());
+
+    // OIDC-провайдер отвечает на refresh-грант invalid_grant (400 + { error })
+    const fetchMock = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes('.well-known/openid-configuration')) {
+        return Promise.resolve(jsonResponse(DISCOVERY));
+      }
+      if (u.includes('/token')) {
+        const body = init?.body instanceof URLSearchParams ? init.body : null;
+        if (body?.get('grant_type') === 'refresh_token') {
+          return Promise.resolve(jsonResponse({ error: 'invalid_grant' }, 400));
+        }
+      }
+      return Promise.resolve(jsonResponse({ error: 'not_found' }, 404));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const session = await RemoteSession.ensureAuthenticated(deviceOpts());
+    vi.setSystemTime(new Date('2026-01-01T00:01:00.000Z'));
+
+    // getToken НЕ роняет поток — возвращает null (запрос уйдёт без токена → 401)
+    expect(await session.getToken()).toBeNull();
+  });
+
+  it('сеть недоступна при refresh → null, без исключения', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    await saveCredentials({
+      backendUrl: 'https://backend.test',
+      accessToken: 'at-soon-expired',
+      refreshToken: 'rt-1',
+      expiresAt: '2026-01-01T00:00:30.000Z',
+    }, credsPath());
+
+    const session = await RemoteSession.ensureAuthenticated(deviceOpts());
+    vi.setSystemTime(new Date('2026-01-01T00:01:00.000Z'));
+
+    // Сеть падает во время refresh (и discovery, и token_endpoint)
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+
+    expect(await session.getToken()).toBeNull();
+  });
 });
