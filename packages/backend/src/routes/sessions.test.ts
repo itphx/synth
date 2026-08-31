@@ -554,6 +554,28 @@ describe('Session API Routes', () => {
       expect(body.project_id).toBe(proj.id);
     });
 
+    it('сохраняет parentId из экспорта (publish переписывает его на remote-id)', async () => {
+      const { app, sessionManager, projectStore } = createTestApp(tmpDir);
+      const proj = projectStore.create('Proj3', 'test-user');
+      await projectStore.save(proj);
+      const parent = await sessionManager.createSession({ title: 'Parent', userId: 'test-user' });
+      const source = await sessionManager.createSession({ title: 'Child', userId: 'test-user', parentId: parent.id });
+      const exported = await sessionManager.getSession(source.id);
+
+      const res = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...exported, import: { project_id: proj.id } }),
+      });
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      expect(body.id).not.toBe(source.id);
+      // parentId — как в экспорте (переписанный publish-ом remote-id).
+      expect(body.parent_id).toBe(parent.id);
+      const created = await sessionManager.getSession(body.id);
+      expect(created?.parentId).toBe(parent.id);
+    });
+
     it('возвращает 400 PROJECT_NOT_FOUND для несуществующего проекта', async () => {
       const { app } = createTestApp(tmpDir);
       const res = await app.request('/api/v2/sessions/import', {

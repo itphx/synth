@@ -219,6 +219,103 @@ describe('transfer helpers', () => {
       expect(stats.created).toBe(false);
     });
 
+    it('publish передаёт plan проекта в createProject и updateProject', async () => {
+      const plan = {
+        version: 1,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        columns: [{ id: 'c1', name: 'Колонка', order: 0 }],
+        items: [],
+      };
+      const projectStore = new ProjectStore({ dataDir: tmpDir });
+      const project = projectStore.create('PlanPublish', 'local');
+      project.plan = plan;
+      await projectStore.save(project);
+      const baseOpts = {
+        includeFiles: false,
+        includeSessions: false,
+        localProjectDir: join(tmpDir, 'ws'),
+        localSessions: [],
+      };
+
+      const createClient = makeFakeRemoteClient();
+      await syncProjectToRemote({ ...baseOpts, localProject: project, remoteClient: createClient });
+      expect(createClient.createProject).toHaveBeenCalledWith(expect.objectContaining({ plan }));
+
+      const updateClient = makeFakeRemoteClient();
+      await syncProjectToRemote({
+        ...baseOpts,
+        localProject: project,
+        remoteClient: updateClient,
+        remoteProjectId: 'remote-1',
+      });
+      expect(updateClient.updateProject).toHaveBeenCalledWith('remote-1', expect.objectContaining({ plan }));
+    });
+
+    it('publish: parentId/references переписываются на новые remote-id, чужие ссылки зануляются', async () => {
+      const importedIds = ['remote-ses-A', 'remote-ses-B'];
+      let importCall = 0;
+      const client = makeFakeRemoteClient({
+        importSession: vi.fn(async (body: Record<string, unknown>) => ({
+          ...body,
+          id: importedIds[importCall++] ?? 'remote-ses-unknown',
+        })),
+      });
+      const projectStore = new ProjectStore({ dataDir: tmpDir });
+      const project = projectStore.create('PublishRefs', 'local');
+      await projectStore.save(project);
+
+      const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+      const parent = await sessionManager.createSession({ title: 'Parent', projectId: project.id });
+      const child = await sessionManager.createSession({ title: 'Child', projectId: project.id, parentId: parent.id });
+      // Ссылка на переносимую сессию + ссылка на непереносимую (вне проекта).
+      child.references = [
+        { type: 'session_reference' as const, sessionId: parent.id, label: 'parent', messageRange: [1, 2], createdAt: new Date().toISOString() },
+        { type: 'session_reference' as const, sessionId: 'outside-session', label: 'outside', messageRange: [1, 2], createdAt: new Date().toISOString() },
+      ];
+      // Сохраняем references ДО addMessage (иначе addMessage перезапишет их в store).
+      await sessionManager.saveSession(child);
+      // session_reference-часть в сообщении + sourceMsgId на сообщение, которого нет в наборе.
+      await sessionManager.addMessage(child.id, {
+        id: 'child-m1', role: MessageRole.USER, seq: 1, origin: 'local' as const,
+        parts: [
+          { id: 'p1', type: 'text' as const, data: 'hello' },
+          { id: 'p2', type: 'session_reference' as const, data: { sessionId: parent.id, label: 'ref-in-msg' } },
+        ],
+        content: 'hello', sourceMsgId: 'ghost-message', createdAt: new Date().toISOString(),
+        disabled: false, pinned: false, hidden: false,
+      });
+      // addMessage не мутирует in-memory объект — берём свежие копии из store.
+      const freshChild = (await sessionManager.getSession(child.id))!;
+      const freshParent = (await sessionManager.getSession(parent.id))!;
+
+      const stats = await syncProjectToRemote({
+        localProject: project,
+        remoteClient: client,
+        includeFiles: false,
+        includeSessions: true,
+        localProjectDir: join(tmpDir, 'ws'),
+        localSessions: [freshChild, freshParent],
+      });
+
+      expect(stats.sessionsImported).toBe(2);
+      // Топологический порядок: родитель импортируется раньше ребёнка.
+      const bodies = (client.importSession as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as Record<string, unknown>);
+      expect(bodies[0]!.id).toBe(parent.id);
+      expect(bodies[1]!.id).toBe(child.id);
+
+      // parentId ребёнка → новый remote-id родителя.
+      expect(bodies[1]!.parentId).toBe('remote-ses-A');
+      // references: переносимая → remote-id, непереносимая → null.
+      const refs = bodies[1]!.references as Array<{ sessionId: string | null }>;
+      expect(refs[0]!.sessionId).toBe('remote-ses-A');
+      expect(refs[1]!.sessionId).toBeNull();
+      // session_reference-часть сообщения → remote-id; sourceMsgId вне набора → null.
+      const childMsgParts = (bodies[1]!.messages as Array<{ parts: Array<{ type: string; data: Record<string, unknown> }> }>)[0]!.parts;
+      const refPart = childMsgParts.find((p) => p.type === 'session_reference')!;
+      expect(refPart.data.sessionId).toBe('remote-ses-A');
+      expect((bodies[1]!.messages as Array<{ sourceMsgId: string | null }>)[0]!.sourceMsgId).toBeNull();
+    });
+
     it('бросает ошибку, если локальный workspace не существует и нужны файлы', async () => {
       const client = makeFakeRemoteClient();
       const projectStore = new ProjectStore({ dataDir: tmpDir });
@@ -297,6 +394,74 @@ describe('transfer helpers', () => {
       expect(stats.sessionsImported).toBe(1);
       expect(client.exportSession).toHaveBeenCalledTimes(1);
       expect(client.exportSession).toHaveBeenCalledWith('rs-1');
+    });
+
+    it('fork: parentId/references переписываются на новые локальные id, чужие ссылки зануляются', async () => {
+      const exportsBySession: Record<string, Record<string, unknown>> = {
+        'rs-parent': {
+          title: 'Parent',
+          engine: 'synth',
+          sessionOrigin: 'user',
+          settings: { temperature: 0.3 },
+          messages: [
+            { id: 'pm1', role: 'user', seq: 1, origin: 'local', parts: [{ id: 'pp1', type: 'text', data: 'hi' }], content: 'hi', createdAt: '2026-01-01T00:00:00.000Z', disabled: false, pinned: false, hidden: false },
+          ],
+          todos: [],
+          sticky_notes: [],
+          references: [],
+          checkpoints: [],
+        },
+        'rs-child': {
+          title: 'Child',
+          engine: 'synth',
+          sessionOrigin: 'user',
+          parentId: 'rs-parent',
+          settings: { temperature: 0.3 },
+          messages: [
+            { id: 'cm1', role: 'user', seq: 1, origin: 'local', parts: [{ id: 'cp1', type: 'text', data: 'hello' }], content: 'hello', createdAt: '2026-01-01T00:00:00.000Z', disabled: false, pinned: false, hidden: false },
+          ],
+          todos: [],
+          sticky_notes: [],
+          references: [
+            { type: 'session_reference', sessionId: 'rs-parent', label: 'parent', messageRange: [1, 1], createdAt: '2026-01-01T00:00:00.000Z' },
+            { type: 'session_reference', sessionId: 'outside-session', label: 'outside', messageRange: [1, 1], createdAt: '2026-01-01T00:00:00.000Z' },
+          ],
+          checkpoints: [],
+        },
+      };
+      const client = makeFakeRemoteClient({
+        listSessions: async () => [
+          { id: 'rs-parent', project_id: 'remote-1' },
+          { id: 'rs-child', project_id: 'remote-1' },
+        ],
+        exportSession: vi.fn(async (id: string) => exportsBySession[id] ?? {}),
+      });
+      const projectStore = new ProjectStore({ dataDir: tmpDir });
+      const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+
+      const stats = await forkProjectToLocal({
+        remoteProjectId: 'remote-1',
+        remoteClient: client,
+        localProjectStore: projectStore,
+        localSessionManager: sessionManager,
+        includeFiles: false,
+        includeSessions: true,
+        localWorkspacesRoot: workspacesRoot,
+      });
+
+      expect(stats.sessionsImported).toBe(2);
+      const sessions = await sessionManager.listSessions({ projectId: stats.projectId });
+      const parent = sessions.find((s) => s.title === 'Parent')!;
+      const child = sessions.find((s) => s.title === 'Child')!;
+      expect(parent).toBeDefined();
+      expect(child).toBeDefined();
+
+      // parentId ребёнка → новый локальный id родителя.
+      expect(child.parentId).toBe(parent.id);
+      // references: переносимая → локальный id, непереносимая → null.
+      expect(child.references[0]!.sessionId).toBe(parent.id);
+      expect(child.references[1]!.sessionId).toBeNull();
+      expect(parent.parentId).toBeUndefined();
     });
   });
 });

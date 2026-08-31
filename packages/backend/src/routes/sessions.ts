@@ -253,6 +253,8 @@ export function createSessionRoutes(
     });
 
     // Переносим историю и состояние из экспорта.
+    // parentId: publish переписывает ссылки на новые remote-id до импорта — сохраняем.
+    session.parentId = (body.parent_id ?? body.parentId) as string | undefined;
     const messages: Message[] = Array.isArray(body.messages) ? body.messages as Message[] : [];
     session.messages = messages.map((m) => ({ ...structuredClone(m), seq: 0 }));
     session.messages.forEach((m, i) => { m.seq = i + 1; });

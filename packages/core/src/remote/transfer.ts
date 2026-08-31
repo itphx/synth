@@ -106,6 +106,134 @@ export function buildSessionExport(session: Session): Record<string, unknown> {
   return { ...session };
 }
 
+/** Минимальная форма сессии для анализа ссылок (Session или экспорт с camelCase). */
+interface SessionRefsShape {
+  id: string;
+  parentId?: string;
+  references?: Array<{ sessionId?: string | null }>;
+  messages?: Array<{ parts?: Array<{ type?: string; data?: unknown }> }>;
+}
+
+/** Идентификаторы сессий, на которые ссылается сессия: parentId, references[].sessionId, session_reference-части сообщений. */
+function collectReferencedSessionIds(session: SessionRefsShape): string[] {
+  const out = new Set<string>();
+  if (typeof session.parentId === 'string' && session.parentId) out.add(session.parentId);
+  for (const ref of session.references ?? []) {
+    if (typeof ref.sessionId === 'string' && ref.sessionId) out.add(ref.sessionId);
+  }
+  for (const m of session.messages ?? []) {
+    for (const p of m.parts ?? []) {
+      if (p.type !== 'session_reference' || !p.data || typeof p.data !== 'object') continue;
+      const d = p.data as Record<string, unknown>;
+      const sid = d.sessionId ?? d.session_id;
+      if (typeof sid === 'string' && sid) out.add(sid);
+    }
+  }
+  return [...out];
+}
+
+/**
+ * Упорядочить сессии так, чтобы зависимости (parentId/references) импортировались
+ * раньше ссылающихся на них. Нужно для publish/fork: remote-id создаётся в момент
+ * импорта, поэтому к моменту переноса дочерней сессии mapping родителя уже известен.
+ * Циклы (взаимные ссылки) добавляются в исходном порядке — их ссылки останутся локальными.
+ */
+function orderSessionsForTransfer<T extends SessionRefsShape>(sessions: T[]): T[] {
+  if (sessions.length <= 1) return sessions;
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  const localIds = new Set(byId.keys());
+  const deps = new Map<string, string[]>();
+  const dependents = new Map<string, string[]>();
+  for (const s of sessions) {
+    const refs = collectReferencedSessionIds(s).filter((id) => localIds.has(id) && id !== s.id);
+    deps.set(s.id, refs);
+    for (const dep of refs) {
+      const arr = dependents.get(dep) ?? [];
+      arr.push(s.id);
+      dependents.set(dep, arr);
+    }
+  }
+  const indegree = new Map<string, number>();
+  for (const s of sessions) indegree.set(s.id, (deps.get(s.id) ?? []).length);
+  const originalIndex = new Map(sessions.map((s, i) => [s.id, i]));
+  const queue = sessions.filter((s) => (indegree.get(s.id) ?? 0) === 0).map((s) => s.id);
+  const order: string[] = [];
+  while (queue.length > 0) {
+    // Стабильный порядок: в рамках уровня — по исходному индексу.
+    queue.sort((a, b) => (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0));
+    const id = queue.shift()!;
+    order.push(id);
+    for (const dependent of dependents.get(id) ?? []) {
+      const deg = (indegree.get(dependent) ?? 0) - 1;
+      indegree.set(dependent, deg);
+      if (deg === 0) queue.push(dependent);
+    }
+  }
+  if (order.length < sessions.length) {
+    for (const s of sessions) if (!order.includes(s.id)) order.push(s.id);
+  }
+  return order.map((id) => byId.get(id)!);
+}
+
+/** Переписать sessionId в session_reference-части сообщения по mapping (не перенесено → null). */
+function rewriteReferencePart(p: unknown, mapping: Map<string, string>): Record<string, unknown> {
+  if (!p || typeof p !== 'object') return p as Record<string, unknown>;
+  const part = p as Record<string, unknown>;
+  if (part.type !== 'session_reference' || !part.data || typeof part.data !== 'object') return part;
+  const d = { ...(part.data as Record<string, unknown>) };
+  const sid = d.sessionId ?? d.session_id;
+  if (typeof sid === 'string') {
+    d.sessionId = mapping.get(sid) ?? null;
+    delete d.session_id;
+  }
+  return { ...part, data: d };
+}
+
+/**
+ * Переписать ссылки экспорта сессии при publish: parentId/references[].sessionId
+ * и session_reference-части сообщений получают новые remote-id из mapping.
+ * Ссылки на сессии вне переносимого набора зануляются (иначе битые ссылки на
+ * несуществующие id). sourceMsgId валиден только если сообщение есть в переносимом
+ * наборе (id сообщений при импорте сохраняются) — иначе зануляется.
+ */
+function rewriteSessionExportForRemote(
+  session: Session,
+  mapping: Map<string, string>,
+  transferredMessageIds: Set<string>,
+): Record<string, unknown> {
+  const out = buildSessionExport(session) as Record<string, unknown>;
+
+  if (typeof out.parentId === 'string') {
+    out.parentId = mapping.get(out.parentId) ?? null;
+  }
+
+  if (Array.isArray(out.references)) {
+    out.references = out.references.map((ref) => {
+      if (ref && typeof ref === 'object') {
+        const r = { ...(ref as Record<string, unknown>) };
+        if (typeof r.sessionId === 'string') r.sessionId = mapping.get(r.sessionId) ?? null;
+        return r;
+      }
+      return ref;
+    });
+  }
+
+  if (Array.isArray(out.messages)) {
+    out.messages = out.messages.map((m) => {
+      const mm = { ...(m as Record<string, unknown>) };
+      if (typeof mm.sourceMsgId === 'string' && !transferredMessageIds.has(mm.sourceMsgId)) {
+        mm.sourceMsgId = null;
+      }
+      if (Array.isArray(mm.parts)) {
+        mm.parts = (mm.parts as Array<Record<string, unknown>>).map((p) => rewriteReferencePart(p, mapping));
+      }
+      return mm;
+    });
+  }
+
+  return out;
+}
+
 export interface SyncProjectToRemoteOptions {
   localProject: Project;
   remoteClient: RemoteBackendClient;
@@ -169,6 +297,7 @@ export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Pro
       icon: localProject.icon ?? null,
       color: localProject.color ?? null,
       repos: localProject.repos ?? null,
+      ...(localProject.plan ? { plan: localProject.plan } : {}),
     });
     logger(`Проект обновлён на сервере: ${targetProjectId}`);
   } else {
@@ -187,6 +316,7 @@ export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Pro
       color: localProject.color ?? null,
       repos: localProject.repos ?? null,
       workspace,
+      ...(localProject.plan ? { plan: localProject.plan } : {}),
     })) as Record<string, unknown>;
     targetProjectId = String(createdProj.id ?? createdProj.project_id ?? '');
     targetWorkspace = workspace;
@@ -207,11 +337,28 @@ export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Pro
 
   let sessionsImported = 0;
   if (includeSessions) {
+    // Mapping локальный id → remote id: remote-id создаётся в момент импорта,
+    // поэтому сессии переносим в топологическом порядке (зависимости раньше) и
+    // переписываем parentId/references уже известными remote-id.
+    const mapping = new Map<string, string>();
+    const transferredMessageIds = new Set<string>();
     for (const s of localSessions) {
-      await remoteClient.importSession({
-        ...buildSessionExport(s),
+      for (const m of s.messages ?? []) transferredMessageIds.add(m.id);
+    }
+    const ordered = orderSessionsForTransfer(localSessions);
+
+    for (const s of ordered) {
+      const exportBody = rewriteSessionExportForRemote(s, mapping, transferredMessageIds);
+      const created = (await remoteClient.importSession({
+        ...exportBody,
         import: { project_id: targetProjectId },
-      });
+      })) as Record<string, unknown> | null;
+      const remoteId = String(created?.id ?? '');
+      if (remoteId) {
+        mapping.set(s.id, remoteId);
+      } else {
+        logger(`  сессия ${s.title || s.id}: не получен remote-id — ссылки на неё будут занулены`);
+      }
       sessionsImported++;
       logger(`  сессия: ${s.title || s.id}`);
     }
@@ -291,9 +438,43 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
     const sessionsForProject = remoteSessions.filter(
       (s) => s.project_id === remoteProjectId || s.projectId === remoteProjectId,
     );
+
+    // Сначала экспортируем ВСЕ сессии: нужны их ссылки для упорядочивания (remote-id
+    // локальных сессий создаётся в момент createSession) и набор message-id для sourceMsgId.
+    const exports = new Map<string, Record<string, unknown>>();
     for (const rs of sessionsForProject) {
       const id = String(rs.id ?? '');
-      const exportData = (await remoteClient.exportSession(id)) as Record<string, unknown>;
+      exports.set(id, (await remoteClient.exportSession(id)) as Record<string, unknown>);
+    }
+
+    const remoteShapes: SessionRefsShape[] = sessionsForProject.map((rs) => {
+      const id = String(rs.id ?? '');
+      const exp = exports.get(id) ?? {};
+      return {
+        id,
+        parentId: typeof exp.parentId === 'string' ? exp.parentId : undefined,
+        references: Array.isArray(exp.references)
+          ? (exp.references as Array<{ sessionId?: string | null }>)
+          : [],
+        messages: Array.isArray(exp.messages)
+          ? (exp.messages as Array<{ parts?: Array<{ type?: string; data?: unknown }> }>)
+          : [],
+      };
+    });
+    const orderedIds = orderSessionsForTransfer(remoteShapes).map((s) => s.id);
+
+    const transferredMessageIds = new Set<string>();
+    for (const exp of exports.values()) {
+      for (const m of (Array.isArray(exp.messages) ? exp.messages : []) as Message[]) {
+        if (typeof m.id === 'string') transferredMessageIds.add(m.id);
+      }
+    }
+
+    // Mapping remote id → локальный id для переписывания parentId/references.
+    const mapping = new Map<string, string>();
+
+    for (const id of orderedIds) {
+      const exportData = exports.get(id)!;
 
       const session = await localSessionManager.createSession({
         title: typeof exportData.title === 'string' ? exportData.title : undefined,
@@ -305,17 +486,37 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
         settings: (exportData.settings ?? {}) as Partial<SessionSettings>,
       });
 
+      // parentId: ссылка на переносимую сессию → новый локальный id; иначе убираем.
+      if (typeof exportData.parentId === 'string' && exportData.parentId) {
+        session.parentId = mapping.get(exportData.parentId) ?? undefined;
+      }
+
       const messages: Message[] = Array.isArray(exportData.messages)
         ? (exportData.messages as Message[]).map((m) => ({ ...structuredClone(m), seq: 0 }))
         : [];
       messages.forEach((m, i) => { m.seq = i + 1; });
+      // Переписываем ссылки в сообщениях: session_reference-части — по mapping,
+      // sourceMsgId — только если сообщение есть в переносимом наборе.
+      for (const m of messages) {
+        if (typeof m.sourceMsgId === 'string' && !transferredMessageIds.has(m.sourceMsgId)) {
+          m.sourceMsgId = undefined;
+        }
+        m.parts = m.parts.map((p) => rewriteReferencePart(p, mapping) as unknown as Message['parts'][number]);
+      }
       session.messages = messages;
       session.pendingMessages = [];
       session.todos = (exportData.todos ?? undefined) as Session['todos'];
       session.stickyNotes = Array.isArray(exportData.sticky_notes ?? exportData.stickyNotes)
         ? ((exportData.sticky_notes ?? exportData.stickyNotes) as Session['stickyNotes'])
         : [];
-      session.references = Array.isArray(exportData.references) ? exportData.references as Session['references'] : [];
+      session.references = Array.isArray(exportData.references)
+        ? (exportData.references as Session['references']).map((ref) => ({
+            ...ref,
+            sessionId: typeof ref.sessionId === 'string'
+              ? (mapping.get(ref.sessionId) ?? null)
+              : ref.sessionId,
+          })) as unknown as Session['references']
+        : [];
       session.checkpoints = Array.isArray(exportData.checkpoints) ? exportData.checkpoints as Session['checkpoints'] : [];
       session.mode = (exportData.mode ?? undefined) as Session['mode'];
       session.planApproved = (exportData.plan_approved ?? exportData.planApproved ?? false) as boolean | undefined;
@@ -341,6 +542,7 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
       session.cacheWriteCost = num(exportData.cache_write_cost ?? exportData.cacheWriteCost);
 
       await localSessionManager.saveSession(session);
+      mapping.set(id, session.id);
       sessionsImported++;
       logger(`  сессия: ${session.title || session.id}`);
     }
