@@ -22,8 +22,12 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   return response.json()
 }
 
+export type EntityOrigin = 'local' | 'remote'
+
 export interface ProjectData {
   id: string
+  /** Происхождение сущности (гибридный режим): local — локальный мир, remote — удалённый backend. */
+  origin?: EntityOrigin
   name: string
   owner_id: string
   members: Record<string, string>
@@ -48,6 +52,8 @@ export interface ProjectData {
 
 export interface SessionData {
   id: string
+  /** Происхождение сущности (гибридный режим): local — локальный мир, remote — удалённый backend. */
+  origin?: EntityOrigin
   name: string | null
   parent_id?: string | null
   branch_point?: string | null
@@ -252,6 +258,7 @@ export const synthApi = {
     icon?: string | null
     color?: string | null
     workspace?: string | null
+    origin?: EntityOrigin
   }): Promise<ProjectData> {
     return fetchJSON<ProjectData>(`${BASE_URL}/projects`, {
       method: 'POST',
@@ -304,6 +311,7 @@ export const synthApi = {
     project_id?: string | null
     engine?: string
     settings?: Record<string, unknown>
+    origin?: EntityOrigin
   }): Promise<SessionData> {
     return fetchJSON<SessionData>(`${BASE_URL}/sessions`, {
       method: 'POST',
@@ -695,6 +703,11 @@ export const synthApi = {
   // Все агенты (для админки, GET /agents/all)
   async getAllAgents(): Promise<AgentsListResponse> {
     return fetchJSON<AgentsListResponse>(`${BASE_URL}/agents/all`)
+  },
+
+  // Гибридный режим: статус подключения к удалённому backend (без auth, как /health)
+  async getHybridStatus(): Promise<HybridStatus> {
+    return fetchJSON<HybridStatus>(`${BASE_URL}/hybrid/status`)
   },
 
   // Провайдеры и модели
@@ -1163,4 +1176,16 @@ export interface McpServerEntry {
   name: string
   config: McpServerConfig
   connected: boolean
+}
+
+/** Ответ GET /api/v2/hybrid/status — статус гибридного режима (core ↔ удалённый backend). */
+export interface HybridStatus {
+  enabled: boolean
+  connected: boolean
+  backendUrl: string | null
+  user?: {
+    id: string
+    username: string
+    roles: string[]
+  } | null
 }

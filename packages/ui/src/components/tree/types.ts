@@ -31,6 +31,8 @@ export interface TreeNodeBase {
   subtitle?: string
   count?: number
   suffix?: string
+  /** Компактный бейдж рядом с label (например, OriginBadge для удалённых сущностей). */
+  badge?: React.ReactNode
 
   isActive?: boolean
   isTabOpen?: boolean

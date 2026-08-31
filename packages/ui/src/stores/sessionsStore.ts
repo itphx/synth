@@ -1,11 +1,17 @@
 import { create } from 'zustand'
-import type { SessionData } from '@/lib/api/synthApi'
+import type { SessionData, EntityOrigin } from '@/lib/api/synthApi'
 import type { SessionMode } from '@itphx/synth-shared'
 import { synthApi } from '@/lib/api/synthApi'
 import { loadRoutingDefaults, routingDefaultsToSettings } from '@/lib/routingDefaults'
 import { useUIStore } from './useUIStore'
 import { useChatStore } from './chatStore'
 import { isTransportConnected } from './transportStore'
+import { useI18nStore, formatMessage } from '@/lib/i18n/store'
+
+/** Локализованная строка вне React (для window.confirm в сторах). */
+function i18nText(key: string): string {
+  return formatMessage(useI18nStore.getState().dictionary, key)
+}
 
 interface SessionsStore {
   sessions: SessionData[]
@@ -18,6 +24,7 @@ interface SessionsStore {
     project_id?: string | null
     engine?: string
     settings?: Record<string, unknown>
+    origin?: EntityOrigin
   }) => Promise<SessionData | null>
   forkSession: (sessionId: string, options?: { message_id?: string; message_index?: number; title?: string }) => Promise<SessionData | null>
   moveSession: (sessionId: string, projectId: string | null) => Promise<SessionData | null>
@@ -108,6 +115,11 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
   },
 
   async deleteSession(sessionId: string) {
+    // Гибрид: удаление удалённой сессии выполняется на сервере — подтверждение.
+    const session = get().sessions.find((s) => s.id === sessionId)
+    if (session?.origin === 'remote') {
+      if (!window.confirm(i18nText('hybrid.confirmDeleteRemoteSession'))) return false
+    }
     try {
       await synthApi.deleteSession(sessionId)
       if (!isTransportConnected()) {

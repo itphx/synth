@@ -12,10 +12,12 @@ import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 import { useAdaptiveIcons } from '@/hooks/useAdaptiveIcons'
 import { synthApi } from '@/lib/api/synthApi'
+import type { EntityOrigin } from '@/lib/api/synthApi'
 import { PROJECT_ICON_MAP, PROJECT_COLOR_MAP } from '@/lib/projectMeta'
 import { formatRelativeTime, parseISODate } from '@/lib/formatDate'
 import { TreeNode, TreeChildren, TreeContainer } from '@/components/tree'
 import type { TreeNodeBase, TreeAction } from '@/components/tree'
+import { OriginBadge } from '@/components/ui/OriginBadge'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { ConfirmDialog, type ConfirmVariant } from '@/components/ui/confirm-dialog'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
@@ -206,6 +208,7 @@ function ProjectsTab() {
       depth,
       icon: isSubagent ? 'cpu' : 'chat-new',
       subtitle: formatRelativeTime(session.updated_at),
+      badge: <OriginBadge origin={session.origin} />,
       isSelected: selectedIds.has(session.id),
       isTabOpen: sessionTabOpenSet.has(session.id),
       isActive: activeCenterTabId === `chat-${session.id}`,
@@ -441,23 +444,24 @@ function ProjectsTab() {
             expandedSessions={expandedSessions}
             toggleSessionExpand={toggleSessionExpand}
             projectId={project.id}
+            origin={project.origin}
             onCreateSession={async () => {
               const uiState = useUIStore.getState()
               if (uiState.collapsedProjects.has(project.id)) uiState.toggleProjectCollapse(project.id)
-              const result = await createSession({ project_id: project.id })
+              const result = await createSession({ project_id: project.id, origin: project.origin === 'remote' ? 'remote' : undefined })
               if (result) openTab({ id: 'chat-' + result.id, type: 'chat', title: result.name || result.id, data: { sessionId: result.id, projectId: result.project_id || undefined } })
             }}
             onDropSession={async (sessionId) => { await moveSession(sessionId, project.id) }}
             projectActions={[
               { id: 'new-session', icon: 'add' as const, title: t('leftPanel.newSession'), onClick: async () => {
-                const result = await createSession({ project_id: project.id })
+                const result = await createSession({ project_id: project.id, origin: project.origin === 'remote' ? 'remote' : undefined })
                 if (result) openTab({ id: 'chat-' + result.id, type: 'chat', title: result.name || result.id, data: { sessionId: result.id, projectId: result.project_id || undefined } })
               }},
             ]}
             projectContextItems={[
               { label: t('leftPanel.editProject'), icon: 'settings-3' as const, onClick: () => { setEditingProject({ ...project }) } },
               { label: t('leftPanel.newSession'), icon: 'add' as const, onClick: async () => {
-                const result = await createSession({ project_id: project.id })
+                const result = await createSession({ project_id: project.id, origin: project.origin === 'remote' ? 'remote' : undefined })
                 if (result) openTab({ id: 'chat-' + result.id, type: 'chat', title: result.name || result.id, data: { sessionId: result.id, projectId: result.project_id || undefined } })
               }},
               'separator' as const,
@@ -524,6 +528,7 @@ function GroupNode({
   expandedSessions, toggleSessionExpand,
   projectId, onCreateSession, onDropSession,
   projectActions, projectContextItems, t,
+  origin,
 }: {
   id: string; label: string; icon: string; iconColor?: string
   isCollapsed: boolean; onToggle: () => void
@@ -533,6 +538,7 @@ function GroupNode({
   expandedSessions: Set<string>; toggleSessionExpand: (id: string) => void
   projectId: string | null; onCreateSession: () => void; onDropSession: (sid: string) => void
   projectActions?: TreeAction[]; projectContextItems?: any[]
+  origin?: EntityOrigin
   t: any
 }) {
   const expandKey = projectId ? `project:${projectId}` : `group:__none__`
@@ -567,6 +573,7 @@ function GroupNode({
     hasChildren: true,
     onToggle,
     count: totalCount,
+    badge: <OriginBadge origin={origin} />,
     actions,
     contextItems: projectContextItems,
   }
@@ -1077,6 +1084,7 @@ function FilesTab() {
               iconSize="md"
               isExpanded={isExpanded}
               hasChildren={true}
+              badge={<OriginBadge origin={project.origin} />}
               onToggle={() => toggleProjectExpand(project.id)}
               onDragOver={handleFileDragOver}
               onDrop={(e) => handleDropOnProject(e, project.id)}
@@ -1323,6 +1331,7 @@ function GitTab() {
                   iconSize="md"
                   isExpanded={isExpanded}
                   hasChildren={repos.length > 0 ? true : undefined}
+                  badge={<OriginBadge origin={project.origin} />}
                   onToggle={() => toggleProjectExpand(project.id)}
                   count={repos.length > 0 ? repos.length : undefined}
                   actions={[

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
-import type { ProjectData, GitRepoConfigData } from '@/lib/api/synthApi'
+import type { ProjectData, GitRepoConfigData, EntityOrigin } from '@/lib/api/synthApi'
 import { synthApi } from '@/lib/api/synthApi'
+import { useI18nStore, formatMessage } from '@/lib/i18n/store'
 
 interface ProjectsStore {
   projects: ProjectData[]
@@ -16,6 +17,7 @@ interface ProjectsStore {
     color?: string | null
     workspace?: string | null
     repos?: GitRepoConfigData[]
+    origin?: EntityOrigin
   }) => Promise<ProjectData | null>
   updateProject: (id: string, data: {
     name?: string
@@ -28,7 +30,12 @@ interface ProjectsStore {
   deleteProject: (id: string) => Promise<boolean>
 }
 
-export const useProjectsStore = create<ProjectsStore>((set) => ({
+/** Локализованная строка вне React (для window.confirm в сторах). */
+function i18nText(key: string): string {
+  return formatMessage(useI18nStore.getState().dictionary, key)
+}
+
+export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   projects: [],
   loading: false,
   error: null,
@@ -86,6 +93,11 @@ export const useProjectsStore = create<ProjectsStore>((set) => ({
   },
 
   deleteProject: async (id) => {
+    // Гибрид: удаление удалённого проекта выполняется на сервере — подтверждение.
+    const project = get().projects.find((p) => p.id === id)
+    if (project?.origin === 'remote') {
+      if (!window.confirm(i18nText('hybrid.confirmDeleteRemoteProject'))) return false
+    }
     try {
       await synthApi.deleteProject(id)
       set((s) => ({ projects: s.projects.filter((p) => p.id !== id) }))

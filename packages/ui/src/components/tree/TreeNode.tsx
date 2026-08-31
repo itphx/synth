@@ -55,6 +55,7 @@ export function TreeNode({
   subtitle,
   count,
   suffix,
+  badge,
 
   isActive,
   isTabOpen,
@@ -201,15 +202,18 @@ export function TreeNode({
           </div>
         ) : (
           <>
-            <span
-              className={cn(
-                'truncate text-sm',
-                hasUnread ? 'text-orange-400' : labelMuted ? 'text-muted-foreground' : 'text-foreground',
-              )}
-              title={label}
-            >
-              {label}
-            </span>
+            <div className="flex items-center gap-1 min-w-0">
+              <span
+                className={cn(
+                  'truncate text-sm',
+                  hasUnread ? 'text-orange-400' : labelMuted ? 'text-muted-foreground' : 'text-foreground',
+                )}
+                title={label}
+              >
+                {label}
+              </span>
+              {badge}
+            </div>
             {subtitle && (
               <span className="text-[0.65rem] text-muted-foreground leading-none truncate">
                 {subtitle}

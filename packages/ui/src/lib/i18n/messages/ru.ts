@@ -664,6 +664,19 @@ export const dict = {
   'transport.wsDesc': 'Только WebSocket',
   'transport.sseDesc': 'Только SSE',
 
+  // Hybrid mode (гибридный режим: локальный core + удалённый backend)
+  'hybrid.local': 'локально',
+  'hybrid.remote': 'удалённо',
+  'hybrid.enabled': 'Сервер',
+  'hybrid.connected': 'Сервер: подключён',
+  'hybrid.disconnected': 'Сервер: недоступен',
+  'hybrid.statusTitle': 'Гибридный режим',
+  'hybrid.confirmDeleteRemoteProject': 'Удалить удалённый проект? Действие выполнится на сервере.',
+  'hybrid.confirmDeleteRemoteSession': 'Удалить удалённую сессию? Действие выполнится на сервере.',
+  'hybrid.createWhere': 'Где создать',
+  'hybrid.createLocal': 'Локально',
+  'hybrid.createRemote': 'На сервере',
+
   // Session settings
   'sessionSettings.providerModel': 'Провайдер и модель',
   'sessionSettings.model': 'Модель',

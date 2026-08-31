@@ -667,6 +667,19 @@ export const dict = {
   'transport.wsDesc': 'WebSocket only',
   'transport.sseDesc': 'SSE only',
 
+  // Hybrid mode (local core + remote backend)
+  'hybrid.local': 'local',
+  'hybrid.remote': 'remote',
+  'hybrid.enabled': 'Server',
+  'hybrid.connected': 'Server: connected',
+  'hybrid.disconnected': 'Server: unavailable',
+  'hybrid.statusTitle': 'Hybrid mode',
+  'hybrid.confirmDeleteRemoteProject': 'Delete remote project? The action will be performed on the server.',
+  'hybrid.confirmDeleteRemoteSession': 'Delete remote session? The action will be performed on the server.',
+  'hybrid.createWhere': 'Create where',
+  'hybrid.createLocal': 'Local',
+  'hybrid.createRemote': 'On server',
+
   // Session settings
   'sessionSettings.providerModel': 'Provider & Model',
   'sessionSettings.model': 'Model',
