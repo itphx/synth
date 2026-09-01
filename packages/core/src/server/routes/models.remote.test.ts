@@ -42,7 +42,7 @@ describe('createModelRoutes: слияние remote-моделей (Часть 6)
     await providerStore.save('local', LOCAL_PROVIDER);
     await modelStore.save('local-m1', { id: 'local-m1', name: 'm1', provider: 'local', enabled: true });
 
-    const app = createModelRoutes(createMockAuth(), modelStore, providerStore);
+    const app = createModelRoutes(createMockAuth(), modelStore, providerStore, new Map<string, ModelConfig>());
     const res = await app.request('/');
     expect(res.status).toBe(200);
     const body = (await res.json()) as { groups: Group[] };
@@ -55,7 +55,7 @@ describe('createModelRoutes: слияние remote-моделей (Часть 6)
     await providerStore.save('local', LOCAL_PROVIDER);
     await modelStore.save('local-m1', { id: 'local-m1', name: 'm1', provider: 'local', enabled: true });
 
-    const app = createModelRoutes(createMockAuth(), modelStore, providerStore, {
+    const app = createModelRoutes(createMockAuth(), modelStore, providerStore, new Map<string, ModelConfig>(), {
       extraModels: [
         { id: 'remote-m1', name: 'rm1', provider: 'synth-remote', enabled: true },
         { id: 'remote-m2', name: 'rm2', provider: 'synth-remote', enabled: true },
@@ -82,7 +82,7 @@ describe('createModelRoutes: слияние remote-моделей (Часть 6)
     await providerStore.save('local', LOCAL_PROVIDER);
     await modelStore.save('local-m1', { id: 'local-m1', name: 'm1', provider: 'local', enabled: true });
 
-    const app = createModelRoutes(createMockAuth(), modelStore, providerStore, {
+    const app = createModelRoutes(createMockAuth(), modelStore, providerStore, new Map<string, ModelConfig>(), {
       extraModels: [{ id: 'remote-m1', name: 'rm1', provider: 'synth-remote', enabled: true }],
       extraProviders: [REMOTE_PROVIDER],
       onlyRemoteModels: true,
@@ -98,7 +98,7 @@ describe('createModelRoutes: слияние remote-моделей (Часть 6)
     await providerStore.save('local', LOCAL_PROVIDER);
     await modelStore.save('local-m1', { id: 'local-m1', name: 'm1', provider: 'local', enabled: true });
 
-    const app = createModelRoutes(createMockAuth(), modelStore, providerStore, {
+    const app = createModelRoutes(createMockAuth(), modelStore, providerStore, new Map<string, ModelConfig>(), {
       extraModels: [{ id: 'remote-m1', name: 'rm1', provider: 'synth-remote', enabled: true }],
       extraProviders: [REMOTE_PROVIDER],
     });
@@ -113,7 +113,7 @@ describe('createModelRoutes: слияние remote-моделей (Часть 6)
   });
 
   it('enabled_only отфильтровывает отключённые remote-модели', async () => {
-    const app = createModelRoutes(createMockAuth(), modelStore, providerStore, {
+    const app = createModelRoutes(createMockAuth(), modelStore, providerStore, new Map<string, ModelConfig>(), {
       extraModels: [
         { id: 'remote-m1', name: 'rm1', provider: 'synth-remote', enabled: true },
         { id: 'remote-m2', name: 'rm2', provider: 'synth-remote', enabled: false },

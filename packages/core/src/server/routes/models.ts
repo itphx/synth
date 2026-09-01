@@ -16,6 +16,7 @@ export function createModelRoutes(
   auth: AuthKit,
   modelStore: JsonStore<ModelConfig>,
   providerStore: JsonStore<ProviderConfig>,
+  modelCache: Map<string, ModelConfig>,
   opts?: ModelRoutesOptions,
 ): Hono {
   const app = new Hono();
@@ -133,6 +134,7 @@ export function createModelRoutes(
     };
 
     await modelStore.save(modelId, model);
+    modelCache.set(modelId, model);
     return c.json(model, existing ? 200 : 201);
   });
 
@@ -142,6 +144,7 @@ export function createModelRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: 'Модель не найдена' } }, 404);
     }
     await modelStore.delete(id);
+    modelCache.delete(id);
     return c.body(null, 204);
   });
 

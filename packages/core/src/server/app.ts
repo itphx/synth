@@ -404,10 +404,10 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, config.remoteClient));
 
   // Providers
-  app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, true));
+  app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache, true));
 
   // Models
-  app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, {
+  app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, modelCache, {
     extraModels: config.remoteProvider?.models,
     extraProviders: config.remoteProvider ? [config.remoteProvider.provider] : undefined,
     onlyRemoteModels: config.remoteBlockLocalProviders && !!config.remoteProvider,

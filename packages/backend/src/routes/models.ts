@@ -31,7 +31,13 @@ interface ModelGroupResponse {
   }>;
 }
 
-export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfig>, providerStore: JsonStore<ProviderConfig>): Hono {
+export function createModelRoutes(
+  kit: AuthKit,
+  modelStore: JsonStore<ModelConfig>,
+  providerStore: JsonStore<ProviderConfig>,
+  modelCache: Map<string, ModelConfig>,
+  providerCache: Map<string, ProviderConfig>,
+): Hono {
   const app = new Hono();
 
   // GET /api/v2/models — сгруппированный список моделей
@@ -134,6 +140,7 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
     };
 
     await modelStore.save(modelId, model);
+    modelCache.set(modelId, model);
 
     // Если set_as_default — обновить провайдера
     if (body.set_as_default && provider) {
@@ -141,6 +148,7 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
       if (prov) {
         prov.defaultModel = model.name;
         await providerStore.save(provider, prov);
+        providerCache.set(provider, prov);
 
         // Снять isDefault с других моделей того же провайдера
         const allModels = await modelStore.list();
@@ -148,6 +156,7 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
           if (m.provider === provider && m.id !== modelId && m.isDefault) {
             m.isDefault = false;
             await modelStore.save(m.id, m);
+            modelCache.set(m.id, m);
           }
         }
       }
@@ -202,7 +211,7 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
 
           if (!existing) {
             // Новая модель
-            await modelStore.save(fullId, {
+            const newModel: ModelConfig = {
               id: fullId,
               name: modelId,
               provider: provider.name,
@@ -211,7 +220,9 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
               isDefault: false,
               contextWindow: resolvedWindow,
               contextSource: resolvedSource,
-            });
+            };
+            await modelStore.save(fullId, newModel);
+            modelCache.set(fullId, newModel);
             totalNew++;
             totalFetched++;
           } else if (apiWindow > 0 && existing.contextWindow !== apiWindow) {
@@ -223,6 +234,7 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
               existing.contextWindow = apiWindow;
               existing.contextSource = 'api';
               await modelStore.save(fullId, existing);
+              modelCache.set(fullId, existing);
               totalEnriched++;
             }
             totalFetched++;
@@ -231,6 +243,7 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
             existing.contextWindow = window;
             existing.contextSource = source;
             await modelStore.save(fullId, existing);
+            modelCache.set(fullId, existing);
             totalEnriched++;
             totalFetched++;
           } else {
@@ -257,6 +270,7 @@ export function createModelRoutes(kit: AuthKit, modelStore: JsonStore<ModelConfi
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.model', undefined, c) } }, 404);
     }
     await modelStore.delete(id);
+    modelCache.delete(id);
     return c.body(null, 204);
   });
 

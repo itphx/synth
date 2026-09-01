@@ -12,7 +12,7 @@
 
 import { createServer, IncomingMessage } from 'node:http';
 import { join } from 'node:path';
-import { WebSocketServer, WebSocket } from 'ws';
+import { WebSocketServer } from 'ws';
 import { Readable } from 'node:stream';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -452,10 +452,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/fs', createFsRoutes(auth, projectStore, backendConfig.workspacesRoot));
 
     // Providers routes
-    app.route('/api/v2/providers', createProviderRoutes(auth, providerStore));
+    app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache));
 
     // Models routes
-    app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore));
+    app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, modelCache, providerCache));
 
     // Agents routes
     app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, sessionManager, agentRegistry));
