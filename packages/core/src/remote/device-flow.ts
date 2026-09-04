@@ -3,6 +3,7 @@
 // показываем их в CLI, после подтверждения — обмениваем device_code на токен.
 
 import { RemoteError } from './types.js';
+import type { RemoteErrorCode } from './types.js';
 
 /** Таймаут HTTP-запросов к серверу авторизации. */
 const AUTH_HTTP_TIMEOUT_MS = 15_000;
@@ -41,6 +42,18 @@ export interface RefreshTokenResult {
   expiresIn?: number;
 }
 
+/** Результат входа по логину/паролю (ROPC, grant_type=password). */
+export interface PasswordGrantResult {
+  accessToken: string;
+  refreshToken?: string;
+  expiresIn?: number;
+}
+
+/** Параметры postForm: код ошибки при недоступности сервера авторизации. */
+export interface PostFormOptions {
+  networkErrorCode?: RemoteErrorCode;
+}
+
 function str(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
@@ -65,7 +78,11 @@ async function getJson(url: string): Promise<Record<string, unknown>> {
   return (await res.json()) as Record<string, unknown>;
 }
 
-async function postForm(url: string, params: URLSearchParams): Promise<Record<string, unknown>> {
+export async function postForm(
+  url: string,
+  params: URLSearchParams,
+  opts: PostFormOptions = {},
+): Promise<Record<string, unknown>> {
   let res: Response;
   try {
     res = await fetch(url, {
@@ -76,7 +93,7 @@ async function postForm(url: string, params: URLSearchParams): Promise<Record<st
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    throw new RemoteError(`Сервер авторизации недоступен: ${reason}`, 'AUTH');
+    throw new RemoteError(`Сервер авторизации недоступен: ${reason}`, opts.networkErrorCode ?? 'AUTH');
   }
   let body: Record<string, unknown> = {};
   try {
@@ -120,6 +137,16 @@ export async function startDeviceFlow(issuer: string, clientId: string): Promise
     scope: 'openid profile',
   });
   const body = await postForm(disc.device_authorization_endpoint, params);
+  const authError = str(body.error);
+  if (authError) {
+    // RFC 8628 §3.1: сервер может вернуть ошибку (например, unauthorized_client
+    // для confidential-клиента). Показываем её вместо generic-сообщения.
+    const detail = str(body.error_description) ?? authError;
+    throw new RemoteError(
+      `Сервер авторизации не выдал device-код: ${authError} — ${detail} (проверьте client_id и тип клиента)`,
+      'AUTH',
+    );
+  }
   const deviceCode = str(body.device_code);
   const userCode = str(body.user_code);
   const verificationUri = str(body.verification_uri);
@@ -220,6 +247,50 @@ export async function refreshAccessToken(
       ? 'refresh token недействителен или истёк'
       : (err ?? 'неизвестная ошибка');
     throw new RemoteError(`Не удалось обновить токен: ${detail}`, 'AUTH');
+  }
+  return {
+    accessToken,
+    refreshToken: str(body.refresh_token),
+    expiresIn: num(body.expires_in),
+  };
+}
+
+/**
+ * Вход по логину/паролю (ROPC, grant_type=password, RFC 6749 §4.3).
+ * Используется в гибридном режиме для «единой личности»: локальный core
+ * логинится как серверный пользователь Keycloak (public-клиент с
+ * directAccessGrantsEnabled). Токен-эндпоинт — стандартный путь Keycloak
+ * {issuer}/protocol/openid-connect/token.
+ * Ошибки аутентификации (invalid_grant/invalid_client) → RemoteError('AUTH')
+ * с понятным русским сообщением; сеть недоступна → RemoteError('OFFLINE').
+ */
+export async function passwordGrant(
+  issuer: string,
+  clientId: string,
+  username: string,
+  password: string,
+): Promise<PasswordGrantResult> {
+  const base = issuer.replace(/\/+$/, '');
+  const params = new URLSearchParams({
+    grant_type: 'password',
+    client_id: clientId,
+    username,
+    password,
+  });
+  // Сеть недоступна → OFFLINE (а не AUTH, как у postForm по умолчанию):
+  // ROPC-логин из runtime-эндпоинта должен различать «неверные учётные данные»
+  // и «сервер авторизации недоступен».
+  const body = await postForm(`${base}/protocol/openid-connect/token`, params, {
+    networkErrorCode: 'OFFLINE',
+  });
+
+  const accessToken = str(body.access_token);
+  if (!accessToken) {
+    const err = str(body.error);
+    const detail = err === 'invalid_grant' || err === 'invalid_client'
+      ? 'Неверный логин или пароль'
+      : (err ?? 'неизвестная ошибка');
+    throw new RemoteError(`Не удалось войти: ${detail}`, 'AUTH');
   }
   return {
     accessToken,

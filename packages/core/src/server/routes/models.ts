@@ -5,11 +5,17 @@ import type { ModelConfig, ProviderConfig } from '@itphx/synth-shared';
 
 export interface ModelRoutesOptions {
   /** Виртуальные модели (например, remote-модели через LLM Proxy) — добавляются к store-моделям. */
-  extraModels?: ModelConfig[];
+  extraModels?: ModelConfig[] | (() => ModelConfig[]);
   /** Виртуальные провайдеры (например, synth-remote) — для группировки extraModels. */
-  extraProviders?: ProviderConfig[];
+  extraProviders?: ProviderConfig[] | (() => ProviderConfig[]);
   /** Показывать только extraModels (политика «все LLM — через remote»). */
-  onlyRemoteModels?: boolean;
+  onlyRemoteModels?: boolean | (() => boolean);
+}
+
+/** Гибрид подключается в рантайме — опции могут быть геттерами текущего состояния. */
+function resolveOpt<T>(value: T | (() => T) | undefined, fallback: T): T {
+  if (typeof value === 'function') return (value as () => T)();
+  return value ?? fallback;
 }
 
 export function createModelRoutes(
@@ -28,13 +34,18 @@ export function createModelRoutes(
     const filterProvider = c.req.query('provider');
     const onlyEnabled = c.req.query('enabled_only') === 'true' || c.req.query('enabled_only') === '1';
 
+    // Гибрид runtime: extra-модели/провайдеры читаются на каждый запрос.
+    const effExtraModels = resolveOpt<ModelConfig[]>(extraModels, []);
+    const effExtraProviders = resolveOpt<ProviderConfig[]>(extraProviders, []);
+    const effOnlyRemoteModels = resolveOpt<boolean>(onlyRemoteModels, false);
+
     const [storeModels, storeProviders] = await Promise.all([modelStore.list(), providerStore.list()]);
 
     // Слияние store + extra (без дубликатов по id). При onlyRemoteModels
     // локальные модели скрываются — остаются только remote.
     const models: ModelConfig[] = [];
     const seenModels = new Set<string>();
-    for (const m of onlyRemoteModels ? extraModels : [...storeModels, ...extraModels]) {
+    for (const m of effOnlyRemoteModels ? effExtraModels : [...storeModels, ...effExtraModels]) {
       if (seenModels.has(m.id)) continue;
       seenModels.add(m.id);
       models.push(m);
@@ -42,7 +53,7 @@ export function createModelRoutes(
 
     const providers: ProviderConfig[] = [];
     const seenProviders = new Set<string>();
-    for (const p of onlyRemoteModels ? extraProviders : [...storeProviders, ...extraProviders]) {
+    for (const p of effOnlyRemoteModels ? effExtraProviders : [...storeProviders, ...effExtraProviders]) {
       if (seenProviders.has(p.name)) continue;
       seenProviders.add(p.name);
       providers.push(p);

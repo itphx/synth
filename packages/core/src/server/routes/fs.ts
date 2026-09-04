@@ -31,12 +31,18 @@ function resolveSafe(root: string, p: string): string | null {
   return full;
 }
 
-export function createFsRoutes(auth: AuthKit, workspacesRoot?: string, remoteClient?: RemoteBackendClient): Hono {
+export function createFsRoutes(
+  auth: AuthKit,
+  workspacesRoot?: string,
+  getRemoteClient?: () => RemoteBackendClient | null,
+): Hono {
   const app = new Hono();
   const root = workspacesRoot || process.cwd();
+  const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
 
   // GET / — список файлов в директории
   app.get('/', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const projectId = c.req.query('project_id');
     if (projectId && isRemoteRef(projectId)) {
       if (!remoteClient) return remoteUnavailable(c);
@@ -89,6 +95,7 @@ export function createFsRoutes(auth: AuthKit, workspacesRoot?: string, remoteCli
 
   // GET /read — содержимое файла
   app.get('/read', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const projectId = c.req.query('project_id');
     if (projectId && isRemoteRef(projectId)) {
       if (!remoteClient) return remoteUnavailable(c);
@@ -122,6 +129,7 @@ export function createFsRoutes(auth: AuthKit, workspacesRoot?: string, remoteCli
 
   // POST /write — запись файла
   app.post('/write', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const body = await c.req.json().catch(() => null);
     const projectId = body?.projectId || body?.project_id;
     if (typeof projectId === 'string' && isRemoteRef(projectId)) {
@@ -163,6 +171,7 @@ export function createFsRoutes(auth: AuthKit, workspacesRoot?: string, remoteCli
 
   // POST /upload — загрузка файла (multipart)
   app.post('/upload', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const formData = await c.req.formData();
     const projectIdField = formData.get('project_id');
     const projectId = typeof projectIdField === 'string' ? projectIdField : undefined;
@@ -224,6 +233,7 @@ export function createFsRoutes(auth: AuthKit, workspacesRoot?: string, remoteCli
 
   // GET /download — скачивание файла
   app.get('/download', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const projectId = c.req.query('project_id');
     if (projectId && isRemoteRef(projectId)) {
       if (!remoteClient) return remoteUnavailable(c);
@@ -270,6 +280,7 @@ export function createFsRoutes(auth: AuthKit, workspacesRoot?: string, remoteCli
 
   // DELETE / — удаление файла или пустой директории
   app.delete('/', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const projectId = c.req.query('project_id');
     if (projectId && isRemoteRef(projectId)) {
       if (!remoteClient) return remoteUnavailable(c);
@@ -313,6 +324,7 @@ export function createFsRoutes(auth: AuthKit, workspacesRoot?: string, remoteCli
 
   // POST /mkdir — создание директории
   app.post('/mkdir', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const body = await c.req.json().catch(() => null);
     const projectId = body?.projectId || body?.project_id;
     if (typeof projectId === 'string' && isRemoteRef(projectId)) {
@@ -358,6 +370,7 @@ export function createFsRoutes(auth: AuthKit, workspacesRoot?: string, remoteCli
 
   // POST /move — перемещение/переименование
   app.post('/move', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const body = await c.req.json().catch(() => null);
     const projectId = body?.projectId || body?.project_id;
     if (typeof projectId === 'string' && isRemoteRef(projectId)) {

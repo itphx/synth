@@ -33,12 +33,19 @@ export function createSessionRoutes(
   orchestrator: ChatOrchestrator,
   contextOptimizer?: ContextOptimizer,
   projectStore?: ProjectStore,
-  remoteClient?: RemoteBackendClient,
+  /**
+   * Геттер текущего клиента к удалённому backend (runtime-подключение):
+   * возвращает null, когда гибрид не подключён. Роуты резолвят клиента
+   * в начале каждого хэндлера, а не при создании фабрики.
+   */
+  getRemoteClient?: () => RemoteBackendClient | null,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
+  const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
 
   app.get('/', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const projectId = c.req.query('project_id') || undefined;
     const sessions = await sessionManager.listSessions({
       userId: LOCAL_USER_ID,
@@ -75,6 +82,7 @@ export function createSessionRoutes(
   });
 
   app.post('/', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const body = await c.req.json().catch(() => ({}));
 
     // Гибрид: создание удалённой сессии на backend.
@@ -112,6 +120,7 @@ export function createSessionRoutes(
   });
 
   app.get('/:id', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const id = c.req.param('id');
     if (isRemoteRef(id)) {
       if (!remoteClient) {
@@ -134,6 +143,7 @@ export function createSessionRoutes(
   });
 
   app.patch('/:id', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const id = c.req.param('id');
     if (isRemoteRef(id)) {
       if (!remoteClient) {
@@ -226,6 +236,7 @@ export function createSessionRoutes(
   });
 
   app.delete('/:id', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const id = c.req.param('id');
     if (isRemoteRef(id)) {
       if (!remoteClient) {
@@ -263,6 +274,7 @@ export function createSessionRoutes(
   });
 
   app.post('/:id/prompt', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('id');
 
     // Гибрид: удалённая сессия исполняется backend — пробрасываем upstream Response
@@ -362,6 +374,7 @@ export function createSessionRoutes(
   });
 
   app.get('/:id/messages', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const id = c.req.param('id');
     if (isRemoteRef(id)) {
       if (!remoteClient) {
@@ -409,6 +422,7 @@ export function createSessionRoutes(
   });
 
   app.post('/:id/abort', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const id = c.req.param('id');
     if (isRemoteRef(id)) {
       if (!remoteClient) {
@@ -454,6 +468,7 @@ export function createSessionRoutes(
   });
 
   app.post('/:id/summarize', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const id = c.req.param('id');
     if (isRemoteRef(id)) {
       if (!remoteClient) {

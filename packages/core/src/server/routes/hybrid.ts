@@ -1,6 +1,4 @@
 import { Hono } from 'hono';
-import type { RemoteBackendClient } from '../../remote/client.js';
-import { RemoteError } from '../../remote/types.js';
 
 export interface HybridStatusUser {
   id: string;
@@ -13,56 +11,32 @@ export interface HybridStatusResponse {
   connected: boolean;
   backendUrl: string | null;
   user?: HybridStatusUser | null;
+  /** Адрес сервера известен (defaultBackendUrl задан при старте) — даже если не подключено. */
+  serverConfigured: boolean;
+  /** Доступен вход на сервер (адрес известен ИЛИ есть OIDC issuer ИЛИ уже подключено). */
+  serverLoginAvailable: boolean;
 }
 
-/**
- * Короткий таймаут для auth-статуса удалённого backend: UI опрашивает
- * эндпоинт каждые ~30 с, поэтому запрос не должен висеть на медленном OIDC.
- */
-const AUTH_STATUS_TIMEOUT_MS = 5_000;
+/** Текущее состояние гибрида: колбэк читает RemoteConnection в момент запроса. */
+export type HybridStatusState = HybridStatusResponse;
 
 /**
  * Статус гибридного режима (без auth, как /health).
- * - enabled   — настроен ли remoteClient (`serve --connect`).
- * - connected — доступен ли удалённый backend (краткий health-check).
+ * Роут читает состояние через getState() в момент каждого запроса — гибрид
+ * подключается в рантайме (RemoteConnection), поэтому статический remoteClient
+ * здесь не передаётся.
+ * - enabled   — настроен ли гибрид (задан defaultBackendUrl ИЛИ есть подключение).
+ * - connected — активно ли runtime-подключение к удалённому backend.
  * - backendUrl — URL удалённого backend (null без гибрида).
  * - user      — пользователь backend (из /auth/status; null при недоступности).
+ * - serverConfigured — адрес сервера известен при старте (defaultBackendUrl), UI скрывает поле адреса.
+ * - serverLoginAvailable — можно войти на сервер (адрес/issuer известен ИЛИ подключено).
  */
-export function createHybridRoutes(remoteClient?: RemoteBackendClient): Hono {
+export function createHybridRoutes(getState: () => HybridStatusState): Hono {
   const app = new Hono();
 
-  app.get('/api/v2/hybrid/status', async (c) => {
-    if (!remoteClient) {
-      return c.json({ enabled: false, connected: false, backendUrl: null, user: null });
-    }
-
-    const connected = await remoteClient.isReachable();
-    let user: HybridStatusUser | null = null;
-    if (connected) {
-      try {
-        const status = await remoteClient.getAuthStatus({ timeoutMs: AUTH_STATUS_TIMEOUT_MS });
-        if (status.authenticated && status.user) {
-          user = status.user;
-        }
-      } catch (err) {
-        // Backend недоступен/не авторизован: connected оставляем по isReachable,
-        // user — null. Эндпоинт не должен падать из-за медленного auth.
-        if (err instanceof RemoteError) {
-          // ок — статус просто недоступен
-        } else {
-          console.warn(
-            `[hybrid] не удалось получить auth-статус: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
-    }
-
-    return c.json({
-      enabled: true,
-      connected,
-      backendUrl: remoteClient.backendUrl,
-      user,
-    });
+  app.get('/api/v2/hybrid/status', (c) => {
+    return c.json(getState());
   });
 
   return app;

@@ -13,15 +13,18 @@ function extractBearerToken(h: string | undefined): string | null {
   return null;
 }
 
-/** Формат cookie: `base64url(apiKey).hex(hmacSha256(base64url(apiKey), secret))`. */
-function signApiKey(apiKey: string, secret: string): string {
-  const payload = Buffer.from(apiKey, 'utf8').toString('base64url');
-  const sig = createHmac('sha256', secret).update(payload).digest('hex');
-  return `${payload}.${sig}`;
+/**
+ * Подписанный payload cookie: `base64url(payload).hex(hmacSha256(base64url(payload), secret))`.
+ * Используется и для v1 (payload = apiKey), и для v2 (payload = JSON).
+ */
+function signPayload(payload: string, secret: string): string {
+  const p = Buffer.from(payload, 'utf8').toString('base64url');
+  const sig = createHmac('sha256', secret).update(p).digest('hex');
+  return `${p}.${sig}`;
 }
 
-/** Верифицирует подпись и возвращает apiKey из cookie, либо null. */
-function verifySignedApiKey(value: string, secret: string): string | null {
+/** Верифицирует подпись и возвращает декодированный payload, либо null. */
+function verifySignedPayload(value: string, secret: string): string | null {
   const idx = value.lastIndexOf('.');
   if (idx <= 0 || idx === value.length - 1) return null;
   const payload = value.slice(0, idx);
@@ -35,6 +38,11 @@ function verifySignedApiKey(value: string, secret: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Формат cookie v1: `base64url(apiKey).hex(hmac)`. */
+function signApiKey(apiKey: string, secret: string): string {
+  return signPayload(apiKey, secret);
 }
 
 /** Достаёт значение cookie из заголовка `Cookie`. */
@@ -58,6 +66,40 @@ export interface LocalAuthConfig {
   apiKey: string;
 }
 
+/**
+ * Серверный пользователь (гибридная личность): хранится в cookie v2
+ * и возвращается API-роутами /auth. Подмножество User из @itphx/synth-shared.
+ */
+export interface ServerUserPayload {
+  id: string;
+  username: string;
+  email?: string;
+  roles: string[];
+}
+
+/** Формат cookie v2: JSON-объект с kind и данными пользователя. */
+interface SessionCookiePayloadV2 {
+  v: 2;
+  kind: 'server' | 'local';
+  user: ServerUserPayload;
+}
+
+/** Собрать полного локального User из серверных данных (cookie v2 / авто-логин). */
+export function serverUserToUser(u: ServerUserPayload): User {
+  return {
+    id: u.id,
+    username: u.username,
+    email: u.email,
+    roles: u.roles,
+    preferredLanguage: 'ru',
+    createdAt: new Date().toISOString(),
+    teamRole: u.roles[0] || 'USER',
+    notes: '',
+    interviewCompleted: false,
+    isLocal: false,
+  };
+}
+
 export interface AuthKit {
   getCurrentUser(c: ContextLike): User | null;
   requireAuth: ReturnType<typeof createMiddleware>;
@@ -71,6 +113,8 @@ export interface AuthKit {
 export interface LocalAuthKit extends AuthKit {
   /** Установить cookie-сессию (подписанный API-ключ) в ответе. */
   setSessionCookie(c: ContextLike): void;
+  /** Установить cookie с серверной личностью (v2, kind:'server') в ответе. */
+  setServerUserCookie(c: ContextLike, user: ServerUserPayload): void;
   /** Очистить cookie-сессию (истёкший срок). */
   clearSessionCookie(c: ContextLike): void;
 }
@@ -100,12 +144,28 @@ export function createLocalAuth(config: LocalAuthConfig): LocalAuthKit {
       return localUser;
     }
 
-    // 2. Cookie synth_session — подписанный API-ключ (для SPA после spa-login)
+    // 2. Cookie synth_session
     const cookieValue = readCookie(c.req.header('Cookie'), SESSION_COOKIE);
     if (cookieValue) {
-      const signedKey = verifySignedApiKey(cookieValue, config.apiKey);
-      if (signedKey === config.apiKey) {
-        return localUser;
+      const payload = verifySignedPayload(cookieValue, config.apiKey);
+      if (payload !== null) {
+        // v2: JSON {v:2, kind:'server'|'local', user} — серверная/локальная личность
+        if (payload.startsWith('{')) {
+          try {
+            const parsed = JSON.parse(payload) as SessionCookiePayloadV2;
+            if (parsed?.v === 2 && parsed.user?.username) {
+              if (parsed.kind === 'server') return serverUserToUser(parsed.user);
+              if (parsed.kind === 'local') return localUser;
+            }
+          } catch {
+            // повреждённый JSON — cookie отклоняем
+          }
+          return null;
+        }
+        // v1: подписанный apiKey (совместимость со старыми cookie)
+        if (payload === config.apiKey) {
+          return localUser;
+        }
       }
     }
 
@@ -115,6 +175,16 @@ export function createLocalAuth(config: LocalAuthConfig): LocalAuthKit {
   const setSessionCookie = (c: ContextLike): void => {
     if (!c.header) return;
     c.header('Set-Cookie', buildCookie(signApiKey(config.apiKey, config.apiKey), SESSION_MAX_AGE));
+  };
+
+  const setServerUserCookie = (c: ContextLike, user: ServerUserPayload): void => {
+    if (!c.header) return;
+    const payload = JSON.stringify({
+      v: 2,
+      kind: 'server',
+      user,
+    } satisfies SessionCookiePayloadV2);
+    c.header('Set-Cookie', buildCookie(signPayload(payload, config.apiKey), SESSION_MAX_AGE));
   };
 
   const clearSessionCookie = (c: ContextLike): void => {
@@ -135,6 +205,7 @@ export function createLocalAuth(config: LocalAuthConfig): LocalAuthKit {
     getCurrentUser,
     requireAuth,
     setSessionCookie,
+    setServerUserCookie,
     clearSessionCookie,
   };
 }

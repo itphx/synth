@@ -38,6 +38,8 @@ export const authConfigSchema = z.object({
       clientId: z.string().default(''),
       clientSecret: z.string().default(''),
       redirectUri: z.string().default('http://localhost:5002/auth/callback'),
+      /** Public client_id для локального CLI/core (ROPC/device flow). Не секрет. */
+      cliClientId: z.string().default('synth-cli'),
     })
     .optional(),
 });

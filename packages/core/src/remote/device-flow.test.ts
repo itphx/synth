@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { refreshAccessToken } from './device-flow.js';
+import { refreshAccessToken, startDeviceFlow } from './device-flow.js';
 import { RemoteError } from './types.js';
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -17,6 +17,31 @@ const DISCOVERY = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('startDeviceFlow', () => {
+  it('unauthorized_client на device endpoint → RemoteError(AUTH) с текстом ошибки сервера', async () => {
+    const fetchMock = vi.fn((url: string | URL | Request, _init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes('.well-known/openid-configuration')) {
+        return Promise.resolve(jsonResponse(DISCOVERY));
+      }
+      if (u.includes('/device')) {
+        return Promise.resolve(jsonResponse({
+          error: 'unauthorized_client',
+          error_description: 'Invalid client or Invalid client credentials',
+        }, 400));
+      }
+      return Promise.resolve(jsonResponse({ error: 'not_found' }, 404));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const err = await startDeviceFlow('https://issuer.test', 'bad-client').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RemoteError);
+    expect((err as RemoteError).code).toBe('AUTH');
+    expect((err as RemoteError).message).toContain('unauthorized_client');
+    expect((err as RemoteError).message).not.toContain('нет device_code');
+  });
 });
 
 describe('refreshAccessToken', () => {

@@ -452,3 +452,128 @@ describe('RemoteSession.getToken (Часть 6)', () => {
     expect(await session.getToken()).toBeNull();
   });
 });
+
+describe('RemoteSession.loginWithPassword (ROPC, Часть 10)', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'synth-login-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+    vi.unstubAllGlobals();
+  });
+
+  function credsPath(name = 'credentials.json'): string {
+    return join(dir, name);
+  }
+
+  function loginOpts(overrides: Partial<RemoteSessionOptions> = {}): RemoteSessionOptions {
+    return {
+      backendUrl: 'https://backend.test',
+      issuer: 'https://issuer.test',
+      clientId: 'synth-cli',
+      credentialsPath: credsPath(),
+      ...overrides,
+    };
+  }
+
+  /**
+   * fetch-мок ROPC: token_endpoint ({issuer}/protocol/openid-connect/token)
+   * отвечает на grant_type=password, backend /auth/status — серверным юзером.
+   */
+  function ropcFetchMock(overrides: { tokenStatus?: number; tokenBody?: Record<string, unknown>; statusBody?: unknown } = {}) {
+    const { tokenStatus = 200, tokenBody, statusBody } = overrides;
+    return vi.fn((url: string | URL | Request, _init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes('/protocol/openid-connect/token')) {
+        if (tokenStatus !== 200) {
+          return Promise.resolve(jsonResponse(tokenBody ?? { error: 'invalid_grant' }, tokenStatus));
+        }
+        return Promise.resolve(jsonResponse(tokenBody ?? {
+          access_token: 'at-ropc',
+          refresh_token: 'rt-ropc',
+          expires_in: 300,
+        }, tokenStatus));
+      }
+      if (u.includes('/auth/status')) {
+        return Promise.resolve(jsonResponse(statusBody ?? {
+          authenticated: true,
+          oidc_enabled: true,
+          user: { id: 'u-1', username: 'lucky', roles: ['ADMIN', 'USER'] },
+        }));
+      }
+      return Promise.resolve(jsonResponse({ error: 'not_found' }, 404));
+    });
+  }
+
+  it('успех: токены сохранены в credentials + user из /auth/status + getToken() работает', async () => {
+    vi.stubGlobal('fetch', ropcFetchMock());
+
+    const session = await RemoteSession.loginWithPassword(loginOpts(), 'lucky', 'secret');
+
+    expect(session.backendUrl).toBe('https://backend.test');
+    expect(session.user?.username).toBe('lucky');
+    expect(session.user?.roles).toEqual(['ADMIN', 'USER']);
+
+    const saved = await loadCredentials('https://backend.test', credsPath());
+    expect(saved?.accessToken).toBe('at-ropc');
+    expect(saved?.refreshToken).toBe('rt-ropc');
+    expect(saved?.user?.username).toBe('lucky');
+    expect(saved?.user?.roles).toEqual(['ADMIN', 'USER']);
+    expect(saved?.expiresAt).toBeDefined();
+
+    // getToken() авто-рефрешит (сессия умеет refresh) и ходит с токеном
+    expect(await session.getToken()).toBe('at-ropc');
+    expect(session.authType).toBe('device');
+  });
+
+  it('неверный логин/пароль (invalid_grant) → RemoteError(AUTH) с русским сообщением', async () => {
+    vi.stubGlobal('fetch', ropcFetchMock({ tokenStatus: 401, tokenBody: { error: 'invalid_grant', error_description: 'Invalid user credentials' } }));
+
+    const err = await RemoteSession.loginWithPassword(loginOpts(), 'lucky', 'wrong').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(RemoteError);
+    expect((err as RemoteError).code).toBe('AUTH');
+    expect((err as RemoteError).message).toContain('Неверный логин или пароль');
+    // credentials не сохраняются при ошибке
+    expect(await loadCredentials('https://backend.test', credsPath())).toBeNull();
+  });
+
+  it('сеть недоступна → RemoteError(OFFLINE)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+
+    const err = await RemoteSession.loginWithPassword(loginOpts(), 'lucky', 'secret').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(RemoteError);
+    expect((err as RemoteError).code).toBe('OFFLINE');
+  });
+
+  it('нет issuer/clientId → RemoteError(AUTH)', async () => {
+    const err = await RemoteSession.loginWithPassword({
+      backendUrl: 'https://backend.test',
+      credentialsPath: credsPath(),
+    }, 'lucky', 'secret').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(RemoteError);
+    expect((err as RemoteError).code).toBe('AUTH');
+  });
+
+  it('/auth/status недоступен после обмена → сессия создана, credentials без user', async () => {
+    vi.stubGlobal('fetch', ropcFetchMock({ statusBody: undefined }));
+    // Перекрываем: token endpoint ок, а /auth/status падает с сетевой ошибкой.
+    const baseMock = ropcFetchMock();
+    vi.stubGlobal('fetch', vi.fn((url: string | URL | Request, _init?: RequestInit) => {
+      if (String(url).includes('/auth/status')) return Promise.reject(new TypeError('Failed to fetch'));
+      return baseMock(url, _init);
+    }));
+
+    const session = await RemoteSession.loginWithPassword(loginOpts(), 'lucky', 'secret');
+
+    expect(session.user).toBeUndefined();
+    const saved = await loadCredentials('https://backend.test', credsPath());
+    expect(saved?.accessToken).toBe('at-ropc');
+    expect(saved?.user).toBeUndefined();
+  });
+});

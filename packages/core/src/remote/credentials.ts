@@ -72,6 +72,12 @@ export async function saveCredentials(creds: RemoteCredentials, path?: string): 
   await writeCredentialsFile(filePath, file);
 }
 
+/** Список backendUrl, для которых сохранены credentials (порядок файла). */
+export async function listCredentials(path?: string): Promise<string[]> {
+  const file = await readCredentialsFile(path ?? defaultCredentialsPath());
+  return Object.keys(file);
+}
+
 /** Удалить credentials для backendUrl. Если записей не осталось — удалить файл. */
 export async function clearCredentials(backendUrl: string, path?: string): Promise<void> {
   const filePath = path ?? defaultCredentialsPath();

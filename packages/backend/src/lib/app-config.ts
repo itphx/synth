@@ -65,6 +65,7 @@ function buildAuthConfig(defaults: SynthConfig['auth']): AuthConfig {
           clientId: envStr('SYNTH_OIDC_CLIENT_ID', defaults.oidc?.clientId ?? ''),
           clientSecret: envStr('SYNTH_OIDC_CLIENT_SECRET', defaults.oidc?.clientSecret ?? ''),
           redirectUri: envStr('SYNTH_OIDC_REDIRECT_URI', defaults.oidc?.redirectUri ?? 'http://localhost:5002/auth/callback'),
+          cliClientId: envStr('SYNTH_OIDC_CLI_CLIENT_ID', defaults.oidc?.cliClientId ?? 'synth-cli'),
         }
       : undefined,
   };

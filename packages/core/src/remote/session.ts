@@ -6,7 +6,7 @@
 
 import { RemoteBackendClient } from './client.js';
 import { loadCredentials, saveCredentials, clearCredentials } from './credentials.js';
-import { startDeviceFlow, pollDeviceToken, refreshAccessToken } from './device-flow.js';
+import { startDeviceFlow, pollDeviceToken, refreshAccessToken, passwordGrant } from './device-flow.js';
 import { RemoteError } from './types.js';
 import type { RemoteAuthType, RemoteCredentials, RemoteUser } from './types.js';
 
@@ -42,6 +42,8 @@ function isTokenExpired(expiresAt?: string): boolean {
 export class RemoteSession {
   readonly backendUrl: string;
   readonly authType: RemoteAuthType;
+  /** Серверный пользователь (из GET /auth/status), если известен. */
+  readonly user?: RemoteUser;
 
   private _accessToken: string;
   private _refreshToken?: string;
@@ -61,6 +63,7 @@ export class RemoteSession {
     expiresAt?: string,
     issuer?: string,
     clientId?: string,
+    user?: RemoteUser,
   ) {
     this.backendUrl = backendUrl;
     this.authType = authType;
@@ -70,6 +73,7 @@ export class RemoteSession {
     this._issuer = issuer;
     this._clientId = clientId;
     this._credentialsPath = credentialsPath;
+    this.user = user;
     this._client = new RemoteBackendClient({
       backendUrl,
       // Клиент тоже ходит через session.getToken(): протухший accessToken
@@ -111,6 +115,7 @@ export class RemoteSession {
       return new RemoteSession(
         backendUrl, authType, existing.accessToken, credentialsPath, opts.timeoutMs,
         existing.refreshToken, existing.expiresAt, opts.issuer, opts.clientId,
+        existing.user,
       );
     }
 
@@ -137,6 +142,7 @@ export class RemoteSession {
         return new RemoteSession(
           backendUrl, authType, updated.accessToken, credentialsPath, opts.timeoutMs,
           updated.refreshToken, updated.expiresAt, opts.issuer, opts.clientId,
+          updated.user,
         );
       } catch (err) {
         if (err instanceof RemoteError && err.code === 'AUTH') {
@@ -178,6 +184,74 @@ export class RemoteSession {
     return new RemoteSession(
       backendUrl, authType, creds.accessToken, credentialsPath, opts.timeoutMs,
       creds.refreshToken, creds.expiresAt, opts.issuer, opts.clientId,
+    );
+  }
+
+  /**
+   * Вход по логину/паролю (ROPC, grant_type=password) — «единая личность»:
+   * локальный core логинится как серверный пользователь (username + роли из
+   * Keycloak). Токены сохраняются в credentials (переживают рестарт,
+   * getToken() авто-обновляет по refresh token).
+   *
+   * После обмена токена запрашивается серверный пользователь
+   * (GET {backendUrl}/auth/status с Bearer access_token); если backend
+   * недоступен — credentials уже сохранены, user остаётся пустым.
+   *
+   * Ошибки: RemoteError('AUTH') — неверный логин/пароль;
+   * RemoteError('OFFLINE') — сервер авторизации недоступен.
+   */
+  static async loginWithPassword(
+    opts: RemoteSessionOptions,
+    username: string,
+    password: string,
+  ): Promise<RemoteSession> {
+    const backendUrl = opts.backendUrl.replace(/\/+$/, '');
+    const authType = opts.authType ?? 'device';
+    if (!opts.issuer || !opts.clientId) {
+      throw new RemoteError(
+        'Не заданы remote.auth.issuer/clientId — укажите их в config.yaml или флагами --oidc-issuer/--oidc-client-id',
+        'AUTH',
+      );
+    }
+    if (!username || !password) {
+      throw new RemoteError('Укажите логин и пароль', 'AUTH');
+    }
+
+    const granted = await passwordGrant(opts.issuer, opts.clientId, username, password);
+    const expiresAt = granted.expiresIn
+      ? new Date(Date.now() + granted.expiresIn * 1000).toISOString()
+      : undefined;
+
+    const creds: RemoteCredentials = {
+      backendUrl,
+      accessToken: granted.accessToken,
+      refreshToken: granted.refreshToken,
+      expiresAt,
+    };
+    await saveCredentials(creds, opts.credentialsPath);
+
+    // Пытаемся получить серверного пользователя. Если backend недоступен —
+    // сессия уже создана, user остаётся пустым (credentials без user сохранены).
+    let user: RemoteUser | undefined;
+    try {
+      const statusClient = new RemoteBackendClient({
+        backendUrl,
+        getToken: async () => granted.accessToken,
+        timeoutMs: opts.timeoutMs,
+      });
+      const status = await statusClient.getAuthStatus();
+      if (status.user) {
+        user = { id: status.user.id, username: status.user.username, roles: status.user.roles };
+        await saveCredentials({ ...creds, user }, opts.credentialsPath);
+      }
+    } catch {
+      // статус недоступен — не роняем логин
+    }
+
+    return new RemoteSession(
+      backendUrl, authType, creds.accessToken, opts.credentialsPath, opts.timeoutMs,
+      creds.refreshToken, creds.expiresAt, opts.issuer, opts.clientId,
+      user,
     );
   }
 

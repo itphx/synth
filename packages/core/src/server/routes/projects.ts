@@ -37,12 +37,14 @@ function mapRemoteError(c: Context, err: unknown): Response | undefined {
 export function createProjectRoutes(
   auth: AuthKit,
   store: ProjectStore,
-  remoteClient?: RemoteBackendClient,
+  getRemoteClient?: () => RemoteBackendClient | null,
 ): Hono {
   const app = new Hono();
   const LOCAL_USER = 'local';
+  const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
 
   app.get('/', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const projects = await store.list(LOCAL_USER);
     if (!remoteClient) {
       return c.json(projects.map(serializeProject));
@@ -61,6 +63,7 @@ export function createProjectRoutes(
   });
 
   app.post('/', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const body = await c.req.json().catch(() => ({}));
 
     // Гибрид: создание удалённого проекта на backend.
@@ -97,6 +100,7 @@ export function createProjectRoutes(
   });
 
   app.get('/:id', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const id = c.req.param('id');
     if (isRemoteRef(id)) {
       if (!remoteClient) {
@@ -119,6 +123,7 @@ export function createProjectRoutes(
   });
 
   app.put('/:id', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const id = c.req.param('id');
     if (isRemoteRef(id)) {
       if (!remoteClient) {
@@ -157,6 +162,7 @@ export function createProjectRoutes(
   });
 
   app.delete('/:id', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const id = c.req.param('id');
     if (isRemoteRef(id)) {
       if (!remoteClient) {

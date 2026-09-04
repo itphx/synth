@@ -37,8 +37,8 @@ program
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')
   .option('--connect <url>', 'URL удалённого backend (гибридный режим)')
-  .option('--oidc-issuer <url>', 'OIDC issuer для device flow (гибридный режим)')
-  .option('--oidc-client-id <id>', 'OIDC client_id для device flow (гибридный режим)')
+  .option('--oidc-issuer <url>', 'OIDC issuer — fallback дискавери для входа в UI (гибридный режим)')
+  .option('--oidc-client-id <id>', 'OIDC client_id — fallback дискавери для входа в UI (гибридный режим)')
   .option('--token <key>', 'API-ключ для аутентификации на удалённом backend (гибридный режим)')
   .action(async (options) => {
     const { dataDir } = await ensureFirstRun(
@@ -80,70 +80,44 @@ program
     const uiRoot = resolvePackageRoot('@itphx/synth-ui');
     const uiDistPath = uiRoot ? join(uiRoot, 'dist') : undefined;
 
-    // Гибридный режим: аутентификация к удалённому backend перед стартом сервера.
-    let remoteClient;
-    let remoteProvider;
-    let remoteBlockLocalProviders;
-    let remoteGetToken;
-    if (synth.remote.enabled && synth.remote.backendUrl) {
-      const { RemoteSession } = await import('@itphx/synth-core/remote');
-      const session = await RemoteSession.ensureAuthenticated(
-        {
-          backendUrl: synth.remote.backendUrl,
-          authType: synth.remote.auth.type,
-          apiKey: synth.remote.auth.apiKey,
-          issuer: synth.remote.auth.issuer,
-          clientId: synth.remote.auth.clientId,
-          credentialsPath: synth.remote.credentialsPath || undefined,
-          timeoutMs: synth.remote.timeoutMs,
-        },
-        async (info) => {
-          console.log('\n  Гибридный режим: требуется авторизация на удалённом backend.');
-          console.log(`  1. Откройте в браузере: ${info.verificationUri}`);
-          console.log(`  2. Введите код: ${info.userCode}`);
-          console.log('  Ожидание подтверждения...');
-        },
-      );
-      remoteClient = session.getClient();
-      remoteGetToken = () => session.getToken();
-      const status = await session.getAuthStatus().catch(() => null);
-      console.log(`  Подключено к удалённому backend: ${synth.remote.backendUrl}${status?.user ? ` (user: ${status.user.username})` : ''}`);
-      if (status && !status.connected) {
-        console.log('  Внимание: не удалось подтвердить статус (сервер недоступен), credentials сохранены.');
-      }
+    // Гибридный режим: сервер стартует «холодным» (без блокирующего device flow).
+    // Подключение к удалённому backend происходит в рантайме:
+    //   - тихое connectFromSaved после listen (если credentials сохранены);
+    //   - иначе пользователь логинится в UI (POST /auth/login) или используется
+    //     API-ключ (--token), когда он задан.
+    const remoteEnabled = synth.remote.enabled && !!synth.remote.backendUrl;
+    const remoteBackendUrl = synth.remote.backendUrl.replace(/\/+$/, '');
+    // OIDC-fallback (issuer/client_id) передаём и без --connect: сервер стартует
+    // без известного адреса, пользователь вводит адрес в UI (POST /auth/login),
+    // а дискавери при недоступности /auth/oidc-meta падает на эти параметры.
+    // Флаги приоритетнее config.yaml (в секцию remote они не мержатся без --connect).
+    const remoteIssuer = options.oidcIssuer || synth.remote.auth.issuer;
+    const remoteClientId = options.oidcClientId || synth.remote.auth.clientId;
+    const oidcFallbackGiven = !!(remoteIssuer || remoteClientId);
 
-      // Часть 6: централизация LLM — виртуальный remote-провайдер (все LLM
-      // локальных сессий идут через серверный /api/v2/llm/chat/completions).
-      const remoteModelsRaw = await remoteClient.listModels({ timeoutMs: 5000 }).catch(() => []);
-      const remoteModels = (remoteModelsRaw ?? []).map((m) => ({
-        id: String(m.id ?? ''),
-        name: String(m.name ?? m.id ?? ''),
-        provider: 'synth-remote',
-        description: String(m.description ?? ''),
-        enabled: m.enabled !== false,
-      })).filter((m) => m.id);
-      remoteProvider = {
-        provider: { name: 'synth-remote', type: 'remote', baseUrl: session.backendUrl, apiKey: '', enabled: true },
-        models: remoteModels,
-        getToken: () => session.getToken(),
-      };
-      // Политика: по умолчанию (remote.llm=server) локальные провайдеры запрещены.
-      remoteBlockLocalProviders = synth.remote.llm !== 'local';
-      console.log(`  LLM: ${remoteBlockLocalProviders ? 'централизация (локальные провайдеры запрещены)' : 'гибрид (локальные + remote)'}`);
-    }
-
-    const { server, wss, remoteEventBridge } = await createStandaloneApp({
+    const appHandle = await createStandaloneApp({
       port,
       dataDir,
       apiKey,
       workspacesRoot: resolveWorkspacesRoot(synth),
       defaultWorkingDir: resolveDefaultWorkspace(synth),
       uiDistPath,
-      remoteClient,
-      remoteProvider,
-      remoteBlockLocalProviders,
-      remoteGetToken,
+      defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
+      defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
+        ? (synth.remote.auth.apiKey || undefined)
+        : undefined,
+      remoteAuth: remoteEnabled || oidcFallbackGiven
+        ? {
+            issuer: remoteIssuer || undefined,
+            clientId: remoteClientId || undefined,
+            credentialsPath: synth.remote.credentialsPath || undefined,
+          }
+        : undefined,
+      remoteLlm: synth.remote.llm,
+      remoteTimeoutMs: synth.remote.timeoutMs,
+      remoteCredentialsPath: synth.remote.credentialsPath || undefined,
     });
+    const { server, wss } = appHandle;
 
     let shuttingDown = false;
 
@@ -153,7 +127,8 @@ program
       console.log(`\n[Shutdown] Получен сигнал ${signal}, завершаю...`);
 
       // Гибрид: закрыть SSE-стрим к удалённому backend, отменить реконнект.
-      remoteEventBridge?.stop();
+      await appHandle.disconnectRemote?.().catch(() => {});
+      appHandle.remoteEventBridge?.stop();
 
       server.close((err: Error | undefined) => {
         if (err) console.error('[Shutdown] Server close error:', err);
@@ -174,9 +149,28 @@ program
     server.listen(port, host, () => {
       console.log(`\n  Откройте http://${host}:${port} в браузере`);
       console.log(`  API-ключ: ${apiKey ? apiKey.slice(0, 8) + '...' : '(не задан)'}`);
+      if (remoteEnabled) {
+        console.log(`  Удалённый backend: ${remoteBackendUrl}. Если сервер не подключён — войдите в UI (адрес сервера + логин/пароль).`);
+      }
 
-      // Гибрид: после старта сервера подключаем мост событий удалённого backend.
-      remoteEventBridge?.start();
+      // Гибрид: тихое подключение после старта (best-effort, без интерактива).
+      // При --token (api_key) предпочитаем сохранённые credentials, иначе — API-ключ.
+      if (remoteEnabled) {
+        void (async () => {
+          try {
+            if (synth.remote.auth.type === 'api_key' && synth.remote.auth.apiKey) {
+              const saved = await appHandle.connectRemoteFromSaved?.(remoteBackendUrl).catch(() => null);
+              if (!saved) {
+                await appHandle.connectRemoteWithApiKey?.(remoteBackendUrl, synth.remote.auth.apiKey);
+              }
+            } else {
+              await appHandle.connectRemoteFromSaved?.(remoteBackendUrl);
+            }
+          } catch {
+            // тихо: сервер недоступен / credentials не подошли — пользователь войдёт в UI
+          }
+        })();
+      }
     });
   });
 

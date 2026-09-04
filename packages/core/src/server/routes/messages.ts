@@ -23,12 +23,14 @@ function remoteUnavailable(c: Context): Response | undefined {
 export function createMessageRoutes(
   auth: AuthKit,
   sessionManager: SessionManager,
-  remoteClient?: RemoteBackendClient,
+  getRemoteClient?: () => RemoteBackendClient | null,
 ): Hono {
   const app = new Hono();
+  const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
 
   // POST /api/v2/messages/:sessionId/batch — групповая операция
   app.post('/:sessionId/batch', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
     const body = await c.req.json<{ action: string; indices: number[]; state?: boolean }>();
 
@@ -68,6 +70,7 @@ export function createMessageRoutes(
 
   // PATCH /api/v2/messages/:sessionId/:index/toggle — переключить disabled
   app.patch('/:sessionId/:index/toggle', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
     const index = parseInt(c.req.param('index'), 10);
 
@@ -102,6 +105,7 @@ export function createMessageRoutes(
 
   // PATCH /api/v2/messages/:sessionId/:index/pin — переключить pinned
   app.patch('/:sessionId/:index/pin', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
     const index = parseInt(c.req.param('index'), 10);
 
@@ -136,6 +140,7 @@ export function createMessageRoutes(
 
   // DELETE /api/v2/messages/:sessionId/:index — удалить сообщение
   app.delete('/:sessionId/:index', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
     const index = parseInt(c.req.param('index'), 10);
 
@@ -170,6 +175,7 @@ export function createMessageRoutes(
 
   // POST /api/v2/messages/:sessionId/:index/retry — отключить сообщения от index и вернуть текст
   app.post('/:sessionId/:index/retry', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
     const index = parseInt(c.req.param('index'), 10);
 
@@ -209,6 +215,7 @@ export function createMessageRoutes(
 
   // GET /api/v2/messages/:sessionId/:index/debug
   app.get('/:sessionId/:index/debug', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
     const index = parseInt(c.req.param('index'), 10);
 

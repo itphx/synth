@@ -1,50 +1,155 @@
 import { Hono } from 'hono';
-import type { LocalAuthKit } from '../../auth/local.js';
+import type { User } from '@itphx/synth-shared';
+import { serverUserToUser, type LocalAuthKit, type ServerUserPayload } from '../../auth/local.js';
+import type { RemoteConnection } from '../../remote/connection.js';
+import type { RemoteCredentials, RemoteUser } from '../../remote/types.js';
+import { RemoteError } from '../../remote/types.js';
+import { startDeviceFlow, pollDeviceToken } from '../../remote/device-flow.js';
+import { saveCredentials } from '../../remote/credentials.js';
 
-export function createAuthRoutes(auth: LocalAuthKit): Hono {
+/**
+ * Remote-зависимости standalone auth-роутов (гибридный режим).
+ * Гибрид подключается в РАНТАЙМЕ через RemoteConnection: роуты получают сам
+ * connection (текущее состояние) и функции-обёртки connectRemote/disconnectRemote,
+ * которые создаёт createStandaloneApp (connect + инъекция провайдера).
+ */
+export interface AuthRoutesRemoteDeps {
+  /** Runtime-подключение к удалённому backend (состояние: connected/backendUrl/user). */
+  connection: RemoteConnection;
+  /** Полное подключение по логину/паролю (ROPC): connect + applyConnected. */
+  connectRemote: (serverUrl: string, username: string, password: string) => Promise<RemoteUser>;
+  /** Авто-логин по сохранённым credentials (без device flow); null — нет/не вышло. */
+  connectRemoteFromSaved?: (backendUrl?: string) => Promise<RemoteUser | null>;
+  /** Подключение по API-ключу (машинный доступ). */
+  connectRemoteWithApiKey?: (serverUrl: string, apiKey: string) => Promise<RemoteUser>;
+  /** Полный сброс runtime-подключения (bridge + провайдер + connection). */
+  disconnectRemote?: () => Promise<void>;
+  /** Дефолтный адрес сервера (из --connect/env/конфига) — если в запросе не указан server. */
+  defaultBackendUrl?: string;
+  /** Задан OIDC issuer (--oidc-issuer/--oidc-client-id) — fallback дискавери для входа в UI. */
+  issuerAvailable?: boolean;
+}
+
+function normalizeUrl(url: string): string {
+  return url.replace(/\/+$/, '');
+}
+
+function toPayload(user: User): ServerUserPayload {
+  return { id: user.id, username: user.username, email: user.email, roles: user.roles };
+}
+
+function remoteUserToPayload(user: RemoteUser): ServerUserPayload {
+  return { id: user.id, username: user.username, roles: user.roles };
+}
+
+/**
+ * Активный device flow (RFC 8628), запущенный через POST /auth/device-start.
+ * Хранится в замыкании createAuthRoutes: один активный flow — новый start
+ * перезаписывает старый. Фоновый pollDeviceToken обновляет status.
+ */
+interface ActiveDeviceFlow {
+  deviceCode: string;
+  status: 'pending' | 'authenticated' | 'error';
+  errorMessage?: string;
+  user?: ServerUserPayload;
+}
+
+/**
+ * Авто-логин (GET /auth/status|session): если локальной cookie нет, но remote
+ * подключён (connection.active) — пользователь известен; иначе пробуем тихое
+ * подключение по сохранённым credentials (connectRemoteFromSaved, без device flow).
+ * Возвращает null, если авто-логин невозможен.
+ */
+async function tryAutoLogin(
+  c: Parameters<LocalAuthKit['getCurrentUser']>[0],
+  auth: LocalAuthKit,
+  deps: AuthRoutesRemoteDeps,
+): Promise<User | null> {
+  // Уже подключены — серверная личность известна из runtime-сессии.
+  if (deps.connection.connected && deps.connection.user) {
+    const user = deps.connection.user;
+    auth.setServerUserCookie(c, remoteUserToPayload(user));
+    return serverUserToUser(remoteUserToPayload(user));
+  }
+
+  // Гибрид сконфигурирован (есть дефолтный сервер), но не подключён —
+  // тихо подключаемся по сохранённым credentials (без интерактива).
+  if (!deps.connection.connected && deps.defaultBackendUrl && deps.connectRemoteFromSaved) {
+    try {
+      const user = await deps.connectRemoteFromSaved(deps.defaultBackendUrl);
+      if (user) {
+        auth.setServerUserCookie(c, remoteUserToPayload(user));
+        return serverUserToUser(remoteUserToPayload(user));
+      }
+    } catch {
+      // best-effort: сервер недоступен / credentials не подошли — авто-логин невозможен
+    }
+  }
+  return null;
+}
+
+/** Маппинг RemoteError ROPC-логина в HTTP-ответ. */
+function mapLoginError(err: unknown): Response {
+  if (err instanceof RemoteError) {
+    if (err.code === 'OFFLINE') {
+      return new Response(JSON.stringify({ error: { code: 'OFFLINE', message: err.message } }), {
+        status: 502,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (err.code === 'AUTH' || err.code === 'UNAUTHORIZED') {
+      return new Response(JSON.stringify({ error: { code: 'UNAUTHORIZED', message: err.message } }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+  }
+  return new Response(JSON.stringify({
+    error: { code: 'INTERNAL_ERROR', message: 'Не удалось выполнить вход' },
+  }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+}
+
+export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps): Hono {
   const app = new Hono();
+  // Активный device flow (один на сервер; новый start перезаписывает старый).
+  let activeDeviceFlow: ActiveDeviceFlow | null = null;
 
-  app.get('/status', (c) => {
-    const user = auth.getCurrentUser(c);
+  app.get('/status', async (c) => {
+    let user = auth.getCurrentUser(c);
+    if (!user) {
+      const auto = await tryAutoLogin(c, auth, deps);
+      if (auto) user = auto;
+    }
     return c.json({
       authenticated: !!user,
       debug_mode: false,
-      oidc_enabled: false,
-      user: user ? {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        roles: user.roles,
-      } : null,
+      // OIDC-вход на сервер возможен, когда известен адрес сервера
+      // (defaultBackendUrl), задан OIDC issuer (--oidc-issuer/--oidc-client-id —
+      // fallback дискавери; UI тогда показывает форму с полем адреса) либо уже
+      // есть runtime-подключение. Иначе — только локальный API-ключ.
+      oidc_enabled: !!(deps.defaultBackendUrl || deps.issuerAvailable || deps.connection.connected),
+      user: user ? toPayload(user) : null,
     });
   });
 
-  app.get('/session', (c) => {
-    const user = auth.getCurrentUser(c);
+  app.get('/session', async (c) => {
+    let user = auth.getCurrentUser(c);
+    if (!user) {
+      const auto = await tryAutoLogin(c, auth, deps);
+      if (auto) user = auto;
+    }
     if (!user) {
       return c.json({ user: null }, 401);
     }
-    return c.json({
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        roles: user.roles,
-      },
-    });
+    return c.json({ user: toPayload(user) });
   });
 
-  app.get('/me', (c) => {
+  app.get('/me', async (c) => {
     const user = auth.getCurrentUser(c);
     if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
     }
-    return c.json({
-      id: user.id,
-      username: user.username,
-      email: user.email,
-      roles: user.roles,
-    });
+    return c.json(toPayload(user));
   });
 
   app.post('/spa-login', async (c) => {
@@ -63,14 +168,158 @@ export function createAuthRoutes(auth: LocalAuthKit): Hono {
     // Устанавливаем cookie-сессию, чтобы SPA авторизовался на API автоматически
     auth.setSessionCookie(c);
 
-    return c.json({
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        roles: user.roles,
-      },
-    });
+    return c.json({ user: toPayload(user) });
+  });
+
+  /**
+   * POST /auth/login — вход по логину/паролю (ROPC) в гибридном режиме.
+   * Локальная личность = серверная: ROPC против OIDC issuer, пользователь
+   * (username + роли) приходит с сервера, cookie ставится с kind:'server'.
+   * body: { server?, username, password } — server пуст → defaultBackendUrl
+   * (--connect/env/конфиг); если сервер неизвестен и нет подключения — 400.
+   */
+  app.post('/login', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const rawServer = typeof body.server === 'string' ? body.server.trim() : '';
+    const server = rawServer
+      ? normalizeUrl(rawServer)
+      : (deps.defaultBackendUrl ?? '');
+    const username = typeof body.username === 'string' ? body.username : '';
+    const password = typeof body.password === 'string' ? body.password : '';
+
+    // Адрес сервера: явный server → defaultBackendUrl → уже подключённый backend.
+    const target = server || deps.connection.backendUrl || deps.defaultBackendUrl;
+    if (!target) {
+      return c.json({
+        error: { code: 'BAD_REQUEST', message: 'Не указан адрес сервера' },
+      }, 400);
+    }
+    if (!username || !password) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Укажите логин и пароль' } }, 400);
+    }
+
+    try {
+      // Всегда пробуем connectByPassword заново: безопаснее и проще, чем
+      // сверять «уже подключённого» пользователя (состояние фиксируется
+      // только после успешного входа).
+      const user = await deps.connectRemote(target, username, password);
+      auth.setServerUserCookie(c, remoteUserToPayload(user));
+      return c.json({ user: remoteUserToPayload(user) });
+    } catch (err) {
+      return mapLoginError(err);
+    }
+  });
+
+  /**
+   * POST /auth/device-start — OIDC device flow (вход через браузер) из UI.
+   * Без auth. Адрес сервера берётся из текущего подключения/defaultBackendUrl;
+   * OIDC issuer/client_id узнаём через connection.discoverOidc (fallback на
+   * deps.defaultIssuer/defaultClientId). Запускает startDeviceFlow и фоновый
+   * pollDeviceToken: по успеху — saveCredentials + connectRemoteFromSaved
+   * (runtime-подключение), статус 'authenticated'; по ошибке — 'error'.
+   */
+  app.post('/device-start', async (c) => {
+    const serverUrl = deps.connection.backendUrl ?? deps.defaultBackendUrl;
+    if (!serverUrl) {
+      return c.json({
+        error: { code: 'BAD_REQUEST', message: 'Гибридный режим не настроен (запустите с --connect)' },
+      }, 400);
+    }
+
+    // Remote-сессия уже валидна — UI просто перелогинится.
+    if (deps.connection.connected) {
+      return c.json({ status: 'already_authenticated' });
+    }
+
+    let meta: { issuer: string; clientId: string };
+    try {
+      meta = await deps.connection.discoverOidc(serverUrl);
+    } catch (err) {
+      if (err instanceof RemoteError && err.code === 'OFFLINE') {
+        return c.json({ error: { code: 'OFFLINE', message: err.message } }, 502);
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: { code: 'AUTH_ERROR', message } }, 400);
+    }
+
+    try {
+      const session = await startDeviceFlow(meta.issuer, meta.clientId);
+      const flow: ActiveDeviceFlow = { deviceCode: session.deviceCode, status: 'pending' };
+      activeDeviceFlow = flow;
+
+      // Фоновый опрос token_endpoint (не блокирует ответ /device-start).
+      void (async () => {
+        try {
+          const token = await pollDeviceToken(session);
+          const creds: RemoteCredentials = {
+            backendUrl: serverUrl,
+            accessToken: token.accessToken,
+            refreshToken: token.refreshToken,
+            expiresAt: token.expiresIn
+              ? new Date(Date.now() + token.expiresIn * 1000).toISOString()
+              : undefined,
+          };
+          await saveCredentials(creds, deps.connection.deps.credentialsPath);
+
+          // Активируем runtime-подключение по сохранённым credentials.
+          let user: ServerUserPayload | undefined;
+          if (deps.connectRemoteFromSaved) {
+            const connected = await deps.connectRemoteFromSaved(serverUrl).catch(() => null);
+            if (connected) {
+              user = remoteUserToPayload(connected);
+            }
+          }
+
+          if (activeDeviceFlow === flow) {
+            flow.status = 'authenticated';
+            flow.user = user;
+          }
+        } catch (err) {
+          if (activeDeviceFlow === flow) {
+            flow.status = 'error';
+            flow.errorMessage = err instanceof Error ? err.message : String(err);
+          }
+        }
+      })();
+
+      return c.json({
+        status: 'pending',
+        verification_uri: session.verificationUri,
+        user_code: session.userCode,
+        verification_uri_complete: session.verificationUriComplete,
+      });
+    } catch (err) {
+      // startDeviceFlow не выдал код (сервер авторизации недоступен/конфиг клиента)
+      if (err instanceof RemoteError && err.code === 'OFFLINE') {
+        return c.json({ error: { code: 'OFFLINE', message: err.message } }, 502);
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: { code: 'AUTH_ERROR', message } }, 400);
+    }
+  });
+
+  /**
+   * POST /auth/device-check — состояние активного device flow (без auth).
+   * При 'authenticated' ставит server-cookie (auth.setServerUserCookie) и
+   * очищает состояние; при 'error' очищает состояние и возвращает message.
+   */
+  app.post('/device-check', async (c) => {
+    const flow = activeDeviceFlow;
+    if (!flow) {
+      return c.json({ status: 'error', message: 'Нет активного процесса авторизации' });
+    }
+    if (flow.status === 'pending') {
+      return c.json({ status: 'pending' });
+    }
+    if (flow.status === 'authenticated') {
+      activeDeviceFlow = null;
+      if (flow.user) {
+        auth.setServerUserCookie(c, flow.user);
+      }
+      return c.json({ status: 'authenticated', user: flow.user ?? null });
+    }
+    activeDeviceFlow = null;
+    return c.json({ status: 'error', message: flow.errorMessage ?? 'Авторизация не удалась' });
   });
 
   app.post('/logout', (c) => {
@@ -78,7 +327,21 @@ export function createAuthRoutes(auth: LocalAuthKit): Hono {
     return c.body(null, 204);
   });
 
-  app.get('/profile', (c) => {
+  // GET /auth/profile — в гибриде проксируется на backend (серверный профиль
+  // с настройками и предпочтениями), в локальном режиме — минимальный профиль.
+  app.get('/profile', async (c) => {
+    const client = deps.connection.client;
+    if (client) {
+      try {
+        const profile = await client.request<unknown>('GET', '/auth/profile');
+        return c.json(profile);
+      } catch (err) {
+        if (err instanceof RemoteError && err.code === 'OFFLINE') {
+          return c.json({ error: { code: 'OFFLINE', message: err.message } }, 502);
+        }
+        return c.json({ error: { code: 'UNAUTHORIZED', message: 'Не авторизован на удалённом сервере' } }, 401);
+      }
+    }
     const user = auth.getCurrentUser(c);
     if (!user) return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
     return c.json({
@@ -87,6 +350,26 @@ export function createAuthRoutes(auth: LocalAuthKit): Hono {
       roles: user.roles,
       preferences: {},
     });
+  });
+
+  // PUT /auth/profile — в гибриде проксируется на backend.
+  app.put('/profile', async (c) => {
+    const client = deps.connection.client;
+    if (client) {
+      const body = await c.req.json().catch(() => ({}));
+      try {
+        const profile = await client.request<unknown>('PUT', '/auth/profile', body);
+        return c.json(profile);
+      } catch (err) {
+        if (err instanceof RemoteError && err.code === 'OFFLINE') {
+          return c.json({ error: { code: 'OFFLINE', message: err.message } }, 502);
+        }
+        return c.json({ error: { code: 'UNAUTHORIZED', message: 'Не авторизован на удалённом сервере' } }, 401);
+      }
+    }
+    const user = auth.getCurrentUser(c);
+    if (!user) return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
+    return c.json({ status: 'ok', user: { id: user.id, username: user.username, roles: user.roles } });
   });
 
   return app;

@@ -119,9 +119,9 @@ function createTestApp(remote?: RemoteBackendClient, tmpDir?: string): TestWorld
     orchestrator as any,
     undefined,
     projectStore,
-    remote,
+    remote ? () => remote : undefined,
   ));
-  app.route('/api/v2/projects', createProjectRoutes(createMockAuth(), projectStore, remote));
+  app.route('/api/v2/projects', createProjectRoutes(createMockAuth(), projectStore, remote ? () => remote : undefined));
 
   const fakeRemote = remote as unknown as ReturnType<typeof createFakeRemoteClient> | undefined;
   return { app, remote: fakeRemote!, sessionManager, projectStore };
@@ -412,25 +412,38 @@ describe('Remote-роуты: единый маппинг ошибок через
   });
 });
 
-describe('GET /api/v2/hybrid/status (статус гибридного режима)', () => {
-  it('без remoteClient — { enabled: false, connected: false, backendUrl: null }', async () => {
-    const app = createHybridRoutes(undefined);
+describe('GET /api/v2/hybrid/status (статус гибридного режима, runtime-состояние)', () => {
+  it('гибрид не настроен — { enabled: false, connected: false, backendUrl: null, serverConfigured: false }', async () => {
+    const app = createHybridRoutes(() => ({
+      enabled: false,
+      connected: false,
+      backendUrl: null,
+      user: null,
+      serverConfigured: false,
+      serverLoginAvailable: false,
+    }));
     const res = await app.request('/api/v2/hybrid/status');
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ enabled: false, connected: false, backendUrl: null, user: null });
+    expect(await res.json()).toEqual({
+      enabled: false,
+      connected: false,
+      backendUrl: null,
+      user: null,
+      serverConfigured: false,
+      serverLoginAvailable: false,
+    });
   });
 
-  it('remoteClient подключён и авторизован — enabled/connected/user', async () => {
-    const fake = {
+  it('подключено и авторизовано — enabled/connected/backendUrl/user', async () => {
+    const getState = vi.fn(() => ({
+      enabled: true,
+      connected: true,
       backendUrl: 'https://backend.example',
-      isReachable: vi.fn().mockResolvedValue(true),
-      getAuthStatus: vi.fn().mockResolvedValue({
-        oidc_enabled: true,
-        authenticated: true,
-        user: { id: 'u1', username: 'dev', roles: ['USER'] },
-      }),
-    } as unknown as RemoteBackendClient;
-    const app = createHybridRoutes(fake);
+      user: { id: 'u1', username: 'dev', roles: ['USER'] },
+      serverConfigured: false,
+      serverLoginAvailable: true,
+    }));
+    const app = createHybridRoutes(getState);
 
     const res = await app.request('/api/v2/hybrid/status');
     expect(res.status).toBe(200);
@@ -439,36 +452,22 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       connected: true,
       backendUrl: 'https://backend.example',
       user: { id: 'u1', username: 'dev', roles: ['USER'] },
+      serverConfigured: false,
+      serverLoginAvailable: true,
     });
-    expect(fake.isReachable).toHaveBeenCalled();
-    expect(fake.getAuthStatus).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: expect.any(Number) }));
+    expect(getState).toHaveBeenCalled();
   });
 
-  it('backend недоступен — connected: false, user: null, getAuthStatus не вызывается', async () => {
-    const fake = {
-      backendUrl: 'https://backend.example',
-      isReachable: vi.fn().mockResolvedValue(false),
-      getAuthStatus: vi.fn(),
-    } as unknown as RemoteBackendClient;
-    const app = createHybridRoutes(fake);
-
-    const res = await app.request('/api/v2/hybrid/status');
-    expect(await res.json()).toEqual({
+  it('подключено, но user неизвестен — connected:true, user:null', async () => {
+    const getState = () => ({
       enabled: true,
-      connected: false,
+      connected: true,
       backendUrl: 'https://backend.example',
       user: null,
+      serverConfigured: false,
+      serverLoginAvailable: true,
     });
-    expect(fake.getAuthStatus).not.toHaveBeenCalled();
-  });
-
-  it('auth-статус падает (RemoteError) — запрос не роняется, user: null, connected: true', async () => {
-    const fake = {
-      backendUrl: 'https://backend.example',
-      isReachable: vi.fn().mockResolvedValue(true),
-      getAuthStatus: vi.fn().mockRejectedValue(new Error('auth down')),
-    } as unknown as RemoteBackendClient;
-    const app = createHybridRoutes(fake);
+    const app = createHybridRoutes(getState);
 
     const res = await app.request('/api/v2/hybrid/status');
     expect(res.status).toBe(200);
@@ -477,6 +476,55 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       connected: true,
       backendUrl: 'https://backend.example',
       user: null,
+      serverConfigured: false,
+      serverLoginAvailable: true,
     });
+  });
+
+  it('сервер известен (defaultBackendUrl), но не подключено — serverConfigured:true', async () => {
+    const getState = () => ({
+      enabled: true,
+      connected: false,
+      backendUrl: null,
+      user: null,
+      serverConfigured: true,
+      serverLoginAvailable: true,
+    });
+    const app = createHybridRoutes(getState);
+
+    const res = await app.request('/api/v2/hybrid/status');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      enabled: true,
+      connected: false,
+      backendUrl: null,
+      user: null,
+      serverConfigured: true,
+      serverLoginAvailable: true,
+    });
+  });
+
+  it('состояние читается на каждый запрос (getState вызывается повторно)', async () => {
+    let connected = false;
+    const getState = vi.fn(() => ({
+      enabled: true,
+      connected,
+      backendUrl: connected ? 'https://backend.example' : null,
+      user: connected ? { id: 'u1', username: 'dev', roles: ['USER'] } : null,
+      serverConfigured: false,
+      serverLoginAvailable: connected,
+    }));
+    const app = createHybridRoutes(getState);
+
+    const first = await app.request('/api/v2/hybrid/status');
+    expect(((await first.json()) as { connected: boolean }).connected).toBe(false);
+
+    // Runtime-подключение произошло между запросами — статус изменился.
+    connected = true;
+    const second = await app.request('/api/v2/hybrid/status');
+    const body = (await second.json()) as { connected: boolean; user: { username: string } | null };
+    expect(body.connected).toBe(true);
+    expect(body.user?.username).toBe('dev');
+    expect(getState).toHaveBeenCalledTimes(2);
   });
 });

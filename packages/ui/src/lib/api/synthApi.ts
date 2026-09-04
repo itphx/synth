@@ -1183,6 +1183,10 @@ export interface HybridStatus {
   enabled: boolean
   connected: boolean
   backendUrl: string | null
+  /** Адрес сервера известен (--connect/env/конфиг) — форма логина скрывает поле адреса. */
+  serverConfigured: boolean
+  /** Доступен вход на сервер (адрес/issuer известен или уже подключено) — серверная форма логина. */
+  serverLoginAvailable: boolean
   user?: {
     id: string
     username: string

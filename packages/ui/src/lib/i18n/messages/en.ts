@@ -202,6 +202,8 @@ export const dict = {
   'auth.usernamePlaceholder': 'Enter login',
   'auth.password': 'Password',
   'auth.passwordPlaceholder': 'Enter password',
+  'auth.serverUrl': 'Server URL',
+  'auth.serverUrlPlaceholder': 'https://synth.example.com',
   'auth.selectUser': 'Select user',
   'auth.loginButton': 'Sign In',
   'auth.profile': 'Profile',

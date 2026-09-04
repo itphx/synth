@@ -27,11 +27,13 @@ export function createQueueRoutes(
   queueManager: QueueProcessorManager,
   eventBus: EventBus,
   processMessage: ReturnType<ChatOrchestrator['createProcessMessage']>,
-  remoteClient?: RemoteBackendClient,
+  getRemoteClient?: () => RemoteBackendClient | null,
 ): Hono {
   const app = new Hono();
+  const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
 
   app.post('/:sessionId/clear', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
     if (isRemoteRef(sessionId)) {
       if (!remoteClient) return remoteUnavailable(c);
@@ -52,6 +54,7 @@ export function createQueueRoutes(
   });
 
   app.post('/:sessionId/return', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
     const indexStr = c.req.query('index');
     const index = indexStr !== undefined ? parseInt(indexStr, 10) : undefined;
@@ -133,6 +136,7 @@ export function createQueueRoutes(
   });
 
   app.post('/:sessionId/resume', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
     if (isRemoteRef(sessionId)) {
       if (!remoteClient) return remoteUnavailable(c);
@@ -194,6 +198,7 @@ export function createQueueRoutes(
 
   // POST /:sessionId/retry-now — немедленный повтор при backoff (без ожидания паузы)
   app.post('/:sessionId/retry-now', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
     if (isRemoteRef(sessionId)) {
       if (!remoteClient) return remoteUnavailable(c);
@@ -215,6 +220,7 @@ export function createQueueRoutes(
 
   // POST /:sessionId/cancel-retry — отменить повторные попытки (снять pending, разблокировать)
   app.post('/:sessionId/cancel-retry', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
     if (isRemoteRef(sessionId)) {
       if (!remoteClient) return remoteUnavailable(c);

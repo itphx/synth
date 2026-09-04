@@ -28,6 +28,77 @@ function extractCookieValue(setCookie: string | undefined): string | null {
   return match?.[1] ?? null;
 }
 
+describe('createLocalAuth (server-личность, cookie v2)', () => {
+  const SERVER_USER = { id: 'u-1', username: 'lucky', email: 'lucky@itphx.ru', roles: ['ADMIN', 'USER'] };
+
+  it('setServerUserCookie → getCurrentUser возвращает серверного юзера с ролями', () => {
+    const auth = createLocalAuth({ apiKey: API_KEY });
+    const { c, headers } = makeContext();
+    auth.setServerUserCookie(c, SERVER_USER);
+
+    const setCookie = headers.get('Set-Cookie');
+    expect(setCookie).toBeDefined();
+    expect(setCookie).toContain('Path=/');
+    expect(setCookie).toContain('HttpOnly');
+    expect(setCookie).toContain('SameSite=Lax');
+    expect(setCookie).toMatch(/Max-Age=\d+/);
+
+    const cookieValue = extractCookieValue(setCookie)!;
+    const user = auth.getCurrentUser(makeContext(`${COOKIE_NAME}=${cookieValue}`).c);
+    expect(user?.username).toBe('lucky');
+    expect(user?.roles).toEqual(['ADMIN', 'USER']);
+    expect(user?.id).toBe('u-1');
+    expect(user?.email).toBe('lucky@itphx.ru');
+  });
+
+  it('server-cookie не отдаёт локального юзера, а local-cookie (v1) — локального', () => {
+    const auth = createLocalAuth({ apiKey: API_KEY });
+
+    // v2 server cookie
+    const srv = makeContext();
+    auth.setServerUserCookie(srv.c, SERVER_USER);
+    const serverCookie = extractCookieValue(srv.headers.get('Set-Cookie'))!;
+    const fromServer = auth.getCurrentUser(makeContext(`${COOKIE_NAME}=${serverCookie}`).c);
+    expect(fromServer?.username).toBe('lucky');
+    expect(fromServer?.isLocal).toBe(false);
+
+    // v1 local cookie (старый формат — подписанный apiKey)
+    const loc = makeContext();
+    auth.setSessionCookie(loc.c);
+    const localCookie = extractCookieValue(loc.headers.get('Set-Cookie'))!;
+    const fromLocal = auth.getCurrentUser(makeContext(`${COOKIE_NAME}=${localCookie}`).c);
+    expect(fromLocal?.username).toBe('local');
+    expect(fromLocal?.roles).toEqual(['USER']);
+  });
+
+  it('server-cookie с испорченной подписью отклоняется', () => {
+    const auth = createLocalAuth({ apiKey: API_KEY });
+    const { c, headers } = makeContext();
+    auth.setServerUserCookie(c, SERVER_USER);
+    const cookieValue = extractCookieValue(headers.get('Set-Cookie'))!;
+
+    const broken = cookieValue.slice(0, -1) + (cookieValue.endsWith('0') ? '1' : '0');
+    expect(auth.getCurrentUser(makeContext(`${COOKIE_NAME}=${broken}`).c)).toBeNull();
+  });
+
+  it('server-cookie, подписанный для другого ключа, отклоняется', () => {
+    const auth = createLocalAuth({ apiKey: API_KEY });
+    const other = createLocalAuth({ apiKey: 'other-key' });
+    const { c, headers } = makeContext();
+    other.setServerUserCookie(c, SERVER_USER);
+    const foreignCookie = extractCookieValue(headers.get('Set-Cookie'))!;
+
+    expect(auth.getCurrentUser(makeContext(`${COOKIE_NAME}=${foreignCookie}`).c)).toBeNull();
+  });
+
+  it('clearSessionCookie стирает и server-cookie (Max-Age=0)', () => {
+    const auth = createLocalAuth({ apiKey: API_KEY });
+    const { c, headers } = makeContext();
+    auth.clearSessionCookie(c);
+    expect(headers.get('Set-Cookie')).toContain('Max-Age=0');
+  });
+});
+
 describe('createLocalAuth (cookie-сессия)', () => {
   it('getCurrentUser: авторизация по Bearer-заголовку работает как раньше', () => {
     const auth = createLocalAuth({ apiKey: API_KEY });

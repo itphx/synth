@@ -125,28 +125,24 @@ describe('Гибридный режим: локальный core + реальн�
     });
     remoteClient = remoteSession.getClient();
 
-    // Локальный core в гибриде: remoteClient + синтетический remote-провайдер
-    // (все LLM-запросы — через backend, локальные провайдеры запрещены).
+    // Локальный core в гибриде: стартует «холодным», подключается в рантайме
+    // по API-ключу (defaultBackendUrl + defaultToken). applyConnected инъектирует
+    // виртуальный remote-провайдер synth-remote и запускает RemoteEventBridge.
     core = await createStandaloneApp({
       port: 0,
       dataDir: coreDir,
       apiKey: LOCAL_API_KEY,
-      remoteClient,
-      remoteGetToken: () => remoteSession.getToken(),
-      remoteProvider: {
-        provider: { name: 'synth-remote', type: 'remote', baseUrl: backendUrl, apiKey: '', enabled: true },
-        models: [{ id: 'itphx/fake-model', name: 'fake-model', provider: 'synth-remote', description: '', enabled: true }],
-        getToken: () => remoteSession.getToken(),
-      },
-      remoteBlockLocalProviders: true,
+      defaultBackendUrl: backendUrl,
+      defaultToken: ADMIN_API_KEY,
+      remoteLlm: 'server',
     });
 
     await new Promise<void>((resolve) => core.server.listen(0, '127.0.0.1', resolve));
     const coreAddr = core.server.address() as AddressInfo;
     coreUrl = `http://127.0.0.1:${coreAddr.port}`;
 
-    // Мост событий стартует после слушания (как в CLI synth serve).
-    core.remoteEventBridge?.start();
+    // Runtime-подключение к backend (как делает CLI после listen).
+    await core.connectRemoteWithApiKey(backendUrl, ADMIN_API_KEY);
 
     // Fake-провайдер для LLM Proxy backend: ProviderFactory.create('itphx', ...)
     // возвращает FakeProvider, остальные вызовы (в т.ч. synth-remote на core)

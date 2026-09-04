@@ -44,6 +44,11 @@ export function setRemoteTokenProvider(name: string, getToken: () => Promise<str
   REMOTE_TOKEN_PROVIDERS.set(name.toLowerCase(), getToken);
 }
 
+/** Удалить поставщика токена (при отключении remote-провайдера). */
+export function removeRemoteTokenProvider(name: string): void {
+  REMOTE_TOKEN_PROVIDERS.delete(name.toLowerCase());
+}
+
 /** Сброс реестра (для тестов). */
 export function clearRemoteTokenProviders(): void {
   REMOTE_TOKEN_PROVIDERS.clear();

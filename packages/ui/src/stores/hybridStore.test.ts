@@ -14,6 +14,8 @@ const ENABLED_CONNECTED = {
   connected: true,
   backendUrl: 'https://backend.example',
   user: { id: 'u1', username: 'dev', roles: ['USER'] },
+  serverConfigured: true,
+  serverLoginAvailable: true,
 }
 
 describe('hybridStore', () => {
@@ -43,7 +45,7 @@ describe('hybridStore', () => {
   })
 
   it('loadStatus: гибрид выключен → сброс', async () => {
-    vi.mocked(synthApi.getHybridStatus).mockResolvedValue({ enabled: false, connected: false, backendUrl: null, user: null })
+    vi.mocked(synthApi.getHybridStatus).mockResolvedValue({ enabled: false, connected: false, backendUrl: null, user: null, serverConfigured: false, serverLoginAvailable: false })
 
     await useHybridStore.getState().loadStatus()
 
