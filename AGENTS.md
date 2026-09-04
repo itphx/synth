@@ -308,6 +308,20 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 (ключи, модели и аудит — только на нём). Реализовано в ветке `feat/hybrid-mode`;
 детальные требования, архитектура и статус — в [docs/HYBRID.md](docs/HYBRID.md).
 
+**UX (вход без Keycloak-ритуала):** `serve --connect` больше НЕ блокирует старт
+device flow'ом — сервер поднимается «холодным», после listen тихо выполняется
+авто-логин по сохранённым credentials (или по `--token`), а если credentials нет —
+вход выполняется прямо в UI: форма логина с полями логин/пароль (ROPC
+«за кулисами»), личность/роли/профиль приходят с сервера. Поле «Адрес сервера»
+в форме показывается только когда адрес НЕ задан при старте (иначе он известен
+core и поле скрыто). Никакого «входа через браузер» (device flow) в пользовательском
+пути нет — кнопка и модалка удалены из UI (эндпоинты device-start/device-check
+в core остаются, но из UI не вызываются).
+
+OIDC issuer/client_id локальный core узнаёт **с сервера** (`GET {server}/auth/oidc-meta`),
+с fallback на флаги `--oidc-issuer`/`--oidc-client-id` для серверов без эндпоинта
+(боевой K3s пока требует передеплоя, чтобы отдавать `/auth/oidc-meta`).
+
 ### Включение
 
 Секция `remote` в config.yaml:
@@ -319,36 +333,51 @@ remote:
   auth:
     type: device                  # device | api_key
     issuer: "https://keycloak.itphx.loc/realms/synth"
-    clientId: "synth"
+    clientId: "synth-cli"
   llm: "server"                   # server | local; server — централизация LLM
 ```
 
-Или CLI-флагами без правки конфига:
+Или CLI-флагами без правки конфига (адрес можно не указывать — тогда его введёт
+пользователь в форме входа UI):
 
 ```bash
+# Адрес известен — UI спросит только логин/пароль
 synth serve --connect https://synth.k3s.itphx.loc \
   --oidc-issuer https://keycloak.itphx.loc/realms/synth \
-  --oidc-client-id synth
+  --oidc-client-id synth-cli
+
+# Адрес не известен — UI покажет поле «Адрес сервера» + логин/пароль
+synth serve --oidc-issuer https://keycloak.itphx.loc/realms/synth \
+  --oidc-client-id synth-cli
 ```
+
+Удобный запуск (сборка + CA + флаги): `./scripts/hybrid.sh [SERVER_URL]` —
+без адреса стартует и даёт ввести адрес в UI, с адресом сразу подключается.
 
 ### Команды CLI
 
 | Команда | Назначение |
 |---|---|
-| `synth serve --connect <url>` | Запуск локального core с подключением к серверу (опции `--oidc-issuer`, `--oidc-client-id`, `--token`) |
-| `synth connect --backend <url>` | Аутентификация (OIDC device flow / `--token` API-ключ); credentials — в `~/.config/synth/credentials.json` (0600) |
+| `synth serve --connect <url>` | Запуск локального core с подключением к серверу (опции `--oidc-issuer`, `--oidc-client-id`, `--token`; без `--connect` — вход по адресу из формы UI) |
+| `synth connect --backend <url>` | Сохранение credentials (ROPC по логину/паролю / `--token` API-ключ); credentials — в `~/.config/synth/credentials.json` (0600) |
 | `synth disconnect --backend <url>` | Удалить сохранённые credentials |
 | `synth project publish <id> --remote <url>` | Локальный проект → сервер (проект + сессии + файлы; `--no-files` / `--no-sessions`) |
 | `synth project fork <id> --remote <url>` | Удалённый проект → локально (`--local-name`, `--no-files`, `--no-sessions`) |
 
 ### Поведение
 
+- **Вход:** сервер стартует «холодным»; после listen тихий авто-логин
+  (connectFromSaved / `--token`), иначе — форма логина в UI (адрес опционален:
+  параметр/env → не спрашиваем; иначе поле в форме). OIDC-параметры — дискавери
+  с сервера (`GET /auth/oidc-meta`), fallback на `--oidc-issuer`/`--oidc-client-id`.
 - **Агрегация миров:** проекты/сессии локального core объединяются с удалёнными
   (backend); у каждой сущности поле `origin: 'local'|'remote'`, удалённые id —
   `remote:<uuid>` (исключают коллизии UUID). Запросы маршрутизируются по миру:
   локальные обрабатывает core, удалённые — проксируются на сервер.
-- **Статус:** `GET /api/v2/hybrid/status` → `{ enabled, connected, backendUrl, user }`
-  (без auth; UI опрашивает ~30 с).
+- **Статус:** `GET /api/v2/hybrid/status` →
+  `{ enabled, connected, backendUrl, serverConfigured, serverLoginAvailable, user }`
+  (без auth; UI опрашивает ~30 с). `serverConfigured` — адрес сервера задан при
+  старте (даже без подключения); `serverLoginAvailable` — доступен вход на сервер.
 - **События:** RemoteEventBridge транслирует SSE сервера в локальный EventBus,
   события удалённых сессий переписываются в `remote:<id>` и доходят до UI.
 - **LLM:** локальные сессии в гибриде ходят за LLM через сервер
@@ -360,10 +389,13 @@ synth serve --connect https://synth.k3s.itphx.loc \
 
 ### Ключевые файлы
 
-- `packages/core/src/remote/` — клиент, device flow, credentials, агрегация, событийный мост, publish/fork
+- `packages/core/src/remote/` — RemoteConnection (runtime-подключение), клиент, credentials, агрегация, событийный мост, publish/fork
+- `packages/core/src/server/routes/auth.ts` — `/auth/status|session|login` (ROPC), `/auth/device-start|device-check` (не вызываются из UI)
+- `packages/backend/src/routes/auth.ts` — `/auth/oidc-meta` (публичные OIDC-параметры для дискавери)
 - `packages/backend/src/routes/llm.ts` — LLM Proxy (`POST /api/v2/llm/chat/completions`)
 - `packages/backend/src/routes/sessions.ts` — `GET /sessions/:id/export`, `POST /sessions/import`
-- UI: `packages/ui/src/components/layout/HybridStatusIndicator.tsx`, `HybridOfflineBanner.tsx`, бейджи origin, селектор «где создать»
+- UI: `packages/ui/src/components/layout/HybridStatusIndicator.tsx`, `HybridOfflineBanner.tsx`, `packages/ui/src/components/auth/LoginForm.tsx`, бейджи origin, селектор «где создать»
+- `scripts/hybrid.sh` — запуск локального core в гибриде (сборка + CA + флаги)
 
 ---
 

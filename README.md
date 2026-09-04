@@ -125,12 +125,29 @@ Synth подключается к корпоративному серверу (�
 объединяя локальные и удалённые проекты/сессии в одном UI. LLM-запросы
 централизованы — идут через сервер (ключи, модели и аудит — только на нём).
 
+Удобный запуск — `./scripts/hybrid.sh [SERVER_URL]` (сборка + CA + OIDC-флаги):
+
 ```bash
-synth connect --backend https://synth.k3s.itphx.loc \
-  --oidc-issuer https://keycloak.itphx.loc/realms/synth \
-  --oidc-client-id synth
-synth serve --connect https://synth.k3s.itphx.loc
+# Адрес известен — в UI войти логином/паролем
+./scripts/hybrid.sh https://synth.k3s.itphx.loc
+
+# Адрес не известен — UI покажет поле «Адрес сервера» и логин/пароль
+./scripts/hybrid.sh
 ```
+
+Эквивалент вручную:
+
+```bash
+synth serve --connect https://synth.k3s.itphx.loc \
+  --oidc-issuer https://keycloak.itphx.loc/realms/synth \
+  --oidc-client-id synth-cli
+```
+
+Старт не блокируется (никакого device flow в консоли): сервер поднимается
+«холодным», после listen выполняется тихий авто-логин по сохранённым credentials
+(или `--token`); если их нет — вход в UI по логину/паролю (ROPC «за кулисами»,
+личность приходит с сервера). OIDC issuer/client_id core узнаёт с сервера
+(`GET /auth/oidc-meta`) с fallback на `--oidc-issuer`/`--oidc-client-id`.
 
 Подробнее — [docs/HYBRID.md](docs/HYBRID.md).
 
