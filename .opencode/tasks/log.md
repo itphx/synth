@@ -81,3 +81,12 @@
 - **Живая проверка:** core без --connect (только --oidc-issuer/--oidc-client-id): /auth/status oidc_enabled:true; /hybrid/status serverConfigured:false; POST /auth/login {server, lucky} → 200 (дискавери упал в fallback на флаги, т.к. боевой K3s ещё без /auth/oidc-meta) → connected:true; core с --connect: авто-логин по saved credentials, serverConfigured:true.
 - **Важно:** боевой K3s (образ 0.4.1) НЕ содержит /auth/oidc-meta — для полностью динамического входа в произвольный сервер нужен редеплой backend (новый образ с Batch A). Пока работает fallback на --oidc-issuer/--oidc-client-id (в hybrid.sh есть дефолты itphx). CLI `synth connect` (device flow) и backend /auth/device-* оставлены для обратной совместимости/автоматизации, из UI не вызываются.
 - **Заметки:** /auth/locales → 404 в standalone (UI запрашивает — некритично); logout не удаляет credentials.json (авто-логин при следующем открытии — by design); ошибка формы логина без role=alert (a11y, некритично).
+
+## 2026-09-04 — deploy: пересборка и деплой 0.4.2 на K3s
+- **Задача:** «Пересобери и задеплой на K3s актуальный образ.»
+- **Тип:** deploy/ops
+- **Исполнитель:** @orchestrator
+- **Результат:** PASS
+- **Коммиты:** synth — e102731 (feat: единая личность/вход в UI), a78f512 (docs), 474078d (chore: bump v0.4.2) + tag v0.4.2 (ветка feat/hybrid-mode); synth-deploy — fb00edf (теги 0.4.2, main, запушен → Fleet).
+- **Что сделано:** bump 0.4.2; docker build+push git.itphx.ru/itphx/synth-{backend,ui}:0.4.2 (Dockerfile.backend/ui из исходников монорепо); обновлены теги в synth-deploy/values.yaml; Fleet раскатил (backend+ui 0.4.2, rollout успешен).
+- **Проверка (живой K3s):** /auth/oidc-meta → `{enabled:true, issuer:keycloak…/synth, clientId:synth-cli}` (эндпоинт дискавери появился); дискавери→ROPC(lucky)→Bearer /auth/status → authenticated:true, lucky, USER — полный путь входа локального core работает. /health по-прежнему отдаёт version 0.1.0 (hardcoded в роуте health backend — косметика, не связано с образом).
