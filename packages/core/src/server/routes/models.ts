@@ -6,7 +6,7 @@ import type { ModelConfig, ProviderConfig } from '@itphx/synth-shared';
 export interface ModelRoutesOptions {
   /** Виртуальные модели (например, remote-модели через LLM Proxy) — добавляются к store-моделям. */
   extraModels?: ModelConfig[] | (() => ModelConfig[]);
-  /** Виртуальные провайдеры (например, synth-remote) — для группировки extraModels. */
+  /** Виртуальные провайдеры (например, remote-зеркала серверных провайдеров) — для группировки extraModels. */
   extraProviders?: ProviderConfig[] | (() => ProviderConfig[]);
   /** Показывать только extraModels (политика «все LLM — через remote»). */
   onlyRemoteModels?: boolean | (() => boolean);

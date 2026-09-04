@@ -13,15 +13,18 @@ import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 import { useAdaptiveIcons } from '@/hooks/useAdaptiveIcons'
 import { synthApi } from '@/lib/api/synthApi'
-import type { EntityOrigin } from '@/lib/api/synthApi'
+import type { EntityOrigin, ProjectData } from '@/lib/api/synthApi'
 import { PROJECT_ICON_MAP, PROJECT_COLOR_MAP } from '@/lib/projectMeta'
 import { formatRelativeTime, parseISODate } from '@/lib/formatDate'
 import { TreeNode, TreeChildren, TreeContainer } from '@/components/tree'
 import type { TreeNodeBase, TreeAction } from '@/components/tree'
 import { OriginBadge } from '@/components/ui/OriginBadge'
+import type { ContextMenuItem } from '@/components/ui/contextMenu'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { ConfirmDialog, type ConfirmVariant } from '@/components/ui/confirm-dialog'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
+import { PublishProjectDialog } from '@/components/projects/PublishProjectDialog'
+import { ForkProjectDialog } from '@/components/projects/ForkProjectDialog'
 
 const LEFT_TABS = [
   { id: 'projects' as const, icon: 'folder-3' as const, labelKey: 'leftPanel.tab.projects' },
@@ -78,6 +81,7 @@ function ProjectsTab() {
   const sessionUnread = useNotificationStore((s) => s.sessionUnread)
   const clearSessionUnread = useNotificationStore((s) => s.clearSessionUnread)
   const isOffline = useHybridStore(selectIsOffline)
+  const hybridEnabled = useHybridStore((s) => s.enabled)
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -87,6 +91,9 @@ function ProjectsTab() {
   const pendingDeleteRef = useRef<Set<string>>(new Set())
   const [forwardTarget, setForwardTarget] = useState<{ sessionId: string; sessionName: string } | null>(null)
   const [summarizeChecked, setSummarizeChecked] = useState(false)
+  // Гибрид: перенос проектов между мирами — проект, для которого открыт диалог.
+  const [publishTarget, setPublishTarget] = useState<ProjectData | null>(null)
+  const [forkTarget, setForkTarget] = useState<ProjectData | null>(null)
 
   // Switch to Projects tab when forward mode activates
   useEffect(() => {
@@ -296,6 +303,73 @@ function ProjectsTab() {
     (sessionsByProject['__none__']?.length ?? 0) > 0 ||
     sortedProjects.some((p) => (sessionsByProject[p.id]?.length ?? 0) > 0)
 
+  // Сервер доступен (гибрид включён и не offline) — доступно создание на сервере.
+  const hybridOnline = hybridEnabled && !isOffline
+
+  // Гибрид: создание сессии из узла дерева. Каждый мир знает только свои проекты,
+  // поэтому «свой» мир создаёт сессию ВНУТРИ проекта узла, а «чужой» — БЕЗ проекта
+  // (в группе «Без проекта»), иначе получится битая связка project_id из другого мира:
+  //   локальный проект: local → в проекте, remote → на сервере без проекта;
+  //   remote-проект:    remote → в проекте (на сервере), local → локально без проекта;
+  //   группа «Без проекта»: local/remote → без проекта в соответствующем мире.
+  const handleCreateSession = async (projectId: string | null, projectOrigin: EntityOrigin | undefined, target: EntityOrigin) => {
+    const inOwnWorld = (projectOrigin ?? 'local') === target
+    const boundProjectId = inOwnWorld ? projectId : null
+    // Разворачиваем группу, куда попадёт новая сессия (проект или «Без проекта»).
+    const uiState = useUIStore.getState()
+    const groupKey = boundProjectId ?? '__none__'
+    if (uiState.collapsedProjects.has(groupKey)) uiState.toggleProjectCollapse(groupKey)
+    const result = await createSession({
+      project_id: boundProjectId,
+      origin: target === 'remote' ? 'remote' : undefined,
+    })
+    if (result) openTab({ id: 'chat-' + result.id, type: 'chat', title: result.name || result.id, data: { sessionId: result.id, projectId: result.project_id || undefined } })
+  }
+
+  // Пункты меню создания сессии для узла (проект или «Без проекта»). В гибриде —
+  // оба мира (локально/на сервере); вне гибрида/offline для доступных узлов — один
+  // пункт «Новая сессия» в мире узла.
+  const makeSessionMenuItems = (projectId: string | null, projectOrigin: EntityOrigin | undefined): ContextMenuItem[] => {
+    if (!hybridOnline) return []
+    return [
+      { label: t('hybrid.createSessionLocal'), icon: 'chat-new' as const, onClick: () => void handleCreateSession(projectId, projectOrigin, 'local') },
+      { label: t('hybrid.createSessionRemote'), icon: 'server' as const, onClick: () => void handleCreateSession(projectId, projectOrigin, 'remote') },
+    ]
+  }
+
+  // Действие «+» для узла: в гибриде раскрывает меню выбора мира; вне гибрида и в
+  // offline создаёт сразу в мире узла. Для remote-узла в offline действия нет —
+  // remote-создание недоступно (502), а «локально из remote-проекта» запутывает
+  // (узел и так помечен «недоступен»).
+  const makeSessionAction = (projectId: string | null, projectOrigin: EntityOrigin | undefined): TreeAction | null => {
+    const isRemoteOffline = isOffline && projectOrigin === 'remote'
+    if (isRemoteOffline) return null
+    const menuItems = makeSessionMenuItems(projectId, projectOrigin)
+    const ownTarget = projectOrigin ?? 'local'
+    if (menuItems.length > 0) {
+      return { id: 'new-session', icon: 'add' as const, title: t('leftPanel.newSession'), menuItems }
+    }
+    return {
+      id: 'new-session',
+      icon: 'add' as const,
+      title: t('leftPanel.newSession'),
+      onClick: () => void handleCreateSession(projectId, projectOrigin, ownTarget),
+    }
+  }
+
+  // Пункты контекстного меню узла проекта (…): в гибриде — выбор мира, иначе —
+  // «Новая сессия» в мире проекта. В offline у remote-проекта создание скрыто.
+  const makeProjectCreateItems = (projectId: string | null, projectOrigin: EntityOrigin | undefined): ContextMenuItem[] => {
+    const isRemoteOffline = isOffline && projectOrigin === 'remote'
+    if (isRemoteOffline) return []
+    const menuItems = makeSessionMenuItems(projectId, projectOrigin)
+    if (menuItems.length > 0) return menuItems
+    const ownTarget = projectOrigin ?? 'local'
+    return [{ label: t('leftPanel.newSession'), icon: 'add' as const, onClick: () => void handleCreateSession(projectId, projectOrigin, ownTarget) }]
+  }
+
+  const noneSessionAction = makeSessionAction(null, undefined)
+
   if (!hasItems) {
     return (
       <TreeContainer>
@@ -317,6 +391,24 @@ function ProjectsTab() {
         variant={confirm?.variant ?? 'danger'}
         onConfirm={() => { confirm?.onConfirm(); setConfirm(null) }}
       />
+
+      {publishTarget && (
+        <PublishProjectDialog
+          open={!!publishTarget}
+          onOpenChange={(open) => { if (!open) setPublishTarget(null) }}
+          project={publishTarget}
+          remoteProjects={projects.filter((p) => p.origin === 'remote')}
+        />
+      )}
+
+      {forkTarget && (
+        <ForkProjectDialog
+          open={!!forkTarget}
+          onOpenChange={(open) => { if (!open) setForkTarget(null) }}
+          project={forkTarget}
+          localProjects={projects.filter((p) => p.origin !== 'remote')}
+        />
+      )}
 
       {forwardTarget && (
         <Dialog open={!!forwardTarget} onOpenChange={(open) => { if (!open) { setForwardTarget(null); setSummarizeChecked(false) } }}>
@@ -421,18 +513,45 @@ function ProjectsTab() {
         expandedSessions={expandedSessions}
         toggleSessionExpand={toggleSessionExpand}
         projectId={null}
-        onCreateSession={async () => {
-          const uiState = useUIStore.getState()
-          if (uiState.collapsedProjects.has('__none__')) uiState.toggleProjectCollapse('__none__')
-          const result = await createSession({ project_id: null })
-          if (result) openTab({ id: 'chat-' + result.id, type: 'chat', title: result.name || result.id, data: { sessionId: result.id, projectId: result.project_id || undefined } })
-        }}
+        onCreateSession={() => void handleCreateSession(null, undefined, 'local')}
+        projectActions={noneSessionAction ? [noneSessionAction] : undefined}
         onDropSession={async (sessionId) => { await moveSession(sessionId, null) }}
         t={t}
       />
 
       {sortedProjects.map((project) => {
         const isCollapsed = collapsedProjects.has(project.id)
+        const sessionAction = makeSessionAction(project.id, project.origin)
+        // В offline remote-проект недоступен — «+» скрываем, создание сессии не предлагаем.
+        const projectActions = sessionAction ? [sessionAction] : []
+        const createItems = makeProjectCreateItems(project.id, project.origin)
+        // Гибрид: перенос проекта между мирами. Локальный → «Опубликовать на сервер»,
+        // remote → «Склонировать локально». В offline/вне гибрида пунктов нет.
+        const transferItem: ContextMenuItem | null = hybridOnline && project.origin === 'local'
+          ? { label: t('hybrid.publishProject'), icon: 'upload' as const, onClick: () => setPublishTarget(project) }
+          : hybridOnline && project.origin === 'remote'
+            ? { label: t('hybrid.cloneProject'), icon: 'download' as const, onClick: () => setForkTarget(project) }
+            : null
+        const projectContextItems: any[] = [
+          { label: t('leftPanel.editProject'), icon: 'settings-3' as const, onClick: () => { setEditingProject({ ...project }) } },
+        ]
+        if (transferItem) {
+          projectContextItems.push('separator' as const, transferItem)
+        }
+        if (createItems.length > 0) {
+          projectContextItems.push('separator' as const, ...createItems)
+        }
+        if (transferItem || createItems.length > 0) {
+          projectContextItems.push('separator' as const)
+        }
+        projectContextItems.push({
+          label: t('leftPanel.delete'), icon: 'delete-bin' as const, onClick: () => setConfirm({
+            title: t('leftPanel.delete'),
+            message: t('leftPanel.confirmDelete'),
+            variant: 'danger',
+            onConfirm: async () => { await deleteProject(project.id) },
+          }), destructive: true,
+        })
         return (
           <GroupNode
             key={project.id}
@@ -452,33 +571,10 @@ function ProjectsTab() {
             projectId={project.id}
             origin={project.origin}
             offline={isOffline}
-            onCreateSession={async () => {
-              const uiState = useUIStore.getState()
-              if (uiState.collapsedProjects.has(project.id)) uiState.toggleProjectCollapse(project.id)
-              const result = await createSession({ project_id: project.id, origin: project.origin === 'remote' ? 'remote' : undefined })
-              if (result) openTab({ id: 'chat-' + result.id, type: 'chat', title: result.name || result.id, data: { sessionId: result.id, projectId: result.project_id || undefined } })
-            }}
+            onCreateSession={() => void handleCreateSession(project.id, project.origin, project.origin ?? 'local')}
+            projectActions={projectActions}
             onDropSession={async (sessionId) => { await moveSession(sessionId, project.id) }}
-            projectActions={[
-              { id: 'new-session', icon: 'add' as const, title: t('leftPanel.newSession'), onClick: async () => {
-                const result = await createSession({ project_id: project.id, origin: project.origin === 'remote' ? 'remote' : undefined })
-                if (result) openTab({ id: 'chat-' + result.id, type: 'chat', title: result.name || result.id, data: { sessionId: result.id, projectId: result.project_id || undefined } })
-              }},
-            ]}
-            projectContextItems={[
-              { label: t('leftPanel.editProject'), icon: 'settings-3' as const, onClick: () => { setEditingProject({ ...project }) } },
-              { label: t('leftPanel.newSession'), icon: 'add' as const, onClick: async () => {
-                const result = await createSession({ project_id: project.id, origin: project.origin === 'remote' ? 'remote' : undefined })
-                if (result) openTab({ id: 'chat-' + result.id, type: 'chat', title: result.name || result.id, data: { sessionId: result.id, projectId: result.project_id || undefined } })
-              }},
-              'separator' as const,
-              { label: t('leftPanel.delete'), icon: 'delete-bin' as const, onClick: () => setConfirm({
-                title: t('leftPanel.delete'),
-                message: t('leftPanel.confirmDelete'),
-                variant: 'danger',
-                onConfirm: async () => { await deleteProject(project.id) },
-              }), destructive: true },
-            ]}
+            projectContextItems={projectContextItems}
             t={t}
           />
         )

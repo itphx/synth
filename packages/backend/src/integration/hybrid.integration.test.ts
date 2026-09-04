@@ -1,16 +1,17 @@
 // Интеграционный тест гибридного режима (Часть 11): «локальный core + реальный backend».
 // Сквозной сценарий в одном процессе:
 //   - backend поднимается in-process через фабрику createBackendApp (debug auth);
-//   - локальный core поднимается через createStandaloneApp с remoteClient,
-//     remoteProvider (synth-remote) и запретом локальных провайдеров;
+//   - локальный core поднимается через createStandaloneApp с runtime-подключением
+//     (applyConnected зеркалит серверного провайдера itphx как remote-зеркало)
+//     и запретом локальных провайдеров;
 //   - мост событий RemoteEventBridge транслирует SSE backend в локальный EventBus.
 //
 // Сценарии:
 //   1. GET /api/v2/hybrid/status → { enabled, connected, backendUrl };
 //   2. агрегация: remote-проект/сессия на backend видны на core как remote:<id>,
 //      локальный проект — как origin:'local';
-//   3. LLM через прокси: локальная сессия (provider=synth-remote) → backend
-//      /api/v2/llm → FakeProvider (spy на ProviderFactory.create);
+//   3. LLM через прокси: локальная сессия (provider=itphx — зеркало серверного
+//      провайдера) → backend /api/v2/llm → FakeProvider (spy на ProviderFactory.create);
 //   4. события: session.created на backend доходит до локального eventBus с remote:<id>;
 //   5. publish/fork e2e: локальный проект (сессия + файл) → syncProjectToRemote →
 //      проверка на backend → forkProjectToLocal в третий каталог.
@@ -126,8 +127,8 @@ describe('Гибридный режим: локальный core + реальн�
     remoteClient = remoteSession.getClient();
 
     // Локальный core в гибриде: стартует «холодным», подключается в рантайме
-    // по API-ключу (defaultBackendUrl + defaultToken). applyConnected инъектирует
-    // виртуальный remote-провайдер synth-remote и запускает RemoteEventBridge.
+    // по API-ключу (defaultBackendUrl + defaultToken). applyConnected зеркалит
+    // серверных провайдеров (itphx) и запускает RemoteEventBridge.
     core = await createStandaloneApp({
       port: 0,
       dataDir: coreDir,
@@ -145,8 +146,8 @@ describe('Гибридный режим: локальный core + реальн�
     await core.connectRemoteWithApiKey(backendUrl, ADMIN_API_KEY);
 
     // Fake-провайдер для LLM Proxy backend: ProviderFactory.create('itphx', ...)
-    // возвращает FakeProvider, остальные вызовы (в т.ч. synth-remote на core)
-    // делегируются оригинальной фабрике.
+    // возвращает FakeProvider, остальные вызовы (в т.ч. создание зеркала на core —
+    // там тип 'remote') делегируются оригинальной фабрике.
     fakeProvider = new FakeProvider();
     const originalCreate = ProviderFactory.create.bind(ProviderFactory);
     vi.spyOn(ProviderFactory, 'create').mockImplementation(((
@@ -209,14 +210,14 @@ describe('Гибридный режим: локальный core + реальн�
     expect(projects2.find((p) => p.id === `remote:${remoteProj.id}`)?.origin).toBe('remote');
   });
 
-  it('3. LLM через прокси: локальная сессия → synth-remote → backend → FakeProvider', { timeout: 20_000 }, async () => {
-    // Локальная сессия на core с remote-провайдером и моделью backend.
+  it('3. LLM через прокси: локальная сессия → зеркало itphx → backend → FakeProvider', { timeout: 20_000 }, async () => {
+    // Локальная сессия на core с зеркалом серверного провайдера и его моделью.
     const createRes = await coreApi('/api/v2/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: 'LLM через прокси',
-        settings: { provider: 'synth-remote', model: 'itphx/fake-model' },
+        settings: { provider: 'itphx', model: 'itphx/fake-model' },
       }),
     });
     expect(createRes.status).toBe(201);

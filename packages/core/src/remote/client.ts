@@ -20,13 +20,37 @@ export interface RemoteAuthStatus {
   user?: { id: string; username: string; roles: string[] } | null;
 }
 
-/** Плоская запись модели с удалённого backend (для CLI/инъекции remote-моделей). */
+/** Плоская запись провайдера с удалённого backend (GET /api/v2/providers). */
+export interface RemoteProviderInfo {
+  name: string;
+  type: string;
+  url: string;
+  model: string;
+  enabled: boolean;
+  is_default: boolean;
+  icon?: string;
+  icon_url?: string;
+}
+
+/**
+ * Плоская запись модели с удалённого backend (для CLI/инъекции remote-моделей).
+ * Несёт полные метаданные модели (контекстное окно, цены), чтобы локальный core
+ * мог считать контекст-окна и стоимость — как если бы модель была локальной.
+ */
 export interface RemoteModelInfo {
   id: string;
   name: string;
   provider: string;
   description: string;
   enabled: boolean;
+  isDefault?: boolean;
+  contextWindow?: number;
+  contextSource?: string;
+  maxOutputTokens?: number;
+  inputPrice?: number;
+  outputPrice?: number;
+  cacheReadPrice?: number;
+  cacheWritePrice?: number;
 }
 
 export interface RequestOptions {
@@ -160,7 +184,36 @@ export class RemoteBackendClient {
         provider: String(m.provider ?? ''),
         description: String(m.description ?? ''),
         enabled: m.enabled !== false,
+        isDefault: m.isDefault === true,
+        contextWindow: typeof m.contextWindow === 'number' && m.contextWindow > 0 ? m.contextWindow : undefined,
+        contextSource: typeof m.contextSource === 'string' && m.contextSource !== 'unknown' ? m.contextSource : undefined,
+        maxOutputTokens: typeof m.maxOutputTokens === 'number' ? m.maxOutputTokens : undefined,
+        inputPrice: typeof m.inputPrice === 'number' ? m.inputPrice : undefined,
+        outputPrice: typeof m.outputPrice === 'number' ? m.outputPrice : undefined,
+        cacheReadPrice: typeof m.cacheReadPrice === 'number' ? m.cacheReadPrice : undefined,
+        cacheWritePrice: typeof m.cacheWritePrice === 'number' ? m.cacheWritePrice : undefined,
       })).filter((m) => m.id !== ''),
+    );
+  }
+
+  /** Провайдеры на удалённом backend (GET /api/v2/providers) — для зеркалирования. */
+  listProviders(opts?: RequestOptions): Promise<RemoteProviderInfo[]> {
+    return this.request<{ providers?: Array<Record<string, unknown>> }>(
+      'GET',
+      '/api/v2/providers',
+      undefined,
+      opts,
+    ).then((data) =>
+      (data?.providers ?? []).map((p) => ({
+        name: String(p.name ?? ''),
+        type: String(p.type ?? ''),
+        url: String(p.url ?? ''),
+        model: String(p.model ?? ''),
+        enabled: p.enabled !== false,
+        is_default: p.is_default === true,
+        ...(p.icon ? { icon: String(p.icon) } : {}),
+        ...(p.icon_url ? { icon_url: String(p.icon_url) } : {}),
+      })).filter((p) => p.name !== ''),
     );
   }
 

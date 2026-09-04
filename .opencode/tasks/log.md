@@ -90,3 +90,48 @@
 - **Коммиты:** synth — e102731 (feat: единая личность/вход в UI), a78f512 (docs), 474078d (chore: bump v0.4.2) + tag v0.4.2 (ветка feat/hybrid-mode); synth-deploy — fb00edf (теги 0.4.2, main, запушен → Fleet).
 - **Что сделано:** bump 0.4.2; docker build+push git.itphx.ru/itphx/synth-{backend,ui}:0.4.2 (Dockerfile.backend/ui из исходников монорепо); обновлены теги в synth-deploy/values.yaml; Fleet раскатил (backend+ui 0.4.2, rollout успешен).
 - **Проверка (живой K3s):** /auth/oidc-meta → `{enabled:true, issuer:keycloak…/synth, clientId:synth-cli}` (эндпоинт дискавери появился); дискавери→ROPC(lucky)→Bearer /auth/status → authenticated:true, lucky, USER — полный путь входа локального core работает. /health по-прежнему отдаёт version 0.1.0 (hardcoded в роуте health backend — косметика, не связано с образом).
+
+## 2026-09-05 — fix: гибрид — зеркалирование серверных провайдеров вместо synth-remote (Задача 1 из пула)
+- **Задача:** «В локальной сессии гибрида не работает отправка: „Провайдер не найден или не сконфигурирован“. Решение (утверждено): локальный core получает с сервера полный список провайдеров/моделей и зеркалирует их как remote-провайдеров с настоящими именами; явное поле provider в контракте LLM Proxy.»
+- **Тип:** bug/feature (core+backend)
+- **Исполнитель:** @fixer
+- **Результат:** PASS
+- **Коммит:** нет (не коммитим без явной просьбы; 11 файлов в рабочем дереве, ветка feat/hybrid-mode)
+- **Что сделано:**
+  - Backend `llm.ts`: в `chatCompletionsSchema` добавлено опциональное `provider`; если задан — провайдер обязан существовать и быть включённым, иначе 502 PROVIDER_NOT_FOUND / 400 PROVIDER_DISABLED; несоответствие провайдера модели → 400 MODEL_MISMATCH; без поля — как раньше (резолв по модели).
+  - Core `providers/remote.ts`: `RemoteProviderOptions.provider` — имя серверного провайдера для тела LLM Proxy (по умолчанию = name); `_buildBody` шлёт `provider`.
+  - Core `remote/client.ts`: добавлен `listProviders()` (GET /api/v2/providers); `listModels()` расширен полными метаданными (contextWindow/цены/isDefault/contextSource/maxOutputTokens).
+  - Core `server/app.ts`: `activeRemoteProviderName` → `Set activeRemoteProviderNames`; `applyConnected` параллельно тянет провайдеров+модели, зеркалит каждого включённого неслужебного серверного провайдера под НАСТОЯЩИМ именем (type:'remote', baseUrl: backendUrl) c `setRemoteTokenProvider`; модели в modelCache БЕЗ переписывания provider; `remote.llm: local` — зеркала только для имён, отсутствующих в локальном store; снапшоты перекрытых локальных записей + `restoreRemoteMirrors()` (reconnect/disconnect без потери локальных конфигов); `providerLoader` блокирует локальных при server-режиме, разрешает набор зеркал; models-роут — extraProviders из набора.
+  - Миграция старых сессий с `synth-remote` НЕ делается (решение пользователя): сессия чинится сменой модели в UI (перезапишет settings при следующей отправке).
+  - Тесты: `llm.test.ts` (provider в теле), `remote.test.ts` (_buildBody), `client.test.ts` (listProviders/listModels), `app.remote.test.ts` (E2E зеркало itphx + локальная сессия + восстановление после disconnect + remote.llm local), `hybrid.integration.test.ts`/`models.remote.test.ts` переведены с synth-remote на зеркальные имена.
+- **Проверка:** pnpm typecheck (все 6 пакетов) чисто; pnpm lint — 0 errors; pnpm test — shared 72 / core 1168 / ui 94 / backend 229 (все зелёные, включая hybrid.integration 5/5). dist core пересобран.
+- **Заметки:** легаси-дефолт `name ?? 'synth-remote'` в remote.ts сохранён (обратная совместимость + unit-тесты); в app.ts `synth-remote` остался только в комментариях. Дальше по плану: Задача 2 (селектор «где создать» в дереве) → Задача 3 (UI-перенос проектов publish/fork).
+
+## 2026-09-05 — feat: выбор мира создания сессий в дереве (Задача 2 из пула)
+- **Задача:** «В гибриде новые сессии создаются локально — при работе в локальном экземпляре должен быть выбор, где создавать сессию.»
+- **Тип:** feature (UI)
+- **Исполнитель:** @fixer
+- **Результат:** PASS
+- **Коммит:** нет (без явной просьбы; только пакет @itphx/synth-ui + 3 теста)
+- **Что сделано:**
+  - `components/ui/OriginSelector.tsx` (новый) — общий селектор «Локально / На сервере» (вынесен из ProjectsTabToolbar; offline/disabled поддержка).
+  - `LeftPanel.tsx`: у группы «Без проекта» и узлов проектов «+»/контекстное меню в гибриде дают выбор «Создать сессию локально / на сервере». Семантика кросс-мира: каждый мир знает только свои проекты — «чужой» мир создаёт сессию БЕЗ проекта (в группе «Без проекта»), «свой» — внутри проекта узла; битых связок project_id из другого мира не остаётся. В offline remote-создание скрыто (не 502).
+  - `ProjectsTabToolbar.tsx`: remote-проект принудительно фиксирует origin 'remote' (селектор заблокирован); выбор 'remote' при локальном проекте сбрасывает привязку к проекту + подсказка hybrid.createRemoteNoProject; на submit remote+локальный проект → project_id: null.
+  - `tree/types.ts` + `TreeNode.tsx`: TreeAction получил опциональный menuItems — кнопка действия («+») может раскрывать ContextMenu (обратная совместимость сохранена).
+  - `sessionsStore.ts`: origin нормализуется `?? 'local'` при создании; `transportStore.ts`: WS session.created/fork.created без origin восстанавливают по remote: префиксу.
+  - i18n ru/en: hybrid.createSessionLocal/createSessionRemote/createRemoteNoProject. Тесты: transportStore.subagent.test.ts +3 (origin локальных/remote-событий).
+- **Проверка:** pnpm typecheck чисто; pnpm lint 0 errors; pnpm test — shared 72 / core 1168 / ui 97 / backend 229 (зелёные); pnpm --filter @itphx/synth-ui build — ок.
+- **Заметки:** projectsStore не менялся (origin не теряется). Drag-and-drop сессий между мирами — вне объёма. Дальше по плану: Задача 3 (UI-перенос проектов publish/fork).
+
+## 2026-09-05 — feat: перенос проектов между мирами через UI (Задача 3 из пула)
+- **Задача:** «В UI нужен инструментарий переноса: локальный проект → сервер или форк серверного проекта в локальный. Перенос — только проектов целиком (не сессий).»
+- **Тип:** feature (core + UI)
+- **Исполнитель:** @fixer
+- **Результат:** PASS
+- **Коммит:** нет (без явной просьбы; новые файлы project-transfer.ts(+test), PublishProjectDialog, ForkProjectDialog)
+- **Что сделано:**
+  - Core: новый `routes/project-transfer.ts` — `POST /api/v2/projects/:id/publish` (локальный проект → сервер; тело `remote_project_id?` = обновление существующего, иначе создание нового с тем же именем; «всегда всё» — includeFiles/Sessions=true; 400 на remote-id, 404, offline → 502, RemoteError → HTTP) и `POST /api/v2/projects/:id/fork-local` (remote-проект → локальный; тело `local_name?`; возвращает DTO локального проекта). Смонтированы в app.ts на префикс /projects (переданы projectStore/sessionManager/workspacesRoot/defaultWorkingDir/геттер client). Нюанс 422: не требуется — syncProjectToRemote создаёт workspace на сервере при includeFiles=true (тесты фиксируют).
+  - Core `remote/transfer.ts`: в forkProjectToLocal импортированные сессии помечаются userId/ownerId='local' (иначе GET /sessions не вернул бы их в UI). Тесты CLI/transfer не сломаны.
+  - UI: synthApi.publishProject/forkRemoteProject; projectsStore — экшены + loadProjects/loadSessions + проброс ошибок; LeftPanel — пункты «Опубликовать на сервер»/«Склонировать локально» в меню проекта (только hybridOnline); диалоги `projects/PublishProjectDialog.tsx` (создать новый / обновить существующий remote-проект из списка, предупреждение о перезаписи, занятость, toast) и `ForkProjectDialog.tsx` (имя копии, коллизия локального имени блокирует); i18n ru/en.
+- **Проверка:** pnpm typecheck чисто; pnpm lint 0 errors; pnpm test — shared 72 / ui 97 / core 85 файлов/1180 (+12: project-transfer.test.ts 10 + app.remote.test.ts +2) / backend 229 (зелёные); pnpm build успешно.
+- **Заметки:** живой smoke publish/fork в UI/через curl с реальным backend не выполнялся (нет окружения/credentials) — рекомендуется при следующей сессии с dev-окружением. HTTP-сценарий в hybrid.integration.test.ts — опционально. Все 3 задачи пула (фикс провайдера, селектор «где создать», UI-перенос проектов) реализованы, изменения в рабочем дереве не закоммичены.

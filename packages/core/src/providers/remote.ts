@@ -27,6 +27,13 @@ export interface RemoteProviderOptions {
   maxTokens?: number;
   name?: string;
   type?: string;
+  /**
+   * Имя провайдера НА СЕРВЕРЕ (отправляется в теле LLM Proxy, чтобы backend
+   * резолвил явного провайдера). В отличие от name — локального имени, по
+   * которому резолвится токен/движок. По умолчанию совпадает с name (зеркала
+   * серверных провайдеров называются их настоящими именами).
+   */
+  provider?: string;
 }
 
 /** Путь LLM Proxy на backend. */
@@ -60,6 +67,8 @@ function lookupRemoteTokenProvider(name: string): (() => Promise<string | null>)
 
 export class RemoteProvider extends BaseProvider {
   private readonly _getToken?: () => Promise<string | null>;
+  /** Имя серверного провайдера для тела LLM Proxy (по умолчанию — локальное name). */
+  private readonly _providerName?: string;
 
   constructor(opts: RemoteProviderOptions) {
     super({
@@ -73,6 +82,7 @@ export class RemoteProvider extends BaseProvider {
       type: opts.type ?? 'remote',
     });
     this._getToken = opts.getToken;
+    this._providerName = opts.provider ?? opts.name;
   }
 
   getProviderName(): string {
@@ -380,6 +390,9 @@ export class RemoteProvider extends BaseProvider {
     if (stream) body.stream = true;
     if (tools?.length) body.tools = tools;
     if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
+    // Явный провайдер: backend исполняет своего провайдера с этим именем
+    // (см. chatCompletionsSchema.provider в routes/llm.ts backend).
+    if (this._providerName) body.provider = this._providerName;
     return body;
   }
 

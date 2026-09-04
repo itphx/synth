@@ -159,6 +159,48 @@ describe('RemoteProvider.chat (non-stream)', () => {
   });
 });
 
+describe('RemoteProvider: явный provider в теле (зеркала серверных провайдеров)', () => {
+  function okResponse(): Response {
+    return jsonResponse({
+      choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+      usage: {},
+    });
+  }
+
+  it('provider из опций уходит в тело запроса LLM Proxy', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider({ name: 'local-alias', provider: 'itphx' });
+    await provider.chat([makeMessage()]);
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.provider).toBe('itphx');
+  });
+
+  it('provider не задан, но задан name — в тело уходит name (зеркала называются серверными именами)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider({ name: 'itphx' });
+    await provider.chat([makeMessage()]);
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.provider).toBe('itphx');
+  });
+
+  it('без name и без provider тело не содержит provider (обратная совместимость)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider({ name: undefined });
+    await provider.chat([makeMessage()]);
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.provider).toBeUndefined();
+  });
+});
+
 describe('RemoteProvider.chatAsync (SSE-стрим)', () => {
   function sseResponse(events: string[]): Response {
     return new Response(events.map((e) => `data: ${e}\n\n`).join(''), {

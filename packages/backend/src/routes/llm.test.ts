@@ -294,6 +294,76 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
     });
   });
 
+  describe('явный provider в теле (remote-зеркала)', () => {
+    // Сервер знает двух провайдеров: fake (владелец fake-model) и itphx.
+    const twoProviderLoader = (name: string) => {
+      if (name === 'fake') return providerConfig;
+      if (name === 'itphx') return { ...providerConfig, name: 'itphx', baseUrl: 'https://ai.itphx.ru/v1', defaultModel: 'local.qwen3:14b' };
+      return null;
+    };
+
+    it('provider совпадает с провайдером модели → 200 (как раньше)', async () => {
+      const { app } = createTestContext(userUser, { providerLoader: twoProviderLoader });
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        provider: 'fake',
+        messages: [{ role: 'user', content: 'привет' }],
+      }));
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.choices[0].message.content).toBe('Ответ fake-провайдера');
+    });
+
+    it('provider существует, но не совпадает с провайдером модели → 400 MODEL_MISMATCH', async () => {
+      const { app } = createTestContext(userUser, { providerLoader: twoProviderLoader });
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        provider: 'itphx',
+        messages: [{ role: 'user', content: 'привет' }],
+      }));
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('MODEL_MISMATCH');
+      expect(body.error.message).toContain('itphx');
+      expect(body.error.message).toContain('fake-model');
+    });
+
+    it('provider не существует на сервере → 502 PROVIDER_NOT_FOUND', async () => {
+      const { app } = createTestContext(userUser, { providerLoader: twoProviderLoader });
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        provider: 'no-such-provider',
+        messages: [{ role: 'user', content: 'привет' }],
+      }));
+      expect(res.status).toBe(502);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('PROVIDER_NOT_FOUND');
+    });
+
+    it('provider существует, но отключён → 400 PROVIDER_DISABLED', async () => {
+      const { app } = createTestContext(userUser, {
+        providerLoader: (name) => (name === 'itphx' ? { ...providerConfig, name: 'itphx', enabled: false } : providerConfig),
+      });
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        provider: 'itphx',
+        messages: [{ role: 'user', content: 'привет' }],
+      }));
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('PROVIDER_DISABLED');
+    });
+
+    it('без provider работает как раньше (резолв по модели)', async () => {
+      const { app } = createTestContext(userUser, { providerLoader: twoProviderLoader });
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'привет' }],
+      }));
+      expect(res.status).toBe(200);
+    });
+  });
+
   describe('non-stream успех', () => {
     it('возвращает OpenAI-формат и usage', async () => {
       const { app } = createTestContext(userUser);

@@ -142,6 +142,16 @@ export interface ProjectStats {
   total_reasoning_tokens: number
 }
 
+/** Ответ POST /projects/:id/publish — перенос локального проекта на сервер. */
+export interface PublishProjectResult {
+  ok: boolean
+  /** id удалённого проекта в remote-форме ('remote:<uuid>'). */
+  project_id: string
+  created: boolean
+  sessions_imported: number
+  files_uploaded: number
+}
+
 export interface UserInfo {
   id: string
   username: string
@@ -285,6 +295,22 @@ export const synthApi = {
   async deleteProject(id: string): Promise<void> {
     return fetchJSON<void>(`${BASE_URL}/projects/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+    })
+  },
+
+  // Перенос проектов между мирами (гибрид): publish — локальный проект на сервер,
+  // fork-local — удалённый проект в локальный мир. Сессии и файлы переносятся всегда.
+  async publishProject(id: string, opts?: { remote_project_id?: string }): Promise<PublishProjectResult> {
+    return fetchJSON<PublishProjectResult>(`${BASE_URL}/projects/${encodeURIComponent(id)}/publish`, {
+      method: 'POST',
+      body: JSON.stringify(opts || {}),
+    })
+  },
+
+  async forkRemoteProject(id: string, opts?: { local_name?: string }): Promise<ProjectData> {
+    return fetchJSON<ProjectData>(`${BASE_URL}/projects/${encodeURIComponent(id)}/fork-local`, {
+      method: 'POST',
+      body: JSON.stringify(opts || {}),
     })
   },
 

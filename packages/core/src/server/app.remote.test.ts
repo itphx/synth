@@ -10,7 +10,7 @@ import { clearRemoteTokenProviders } from '../providers/remote.js';
 import type { ModelConfig, ProviderConfig } from '@itphx/synth-shared';
 
 const REMOTE_PROVIDER: ProviderConfig = {
-  name: 'synth-remote',
+  name: 'itphx',
   type: 'remote',
   baseUrl: 'https://backend.test',
   apiKey: '',
@@ -32,20 +32,37 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
   });
 }
 
+/** Что реальный backend отдаёт в GET /api/v2/providers (включённый itphx). */
+function defaultProvidersBody(): unknown {
+  return {
+    providers: [
+      {
+        name: 'itphx', type: 'openai', url: 'https://ai.itphx.ru/v1',
+        model: 'm1', enabled: true, is_default: true,
+      },
+    ],
+    default_provider: 'itphx',
+  };
+}
+
 /**
- * fetch-роутер runtime-подключения: /auth/status (пользователь) и /api/v2/models
- * (модели сервера) нужны самому connectRemoteWithApiKey+applyConnected; остальные
- * URL уходят в onOther.
+ * fetch-роутер runtime-подключения: /auth/status (пользователь), /api/v2/providers
+ * (зеркалируемые провайдеры) и /api/v2/models (модели сервера) нужны самому
+ * connectRemoteWithApiKey+applyConnected; остальные URL уходят в onOther.
  */
 function hybridFetchMock(opts: {
   modelsBody?: unknown;
+  providersBody?: unknown;
   onOther?: (url: string, init?: RequestInit) => Response | Promise<Response>;
 }) {
-  const { modelsBody, onOther } = opts;
+  const { modelsBody, providersBody, onOther } = opts;
   return vi.fn((url: string | URL | Request, init?: RequestInit) => {
     const u = String(url);
     if (u.includes('/auth/status')) {
       return Promise.resolve(jsonResponse({ authenticated: true, oidc_enabled: true, user: SERVER_USER }));
+    }
+    if (u.includes('/api/v2/providers')) {
+      return Promise.resolve(jsonResponse(providersBody ?? defaultProvidersBody()));
     }
     if (u.includes('/api/v2/models')) {
       return Promise.resolve(jsonResponse(modelsBody ?? { groups: [] }));
@@ -57,7 +74,7 @@ function hybridFetchMock(opts: {
 function modelsBodyWith(remoteModels: Array<Record<string, unknown>>): unknown {
   return {
     groups: [
-      { provider: { name: 'synth-remote', type: 'remote' }, models: remoteModels },
+      { provider: { name: 'itphx', type: 'openai' }, models: remoteModels },
     ],
   };
 }
@@ -76,14 +93,14 @@ describe('injectRemoteProvider (unit)', () => {
     const name = injectRemoteProvider(providerCache, modelCache, {
       provider: REMOTE_PROVIDER,
       models: [
-        { id: 'remote/m1', name: 'm1', provider: 'synth-remote', enabled: true },
-        { id: 'remote/m2', name: 'm2', provider: 'synth-remote', enabled: true },
+        { id: 'remote/m1', name: 'm1', provider: 'itphx', enabled: true },
+        { id: 'remote/m2', name: 'm2', provider: 'itphx', enabled: true },
       ],
       getToken: async () => 'tok',
     });
 
-    expect(name).toBe('synth-remote');
-    expect(providerCache.get('synth-remote')).toMatchObject({
+    expect(name).toBe('itphx');
+    expect(providerCache.get('itphx')).toMatchObject({
       type: 'remote',
       baseUrl: 'https://backend.test',
       enabled: true,
@@ -107,7 +124,7 @@ describe('createStandaloneApp: remote-модели через runtime-подкл
     try {
       const fetchMock = hybridFetchMock({
         modelsBody: modelsBodyWith([
-          { id: 'remote/m1', name: 'm1', provider: 'synth-remote', description: '', enabled: true },
+          { id: 'remote/m1', name: 'm1', provider: 'itphx', description: '', enabled: true },
         ]),
       });
       vi.stubGlobal('fetch', fetchMock);
@@ -124,7 +141,7 @@ describe('createStandaloneApp: remote-модели через runtime-подкл
       const res = await handle.app.request('/api/v2/models', { headers: { Authorization: 'Bearer test-key' } });
       expect(res.status).toBe(200);
       const body = (await res.json()) as { groups: Group[] };
-      const group = body.groups.find((g) => g.provider.name === 'synth-remote');
+      const group = body.groups.find((g) => g.provider.name === 'itphx');
       expect(group).toBeDefined();
       expect(group!.models.map((m) => m.id)).toEqual(['remote/m1']);
 
@@ -132,7 +149,7 @@ describe('createStandaloneApp: remote-модели через runtime-подкл
       const modelStore = new JsonStore<ModelConfig>({ dataDir: dir, subdir: 'models' });
       expect(await modelStore.exists('remote/m1')).toBe(false);
       const providerStore = new JsonStore<ProviderConfig>({ dataDir: dir, subdir: 'providers' });
-      expect(await providerStore.exists('synth-remote')).toBe(false);
+      expect(await providerStore.exists('itphx')).toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
@@ -145,7 +162,7 @@ describe('createStandaloneApp: remote-модели через runtime-подкл
       const res = await app.request('/api/v2/models', { headers: { Authorization: 'Bearer test-key' } });
       expect(res.status).toBe(200);
       const body = (await res.json()) as { groups: Group[] };
-      expect(body.groups.find((g) => g.provider.name === 'synth-remote')).toBeUndefined();
+      expect(body.groups.find((g) => g.provider.name === 'itphx')).toBeUndefined();
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
@@ -156,7 +173,7 @@ describe('createStandaloneApp: remote-модели через runtime-подкл
     try {
       const fetchMock = hybridFetchMock({
         modelsBody: modelsBodyWith([
-          { id: 'remote/m1', name: 'm1', provider: 'synth-remote', description: '', enabled: true },
+          { id: 'remote/m1', name: 'm1', provider: 'itphx', description: '', enabled: true },
         ]),
       });
       vi.stubGlobal('fetch', fetchMock);
@@ -177,7 +194,177 @@ describe('createStandaloneApp: remote-модели через runtime-подкл
       expect(handle.getHybridStatus().backendUrl).toBeNull();
       const res = await handle.app.request('/api/v2/models', { headers: { Authorization: 'Bearer test-key' } });
       const body = (await res.json()) as { groups: Group[] };
-      expect(body.groups.find((g) => g.provider.name === 'synth-remote')).toBeUndefined();
+      expect(body.groups.find((g) => g.provider.name === 'itphx')).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('disconnectRemote восстанавливает локального провайдера, перекрытого зеркалом', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-remote-restore-'));
+    try {
+      // Локальный провайдер itphx (openai) + модель — конфликтует с серверным зеркалом.
+      const providerStore = new JsonStore<ProviderConfig>({ dataDir: dir, subdir: 'providers' });
+      await providerStore.save('itphx', {
+        name: 'itphx', type: 'openai', baseUrl: 'http://local.test', apiKey: 'k', enabled: true,
+      });
+
+      const fetchMock = hybridFetchMock({
+        modelsBody: modelsBodyWith([
+          { id: 'itphx/m1', name: 'm1', provider: 'itphx', description: '', enabled: true },
+        ]),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const handle = await createStandaloneApp({
+        port: 0,
+        dataDir: dir,
+        apiKey: 'test-key',
+        defaultBackendUrl: BACKEND_URL,
+        remoteLlm: 'server',
+      });
+      // До подключения в providerCache локальный itphx.
+      await handle.connectRemoteWithApiKey(BACKEND_URL, 'tok');
+      await handle.disconnectRemote();
+
+      // Локальная сессия с itphx после отключения резолвится (зеркало откачено):
+      // GET /api/v2/models не проксируется, локальная группа itphx снова видна.
+      const res = await handle.app.request('/api/v2/models', { headers: { Authorization: 'Bearer test-key' } });
+      const body = (await res.json()) as { groups: Group[] };
+      const localGroup = body.groups.find((g) => g.provider.name === 'itphx');
+      expect(localGroup).toBeDefined();
+      expect(localGroup!.provider.type).toBe('openai');
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+describe('createStandaloneApp: зеркалирование серверных провайдеров (локальная сессия → LLM Proxy)', () => {
+  function sseResponse(events: string[]): Response {
+    return new Response(events.map((e) => `data: ${e}\n\n`).join(''), {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  }
+
+  it('локальная сессия резолвит зеркало itphx и шлёт запрос с provider в теле', { timeout: 20_000 }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-mirror-e2e-'));
+    try {
+      const llmProxyCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
+      const fetchMock = hybridFetchMock({
+        modelsBody: modelsBodyWith([
+          {
+            id: 'itphx/m1', name: 'm1', provider: 'itphx', description: '', enabled: true,
+            contextWindow: 16_384, inputPrice: 1, outputPrice: 2,
+          },
+        ]),
+        onOther: (url, init) => {
+          if (url.includes('/api/v2/llm/chat/completions')) {
+            const rawBody = typeof init?.body === 'string' ? init.body : '';
+            llmProxyCalls.push({ url, body: JSON.parse(rawBody) as Record<string, unknown> });
+            return sseResponse([
+              JSON.stringify({ choices: [{ index: 0, delta: { content: 'Ответ зеркала itphx' }, finish_reason: null }] }),
+              JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 } }),
+              '[DONE]',
+            ]);
+          }
+          return jsonResponse({}, 200);
+        },
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const handle = await createStandaloneApp({
+        port: 0,
+        dataDir: dir,
+        apiKey: 'test-key',
+        defaultBackendUrl: BACKEND_URL,
+        remoteLlm: 'server',
+      });
+      await handle.connectRemoteWithApiKey(BACKEND_URL, 'tok');
+
+      // Локальная сессия с провайдером/моделью сервера (имя зеркала = itphx).
+      const createRes = await handle.app.request('/api/v2/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-key' },
+        body: JSON.stringify({
+          name: 'зеркало itphx',
+          settings: { provider: 'itphx', model: 'itphx/m1' },
+        }),
+      });
+      expect(createRes.status).toBe(201);
+      const ses = (await createRes.json()) as { id: string };
+      expect(ses.id).toBeDefined();
+
+      const promptRes = await handle.app.request(`/api/v2/sessions/${ses.id}/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-key' },
+        body: JSON.stringify({ content: 'привет зеркалу' }),
+      });
+      expect(promptRes.status).toBe(200);
+      const text = await promptRes.text();
+      const events = text.split('\n')
+        .filter((l) => l.startsWith('data: '))
+        .map((l) => JSON.parse(l.slice(6)) as { type: string; data: Record<string, unknown> });
+      const done = events.find((e) => e.type === 'stream.done');
+      expect(done).toBeDefined();
+      expect(String(done!.data.content)).toContain('Ответ зеркала itphx');
+
+      // RemoteProvider ушёл на сервер с ЯВНЫМ provider (имя зеркала) и моделью сервера.
+      const proxyCall = llmProxyCalls.find((c) => c.url.includes('/api/v2/llm/chat/completions'));
+      expect(proxyCall).toBeDefined();
+      expect(proxyCall!.body.provider).toBe('itphx');
+      expect(proxyCall!.body.model).toBe('itphx/m1');
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('remote.llm=local: зеркало не перекрывает локального провайдера с тем же именем', { timeout: 20_000 }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-mirror-local-'));
+    try {
+      // Локальный провайдер itphx (openai) — при remote.llm=local он не перекрывается.
+      const providerStore = new JsonStore<ProviderConfig>({ dataDir: dir, subdir: 'providers' });
+      await providerStore.save('itphx', {
+        name: 'itphx', type: 'openai', baseUrl: 'http://local.test', apiKey: 'k', enabled: true,
+      });
+
+      const fetchMock = hybridFetchMock({
+        modelsBody: modelsBodyWith([
+          { id: 'itphx/m1', name: 'm1', provider: 'itphx', description: '', enabled: true },
+        ]),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const handle = await createStandaloneApp({
+        port: 0,
+        dataDir: dir,
+        apiKey: 'test-key',
+        defaultBackendUrl: BACKEND_URL,
+        remoteLlm: 'local',
+      });
+      await handle.connectRemoteWithApiKey(BACKEND_URL, 'tok');
+
+      // Локальная сессия всё ещё резолвит ЛОКАЛЬНЫЙ itphx (openai) — зеркало не создано.
+      const createRes = await handle.app.request('/api/v2/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-key' },
+        body: JSON.stringify({
+          name: 'локальный itphx',
+          settings: { provider: 'itphx', model: 'itphx/m1' },
+        }),
+      });
+      expect(createRes.status).toBe(201);
+
+      // В remote.llm=local моделей сервера для itphx нет (провайдер перекрыт
+      // локальным) — зеркало не появилось. После отключения локальная группа
+      // itphx (openai) видна как раньше.
+      await handle.disconnectRemote();
+      const res = await handle.app.request('/api/v2/models', { headers: { Authorization: 'Bearer test-key' } });
+      const body = (await res.json()) as { groups: Group[] };
+      const group = body.groups.find((g) => g.provider.name === 'itphx');
+      expect(group).toBeDefined();
+      expect(group!.provider.type).toBe('openai');
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
@@ -505,6 +692,42 @@ describe('createStandaloneApp: WS /ws/events аутентификация чер
       expect(result.status).toBe(401);
     } finally {
       await app.close();
+    }
+  });
+});
+
+describe('createStandaloneApp: HTTP-эндпоинты переноса проектов смонтированы (publish/fork-local)', () => {
+  it('без runtime-подключения publish → 502 REMOTE_UNAVAILABLE', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-transfer-mount-'));
+    try {
+      const { app } = await createStandaloneApp({ port: 0, dataDir: dir, apiKey: 'test-key' });
+      const res = await app.request('/api/v2/projects/local-proj/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-key' },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(502);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('REMOTE_UNAVAILABLE');
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('без runtime-подключения fork-local → 502 REMOTE_UNAVAILABLE', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-transfer-mount-'));
+    try {
+      const { app } = await createStandaloneApp({ port: 0, dataDir: dir, apiKey: 'test-key' });
+      const res = await app.request('/api/v2/projects/remote:abc/fork-local', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-key' },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(502);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('REMOTE_UNAVAILABLE');
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
   });
 });

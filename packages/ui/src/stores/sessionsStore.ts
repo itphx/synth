@@ -58,10 +58,13 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
         ...data,
         settings: data.settings ?? routingDefaultsToSettings(loadRoutingDefaults()),
       })
+      // Гибрид: не теряем origin свежесозданной сессии (бейдж/фильтры в дереве).
+      // Ответ API почти всегда несёт origin, но страхуемся на случай отсутствия.
+      const normalized = { ...session, origin: session.origin ?? data.origin ?? ('local' as const) }
       if (!isTransportConnected()) {
-        set((s) => ({ sessions: [session, ...s.sessions] }))
+        set((s) => ({ sessions: [normalized, ...s.sessions] }))
       }
-      return session
+      return normalized
     } catch (e) {
       set({ error: (e as Error).message })
       return null

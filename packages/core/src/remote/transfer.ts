@@ -529,6 +529,11 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
       session.summarizationPending = false;
       session.canSummarize = false;
 
+      // Локальные сессии принадлежат локальному пользователю (в standalone core — 'local'):
+      // иначе их не вернёт GET /api/v2/sessions (список сессий фильтруется по userId).
+      session.userId = 'local';
+      session.ownerId = 'local';
+
       const num = (v: unknown, def = 0): number => (typeof v === 'number' ? v : def);
       session.inputTokens = num(exportData.input_tokens ?? exportData.inputTokens);
       session.outputTokens = num(exportData.output_tokens ?? exportData.outputTokens);

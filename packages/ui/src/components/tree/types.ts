@@ -9,7 +9,10 @@ export interface TreeAction {
   id: string
   icon: IconName
   title: string
-  onClick: () => void
+  /** Мгновенное действие по клику (используется, если menuItems не задан). */
+  onClick?: () => void
+  /** Альтернатива onClick: кнопка раскрывает меню с пунктами (например, «создать локально/на сервере»). */
+  menuItems?: ContextMenuItem[]
   variant?: 'default' | 'primary' | 'destructive'
   alwaysVisible?: boolean
 }

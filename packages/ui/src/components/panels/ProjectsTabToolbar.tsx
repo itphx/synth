@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Icon } from '@/components/icon/Icon'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
+import { OriginSelector } from '@/components/ui/OriginSelector'
 import { useSessionsTreeStore } from '@/stores/useSessionsTreeStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
@@ -11,30 +12,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/u
 import type { EntityOrigin } from '@/lib/api/synthApi'
 
 type PopoverType = null | 'project' | 'session'
-
-/** Селектор «где создать» (гибридный режим): Локально / На сервере. При offline — только «Локально». */
-function OriginSelector({ value, onChange, offline }: { value: EntityOrigin; onChange: (v: EntityOrigin) => void; offline: boolean }) {
-  const { t } = useI18n()
-  const shownValue = offline ? ('local' as EntityOrigin) : value
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-[0.65rem] text-muted-foreground">{t('hybrid.createWhere')}</span>
-      <Select value={shownValue} onValueChange={(v) => onChange((v || 'local') as EntityOrigin)}>
-        <SelectTrigger size="sm" disabled={offline} className="w-full text-xs border-0 bg-interactive rounded">
-          <span className="truncate flex-1 text-left">
-            {shownValue === 'remote' ? t('hybrid.createRemote') : t('hybrid.createLocal')}
-          </span>
-          <Icon name="arrow-down-s" className="size-3.5 opacity-50 shrink-0" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="local">{t('hybrid.createLocal')}</SelectItem>
-          {!offline && <SelectItem value="remote">{t('hybrid.createRemote')}</SelectItem>}
-        </SelectContent>
-      </Select>
-      {offline && <span className="text-[0.65rem] text-destructive">{t('hybrid.offlineShort')}</span>}
-    </div>
-  )
-}
 
 export const ProjectsTabToolbar: React.FC = () => {
   const { t } = useI18n()
@@ -68,7 +45,15 @@ export const ProjectsTabToolbar: React.FC = () => {
 
   const handleCreateSession = async () => {
     const name = sessionName.trim() || undefined
-    const result = await createSession({ name, project_id: sessionProjectId, origin: createOrigin })
+    const selectedProject = sessionProjectId ? projects.find((p) => p.id === sessionProjectId) : null
+    // Гибрид: remote-сессия не может ссылаться на ЛОКАЛЬНЫЙ проект (сервер его не
+    // знает) — в этом случае создаём на сервере сессию без проекта. Обратная
+    // комбинация (origin local + remote-проект) исключена в UI: выбор remote-проекта
+    // принудительно фиксирует origin 'remote'.
+    const project_id = createOrigin === 'remote' && selectedProject && selectedProject.origin !== 'remote'
+      ? null
+      : sessionProjectId
+    const result = await createSession({ name, project_id, origin: createOrigin })
     if (result) {
       setPopover(null)
       openTab({
@@ -91,6 +76,30 @@ export const ProjectsTabToolbar: React.FC = () => {
       setPopover(null)
     }
   }
+
+  // Выбор проекта в поповере сессии. Проект принадлежит одному из миров: remote-проект
+  // может содержать только remote-сессии, локальный — только локальные. Поэтому выбор
+  // проекта фиксирует origin (для remote-проекта селектор «где создать» блокируется).
+  const handleProjectSelect = (value: string) => {
+    const pid = value || null
+    setSessionProjectId(pid)
+    const project = pid ? projects.find((p) => p.id === pid) : null
+    if (project) setCreateOrigin(project.origin === 'remote' ? 'remote' : 'local')
+  }
+
+  // Смена «где создать». Remote-мир не знает локальные проекты — если выбран локальный
+  // проект, сбрасываем привязку на «без проекта» (иначе получится битая комбинация).
+  const handleOriginChange = (origin: EntityOrigin) => {
+    setCreateOrigin(origin)
+    if (origin === 'remote' && sessionProjectId) {
+      const project = projects.find((p) => p.id === sessionProjectId)
+      if (project && project.origin !== 'remote') setSessionProjectId(null)
+    }
+  }
+
+  // Если выбран remote-проект — origin 'remote' обязателен: локальная сессия внутри
+  // удалённого проекта невозможна (локальный мир его не знает).
+  const originLocked = !!sessionProjectId && projects.find((p) => p.id === sessionProjectId)?.origin === 'remote'
 
   const handleToggleAll = () => {
     const { projects } = useProjectsStore.getState()
@@ -190,7 +199,7 @@ export const ProjectsTabToolbar: React.FC = () => {
               placeholder={t('leftPanel.sessionName')}
               className="rounded bg-interactive px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground outline-none w-full"
             />
-            <Select value={sessionProjectId ?? ''} onValueChange={(v) => setSessionProjectId(v || null)}>
+            <Select value={sessionProjectId ?? ''} onValueChange={handleProjectSelect}>
               <SelectTrigger size="sm" className="w-full text-xs border-0 bg-interactive rounded">
                 <span className="truncate flex-1 text-left">
                   {sessionProjectId ? (projects.find(p => p.id === sessionProjectId)?.name ?? sessionProjectId) : t('leftPanel.noProject')}
@@ -204,7 +213,14 @@ export const ProjectsTabToolbar: React.FC = () => {
                 ))}
               </SelectContent>
             </Select>
-            {hybridEnabled && <OriginSelector value={createOrigin} onChange={setCreateOrigin} offline={isOffline} />}
+            {hybridEnabled && (
+              <>
+                <OriginSelector value={createOrigin} onChange={handleOriginChange} offline={isOffline} disabled={originLocked} />
+                {createOrigin === 'remote' && !sessionProjectId && (
+                  <p className="text-[0.65rem] text-muted-foreground">{t('hybrid.createRemoteNoProject')}</p>
+                )}
+              </>
+            )}
             <button type="submit" className="self-end rounded px-3 py-1 text-xs text-primary hover:bg-primary/10">
               {t('common.create')}
             </button>

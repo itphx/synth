@@ -16,7 +16,7 @@ function createMockAuth(): AuthKit {
 }
 
 const LOCAL_PROVIDER: ProviderConfig = { name: 'local', type: 'openai', baseUrl: 'http://local.test', apiKey: 'k', enabled: true };
-const REMOTE_PROVIDER: ProviderConfig = { name: 'synth-remote', type: 'remote', baseUrl: 'https://backend.test', apiKey: '', enabled: true };
+const REMOTE_PROVIDER: ProviderConfig = { name: 'itphx', type: 'remote', baseUrl: 'https://backend.test', apiKey: '', enabled: true };
 
 interface Group {
   provider: { name: string; type: string };
@@ -57,8 +57,8 @@ describe('createModelRoutes: слияние remote-моделей (Часть 6)
 
     const app = createModelRoutes(createMockAuth(), modelStore, providerStore, new Map<string, ModelConfig>(), {
       extraModels: [
-        { id: 'remote-m1', name: 'rm1', provider: 'synth-remote', enabled: true },
-        { id: 'remote-m2', name: 'rm2', provider: 'synth-remote', enabled: true },
+        { id: 'remote-m1', name: 'rm1', provider: 'itphx', enabled: true },
+        { id: 'remote-m2', name: 'rm2', provider: 'itphx', enabled: true },
         // Дубликат store-модели — должен быть отброшен (первый источник — store).
         { id: 'local-m1', name: 'm1-dup', provider: 'local', enabled: true },
       ],
@@ -68,7 +68,7 @@ describe('createModelRoutes: слияние remote-моделей (Часть 6)
     const res = await app.request('/');
     const body = (await res.json()) as { groups: Group[] };
 
-    const remoteGroup = body.groups.find((g) => g.provider.name === 'synth-remote')!;
+    const remoteGroup = body.groups.find((g) => g.provider.name === 'itphx')!;
     expect(remoteGroup).toBeDefined();
     expect(remoteGroup.models.map((m) => m.id)).toEqual(['remote-m1', 'remote-m2']);
     expect(remoteGroup.provider.type).toBe('remote');
@@ -83,30 +83,30 @@ describe('createModelRoutes: слияние remote-моделей (Часть 6)
     await modelStore.save('local-m1', { id: 'local-m1', name: 'm1', provider: 'local', enabled: true });
 
     const app = createModelRoutes(createMockAuth(), modelStore, providerStore, new Map<string, ModelConfig>(), {
-      extraModels: [{ id: 'remote-m1', name: 'rm1', provider: 'synth-remote', enabled: true }],
+      extraModels: [{ id: 'remote-m1', name: 'rm1', provider: 'itphx', enabled: true }],
       extraProviders: [REMOTE_PROVIDER],
       onlyRemoteModels: true,
     });
 
     const res = await app.request('/');
     const body = (await res.json()) as { groups: Group[] };
-    expect(body.groups.map((g) => g.provider.name)).toEqual(['synth-remote']);
+    expect(body.groups.map((g) => g.provider.name)).toEqual(['itphx']);
     expect(body.groups[0]!.models.map((m) => m.id)).toEqual(['remote-m1']);
   });
 
-  it('?provider=synth-remote фильтрует по remote-провайдеру', async () => {
+  it('?provider=itphx фильтрует по remote-провайдеру', async () => {
     await providerStore.save('local', LOCAL_PROVIDER);
     await modelStore.save('local-m1', { id: 'local-m1', name: 'm1', provider: 'local', enabled: true });
 
     const app = createModelRoutes(createMockAuth(), modelStore, providerStore, new Map<string, ModelConfig>(), {
-      extraModels: [{ id: 'remote-m1', name: 'rm1', provider: 'synth-remote', enabled: true }],
+      extraModels: [{ id: 'remote-m1', name: 'rm1', provider: 'itphx', enabled: true }],
       extraProviders: [REMOTE_PROVIDER],
     });
 
-    const res = await app.request('/?provider=synth-remote');
+    const res = await app.request('/?provider=itphx');
     const body = (await res.json()) as { groups: Group[] };
     // Существующий контракт: все провайдеры присутствуют, несовпадающие — с пустым списком.
-    const remoteGroup = body.groups.find((g) => g.provider.name === 'synth-remote')!;
+    const remoteGroup = body.groups.find((g) => g.provider.name === 'itphx')!;
     expect(remoteGroup.models.map((m) => m.id)).toEqual(['remote-m1']);
     const localGroup = body.groups.find((g) => g.provider.name === 'local');
     expect(localGroup?.models).toEqual([]);
@@ -115,8 +115,8 @@ describe('createModelRoutes: слияние remote-моделей (Часть 6)
   it('enabled_only отфильтровывает отключённые remote-модели', async () => {
     const app = createModelRoutes(createMockAuth(), modelStore, providerStore, new Map<string, ModelConfig>(), {
       extraModels: [
-        { id: 'remote-m1', name: 'rm1', provider: 'synth-remote', enabled: true },
-        { id: 'remote-m2', name: 'rm2', provider: 'synth-remote', enabled: false },
+        { id: 'remote-m1', name: 'rm1', provider: 'itphx', enabled: true },
+        { id: 'remote-m2', name: 'rm2', provider: 'itphx', enabled: false },
       ],
       extraProviders: [REMOTE_PROVIDER],
     });

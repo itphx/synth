@@ -138,6 +138,83 @@ describe('RemoteBackendClient', () => {
     });
   });
 
+  it('listModels переносит полные метаданные моделей (контекст, цены, default)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      groups: [
+        {
+          provider: { name: 'itphx', type: 'openai' },
+          models: [
+            {
+              id: 'itphx/local.qwen3:14b', name: 'local.qwen3:14b', provider: 'itphx',
+              description: 'Qwen', enabled: true, isDefault: true,
+              contextWindow: 32_768, contextSource: 'api', maxOutputTokens: 4096,
+              inputPrice: 1.5, outputPrice: 2.5, cacheReadPrice: 0.5, cacheWritePrice: 1,
+            },
+            {
+              id: 'ollama/llama3', name: 'llama3', provider: 'ollama',
+              description: '', enabled: false,
+            },
+          ],
+        },
+      ],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const models = await makeClient().listModels();
+    expect(models).toEqual([
+      {
+        id: 'itphx/local.qwen3:14b', name: 'local.qwen3:14b', provider: 'itphx',
+        description: 'Qwen', enabled: true, isDefault: true,
+        contextWindow: 32_768, contextSource: 'api', maxOutputTokens: 4096,
+        inputPrice: 1.5, outputPrice: 2.5, cacheReadPrice: 0.5, cacheWritePrice: 1,
+      },
+      {
+        id: 'ollama/llama3', name: 'llama3', provider: 'ollama',
+        description: '', enabled: false, isDefault: false,
+        contextWindow: undefined, contextSource: undefined, maxOutputTokens: undefined,
+        inputPrice: undefined, outputPrice: undefined, cacheReadPrice: undefined, cacheWritePrice: undefined,
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://backend.test/api/v2/models',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('listProviders возвращает провайдеров сервера и шлёт Bearer', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      providers: [
+        { name: 'itphx', type: 'openai', url: 'http://ai.itphx.ru/v1', model: 'local.qwen3:14b', enabled: true, is_default: true },
+        { name: 'ollama', type: 'ollama', url: 'http://owu.itphx.loc:11434', model: '', enabled: true, is_default: false },
+        { name: '__service', type: 'openai', url: '', model: '', enabled: true, is_default: false },
+      ],
+      default_provider: 'itphx',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const providers = await makeClient().listProviders();
+    expect(providers).toEqual([
+      {
+        name: 'itphx', type: 'openai', url: 'http://ai.itphx.ru/v1', model: 'local.qwen3:14b',
+        enabled: true, is_default: true,
+      },
+      {
+        name: 'ollama', type: 'ollama', url: 'http://owu.itphx.loc:11434', model: '',
+        enabled: true, is_default: false,
+      },
+      {
+        name: '__service', type: 'openai', url: '', model: '', enabled: true, is_default: false,
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://backend.test/api/v2/providers',
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
+      }),
+    );
+  });
+
   it('isReachable: /health ok → true', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ status: 'healthy' })));
     expect(await makeClient().isReachable()).toBe(true);

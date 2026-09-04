@@ -61,6 +61,9 @@ const chatCompletionsSchema = z.object({
   stream: z.boolean().optional(),
   tools: z.array(z.record(z.unknown())).optional(),
   session_id: z.string().optional(),
+  // Имя серверного провайдера (шлют remote-зеркала RemoteProvider в гибриде).
+  // Опционально — старые клиенты без поля работают как раньше (резолв по модели).
+  provider: z.string().optional(),
 });
 type ChatCompletionsBody = z.infer<typeof chatCompletionsSchema>;
 
@@ -189,6 +192,25 @@ export function createLlmRoutes(kit: AuthKit, deps: LlmRoutesDeps): Hono {
     }
     if (providerConfig.enabled === false) {
       return c.json({ error: { code: 'PROVIDER_DISABLED', message: `Провайдер отключён: ${providerName}` } }, 400);
+    }
+
+    // Явный provider в теле (шлют remote-зеркала): имя обязано существовать и быть
+    // включённым, иначе модель неоднозначна. Совпадение с providerName (провайдером
+    // модели) — обычный случай зеркал: сервер исполняет своего провайдера.
+    if (body.provider && body.provider !== providerName) {
+      const explicitProvider = deps.providerLoader(body.provider);
+      if (!explicitProvider || !explicitProvider.baseUrl) {
+        return c.json({ error: { code: 'PROVIDER_NOT_FOUND', message: `Провайдер не найден: ${body.provider}` } }, 502);
+      }
+      if (explicitProvider.enabled === false) {
+        return c.json({ error: { code: 'PROVIDER_DISABLED', message: `Провайдер отключён: ${body.provider}` } }, 400);
+      }
+      return c.json({
+        error: {
+          code: 'MODEL_MISMATCH',
+          message: `Провайдер ${body.provider} не соответствует модели ${body.model} (принадлежит провайдеру ${providerName})`,
+        },
+      }, 400);
     }
 
     // 2. Создаём провайдер (модель из ModelConfig.name — реальное имя для LLM API).

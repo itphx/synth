@@ -14,6 +14,7 @@ vi.mock('@/hooks/useNotification', () => ({
 
 import { createDispatcher } from './transportStore'
 import { useChatStore } from './chatStore'
+import { useSessionsStore } from './sessionsStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { notifyMessage } from '@/hooks/useNotification'
 import type { WSEvent } from '@/lib/api/transport'
@@ -196,5 +197,38 @@ describe('transportStore dispatcher: stream.error → финальная оши�
 
     dispatch(makeEvent('stream.done', 's1', { stream_id: 'st2', content: '' }))
     expect(useChatStore.getState().finalErrorBySession['s1']).toBeNull()
+  })
+})
+
+describe('transportStore dispatcher: session.created origin (гибрид)', () => {
+  beforeEach(() => {
+    useSessionsStore.setState({ sessions: [] })
+  })
+
+  it('локальное событие без origin → в стор попадает origin local', () => {
+    dispatch(makeEvent('session.created', 'ses-local', {
+      id: 'ses-local',
+      name: 'Локальная',
+    }))
+    const created = useSessionsStore.getState().sessions.find((s) => s.id === 'ses-local')
+    expect(created?.origin).toBe('local')
+  })
+
+  it('remote-событие моста (id remote:<...>, без origin) → в стор origin remote', () => {
+    dispatch(makeEvent('session.created', 'remote:ses-1', {
+      id: 'remote:ses-1',
+      name: 'Удалённая',
+    }))
+    const created = useSessionsStore.getState().sessions.find((s) => s.id === 'remote:ses-1')
+    expect(created?.origin).toBe('remote')
+  })
+
+  it('origin из payload не перетирается', () => {
+    dispatch(makeEvent('session.created', 'remote:ses-2', {
+      id: 'remote:ses-2',
+      origin: 'remote',
+    }))
+    const created = useSessionsStore.getState().sessions.find((s) => s.id === 'remote:ses-2')
+    expect(created?.origin).toBe('remote')
   })
 })

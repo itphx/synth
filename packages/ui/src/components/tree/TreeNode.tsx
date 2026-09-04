@@ -22,15 +22,36 @@ function ActionButton({ action, alwaysVisible }: { action: TreeAction; alwaysVis
       : 'text-muted-foreground hover:text-foreground'
 
   const visibilityClass = alwaysVisible ? '' : 'hidden group-hover:inline-flex'
+  const buttonClass = cn(
+    'h-5 w-5 items-center justify-center rounded transition-colors',
+    visibilityClass,
+    variantClass,
+  )
+
+  // Действие с пунктами меню (гибрид: «создать локально / на сервере») — кнопка
+  // становится триггером контекстного меню, а не мгновенным действием.
+  if (action.menuItems && action.menuItems.length > 0) {
+    return (
+      <ContextMenu
+        trigger={
+          <button
+            onClick={(e) => e.stopPropagation()}
+            className={buttonClass}
+            title={action.title}
+          >
+            <Icon name={action.icon} className="h-3.5 w-3.5" />
+          </button>
+        }
+        items={action.menuItems}
+        align="end"
+      />
+    )
+  }
 
   return (
     <button
-      onClick={(e) => { e.stopPropagation(); action.onClick() }}
-      className={cn(
-        'h-5 w-5 items-center justify-center rounded transition-colors',
-        visibilityClass,
-        variantClass,
-      )}
+      onClick={(e) => { e.stopPropagation(); action.onClick?.() }}
+      className={buttonClass}
       title={action.title}
     >
       <Icon name={action.icon} className="h-3.5 w-3.5" />
