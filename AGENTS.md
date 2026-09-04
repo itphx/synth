@@ -319,8 +319,8 @@ core и поле скрыто). Никакого «входа через бра�
 в core остаются, но из UI не вызываются).
 
 OIDC issuer/client_id локальный core узнаёт **с сервера** (`GET {server}/auth/oidc-meta`),
-с fallback на флаги `--oidc-issuer`/`--oidc-client-id` для серверов без эндпоинта
-(боевой K3s пока требует передеплоя, чтобы отдавать `/auth/oidc-meta`).
+с fallback на флаги `--oidc-issuer`/`--oidc-client-id` для серверов без эндпоинта.
+Эндпоинт публичный, отдаёт только issuer + public client_id (`synth-cli`), без секрета.
 
 ### Включение
 
@@ -431,6 +431,7 @@ synth serve --oidc-issuer https://keycloak.itphx.loc/realms/synth \
 | AD-040 | Сессии без проекта: контекст, подсказка, перенос между проектами ✅ Реализовано | [ad-040](./docs/arch_decisions/ad-040-sessions-without-project.md) |
 | AD-041 | Единая таксономия ошибок LLM (llm-error.ts) + контракт локализации строк движка (@itphx/synth-shared/i18n) ✅ Реализовано | [ad-041](./docs/arch_decisions/ad-041-llm-error-taxonomy.md) |
 | AD-042 | Гибридный режим: локальный core + централизованный сервер (агрегация миров, LLM Proxy, RemoteEventBridge, publish/fork) ✅ Реализовано | [ad-042](./docs/arch_decisions/ad-042-hybrid-mode.md) |
+| AD-043 | Единая идентичность гибрида: вход в UI без Keycloak (runtime-подключение, ROPC, дискавери oidc-meta, единая личность) ✅ Реализовано | [ad-043](./docs/arch_decisions/ad-043-unified-identity-login.md) |
 
 > **Перенос AD:** реализованные AD переносятся в `docs/arch_decisions/` (в AGENTS.md остаётся краткая строка + ссылка). Нереализованные остаются в AGENTS.md до реализации.
 
@@ -823,8 +824,13 @@ git pre-commit hook (уровень git, обойти нельзя)
 
 ### AD-042: Гибридный режим — локальный core + централизованный сервер ✅ Реализовано
 
-**Кратко:** Локальный core + сервер K3s: агрегация миров remote:<id>, LLM Proxy, device flow, RemoteEventBridge, publish/fork.
+**Кратко:** Локальный core + сервер K3s: агрегация миров remote:<id>, LLM Proxy, RemoteEventBridge, publish/fork (аутентификация/единая личность — AD-043).
 **Подробно:** [docs/arch_decisions/ad-042-hybrid-mode.md](./docs/arch_decisions/ad-042-hybrid-mode.md)
+
+### AD-043: Единая идентичность гибрида — вход в UI без Keycloak-ритуала ✅ Реализовано
+
+**Кратко:** Runtime-подключение (RemoteConnection) + вход в UI по логину/паролю (ROPC «за кулисами»), дискавери IdP с сервера (`GET /auth/oidc-meta`), единая личность (cookie v2, роли/профиль/админка — с сервера), старт без device flow; public-клиент `synth-cli`.
+**Подробно:** [docs/arch_decisions/ad-043-unified-identity-login.md](./docs/arch_decisions/ad-043-unified-identity-login.md)
 
 ## Аутентификация
 
