@@ -135,3 +135,13 @@
   - UI: synthApi.publishProject/forkRemoteProject; projectsStore — экшены + loadProjects/loadSessions + проброс ошибок; LeftPanel — пункты «Опубликовать на сервер»/«Склонировать локально» в меню проекта (только hybridOnline); диалоги `projects/PublishProjectDialog.tsx` (создать новый / обновить существующий remote-проект из списка, предупреждение о перезаписи, занятость, toast) и `ForkProjectDialog.tsx` (имя копии, коллизия локального имени блокирует); i18n ru/en.
 - **Проверка:** pnpm typecheck чисто; pnpm lint 0 errors; pnpm test — shared 72 / ui 97 / core 85 файлов/1180 (+12: project-transfer.test.ts 10 + app.remote.test.ts +2) / backend 229 (зелёные); pnpm build успешно.
 - **Заметки:** живой smoke publish/fork в UI/через curl с реальным backend не выполнялся (нет окружения/credentials) — рекомендуется при следующей сессии с dev-окружением. HTTP-сценарий в hybrid.integration.test.ts — опционально. Все 3 задачи пула (фикс провайдера, селектор «где создать», UI-перенос проектов) реализованы, изменения в рабочем дереве не закоммичены.
+
+## 2026-09-05 — deploy: релиз 0.4.3 на K3s (3 задачи гибрида)
+- **Задача:** «Закоммить наработки, собери и разверни на K3s.»
+- **Тип:** deploy/ops
+- **Исполнитель:** @orchestrator
+- **Результат:** PASS
+- **Коммиты:** synth — 7117f55 (feat: гибрид — зеркалирование провайдеров, выбор мира создания сессий, перенос проектов, v0.4.3; один коммит — правки задач переплетены в общих файлах) + tag v0.4.3 (локально, push не делали по решению пользователя); synth-deploy — 17ca774 (chore: deploy 0.4.3 — теги backend/ui), запушен на git.itphx.loc → Fleet.
+- **Что сделано:** version-bump 0.4.3 (version.ts + 6 package.json); pnpm build всех пакетов — успешно; docker build+push git.itphx.ru/itphx/synth-{backend,ui}:0.4.3 (Dockerfile.backend/ui из исходников); values.yaml в synth-deploy → теги 0.4.3, push main.
+- **Проверка (живой K3s):** rollout backend/ui успешен; поды на образах 0.4.3 (1/1 Running); /api/v2/health → healthy; /auth/oidc-meta → {enabled, issuer keycloak/synth, clientId synth-cli}; ошибок в логах backend нет. Известные pre-existing мелочи: /health отдаёт version 0.1.0 (hardcoded, косметика); Fleet bundle synth Ready=False из-за ingressroute/middleware synth-https-redirect/synth-redirect-to-https «not owned by us» (ресурсы созданы не Fleet) — на rollout деплойментов не влияет.
+- **Заметки:** push synth (ветка feat/hybrid-mode, тег v0.4.3) в gitverse origin НЕ выполнялся (решение пользователя — push только synth-deploy). Живой smoke новых фич (отправка в локальной сессии гибрида, выбор мира, publish/fork в UI) — при следующей сессии с dev-окружением.
