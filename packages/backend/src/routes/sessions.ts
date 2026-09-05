@@ -6,6 +6,7 @@ import type { QueueProcessorManager } from '@itphx/synth-core';
 import type { ChatOrchestrator } from '@itphx/synth-core';
 import type { ContextOptimizer } from '@itphx/synth-core';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema } from '@itphx/synth-shared';
+import type { Message, Session, SessionSettings } from '@itphx/synth-shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError } from '@itphx/synth-core';
 import { serializeSession } from '../lib/serialize.js';
@@ -204,6 +205,103 @@ export function createSessionRoutes(
   app.get('/:id/tree', kit.requireAuth, async (c) => {
     const tree = await sessionManager.getSessionTree(c.req.param('id'));
     return c.json(tree);
+  });
+
+  // GET /api/v2/sessions/:id/export — полный экспорт сессии для переноса между
+  // мирами (publish/fork). Внутренний формат: объект Session (camelCase) из
+  // SessionManager — история сообщений, todos, настройки, заметки, ссылки,
+  // чекпоинты, план-флаг и карта обфускации. Не публичный DTO.
+  app.get('/:id/export', kit.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+    return c.json(session);
+  });
+
+  // POST /api/v2/sessions/import — создать сессию из экспорта другой сессии
+  // (перенос истории между мирами). Тело: объект экспорта + import.project_id
+  // (целевой проект; если не задан — берётся из экспорта). LLM не запускается.
+  app.post('/import', kit.requireAuth, async (c) => {
+    const user = (await kit.getCurrentUser(c))!;
+    const body = await c.req.json().catch(() => ({}));
+
+    const targetProjectId = body.import?.project_id
+      ?? body.import?.projectId
+      ?? body.project_id
+      ?? body.projectId
+      ?? undefined;
+
+    if (targetProjectId) {
+      if (!projectStore) {
+        return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Хранилище проектов недоступно' } }, 500);
+      }
+      const existing = await projectStore.load(targetProjectId);
+      if (!existing) {
+        return c.json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Проект не найден' } }, 400);
+      }
+    }
+
+    const session = await sessionManager.createSession({
+      title: typeof body.title === 'string' ? body.title : undefined,
+      projectId: targetProjectId,
+      engine: typeof body.engine === 'string' ? (body.engine as Session['engine']) : undefined,
+      sessionOrigin: (body.session_origin ?? body.sessionOrigin) as Session['sessionOrigin'] | undefined,
+      settings: (body.settings ?? {}) as Partial<SessionSettings>,
+      userId: user.id,
+      ownerId: user.id,
+    });
+
+    // Переносим историю и состояние из экспорта.
+    // parentId: publish переписывает ссылки на новые remote-id до импорта — сохраняем.
+    session.parentId = (body.parent_id ?? body.parentId) as string | undefined;
+    const messages: Message[] = Array.isArray(body.messages) ? body.messages as Message[] : [];
+    session.messages = messages.map((m) => ({ ...structuredClone(m), seq: 0 }));
+    session.messages.forEach((m, i) => { m.seq = i + 1; });
+    // pendingMessages — runtime-очередь, переносить бессмысленно.
+    session.pendingMessages = [];
+    session.todos = (body.todos ?? undefined) as Session['todos'];
+    session.stickyNotes = Array.isArray(body.sticky_notes ?? body.stickyNotes)
+      ? (body.sticky_notes ?? body.stickyNotes) as Session['stickyNotes']
+      : [];
+    session.references = Array.isArray(body.references) ? body.references as Session['references'] : [];
+    session.checkpoints = Array.isArray(body.checkpoints) ? body.checkpoints as Session['checkpoints'] : [];
+    session.mode = (body.mode ?? undefined) as Session['mode'];
+    session.planApproved = body.plan_approved ?? body.planApproved ?? false;
+    session.branchPoint = body.branch_point ?? body.branchPoint;
+    session.obfuscationMap = (body.obfuscation_map ?? body.obfuscationMap) as Session['obfuscationMap'];
+    session.createdAt = typeof (body.created_at ?? body.createdAt) === 'string'
+      ? (body.created_at ?? body.createdAt)
+      : session.createdAt;
+    session.updatedAt = nowISO();
+
+    // Сбрасываем runtime-состояние: блокировки/стримы с другого хоста не переносим.
+    session.status = {};
+    session.currentStream = undefined;
+    session.summarizationPending = false;
+    session.canSummarize = false;
+
+    const num = (v: unknown, def = 0): number => (typeof v === 'number' ? v : def);
+    session.inputTokens = num(body.input_tokens ?? body.inputTokens);
+    session.outputTokens = num(body.output_tokens ?? body.outputTokens);
+    session.totalTokens = num(body.total_tokens ?? body.totalTokens);
+    session.cacheReadTokens = num(body.cache_read_tokens ?? body.cacheReadTokens);
+    session.cacheWriteTokens = num(body.cache_write_tokens ?? body.cacheWriteTokens);
+    session.reasoningTokens = num(body.reasoning_tokens ?? body.reasoningTokens);
+    session.inputCost = num(body.input_cost ?? body.inputCost);
+    session.outputCost = num(body.output_cost ?? body.outputCost);
+    session.cacheReadCost = num(body.cache_read_cost ?? body.cacheReadCost);
+    session.cacheWriteCost = num(body.cache_write_cost ?? body.cacheWriteCost);
+
+    await sessionManager.saveSession(session);
+
+    // Автоматически подписываем активных клиентов на новую сессию
+    eventHub.subscribeToSession(user.id, session.id).catch((e: unknown) =>
+      console.warn('subscribeToSession failed:', e),
+    );
+    eventBus.publish(session.id, 'session.created', serializeSession(session, { agentRegistry }));
+
+    return c.json(serializeSession(session, { agentRegistry }), 201);
   });
 
   // GET /api/v2/sessions/:id/status

@@ -158,9 +158,47 @@ security:
     mode: "flag"                  # flag | sanitize | block
   protectedPaths:
     enabled: true
+
+remote:                           # гибридный режим: локальный core + удалённый backend
+  enabled: false
+  backendUrl: "https://synth.k3s.itphx.loc"
+  auth:
+    type: device                  # device | api_key
+    apiKey: ""
+    issuer: "https://keycloak.itphx.loc/realms/synth"
+    clientId: "synth"
+  llm: "server"                   # server | local (по умолчанию server — централизация)
+  worlds: { local: true, remote: true }
+  credentialsPath: ""             # пусто → ~/.config/synth/credentials.json
+  timeoutMs: 15000
 ```
 
 Полный список полей (включая `logging`, `tsm`, `context`, `summarization`, `mcp`, `auth.oidc`) — в `packages/shared/src/config/types.ts`.
+
+### Гибридный режим (remote)
+
+Секция `remote` включает гибридный режим: локальный `synth serve` подключается
+к удалённому backend (например, корпоративному K3s) и объединяет локальные и
+удалённые проекты/сессии в одном UI, а LLM-запросы централизуются на сервере.
+Подробности — [HYBRID.md](HYBRID.md).
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `enabled` | Включить гибридный режим | `false` |
+| `backendUrl` | Базовый URL удалённого backend | `""` |
+| `auth.type` | Способ аутентификации: `device` (OIDC device flow) или `api_key` | `device` |
+| `auth.apiKey` | API-ключ для `auth.type: api_key` | `""` |
+| `auth.issuer` | OIDC issuer (Keycloak realm) для device flow | `""` |
+| `auth.clientId` | OIDC `client_id` (public client) для device flow | `""` |
+| `llm` | Куда идут LLM-запросы локальных сессий: `server` (централизация) или `local` | `server` |
+| `worlds` | Какие миры доступны: `{ local, remote }` | `{ local: true, remote: true }` |
+| `credentialsPath` | Путь к файлу credentials; пусто → `~/.config/synth/credentials.json` (0600) | `""` |
+| `timeoutMs` | Таймаут запросов к удалённому backend | `15000` |
+
+**Env-переменные:** отдельных `SYNTH_REMOTE_*` переменных нет — секция задаётся
+в `config.yaml` или CLI-флагами (`synth serve --connect <url> --oidc-issuer ...
+--oidc-client-id ... --token ...`, `synth connect|disconnect --backend <url>`,
+`synth project publish|fork <id> --remote <url>`).
 
 ## Первый запуск
 

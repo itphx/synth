@@ -68,8 +68,9 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
     },
   })
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: 'Request failed' }))
-    throw new Error(error.detail || `HTTP ${response.status}`)
+    const body = await response.json().catch(() => ({}))
+    const error = body as { error?: { message?: string }; detail?: string }
+    throw new Error(error.error?.message || error.detail || `HTTP ${response.status}`)
   }
   return response.json()
 }
@@ -90,10 +91,14 @@ export const api = {
     })
   },
 
-  async loginWithPassword(username: string, password: string): Promise<SPALoginResponse> {
+  async loginWithPassword(
+    server: string | undefined,
+    username: string,
+    password: string,
+  ): Promise<SPALoginResponse> {
     return fetchJSON<SPALoginResponse>(`${BASE_URL}/login`, {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ server: server || undefined, username, password }),
     })
   },
 

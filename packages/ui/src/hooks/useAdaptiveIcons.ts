@@ -22,6 +22,9 @@ export function useAdaptiveIcons(containerRef: RefObject<HTMLElement | null>): b
   // Минимальная ширина контейнера, при которой все подписи влезают без обрезки.
   // Не пересчитывается в iconsOnly (span скрыты, scrollWidth=0).
   const textFitsWidthRef = useRef(0)
+  // Ширина контейнера в момент включения iconsOnly — якорь для порога возврата,
+  // пока textFitsWidthRef не измерен (обрезка была с первого замера).
+  const iconsOnlyWidthRef = useRef(0)
   const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -42,6 +45,33 @@ export function useAdaptiveIcons(containerRef: RefObject<HTMLElement | null>): b
       }
     }
 
+    // Порог возврата подписей: ширина, при которой текст влезал (textFitsWidthRef),
+    // либо — если она ещё не измерена — ширина контейнера в момент включения iconsOnly.
+    const returnThreshold = () => {
+      const baseWidth = textFitsWidthRef.current > 0 ? textFitsWidthRef.current : iconsOnlyWidthRef.current
+      return baseWidth > 0 ? baseWidth + RETURN_MARGIN_PX : 0
+    }
+
+    const enterIconsOnly = () => {
+      // Панель могла закрыться (ширина схлопнута) или расшириться — проверки
+      // повторяются перед включением.
+      if (container.clientWidth < MIN_CONTAINER_WIDTH_PX || iconsOnlyRef.current || !hasOverflow()) return
+      if (textFitsWidthRef.current === 0) {
+        iconsOnlyWidthRef.current = container.clientWidth
+      }
+      iconsOnlyRef.current = true
+      setIconsOnly(true)
+    }
+
+    const exitIconsOnly = () => {
+      if (container.clientWidth < MIN_CONTAINER_WIDTH_PX || !iconsOnlyRef.current) return
+      const threshold = returnThreshold()
+      if (threshold > 0 && container.clientWidth > threshold) {
+        iconsOnlyRef.current = false
+        setIconsOnly(false)
+      }
+    }
+
     const check = () => {
       const containerWidth = container.clientWidth
       // Панель скрыта (ширина схлопнута до padding'а) — измерять нечего, иначе
@@ -56,32 +86,28 @@ export function useAdaptiveIcons(containerRef: RefObject<HTMLElement | null>): b
         if (!hasOverflow()) {
           textFitsWidthRef.current = Math.min(textFitsWidthRef.current || Infinity, containerWidth)
           cancelPending()
-        } else {
+        } else if (pendingTimerRef.current === null) {
           // Обрезка есть: переключаемся только при стабильной обрезке, иначе анимация
           // открытия/быстрые ресайзы вызывали бы мигание.
-          if (pendingTimerRef.current === null) {
-            pendingTimerRef.current = setTimeout(() => {
-              pendingTimerRef.current = null
-              // Панель могла закрыться (ширина схлопнута) — тогда не включаем iconsOnly.
-              // Проверка обрезки повторяется перед включением.
-              if (container.clientWidth >= MIN_CONTAINER_WIDTH_PX && !iconsOnlyRef.current && hasOverflow()) {
-                iconsOnlyRef.current = true
-                setIconsOnly(true)
-              }
-            }, TRIGGER_DEBOUNCE_MS)
-          }
+          pendingTimerRef.current = setTimeout(() => {
+            pendingTimerRef.current = null
+            enterIconsOnly()
+          }, TRIGGER_DEBOUNCE_MS)
         }
       } else {
         // В iconsOnly НЕ пересчитываем textFitsWidthRef (span скрыты, scrollWidth=0) —
-        // возвращаем подписи только когда контейнер стал заметно шире той ширины,
-        // при которой текст влезал.
-        const threshold = textFitsWidthRef.current > 0
-          ? textFitsWidthRef.current + RETURN_MARGIN_PX
-          : containerWidth * 0.9 // fallback: ref ещё не измерен (обрезка была с первого замера)
-        if (containerWidth > threshold) {
+        // подписи возвращаем только при стабильном превышении порога возврата
+        // (симметрично включению, с тем же debounce).
+        const threshold = returnThreshold()
+        if (threshold > 0 && containerWidth > threshold) {
+          if (pendingTimerRef.current === null) {
+            pendingTimerRef.current = setTimeout(() => {
+              pendingTimerRef.current = null
+              exitIconsOnly()
+            }, TRIGGER_DEBOUNCE_MS)
+          }
+        } else {
           cancelPending()
-          iconsOnlyRef.current = false
-          setIconsOnly(false)
         }
       }
     }

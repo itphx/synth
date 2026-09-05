@@ -15,6 +15,7 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
   const agent = agentId && opts?.agentRegistry ? opts.agentRegistry.get(agentId) : undefined;
   return {
     id: session.id,
+    origin: 'local' as const,
     name: session.title || null,
     parent_id: session.parentId || null,
     branch_point: session.branchPoint || null,
@@ -121,6 +122,7 @@ export function serializeMessage(msg: Message, index: number) {
 export function serializeProject(project: Project) {
   return {
     id: project.id,
+    origin: 'local' as const,
     name: project.name,
     owner_id: project.ownerId,
     members: project.members,

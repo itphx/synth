@@ -13,6 +13,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { QuickSettingsPopup } from '../auth/QuickSettingsPopup'
 import { NotificationPopup } from './NotificationPopup'
 import { GlobalTransportIndicator } from './GlobalTransportIndicator'
+import { HybridStatusIndicator } from './HybridStatusIndicator'
 
 interface HeaderProps {
   onSettingsClick: () => void
@@ -520,6 +521,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
 
       <div className="flex items-center gap-2 shrink-0">
         <GlobalTransportIndicator />
+        <HybridStatusIndicator />
         <NotificationPopup />
         <QuickSettingsPopup onSettingsClick={onSettingsClick} />
 

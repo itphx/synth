@@ -14,6 +14,7 @@ import { GitTabToolbar } from './components/panels/GitTabToolbar'
 import { CenterPanel } from './components/layout/CenterPanel'
 import { BackendConnection } from './components/layout/BackendConnection'
 import { UpdateNotification } from './components/layout/UpdateNotification'
+import { HybridOfflineBanner } from './components/layout/HybridOfflineBanner'
 import { SettingsModal } from './components/settings/SettingsModal'
 import { LogsModal } from './components/logviewer/LogsModal'
 import { AuthGate } from './components/auth/AuthGate'
@@ -88,6 +89,7 @@ function App() {
 
           <div className="flex flex-col flex-1 min-w-0 relative">
             <Header onSettingsClick={() => { setSettingsPage('profile'); setSettingsDialogOpen(true) }} />
+            <HybridOfflineBanner />
             <CenterPanel />
             {forwardMode.active && (
               <div

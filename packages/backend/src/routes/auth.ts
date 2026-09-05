@@ -103,6 +103,20 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
     });
   });
 
+  // GET /auth/oidc-meta — публичные OIDC-параметры для локальных клиентов (дискавери).
+  // Локальный core по адресу сервера узнаёт issuer и public client_id (для ROPC/device flow).
+  // Секрет клиента НЕ отдаётся.
+  app.get('/oidc-meta', (c) => {
+    if (!config.oidc?.enabled) {
+      return c.json({ enabled: false });
+    }
+    return c.json({
+      enabled: true,
+      issuer: config.oidc.issuer,
+      clientId: config.oidc.cliClientId || 'synth-cli',
+    });
+  });
+
   // GET /auth/session — проверка cookie-сессии
   app.get('/session', async (c) => {
     const user = await kit.getCurrentUser(c);

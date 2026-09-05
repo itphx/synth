@@ -3,18 +3,61 @@ import type { AuthKit } from '../../auth/local.js';
 import { JsonStore } from '../../storage/json-store.js';
 import type { ModelConfig, ProviderConfig } from '@itphx/synth-shared';
 
+export interface ModelRoutesOptions {
+  /** Виртуальные модели (например, remote-модели через LLM Proxy) — добавляются к store-моделям. */
+  extraModels?: ModelConfig[] | (() => ModelConfig[]);
+  /** Виртуальные провайдеры (например, remote-зеркала серверных провайдеров) — для группировки extraModels. */
+  extraProviders?: ProviderConfig[] | (() => ProviderConfig[]);
+  /** Показывать только extraModels (политика «все LLM — через remote»). */
+  onlyRemoteModels?: boolean | (() => boolean);
+}
+
+/** Гибрид подключается в рантайме — опции могут быть геттерами текущего состояния. */
+function resolveOpt<T>(value: T | (() => T) | undefined, fallback: T): T {
+  if (typeof value === 'function') return (value as () => T)();
+  return value ?? fallback;
+}
+
 export function createModelRoutes(
   auth: AuthKit,
   modelStore: JsonStore<ModelConfig>,
   providerStore: JsonStore<ProviderConfig>,
+  modelCache: Map<string, ModelConfig>,
+  opts?: ModelRoutesOptions,
 ): Hono {
   const app = new Hono();
+  const extraModels = opts?.extraModels ?? [];
+  const extraProviders = opts?.extraProviders ?? [];
+  const onlyRemoteModels = opts?.onlyRemoteModels ?? false;
 
   app.get('/', auth.requireAuth, async (c) => {
     const filterProvider = c.req.query('provider');
     const onlyEnabled = c.req.query('enabled_only') === 'true' || c.req.query('enabled_only') === '1';
 
-    const [models, providers] = await Promise.all([modelStore.list(), providerStore.list()]);
+    // Гибрид runtime: extra-модели/провайдеры читаются на каждый запрос.
+    const effExtraModels = resolveOpt<ModelConfig[]>(extraModels, []);
+    const effExtraProviders = resolveOpt<ProviderConfig[]>(extraProviders, []);
+    const effOnlyRemoteModels = resolveOpt<boolean>(onlyRemoteModels, false);
+
+    const [storeModels, storeProviders] = await Promise.all([modelStore.list(), providerStore.list()]);
+
+    // Слияние store + extra (без дубликатов по id). При onlyRemoteModels
+    // локальные модели скрываются — остаются только remote.
+    const models: ModelConfig[] = [];
+    const seenModels = new Set<string>();
+    for (const m of effOnlyRemoteModels ? effExtraModels : [...storeModels, ...effExtraModels]) {
+      if (seenModels.has(m.id)) continue;
+      seenModels.add(m.id);
+      models.push(m);
+    }
+
+    const providers: ProviderConfig[] = [];
+    const seenProviders = new Set<string>();
+    for (const p of effOnlyRemoteModels ? effExtraProviders : [...storeProviders, ...effExtraProviders]) {
+      if (seenProviders.has(p.name)) continue;
+      seenProviders.add(p.name);
+      providers.push(p);
+    }
 
     const providerMap = new Map<string, ProviderConfig>();
     for (const p of providers) {
@@ -102,6 +145,7 @@ export function createModelRoutes(
     };
 
     await modelStore.save(modelId, model);
+    modelCache.set(modelId, model);
     return c.json(model, existing ? 200 : 201);
   });
 
@@ -111,6 +155,7 @@ export function createModelRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: 'Модель не найдена' } }, 404);
     }
     await modelStore.delete(id);
+    modelCache.delete(id);
     return c.body(null, 204);
   });
 

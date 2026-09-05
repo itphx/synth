@@ -17,13 +17,21 @@ import {
 import type { SummarizationConfig } from '@itphx/synth-shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } from '@itphx/synth-shared';
 import { createLocalAuth } from '../auth/local.js';
+import { RemoteConnection } from '../remote/connection.js';
+import type { RemoteUser } from '../remote/types.js';
+import { RemoteError } from '../remote/types.js';
+import { RemoteEventBridge } from '../remote/event-bridge.js';
+import { isRemoteRef, toLocalId } from '../remote/aggregate.js';
+import { setRemoteTokenProvider, removeRemoteTokenProvider } from '../providers/remote.js';
 import { JsonStore } from '../storage/json-store.js';
 import { ProjectStore } from '../storage/project-store.js';
 import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig } from '../storage/runtime-settings.js';
 import { createHealthRoutes } from './routes/health.js';
+import { createHybridRoutes } from './routes/hybrid.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createSessionRoutes } from './routes/sessions.js';
 import { createProjectRoutes } from './routes/projects.js';
+import { createProjectTransferRoutes } from './routes/project-transfer.js';
 import { createProviderRoutes } from './routes/providers.js';
 import { createModelRoutes } from './routes/models.js';
 import { createAgentRoutes } from './routes/agents.js';
@@ -33,6 +41,7 @@ import { createUpdateRoutes } from './routes/updates.js';
 import { createMessageRoutes } from './routes/messages.js';
 import { createSettingsRoutes } from './routes/settings.js';
 import { createMcpRoutes } from './routes/mcp.js';
+import { createRemoteProxyMiddleware } from './proxy.js';
 
 export interface StandaloneConfig {
   port: number;
@@ -53,7 +62,40 @@ export interface StandaloneConfig {
   gatewayConfig?: LLMGatewayConfig;
   /** Конфигурация MCP-серверов из config.yaml mcp.servers (для probe и загрузки тулов). */
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * Дефолтный адрес удалённого backend (гибрид, `serve --connect`/env/конфиг).
+   * Нужен для авто-логина (GET /auth/status) и POST /auth/login без поля server.
+   * Сам сервер при этом стартует «холодным»: подключение происходит в рантайме.
+   */
+  defaultBackendUrl?: string;
+  /** API-ключ к удалённому backend (`serve --token`) — машинное подключение при старте. */
+  defaultToken?: string;
+  /**
+   * Параметры remote-аутентификации (гибрид): нужны RemoteConnection как
+   * fallback OIDC issuer/client_id (дискавери с сервера имеет приоритет) и
+   * путь к credentials. backendUrl больше НЕ передаётся — адрес сервера в
+   * defaultBackendUrl.
+   */
+  remoteAuth?: {
+    issuer?: string;
+    clientId?: string;
+    credentialsPath?: string;
+  };
+  /** Куда идут LLM-запросы локальных сессий: server (централизация) | local | auto. */
+  remoteLlm?: 'server' | 'local' | 'auto';
+  /** Таймаут запросов к удалённому backend (мс). */
+  remoteTimeoutMs?: number;
+  /** Путь к файлу credentials (~/.config/synth/credentials.json по умолчанию). */
+  remoteCredentialsPath?: string;
 }
+
+/**
+ * @deprecated Гибрид переведён на runtime-подключение через RemoteConnection
+ * (поле defaultBackendUrl + методы connect* на возвращаемом app-хэндле).
+ * Статические remoteClient/remoteProvider/remoteGetToken/remoteEventBridge/
+ * remoteBlockLocalProviders удалены — при необходимости подключите приложение
+ * через connectRemoteWithApiKey/connectRemoteFromSaved.
+ */
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -164,6 +206,41 @@ async function syncProvidersFromEnv(
   }
 }
 
+/** Описание одного remote-зеркала серверного провайдера для инъекции в кэши. */
+export interface RemoteProviderSpec {
+  /** Конфиг провайдера: { name: 'itphx', type: 'remote', baseUrl: backendUrl, apiKey: '', enabled: true }. */
+  provider: ProviderConfig;
+  /** Модели, которые сервер отдаёт для этого провайдера (смерживаются в models-роут). */
+  models?: ModelConfig[];
+  /** Поставщик токена (обычно RemoteConnection.getToken) — автообновление в рантайме. */
+  getToken?: () => Promise<string | null>;
+}
+
+/**
+ * Инъекция одного remote-зеркала в кэши (гибрид: зеркалирование серверных
+ * провайдеров). Добавляет провайдера в providerCache и его модели в modelCache —
+ * только in-memory, в JsonStore не пишется. Регистрирует поставщика токена для
+ * RemoteProvider, создаваемых через ProviderFactory. Возвращает имя
+ * remote-провайдера (для политики blockLocalProviders) или undefined.
+ */
+export function injectRemoteProvider(
+  providerCache: Map<string, ProviderConfig>,
+  modelCache: Map<string, ModelConfig>,
+  remoteProvider?: RemoteProviderSpec,
+): string | undefined {
+  if (!remoteProvider) return undefined;
+
+  const rp = remoteProvider.provider;
+  providerCache.set(rp.name, { ...rp, enabled: rp.enabled ?? true });
+  if (remoteProvider.getToken) {
+    setRemoteTokenProvider(rp.name, remoteProvider.getToken);
+  }
+  for (const m of remoteProvider.models ?? []) {
+    modelCache.set(m.id, m);
+  }
+  return rp.name;
+}
+
 export async function createStandaloneApp(config: StandaloneConfig) {
   const app = new Hono();
   const auth = createLocalAuth({ apiKey: config.apiKey });
@@ -174,17 +251,233 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     credentials: true,
   }));
 
+  // Runtime-подключение к удалённому backend (гибрид). Connection создаётся
+  // всегда: без defaultBackendUrl/credentials он остаётся disconnected, а
+  // пользователь логинится в UI (POST /auth/login) в рантайме.
+  const connection = new RemoteConnection({
+    credentialsPath: config.remoteCredentialsPath ?? config.remoteAuth?.credentialsPath,
+    timeoutMs: config.remoteTimeoutMs,
+    defaultIssuer: config.remoteAuth?.issuer,
+    defaultClientId: config.remoteAuth?.clientId,
+  });
+
+  // Текущее активное remote-состояние: зеркала провайдеров/модели/мост задаются
+  // в applyConnected() (после успешного connect*) и сбрасываются в disconnectRemote().
+  // Зеркал несколько — по одному на каждого включённого серверного провайдера.
+  let activeRemoteProviderNames: Set<string> = new Set();
+  let activeRemoteModels: ModelConfig[] = [];
+  let activeBridge: RemoteEventBridge | undefined;
+  /** Политика «все LLM — через сервер»: активна только при подключении И remoteLlm !== 'local'. */
+  let blockLocalProviders = false;
+  // Снапшоты локальных записей providerCache/modelCache, перекрытых зеркалами, —
+  // для восстановления в disconnectRemote (иначе локальные провайдеры/модели с теми
+  // же именами, что и серверные, исчезли бы из in-memory кэшей до рестарта).
+  const providerMirrorSnapshot = new Map<string, ProviderConfig | null>();
+  const modelMirrorSnapshot = new Map<string, ModelConfig | null>();
+
+  // ── Состояние гибрида (для hybrid/status, без auth) ──
+  function getHybridState() {
+    const serverConfigured = !!config.defaultBackendUrl;
+    return {
+      enabled: serverConfigured || connection.connected,
+      connected: connection.connected,
+      backendUrl: connection.backendUrl,
+      user: connection.user,
+      serverConfigured,
+      // Вход на сервер возможен: адрес известен (--connect/env/конфиг), есть
+      // OIDC issuer (--oidc-issuer/--oidc-client-id как fallback дискавери)
+      // или уже есть runtime-подключение.
+      serverLoginAvailable: serverConfigured || !!config.remoteAuth?.issuer || connection.connected,
+    };
+  }
+
+  /**
+   * Откат зеркал: восстановить перекрытые локальные записи из снапшотов и
+   * дерегистрировать токены. Вызывается перед новым подключением (reconnect)
+   * и в disconnectRemote.
+   */
+  function restoreRemoteMirrors(): void {
+    for (const name of activeRemoteProviderNames) {
+      removeRemoteTokenProvider(name);
+    }
+    for (const [name, prev] of providerMirrorSnapshot) {
+      if (prev) providerCache.set(name, prev);
+      else providerCache.delete(name);
+    }
+    for (const [id, prev] of modelMirrorSnapshot) {
+      if (prev) modelCache.set(id, prev);
+      else modelCache.delete(id);
+    }
+    providerMirrorSnapshot.clear();
+    modelMirrorSnapshot.clear();
+    activeRemoteProviderNames.clear();
+    activeRemoteModels = [];
+    blockLocalProviders = false;
+  }
+
+  // ── Подключение: применить состояние после успешного connect* ──
+  async function applyConnected(user: RemoteUser): Promise<RemoteUser> {
+    const client = connection.client;
+    const backendUrl = connection.backendUrl;
+    if (!client || !backendUrl) {
+      throw new RemoteError('Удалённый backend не подключён', 'AUTH');
+    }
+
+    // Reconnect без disconnect: сначала откатываем предыдущие зеркала.
+    restoreRemoteMirrors();
+
+    // Зеркалирование (Задача 1): вместо одного синтетического synth-remote берём
+    // с сервера полный список провайдеров и моделей. Каждый включённый серверный
+    // провайдер зеркалится в providerCache под НАСТОЯЩИМ именем (itphx, ollama, …)
+    // как type:'remote' → локальная сессия резолвит имя через providerLoader и
+    // RemoteProvider уходит на сервер с явным provider в теле LLM Proxy.
+    // Инъекция строго in-memory: в providers/*.json и models/* не пишется.
+    const [rawProviders, rawModels] = await Promise.all([
+      client.listProviders({ timeoutMs: 5000 }).catch(() => []),
+      client.listModels({ timeoutMs: 5000 }).catch(() => []),
+    ]);
+
+    blockLocalProviders = (config.remoteLlm ?? 'server') !== 'local';
+
+    // В remote.llm:local зеркала не должны перекрывать локальных провайдеров —
+    // их имена берём из локального store (провайдеры из env тоже сохранены туда).
+    const localProviderNames = new Set((await providerStore.list()).map((p) => p.name));
+
+    const models = (rawModels ?? [])
+      .map((m) => ({
+        id: m.id,
+        name: m.name,
+        // Провайдер сохраняем как на сервере (без переписывания на synth-remote).
+        provider: m.provider,
+        description: m.description,
+        enabled: m.enabled !== false,
+        isDefault: m.isDefault === true || undefined,
+        contextWindow: m.contextWindow && m.contextWindow > 0 ? m.contextWindow : undefined,
+        contextSource: m.contextSource as ModelConfig['contextSource'],
+        maxOutputTokens: m.maxOutputTokens,
+        inputPrice: m.inputPrice,
+        outputPrice: m.outputPrice,
+        cacheReadPrice: m.cacheReadPrice,
+        cacheWritePrice: m.cacheWritePrice,
+      }))
+      .filter((m) => m.id && m.provider);
+
+    // Имена провайдеров, которые реально зеркалим: включённые и не служебные
+    // (__*), а в remote.llm:local — ещё и не совпадающие с локальными.
+    const mirrorNames = new Set<string>();
+    for (const sp of rawProviders ?? []) {
+      if (!sp.name || sp.name.startsWith('__')) continue;
+      if (sp.enabled === false) continue;
+      if (!blockLocalProviders && localProviderNames.has(sp.name)) continue;
+      mirrorNames.add(sp.name);
+    }
+
+    // Модели зеркалим только тех провайдеров, что реально зеркалим: модель
+    // провайдера без зеркала не резолвится оркестратором (provider_not_found).
+    const modelsToMirror = models.filter((m) => mirrorNames.has(m.provider));
+
+    // Снапшот перекрываемых записей до инъекции.
+    for (const name of mirrorNames) {
+      providerMirrorSnapshot.set(name, providerCache.get(name) ?? null);
+    }
+    for (const m of modelsToMirror) {
+      if (!modelMirrorSnapshot.has(m.id)) {
+        modelMirrorSnapshot.set(m.id, modelCache.get(m.id) ?? null);
+      }
+    }
+
+    // Инъекция зеркал: провайдер → кэш, модели этого провайдера → modelCache,
+    // токен → реестр RemoteProvider (имя зеркала = серверное имя).
+    const getToken = connection.getToken;
+    for (const name of mirrorNames) {
+      const providerInfo = (rawProviders ?? []).find((p) => p.name === name)!;
+      const spec: RemoteProviderSpec = {
+        provider: {
+          name,
+          type: 'remote',
+          baseUrl: backendUrl,
+          apiKey: '',
+          defaultModel: providerInfo.model || undefined,
+          enabled: true,
+        },
+        models: modelsToMirror.filter((m) => m.provider === name),
+        getToken: getToken ?? (async () => null),
+      };
+      injectRemoteProvider(providerCache, modelCache, spec);
+    }
+    activeRemoteProviderNames = mirrorNames;
+    activeRemoteModels = modelsToMirror;
+
+    // Мост событий backend → локальный EventBus: останавливаем старый (если был)
+    // и запускаем новый для текущего клиента.
+    activeBridge?.stop();
+    if (getToken) {
+      activeBridge = new RemoteEventBridge({ client, getToken, eventBus, backendUrl });
+      activeBridge.start();
+    }
+    return user;
+  }
+
+  // ── Отключение: полный сброс runtime-состояния ──
+  async function disconnectRemote(): Promise<void> {
+    activeBridge?.stop();
+    activeBridge = undefined;
+    restoreRemoteMirrors();
+    connection.disconnect();
+  }
+
+  // ── Публичные обёртки connect* + applyConnected ──
+  async function connectRemote(serverUrl: string, username: string, password: string): Promise<RemoteUser> {
+    const user = await connection.connectByPassword(serverUrl, username, password);
+    return applyConnected(user);
+  }
+
+  async function connectRemoteFromSaved(backendUrl?: string): Promise<RemoteUser | null> {
+    const user = await connection.connectFromSaved(backendUrl);
+    if (!user) return null;
+    return applyConnected(user);
+  }
+
+  async function connectRemoteWithApiKey(serverUrl: string, apiKey: string): Promise<RemoteUser> {
+    const user = await connection.connectWithApiKey(serverUrl, apiKey);
+    return applyConnected(user);
+  }
+
   // Health — без auth
   const healthRoutes = createHealthRoutes();
   app.route('/', healthRoutes);
 
+  // Hybrid status — без auth (как health): UI опрашивает статус подключения
+  // к удалённому backend до аутентификации.
+  const hybridRoutes = createHybridRoutes(getHybridState);
+  app.route('/', hybridRoutes);
+
   // Auth routes — без auth (только spa-login проверяет ключ сам)
-  app.route('/auth', createAuthRoutes(auth));
+  app.route('/auth', createAuthRoutes(auth, {
+    connection,
+    connectRemote,
+    connectRemoteFromSaved,
+    connectRemoteWithApiKey,
+    disconnectRemote,
+    defaultBackendUrl: config.defaultBackendUrl,
+    issuerAvailable: !!config.remoteAuth?.issuer,
+  }));
 
 
   // Всё остальное требует аутентификации
   app.use('/api/*', auth.requireAuth);
   app.use('/ws/*', auth.requireAuth);
+
+  // Гибрид (Batch 2, T5): серверные/админ-эндпоинты (которых нет у standalone
+  // или источник истины — сервер) проксируются на удалённый backend.
+  // Стоит ПОСЛЕ requireAuth и ДО локальных роутов — в гибриде перехватывает
+  // /api/v2/{audit,users,admin,logs,gateway,context,llm,providers,models}.
+  // Middleware регистрируется ВСЕГДА; без runtime-подключения getClient() даёт
+  // null → next() (запрос обрабатывают локальные роуты).
+  app.use('/api/*', createRemoteProxyMiddleware(
+    () => connection.client,
+    () => connection.getToken?.() ?? Promise.resolve(null),
+  ));
 
   const dataDir = config.dataDir;
   await ensureDataDir(dataDir);
@@ -236,10 +529,6 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     defaultLanguage: 'ru',
   });
 
-  const providerLoader = (name: string): ProviderConfig | null => {
-    return providerCache.get(name) ?? null;
-  };
-
   const providerCache = new Map<string, ProviderConfig>();
   (await providerStore.list()).forEach((p) => {
     providerCache.set(p.name, p);
@@ -249,6 +538,17 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   (await modelStore.list()).forEach((m) => {
     modelCache.set(m.id, m);
   });
+
+  // Гибрид: remote-провайдер/модели инъектируются в кэши в applyConnected()
+  // (после успешного runtime-подключения), а не при создании приложения.
+
+  // Загрузчик провайдеров для движка: при политике remoteLlm=server разрешены
+  // ТОЛЬКО зеркала серверных провайдеров (blockLocalProviders ставится в
+  // applyConnected); при remote.llm=local локальные провайдеры остаются доступны.
+  const providerLoader = (name: string): ProviderConfig | null => {
+    if (blockLocalProviders && activeRemoteProviderNames.size > 0 && !activeRemoteProviderNames.has(name)) return null;
+    return providerCache.get(name) ?? null;
+  };
 
   // Загрузчик сохранённого контекстного окна модели (ModelConfig.contextWindow)
   const modelWindowLoader = (modelName: string): number => {
@@ -316,31 +616,55 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // Sessions
   app.route('/api/v2/sessions', createSessionRoutes(
     auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore,
+    () => connection.client,
   ));
 
   // Projects
-  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore));
+  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, () => connection.client));
+
+  // Перенос проектов между мирами (гибрид, UI publish/fork): те же пути, что у
+  // project-роутов (:id/publish, :id/fork-local — без конфликта с :id). Работает
+  // in-process через remote/transfer.ts, требует runtime-подключения к backend.
+  app.route('/api/v2/projects', createProjectTransferRoutes(
+    auth,
+    projectStore,
+    sessionManager,
+    config.workspacesRoot ?? join(dataDir, 'workspaces'),
+    defaultWorkingDir,
+    () => connection.client,
+  ));
 
   // Providers
-  app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, true));
+  app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache, true));
 
-  // Models
-  app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore));
+  // Models: remote-модели/провайдер читаются на каждый запрос (runtime-подключение).
+  app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, modelCache, {
+    extraModels: () => [...activeRemoteModels],
+    extraProviders: () => {
+      const out: ProviderConfig[] = [];
+      for (const name of activeRemoteProviderNames) {
+        const p = providerCache.get(name);
+        if (p) out.push(p);
+      }
+      return out;
+    },
+    onlyRemoteModels: () => blockLocalProviders && activeRemoteProviderNames.size > 0,
+  }));
 
   // Agents
   app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry));
 
   // FS
-  app.route('/api/v2/fs', createFsRoutes(auth, config.workspacesRoot));
+  app.route('/api/v2/fs', createFsRoutes(auth, config.workspacesRoot, () => connection.client));
 
   // Queue
-  app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage));
+  app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage, () => connection.client));
 
   // Updates
   app.route('/api/v2/updates', createUpdateRoutes(auth, dataDir));
 
   // Messages (batch operations)
-  app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager));
+  app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager, () => connection.client));
 
   // Settings (runtime-настройки для UI, раздел «Проекты»)
   app.route('/api/v2/settings', createSettingsRoutes(auth, {
@@ -375,7 +699,6 @@ export async function createStandaloneApp(config: StandaloneConfig) {
         async start(controller) {
           const encoder = new TextEncoder();
 
-          const allSessions = await sessionManager.listSessions({ userId: 'local' });
           const unsubs: Array<() => void> = [];
 
           const handler = (event: { type: string; data: Record<string, unknown>; sessionId: string; timestamp: string }) => {
@@ -387,8 +710,15 @@ export async function createStandaloneApp(config: StandaloneConfig) {
             }
           };
 
-          for (const s of allSessions) {
-            unsubs.push(eventBus.subscribe(s.id, handler));
+          if (connection.connected) {
+            // Гибрид: события удалённых сессий (remote:<id>) публикует мост,
+            // локальных — оркестратор. Только subscribeAll — без дублей.
+            unsubs.push(eventBus.subscribeAll(handler));
+          } else {
+            const allSessions = await sessionManager.listSessions({ userId: 'local' });
+            for (const s of allSessions) {
+              unsubs.push(eventBus.subscribe(s.id, handler));
+            }
           }
 
           const keepalive = setInterval(() => {
@@ -494,6 +824,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       }
       const headers = Object.fromEntries(response.headers.entries());
       res.writeHead(response.status, headers);
+      // SSE/долгоживущие стримы: при chunked-кодировании Node не сбрасывает
+      // заголовки в сокет до первого write()/end(). Для пустого начала стрима
+      // (SSE до первого события/keepalive) клиент иначе не получит заголовки
+      // вовсе — сбрасываем head принудительно.
+      res.flushHeaders();
       if (response.body) {
         const reader = response.body.getReader();
         const pump = async () => {
@@ -526,7 +861,23 @@ export async function createStandaloneApp(config: StandaloneConfig) {
         ? authHeader.slice(7)
         : null;
 
-      if (token !== config.apiKey) {
+      // Аутентификация: либо валидный Bearer API-ключ (CLI/API-клиенты), либо
+      // cookie-сессия v2 (server-identity/local) — браузер не может ставить
+      // Authorization-заголовок на WebSocket, поэтому UI полагается на cookie.
+      let authorized = token === config.apiKey;
+      if (!authorized) {
+        const cookieContext = {
+          req: {
+            header: (name: string): string | undefined => {
+              const v = request.headers[name.toLowerCase()];
+              return Array.isArray(v) ? v[0] : v;
+            },
+          },
+        };
+        authorized = auth.getCurrentUser(cookieContext) !== null;
+      }
+
+      if (!authorized) {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
         socket.destroy();
         return;
@@ -535,7 +886,6 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       wss.handleUpgrade(request, socket, head, async (ws: WebSocket) => {
         const clientId = `ws-events-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-        const allSessions = await sessionManager.listSessions({ userId: 'local' });
         const unsubs: Array<() => void> = [];
 
         const handler = (event: { type: string; data: Record<string, unknown> }) => {
@@ -546,8 +896,15 @@ export async function createStandaloneApp(config: StandaloneConfig) {
           } catch { /* ignore */ }
         };
 
-        for (const s of allSessions) {
-          unsubs.push(eventBus.subscribe(s.id, handler));
+        if (connection.connected) {
+          // Гибрид: события удалённых сессий (remote:<id>) публикует мост —
+          // подписываемся на все события (без дублей для локальных).
+          unsubs.push(eventBus.subscribeAll(handler));
+        } else {
+          const allSessions = await sessionManager.listSessions({ userId: 'local' });
+          for (const s of allSessions) {
+            unsubs.push(eventBus.subscribe(s.id, handler));
+          }
         }
 
         ws.send(JSON.stringify({
@@ -575,6 +932,39 @@ export async function createStandaloneApp(config: StandaloneConfig) {
               }));
 
               (async () => {
+                // Гибрид: remote-сессия (`remote:<id>`) — промпт уходит на удалённый
+                // backend (raw Response, тело не читаем), события возвращаются через
+                // RemoteEventBridge. Локальный оркестратор не запускается.
+                if (isRemoteRef(sid)) {
+                  const remote = connection.client;
+                  if (!remote) {
+                    ws.send(JSON.stringify({
+                      type: 'error',
+                      session_id: sid,
+                      data: { error: 'Удалённый сервер не подключён' },
+                      timestamp: nowISO(),
+                    }));
+                    return;
+                  }
+                  try {
+                    await remote.promptSession(toLocalId(sid), {
+                      content: msg.content.trim(),
+                      messageId: streamId,
+                      ...(msg.agent_role ? { agent: msg.agent_role } : {}),
+                      ...(msg.provider ? { provider: msg.provider } : {}),
+                      ...(msg.model ? { model: msg.model } : {}),
+                    });
+                  } catch (err) {
+                    ws.send(JSON.stringify({
+                      type: 'error',
+                      session_id: sid,
+                      data: { error: err instanceof Error ? err.message : String(err) },
+                      timestamp: nowISO(),
+                    }));
+                  }
+                  return;
+                }
+
                 const session = await sessionManager.getSession(sid);
                 if (!session) {
                   ws.send(JSON.stringify({
@@ -673,6 +1063,25 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   if (config.uiDistPath && existsSync(config.uiDistPath)) {
     console.log(`  ui: serving from ${config.uiDistPath}`);
   }
+  if (config.defaultBackendUrl) {
+    console.log(`  remote: гибридный режим (сервер ${config.defaultBackendUrl}) — подключение в рантайме`);
+  }
 
-  return { app, server, wss, port };
+  return {
+    app,
+    server,
+    wss,
+    port,
+    connection,
+    connectRemote,
+    connectRemoteFromSaved,
+    connectRemoteWithApiKey,
+    disconnectRemote,
+    getHybridStatus: getHybridState,
+    eventBus,
+    // Текущий мост событий (создаётся/обновляется в applyConnected) — для stop() при shutdown.
+    get remoteEventBridge(): RemoteEventBridge | undefined {
+      return activeBridge;
+    },
+  };
 }

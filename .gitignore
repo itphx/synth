@@ -70,3 +70,6 @@ charts/
 *.pem
 *.key
 secrets/
+
+# Changelog
+changelog-partial.md

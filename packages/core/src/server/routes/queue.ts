@@ -1,7 +1,25 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import type { SessionManager, QueueProcessorManager, ChatOrchestrator, EventBus } from '../../index.js';
 import { generateStreamId, MessageRole } from '@itphx/synth-shared';
+import { isRemoteRef, toLocalId, remoteErrorToHttp } from '../../remote/aggregate.js';
+import type { RemoteBackendClient } from '../../remote/client.js';
+
+/** Преобразовать RemoteError в HTTP-ответ API v2; не-RemoteError → undefined (пробросить дальше). */
+function mapRemoteError(c: Context, err: unknown): Response | undefined {
+  const http = remoteErrorToHttp(err);
+  if (!http) return undefined;
+  return c.json(
+    { error: { code: http.code, message: err instanceof Error ? err.message : String(err) } },
+    http.status as 400 | 401 | 404 | 409 | 500 | 502,
+  );
+}
+
+/** 502, если гибрид не настроен, иначе undefined — обрабатываем удалённую сессию. */
+function remoteUnavailable(c: Context): Response | undefined {
+  return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
+}
 
 export function createQueueRoutes(
   auth: AuthKit,
@@ -9,11 +27,25 @@ export function createQueueRoutes(
   queueManager: QueueProcessorManager,
   eventBus: EventBus,
   processMessage: ReturnType<ChatOrchestrator['createProcessMessage']>,
+  getRemoteClient?: () => RemoteBackendClient | null,
 ): Hono {
   const app = new Hono();
+  const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
 
   app.post('/:sessionId/clear', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
+    if (isRemoteRef(sessionId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.queueClear(toLocalId(sessionId));
+        return c.json(result);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
     await sessionManager.safeUpdate(sessionId, async (session) => {
       session.pendingMessages = [];
     });
@@ -22,9 +54,23 @@ export function createQueueRoutes(
   });
 
   app.post('/:sessionId/return', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
     const indexStr = c.req.query('index');
     const index = indexStr !== undefined ? parseInt(indexStr, 10) : undefined;
+
+    if (isRemoteRef(sessionId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.queueReturn(toLocalId(sessionId), index);
+        return c.json(result);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
+
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
@@ -90,7 +136,19 @@ export function createQueueRoutes(
   });
 
   app.post('/:sessionId/resume', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
+    if (isRemoteRef(sessionId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.queueResume(toLocalId(sessionId));
+        return c.json(result);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
@@ -140,7 +198,19 @@ export function createQueueRoutes(
 
   // POST /:sessionId/retry-now — немедленный повтор при backoff (без ожидания паузы)
   app.post('/:sessionId/retry-now', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
+    if (isRemoteRef(sessionId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.queueRetryNow(toLocalId(sessionId));
+        return c.json(result);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
     const retried = queueManager.retryNow(sessionId);
     if (!retried) {
       return c.json({ error: { code: 'CONFLICT', message: 'Процессор не находится в состоянии повтора' } }, 409);
@@ -150,7 +220,19 @@ export function createQueueRoutes(
 
   // POST /:sessionId/cancel-retry — отменить повторные попытки (снять pending, разблокировать)
   app.post('/:sessionId/cancel-retry', auth.requireAuth, async (c) => {
+    const remoteClient = resolveClient();
     const sessionId = c.req.param('sessionId');
+    if (isRemoteRef(sessionId)) {
+      if (!remoteClient) return remoteUnavailable(c);
+      try {
+        const result = await remoteClient.queueCancelRetry(toLocalId(sessionId));
+        return c.json(result);
+      } catch (err) {
+        const mapped = mapRemoteError(c, err);
+        if (mapped) return mapped;
+        throw err;
+      }
+    }
     const cancelled = await queueManager.cancelRetry(sessionId);
     if (!cancelled) {
       return c.json({ error: { code: 'CONFLICT', message: 'Процессор не найден' } }, 409);

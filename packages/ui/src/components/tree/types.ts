@@ -9,7 +9,10 @@ export interface TreeAction {
   id: string
   icon: IconName
   title: string
-  onClick: () => void
+  /** Мгновенное действие по клику (используется, если menuItems не задан). */
+  onClick?: () => void
+  /** Альтернатива onClick: кнопка раскрывает меню с пунктами (например, «создать локально/на сервере»). */
+  menuItems?: ContextMenuItem[]
   variant?: 'default' | 'primary' | 'destructive'
   alwaysVisible?: boolean
 }
@@ -31,6 +34,10 @@ export interface TreeNodeBase {
   subtitle?: string
   count?: number
   suffix?: string
+  /** Компактный бейдж рядом с label (например, OriginBadge для удалённых сущностей). */
+  badge?: React.ReactNode
+  /** Тултип на строке узла (например, «недоступен» для remote-сущностей при offline). */
+  title?: string
 
   isActive?: boolean
   isTabOpen?: boolean

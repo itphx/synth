@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
+import type { SynthConfig } from '@itphx/synth-shared';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { checkForUpdatesBackground } from './update-checker.js';
@@ -21,18 +22,37 @@ program
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')
   .option('--backend <url>', 'URL бэкенда (managed mode)')
+  .option('--connect <url>', 'URL удалённого backend (гибридный режим)')
+  .option('--oidc-issuer <url>', 'OIDC issuer — fallback дискавери для входа в UI (гибридный режим)')
+  .option('--oidc-client-id <id>', 'OIDC client_id — fallback дискавери для входа в UI (гибридный режим)')
+  .option('--token <key>', 'API-ключ для аутентификации на удалённом backend (гибридный режим)')
   .option('--runner', 'запустить in-process раннер')
   .option('--ui <path>', 'путь к собранному UI (dist)')
   .action(async (options) => {
+    const overrides: Partial<SynthConfig> = {
+      core: {
+        port: parseInt(options.port, 10),
+        apiKey: options.apiKey,
+      },
+      storage: options.dataDir ? { dataDir: options.dataDir, workspacesRoot: '', defaultWorkspace: '' } : undefined,
+    };
+    if (options.connect) {
+      // deepMerge на рантайме сольёт частичную секцию remote с defaultConfig; тип требует полный RemoteConfig.
+      overrides.remote = {
+        enabled: true,
+        backendUrl: options.connect,
+        auth: {
+          type: options.token ? 'api_key' : 'device',
+          apiKey: options.token ?? '',
+          issuer: options.oidcIssuer ?? '',
+          clientId: options.oidcClientId ?? '',
+        },
+      } as SynthConfig['remote'];
+    }
+
     const synth = await loadConfig({
       configPath: options.config,
-      overrides: {
-        core: {
-          port: parseInt(options.port, 10),
-          apiKey: options.apiKey,
-        },
-        storage: options.dataDir ? { dataDir: options.dataDir, workspacesRoot: '', defaultWorkspace: '' } : undefined,
-      },
+      overrides,
     });
 
     const dataDir = resolveDataDir(synth);
@@ -43,9 +63,24 @@ program
 
     const { createStandaloneApp } = await import('./server/app.js');
 
+    // Гибридный режим: сервер стартует «холодным» (без блокирующего device flow).
+    // Подключение к удалённому backend происходит в рантайме:
+    //   - тихое connectFromSaved после listen (если credentials сохранены);
+    //   - иначе пользователь логинится в UI (POST /auth/login) или используется
+    //     API-ключ (--token), когда он задан.
+    const remoteEnabled = synth.remote.enabled && !!synth.remote.backendUrl;
+    const remoteBackendUrl = synth.remote.backendUrl.replace(/\/+$/, '');
+    // OIDC-fallback (issuer/client_id) передаём и без --connect: сервер стартует
+    // без известного адреса, пользователь вводит адрес в UI (POST /auth/login),
+    // а дискавери при недоступности /auth/oidc-meta падает на эти параметры.
+    // Флаги приоритетнее config.yaml (в секцию remote они не мержатся без --connect).
+    const remoteIssuer = options.oidcIssuer || synth.remote.auth.issuer;
+    const remoteClientId = options.oidcClientId || synth.remote.auth.clientId;
+    const oidcFallbackGiven = !!(remoteIssuer || remoteClientId);
+
     const uiPath = options.ui || undefined;
 
-    const { server, wss } = await createStandaloneApp({
+    const appHandle = await createStandaloneApp({
       port,
       dataDir,
       apiKey,
@@ -57,7 +92,22 @@ program
       securityConfig: synth.security,
       gatewayConfig: synth.llmGateway,
       mcpServers: synth.mcp?.servers ?? {},
+      defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
+      defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
+        ? (synth.remote.auth.apiKey || undefined)
+        : undefined,
+      remoteAuth: remoteEnabled || oidcFallbackGiven
+        ? {
+            issuer: remoteIssuer || undefined,
+            clientId: remoteClientId || undefined,
+            credentialsPath: synth.remote.credentialsPath || undefined,
+          }
+        : undefined,
+      remoteLlm: synth.remote.llm,
+      remoteTimeoutMs: synth.remote.timeoutMs,
+      remoteCredentialsPath: synth.remote.credentialsPath || undefined,
     });
+    const { server, wss } = appHandle;
 
     let shuttingDown = false;
 
@@ -65,6 +115,10 @@ program
       if (shuttingDown) return;
       shuttingDown = true;
       console.log(`\n[Shutdown] Получен сигнал ${signal}, завершаю...`);
+
+      // Гибрид: закрыть SSE-стрим к удалённому backend, отменить реконнект.
+      await appHandle.disconnectRemote?.().catch(() => {});
+      appHandle.remoteEventBridge?.stop();
 
       server.close((err: Error | undefined) => {
         if (err) console.error('[Shutdown] Server close error:', err);
@@ -85,6 +139,28 @@ program
     server.listen(port, host, () => {
       console.log(`\n  Откройте http://${host}:${port} в браузере`);
       console.log(`  API-ключ: ${apiKey.slice(0, 8)}...`);
+      if (remoteEnabled) {
+        console.log(`  Удалённый backend: ${remoteBackendUrl}. Если сервер не подключён — войдите в UI (адрес сервера + логин/пароль).`);
+      }
+
+      // Гибрид: тихое подключение после старта (best-effort, без интерактива).
+      // При --token (api_key) предпочитаем сохранённые credentials, иначе — API-ключ.
+      if (remoteEnabled) {
+        void (async () => {
+          try {
+            if (synth.remote.auth.type === 'api_key' && synth.remote.auth.apiKey) {
+              const saved = await appHandle.connectRemoteFromSaved?.(remoteBackendUrl).catch(() => null);
+              if (!saved) {
+                await appHandle.connectRemoteWithApiKey?.(remoteBackendUrl, synth.remote.auth.apiKey);
+              }
+            } else {
+              await appHandle.connectRemoteFromSaved?.(remoteBackendUrl);
+            }
+          } catch {
+            // тихо: сервер недоступен / credentials не подошли — пользователь войдёт в UI
+          }
+        })();
+      }
 
       checkForUpdatesBackground(dataDir, (info) => {
         console.log(`\n  Доступна новая версия ${info.latestVersion} (текущая: ${info.currentVersion})`);
@@ -92,6 +168,200 @@ program
       });
     });
   });
+
+program
+  .command('connect')
+  .description('Подключиться к удалённому backend (гибридный режим)')
+  .requiredOption('--backend <url>', 'URL удалённого backend')
+  .option('--oidc-issuer <url>', 'OIDC issuer для device flow')
+  .option('--oidc-client-id <id>', 'OIDC client_id для device flow')
+  .option('--token <key>', 'API-ключ для аутентификации')
+  .option('--config <path>', 'путь к config.yaml')
+  .action(async (options) => {
+    const synth = await loadConfig({ configPath: options.config });
+    const { RemoteSession } = await import('./remote/session.js');
+
+    const session = await RemoteSession.ensureAuthenticated(
+      {
+        backendUrl: options.backend,
+        authType: options.token ? 'api_key' : 'device',
+        apiKey: options.token ?? '',
+        issuer: options.oidcIssuer ?? synth.remote.auth.issuer,
+        clientId: options.oidcClientId ?? synth.remote.auth.clientId,
+        credentialsPath: synth.remote.credentialsPath || undefined,
+        timeoutMs: synth.remote.timeoutMs,
+      },
+      async (info) => {
+        console.log('\nТребуется авторизация на удалённом backend.');
+        console.log(`  1. Откройте в браузере: ${info.verificationUri}`);
+        console.log(`  2. Введите код: ${info.userCode}`);
+        console.log('  Ожидание подтверждения...');
+      },
+    );
+
+    const status = await session.getAuthStatus().catch(() => null);
+    console.log(`Подключено: ${options.backend}${status?.user ? ` (user: ${status.user.username})` : ''}`);
+    if (status && !status.connected) {
+      console.log('Внимание: не удалось подтвердить статус (сервер недоступен), credentials сохранены.');
+    }
+  });
+
+program
+  .command('disconnect')
+  .description('Отключиться от удалённого backend (удалить сохранённые credentials)')
+  .requiredOption('--backend <url>', 'URL удалённого backend')
+  .option('--config <path>', 'путь к config.yaml')
+  .action(async (options) => {
+    const synth = await loadConfig({ configPath: options.config });
+    const { clearCredentials } = await import('./remote/credentials.js');
+    await clearCredentials(options.backend, synth.remote.credentialsPath || undefined);
+    console.log(`Отключено: ${options.backend} (credentials удалены)`);
+  });
+
+/** Общая аутентификация к удалённому backend для команд publish/fork. */
+async function ensureRemoteSession(options: Record<string, unknown>, synth: SynthConfig) {
+  const { RemoteSession } = await import('./remote/session.js');
+  const backendUrl = (options.remote as string | undefined) || synth.remote.backendUrl;
+  if (!backendUrl) {
+    console.error('Ошибка: не указан URL удалённого backend. Используйте --remote <url> или remote.backendUrl в config.yaml.');
+    process.exit(1);
+  }
+  const session = await RemoteSession.ensureAuthenticated(
+    {
+      backendUrl,
+      authType: (options.token as string | undefined) ? 'api_key' : (synth.remote.auth.type || 'device'),
+      apiKey: (options.token as string | undefined) || synth.remote.auth.apiKey || '',
+      issuer: (options.oidcIssuer as string | undefined) || synth.remote.auth.issuer,
+      clientId: (options.oidcClientId as string | undefined) || synth.remote.auth.clientId,
+      credentialsPath: synth.remote.credentialsPath || undefined,
+      timeoutMs: synth.remote.timeoutMs,
+    },
+    async (info) => {
+      console.log('\nТребуется авторизация на удалённом backend.');
+      console.log(`  1. Откройте в браузере: ${info.verificationUri}`);
+      console.log(`  2. Введите код: ${info.userCode}`);
+      console.log('  Ожидание подтверждения...');
+    },
+  );
+  return session;
+}
+
+const projectCmd = new Command('project')
+  .description('Операции переноса проектов между мирами (гибридный режим)');
+
+projectCmd
+  .command('publish')
+  .description('Опубликовать локальный проект на удалённый backend (проект + сессии + файлы)')
+  .argument('<projectId>', 'ID локального проекта')
+  .option('--remote <url>', 'URL удалённого backend (или remote.backendUrl из config.yaml)')
+  .option('--remote-project <id>', 'ID существующего проекта на сервере (обновление вместо создания)')
+  .option('--no-files', 'не переносить workspace-файлы')
+  .option('--no-sessions', 'не переносить сессии')
+  .option('--config <path>', 'путь к config.yaml')
+  .option('--data-dir <path>', 'каталог данных')
+  .option('--oidc-issuer <url>', 'OIDC issuer для device flow')
+  .option('--oidc-client-id <id>', 'OIDC client_id для device flow')
+  .option('--token <key>', 'API-ключ для аутентификации')
+  .action(async (projectId, options) => {
+    const synth = await loadConfig({ configPath: options.config });
+    const dataDir = (options.dataDir as string | undefined) || resolveDataDir(synth);
+    await ensureDataDir(dataDir);
+
+    const { ProjectStore } = await import('./storage/project-store.js');
+    const { FileStore } = await import('./storage/file-store.js');
+    const { SessionManager } = await import('./sessions/manager.js');
+    const { syncProjectToRemote, resolveLocalWorkspace } = await import('./remote/transfer.js');
+
+    const projectStore = new ProjectStore({ dataDir });
+    const project = await projectStore.load(projectId);
+    if (!project) {
+      console.error(`Ошибка: локальный проект ${projectId} не найден`);
+      process.exit(1);
+    }
+
+    const includeFiles = !options.noFiles;
+    const includeSessions = !options.noSessions;
+    // При явном --data-dir workspaces лежат рядом ({dataDir}/workspaces),
+    // иначе — из конфига (resolveWorkspacesRoot/resolveDefaultWorkspace).
+    const workspacesRoot = options.dataDir ? join(dataDir, 'workspaces') : resolveWorkspacesRoot(synth);
+    const defaultWorkingDir = options.dataDir ? join(dataDir, 'workspaces', 'default') : resolveDefaultWorkspace(synth);
+    const localProjectDir = resolveLocalWorkspace(
+      project,
+      workspacesRoot,
+      defaultWorkingDir,
+    );
+
+    const session = await ensureRemoteSession(options, synth);
+    const remoteClient = session.getClient();
+
+    const localSessions = includeSessions
+      ? await new SessionManager(new FileStore({ dataDir })).listSessions({ projectId: project.id })
+      : [];
+
+    console.log(`Publish проекта «${project.name}» → ${session.backendUrl}`);
+    const stats = await syncProjectToRemote({
+      localProject: project,
+      remoteClient,
+      remoteProjectId: (options.remoteProject as string | undefined) || undefined,
+      includeFiles,
+      includeSessions,
+      localProjectDir,
+      localSessions,
+      log: (msg) => console.log(msg),
+    });
+
+    console.log('─'.repeat(60));
+    console.log(`Готово: проект ${stats.projectId} (${stats.created ? 'создан' : 'обновлён'})`);
+    console.log(`  сессий импортировано: ${stats.sessionsImported}`);
+    if (includeFiles) console.log(`  файлов загружено: ${stats.filesUploaded}`);
+  });
+
+projectCmd
+  .command('fork')
+  .description('Склонировать удалённый проект локально (проект + сессии + файлы)')
+  .argument('<remoteProjectId>', 'ID удалённого проекта')
+  .option('--remote <url>', 'URL удалённого backend (или remote.backendUrl из config.yaml)')
+  .option('--local-name <name>', 'имя локального проекта (по умолчанию — имя удалённого)')
+  .option('--no-files', 'не скачивать workspace-файлы')
+  .option('--no-sessions', 'не переносить сессии')
+  .option('--config <path>', 'путь к config.yaml')
+  .option('--data-dir <path>', 'каталог данных')
+  .option('--oidc-issuer <url>', 'OIDC issuer для device flow')
+  .option('--oidc-client-id <id>', 'OIDC client_id для device flow')
+  .option('--token <key>', 'API-ключ для аутентификации')
+  .action(async (remoteProjectId, options) => {
+    const synth = await loadConfig({ configPath: options.config });
+    const dataDir = (options.dataDir as string | undefined) || resolveDataDir(synth);
+    await ensureDataDir(dataDir);
+
+    const { ProjectStore } = await import('./storage/project-store.js');
+    const { FileStore } = await import('./storage/file-store.js');
+    const { SessionManager } = await import('./sessions/manager.js');
+    const { forkProjectToLocal } = await import('./remote/transfer.js');
+
+    const session = await ensureRemoteSession(options, synth);
+    const remoteClient = session.getClient();
+
+    console.log(`Fork проекта ${remoteProjectId} ← ${session.backendUrl}`);
+    const stats = await forkProjectToLocal({
+      remoteProjectId,
+      remoteClient,
+      localProjectStore: new ProjectStore({ dataDir }),
+      localSessionManager: new SessionManager(new FileStore({ dataDir })),
+      includeFiles: !options.noFiles,
+      includeSessions: !options.noSessions,
+      localWorkspacesRoot: options.dataDir ? join(dataDir, 'workspaces') : resolveWorkspacesRoot(synth),
+      localName: (options.localName as string | undefined) || undefined,
+      log: (msg) => console.log(msg),
+    });
+
+    console.log('─'.repeat(60));
+    console.log(`Готово: локальный проект ${stats.projectId}`);
+    console.log(`  сессий импортировано: ${stats.sessionsImported}`);
+    if (!options.noFiles) console.log(`  файлов скачано: ${stats.filesDownloaded}`);
+  });
+
+program.addCommand(projectCmd);
 
 program
   .command('chat')

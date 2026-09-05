@@ -419,6 +419,8 @@ export interface AuthConfig {
     clientId: string;
     clientSecret: string;
     redirectUri: string;
+    /** Public client_id для локального CLI/core (ROPC/device flow). Не секрет. */
+    cliClientId?: string;
   };
 }
 

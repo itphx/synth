@@ -21,6 +21,8 @@ function createKit() {
 async function makeApp(tmpDir: string) {
   const modelStore = new JsonStore<ModelConfig>({ dataDir: tmpDir, subdir: 'models' });
   const providerStore = new JsonStore<ProviderConfig>({ dataDir: tmpDir, subdir: 'providers' });
+  const modelCache = new Map<string, ModelConfig>();
+  const providerCache = new Map<string, ProviderConfig>();
   await providerStore.save('p1', {
     name: 'p1',
     type: 'openai',
@@ -28,8 +30,8 @@ async function makeApp(tmpDir: string) {
     enabled: true,
   });
   const app = new Hono();
-  app.route(BASE, createModelRoutes(createKit() as never, modelStore, providerStore));
-  return { app, modelStore };
+  app.route(BASE, createModelRoutes(createKit() as never, modelStore, providerStore, modelCache, providerCache));
+  return { app, modelStore, providerStore, modelCache, providerCache };
 }
 
 function postJSON(body: unknown): RequestInit {
@@ -153,6 +155,81 @@ describe('routes/models', () => {
       const m2 = await stores.modelStore.load('p1/m2');
       expect(m2?.contextWindow).toBe(131072);
       expect(m2?.contextSource).toBe('api');
+    });
+  });
+
+  describe('синхронизация in-memory кеша (LLM Proxy)', () => {
+    it('POST /models добавляет модель в кеш', async () => {
+      const res = await stores.app.request(BASE, postJSON({
+        id: 'p1/m1',
+        name: 'm1',
+        provider: 'p1',
+        context_window: 4096,
+      }));
+      expect(res.status).toBe(201);
+
+      const cached = stores.modelCache.get('p1/m1');
+      expect(cached).toBeDefined();
+      expect(cached?.contextWindow).toBe(4096);
+    });
+
+    it('POST /models c set_as_default обновляет defaultModel провайдера в кеше и снимает isDefault с других моделей', async () => {
+      await stores.modelStore.save('p1/m1', {
+        id: 'p1/m1', name: 'm1', provider: 'p1', enabled: true, isDefault: true,
+      });
+      await stores.modelStore.save('p1/m2', {
+        id: 'p1/m2', name: 'm2', provider: 'p1', enabled: true, isDefault: false,
+      });
+      stores.modelCache.set('p1/m1', { id: 'p1/m1', name: 'm1', provider: 'p1', enabled: true, isDefault: true });
+      stores.modelCache.set('p1/m2', { id: 'p1/m2', name: 'm2', provider: 'p1', enabled: true, isDefault: false });
+
+      const res = await stores.app.request(BASE, postJSON({
+        id: 'p1/m2',
+        name: 'm2',
+        provider: 'p1',
+        set_as_default: true,
+      }));
+      expect(res.status).toBe(200);
+
+      expect(stores.providerCache.get('p1')?.defaultModel).toBe('m2');
+      expect(stores.modelCache.get('p1/m1')?.isDefault).toBe(false);
+      expect(stores.modelCache.get('p1/m2')).toBeDefined();
+      // isDefault на самой модели не выставляется — дефолт определяется через provider.defaultModel
+      expect(stores.providerCache.get('p1')).toEqual(expect.objectContaining({ defaultModel: 'm2' }));
+    });
+
+    it('POST /models/fetch кладёт новые и обогащённые модели в кеш', async () => {
+      await stores.modelStore.save('p1/m1', {
+        id: 'p1/m1', name: 'm1', provider: 'p1', enabled: true,
+        contextWindow: 100, contextSource: 'reference',
+      });
+      stores.modelCache.set('p1/m1', { id: 'p1/m1', name: 'm1', provider: 'p1', enabled: true, contextWindow: 100, contextSource: 'reference' });
+      vi.spyOn(ProviderFactory, 'create').mockReturnValue({
+        listModelsDetailed: vi.fn().mockResolvedValue([
+          { id: 'm1', contextWindow: 262144 },
+          { id: 'm2', contextWindow: 131072 },
+        ]),
+      } as never);
+
+      const res = await stores.app.request(`${BASE}/fetch?provider=p1`, { method: 'POST' });
+      expect(res.status).toBe(200);
+
+      expect(stores.modelCache.get('p1/m1')?.contextWindow).toBe(262144);
+      expect(stores.modelCache.get('p1/m2')).toMatchObject({
+        id: 'p1/m2', name: 'm2', provider: 'p1', contextWindow: 131072,
+      });
+    });
+
+    it('DELETE /models/:id удаляет модель из кеша', async () => {
+      await stores.modelStore.save('p1/m1', {
+        id: 'p1/m1', name: 'm1', provider: 'p1', enabled: true,
+      });
+      stores.modelCache.set('p1/m1', { id: 'p1/m1', name: 'm1', provider: 'p1', enabled: true });
+
+      const res = await stores.app.request(`${BASE}/p1%2Fm1`, { method: 'DELETE' });
+      expect(res.status).toBe(204);
+
+      expect(stores.modelCache.has('p1/m1')).toBe(false);
     });
   });
 });

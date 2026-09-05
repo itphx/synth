@@ -267,99 +267,195 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 
 ---
 
-## Архитектурные решения (ключевые)
+## K3s-инстанс (managed-деплой)
 
-| AD | Суть |
-|----|------|
-| AD-005 | JSON-файлы как хранилище (атомарная запись через tmp-файл + rename) |
-| AD-008 | WebSocket для real-time событий |
-| AD-009 | SessionEventBus — шина событий сессии |
-| AD-014 | Проект как контейнер (сессии, файлы, контекст внутри проекта) |
-| AD-017 | Собственный API-контракт (API v2 на Hono) |
-| AD-018 | Выбор AI-движка на уровне сессии |
-| AD-019 | React 19 SPA с нуля |
-| AD-022 | Единый TypeScript стек + Runner архитектура |
-| AD-023 | Единая система конфигурации (@itphx/synth-shared/config) |
-| AD-024 | Единый транспорт: EventHub (backend) + TransportClient (UI) |
-| AD-025 | Plan/Act как глобальный permission toggle (не отдельные агенты) ✅ Реализовано |
-| AD-026 | Режимы контекста саб-агента: inherit / summary / none |
-| AD-027 | Двойная передача плана: диск + system prompt ⚠️ Переопределено AD-039 (план — в проекте) |
-| AD-028 | Настраиваемая строгость цикла Plan→Build: auto / strict / off ✅ Реализовано |
-| AD-029 | Гранулярные permissions: allow/deny/ask per tool + file patterns ✅ Реализовано |
-| AD-030 | Hooks для событий агента (pre/post tool use, session, plan, spawn) |
-| AD-031 | Verification синт (аналог VerificationAgent из Claude Code) |
-| AD-032 | Хранение истории: SQLite нормализованная схема (сессии, сообщения, части) |
-| AD-033 | Ветвление сессий, наследование контекста и межсессионное слияние ✅ Реализовано |
-| AD-034 | Routing между моделями (content + confidence + cost) ✅ Реализовано |
-| AD-035 | Micro-model first: дешёвый слой перед LLM (правила/embedding) ✅ Реализовано |
-| AD-036 | LLM Gateway: независимый слой безопасности (guard + обфускация + rate limit + аудит) ✅ Реализовано |
-| AD-037 | Security step перед коммитом: git pre-commit hook + маркер-хеш (гарантия проверки) |
-| AD-038 | Монорепо как набор публикуемых npm-пакетов (6 пакетов, pnpm publish, тонкая CLI-обёртка) ✅ Реализовано |
-| AD-039 | План — в проекте, todo — в сессии, состояние через инструменты (замена TSM) ✅ Реализовано |
-| AD-040 | Сессии без проекта: контекст, подсказка, перенос между проектами ✅ Реализовано |
-| AD-041 | Единая таксономия ошибок LLM (llm-error.ts) + контракт локализации строк движка (@itphx/synth-shared/i18n) ✅ Реализовано |
+Боевой инстанс развёрнут в K3s (Rancher Fleet) на `itphx.loc`. Код приложения — в монорепо `synth/`,
+код деплоя — в отдельном git-репозитории `synth-deploy/` (каталог рядом с `synth/`).
 
-Подробности deprecated решений — в `archive/AGENTS_OLD.md`.
+### Репозиторий деплоя
 
-### AD-022: TypeScript стек + Runner
+- Helm-чарт + Fleet-конфиг: `Chart.yaml`, `values.yaml`, `fleet.yaml`, `templates/` (namespace `synth`)
+- Fleet-репозиторий: `https://git.itphx.ru/itphx/synth-deploy.git`, ветка `main`
+- Подробности: `synth-deploy/README.md`
 
-- **@itphx/synth-core** — автономное ядро: сессии, очередь, LLM-провайдеры, MCP, HTTP API v2, CLI
-- **@itphx/synth-backend** — облачный API Hub: OIDC, RBAC, Runner Registry, LLM Proxy
-- **@itphx/synth-runner** — мост между бэкендом и движками (opencode, cline, synth-core)
-- **@itphx/synth-ui** — React 19 SPA + админка
+### Адреса
 
-### AD-023: Конфигурация
+| Сервис | Адрес |
+|--------|-------|
+| Synth UI (вход) | https://synth.k3s.itphx.loc |
+| Keycloak issuer | https://keycloak.itphx.loc/realms/synth (клиент `synth`, confidential) |
+| Backend в кластере | `synth-backend:5000` (namespace `synth`) |
 
-Приоритет: `CLI-флаги > SYNTH_* env vars > config.yaml > defaults`.
+Доступ к кластеру: `kubectl` (контекст `local`), поды/логи — `kubectl -n synth get pods`,
+`kubectl -n synth logs deploy/synth-backend`.
 
-Каскадный поиск `config.yaml`:
-1. `--config` / `SYNTH_CONFIG`
-2. `./synth.config.yaml`
-3. `./config.yaml`
-4. `~/.config/synth/config.yaml`
-5. `/etc/synth/config.yaml`
+### Учётные записи Keycloak
 
-Ключевые env vars: `SYNTH_DATA_DIR`, `SYNTH_PORT`, `SYNTH_CORE_PORT`, `SYNTH_AUTH_DEBUG`, `SYNTH_API_KEY`.
+Тестовая УЗ (realm `synth`, роль `user`) и временная админская УЗ (realm `master`) — в файле
+`secrets/keycloak-accounts.md` в корне проекта, вне git-репозитория `synth/`.
 
-### AD-024: Транспорт (EventHub + TransportClient)
+Временная админская УЗ используется для admin API Keycloak (`admin-cli`) — например, для диагностики
+ролей и мапперов. Client secret клиента `synth` — в SealedSecret `synth-secrets` (namespace `synth`,
+ключ `SYNTH_OIDC_CLIENT_SECRET`), команда для получения — в файле секретов.
 
-Единое WS-соединение `WS /ws/events` для всех событий. EventHub на бэкенде автоматически подписывает клиентов на сессии пользователя. TransportClient на UI — единый клиент с авто-фоллбеком на SSE.
+---
 
-### AD-025: Plan/Act как глобальный permission toggle
+## Гибридный режим
 
-**Решение:** Plan/Act режимы — глобальное состояние сессии, не привязанное к конкретному синту. При переключении режима меняется набор доступных инструментов, но роль и промпт агента остаются прежними.
+Гибридный режим — локальный core подключается к корпоративному серверу
+(`synth serve --connect <url>`): в одном локальном UI объединяются локальные и
+удалённые (backend) проекты/сессии, а LLM-запросы централизованы на сервере
+(ключи, модели и аудит — только на нём). Реализовано в ветке `feat/hybrid-mode`;
+детальные требования, архитектура и статус — в [docs/HYBRID.md](docs/HYBRID.md).
 
-**Контекст:** в OpenCode Plan и Act — это разные агенты (plan agent ↔ build agent) со своими permissions и системными промптами. В Claude Code — один и тот же агент, но с переключением permissionMode. И тот и другой подход сошлись на одном: plan mode — это ограничение инструментов, а не отдельная личность. Synth идёт по пути Claude Code.
+**UX (вход без Keycloak-ритуала):** `serve --connect` больше НЕ блокирует старт
+device flow'ом — сервер поднимается «холодным», после listen тихо выполняется
+авто-логин по сохранённым credentials (или по `--token`), а если credentials нет —
+вход выполняется прямо в UI: форма логина с полями логин/пароль (ROPC
+«за кулисами»), личность/роли/профиль приходят с сервера. Поле «Адрес сервера»
+в форме показывается только когда адрес НЕ задан при старте (иначе он известен
+core и поле скрыто). Никакого «входа через браузер» (device flow) в пользовательском
+пути нет — кнопка и модалка удалены из UI (эндпоинты device-start/device-check
+в core остаются, но из UI не вызываются).
 
-**Реализация:**
+OIDC issuer/client_id локальный core узнаёт **с сервера** (`GET {server}/auth/oidc-meta`),
+с fallback на флаги `--oidc-issuer`/`--oidc-client-id` для серверов без эндпоинта.
+Эндпоинт публичный, отдаёт только issuer + public client_id (`synth-cli`), без секрета.
+
+### Включение
+
+Секция `remote` в config.yaml:
 
 ```yaml
-# config.yaml
-session:
-  mode: "auto"  # plan | act | yolo | auto
-
-agents:
-  analyst:
-    description: "Анализирует код, архитектуру, находит проблемы"
-    systemPrompt: "..."
-    # tools — максимальный набор для синта
-    # в plan mode write-тулы будут заблокированы глобально
+remote:
+  enabled: true
+  backendUrl: "https://synth.k3s.itphx.loc"
+  auth:
+    type: device                  # device | api_key
+    issuer: "https://keycloak.itphx.loc/realms/synth"
+    clientId: "synth-cli"
+  llm: "server"                   # server | local; server — централизация LLM
 ```
 
-| Режим | Поведение | Переключение |
-|---|---|---|
-| `plan` | **Read-only.** Все write/edit/delete → deny. Синт исследует, задаёт вопросы, работает с планом проекта через `plan_read`/`plan_write` | Пользователь (`/plan`) или синт через tool `plan_enter` |
-| `act` | **Полный доступ.** Набор тулов из конфига синта + глобальные permissions | Пользователь (`/act`) или tool `plan_exit` |
-| `yolo` | **Автоподтверждение.** Все ask → allow автоматически (без события `permission.asked` и ожидания пользователя), deny остаётся deny | Пользователь (`/yolo`) |
-| `auto` | Синт **сам решает**, когда войти в план. Вызывает `plan_enter` если задача сложная, требует исследования или архитектурных решений | Автоматически (аналог EnterPlanModeTool) |
+Или CLI-флагами без правки конфига (адрес можно не указывать — тогда его введёт
+пользователь в форме входа UI):
 
-**SessionMode:** `'plan' | 'act' | 'yolo'`. В сериализации сессии есть поле `mode_applicable` — `false` для read-only агентов (нет `shell`/`file_write`/`web`): toggle режима в UI деактивируется.
+```bash
+# Адрес известен — UI спросит только логин/пароль
+synth serve --connect https://synth.k3s.itphx.loc \
+  --oidc-issuer https://keycloak.itphx.loc/realms/synth \
+  --oidc-client-id synth-cli
 
-**Системный промпт режима:** контекстные файлы `prompts/modes/{plan,act,yolo}.md` (встроенные, копируются в `dist/`), переопределяются через `{dataDir}/context/modes/{mode}.md` и локализованные `{mode}.{lang}.md`. Встраиваются в system prompt через `_buildPlanSystemPrompt`.
+# Адрес не известен — UI покажет поле «Адрес сервера» + логин/пароль
+synth serve --oidc-issuer https://keycloak.itphx.loc/realms/synth \
+  --oidc-client-id synth-cli
+```
 
-**События:** `plan.approved` (план утверждён через `plan_exit`), `todos.updated` (обновлён список ToDo через todo-инструменты `todo_write`/`todo_add`/`todo_update`/`todo_delete`).
+Удобный запуск (сборка + CA + флаги): `./scripts/hybrid.sh [SERVER_URL]` —
+без адреса стартует и даёт ввести адрес в UI, с адресом сразу подключается.
 
-**Почему не N×2 агентов:** создание отдельных plan-версий для каждого синта даёт квадратичный рост конфигурации. С глобальным toggle — N синтов × 3 режима = те же N в конфиге, а режим переключается сессионно.
+### Команды CLI
+
+| Команда | Назначение |
+|---|---|
+| `synth serve --connect <url>` | Запуск локального core с подключением к серверу (опции `--oidc-issuer`, `--oidc-client-id`, `--token`; без `--connect` — вход по адресу из формы UI) |
+| `synth connect --backend <url>` | Сохранение credentials (ROPC по логину/паролю / `--token` API-ключ); credentials — в `~/.config/synth/credentials.json` (0600) |
+| `synth disconnect --backend <url>` | Удалить сохранённые credentials |
+| `synth project publish <id> --remote <url>` | Локальный проект → сервер (проект + сессии + файлы; `--no-files` / `--no-sessions`) |
+| `synth project fork <id> --remote <url>` | Удалённый проект → локально (`--local-name`, `--no-files`, `--no-sessions`) |
+
+### Поведение
+
+- **Вход:** сервер стартует «холодным»; после listen тихий авто-логин
+  (connectFromSaved / `--token`), иначе — форма логина в UI (адрес опционален:
+  параметр/env → не спрашиваем; иначе поле в форме). OIDC-параметры — дискавери
+  с сервера (`GET /auth/oidc-meta`), fallback на `--oidc-issuer`/`--oidc-client-id`.
+- **Агрегация миров:** проекты/сессии локального core объединяются с удалёнными
+  (backend); у каждой сущности поле `origin: 'local'|'remote'`, удалённые id —
+  `remote:<uuid>` (исключают коллизии UUID). Запросы маршрутизируются по миру:
+  локальные обрабатывает core, удалённые — проксируются на сервер.
+- **Статус:** `GET /api/v2/hybrid/status` →
+  `{ enabled, connected, backendUrl, serverConfigured, serverLoginAvailable, user }`
+  (без auth; UI опрашивает ~30 с). `serverConfigured` — адрес сервера задан при
+  старте (даже без подключения); `serverLoginAvailable` — доступен вход на сервер.
+- **События:** RemoteEventBridge транслирует SSE сервера в локальный EventBus,
+  события удалённых сессий переписываются в `remote:<id>` и доходят до UI.
+- **LLM:** локальные сессии в гибриде ходят за LLM через сервер
+  (`POST /api/v2/llm/chat/completions`, RemoteProvider `synth-remote`); при
+  `remote.llm: server` локальные провайдеры запрещены полностью.
+- **Offline-деградация:** сервер недоступен — локальный мир работает, списки
+  деградируют с warn, явные remote-операции возвращают 502 OFFLINE; в UI баннер
+  «Сервер недоступен», remote-сущности приглушены, селектор «где создать» — только «Локально».
+
+### Ключевые файлы
+
+- `packages/core/src/remote/` — RemoteConnection (runtime-подключение), клиент, credentials, агрегация, событийный мост, publish/fork
+- `packages/core/src/server/routes/auth.ts` — `/auth/status|session|login` (ROPC), `/auth/device-start|device-check` (не вызываются из UI)
+- `packages/backend/src/routes/auth.ts` — `/auth/oidc-meta` (публичные OIDC-параметры для дискавери)
+- `packages/backend/src/routes/llm.ts` — LLM Proxy (`POST /api/v2/llm/chat/completions`)
+- `packages/backend/src/routes/sessions.ts` — `GET /sessions/:id/export`, `POST /sessions/import`
+- UI: `packages/ui/src/components/layout/HybridStatusIndicator.tsx`, `HybridOfflineBanner.tsx`, `packages/ui/src/components/auth/LoginForm.tsx`, бейджи origin, селектор «где создать»
+- `scripts/hybrid.sh` — запуск локального core в гибриде (сборка + CA + флаги)
+
+---
+
+## Архитектурные решения (ключевые)
+
+| AD | Суть | Подробно |
+|----|------|----------|
+| AD-005 | JSON-файлы как хранилище (атомарная запись через tmp-файл + rename) | — |
+| AD-008 | WebSocket для real-time событий | — |
+| AD-009 | SessionEventBus — шина событий сессии | — |
+| AD-014 | Проект как контейнер (сессии, файлы, контекст внутри проекта) | — |
+| AD-017 | Собственный API-контракт (API v2 на Hono) | — |
+| AD-018 | Выбор AI-движка на уровне сессии | — |
+| AD-019 | React 19 SPA с нуля | — |
+| AD-022 | Единый TypeScript стек + Runner архитектура | [ad-022](./docs/arch_decisions/ad-022-typescript-stack-runner.md) |
+| AD-023 | Единая система конфигурации (@itphx/synth-shared/config) | [ad-023](./docs/arch_decisions/ad-023-configuration.md) |
+| AD-024 | Единый транспорт: EventHub (backend) + TransportClient (UI) | [ad-024](./docs/arch_decisions/ad-024-eventhub-transport.md) |
+| AD-025 | Plan/Act как глобальный permission toggle (не отдельные агенты) ✅ Реализовано | [ad-025](./docs/arch_decisions/ad-025-plan-act-toggle.md) |
+| AD-026 | Режимы контекста саб-агента: inherit / summary / none | — |
+| AD-027 | Двойная передача плана: диск + system prompt ⚠️ Переопределено AD-039 (план — в проекте) | — |
+| AD-028 | Настраиваемая строгость цикла Plan→Build: auto / strict / off ✅ Реализовано | [ad-028](./docs/arch_decisions/ad-028-plan-build-strictness.md) |
+| AD-029 | Гранулярные permissions: allow/deny/ask per tool + file patterns ✅ Реализовано | [ad-029](./docs/arch_decisions/ad-029-granular-permissions.md) |
+| AD-030 | Hooks для событий агента (pre/post tool use, session, plan, spawn) | — |
+| AD-031 | Verification синт (аналог VerificationAgent из Claude Code) | — |
+| AD-032 | Хранение истории: PostgreSQL нормализованная схема (сессии, сообщения, части) | — |
+| AD-033 | Ветвление сессий, наследование контекста и межсессионное слияние ✅ Реализовано | [ad-033](./docs/arch_decisions/ad-033-session-branching-merge.md) |
+| AD-034 | Routing между моделями (content + confidence + cost) ✅ Реализовано | [ad-034](./docs/arch_decisions/ad-034-model-routing.md) |
+| AD-035 | Micro-model first: дешёвый слой перед LLM (правила/embedding) ✅ Реализовано | [ad-035](./docs/arch_decisions/ad-035-micro-model-first.md) |
+| AD-036 | LLM Gateway: независимый слой безопасности (guard + обфускация + rate limit + аудит) ✅ Реализовано | [ad-036](./docs/arch_decisions/ad-036-llm-gateway.md) |
+| AD-037 | Security step перед коммитом: git pre-commit hook + маркер-хеш (гарантия проверки) | — |
+| AD-038 | Монорепо как набор публикуемых npm-пакетов (6 пакетов, pnpm publish, тонкая CLI-обёртка) ✅ Реализовано | [ad-038](./docs/arch_decisions/ad-038-npm-packages.md) |
+| AD-039 | План — в проекте, todo — в сессии, состояние через инструменты (замена TSM) ✅ Реализовано | [ad-039](./docs/arch_decisions/ad-039-plan-in-project.md) |
+| AD-040 | Сессии без проекта: контекст, подсказка, перенос между проектами ✅ Реализовано | [ad-040](./docs/arch_decisions/ad-040-sessions-without-project.md) |
+| AD-041 | Единая таксономия ошибок LLM (llm-error.ts) + контракт локализации строк движка (@itphx/synth-shared/i18n) ✅ Реализовано | [ad-041](./docs/arch_decisions/ad-041-llm-error-taxonomy.md) |
+| AD-042 | Гибридный режим: локальный core + централизованный сервер (агрегация миров, LLM Proxy, RemoteEventBridge, publish/fork) ✅ Реализовано | [ad-042](./docs/arch_decisions/ad-042-hybrid-mode.md) |
+| AD-043 | Единая идентичность гибрида: вход в UI без Keycloak (runtime-подключение, ROPC, дискавери oidc-meta, единая личность) ✅ Реализовано | [ad-043](./docs/arch_decisions/ad-043-unified-identity-login.md) |
+
+> **Перенос AD:** реализованные AD переносятся в `docs/arch_decisions/` (в AGENTS.md остаётся краткая строка + ссылка). Нереализованные остаются в AGENTS.md до реализации.
+
+Подробности deprecated решений — в `archive/AGENTS_OLD.md` (вне репозитория), исторические AD (AD-001..010, Python-стек) — в `docs/arch_decisions/legacy/`.
+
+### AD-022: TypeScript стек + Runner ✅ Реализовано
+
+**Кратко:** Единый TypeScript стек: @itphx/synth-{core,backend,runner,ui}; история на бэкенде, движок stateless.
+**Подробно:** [docs/arch_decisions/ad-022-typescript-stack-runner.md](./docs/arch_decisions/ad-022-typescript-stack-runner.md)
+
+### AD-023: Конфигурация ✅ Реализовано
+
+**Кратко:** Приоритет: CLI-флаги > SYNTH_* env > config.yaml > defaults; каскадный поиск config.yaml (5 путей).
+**Подробно:** [docs/arch_decisions/ad-023-configuration.md](./docs/arch_decisions/ad-023-configuration.md)
+
+### AD-024: Транспорт (EventHub + TransportClient) ✅ Реализовано
+
+**Кратко:** Единое WS-соединение /ws/events; EventHub подписывает клиентов на сессии; TransportClient с фоллбеком на SSE.
+**Подробно:** [docs/arch_decisions/ad-024-eventhub-transport.md](./docs/arch_decisions/ad-024-eventhub-transport.md)
+
+### AD-025: Plan/Act как глобальный permission toggle ✅ Реализовано
+
+**Кратко:** Plan/Act/YOLO — глобальный permission toggle сессии (не отдельные агенты); mode_applicable для read-only агентов.
+**Подробно:** [docs/arch_decisions/ad-025-plan-act-toggle.md](./docs/arch_decisions/ad-025-plan-act-toggle.md)
 
 ### AD-026: Режимы контекста саб-агента
 
@@ -429,78 +525,15 @@ plan (план написан)
 
 **Защита от потери:** при возобновлении сессии план восстанавливается из файла. Если файл не найден (CCR/remote сессия) — ищется в снапшотах и истории сообщений (аналог `copyPlanForResume` из Claude Code).
 
-### AD-028: Настраиваемая строгость цикла Plan → Build
+### AD-028: Настраиваемая строгость цикла Plan → Build ✅ Реализовано
 
-**Решение:** три режима строгости, настраиваются глобально или на уровне проекта.
+**Кратко:** Три режима строгости: auto / strict / off; в strict план обязателен перед любым write.
+**Подробно:** [docs/arch_decisions/ad-028-plan-build-strictness.md](./docs/arch_decisions/ad-028-plan-build-strictness.md)
 
-| Режим | Поведение | Когда синт может писать | Аналог |
-|---|---|---|---|
-| `auto` | Синт сам решает, нужен ли план. Для простых задач — сразу делает. Для сложных — вызывает `plan_enter` | После того как сам решил (или без плана для простых) | Claude Code (EnterPlanMode + ExitPlanMode) |
-| `strict` | **План обязателен** перед любым write. Без утверждённого плана все write/edit/delete → deny. Исследовать (read) можно | Только после `plan_exit` (план утверждён) | OpenCode (принудительный Plan→Build цикл) |
-| `off` | Планирование отключено. Всегда act mode | Всегда | — (для тривиальных фиксов, Personal/personal) |
+### AD-029: Гранулярные permissions ✅ Реализовано
 
-```yaml
-# config.yaml
-session:
-  plan_mode: "auto"  # auto | strict | off
-```
-
-**Рекомендации по выбору:**
-- `strict` — командная работа, сложные проекты, новички в команде. Не даст наломать дров
-- `auto` — продвинутые пользователи, balance между скоростью и безопасностью
-- `off` — персональные скрипты, прототипы, одноразовые задачи
-
-**Вход в план в режиме `auto`:** синт получает промпт-инструкцию (аналог EnterPlanModeTool prompt): «Если задача сложная, затрагивает несколько файлов или требует архитектурных решений — вызови `plan_enter`. Для простых фиксов — делай сразу.»
-
-### AD-029: Гранулярные permissions
-
-**Решение:** права доступа на основе модели OpenCode — allow/deny/ask для каждого инструмента с поддержкой glob-паттернов для файлов.
-
-**Контекст:** у Claude Code система прав — `disallowedTools` (простой список запрета). У OpenCode — allow/deny/ask на каждый инструмент + паттерны файлов с разрешением на glob-уровне. Модель OpenCode **строго лучше** — даёт точный контроль без оверхеда.
-
-```yaml
-permission:
-  # Глобальные правила
-  "*": "allow"                    # всё разрешено по умолчанию
-  doom_loop: "ask"                # подозрительные циклы — переспросить
-  question: "deny"                # саб-агентам нельзя переспрашивать пользователя
-  plan_enter: "deny"              # саб-агентам нельзя входить в план
-  plan_exit: "deny"               # саб-агентам нельзя выходить из плана
-
-  # Внешние директории
-  external_directory:
-    "*": "ask"                    # любые внешние файлы — спросить
-    "/tmp/*": "allow"             # кроме tmp
-
-  # Чтение файлов
-  read:
-    "*": "allow"
-    "*.env": "ask"                # .env — всегда спрашивать
-    "*.env.example": "allow"      # .env.example — можно
-    "**/credentials.*": "deny"    # credentials файлы — никогда
-
-  # Редактирование (переопределяется в plan mode)
-  edit:
-    "*": "deny"                   # plan mode: ничего не трогаем
-```
-
-**Три уровня действия (action):**
-
-| Action | Поведение | Пример |
-|---|---|---|
-| `allow` | Выполняется без спроса | `read: "*": "allow"` |
-| `deny` | Блокируется с пояснением причины | `edit: "*.env": "deny"` |
-| `ask` | Показывается пользователю на подтверждение | `external_directory: "*": "ask"` |
-
-**Наследование саб-агентами:** саб-агент получает permissions родительской сессии + свои deny-правила (edit-ограничения от plan mode родителя) + блокировку `question`, `plan_enter`, `task`. Реализуется через `deriveSubagentSessionPermission()` по аналогии с OpenCode.
-
-**«Разрешить в сессии» (once:false):** при ответе пользователя на `ask` с `once:false` в сессию добавляется allow-правило для тула — повторные вызовы не спрашивают. `once:true` — разрешение только на один вызов.
-
-**Deny от пользователя:** при отказе (ask → deny) обработка завершается (`stopped_by_deny`), файл не создаётся, промежуточные результаты сохраняются в истории.
-
-**Саб-агенты:** проходят permission-check; `ask` публикуется в родительскую сессию (`permission.asked`), ответ пользователя применяется к дочерней сессии.
-
-**MCP-инструменты:** доступность по режимам plan/act — `SessionSettings.mcpToolSettings[server].default|tools[tool] = { plan, act }` (настройки в UI). В текущем режиме недоступный тул → deny.
+**Кратко:** allow/deny/ask per tool + glob-паттерны; наследование саб-агентами; MCP по режимам plan/act.
+**Подробно:** [docs/arch_decisions/ad-029-granular-permissions.md](./docs/arch_decisions/ad-029-granular-permissions.md)
 
 ### AD-030: Hooks для событий агента
 
@@ -643,132 +676,14 @@ plan_exit (план утверждён)
 | `merged` | Скопировано из другой сессии пользователем (smart paste) | ID оригинального сообщения |
 | `crosspost` | Существует в нескольких сессиях одновременно | Синхронизировано |
 
-**Способы хранения (физический уровень — отдельное решение):**
-- Локально: SQLite (одна embedded БД, не требует сервера)
-- Командный режим: PostgreSQL (через drizzle — смена драйвера)
-- Вариант: JSON-файлы с индексацией (как сейчас в прототипе)
+**Способы хранения (физический уровень):**
+- Целевое хранилище: **PostgreSQL** (нормализованная схема). Идём сразу в PostgreSQL — SQLite как промежуточный вариант не используется.
+- Переход с JSON-файлов (AD-005) на PostgreSQL.
 
-### AD-033: Ветвление сессий и межсессионное слияние
+### AD-033: Ветвление сессий и межсессионное слияние ✅ Реализовано
 
-**Решение:** три слоя наследования истории + операция слияния по инициативе пользователя.
-
-**Контекст:** OpenCode поддерживает parent-child через `parent_id` и `ForkInput`, но fork копирует все сообщения целиком и не поддерживает слияние. Claude Code передаёт контекст саб-агента через копирование `initialMessages` в runtime. Synth добавляет: ветвление без копирования данных, ссылочное наследование, и ручной merge по инициативе пользователя.
-
-#### Слой 1: Результаты саб-агента → в основную сессию
-
-**Как сейчас:** результат возвращается через `tool_result`. Родитель видит итоговый ответ, но не видит промежуточных шагов (tool_use, tool_result, reasoning).
-
-```
-Родитель:
-  tool_use → task({prompt: "исправь auth.ts"})
-  tool_result ← "<task id='ses_child' state='completed'>
-                   <task_result>Готово, починил в validate.ts:42</task_result>
-                 </task>"
-```
-
-**Это ок для MVP.** Промежуточные шаги доступны в дочерней сессии при необходимости.
-
-#### Слой 2: Наследование контекста (ветвление)
-
-При запуске саб-агента с `--context inherit` или `--context summary` — создаётся дочерняя сессия:
-
-```
-ses_main (родитель)
-  ├── msg_1..msg_42 — родительская история
-  └── ses_branch (дочерняя, parent_id=ses_main, branch_point=msg_42)
-        ├── msg_1..msg_42 — унаследованы (origin=inherited, ссылки на ses_main)
-        ├── msg_43 — origin=local, prompt саб-агента
-        └── msg_44..50 — origin=local, работа саб-агента
-```
-
-**Экономия:** не дублируем содержимое сообщений — храним ссылки на оригинал через `source_msg_id`.
-
-#### Слой 3: Межсессионное слияние (по инициативе пользователя)
-
-**Сценарий:** пользователь провёл анализ в сессии A, хочет передать выводы в сессию B (где коллега ведёт разработку).
-
-Три способа:
-
-**a) Smart paste — копирование сообщений**
-
-```bash
-# В сессии A: выбрать сообщения для копирования
-synth msg select 4..8
-synth msg copy 4..8
-
-# В сессии B: вставить
-synth msg paste --after last
-synth msg paste --before 3
-synth msg paste --summarize    # сжать через LLM перед вставкой
-```
-
-Механика: копирует выбранные сообщения в целевую сессию с `origin='merged'`, `source_msg_id=<original>`. `--summarize` прогоняет через быструю модель для компрессии.
-
-**b) Ссылочный блок — вставка без копирования**
-
-```bash
-synth ref ses_analysis:4..8   # вставить ссылку на диапазон сессии
-```
-
-В сессию B добавляется attachment:
-
-```json
-{
-  "type": "session_reference",
-  "session_id": "ses_analysis",
-  "label": "Выводы по auth модулю",
-  "range": [4, 8],
-  "auto_summary": "Анализ auth модуля. Найден null pointer в validate.ts:42..."
-}
-```
-
-Модель видит ссылку и может прочитать referenced-сессию через tool call. **Не тратит токены** на вставку больших блоков.
-
-**c) Crosspost — параллельное связывание**
-
-```bash
-synth crosspost ses_analysis:4..8 --to ses_dev --label "Выводы по auth"
-```
-
-Сообщение существует в обеих сессиях с `origin='crosspost'`. Обновление в одной — видно в другой. Для параллельных веток одного исследования.
-
-**Таблица: операции слияния**
-
-| Операция | Инициатор | Источник → Цель | Что происходит |
-|---|---|---|---|
-| **subagent result** | Система (авто) | Дочерняя → Родительская | Итог через `tool_result`. Промежуточные шаги НЕ копируются |
-| **smart paste** | Пользователь | Любая → Любая | Копирование сообщений с `origin='merged'`. Опционально `--summarize` |
-| **reference** | Пользователь | Любая → Любая | Ссылочный блок, модель читает через tool call. Не копирует данные |
-| **crosspost** | Пользователь | N ↔ M | Сообщение в нескольких сессиях, синхронизация изменений |
-
-**Реализация merge (smart paste):**
-
-```typescript
-async function mergeMessages(
-  targetSessionId: SessionID,
-  sourceSessionId: SessionID,
-  options: {
-    sourceRange: [number, number],    // какие seq копировать
-    position: 'after' | 'before',
-    anchorMsgId?: MessageID,          // после/перед какого сообщения
-    summarize?: boolean,              // сжать через LLM
-    model?: string,                   // модель для саммаризации
-  }
-): Promise<MessageID[]> {
-  // 1. Прочитать source-сообщения
-  // 2. Если summarize — сжать через LLM в одно сообщение
-  // 3. Пересчитать seq в target (раздвинуть)
-  // 4. Вставить с origin='merged', source_msg_id
-}
-```
-
-**Порядок реализации:**
-1. Базовое хранение: логическая модель сессия + сообщение + часть
-2. Ветвление: parent_id + branch_point + наследование через ссылки
-3. Subagent result — через tool_result (без изменений)
-4. Reference — ссылочные блоки между сессиями
-5. Smart paste — копирование сообщений по инициативе пользователя
-6. Crosspost — синхронизация между сессиями
+**Кратко:** Три слоя: subagent result → ветвление (parent_id + branch_point) → merge (smart paste / reference / crosspost).
+**Подробно:** [docs/arch_decisions/ad-033-session-branching-merge.md](./docs/arch_decisions/ad-033-session-branching-merge.md)
 
 ### Модель Runner
 
@@ -776,345 +691,20 @@ async function mergeMessages(
 
 Движки — stateless: история на бэкенде, на вход получают историю + новое сообщение + контекст.
 
-### AD-034: Routing между моделями
+### AD-034: Routing между моделями ✅ Реализовано
 
-**Решение:** Router-слой между синтом и LLM — три стратегии: content-based, escalation by confidence, cost-aware.
+**Кратко:** Router: content-based, escalation by confidence, cost-aware; ProviderPool + Quality Check.
+**Подробно:** [docs/arch_decisions/ad-034-model-routing.md](./docs/arch_decisions/ad-034-model-routing.md)
 
-**Контекст:** разные модели имеют разную специализацию и стоимость. Небольшие fine-tuned локальные модели работают быстро и лучше разбираются в конкретной области, облачные большие модели сильнее в логике и рассуждениях, большие локальные модели — баланс между скоростью и стоимостью. Выбор правильной модели на этапе запроса даёт выигрыш в качестве без удорожания. Мультимодальные модели - стоимость больше, но распознавание картинок нужно не в каждом запросе.
+### AD-035: Micro-model first — дешёвый слой перед LLM ✅ Реализовано
 
-**Три стратегии роутинга:**
-
-| Стратегия | Суть | Когда срабатывает |
-|---|---|---|
-| **Content** | Тип запроса → выбор модели | Кодинг → DeepSeek, сленг → Qwen, исследование → Gemma |
-| **Confidence** | Quality check → FAIL → эскалация | Неуверенный или невалидный ответ Qwen → DeepSeek |
-| **Cost** | Простые запросы → дешёвая, сложные → дорогая | < 10 слов → Qwen, > 50 слов → DeepSeek/MiniMax |
-
-**Архитектура Router:**
-
-```
-Request
-  │
-  ▼
-┌──────────────────────────────────────────────┐
-│  Router                                        │
-│  ┌──────────────┐  ┌────────────────────────┐ │
-│  │  Content      │  │  Provider Pool          │ │
-│  │  Classifier   │──│  ├─ Qwen3-4B (local)   │ │
-│  └──────┬───────┘  │  ├─ DeepSeek (API)      │ │
-│         │           │  ├─ Gemma 12B (Ollama)  │ │
-│         ▼           │  └─ MiniMax M3 (API)    │ │
-│  ┌──────────────┐  └────────────────────────┘ │
-│  │  Selector    │                              │
-│  └──────┬───────┘                              │
-│         ▼                                      │
-│  ┌──────────────┐                              │
-│  │  Executor    │── in/out logging + metrics   │
-│  └──────┬───────┘                              │
-│         ▼                                      │
-│  ┌──────────────┐                              │
-│  │  Quality     │── if FAIL → Selector → retry │
-│  │  Check       │     (confidence escalation)  │
-│  └──────────────┘                              │
-└──────────────────────────────────────────────┘
-  │
-  ▼
-Response + routing_metadata
-```
-
-**Конфигурация (synth.yaml):**
-
-```yaml
-router:
-  strategy: content  # default: content-based
-
-  # Content-based routing
-  content:
-    coding:
-      provider: deepseek
-      model: deepseek-v4-flash
-      max_tokens: 4096
-    slang_translate:
-      provider: openai
-      model: qwen3-4b-v2
-      base_url: http://localhost:11434/v1
-    research:
-      provider: openai
-      model: gemma-4-12b-it
-      base_url: http://localhost:11434/v1
-
-  # Escalation (confidence-based)
-  escalation:
-    enabled: true
-    max_retries: 1
-    on_failure: deepseek  # fallback provider
-    checks:
-      - constraint    # сленг/не сленг
-      - min_length: 5 # слишком короткий ответ
-
-  # Cost-aware routing
-  cost:
-    cheap_providers: [qwen, gemma_12b]
-    expensive_providers: [deepseek, minimax]
-    max_cheap_cost: 0.01  # $ за запрос
-```
-
-**Quality Check (набросок):**
-
-```typescript
-interface QualityResult {
-  constraint: { pass: boolean; detail: string }
-  minLength: { pass: boolean }
-  overall: 'PASS' | 'UNSURE' | 'FAIL'
-}
-
-async function qualityCheck(
-  answer: string,
-  direction: 'to_slang' | 'to_lit',
-  rules: QualityRule[]
-): Promise<QualityResult> {
-  // constraint: проверка наличия/отсутствия сленга
-  // min_length: ответ не пустой
-  // custom_rules: из конфига
-}
-```
-
-**Порядок реализации:**
-1. Router interface + Provider Pool (подключение к разным API)
-2. Content classifier — простая классификация по ключевым словам (на первых порах)
-3. Quality check — 3 возможных типа проверки:
-  - Self-check  — модель оценивает свой ответ
-  - Redundancy  — 3 прогона, Jaccard similarity
-  - Constraint  — алгоритмическая проверка вывода - длина, наличие / остутствие слов или конструкций
-4. Confidence escalation — при FAIL → повтор на другой модели
-5. Cost strategy — трекинг токенов и стоимости
-6. CLI: `synth router test "запрос"` — показать какая модель выбрана и почему
-
-### AD-035: Micro-model first — дешёвый слой перед LLM
-
-**Решение:** двухуровневый каскад: **микро-модель** (правила / embedding / словарь) обрабатывает запрос первой и зовёт LLM только при неуверенности. LLM — не дефолт, а fallback.
-
-**Контекст:** большинство запросов к LLM на самом деле простые и структурируемые (классификация, интент, извлечение полей, enum-решения). Гонять их через большую модель — тратить токены и время. Двухуровневый каскад отсекает 60-80% трафика до LLM.
-
-**Архитектура:**
-
-```
-Запрос
-  │
-  ▼
-┌──────────────────────────────────┐
-│  Уровень 1: MICRO-MODEL           │
-│  (правила / словарь / embeddings) │
-│  → структурированный результат    │
-│  → enum / label / score           │
-│  → confidence: OK | UNSURE        │
-└──────┬───────────────────────────┘
-       │
-  ┌────┴────┐
-  │         │
- OK        UNSURE
-  │         │
-  │    ┌────▼─────────────────────┐
-  │    │  Уровень 2: LLM fallback  │
-  │    │  → маршрутизация (AD-034) │
-  │    │  → верификация результата │
-  │    └────┬─────────────────────┘
-  │         │
-  ▼         ▼
- Ответ    Ответ + метка "fallback"
-без LLM
-```
-
-**Требования к микро-модели:**
-- Возвращает **структурированный результат**: `{label: enum, confidence: 0.0-1.0}`
-- Возвращает **статус уверенности**: `OK` (порог пройден) или `UNSURE`
-- Работает **без вызова LLM** (0 токенов)
-
-**Варианты реализации микро-модели (по возрастанию сложности):**
-
-| Вариант | Скорость | Стоимость | Когда использовать |
-|---|---|---|---|
-| **Правила + словарь** | мс | 0 | Классификация по ключевым словам, форматные проверки |
-| **Embedding-классификатор** (sentence-transformers) | ~50 мс | 0 (локально) | Семантика: интенты, темы, похожесть |
-| **Микро-LLM** (1-3B, local) | ~0.5 с | ~0 | Контекстные решения, когда правил мало |
-
-**Логика confidence:**
-
-```
-confidence >= 0.8  → OK     → ответ без LLM
-confidence < 0.8   → UNSURE → fallback на LLM
-формат невалиден    → UNSURE → fallback на LLM
-```
-
-Порог конфигурируется per-task.
-
-**Интеграция с AD-034 (routing):**
-
-```
-Запрос
-  │
-  ├─ AD-035: Micro-first
-  │     ├─ OK → ответ (0 токенов)
-  │     └─ UNSURE ↓
-  ├─ AD-034: Routing
-  │     └─ content/confidence/cost → выбор провайдера
-  └─ LLM ответ
-```
-
-**Конфигурация (synth.yaml):**
-
-```yaml
-micro_first:
-  enabled: true
-  tasks:
-    classify_intent:
-      type: embedding       # rules | embedding | micro_llm
-      model: local-embed    # для embedding
-      confidence_threshold: 0.8
-      labels: [bug, feature, question, spam]
-    extract_fields:
-      type: rules
-      patterns:
-        - email
-        - phone
-        - url
-      confidence_threshold: 0.8
-```
-
-**Метрики (что логируем):**
-- % запросов, обработанных микро-моделью (target: 60-80%)
-- % fallback на LLM
-- Средняя latency по уровням
-- Стоимость токенов сэкономленная
-
-**Реализация (2026-08-03):**
-
-Код: `packages/core/src/engine/router/micro/`
-
-```
-micro/
-├── index.ts              # MicroPipeline — каскад rules→embedding→micro_llm
-├── types.ts              # MicroInput, MicroResult, PipelineResult
-├── task-classifier.ts    # Классификация: small_talk | classify | enum_decision | llm_task
-├── models/
-│   ├── base.ts           # Интерфейс MicroModel
-│   ├── rules-model.ts    # Правила + словарь (DictionaryStore), 0 токенов
-│   ├── embedding-model.ts # Lazy import @huggingface/transformers
-│   └── micro-llm-model.ts # Локальная LLM через ProviderPool
-└── tasks/
-    ├── small-talk.ts     # Приветствия / прощания / благодарности → готовый ответ
-    ├── classify-intent.ts # Вопрос / команда / ревью / объяснение → label + confidence
-    └── enum-decision.ts  # Да / нет / режим → enum + score
-```
-
-**Включение:** `session.microFirst: true` (в Settings сессии или config.yaml). По умолчанию `false` — обратная совместимость.
-
-**Каскад:** rules (0 токенов, ~1 мс) → embedding (~50 мс, ленивый импорт) → micro_llm (~0.5 с, локальная) → LLM fallback через AD-034.
-
-**Метрики:** в DebugCollector (`micro.handled`, `micro.fallback`, `micro.latency_by_model`).
-
-**Бенчмарк:** `npx tsx scripts/micro-benchmark.mjs` — 25 запросов, таблица результатов + сводка.
-
-**Что не делаем в демо:**
-- Обучение кастомных микро-моделей (берём готовые embeddings)
-- Динамический подбор порога (фиксированный per-task: 0.8)
+**Кратко:** Двухуровневый каскад: микро-модель (rules/embedding/micro-LLM) → LLM fallback; порог confidence 0.8.
+**Подробно:** [docs/arch_decisions/ad-035-micro-model-first.md](./docs/arch_decisions/ad-035-micro-model-first.md)
 
 ### AD-036: LLM Gateway — независимый слой безопасности ✅ Реализовано
 
-**Решение:** декоратор `GatewayProvider extends BaseProvider` в `@itphx/synth-core`, оборачивающий все LLM-вызовы (покрывает 11 точек: tool-loop, fallback-эскалация, debug, суммаризация, auto-title, саб-агенты, micro-LLM). Защита данных: детекция секретов, обфускация, деобфускация в точках потребления, rate limiting, аудит и cost tracking. Полностью независимый компонент — не связан с выбором модели, маршрутизацией или фильтрацией запросов. **HTTP-прокси не нужен** — весь LLM-трафик in-process, backend/runner получают gateway «бесплатно» через `ChatOrchestrator`.
-
-**Контекст:** промпты и ответы агентов могут содержать секреты (API-ключи, токены, карты, email). При прямом вызове LLM-провайдера секрет уходит наружу и оседает в логах провайдера. Gateway перехватывает трафик и не допускает утечки, при этом пользователи продолжают работать со своими данными внутри доверенной зоны.
-
-**Принципы:**
-- **Выключен по умолчанию.** Весь слой защиты — опция. Пока не включён — трафик идёт напрямую, без задержек.
-- **Если включён — по умолчанию обфусцируем**, а не блокируем. Блокировка — отдельный режим.
-- **Независимость.** Работает на уровне «запрос → провайдер → ответ → потребление».
-- **Наследование секретов.** Карта обфускации живёт в сессии независимо от глобального тумблера — после отключения шлюза старые плейсхолдеры остаются раскрываемыми.
-
-**Точка перехвата:** `ProviderPool.getProvider` + `orchestrator._getProvider/_routeProvider` оборачивают провайдер в `GatewayProvider`. Если шлюз выключен — возвращается оригинальный провайдер без изменений (обратная совместимость).
-
-**Два режима Input Guard:**
-
-| Режим | Поведение |
-|---|---|
-| **obfuscate** (default при включении) | Секрет заменяется на `⟦SYNTH_SECRET_N⟧`, карта сохраняется, запрос идёт в LLM |
-| **block** | Секрет найден → запрос блокируется, возвращается warning, в LLM ничего не уходит |
-
-**Плейсхолдер:** `⟦SYNTH_SECRET_N⟧` (юникод-скобки U+27E6/27E7 + префикс `SYNTH_`). Выбран вместо `{{SECRET_N}}` — двойные фигурные скобки конфликтуют с шаблонными движками (Mustache/Handlebars/Vue), юникод-скобки не встречаются в коде. Regex: `⟦SYNTH_SECRET_(\d+)⟧`.
-
-**Обфускация:**
-
-```
-Вход:  "мой ключ sk-abc123 используй для подключения"
-       ↓ obfuscate (карта: ⟦SYNTH_SECRET_1⟧ → sk-abc123)
-       "мой ключ ⟦SYNTH_SECRET_1⟧ используй для подключения"
-       ↓ LLM
-Ответ: "Подключение с ⟦SYNTH_SECRET_1⟧ установлено"
-       ↓ деобфускация НЕ в стриме, а в точках потребления
-```
-
-**Карта обфускации (словарь):**
-- Хранится в **`Session.obfuscationMap`** (`Record<string, string>`), сериализуется в `FileStore` как `obfuscation_map`. Живёт всю сессию, не теряется.
-- Сама карта — секрет: доступ только у админов и аудиторов (вкладка «Словарь обфускации» в правой панели UI).
-- Сгенерированные моделью `⟦SYNTH_SECRET_N⟧` (которых нет в карте) — **не восстанавливаются**.
-
-**Отображение в UI:**
-- В ответе и в сообщениях пользователя секрет отображается как плейсхолдер `⟦SYNTH_SECRET_N⟧` — бейдж `SecretPlaceholder`.
-- Реальные значения встраиваются в `message.metadata.secrets` — клик раскрывает локально.
-- Раскрытие логируется в аудит (`type: revealed`).
-
-**Деобфускация — только в точках потребления:**
-
-| Точка | Когда |
-|---|---|
-| Запись файла | Перед write_file/edit_file — restore |
-| Shell-команда | Перед exec — restore аргументов |
-| Веб-запрос | Перед web_fetch/web_search — restore url/query |
-| Git-операции | Перед exec — restore |
-| Поиск | Перед grep — restore |
-| MCP-вызов | Перед callTool — restore аргументов |
-
-Стриминг ответа идёт как есть (с плейсхолдерами) — никаких буферов и задержек. Деобфускация только на финальном собранном ответе (chat) и в точках потребления.
-
-**Output Guard:**
-- Детекция секретов в ответе модели (галлюцинированные ключи, extraction-попытки) — пишется в аудит `output_guard`
-- Подозрительные URL и команды
-
-**Rate Limiting:**
-- **Индивидуальный** — N запросов/мин на пользователя (`rateLimit.userPerMinute`)
-- **Общий** — M запросов/мин на провайдера (`rateLimit.providerPerMinute`, защита от исчерпания квоты)
-- Реализация: in-memory sliding window на уровне провайдера в core — покрывает и внутренние LLM-вызовы (суммаризация, auto-title, саб-агенты), а не только HTTP-запросы
-
-**Аудит и Cost:**
-- Хранение: **JSONL-файл** `{dataDir}/audit/llm-gateway.jsonl`, append-only, одна строка = одна запись (атомарный append, tail-friendly)
-- Просмотр: `GET /api/v2/audit` (RBAC ADMIN/AUDITOR, фильтры `userId/sessionId/since/until/limit`) + CLI `synth audit`
-- Формат записи: `{ts, type, sessionId, userId, provider, model, secretsFound, placeholders, tokensIn, tokensOut, costUsd, reason}`. Типы: `obfuscated`, `blocked`, `revealed`, `rate_limited`, `output_guard`
-- Секреты в логах — только как плейсхолдеры
-- Cost-трекинг: счётчики `inputCost/outputCost` в `_saveAssistantMessage`
-
-**Конфигурация:**
-
-```yaml
-# config.yaml
-llmGateway:
-  enabled: false          # выключен по умолчанию
-  inputMode: "obfuscate"  # obfuscate | block
-  rateLimit:
-    userPerMinute: 60
-    providerPerMinute: 120
-  audit:
-    enabled: true
-    logPath: ""           # по умолчанию {dataDir}/audit/llm-gateway.jsonl
-```
-
-- Глобальный тумблер вкл/выкл: секция «Шлюз безопасности» в настройках UI (только ADMIN)
-- Per-session override — не требуется, тумблер глобальный
-
-**Реализация:** каталог `packages/core/src/engine/gateway/` (`secret-detector.ts`, `obfuscator.ts`, `input-guard.ts`, `output-guard.ts`, `rate-limiter.ts`, `audit-logger.ts`, `gateway-provider.ts`, `obfuscation-map-store.ts`).
-
-**Что не делаем в демо:**
-- ML-детекция секретов (только regex)
-- Распределённый rate limit (per-process)
+**Кратко:** GatewayProvider оборачивает все LLM-вызовы; обфускация ⟦SYNTH_SECRET_N⟧ / block; rate limit; аудит JSONL.
+**Подробно:** [docs/arch_decisions/ad-036-llm-gateway.md](./docs/arch_decisions/ad-036-llm-gateway.md)
 
 ### AD-037: Security step перед коммитом
 
@@ -1209,167 +799,37 @@ git pre-commit hook (уровень git, обойти нельзя)
 
 ### AD-038: Монорепо как набор публикуемых npm-пакетов ✅ Реализовано
 
-**Решение:** каждый пакет монорепозитория публикуется в npm независимо и владеет
-своими ассетами через поле `files`. Потребитель ставит только `@itphx/synth`, а
-зависимости (`@itphx/synth-core`, `@itphx/synth-ui`, `@itphx/synth-shared`) доставляются как
-транзитивные npm-зависимости. Никакого дублирования файлов и бандла core внутрь CLI.
+**Кратко:** 6 пакетов публикуются независимо (shared→core→ui→backend→runner→synth); @itphx/synth — тонкая обёртка; pnpm publish.
+**Подробно:** [docs/arch_decisions/ad-038-npm-packages.md](./docs/arch_decisions/ad-038-npm-packages.md)
 
-**Контекст:** исторически `@itphx/synth` собирался как самодостаточный пакет —
-скрипт сборки через `cp -r` копировал в него промпты, собранный UI, docs и README
-из соседних пакетов, а `cli.js` бандлил core через `noExternal`. Это порождало
-несколько источников истины: одни и те же файлы (промпты, UI-ассеты, документация)
-существовали и в `packages/core`, и в `packages/ui`, и в `packages/synth`. Любая
-правка промпта требовала пересборки и перекопирования, а рассинхронизация копий
-давала трудноуловимые баги. Кроме того, бандл core внутрь `cli.js` раздувал пакет
-и ломал дерево зависимостей для npm-потребителей.
+### AD-039: План — в проекте, todo — в сессии, состояние через инструменты (замена TSM) ✅ Реализовано
 
-**Решение:**
+**Кратко:** План в project.plan (kanban), todo в session.todos; инструменты plan_*/todo_*; отменяет AD-002, переопределяет AD-027.
+**Подробно:** [docs/arch_decisions/ad-039-plan-in-project.md](./docs/arch_decisions/ad-039-plan-in-project.md)
 
-```
-@itphx/synth-shared  ←  только контракты (types/schemas/protocols/config)
-       ↑
-@itphx/synth-core    ←  владеет prompts/, dictionaries/, definitions/ (files)
-       ↑
-┌──────┴──────┐
-@itphx/synth-backend │ @itphx/synth-ui   ←  core и ui владеют своими ассетами
-@itphx/synth-runner (in-process)
-       ↑
-@itphx/synth   ←  тонкая обёртка: dependencies = core + ui + shared
-                  bin: synth → dist/cli.js (external: core/ui/shared)
-```
+### AD-040: Сессии без проекта и перенос между проектами ✅ Реализовано
 
-**Принципы:**
-- **Каждый пакет владеет своими ассетами.** Ассеты перечислены в поле `files`
-  (`dist`, `prompts`, `dictionaries` и т.д.) и доставляются через npm.
-- **`@itphx/synth` — тонкая обёртка.** В `dependencies` — только `@itphx/synth-core`,
-  `@itphx/synth-ui`, `@itphx/synth-shared` (и runtime-библиотеки). Сборка tsup помечает
-  `@itphx/*` как `external` — core **не** бандлится в `cli.js`.
-- **Никакого копирования ассетов.** `cp -r prompts`, `cp -r ui/dist`, копирование
-  README/docs при сборке synth — удалены. В репозитории больше нет идентичных файлов.
-- **Резолвинг из node_modules.** `@itphx/synth-core` находит свои промпты по
-  `{packageRoot}/prompts` (поиск package.json вверх от `import.meta.url`, fallback
-  на `dist/prompts` для Docker). `@itphx/synth` резолвит собранный UI через
-  `require.resolve('@itphx/synth-ui/package.json')` → `dist/`.
-- **Docker из npm-публикации.** Образ ставит `npm install -g @itphx/synth@<version>`,
-  зависимости резолвятся npm-ом — не из workspace-сборки.
-
-**Порядок публикации** (строгая иерархия зависимостей):
-
-```
-shared → core → ui → backend → runner → synth
-```
-
-**`pnpm publish` вместо `npm publish`:** `npm publish` не переписывает
-`workspace:*` в зависимостях — опубликованные пакеты падают у npm-потребителей
-(не резолвится `workspace:*`). `pnpm publish` автоматически заменяет
-`workspace:*` на фактические версии workspace-пакетов, поэтому используется именно
-он (с флагом `--no-git-checks`, т.к. публикация идёт не из чистого git-дерева).
-
-**Реестры:**
-- npmjs.org: `https://registry.npmjs.org` (токен `NPM_TOKEN`)
-- GitVerse: `https://gitverse.ru/api/packages/itphx/npm/` (токен `GV_TOKEN`)
-
-**Что не делаем:**
-- Не публикуем workspace-сборку как единый артефакт — только npm-пакеты
-- Не копируем ассеты между пакетами при сборке
-- Не используем `noExternal`-бандл core/ui/shared в `@itphx/synth`
-
-### AD-039: План — в проекте, todo — в сессии, состояние через инструменты (замена TSM)
-
-**Решение:** вместо TSM-протокола прототипа (JSON-блок статуса + парсинг текста + отдельные промпты по состояниям) — модель, в которой:
-
-- **План принадлежит проекту**, **todo — сессии**.
-- Состояние/режим, план и todo управляются **инструментами** (`plan_*`, `todo_*`, переключение режима), а не JSON-блоком в ответе модели.
-- Инструкции (когда планировать, как декомпозировать задачу в todo, когда предложить завести проект) — в системном промпте: роль агента + mode-промпты + контекстный блок сессии. Отдельного слоя TSM-промптов нет.
-
-**Контекст:** AD-002 (собственная TSM) не оправдал себя в прототипе: валидация переходов была мёртвым кодом, JSON-блок хрупко парсился (regex, построчный fallback, видимый JSON в streaming), `next_state` отбрасывался. Тот же результат достигается надёжнее: режим (plan/act/yolo) — глобальный permission toggle (AD-025), план и todo — структурированные данные под управлением инструментов.
-
-**Модель данных:**
-
-```ts
-// Проект владеет планом (kanban-основа)
-interface ProjectPlan {
-  version: number;
-  updatedAt: string;
-  columns: PlanColumn[];   // колонки доски
-  items: PlanItem[];       // пункты плана
-}
-interface PlanColumn { id: string; name: string; order: number; wipLimit?: number }
-interface PlanItem {
-  id: string; title: string; description?: string;
-  columnId: string; priority: 'high' | 'medium' | 'low'; order: number;
-  dependsOn: PlanDependency[]; tags?: string[];
-  createdAt: string; updatedAt: string;
-}
-interface PlanDependency { projectId?: string; itemId: string; relation: 'blocked_by' | 'blocks' | 'relates_to' }
-
-// Сессия владеет todo
-interface TodoItem {
-  id: string; content: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
-  priority: 'high' | 'medium' | 'low';
-  planItemId?: string;   // связь с пунктом плана проекта
-}
-```
-
-**Хранение:** план — поле `project.plan` (JSON проекта), todo — поле `session.todos` (JSON сессии). **Без файлов `.synth/` в workspace** — данные живут в самих сущностях (атомарная запись AD-005; слабая привязка к ФС, упрощённая миграция на БД, AD-032). `planContent`/`planPath` из сессии — удаляются.
-
-**Инструменты:**
-- `plan_*` — работа с планом проекта: `plan_read`/`plan_list`, `plan_write` (создание/редактирование пунктов, перемещение по колонкам, зависимости), `plan_export` (markdown-представление).
-- `todo_*` — работа с todo сессии: `todo_list`, `todo_add`, `todo_update` (статус/порядок/`planItemId`), `todo_delete`, `todo_export`.
-- `plan_enter` / `plan_exit` — **только** переключение режима сессии (plan ↔ act), без записи файлов. План пишется отдельным `plan_write`; `plan_exit` завершает планирование (событие `plan.approved` — сигнал «план зафиксирован»).
-- В system prompt: блок `[APPROVED PLAN]` собирается из `project.plan`, блок todo — из сессии; контекстный блок сессии сообщает наличие/отсутствие проекта и рабочий каталог.
-
-**Переопределяет:** AD-027 (план хранится в проекте, не на диске; в system prompt — из `project.plan`). **Отменяет AD-002:** TSM-слой (`TsmState`, `updateTsmState`, категория `tsm` в конфиге) удаляется.
-
-### AD-040: Сессии без проекта и перенос между проектами
-
-**Решение:** `projectId` сессии опционален — сессия без проекта штатный сценарий. Модель всегда знает свой контекст:
-
-- В system prompt встраивается **контекстный блок сессии**: есть/нет проекта, имя проекта, рабочий каталог, ограничения (план доступен только при проекте; файловые/git-тулы работают в рамках рабочего каталога).
-- Если задача требует плана или длительной работы с файлами — модель **подсказывает пользователю** завести проект или перенести сессию; может инициировать через инструменты `project_create` / `project_attach` (с permission ask).
-- `get_project_info` в сессии без проекта возвращает честный статус «проект отсутствует» + рабочий каталог (не «Проект: default»).
-
-**Перенос сессии между проектами** (`PATCH /sessions/:id` `project_id`, drag&drop в UI):
-- **todo остаётся** с сессией; **план берётся от нового проекта** (`planItemId` в todo, ссылающийся на пункты старого плана, игнорируется, если пункт не найден).
-- При смене проекта валидируется его существование; `planPath`/`planContent` (если ещё есть) сбрасываются; публикуется событие `session.moved`.
-- Сессия без проекта: todo есть, плана нет.
-
-**UI:** вкладка «Проект» для сессии без проекта — действия «Создать проект» / «Привязать к проекту»; визуальная метка «без проекта»; файловый браузер доступен через проекты с workspace.
-
-**Порядок реализации:**
-1. Ядро состояний: удаление TSM-слоя, контекстный блок сессии, `todo_*` CRUD, доступность plan/todo/project-тулов (permission-группа `RUNTIME`, capability `runtime` встроенным агентам).
-2. Проект-контейнер: `project.plan` (kanban-структура), `plan_*` инструменты, лог проекта, инварианты/лимиты/метки доступа.
-3. Сессии без проекта: подсказка + перенос + UI.
+**Кратко:** projectId опционален; контекстный блок сессии; project_create/project_attach; перенос с session.moved.
+**Подробно:** [docs/arch_decisions/ad-040-sessions-without-project.md](./docs/arch_decisions/ad-040-sessions-without-project.md)
 
 ### Отказ от JSON-блока
 
 Механизм JSON-блока (модель возвращает JSON со статусом в конце ответа) не перенесён из прототипа. Причины: хрупкий парсинг, трата токенов, загрязнение промпта. Замена: Tool Use / Function Calling — состояние, план и todo управляются инструментами (см. AD-039).
 
-### AD-041: Единая таксономия ошибок LLM + контракт локализации строк движка
+### AD-041: Единая таксономия ошибок LLM + контракт локализации строк движка ✅ Реализовано
 
-**Решение:** (1) классификация/«recoverable» ошибок LLM-провайдеров — одна точка истины в `packages/core/src/engine/llm-error.ts`, используемая и основной сессией, и саб-агентом; (2) локализованные строки движка — по месту потребления, с контрактом ключей в `@itphx/synth-shared` и автопроверкой синхронизации core↔ui.
+**Кратко:** classifyLlmError + isLlmErrorRecoverable — единый источник; контракт ENGINE_MESSAGE_KEYS (201) в shared/i18n; автопроверка синхронизации.
+**Подробно:** [docs/arch_decisions/ad-041-llm-error-taxonomy.md](./docs/arch_decisions/ad-041-llm-error-taxonomy.md)
 
-**Контекст:** классификация ошибок была реализована в трёх местах (`llm-error.ts`, `orchestrator._isRecoverable`, `processor._isRecoverable`) с расходящимися списками — одна и та же ошибка получала разные вердикты «можно ретраить» в основной сессии и в саб-агенте. Локализация движковых системных сообщений не имела автопроверки: изменение en-шаблона (ключ/параметр) молча рассинхронизировало ru-словарь UI.
+### AD-042: Гибридный режим — локальный core + централизованный сервер ✅ Реализовано
 
-**(1) Таксономия ошибок.** `classifyLlmError` + `isLlmErrorRecoverable(error, errMsg?, errorType?)` — единый источник. Приоритеты: `ContextLengthExceededError` (по классу, а не по тексту) → unrecoverable; переданный `errorType` из `UNRECOVERABLE_TYPES` → unrecoverable; иначе по объединённому `UNRECOVERABLE_PATTERNS`. `orchestrator._handleLlmFailure` и `processor._isRecoverable` делегируют сюда; инлайновые списки удалены. Политика ретрая (3 попытки, задержки 5/15/30с) вынесена в константы `LLM_MAX_ATTEMPTS`/`LLM_RETRY_DELAYS_MS` — единые для основной сессии и саб-агента (`task.ts` — реэкспорт-алиасы, внешние импорты не сломаны).
+**Кратко:** Локальный core + сервер K3s: агрегация миров remote:<id>, LLM Proxy, RemoteEventBridge, publish/fork (аутентификация/единая личность — AD-043).
+**Подробно:** [docs/arch_decisions/ad-042-hybrid-mode.md](./docs/arch_decisions/ad-042-hybrid-mode.md)
 
-**(2) Локализация.** Схема «LLM = один язык / UI = локализация» сохранена. Хранение по месту потребления:
-- **en-шаблоны** (LLM-канал, источник истины) — `packages/core/src/engine/system-messages.ts` (текст в core, не перемещён).
-- **ru-переводы** (потребитель — UI; движок их сам не эмитит) — `packages/ui/src/lib/i18n/messages/ru.ts` (как было).
-- **контракт** — `packages/shared/src/i18n/index.ts`: `ENGINE_MESSAGE_KEYS` (201 ключ, `as const`), `ENGINE_MESSAGE_PARAMS` (канонические `{param}`-имена на ключ), `extractParams`, тип `EngineMessageKey`; реэкспорт `MessageI18n`.
-- **промпты-файлы** (роли/режимы/саб-агенты, LLM-facing, большие markdown) — остаются `.md`-локализуемыми в `core/prompts/` (отдельная механика серверного резолва по языку; осознанно не объединяется со словарём).
+### AD-043: Единая идентичность гибрида — вход в UI без Keycloak-ритуала ✅ Реализовано
 
-**Автопроверка синхронизации (устраняет рассинхрон core↔ui):**
-- core `system-messages.ts` типизирован `as const satisfies Record<SystemMessageKey, string>` → TS не допускает «осиротевших»/«лишних» ключей; `SystemMessageKey = EngineMessageKey`.
-- тест core: ключи `SYSTEM_MESSAGES` set-равны `ENGINE_MESSAGE_KEYS`; `extractParams(en)` ≡ `ENGINE_MESSAGE_PARAMS[key]`.
-- тест ui: каждый `ENGINE_MESSAGE_KEYS` присутствует в `ru.ts` и `extractParams(ru)` ≡ `ENGINE_MESSAGE_PARAMS[key]`; en-локаль может не содержать движковые ключи (деградация на en-`content`).
-
-**Переопределяет/заменяет:** ничего из прежних AD не отменяет. **Расширяет:** AD-036 (gateway) — общая точка классификации ошибок; AD-039/AD-040 — i18n движковых сообщений.
-
-**Почему не переносим весь каталог в shared:** ru-переводы потребляет только UI, en-шаблоны — только движок; перенос текста заставил бы переписывать словарную загрузку UI и размыл бы границы пакетов. В shared — только контракт (словник как контракт/тип/утилита), что соответствует роли пакета «контракты, без логики».
-
----
+**Кратко:** Runtime-подключение (RemoteConnection) + вход в UI по логину/паролю (ROPC «за кулисами»), дискавери IdP с сервера (`GET /auth/oidc-meta`), единая личность (cookie v2, роли/профиль/админка — с сервера), старт без device flow; public-клиент `synth-cli`.
+**Подробно:** [docs/arch_decisions/ad-043-unified-identity-login.md](./docs/arch_decisions/ad-043-unified-identity-login.md)
 
 ## Аутентификация
 
@@ -1679,6 +1139,7 @@ pnpm typecheck && pnpm lint && pnpm test
 |------|------------|
 | `AGENTS.md` | Архитектурные соглашения (этот файл) |
 | `plan.md` | План дальнейших работ |
+| `docs/HYBRID.md` | Гибридный режим: требования, архитектура, статус |
 | `archive/AGENTS_OLD.md` | Архив: deprecated AD, Python/FastAPI стек |
 | `SPEC.md` | Спецификация функциональности |
 | `rbac-design.md` | Дизайн RBAC |

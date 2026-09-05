@@ -376,7 +376,13 @@ export function createDispatcher(): EventDispatcher {
 
       case 'session.created':
       case 'session.fork.created': {
-        const session = payload as unknown as SessionData
+        const session = { ...(payload as unknown as SessionData) }
+        if (session.id && !session.origin) {
+          // Гибрид: события удалённого backend приходят через RemoteEventBridge с
+          // переписанным id (remote:<...>), но без поля origin — восстанавливаем его,
+          // чтобы бейдж/фильтры дерева не теряли мир сессии.
+          session.origin = session.id.startsWith('remote:') ? 'remote' : 'local'
+        }
         if (session.id) {
           useSessionsStore.setState((s) => ({
             sessions: [session, ...s.sessions],

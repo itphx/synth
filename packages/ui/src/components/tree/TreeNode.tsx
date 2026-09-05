@@ -22,15 +22,36 @@ function ActionButton({ action, alwaysVisible }: { action: TreeAction; alwaysVis
       : 'text-muted-foreground hover:text-foreground'
 
   const visibilityClass = alwaysVisible ? '' : 'hidden group-hover:inline-flex'
+  const buttonClass = cn(
+    'h-5 w-5 items-center justify-center rounded transition-colors',
+    visibilityClass,
+    variantClass,
+  )
+
+  // Действие с пунктами меню (гибрид: «создать локально / на сервере») — кнопка
+  // становится триггером контекстного меню, а не мгновенным действием.
+  if (action.menuItems && action.menuItems.length > 0) {
+    return (
+      <ContextMenu
+        trigger={
+          <button
+            onClick={(e) => e.stopPropagation()}
+            className={buttonClass}
+            title={action.title}
+          >
+            <Icon name={action.icon} className="h-3.5 w-3.5" />
+          </button>
+        }
+        items={action.menuItems}
+        align="end"
+      />
+    )
+  }
 
   return (
     <button
-      onClick={(e) => { e.stopPropagation(); action.onClick() }}
-      className={cn(
-        'h-5 w-5 items-center justify-center rounded transition-colors',
-        visibilityClass,
-        variantClass,
-      )}
+      onClick={(e) => { e.stopPropagation(); action.onClick?.() }}
+      className={buttonClass}
       title={action.title}
     >
       <Icon name={action.icon} className="h-3.5 w-3.5" />
@@ -55,6 +76,9 @@ export function TreeNode({
   subtitle,
   count,
   suffix,
+  badge,
+
+  title,
 
   isActive,
   isTabOpen,
@@ -131,6 +155,7 @@ export function TreeNode({
         className,
         rowClassName,
       )}
+      title={title}
       draggable={draggable && !selectionMode}
       onDragStart={(e) => { if (!selectionMode) onDragStart?.(e) }}
       onDragOver={onDragOver}
@@ -201,15 +226,18 @@ export function TreeNode({
           </div>
         ) : (
           <>
-            <span
-              className={cn(
-                'truncate text-sm',
-                hasUnread ? 'text-orange-400' : labelMuted ? 'text-muted-foreground' : 'text-foreground',
-              )}
-              title={label}
-            >
-              {label}
-            </span>
+            <div className="flex items-center gap-1 min-w-0">
+              <span
+                className={cn(
+                  'truncate text-sm',
+                  hasUnread ? 'text-orange-400' : labelMuted ? 'text-muted-foreground' : 'text-foreground',
+                )}
+                title={label}
+              >
+                {label}
+              </span>
+              {badge}
+            </div>
             {subtitle && (
               <span className="text-[0.65rem] text-muted-foreground leading-none truncate">
                 {subtitle}

@@ -22,8 +22,12 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   return response.json()
 }
 
+export type EntityOrigin = 'local' | 'remote'
+
 export interface ProjectData {
   id: string
+  /** Происхождение сущности (гибридный режим): local — локальный мир, remote — удалённый backend. */
+  origin?: EntityOrigin
   name: string
   owner_id: string
   members: Record<string, string>
@@ -48,6 +52,8 @@ export interface ProjectData {
 
 export interface SessionData {
   id: string
+  /** Происхождение сущности (гибридный режим): local — локальный мир, remote — удалённый backend. */
+  origin?: EntityOrigin
   name: string | null
   parent_id?: string | null
   branch_point?: string | null
@@ -134,6 +140,16 @@ export interface ProjectStats {
   total_cache_read_tokens: number
   total_cache_write_tokens: number
   total_reasoning_tokens: number
+}
+
+/** Ответ POST /projects/:id/publish — перенос локального проекта на сервер. */
+export interface PublishProjectResult {
+  ok: boolean
+  /** id удалённого проекта в remote-форме ('remote:<uuid>'). */
+  project_id: string
+  created: boolean
+  sessions_imported: number
+  files_uploaded: number
 }
 
 export interface UserInfo {
@@ -252,6 +268,7 @@ export const synthApi = {
     icon?: string | null
     color?: string | null
     workspace?: string | null
+    origin?: EntityOrigin
   }): Promise<ProjectData> {
     return fetchJSON<ProjectData>(`${BASE_URL}/projects`, {
       method: 'POST',
@@ -281,6 +298,22 @@ export const synthApi = {
     })
   },
 
+  // Перенос проектов между мирами (гибрид): publish — локальный проект на сервер,
+  // fork-local — удалённый проект в локальный мир. Сессии и файлы переносятся всегда.
+  async publishProject(id: string, opts?: { remote_project_id?: string }): Promise<PublishProjectResult> {
+    return fetchJSON<PublishProjectResult>(`${BASE_URL}/projects/${encodeURIComponent(id)}/publish`, {
+      method: 'POST',
+      body: JSON.stringify(opts || {}),
+    })
+  },
+
+  async forkRemoteProject(id: string, opts?: { local_name?: string }): Promise<ProjectData> {
+    return fetchJSON<ProjectData>(`${BASE_URL}/projects/${encodeURIComponent(id)}/fork-local`, {
+      method: 'POST',
+      body: JSON.stringify(opts || {}),
+    })
+  },
+
   async getProjectStats(id: string): Promise<ProjectStats> {
     return fetchJSON<ProjectStats>(`${BASE_URL}/projects/${encodeURIComponent(id)}/stats`)
   },
@@ -304,6 +337,7 @@ export const synthApi = {
     project_id?: string | null
     engine?: string
     settings?: Record<string, unknown>
+    origin?: EntityOrigin
   }): Promise<SessionData> {
     return fetchJSON<SessionData>(`${BASE_URL}/sessions`, {
       method: 'POST',
@@ -695,6 +729,11 @@ export const synthApi = {
   // Все агенты (для админки, GET /agents/all)
   async getAllAgents(): Promise<AgentsListResponse> {
     return fetchJSON<AgentsListResponse>(`${BASE_URL}/agents/all`)
+  },
+
+  // Гибридный режим: статус подключения к удалённому backend (без auth, как /health)
+  async getHybridStatus(): Promise<HybridStatus> {
+    return fetchJSON<HybridStatus>(`${BASE_URL}/hybrid/status`)
   },
 
   // Провайдеры и модели
@@ -1163,4 +1202,20 @@ export interface McpServerEntry {
   name: string
   config: McpServerConfig
   connected: boolean
+}
+
+/** Ответ GET /api/v2/hybrid/status — статус гибридного режима (core ↔ удалённый backend). */
+export interface HybridStatus {
+  enabled: boolean
+  connected: boolean
+  backendUrl: string | null
+  /** Адрес сервера известен (--connect/env/конфиг) — форма логина скрывает поле адреса. */
+  serverConfigured: boolean
+  /** Доступен вход на сервер (адрес/issuer известен или уже подключено) — серверная форма логина. */
+  serverLoginAvailable: boolean
+  user?: {
+    id: string
+    username: string
+    roles: string[]
+  } | null
 }

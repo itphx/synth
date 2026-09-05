@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useAuthStore } from '@/stores/authStore'
 import { api } from '@/lib/api/client'
+import { synthApi } from '@/lib/api/synthApi'
 import { useI18n } from '@/lib/i18n'
 import { SynthLogo } from '@/components/ui'
 import { Icon } from '@/components/icon/Icon'
@@ -15,11 +16,14 @@ export const LoginForm = () => {
   const { t } = useI18n()
   const { login, loginWithPassword, isLoading, error, clearError } = useAuthStore()
   const [apiKey, setApiKey] = useState('')
+  const [server, setServer] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [debugUsers, setDebugUsers] = useState<DebugUser[]>([])
   const [isDebugMode, setIsDebugMode] = useState(false)
   const [oidcEnabled, setOidcEnabled] = useState(false)
+  /** Адрес сервера известен при старте (--connect/env/конфиг) → поле адреса скрыто. */
+  const [serverConfigured, setServerConfigured] = useState(false)
 
   useEffect(() => {
     const checkStatus = async () => {
@@ -30,6 +34,17 @@ export const LoginForm = () => {
         if (status.debug_mode) {
           const users = await api.getUsers()
           setDebugUsers(users.users)
+        }
+        // Гибрид: если вход на сервер доступен — уточняем, известен ли адрес.
+        // serverConfigured=true → адрес задан при старте, поле скрываем (вход
+        // идёт на defaultBackendUrl core); false → адрес вводит пользователь.
+        // backendUrl подставляем, если core уже знает удалённый backend.
+        if (status.oidc_enabled) {
+          const hybrid = await synthApi.getHybridStatus().catch(() => null)
+          if (hybrid) {
+            setServerConfigured(hybrid.serverConfigured)
+            if (hybrid.backendUrl) setServer((prev) => prev || hybrid.backendUrl || '')
+          }
         }
       } catch {
         setIsDebugMode(false)
@@ -42,7 +57,9 @@ export const LoginForm = () => {
     e.preventDefault()
     clearError()
     if (oidcEnabled) {
-      await loginWithPassword(username, password)
+      // server пуст только когда адрес известен core (defaultBackendUrl) —
+      // серверная часть сама подставит его.
+      await loginWithPassword(server, username, password)
     } else {
       await login(apiKey, username || undefined)
     }
@@ -62,6 +79,27 @@ export const LoginForm = () => {
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           {oidcEnabled ? (
             <>
+              {!serverConfigured && (
+                <div className="flex flex-col gap-2">
+                  <label className="text-sm font-medium text-foreground">
+                    {t('auth.serverUrl')}
+                  </label>
+                  <input
+                    type="text"
+                    value={server}
+                    onChange={(e) => setServer(e.target.value)}
+                    placeholder={t('auth.serverUrlPlaceholder')}
+                    autoComplete="url"
+                    className={cn(
+                      "w-full px-4 py-2.5 rounded-lg border bg-background text-foreground",
+                      "placeholder:text-muted-foreground",
+                      "focus:outline-none focus:ring-2 focus:ring-ring",
+                      "transition-colors"
+                    )}
+                  />
+                </div>
+              )}
+
               <div className="flex flex-col gap-2">
                 <label className="text-sm font-medium text-foreground">
                   {t('auth.username')}

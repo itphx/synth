@@ -8,6 +8,7 @@ import { createSessionRoutes } from './sessions.js';
 import { SessionManager, EventBus, FileStore } from '@itphx/synth-core';
 import { ProjectStore } from '../storage/project-store.js';
 import type { User } from '@itphx/synth-shared';
+import { MessageRole } from '@itphx/synth-shared';
 
 const testUser: User = {
   id: 'test-user',
@@ -453,6 +454,138 @@ describe('Session API Routes', () => {
       const { app } = createTestApp(tmpDir);
       const res = await app.request('/api/v2/sessions/non-existent/clear', { method: 'POST' });
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('GET /api/v2/sessions/:id/export', () => {
+    it('возвращает полный объект сессии с историей, todos и настройками', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'Exp', userId: 'test-user' });
+      session.todos = [{ id: 't1', content: 'task', status: 'pending', priority: 'medium' }];
+      await sessionManager.updateSession(session);
+      await sessionManager.addMessage(session.id, {
+        id: 'm1', role: MessageRole.USER, seq: 1, origin: 'local' as const,
+        parts: [{ id: 'p1', type: 'text' as const, data: 'hello' }],
+        content: 'hello', createdAt: new Date().toISOString(),
+        disabled: false, pinned: false, hidden: false,
+      });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/export`);
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.id).toBe(session.id);
+      expect(body.title).toBe('Exp');
+      expect(body.messages).toHaveLength(1);
+      expect(body.messages[0].content).toBe('hello');
+      expect(body.todos).toEqual([{ id: 't1', content: 'task', status: 'pending', priority: 'medium' }]);
+      expect(body.settings).toBeTruthy();
+      expect(body.engine).toBe('synth');
+    });
+
+    it('возвращает 404 для отсутствующей сессии', async () => {
+      const { app } = createTestApp(tmpDir);
+      const res = await app.request('/api/v2/sessions/non-existent/export');
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('POST /api/v2/sessions/import', () => {
+    it('создаёт сессию с историей сообщений из экспорта', async () => {
+      const { app, sessionManager, projectStore } = createTestApp(tmpDir);
+      const proj = projectStore.create('Proj1', 'test-user');
+      await projectStore.save(proj);
+      const source = await sessionManager.createSession({ title: 'Src', userId: 'test-user' });
+      await sessionManager.addMessage(source.id, {
+        id: 'm1', role: MessageRole.USER, seq: 1, origin: 'local' as const,
+        parts: [{ id: 'p1', type: 'text' as const, data: 'привет' }],
+        content: 'привет', createdAt: '2026-01-01T00:00:00.000Z',
+        disabled: false, pinned: false, hidden: false,
+      });
+      await sessionManager.addMessage(source.id, {
+        id: 'm2', role: MessageRole.ASSISTANT, seq: 2, origin: 'local' as const,
+        parts: [{ id: 'p2', type: 'text' as const, data: 'ответ' }],
+        content: 'ответ', createdAt: '2026-01-01T00:00:01.000Z',
+        disabled: false, pinned: false, hidden: false,
+      });
+      const exported = await sessionManager.getSession(source.id);
+
+      const res = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...exported, import: { project_id: proj.id } }),
+      });
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      expect(body.id).not.toBe(source.id);
+      expect(body.name).toBe('Src');
+      expect(body.project_id).toBe(proj.id);
+
+      const created = await sessionManager.getSession(body.id);
+      expect(created?.messages).toHaveLength(2);
+      expect(created?.messages[0]?.content).toBe('привет');
+      expect(created?.messages[1]?.content).toBe('ответ');
+      expect(created?.messages[1]?.seq).toBe(2);
+    });
+
+    it('принимает тело в snake_case формате', async () => {
+      const { app, projectStore } = createTestApp(tmpDir);
+      const proj = projectStore.create('Proj2', 'test-user');
+      await projectStore.save(proj);
+      const res = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: 'Snake',
+          engine: 'synth',
+          session_origin: 'user',
+          project_id: proj.id,
+          messages: [{
+            id: 'm1', role: MessageRole.USER, seq: 1, origin: 'local',
+            parts: [{ id: 'p1', type: 'text', data: 'x' }],
+            content: 'x', created_at: '2026-01-01T00:00:00.000Z',
+            disabled: false, pinned: false, hidden: false,
+          }],
+          todos: [{ id: 't1', content: 'task', status: 'pending', priority: 'high' }],
+        }),
+      });
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      expect(body.name).toBe('Snake');
+      expect(body.project_id).toBe(proj.id);
+    });
+
+    it('сохраняет parentId из экспорта (publish переписывает его на remote-id)', async () => {
+      const { app, sessionManager, projectStore } = createTestApp(tmpDir);
+      const proj = projectStore.create('Proj3', 'test-user');
+      await projectStore.save(proj);
+      const parent = await sessionManager.createSession({ title: 'Parent', userId: 'test-user' });
+      const source = await sessionManager.createSession({ title: 'Child', userId: 'test-user', parentId: parent.id });
+      const exported = await sessionManager.getSession(source.id);
+
+      const res = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...exported, import: { project_id: proj.id } }),
+      });
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      expect(body.id).not.toBe(source.id);
+      // parentId — как в экспорте (переписанный publish-ом remote-id).
+      expect(body.parent_id).toBe(parent.id);
+      const created = await sessionManager.getSession(body.id);
+      expect(created?.parentId).toBe(parent.id);
+    });
+
+    it('возвращает 400 PROJECT_NOT_FOUND для несуществующего проекта', async () => {
+      const { app } = createTestApp(tmpDir);
+      const res = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'X', import: { project_id: 'no-such-project' } }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('PROJECT_NOT_FOUND');
     });
   });
 });

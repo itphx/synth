@@ -52,7 +52,11 @@ function isInternalOrigin(origin: string): boolean {
   }
 }
 
-export function createProviderRoutes(kit: AuthKit, store: JsonStore<ProviderConfig>): Hono {
+export function createProviderRoutes(
+  kit: AuthKit,
+  store: JsonStore<ProviderConfig>,
+  providerCache: Map<string, ProviderConfig>,
+): Hono {
   const app = new Hono();
 
   // GET /api/v2/providers — список провайдеров
@@ -93,6 +97,7 @@ export function createProviderRoutes(kit: AuthKit, store: JsonStore<ProviderConf
       icon: body.icon !== undefined ? body.icon : (existing?.icon ?? ''),
     };
     await store.save(name, provider);
+    providerCache.set(name, provider);
     return c.json(provider, existing ? 200 : 201);
   });
 
@@ -103,6 +108,7 @@ export function createProviderRoutes(kit: AuthKit, store: JsonStore<ProviderConf
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.provider', undefined, c) } }, 404);
     }
     await store.delete(name);
+    providerCache.delete(name);
     return c.body(null, 204);
   });
 

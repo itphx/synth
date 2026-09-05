@@ -110,6 +110,15 @@ export const defaultConfig: SynthConfig = {
       provider: '',
     },
   },
+  remote: {
+    enabled: false,
+    backendUrl: '',
+    auth: { type: 'device', apiKey: '', issuer: '', clientId: '' },
+    llm: 'server',
+    worlds: { local: true, remote: true },
+    credentialsPath: '',
+    timeoutMs: 15000,
+  },
   microFirst: {
     enabled: false,
     confidenceThreshold: 0.8,

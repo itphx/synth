@@ -11,8 +11,10 @@ interface AuthState {
   error: string | null
 
   initialize: () => Promise<void>
+  reauthenticate: () => Promise<void>
   login: (apiKey: string, username?: string) => Promise<void>
-  loginWithPassword: (username: string, password: string) => Promise<void>
+  loginWithPassword: (server: string, username: string, password: string) => Promise<void>
+  setUser: (user: User) => Promise<void>
   logout: () => Promise<void>
   clearError: () => void
 }
@@ -27,6 +29,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   initialize: async () => {
     if (get().isLoading || get().isInitialized) return
+    await get().reauthenticate()
+  },
+
+  /**
+   * Принудительно перечитать сессию (без guard) — когда cookie уже поставлена
+   * (например после server-логина), а состояние UI нужно обновить.
+   */
+  reauthenticate: async () => {
     set({ isLoading: true, error: null })
     try {
       const session = await api.getSession()
@@ -68,10 +78,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  loginWithPassword: async (username: string, password: string) => {
+  loginWithPassword: async (server: string, username: string, password: string) => {
     set({ isLoading: true, error: null })
     try {
-      const response = await api.loginWithPassword(username, password)
+      const response = await api.loginWithPassword(server, username, password)
       set({
         user: response.user,
         isAuthenticated: true,
@@ -86,6 +96,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         isInitialized: true,
       })
     }
+  },
+
+  /**
+   * Установить пользователя после server-логина: cookie уже поставлена core,
+   * здесь — только состояние UI (+ профиль).
+   */
+  setUser: async (user: User) => {
+    set({ user, isAuthenticated: true, isLoading: false, error: null })
+    await profileService.initialize()
+    set({ isInitialized: true })
   },
 
   logout: async () => {

@@ -23,6 +23,7 @@ function renderIcon(icon?: string, baseUrl?: string): { icon: string; icon_url?:
 export function createProviderRoutes(
   auth: AuthKit,
   store: JsonStore<ProviderConfig>,
+  providerCache: Map<string, ProviderConfig>,
   isTestEnabled: boolean = false,
 ): Hono {
   const app = new Hono();
@@ -63,6 +64,7 @@ export function createProviderRoutes(
       icon: body.icon !== undefined ? body.icon : (existing?.icon ?? ''),
     };
     await store.save(name, provider);
+    providerCache.set(name, provider);
     return c.json(provider, existing ? 200 : 201);
   });
 
@@ -72,6 +74,7 @@ export function createProviderRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: 'Провайдер не найден' } }, 404);
     }
     await store.delete(name);
+    providerCache.delete(name);
     return c.body(null, 204);
   });
 

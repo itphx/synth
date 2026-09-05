@@ -1,6 +1,8 @@
 import { create } from 'zustand'
-import type { ProjectData, GitRepoConfigData } from '@/lib/api/synthApi'
+import type { ProjectData, GitRepoConfigData, EntityOrigin, PublishProjectResult } from '@/lib/api/synthApi'
 import { synthApi } from '@/lib/api/synthApi'
+import { useSessionsStore } from './sessionsStore'
+import { useI18nStore, formatMessage } from '@/lib/i18n/store'
 
 interface ProjectsStore {
   projects: ProjectData[]
@@ -16,6 +18,7 @@ interface ProjectsStore {
     color?: string | null
     workspace?: string | null
     repos?: GitRepoConfigData[]
+    origin?: EntityOrigin
   }) => Promise<ProjectData | null>
   updateProject: (id: string, data: {
     name?: string
@@ -26,9 +29,18 @@ interface ProjectsStore {
     repos?: GitRepoConfigData[]
   }) => Promise<ProjectData | null>
   deleteProject: (id: string) => Promise<boolean>
+  // Перенос проектов между мирами (гибрид, UI publish/fork). Бросают ошибку при
+  // неудаче — вызывающий код решает, что показать (паттерн setSessionMode).
+  publishProject: (id: string, opts?: { remote_project_id?: string }) => Promise<PublishProjectResult>
+  forkRemoteProject: (id: string, opts?: { local_name?: string }) => Promise<ProjectData>
 }
 
-export const useProjectsStore = create<ProjectsStore>((set) => ({
+/** Локализованная строка вне React (для window.confirm в сторах). */
+function i18nText(key: string): string {
+  return formatMessage(useI18nStore.getState().dictionary, key)
+}
+
+export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   projects: [],
   loading: false,
   error: null,
@@ -86,6 +98,11 @@ export const useProjectsStore = create<ProjectsStore>((set) => ({
   },
 
   deleteProject: async (id) => {
+    // Гибрид: удаление удалённого проекта выполняется на сервере — подтверждение.
+    const project = get().projects.find((p) => p.id === id)
+    if (project?.origin === 'remote') {
+      if (!window.confirm(i18nText('hybrid.confirmDeleteRemoteProject'))) return false
+    }
     try {
       await synthApi.deleteProject(id)
       set((s) => ({ projects: s.projects.filter((p) => p.id !== id) }))
@@ -93,6 +110,33 @@ export const useProjectsStore = create<ProjectsStore>((set) => ({
     } catch (e) {
       set({ error: (e as Error).message })
       return false
+    }
+  },
+
+  // Гибрид: локальный проект → сервер (проект + сессии + файлы). После успеха
+  // перечитываем списки — удалённая копия появляется в дереве проектов.
+  publishProject: async (id, opts) => {
+    try {
+      const result = await synthApi.publishProject(id, opts)
+      await get().loadProjects()
+      await useSessionsStore.getState().loadSessions()
+      return result
+    } catch (e) {
+      set({ error: (e as Error).message })
+      throw e
+    }
+  },
+
+  // Гибрид: удалённый проект → локальная копия (проект + сессии + файлы).
+  forkRemoteProject: async (id, opts) => {
+    try {
+      const project = await synthApi.forkRemoteProject(id, opts)
+      await get().loadProjects()
+      await useSessionsStore.getState().loadSessions()
+      return project
+    } catch (e) {
+      set({ error: (e as Error).message })
+      throw e
     }
   },
 }))
