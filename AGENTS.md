@@ -420,7 +420,7 @@ synth serve --oidc-issuer https://keycloak.itphx.loc/realms/synth \
 | AD-029 | Гранулярные permissions: allow/deny/ask per tool + file patterns ✅ Реализовано | [ad-029](./docs/arch_decisions/ad-029-granular-permissions.md) |
 | AD-030 | Hooks для событий агента (pre/post tool use, session, plan, spawn) | — |
 | AD-031 | Verification синт (аналог VerificationAgent из Claude Code) | — |
-| AD-032 | Хранение истории: SQLite нормализованная схема (сессии, сообщения, части) | — |
+| AD-032 | Хранение истории: PostgreSQL нормализованная схема (сессии, сообщения, части) | — |
 | AD-033 | Ветвление сессий, наследование контекста и межсессионное слияние ✅ Реализовано | [ad-033](./docs/arch_decisions/ad-033-session-branching-merge.md) |
 | AD-034 | Routing между моделями (content + confidence + cost) ✅ Реализовано | [ad-034](./docs/arch_decisions/ad-034-model-routing.md) |
 | AD-035 | Micro-model first: дешёвый слой перед LLM (правила/embedding) ✅ Реализовано | [ad-035](./docs/arch_decisions/ad-035-micro-model-first.md) |
@@ -676,10 +676,9 @@ plan_exit (план утверждён)
 | `merged` | Скопировано из другой сессии пользователем (smart paste) | ID оригинального сообщения |
 | `crosspost` | Существует в нескольких сессиях одновременно | Синхронизировано |
 
-**Способы хранения (физический уровень — отдельное решение):**
-- Локально: SQLite (одна embedded БД, не требует сервера)
-- Командный режим: PostgreSQL (через drizzle — смена драйвера)
-- Вариант: JSON-файлы с индексацией (как сейчас в прототипе)
+**Способы хранения (физический уровень):**
+- Целевое хранилище: **PostgreSQL** (нормализованная схема). Идём сразу в PostgreSQL — SQLite как промежуточный вариант не используется.
+- Переход с JSON-файлов (AD-005) на PostgreSQL.
 
 ### AD-033: Ветвление сессий и межсессионное слияние ✅ Реализовано
 
