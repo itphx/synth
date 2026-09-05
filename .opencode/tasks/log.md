@@ -145,3 +145,26 @@
 - **Что сделано:** version-bump 0.4.3 (version.ts + 6 package.json); pnpm build всех пакетов — успешно; docker build+push git.itphx.ru/itphx/synth-{backend,ui}:0.4.3 (Dockerfile.backend/ui из исходников); values.yaml в synth-deploy → теги 0.4.3, push main.
 - **Проверка (живой K3s):** rollout backend/ui успешен; поды на образах 0.4.3 (1/1 Running); /api/v2/health → healthy; /auth/oidc-meta → {enabled, issuer keycloak/synth, clientId synth-cli}; ошибок в логах backend нет. Известные pre-existing мелочи: /health отдаёт version 0.1.0 (hardcoded, косметика); Fleet bundle synth Ready=False из-за ingressroute/middleware synth-https-redirect/synth-redirect-to-https «not owned by us» (ресурсы созданы не Fleet) — на rollout деплойментов не влияет.
 - **Заметки:** push synth (ветка feat/hybrid-mode, тег v0.4.3) в gitverse origin НЕ выполнялся (решение пользователя — push только synth-deploy). Живой smoke новых фич (отправка в локальной сессии гибрида, выбор мира, publish/fork в UI) — при следующей сессии с dev-окружением.
+
+## 2026-09-05 — fix: подготовка нового релиза (2 бага + Fleet Ready)
+- **Задача:** «Исправь пару небольших багов и будем выкатывать новый релиз» — /health version; дёрганье вкладок правой панели; Fleet bundle synth Ready=False.
+- **Тип:** bug (backend, UI) + ops (Fleet)
+- **Исполнитель:** @fixer (код), @orchestrator (Fleet)
+- **Результат:** PASS
+- **Коммит:** d3463db (synth, feat/hybrid-mode; push не делали)
+- **Что сделано:**
+  - `packages/backend/src/app.ts`: `/health` и `/api/v2/health` возвращают `SYNTH_VERSION` (0.4.3) вместо хардкода '0.1.0' (импорт добавлен в существующий shared-импорт).
+  - `packages/ui/src/hooks/useAdaptiveIcons.ts` (+ тест `useAdaptiveIcons.test.tsx`, 7 кейсов): устранена осцилляция «текст ↔ иконки» при первом открытии правой панели. Причина: при обрезке с первого замера `textFitsWidthRef` оставался 0, а fallback-порог возврата `containerWidth * 0.9` пересчитывался на каждый check (для любой ширины W>0.9W всегда истинно) и не дебаунсился → любое событие ResizeObserver/resize во время анимации открытия мгновенно возвращало текст, затем снова иконки. Фикс: якорь `iconsOnlyWidthRef` (ширина в момент включения iconsOnly) + симметричный debounce 300 мс для возврата текста. RightPanel/LeftPanel не менялись.
+  - Fleet: объекты `ingressroute synth-https-redirect` и `middleware synth-redirect-to-https` в ns synth были созданы вручную (kubectl apply 30.08, last-applied-configuration, без objectset-лейблов) — bundle `synth` (fleet-local) Ready=False «not owned by us». Чарт synth-deploy их уже определяет (templates/https-redirect.yaml, `redirectHttpToHttps: true`, gitrepo на 17ca774). Удаление не привело к авто-пересозданию (у GitRepo `correctDrift` пуст, helm не ставит objectset-лейблы) — Fleet перешёл в «missing». Восстановили оба ресурса с ownership-лейблами как у соседних (`objectset.rio.cattle.io/hash: e3f76…62`, `objectset.rio.cattle.io/id: default-synth-cattle-fleet-local-system`, helm-лейблы/аннотации, spec идентичен чарту) → bundle Ready 1/1, modified=0.
+- **Проверка:** pnpm typecheck — все 6 пакетов чисто; pnpm lint — 0 errors (только pre-existing warnings); pnpm test — shared 72 / ui 104 (+7 новый hook-тест) / core 1180 / backend 229 / runner нет тестов — зелёные. K3s: `kubectl -n fleet-local get bundle synth` → 1/1 Ready; IngressRoute/Middleware созданы, labels с hash на месте.
+- **Заметки:** закоммичены только 3 файла фиксов (app.ts, useAdaptiveIcons.ts + test); чужие незакоммиченные доки (AGENTS.md, README.md, docs/**) не трогали. Готово к сборке нового релиза (0.4.4+).
+
+## 2026-09-05 — release+deploy: релиз 0.4.4 и обновление K3s
+- **Задача:** «Закоммить изменения и релизимся. После релиза обнови инстанс на K3s.»
+- **Тип:** release/ops
+- **Исполнитель:** @orchestrator
+- **Результат:** PASS
+- **Коммиты:** synth — 671fda5 (docs: AD-032 PostgreSQL), be7a21b (chore: bump v0.4.4), tag v0.4.4 (локально, push не делали по прецеденту 0.4.3); synth-deploy — 0a4e622 (chore: deploy 0.4.4 — теги backend/ui), запушен на git.itphx.loc → Fleet.
+- **Что сделано:** закоммичена оставшаяся документация (AD-032 — хранение истории на PostgreSQL, SQLite исключён); `./scripts/version-bump.sh patch` 0.4.3→0.4.4 (version.ts + 6 package.json); pnpm build всех пакетов — успешно; docker build+push git.itphx.ru/itphx/synth-{backend,ui}:0.4.4 (Dockerfile.backend/ui из исходников); values.yaml в synth-deploy → теги 0.4.4, push main.
+- **Проверка (живой K3s):** Fleet подхватил 0a4e622 (~40 с), bundle synth 1/1 Ready (в момент rollout 0/1 → снова 1/1); rollout backend/ui успешен, поды на образах 0.4.4 (1/1 Running); `/health` и `/api/v2/health` → version 0.4.4 (фикс хардкода 0.1.0 подтверждён на проде); ingressroute/middleware synth-https-redirect/synth-redirect-to-https пережили helm-upgrade (остались owned, bundle без Modified); ошибок в логах backend нет (только штатные 401 на /api/v2/events без сессии).
+- **Заметки:** push synth (ветка feat/hybrid-mode, тег v0.4.4) в gitverse origin не выполнялся — по прецеденту 0.4.3 (пользователь пушил только synth-deploy); npm-публикация не выполнялась. Релиз 0.4.4 содержит: фикс версии в /health, стабилизацию useAdaptiveIcons (дёрганье вкладок), доки AD-032.
