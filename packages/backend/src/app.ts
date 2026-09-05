@@ -29,7 +29,7 @@ import {
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
-import { nowISO, ensureDataDir, MessageRole, generateStreamId, findConfigPath } from '@itphx/synth-shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId, findConfigPath, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { BusEvent } from '@itphx/synth-shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import type { BackendConfig } from './lib/app-config.js';
@@ -167,8 +167,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // CORS настраивается после загрузки конфига
 
     // Health (без auth)
-    app.get('/health', (c) => c.json({ status: 'healthy', version: '0.1.0', time: nowISO() }));
-    app.get('/api/v2/health', (c) => c.json({ status: 'healthy', version: '0.1.0', time: nowISO() }));
+    app.get('/health', (c) => c.json({ status: 'healthy', version: SYNTH_VERSION, time: nowISO() }));
+    app.get('/api/v2/health', (c) => c.json({ status: 'healthy', version: SYNTH_VERSION, time: nowISO() }));
 
     // Динамический CORS origin: если задан explicit ORIGIN через env var, использовать его;
     // если задан список allowedOrigins — проверять и эхо; если список пуст — разрешить все.
