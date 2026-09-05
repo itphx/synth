@@ -168,3 +168,19 @@
 - **Что сделано:** закоммичена оставшаяся документация (AD-032 — хранение истории на PostgreSQL, SQLite исключён); `./scripts/version-bump.sh patch` 0.4.3→0.4.4 (version.ts + 6 package.json); pnpm build всех пакетов — успешно; docker build+push git.itphx.ru/itphx/synth-{backend,ui}:0.4.4 (Dockerfile.backend/ui из исходников); values.yaml в synth-deploy → теги 0.4.4, push main.
 - **Проверка (живой K3s):** Fleet подхватил 0a4e622 (~40 с), bundle synth 1/1 Ready (в момент rollout 0/1 → снова 1/1); rollout backend/ui успешен, поды на образах 0.4.4 (1/1 Running); `/health` и `/api/v2/health` → version 0.4.4 (фикс хардкода 0.1.0 подтверждён на проде); ingressroute/middleware synth-https-redirect/synth-redirect-to-https пережили helm-upgrade (остались owned, bundle без Modified); ошибок в логах backend нет (только штатные 401 на /api/v2/events без сессии).
 - **Заметки:** push synth (ветка feat/hybrid-mode, тег v0.4.4) в gitverse origin не выполнялся — по прецеденту 0.4.3 (пользователь пушил только synth-deploy); npm-публикация не выполнялась. Релиз 0.4.4 содержит: фикс версии в /health, стабилизацию useAdaptiveIcons (дёрганье вкладок), доки AD-032.
+
+## 2026-09-05 — gitverse: merge в master + полноценный релиз v0.4.4
+- **Задача:** «Слей ветку в master с --no-ff, запуш, и создай полноценный релиз в gitverse.»
+- **Тип:** git/release
+- **Исполнитель:** @orchestrator
+- **Результат:** PASS (с оговорками по docker-образу gitverse, см. ниже)
+- **Коммиты:** merge `6126667` (feat/hybrid-mode → master, --no-ff) + docs-лог; push `master` (`611164f..6126667`) и тег `v0.4.4` на gitverse.ru.
+- **Что сделано:**
+  - Merge `feat/hybrid-mode` → `master` (`--no-ff`, 30 коммитов: гибрид 0.4.0–0.4.4, фиксы, доки); тег `v0.4.4` перенесён на merge-коммит.
+  - Пуш `master` и `v0.4.4` → сработал release-workflow (`release.yaml`, ран v0.4.4 ×4 попытки).
+  - npm-публикация 0.4.4 доведена до конца: npmjs.org (shared/core упали в CI по сети — допубликованы локально backend/ui/runner/synth) и GitVerse Package Registry (все 6) — `@itphx/synth` latest = 0.4.4.
+  - GitVerse Release создан вручную (MCP): https://gitverse.ru/itphx/synth/releases/tag/v0.4.4 (тело — гибрид, фиксы, установка).
+- **Проблемы/оговорки:**
+  - GitVerse-раннеры нестабильны: segfault pnpm (exit 139), context deadline docker.sock, сетевой обрыв npmjs — лечилось перезапуском/локальной публикацией.
+  - CI-джобы «Docker образ» и «GitVerse Release» падают с **403 Forbidden** (kaniko push в gitverse.ru container registry; create-release API): у `GV_TOKEN` в секретах нет прав на container registry org itphx и Releases API (npm-реестр — есть). Локальный docker push в gitverse.ru тоже 403 → образы в gitverse-реестр НЕ выложены (для K3s используются git.itphx.ru, выложены ранее).
+  - **Рекомендация:** выдать `GV_TOKEN` (или отдельному токену CI) права на container registry itphx/synth-* и Releases, либо проверить корректность username в kaniko-авторизации (`itphx:` + token → возможно нужен логин владельца токена). Тогда повторный push тега пройдёт docker+create-release автоматически (npm-шаги идемпотентны).
