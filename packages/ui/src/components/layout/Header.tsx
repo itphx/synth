@@ -14,6 +14,7 @@ import { QuickSettingsPopup } from '../auth/QuickSettingsPopup'
 import { NotificationPopup } from './NotificationPopup'
 import { GlobalTransportIndicator } from './GlobalTransportIndicator'
 import { HybridStatusIndicator } from './HybridStatusIndicator'
+import { useDevice } from '@/hooks/useDevice'
 
 interface HeaderProps {
   onSettingsClick: () => void
@@ -26,8 +27,11 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
     leftPanel, rightPanel, toggleLeftPanel, toggleRightPanel,
     setSettingsDialogOpen, setLogsDialogOpen, centerTabs, activeCenterTabId,
     openTab, closeTab,
+    mobileLeftOpen, mobileRightOpen, setMobileLeftOpen, setMobileRightOpen,
   } = useUIStore()
   const { user } = useAuthStore()
+  const { deviceType } = useDevice()
+  const isMobile = deviceType !== 'desktop'
   const projects = useProjectsStore((s) => s.projects)
 
   const activeTab = centerTabs.find((tab) => tab.id === activeCenterTabId)
@@ -286,6 +290,60 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   useUIStore.getState().forwardConfirmAction = handleForwardConfirm
   if (!forwardCallbackRef.current) {
     forwardCallbackRef.current = true
+  }
+
+  if (isMobile) {
+    const canSeeLogs = !!user?.roles?.some((r) => r === 'ADMIN' || r === 'AUDITOR')
+    const iconBtn = 'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground'
+    return (
+      <header className="flex h-11 shrink-0 items-center gap-1 border-b border-border/70 bg-background px-2">
+        <button
+          onClick={() => setMobileLeftOpen(!mobileLeftOpen)}
+          className={iconBtn}
+          title={t('header.showLeftPanel')}
+          aria-label={t('header.showLeftPanel')}
+        >
+          <Icon name="menu" className="h-5 w-5" />
+        </button>
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+          {headerTitle}
+        </span>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <GlobalTransportIndicator />
+          {deviceType === 'tablet' && <HybridStatusIndicator />}
+          <NotificationPopup />
+          <QuickSettingsPopup onSettingsClick={onSettingsClick} />
+          {deviceType === 'tablet' && canSeeLogs && (
+            <button
+              onClick={() => setLogsDialogOpen(true)}
+              className={iconBtn}
+              title={t('header.logs')}
+              aria-label={t('header.logs')}
+            >
+              <Icon name="file-list" className="h-5 w-5" />
+            </button>
+          )}
+          {deviceType === 'tablet' && (
+            <button
+              onClick={() => setSettingsDialogOpen(true)}
+              className={iconBtn}
+              title={t('header.settings')}
+              aria-label={t('header.settings')}
+            >
+              <Icon name="settings-3" className="h-5 w-5" />
+            </button>
+          )}
+          <button
+            onClick={() => setMobileRightOpen(!mobileRightOpen)}
+            className={iconBtn}
+            title={t('header.showRightPanel')}
+            aria-label={t('header.showRightPanel')}
+          >
+            <Icon name="layout-right" className="h-5 w-5" />
+          </button>
+        </div>
+      </header>
+    )
   }
 
   return (

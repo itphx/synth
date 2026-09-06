@@ -12,6 +12,7 @@ import { ProjectsTabToolbar } from './components/panels/ProjectsTabToolbar'
 import { FilesTabToolbar } from './components/panels/FilesTabToolbar'
 import { GitTabToolbar } from './components/panels/GitTabToolbar'
 import { CenterPanel } from './components/layout/CenterPanel'
+import { MobileDrawer } from './components/layout/MobileDrawer'
 import { BackendConnection } from './components/layout/BackendConnection'
 import { UpdateNotification } from './components/layout/UpdateNotification'
 import { HybridOfflineBanner } from './components/layout/HybridOfflineBanner'
@@ -20,6 +21,7 @@ import { LogsModal } from './components/logviewer/LogsModal'
 import { AuthGate } from './components/auth/AuthGate'
 import { profileService } from '@/lib/api/profileService'
 import { useAuthStore } from '@/stores/authStore'
+import { useDevice } from '@/hooks/useDevice'
 
 function DefaultsSync() {
   const { isAuthenticated, isInitialized } = useAuthStore()
@@ -59,8 +61,17 @@ function DefaultsSync() {
 }
 
 function App() {
-  const { leftPanel, rightPanel, setLeftPanelWidth, setRightPanelWidth, setSettingsDialogOpen, setSettingsPage, leftPanelTab } = useUIStore()
+  const { leftPanel, rightPanel, setLeftPanelWidth, setRightPanelWidth, setSettingsDialogOpen, setSettingsPage, leftPanelTab, mobileLeftOpen, mobileRightOpen, setMobileLeftOpen, setMobileRightOpen } = useUIStore()
   const forwardMode = useUIStore(s => s.forwardMode)
+  const { deviceType } = useDevice()
+  const isMobile = deviceType !== 'desktop'
+
+  useEffect(() => {
+    if (isMobile) {
+      useUIStore.getState().setMobileLeftOpen(false)
+      useUIStore.getState().setMobileRightOpen(false)
+    }
+  }, [isMobile])
 
   const leftHeaderActions = leftPanelTab === 'projects' ? <ProjectsTabToolbar />
     : leftPanelTab === 'files' ? <FilesTabToolbar />
@@ -69,6 +80,66 @@ function App() {
 
   const panelContent = <LeftPanel />
 
+  const centerColumn = (
+    <div className="flex flex-col flex-1 min-w-0 relative">
+      <Header onSettingsClick={() => { setSettingsPage('profile'); setSettingsDialogOpen(true) }} />
+      <HybridOfflineBanner />
+      <CenterPanel />
+      {forwardMode.active && (
+        <div
+          className="absolute inset-0 z-50 bg-black/40 pointer-events-auto"
+          onClick={() => useUIStore.getState().cancelForwardMode()}
+        />
+      )}
+    </div>
+  )
+
+  const desktopLayout = (
+    <div className="flex h-screen">
+      <Sidebar
+        side="left"
+        width={leftPanel.width}
+        isOpen={leftPanel.isOpen}
+        onWidthChange={setLeftPanelWidth}
+        headerActions={leftHeaderActions}
+      >
+        {panelContent}
+      </Sidebar>
+
+      {centerColumn}
+
+      <Sidebar
+        side="right"
+        width={rightPanel.width}
+        isOpen={rightPanel.isOpen}
+        onWidthChange={setRightPanelWidth}
+      >
+        <RightPanel />
+      </Sidebar>
+    </div>
+  )
+
+  const mobileLayout = (
+    <div className="app-shell relative flex w-full flex-col overflow-hidden bg-background pt-safe">
+      {centerColumn}
+      <MobileDrawer
+        side="left"
+        open={mobileLeftOpen}
+        onClose={() => setMobileLeftOpen(false)}
+        headerActions={leftHeaderActions}
+      >
+        <LeftPanel />
+      </MobileDrawer>
+      <MobileDrawer
+        side="right"
+        open={mobileRightOpen}
+        onClose={() => setMobileRightOpen(false)}
+      >
+        <RightPanel />
+      </MobileDrawer>
+    </div>
+  )
+
   return (
     <>
       <DefaultsSync />
@@ -76,38 +147,7 @@ function App() {
         <BackendConnection />
         <UpdateNotification />
         <TooltipProvider>
-        <div className="flex h-screen">
-          <Sidebar
-            side="left"
-            width={leftPanel.width}
-            isOpen={leftPanel.isOpen}
-            onWidthChange={setLeftPanelWidth}
-            headerActions={leftHeaderActions}
-          >
-            {panelContent}
-          </Sidebar>
-
-          <div className="flex flex-col flex-1 min-w-0 relative">
-            <Header onSettingsClick={() => { setSettingsPage('profile'); setSettingsDialogOpen(true) }} />
-            <HybridOfflineBanner />
-            <CenterPanel />
-            {forwardMode.active && (
-              <div
-                className="absolute inset-0 z-50 bg-black/40 pointer-events-auto"
-                onClick={() => useUIStore.getState().cancelForwardMode()}
-              />
-            )}
-          </div>
-
-          <Sidebar
-            side="right"
-            width={rightPanel.width}
-            isOpen={rightPanel.isOpen}
-            onWidthChange={setRightPanelWidth}
-          >
-            <RightPanel />
-          </Sidebar>
-        </div>
+          {isMobile ? mobileLayout : desktopLayout}
         </TooltipProvider>
 
         <SettingsModal />

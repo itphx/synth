@@ -74,3 +74,196 @@
   color: var(--card-foreground) !important;
   opacity: 0.5;
 }
+
+/* =============================================================
+   Adaptive / mobile layout (классы device-* выставляет JS на <html>)
+   Десктопная зона (≥1200px, нет классов device-phone/device-tablet)
+   остаётся без изменений — все правила ниже гейтятся селекторами.
+   ============================================================= */
+
+:root {
+  --oc-app-height: 100vh;
+  --chat-column-width: 50vw;
+  --chat-pad-left: 0px;
+  --chat-pad-right: 0px;
+}
+
+@supports (height: 100dvh) {
+  :root {
+    --oc-app-height: 100dvh;
+  }
+}
+
+html.device-phone,
+html.device-tablet {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* Мобильный корень приложения (используется только в device-зоне phone/tablet) */
+.app-shell {
+  height: 100vh;
+  height: var(--oc-app-height);
+}
+
+/* Safe-area хелперы (переменные наполняются env(safe-area-inset-*) в design-system.css) */
+.pt-safe {
+  padding-top: var(--oc-safe-area-top);
+}
+
+.pr-safe {
+  padding-right: var(--oc-safe-area-right);
+}
+
+.pb-safe {
+  padding-bottom: var(--oc-safe-area-bottom);
+}
+
+.pl-safe {
+  padding-left: var(--oc-safe-area-left);
+}
+
+.px-safe {
+  padding-left: var(--oc-safe-area-left);
+  padding-right: var(--oc-safe-area-right);
+}
+
+/* Колонка сообщений чата: десктоп — прежние max-w-[50vw]; мобильные зоны — шире */
+.chat-column {
+  width: 100%;
+  max-width: var(--chat-column-width, 50vw);
+  margin-inline: auto;
+  padding-left: var(--chat-pad-left, 0px);
+  padding-right: var(--chat-pad-right, 0px);
+}
+
+html.device-phone {
+  --chat-column-width: 100%;
+  --chat-pad-left: max(0.75rem, var(--oc-safe-area-left));
+  --chat-pad-right: max(0.75rem, var(--oc-safe-area-right));
+}
+
+html.device-tablet {
+  --chat-column-width: min(100%, 48rem);
+  --chat-pad-left: 1rem;
+  --chat-pad-right: 1rem;
+}
+
+/* Композер чата: десктоп — прежние w-4/5; мобильные зоны — почти вся ширина */
+html.device-phone {
+  --composer-ml: max(0.75rem, var(--oc-safe-area-left));
+  --composer-mr: max(0.75rem, var(--oc-safe-area-right));
+}
+
+html.device-phone .chat-composer {
+  width: calc(100% - var(--composer-ml) - var(--composer-mr));
+  margin-left: var(--composer-ml);
+  margin-right: var(--composer-mr);
+  margin-bottom: calc(0.5rem + var(--oc-safe-area-bottom));
+}
+
+html.device-tablet .chat-composer {
+  width: calc(100% - 2rem);
+  margin-left: 1rem;
+  margin-right: 1rem;
+}
+
+/* --- Дроверы (phone/tablet): фиксированные оверлеи вместо десктопных сайдбаров --- */
+.mobile-drawer-root {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+}
+
+.mobile-drawer-root.mobile-drawer-open {
+  pointer-events: auto;
+}
+
+.mobile-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 0.45);
+  opacity: 0;
+  transition: opacity 250ms ease;
+}
+
+.mobile-drawer-open .mobile-drawer-backdrop {
+  opacity: 1;
+}
+
+.mobile-drawer-panel {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: min(360px, 86vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar);
+  color: var(--sidebar-foreground);
+  box-shadow: 0 0 24px rgb(0 0 0 / 0.3);
+  transition: transform 300ms ease-in-out;
+}
+
+.mobile-drawer-left .mobile-drawer-panel {
+  left: 0;
+  transform: translateX(-105%);
+}
+
+.mobile-drawer-right .mobile-drawer-panel {
+  right: 0;
+  transform: translateX(105%);
+}
+
+.mobile-drawer-open .mobile-drawer-panel {
+  transform: translateX(0);
+}
+
+/* Touch: нативные скроллбары, кастомные оверлей-скроллбары не нужны */
+html.pointer-coarse * {
+  scrollbar-width: auto;
+}
+
+html.pointer-coarse .overlay-scrollbar,
+html.pointer-coarse .overlay-scrollbar__thumb,
+html.pointer-coarse .overlay-scrollbar__thumb--horizontal {
+  display: none !important;
+}
+
+html.pointer-coarse .overlay-scrollbar-target {
+  scrollbar-width: thin !important;
+  scrollbar-color: var(--oc-scrollbar-thumb) transparent !important;
+}
+
+html.pointer-coarse .overlay-scrollbar-target::-webkit-scrollbar {
+  width: 6px !important;
+  height: 6px !important;
+  display: block !important;
+  background: transparent;
+}
+
+/* Минимальные тач-таргеты в хедере/дроверах */
+html.pointer-coarse header button,
+html.pointer-coarse .mobile-drawer-panel button {
+  min-width: 32px;
+  min-height: 32px;
+}
+
+/* Кнопка закрытия вкладки CenterTabs доступна на touch (вместо group-hover) */
+html.pointer-coarse [data-tab-id] button {
+  opacity: 1 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  min-height: 20px;
+}
+
+/* Компактные подписи индикаторов на телефоне (остаётся точка/иконка) */
+.device-hide-label {
+  display: inline;
+}
+
+html.device-phone .device-hide-label {
+  display: none;
+}

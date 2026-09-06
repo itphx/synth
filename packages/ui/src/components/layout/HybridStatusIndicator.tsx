@@ -41,7 +41,7 @@ export function HybridStatusIndicator() {
       aria-label={t('hybrid.statusTitle')}
     >
       <span className={cn('size-2 rounded-full shrink-0', dotColor)} />
-      <span className={labelColor}>{t('hybrid.enabled')}</span>
+      <span className={cn('device-hide-label', labelColor)}>{t('hybrid.enabled')}</span>
     </button>
   )
 }

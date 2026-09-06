@@ -66,6 +66,12 @@ interface UIStore {
   setRightPanelWidth: (width: number) => void
   setRightPanelOpen: (open: boolean) => void
 
+  /** Мобильные дроверы (phone/tablet) — не персистятся и не связаны с desktop-полями. */
+  mobileLeftOpen: boolean
+  setMobileLeftOpen: (open: boolean) => void
+  mobileRightOpen: boolean
+  setMobileRightOpen: (open: boolean) => void
+
   leftPanelTab: string
   setLeftPanelTab: (tab: string) => void
   rightPanelTab: string
@@ -184,6 +190,11 @@ export const useUIStore = create<UIStore>()(
             ),
           },
         })),
+
+      mobileLeftOpen: false,
+      setMobileLeftOpen: (open) => set({ mobileLeftOpen: open }),
+      mobileRightOpen: false,
+      setMobileRightOpen: (open) => set({ mobileRightOpen: open }),
 
       leftPanelTab: 'projects',
       setLeftPanelTab: (tab) => set({ leftPanelTab: tab }),

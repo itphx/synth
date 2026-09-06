@@ -314,7 +314,7 @@ export function ChatInput({
 
   return (
     <div
-      className={`relative overflow-visible mx-auto mt-2 mb-2 w-4/5 ${
+      className={`chat-composer relative overflow-visible mx-auto mt-2 mb-2 w-4/5 ${
         expanded ? 'flex-1 flex h-full' : 'shrink-0'
       }`}
     >
