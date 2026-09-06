@@ -278,3 +278,68 @@ export async function migrateCredentialsToProfile(
   await clearCredentials(normalizedUrl, globalFilePath);
   return true;
 }
+
+/** Результат резолва профиля сервера при старте serve. */
+export interface StartupProfileResolution {
+  /** Базовый каталог данных (вне профилей) — {baseDataDir}/profiles/{id}. */
+  baseDataDir: string;
+  /** Выбранный профиль или null (нейтральный запуск). */
+  profile: ProfileMeta | null;
+  /** Каталог данных для запуска: профильный ({baseDataDir}/profiles/{id}) или baseDataDir. */
+  dataDir: string;
+  /** URL удалённого backend (из --connect/lastProfile) или null (нейтральный запуск). */
+  backendUrl: string | null;
+  /** Путь к профильному credentials.json или null (использовать глобальный default). */
+  credentialsPath: string | null;
+}
+
+/**
+ * Чистый резолв профиля сервера при старте serve (без CLI/конфига).
+ *
+ * Логика:
+ * 1. Если задан connectUrl — профиль берётся/создаётся по url (ensureProfile
+ *    обновляет lastUsedAt/lastProfileId в реестре), данные — в профильный каталог.
+ * 2. Иначе если useLastProfile (по умолчанию true) и в реестре есть последний
+ *    профиль — данные/url/credentials берутся из него (реестр НЕ изменяется).
+ * 3. Иначе — нейтральный запуск: dataDir = baseDataDir, backendUrl/credentialsPath = null.
+ */
+export async function resolveStartupProfile(opts: {
+  baseDataDir: string;
+  connectUrl?: string;
+  useLastProfile?: boolean; // по умолчанию true
+  profilesPath?: string; // для тестов
+}): Promise<StartupProfileResolution> {
+  const profilesPath = opts.profilesPath;
+
+  if (opts.connectUrl) {
+    const profile = await ensureProfile(opts.connectUrl, {}, profilesPath);
+    return {
+      baseDataDir: opts.baseDataDir,
+      profile,
+      dataDir: profileDataDir(opts.baseDataDir, profile.id),
+      backendUrl: profile.url,
+      credentialsPath: profileCredentialsPath(opts.baseDataDir, profile.id),
+    };
+  }
+
+  if (opts.useLastProfile !== false) {
+    const profile = await getLastProfile(profilesPath);
+    if (profile) {
+      return {
+        baseDataDir: opts.baseDataDir,
+        profile,
+        dataDir: profileDataDir(opts.baseDataDir, profile.id),
+        backendUrl: profile.url,
+        credentialsPath: profileCredentialsPath(opts.baseDataDir, profile.id),
+      };
+    }
+  }
+
+  return {
+    baseDataDir: opts.baseDataDir,
+    profile: null,
+    dataDir: opts.baseDataDir,
+    backendUrl: null,
+    credentialsPath: null,
+  };
+}

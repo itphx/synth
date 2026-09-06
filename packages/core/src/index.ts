@@ -175,5 +175,6 @@ export {
   ensureProfile,
   removeProfile,
   migrateCredentialsToProfile,
+  resolveStartupProfile,
 } from './profiles.js';
-export type { ProfileMeta, ProfilesFile } from './profiles.js';
+export type { ProfileMeta, ProfilesFile, StartupProfileResolution } from './profiles.js';
