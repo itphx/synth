@@ -2,10 +2,13 @@ import { useEffect, useRef } from 'react';
 import { toast } from 'react-toastify';
 import { synthApi } from '../../lib/api/synthApi';
 
+const UPDATE_CHECK_ENABLED = (import.meta.env.VITE_ENABLE_UPDATE_CHECK as string) === 'true';
+
 export function UpdateNotification() {
   const checked = useRef(false);
 
   useEffect(() => {
+    if (!UPDATE_CHECK_ENABLED) return;
     if (checked.current) return;
     checked.current = true;
 

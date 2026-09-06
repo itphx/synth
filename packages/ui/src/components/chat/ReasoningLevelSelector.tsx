@@ -4,6 +4,7 @@ import type { ReasoningLevel } from '@itphx/synth-shared'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useI18n } from '@/lib/i18n'
+import { useDevice } from '@/hooks/useDevice'
 import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '../icon/Icon'
 
@@ -17,6 +18,8 @@ const REASONING_LEVELS_BY_PROVIDER_TYPE: Record<string, ReasoningLevel[]> = {
 
 export function ReasoningLevelSelector({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
+  const { deviceType } = useDevice()
+  const isMobile = deviceType !== 'desktop'
   const [open, setOpen] = useState(false)
   const providers = useProvidersStore((s) => s.providers)
   const selectedProviderName = useProvidersStore((s) => s.selectedProviderName)
@@ -53,7 +56,7 @@ export function ReasoningLevelSelector({ sessionId }: { sessionId: string }) {
             aria-label={t('chat.reasoning.title')}
           >
             <Icon name="brain" className="size-3 shrink-0 text-muted-foreground" />
-            <span className="@max-[212px]:hidden">{t(`chat.reasoning.${currentLevel}`)}</span>
+            {!isMobile && <span className="@max-[212px]:hidden">{t(`chat.reasoning.${currentLevel}`)}</span>}
           </button>
         </DropdownMenu.Trigger>
       </div>

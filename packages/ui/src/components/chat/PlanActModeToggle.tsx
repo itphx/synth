@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { SessionMode } from '@itphx/synth-shared'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useI18n } from '@/lib/i18n'
+import { useDevice } from '@/hooks/useDevice'
 import { useNotification } from '@/hooks/useNotification'
 import { Icon } from '../icon/Icon'
 
@@ -37,6 +38,8 @@ const MODE_OPTIONS: ModeOption[] = [
 
 export function PlanActModeToggle({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
+  const { deviceType } = useDevice()
+  const isMobile = deviceType !== 'desktop'
   const { notify } = useNotification()
   const sessionMode = useSessionsStore((s) => s.sessions.find((ses) => ses.id === sessionId)?.mode)
   const modeApplicable = useSessionsStore((s) => s.sessions.find((ses) => ses.id === sessionId)?.mode_applicable ?? true)
@@ -93,7 +96,7 @@ export function PlanActModeToggle({ sessionId }: { sessionId: string }) {
             onClick={() => handleChange(opt.mode)}
             disabled={disabled}
             aria-pressed={active}
-            title={!modeApplicable ? t('chat.mode.unavailable') : opt.hintKey ? t(opt.hintKey) : undefined}
+            title={!modeApplicable ? t('chat.mode.unavailable') : opt.hintKey ? t(opt.hintKey) : t(opt.labelKey)}
             className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               active
                 ? opt.activeClass
@@ -101,7 +104,7 @@ export function PlanActModeToggle({ sessionId }: { sessionId: string }) {
             }`}
           >
             <Icon name={opt.icon} className="size-3 shrink-0" />
-            <span className="@max-[212px]:hidden">{t(opt.labelKey)}</span>
+            {!isMobile && <span className="@max-[212px]:hidden">{t(opt.labelKey)}</span>}
           </button>
         )
       })}
