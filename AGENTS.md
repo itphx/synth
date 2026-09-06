@@ -432,6 +432,7 @@ synth serve --oidc-issuer https://keycloak.itphx.loc/realms/synth \
 | AD-041 | Единая таксономия ошибок LLM (llm-error.ts) + контракт локализации строк движка (@itphx/synth-shared/i18n) ✅ Реализовано | [ad-041](./docs/arch_decisions/ad-041-llm-error-taxonomy.md) |
 | AD-042 | Гибридный режим: локальный core + централизованный сервер (агрегация миров, LLM Proxy, RemoteEventBridge, publish/fork) ✅ Реализовано | [ad-042](./docs/arch_decisions/ad-042-hybrid-mode.md) |
 | AD-043 | Единая идентичность гибрида: вход в UI без Keycloak (runtime-подключение, ROPC, дискавери oidc-meta, единая личность) ✅ Реализовано | [ad-043](./docs/arch_decisions/ad-043-unified-identity-login.md) |
+| AD-044 | Адаптивный мобильный UI + PWA (три зоны, панели-дроверы, touch-first, ручной app-shell) ✅ Реализовано | [ad-044](./docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md) |
 
 > **Перенос AD:** реализованные AD переносятся в `docs/arch_decisions/` (в AGENTS.md остаётся краткая строка + ссылка). Нереализованные остаются в AGENTS.md до реализации.
 
@@ -955,6 +956,40 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 ## UI: панель «Сессия»
 
 Вкладка «Сессия» в правой панели показывает план (`planContent`) и ToDo (`todos`) текущей сессии. Обновляются по WS-событиям `plan.approved` / `todos.updated` (полный refresh сессии с сервера).
+
+---
+
+## UI: мобильный адаптив + PWA
+
+Единый адаптивный интерфейс (не отдельное мобильное дерево). Три зоны по ширине окна:
+**телефон ≤768px / планшет 769–1199px / десктоп ≥1200px** (десктоп не изменяется).
+Детекция через `matchMedia` + классы на `<html>`: `device-phone/tablet/desktop`, `pointer-coarse`
+(хуки `useDevice()`/`useMediaQuery`, модуль `lib/device.ts`); весь мобильный CSS гейтится этими классами.
+
+- **Раскладка на телефоне/планшете:** чат на весь экран; левая и правая панели — оверлей-дроверы
+  (`components/layout/MobileDrawer.tsx`), управление из мобильного хедера; `ResizeHandle` скрыт.
+  Нижней навигации нет. Мобильное состояние панелей (`mobileLeftOpen/RightOpen`) не персистится
+  в десктопные ширины.
+- **Touch-first:** hover-действия доступны на таче (CSS под `html.pointer-coarse`), touch-таргеты ≥40px,
+  нативные скроллбары на таче, нативный `drag&drop` в деревьях отключён на таче.
+- **Подтверждения:** `window.confirm` → `ConfirmDialog`; для zustand-сторов — глобальный сервис
+  (`lib/confirm.ts` + `stores/confirmStore.ts`, рендер в `App`).
+- **Модалки/админка:** `SettingsModal`/`LogsModal` на телефоне — категории в горизонтальные скролл-табы,
+  контент на всю ширину; табличные админ-панели (например `ModelsPanel`) — горизонтальный скролл.
+- **Клавиатура:** `useKeyboardInset` (visualViewport → `--kb-inset` → `padding-bottom` композера);
+  Enter на таче = перенос строки, на fine-pointer — отправка; IME учтён.
+- **PWA (ручной app-shell, без vite-plugin-pwa):** `public/manifest.webmanifest` (standalone, theme `#09090b`),
+  `public/sw.js` (runtime-кэш шела; `/api,/ws,/auth,/admin,/health` не кэшируются; навигация network-first →
+  офлайн-заглушка), иконки 192/512/maskable/apple в `public/icons/`; меты в `index.html`
+  (manifest, theme-color, apple-touch-icon, apple-mobile-web-app-*, viewport-fit=cover);
+  `usePwaInstall` + `PwaInstallButton` (`beforeinstallprompt`); регистрация SW только в prod.
+- **Раздача:** `docker/nginx-ui.conf` (MIME `.webmanifest` + no-cache для `/sw.js`/`/manifest.webmanifest`)
+  и `packages/core/src/server/app.ts` (MIME `.webmanifest` + no-cache для sw/manifest).
+- **Фикс логина:** поле «Адрес сервера» показывается только при `oidcEnabled && hybridEnabled && !serverConfigured`
+  (эндпоинт `/hybrid/status` есть только в standalone-core; на managed-бэкенде поле скрыто);
+  Enter в «Логин» → фокус на «Пароль».
+
+Подробности и мотивация — [AD-044](./docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md).
 
 ---
 
