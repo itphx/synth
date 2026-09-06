@@ -87,6 +87,13 @@ export interface StandaloneConfig {
   remoteTimeoutMs?: number;
   /** Путь к файлу credentials (~/.config/synth/credentials.json по умолчанию). */
   remoteCredentialsPath?: string;
+  /**
+   * Гибридный режим включён (remote.enabled в config.yaml либо задан OIDC
+   * fallback --oidc-issuer/--oidc-client-id), даже если адрес сервера ещё не
+   * известен (вводится в UI). Позволяет /auth/status отдать oidc_enabled=true и
+   * /hybrid/status — enabled=true, чтобы LoginForm показал поле «Адрес сервера».
+   */
+  hybridEnabled?: boolean;
 }
 
 /**
@@ -108,6 +115,7 @@ const MIME_TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
   '.woff': 'font/woff',
   '.ico': 'image/x-icon',
+  '.webmanifest': 'application/manifest+json',
 };
 
 function serveStatic(uiDistPath: string) {
@@ -135,7 +143,10 @@ function serveStatic(uiDistPath: string) {
         status: 200,
         headers: {
           'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
-          'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=3600',
+          'Cache-Control':
+            ext === '.html' || ext === '.webmanifest' || url.pathname === '/sw.js'
+              ? 'no-cache'
+              : 'public, max-age=3600',
         },
       });
     } catch {
@@ -279,7 +290,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   function getHybridState() {
     const serverConfigured = !!config.defaultBackendUrl;
     return {
-      enabled: serverConfigured || connection.connected,
+      // Гибрид «включён», когда настроен в конфиге (remote.enabled/--connect/
+      // --oidc-issuer), известен адрес сервера или есть runtime-подключение.
+      // Случай «включён, но адрес не задан» — это тоже гибрид: адрес вводит
+      // пользователь в UI (LoginForm показывает поле «Адрес сервера»).
+      enabled: config.hybridEnabled || serverConfigured || connection.connected,
       connected: connection.connected,
       backendUrl: connection.backendUrl,
       user: connection.user,
@@ -461,6 +476,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     disconnectRemote,
     defaultBackendUrl: config.defaultBackendUrl,
     issuerAvailable: !!config.remoteAuth?.issuer,
+    hybridEnabled: config.hybridEnabled,
   }));
 
 

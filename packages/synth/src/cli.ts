@@ -94,6 +94,10 @@ program
     const remoteIssuer = options.oidcIssuer || synth.remote.auth.issuer;
     const remoteClientId = options.oidcClientId || synth.remote.auth.clientId;
     const oidcFallbackGiven = !!(remoteIssuer || remoteClientId);
+    // Гибрид «включён»: remote.enabled в config.yaml (с адресом или без) ИЛИ
+    // задан OIDC-fallback (--oidc-issuer/--oidc-client-id). Даже без известного
+    // адреса это гибрид — адрес вводится в UI (поле «Адрес сервера»).
+    const hybridEnabled = synth.remote.enabled || oidcFallbackGiven;
 
     const appHandle = await createStandaloneApp({
       port,
@@ -106,6 +110,7 @@ program
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
         ? (synth.remote.auth.apiKey || undefined)
         : undefined,
+      hybridEnabled,
       remoteAuth: remoteEnabled || oidcFallbackGiven
         ? {
             issuer: remoteIssuer || undefined,

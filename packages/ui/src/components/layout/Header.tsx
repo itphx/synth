@@ -10,10 +10,13 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { useNotification } from '@/hooks/useNotification'
 import { useAuthStore } from '@/stores/authStore'
+import { confirm } from '@/lib/confirm'
 import { QuickSettingsPopup } from '../auth/QuickSettingsPopup'
 import { NotificationPopup } from './NotificationPopup'
 import { GlobalTransportIndicator } from './GlobalTransportIndicator'
 import { HybridStatusIndicator } from './HybridStatusIndicator'
+import { PwaInstallButton } from './PwaInstallButton'
+import { useDevice } from '@/hooks/useDevice'
 
 interface HeaderProps {
   onSettingsClick: () => void
@@ -26,8 +29,11 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
     leftPanel, rightPanel, toggleLeftPanel, toggleRightPanel,
     setSettingsDialogOpen, setLogsDialogOpen, centerTabs, activeCenterTabId,
     openTab, closeTab,
+    mobileLeftOpen, mobileRightOpen, setMobileLeftOpen, setMobileRightOpen,
   } = useUIStore()
   const { user } = useAuthStore()
+  const { deviceType } = useDevice()
+  const isMobile = deviceType !== 'desktop'
   const projects = useProjectsStore((s) => s.projects)
 
   const activeTab = centerTabs.find((tab) => tab.id === activeCenterTabId)
@@ -80,7 +86,8 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
 
   const handleClearSession = useCallback(async () => {
     if (!sessionId) return
-    if (!window.confirm(t('leftPanel.confirmClearSession'))) return
+    const ok = await confirm({ title: t('leftPanel.confirmClearSession'), variant: 'warning' })
+    if (!ok) return
     try {
       await synthApi.clearSession(sessionId)
       useChatStore.getState().clearSession(sessionId)
@@ -220,7 +227,8 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
     if (!sessionId) return
     const indices = [...selectedIndices]
     if (indices.length === 0) return
-    if (!window.confirm(`Удалить ${indices.length} сообщений?`)) return
+    const ok = await confirm({ title: `Удалить ${indices.length} сообщений?`, variant: 'danger' })
+    if (!ok) return
     try {
       await synthApi.batchMessages(sessionId, 'delete', indices)
       await afterBulkReload()
@@ -288,6 +296,61 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
     forwardCallbackRef.current = true
   }
 
+  if (isMobile) {
+    const canSeeLogs = !!user?.roles?.some((r) => r === 'ADMIN' || r === 'AUDITOR')
+    const iconBtn = 'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground'
+    return (
+      <header className="flex h-11 shrink-0 items-center gap-1 border-b border-border/70 bg-background px-2">
+        <button
+          onClick={() => setMobileLeftOpen(!mobileLeftOpen)}
+          className={iconBtn}
+          title={t('header.showLeftPanel')}
+          aria-label={t('header.showLeftPanel')}
+        >
+          <Icon name="layout-left" className="h-5 w-5" />
+        </button>
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+          {headerTitle}
+        </span>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <GlobalTransportIndicator />
+          {deviceType === 'tablet' && <HybridStatusIndicator />}
+          <NotificationPopup />
+          <PwaInstallButton />
+          <QuickSettingsPopup onSettingsClick={onSettingsClick} />
+          {deviceType === 'tablet' && canSeeLogs && (
+            <button
+              onClick={() => setLogsDialogOpen(true)}
+              className={iconBtn}
+              title={t('header.logs')}
+              aria-label={t('header.logs')}
+            >
+              <Icon name="file-list" className="h-5 w-5" />
+            </button>
+          )}
+          {deviceType === 'tablet' && (
+            <button
+              onClick={() => setSettingsDialogOpen(true)}
+              className={iconBtn}
+              title={t('header.settings')}
+              aria-label={t('header.settings')}
+            >
+              <Icon name="settings-3" className="h-5 w-5" />
+            </button>
+          )}
+          <button
+            onClick={() => setMobileRightOpen(!mobileRightOpen)}
+            className={iconBtn}
+            title={t('header.showRightPanel')}
+            aria-label={t('header.showRightPanel')}
+          >
+            <Icon name="layout-right" className="h-5 w-5" />
+          </button>
+        </div>
+      </header>
+    )
+  }
+
   return (
     <header className="flex h-9 items-center justify-between px-3 bg-background">
       <div className="flex items-center gap-3 min-w-0">
@@ -317,7 +380,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
                     style={{ width: `${Math.min(windowPercent, 100)}%` }}
                   />
                 </div>
-                <span className={cn('text-[10px] tabular-nums', nearContextLimit ? 'text-destructive' : 'text-muted-foreground')}>
+                <span className={cn('text-[10px] tabular-nums device-hide-label', nearContextLimit ? 'text-destructive' : 'text-muted-foreground')}>
                   {windowPercent}%
                 </span>
               </div>
@@ -423,7 +486,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
               className="shrink-0 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors ml-1"
               title="Слияние"
             >
-              🔗 Слияние
+              🔗 <span className="device-hide-label">Слияние</span>
             </button>
           </>
         )}

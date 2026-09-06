@@ -731,3 +731,67 @@ describe('createStandaloneApp: HTTP-эндпоинты переноса прое
     }
   });
 });
+
+describe('createStandaloneApp: гибрид-статус и oidc_enabled (адрес не задан)', () => {
+  it('гибрид включён, адрес не задан (hybridEnabled) → /hybrid/status enabled:true, serverConfigured:false; /auth/status oidc_enabled:true', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-hybrid-addrnone-'));
+    try {
+      const { app } = await createStandaloneApp({
+        port: 0,
+        dataDir: dir,
+        apiKey: 'test-key',
+        // remote.enabled:true, но БЕЗ defaultBackendUrl/issuer/подключения.
+        hybridEnabled: true,
+      });
+
+      const hybridRes = await app.request('/api/v2/hybrid/status');
+      expect(hybridRes.status).toBe(200);
+      expect(await hybridRes.json()).toMatchObject({ enabled: true, connected: false, serverConfigured: false });
+
+      const authRes = await app.request('/auth/status');
+      expect(authRes.status).toBe(200);
+      expect(((await authRes.json()) as { oidc_enabled: boolean }).oidc_enabled).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('без гибрида (нет hybridEnabled/адреса/подключения) → /hybrid/status enabled:false; /auth/status oidc_enabled:false', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-nohybrid-'));
+    try {
+      const { app } = await createStandaloneApp({ port: 0, dataDir: dir, apiKey: 'test-key' });
+
+      const hybridRes = await app.request('/api/v2/hybrid/status');
+      expect(hybridRes.status).toBe(200);
+      expect(await hybridRes.json()).toMatchObject({ enabled: false, connected: false, serverConfigured: false });
+
+      const authRes = await app.request('/auth/status');
+      expect(authRes.status).toBe(200);
+      expect(((await authRes.json()) as { oidc_enabled: boolean }).oidc_enabled).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('managed/без standalone не затрагивается: defaultBackendUrl задан → serverConfigured:true, oidc_enabled:true (поле адреса скрыто)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-hybrid-addrknown-'));
+    try {
+      const { app } = await createStandaloneApp({
+        port: 0,
+        dataDir: dir,
+        apiKey: 'test-key',
+        defaultBackendUrl: BACKEND_URL,
+      });
+
+      const hybridRes = await app.request('/api/v2/hybrid/status');
+      expect(hybridRes.status).toBe(200);
+      expect(await hybridRes.json()).toMatchObject({ enabled: true, serverConfigured: true });
+
+      const authRes = await app.request('/auth/status');
+      expect(authRes.status).toBe(200);
+      expect(((await authRes.json()) as { oidc_enabled: boolean }).oidc_enabled).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});

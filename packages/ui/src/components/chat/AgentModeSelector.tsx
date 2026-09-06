@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useI18n } from '@/lib/i18n'
+import { useDevice } from '@/hooks/useDevice'
+import { useUIStore } from '@/stores/useUIStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { resolveColor } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
@@ -14,6 +16,9 @@ interface AgentModeSelectorProps {
 export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
   const { agents, activeAgentId, setActiveAgentId, loadAgents } = useAgentsStore()
   const { t } = useI18n()
+  const { deviceType } = useDevice()
+  const centralNarrow = useUIStore((s) => s.centralNarrow)
+  const isMobile = deviceType !== 'desktop' || centralNarrow
   const [open, setOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
 
@@ -50,7 +55,11 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
   return (
     <DropdownMenu.Root open={open} onOpenChange={setOpen}>
       <DropdownMenu.Trigger asChild>
-        <button className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0">
+        <button
+          className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0"
+          title={activeAgent?.display_name || activeAgentId || 'Agent'}
+          aria-label={activeAgent?.display_name || activeAgentId || t('chat.modelControls.searchAgents')}
+        >
           {activeAgent?.icon ? (
             <Icon
               name={activeAgent.icon}
@@ -63,12 +72,14 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
               style={activeAgent?.color ? { backgroundColor: resolveColor(activeAgent.color) } : undefined}
             />
           )}
-          <span
-            className={`font-medium text-xs whitespace-nowrap max-w-[200px] truncate ${activeAgent?.color ? '' : 'text-foreground'}`}
-            style={activeAgent?.color ? { color: resolveColor(activeAgent.color) } : undefined}
-          >
-            {activeAgent?.display_name || activeAgentId || 'Agent'}
-          </span>
+          {!isMobile && (
+            <span
+              className={`font-medium text-xs whitespace-nowrap max-w-[200px] truncate ${activeAgent?.color ? '' : 'text-foreground'}`}
+              style={activeAgent?.color ? { color: resolveColor(activeAgent.color) } : undefined}
+            >
+              {activeAgent?.display_name || activeAgentId || 'Agent'}
+            </span>
+          )}
         </button>
       </DropdownMenu.Trigger>
 
@@ -89,7 +100,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-8 h-8 w-full text-xs bg-background border border-border rounded-md px-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                autoFocus
+                autoFocus={!isMobile}
               />
             </div>
           </div>

@@ -52,7 +52,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
       const user: User = oidcUserToUser(oidcUser);
       const sessionId = kit.createSession(user);
       kit.setSessionCookie(c, sessionId);
-      return c.json({ user: { id: user.id, username: user.username, email: user.email, roles: user.roles } });
+      return c.json({ deployment: 'managed', user: { id: user.id, username: user.username, email: user.email, roles: user.roles } });
     } catch (err) {
       console.error('[auth/login] ROPC error:', err);
       return c.json({ error: { code: 'UNAUTHORIZED', message: t('auth.oidcLoginFailed', undefined, c) } }, 401);
@@ -94,6 +94,9 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
       authenticated: !!user,
       debug_mode: config.debugMode,
       oidc_enabled: !!config.oidc?.enabled,
+      // Тип развёртывания: managed (API Hub) — UI по этому признаку НЕ опрашивает
+      // /api/v2/hybrid/status (эндпоинт есть только в standalone-core).
+      deployment: 'managed',
       user: user ? {
         id: user.id,
         username: user.username,
@@ -124,6 +127,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
       return c.json({ user: null }, 401);
     }
     return c.json({
+      deployment: 'managed',
       user: {
         id: user.id,
         username: user.username,
@@ -198,6 +202,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
     kit.setSessionCookie(c, sessionId);
 
     return c.json({
+      deployment: 'managed',
       user: {
         id: user.id,
         username: user.username,

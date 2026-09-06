@@ -1,11 +1,11 @@
 @layer base {
   :root {
     color-scheme: light;
-    --oc-safe-area-top: 0px;
-    --oc-safe-area-right: 0px;
-    --oc-safe-area-bottom: 0px;
-    --oc-safe-area-bottom-visual: 0px;
-    --oc-safe-area-left: 0px;
+    --oc-safe-area-top: env(safe-area-inset-top, 0px);
+    --oc-safe-area-right: env(safe-area-inset-right, 0px);
+    --oc-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+    --oc-safe-area-bottom-visual: env(safe-area-inset-bottom, 0px);
+    --oc-safe-area-left: env(safe-area-inset-left, 0px);
     --oc-header-height: 56px;
     --oc-visual-viewport-offset-top: 0px;
     --oc-visual-viewport-height: 100dvh;

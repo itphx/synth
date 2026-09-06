@@ -2,7 +2,9 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { Icon } from '../icon/Icon'
 import { OverlayScrollbar } from '../ui/OverlayScrollbar'
 import { useI18n } from '@/lib/i18n'
+import { useDevice } from '@/hooks/useDevice'
 import { useChatStore } from '@/stores/chatStore'
+import { confirm } from '@/lib/confirm'
 import { MentionPopup } from './MentionPopup'
 import { ModelSelector } from './ModelSelector'
 import { AgentModeSelector } from './AgentModeSelector'
@@ -124,6 +126,11 @@ export function ChatInput({
   onToggleExpand,
 }: ChatInputProps) {
   const { t } = useI18n()
+  // Фаза 4: на чисто-сенсорных устройствах (coarse без fine-указателя) Enter на
+  // композере = перенос строки; отправка — только кнопкой «Отправить».
+  // При наличии физического указателя/клавиатуры (any-pointer: fine) isTouch=false
+  // и возвращается десктопное поведение Enter = отправка.
+  const { isTouch } = useDevice()
   const [value, setValue] = useState('')
   const retryText = useChatStore((s) => s.retryInputBySession[sessionId])
   const [mentionState, setMentionState] = useState<{
@@ -224,17 +231,20 @@ export function ChatInput({
     const text = value.trim()
     if (!text) return
 
-    setValue('')
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
-
     const parts = splitMessageWithTags(text, agents)
 
     if (parts && parts.length > MAX_TAGS) {
-      void window.confirm(
-        `Слишком много тегов (${parts.length}). Максимум: ${MAX_TAGS}. Отправить все равно?`
-      )
+      const ok = await confirm({
+        title: 'Слишком много тегов',
+        message: `${parts.length} тегов. Максимум: ${MAX_TAGS}. Отправить все равно?`,
+        variant: 'warning',
+      })
+      if (!ok) return
+    }
+
+    setValue('')
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
     }
 
     if (!parts) {
@@ -250,17 +260,20 @@ export function ChatInput({
     const text = value.trim()
     if (!text) return
 
-    setValue('')
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
-
     const parts = splitMessageWithTags(text, agents)
 
     if (parts && parts.length > MAX_TAGS) {
-      void window.confirm(
-        `Слишком много тегов (${parts.length}). Максимум: ${MAX_TAGS}. Отправить все равно?`
-      )
+      const ok = await confirm({
+        title: 'Слишком много тегов',
+        message: `${parts.length} тегов. Максимум: ${MAX_TAGS}. Отправить все равно?`,
+        variant: 'warning',
+      })
+      if (!ok) return
+    }
+
+    setValue('')
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
     }
 
     if (!parts) {
@@ -303,6 +316,14 @@ export function ChatInput({
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
+      // IME-композиция (китайский/японский/корейский ввод): Enter завершает
+      // композицию, а не отправляет сообщение.
+      if (e.nativeEvent.isComposing) return
+
+      // Touch без физического указателя: Enter = перенос строки, отправка только
+      // кнопкой «Отправить» — защита от случайной отправки на телефоне.
+      if (isTouch) return
+
       e.preventDefault()
       if (isStreaming) {
         handleEnqueue()
@@ -314,7 +335,7 @@ export function ChatInput({
 
   return (
     <div
-      className={`relative overflow-visible mx-auto mt-2 mb-2 w-4/5 ${
+      className={`chat-composer relative overflow-visible mx-auto mt-2 mb-2 w-4/5 ${
         expanded ? 'flex-1 flex h-full' : 'shrink-0'
       }`}
     >
@@ -357,7 +378,7 @@ export function ChatInput({
         </div>
 
         <div
-          className={`flex flex-wrap items-center justify-between gap-1.5 ${
+          className={`chat-toolbar flex flex-wrap items-center justify-between gap-1.5 ${
             expanded ? 'mt-auto' : ''
           }`}
         >
@@ -371,7 +392,7 @@ export function ChatInput({
             />
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-1.5 pr-1 min-w-0 ml-auto">
+          <div className="chat-toolbar-actions flex flex-wrap items-center justify-end gap-1.5 pr-1 min-w-0 ml-auto">
             <PlanActModeToggle sessionId={sessionId} />
             <ReasoningLevelSelector sessionId={sessionId} />
             <ModelSelector sessionId={sessionId} />

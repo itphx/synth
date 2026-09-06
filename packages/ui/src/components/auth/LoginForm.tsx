@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useAuthStore } from '@/stores/authStore'
 import { api } from '@/lib/api/client'
 import { synthApi } from '@/lib/api/synthApi'
@@ -24,6 +24,10 @@ export const LoginForm = () => {
   const [oidcEnabled, setOidcEnabled] = useState(false)
   /** Адрес сервера известен при старте (--connect/env/конфиг) → поле адреса скрыто. */
   const [serverConfigured, setServerConfigured] = useState(false)
+  /** Гибридный режим реально включён (эндпоинт /hybrid/status ответил И enabled=true). */
+  const [hybridEnabled, setHybridEnabled] = useState(false)
+  /** Ссылка на поле пароля — перенос фокуса по Enter с поля логина (мобильная UX). */
+  const passwordRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const checkStatus = async () => {
@@ -35,16 +39,28 @@ export const LoginForm = () => {
           const users = await api.getUsers()
           setDebugUsers(users.users)
         }
-        // Гибрид: если вход на сервер доступен — уточняем, известен ли адрес.
-        // serverConfigured=true → адрес задан при старте, поле скрываем (вход
-        // идёт на defaultBackendUrl core); false → адрес вводит пользователь.
-        // backendUrl подставляем, если core уже знает удалённый backend.
-        if (status.oidc_enabled) {
+        // Гибрид: если сервер — standalone-core (имеет /hybrid/status), уточняем,
+        // включён ли гибрид и известен ли адрес при старте. serverConfigured=true
+        // → адрес задан при старте, поле скрываем (вход идёт на defaultBackendUrl
+        // core); false → адрес вводит пользователь. backendUrl подставляем, если
+        // core уже знает удалённый backend. На managed-бэкенде эндпоинта нет —
+        // запрос НЕ выполняем (0 сетевых запросов → нет 404).
+        if (status.deployment === 'standalone' && status.oidc_enabled) {
           const hybrid = await synthApi.getHybridStatus().catch(() => null)
           if (hybrid) {
+            // Эндпоинт ответил — реально включён гибрид.
+            setHybridEnabled(hybrid.enabled ?? false)
             setServerConfigured(hybrid.serverConfigured)
             if (hybrid.backendUrl) setServer((prev) => prev || hybrid.backendUrl || '')
+          } else {
+            // Гибрид не настроен (или core без hybrid) → поле адреса скрываем.
+            setHybridEnabled(false)
+            setServerConfigured(true)
           }
+        } else {
+          // Managed-бэкенд (нет /hybrid/status) → гибрида нет, поле адреса скрыто.
+          setHybridEnabled(false)
+          setServerConfigured(true)
         }
       } catch {
         setIsDebugMode(false)
@@ -79,7 +95,7 @@ export const LoginForm = () => {
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           {oidcEnabled ? (
             <>
-              {!serverConfigured && (
+              {oidcEnabled && hybridEnabled && !serverConfigured && (
                 <div className="flex flex-col gap-2">
                   <label className="text-sm font-medium text-foreground">
                     {t('auth.serverUrl')}
@@ -108,6 +124,12 @@ export const LoginForm = () => {
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      passwordRef.current?.focus()
+                    }
+                  }}
                   placeholder={t('auth.usernamePlaceholder')}
                   autoComplete="username"
                   className={cn(
@@ -124,9 +146,16 @@ export const LoginForm = () => {
                   {t('auth.password')}
                 </label>
                 <input
+                  ref={passwordRef}
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && username && password) {
+                      e.preventDefault()
+                      e.currentTarget.form?.requestSubmit()
+                    }
+                  }}
                   placeholder={t('auth.passwordPlaceholder')}
                   autoComplete="current-password"
                   className={cn(

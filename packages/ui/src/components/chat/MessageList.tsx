@@ -194,7 +194,7 @@ export function MessageList({
         className="overflow-y-auto overflow-x-hidden chat-scroll-container"
         onScroll={handleScroll}
       >
-        <div ref={chatZoneRef} className="mx-auto w-full max-w-[50vw]">
+        <div ref={chatZoneRef} className="chat-column mx-auto w-full">
           <div
             className="relative w-full"
             style={{

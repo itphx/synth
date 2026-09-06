@@ -3,6 +3,8 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useI18n } from '@/lib/i18n'
+import { useDevice } from '@/hooks/useDevice'
+import { useUIStore } from '@/stores/useUIStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { ProviderIcon } from '@/components/admin/ProviderIcon'
 import { Icon } from '../icon/Icon'
@@ -32,6 +34,9 @@ export function ModelSelector({ compact = false, sessionId }: { compact?: boolea
     error,
   } = useProvidersStore()
   const { t } = useI18n()
+  const { deviceType } = useDevice()
+  const centralNarrow = useUIStore((s) => s.centralNarrow)
+  const isMobile = deviceType !== 'desktop' || centralNarrow
   const [searchQuery, setSearchQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [collapsedProviders, setCollapsedProviders] = useState<Set<string>>(new Set())
@@ -286,11 +291,17 @@ export function ModelSelector({ compact = false, sessionId }: { compact?: boolea
   return (
     <DropdownMenu.Root open={open} onOpenChange={setOpen}>
       <DropdownMenu.Trigger asChild>
-        <button className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0">
+        <button
+          className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0"
+          title={selectedModelName || currentProvider?.model || '—'}
+          aria-label={selectedModelName || currentProvider?.model || t('chat.modelControls.searchModels')}
+        >
           <ProviderIcon icon={currentProvider?.icon ?? ''} baseUrl={currentProvider?.url} size={14} className="text-muted-foreground shrink-0" />
-          <span className="font-medium text-xs text-foreground whitespace-nowrap max-w-[200px] truncate">
-            {selectedModelName || currentProvider?.model || '—'}
-          </span>
+          {!isMobile && (
+            <span className="font-medium text-xs text-foreground whitespace-nowrap max-w-[200px] truncate">
+              {selectedModelName || currentProvider?.model || '—'}
+            </span>
+          )}
         </button>
       </DropdownMenu.Trigger>
 
@@ -311,7 +322,7 @@ export function ModelSelector({ compact = false, sessionId }: { compact?: boolea
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-8 pr-[88px] h-8 w-full text-xs bg-background border border-border rounded-md px-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                autoFocus
+                autoFocus={!isMobile}
               />
               {searchQuery.trim().length > 0 && (
                 <button

@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { ToastContainer } from 'react-toastify'
 import { TooltipProvider } from './components/ui/tooltip'
 import { useUIStore } from '@/stores/useUIStore'
@@ -12,14 +12,18 @@ import { ProjectsTabToolbar } from './components/panels/ProjectsTabToolbar'
 import { FilesTabToolbar } from './components/panels/FilesTabToolbar'
 import { GitTabToolbar } from './components/panels/GitTabToolbar'
 import { CenterPanel } from './components/layout/CenterPanel'
+import { MobileDrawer } from './components/layout/MobileDrawer'
 import { BackendConnection } from './components/layout/BackendConnection'
 import { UpdateNotification } from './components/layout/UpdateNotification'
 import { HybridOfflineBanner } from './components/layout/HybridOfflineBanner'
 import { SettingsModal } from './components/settings/SettingsModal'
 import { LogsModal } from './components/logviewer/LogsModal'
+import { ConfirmDialog } from './components/ui/confirm-dialog'
 import { AuthGate } from './components/auth/AuthGate'
 import { profileService } from '@/lib/api/profileService'
 import { useAuthStore } from '@/stores/authStore'
+import { useConfirmStore } from '@/stores/confirmStore'
+import { useDevice } from '@/hooks/useDevice'
 
 function DefaultsSync() {
   const { isAuthenticated, isInitialized } = useAuthStore()
@@ -59,8 +63,59 @@ function DefaultsSync() {
 }
 
 function App() {
-  const { leftPanel, rightPanel, setLeftPanelWidth, setRightPanelWidth, setSettingsDialogOpen, setSettingsPage, leftPanelTab } = useUIStore()
+  const { leftPanel, rightPanel, setLeftPanelWidth, setRightPanelWidth, setSettingsDialogOpen, setSettingsPage, leftPanelTab, mobileLeftOpen, mobileRightOpen, setMobileLeftOpen, setMobileRightOpen } = useUIStore()
   const forwardMode = useUIStore(s => s.forwardMode)
+  const { deviceType } = useDevice()
+  const isMobile = deviceType !== 'desktop'
+  const confirmOpen = useConfirmStore(s => s.open)
+  const confirmOptions = useConfirmStore(s => s.options)
+  const closeConfirm = useConfirmStore(s => s.closeConfirm)
+
+  const centerNodeRef = useRef<HTMLDivElement | null>(null)
+  const roRef = useRef<ResizeObserver | null>(null)
+
+  const applyCentralNarrow = useCallback((narrow: boolean) => {
+    useUIStore.getState().setCentralNarrow(narrow)
+    document.documentElement.classList.toggle('central-narrow', narrow)
+  }, [])
+
+  const centerRef = useCallback((node: HTMLDivElement | null) => {
+    centerNodeRef.current = node
+    roRef.current?.disconnect()
+    roRef.current = null
+    if (!node) {
+      applyCentralNarrow(false)
+      return
+    }
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const w = entry.contentRect.width
+        applyCentralNarrow(w > 0 && w < 800)
+      }
+    })
+    ro.observe(node)
+    roRef.current = ro
+  }, [applyCentralNarrow])
+
+  useEffect(() => {
+    if (typeof ResizeObserver !== 'undefined') return
+    const onResize = () => {
+      const el = centerNodeRef.current
+      if (!el) return
+      const w = el.getBoundingClientRect().width
+      applyCentralNarrow(w > 0 && w < 800)
+    }
+    onResize()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [applyCentralNarrow])
+
+  useEffect(() => {
+    if (isMobile) {
+      useUIStore.getState().setMobileLeftOpen(false)
+      useUIStore.getState().setMobileRightOpen(false)
+    }
+  }, [isMobile])
 
   const leftHeaderActions = leftPanelTab === 'projects' ? <ProjectsTabToolbar />
     : leftPanelTab === 'files' ? <FilesTabToolbar />
@@ -69,6 +124,66 @@ function App() {
 
   const panelContent = <LeftPanel />
 
+  const centerColumn = (
+    <div ref={centerRef} className="flex flex-col flex-1 min-w-0 min-h-0 relative">
+      <Header onSettingsClick={() => { setSettingsPage('profile'); setSettingsDialogOpen(true) }} />
+      <HybridOfflineBanner />
+      <CenterPanel />
+      {forwardMode.active && (
+        <div
+          className="absolute inset-0 z-50 bg-black/40 pointer-events-auto"
+          onClick={() => useUIStore.getState().cancelForwardMode()}
+        />
+      )}
+    </div>
+  )
+
+  const desktopLayout = (
+    <div className="flex h-screen">
+      <Sidebar
+        side="left"
+        width={leftPanel.width}
+        isOpen={leftPanel.isOpen}
+        onWidthChange={setLeftPanelWidth}
+        headerActions={leftHeaderActions}
+      >
+        {panelContent}
+      </Sidebar>
+
+      {centerColumn}
+
+      <Sidebar
+        side="right"
+        width={rightPanel.width}
+        isOpen={rightPanel.isOpen}
+        onWidthChange={setRightPanelWidth}
+      >
+        <RightPanel />
+      </Sidebar>
+    </div>
+  )
+
+  const mobileLayout = (
+    <div className="app-shell relative flex w-full flex-col overflow-hidden bg-background pt-safe">
+      {centerColumn}
+      <MobileDrawer
+        side="left"
+        open={mobileLeftOpen}
+        onClose={() => setMobileLeftOpen(false)}
+        headerActions={leftHeaderActions}
+      >
+        <LeftPanel />
+      </MobileDrawer>
+      <MobileDrawer
+        side="right"
+        open={mobileRightOpen}
+        onClose={() => setMobileRightOpen(false)}
+      >
+        <RightPanel />
+      </MobileDrawer>
+    </div>
+  )
+
   return (
     <>
       <DefaultsSync />
@@ -76,42 +191,22 @@ function App() {
         <BackendConnection />
         <UpdateNotification />
         <TooltipProvider>
-        <div className="flex h-screen">
-          <Sidebar
-            side="left"
-            width={leftPanel.width}
-            isOpen={leftPanel.isOpen}
-            onWidthChange={setLeftPanelWidth}
-            headerActions={leftHeaderActions}
-          >
-            {panelContent}
-          </Sidebar>
-
-          <div className="flex flex-col flex-1 min-w-0 relative">
-            <Header onSettingsClick={() => { setSettingsPage('profile'); setSettingsDialogOpen(true) }} />
-            <HybridOfflineBanner />
-            <CenterPanel />
-            {forwardMode.active && (
-              <div
-                className="absolute inset-0 z-50 bg-black/40 pointer-events-auto"
-                onClick={() => useUIStore.getState().cancelForwardMode()}
-              />
-            )}
-          </div>
-
-          <Sidebar
-            side="right"
-            width={rightPanel.width}
-            isOpen={rightPanel.isOpen}
-            onWidthChange={setRightPanelWidth}
-          >
-            <RightPanel />
-          </Sidebar>
-        </div>
+          {isMobile ? mobileLayout : desktopLayout}
         </TooltipProvider>
 
         <SettingsModal />
         <LogsModal />
+        <ConfirmDialog
+          open={confirmOpen}
+          onOpenChange={(open) => { if (!open) closeConfirm(false) }}
+          title={confirmOptions?.title ?? ''}
+          message={confirmOptions?.message}
+          confirmLabel={confirmOptions?.confirmLabel}
+          cancelLabel={confirmOptions?.cancelLabel}
+          variant={confirmOptions?.variant ?? 'default'}
+          icon={confirmOptions?.icon}
+          onConfirm={() => closeConfirm(true)}
+        />
         <ToastContainer
           position="bottom-right"
           newestOnTop

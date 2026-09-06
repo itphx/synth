@@ -3,6 +3,7 @@ import type { ProjectData, GitRepoConfigData, EntityOrigin, PublishProjectResult
 import { synthApi } from '@/lib/api/synthApi'
 import { useSessionsStore } from './sessionsStore'
 import { useI18nStore, formatMessage } from '@/lib/i18n/store'
+import { confirm } from '@/lib/confirm'
 
 interface ProjectsStore {
   projects: ProjectData[]
@@ -35,7 +36,7 @@ interface ProjectsStore {
   forkRemoteProject: (id: string, opts?: { local_name?: string }) => Promise<ProjectData>
 }
 
-/** Локализованная строка вне React (для window.confirm в сторах). */
+/** Локализованная строка вне React (для confirm-диалога в сторах). */
 function i18nText(key: string): string {
   return formatMessage(useI18nStore.getState().dictionary, key)
 }
@@ -101,7 +102,8 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     // Гибрид: удаление удалённого проекта выполняется на сервере — подтверждение.
     const project = get().projects.find((p) => p.id === id)
     if (project?.origin === 'remote') {
-      if (!window.confirm(i18nText('hybrid.confirmDeleteRemoteProject'))) return false
+      const ok = await confirm({ title: i18nText('hybrid.confirmDeleteRemoteProject'), variant: 'danger' })
+      if (!ok) return false
     }
     try {
       await synthApi.deleteProject(id)

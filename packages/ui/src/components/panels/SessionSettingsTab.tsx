@@ -6,6 +6,7 @@ import { useSessionsStore } from '@/stores/sessionsStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useNotification } from '@/hooks/useNotification'
+import { confirm } from '@/lib/confirm'
 import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
@@ -254,7 +255,8 @@ export function SessionSettingsTab() {
 
   const handleClearSession = useCallback(async () => {
     if (!sessionId) return
-    if (!window.confirm(t('leftPanel.confirmClearSession'))) return
+    const ok = await confirm({ title: t('leftPanel.confirmClearSession'), variant: 'warning' })
+    if (!ok) return
     try {
       await synthApi.clearSession(sessionId)
       useChatStore.getState().clearSession(sessionId)

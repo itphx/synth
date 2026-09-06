@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useHybridStore, selectIsOffline } from '@/stores/hybridStore'
+import { useAuthStore } from '@/stores/authStore'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 
@@ -9,6 +10,9 @@ import { cn } from '@/lib/utils'
  * зелёная/красная по connected, тултип — статус + backendUrl, клик — перезагрузка.
  * При offline (enabled && !connected) — красная точка + тултип «Сервер недоступен».
  * Поллинг стартует при монтировании и останавливается при размонтировании.
+ * Поллинг /api/v2/hybrid/status включается ТОЛЬКО на standalone-core
+ * (deployment === 'standalone'); на managed-бэкенде эндпоинта нет — поллинг
+ * не запускается (0 сетевых запросов → нет 404 в консоли).
  */
 export function HybridStatusIndicator() {
   const { t } = useI18n()
@@ -19,11 +23,17 @@ export function HybridStatusIndicator() {
   const loadStatus = useHybridStore((s) => s.loadStatus)
   const startPolling = useHybridStore((s) => s.startPolling)
   const stopPolling = useHybridStore((s) => s.stopPolling)
+  const deployment = useAuthStore((s) => s.deployment)
 
   useEffect(() => {
-    startPolling()
-    return () => stopPolling()
-  }, [startPolling, stopPolling])
+    // Как только подтверждено, что сервер — standalone-core (имеет /hybrid/status),
+    // запускаем поллинг. На managed-бэкенде deployment='managed' → поллинга нет.
+    if (deployment === 'standalone') {
+      startPolling()
+      return () => stopPolling()
+    }
+    return undefined
+  }, [deployment, startPolling, stopPolling])
 
   if (!enabled) return null
 
@@ -41,7 +51,7 @@ export function HybridStatusIndicator() {
       aria-label={t('hybrid.statusTitle')}
     >
       <span className={cn('size-2 rounded-full shrink-0', dotColor)} />
-      <span className={labelColor}>{t('hybrid.enabled')}</span>
+      <span className={cn('device-hide-label', labelColor)}>{t('hybrid.enabled')}</span>
     </button>
   )
 }

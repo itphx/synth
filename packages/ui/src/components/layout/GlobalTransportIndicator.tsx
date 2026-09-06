@@ -39,7 +39,7 @@ export function GlobalTransportIndicator() {
       title={tooltip}
     >
       <span className={`size-2 rounded-full shrink-0 ${dotColor}`} />
-      <span className={labelColor}>{label}</span>
+      <span className={`device-hide-label ${labelColor}`}>{label}</span>
     </button>
   )
 }

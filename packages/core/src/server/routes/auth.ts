@@ -28,6 +28,12 @@ export interface AuthRoutesRemoteDeps {
   defaultBackendUrl?: string;
   /** Задан OIDC issuer (--oidc-issuer/--oidc-client-id) — fallback дискавери для входа в UI. */
   issuerAvailable?: boolean;
+  /**
+   * Гибридный режим включён (remote.enabled || задан OIDC fallback) — даже если
+   * адрес сервера ещё не известен. Даёт oidc_enabled=true, чтобы UI показал
+   * форму входа с полем «Адрес сервера» (если адрес не задан) и парольным входом.
+   */
+  hybridEnabled?: boolean;
 }
 
 function normalizeUrl(url: string): string {
@@ -123,11 +129,15 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
     return c.json({
       authenticated: !!user,
       debug_mode: false,
+      // Тип развёртывания: standalone-core — единственный, кто отдаёт
+      // /api/v2/hybrid/status (по этому признаку UI включает поллинг гибрида).
+      deployment: 'standalone',
       // OIDC-вход на сервер возможен, когда известен адрес сервера
       // (defaultBackendUrl), задан OIDC issuer (--oidc-issuer/--oidc-client-id —
-      // fallback дискавери; UI тогда показывает форму с полем адреса) либо уже
-      // есть runtime-подключение. Иначе — только локальный API-ключ.
-      oidc_enabled: !!(deps.defaultBackendUrl || deps.issuerAvailable || deps.connection.connected),
+      // fallback дискавери; UI тогда показывает форму с полем адреса), есть
+      // runtime-подключение либо включён гибридный режим (remote.enabled/--connect/
+      // --oidc-issuer — адрес можно ввести в UI). Иначе — только локальный API-ключ.
+      oidc_enabled: !!(deps.defaultBackendUrl || deps.issuerAvailable || deps.connection.connected || deps.hybridEnabled),
       user: user ? toPayload(user) : null,
     });
   });
@@ -141,7 +151,7 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
     if (!user) {
       return c.json({ user: null }, 401);
     }
-    return c.json({ user: toPayload(user) });
+    return c.json({ deployment: 'standalone', user: toPayload(user) });
   });
 
   app.get('/me', async (c) => {
@@ -168,7 +178,7 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
     // Устанавливаем cookie-сессию, чтобы SPA авторизовался на API автоматически
     auth.setSessionCookie(c);
 
-    return c.json({ user: toPayload(user) });
+    return c.json({ deployment: 'standalone', user: toPayload(user) });
   });
 
   /**
@@ -204,7 +214,7 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
       // только после успешного входа).
       const user = await deps.connectRemote(target, username, password);
       auth.setServerUserCookie(c, remoteUserToPayload(user));
-      return c.json({ user: remoteUserToPayload(user) });
+      return c.json({ deployment: 'standalone', user: remoteUserToPayload(user) });
     } catch (err) {
       return mapLoginError(err);
     }

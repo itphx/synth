@@ -36,8 +36,13 @@ export interface AuthStatus {
   oidc_enabled: boolean
   debug_mode: boolean
   authenticated: boolean
+  /** Тип развёртывания: 'standalone' (synth-core) | 'managed' (synth-backend). Runtime-детекция. */
+  deployment?: DeploymentKind
   user: User | null
 }
+
+/** Тип развёртывания сервера. 'standalone' — synth-core (имеет /api/v2/hybrid/status). */
+export type DeploymentKind = 'standalone' | 'managed'
 
 export interface AuthUsers {
   users: Array<{
@@ -52,6 +57,7 @@ export interface SPALoginRequest {
 }
 
 export interface SPALoginResponse {
+  deployment?: DeploymentKind
   user: User
   token: string
 }

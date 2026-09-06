@@ -66,6 +66,17 @@ interface UIStore {
   setRightPanelWidth: (width: number) => void
   setRightPanelOpen: (open: boolean) => void
 
+  /** Мобильные дроверы (phone/tablet) — не персистятся и не связаны с desktop-полями. */
+  mobileLeftOpen: boolean
+  setMobileLeftOpen: (open: boolean) => void
+  mobileRightOpen: boolean
+  setMobileRightOpen: (open: boolean) => void
+
+  /** Центральная колонка узкая (десктоп с открытыми панелями) — runtime-флаг,
+   *  выставляется ResizeObserver'ом в App. Не персистится. */
+  centralNarrow: boolean
+  setCentralNarrow: (narrow: boolean) => void
+
   leftPanelTab: string
   setLeftPanelTab: (tab: string) => void
   rightPanelTab: string
@@ -184,6 +195,14 @@ export const useUIStore = create<UIStore>()(
             ),
           },
         })),
+
+      mobileLeftOpen: false,
+      setMobileLeftOpen: (open) => set({ mobileLeftOpen: open }),
+      mobileRightOpen: false,
+      setMobileRightOpen: (open) => set({ mobileRightOpen: open }),
+
+      centralNarrow: false,
+      setCentralNarrow: (narrow) => set({ centralNarrow: narrow }),
 
       leftPanelTab: 'projects',
       setLeftPanelTab: (tab) => set({ leftPanelTab: tab }),
