@@ -87,6 +87,13 @@ export interface StandaloneConfig {
   remoteTimeoutMs?: number;
   /** Путь к файлу credentials (~/.config/synth/credentials.json по умолчанию). */
   remoteCredentialsPath?: string;
+  /**
+   * Гибридный режим включён (remote.enabled в config.yaml либо задан OIDC
+   * fallback --oidc-issuer/--oidc-client-id), даже если адрес сервера ещё не
+   * известен (вводится в UI). Позволяет /auth/status отдать oidc_enabled=true и
+   * /hybrid/status — enabled=true, чтобы LoginForm показал поле «Адрес сервера».
+   */
+  hybridEnabled?: boolean;
 }
 
 /**
@@ -283,7 +290,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   function getHybridState() {
     const serverConfigured = !!config.defaultBackendUrl;
     return {
-      enabled: serverConfigured || connection.connected,
+      // Гибрид «включён», когда настроен в конфиге (remote.enabled/--connect/
+      // --oidc-issuer), известен адрес сервера или есть runtime-подключение.
+      // Случай «включён, но адрес не задан» — это тоже гибрид: адрес вводит
+      // пользователь в UI (LoginForm показывает поле «Адрес сервера»).
+      enabled: config.hybridEnabled || serverConfigured || connection.connected,
       connected: connection.connected,
       backendUrl: connection.backendUrl,
       user: connection.user,
@@ -465,6 +476,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     disconnectRemote,
     defaultBackendUrl: config.defaultBackendUrl,
     issuerAvailable: !!config.remoteAuth?.issuer,
+    hybridEnabled: config.hybridEnabled,
   }));
 
 

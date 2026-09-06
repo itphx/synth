@@ -282,6 +282,19 @@ describe('auth routes (гибридная runtime-личность, RemoteConnec
       const res2 = await without.request('/auth/status');
       expect(((await res2.json()) as { oidc_enabled: boolean }).oidc_enabled).toBe(false);
     });
+
+    it('oidc_enabled: true при hybridEnabled (remote.enabled без адреса), false без гибрида', async () => {
+      // Гибрид включён (remote.enabled:true), но адрес/issuer/подключение не заданы:
+      // UI должен показать форму входа с полем «Адрес сервера» (oidc_enabled=true),
+      // а не API-ключ. Это и есть баг-кейс из LU-задачи (поле адреса скрыто).
+      const withHybrid = makeApp(makeDeps({ hybridEnabled: true }, { tmpDir }));
+      const res1 = await withHybrid.request('/auth/status');
+      expect(((await res1.json()) as { oidc_enabled: boolean }).oidc_enabled).toBe(true);
+
+      const without = makeApp(makeDeps({ hybridEnabled: false }, { tmpDir }));
+      const res2 = await without.request('/auth/status');
+      expect(((await res2.json()) as { oidc_enabled: boolean }).oidc_enabled).toBe(false);
+    });
   });
 
   describe('GET /auth/session', () => {
