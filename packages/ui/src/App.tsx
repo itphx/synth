@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { ToastContainer } from 'react-toastify'
 import { TooltipProvider } from './components/ui/tooltip'
 import { useUIStore } from '@/stores/useUIStore'
@@ -71,6 +71,28 @@ function App() {
   const confirmOptions = useConfirmStore(s => s.options)
   const closeConfirm = useConfirmStore(s => s.closeConfirm)
 
+  const centerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const el = centerRef.current
+    if (!el) return
+
+    const apply = (narrow: boolean) => {
+      useUIStore.getState().setCentralNarrow(narrow)
+      document.documentElement.classList.toggle('central-narrow', narrow)
+    }
+
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const w = entry.contentRect.width
+        apply(w > 0 && w < 800)
+      }
+    })
+    ro.observe(el)
+
+    return () => ro.disconnect()
+  }, [])
+
   useEffect(() => {
     if (isMobile) {
       useUIStore.getState().setMobileLeftOpen(false)
@@ -86,7 +108,7 @@ function App() {
   const panelContent = <LeftPanel />
 
   const centerColumn = (
-    <div className="flex flex-col flex-1 min-w-0 min-h-0 relative">
+    <div ref={centerRef} className="flex flex-col flex-1 min-w-0 min-h-0 relative">
       <Header onSettingsClick={() => { setSettingsPage('profile'); setSettingsDialogOpen(true) }} />
       <HybridOfflineBanner />
       <CenterPanel />

@@ -72,6 +72,11 @@ interface UIStore {
   mobileRightOpen: boolean
   setMobileRightOpen: (open: boolean) => void
 
+  /** Центральная колонка узкая (десктоп с открытыми панелями) — runtime-флаг,
+   *  выставляется ResizeObserver'ом в App. Не персистится. */
+  centralNarrow: boolean
+  setCentralNarrow: (narrow: boolean) => void
+
   leftPanelTab: string
   setLeftPanelTab: (tab: string) => void
   rightPanelTab: string
@@ -195,6 +200,9 @@ export const useUIStore = create<UIStore>()(
       setMobileLeftOpen: (open) => set({ mobileLeftOpen: open }),
       mobileRightOpen: false,
       setMobileRightOpen: (open) => set({ mobileRightOpen: open }),
+
+      centralNarrow: false,
+      setCentralNarrow: (narrow) => set({ centralNarrow: narrow }),
 
       leftPanelTab: 'projects',
       setLeftPanelTab: (tab) => set({ leftPanelTab: tab }),

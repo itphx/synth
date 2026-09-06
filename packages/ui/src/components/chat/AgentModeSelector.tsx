@@ -3,6 +3,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useI18n } from '@/lib/i18n'
 import { useDevice } from '@/hooks/useDevice'
+import { useUIStore } from '@/stores/useUIStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { resolveColor } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
@@ -16,7 +17,8 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
   const { agents, activeAgentId, setActiveAgentId, loadAgents } = useAgentsStore()
   const { t } = useI18n()
   const { deviceType } = useDevice()
-  const isMobile = deviceType !== 'desktop'
+  const centralNarrow = useUIStore((s) => s.centralNarrow)
+  const isMobile = deviceType !== 'desktop' || centralNarrow
   const [open, setOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
 

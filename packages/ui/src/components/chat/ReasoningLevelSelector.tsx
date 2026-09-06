@@ -5,6 +5,7 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useI18n } from '@/lib/i18n'
 import { useDevice } from '@/hooks/useDevice'
+import { useUIStore } from '@/stores/useUIStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '../icon/Icon'
 
@@ -19,7 +20,8 @@ const REASONING_LEVELS_BY_PROVIDER_TYPE: Record<string, ReasoningLevel[]> = {
 export function ReasoningLevelSelector({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const { deviceType } = useDevice()
-  const isMobile = deviceType !== 'desktop'
+  const centralNarrow = useUIStore((s) => s.centralNarrow)
+  const isMobile = deviceType !== 'desktop' || centralNarrow
   const [open, setOpen] = useState(false)
   const providers = useProvidersStore((s) => s.providers)
   const selectedProviderName = useProvidersStore((s) => s.selectedProviderName)

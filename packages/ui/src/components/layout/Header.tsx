@@ -380,7 +380,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
                     style={{ width: `${Math.min(windowPercent, 100)}%` }}
                   />
                 </div>
-                <span className={cn('text-[10px] tabular-nums', nearContextLimit ? 'text-destructive' : 'text-muted-foreground')}>
+                <span className={cn('text-[10px] tabular-nums device-hide-label', nearContextLimit ? 'text-destructive' : 'text-muted-foreground')}>
                   {windowPercent}%
                 </span>
               </div>
@@ -486,7 +486,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
               className="shrink-0 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors ml-1"
               title="Слияние"
             >
-              🔗 Слияние
+              🔗 <span className="device-hide-label">Слияние</span>
             </button>
           </>
         )}

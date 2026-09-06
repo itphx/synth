@@ -4,6 +4,7 @@ import { useSessionsStore } from '@/stores/sessionsStore'
 import { useI18n } from '@/lib/i18n'
 import { useDevice } from '@/hooks/useDevice'
 import { useNotification } from '@/hooks/useNotification'
+import { useUIStore } from '@/stores/useUIStore'
 import { Icon } from '../icon/Icon'
 
 interface ModeOption {
@@ -39,7 +40,8 @@ const MODE_OPTIONS: ModeOption[] = [
 export function PlanActModeToggle({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const { deviceType } = useDevice()
-  const isMobile = deviceType !== 'desktop'
+  const centralNarrow = useUIStore((s) => s.centralNarrow)
+  const isMobile = deviceType !== 'desktop' || centralNarrow
   const { notify } = useNotification()
   const sessionMode = useSessionsStore((s) => s.sessions.find((ses) => ses.id === sessionId)?.mode)
   const modeApplicable = useSessionsStore((s) => s.sessions.find((ses) => ses.id === sessionId)?.mode_applicable ?? true)

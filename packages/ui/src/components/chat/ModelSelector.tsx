@@ -4,6 +4,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useI18n } from '@/lib/i18n'
 import { useDevice } from '@/hooks/useDevice'
+import { useUIStore } from '@/stores/useUIStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { ProviderIcon } from '@/components/admin/ProviderIcon'
 import { Icon } from '../icon/Icon'
@@ -34,7 +35,8 @@ export function ModelSelector({ compact = false, sessionId }: { compact?: boolea
   } = useProvidersStore()
   const { t } = useI18n()
   const { deviceType } = useDevice()
-  const isMobile = deviceType !== 'desktop'
+  const centralNarrow = useUIStore((s) => s.centralNarrow)
+  const isMobile = deviceType !== 'desktop' || centralNarrow
   const [searchQuery, setSearchQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [collapsedProviders, setCollapsedProviders] = useState<Set<string>>(new Set())

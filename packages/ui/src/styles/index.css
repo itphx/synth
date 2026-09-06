@@ -259,27 +259,41 @@ html.pointer-coarse .mobile-drawer-panel button {
 }
 
 /* Композер: тулбар ВСЕГДА в один ряд (flex-nowrap) + горизонтальный скролл.
-   Ключевое — переключение зависит от ШИРИНЫ КОМПОЗЕРА (контейнера), т.к. этот
-   блок применяется на любом устройстве: если центральная колонка узкая (напр.
-   на десктопе с открытыми панелями), кнопки управления переносятся в несколько
+   Ключевое — переключение зависит от ШИРИНЫ ЦЕНТРАЛЬНОЙ КОЛОНКИ / устройства, а не
+   только от ширины окна: если центральная колонка узкая (напр. на десктопе с
+   открытыми панелями, html.central-narrow), кнопки управления переносятся в несколько
    строк → вместо этого один ряд с горизонтальным скроллом. */
-.chat-composer .chat-toolbar,
-.chat-composer .chat-toolbar-actions {
+html.pointer-coarse .chat-composer .chat-toolbar,
+html.device-phone .chat-composer .chat-toolbar,
+html.device-tablet .chat-composer .chat-toolbar,
+html.central-narrow .chat-composer .chat-toolbar,
+html.pointer-coarse .chat-composer .chat-toolbar-actions,
+html.device-phone .chat-composer .chat-toolbar-actions,
+html.device-tablet .chat-composer .chat-toolbar-actions,
+html.central-narrow .chat-composer .chat-toolbar-actions {
   flex-wrap: nowrap;
   overflow-x: auto;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
 }
 
-.chat-composer .chat-toolbar::-webkit-scrollbar,
-.chat-composer .chat-toolbar-actions::-webkit-scrollbar {
+html.pointer-coarse .chat-composer .chat-toolbar::-webkit-scrollbar,
+html.device-phone .chat-composer .chat-toolbar::-webkit-scrollbar,
+html.device-tablet .chat-composer .chat-toolbar::-webkit-scrollbar,
+html.central-narrow .chat-composer .chat-toolbar::-webkit-scrollbar,
+html.pointer-coarse .chat-composer .chat-toolbar-actions::-webkit-scrollbar,
+html.device-phone .chat-composer .chat-toolbar-actions::-webkit-scrollbar,
+html.device-tablet .chat-composer .chat-toolbar-actions::-webkit-scrollbar,
+html.central-narrow .chat-composer .chat-toolbar-actions::-webkit-scrollbar {
   display: none;
 }
 
-/* Компактные кнопки тулбара композера на мобильных (~28px), иконка по центру */
+/* Компактные кнопки тулбара композера на мобильных (~28px), иконка по центру.
+   html.central-narrow — узкая центральная колонка на десктопе с открытыми панелями. */
 html.pointer-coarse .chat-composer button,
 html.device-phone .chat-composer button,
-html.device-tablet .chat-composer button {
+html.device-tablet .chat-composer button,
+html.central-narrow .chat-composer button {
   min-width: 28px;
   min-height: 28px;
   align-items: center;
@@ -290,7 +304,8 @@ html.device-tablet .chat-composer button {
 /* Компактные иконки тулбара на мобильных (~16px) */
 html.pointer-coarse .chat-composer button svg,
 html.device-phone .chat-composer button svg,
-html.device-tablet .chat-composer button svg {
+html.device-tablet .chat-composer button svg,
+html.central-narrow .chat-composer button svg {
   width: 16px;
   height: 16px;
 }
@@ -389,11 +404,13 @@ html.pointer-coarse [data-slot="dialog-content"] button {
   min-height: 40px;
 }
 
-/* Компактные подписи индикаторов на телефоне (остаётся точка/иконка) */
+/* Компактные подписи индикаторов на телефоне и при узкой центральной колонке
+   (остаётся точка/иконка) */
 .device-hide-label {
   display: inline;
 }
 
-html.device-phone .device-hide-label {
+html.device-phone .device-hide-label,
+html.central-narrow .device-hide-label {
   display: none;
 }
