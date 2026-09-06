@@ -15,6 +15,7 @@ import { QuickSettingsPopup } from '../auth/QuickSettingsPopup'
 import { NotificationPopup } from './NotificationPopup'
 import { GlobalTransportIndicator } from './GlobalTransportIndicator'
 import { HybridStatusIndicator } from './HybridStatusIndicator'
+import { PwaInstallButton } from './PwaInstallButton'
 import { useDevice } from '@/hooks/useDevice'
 
 interface HeaderProps {
@@ -315,6 +316,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
           <GlobalTransportIndicator />
           {deviceType === 'tablet' && <HybridStatusIndicator />}
           <NotificationPopup />
+          <PwaInstallButton />
           <QuickSettingsPopup onSettingsClick={onSettingsClick} />
           {deviceType === 'tablet' && canSeeLogs && (
             <button

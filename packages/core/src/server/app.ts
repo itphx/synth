@@ -108,6 +108,7 @@ const MIME_TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
   '.woff': 'font/woff',
   '.ico': 'image/x-icon',
+  '.webmanifest': 'application/manifest+json',
 };
 
 function serveStatic(uiDistPath: string) {
@@ -135,7 +136,10 @@ function serveStatic(uiDistPath: string) {
         status: 200,
         headers: {
           'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
-          'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=3600',
+          'Cache-Control':
+            ext === '.html' || ext === '.webmanifest' || url.pathname === '/sw.js'
+              ? 'no-cache'
+              : 'public, max-age=3600',
         },
       });
     } catch {
