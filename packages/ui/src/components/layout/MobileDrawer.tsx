@@ -70,7 +70,7 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
           </button>
           {side === 'left' && headerActions}
         </div>
-        <div className="flex flex-1 overflow-hidden pb-safe">{children}</div>
+        <div className="flex flex-col flex-1 overflow-hidden pb-safe">{children}</div>
       </aside>
     </div>
   )

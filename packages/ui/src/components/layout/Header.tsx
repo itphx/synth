@@ -307,7 +307,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
           title={t('header.showLeftPanel')}
           aria-label={t('header.showLeftPanel')}
         >
-          <Icon name="menu" className="h-5 w-5" />
+          <Icon name="layout-left" className="h-5 w-5" />
         </button>
         <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
           {headerTitle}
