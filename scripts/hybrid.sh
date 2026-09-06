@@ -19,7 +19,11 @@
 #   --client-id <id>    OIDC client_id (default synth-cli)
 #   --token <key>       API-ключ для аутентификации на удалённом backend
 #                       (иначе — вход в UI: адрес сервера + логин/пароль)
-#   --api-key <key>     API-ключ локального core (default: авто-генерация)
+#   --api-key <key>     API-ключ локального core (default: авто-генерация).
+#                       Защищает HTTP API локального core; в гибридном UI-входе
+#                       не нужен. Для отладки/интеграций доступен через
+#                       --print-api-key.
+#   --print-api-key     показать полный локальный API-ключ в сводке запуска
 #   --port <port>       порт локального core (default 4300)
 #   --data-dir <path>   каталог данных локального мира (default ~/.local/share/synth)
 #   --no-build          не пересобирать пакеты
@@ -58,6 +62,7 @@ ISSUER="https://keycloak.itphx.loc/realms/synth"
 CLIENT_ID="synth-cli"
 TOKEN=""
 API_KEY=""
+PRINT_API_KEY=false   # показывать полный ключ в сводке запуска (--print-api-key)
 PORT="4300"
 DATA_DIR="${DATA_DIR:-$HOME/.local/share/synth}"
 DO_BUILD="default"   # default | full | none
@@ -80,7 +85,11 @@ hybrid.sh — запуск Synth локально в гибридном режи
   --client-id <id>    OIDC client_id (default: synth-cli)
   --token <key>       API-ключ для аутентификации на удалённом backend
                       (иначе — вход в UI: адрес сервера + логин/пароль)
-  --api-key <key>     API-ключ локального core (default: авто-генерация)
+  --api-key <key>     API-ключ локального core (default: авто-генерация).
+                      Защищает HTTP API локального core; в гибридном UI-входе
+                      не нужен. Для отладки/интеграций доступен через
+                      --print-api-key.
+  --print-api-key     показать полный локальный API-ключ в сводке запуска
   --port <port>       порт локального core (default: 4300)
   --data-dir <path>   каталог данных локального мира (default: ~/.local/share/synth)
   --no-build          не пересобирать пакеты
@@ -117,6 +126,9 @@ while [ $# -gt 0 ]; do
         --api-key)
             [ $# -ge 2 ] || die "Опция $1 требует значение (см. --help)"
             API_KEY="$2"; shift 2
+            ;;
+        --print-api-key)
+            PRINT_API_KEY=true; shift
             ;;
         --port)
             [ $# -ge 2 ] || die "Опция $1 требует значение (см. --help)"
@@ -265,7 +277,11 @@ else
 fi
 echo "  Локальный порт:    $PORT"
 echo "  Локальный data:    $DATA_DIR"
-echo "  Локальный API-key: $API_KEY"
+if [ "$PRINT_API_KEY" = true ]; then
+    echo "  Локальный API-key: $API_KEY"
+else
+    echo "  Локальный API:    авто-ключ (скрыт; показать: --print-api-key)"
+fi
 echo ""
 echo "  UI: http://localhost:$PORT"
 if [ -n "$TOKEN" ]; then
