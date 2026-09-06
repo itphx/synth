@@ -258,36 +258,21 @@ html.pointer-coarse .mobile-drawer-panel button {
   min-height: 40px;
 }
 
-/* Тулбар композера на мобильных: один ряд (flex-nowrap) + горизонтальный скролл */
-html.pointer-coarse .chat-composer .chat-toolbar,
-html.device-phone .chat-composer .chat-toolbar,
-html.device-tablet .chat-composer .chat-toolbar {
+/* Композер: тулбар ВСЕГДА в один ряд (flex-nowrap) + горизонтальный скролл.
+   Ключевое — переключение зависит от ШИРИНЫ КОМПОЗЕРА (контейнера), т.к. этот
+   блок применяется на любом устройстве: если центральная колонка узкая (напр.
+   на десктопе с открытыми панелями), кнопки управления переносятся в несколько
+   строк → вместо этого один ряд с горизонтальным скроллом. */
+.chat-composer .chat-toolbar,
+.chat-composer .chat-toolbar-actions {
   flex-wrap: nowrap;
   overflow-x: auto;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
 }
 
-html.pointer-coarse .chat-composer .chat-toolbar::-webkit-scrollbar,
-html.device-phone .chat-composer .chat-toolbar::-webkit-scrollbar,
-html.device-tablet .chat-composer .chat-toolbar::-webkit-scrollbar {
-  display: none;
-}
-
-/* Правая группа действий (режим/размышления/модель/агент + отправка): тоже в одну строку */
-html.pointer-coarse .chat-composer .chat-toolbar-actions,
-html.device-phone .chat-composer .chat-toolbar-actions,
-html.device-tablet .chat-composer .chat-toolbar-actions {
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  scrollbar-width: none;
-  min-width: 0;
-  -webkit-overflow-scrolling: touch;
-}
-
-html.pointer-coarse .chat-composer .chat-toolbar-actions::-webkit-scrollbar,
-html.device-phone .chat-composer .chat-toolbar-actions::-webkit-scrollbar,
-html.device-tablet .chat-composer .chat-toolbar-actions::-webkit-scrollbar {
+.chat-composer .chat-toolbar::-webkit-scrollbar,
+.chat-composer .chat-toolbar-actions::-webkit-scrollbar {
   display: none;
 }
 
@@ -310,32 +295,11 @@ html.device-tablet .chat-composer button svg {
   height: 16px;
 }
 
-/* 4.x Композер: «мобильный»/компактный режим определяется по ШИРИНЕ КОМПОЗЕРА
-   (container query на @container в ChatInput), а не по ширине окна. Если
-   центральная колонка узкая (например на десктопе с открытыми левой/правой
-   панелями), тулбар переходит в один ряд с горизонтальным скроллом, а не
-   переносится в 3 строки. Дополняет правила device-* выше, не заменяет их
-   (на широких центральных колонках композер остаётся десктопным). */
+/* 4.x Композер: компактный размер кнопок/иконок определяется по ШИРИНЕ КОМПОЗЕРА
+   (container query на @container в ChatInput), а не по ширине окна. Когда
+   центральная колонка узкая — кнопки компактные (~28px, иконки 16px), иначе
+   обычный размер. Сам «один ряд» уже задан универсально выше. */
 @container (max-width: 800px) {
-  .chat-composer .chat-toolbar {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-  }
-  .chat-composer .chat-toolbar::-webkit-scrollbar {
-    display: none;
-  }
-  .chat-composer .chat-toolbar-actions {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
-    min-width: 0;
-    -webkit-overflow-scrolling: touch;
-  }
-  .chat-composer .chat-toolbar-actions::-webkit-scrollbar {
-    display: none;
-  }
   .chat-composer button {
     min-width: 28px;
     min-height: 28px;
