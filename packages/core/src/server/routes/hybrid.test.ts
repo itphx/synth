@@ -13,6 +13,18 @@ import type { AuthKit } from '../../auth/local.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 import { RemoteError } from '../../remote/types.js';
 
+// Реестр профилей изолируем: если граф теста дотянется до getHybridState/async
+// hybrid-status (../../index.js реэкспортирует app.ts), чтение дефолтного пути
+// ~/.config/synth/profiles.json не должно влиять на тесты. Мок = «реестр пуст».
+vi.mock('../../profiles.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../profiles.js')>();
+  return {
+    ...actual,
+    listProfiles: async () => [],
+    getLastProfile: async () => null,
+  };
+});
+
 function createMockAuth(): AuthKit {
   return {
     getCurrentUser: () => null,

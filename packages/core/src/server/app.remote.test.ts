@@ -9,6 +9,18 @@ import { JsonStore } from '../storage/json-store.js';
 import { clearRemoteTokenProviders } from '../providers/remote.js';
 import type { ModelConfig, ProviderConfig } from '@itphx/synth-shared';
 
+// Реестр профилей изолируем: getHybridStatus/GET /hybrid/status (getHybridState в
+// app.ts) читают listProfiles/getLastProfile БЕЗ path — дефолтный путь увёл бы тест
+// в реальный ~/.config/synth/profiles.json. Мок ведёт себя как «реестр пуст».
+vi.mock('../profiles.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../profiles.js')>();
+  return {
+    ...actual,
+    listProfiles: async () => [],
+    getLastProfile: async () => null,
+  };
+});
+
 const REMOTE_PROVIDER: ProviderConfig = {
   name: 'itphx',
   type: 'remote',

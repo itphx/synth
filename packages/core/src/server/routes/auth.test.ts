@@ -8,6 +8,18 @@ import { createAuthRoutes, type AuthRoutesRemoteDeps } from './auth.js';
 import { RemoteConnection } from '../../remote/connection.js';
 import { RemoteError } from '../../remote/types.js';
 
+// Реестр профилей изолируем: даже если граф теста дотянется до app.ts (авто-логин
+// → /auth/status → getHybridState), дефолтный путь ~/.config/synth/profiles.json
+// не должен читаться. Мок = «реестр пуст».
+vi.mock('../../profiles.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../profiles.js')>();
+  return {
+    ...actual,
+    listProfiles: async () => [],
+    getLastProfile: async () => null,
+  };
+});
+
 const COOKIE_NAME = 'synth_session';
 const API_KEY = 'test-key';
 const BACKEND = 'https://backend.test';
