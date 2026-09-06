@@ -204,6 +204,7 @@ export const dict = {
   'auth.passwordPlaceholder': 'Enter password',
   'auth.serverUrl': 'Server URL',
   'auth.serverUrlPlaceholder': 'https://synth.example.com',
+  'auth.serverKnown': 'Choose a server or enter the address',
   'auth.selectUser': 'Select user',
   'auth.loginButton': 'Sign In',
   'auth.profile': 'Profile',

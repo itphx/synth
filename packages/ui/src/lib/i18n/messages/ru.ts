@@ -203,6 +203,7 @@ export const dict = {
   'auth.passwordPlaceholder': 'Введите пароль',
   'auth.serverUrl': 'Адрес сервера',
   'auth.serverUrlPlaceholder': 'https://synth.example.com',
+  'auth.serverKnown': 'Выберите сервер или введите адрес',
   'auth.selectUser': 'Выберите пользователя',
   'auth.loginButton': 'Войти',
   'auth.profile': 'Профиль',

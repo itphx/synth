@@ -17,7 +17,7 @@ import {
 import type { SummarizationConfig } from '@itphx/synth-shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } from '@itphx/synth-shared';
 import { createLocalAuth } from '../auth/local.js';
-import { ensureProfile, profileDataDir, profileCredentialsPath } from '../profiles.js';
+import { ensureProfile, profileDataDir, profileCredentialsPath, listProfiles, getLastProfile } from '../profiles.js';
 import { RemoteConnection } from '../remote/connection.js';
 import { RemoteSession } from '../remote/session.js';
 import type { RemoteUser } from '../remote/types.js';
@@ -299,8 +299,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   let connectionWatcher: ConnectionWatcher | null = null;
 
   // ── Состояние гибрида (для hybrid/status, без auth) ──
-  function getHybridState() {
+  async function getHybridState() {
     const serverConfigured = !!config.defaultBackendUrl;
+    // Реестр профилей серверов (для формы входа UI): известные серверы и последний
+    // использованный. Чтение файла ~/.config/synth/profiles.json — безопасно при
+    // отсутствии (пустой список/null).
+    const [knownProfiles, lastProfile] = await Promise.all([listProfiles(), getLastProfile()]);
     return {
       // Гибрид «включён», когда настроен в конфиге (remote.enabled/--connect/
       // --oidc-issuer), известен адрес сервера или есть runtime-подключение.
@@ -319,6 +323,10 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       // OIDC issuer (--oidc-issuer/--oidc-client-id как fallback дискавери)
       // или уже есть runtime-подключение.
       serverLoginAvailable: serverConfigured || !!config.remoteAuth?.issuer || connection.connected,
+      // Известные серверы (реестр профилей) и последний использованный — для
+      // мульти-серверной формы входа (datalist + предзаполнение).
+      knownServers: knownProfiles.map((p) => p.url),
+      lastServer: lastProfile?.url ?? null,
     };
   }
 

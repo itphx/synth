@@ -62,6 +62,17 @@ export interface SPALoginResponse {
   token: string
 }
 
+/** Ответ POST /auth/login (парольный вход/переход в профиль сервера). */
+export interface PasswordLoginResponse {
+  deployment?: DeploymentKind
+  user?: User
+  token?: string
+  /** Переход в профиль: процесс перезапускается обёрткой (user/token отсутствуют). */
+  action?: 'switch-profile'
+  server?: string
+  message?: string
+}
+
 const BASE_URL = '/auth'
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -101,8 +112,8 @@ export const api = {
     server: string | undefined,
     username: string,
     password: string,
-  ): Promise<SPALoginResponse> {
-    return fetchJSON<SPALoginResponse>(`${BASE_URL}/login`, {
+  ): Promise<PasswordLoginResponse> {
+    return fetchJSON<PasswordLoginResponse>(`${BASE_URL}/login`, {
       method: 'POST',
       body: JSON.stringify({ server: server || undefined, username, password }),
     })

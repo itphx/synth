@@ -186,12 +186,13 @@ describe('createStandaloneApp: remote-модели через runtime-подкл
         remoteLlm: 'server',
       });
       await handle.connectRemoteWithApiKey(BACKEND_URL, 'tok');
-      expect(handle.getHybridStatus().connected).toBe(true);
+      expect((await handle.getHybridStatus()).connected).toBe(true);
 
       await handle.disconnectRemote();
 
-      expect(handle.getHybridStatus().connected).toBe(false);
-      expect(handle.getHybridStatus().backendUrl).toBeNull();
+      const status = await handle.getHybridStatus();
+      expect(status.connected).toBe(false);
+      expect(status.backendUrl).toBeNull();
       const res = await handle.app.request('/api/v2/models', { headers: { Authorization: 'Bearer test-key' } });
       const body = (await res.json()) as { groups: Group[] };
       expect(body.groups.find((g) => g.provider.name === 'itphx')).toBeUndefined();

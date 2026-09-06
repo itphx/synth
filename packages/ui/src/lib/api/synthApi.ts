@@ -1218,4 +1218,8 @@ export interface HybridStatus {
     username: string
     roles: string[]
   } | null
+  /** URL известных серверов из реестра профилей core (список для datalist формы входа). */
+  knownServers?: string[]
+  /** URL последнего использованного сервера (предзаполнение поля адреса). */
+  lastServer?: string | null
 }

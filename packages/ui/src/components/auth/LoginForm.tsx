@@ -14,7 +14,7 @@ interface DebugUser {
 
 export const LoginForm = () => {
   const { t } = useI18n()
-  const { login, loginWithPassword, isLoading, error, clearError } = useAuthStore()
+  const { login, loginWithPassword, isLoading, error, notice, clearError } = useAuthStore()
   const [apiKey, setApiKey] = useState('')
   const [server, setServer] = useState('')
   const [username, setUsername] = useState('')
@@ -26,6 +26,8 @@ export const LoginForm = () => {
   const [serverConfigured, setServerConfigured] = useState(false)
   /** Гибридный режим реально включён (эндпоинт /hybrid/status ответил И enabled=true). */
   const [hybridEnabled, setHybridEnabled] = useState(false)
+  /** Известные серверы из реестра профилей core (варианты для datalist поля «Сервер»). */
+  const [knownServers, setKnownServers] = useState<string[]>([])
   /** Ссылка на поле пароля — перенос фокуса по Enter с поля логина (мобильная UX). */
   const passwordRef = useRef<HTMLInputElement>(null)
 
@@ -51,7 +53,11 @@ export const LoginForm = () => {
             // Эндпоинт ответил — реально включён гибрид.
             setHybridEnabled(hybrid.enabled ?? false)
             setServerConfigured(hybrid.serverConfigured)
-            if (hybrid.backendUrl) setServer((prev) => prev || hybrid.backendUrl || '')
+            setKnownServers(hybrid.knownServers ?? [])
+            // Предзаполнение поля адреса: последний использованный сервер
+            // (реестр профилей) приоритетнее текущего backendUrl core.
+            const initial = hybrid.lastServer || hybrid.backendUrl || ''
+            if (initial) setServer((prev) => prev || initial)
           } else {
             // Гибрид не настроен (или core без hybrid) → поле адреса скрываем.
             setHybridEnabled(false)
@@ -102,9 +108,14 @@ export const LoginForm = () => {
                   </label>
                   <input
                     type="text"
+                    list="known-synth-servers"
                     value={server}
                     onChange={(e) => setServer(e.target.value)}
-                    placeholder={t('auth.serverUrlPlaceholder')}
+                    placeholder={
+                      knownServers.length > 0
+                        ? t('auth.serverKnown')
+                        : t('auth.serverUrlPlaceholder')
+                    }
                     autoComplete="url"
                     className={cn(
                       "w-full px-4 py-2.5 rounded-lg border bg-background text-foreground",
@@ -113,6 +124,13 @@ export const LoginForm = () => {
                       "transition-colors"
                     )}
                   />
+                  {/* Варианты известных серверов (реестр профилей core). Пустой
+                      список не мешает — datalist просто не показывает вариантов. */}
+                  <datalist id="known-synth-servers">
+                    {knownServers.map((url) => (
+                      <option key={url} value={url} />
+                    ))}
+                  </datalist>
                 </div>
               )}
 
@@ -236,10 +254,17 @@ export const LoginForm = () => {
             </div>
           )}
 
+          {notice && (
+            <div className="p-3 rounded-lg bg-blue-500/10 text-blue-700 dark:text-blue-300 text-sm">
+              {notice}
+            </div>
+          )}
+
           <button
             type="submit"
             disabled={
               isLoading ||
+              !!notice ||
               (oidcEnabled
                 ? !username || !password
                 : !apiKey || (isDebugMode && !username))

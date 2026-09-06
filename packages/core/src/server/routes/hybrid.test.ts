@@ -421,6 +421,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: null,
       serverConfigured: false,
       serverLoginAvailable: false,
+      knownServers: [],
+      lastServer: null,
     }));
     const res = await app.request('/api/v2/hybrid/status');
     expect(res.status).toBe(200);
@@ -431,6 +433,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: null,
       serverConfigured: false,
       serverLoginAvailable: false,
+      knownServers: [],
+      lastServer: null,
     });
   });
 
@@ -442,6 +446,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: { id: 'u1', username: 'dev', roles: ['USER'] },
       serverConfigured: false,
       serverLoginAvailable: true,
+      knownServers: [],
+      lastServer: null,
     }));
     const app = createHybridRoutes(getState);
 
@@ -454,6 +460,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: { id: 'u1', username: 'dev', roles: ['USER'] },
       serverConfigured: false,
       serverLoginAvailable: true,
+      knownServers: [],
+      lastServer: null,
     });
     expect(getState).toHaveBeenCalled();
   });
@@ -466,6 +474,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: null,
       serverConfigured: false,
       serverLoginAvailable: true,
+      knownServers: [],
+      lastServer: null,
     });
     const app = createHybridRoutes(getState);
 
@@ -478,6 +488,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: null,
       serverConfigured: false,
       serverLoginAvailable: true,
+      knownServers: [],
+      lastServer: null,
     });
   });
 
@@ -489,6 +501,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: null,
       serverConfigured: true,
       serverLoginAvailable: true,
+      knownServers: [],
+      lastServer: null,
     });
     const app = createHybridRoutes(getState);
 
@@ -501,6 +515,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: null,
       serverConfigured: true,
       serverLoginAvailable: true,
+      knownServers: [],
+      lastServer: null,
     });
   });
 
@@ -513,6 +529,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: connected ? { id: 'u1', username: 'dev', roles: ['USER'] } : null,
       serverConfigured: false,
       serverLoginAvailable: connected,
+      knownServers: [],
+      lastServer: null,
     }));
     const app = createHybridRoutes(getState);
 
@@ -526,5 +544,33 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
     expect(body.connected).toBe(true);
     expect(body.user?.username).toBe('dev');
     expect(getState).toHaveBeenCalledTimes(2);
+  });
+
+  it('асинхронное состояние (Promise) поддерживается; knownServers/lastServer проходят как есть', async () => {
+    const getState = vi.fn(async () => ({
+      enabled: true,
+      connected: false,
+      backendUrl: null,
+      user: null,
+      serverConfigured: false,
+      serverLoginAvailable: true,
+      knownServers: ['https://synth.k3s.itphx.loc', 'https://beta.example.loc'],
+      lastServer: 'https://synth.k3s.itphx.loc',
+    }));
+    const app = createHybridRoutes(getState);
+
+    const res = await app.request('/api/v2/hybrid/status');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      enabled: true,
+      connected: false,
+      backendUrl: null,
+      user: null,
+      serverConfigured: false,
+      serverLoginAvailable: true,
+      knownServers: ['https://synth.k3s.itphx.loc', 'https://beta.example.loc'],
+      lastServer: 'https://synth.k3s.itphx.loc',
+    });
+    expect(getState).toHaveBeenCalled();
   });
 });
