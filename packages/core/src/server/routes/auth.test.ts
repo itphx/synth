@@ -210,6 +210,94 @@ describe('auth routes (гибридная runtime-личность, RemoteConnec
     });
   });
 
+  describe('POST /auth/login (переход в профиль / смена активного сервера)', () => {
+    const OTHER = 'https://other.test';
+
+    it('нейтральный процесс + server + restartable=false → 409 PROFILE_SWITCH_REQUIRED, connectRemote не вызван', async () => {
+      // Нейтральный процесс: defaultBackendUrl не задан, connection не подключён.
+      const connectRemote = vi.fn();
+      const switchToProfile = vi.fn().mockResolvedValue(undefined);
+      const app = makeApp(makeDeps({
+        connectRemote,
+        switchToProfile,
+        restartable: false,
+      }, { tmpDir }));
+
+      const res = await app.request('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ server: BACKEND, username: 'lucky', password: 'secret' }),
+      });
+
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe('PROFILE_SWITCH_REQUIRED');
+      expect(body.error.message).toContain(BACKEND);
+      // Вход выполнен в профиль, НЕ в runtime-состояние процесса.
+      expect(connectRemote).not.toHaveBeenCalled();
+      expect(switchToProfile).toHaveBeenCalledWith(BACKEND, 'lucky', 'secret');
+    });
+
+    it('нейтральный процесс + server + restartable=true → 200 switch-profile, scheduleRestart вызван', async () => {
+      const connectRemote = vi.fn();
+      const switchToProfile = vi.fn().mockResolvedValue(undefined);
+      const scheduleRestart = vi.fn();
+      const app = makeApp(makeDeps({
+        connectRemote,
+        switchToProfile,
+        restartable: true,
+        scheduleRestart,
+      }, { tmpDir }));
+
+      const res = await app.request('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ server: `${BACKEND}/`, username: 'lucky', password: 'secret' }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { action: string; server: string };
+      expect(body.action).toBe('switch-profile');
+      expect(body.server).toBe(BACKEND);
+      expect(switchToProfile).toHaveBeenCalledWith(BACKEND, 'lucky', 'secret');
+      expect(scheduleRestart).toHaveBeenCalledTimes(1);
+      expect(connectRemote).not.toHaveBeenCalled();
+    });
+
+    it('процесс привязан (defaultBackendUrl=A) + server=B → 409 PROFILE_SWITCH_REQUIRED, connectRemote не вызван', async () => {
+      const connectRemote = vi.fn();
+      const app = makeApp(makeDeps({ defaultBackendUrl: BACKEND, connectRemote }, { tmpDir }));
+
+      const res = await app.request('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ server: OTHER, username: 'lucky', password: 'secret' }),
+      });
+
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe('PROFILE_SWITCH_REQUIRED');
+      expect(body.error.message).toContain(OTHER);
+      expect(connectRemote).not.toHaveBeenCalled();
+    });
+
+    it('процесс привязан (defaultBackendUrl=A) + server=A → обычный runtime-вход', async () => {
+      const connectRemote = vi.fn().mockResolvedValue(SERVER_USER);
+      const app = makeApp(makeDeps({ defaultBackendUrl: BACKEND, connectRemote }, { tmpDir }));
+
+      const res = await app.request('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ server: BACKEND, username: 'lucky', password: 'secret' }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { user: { username: string } };
+      expect(body.user.username).toBe('lucky');
+      expect(connectRemote).toHaveBeenCalledWith(BACKEND, 'lucky', 'secret');
+    });
+  });
+
   describe('GET /auth/status (авто-логин)', () => {
     it('не подключено + сохранённые credentials (connectRemoteFromSaved) → server-cookie и user', async () => {
       const connectRemoteFromSaved = vi.fn().mockResolvedValue(SERVER_USER);

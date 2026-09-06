@@ -318,10 +318,25 @@ if [ -n "$TOKEN" ]; then
     CLI_ARGS+=(--token "$TOKEN")
 fi
 
-node "$CLI" "${CLI_ARGS[@]}" &
-CLI_PID=$!
-wait "$CLI_PID"
-rc=$?
+# Процесс «перезапускаемый» (SYNTH_RESTARTABLE=1): при входе в UI на новый сервер
+# (переход в профиль) CLI пишет профиль и завершается кодом 77 — здесь перезапускаем
+# его, serve подхватит lastProfile нового сервера. Любой другой код — обычный выход.
+export SYNTH_RESTARTABLE=1
+
+while true; do
+    node "$CLI" "${CLI_ARGS[@]}" &
+    CLI_PID=$!
+    wait "$CLI_PID"
+    rc=$?
+    CLI_PID=""
+    if [ "$rc" -eq 77 ]; then
+        echo ""
+        echo "  Переключение профиля — перезапускаю..."
+        echo ""
+        continue
+    fi
+    break
+done
 trap - INT TERM
 
 echo ""

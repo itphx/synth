@@ -34,6 +34,12 @@ export interface AuthRoutesRemoteDeps {
    * форму входа с полем «Адрес сервера» (если адрес не задан) и парольным входом.
    */
   hybridEnabled?: boolean;
+  /** Процесс перезапускаемый обёрткой (env SYNTH_RESTARTABLE=1): switch-profile завершит процесс кодом 77. */
+  restartable?: boolean;
+  /** Вход в профиль сервера (создание профиля + credentials в профильный файл) без runtime-подключения процесса. */
+  switchToProfile?: (serverUrl: string, username: string, password: string) => Promise<void>;
+  /** Отложенный запрос перезапуска процесса (graceful, код 77). */
+  scheduleRestart?: () => void;
 }
 
 function normalizeUrl(url: string): string {
@@ -115,6 +121,23 @@ function mapLoginError(err: unknown): Response {
   }), { status: 500, headers: { 'Content-Type': 'application/json' } });
 }
 
+/**
+ * 409 «требуется перезапуск для смены сервера». Два случая:
+ * - нейтральный процесс + явный адрес: вход выполнен в ПРОФИЛЬ сервера (не в
+ *   runtime), но процесс не перезапускаемый (прямой `synth serve`) — пользователь
+ *   сам перезапустит с адресом (`synth serve --connect <server>`);
+ * - процесс привязан к серверу A, запрошен B: смена активного сервера «на лету»
+ *   не поддерживается (dataDir/runtime принадлежат профилю A) — нужен перезапуск.
+ */
+function profileSwitchRequired(server: string): Response {
+  return new Response(JSON.stringify({
+    error: {
+      code: 'PROFILE_SWITCH_REQUIRED',
+      message: `Перезапустите с адресом сервера: synth serve --connect ${server}`,
+    },
+  }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+}
+
 export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps): Hono {
   const app = new Hono();
   // Активный device flow (один на сервер; новый start перезаписывает старый).
@@ -185,20 +208,36 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
    * POST /auth/login — вход по логину/паролю (ROPC) в гибридном режиме.
    * Локальная личность = серверная: ROPC против OIDC issuer, пользователь
    * (username + роли) приходит с сервера, cookie ставится с kind:'server'.
-   * body: { server?, username, password } — server пуст → defaultBackendUrl
-   * (--connect/env/конфиг); если сервер неизвестен и нет подключения — 400.
+   * body: { server?, username, password } — server пуст → активный сервер
+   * процесса (defaultBackendUrl/подключение); если сервер неизвестен и нет
+   * подключения — 400.
+   *
+   * Сценарии «вход = переход в профиль» (процессы-профили серверов):
+   * - нейтральный процесс (без defaultBackendUrl и подключения) + передан
+   *   server → вход выполняется НЕ в runtime-состояние процесса, а в ПРОФИЛЬ
+   *   сервера (switchToProfile: реестр + профильные credentials). Если процесс
+   *   перезапускаемый (restartable, env SYNTH_RESTARTABLE=1) — ответ 200
+   *   { action:'switch-profile' } и отложенный exit(77) (обёртка hybrid.sh
+   *   перезапустит процесс в новом профиле); иначе — 409 PROFILE_SWITCH_REQUIRED.
+   * - процесс привязан к серверу A + передан server B (≠ A) — смена активного
+   *   сервера «на лету» не поддерживается: 409 PROFILE_SWITCH_REQUIRED, runtime
+   *   процесса не трогается.
+   * - иначе (server пуст → активный, либо равен активному) — обычный runtime-вход
+   *   (connectRemote), как раньше.
    */
   app.post('/login', async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const rawServer = typeof body.server === 'string' ? body.server.trim() : '';
-    const server = rawServer
-      ? normalizeUrl(rawServer)
-      : (deps.defaultBackendUrl ?? '');
     const username = typeof body.username === 'string' ? body.username : '';
     const password = typeof body.password === 'string' ? body.password : '';
 
-    // Адрес сервера: явный server → defaultBackendUrl → уже подключённый backend.
-    const target = server || deps.connection.backendUrl || deps.defaultBackendUrl;
+    // Адрес из тела запроса (куда хочет войти пользователь) и активный сервер
+    // процесса: runtime-подключение (приоритет) или дефолтный адрес при старте.
+    const requested = rawServer ? normalizeUrl(rawServer) : '';
+    const activeRaw = deps.connection.backendUrl ?? deps.defaultBackendUrl ?? '';
+    const active = activeRaw ? normalizeUrl(activeRaw) : '';
+    // Адрес для входа: явный server → defaultBackendUrl → уже подключённый backend.
+    const target = requested || active;
     if (!target) {
       return c.json({
         error: { code: 'BAD_REQUEST', message: 'Не указан адрес сервера' },
@@ -206,6 +245,39 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
     }
     if (!username || !password) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Укажите логин и пароль' } }, 400);
+    }
+
+    // Процесс привязан к другому серверу, а запрошен новый — смена активного
+    // сервера «на лету» не поддерживается (runtime/dataDir принадлежат профилю
+    // активного сервера): просим перезапустить процесс с адресом.
+    if (requested && active && requested !== active) {
+      return profileSwitchRequired(requested);
+    }
+
+    // Нейтральный процесс + явный адрес → «переход в профиль»: вход выполняется
+    // в профиль сервера (реестр + профильный каталог + credentials), runtime
+    // процесса НЕ подключается. Без switchToProfile (deps без профильной
+    // поддержки) — обратная совместимость: обычный runtime-вход как раньше.
+    if (requested && !active && deps.switchToProfile) {
+      try {
+        await deps.switchToProfile(requested, username, password);
+      } catch (err) {
+        return mapLoginError(err);
+      }
+      // Перезапускаемый процесс (hybrid.sh): отвечаем 200 switch-profile и
+      // отложенно завершаем процесс кодом 77 — обёртка перезапустит serve в
+      // новом профиле (serve без --connect берёт lastProfile из реестра).
+      if (deps.restartable && deps.scheduleRestart) {
+        deps.scheduleRestart();
+        return c.json({
+          action: 'switch-profile',
+          server: requested,
+          message: 'Профиль сервера сохранён — процесс перезапускается в новом профиле',
+        });
+      }
+      // Прямой synth serve без обёртки: процесс не завершаем, пользователь сам
+      // перезапустит с адресом сервера.
+      return profileSwitchRequired(requested);
     }
 
     try {

@@ -17,7 +17,9 @@ import {
 import type { SummarizationConfig } from '@itphx/synth-shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } from '@itphx/synth-shared';
 import { createLocalAuth } from '../auth/local.js';
+import { ensureProfile, profileDataDir, profileCredentialsPath } from '../profiles.js';
 import { RemoteConnection } from '../remote/connection.js';
+import { RemoteSession } from '../remote/session.js';
 import type { RemoteUser } from '../remote/types.js';
 import { RemoteError } from '../remote/types.js';
 import { RemoteEventBridge } from '../remote/event-bridge.js';
@@ -458,6 +460,45 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     return applyConnected(user);
   }
 
+  // ── Переход в профиль (нейтральный процесс + адрес из UI) ──
+
+  /** Процесс перезапускаемый обёрткой (env SYNTH_RESTARTABLE=1 ставит hybrid.sh). */
+  const restartable = process.env.SYNTH_RESTARTABLE === '1';
+
+  /** Отложенный перезапуск процесса кодом 77: обёртка hybrid.sh перезапустит serve в новом профиле. */
+  function scheduleRestart(): void {
+    setTimeout(() => {
+      process.exit(77);
+    }, 800);
+  }
+
+  /**
+   * «Вход в профиль» сервера: НЕ трогает runtime-состояние процесса (connection
+   * остаётся disconnected). Создаёт/обновляет профиль в реестре (ensureProfile),
+   * гарантирует профильный каталог данных и пишет credentials в профильный файл
+   * ({baseDataDir}/profiles/{id}/credentials.json) через RemoteSession.loginWithPassword.
+   * OIDC issuer/client_id — дискавери с сервера (connection.discoverOidc, fallback
+   * на config.remoteAuth внутри connection). После успешного входа перезапускаемый
+   * процесс завершается кодом 77 и стартует уже в профиле нового сервера.
+   */
+  async function switchToProfile(serverUrl: string, username: string, password: string): Promise<void> {
+    const baseDataDir = config.dataDir;
+    const profile = await ensureProfile(serverUrl, { username });
+    await ensureDataDir(profileDataDir(baseDataDir, profile.id));
+    const { issuer, clientId } = await connection.discoverOidc(profile.url);
+    await RemoteSession.loginWithPassword(
+      {
+        backendUrl: profile.url,
+        issuer,
+        clientId,
+        credentialsPath: profileCredentialsPath(baseDataDir, profile.id),
+        timeoutMs: config.remoteTimeoutMs,
+      },
+      username,
+      password,
+    );
+  }
+
   // Health — без auth
   const healthRoutes = createHealthRoutes();
   app.route('/', healthRoutes);
@@ -477,6 +518,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     defaultBackendUrl: config.defaultBackendUrl,
     issuerAvailable: !!config.remoteAuth?.issuer,
     hybridEnabled: config.hybridEnabled,
+    restartable,
+    switchToProfile,
+    scheduleRestart,
   }));
 
 
