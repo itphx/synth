@@ -258,12 +258,56 @@ html.pointer-coarse .mobile-drawer-panel button {
   min-height: 40px;
 }
 
-/* Минимальные тач-таргеты кнопок тулбара композера на мобильных */
+/* Тулбар композера на мобильных: один ряд (flex-nowrap) + горизонтальный скролл */
+html.pointer-coarse .chat-composer .chat-toolbar,
+html.device-phone .chat-composer .chat-toolbar,
+html.device-tablet .chat-composer .chat-toolbar {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+html.pointer-coarse .chat-composer .chat-toolbar::-webkit-scrollbar,
+html.device-phone .chat-composer .chat-toolbar::-webkit-scrollbar,
+html.device-tablet .chat-composer .chat-toolbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Правая группа действий (режим/размышления/модель/агент + отправка): тоже в одну строку */
+html.pointer-coarse .chat-composer .chat-toolbar-actions,
+html.device-phone .chat-composer .chat-toolbar-actions,
+html.device-tablet .chat-composer .chat-toolbar-actions {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  min-width: 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+html.pointer-coarse .chat-composer .chat-toolbar-actions::-webkit-scrollbar,
+html.device-phone .chat-composer .chat-toolbar-actions::-webkit-scrollbar,
+html.device-tablet .chat-composer .chat-toolbar-actions::-webkit-scrollbar {
+  display: none;
+}
+
+/* Компактные кнопки тулбара композера на мобильных (~28px), иконка по центру */
 html.pointer-coarse .chat-composer button,
 html.device-phone .chat-composer button,
 html.device-tablet .chat-composer button {
-  min-width: 40px;
-  min-height: 40px;
+  min-width: 28px;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+}
+
+/* Компактные иконки тулбара на мобильных (~16px) */
+html.pointer-coarse .chat-composer button svg,
+html.device-phone .chat-composer button svg,
+html.device-tablet .chat-composer button svg {
+  width: 16px;
+  height: 16px;
 }
 
 /* Кнопка закрытия вкладки CenterTabs доступна на touch (вместо group-hover).
@@ -276,6 +320,8 @@ html.device-tablet [data-tab-id] {
   min-height: 36px;
 }
 
+/* Кнопка закрытия вкладки — маленькая (~18-20px), иконка по центру. Вкладка
+   остаётся крупным тап-таргетом (min-height:36px выше); разведены стили. */
 html.pointer-coarse [data-tab-id] button,
 html.device-phone [data-tab-id] button,
 html.device-tablet [data-tab-id] button {
@@ -283,8 +329,18 @@ html.device-tablet [data-tab-id] button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 32px;
-  min-height: 32px;
+  min-width: 18px;
+  min-height: 18px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+}
+
+html.pointer-coarse [data-tab-id] button svg,
+html.device-phone [data-tab-id] button svg,
+html.device-tablet [data-tab-id] button svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* =============================================================

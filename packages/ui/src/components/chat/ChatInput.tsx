@@ -378,7 +378,7 @@ export function ChatInput({
         </div>
 
         <div
-          className={`flex flex-wrap items-center justify-between gap-1.5 ${
+          className={`chat-toolbar flex flex-wrap items-center justify-between gap-1.5 ${
             expanded ? 'mt-auto' : ''
           }`}
         >
@@ -392,7 +392,7 @@ export function ChatInput({
             />
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-1.5 pr-1 min-w-0 ml-auto">
+          <div className="chat-toolbar-actions flex flex-wrap items-center justify-end gap-1.5 pr-1 min-w-0 ml-auto">
             <PlanActModeToggle sessionId={sessionId} />
             <ReasoningLevelSelector sessionId={sessionId} />
             <ModelSelector sessionId={sessionId} />

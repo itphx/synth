@@ -123,6 +123,9 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
     return c.json({
       authenticated: !!user,
       debug_mode: false,
+      // Тип развёртывания: standalone-core — единственный, кто отдаёт
+      // /api/v2/hybrid/status (по этому признаку UI включает поллинг гибрида).
+      deployment: 'standalone',
       // OIDC-вход на сервер возможен, когда известен адрес сервера
       // (defaultBackendUrl), задан OIDC issuer (--oidc-issuer/--oidc-client-id —
       // fallback дискавери; UI тогда показывает форму с полем адреса) либо уже
@@ -141,7 +144,7 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
     if (!user) {
       return c.json({ user: null }, 401);
     }
-    return c.json({ user: toPayload(user) });
+    return c.json({ deployment: 'standalone', user: toPayload(user) });
   });
 
   app.get('/me', async (c) => {
@@ -168,7 +171,7 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
     // Устанавливаем cookie-сессию, чтобы SPA авторизовался на API автоматически
     auth.setSessionCookie(c);
 
-    return c.json({ user: toPayload(user) });
+    return c.json({ deployment: 'standalone', user: toPayload(user) });
   });
 
   /**
@@ -204,7 +207,7 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
       // только после успешного входа).
       const user = await deps.connectRemote(target, username, password);
       auth.setServerUserCookie(c, remoteUserToPayload(user));
-      return c.json({ user: remoteUserToPayload(user) });
+      return c.json({ deployment: 'standalone', user: remoteUserToPayload(user) });
     } catch (err) {
       return mapLoginError(err);
     }

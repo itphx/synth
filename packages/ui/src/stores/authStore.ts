@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api, type User, type Profile } from '@/lib/api/client'
+import { api, type User, type Profile, type DeploymentKind } from '@/lib/api/client'
 import { profileService } from '@/lib/api/profileService'
 
 interface AuthState {
@@ -9,6 +9,8 @@ interface AuthState {
   isLoading: boolean
   isInitialized: boolean
   error: string | null
+  /** Тип развёртывания сервера ('standalone'|'managed') — runtime-детекция. */
+  deployment: DeploymentKind | null
 
   initialize: () => Promise<void>
   reauthenticate: () => Promise<void>
@@ -26,6 +28,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isLoading: false,
   isInitialized: false,
   error: null,
+  deployment: null,
 
   initialize: async () => {
     if (get().isLoading || get().isInitialized) return
@@ -44,6 +47,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         user: session.user,
         isAuthenticated: true,
         isLoading: false,
+        deployment: session.deployment ?? null,
       })
       await profileService.initialize()
       set({ isInitialized: true })
@@ -54,6 +58,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         isAuthenticated: status.authenticated,
         isLoading: false,
         isInitialized: true,
+        deployment: status.deployment ?? null,
       })
     }
   },
@@ -66,6 +71,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         user: response.user,
         isAuthenticated: true,
         isLoading: false,
+        deployment: response.deployment ?? null,
       })
       await profileService.initialize()
       set({ isInitialized: true })
@@ -86,6 +92,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         user: response.user,
         isAuthenticated: true,
         isLoading: false,
+        deployment: response.deployment ?? null,
       })
       await profileService.initialize()
       set({ isInitialized: true })
@@ -120,7 +127,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       localStorage.removeItem('useSystemTheme')
       localStorage.removeItem('selectedThemeId')
       localStorage.removeItem('selectedThemeVariant')
-      set({ user: null, profile: null, isAuthenticated: false, isLoading: false })
+      set({ user: null, profile: null, isAuthenticated: false, isLoading: false, deployment: null })
     }
   },
 

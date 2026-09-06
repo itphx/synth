@@ -39,12 +39,13 @@ export const LoginForm = () => {
           const users = await api.getUsers()
           setDebugUsers(users.users)
         }
-        // Гибрид: если вход на сервер доступен — уточняем, включён ли гибрид
-        // и известен ли адрес при старте. serverConfigured=true → адрес задан
-        // при старте, поле скрываем (вход идёт на defaultBackendUrl core);
-        // false → адрес вводит пользователь. backendUrl подставляем, если core
-        // уже знает удалённый backend.
-        if (status.oidc_enabled) {
+        // Гибрид: если сервер — standalone-core (имеет /hybrid/status), уточняем,
+        // включён ли гибрид и известен ли адрес при старте. serverConfigured=true
+        // → адрес задан при старте, поле скрываем (вход идёт на defaultBackendUrl
+        // core); false → адрес вводит пользователь. backendUrl подставляем, если
+        // core уже знает удалённый backend. На managed-бэкенде эндпоинта нет —
+        // запрос НЕ выполняем (0 сетевых запросов → нет 404).
+        if (status.deployment === 'standalone' && status.oidc_enabled) {
           const hybrid = await synthApi.getHybridStatus().catch(() => null)
           if (hybrid) {
             // Эндпоинт ответил — реально включён гибрид.
@@ -52,11 +53,14 @@ export const LoginForm = () => {
             setServerConfigured(hybrid.serverConfigured)
             if (hybrid.backendUrl) setServer((prev) => prev || hybrid.backendUrl || '')
           } else {
-            // Эндпоинт недоступен (managed-бэкенд без гибрида) ИЛИ гибрид не
-            // настроен → поле адреса гарантированно скрываем.
+            // Гибрид не настроен (или core без hybrid) → поле адреса скрываем.
             setHybridEnabled(false)
             setServerConfigured(true)
           }
+        } else {
+          // Managed-бэкенд (нет /hybrid/status) → гибрида нет, поле адреса скрыто.
+          setHybridEnabled(false)
+          setServerConfigured(true)
         }
       } catch {
         setIsDebugMode(false)
