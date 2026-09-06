@@ -24,6 +24,7 @@ import type { RemoteUser } from '../remote/types.js';
 import { RemoteError } from '../remote/types.js';
 import { RemoteEventBridge } from '../remote/event-bridge.js';
 import { isRemoteRef, toLocalId } from '../remote/aggregate.js';
+import { ConnectionWatcher } from './connection-watcher.js';
 import { setRemoteTokenProvider, removeRemoteTokenProvider } from '../providers/remote.js';
 import { JsonStore } from '../storage/json-store.js';
 import { ProjectStore } from '../storage/project-store.js';
@@ -288,6 +289,15 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const providerMirrorSnapshot = new Map<string, ProviderConfig | null>();
   const modelMirrorSnapshot = new Map<string, ModelConfig | null>();
 
+  // ── Фактическая живость подключения ──
+  // connection.connected означает лишь «есть runtime-сессия», но не доступность
+  // backend (после падения/перезапуска сервера сессия в памяти остаётся «живой»).
+  // hybridLiveness обновляет ConnectionWatcher (health+auth каждые 15 с), а
+  // connect*/disconnect выставляют его синхронно. /hybrid/status.connected =
+  // connection.connected && hybridLiveness — реальная доступность сервера.
+  let hybridLiveness = false;
+  let connectionWatcher: ConnectionWatcher | null = null;
+
   // ── Состояние гибрида (для hybrid/status, без auth) ──
   function getHybridState() {
     const serverConfigured = !!config.defaultBackendUrl;
@@ -297,7 +307,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       // Случай «включён, но адрес не задан» — это тоже гибрид: адрес вводит
       // пользователь в UI (LoginForm показывает поле «Адрес сервера»).
       enabled: config.hybridEnabled || serverConfigured || connection.connected,
-      connected: connection.connected,
+      // connected отражает РЕАЛЬНУЮ доступность backend: сессия есть (connection)
+      // И сервер подтверждён живым watcher'ом (hybridLiveness). После
+      // connectRemote* applyConnected сразу ставит hybridLiveness=true — UI видит
+      // connected немедленно; последующие тики watcher'а лишь подтверждают/снимают.
+      connected: connection.connected && hybridLiveness,
       backendUrl: connection.backendUrl,
       user: connection.user,
       serverConfigured,
@@ -432,11 +446,15 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       activeBridge = new RemoteEventBridge({ client, getToken, eventBus, backendUrl });
       activeBridge.start();
     }
+    // Подключение успешно применено — статус немедленно «живой» (UI видит
+    // connected сразу после логина/авто-подключения; тик watcher'а подтвердит).
+    hybridLiveness = true;
     return user;
   }
 
   // ── Отключение: полный сброс runtime-состояния ──
   async function disconnectRemote(): Promise<void> {
+    hybridLiveness = false;
     activeBridge?.stop();
     activeBridge = undefined;
     restoreRemoteMirrors();
@@ -1127,6 +1145,43 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     console.log(`  remote: гибридный режим (сервер ${config.defaultBackendUrl}) — подключение в рантайме`);
   }
 
+  // Watcher фактической живости: создаётся (но НЕ стартует — чтобы тесты app не
+  // гоняли интервалы); запускает cli.ts через handle.startConnectionWatcher().
+  connectionWatcher = new ConnectionWatcher({
+    getTarget: () => connection.backendUrl ?? config.defaultBackendUrl ?? null,
+    isSessionActive: () => connection.connected,
+    tryConnectFromSaved: async (url) => {
+      try {
+        const user = await connectRemoteFromSaved(url);
+        return !!user;
+      } catch {
+        return false;
+      }
+    },
+    checkReachable: async () => {
+      try {
+        const client = connection.client;
+        if (!client) return false;
+        return await client.isReachable();
+      } catch {
+        return false;
+      }
+    },
+    checkAuth: async () => {
+      const client = connection.client;
+      if (!client) return false;
+      try {
+        const st = await client.getAuthStatus({ timeoutMs: 5000 });
+        return st.authenticated === true;
+      } catch {
+        return false;
+      }
+    },
+    setLiveness: (v) => {
+      hybridLiveness = v;
+    },
+  });
+
   return {
     app,
     server,
@@ -1137,6 +1192,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     connectRemoteFromSaved,
     connectRemoteWithApiKey,
     disconnectRemote,
+    // Watcher фактической живости подключения: НЕ стартует внутри
+    // createStandaloneApp — запускает/останавливает cli.ts (server.listen →
+    // gracefulShutdown), чтобы тесты app не держали фоновых интервалов.
+    startConnectionWatcher: () => connectionWatcher?.start(),
+    stopConnectionWatcher: () => connectionWatcher?.stop(),
     getHybridStatus: getHybridState,
     eventBus,
     // Текущий мост событий (создаётся/обновляется в applyConnected) — для stop() при shutdown.

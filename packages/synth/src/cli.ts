@@ -159,7 +159,9 @@ program
       shuttingDown = true;
       console.log(`\n[Shutdown] Получен сигнал ${signal}, завершаю...`);
 
-      // Гибрид: закрыть SSE-стрим к удалённому backend, отменить реконнект.
+      // Гибрид: остановить фоновый watcher живости (иначе успеет переподключиться
+      // во время shutdown), закрыть SSE-стрим к удалённому backend.
+      appHandle.stopConnectionWatcher?.();
       await appHandle.disconnectRemote?.().catch(() => {});
       appHandle.remoteEventBridge?.stop();
 
@@ -204,6 +206,11 @@ program
           }
         })();
       }
+
+      // Фоновый watcher живости гибридного подключения: если backend недоступен
+      // на старте или лёг позже — периодически (15 с) проверяет доступность и
+      // переподключается по сохранённым credentials; обновляет hybrid/status.
+      appHandle.startConnectionWatcher?.();
     });
   });
 
