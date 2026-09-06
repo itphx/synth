@@ -251,6 +251,11 @@ jobs:
           "
           chmod 600 "${{ gitverse.workspace }}/.docker/config.json"
 
+      - name: Очистка старых Docker-образов (gitverse)
+        env:
+          GV_TOKEN: ${{ secrets.GV_TOKEN }}
+        run: node scripts/docker-cleanup.mjs synth synth-backend synth-ui
+
       - name: Сборка и публикация Docker образа synth (kaniko)
         uses: docker://gcr.io/kaniko-project/executor:v1.24.0
         env:
