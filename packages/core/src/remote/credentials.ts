@@ -24,7 +24,8 @@ const CREDENTIALS_FILE_MODE = 0o600;
 
 type CredentialsFile = Record<string, RemoteCredentials>;
 
-function defaultCredentialsPath(): string {
+/** Путь к файлу credentials по умолчанию (~/.config/synth/credentials.json). */
+export function defaultCredentialsPath(): string {
   return join(homedir(), '.config', 'synth', 'credentials.json');
 }
 

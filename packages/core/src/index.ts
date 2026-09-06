@@ -162,3 +162,18 @@ export type {
   RemoteConfig,
   RemoteEventBridgeOptions,
 } from './remote/index.js';
+
+export {
+  getProfilesPath,
+  profileIdForUrl,
+  profileDataDir,
+  profileCredentialsPath,
+  loadProfiles,
+  listProfiles,
+  getLastProfile,
+  findProfileByUrl,
+  ensureProfile,
+  removeProfile,
+  migrateCredentialsToProfile,
+} from './profiles.js';
+export type { ProfileMeta, ProfilesFile } from './profiles.js';
