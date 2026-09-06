@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { ToastContainer } from 'react-toastify'
 import { TooltipProvider } from './components/ui/tooltip'
 import { useUIStore } from '@/stores/useUIStore'
@@ -71,27 +71,44 @@ function App() {
   const confirmOptions = useConfirmStore(s => s.options)
   const closeConfirm = useConfirmStore(s => s.closeConfirm)
 
-  const centerRef = useRef<HTMLDivElement>(null)
+  const centerNodeRef = useRef<HTMLDivElement | null>(null)
+  const roRef = useRef<ResizeObserver | null>(null)
 
-  useEffect(() => {
-    const el = centerRef.current
-    if (!el) return
+  const applyCentralNarrow = useCallback((narrow: boolean) => {
+    useUIStore.getState().setCentralNarrow(narrow)
+    document.documentElement.classList.toggle('central-narrow', narrow)
+  }, [])
 
-    const apply = (narrow: boolean) => {
-      useUIStore.getState().setCentralNarrow(narrow)
-      document.documentElement.classList.toggle('central-narrow', narrow)
+  const centerRef = useCallback((node: HTMLDivElement | null) => {
+    centerNodeRef.current = node
+    roRef.current?.disconnect()
+    roRef.current = null
+    if (!node) {
+      applyCentralNarrow(false)
+      return
     }
-
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const w = entry.contentRect.width
-        apply(w > 0 && w < 800)
+        applyCentralNarrow(w > 0 && w < 800)
       }
     })
-    ro.observe(el)
+    ro.observe(node)
+    roRef.current = ro
+  }, [applyCentralNarrow])
 
-    return () => ro.disconnect()
-  }, [])
+  useEffect(() => {
+    if (typeof ResizeObserver !== 'undefined') return
+    const onResize = () => {
+      const el = centerNodeRef.current
+      if (!el) return
+      const w = el.getBoundingClientRect().width
+      applyCentralNarrow(w > 0 && w < 800)
+    }
+    onResize()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [applyCentralNarrow])
 
   useEffect(() => {
     if (isMobile) {
