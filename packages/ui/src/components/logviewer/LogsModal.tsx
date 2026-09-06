@@ -5,6 +5,7 @@ import { useUIStore } from "../../stores/useUIStore"
 import { useAuthStore } from "@/stores/authStore"
 import { useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
+import { useDevice } from "@/hooks/useDevice"
 import { LogFilePanel } from "./LogFilePanel"
 import { AuditLogPanel } from "./AuditLogPanel"
 import { LlmPayloadPanel } from "./LlmPayloadPanel"
@@ -28,6 +29,8 @@ export const LogsModal = () => {
   const { t } = useI18n()
   const { user } = useAuthStore()
   const { isLogsDialogOpen, setLogsDialogOpen, logsPage, setLogsPage } = useUIStore()
+  const { deviceType } = useDevice()
+  const isPhone = deviceType === 'phone'
 
   const userRoles = user?.roles ?? []
   const visibleCategories = CATEGORIES.filter(
@@ -40,9 +43,9 @@ export const LogsModal = () => {
         className="p-0 gap-0 max-w-5xl w-[95vw] h-[90vh] max-h-[90vh] md:max-h-[85vh] shadow-xl"
         showCloseButton={false}
       >
-        <div className="flex h-full overflow-hidden overscroll-behavior-contain">
-          {/* Left sidebar */}
-          <div className="w-48 md:w-52 border-r border-border flex flex-col shrink-0">
+        <div className={cn("flex h-full overflow-hidden overscroll-behavior-contain", isPhone ? "flex-col" : "md:flex-row")}>
+          {/* Left sidebar (desktop) / mobile horizontal menu tabs */}
+          <div className={cn("flex flex-col shrink-0", !isPhone && "w-48 md:w-52 border-r border-border")}>
             <div className="flex items-center gap-2 px-4 h-12 border-b border-border">
               <Icon name="terminal-box" className="size-4 text-muted-foreground" />
               <span className="font-medium text-sm">{t('logs.title')}</span>
@@ -55,17 +58,24 @@ export const LogsModal = () => {
                 </DialogClose>
               </div>
             </div>
-            <nav className="flex-1 overflow-y-auto p-2" aria-label={t('logs.title')}>
+            <nav
+              className={cn(
+                "p-2 gap-1",
+                isPhone ? "flex flex-row overflow-x-auto" : "flex-1 overflow-y-auto flex-col",
+              )}
+              aria-label={t('logs.title')}
+            >
               {visibleCategories.map((cat) => (
                 <Fragment key={cat.id}>
                   <button
                     onClick={() => setLogsPage(cat.id)}
                     aria-current={logsPage === cat.id ? 'page' : undefined}
                     className={cn(
-                      "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition-[transform,color] duration-150 active:scale-[0.96]",
+                      "flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition-[transform,color] duration-150 active:scale-[0.96]",
+                      isPhone && "shrink-0",
                       logsPage === cat.id
                         ? "bg-interactive-selection text-interactive-selection-foreground"
-                        : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
+                        : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
                     )}
                   >
                     <Icon name={cat.icon} className="size-4 shrink-0" />

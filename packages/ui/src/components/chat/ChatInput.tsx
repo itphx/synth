@@ -3,6 +3,7 @@ import { Icon } from '../icon/Icon'
 import { OverlayScrollbar } from '../ui/OverlayScrollbar'
 import { useI18n } from '@/lib/i18n'
 import { useChatStore } from '@/stores/chatStore'
+import { confirm } from '@/lib/confirm'
 import { MentionPopup } from './MentionPopup'
 import { ModelSelector } from './ModelSelector'
 import { AgentModeSelector } from './AgentModeSelector'
@@ -224,17 +225,20 @@ export function ChatInput({
     const text = value.trim()
     if (!text) return
 
-    setValue('')
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
-
     const parts = splitMessageWithTags(text, agents)
 
     if (parts && parts.length > MAX_TAGS) {
-      void window.confirm(
-        `Слишком много тегов (${parts.length}). Максимум: ${MAX_TAGS}. Отправить все равно?`
-      )
+      const ok = await confirm({
+        title: 'Слишком много тегов',
+        message: `${parts.length} тегов. Максимум: ${MAX_TAGS}. Отправить все равно?`,
+        variant: 'warning',
+      })
+      if (!ok) return
+    }
+
+    setValue('')
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
     }
 
     if (!parts) {
@@ -250,17 +254,20 @@ export function ChatInput({
     const text = value.trim()
     if (!text) return
 
-    setValue('')
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
-
     const parts = splitMessageWithTags(text, agents)
 
     if (parts && parts.length > MAX_TAGS) {
-      void window.confirm(
-        `Слишком много тегов (${parts.length}). Максимум: ${MAX_TAGS}. Отправить все равно?`
-      )
+      const ok = await confirm({
+        title: 'Слишком много тегов',
+        message: `${parts.length} тегов. Максимум: ${MAX_TAGS}. Отправить все равно?`,
+        variant: 'warning',
+      })
+      if (!ok) return
+    }
+
+    setValue('')
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
     }
 
     if (!parts) {

@@ -245,18 +245,65 @@ html.pointer-coarse .overlay-scrollbar-target::-webkit-scrollbar {
 /* Минимальные тач-таргеты в хедере/дроверах */
 html.pointer-coarse header button,
 html.pointer-coarse .mobile-drawer-panel button {
-  min-width: 32px;
-  min-height: 32px;
+  min-width: 40px;
+  min-height: 40px;
 }
 
 /* Кнопка закрытия вкладки CenterTabs доступна на touch (вместо group-hover) */
+html.pointer-coarse [data-tab-id] {
+  min-height: 36px;
+}
+
 html.pointer-coarse [data-tab-id] button {
   opacity: 1 !important;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 20px;
-  min-height: 20px;
+  min-width: 32px;
+  min-height: 32px;
+}
+
+/* =============================================================
+   Touch-first (Фаза 2): hover-зависимые действия доступны на touch,
+   touch-таргеты ≥40px. Десктопные зоны (device-phone/tablet отсутствуют,
+   pointer fine) не затронуты.
+   ============================================================= */
+
+/* 2.1 Действия, видимые только на hover (opacity), → всегда видимы на touch */
+html.pointer-coarse .group-hover\:opacity-100 {
+  opacity: 1 !important;
+}
+
+/* 2.1 Действия, скрытые display-ом (hidden group-hover:inline-flex/block)
+   в строках дерева (TreeNode) → всегда видимы на touch */
+html.pointer-coarse [data-tree-node] .group-hover\:inline-flex {
+  display: inline-flex !important;
+}
+
+html.pointer-coarse [data-tree-node] .group-hover\:block {
+  display: block !important;
+}
+
+/* 2.2 Touch-таргеты: действия внутри hover-контейнеров (сообщения, стикеры,
+   очередь, нотификации, ссылки) — ~40px */
+html.pointer-coarse .group-hover\:opacity-100 button {
+  min-width: 40px;
+  min-height: 40px;
+}
+
+/* 2.2 Строки дерева — тапобласть ≥40px, кнопки действий ≥36px */
+html.pointer-coarse [data-tree-node] {
+  min-height: 40px;
+}
+
+html.pointer-coarse [data-tree-node] button {
+  min-width: 36px;
+  min-height: 36px;
+}
+
+/* 2.2 Кнопки в модалках (DialogContent) — тапобласть ≥40px */
+html.pointer-coarse [data-slot="dialog-content"] button {
+  min-height: 40px;
 }
 
 /* Компактные подписи индикаторов на телефоне (остаётся точка/иконка) */

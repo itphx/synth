@@ -18,9 +18,11 @@ import { UpdateNotification } from './components/layout/UpdateNotification'
 import { HybridOfflineBanner } from './components/layout/HybridOfflineBanner'
 import { SettingsModal } from './components/settings/SettingsModal'
 import { LogsModal } from './components/logviewer/LogsModal'
+import { ConfirmDialog } from './components/ui/confirm-dialog'
 import { AuthGate } from './components/auth/AuthGate'
 import { profileService } from '@/lib/api/profileService'
 import { useAuthStore } from '@/stores/authStore'
+import { useConfirmStore } from '@/stores/confirmStore'
 import { useDevice } from '@/hooks/useDevice'
 
 function DefaultsSync() {
@@ -65,6 +67,9 @@ function App() {
   const forwardMode = useUIStore(s => s.forwardMode)
   const { deviceType } = useDevice()
   const isMobile = deviceType !== 'desktop'
+  const confirmOpen = useConfirmStore(s => s.open)
+  const confirmOptions = useConfirmStore(s => s.options)
+  const closeConfirm = useConfirmStore(s => s.closeConfirm)
 
   useEffect(() => {
     if (isMobile) {
@@ -152,6 +157,17 @@ function App() {
 
         <SettingsModal />
         <LogsModal />
+        <ConfirmDialog
+          open={confirmOpen}
+          onOpenChange={(open) => { if (!open) closeConfirm(false) }}
+          title={confirmOptions?.title ?? ''}
+          message={confirmOptions?.message}
+          confirmLabel={confirmOptions?.confirmLabel}
+          cancelLabel={confirmOptions?.cancelLabel}
+          variant={confirmOptions?.variant ?? 'default'}
+          icon={confirmOptions?.icon}
+          onConfirm={() => closeConfirm(true)}
+        />
         <ToastContainer
           position="bottom-right"
           newestOnTop

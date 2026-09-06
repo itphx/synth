@@ -7,8 +7,9 @@ import { useUIStore } from './useUIStore'
 import { useChatStore } from './chatStore'
 import { isTransportConnected } from './transportStore'
 import { useI18nStore, formatMessage } from '@/lib/i18n/store'
+import { confirm } from '@/lib/confirm'
 
-/** Локализованная строка вне React (для window.confirm в сторах). */
+/** Локализованная строка вне React (для confirm-диалога в сторах). */
 function i18nText(key: string): string {
   return formatMessage(useI18nStore.getState().dictionary, key)
 }
@@ -121,7 +122,8 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
     // Гибрид: удаление удалённой сессии выполняется на сервере — подтверждение.
     const session = get().sessions.find((s) => s.id === sessionId)
     if (session?.origin === 'remote') {
-      if (!window.confirm(i18nText('hybrid.confirmDeleteRemoteSession'))) return false
+      const ok = await confirm({ title: i18nText('hybrid.confirmDeleteRemoteSession'), variant: 'danger' })
+      if (!ok) return false
     }
     try {
       await synthApi.deleteSession(sessionId)

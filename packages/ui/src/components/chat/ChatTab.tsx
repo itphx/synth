@@ -7,6 +7,7 @@ import { useSessionsStore } from '@/stores/sessionsStore'
 import { useTransportStore } from '@/stores/transportStore'
 import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
 import { useNotification } from '@/hooks/useNotification'
+import { confirm } from '@/lib/confirm'
 import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { DebugModal } from './DebugModal'
@@ -353,7 +354,8 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   const handleDelete = useCallback(
     async (msg: MessageData) => {
-      if (!window.confirm(t('chat.actions.deleteConfirm'))) return
+      const ok = await confirm({ title: t('chat.actions.deleteConfirm'), variant: 'danger' })
+      if (!ok) return
       try {
         await synthApi.deleteMessage(sessionId, msg.index)
         const result = await synthApi.getSessionMessages(sessionId)
@@ -368,7 +370,8 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   const handleRetry = useCallback(
     async (msg: MessageData) => {
-      if (!window.confirm(t('chat.actions.retryConfirm'))) return
+      const ok = await confirm({ title: t('chat.actions.retryConfirm'), variant: 'warning' })
+      if (!ok) return
       try {
         const result = await synthApi.retryMessage(sessionId, msg.index)
         const reloadResult = await synthApi.getSessionMessages(sessionId)

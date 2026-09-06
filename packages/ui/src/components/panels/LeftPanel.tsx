@@ -12,6 +12,7 @@ import { useHybridStore, selectIsOffline } from '@/stores/hybridStore'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 import { useAdaptiveIcons } from '@/hooks/useAdaptiveIcons'
+import { useDevice } from '@/hooks/useDevice'
 import { synthApi } from '@/lib/api/synthApi'
 import type { EntityOrigin, ProjectData } from '@/lib/api/synthApi'
 import { PROJECT_ICON_MAP, PROJECT_COLOR_MAP } from '@/lib/projectMeta'
@@ -69,6 +70,7 @@ function ProjectsTab() {
   const { t } = useI18n()
   const { projects, loadProjects, deleteProject } = useProjectsStore()
   const { sessions, loadSessions, createSession, forkSession, deleteSession, moveSession } = useSessionsStore()
+  const { isTouch } = useDevice()
   const collapsedProjects = useUIStore((s) => s.collapsedProjects)
   const toggleProjectCollapse = useUIStore((s) => s.toggleProjectCollapse)
   const openTab = useUIStore((s) => s.openTab)
@@ -243,8 +245,8 @@ function ProjectsTab() {
         setRenameValue('')
       },
       onRenameCancel: () => { setRenamingId(null); setRenameValue('') },
-      draggable: !selectionMode,
-      onDragStart: (e) => { e.dataTransfer.setData('text/plain', session.id); e.dataTransfer.effectAllowed = 'move' },
+      draggable: !selectionMode && !isTouch,
+      onDragStart: isTouch ? undefined : (e) => { e.dataTransfer.setData('text/plain', session.id); e.dataTransfer.effectAllowed = 'move' },
       className: cn(
         isForwardSource && 'opacity-40 pointer-events-none',
         isForwardTarget && 'cursor-pointer hover:bg-primary/10',
@@ -516,6 +518,7 @@ function ProjectsTab() {
         onCreateSession={() => void handleCreateSession(null, undefined, 'local')}
         projectActions={noneSessionAction ? [noneSessionAction] : undefined}
         onDropSession={async (sessionId) => { await moveSession(sessionId, null) }}
+        isTouch={isTouch}
         t={t}
       />
 
@@ -575,6 +578,7 @@ function ProjectsTab() {
             projectActions={projectActions}
             onDropSession={async (sessionId) => { await moveSession(sessionId, project.id) }}
             projectContextItems={projectContextItems}
+            isTouch={isTouch}
             t={t}
           />
         )
@@ -631,7 +635,7 @@ function GroupNode({
   expandedSessions, toggleSessionExpand,
   projectId, onCreateSession, onDropSession,
   projectActions, projectContextItems, t,
-  origin, offline,
+  origin, offline, isTouch,
 }: {
   id: string; label: string; icon: string; iconColor?: string
   isCollapsed: boolean; onToggle: () => void
@@ -643,6 +647,7 @@ function GroupNode({
   projectActions?: TreeAction[]; projectContextItems?: any[]
   origin?: EntityOrigin
   offline?: boolean
+  isTouch?: boolean
   t: any
 }) {
   const expandKey = projectId ? `project:${projectId}` : `group:__none__`
@@ -660,9 +665,10 @@ function GroupNode({
   const isOfflineNode = offline && origin === 'remote'
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (isTouch) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
-  }, [])
+  }, [isTouch])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -723,6 +729,7 @@ function GroupNode({
 function FilesTab() {
   const { t } = useI18n()
   const { projects, loadProjects } = useProjectsStore()
+  const { isTouch } = useDevice()
   const { treesByProject, loadFileTree, loadSubDirectory, expandedProjects, expandedDirs, toggleProjectExpand, toggleDirExpand, createFile, createDirectory, moveEntry, deleteEntry, uploadFile } = useFilesStore()
   const openTab = useUIStore((s) => s.openTab)
   const centerTabs = useUIStore((s) => s.centerTabs)
@@ -1058,15 +1065,15 @@ function FilesTab() {
       suffix: !isDir ? fileSize(entry.size) : undefined,
       isTabOpen: openFilePathSet.has(`${projectId}::${entry.path}`),
       isActive: activeFilePathKey === `${projectId}::${entry.path}`,
-      draggable: true,
+      draggable: !isTouch,
       isRenaming,
       renameValue: isRenaming ? renameValue : '',
       onRenameChange: setRenameValue,
       onRenameCommit: () => handleRenameSubmit(projectId, entry),
       onRenameCancel: () => { setRenamingPath(null); setRenamingProject(null); setRenamingEntry(null) },
-      onDragStart: (e) => handleFileDragStart(e, projectId, entry),
-      onDragOver: isDir ? handleFileDragOver : undefined,
-      onDrop: isDir ? (e: React.DragEvent) => handleDropOnDir(e, projectId, entry.path) : undefined,
+      onDragStart: isTouch ? undefined : (e) => handleFileDragStart(e, projectId, entry),
+      onDragOver: isDir && !isTouch ? handleFileDragOver : undefined,
+      onDrop: isDir && !isTouch ? (e: React.DragEvent) => handleDropOnDir(e, projectId, entry.path) : undefined,
       onClick: () => {
         if (pendingDeleteRef.current.has(`${projectId}::${entry.path}`)) return
         if (isDir) { toggleDir(projectId, entry.path) } else {
@@ -1195,8 +1202,8 @@ function FilesTab() {
               hasChildren={true}
               badge={<OriginBadge origin={project.origin} />}
               onToggle={() => toggleProjectExpand(project.id)}
-              onDragOver={handleFileDragOver}
-              onDrop={(e) => handleDropOnProject(e, project.id)}
+              onDragOver={isTouch ? undefined : handleFileDragOver}
+              onDrop={isTouch ? undefined : (e) => handleDropOnProject(e, project.id)}
               actions={[
                 { id: 'upload', icon: 'upload', title: t('file.upload'), onClick: () => handleUpload(project.id) },
                 { id: 'new-folder-root', icon: 'folder-add', title: t('file.newFolder'), onClick: () => setPopover({ type: 'newFolder', projectId: project.id, parentPath: '' }) },

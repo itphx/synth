@@ -10,6 +10,7 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { useNotification } from '@/hooks/useNotification'
 import { useAuthStore } from '@/stores/authStore'
+import { confirm } from '@/lib/confirm'
 import { QuickSettingsPopup } from '../auth/QuickSettingsPopup'
 import { NotificationPopup } from './NotificationPopup'
 import { GlobalTransportIndicator } from './GlobalTransportIndicator'
@@ -84,7 +85,8 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
 
   const handleClearSession = useCallback(async () => {
     if (!sessionId) return
-    if (!window.confirm(t('leftPanel.confirmClearSession'))) return
+    const ok = await confirm({ title: t('leftPanel.confirmClearSession'), variant: 'warning' })
+    if (!ok) return
     try {
       await synthApi.clearSession(sessionId)
       useChatStore.getState().clearSession(sessionId)
@@ -224,7 +226,8 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
     if (!sessionId) return
     const indices = [...selectedIndices]
     if (indices.length === 0) return
-    if (!window.confirm(`Удалить ${indices.length} сообщений?`)) return
+    const ok = await confirm({ title: `Удалить ${indices.length} сообщений?`, variant: 'danger' })
+    if (!ok) return
     try {
       await synthApi.batchMessages(sessionId, 'delete', indices)
       await afterBulkReload()

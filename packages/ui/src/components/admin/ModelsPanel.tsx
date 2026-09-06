@@ -492,9 +492,9 @@ export const ModelsPanel = () => {
 
                 {/* Строки моделей */}
                 {!isCollapsed && (
-                  <div>
+                  <div className="overflow-x-auto">
                     {/* Шапка таблицы */}
-                    <div className="grid grid-cols-[1fr_80px_140px_70px_40px_32px] gap-2 px-4 py-2 text-[11px] font-medium text-muted-foreground border-b">
+                    <div className="grid grid-cols-[1fr_80px_140px_70px_40px_32px] min-w-[560px] gap-2 px-4 py-2 text-[11px] font-medium text-muted-foreground border-b">
                       <span className="pl-1">{t('admin.models.model')}</span>
                       <span className="text-center">{t('admin.models.context')}</span>
                       <span className="text-center">{t('admin.models.prices')}</span>
@@ -513,7 +513,7 @@ export const ModelsPanel = () => {
                         return (
                           <div
                             key={model.id}
-                            className="grid grid-cols-[1fr_80px_140px_70px_40px_32px] gap-2 px-4 py-2 items-center border-b border-dashed last:border-b-0 hover:bg-muted/30 text-sm"
+                            className="grid grid-cols-[1fr_80px_140px_70px_40px_32px] min-w-[560px] gap-2 px-4 py-2 items-center border-b border-dashed last:border-b-0 hover:bg-muted/30 text-sm"
                           >
                             {/* Название модели + иконка */}
                             <div className="flex items-center gap-2 min-w-0">
