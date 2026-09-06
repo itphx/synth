@@ -258,12 +258,19 @@ html.pointer-coarse .mobile-drawer-panel button {
   min-height: 40px;
 }
 
-/* Кнопка закрытия вкладки CenterTabs доступна на touch (вместо group-hover) */
-html.pointer-coarse [data-tab-id] {
+/* Кнопка закрытия вкладки CenterTabs доступна на touch (вместо group-hover).
+   Также включаем на device-phone/device-tablet: кнопка «×» у вкладок должна быть
+   видна на мобильных всегда (а не только при pointer-coarse, который не всегда
+   выставляется браузером — например, эмуляция телефона с fine-указателем). */
+html.pointer-coarse [data-tab-id],
+html.device-phone [data-tab-id],
+html.device-tablet [data-tab-id] {
   min-height: 36px;
 }
 
-html.pointer-coarse [data-tab-id] button {
+html.pointer-coarse [data-tab-id] button,
+html.device-phone [data-tab-id] button,
+html.device-tablet [data-tab-id] button {
   opacity: 1 !important;
   display: inline-flex;
   align-items: center;

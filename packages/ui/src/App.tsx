@@ -86,7 +86,7 @@ function App() {
   const panelContent = <LeftPanel />
 
   const centerColumn = (
-    <div className="flex flex-col flex-1 min-w-0 relative">
+    <div className="flex flex-col flex-1 min-w-0 min-h-0 relative">
       <Header onSettingsClick={() => { setSettingsPage('profile'); setSettingsDialogOpen(true) }} />
       <HybridOfflineBanner />
       <CenterPanel />
