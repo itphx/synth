@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { Icon } from '../icon/Icon'
 import { OverlayScrollbar } from '../ui/OverlayScrollbar'
 import { useI18n } from '@/lib/i18n'
+import { useDevice } from '@/hooks/useDevice'
 import { useChatStore } from '@/stores/chatStore'
 import { confirm } from '@/lib/confirm'
 import { MentionPopup } from './MentionPopup'
@@ -125,6 +126,11 @@ export function ChatInput({
   onToggleExpand,
 }: ChatInputProps) {
   const { t } = useI18n()
+  // Фаза 4: на чисто-сенсорных устройствах (coarse без fine-указателя) Enter на
+  // композере = перенос строки; отправка — только кнопкой «Отправить».
+  // При наличии физического указателя/клавиатуры (any-pointer: fine) isTouch=false
+  // и возвращается десктопное поведение Enter = отправка.
+  const { isTouch } = useDevice()
   const [value, setValue] = useState('')
   const retryText = useChatStore((s) => s.retryInputBySession[sessionId])
   const [mentionState, setMentionState] = useState<{
@@ -310,6 +316,14 @@ export function ChatInput({
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
+      // IME-композиция (китайский/японский/корейский ввод): Enter завершает
+      // композицию, а не отправляет сообщение.
+      if (e.nativeEvent.isComposing) return
+
+      // Touch без физического указателя: Enter = перенос строки, отправка только
+      // кнопкой «Отправить» — защита от случайной отправки на телефоне.
+      if (isTouch) return
+
       e.preventDefault()
       if (isStreaming) {
         handleEnqueue()

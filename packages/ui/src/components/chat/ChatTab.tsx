@@ -7,6 +7,7 @@ import { useSessionsStore } from '@/stores/sessionsStore'
 import { useTransportStore } from '@/stores/transportStore'
 import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
 import { useNotification } from '@/hooks/useNotification'
+import { useKeyboardInset } from '@/hooks/useKeyboardInset'
 import { confirm } from '@/lib/confirm'
 import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
@@ -26,6 +27,9 @@ interface ChatTabProps {
 export function ChatTab({ tab }: ChatTabProps) {
   const { t } = useI18n()
   const { notify } = useNotification()
+  // Фаза 4: на touch подписка на visualViewport → --kb-inset → отступ композера.
+  // На десктопе/без visualViewport — no-op (переменная 0).
+  useKeyboardInset()
   const {
     messagesBySession,
     streamingBySession,

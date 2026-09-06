@@ -168,6 +168,15 @@ html.device-tablet .chat-composer {
   margin-right: 1rem;
 }
 
+/* 4.1 Клавиатура на touch (Фаза 4): композер сдвигается вверх, чтобы не
+   прятаться под виртуальной клавиатурой. --kb-inset пишет useKeyboardInset():
+   0 при закрытой клавиатуре/без visualViewport → десктоп и закрытая клавиатура
+   не изменяют поведение. Safe-area снизу уже учтён в margin-bottom композера
+   (html.device-phone), поэтому здесь только высота перекрытия клавиатуры. */
+html.pointer-coarse .chat-composer {
+  padding-bottom: var(--kb-inset, 0px);
+}
+
 /* --- Дроверы (phone/tablet): фиксированные оверлеи вместо десктопных сайдбаров --- */
 .mobile-drawer-root {
   position: fixed;
