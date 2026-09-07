@@ -308,7 +308,8 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 (ключи, модели и аудит — только на нём). Реализовано в ветке `feat/hybrid-mode`;
 лёгкий runtime-вход с общим каталогом данных, мета-реестр профилей серверов и
 устойчивость (ConnectionWatcher) — в ветке `feat/hybrid-server-profiles` (2026-09-07);
-детальные требования, архитектура и статус — в [docs/HYBRID.md](docs/HYBRID.md).
+детальные требования и статус — в [docs/HYBRID.md](docs/HYBRID.md);
+архитектура — AD-042/AD-043/AD-045.
 
 **UX (вход без Keycloak-ритуала):** `serve --connect` больше НЕ блокирует старт
 device flow'ом — сервер поднимается «холодным», после listen тихо выполняется
@@ -464,6 +465,7 @@ synth serve --oidc-issuer https://keycloak.itphx.loc/realms/synth \
 | AD-042 | Гибридный режим: локальный core + централизованный сервер (агрегация миров, LLM Proxy, RemoteEventBridge, publish/fork) ✅ Реализовано | [ad-042](./docs/arch_decisions/ad-042-hybrid-mode.md) |
 | AD-043 | Единая идентичность гибрида: вход в UI без Keycloak (runtime-подключение, ROPC, дискавери oidc-meta, единая личность) ✅ Реализовано | [ad-043](./docs/arch_decisions/ad-043-unified-identity-login.md) |
 | AD-044 | Адаптивный мобильный UI + PWA (три зоны, панели-дроверы, touch-first, ручной app-shell) ✅ Реализовано | [ad-044](./docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md) |
+| AD-045 | Профили серверов и лёгкий runtime-вход в гибриде: единый dataDir, мета-реестр profiles.json, вход без рестарта (отмена switch-profile/exit 77/409), logout = забыть токен + best-effort revoke, ConnectionWatcher ✅ Реализовано | [ad-045](./docs/arch_decisions/ad-045-hybrid-server-profiles.md) |
 
 > **Перенос AD:** реализованные AD переносятся в `docs/arch_decisions/` (в AGENTS.md остаётся краткая строка + ссылка). Нереализованные остаются в AGENTS.md до реализации.
 
@@ -862,6 +864,11 @@ git pre-commit hook (уровень git, обойти нельзя)
 
 **Кратко:** Runtime-подключение (RemoteConnection) + вход в UI по логину/паролю (ROPC «за кулисами»), дискавери IdP с сервера (`GET /auth/oidc-meta`), единая личность (cookie v2, роли/профиль/админка — с сервера), старт без device flow; public-клиент `synth-cli`.
 **Подробно:** [docs/arch_decisions/ad-043-unified-identity-login.md](./docs/arch_decisions/ad-043-unified-identity-login.md)
+
+### AD-045: Профили серверов и лёгкий runtime-вход в гибриде — единый dataDir ✅ Реализовано
+
+**Кратко:** Вход всегда лёгкий (runtime, без рестарта/exit 77/409): один процесс подключается к любому серверу на лету; локальные данные — единый dataDir; profiles.json — мета-реестр (knownServers/lastServer); credentials — единый мульти-серверный файл; logout = disconnect + забыть токен + best-effort revoke refresh-токена на IdP (RFC 7009); ConnectionWatcher.
+**Подробно:** [docs/arch_decisions/ad-045-hybrid-server-profiles.md](./docs/arch_decisions/ad-045-hybrid-server-profiles.md)
 
 ## Аутентификация
 

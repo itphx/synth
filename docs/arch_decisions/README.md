@@ -22,6 +22,9 @@
 | AD-040 | Сессии без проекта и перенос между проектами | ✅ | [ad-040-sessions-without-project.md](./ad-040-sessions-without-project.md) |
 | AD-041 | Единая таксономия ошибок LLM + контракт локализации | ✅ | [ad-041-llm-error-taxonomy.md](./ad-041-llm-error-taxonomy.md) |
 | AD-042 | Гибридный режим: локальный core + централизованный сервер | ✅ | [ad-042-hybrid-mode.md](./ad-042-hybrid-mode.md) |
+| AD-043 | Единая идентичность гибрида: вход в UI без Keycloak | ✅ | [ad-043-unified-identity-login.md](./ad-043-unified-identity-login.md) |
+| AD-044 | Адаптивный мобильный UI + PWA | ✅ | [ad-044-mobile-adaptive-ui-pwa.md](./ad-044-mobile-adaptive-ui-pwa.md) |
+| AD-045 | Профили серверов и лёгкий runtime-вход в гибриде: единый dataDir, мета-реестр profiles.json, logout = забыть токен + revoke | ✅ | [ad-045-hybrid-server-profiles.md](./ad-045-hybrid-server-profiles.md) |
 
 ## Нереализованные AD
 
