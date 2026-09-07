@@ -6,7 +6,7 @@ import type { SynthConfig } from '@itphx/synth-shared';
 import { createStandaloneApp } from '@itphx/synth-core/server/app.js';
 import { runSingleChat } from '@itphx/synth-core/server/chat.js';
 import { JsonStore } from '@itphx/synth-core/storage/json-store.js';
-import { resolveStartupProfile, migrateCredentialsToProfile } from '@itphx/synth-core';
+import { getLastProfile, ensureProfile } from '@itphx/synth-core';
 
 const require = createRequire(import.meta.url);
 
@@ -43,32 +43,26 @@ program
   .option('--oidc-client-id <id>', 'OIDC client_id — fallback дискавери для входа в UI (гибридный режим)')
   .option('--token <key>', 'API-ключ для аутентификации на удалённом backend (гибридный режим)')
   .action(async (options) => {
-    // Базовый dataDir — отправная точка для резолва профиля сервера:
-    // профили живут в {baseDataDir}/profiles/{id}, их данные изолированы.
-    const baseFirstRun = await ensureFirstRun(
+    // Единый каталог данных локального мира — НЕ зависит от удалённого сервера.
+    // Профили серверов (profiles.json) остаются мета-реестром для UX (известные
+    // серверы/lastServer), все runtime-данные лежат в одном dataDir.
+    const firstRun = await ensureFirstRun(
       options.dataDir || undefined,
       options.config || undefined,
     );
-    const baseDataDir = baseFirstRun.dataDir;
+    const dataDir = firstRun.dataDir;
 
-    // Резолв профиля: явный --connect → профиль url (создаётся/обновляется);
-    // иначе последний использованный профиль (если не --no-auto-profile);
-    // иначе — нейтральный запуск (базовый dataDir, глобальные credentials).
-    const resolution = await resolveStartupProfile({
-      baseDataDir,
-      connectUrl: options.connect,
-      useLastProfile: options.connect ? false : options.autoProfile,
-    });
-
-    if (resolution.profile && resolution.backendUrl) {
-      // Профильный каталог: полный набор подкаталогов (sessions/projects/...).
-      await ensureDataDir(resolution.dataDir);
-      // Старые глобальные credentials переносим в профильный файл (best-effort, no-op без записи).
-      await migrateCredentialsToProfile(
-        resolution.backendUrl,
-        resolution.baseDataDir,
-        resolution.profile.id,
-      ).catch(() => {});
+    // Источник адреса для тихого авто-входа (defaultBackendUrl):
+    //   1. явный --connect url;
+    //   2. иначе последний использованный профиль из реестра (если не --no-auto-profile);
+    //   3. иначе — нейтральный запуск: адрес вводится в форме входа UI.
+    let startupBackendUrl: string | null = options.connect ?? null;
+    if (!startupBackendUrl && options.autoProfile) {
+      startupBackendUrl = (await getLastProfile())?.url ?? null;
+    }
+    // При явном --connect согласуем реестр (lastUsedAt/lastProfileId) — best-effort.
+    if (options.connect) {
+      await ensureProfile(options.connect).catch(() => {});
     }
 
     const overrides: Partial<SynthConfig> = {
@@ -76,13 +70,13 @@ program
         port: parseInt(options.port, 10),
         apiKey: options.apiKey,
       },
-      storage: { dataDir: resolution.dataDir, workspacesRoot: '', defaultWorkspace: '' },
+      storage: { dataDir, workspacesRoot: '', defaultWorkspace: '' },
     };
-    if (resolution.backendUrl) {
+    if (startupBackendUrl) {
       // deepMerge на рантайме сольёт частичную секцию remote с defaultConfig; тип требует полный RemoteConfig.
       overrides.remote = {
         enabled: true,
-        backendUrl: resolution.backendUrl,
+        backendUrl: startupBackendUrl,
         auth: {
           type: options.token ? 'api_key' : 'device',
           apiKey: options.token ?? '',
@@ -110,11 +104,12 @@ program
     //   - тихое connectFromSaved после listen (если credentials сохранены);
     //   - иначе пользователь логинится в UI (POST /auth/login) или используется
     //     API-ключ (--token), когда он задан.
-    // Источник адреса — резолв профиля (--connect/lastProfile). При нейтральном
+    // Источник адреса — --connect или lastProfile (мета-реестр). При нейтральном
     // запуске сохраняем прежнее поведение: remote-секция из config.yaml (если
     // задана) по-прежнему включает авто-подключение к synth.remote.backendUrl.
-    const remoteEnabled = !!resolution.backendUrl || (synth.remote.enabled && !!synth.remote.backendUrl);
-    const remoteBackendUrl = resolution.backendUrl ?? synth.remote.backendUrl.replace(/\/+$/, '');
+    // Локальные данные процесса — всегда в едином dataDir (не зависят от сервера).
+    const remoteEnabled = !!startupBackendUrl || (synth.remote.enabled && !!synth.remote.backendUrl);
+    const remoteBackendUrl = startupBackendUrl ?? synth.remote.backendUrl.replace(/\/+$/, '');
     // OIDC-fallback (issuer/client_id) передаём и без --connect: сервер стартует
     // без известного адреса, пользователь вводит адрес в UI (POST /auth/login),
     // а дискавери при недоступности /auth/oidc-meta падает на эти параметры.
@@ -129,7 +124,7 @@ program
 
     const appHandle = await createStandaloneApp({
       port,
-      dataDir: resolution.dataDir,
+      dataDir,
       apiKey,
       workspacesRoot: resolveWorkspacesRoot(synth),
       defaultWorkingDir: resolveDefaultWorkspace(synth),
@@ -143,12 +138,14 @@ program
         ? {
             issuer: remoteIssuer || undefined,
             clientId: remoteClientId || undefined,
-            credentialsPath: resolution.credentialsPath ?? (synth.remote.credentialsPath || undefined),
+            // credentials — единый мульти-серверный файл (глобальный default /
+            // synth.remote.credentialsPath), не профильный.
+            credentialsPath: synth.remote.credentialsPath || undefined,
           }
         : undefined,
       remoteLlm: synth.remote.llm,
       remoteTimeoutMs: synth.remote.timeoutMs,
-      remoteCredentialsPath: resolution.credentialsPath ?? (synth.remote.credentialsPath || undefined),
+      remoteCredentialsPath: synth.remote.credentialsPath || undefined,
     });
     const { server, wss } = appHandle;
 

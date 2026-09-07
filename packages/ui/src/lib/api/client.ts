@@ -62,15 +62,11 @@ export interface SPALoginResponse {
   token: string
 }
 
-/** Ответ POST /auth/login (парольный вход/переход в профиль сервера). */
+/** Ответ POST /auth/login (парольный runtime-вход в гибридном режиме). */
 export interface PasswordLoginResponse {
   deployment?: DeploymentKind
   user?: User
   token?: string
-  /** Переход в профиль: процесс перезапускается обёрткой (user/token отсутствуют). */
-  action?: 'switch-profile'
-  server?: string
-  message?: string
 }
 
 const BASE_URL = '/auth'

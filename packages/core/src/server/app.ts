@@ -17,11 +17,12 @@ import {
 import type { SummarizationConfig } from '@itphx/synth-shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } from '@itphx/synth-shared';
 import { createLocalAuth } from '../auth/local.js';
-import { ensureProfile, profileDataDir, profileCredentialsPath, listProfiles, getLastProfile } from '../profiles.js';
+import { ensureProfile, listProfiles, getLastProfile } from '../profiles.js';
 import { RemoteConnection } from '../remote/connection.js';
-import { RemoteSession } from '../remote/session.js';
 import type { RemoteUser } from '../remote/types.js';
 import { RemoteError } from '../remote/types.js';
+import { loadCredentials, clearCredentials } from '../remote/credentials.js';
+import { revokeRefreshToken } from '../remote/device-flow.js';
 import { RemoteEventBridge } from '../remote/event-bridge.js';
 import { isRemoteRef, toLocalId } from '../remote/aggregate.js';
 import { ConnectionWatcher } from './connection-watcher.js';
@@ -486,43 +487,63 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     return applyConnected(user);
   }
 
-  // ── Переход в профиль (нейтральный процесс + адрес из UI) ──
+  // ── Реестр профилей (мета-информация для UX) и выход из гибрида ──
 
-  /** Процесс перезапускаемый обёрткой (env SYNTH_RESTARTABLE=1 ставит hybrid.sh). */
-  const restartable = process.env.SYNTH_RESTARTABLE === '1';
-
-  /** Отложенный перезапуск процесса кодом 77: обёртка hybrid.sh перезапустит serve в новом профиле. */
-  function scheduleRestart(): void {
-    setTimeout(() => {
-      process.exit(77);
-    }, 800);
+  /**
+   * Обновить мета-профиль сервера в реестре профилей (lastUsedAt/lastProfileId/
+   * username) после успешного входа. Best-effort: реестр — только UX-метаданные
+   * (knownServers/lastServer), ошибка записи не должна ронять логин.
+   */
+  async function rememberServer(serverUrl: string, username: string): Promise<void> {
+    try {
+      await ensureProfile(serverUrl, { username });
+    } catch {
+      // best-effort: мета-реестр не критичен для входа
+    }
   }
 
   /**
-   * «Вход в профиль» сервера: НЕ трогает runtime-состояние процесса (connection
-   * остаётся disconnected). Создаёт/обновляет профиль в реестре (ensureProfile),
-   * гарантирует профильный каталог данных и пишет credentials в профильный файл
-   * ({baseDataDir}/profiles/{id}/credentials.json) через RemoteSession.loginWithPassword.
-   * OIDC issuer/client_id — дискавери с сервера (connection.discoverOidc, fallback
-   * на config.remoteAuth внутри connection). После успешного входа перезапускаемый
-   * процесс завершается кодом 77 и стартует уже в профиле нового сервера.
+   * Полный выход из гибрида («Выйти» в UI). Локальные данные НЕ удаляются
+   * (единый dataDir), мета-профиль из реестра НЕ удаляется — сервер остаётся
+   * в knownServers/lastServer для формы входа. Порядок:
+   *   1. best-effort revoke refresh-токена на IdP (RFC 7009): если известен
+   *      backendUrl — дискавери issuer/client_id (fallback на connection.issuer /
+   *      config.remoteAuth), загрузить credentials ДО удаления, отозвать refresh;
+   *   2. локальное удаление credentials активного сервера («забыть токен»);
+   *   3. полный сброс runtime-состояния подключения.
+   * Revoke/дискавери могут не сработать (Keycloak/публичный клиент) — это ок,
+   * деградация до локального удаления.
    */
-  async function switchToProfile(serverUrl: string, username: string, password: string): Promise<void> {
-    const baseDataDir = config.dataDir;
-    const profile = await ensureProfile(serverUrl, { username });
-    await ensureDataDir(profileDataDir(baseDataDir, profile.id));
-    const { issuer, clientId } = await connection.discoverOidc(profile.url);
-    await RemoteSession.loginWithPassword(
-      {
-        backendUrl: profile.url,
-        issuer,
-        clientId,
-        credentialsPath: profileCredentialsPath(baseDataDir, profile.id),
-        timeoutMs: config.remoteTimeoutMs,
-      },
-      username,
-      password,
-    );
+  async function logoutRemote(): Promise<void> {
+    const backendUrl = connection.backendUrl ?? config.defaultBackendUrl ?? null;
+    const credentialsPath = config.remoteCredentialsPath ?? config.remoteAuth?.credentialsPath;
+
+    if (backendUrl) {
+      try {
+        const creds = await loadCredentials(backendUrl, credentialsPath);
+        if (creds?.refreshToken) {
+          let issuer = connection.issuer ?? config.remoteAuth?.issuer ?? undefined;
+          let clientId = config.remoteAuth?.clientId ?? undefined;
+          if (!issuer || !clientId) {
+            const meta = await connection.discoverOidc(backendUrl);
+            issuer = meta.issuer;
+            clientId = meta.clientId;
+          }
+          if (issuer && clientId) {
+            await revokeRefreshToken(issuer, clientId, creds.refreshToken);
+          }
+        }
+      } catch {
+        // best-effort: revoke не удался — переходим к локальному удалению
+      }
+      try {
+        await clearCredentials(backendUrl, credentialsPath);
+      } catch {
+        // тихо: файла может не быть
+      }
+    }
+
+    await disconnectRemote().catch(() => {});
   }
 
   // Health — без auth
@@ -544,9 +565,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     defaultBackendUrl: config.defaultBackendUrl,
     issuerAvailable: !!config.remoteAuth?.issuer,
     hybridEnabled: config.hybridEnabled,
-    restartable,
-    switchToProfile,
-    scheduleRestart,
+    rememberServer,
+    logoutRemote,
   }));
 
 

@@ -166,15 +166,11 @@ export type {
 export {
   getProfilesPath,
   profileIdForUrl,
-  profileDataDir,
-  profileCredentialsPath,
   loadProfiles,
   listProfiles,
   getLastProfile,
   findProfileByUrl,
   ensureProfile,
   removeProfile,
-  migrateCredentialsToProfile,
-  resolveStartupProfile,
 } from './profiles.js';
-export type { ProfileMeta, ProfilesFile, StartupProfileResolution } from './profiles.js';
+export type { ProfileMeta, ProfilesFile } from './profiles.js';

@@ -9,8 +9,6 @@ interface AuthState {
   isLoading: boolean
   isInitialized: boolean
   error: string | null
-  /** Информационное сообщение (например «переключаюсь на сервер») — не ошибка. */
-  notice: string | null
   /** Тип развёртывания сервера ('standalone'|'managed') — runtime-детекция. */
   deployment: DeploymentKind | null
 
@@ -23,28 +21,6 @@ interface AuthState {
   clearError: () => void
 }
 
-/**
- * Перезагрузка страницы после switch-profile: процесс core перезапускается
- * обёрткой (exit 77) и стартует уже в профиле нового сервера — после паузы
- * показываем notice и перезагружаем UI. Один таймер на всё время жизни стора.
- */
-let profileSwitchReloadTimer: ReturnType<typeof setTimeout> | null = null
-
-function scheduleProfileSwitchReload(delayMs = 2500): void {
-  if (profileSwitchReloadTimer) return
-  profileSwitchReloadTimer = setTimeout(() => {
-    profileSwitchReloadTimer = null
-    window.location.reload()
-  }, delayMs)
-}
-
-function clearProfileSwitchReload(): void {
-  if (profileSwitchReloadTimer) {
-    clearTimeout(profileSwitchReloadTimer)
-    profileSwitchReloadTimer = null
-  }
-}
-
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   profile: null,
@@ -52,7 +28,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isLoading: false,
   isInitialized: false,
   error: null,
-  notice: null,
   deployment: null,
 
   initialize: async () => {
@@ -65,7 +40,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
    * (например после server-логина), а состояние UI нужно обновить.
    */
   reauthenticate: async () => {
-    set({ isLoading: true, error: null, notice: null })
+    set({ isLoading: true, error: null })
     try {
       const session = await api.getSession()
       set({
@@ -89,7 +64,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   login: async (apiKey: string, username?: string) => {
-    set({ isLoading: true, error: null, notice: null })
+    set({ isLoading: true, error: null })
     try {
       const response = await api.spaLogin({ api_key: apiKey, username })
       set({
@@ -110,25 +85,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   loginWithPassword: async (server: string, username: string, password: string) => {
-    set({ isLoading: true, error: null, notice: null })
+    set({ isLoading: true, error: null })
     try {
       const response = await api.loginWithPassword(server, username, password)
-      // «Переход в профиль»: core сохранил профиль сервера и перезапускается
-      // обёрткой (ответ 200 { action:'switch-profile' }, user/token отсутствуют).
-      // Личность/сессию НЕ ставим — после перезапуска процесс стартует в профиле
-      // нового сервера, UI перезагружается и логинится заново.
-      if (response.action === 'switch-profile') {
-        set({
-          user: null,
-          isAuthenticated: false,
-          isLoading: false,
-          isInitialized: true,
-          error: null,
-          notice: response.message ?? 'Переключаюсь на сервер…',
-        })
-        scheduleProfileSwitchReload()
-        return
-      }
+      // Обычный runtime-вход: личность приходит с сервера сразу (без перезапуска
+      // процесса/страницы), cookie ставит core.
       set({
         user: response.user ?? null,
         isAuthenticated: true,
@@ -151,15 +112,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
    * здесь — только состояние UI (+ профиль).
    */
   setUser: async (user: User) => {
-    set({ user, isAuthenticated: true, isLoading: false, error: null, notice: null })
+    set({ user, isAuthenticated: true, isLoading: false, error: null })
     await profileService.initialize()
     set({ isInitialized: true })
   },
 
   logout: async () => {
     set({ isLoading: true })
-    clearProfileSwitchReload()
     try {
+      // Серверная часть: logoutRemote (revoke refresh-токена + удаление credentials
+      // активного сервера + runtime disconnect) + очистка cookie. Профиль сервера
+      // из реестра не удаляется — сервер остаётся в knownServers/lastServer.
       await api.logout()
     } finally {
       localStorage.removeItem('synth-ui.i18n.v1')
@@ -169,7 +132,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       localStorage.removeItem('useSystemTheme')
       localStorage.removeItem('selectedThemeId')
       localStorage.removeItem('selectedThemeVariant')
-      set({ user: null, profile: null, isAuthenticated: false, isLoading: false, deployment: null, notice: null })
+      set({ user: null, profile: null, isAuthenticated: false, isLoading: false, deployment: null })
     }
   },
 

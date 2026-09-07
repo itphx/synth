@@ -11,7 +11,10 @@ import { saveCredentials } from '../../remote/credentials.js';
  * Remote-зависимости standalone auth-роутов (гибридный режим).
  * Гибрид подключается в РАНТАЙМЕ через RemoteConnection: роуты получают сам
  * connection (текущее состояние) и функции-обёртки connectRemote/disconnectRemote,
- * которые создаёт createStandaloneApp (connect + инъекция провайдера).
+ * которые создаёт createStandaloneApp (connect + инъекция провайдера). Вход всегда
+ * лёгкий (runtime), без перезапуска процесса: никаких профильных каталогов/смены
+ * dataDir — локальные данные в едином каталоге, профили серверов (profiles.json) —
+ * только мета-реестр для UX.
  */
 export interface AuthRoutesRemoteDeps {
   /** Runtime-подключение к удалённому backend (состояние: connected/backendUrl/user). */
@@ -31,15 +34,22 @@ export interface AuthRoutesRemoteDeps {
   /**
    * Гибридный режим включён (remote.enabled || задан OIDC fallback) — даже если
    * адрес сервера ещё не известен. Даёт oidc_enabled=true, чтобы UI показал
-   * форму входа с полем «Адрес сервера» (если адрес не задан) и парольным входом.
+   * форму входа с полем «Адрес сервера» и парольным входом.
    */
   hybridEnabled?: boolean;
-  /** Процесс перезапускаемый обёрткой (env SYNTH_RESTARTABLE=1): switch-profile завершит процесс кодом 77. */
-  restartable?: boolean;
-  /** Вход в профиль сервера (создание профиля + credentials в профильный файл) без runtime-подключения процесса. */
-  switchToProfile?: (serverUrl: string, username: string, password: string) => Promise<void>;
-  /** Отложенный запрос перезапуска процесса (graceful, код 77). */
-  scheduleRestart?: () => void;
+  /**
+   * Обновить мета-профиль сервера в реестре профилей (ensureProfile: lastUsedAt/
+   * lastProfileId/username) после успешного входа. Best-effort — ошибка реестра
+   * не должна ронять логин. Нужен для knownServers/lastServer в форме входа UI.
+   */
+  rememberServer?: (serverUrl: string, username: string) => Promise<void>;
+  /**
+   * Полный выход из гибрида: best-effort revoke refresh-токена на IdP + удаление
+   * credentials активного сервера + runtime disconnect. Мета-профиль из реестра
+   * НЕ удаляется (сервер остаётся в knownServers/lastServer). Все ошибки тихо
+   * игнорируются — главное локальная очистка.
+   */
+  logoutRemote?: () => Promise<void>;
 }
 
 function normalizeUrl(url: string): string {
@@ -121,23 +131,6 @@ function mapLoginError(err: unknown): Response {
   }), { status: 500, headers: { 'Content-Type': 'application/json' } });
 }
 
-/**
- * 409 «требуется перезапуск для смены сервера». Два случая:
- * - нейтральный процесс + явный адрес: вход выполнен в ПРОФИЛЬ сервера (не в
- *   runtime), но процесс не перезапускаемый (прямой `synth serve`) — пользователь
- *   сам перезапустит с адресом (`synth serve --connect <server>`);
- * - процесс привязан к серверу A, запрошен B: смена активного сервера «на лету»
- *   не поддерживается (dataDir/runtime принадлежат профилю A) — нужен перезапуск.
- */
-function profileSwitchRequired(server: string): Response {
-  return new Response(JSON.stringify({
-    error: {
-      code: 'PROFILE_SWITCH_REQUIRED',
-      message: `Перезапустите с адресом сервера: synth serve --connect ${server}`,
-    },
-  }), { status: 409, headers: { 'Content-Type': 'application/json' } });
-}
-
 export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps): Hono {
   const app = new Hono();
   // Активный device flow (один на сервер; новый start перезаписывает старый).
@@ -212,18 +205,12 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
    * процесса (defaultBackendUrl/подключение); если сервер неизвестен и нет
    * подключения — 400.
    *
-   * Сценарии «вход = переход в профиль» (процессы-профили серверов):
-   * - нейтральный процесс (без defaultBackendUrl и подключения) + передан
-   *   server → вход выполняется НЕ в runtime-состояние процесса, а в ПРОФИЛЬ
-   *   сервера (switchToProfile: реестр + профильные credentials). Если процесс
-   *   перезапускаемый (restartable, env SYNTH_RESTARTABLE=1) — ответ 200
-   *   { action:'switch-profile' } и отложенный exit(77) (обёртка hybrid.sh
-   *   перезапустит процесс в новом профиле); иначе — 409 PROFILE_SWITCH_REQUIRED.
-   * - процесс привязан к серверу A + передан server B (≠ A) — смена активного
-   *   сервера «на лету» не поддерживается: 409 PROFILE_SWITCH_REQUIRED, runtime
-   *   процесса не трогается.
-   * - иначе (server пуст → активный, либо равен активному) — обычный runtime-вход
-   *   (connectRemote), как раньше.
+   * Вход всегда лёгкий (runtime), без перезапуска процесса:
+   * - адрес может отличаться от активного — connectRemote выполняет runtime
+   *   reconnect (зеркала провайдеров/мост пересоздаются в applyConnected);
+   * - после успешного входа best-effort обновляется мета-профиль сервера в
+   *   реестре (rememberServer → knownServers/lastServer для формы входа UI);
+   * - локальные данные процесса НЕ затрагиваются (единый dataDir).
    */
   app.post('/login', async (c) => {
     const body = await c.req.json().catch(() => ({}));
@@ -247,44 +234,17 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Укажите логин и пароль' } }, 400);
     }
 
-    // Процесс привязан к другому серверу, а запрошен новый — смена активного
-    // сервера «на лету» не поддерживается (runtime/dataDir принадлежат профилю
-    // активного сервера): просим перезапустить процесс с адресом.
-    if (requested && active && requested !== active) {
-      return profileSwitchRequired(requested);
-    }
-
-    // Нейтральный процесс + явный адрес → «переход в профиль»: вход выполняется
-    // в профиль сервера (реестр + профильный каталог + credentials), runtime
-    // процесса НЕ подключается. Без switchToProfile (deps без профильной
-    // поддержки) — обратная совместимость: обычный runtime-вход как раньше.
-    if (requested && !active && deps.switchToProfile) {
-      try {
-        await deps.switchToProfile(requested, username, password);
-      } catch (err) {
-        return mapLoginError(err);
-      }
-      // Перезапускаемый процесс (hybrid.sh): отвечаем 200 switch-profile и
-      // отложенно завершаем процесс кодом 77 — обёртка перезапустит serve в
-      // новом профиле (serve без --connect берёт lastProfile из реестра).
-      if (deps.restartable && deps.scheduleRestart) {
-        deps.scheduleRestart();
-        return c.json({
-          action: 'switch-profile',
-          server: requested,
-          message: 'Профиль сервера сохранён — процесс перезапускается в новом профиле',
-        });
-      }
-      // Прямой synth serve без обёртки: процесс не завершаем, пользователь сам
-      // перезапустит с адресом сервера.
-      return profileSwitchRequired(requested);
-    }
-
     try {
       // Всегда пробуем connectByPassword заново: безопаснее и проще, чем
       // сверять «уже подключённого» пользователя (состояние фиксируется
-      // только после успешного входа).
+      // только после успешного входа). Если сервер отличается от активного —
+      // connectRemote сам выполняет runtime-reconnect (applyConnected).
       const user = await deps.connectRemote(target, username, password);
+      // Мета-профиль в реестре (известные серверы/lastServer для формы входа) —
+      // best-effort: ошибка реестра не должна ронять успешный вход.
+      if (deps.rememberServer) {
+        await deps.rememberServer(target, username).catch(() => {});
+      }
       auth.setServerUserCookie(c, remoteUserToPayload(user));
       return c.json({ deployment: 'standalone', user: remoteUserToPayload(user) });
     } catch (err) {
@@ -404,7 +364,12 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
     return c.json({ status: 'error', message: flow.errorMessage ?? 'Авторизация не удалась' });
   });
 
-  app.post('/logout', (c) => {
+  app.post('/logout', async (c) => {
+    // Гибрид: полный выход — best-effort revoke refresh-токена на IdP + удаление
+    // credentials активного сервера + runtime disconnect (все ошибки тихо
+    // игнорируются). Мета-профиль из реестра при этом НЕ удаляется — сервер
+    // остаётся в knownServers/lastServer для формы входа.
+    await deps.logoutRemote?.().catch(() => {});
     auth.clearSessionCookie(c);
     return c.body(null, 204);
   });

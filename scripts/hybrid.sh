@@ -295,6 +295,8 @@ echo ""
 # ── Запуск (foreground) ───────────────────────────────────────────────────
 # CLI сам обрабатывает SIGINT/SIGTERM (graceful shutdown) — здесь просто
 # транслируем сигналы дочернему процессу и дожидаемся его завершения.
+# Вход всегда лёгкий (runtime): переключение сервера происходит в UI без
+# перезапуска процесса, поэтому никакого цикла рестарта не нужно.
 CLI_PID=""
 forward_signal() {
     if [ -n "$CLI_PID" ] && kill -0 "$CLI_PID" 2>/dev/null; then
@@ -318,25 +320,11 @@ if [ -n "$TOKEN" ]; then
     CLI_ARGS+=(--token "$TOKEN")
 fi
 
-# Процесс «перезапускаемый» (SYNTH_RESTARTABLE=1): при входе в UI на новый сервер
-# (переход в профиль) CLI пишет профиль и завершается кодом 77 — здесь перезапускаем
-# его, serve подхватит lastProfile нового сервера. Любой другой код — обычный выход.
-export SYNTH_RESTARTABLE=1
-
-while true; do
-    node "$CLI" "${CLI_ARGS[@]}" &
-    CLI_PID=$!
-    wait "$CLI_PID"
-    rc=$?
-    CLI_PID=""
-    if [ "$rc" -eq 77 ]; then
-        echo ""
-        echo "  Переключение профиля — перезапускаю..."
-        echo ""
-        continue
-    fi
-    break
-done
+node "$CLI" "${CLI_ARGS[@]}" &
+CLI_PID=$!
+wait "$CLI_PID"
+rc=$?
+CLI_PID=""
 trap - INT TERM
 
 echo ""

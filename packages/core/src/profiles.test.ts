@@ -4,19 +4,13 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   profileIdForUrl,
-  profileDataDir,
-  profileCredentialsPath,
   loadProfiles,
   listProfiles,
   getLastProfile,
   findProfileByUrl,
   ensureProfile,
   removeProfile,
-  migrateCredentialsToProfile,
-  resolveStartupProfile,
 } from './profiles.js';
-import { saveCredentials, loadCredentials } from './remote/credentials.js';
-import type { RemoteCredentials } from './remote/types.js';
 
 describe('profiles', () => {
   let dir: string;
@@ -31,17 +25,6 @@ describe('profiles', () => {
 
   function registryPath(): string {
     return join(dir, 'profiles.json');
-  }
-
-  function makeCreds(overrides: Partial<RemoteCredentials> = {}): RemoteCredentials {
-    return {
-      backendUrl: 'https://synth.example.loc',
-      accessToken: 'token-1',
-      refreshToken: 'refresh-1',
-      expiresAt: '2026-09-01T00:00:00.000Z',
-      user: { id: 'u1', username: 'admin', roles: ['ADMIN'] },
-      ...overrides,
-    };
   }
 
   describe('profileIdForUrl', () => {
@@ -60,20 +43,6 @@ describe('profiles', () => {
 
     it('учитывает порт для http', () => {
       expect(profileIdForUrl('http://localhost:5000')).toBe('localhost-5000');
-    });
-  });
-
-  describe('profileDataDir / profileCredentialsPath', () => {
-    it('строит каталог профиля внутри base', () => {
-      expect(profileDataDir(dir, 'synth-k3s-itphx-loc')).toBe(
-        join(dir, 'profiles', 'synth-k3s-itphx-loc'),
-      );
-    });
-
-    it('строит путь к credentials профиля', () => {
-      expect(profileCredentialsPath(dir, 'synth-k3s-itphx-loc')).toBe(
-        join(dir, 'profiles', 'synth-k3s-itphx-loc', 'credentials.json'),
-      );
     });
   });
 
@@ -208,122 +177,6 @@ describe('profiles', () => {
 
       // реестр пуст — файл удалён
       await expect(access(registryPath())).rejects.toThrow();
-    });
-  });
-
-  describe('migrateCredentialsToProfile', () => {
-    it('переносит запись из глобального файла в профильный и удаляет из глобального', async () => {
-      const url = 'https://synth.example.loc';
-      const globalPath = join(dir, 'global-credentials.json');
-      const a = makeCreds({ backendUrl: url, accessToken: 'tok-a' });
-      const b = makeCreds({ backendUrl: 'https://other.example.loc', accessToken: 'tok-b' });
-      await saveCredentials(a, globalPath);
-      await saveCredentials(b, globalPath);
-
-      const migrated = await migrateCredentialsToProfile(url, dir, 'synth-example-loc', globalPath);
-      expect(migrated).toBe(true);
-
-      // из глобального удалена, другие записи целы
-      expect(await loadCredentials(url, globalPath)).toBeNull();
-      expect(await loadCredentials('https://other.example.loc', globalPath)).toEqual(b);
-
-      // в профильном файле появилась
-      const profileCredPath = profileCredentialsPath(dir, 'synth-example-loc');
-      expect(await loadCredentials(url, profileCredPath)).toEqual(a);
-    });
-
-    it('при отсутствии записи — no-op (глобальный файл не меняется)', async () => {
-      const url = 'https://synth.example.loc';
-      const globalPath = join(dir, 'global-credentials.json');
-      const a = makeCreds({ backendUrl: url });
-      await saveCredentials(a, globalPath);
-
-      const migrated = await migrateCredentialsToProfile(
-        'https://absent.example.loc',
-        dir,
-        'absent-example-loc',
-        globalPath,
-      );
-      expect(migrated).toBe(false);
-      expect(await loadCredentials(url, globalPath)).toEqual(a);
-      await expect(access(profileCredentialsPath(dir, 'absent-example-loc'))).rejects.toThrow();
-    });
-  });
-
-  describe('resolveStartupProfile', () => {
-    it('без профилей и без connect → нейтральный запуск (dataDir=base, backendUrl=null)', async () => {
-      const res = await resolveStartupProfile({ baseDataDir: dir, profilesPath: registryPath() });
-      expect(res.profile).toBeNull();
-      expect(res.dataDir).toBe(dir);
-      expect(res.backendUrl).toBeNull();
-      expect(res.credentialsPath).toBeNull();
-      expect(res.baseDataDir).toBe(dir);
-    });
-
-    it('есть профиль → useLastProfile=true возвращает его dataDir/url/credentialsPath', async () => {
-      await ensureProfile('https://synth.example.loc', {}, registryPath());
-      const res = await resolveStartupProfile({ baseDataDir: dir, profilesPath: registryPath() });
-
-      expect(res.profile?.id).toBe('synth-example-loc');
-      expect(res.dataDir).toBe(profileDataDir(dir, 'synth-example-loc'));
-      expect(res.backendUrl).toBe('https://synth.example.loc');
-      expect(res.credentialsPath).toBe(profileCredentialsPath(dir, 'synth-example-loc'));
-    });
-
-    it('connectUrl задан → профиль создаётся в реестре, резолв с профилем', async () => {
-      const res = await resolveStartupProfile({
-        baseDataDir: dir,
-        connectUrl: 'https://remote.example.loc/',
-        profilesPath: registryPath(),
-      });
-
-      expect(res.profile?.id).toBe('remote-example-loc');
-      expect(res.profile?.url).toBe('https://remote.example.loc');
-      expect(res.backendUrl).toBe('https://remote.example.loc');
-      expect(res.dataDir).toBe(profileDataDir(dir, 'remote-example-loc'));
-
-      const list = await listProfiles(registryPath());
-      expect(list).toHaveLength(1);
-      expect((await getLastProfile(registryPath()))?.id).toBe('remote-example-loc');
-    });
-
-    it('connectUrl имеет приоритет над useLastProfile=true', async () => {
-      await ensureProfile('https://old.example.loc', {}, registryPath());
-      const res = await resolveStartupProfile({
-        baseDataDir: dir,
-        connectUrl: 'https://new.example.loc',
-        useLastProfile: true,
-        profilesPath: registryPath(),
-      });
-
-      expect(res.backendUrl).toBe('https://new.example.loc');
-      expect(res.dataDir).toBe(profileDataDir(dir, 'new-example-loc'));
-      // lastProfileId в реестре обновлён на connectUrl
-      expect((await getLastProfile(registryPath()))?.url).toBe('https://new.example.loc');
-    });
-
-    it('useLastProfile=false при наличии lastProfile → нейтральный запуск', async () => {
-      await ensureProfile('https://synth.example.loc', {}, registryPath());
-      const res = await resolveStartupProfile({
-        baseDataDir: dir,
-        useLastProfile: false,
-        profilesPath: registryPath(),
-      });
-
-      expect(res.profile).toBeNull();
-      expect(res.dataDir).toBe(dir);
-      expect(res.backendUrl).toBeNull();
-      expect(res.credentialsPath).toBeNull();
-      // реестр не трогали
-      expect((await getLastProfile(registryPath()))?.url).toBe('https://synth.example.loc');
-    });
-
-    it('профильный dataDir лежит внутри base', async () => {
-      await ensureProfile('https://synth.example.loc', {}, registryPath());
-      const res = await resolveStartupProfile({ baseDataDir: dir, profilesPath: registryPath() });
-
-      expect(res.dataDir.startsWith(dir)).toBe(true);
-      expect(res.dataDir).toBe(join(dir, 'profiles', 'synth-example-loc'));
     });
   });
 });

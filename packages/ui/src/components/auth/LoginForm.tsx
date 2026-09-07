@@ -14,7 +14,7 @@ interface DebugUser {
 
 export const LoginForm = () => {
   const { t } = useI18n()
-  const { login, loginWithPassword, isLoading, error, notice, clearError } = useAuthStore()
+  const { login, loginWithPassword, isLoading, error, clearError } = useAuthStore()
   const [apiKey, setApiKey] = useState('')
   const [server, setServer] = useState('')
   const [username, setUsername] = useState('')
@@ -22,8 +22,6 @@ export const LoginForm = () => {
   const [debugUsers, setDebugUsers] = useState<DebugUser[]>([])
   const [isDebugMode, setIsDebugMode] = useState(false)
   const [oidcEnabled, setOidcEnabled] = useState(false)
-  /** Адрес сервера известен при старте (--connect/env/конфиг) → поле адреса скрыто. */
-  const [serverConfigured, setServerConfigured] = useState(false)
   /** Гибридный режим реально включён (эндпоинт /hybrid/status ответил И enabled=true). */
   const [hybridEnabled, setHybridEnabled] = useState(false)
   /** Известные серверы из реестра профилей core (варианты для datalist поля «Сервер»). */
@@ -42,17 +40,16 @@ export const LoginForm = () => {
           setDebugUsers(users.users)
         }
         // Гибрид: если сервер — standalone-core (имеет /hybrid/status), уточняем,
-        // включён ли гибрид и известен ли адрес при старте. serverConfigured=true
-        // → адрес задан при старте, поле скрываем (вход идёт на defaultBackendUrl
-        // core); false → адрес вводит пользователь. backendUrl подставляем, если
-        // core уже знает удалённый backend. На managed-бэкенде эндпоинта нет —
-        // запрос НЕ выполняем (0 сетевых запросов → нет 404).
+        // включён ли гибрид. Поле «Сервер» в гибриде показывается ВСЕГДА (даже
+        // когда адрес известен core при старте): при протухшем токене пользователь
+        // может сменить адрес. backendUrl/lastServer используем как предзаполнение.
+        // На managed-бэкенде эндпоинта нет — запрос НЕ выполняем (0 сетевых
+        // запросов → нет 404), поле адреса скрыто (hybridEnabled=false).
         if (status.deployment === 'standalone' && status.oidc_enabled) {
           const hybrid = await synthApi.getHybridStatus().catch(() => null)
           if (hybrid) {
             // Эндпоинт ответил — реально включён гибрид.
             setHybridEnabled(hybrid.enabled ?? false)
-            setServerConfigured(hybrid.serverConfigured)
             setKnownServers(hybrid.knownServers ?? [])
             // Предзаполнение поля адреса: последний использованный сервер
             // (реестр профилей) приоритетнее текущего backendUrl core.
@@ -61,12 +58,10 @@ export const LoginForm = () => {
           } else {
             // Гибрид не настроен (или core без hybrid) → поле адреса скрываем.
             setHybridEnabled(false)
-            setServerConfigured(true)
           }
         } else {
           // Managed-бэкенд (нет /hybrid/status) → гибрида нет, поле адреса скрыто.
           setHybridEnabled(false)
-          setServerConfigured(true)
         }
       } catch {
         setIsDebugMode(false)
@@ -79,8 +74,9 @@ export const LoginForm = () => {
     e.preventDefault()
     clearError()
     if (oidcEnabled) {
-      // server пуст только когда адрес известен core (defaultBackendUrl) —
-      // серверная часть сама подставит его.
+      // В гибриде поле «Сервер» всегда видно (предзаполнено lastServer/
+      // backendUrl). Если server пуст — серверная часть подставит defaultBackendUrl
+      // или ответит BAD_REQUEST («Не указан адрес сервера»).
       await loginWithPassword(server, username, password)
     } else {
       await login(apiKey, username || undefined)
@@ -101,7 +97,7 @@ export const LoginForm = () => {
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           {oidcEnabled ? (
             <>
-              {oidcEnabled && hybridEnabled && !serverConfigured && (
+              {hybridEnabled && (
                 <div className="flex flex-col gap-2">
                   <label className="text-sm font-medium text-foreground">
                     {t('auth.serverUrl')}
@@ -254,17 +250,10 @@ export const LoginForm = () => {
             </div>
           )}
 
-          {notice && (
-            <div className="p-3 rounded-lg bg-blue-500/10 text-blue-700 dark:text-blue-300 text-sm">
-              {notice}
-            </div>
-          )}
-
           <button
             type="submit"
             disabled={
               isLoading ||
-              !!notice ||
               (oidcEnabled
                 ? !username || !password
                 : !apiKey || (isDebugMode && !username))

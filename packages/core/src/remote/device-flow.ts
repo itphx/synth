@@ -299,6 +299,31 @@ export async function passwordGrant(
   };
 }
 
+/**
+ * Отозвать refresh-токен на сервере авторизации (RFC 7009, endpoint
+ * {issuer}/protocol/openid-connect/revoke). Используется при выходе из гибрида
+ * («Выйти» в UI), чтобы инвалидировать серверную сессию. Best-effort: Keycloak
+ * может не поддерживать revoke для public-клиента или отвечать ошибкой — все
+ * ошибки молча игнорируются, главное — локальное удаление credentials.
+ */
+export async function revokeRefreshToken(
+  issuer: string,
+  clientId: string,
+  refreshToken: string,
+): Promise<void> {
+  const base = issuer.replace(/\/+$/, '');
+  const params = new URLSearchParams({
+    token: refreshToken,
+    client_id: clientId,
+    token_type_hint: 'refresh_token',
+  });
+  try {
+    await postForm(`${base}/protocol/openid-connect/revoke`, params);
+  } catch {
+    // best-effort: revoke недоступен/отклонён — игнорируем
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
