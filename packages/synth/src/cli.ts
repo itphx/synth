@@ -6,6 +6,7 @@ import type { SynthConfig } from '@itphx/synth-shared';
 import { createStandaloneApp } from '@itphx/synth-core/server/app.js';
 import { runSingleChat } from '@itphx/synth-core/server/chat.js';
 import { JsonStore } from '@itphx/synth-core/storage/json-store.js';
+import { getLastProfile, ensureProfile } from '@itphx/synth-core';
 
 const require = createRequire(import.meta.url);
 
@@ -37,14 +38,32 @@ program
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')
   .option('--connect <url>', 'URL удалённого backend (гибридный режим)')
+  .option('--no-auto-profile', 'не подключаться автоматически к последнему профилю (нейтральный запуск)')
   .option('--oidc-issuer <url>', 'OIDC issuer — fallback дискавери для входа в UI (гибридный режим)')
   .option('--oidc-client-id <id>', 'OIDC client_id — fallback дискавери для входа в UI (гибридный режим)')
   .option('--token <key>', 'API-ключ для аутентификации на удалённом backend (гибридный режим)')
   .action(async (options) => {
-    const { dataDir } = await ensureFirstRun(
+    // Единый каталог данных локального мира — НЕ зависит от удалённого сервера.
+    // Профили серверов (profiles.json) остаются мета-реестром для UX (известные
+    // серверы/lastServer), все runtime-данные лежат в одном dataDir.
+    const firstRun = await ensureFirstRun(
       options.dataDir || undefined,
       options.config || undefined,
     );
+    const dataDir = firstRun.dataDir;
+
+    // Источник адреса для тихого авто-входа (defaultBackendUrl):
+    //   1. явный --connect url;
+    //   2. иначе последний использованный профиль из реестра (если не --no-auto-profile);
+    //   3. иначе — нейтральный запуск: адрес вводится в форме входа UI.
+    let startupBackendUrl: string | null = options.connect ?? null;
+    if (!startupBackendUrl && options.autoProfile) {
+      startupBackendUrl = (await getLastProfile())?.url ?? null;
+    }
+    // При явном --connect согласуем реестр (lastUsedAt/lastProfileId) — best-effort.
+    if (options.connect) {
+      await ensureProfile(options.connect).catch(() => {});
+    }
 
     const overrides: Partial<SynthConfig> = {
       core: {
@@ -53,11 +72,11 @@ program
       },
       storage: { dataDir, workspacesRoot: '', defaultWorkspace: '' },
     };
-    if (options.connect) {
+    if (startupBackendUrl) {
       // deepMerge на рантайме сольёт частичную секцию remote с defaultConfig; тип требует полный RemoteConfig.
       overrides.remote = {
         enabled: true,
-        backendUrl: options.connect,
+        backendUrl: startupBackendUrl,
         auth: {
           type: options.token ? 'api_key' : 'device',
           apiKey: options.token ?? '',
@@ -85,8 +104,12 @@ program
     //   - тихое connectFromSaved после listen (если credentials сохранены);
     //   - иначе пользователь логинится в UI (POST /auth/login) или используется
     //     API-ключ (--token), когда он задан.
-    const remoteEnabled = synth.remote.enabled && !!synth.remote.backendUrl;
-    const remoteBackendUrl = synth.remote.backendUrl.replace(/\/+$/, '');
+    // Источник адреса — --connect или lastProfile (мета-реестр). При нейтральном
+    // запуске сохраняем прежнее поведение: remote-секция из config.yaml (если
+    // задана) по-прежнему включает авто-подключение к synth.remote.backendUrl.
+    // Локальные данные процесса — всегда в едином dataDir (не зависят от сервера).
+    const remoteEnabled = !!startupBackendUrl || (synth.remote.enabled && !!synth.remote.backendUrl);
+    const remoteBackendUrl = startupBackendUrl ?? synth.remote.backendUrl.replace(/\/+$/, '');
     // OIDC-fallback (issuer/client_id) передаём и без --connect: сервер стартует
     // без известного адреса, пользователь вводит адрес в UI (POST /auth/login),
     // а дискавери при недоступности /auth/oidc-meta падает на эти параметры.
@@ -115,6 +138,8 @@ program
         ? {
             issuer: remoteIssuer || undefined,
             clientId: remoteClientId || undefined,
+            // credentials — единый мульти-серверный файл (глобальный default /
+            // synth.remote.credentialsPath), не профильный.
             credentialsPath: synth.remote.credentialsPath || undefined,
           }
         : undefined,
@@ -131,7 +156,9 @@ program
       shuttingDown = true;
       console.log(`\n[Shutdown] Получен сигнал ${signal}, завершаю...`);
 
-      // Гибрид: закрыть SSE-стрим к удалённому backend, отменить реконнект.
+      // Гибрид: остановить фоновый watcher живости (иначе успеет переподключиться
+      // во время shutdown), закрыть SSE-стрим к удалённому backend.
+      appHandle.stopConnectionWatcher?.();
       await appHandle.disconnectRemote?.().catch(() => {});
       appHandle.remoteEventBridge?.stop();
 
@@ -158,9 +185,15 @@ program
         console.log(`  Удалённый backend: ${remoteBackendUrl}. Если сервер не подключён — войдите в UI (адрес сервера + логин/пароль).`);
       }
 
-      // Гибрид: тихое подключение после старта (best-effort, без интерактива).
-      // При --token (api_key) предпочитаем сохранённые credentials, иначе — API-ключ.
+      // Фоновый watcher живости гибридного подключения: если backend недоступен
+      // на старте или лёг позже — периодически (15 с) проверяет доступность и
+      // переподключается по сохранённым credentials; обновляет hybrid/status.
+      // Стартует ПОСЛЕ попытки авто-подключения: первый тик watcher немедленный,
+      // и если запустить его сразу — он будет гоняться с авто-входом ниже и
+      // дублировать HTTP-запросы к backend.
       if (remoteEnabled) {
+        // Гибрид: тихое подключение после старта (best-effort, без интерактива).
+        // При --token (api_key) предпочитаем сохранённые credentials, иначе — API-ключ.
         void (async () => {
           try {
             if (synth.remote.auth.type === 'api_key' && synth.remote.auth.apiKey) {
@@ -174,7 +207,13 @@ program
           } catch {
             // тихо: сервер недоступен / credentials не подошли — пользователь войдёт в UI
           }
+          appHandle.startConnectionWatcher?.();
         })();
+      } else {
+        // Нейтральный запуск (адрес remote неизвестен): первый тик watcher — no-op
+        // (target null), но адрес может появиться в рантайме (config/вход в UI) —
+        // держим watcher включённым, чтобы он подхватил его без рестарта.
+        appHandle.startConnectionWatcher?.();
       }
     });
   });

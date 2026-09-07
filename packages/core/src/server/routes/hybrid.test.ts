@@ -13,6 +13,18 @@ import type { AuthKit } from '../../auth/local.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 import { RemoteError } from '../../remote/types.js';
 
+// Реестр профилей изолируем: если граф теста дотянется до getHybridState/async
+// hybrid-status (../../index.js реэкспортирует app.ts), чтение дефолтного пути
+// ~/.config/synth/profiles.json не должно влиять на тесты. Мок = «реестр пуст».
+vi.mock('../../profiles.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../profiles.js')>();
+  return {
+    ...actual,
+    listProfiles: async () => [],
+    getLastProfile: async () => null,
+  };
+});
+
 function createMockAuth(): AuthKit {
   return {
     getCurrentUser: () => null,
@@ -421,6 +433,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: null,
       serverConfigured: false,
       serverLoginAvailable: false,
+      knownServers: [],
+      lastServer: null,
     }));
     const res = await app.request('/api/v2/hybrid/status');
     expect(res.status).toBe(200);
@@ -431,6 +445,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: null,
       serverConfigured: false,
       serverLoginAvailable: false,
+      knownServers: [],
+      lastServer: null,
     });
   });
 
@@ -442,6 +458,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: { id: 'u1', username: 'dev', roles: ['USER'] },
       serverConfigured: false,
       serverLoginAvailable: true,
+      knownServers: [],
+      lastServer: null,
     }));
     const app = createHybridRoutes(getState);
 
@@ -454,6 +472,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: { id: 'u1', username: 'dev', roles: ['USER'] },
       serverConfigured: false,
       serverLoginAvailable: true,
+      knownServers: [],
+      lastServer: null,
     });
     expect(getState).toHaveBeenCalled();
   });
@@ -466,6 +486,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: null,
       serverConfigured: false,
       serverLoginAvailable: true,
+      knownServers: [],
+      lastServer: null,
     });
     const app = createHybridRoutes(getState);
 
@@ -478,6 +500,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: null,
       serverConfigured: false,
       serverLoginAvailable: true,
+      knownServers: [],
+      lastServer: null,
     });
   });
 
@@ -489,6 +513,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: null,
       serverConfigured: true,
       serverLoginAvailable: true,
+      knownServers: [],
+      lastServer: null,
     });
     const app = createHybridRoutes(getState);
 
@@ -501,6 +527,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: null,
       serverConfigured: true,
       serverLoginAvailable: true,
+      knownServers: [],
+      lastServer: null,
     });
   });
 
@@ -513,6 +541,8 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
       user: connected ? { id: 'u1', username: 'dev', roles: ['USER'] } : null,
       serverConfigured: false,
       serverLoginAvailable: connected,
+      knownServers: [],
+      lastServer: null,
     }));
     const app = createHybridRoutes(getState);
 
@@ -526,5 +556,33 @@ describe('GET /api/v2/hybrid/status (статус гибридного режи�
     expect(body.connected).toBe(true);
     expect(body.user?.username).toBe('dev');
     expect(getState).toHaveBeenCalledTimes(2);
+  });
+
+  it('асинхронное состояние (Promise) поддерживается; knownServers/lastServer проходят как есть', async () => {
+    const getState = vi.fn(async () => ({
+      enabled: true,
+      connected: false,
+      backendUrl: null,
+      user: null,
+      serverConfigured: false,
+      serverLoginAvailable: true,
+      knownServers: ['https://synth.k3s.itphx.loc', 'https://beta.example.loc'],
+      lastServer: 'https://synth.k3s.itphx.loc',
+    }));
+    const app = createHybridRoutes(getState);
+
+    const res = await app.request('/api/v2/hybrid/status');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      enabled: true,
+      connected: false,
+      backendUrl: null,
+      user: null,
+      serverConfigured: false,
+      serverLoginAvailable: true,
+      knownServers: ['https://synth.k3s.itphx.loc', 'https://beta.example.loc'],
+      lastServer: 'https://synth.k3s.itphx.loc',
+    });
+    expect(getState).toHaveBeenCalled();
   });
 });

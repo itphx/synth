@@ -1209,7 +1209,7 @@ export interface HybridStatus {
   enabled: boolean
   connected: boolean
   backendUrl: string | null
-  /** Адрес сервера известен (--connect/env/конфиг) — форма логина скрывает поле адреса. */
+  /** Адрес сервера известен (--connect/env/конфиг) — информационное поле. */
   serverConfigured: boolean
   /** Доступен вход на сервер (адрес/issuer известен или уже подключено) — серверная форма логина. */
   serverLoginAvailable: boolean
@@ -1218,4 +1218,8 @@ export interface HybridStatus {
     username: string
     roles: string[]
   } | null
+  /** URL известных серверов из реестра профилей core (список для datalist формы входа). */
+  knownServers?: string[]
+  /** URL последнего использованного сервера (предзаполнение поля адреса). */
+  lastServer?: string | null
 }

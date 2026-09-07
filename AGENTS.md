@@ -306,17 +306,23 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 (`synth serve --connect <url>`): в одном локальном UI объединяются локальные и
 удалённые (backend) проекты/сессии, а LLM-запросы централизованы на сервере
 (ключи, модели и аудит — только на нём). Реализовано в ветке `feat/hybrid-mode`;
-детальные требования, архитектура и статус — в [docs/HYBRID.md](docs/HYBRID.md).
+лёгкий runtime-вход с общим каталогом данных, мета-реестр профилей серверов и
+устойчивость (ConnectionWatcher) — в ветке `feat/hybrid-server-profiles` (2026-09-07);
+детальные требования и статус — в [docs/HYBRID.md](docs/HYBRID.md);
+архитектура — AD-042/AD-043/AD-045.
 
 **UX (вход без Keycloak-ритуала):** `serve --connect` больше НЕ блокирует старт
 device flow'ом — сервер поднимается «холодным», после listen тихо выполняется
 авто-логин по сохранённым credentials (или по `--token`), а если credentials нет —
 вход выполняется прямо в UI: форма логина с полями логин/пароль (ROPC
-«за кулисами»), личность/роли/профиль приходят с сервера. Поле «Адрес сервера»
-в форме показывается только когда адрес НЕ задан при старте (иначе он известен
-core и поле скрыто). Никакого «входа через браузер» (device flow) в пользовательском
-пути нет — кнопка и модалка удалены из UI (эндпоинты device-start/device-check
-в core остаются, но из UI не вызываются).
+«за кулисами»), личность/роли/профиль приходят с сервера. Вход **всегда лёгкий
+(runtime)**: без перезапуска процесса/перезагрузки страницы, локальные данные
+лежат в едином dataDir и от сервера не зависят. Поле «Сервер» (адрес) в форме
+показывается всегда в гибридном режиме (можно сменить сервер при протухшем
+токене), предзаполняется последним использованным сервером и предлагает список
+известных серверов из реестра профилей. Никакого «входа через браузер»
+(device flow) в пользовательском пути нет — кнопка и модалка удалены из UI
+(эндпоинты device-start/device-check в core остаются, но из UI не вызываются).
 
 OIDC issuer/client_id локальный core узнаёт **с сервера** (`GET {server}/auth/oidc-meta`),
 с fallback на флаги `--oidc-issuer`/`--oidc-client-id` для серверов без эндпоинта.
@@ -341,12 +347,12 @@ remote:
 пользователь в форме входа UI):
 
 ```bash
-# Адрес известен — UI спросит только логин/пароль
+# Адрес известен — UI предзаполнит поле «Сервер», спросит логин/пароль
 synth serve --connect https://synth.k3s.itphx.loc \
   --oidc-issuer https://keycloak.itphx.loc/realms/synth \
   --oidc-client-id synth-cli
 
-# Адрес не известен — UI покажет поле «Адрес сервера» + логин/пароль
+# Адрес не известен — UI покажет поле «Сервер» (пустое/последний адрес) + логин/пароль
 synth serve --oidc-issuer https://keycloak.itphx.loc/realms/synth \
   --oidc-client-id synth-cli
 ```
@@ -358,7 +364,7 @@ synth serve --oidc-issuer https://keycloak.itphx.loc/realms/synth \
 
 | Команда | Назначение |
 |---|---|
-| `synth serve --connect <url>` | Запуск локального core с подключением к серверу (опции `--oidc-issuer`, `--oidc-client-id`, `--token`; без `--connect` — вход по адресу из формы UI) |
+| `synth serve --connect <url>` | Запуск локального core с подключением к серверу (опции `--oidc-issuer`, `--oidc-client-id`, `--token`). Локальные данные — в едином dataDir (не зависят от сервера). Без `--connect` подставляет последний использованный сервер (lastProfile из реестра) как адрес для тихого авто-входа; `--no-auto-profile` — нейтральный запуск (адрес вводится в форме входа UI) |
 | `synth connect --backend <url>` | Сохранение credentials (ROPC по логину/паролю / `--token` API-ключ); credentials — в `~/.config/synth/credentials.json` (0600) |
 | `synth disconnect --backend <url>` | Удалить сохранённые credentials |
 | `synth project publish <id> --remote <url>` | Локальный проект → сервер (проект + сессии + файлы; `--no-files` / `--no-sessions`) |
@@ -368,16 +374,40 @@ synth serve --oidc-issuer https://keycloak.itphx.loc/realms/synth \
 
 - **Вход:** сервер стартует «холодным»; после listen тихий авто-логин
   (connectFromSaved / `--token`), иначе — форма логина в UI (адрес опционален:
-  параметр/env → не спрашиваем; иначе поле в форме). OIDC-параметры — дискавери
+  параметр/env → предзаполнен; иначе — пустое поле). OIDC-параметры — дискавери
   с сервера (`GET /auth/oidc-meta`), fallback на `--oidc-issuer`/`--oidc-client-id`.
+  Вход всегда лёгкий (runtime): POST /auth/login подключает процесс на лету без
+  перезапуска; после успеха best-effort обновляется мета-профиль в реестре.
+- **Профили серверов:** profiles.json — мета-реестр для UX
+  (`~/.config/synth/profiles.json`, 0600, атомарно: `{id, url, label, lastUsedAt, username}`):
+  известные серверы (knownServers), последний использованный (lastServer),
+  предзаполнение формы входа. Никаких профильных каталогов данных нет — локальные
+  данные всех серверов лежат в ЕДИНОМ dataDir процесса; credentials — единый
+  мульти-серверный файл `~/.config/synth/credentials.json`
+  (`packages/core/src/profiles.ts` — только мета-реестр).
+- **Смена сервера / выход:** «Выйти» в UI = runtime disconnect + удаление
+  credentials активного сервера («забыть токен») + best-effort revoke refresh-токена
+  на Keycloak + очистка cookie → форма входа. Мета-профиль при этом НЕ удаляется.
+  Сменить сервер — «Выйти» и войти на другой адрес (поле «Сервер» редактируемое,
+  варианты из knownServers); вход на новый сервер происходит на лету, без
+  перезапуска процесса и перезагрузки страницы.
+- **Устойчивость (ConnectionWatcher):** фоновый watcher
+  (`packages/core/src/server/connection-watcher.ts`) каждые ~15 с проверяет
+  доступность backend (`/health`) и валидность токена (`/auth/status`);
+  `/hybrid/status.connected` отражает реальную доступность (раньше — лишь наличие
+  сессии). Сервер упал → connected=false (offline-баннер); вернулся — авто-подключение
+  по сохранённым credentials (не чаще 1/30 с); невалидный токен — пересоздание
+  сессии (refresh).
 - **Агрегация миров:** проекты/сессии локального core объединяются с удалёнными
   (backend); у каждой сущности поле `origin: 'local'|'remote'`, удалённые id —
   `remote:<uuid>` (исключают коллизии UUID). Запросы маршрутизируются по миру:
   локальные обрабатывает core, удалённые — проксируются на сервер.
 - **Статус:** `GET /api/v2/hybrid/status` →
-  `{ enabled, connected, backendUrl, serverConfigured, serverLoginAvailable, user }`
+  `{ enabled, connected, backendUrl, serverConfigured, serverLoginAvailable, user, knownServers, lastServer }`
   (без auth; UI опрашивает ~30 с). `serverConfigured` — адрес сервера задан при
-  старте (даже без подключения); `serverLoginAvailable` — доступен вход на сервер.
+  старте (даже без подключения); `serverLoginAvailable` — доступен вход на сервер;
+  `knownServers` — известные серверы из реестра профилей (варианты для формы
+  входа), `lastServer` — последний использованный (предзаполнение поля «Сервер»).
 - **События:** RemoteEventBridge транслирует SSE сервера в локальный EventBus,
   события удалённых сессий переписываются в `remote:<id>` и доходят до UI.
 - **LLM:** локальные сессии в гибриде ходят за LLM через сервер
@@ -389,13 +419,15 @@ synth serve --oidc-issuer https://keycloak.itphx.loc/realms/synth \
 
 ### Ключевые файлы
 
+- `packages/core/src/profiles.ts` — мета-реестр профилей серверов (`~/.config/synth/profiles.json`): knownServers/lastServer для UX (без каталогов данных/credentials)
+- `packages/core/src/server/connection-watcher.ts` — фоновый watcher живости подключения (health/auth, авто-переподключение)
 - `packages/core/src/remote/` — RemoteConnection (runtime-подключение), клиент, credentials, агрегация, событийный мост, publish/fork
-- `packages/core/src/server/routes/auth.ts` — `/auth/status|session|login` (ROPC), `/auth/device-start|device-check` (не вызываются из UI)
+- `packages/core/src/server/routes/auth.ts` — `/auth/status|session|login` (ROPC, runtime), `/auth/logout` (disconnect + revoke), `/auth/device-start|device-check` (не вызываются из UI)
 - `packages/backend/src/routes/auth.ts` — `/auth/oidc-meta` (публичные OIDC-параметры для дискавери)
 - `packages/backend/src/routes/llm.ts` — LLM Proxy (`POST /api/v2/llm/chat/completions`)
 - `packages/backend/src/routes/sessions.ts` — `GET /sessions/:id/export`, `POST /sessions/import`
 - UI: `packages/ui/src/components/layout/HybridStatusIndicator.tsx`, `HybridOfflineBanner.tsx`, `packages/ui/src/components/auth/LoginForm.tsx`, бейджи origin, селектор «где создать»
-- `scripts/hybrid.sh` — запуск локального core в гибриде (сборка + CA + флаги)
+- `scripts/hybrid.sh` — запуск локального core в гибриде (сборка + CA + флаги; однократный запуск serve)
 
 ---
 
@@ -433,6 +465,7 @@ synth serve --oidc-issuer https://keycloak.itphx.loc/realms/synth \
 | AD-042 | Гибридный режим: локальный core + централизованный сервер (агрегация миров, LLM Proxy, RemoteEventBridge, publish/fork) ✅ Реализовано | [ad-042](./docs/arch_decisions/ad-042-hybrid-mode.md) |
 | AD-043 | Единая идентичность гибрида: вход в UI без Keycloak (runtime-подключение, ROPC, дискавери oidc-meta, единая личность) ✅ Реализовано | [ad-043](./docs/arch_decisions/ad-043-unified-identity-login.md) |
 | AD-044 | Адаптивный мобильный UI + PWA (три зоны, панели-дроверы, touch-first, ручной app-shell) ✅ Реализовано | [ad-044](./docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md) |
+| AD-045 | Профили серверов и лёгкий runtime-вход в гибриде: единый dataDir, мета-реестр profiles.json, вход без рестарта (отмена switch-profile/exit 77/409), logout = забыть токен + best-effort revoke, ConnectionWatcher ✅ Реализовано | [ad-045](./docs/arch_decisions/ad-045-hybrid-server-profiles.md) |
 
 > **Перенос AD:** реализованные AD переносятся в `docs/arch_decisions/` (в AGENTS.md остаётся краткая строка + ссылка). Нереализованные остаются в AGENTS.md до реализации.
 
@@ -832,6 +865,11 @@ git pre-commit hook (уровень git, обойти нельзя)
 **Кратко:** Runtime-подключение (RemoteConnection) + вход в UI по логину/паролю (ROPC «за кулисами»), дискавери IdP с сервера (`GET /auth/oidc-meta`), единая личность (cookie v2, роли/профиль/админка — с сервера), старт без device flow; public-клиент `synth-cli`.
 **Подробно:** [docs/arch_decisions/ad-043-unified-identity-login.md](./docs/arch_decisions/ad-043-unified-identity-login.md)
 
+### AD-045: Профили серверов и лёгкий runtime-вход в гибриде — единый dataDir ✅ Реализовано
+
+**Кратко:** Вход всегда лёгкий (runtime, без рестарта/exit 77/409): один процесс подключается к любому серверу на лету; локальные данные — единый dataDir; profiles.json — мета-реестр (knownServers/lastServer); credentials — единый мульти-серверный файл; logout = disconnect + забыть токен + best-effort revoke refresh-токена на IdP (RFC 7009); ConnectionWatcher.
+**Подробно:** [docs/arch_decisions/ad-045-hybrid-server-profiles.md](./docs/arch_decisions/ad-045-hybrid-server-profiles.md)
+
 ## Аутентификация
 
 Все запросы к API (кроме `GET /health`) аутентифицированы. 401 для неаутентифицированных.
@@ -985,8 +1023,11 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
   `usePwaInstall` + `PwaInstallButton` (`beforeinstallprompt`); регистрация SW только в prod.
 - **Раздача:** `docker/nginx-ui.conf` (MIME `.webmanifest` + no-cache для `/sw.js`/`/manifest.webmanifest`)
   и `packages/core/src/server/app.ts` (MIME `.webmanifest` + no-cache для sw/manifest).
-- **Фикс логина:** поле «Адрес сервера» показывается только при `oidcEnabled && hybridEnabled && !serverConfigured`
-  (эндпоинт `/hybrid/status` есть только в standalone-core; на managed-бэкенде поле скрыто);
+- **Фикс логина:** в гибридном режиме (standalone-core, эндпоинт `/hybrid/status`
+  ответил и enabled=true) поле «Сервер» (адрес) показывается ВСЕГДА — при протухшем
+  токене можно сменить адрес; предзаполняется lastServer/backendUrl, варианты из
+  knownServers. На managed-бэкенде (нет `/hybrid/status` → hybridEnabled=false)
+  поле скрыто;
   Enter в «Логин» → фокус на «Пароль».
 
 Подробности и мотивация — [AD-044](./docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md).

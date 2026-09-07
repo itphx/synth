@@ -8,6 +8,18 @@ import { createAuthRoutes, type AuthRoutesRemoteDeps } from './auth.js';
 import { RemoteConnection } from '../../remote/connection.js';
 import { RemoteError } from '../../remote/types.js';
 
+// Реестр профилей изолируем: даже если граф теста дотянется до app.ts (авто-логин
+// → /auth/status → getHybridState), дефолтный путь ~/.config/synth/profiles.json
+// не должен читаться. Мок = «реестр пуст».
+vi.mock('../../profiles.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../profiles.js')>();
+  return {
+    ...actual,
+    listProfiles: async () => [],
+    getLastProfile: async () => null,
+  };
+});
+
 const COOKIE_NAME = 'synth_session';
 const API_KEY = 'test-key';
 const BACKEND = 'https://backend.test';
@@ -207,6 +219,108 @@ describe('auth routes (гибридная runtime-личность, RemoteConnec
       expect(res.status).toBe(502);
       const body = (await res.json()) as { error: { code: string } };
       expect(body.error.code).toBe('OFFLINE');
+    });
+  });
+
+  describe('POST /auth/login (runtime-вход, смена сервера на лету)', () => {
+    const OTHER = 'https://other.test';
+
+    it('нейтральный процесс + server в body → обычный runtime-вход (connectRemote) + rememberServer', async () => {
+      const connectRemote = vi.fn().mockResolvedValue(SERVER_USER);
+      const rememberServer = vi.fn().mockResolvedValue(undefined);
+      const app = makeApp(makeDeps({
+        connectRemote,
+        rememberServer,
+      }, { tmpDir }));
+
+      const res = await app.request('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ server: BACKEND, username: 'lucky', password: 'secret' }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { user: { username: string } };
+      expect(body.user.username).toBe('lucky');
+      // Вход выполнен в runtime-состояние процесса (без 409/перезапуска).
+      expect(connectRemote).toHaveBeenCalledWith(BACKEND, 'lucky', 'secret');
+      // Мета-профиль обновлён в реестре (lastUsedAt/lastProfileId/username).
+      expect(rememberServer).toHaveBeenCalledWith(BACKEND, 'lucky');
+    });
+
+    it('процесс привязан (defaultBackendUrl=A) + server=B → runtime-переключение на B (без 409)', async () => {
+      const connectRemote = vi.fn().mockResolvedValue(SERVER_USER);
+      const app = makeApp(makeDeps({ defaultBackendUrl: BACKEND, connectRemote }, { tmpDir }));
+
+      const res = await app.request('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ server: OTHER, username: 'lucky', password: 'secret' }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { user: { username: string } };
+      expect(body.user.username).toBe('lucky');
+      expect(connectRemote).toHaveBeenCalledWith(OTHER, 'lucky', 'secret');
+    });
+
+    it('процесс привязан (defaultBackendUrl=A) + server=A → обычный runtime-вход', async () => {
+      const connectRemote = vi.fn().mockResolvedValue(SERVER_USER);
+      const app = makeApp(makeDeps({ defaultBackendUrl: BACKEND, connectRemote }, { tmpDir }));
+
+      const res = await app.request('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ server: BACKEND, username: 'lucky', password: 'secret' }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { user: { username: string } };
+      expect(body.user.username).toBe('lucky');
+      expect(connectRemote).toHaveBeenCalledWith(BACKEND, 'lucky', 'secret');
+    });
+
+    it('rememberServer падает → вход всё равно успешен (best-effort, без 500)', async () => {
+      const rememberServer = vi.fn().mockRejectedValue(new Error('registry write failed'));
+      const app = makeApp(makeDeps({ defaultBackendUrl: BACKEND, rememberServer }, { tmpDir }));
+      vi.stubGlobal('fetch', ropcFetchMock());
+
+      const res = await app.request('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'lucky', password: 'secret' }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { user: { username: string } };
+      expect(body.user.username).toBe('lucky');
+      expect(rememberServer).toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /auth/logout (runtime-выход)', () => {
+    it('вызывает logoutRemote и очищает cookie', async () => {
+      const logoutRemote = vi.fn().mockResolvedValue(undefined);
+      const app = makeApp(makeDeps({ defaultBackendUrl: BACKEND, logoutRemote }, { tmpDir }));
+
+      const res = await app.request('/auth/logout', { method: 'POST' });
+      expect(res.status).toBe(204);
+      expect(logoutRemote).toHaveBeenCalledTimes(1);
+    });
+
+    it('logoutRemote падает → всё равно 204 и cookie очищена (best-effort)', async () => {
+      const logoutRemote = vi.fn().mockRejectedValue(new Error('revoke failed'));
+      const app = makeApp(makeDeps({ defaultBackendUrl: BACKEND, logoutRemote }, { tmpDir }));
+
+      const res = await app.request('/auth/logout', { method: 'POST' });
+      expect(res.status).toBe(204);
+      expect(logoutRemote).toHaveBeenCalledTimes(1);
+    });
+
+    it('без logoutRemote (нет гибрида) → просто очистка cookie, 204', async () => {
+      const app = makeApp(makeDeps({}, { tmpDir }));
+      const res = await app.request('/auth/logout', { method: 'POST' });
+      expect(res.status).toBe(204);
     });
   });
 

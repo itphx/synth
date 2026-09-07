@@ -9,6 +9,18 @@ import { JsonStore } from '../storage/json-store.js';
 import { clearRemoteTokenProviders } from '../providers/remote.js';
 import type { ModelConfig, ProviderConfig } from '@itphx/synth-shared';
 
+// Реестр профилей изолируем: getHybridStatus/GET /hybrid/status (getHybridState в
+// app.ts) читают listProfiles/getLastProfile БЕЗ path — дефолтный путь увёл бы тест
+// в реальный ~/.config/synth/profiles.json. Мок ведёт себя как «реестр пуст».
+vi.mock('../profiles.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../profiles.js')>();
+  return {
+    ...actual,
+    listProfiles: async () => [],
+    getLastProfile: async () => null,
+  };
+});
+
 const REMOTE_PROVIDER: ProviderConfig = {
   name: 'itphx',
   type: 'remote',
@@ -186,12 +198,13 @@ describe('createStandaloneApp: remote-модели через runtime-подкл
         remoteLlm: 'server',
       });
       await handle.connectRemoteWithApiKey(BACKEND_URL, 'tok');
-      expect(handle.getHybridStatus().connected).toBe(true);
+      expect((await handle.getHybridStatus()).connected).toBe(true);
 
       await handle.disconnectRemote();
 
-      expect(handle.getHybridStatus().connected).toBe(false);
-      expect(handle.getHybridStatus().backendUrl).toBeNull();
+      const status = await handle.getHybridStatus();
+      expect(status.connected).toBe(false);
+      expect(status.backendUrl).toBeNull();
       const res = await handle.app.request('/api/v2/models', { headers: { Authorization: 'Bearer test-key' } });
       const body = (await res.json()) as { groups: Group[] };
       expect(body.groups.find((g) => g.provider.name === 'itphx')).toBeUndefined();

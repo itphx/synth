@@ -62,6 +62,13 @@ export interface SPALoginResponse {
   token: string
 }
 
+/** Ответ POST /auth/login (парольный runtime-вход в гибридном режиме). */
+export interface PasswordLoginResponse {
+  deployment?: DeploymentKind
+  user?: User
+  token?: string
+}
+
 const BASE_URL = '/auth'
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -101,8 +108,8 @@ export const api = {
     server: string | undefined,
     username: string,
     password: string,
-  ): Promise<SPALoginResponse> {
-    return fetchJSON<SPALoginResponse>(`${BASE_URL}/login`, {
+  ): Promise<PasswordLoginResponse> {
+    return fetchJSON<PasswordLoginResponse>(`${BASE_URL}/login`, {
       method: 'POST',
       body: JSON.stringify({ server: server || undefined, username, password }),
     })

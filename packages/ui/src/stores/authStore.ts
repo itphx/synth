@@ -88,8 +88,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ isLoading: true, error: null })
     try {
       const response = await api.loginWithPassword(server, username, password)
+      // Обычный runtime-вход: личность приходит с сервера сразу (без перезапуска
+      // процесса/страницы), cookie ставит core.
       set({
-        user: response.user,
+        user: response.user ?? null,
         isAuthenticated: true,
         isLoading: false,
         deployment: response.deployment ?? null,
@@ -118,6 +120,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   logout: async () => {
     set({ isLoading: true })
     try {
+      // Серверная часть: logoutRemote (revoke refresh-токена + удаление credentials
+      // активного сервера + runtime disconnect) + очистка cookie. Профиль сервера
+      // из реестра не удаляется — сервер остаётся в knownServers/lastServer.
       await api.logout()
     } finally {
       localStorage.removeItem('synth-ui.i18n.v1')
