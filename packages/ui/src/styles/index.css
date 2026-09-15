@@ -382,6 +382,18 @@ html.pointer-coarse [data-tree-node] .group-hover\:block {
   display: block !important;
 }
 
+/* 2.1 Fallback для мобильных зон: действия в строках дерева видимы
+   независимо от pointer-coarse (эмуляция/fine-указатель) */
+html.device-phone [data-tree-node] .group-hover\:inline-flex,
+html.device-tablet [data-tree-node] .group-hover\:inline-flex {
+  display: inline-flex !important;
+}
+
+html.device-phone [data-tree-node] .group-hover\:block,
+html.device-tablet [data-tree-node] .group-hover\:block {
+  display: block !important;
+}
+
 /* 2.2 Touch-таргеты: действия внутри hover-контейнеров (сообщения, стикеры,
    очередь, нотификации, ссылки) — ~40px */
 html.pointer-coarse .group-hover\:opacity-100 button {
@@ -395,6 +407,18 @@ html.pointer-coarse [data-tree-node] {
 }
 
 html.pointer-coarse [data-tree-node] button {
+  min-width: 36px;
+  min-height: 36px;
+}
+
+/* 2.2 Fallback для мобильных зон: touch-таргеты строк дерева */
+html.device-phone [data-tree-node],
+html.device-tablet [data-tree-node] {
+  min-height: 40px;
+}
+
+html.device-phone [data-tree-node] button,
+html.device-tablet [data-tree-node] button {
   min-width: 36px;
   min-height: 36px;
 }

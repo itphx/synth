@@ -122,3 +122,36 @@ describe('authStore: logout', () => {
     expect(s.isAuthenticated).toBe(false)
   })
 })
+
+describe('authStore: sessionExpired', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubGlobal('localStorage', { removeItem: vi.fn() })
+    useAuthStore.setState({
+      ...INITIAL_STATE,
+      user: { id: 'u1', username: 'dev', email: null, roles: ['USER'] },
+      profile: { id: 'u1', username: 'dev', email: null, roles: ['USER'] },
+      isAuthenticated: true,
+      isInitialized: true,
+      deployment: 'managed',
+    })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('сбрасывает авторизацию без сетевых вызовов и без очистки localStorage', () => {
+    useAuthStore.getState().sessionExpired()
+
+    const s = useAuthStore.getState()
+    expect(s.user).toBeNull()
+    expect(s.profile).toBeNull()
+    expect(s.isAuthenticated).toBe(false)
+    expect(s.isLoading).toBe(false)
+    expect(s.deployment).toBeNull()
+    expect(api.logout).not.toHaveBeenCalled()
+    expect(api.getStatus).not.toHaveBeenCalled()
+    expect(localStorage.removeItem).not.toHaveBeenCalled()
+  })
+})

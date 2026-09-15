@@ -14,6 +14,7 @@ import { GitTabToolbar } from './components/panels/GitTabToolbar'
 import { CenterPanel } from './components/layout/CenterPanel'
 import { MobileDrawer } from './components/layout/MobileDrawer'
 import { BackendConnection } from './components/layout/BackendConnection'
+import { ConnectionGuard } from './components/layout/ConnectionGuard'
 import { UpdateNotification } from './components/layout/UpdateNotification'
 import { HybridOfflineBanner } from './components/layout/HybridOfflineBanner'
 import { SettingsModal } from './components/settings/SettingsModal'
@@ -189,6 +190,7 @@ function App() {
       <DefaultsSync />
       <AuthGate>
         <BackendConnection />
+        <ConnectionGuard />
         <UpdateNotification />
         <TooltipProvider>
           {isMobile ? mobileLayout : desktopLayout}
@@ -207,34 +209,34 @@ function App() {
           icon={confirmOptions?.icon}
           onConfirm={() => closeConfirm(true)}
         />
-        <ToastContainer
-          position="bottom-right"
-          newestOnTop
-          limit={5}
-          autoClose={5000}
-          closeButton
-          hideProgressBar
-          closeOnClick={false}
-          toastClassName="synth-toast"
-          style={{
-            // @ts-expect-error CSS custom properties
-            '--toastify-toast-min-height': '44px',
-            '--toastify-toast-padding': '10px 14px',
-            '--toastify-color-success': 'oklch(0.68 0.12 145)',
-            '--toastify-color-warning': 'oklch(0.7 0.13 95)',
-            '--toastify-color-error': 'oklch(0.65 0.15 30)',
-            '--toastify-color-info': 'oklch(0.68 0.12 230)',
-            '--toastify-icon-color-success': 'oklch(0.68 0.12 145)',
-            '--toastify-icon-color-warning': 'oklch(0.7 0.13 95)',
-            '--toastify-icon-color-error': 'oklch(0.65 0.15 30)',
-            '--toastify-icon-color-info': 'oklch(0.68 0.12 230)',
-            '--toastify-color-progress-success': 'oklch(0.68 0.12 145)',
-            '--toastify-color-progress-warning': 'oklch(0.7 0.13 95)',
-            '--toastify-color-progress-error': 'oklch(0.65 0.15 30)',
-            '--toastify-color-progress-info': 'oklch(0.68 0.12 230)',
-          }}
-        />
       </AuthGate>
+      <ToastContainer
+        position="bottom-right"
+        newestOnTop
+        limit={5}
+        autoClose={5000}
+        closeButton
+        hideProgressBar
+        closeOnClick={false}
+        toastClassName="synth-toast"
+        style={{
+          // @ts-expect-error CSS custom properties
+          '--toastify-toast-min-height': '44px',
+          '--toastify-toast-padding': '10px 14px',
+          '--toastify-color-success': 'oklch(0.68 0.12 145)',
+          '--toastify-color-warning': 'oklch(0.7 0.13 95)',
+          '--toastify-color-error': 'oklch(0.65 0.15 30)',
+          '--toastify-color-info': 'oklch(0.68 0.12 230)',
+          '--toastify-icon-color-success': 'oklch(0.68 0.12 145)',
+          '--toastify-icon-color-warning': 'oklch(0.7 0.13 95)',
+          '--toastify-icon-color-error': 'oklch(0.65 0.15 30)',
+          '--toastify-icon-color-info': 'oklch(0.68 0.12 230)',
+          '--toastify-color-progress-success': 'oklch(0.68 0.12 145)',
+          '--toastify-color-progress-warning': 'oklch(0.7 0.13 95)',
+          '--toastify-color-progress-error': 'oklch(0.65 0.15 30)',
+          '--toastify-color-progress-info': 'oklch(0.68 0.12 230)',
+        }}
+      />
     </>
   )
 }

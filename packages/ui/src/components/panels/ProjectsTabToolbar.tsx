@@ -31,7 +31,6 @@ export const ProjectsTabToolbar: React.FC = () => {
 
   const [popover, setPopover] = useState<PopoverType>(null)
   const [projectName, setProjectName] = useState('')
-  const [sessionName, setSessionName] = useState('')
   const [sessionProjectId, setSessionProjectId] = useState<string | null>(null)
   // Гибридный режим: где создать сущность — локально или на удалённом сервере.
   const [createOrigin, setCreateOrigin] = useState<EntityOrigin>('local')
@@ -44,7 +43,6 @@ export const ProjectsTabToolbar: React.FC = () => {
   }
 
   const handleCreateSession = async () => {
-    const name = sessionName.trim() || undefined
     const selectedProject = sessionProjectId ? projects.find((p) => p.id === sessionProjectId) : null
     // Гибрид: remote-сессия не может ссылаться на ЛОКАЛЬНЫЙ проект (сервер его не
     // знает) — в этом случае создаём на сервере сессию без проекта. Обратная
@@ -53,7 +51,7 @@ export const ProjectsTabToolbar: React.FC = () => {
     const project_id = createOrigin === 'remote' && selectedProject && selectedProject.origin !== 'remote'
       ? null
       : sessionProjectId
-    const result = await createSession({ name, project_id, origin: createOrigin })
+    const result = await createSession({ project_id, origin: createOrigin })
     if (result) {
       setPopover(null)
       openTab({
@@ -68,7 +66,6 @@ export const ProjectsTabToolbar: React.FC = () => {
   const handleOpenChange = (type: PopoverType) => (open: boolean) => {
     if (open) {
       setProjectName('')
-      setSessionName('')
       setSessionProjectId(null)
       setCreateOrigin('local')
       setPopover(type)
@@ -191,14 +188,6 @@ export const ProjectsTabToolbar: React.FC = () => {
             onSubmit={(e) => { e.preventDefault(); handleCreateSession() }}
             className="flex flex-col gap-2"
           >
-            <input
-              autoFocus
-              type="text"
-              value={sessionName}
-              onChange={(e) => setSessionName(e.target.value)}
-              placeholder={t('leftPanel.sessionName')}
-              className="rounded bg-interactive px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground outline-none w-full"
-            />
             <Select value={sessionProjectId ?? ''} onValueChange={handleProjectSelect}>
               <SelectTrigger size="sm" className="w-full text-xs border-0 bg-interactive rounded">
                 <span className="truncate flex-1 text-left">

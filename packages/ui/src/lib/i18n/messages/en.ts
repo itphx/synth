@@ -230,6 +230,7 @@ export const dict = {
   'auth.resetConfirm': 'Are you sure you want to reset visual settings?',
   'auth.resetSuccess': 'Settings reset',
   'auth.admin': 'Administration',
+  'auth.reloadPage': 'Reload page',
 
   // Left panel
   'leftPanel.tab.projects': 'Projects',
@@ -661,6 +662,13 @@ export const dict = {
   'connection.ws': 'WebSocket connected',
   'connection.sse': 'SSE mode (WebSocket unavailable)',
   'connection.disconnected': 'Backend unavailable',
+  'connection.sessionExpired': 'Your session has expired or the server was restarted. Please sign in again.',
+  'connection.lost': 'Connection lost. Reconnecting…',
+  'connection.offline': 'No network connection.',
+  'connection.reloadTitle': 'Connection not restored',
+  'connection.reloadMessage': 'Could not restore the connection. Reload the page?',
+  'connection.reloadConfirm': 'Reload',
+  'connection.reloadCancel': 'Wait',
 
   // Transport modes
   'transport.auto': 'Auto',

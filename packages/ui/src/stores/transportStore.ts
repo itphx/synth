@@ -643,13 +643,23 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
       },
       onDisconnect: (reason) => {
         transportReady = false
-        const oldTransport = transport
-        transport = null
         set({ connected: false })
         console.debug('[TransportStore] Disconnected:', reason)
-        if (get().transportMode === 'auto' && reason !== 'manual') {
+
+        if (reason === 'manual') {
+          return
+        }
+
+        const failed = transport
+        const failedKind = failed?.getTransport()
+
+        // Одноразовый fallback WS→SSE в режиме auto. Для SSE (и когда транспорта
+        // нет) НЕ пересоздаём клиент — TransportClient сам переподключается через
+        // scheduleReconnect() с экспоненциальным backoff.
+        if (get().transportMode === 'auto' && failedKind === 'ws' && failed) {
           console.debug('[TransportStore] Auto-fallback: switching to SSE')
-          oldTransport?.disconnect()
+          transport = null
+          failed.disconnect()
           get().connect('auto', 'sse')
         }
       },

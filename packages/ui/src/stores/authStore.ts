@@ -18,6 +18,7 @@ interface AuthState {
   loginWithPassword: (server: string, username: string, password: string) => Promise<void>
   setUser: (user: User) => Promise<void>
   logout: () => Promise<void>
+  sessionExpired: () => void
   clearError: () => void
 }
 
@@ -135,6 +136,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ user: null, profile: null, isAuthenticated: false, isLoading: false, deployment: null })
     }
   },
+
+  sessionExpired: () =>
+    set({ user: null, profile: null, isAuthenticated: false, isLoading: false, deployment: null }),
 
   clearError: () => set({ error: null }),
 }))

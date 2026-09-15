@@ -229,6 +229,7 @@ export const dict = {
   'auth.resetConfirm': 'Вы уверены, что хотите сбросить настройки внешнего вида?',
   'auth.resetSuccess': 'Настройки сброшены',
   'auth.admin': 'Администрирование',
+  'auth.reloadPage': 'Обновить страницу',
 
   // Left panel
   'leftPanel.tab.projects': 'Проекты',
@@ -658,6 +659,13 @@ export const dict = {
   'connection.ws': 'WebSocket подключен',
   'connection.sse': 'SSE режим (WebSocket недоступен)',
   'connection.disconnected': 'Бэкенд недоступен',
+  'connection.sessionExpired': 'Сессия истекла или сервер был перезапущен. Войдите заново.',
+  'connection.lost': 'Связь с сервером потеряна. Переподключаемся…',
+  'connection.offline': 'Нет подключения к сети.',
+  'connection.reloadTitle': 'Связь не восстановлена',
+  'connection.reloadMessage': 'Не удалось восстановить соединение с сервером. Обновить страницу?',
+  'connection.reloadConfirm': 'Обновить',
+  'connection.reloadCancel': 'Подождать',
 
   // Transport modes
   'transport.auto': 'Авто',

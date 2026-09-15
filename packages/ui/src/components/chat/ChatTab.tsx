@@ -616,7 +616,7 @@ export function ChatTab({ tab }: ChatTabProps) {
       )}
 
       {isEmpty && !isSubagent ? (
-        <div className="flex flex-1 items-center justify-center px-4">
+        <div className="flex flex-1 items-center justify-center">
           <ChatInput
             sessionId={sessionId}
             agents={agentsRef.current}

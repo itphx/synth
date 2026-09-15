@@ -6,6 +6,7 @@ import { useI18n } from '@/lib/i18n'
 import { api } from '@/lib/api/client'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
+import { isPwaStandalone } from '@/lib/pwa'
 
 interface QuickSettingsPopupProps {
   onSettingsClick: () => void
@@ -163,6 +164,22 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
           </div>
 
           <div className="py-1 border-t border-border">
+            {isPwaStandalone() && (
+              <button
+                onClick={() => {
+                  setIsOpen(false)
+                  window.location.reload()
+                }}
+                className={cn(
+                  "w-full flex items-center gap-2 px-3 py-2 text-sm text-left",
+                  "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
+                  "transition-colors"
+                )}
+              >
+                <Icon name="refresh" className="size-4" />
+                {t('auth.reloadPage')}
+              </button>
+            )}
             <button
               onClick={() => {
                 onSettingsClick()

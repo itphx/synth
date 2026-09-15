@@ -17,7 +17,7 @@ export interface TransportClientCallbacks {
 
 const HEARTBEAT_INTERVAL = 25_000
 const INITIAL_RECONNECT_DELAY = 1_000
-const MAX_RECONNECT_DELAY = 600_000
+const MAX_RECONNECT_DELAY = 60_000
 const SEND_TIMEOUT = 10_000
 
 export class TransportClient {
