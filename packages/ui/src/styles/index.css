@@ -183,10 +183,11 @@ html.pointer-coarse .chat-composer {
   -webkit-overflow-scrolling: touch;
 }
 
-/* Экран входа на touch: при раскрытой клавиатуре сдвигаем форму вверх
-   (--kb-inset пишет useKeyboardInset()); на десктопе padding = 0. */
-html.pointer-coarse .login-screen {
-  padding-bottom: var(--kb-inset, 0px);
+/* Экран входа на touch: пока поле в фокусе, резервируем нижнюю половину экрана,
+   чтобы форма была выше клавиатуры независимо от того, сообщает ли браузер
+   высоту клавиатуры (в standalone-PWA visualViewport может не обновляться). */
+html.pointer-coarse .login-screen.login-screen--keyboard {
+  padding-bottom: 50vh;
 }
 
 /* --- Дроверы (phone/tablet): фиксированные оверлеи вместо десктопных сайдбаров --- */

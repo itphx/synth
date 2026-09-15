@@ -6,7 +6,6 @@ import { useI18n } from '@/lib/i18n'
 import { SynthLogo } from '@/components/ui'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
-import { useKeyboardInset } from '@/hooks/useKeyboardInset'
 import { useDevice } from '@/hooks/useDevice'
 
 interface DebugUser {
@@ -18,7 +17,7 @@ export const LoginForm = () => {
   const { t } = useI18n()
   const { login, loginWithPassword, isLoading, error, clearError } = useAuthStore()
   const { isTouch } = useDevice()
-  useKeyboardInset()
+  const [keyboardReserve, setKeyboardReserve] = useState(false)
   const [apiKey, setApiKey] = useState('')
   const [server, setServer] = useState('')
   const [username, setUsername] = useState('')
@@ -33,6 +32,7 @@ export const LoginForm = () => {
   /** Ссылка на поле пароля — перенос фокуса по Enter с поля логина (мобильная UX). */
   const passwordRef = useRef<HTMLInputElement>(null)
   const loginRef = useRef<HTMLDivElement>(null)
+  const blurTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     const checkStatus = async () => {
@@ -89,22 +89,48 @@ export const LoginForm = () => {
   }
 
   // На touch при фокусе поля раскрывается клавиатура и перекрывает форму.
-  // Ждём ~300 мс, пока клавиатура раскроется, и прокручиваем страницу вниз,
-  // чтобы поля логина и пароля остались видны над клавиатурой.
+  // Резервируем нижнюю половину экрана (класс login-screen--keyboard) и
+  // прокручиваем страницу вниз — это поднимает форму над клавиатурой при любой
+  // её высоте и независимо от того, обновляет ли браузер visualViewport
+  // (в standalone-PWA, в частности iOS, высота клавиатуры может не сообщаться).
   const handleScreenFocus = (e: React.FocusEvent<HTMLDivElement>) => {
     if (!isTouch) return
     if (!(e.target instanceof HTMLInputElement)) return
+    if (blurTimerRef.current !== null) {
+      window.clearTimeout(blurTimerRef.current)
+      blurTimerRef.current = null
+    }
+    setKeyboardReserve(true)
+    // даём клавиатуре/лейауту раскрыться, затем поднимаем форму вверх
     window.setTimeout(() => {
       const el = loginRef.current
       if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
     }, 300)
   }
 
+  const handleScreenBlur = (e: React.FocusEvent<HTMLDivElement>) => {
+    if (!isTouch) return
+    if (!(e.target instanceof HTMLInputElement)) return
+    if (blurTimerRef.current !== null) window.clearTimeout(blurTimerRef.current)
+    // небольшая задержка, чтобы переход фокуса между полями не сбрасывал резерв
+    blurTimerRef.current = window.setTimeout(() => setKeyboardReserve(false), 200)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (blurTimerRef.current !== null) window.clearTimeout(blurTimerRef.current)
+    }
+  }, [])
+
   return (
     <div
       ref={loginRef}
-      className="login-screen min-h-screen flex items-center justify-center bg-background"
+      className={cn(
+        'login-screen min-h-screen flex items-center justify-center bg-background',
+        keyboardReserve && 'login-screen--keyboard'
+      )}
       onFocus={handleScreenFocus}
+      onBlur={handleScreenBlur}
     >
       <div className="my-auto w-full max-w-md p-8 rounded-xl border bg-background-secondary">
         <div className="flex flex-col items-center gap-4 mb-8">
