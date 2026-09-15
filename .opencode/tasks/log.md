@@ -360,3 +360,19 @@
 - **Деплой K3s (0.5.16, UI-only):** образ `git.itphx.ru/itphx/synth-ui:0.5.16` (sha256:8f44cd9c…) собран/запушен; `values.yaml` `ui.image.tag` 0.5.15→0.5.16, push `main` (`8ce9bea..acf799f`) → Fleet; под `synth-ui-5947c8cbfc` на 0.5.16, старый RS 0/0; `synth-backend` 0.5.14 не перезапускался.
 - **Проверка боевого:** `/` → 200; index.html — `content="only light"` + pre-paint `only dark` + `interactive-widget=resizes-content`; CSS — `color-scheme:light only` / `dark only`, `.device-phone .app-shell{position:fixed…}`, `overflow:hidden auto`; JS — `0.5.16`, есть `scrollingElement` (нудж).
 - **Если Huawei всё ещё темнит:** следующий шаг — runtime-детект Auto Dark Theme (canvas-метод из доки) и, при обнаружении, принудительный тёмный режим приложения (пользователь подтвердил, что тёмная тема отображается корректно); как временный обход — отключить «Тёмная тема» в настройках самого Huawei Browser.
+
+## 2026-09-15 — fix(ui) v3: высота `min(100dvh, viewport)` для альбома + `/diag.html`; деплой K3s 0.5.17 (UI-only)
+- **Задача:** уточнения по мобильным браузерам — планшет в ландшафте (ввод за нижней границей), Yandex/Firefox не скрывают панель, Huawei night mode (настройка браузера, не ОС). Пользователь просил изучить документацию браузеров.
+- **Тип:** bugfix (mobile UI) + diagnostics + ops
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS (K3s); далее данные с устройств
+- **Research (интернет):**
+  - Firefox Android: тулбар скрывается по скроллу (настройка «Scroll to hide toolbar»), но **в ландшафте адресная строка ~20% и не прячется** (Mozilla Connect); **bug 2071251**: при блокировке скролла сайтом панель нельзя скрыть/показать. ⇒ нельзя полагаться на скрытие панели.
+  - Yandex Android: нижняя панель — chrome браузера, по скроллу не скрывается (меняется только настройками браузера). ⇒ нужно корректно вычислять видимую высоту.
+  - Huawei: night mode — настройка браузера; `color-scheme: only light` игнорируется. ⇒ нужен runtime-детект force-dark.
+- **Исправлено:** `useViewportHeight.ts` пишет `--oc-app-height: min(100dvh, ${min(vv.height, innerHeight)}px)` — шелл не превышает динамический вьюпорт и реагирует на клавиатуру; +5 unit-тестов.
+- **Добавлено:** `packages/ui/public/diag.html` — диагностика (UA/экран/окно/документ/visualViewport/единицы `100vh|dvh|svh|lvh`/safe-area/медиа/**детект auto-dark**/классы/ландшафт, кнопки «Скопировать»/«Обновить»).
+- **Коммиты:** synth — `eb48162` (fix + bump v0.5.17); synth-deploy — `f1f98a9`.
+- **Проверки:** typecheck 0; тесты shared 72 / ui **128** / core 1220 / backend 229; lint 0 errors; build ok, `dist/diag.html` есть.
+- **Деплой K3s (0.5.17, UI-only):** `git.itphx.ru/itphx/synth-ui:0.5.17` (sha256:1e5755c3…) собран/запушен; Fleet → под на 0.5.17; `synth-backend` 0.5.14 не перезапускался. Боевой: `/diag.html` → 200, `/` → 200.
+- **Следующий шаг:** получить отчёт с `/diag.html` с Huawei/Yandex/Firefox (портрет+ландшафт) и по нему — правильная метрика высоты и авто-режим force-dark.
