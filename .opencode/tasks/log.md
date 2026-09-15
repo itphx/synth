@@ -325,3 +325,23 @@
 - **Деплой K3s (0.5.14, backend + UI):** образы `synth-ui:0.5.14` (sha256:e0a704c1…) и `synth-backend:0.5.14` (sha256:e816abe4…) собраны/запушены; `values.yaml` — обе `tag` → 0.5.14, Fleet `synth` 1/1 Ready, оба rollout успешны.
 - **Проверка боевого:** `/health` → `{"status":"healthy","version":"0.5.14"}`; `/auth/oidc-meta` отвечает; неаутентифицированный `/api/v2/sessions` → 401; UI-бандл содержит `admin-provider-api-key`, `providerApiKey`, `data-1p-ignore`/`data-lpignore`/`data-bwignore`, `mcpServerEnv`. **Smoke ROPC-логин тестовой УЗ (`lucky`): `POST /auth/login` → 200 (роли `USER`), cookie `user_session`, `/auth/status` → `authenticated:true`, `/api/v2/sessions` → 200.**
 - **Внимание:** рестарт backend сбрасывает in-memory сессии (`packages/backend/src/auth/middleware.ts:9`) — все пользователи (включая текущий браузер) будут разлогинены, это ожидаемо (см. инцидент 14.09).
+
+## 2026-09-15 — fix(ui): мобильная адаптация (Huawei EMUI auto-dark, ввод в Yandex/Firefox); деплой K3s 0.5.15 (UI-only)
+- **Задача:** «1) Huawei — встроенная авто-тёмная тема (EMUI/HarmonyOS) ломает вид, обойти/отключить; 2) Yandex/Firefox — не сворачивается панель браузера, область ввода не видна. Исследуй, обсудим.»
+- **Тип:** bugfix (mobile UI) + ops
+- **Исполнитель:** @orchestrator → @explore×2 (исследование) + @fixer (правки)
+- **Результат:** PASS (K3s); ручной device-тест Huawei/Yandex/Firefox — за пользователем
+- **Коммиты:** synth — `19d9b2a` (fix + bump v0.5.15, в origin НЕ пушился); synth-deploy — `8ce9bea` (push main → Fleet).
+- **Первопричины:**
+  - Huawei: `color-scheme` в CSS был `light` (`design-system.css:3`) → страница декларирует «только светлая», EMUI применяет force-dark. Плюс Tailwind v4 `dark:` компилировался в `@media (prefers-color-scheme: dark)` (нет `@custom-variant`), т.е. 108 `dark:`-утилит следовали ОС, а не теме приложения.
+  - Yandex/Firefox: корневой документ не скроллится (`html/body/#root { overflow:hidden }`), поэтому браузерная панель не сворачивается; высота шелла `100dvh` + композер в потоке внизу → при неверном `dvh`/панели ввод уходил за экран. Клавиатурный сдвиг `--kb-inset` гейтился `pointer-coarse` и не срабатывал при `any-pointer: fine`.
+- **Исправлено:**
+  - `packages/ui/index.html` — pre-paint inline-скрипт (класс `dark`/`light` + `data-theme` + фон из `splashBg*` + `theme-color`), `<meta name="color-scheme" content="light dark">`, `interactive-widget=resizes-content`, `<body>` без жёстких `bg-zinc-950 text-zinc-100`.
+  - `styles/index.css` — `@custom-variant dark (&:where(.dark, .dark *))`; удалён дубль base `height/overflow`; удалён `--kb-inset`-отступ композера.
+  - `styles/design-system.css` — `:root { color-scheme: light dark }` (opt-out от EMUI force-dark).
+  - `hooks/useViewportHeight.ts` (новый) — `visualViewport` → `--oc-app-height` / `--oc-visual-viewport-offset-top`; `hooks/useKeyboardInset.ts` удалён; вызов в `App.tsx`, убран из `ChatTab.tsx`.
+- **Проверки (локально, prod-preview):** typecheck 0 ошибок; тесты shared 72 / ui 120 / core 1220 / backend 229; lint 0 errors. Бандл: 49 селекторов `:where(.dark`, `dark:` в media нет, `color-scheme: light dark` есть. В браузере (390×844): композер внизу виден (`bottom=836`), при усадке вьюпорта до 500px шелл/композер сжимаются, темная/светлая темы переключаются.
+- **Деплой K3s (0.5.15, UI-only):** образ `git.itphx.ru/itphx/synth-ui:0.5.15` (sha256:680e7bac…, digest совпадает с imageID пода) собран из исходников и запушен; `values.yaml` — `ui.image.tag` 0.5.14→0.5.15, push `main` (`3057497..8ce9bea`) → Fleet `synth` 1/1 Ready, rollout `synth-ui` успешен; `synth-backend` 0.5.14 **не перезапускался** (сессии сохранены).
+- **Проверка боевого:** `/` → 200; index.html содержит `interactive-widget=resizes-content`, `color-scheme`, `splashBgDark`; JS — `0.5.15`, `oc-app-height`, без `kb-inset`; CSS — `color-scheme: light dark`, `:where(.dark` ×49; `/api/v2/health` → 0.5.14 (backend); `/auth/oidc-meta` отвечает.
+- **Известная проблема (вне задачи):** dev-UI (`./scripts/dev.sh`) отдаёт пустой экран — `packages/shared/dist/config/loader.js` тянет `node:fs/promises` в браузер (Vite externalized). Воспроизводится на чистом `master`; проверка делалась на production-сборке. Стоит отдельной задачи (browser-условие в `exports`/отдельный entry).
+- **Follow-up:** AD-044 описывает удалённый `--kb-inset`-механизм — обновить по итогам device-теста; опционально hex/`@supports`-fallback для `oklch`/`color-mix` (старые Huawei).
