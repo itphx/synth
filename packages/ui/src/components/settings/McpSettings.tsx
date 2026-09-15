@@ -268,8 +268,18 @@ export const McpSettings = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-muted-foreground mb-1">{t('mcp.env')}</label>
+                  <label htmlFor="mcp-server-env" className="block text-xs font-medium text-muted-foreground mb-1">{t('mcp.env')}</label>
                   <textarea
+                    id="mcp-server-env"
+                    name="mcpServerEnv"
+                    autoComplete="off"
+                    data-1p-ignore=""
+                    data-lpignore="true"
+                    data-bwignore=""
+                    data-form-type="other"
+                    spellCheck={false}
+                    autoCapitalize="none"
+                    autoCorrect="off"
                     value={formatEnv()}
                     onChange={(e) => {
                       const lines = e.target.value.split('\n').filter(Boolean)

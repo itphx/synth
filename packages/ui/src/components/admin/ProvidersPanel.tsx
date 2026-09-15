@@ -200,11 +200,21 @@ export const ProvidersPanel = () => {
               />
             </div>
             <div>
-              <label className="text-xs text-muted-foreground">{t('admin.providers.apiKey')}</label>
+              <label htmlFor="admin-provider-api-key" className="text-xs text-muted-foreground">{t('admin.providers.apiKey')}</label>
               <input
+                id="admin-provider-api-key"
+                name="providerApiKey"
                 type="password" value={form.api_key}
                 onChange={(e) => setForm({ ...form, api_key: e.target.value })}
                 placeholder={editName ? t('admin.providers.notChange') : 'sk-...'}
+                autoComplete="off"
+                data-1p-ignore=""
+                data-lpignore="true"
+                data-bwignore=""
+                data-form-type="other"
+                spellCheck={false}
+                autoCapitalize="none"
+                autoCorrect="off"
                 className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
