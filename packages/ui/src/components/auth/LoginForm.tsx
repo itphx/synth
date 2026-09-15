@@ -142,15 +142,22 @@ export const LoginForm = () => {
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <form
+          onSubmit={handleSubmit}
+          name="synth-login"
+          autoComplete="on"
+          className="flex flex-col gap-4"
+        >
           {oidcEnabled ? (
             <>
               {hybridEnabled && (
                 <div className="flex flex-col gap-2">
-                  <label className="text-sm font-medium text-foreground">
+                  <label htmlFor="synth-login-server" className="text-sm font-medium text-foreground">
                     {t('auth.serverUrl')}
                   </label>
                   <input
+                    id="synth-login-server"
+                    name="server"
                     type="text"
                     list="known-synth-servers"
                     value={server}
@@ -179,10 +186,12 @@ export const LoginForm = () => {
               )}
 
               <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium text-foreground">
+                <label htmlFor="synth-login-username" className="text-sm font-medium text-foreground">
                   {t('auth.username')}
                 </label>
                 <input
+                  id="synth-login-username"
+                  name="username"
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
@@ -194,6 +203,9 @@ export const LoginForm = () => {
                   }}
                   placeholder={t('auth.usernamePlaceholder')}
                   autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   className={cn(
                     "w-full px-4 py-2.5 rounded-lg border bg-background text-foreground",
                     "placeholder:text-muted-foreground",
@@ -204,10 +216,12 @@ export const LoginForm = () => {
               </div>
 
               <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium text-foreground">
+                <label htmlFor="synth-login-password" className="text-sm font-medium text-foreground">
                   {t('auth.password')}
                 </label>
                 <input
+                  id="synth-login-password"
+                  name="password"
                   ref={passwordRef}
                   type="password"
                   value={password}
@@ -233,11 +247,13 @@ export const LoginForm = () => {
             <>
               {isDebugMode && (
                 <div className="flex flex-col gap-2">
-                  <label className="text-sm font-medium text-foreground">
+                  <label htmlFor="synth-login-username" className="text-sm font-medium text-foreground">
                     {t('auth.username')}
                   </label>
                   {debugUsers.length > 0 ? (
                     <select
+                      id="synth-login-username"
+                      name="username"
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
                       className={cn(
@@ -255,10 +271,13 @@ export const LoginForm = () => {
                     </select>
                   ) : (
                     <input
+                      id="synth-login-username"
+                      name="username"
                       type="text"
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
                       placeholder={t('auth.usernamePlaceholder')}
+                      autoComplete="username"
                       className={cn(
                         "w-full px-4 py-2.5 rounded-lg border bg-background text-foreground",
                         "placeholder:text-muted-foreground",
@@ -271,11 +290,14 @@ export const LoginForm = () => {
               )}
 
               <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium text-foreground">
+                <label htmlFor="synth-login-apikey" className="text-sm font-medium text-foreground">
                   {t('auth.apiKey')}
                 </label>
                 <input
+                  id="synth-login-apikey"
+                  name="apiKey"
                   type="password"
+                  autoComplete="off"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder={t('auth.apiKeyPlaceholder')}
