@@ -26,6 +26,7 @@ import { profileService } from '@/lib/api/profileService'
 import { useAuthStore } from '@/stores/authStore'
 import { useConfirmStore } from '@/stores/confirmStore'
 import { useDevice } from '@/hooks/useDevice'
+import { useViewportHeight } from '@/hooks/useViewportHeight'
 
 function DefaultsSync() {
   const { isAuthenticated, isInitialized } = useAuthStore()
@@ -68,6 +69,7 @@ function App() {
   const { leftPanel, rightPanel, setLeftPanelWidth, setRightPanelWidth, setSettingsDialogOpen, setSettingsPage, leftPanelTab, mobileLeftOpen, mobileRightOpen, setMobileLeftOpen, setMobileRightOpen } = useUIStore()
   const forwardMode = useUIStore(s => s.forwardMode)
   const { deviceType } = useDevice()
+  useViewportHeight()
   const isMobile = deviceType !== 'desktop'
   const confirmOpen = useConfirmStore(s => s.open)
   const confirmOptions = useConfirmStore(s => s.options)

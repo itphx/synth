@@ -2,8 +2,9 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="description" content="Synth — Agentic AI Platform for Dev Teams" />
+    <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#09090b" />
@@ -12,8 +13,42 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Synth" />
     <title>Synth</title>
+    <script>
+      (function () {
+        try {
+          var isDark;
+          var mode = localStorage.getItem('themeMode');
+          if (mode === 'dark') {
+            isDark = true;
+          } else if (mode === 'light') {
+            isDark = false;
+          } else if (mode === 'system') {
+            isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          } else {
+            var useSystem = localStorage.getItem('useSystemTheme');
+            var variant = localStorage.getItem('selectedThemeVariant');
+            if (useSystem === 'false' && (variant === 'light' || variant === 'dark')) {
+              isDark = variant === 'dark';
+            } else {
+              isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            }
+          }
+          var root = document.documentElement;
+          root.classList.add(isDark ? 'dark' : 'light');
+          root.setAttribute('data-theme', isDark ? 'dark' : 'light');
+          var bg = localStorage.getItem(isDark ? 'splashBgDark' : 'splashBgLight');
+          if (bg) {
+            root.style.backgroundColor = bg;
+            var meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) {
+              meta.setAttribute('content', bg);
+            }
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
-  <body class="bg-zinc-950 text-zinc-100 antialiased">
+  <body class="antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

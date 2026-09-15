@@ -1,20 +1,11 @@
 @import "tailwindcss";
 @import "./design-system.css";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
-}
-
-@layer base {
-  :root,
-  :root body,
-  :root #root {
-    height: 100%;
-    overflow: hidden;
-    overscroll-behavior: none;
-    overscroll-behavior-y: none;
-  }
 }
 
 @layer utilities {
@@ -166,15 +157,6 @@ html.device-tablet .chat-composer {
   width: calc(100% - 2rem);
   margin-left: 1rem;
   margin-right: 1rem;
-}
-
-/* 4.1 Клавиатура на touch (Фаза 4): композер сдвигается вверх, чтобы не
-   прятаться под виртуальной клавиатурой. --kb-inset пишет useKeyboardInset():
-   0 при закрытой клавиатуре/без visualViewport → десктоп и закрытая клавиатура
-   не изменяют поведение. Safe-area снизу уже учтён в margin-bottom композера
-   (html.device-phone), поэтому здесь только высота перекрытия клавиатуры. */
-html.pointer-coarse .chat-composer {
-  padding-bottom: var(--kb-inset, 0px);
 }
 
 .login-screen {
