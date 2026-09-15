@@ -34,6 +34,13 @@
             }
           }
           var root = document.documentElement;
+          // Huawei Browser: собственный ночной режим затемняет светлую тему и
+          // игнорирует color-scheme. Помечаем страницу и объявляем её dark,
+          // чтобы браузер считал её уже тёмной и не применял затемнение.
+          var isHuawei = /HuaweiBrowser/i.test(navigator.userAgent);
+          if (isHuawei) {
+            root.classList.add('huawei');
+          }
           root.classList.add(isDark ? 'dark' : 'light');
           root.setAttribute('data-theme', isDark ? 'dark' : 'light');
           var colorScheme = document.querySelector('meta[name="color-scheme"]');
@@ -42,7 +49,7 @@
             colorScheme.setAttribute('name', 'color-scheme');
             document.head.appendChild(colorScheme);
           }
-          colorScheme.setAttribute('content', isDark ? 'only dark' : 'only light');
+          colorScheme.setAttribute('content', isHuawei ? 'dark' : (isDark ? 'only dark' : 'only light'));
           var bg = localStorage.getItem(isDark ? 'splashBgDark' : 'splashBgLight');
           if (bg) {
             root.style.backgroundColor = bg;

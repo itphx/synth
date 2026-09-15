@@ -14,6 +14,18 @@ const QUERIES = {
 
 const POINTER_QUERIES = ['(pointer: coarse)'] as const
 
+const HUAWEI_BROWSER_RE = /HuaweiBrowser/i
+
+/**
+ * Huawei Browser имеет собственный «ночной режим» (настройка браузера), который
+ * затемняет светлую тему приложения и игнорирует color-scheme. Для него страница
+ * объявляется тёмной (см. pre-paint в index.html и updateBrowserChrome).
+ */
+export function isHuaweiBrowser(): boolean {
+  if (typeof navigator === 'undefined') return false
+  return HUAWEI_BROWSER_RE.test(navigator.userAgent)
+}
+
 function hasMatchMedia(): boolean {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
 }

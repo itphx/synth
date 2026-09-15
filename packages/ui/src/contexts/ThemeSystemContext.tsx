@@ -8,6 +8,7 @@ import { flushSync } from 'react-dom';
 import type { Theme, ThemeMode } from '@/types/theme';
 import type { DesktopSettings } from '@/lib/desktop';
 import { isDesktopLocalOriginActive, isTauriShell, isVSCodeRuntime } from '@/lib/desktop';
+import { isHuaweiBrowser } from '@/lib/device';
 import { setDesktopWindowTheme } from '@/lib/desktopNative';
 import { CSSVariableGenerator } from '@/lib/theme/cssGenerator';
 import { updateDesktopSettings } from '@/lib/persistence';
@@ -415,7 +416,16 @@ export function ThemeSystemProvider({ children, defaultThemeId }: ThemeSystemPro
     // color-scheme — зеркало темы приложения со значением only: отключает
     // принудительное авто-затемнение (Huawei EMUI Auto Dark Theme) и держит
     // нативные контролы/скроллбары в правильной схеме.
-    const colorScheme = theme.metadata.variant === 'dark' ? 'only dark' : 'only light';
+    // Huawei Browser: класс huawei выставляется pre-paint-скриптом; его ночной
+    // режим игнорирует only light, поэтому объявляем страницу dark всегда —
+    // сама тема приложения при этом не меняется.
+    const isHuawei =
+      document.documentElement.classList.contains('huawei') || isHuaweiBrowser();
+    const colorScheme = isHuawei
+      ? 'dark'
+      : theme.metadata.variant === 'dark'
+        ? 'only dark'
+        : 'only light';
     let metaColorScheme = document.querySelector('meta[name="color-scheme"]') as HTMLMetaElement | null;
     if (!metaColorScheme) {
       metaColorScheme = document.createElement('meta');

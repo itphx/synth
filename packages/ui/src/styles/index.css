@@ -8,6 +8,14 @@
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
 
+/* Huawei Browser: собственный ночной режим затемняет светлую тему и не
+   реагирует на color-scheme. Объявляем странице dark, чтобы не трогал.
+   Вне @layer: специфичность html.huawei выше :root и .dark. */
+html.huawei,
+html.huawei.dark {
+  color-scheme: dark;
+}
+
 @layer utilities {
   @keyframes notification-blink {
     0%, 100% { opacity: 1; }
