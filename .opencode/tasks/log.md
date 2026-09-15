@@ -376,3 +376,21 @@
 - **Проверки:** typecheck 0; тесты shared 72 / ui **128** / core 1220 / backend 229; lint 0 errors; build ok, `dist/diag.html` есть.
 - **Деплой K3s (0.5.17, UI-only):** `git.itphx.ru/itphx/synth-ui:0.5.17` (sha256:1e5755c3…) собран/запушен; Fleet → под на 0.5.17; `synth-backend` 0.5.14 не перезапускался. Боевой: `/diag.html` → 200, `/` → 200.
 - **Следующий шаг:** получить отчёт с `/diag.html` с Huawei/Yandex/Firefox (портрет+ландшафт) и по нему — правильная метрика высоты и авто-режим force-dark.
+
+## 2026-09-15 — fix(ui) v4: высота десктоп-раскладки по видимому вьюпорту + pointer-coarse; деплой K3s 0.5.18 (UI-only)
+- **Задача:** по diag-отчётам с планшета/смартфона устранить обрезку ввода в ландшафте и поправить детект тача.
+- **Тип:** bugfix (mobile UI) + ops
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS (K3s); ждём ретест
+- **Первопричины (из /diag.html):**
+  - Планшет в ландшафте имеет ширину 1204–1408px → `device-desktop` (≥1200) → десктопная раскладка с `h-screen` = `100vh` = **large viewport** (836/715px), а видимая = `100dvh` (696/617px) → низ (композер, логин) за границей. Портрет (<1200) → мобильная раскладка, там ок.
+  - `(pointer: coarse)=да` **и** `(any-pointer: fine)=да` на всех устройствах → прежний `pointer-coarse`/`isTouch` (`coarse && !anyFine`) не срабатывал → touch-стили не включались.
+  - Huawei night-mode: `background-color: canvas` остаётся `rgb(255,255,255)` и `prefers-color-scheme` = light даже в night-mode → Chrome-метод детекта force-dark **не ловит** Huawei (у него своя реализация). `color-scheme`-signals Huawei, похоже, игнорирует.
+  - Yandex на телефоне: `innerHeight = 100dvh = 677` (панель корректно вычтена) → ввод виден; нижняя панель Yandex по скроллу не скрывается (chrome браузера).
+- **Исправлено:**
+  - `App.tsx` desktop wrapper `h-screen` → `desktop-shell`; `AuthGate`/`LoginForm` `min-h-screen` → `viewport-min-h`; в `index.css` добавлены `.desktop-shell{height:var(--oc-app-height,100dvh)}` и `.viewport-min-h{min-height:var(--oc-app-height,100dvh)}`.
+  - `lib/device.ts`/`hooks/useDevice.ts`: `pointer-coarse`/`isTouch = (pointer: coarse)` (без `!anyFine`).
+- **Коммит:** synth — `b77f584` (bump v0.5.18); synth-deploy — `dafc7a5`.
+- **Проверки:** typecheck 0; тесты shared 72 / ui 128 / core 1220 / backend 229; lint 0 errors; Playwright: 1204×617 → `desktop-shell` height 617, 1408×696 → 696 (было 715/836); логин вписан; телефон/десктоп без регрессий; `pointer-coarse` теперь ставится при coarse+anyFine.
+- **Деплой K3s (0.5.18, UI-only):** `synth-ui:0.5.18` (sha256:3916ca2e…); backend 0.5.14 не перезапускался; `/diag.html` → 200.
+- **Открытый вопрос:** переводить ли тач-планшеты в ландшафте на мобильную (дроверы) раскладку независимо от ширины — через комбинированный детект (`navigator.userAgentData.mobile` → UA-regex → `(hover:none) and (pointer:coarse)`). Сейчас раскладка по-прежнему выбирается только по ширине.
