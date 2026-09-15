@@ -7,6 +7,7 @@ import { api } from '@/lib/api/client'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { isPwaStandalone } from '@/lib/pwa'
+import { useFullscreen } from '@/hooks/useFullscreen'
 
 interface QuickSettingsPopupProps {
   onSettingsClick: () => void
@@ -19,6 +20,7 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
   const { setThemeMode: setThemeSystemMode } = useThemeSystem()
   const [isOpen, setIsOpen] = useState(false)
   const [locales, setLocales] = useState<Array<{ value: string; label: string }>>([])
+  const { isFullscreen, supported: fullscreenSupported, toggle: toggleFullscreen } = useFullscreen()
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -178,6 +180,19 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
               >
                 <Icon name="refresh" className="size-4" />
                 {t('auth.reloadPage')}
+              </button>
+            )}
+            {fullscreenSupported && !isPwaStandalone() && (
+              <button
+                onClick={() => toggleFullscreen()}
+                className={cn(
+                  "w-full flex items-center gap-2 px-3 py-2 text-sm text-left",
+                  "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
+                  "transition-colors"
+                )}
+              >
+                <Icon name={isFullscreen ? 'fullscreen-exit' : 'fullscreen'} className="size-4" />
+                {isFullscreen ? t('auth.exitFullscreen') : t('auth.fullscreen')}
               </button>
             )}
             <button

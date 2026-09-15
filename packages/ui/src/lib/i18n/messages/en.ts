@@ -231,6 +231,8 @@ export const dict = {
   'auth.resetSuccess': 'Settings reset',
   'auth.admin': 'Administration',
   'auth.reloadPage': 'Reload page',
+  'auth.fullscreen': 'Fullscreen',
+  'auth.exitFullscreen': 'Exit fullscreen',
 
   // Left panel
   'leftPanel.tab.projects': 'Projects',

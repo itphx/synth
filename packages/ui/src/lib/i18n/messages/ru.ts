@@ -230,6 +230,8 @@ export const dict = {
   'auth.resetSuccess': 'Настройки сброшены',
   'auth.admin': 'Администрирование',
   'auth.reloadPage': 'Обновить страницу',
+  'auth.fullscreen': 'Полный экран',
+  'auth.exitFullscreen': 'Выйти из полного экрана',
 
   // Left panel
   'leftPanel.tab.projects': 'Проекты',
