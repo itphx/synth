@@ -394,3 +394,16 @@
 - **Проверки:** typecheck 0; тесты shared 72 / ui 128 / core 1220 / backend 229; lint 0 errors; Playwright: 1204×617 → `desktop-shell` height 617, 1408×696 → 696 (было 715/836); логин вписан; телефон/десктоп без регрессий; `pointer-coarse` теперь ставится при coarse+anyFine.
 - **Деплой K3s (0.5.18, UI-only):** `synth-ui:0.5.18` (sha256:3916ca2e…); backend 0.5.14 не перезапускался; `/diag.html` → 200.
 - **Открытый вопрос:** переводить ли тач-планшеты в ландшафте на мобильную (дроверы) раскладку независимо от ширины — через комбинированный детект (`navigator.userAgentData.mobile` → UA-regex → `(hover:none) and (pointer:coarse)`). Сейчас раскладка по-прежнему выбирается только по ширине.
+
+## 2026-09-15 — fix(ui) v5: UA-обход ночного режима Huawei; деплой K3s 0.5.19 (UI-only)
+- **Задача:** «Попробовать UA-обход» для Huawei night-mode (раскладку решено оставить по ширине).
+- **Тип:** bugfix (mobile UI, best-effort) + ops
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS (K3s); проверка обхода — на устройстве
+- **Решение:** для UA с `HuaweiBrowser` странице объявляется `color-scheme: dark` **всегда** (даже на светлой теме) — попытка «притвориться тёмной», чтобы ночной режим не затемнял. Тема приложения не меняется.
+  - `index.html` pre-paint: `/HuaweiBrowser/i` → класс `huawei` на `<html>` + meta `color-scheme=dark`; иначе прежние `only dark`/`only light`.
+  - `lib/device.ts`: `isHuaweiBrowser()`; `ThemeSystemContext.updateBrowserChrome` учитывает класс/утилиту; `index.css`: вне `@layer` `html.huawei, html.huawei.dark { color-scheme: dark }`.
+- **Коммит:** synth — `37273d8` (bump v0.5.19); synth-deploy — `200d0f8`.
+- **Проверки:** typecheck 0; тесты shared 72 / ui 128 / core 1220 / backend 229; lint 0 errors; Playwright с подменой UA: Huawei → `huawei`+`dark`, обычный → `only light`/`only dark`; тема приложения у Huawei не меняется.
+- **Деплой K3s (0.5.19, UI-only):** `synth-ui:0.5.19` (sha256:e3af35d8…); backend 0.5.14 не перезапускался; `/diag.html` → 200; в отдаваемом index есть `HuaweiBrowser`/`huawei`.
+- **Ограничение:** если Huawei игнорирует и это — останется вариант принудительно включать тёмную тему приложения при UA Huawei (пользователь подтвердил, что тёмная отображается корректно).
