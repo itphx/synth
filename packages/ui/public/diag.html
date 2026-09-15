@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="color-scheme" content="only light" />
+    <link rel="icon" href="data:," />
+    <title>Synth — диагностика вьюпорта</title>
+    <style>
+      :root {
+        color-scheme: only light;
+        --fg: #0a0a0a;
+        --muted: #5b5b5b;
+        --bg: #f4f4f5;
+        --card: #ffffff;
+        --border: #d4d4d8;
+        --accent: #1d4ed8;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+        font-size: 18px;
+        line-height: 1.45;
+        -webkit-text-size-adjust: 100%;
+      }
+      main {
+        max-width: 820px;
+        margin: 0 auto;
+        padding: calc(16px + env(safe-area-inset-top)) calc(14px + env(safe-area-inset-right))
+          calc(24px + env(safe-area-inset-bottom)) calc(14px + env(safe-area-inset-left));
+      }
+      h1 {
+        font-size: 22px;
+        margin: 0 0 4px;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 14px;
+        word-break: break-word;
+        margin-bottom: 14px;
+      }
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin: 14px 0;
+      }
+      button {
+        font: inherit;
+        font-size: 17px;
+        padding: 14px 20px;
+        min-height: 48px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--card);
+        color: var(--fg);
+        cursor: pointer;
+        touch-action: manipulation;
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      button:active {
+        transform: translateY(1px);
+      }
+      .status {
+        font-size: 14px;
+        color: var(--accent);
+        min-height: 1.2em;
+        margin-bottom: 6px;
+      }
+      section {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        margin: 12px 0;
+        overflow: hidden;
+      }
+      section > h2 {
+        font-size: 15px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        margin: 0;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+      .row {
+        display: grid;
+        grid-template-columns: minmax(150px, 46%) 1fr;
+        gap: 10px;
+        padding: 8px 12px;
+        border-bottom: 1px solid #eeeef0;
+      }
+      .row:last-child {
+        border-bottom: none;
+      }
+      .label {
+        color: var(--muted);
+        word-break: break-word;
+      }
+      .value {
+        font-weight: 700;
+        word-break: break-all;
+      }
+      .value.ok {
+        color: #15803d;
+      }
+      .value.warn {
+        color: #b45309;
+      }
+      footer {
+        margin-top: 18px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .probes {
+        position: absolute;
+        top: -100000px;
+        left: -100000px;
+        width: 1px;
+        visibility: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Диагностика вьюпорта</h1>
+      <div class="sub" id="updated">—</div>
+
+      <div class="toolbar">
+        <button type="button" class="primary" id="copy">Скопировать</button>
+        <button type="button" id="refresh">Обновить</button>
+      </div>
+      <div class="status" id="status"></div>
+
+      <div id="report"></div>
+
+      <footer>
+        Откройте страницу в нужном браузере, при необходимости поверните экран, нажмите
+        «Обновить», затем «Скопировать» и пришлите отчёт.
+      </footer>
+    </main>
+
+    <div class="probes" aria-hidden="true">
+      <div id="probe-vh" style="height: 100vh"></div>
+      <div id="probe-dvh" style="height: 100dvh"></div>
+      <div id="probe-svh" style="height: 100svh"></div>
+      <div id="probe-lvh" style="height: 100lvh"></div>
+      <div
+        id="probe-safe"
+        style="
+          padding-top: env(safe-area-inset-top);
+          padding-right: env(safe-area-inset-right);
+          padding-bottom: env(safe-area-inset-bottom);
+          padding-left: env(safe-area-inset-left);
+        "
+      ></div>
+      <div id="probe-dark" style="background-color: canvas; color-scheme: light">x</div>
+    </div>
+
+    <script>
+      (function () {
+        'use strict'
+
+        var probeVh = document.getElementById('probe-vh')
+        var probeDvh = document.getElementById('probe-dvh')
+        var probeSvh = document.getElementById('probe-svh')
+        var probeLvh = document.getElementById('probe-lvh')
+        var probeSafe = document.getElementById('probe-safe')
+        var probeDark = document.getElementById('probe-dark')
+
+        function val(v) {
+          return v === undefined || v === null || v === '' ? '—' : String(v)
+        }
+
+        function bool(v) {
+          return v ? 'да' : 'нет'
+        }
+
+        function px(v) {
+          return typeof v === 'number' && isFinite(v) ? Math.round(v * 100) / 100 + ' px' : '—'
+        }
+
+        function media(query) {
+          try {
+            return window.matchMedia(query).matches
+          } catch (e) {
+            return false
+          }
+        }
+
+        function probeHeight(el) {
+          return el ? px(el.offsetHeight) : '—'
+        }
+
+        function buildGroups() {
+          var vv = window.visualViewport
+          var root = document.documentElement
+          var scroller = document.scrollingElement || root
+          var safeStyle = probeSafe ? getComputedStyle(probeSafe) : null
+          var darkBg = probeDark ? getComputedStyle(probeDark).backgroundColor : '—'
+          var isAutoDark = darkBg !== 'rgb(255, 255, 255)'
+          var landscape = window.innerWidth > window.innerHeight
+
+          return [
+            {
+              title: 'Устройство',
+              rows: [
+                ['userAgent', val(navigator.userAgent)],
+                ['platform', val(navigator.platform)],
+                ['devicePixelRatio', val(window.devicePixelRatio)],
+              ],
+            },
+            {
+              title: 'Экран',
+              rows: [
+                ['screen.width × height', val(screen.width) + ' × ' + val(screen.height)],
+                ['screen.orientation.type', val(screen.orientation && screen.orientation.type)],
+                ['window.orientation', val(window.orientation)],
+                ['ландшафт (width > height)', bool(landscape)],
+              ],
+            },
+            {
+              title: 'Окно',
+              rows: [
+                ['window.innerWidth', px(window.innerWidth)],
+                ['window.innerHeight', px(window.innerHeight)],
+                ['window.outerWidth', px(window.outerWidth)],
+                ['window.outerHeight', px(window.outerHeight)],
+              ],
+            },
+            {
+              title: 'Документ',
+              rows: [
+                ['documentElement.clientWidth', px(root.clientWidth)],
+                ['documentElement.clientHeight', px(root.clientHeight)],
+                ['scrollingElement.scrollHeight', px(scroller ? scroller.scrollHeight : undefined)],
+              ],
+            },
+            {
+              title: 'visualViewport',
+              rows: vv
+                ? [
+                    ['width', px(vv.width)],
+                    ['height', px(vv.height)],
+                    ['offsetTop', px(vv.offsetTop)],
+                    ['offsetLeft', px(vv.offsetLeft)],
+                    ['scale', val(vv.scale)],
+                  ]
+                : [['visualViewport', 'недоступен']],
+            },
+            {
+              title: 'Единицы вьюпорта (offsetHeight)',
+              rows: [
+                ['100vh', probeHeight(probeVh)],
+                ['100dvh', probeHeight(probeDvh)],
+                ['100svh', probeHeight(probeSvh)],
+                ['100lvh', probeHeight(probeLvh)],
+              ],
+            },
+            {
+              title: 'Safe-area (env)',
+              rows: [
+                ['inset-top', safeStyle ? px(parseFloat(safeStyle.paddingTop)) : '—'],
+                ['inset-right', safeStyle ? px(parseFloat(safeStyle.paddingRight)) : '—'],
+                ['inset-bottom', safeStyle ? px(parseFloat(safeStyle.paddingBottom)) : '—'],
+                ['inset-left', safeStyle ? px(parseFloat(safeStyle.paddingLeft)) : '—'],
+              ],
+            },
+            {
+              title: 'Медиа',
+              rows: [
+                ['(pointer: coarse)', bool(media('(pointer: coarse)'))],
+                ['(any-pointer: fine)', bool(media('(any-pointer: fine)'))],
+                ['(prefers-color-scheme: dark)', bool(media('(prefers-color-scheme: dark)'))],
+                ['(display-mode: standalone)', bool(media('(display-mode: standalone)'))],
+              ],
+            },
+            {
+              title: 'Force-dark / auto-dark',
+              rows: [
+                ['background-color: canvas (ожидание rgb(255, 255, 255))', val(darkBg)],
+                [
+                  'auto-dark',
+                  isAutoDark ? 'да' : 'нет',
+                  isAutoDark ? 'warn' : 'ok',
+                ],
+              ],
+            },
+            {
+              title: 'Тема / разметка',
+              rows: [
+                ['html.className', val(root.className)],
+                ['html[data-theme]', val(root.getAttribute('data-theme'))],
+              ],
+            },
+          ]
+        }
+
+        function render() {
+          var groups = buildGroups()
+          var container = document.getElementById('report')
+          var html = ''
+
+          for (var g = 0; g < groups.length; g++) {
+            var group = groups[g]
+            html += '<section><h2>' + escapeHtml(group.title) + '</h2>'
+            for (var r = 0; r < group.rows.length; r++) {
+              var row = group.rows[r]
+              var cls = row[2] === 'ok' || row[2] === 'warn' ? ' ' + row[2] : ''
+              html +=
+                '<div class="row"><div class="label">' +
+                escapeHtml(row[0]) +
+                '</div><div class="value' +
+                cls +
+                '">' +
+                escapeHtml(row[1]) +
+                '</div></div>'
+            }
+            html += '</section>'
+          }
+
+          container.innerHTML = html
+          document.getElementById('updated').textContent =
+            'Обновлено: ' + new Date().toLocaleString('ru-RU')
+        }
+
+        function escapeHtml(s) {
+          return String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+        }
+
+        function buildReportText() {
+          var groups = buildGroups()
+          var lines = ['=== Диагностика вьюпорта Synth ===', 'Время: ' + new Date().toISOString(), '']
+          for (var g = 0; g < groups.length; g++) {
+            lines.push('## ' + groups[g].title)
+            for (var r = 0; r < groups[g].rows.length; r++) {
+              lines.push(groups[g].rows[r][0] + ': ' + groups[g].rows[r][1])
+            }
+            lines.push('')
+          }
+          return lines.join('\n')
+        }
+
+        function setStatus(text) {
+          document.getElementById('status').textContent = text
+        }
+
+        function copyReport() {
+          var text = buildReportText()
+          var done = function () {
+            setStatus('Отчёт скопирован в буфер обмена.')
+          }
+          var fail = function () {
+            setStatus('Не удалось скопировать автоматически — выделите отчёт вручную.')
+          }
+
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(done, function () {
+              legacyCopy(text) ? done() : fail()
+            })
+          } else {
+            legacyCopy(text) ? done() : fail()
+          }
+        }
+
+        function legacyCopy(text) {
+          try {
+            var ta = document.createElement('textarea')
+            ta.value = text
+            ta.setAttribute('readonly', '')
+            ta.style.position = 'fixed'
+            ta.style.top = '-100000px'
+            document.body.appendChild(ta)
+            ta.select()
+            var ok = document.execCommand('copy')
+            document.body.removeChild(ta)
+            return ok
+          } catch (e) {
+            return false
+          }
+        }
+
+        function scheduleRender() {
+          window.requestAnimationFrame(render)
+        }
+
+        document.getElementById('copy').addEventListener('click', copyReport)
+        document.getElementById('refresh').addEventListener('click', function () {
+          render()
+          setStatus('Обновлено.')
+        })
+
+        window.addEventListener('resize', scheduleRender)
+        window.addEventListener('orientationchange', scheduleRender)
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener('resize', scheduleRender)
+          window.visualViewport.addEventListener('scroll', scheduleRender)
+        }
+
+        render()
+      })()
+    </script>
+  </body>
+</html>

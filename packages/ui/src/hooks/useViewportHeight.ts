@@ -6,11 +6,14 @@ const OFFSET_TOP_VAR = '--oc-visual-viewport-offset-top'
 /**
  * Синхронизирует высоту мобильного шелла с visual viewport.
  *
- * Пишет высоту visualViewport (fallback — window.innerHeight) в --oc-app-height
- * и offsetTop в --oc-visual-viewport-offset-top на <html>. Когда клавиатура
- * открыта, шелл уменьшается, поэтому композер остаётся видимым без отдельного
- * клавиатурного отступа. При отсутствии обеих величин переменные не трогаются —
- * остаётся CSS-fallback 100dvh.
+ * Пишет высоту в --oc-app-height как `min(100dvh, ${h}px)` и offsetTop в
+ * --oc-visual-viewport-offset-top на <html>. Значение h — минимум из высоты
+ * visualViewport (fallback — window.innerHeight) и layout viewport. CSS `min()`
+ * не даёт шеллу превысить динамический вьюпорт (в альбомной ориентации нижняя
+ * панель браузера не перекрывает композер), но при этом значение реагирует на
+ * клавиатуру: когда она открыта, пиксельная часть min() меньше 100dvh, и шелл
+ * уменьшается без отдельного клавиатурного отступа. При отсутствии данных
+ * переменные не трогаются — остаётся CSS-fallback 100dvh/100vh.
  */
 export function useViewportHeight(): void {
   useEffect(() => {
@@ -21,9 +24,9 @@ export function useViewportHeight(): void {
 
     const apply = () => {
       frame = 0
-      const height = vv?.height ?? window.innerHeight
+      const height = Math.min(vv?.height ?? window.innerHeight, window.innerHeight)
       if (typeof height === 'number' && height > 0) {
-        root.style.setProperty(APP_HEIGHT_VAR, `${height}px`)
+        root.style.setProperty(APP_HEIGHT_VAR, `min(100dvh, ${height}px)`)
       }
       if (vv) {
         root.style.setProperty(OFFSET_TOP_VAR, `${vv.offsetTop}px`)
