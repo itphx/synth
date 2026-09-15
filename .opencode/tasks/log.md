@@ -407,3 +407,18 @@
 - **Проверки:** typecheck 0; тесты shared 72 / ui 128 / core 1220 / backend 229; lint 0 errors; Playwright с подменой UA: Huawei → `huawei`+`dark`, обычный → `only light`/`only dark`; тема приложения у Huawei не меняется.
 - **Деплой K3s (0.5.19, UI-only):** `synth-ui:0.5.19` (sha256:e3af35d8…); backend 0.5.14 не перезапускался; `/diag.html` → 200; в отдаваемом index есть `HuaweiBrowser`/`huawei`.
 - **Ограничение:** если Huawei игнорирует и это — останется вариант принудительно включать тёмную тему приложения при UA Huawei (пользователь подтвердил, что тёмная отображается корректно).
+
+## 2026-09-15 — feat(ui): пункт «Полный экран» в меню профиля (Fullscreen API); деплой K3s 0.5.20 (UI-only)
+- **Задача:** «Можно ли по нажатию отдельной кнопки запросить полноэкранный режим для Yandex/Firefox?»
+- **Тип:** feature (mobile UX) + ops
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS (K3s)
+- **Решение:** Fullscreen API скрывает браузерный интерфейс (адресную строку/нижнюю панель) на Android в Yandex/Firefox/Chrome/Huawei; вызов по тапу (user gesture), без фиксации ориентации. Пункт размещён **в меню профиля** (`QuickSettingsPopup`).
+  - `src/hooks/useFullscreen.ts` — `{ isFullscreen, supported, toggle }`, события `fullscreenchange`/`webkitfullscreenchange`, webkit-fallback, guard SSR/jsdom, ошибки гасятся.
+  - `QuickSettingsPopup.tsx` — пункт перед «Настройки профиля»; показывается, если `supported` и не PWA standalone; иконка `fullscreen`/`fullscreen-exit`, текст `auth.fullscreen`/`auth.exitFullscreen`.
+  - i18n: ключи добавлены в `ru.ts` и `en.ts`.
+  - Тесты: `useFullscreen.test.tsx` (5), `QuickSettingsPopup.test.tsx` (3).
+- **Коммит:** synth — `20a9395` (bump v0.5.20); synth-deploy — `d3cd3c1`.
+- **Проверки:** typecheck 0; тесты shared 72 / ui **136** / core 1220 / backend 229; lint 0 errors; в бандле есть `auth.fullscreen`/`auth.exitFullscreen`.
+- **Деплой K3s (0.5.20, UI-only):** `synth-ui:0.5.20` (sha256:d18d94a9…); backend 0.5.14 не перезапускался; боевой бандл содержит ключи fullscreen.
+- **Ограничение:** iOS Safari не поддерживает fullscreen для произвольного элемента (`document.fullscreenEnabled=false`) — пункт там скрыт; это ок (цель — Android).
