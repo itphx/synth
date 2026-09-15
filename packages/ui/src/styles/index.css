@@ -183,10 +183,16 @@ html.pointer-coarse .chat-composer {
   -webkit-overflow-scrolling: touch;
 }
 
-/* Экран входа на touch: пока поле в фокусе, резервируем нижнюю половину экрана,
-   чтобы форма была выше клавиатуры независимо от того, сообщает ли браузер
-   высоту клавиатуры (в standalone-PWA visualViewport может не обновляться). */
-html.pointer-coarse .login-screen.login-screen--keyboard {
+/* Мобильные зоны: форма у верхнего края — клавиатура не перекрывает поля ввода. */
+html.device-phone .login-screen,
+html.device-tablet .login-screen {
+  align-items: flex-start;
+  padding-top: max(1.5rem, env(safe-area-inset-top));
+}
+
+/* Пока поле в фокусе — резервируем нижнюю половину экрана (клавиатура любой высоты). */
+html.device-phone .login-screen.login-screen--keyboard,
+html.device-tablet .login-screen.login-screen--keyboard {
   padding-bottom: 50vh;
 }
 

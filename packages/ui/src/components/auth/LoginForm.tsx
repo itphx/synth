@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { SYNTH_VERSION } from '@itphx/synth-shared'
 import { useAuthStore } from '@/stores/authStore'
 import { api } from '@/lib/api/client'
 import { synthApi } from '@/lib/api/synthApi'
@@ -6,7 +7,6 @@ import { useI18n } from '@/lib/i18n'
 import { SynthLogo } from '@/components/ui'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
-import { useDevice } from '@/hooks/useDevice'
 
 interface DebugUser {
   id: string
@@ -16,7 +16,6 @@ interface DebugUser {
 export const LoginForm = () => {
   const { t } = useI18n()
   const { login, loginWithPassword, isLoading, error, clearError } = useAuthStore()
-  const { isTouch } = useDevice()
   const [keyboardReserve, setKeyboardReserve] = useState(false)
   const [apiKey, setApiKey] = useState('')
   const [server, setServer] = useState('')
@@ -94,7 +93,6 @@ export const LoginForm = () => {
   // её высоте и независимо от того, обновляет ли браузер visualViewport
   // (в standalone-PWA, в частности iOS, высота клавиатуры может не сообщаться).
   const handleScreenFocus = (e: React.FocusEvent<HTMLDivElement>) => {
-    if (!isTouch) return
     if (!(e.target instanceof HTMLInputElement)) return
     if (blurTimerRef.current !== null) {
       window.clearTimeout(blurTimerRef.current)
@@ -109,7 +107,6 @@ export const LoginForm = () => {
   }
 
   const handleScreenBlur = (e: React.FocusEvent<HTMLDivElement>) => {
-    if (!isTouch) return
     if (!(e.target instanceof HTMLInputElement)) return
     if (blurTimerRef.current !== null) window.clearTimeout(blurTimerRef.current)
     // небольшая задержка, чтобы переход фокуса между полями не сбрасывал резерв
@@ -315,6 +312,10 @@ export const LoginForm = () => {
             {isLoading ? t('common.loading') : t('auth.loginButton')}
           </button>
         </form>
+
+        <div className="mt-6 text-center text-[0.7rem] text-muted-foreground">
+          Synth v{SYNTH_VERSION}
+        </div>
       </div>
     </div>
   )

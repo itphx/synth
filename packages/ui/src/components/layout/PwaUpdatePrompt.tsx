@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { SYNTH_VERSION } from '@itphx/synth-shared'
 import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
 
@@ -53,7 +54,7 @@ export function PwaUpdatePrompt() {
     }
 
     navigator.serviceWorker
-      .register('/sw.js', { updateViaCache: 'none' })
+      .register(`/sw.js?v=${SYNTH_VERSION}`, { updateViaCache: 'none' })
       .then((reg) => {
         if (cancelled) return
         registration = reg
