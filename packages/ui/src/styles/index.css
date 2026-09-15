@@ -177,6 +177,18 @@ html.pointer-coarse .chat-composer {
   padding-bottom: var(--kb-inset, 0px);
 }
 
+.login-screen {
+  height: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Экран входа на touch: при раскрытой клавиатуре сдвигаем форму вверх
+   (--kb-inset пишет useKeyboardInset()); на десктопе padding = 0. */
+html.pointer-coarse .login-screen {
+  padding-bottom: var(--kb-inset, 0px);
+}
+
 /* --- Дроверы (phone/tablet): фиксированные оверлеи вместо десктопных сайдбаров --- */
 .mobile-drawer-root {
   position: fixed;

@@ -1,5 +1,5 @@
 /* Synth PWA — service worker (app-shell, runtime-кэш). */
-const CACHE = 'synth-shell-v1'
+const CACHE = 'synth-shell-v2'
 
 // Пути, которые НЕ кэшируем: данные/авторизация/реалтайм/служебные.
 const NO_CACHE_URL = /\/api\/|\/ws|\/auth|\/admin|\/health|sw\.js$/
@@ -8,13 +8,19 @@ const NO_CACHE_URL = /\/api\/|\/ws|\/auth|\/admin|\/health|sw\.js$/
 const STATIC_RE = /^\/(assets|icons)\//
 
 self.addEventListener('install', (event) => {
-  self.skipWaiting()
+  // Без skipWaiting(): новый SW ждёт команды SKIP_WAITING, чтобы не подменять
+  // приложение без ведома пользователя (баннер обновления — PwaUpdatePrompt).
   event.waitUntil(
     caches
       .open(CACHE)
       .then((cache) => cache.addAll(['/']))
       .catch(() => {}) // ошибки предкэша некритичны
   )
+})
+
+// Обновление запускается из UI: старый SW уступает место новому.
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting()
 })
 
 self.addEventListener('activate', (event) => {

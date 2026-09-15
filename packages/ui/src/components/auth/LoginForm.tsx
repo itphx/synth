@@ -6,6 +6,8 @@ import { useI18n } from '@/lib/i18n'
 import { SynthLogo } from '@/components/ui'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
+import { useKeyboardInset } from '@/hooks/useKeyboardInset'
+import { useDevice } from '@/hooks/useDevice'
 
 interface DebugUser {
   id: string
@@ -15,6 +17,8 @@ interface DebugUser {
 export const LoginForm = () => {
   const { t } = useI18n()
   const { login, loginWithPassword, isLoading, error, clearError } = useAuthStore()
+  const { isTouch } = useDevice()
+  useKeyboardInset()
   const [apiKey, setApiKey] = useState('')
   const [server, setServer] = useState('')
   const [username, setUsername] = useState('')
@@ -28,6 +32,7 @@ export const LoginForm = () => {
   const [knownServers, setKnownServers] = useState<string[]>([])
   /** Ссылка на поле пароля — перенос фокуса по Enter с поля логина (мобильная UX). */
   const passwordRef = useRef<HTMLInputElement>(null)
+  const loginRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const checkStatus = async () => {
@@ -83,9 +88,25 @@ export const LoginForm = () => {
     }
   }
 
+  // На touch при фокусе поля раскрывается клавиатура и перекрывает форму.
+  // Ждём ~300 мс, пока клавиатура раскроется, и прокручиваем страницу вниз,
+  // чтобы поля логина и пароля остались видны над клавиатурой.
+  const handleScreenFocus = (e: React.FocusEvent<HTMLDivElement>) => {
+    if (!isTouch) return
+    if (!(e.target instanceof HTMLInputElement)) return
+    window.setTimeout(() => {
+      const el = loginRef.current
+      if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    }, 300)
+  }
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="w-full max-w-md p-8 rounded-xl border bg-background-secondary">
+    <div
+      ref={loginRef}
+      className="login-screen min-h-screen flex items-center justify-center bg-background"
+      onFocus={handleScreenFocus}
+    >
+      <div className="my-auto w-full max-w-md p-8 rounded-xl border bg-background-secondary">
         <div className="flex flex-col items-center gap-4 mb-8">
           <SynthLogo width={80} height={80} className="text-foreground" />
           <h1 className="text-2xl font-bold text-foreground">{t('auth.loginTitle')}</h1>

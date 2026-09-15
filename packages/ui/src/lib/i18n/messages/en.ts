@@ -1187,4 +1187,9 @@ export const dict = {
   'routing.subagent.modelAuto': 'Auto (same as agent)',
   'routing.quality.pass': 'Quality: OK',
   'routing.quality.fail': 'Quality: ERROR',
+
+  // --- PWA ---
+  'pwa.updateAvailable': 'A new app version is available',
+  'pwa.updateNow': 'Update',
+  'pwa.updateLater': 'Later',
 };

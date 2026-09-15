@@ -16,6 +16,7 @@ import { MobileDrawer } from './components/layout/MobileDrawer'
 import { BackendConnection } from './components/layout/BackendConnection'
 import { ConnectionGuard } from './components/layout/ConnectionGuard'
 import { UpdateNotification } from './components/layout/UpdateNotification'
+import { PwaUpdatePrompt } from './components/layout/PwaUpdatePrompt'
 import { HybridOfflineBanner } from './components/layout/HybridOfflineBanner'
 import { SettingsModal } from './components/settings/SettingsModal'
 import { LogsModal } from './components/logviewer/LogsModal'
@@ -210,6 +211,7 @@ function App() {
           onConfirm={() => closeConfirm(true)}
         />
       </AuthGate>
+      <PwaUpdatePrompt />
       <ToastContainer
         position="bottom-right"
         newestOnTop
