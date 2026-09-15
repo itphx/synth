@@ -97,6 +97,42 @@ html.device-tablet {
   height: var(--oc-app-height);
 }
 
+/* Имитация скролла для Yandex/Firefox на Android: мобильному root-документу
+   даётся небольшой реальный запас прокрутки (NUDGE_PX в useBrowserChromeCollapse),
+   чтобы у браузера был повод свернуть свою панель. Сам .app-shell фиксируется и
+   остаётся на месте, поэтому визуально ничего не сдвигается — прокручивается
+   только «пустой» хвост документа. Десктоп (device-классы отсутствуют) не затронут. */
+html.device-phone,
+html.device-tablet {
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: none;
+}
+
+html.device-phone body,
+html.device-tablet body {
+  height: 100%;
+  /* visible — чтобы переполнение #root попадало в scroll-область root-документа */
+  overflow: visible;
+}
+
+html.device-phone #root,
+html.device-tablet #root {
+  height: auto;
+  min-height: calc(100dvh + 8px);
+  overflow: visible;
+}
+
+html.device-phone .app-shell,
+html.device-tablet .app-shell {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--oc-app-height);
+}
+
 /* Safe-area хелперы (переменные наполняются env(safe-area-inset-*) в design-system.css) */
 .pt-safe {
   padding-top: var(--oc-safe-area-top);

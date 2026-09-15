@@ -1,6 +1,8 @@
 @layer base {
   :root {
-    color-scheme: light dark;
+    /* only light — явный opt-out от Auto Dark Theme (Huawei EMUI и др.):
+       значение light dark там не отключает принудительное затемнение. */
+    color-scheme: only light;
     --oc-safe-area-top: env(safe-area-inset-top, 0px);
     --oc-safe-area-right: env(safe-area-inset-right, 0px);
     --oc-safe-area-bottom: env(safe-area-inset-bottom, 0px);
@@ -103,7 +105,7 @@
   }
 
   .dark {
-    color-scheme: dark;
+    color-scheme: only dark;
     /* Default Dark Theme - using OKLCH color space */
     --background: oklch(0.16 0.01 30); /* #151313 */
     --foreground: oklch(0.85 0.02 90); /* #cdccc3 */

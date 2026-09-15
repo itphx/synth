@@ -1,6 +1,6 @@
 {
   "name": "@itphx/synth-runner",
-  "version": "0.5.15",
+  "version": "0.5.16",
   "type": "module",
   "files": [
     "dist"

@@ -411,6 +411,18 @@ export function ThemeSystemProvider({ children, defaultThemeId }: ThemeSystemPro
       document.head.appendChild(metaThemeColorMedia);
     }
     metaThemeColorMedia.setAttribute('content', chromeColor);
+
+    // color-scheme — зеркало темы приложения со значением only: отключает
+    // принудительное авто-затемнение (Huawei EMUI Auto Dark Theme) и держит
+    // нативные контролы/скроллбары в правильной схеме.
+    const colorScheme = theme.metadata.variant === 'dark' ? 'only dark' : 'only light';
+    let metaColorScheme = document.querySelector('meta[name="color-scheme"]') as HTMLMetaElement | null;
+    if (!metaColorScheme) {
+      metaColorScheme = document.createElement('meta');
+      metaColorScheme.setAttribute('name', 'color-scheme');
+      document.head.appendChild(metaColorScheme);
+    }
+    metaColorScheme.setAttribute('content', colorScheme);
   }, []);
 
   const applyVSCodeRuntimeClass = useCallback((enabled: boolean) => {

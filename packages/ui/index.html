@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="description" content="Synth — Agentic AI Platform for Dev Teams" />
-    <meta name="color-scheme" content="light dark" />
+    <meta name="color-scheme" content="only light" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#09090b" />
@@ -36,6 +36,13 @@
           var root = document.documentElement;
           root.classList.add(isDark ? 'dark' : 'light');
           root.setAttribute('data-theme', isDark ? 'dark' : 'light');
+          var colorScheme = document.querySelector('meta[name="color-scheme"]');
+          if (!colorScheme) {
+            colorScheme = document.createElement('meta');
+            colorScheme.setAttribute('name', 'color-scheme');
+            document.head.appendChild(colorScheme);
+          }
+          colorScheme.setAttribute('content', isDark ? 'only dark' : 'only light');
           var bg = localStorage.getItem(isDark ? 'splashBgDark' : 'splashBgLight');
           if (bg) {
             root.style.backgroundColor = bg;

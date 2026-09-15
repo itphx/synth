@@ -27,6 +27,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useConfirmStore } from '@/stores/confirmStore'
 import { useDevice } from '@/hooks/useDevice'
 import { useViewportHeight } from '@/hooks/useViewportHeight'
+import { useBrowserChromeCollapse } from '@/hooks/useBrowserChromeCollapse'
 
 function DefaultsSync() {
   const { isAuthenticated, isInitialized } = useAuthStore()
@@ -70,6 +71,7 @@ function App() {
   const forwardMode = useUIStore(s => s.forwardMode)
   const { deviceType } = useDevice()
   useViewportHeight()
+  useBrowserChromeCollapse()
   const isMobile = deviceType !== 'desktop'
   const confirmOpen = useConfirmStore(s => s.open)
   const confirmOptions = useConfirmStore(s => s.options)
