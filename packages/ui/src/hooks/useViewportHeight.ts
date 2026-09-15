@@ -1,11 +1,11 @@
 import { useEffect } from 'react'
 
-const APP_HEIGHT_VAR = '--oc-app-height'
+const APP_HEIGHT_VAR = '--synth-app-height'
 
 /**
  * Синхронизирует высоту мобильного шелла с visual viewport.
  *
- * Пишет высоту в --oc-app-height как `min(100dvh, ${h}px)`. Значение h — минимум
+ * Пишет высоту в --synth-app-height как `min(100dvh, ${h}px)`. Значение h — минимум
  * из высоты visualViewport (fallback — window.innerHeight) и layout viewport.
  * CSS `min()` не даёт шеллу превысить динамический вьюпорт (в альбомной
  * ориентации нижняя панель браузера не перекрывает композер), но при этом

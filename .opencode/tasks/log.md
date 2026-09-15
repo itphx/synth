@@ -435,3 +435,95 @@
 - **Проверки:** typecheck 0; тесты shared 72 / ui **133** / core 1220 / backend 229; lint 0 errors; Playwright (390×844): root не скроллится (`scrollHeight−innerHeight=0`, `scrollTo(0,8)` → 0), `.app-shell` `position:relative` высотой 844, композер виден, дроверы/модалка работают, пункт «Полный экран» на месте; десктоп 1280×800 не затронут.
 - **Деплой K3s (0.5.21, UI-only):** `synth-ui:0.5.21` (sha256:8b54b800…) — в боевом CSS/JS нет удалённых маркеров (`100dvh + 8px`, `oc-visual-viewport-offset-top`, fixed app-shell), fullscreen-ключи присутствуют; backend 0.5.14 не перезапускался.
 - **Инцидент окружения:** первая docker-сборка упала с `no space left on device` (диск 100%). Освобождено ~41 ГБ (`docker image prune -a`, `container prune`), сборка повторена успешно. Стоит помнить про чистку Docker.
+
+## 2026-09-15 — refactor(ui): CSS-переменные `--oc-*` → `--synth-*` (убраны отсылки к openchamber); деплой K3s 0.5.22 (UI-only)
+- **Задача:** «у нас всё ещё есть переменные с префиксом `--oc` (`--oc-header-height`, `--oc-wco-*`, `--oc-safe-area-bottom-visual`, `--oc-visual-viewport-height` и прочее). Найди, переименуй префикс в `--synth`.»
+- **Тип:** refactor + ops
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS (K3s)
+- **Переименовано (живые):** `--oc-app-height` → `--synth-app-height`; `--oc-safe-area-{top,right,bottom,left}` → `--synth-safe-area-*`; `--oc-scrollbar-thumb{,-hover}` → `--synth-scrollbar-thumb*`.
+- **Удалено (мёртвые — только объявлены, читателей не было):** `--oc-header-height`, `--oc-visual-viewport-height`, `--oc-safe-area-bottom-visual`, `--oc-wco-left-inset`, `--oc-wco-right-inset`, `--oc-wco-titlebar-height`.
+- **Файлы:** `styles/design-system.css`, `styles/index.css`, `hooks/useViewportHeight.ts`, `hooks/useViewportHeight.test.tsx`, `docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md`.
+- **Поправка к записи 0.5.21:** те «мёртвые» `--oc-*` на самом деле не использовались в активном коде — только в `archive/` (старые фронтенды). Теперь удалены.
+- **Коммит:** synth — **не коммитился** (правило «не коммитить без явной просьбы»); synth-deploy — `96a2c5f`.
+- **Проверки:** typecheck 0; lint 0 errors (139 pre-existing warnings); тесты shared 72 / ui 133 / core 1220 / backend 229; `build.sh` 0.5.22 — успешно; в собранном CSS только `--synth-*` (0 × `--oc-`); локально Playwright (prod-сборка, 1280×720 и 390×844): `--synth-app-height` = `min(100dvh, Npx)`, `.viewport-min-h` резолвит высоту, класс `device-phone` — ок.
+- **Примечание (предсуществующее, не связано):** dev-сервер UI (Vite) отдаёт пустую страницу из-за `node:fs/promises` externalized (`shared/dist/config/loader.js`). Воспроизводится и на чистом `master` (проверено `git stash`) — к правке не относится.
+- **Деплой K3s (0.5.22, UI-only):** `synth-ui:0.5.22` (sha256:c8255a8b…) собран из исходников (`docker/Dockerfile.ui`) и запушен; `values.yaml` `ui.image.tag` 0.5.21→0.5.22, push `main` (`3f30567..96a2c5f`) → Fleet `synth` 1/1 Ready, rollout успешен; `synth-backend` 0.5.14 **не перезапускался** (сессии сохранены). Боевой CSS: 7 × `--synth-*`, 0 × `--oc-`; `/` → 200, `/sw.js` → `no-cache`.
+
+## 2026-09-15 — feat(ui): пункт «Обновить страницу» всегда в меню профиля; деплой K3s 0.5.23 (UI-only)
+- **Задача:** «пункт „Обновить страницу“ должен всегда отображаться в контекстном меню профиля».
+- **Тип:** feature (UI) + ops
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS (K3s)
+- **Причина:** кнопка `auth.reloadPage` в `QuickSettingsPopup.tsx` была обёрнута в `{isPwaStandalone() && (...)}` — видна только в PWA standalone.
+- **Изменение:** условие убрано, кнопка рендерится безусловно (как «Настройки»/«Выйти»). Пункт «Полный экран» и условие `fullscreenSupported && !isPwaStandalone()` не тронуты.
+- **Файлы:** `components/auth/QuickSettingsPopup.tsx`, `components/auth/QuickSettingsPopup.test.tsx` (+тест «standalone=false ⇒ пункт присутствует»).
+- **Коммит:** synth — **не коммитился**; synth-deploy — `a2a34a5`.
+- **Проверки:** typecheck 0; lint 0 errors; тесты shared 72 / ui **134** / core 1220 / backend 229; `build.sh` 0.5.23 — успешно.
+- **Деплой K3s (0.5.23, UI-only):** `synth-ui:0.5.23` (sha256:046f0933…) собран/запушен; `values.yaml` 0.5.22→0.5.23, push `main` (`96a2c5f..a2a34a5`) → rollout успешен; `synth-backend` 0.5.14 не перезапускался; боевой бандл `index-D4l9WePx.js`, `/` → 200.
+
+## 2026-09-15 — fix(ui): переключатели на мобильном растягивались в круг/овал; деплой K3s 0.5.24 (UI-only)
+- **Задача:** «все переключатели на мобильном стали круглыми, а должны быть прямоугольными с закруглёнными углами и кругом внутри».
+- **Тип:** bug fix (CSS) + ops
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS (K3s)
+- **Причина:** генерические правила тач-таргетов в `styles/index.css` задавали `min-width/min-height` всем `<button>` в контейнере, включая switch (трек `w-9 h-5` = 36×20, `rounded-full`) → 40×40 / 36×36 / 36×40 → круг/овал.
+- **Воспроизведение (Playwright на собранном CSS, `pointer-coarse`+`device-phone`):** `.mobile-drawer-panel` 40×40, `[data-slot="dialog-content"]` 36×40, `.group-hover\:opacity-100` 40×40, `[data-tree-node]` 36×36; вне этих контейнеров — 36×20.
+- **Изменение:** к button-селекторам правил тач-таргетов добавлено `:not([role="switch"])` (строки 276–277, 314–317, 339/346, 420, 430, 441–442, 448; значения мин. размеров для остальных кнопок не менялись). Дополнительно `role="switch"` + `aria-checked` добавлены кнопкам-переключателям в `admin/UsersPanel.tsx:266` и `admin/AgentsPanel.tsx:523` (в `Toggle.tsx` и `McpSettings.tsx` уже были).
+- **Файлы:** `styles/index.css`, `components/admin/UsersPanel.tsx`, `components/admin/AgentsPanel.tsx`.
+- **Проверка (Playwright, собранный CSS):** все switch теперь 36×20 во всех контейнерах; обычные кнопки сохранили минимумы (drawer h40, dialog h40, hover 40×40, tree 36×36, composer ≥28). typecheck 0; lint 0 errors; тесты shared 72 / ui 134 / core 1220 / backend 229.
+- **Коммит:** synth — **не коммитился**; synth-deploy — `cdec82e`.
+- **Деплой K3s (0.5.24, UI-only):** `synth-ui:0.5.24` (sha256:b1bd3e5d…) собран/запушен; `values.yaml` 0.5.23→0.5.24, push `main` (`a2a34a5..cdec82e`) → rollout успешен; `synth-backend` 0.5.14 не перезапускался; в боевом CSS 13 × `button:not([role=switch])`, 0 × `--oc-`; `/` → 200.
+- **Оговорка:** переключатели намеренно остаются 36×20 (как на десктопе) — тач-таргет не расширяли, чтобы не менять форму; при желании можно отдельно расширить зону нажатия псевдоэлементом.
+
+## 2026-09-15 — fix(ui): мобильные фиксы (Контекст/Агенты/уведомления/Сессия/левая панель); деплой K3s 0.5.25 + 0.5.26 (UI-only)
+- **Задача:** набор баг-фиксов и унификаций мобильного UI + удаление блока «Отладка» с кнопкой «Отправить системное сообщение».
+- **Тип:** bug fix + refactor (UI) + ops
+- **Исполнитель:** @orchestrator → @fixer (3 партии)
+- **Результат:** PASS (K3s)
+- **Причина «неправильных переключателей» в „Контексте“:** тумблеры уже были 36×20, а раздувались генерические touch-правила — круглые радио-селекторы режима и «+/−» в drawer становились 40×40. Решение (по выбору пользователя): оставить радио, пометить компактные контролы `data-compact` и исключить их из правил `min-width/min-height` (`:not([data-compact])`). Радио 16×16, «+/−» 20×20.
+- **Агенты (настройки):** кастомные тумблеры (`bg-blue-600`) заменены общим `<Toggle>` (в `AgentsPanel` и, для консистентности, `UsersPanel`); сетки карточек (и скелетон) `agents-grid` на phone/tablet — в одну колонку.
+- **Уведомления:** попап вылезал влево (`absolute right-0` от кнопки, не у края; `left=-92`). На phone/tablet — `position:fixed; left/right:.5rem; top:calc(2.75rem + env(safe-area-inset-top))`, десктоп без изменений.
+- **Сессия (правая панель):** `<ModelSelector alwaysShowLabel>` — на мобильном показывает провайдера и модель (было только иконку).
+- **Удалено:** блок «Отладка» с кнопкой отправки системного сообщения — `SessionSettingsTab`, `ChatTab` (авто-отправка), флаг `debugSystemMessages` в `useUIStore`, `synthApi.sendDebugSystemMessage`, 4 i18n-ключа `rightPanel.debug.*`. Отдельный пункт «Отладка» (`debugEnabled`) сохранён.
+- **Кнопки под сообщениями (мобильный):** `.message-actions button` → 28×28 (было 40×40), отступ строки компактнее.
+- **Левая панель:** контейнер вкладок `.left-tabs` на phone/tablet — высота auto (кнопки 40px не выходят за границы); `openTab` теперь закрывает левый мобильный дровер (`mobileLeftOpen:false`) + регрессионный `useUIStore.test.ts`.
+- **Файлы:** `ContextTab.tsx`, `AgentsPanel.tsx`, `UsersPanel.tsx`, `NotificationPopup.tsx`, `SessionSettingsTab.tsx`, `ModelSelector.tsx`, `ChatTab.tsx`, `useUIStore.ts`(+test), `synthApi.ts`, `ru.ts`/`en.ts`, `MessageActions.tsx`, `LeftPanel.tsx`, `styles/index.css`.
+- **Проверки:** typecheck 0; lint 0 errors; тесты shared 72 / ui 136 / core 1220 / backend 229; build.sh 0.5.25/0.5.26. Браузерный harness + боевой UI (390×844): switch 36×20, radio 16×16, «+/−» 20×20, message-actions 28×28, левые вкладки без overflow, клик по сессии открывает вкладку и закрывает дровер, ModelSelector показывает «itphx / omn.qwen3.8:27b», попап `left:8/right:382` (вписан).
+- **Коммит:** synth — не коммитился; synth-deploy — `035cda0` (0.5.25), `e4503c3` (0.5.26).
+- **Деплой K3s (0.5.25, 0.5.26, UI-only):** `synth-ui:0.5.25` (sha256:39994796…), `synth-ui:0.5.26` (sha256:9f136b35…); `synth-backend` 0.5.14 не перезапускался; `/` → 200.
+
+## 2026-09-15 — fix(ui): косметика мобильного (вкладки левой панели, карточки агентов, выравнивание кнопок); деплой K3s 0.5.27 (UI-only)
+- **Задача:** (1) кнопки вкладок левой панели прилипают к верхней границе — сделать интервал как в правой панели; (2) карточки агентов упираются в скролл справа (моб. и десктоп); (3) кнопки под сообщениями всё ещё не выровнены по вертикали.
+- **Тип:** bug fix (UI, косметика) + ops
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS (K3s)
+- **Замер до:** `.message-actions` — зазор сверху/снизу 5/13px (моб.), 7/13px (десктоп).
+- **Изменения:** `LeftPanel.tsx` — контейнеру `.left-tabs` добавлен `py-1` (как в `RightPanel`); `AgentsPanel.tsx` — скролл-контейнеру карточек добавлен `pr-2`; `MessageActions.tsx` — контейнеру добавлен `-mb-1.5`; `styles/index.css` — в device-правило `.message-actions` добавлен `margin-bottom:-0.5rem`.
+- **Замер после:** `.message-actions` 5/5px (моб.), 7/7px (десктоп); вкладки левой панели — интервал 8px сверху (24px-кнопки/40px-контейнер; на реальном touch кнопки 40px); карточки агентов — правый отступ 8px.
+- **Проверки:** typecheck 0; lint 0 errors; тесты shared 72 / ui 136 / core 1220 / backend 229; build.sh 0.5.27; боевой UI (390×844) — `.left-tabs ... px-2 py-1`, интервал есть.
+- **Коммит:** synth — не коммитился; synth-deploy — `a85dbbb`.
+- **Деплой K3s (0.5.27, UI-only):** `synth-ui:0.5.27` (sha256:4d31c989…); `synth-backend` 0.5.14 не перезапускался; `/` → 200.
+
+## 2026-09-15 — fix(ui): центрирование заголовка сообщения, минимальная высота поля ввода, зазоры композера; деплой K3s 0.5.28 (UI-only)
+- **Задача:** (1) отцентрировать текст в верхней строке заголовка сообщения по вертикали; (2) уменьшить минимальную высоту блока ввода до одной строки (рост со второй); (3) выровнять кнопки композера — расстояние текст→кнопки == кнопки→низ.
+- **Тип:** bug fix (UI, косметика) + ops
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS (K3s)
+- **Причина/решение:** (1) `MessageHeader` — `mb-1` (4px) против `padding-top` бабла 12px → текст смещён вниз; заменено на `mb-3` (зазоры 13/12 с учётом рамки — симметрично). (2) `ChatInput` textarea `min-h-[52px]` (≈2.5 строки) → `min-h-[1.25rem]` (20px = одна строка). (3) `chat-toolbar` без верхнего отступа → `mt-2` (8px), совпадает с `padding-bottom` контейнера (8px); попутно textarea получил `block` (устранён 6px «фантомный» зазор от inline-block baseline).
+- **Файлы:** `components/chat/MessageHeader.tsx`, `components/chat/ChatInput.tsx`.
+- **Замеры (harness, 390×844):** заголовок 13/12px, центры детей строки совпадают; textarea 20px/1 строка, 40px/2 строки; композер 8/8px.
+- **Проверки:** typecheck 0; lint 0 errors; тесты shared 72 / ui 136 / core 1220 / backend 229; build.sh 0.5.28; боевой JS содержит `min-h-[1.25rem]`, `mb-3`, `mt-2`.
+- **Коммит:** synth — не коммитился; synth-deploy — `ba06796`.
+- **Деплой K3s (0.5.28, UI-only):** `synth-ui:0.5.28` (sha256:7d8aac5c…); `synth-backend` 0.5.14 не перезапускался; `/` → 200.
+
+## 2026-09-15 — fix(ui): компактные зазоры заголовка (8/8) и +2px в композере; деплой K3s 0.5.29 (UI-only)
+- **Задача:** заголовок сообщения — зазоры 8/8 (вместо 12/12); в панели ввода добавить 2px между текстом и кнопками.
+- **Тип:** bug fix (UI, косметика) + ops
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS (K3s)
+- **Изменения:** `MessageHeader.tsx` — `mb-3` → `-mt-1 mb-2`; `ChatInput.tsx` — `'mt-2'` → `'mt-2.5'` (ветка `expanded`/`mt-auto` не тронута).
+- **Замеры (harness, 390×844):** заголовок 9/8 (9 — с учётом рамки бабла), композер textarea→кнопки **10px**, кнопки→низ **8px**; высота textarea 20px (1 строка).
+- **Проверки:** typecheck 0; lint 0 errors; тесты shared 72 / ui 136 / core 1220 / backend 229; build.sh 0.5.29.
+- **Коммит:** synth — не коммитился; synth-deploy — `db470ba`.
+- **Деплой K3s (0.5.29, UI-only):** `synth-ui:0.5.29` (sha256:698ddf92…); `synth-backend` 0.5.14 не перезапускался; `/` → 200.

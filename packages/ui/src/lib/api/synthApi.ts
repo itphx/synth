@@ -546,13 +546,6 @@ export const synthApi = {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/status`)
   },
 
-  // API v2: отправить отладочное системное сообщение
-  async sendDebugSystemMessage(sessionId: string): Promise<{ status: string; stream_id: string }> {
-    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/debug-system-message`, {
-      method: 'POST',
-    })
-  },
-
   // Очередь (API v2 — /queue/:sessionId)
   async clearQueue(sessionId: string): Promise<void> {
     return fetchJSON(`${BASE_URL}/queue/${encodeURIComponent(sessionId)}/clear`, {

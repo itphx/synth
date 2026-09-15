@@ -17,7 +17,7 @@ type DropdownItem =
   | { type: 'separator'; id: string }
   | { type: 'model'; model: ModelInfo; provider: ProviderInfo; isFavorite: boolean; id: string }
 
-export function ModelSelector({ compact = false, sessionId }: { compact?: boolean; sessionId?: string }) {
+export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = false }: { compact?: boolean; sessionId?: string; alwaysShowLabel?: boolean }) {
   const {
     providers,
     models,
@@ -297,10 +297,17 @@ export function ModelSelector({ compact = false, sessionId }: { compact?: boolea
           aria-label={selectedModelName || currentProvider?.model || t('chat.modelControls.searchModels')}
         >
           <ProviderIcon icon={currentProvider?.icon ?? ''} baseUrl={currentProvider?.url} size={14} className="text-muted-foreground shrink-0" />
-          {!isMobile && (
-            <span className="font-medium text-xs text-foreground whitespace-nowrap max-w-[200px] truncate">
-              {selectedModelName || currentProvider?.model || '—'}
-            </span>
+          {(!isMobile || alwaysShowLabel) && (
+            <>
+              {alwaysShowLabel && currentProvider?.name && (
+                <span className="min-w-0 max-w-[120px] truncate text-xs text-muted-foreground">
+                  {currentProvider.name}
+                </span>
+              )}
+              <span className="min-w-0 font-medium text-xs text-foreground whitespace-nowrap max-w-[200px] truncate">
+                {selectedModelName || currentProvider?.model || '—'}
+              </span>
+            </>
           )}
         </button>
       </DropdownMenu.Trigger>

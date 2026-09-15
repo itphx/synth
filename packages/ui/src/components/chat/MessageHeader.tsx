@@ -88,7 +88,7 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick, processing }: 
   )
 
   return (
-    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70 mb-1">
+    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70 -mt-1 mb-2">
       {userBadge}
       {agentBadge}
 

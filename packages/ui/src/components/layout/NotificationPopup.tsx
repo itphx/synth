@@ -131,7 +131,7 @@ export function NotificationPopup() {
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 top-full mt-1 w-[720px] rounded-lg border bg-card shadow-lg z-50">
+        <div className="notifications-popup absolute right-0 top-full mt-1 w-[720px] max-w-[calc(100vw-1rem)] rounded-lg border bg-card shadow-lg z-50">
           <div className="flex items-center justify-between px-3 py-2 border-b border-border">
             <span className="text-sm font-medium text-foreground">{t('notifications.popup.title')}</span>
             <div className="flex items-center gap-0.5">

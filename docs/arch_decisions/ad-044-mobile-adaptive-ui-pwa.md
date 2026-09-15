@@ -41,7 +41,7 @@ px-ширинами, действия видны только по hover, чат
 - `packages/ui/src/hooks/useMediaQuery.ts` — `useSyncExternalStore` на `matchMedia`.
 - `packages/ui/src/hooks/useDevice.ts` — `useDevice()` → `{ deviceType: 'phone'|'tablet'|'desktop', isTouch }`.
 - `isTouch = (pointer: coarse) && !(any-pointer: fine)` — «сенсор без точного указателя»; совпадает с классом `html.pointer-coarse`.
-- Safe-area: `--oc-safe-area-top/right/bottom/left` из `env(safe-area-inset-*, 0px)`; высоты на `100dvh` (`--oc-app-height`).
+- Safe-area: `--synth-safe-area-top/right/bottom/left` из `env(safe-area-inset-*, 0px)`; высоты на `100dvh` (`--synth-app-height`).
 
 ### Раскладка
 - `App.tsx` выбирает `<MobileDrawer>`-ветку по `deviceType !== 'desktop'`; десктопная ветка — прежний JSX.

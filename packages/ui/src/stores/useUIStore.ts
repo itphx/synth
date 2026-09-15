@@ -121,9 +121,6 @@ interface UIStore {
 
   intermediateTextDisplay: 'inline' | 'bottom'
   setIntermediateTextDisplay: (mode: 'inline' | 'bottom') => void
-
-  debugSystemMessages: boolean
-  setDebugSystemMessages: (enabled: boolean) => void
 }
 
 export const useUIStore = create<UIStore>()(
@@ -268,11 +265,12 @@ export const useUIStore = create<UIStore>()(
           if (existingIdx >= 0) {
             const nextTabs = [...state.centerTabs]
             nextTabs[existingIdx] = { ...nextTabs[existingIdx], title: tab.title }
-            return { centerTabs: nextTabs, activeCenterTabId: tab.id }
+            return { centerTabs: nextTabs, activeCenterTabId: tab.id, mobileLeftOpen: false }
           }
           return {
             centerTabs: [...state.centerTabs, tab],
             activeCenterTabId: tab.id,
+            mobileLeftOpen: false,
           }
         }),
 
@@ -327,9 +325,6 @@ export const useUIStore = create<UIStore>()(
         set({ intermediateTextDisplay: mode })
         profileService.syncIntermediateTextDisplayToProfile(mode)
       },
-
-      debugSystemMessages: false,
-      setDebugSystemMessages: (enabled) => set({ debugSystemMessages: enabled }),
     }),
     {
       name: 'synth-ui-settings',

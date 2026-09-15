@@ -7,7 +7,7 @@ import { useViewportHeight } from './useViewportHeight'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const APP_HEIGHT_VAR = '--oc-app-height'
+const APP_HEIGHT_VAR = '--synth-app-height'
 
 function Probe() {
   useViewportHeight()

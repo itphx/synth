@@ -349,7 +349,7 @@ export function ChatInput({
         <div className={`pt-1 pl-2 pr-2 relative ${expanded ? 'flex-1 min-h-0' : ''}`}>
           <textarea
             ref={textareaRef}
-            className={`overlay-scrollbar-target w-full resize-none border-0 bg-transparent px-0 py-0 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-0 min-h-[52px] ${
+            className={`overlay-scrollbar-target block w-full resize-none border-0 bg-transparent px-0 py-0 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-0 min-h-[1.25rem] ${
               expanded ? 'h-full' : ''
             }`}
             placeholder={t('chat.input.placeholder')}
@@ -378,7 +378,7 @@ export function ChatInput({
 
         <div
           className={`chat-toolbar flex flex-wrap items-center justify-between gap-1.5 ${
-            expanded ? 'mt-auto' : ''
+            expanded ? 'mt-auto' : 'mt-2.5'
           }`}
         >
           <div className="flex shrink-0 items-center gap-0.5">

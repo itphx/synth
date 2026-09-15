@@ -104,6 +104,17 @@ afterEach(async () => {
   delete (document.documentElement as unknown as Record<string, unknown>).requestFullscreen
 })
 
+describe('QuickSettingsPopup: пункт «Обновить страницу»', () => {
+  it('при pwaState.standalone = false пункт отображается (обычный браузер)', async () => {
+    pwaState.standalone = false
+    const host = await renderPopup()
+    await openMenu(host)
+    const reloadBtn = buttonsByText(host, 'auth.reloadPage')[0]
+    expect(reloadBtn).toBeTruthy()
+    expect(reloadBtn!.querySelector('[data-icon]')?.getAttribute('data-icon')).toBe('refresh')
+  })
+})
+
 describe('QuickSettingsPopup: пункт «Полный экран»', () => {
   it('без Fullscreen API пункт не отображается (jsdom)', async () => {
     const host = await renderPopup()

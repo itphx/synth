@@ -3,19 +3,13 @@
     /* only light — явный opt-out от Auto Dark Theme (Huawei EMUI и др.):
        значение light dark там не отключает принудительное затемнение. */
     color-scheme: only light;
-    --oc-safe-area-top: env(safe-area-inset-top, 0px);
-    --oc-safe-area-right: env(safe-area-inset-right, 0px);
-    --oc-safe-area-bottom: env(safe-area-inset-bottom, 0px);
-    --oc-safe-area-bottom-visual: env(safe-area-inset-bottom, 0px);
-    --oc-safe-area-left: env(safe-area-inset-left, 0px);
-    --oc-header-height: 56px;
-    --oc-visual-viewport-height: 100dvh;
-    --oc-wco-left-inset: 0px;
-    --oc-wco-right-inset: 0px;
-    --oc-wco-titlebar-height: 0px;
+    --synth-safe-area-top: env(safe-area-inset-top, 0px);
+    --synth-safe-area-right: env(safe-area-inset-right, 0px);
+    --synth-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+    --synth-safe-area-left: env(safe-area-inset-left, 0px);
     --ui-regular-font-weight: 400;
-    --oc-scrollbar-thumb: color-mix(in oklch, var(--foreground), transparent 70%);
-    --oc-scrollbar-thumb-hover: color-mix(in oklch, var(--foreground), transparent 50%);
+    --synth-scrollbar-thumb: color-mix(in oklch, var(--foreground), transparent 70%);
+    --synth-scrollbar-thumb-hover: color-mix(in oklch, var(--foreground), transparent 50%);
     --padding-scale: 1;
 
     /* Semantic typography defaults (must match SEMANTIC_TYPOGRAPHY) */
@@ -89,18 +83,18 @@
     background: transparent;
   }
   *::-webkit-scrollbar-thumb {
-    background: var(--oc-scrollbar-thumb);
+    background: var(--synth-scrollbar-thumb);
     border-radius: 9999px;
   }
   *::-webkit-scrollbar-thumb:hover {
-    background: var(--oc-scrollbar-thumb-hover);
+    background: var(--synth-scrollbar-thumb-hover);
   }
   *::-webkit-scrollbar-corner {
     background: transparent;
   }
   * {
     scrollbar-width: thin;
-    scrollbar-color: var(--oc-scrollbar-thumb) transparent;
+    scrollbar-color: var(--synth-scrollbar-thumb) transparent;
   }
 
   .dark {
@@ -153,10 +147,10 @@
     --status-info: oklch(0.68 0.12 230);
 
     /* Scrollbar dark theme */
-    --oc-scrollbar-thumb: oklch(0.6 0.02 80 / 0.3);
-    --oc-scrollbar-thumb-hover: oklch(0.6 0.02 80 / 0.5);
+    --synth-scrollbar-thumb: oklch(0.6 0.02 80 / 0.3);
+    --synth-scrollbar-thumb-hover: oklch(0.6 0.02 80 / 0.5);
     * {
-      scrollbar-color: var(--oc-scrollbar-thumb) transparent;
+      scrollbar-color: var(--synth-scrollbar-thumb) transparent;
     }
   }
 
@@ -504,7 +498,7 @@
   pointer-events: auto;
   position: absolute;
   width: 6px;
-  background: var(--oc-scrollbar-thumb);
+  background: var(--synth-scrollbar-thumb);
   border-radius: 9999px;
   opacity: 0.8;
   transition: background-color 0.15s ease, opacity 0.15s ease;
@@ -513,7 +507,7 @@
 
 .overlay-scrollbar__thumb:hover,
 .overlay-scrollbar__thumb:active {
-  background: var(--oc-scrollbar-thumb-hover);
+  background: var(--synth-scrollbar-thumb-hover);
   opacity: 1;
 }
 

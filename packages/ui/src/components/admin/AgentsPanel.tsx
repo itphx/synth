@@ -3,6 +3,7 @@ import { synthApi, type AgentInfo, type AgentMode, type ProviderInfo, type Model
 import { Icon } from '@/components/icon/Icon'
 import { IconPicker } from './IconPicker'
 import { ColorPicker } from './ColorPicker'
+import { Toggle } from '../ui/Toggle'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 
@@ -500,13 +501,13 @@ export const AgentsPanel = () => {
       </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto min-h-0 overscroll-behavior-contain mt-4">
+      <div className="flex-1 overflow-y-auto min-h-0 overscroll-behavior-contain mt-4 pr-2">
       {(creating || expanded) && renderForm()}
 
       {loading ? (
-        <div className="grid grid-cols-2 gap-3">{[1,2,3,4].map((i) => <div key={i} className="bg-background rounded-lg border p-4 animate-pulse"><div className="h-4 bg-muted rounded w-24" /></div>)}</div>
+        <div className="agents-grid grid grid-cols-2 gap-3">{[1,2,3,4].map((i) => <div key={i} className="bg-background rounded-lg border p-4 animate-pulse"><div className="h-4 bg-muted rounded w-24" /></div>)}</div>
       ) : (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="agents-grid grid grid-cols-2 gap-3">
           {filteredAgents.map((a) => (
             <div key={a.id}>
               {/* Compact card */}
@@ -520,15 +521,9 @@ export const AgentsPanel = () => {
                     <span className="font-medium text-sm truncate">{a.display_name}</span>
                     <code className="text-[10px] text-muted-foreground shrink-0">{a.id}</code>
                   </div>
-                  <button onClick={() => handleToggle(a)} className={cn(
-                    "relative w-9 h-5 rounded-full transition-colors shrink-0 ml-1",
-                    a.enabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
-                  )}>
-                    <span className={cn(
-                      "absolute top-0.5 size-4 rounded-full bg-white transition-all shadow-sm",
-                      a.enabled ? 'right-0.5' : 'left-0.5'
-                    )} />
-                  </button>
+                  <div className="ml-1">
+                    <Toggle enabled={a.enabled} onToggle={() => handleToggle(a)} />
+                  </div>
                 </div>
 
                 {/* Badges row */}

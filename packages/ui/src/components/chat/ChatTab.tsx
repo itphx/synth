@@ -191,11 +191,6 @@ export function ChatTab({ tab }: ChatTabProps) {
       // начинает его обработку (event message.added из QueueProcessor)
 
       try {
-        const { debugSystemMessages } = useUIStore.getState()
-        if (debugSystemMessages) {
-          await synthApi.sendDebugSystemMessage(sessionId)
-        }
-
         const { selectedModelName, selectedProviderName } = useProvidersStore.getState()
         useChatStore.getState().clearStreamError(sessionId)
         useChatStore.getState().setStreamRetry(sessionId, null)

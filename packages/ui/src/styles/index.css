@@ -81,7 +81,7 @@ html.huawei.dark {
    ============================================================= */
 
 :root {
-  --oc-app-height: 100vh;
+  --synth-app-height: 100vh;
   --chat-column-width: 50vw;
   --chat-pad-left: 0px;
   --chat-pad-right: 0px;
@@ -89,7 +89,7 @@ html.huawei.dark {
 
 @supports (height: 100dvh) {
   :root {
-    --oc-app-height: 100dvh;
+    --synth-app-height: 100dvh;
   }
 }
 
@@ -102,41 +102,41 @@ html.device-tablet {
 /* Мобильный корень приложения (используется только в device-зоне phone/tablet) */
 .app-shell {
   height: 100vh;
-  height: var(--oc-app-height);
+  height: var(--synth-app-height);
 }
 
-/* «Экранные» контейнеры используют видимую высоту (--oc-app-height, которую
+/* «Экранные» контейнеры используют видимую высоту (--synth-app-height, которую
    пишет useViewportHeight как min(100dvh, innerHeight)), а не 100vh: в ландшафте
    с браузерной панелью 100vh = large viewport и низ уходит за экран.
    Вне @layer, чтобы перекрывать утилиты Tailwind. */
 .desktop-shell {
-  height: var(--oc-app-height, 100dvh);
+  height: var(--synth-app-height, 100dvh);
 }
 
 .viewport-min-h {
-  min-height: var(--oc-app-height, 100dvh);
+  min-height: var(--synth-app-height, 100dvh);
 }
 
 /* Safe-area хелперы (переменные наполняются env(safe-area-inset-*) в design-system.css) */
 .pt-safe {
-  padding-top: var(--oc-safe-area-top);
+  padding-top: var(--synth-safe-area-top);
 }
 
 .pr-safe {
-  padding-right: var(--oc-safe-area-right);
+  padding-right: var(--synth-safe-area-right);
 }
 
 .pb-safe {
-  padding-bottom: var(--oc-safe-area-bottom);
+  padding-bottom: var(--synth-safe-area-bottom);
 }
 
 .pl-safe {
-  padding-left: var(--oc-safe-area-left);
+  padding-left: var(--synth-safe-area-left);
 }
 
 .px-safe {
-  padding-left: var(--oc-safe-area-left);
-  padding-right: var(--oc-safe-area-right);
+  padding-left: var(--synth-safe-area-left);
+  padding-right: var(--synth-safe-area-right);
 }
 
 /* Колонка сообщений чата: десктоп — прежние max-w-[50vw]; мобильные зоны — шире */
@@ -150,8 +150,8 @@ html.device-tablet {
 
 html.device-phone {
   --chat-column-width: 100%;
-  --chat-pad-left: max(0.75rem, var(--oc-safe-area-left));
-  --chat-pad-right: max(0.75rem, var(--oc-safe-area-right));
+  --chat-pad-left: max(0.75rem, var(--synth-safe-area-left));
+  --chat-pad-right: max(0.75rem, var(--synth-safe-area-right));
 }
 
 html.device-tablet {
@@ -162,15 +162,15 @@ html.device-tablet {
 
 /* Композер чата: десктоп — прежние w-4/5; мобильные зоны — почти вся ширина */
 html.device-phone {
-  --composer-ml: max(0.75rem, var(--oc-safe-area-left));
-  --composer-mr: max(0.75rem, var(--oc-safe-area-right));
+  --composer-ml: max(0.75rem, var(--synth-safe-area-left));
+  --composer-mr: max(0.75rem, var(--synth-safe-area-right));
 }
 
 html.device-phone .chat-composer {
   width: calc(100% - var(--composer-ml) - var(--composer-mr));
   margin-left: var(--composer-ml);
   margin-right: var(--composer-mr);
-  margin-bottom: calc(0.5rem + var(--oc-safe-area-bottom));
+  margin-bottom: calc(0.5rem + var(--synth-safe-area-bottom));
 }
 
 html.device-tablet .chat-composer {
@@ -262,7 +262,7 @@ html.pointer-coarse .overlay-scrollbar__thumb--horizontal {
 
 html.pointer-coarse .overlay-scrollbar-target {
   scrollbar-width: thin !important;
-  scrollbar-color: var(--oc-scrollbar-thumb) transparent !important;
+  scrollbar-color: var(--synth-scrollbar-thumb) transparent !important;
 }
 
 html.pointer-coarse .overlay-scrollbar-target::-webkit-scrollbar {
@@ -273,10 +273,19 @@ html.pointer-coarse .overlay-scrollbar-target::-webkit-scrollbar {
 }
 
 /* Минимальные тач-таргеты в хедере/дроверах */
-html.pointer-coarse header button,
-html.pointer-coarse .mobile-drawer-panel button {
+html.pointer-coarse header button:not([role="switch"]):not([data-compact]),
+html.pointer-coarse .mobile-drawer-panel button:not([role="switch"]):not([data-compact]) {
   min-width: 40px;
   min-height: 40px;
+}
+
+/* Контейнер вкладок левой панели: на телефоне/планшете кнопки вкладок получают
+   min-height 40px (правило выше), а контейнер жёстко h-8 (2rem) — кнопки выходят
+   за его границы. Высота контейнера подстраивается; десктоп (h-8) не затронут. */
+html.device-phone .left-tabs,
+html.device-tablet .left-tabs {
+  height: auto;
+  min-height: 2.5rem;
 }
 
 /* Композер: тулбар ВСЕГДА в один ряд (flex-nowrap) + горизонтальный скролл.
@@ -311,10 +320,10 @@ html.central-narrow .chat-composer .chat-toolbar-actions::-webkit-scrollbar {
 
 /* Компактные кнопки тулбара композера на мобильных (~28px), иконка по центру.
    html.central-narrow — узкая центральная колонка на десктопе с открытыми панелями. */
-html.pointer-coarse .chat-composer button,
-html.device-phone .chat-composer button,
-html.device-tablet .chat-composer button,
-html.central-narrow .chat-composer button {
+html.pointer-coarse .chat-composer button:not([role="switch"]):not([data-compact]),
+html.device-phone .chat-composer button:not([role="switch"]):not([data-compact]),
+html.device-tablet .chat-composer button:not([role="switch"]):not([data-compact]),
+html.central-narrow .chat-composer button:not([role="switch"]):not([data-compact]) {
   min-width: 28px;
   min-height: 28px;
   align-items: center;
@@ -336,14 +345,14 @@ html.central-narrow .chat-composer button svg {
    центральная колонка узкая — кнопки компактные (~28px, иконки 16px), иначе
    обычный размер. Сам «один ряд» уже задан универсально выше. */
 @container (max-width: 800px) {
-  .chat-composer button {
+  .chat-composer button:not([role="switch"]):not([data-compact]) {
     min-width: 28px;
     min-height: 28px;
     align-items: center;
     justify-content: center;
     padding: 4px;
   }
-  .chat-composer button svg {
+  .chat-composer button:not([role="switch"]):not([data-compact]) svg {
     width: 16px;
     height: 16px;
   }
@@ -417,9 +426,27 @@ html.device-tablet [data-tree-node] .group-hover\:block {
 
 /* 2.2 Touch-таргеты: действия внутри hover-контейнеров (сообщения, стикеры,
    очередь, нотификации, ссылки) — ~40px */
-html.pointer-coarse .group-hover\:opacity-100 button {
+html.pointer-coarse .group-hover\:opacity-100 button:not([role="switch"]):not([data-compact]) {
   min-width: 40px;
   min-height: 40px;
+}
+
+/* 2.2 Действия под сообщениями — компактные (~28px) вместо общих 40px,
+   строка прижата к низу бабла (компактные margin/padding). */
+html.pointer-coarse .message-actions button:not([role="switch"]):not([data-compact]),
+html.device-phone .message-actions button:not([role="switch"]):not([data-compact]),
+html.device-tablet .message-actions button:not([role="switch"]):not([data-compact]) {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 2px;
+}
+
+html.pointer-coarse .message-actions,
+html.device-phone .message-actions,
+html.device-tablet .message-actions {
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+  margin-bottom: -0.5rem;
 }
 
 /* 2.2 Строки дерева — тапобласть ≥40px, кнопки действий ≥36px */
@@ -427,7 +454,7 @@ html.pointer-coarse [data-tree-node] {
   min-height: 40px;
 }
 
-html.pointer-coarse [data-tree-node] button {
+html.pointer-coarse [data-tree-node] button:not([role="switch"]):not([data-compact]) {
   min-width: 36px;
   min-height: 36px;
 }
@@ -438,15 +465,21 @@ html.device-tablet [data-tree-node] {
   min-height: 40px;
 }
 
-html.device-phone [data-tree-node] button,
-html.device-tablet [data-tree-node] button {
+html.device-phone [data-tree-node] button:not([role="switch"]):not([data-compact]),
+html.device-tablet [data-tree-node] button:not([role="switch"]):not([data-compact]) {
   min-width: 36px;
   min-height: 36px;
 }
 
 /* 2.2 Кнопки в модалках (DialogContent) — тапобласть ≥40px */
-html.pointer-coarse [data-slot="dialog-content"] button {
+html.pointer-coarse [data-slot="dialog-content"] button:not([role="switch"]):not([data-compact]) {
   min-height: 40px;
+}
+
+/* Вкладка «Агенты» (настройки): карточки в одну колонку на телефоне/планшете */
+html.device-phone .agents-grid,
+html.device-tablet .agents-grid {
+  grid-template-columns: 1fr;
 }
 
 /* Компактные подписи индикаторов на телефоне и при узкой центральной колонке
@@ -458,4 +491,18 @@ html.pointer-coarse [data-slot="dialog-content"] button {
 html.device-phone .device-hide-label,
 html.central-narrow .device-hide-label {
   display: none;
+}
+
+/* Попап уведомлений: на мобильных кнопка-триггер не у правого края (правее —
+   профиль/правая панель), поэтому absolute right-0 уводит попап за левый край.
+   Фиксируем от viewport с отступами; хедер h-11 (2.75rem) под safe-area. */
+html.device-phone .notifications-popup,
+html.device-tablet .notifications-popup {
+  position: fixed;
+  left: 0.5rem;
+  right: 0.5rem;
+  width: auto;
+  max-width: none;
+  top: calc(2.75rem + env(safe-area-inset-top, 0px));
+  margin-top: 0;
 }

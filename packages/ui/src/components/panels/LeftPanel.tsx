@@ -1701,7 +1701,7 @@ export const LeftPanel: React.FC = () => {
 
   return (
     <div className="flex h-full flex-col">
-      <div ref={containerRef} className="flex h-8 shrink-0 items-center px-2">
+      <div ref={containerRef} className="left-tabs flex h-8 shrink-0 items-center px-2 py-1">
         <div data-tab-row className="flex w-full rounded-lg border border-sidebar-border overflow-hidden">
           {LEFT_TABS.map((tab) => {
             const active = leftPanelTab === tab.id

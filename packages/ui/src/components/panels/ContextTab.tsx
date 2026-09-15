@@ -307,6 +307,7 @@ function RadioSetting({
       <div className="flex items-center gap-2">
         <button
           onClick={onSelect}
+          data-compact
           className={`flex items-center justify-center size-4 rounded-full border-2 transition-colors shrink-0 ${
             selected ? 'border-primary bg-primary' : 'border-border bg-transparent'
           }`}
@@ -319,6 +320,7 @@ function RadioSetting({
         <button
           onClick={() => selected && onChange(Math.max(min, value - 1))}
           disabled={!selected}
+          data-compact
           className="flex h-5 w-5 items-center justify-center rounded text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground disabled:pointer-events-none disabled:opacity-0"
         >
           −
@@ -336,6 +338,7 @@ function RadioSetting({
         <button
           onClick={() => selected && onChange(Math.min(max, value + 1))}
           disabled={!selected}
+          data-compact
           className="flex h-5 w-5 items-center justify-center rounded text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground disabled:pointer-events-none disabled:opacity-0"
         >
           +
@@ -366,6 +369,7 @@ function NumberSetting({
       <div className="flex items-center gap-1">
         <button
           onClick={() => onChange(Math.max(min, value - 1))}
+          data-compact
           className="flex h-5 w-5 items-center justify-center rounded text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
         >
           −
@@ -381,6 +385,7 @@ function NumberSetting({
         {suffix && <span className="text-xs text-muted-foreground">{suffix}</span>}
         <button
           onClick={() => onChange(Math.min(max, value + 1))}
+          data-compact
           className="flex h-5 w-5 items-center justify-center rounded text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
         >
           +

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { synthApi, type UserInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
+import { Toggle } from '../ui/Toggle'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 
@@ -263,15 +264,7 @@ export const UsersPanel = () => {
                       )}
                     </div>
                   </div>
-                  <button onClick={() => handleToggleActive(u)} className={cn(
-                    'relative w-9 h-5 rounded-full transition-colors shrink-0',
-                    u.is_active ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600',
-                  )}>
-                    <span className={cn(
-                      'absolute top-0.5 size-4 rounded-full bg-white transition-all shadow-sm',
-                      u.is_active ? 'right-0.5' : 'left-0.5',
-                    )} />
-                  </button>
+                  <Toggle enabled={u.is_active} onToggle={() => handleToggleActive(u)} />
                 </div>
 
                 <div className="flex flex-wrap gap-1 mb-2">

@@ -38,7 +38,7 @@ export function MessageActions({
   const isUser = role === 'user'
 
   return (
-    <div className="flex items-center gap-0.5 mt-2 pt-1.5 border-t border-border/30 opacity-0 group-hover:opacity-100 transition-opacity">
+    <div className="message-actions flex items-center gap-0.5 mt-2 pt-1.5 -mb-1.5 border-t border-border/30 opacity-0 group-hover:opacity-100 transition-opacity">
       <ActionBtn onClick={onCopy} title={t('chat.actions.copy')} icon="file-copy" />
 
       <ActionBtn onClick={onFork} title={t('chat.actions.fork')} icon="git-branch" />
