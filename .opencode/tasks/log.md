@@ -285,3 +285,25 @@
 - **Тесты:** `packages/ui` — 116 (было 114; +2: сброс баннера при исчезнувшем `waiting`; reload без `waiting`). Монорепо: typecheck 0 ошибок, тесты shared 72 / ui 116 / core 1220 / backend 229, lint 0 errors.
 - **Деплой K3s (0.5.12, UI-only):** образ `git.itphx.ru/itphx/synth-ui:0.5.12` собран/запушен (sha256:6162c119…); `ui.image.tag` 0.5.11→0.5.12, push `main` (`55e8239..7505188`) → Fleet `synth` 1/1 Ready, rollout успешен; `synth-backend` 0.5.7 не перезапускался. Проверка боевого: в JS нет `Synth v`, версия `0.5.12`, `sw.js?v=…`, интервал 60000; CSS логина (device-phone/tablet) без изменений; `/` → `no-cache`, `/sw.js` → `no-store`.
 - **Пользователю:** на ПК один раз жёстко перезагрузить (Ctrl+Shift+R) — дальше баннер будет сниматься по «Обновить». В PWA — обновиться через баннер; при скрытии клавиатуры форма вернётся наверх с логотипом.
+
+## 2026-09-15 — fix(ui): распознавание полей логина менеджерами паролей; деплой K3s 0.5.13
+- **Задача:** браузер и KeePassXC неверно распознают поля входа: логин воспринимается как пароль, пароль не распознаётся; сохранение учётных данных путает поля.
+- **Тип:** bugfix (UI/autofill) + ops
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS
+- **Коммит:** synth — `ec67160` (fix + bump v0.5.13); synth-deploy — `fd99f35`.
+- **Первопричина:** у инпутов не было `id`/`name`, а `<label>` не были связаны через `htmlFor`. Эвристики автозаполнения (Chrome/Safari, расширения KeePassXC) опираются на `id`/`name`/`for` (+`autocomplete`); локализованные русские placeholder'ы им не помогают. Поле API-ключа вообще было без `autoComplete`. `autoComplete="username"|"current-password"` на OIDC-полях уже были — но без `id`/`name`/`htmlFor` этого недостаточно.
+- **Решение:** форма — `name="synth-login"`, `autoComplete="on"`; логин — `id/name="synth-login-username"/username`, `autoComplete="username"`, `autoCapitalize="none"`, `autoCorrect="off"`, `spellCheck={false}`; пароль — `id/name="synth-login-password"/password`, `autoComplete="current-password"`; сервер — `id/name="synth-login-server"/server`, `autoComplete="url"`; API-ключ — `id/name="synth-login-apikey"/apiKey`, `autoComplete="off"` (не предлагается как пароль УЗ); все label получили `htmlFor`. Debug-`<select>` и fallback-инпут логина — те же `id`/`name` (ветки взаимоисключающие).
+- **Тест:** новый `packages/ui/src/components/auth/LoginForm.test.tsx` (3 кейса: OIDC, API-key, debug-select) фиксирует атрибуты. `@testing-library/react` в проекте не установлен (AGENTS.md запрещает ставить новое) — тест написан на `react-dom/client` + `act` в существующем паттерне ui.
+- **Проверки:** typecheck 0 ошибок; тесты shared 72 / ui **119** (+3) / core 1220 / backend 229; lint 0 errors. Боевой бандл содержит `synth-login-username|password|apikey|server`, `current-password`, `name:"synth-login"`/`autoComplete:"on"`.
+- **Деплой K3s (0.5.13, UI-only):** образ `git.itphx.ru/itphx/synth-ui:0.5.13` (sha256:93d10635…) запушен; `ui.image.tag` 0.5.12→0.5.13, Fleet `synth` 1/1 Ready; `synth-backend` 0.5.7 не перезапускался.
+- **Находка (не менялось):** `packages/ui/src/components/admin/ProvidersPanel.tsx:205` — API-ключ провайдера (`type="password"`) без `id`/`name`/`autoComplete`, та же проблема в админке. Требуется отдельное решение.
+
+## 2026-09-15 — research: вход по отпечатку (WebAuthn/passkeys) в PWA
+- **Тип:** research (@researcher), без изменений кода. Отчёт в переписке.
+- **Вывод:** «просто/средне для managed, сложно для гибрида и локального core».
+  - Managed (`https://synth.k3s.itphx.loc`): plumbing уже есть — `GET /auth/login` (редирект в Keycloak) и `/auth/callback` реализованы (`packages/backend/src/routes/auth.ts:20-88`). Нужно в основном настроить **Keycloak (≥24) WebAuthn Passwordless** + кнопка «Войти по отпечатку» → `window.location.href='/auth/login'`. Оценка **~2–4 дня**. Минус: нарушает AD-043 («без визита в Keycloak») — потребуется ревизия AD.
+  - Гибрид/локальный core: **RP ID/origin** — пасскей привязан к origin (`synth.k3s.itphx.loc` ≠ `localhost`), а вход в гибриде идёт ROPC, с которым WebAuthn несовместим в принципе (нет браузерной церемонии). Оценка **+2–5 дней** и смена UX (device flow) либо новая authorization-code подсистема в core.
+  - Собственный WebAuthn (свой RP ID, `@simplewebauthn/*`, хранение ключей в `$SYNTH_DATA_DIR/auth/`): **8–13 дней**, высокий риск, обходит Keycloak → проблема с ролями (источник истины — Keycloak) и не даёт серверных токенов для гибрида. Не рекомендуется.
+  - В репозитории и в прототипе `~/dev/aic/t11` кода WebAuthn нет — функциональность полностью новая.
+- **Рекомендация:** MVP — пасскей только для managed-инстанса (Keycloak WebAuthn Passwordless) + пароль как fallback; гибрид/локальный core не трогать в MVP. Первый шаг (1 день): включить WebAuthn Passwordless в realm `synth`, проверить цепочку `GET /auth/login` → Keycloak → биометрия → `/auth/callback` → cookie → SPA.
