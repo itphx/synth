@@ -422,3 +422,16 @@
 - **Проверки:** typecheck 0; тесты shared 72 / ui **136** / core 1220 / backend 229; lint 0 errors; в бандле есть `auth.fullscreen`/`auth.exitFullscreen`.
 - **Деплой K3s (0.5.20, UI-only):** `synth-ui:0.5.20` (sha256:d18d94a9…); backend 0.5.14 не перезапускался; боевой бандл содержит ключи fullscreen.
 - **Ограничение:** iOS Safari не поддерживает fullscreen для произвольного элемента (`document.fullscreenEnabled=false`) — пункт там скрыт; это ок (цель — Android).
+
+## 2026-09-15 — refactor(ui): чистка костылей и мёртвого кода после скролл-экспериментов; деплой K3s 0.5.21 (UI-only)
+- **Задача:** «Убедись, что не наделали костылей и не осталось мёртвого кода, например после попыток решить проблему в Yandex/Firefox скролом.»
+- **Тип:** refactor + ops
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS (K3s); `+10 / −252`
+- **Аудит (rg по `packages/ui`):** не осталось `useKeyboardInset`/`kb-inset`, `any-pointer`/`anyFine`, `h-screen`/`min-h-screen`, дублей `:root/body/#root`. Переменные `--oc-header-height`, `--oc-wco-*`, `--oc-safe-area-bottom-visual`, `--oc-visual-viewport-height` используются в других местах репозитория (не мёртвые).
+- **Удалено (костыль):** «имитация скролла» — `hooks/useBrowserChromeCollapse.ts` (+тест), вызов в `App.tsx`, CSS-блок в `index.css` (`overflow-y:auto`, `body overflow:visible`, `#root min-height: calc(100dvh + 8px)`, `.app-shell{position:fixed}`). Причина: не работал там, где нужен (Yandex — ни в одной ориентации, Firefox — в ландшафте); задачу решает fullscreen (v0.5.20). Мобильный root снова не скроллится, `.app-shell` снова в потоке.
+- **Удалено (мёртвое):** `--oc-visual-viewport-offset-top` — только писалась, никем не читалась (`useViewportHeight.ts`/`.test.tsx`/`design-system.css`).
+- **Коммит:** synth — `7042104` (bump v0.5.21); synth-deploy — `3f30567`.
+- **Проверки:** typecheck 0; тесты shared 72 / ui **133** / core 1220 / backend 229; lint 0 errors; Playwright (390×844): root не скроллится (`scrollHeight−innerHeight=0`, `scrollTo(0,8)` → 0), `.app-shell` `position:relative` высотой 844, композер виден, дроверы/модалка работают, пункт «Полный экран» на месте; десктоп 1280×800 не затронут.
+- **Деплой K3s (0.5.21, UI-only):** `synth-ui:0.5.21` (sha256:8b54b800…) — в боевом CSS/JS нет удалённых маркеров (`100dvh + 8px`, `oc-visual-viewport-offset-top`, fixed app-shell), fullscreen-ключи присутствуют; backend 0.5.14 не перезапускался.
+- **Инцидент окружения:** первая docker-сборка упала с `no space left on device` (диск 100%). Освобождено ~41 ГБ (`docker image prune -a`, `container prune`), сборка повторена успешно. Стоит помнить про чистку Docker.
