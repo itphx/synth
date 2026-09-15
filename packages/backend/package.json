@@ -1,6 +1,6 @@
 {
   "name": "@itphx/synth-backend",
-  "version": "0.5.10",
+  "version": "0.5.11",
   "type": "module",
   "files": [
     "dist"
