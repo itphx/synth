@@ -249,3 +249,14 @@
   - Ключевой подводный камень: `:root #root { height:100%; overflow:hidden }` + `html/body overflow:hidden` → внешней прокрутки нет, `window.scrollTo` бесполезен; поэтому скролл внутри `.login-screen`, а не окна.
 - **Деплой K3s (0.5.9, UI-only):** образ `git.itphx.ru/itphx/synth-ui:0.5.9` собран из исходников и запушен (sha256:0a5d5779…); `ui.image.tag` 0.5.8→0.5.9, push `main` (`9639c68..03b5a00`) → Fleet `synth` 1/1 Ready, rollout `synth-ui` успешен; `synth-backend` 0.5.7 не перезапускался. Проверка заголовков: `/` и `/index.html` → `cache-control: no-cache`, `/assets/*` → `public, max-age=31536000, immutable`, `/sw.js` → `no-store` + `synth-shell-v2`/`SKIP_WAITING`. `https://synth.k3s.itphx.loc/` → 200.
 - **Ожидаемое поведение:** при следующем открытии PWA получит 0.5.9 JS (SW network-first), увидит ожидающий новый SW и покажет баннер «Обновить»; после нажатия — reload и полный переход на SW v2. Дальше обновления подхватываются автоматически с уведомлением (и в браузере тоже).
+
+## 2026-09-15 — fix(ui): клавиатура на экране входа в standalone-PWA; деплой K3s 0.5.10
+- **Задача:** «Баннер обновления и уведомления о потере связи работают. Но на экране входа в PWA клавиатура всё ещё перекрывает пароль (в мобильном браузере — ок). Сброс кэша и данных не помог.»
+- **Тип:** bugfix (UI/PWA) + ops
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS
+- **Коммиты:** synth — `0f4f6fd` (fix), `ffc79f2` (bump v0.5.10); synth-deploy — `d2d035c`.
+- **Диагноз:** фикс 0.5.9 опирался на `--kb-inset` (`useKeyboardInset` ← `window.visualViewport`). В standalone-PWA `visualViewport` при клавиатуре может не обновляться/не отдавать высоту → padding=0 → сдвига нет. Это объясняет разницу «браузер vs PWA» при одинаковом устройстве; сброс кэша тут ни при чём.
+- **Решение (keyboard-agnostic):** пока любой `input` формы в фокусе (touch) — у `.login-screen` включается класс `login-screen--keyboard` с `padding-bottom: 50vh`, и контейнер прокручивается вниз; при blur резерв снимается (с задержкой 200 мс, чтобы переход между полями не мигал). Не зависит от высоты клавиатуры и от `visualViewport`.
+- **Верификация (dev, viewport 390×844, эмуляция touch):** до фокуса padding 0, пароль bottom 572; при фокусе класс применён, padding 422 px (50vh), scrollTop 64, пароль bottom **329** — с большим запасом выше клавиатуры (порог даже для 400 px клавиатуры = 444); при blur резерв снят. Композер/`useKeyboardInset` не тронуты.
+- **Деплой K3s (0.5.10, UI-only):** образ `git.itphx.ru/itphx/synth-ui:0.5.10` собран/запушен (sha256:15e921ed…); `ui.image.tag` 0.5.9→0.5.10, push `main` (`03b5a00..d2d035c`) → Fleet `synth` 1/1 Ready, rollout успешен; `synth-backend` 0.5.7 не перезапускался. Проверка: отданный CSS содержит `login-screen--keyboard{padding-bottom:50vh}`; `/` → `no-cache`, `/sw.js` → `no-store`. Проверки монорепо: typecheck 0 ошибок, тесты shared 72 / ui 114 / core 1220 / backend 229, lint 0 errors.
