@@ -1,19 +1,17 @@
 import { useEffect } from 'react'
 
 const APP_HEIGHT_VAR = '--oc-app-height'
-const OFFSET_TOP_VAR = '--oc-visual-viewport-offset-top'
 
 /**
  * Синхронизирует высоту мобильного шелла с visual viewport.
  *
- * Пишет высоту в --oc-app-height как `min(100dvh, ${h}px)` и offsetTop в
- * --oc-visual-viewport-offset-top на <html>. Значение h — минимум из высоты
- * visualViewport (fallback — window.innerHeight) и layout viewport. CSS `min()`
- * не даёт шеллу превысить динамический вьюпорт (в альбомной ориентации нижняя
- * панель браузера не перекрывает композер), но при этом значение реагирует на
- * клавиатуру: когда она открыта, пиксельная часть min() меньше 100dvh, и шелл
- * уменьшается без отдельного клавиатурного отступа. При отсутствии данных
- * переменные не трогаются — остаётся CSS-fallback 100dvh/100vh.
+ * Пишет высоту в --oc-app-height как `min(100dvh, ${h}px)`. Значение h — минимум
+ * из высоты visualViewport (fallback — window.innerHeight) и layout viewport.
+ * CSS `min()` не даёт шеллу превысить динамический вьюпорт (в альбомной
+ * ориентации нижняя панель браузера не перекрывает композер), но при этом
+ * значение реагирует на клавиатуру: когда она открыта, пиксельная часть min()
+ * меньше 100dvh, и шелл уменьшается без отдельного клавиатурного отступа.
+ * При отсутствии данных переменная не трогается — остаётся CSS-fallback 100dvh/100vh.
  */
 export function useViewportHeight(): void {
   useEffect(() => {
@@ -27,9 +25,6 @@ export function useViewportHeight(): void {
       const height = Math.min(vv?.height ?? window.innerHeight, window.innerHeight)
       if (typeof height === 'number' && height > 0) {
         root.style.setProperty(APP_HEIGHT_VAR, `min(100dvh, ${height}px)`)
-      }
-      if (vv) {
-        root.style.setProperty(OFFSET_TOP_VAR, `${vv.offsetTop}px`)
       }
     }
 
@@ -51,7 +46,6 @@ export function useViewportHeight(): void {
       window.removeEventListener('resize', schedule)
       window.removeEventListener('orientationchange', schedule)
       root.style.removeProperty(APP_HEIGHT_VAR)
-      root.style.removeProperty(OFFSET_TOP_VAR)
     }
   }, [])
 }

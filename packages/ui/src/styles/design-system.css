@@ -9,7 +9,6 @@
     --oc-safe-area-bottom-visual: env(safe-area-inset-bottom, 0px);
     --oc-safe-area-left: env(safe-area-inset-left, 0px);
     --oc-header-height: 56px;
-    --oc-visual-viewport-offset-top: 0px;
     --oc-visual-viewport-height: 100dvh;
     --oc-wco-left-inset: 0px;
     --oc-wco-right-inset: 0px;

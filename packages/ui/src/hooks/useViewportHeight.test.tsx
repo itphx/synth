@@ -8,7 +8,6 @@ import { useViewportHeight } from './useViewportHeight'
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const APP_HEIGHT_VAR = '--oc-app-height'
-const OFFSET_TOP_VAR = '--oc-visual-viewport-offset-top'
 
 function Probe() {
   useViewportHeight()
@@ -54,10 +53,6 @@ function appHeight(): string {
   return document.documentElement.style.getPropertyValue(APP_HEIGHT_VAR)
 }
 
-function offsetTop(): string {
-  return document.documentElement.style.getPropertyValue(OFFSET_TOP_VAR)
-}
-
 afterEach(async () => {
   while (mounted.length > 0) {
     const { root, host } = mounted.pop()!
@@ -70,18 +65,16 @@ afterEach(async () => {
   vi.restoreAllMocks()
   delete (window as unknown as Record<string, unknown>).visualViewport
   document.documentElement.style.removeProperty(APP_HEIGHT_VAR)
-  document.documentElement.style.removeProperty(OFFSET_TOP_VAR)
 })
 
 describe('useViewportHeight', () => {
   it('ограничивает высоту layout viewport, если visualViewport больше (альбомная ориентация)', async () => {
     vi.stubGlobal('innerHeight', 700)
-    installVisualViewport(makeVisualViewport({ height: 900, offsetTop: 12 }))
+    installVisualViewport(makeVisualViewport({ height: 900 }))
 
     await mountProbe()
 
     expect(appHeight()).toBe('min(100dvh, 700px)')
-    expect(offsetTop()).toBe('12px')
   })
 
   it('уменьшает высоту вместе с visualViewport (открытая клавиатура)', async () => {
@@ -93,14 +86,13 @@ describe('useViewportHeight', () => {
     expect(appHeight()).toBe('min(100dvh, 560px)')
   })
 
-  it('без visualViewport использует window.innerHeight и не пишет offset', async () => {
+  it('без visualViewport использует window.innerHeight', async () => {
     vi.stubGlobal('innerHeight', 800)
     installVisualViewport(undefined)
 
     await mountProbe()
 
     expect(appHeight()).toBe('min(100dvh, 800px)')
-    expect(offsetTop()).toBe('')
   })
 
   it('не пишет высоту при нулевых данных (остаётся CSS-fallback)', async () => {
@@ -112,7 +104,7 @@ describe('useViewportHeight', () => {
     expect(appHeight()).toBe('')
   })
 
-  it('снимает переменные при размонтировании', async () => {
+  it('снимает переменную при размонтировании', async () => {
     vi.stubGlobal('innerHeight', 800)
     installVisualViewport(makeVisualViewport({ height: 800 }))
 
@@ -125,6 +117,5 @@ describe('useViewportHeight', () => {
     })
 
     expect(appHeight()).toBe('')
-    expect(offsetTop()).toBe('')
   })
 })
