@@ -307,3 +307,21 @@
   - Собственный WebAuthn (свой RP ID, `@simplewebauthn/*`, хранение ключей в `$SYNTH_DATA_DIR/auth/`): **8–13 дней**, высокий риск, обходит Keycloak → проблема с ролями (источник истины — Keycloak) и не даёт серверных токенов для гибрида. Не рекомендуется.
   - В репозитории и в прототипе `~/dev/aic/t11` кода WebAuthn нет — функциональность полностью новая.
 - **Рекомендация:** MVP — пасскей только для managed-инстанса (Keycloak WebAuthn Passwordless) + пароль как fallback; гибрид/локальный core не трогать в MVP. Первый шаг (1 день): включить WebAuthn Passwordless в realm `synth`, проверить цепочку `GET /auth/login` → Keycloak → биометрия → `/auth/callback` → cookie → SPA.
+
+## 2026-09-15 — fix(ui): API-ключи не предлагаются для сохранения в браузере; деплой K3s 0.5.14 (backend + UI)
+- **Задача:** API-ключи провайдера вообще не должны предлагаться для сохранения в браузере; выкатить новые версии backend и UI.
+- **Тип:** bugfix (UI/autofill) + ops
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS
+- **Коммиты:** synth — `79fc42f` (fix + bump v0.5.14); synth-deploy — `3057497`.
+- **Первопричина:** `type="password"` без анти-автозаполняющих атрибутов и без `id`/`name` — Chrome/Safari и расширения (1Password/LastPass/Bitwarden) эвристикой определяли поле как учётные данные и предлагали «Сохранить пароль?».
+- **Исправлено (аудит по всему UI):**
+  - `packages/ui/src/components/admin/ProvidersPanel.tsx:205` — API-ключ провайдера: `id="admin-provider-api-key"`, `name="providerApiKey"`, `autoComplete="off"`, `data-1p-ignore`, `data-lpignore="true"`, `data-bwignore`, `data-form-type="other"`, `spellCheck={false}`, `autoCapitalize="none"`, `autoCorrect="off"`, label `htmlFor`; `type="password"` сохранён (маскировка).
+  - `packages/ui/src/components/settings/McpSettings.tsx:272` — `textarea` env MCP-сервера (туда попадают токены/секреты): то же + `id="mcp-server-env"`, `name="mcpServerEnv"`.
+  - Больше реальных секрет-инпутов вне `LoginForm` не найдено (grep `type="password"`, `apiKey`, `api_key`, `token`, `secret`).
+  - `LoginForm.tsx` НЕ тронут (там нужны `username`/`current-password`). Оба изменённых поля не находятся внутри `<form>`, поэтому `autoComplete="off"` на форму не требовался.
+- **Тест:** новый `packages/ui/src/components/admin/ProvidersPanel.test.tsx` — проверяет `autocomplete=off`, `name` без `password|username|login|account`, наличие `data-1p-ignore`/`data-lpignore`/`data-bwignore`/`data-form-type` и связку label↔input.
+- **Проверки:** typecheck 0 ошибок; тесты shared 72 / ui **120** (+1) / core 1220 / backend 229; lint 0 errors.
+- **Деплой K3s (0.5.14, backend + UI):** образы `synth-ui:0.5.14` (sha256:e0a704c1…) и `synth-backend:0.5.14` (sha256:e816abe4…) собраны/запушены; `values.yaml` — обе `tag` → 0.5.14, Fleet `synth` 1/1 Ready, оба rollout успешны.
+- **Проверка боевого:** `/health` → `{"status":"healthy","version":"0.5.14"}`; `/auth/oidc-meta` отвечает; неаутентифицированный `/api/v2/sessions` → 401; UI-бандл содержит `admin-provider-api-key`, `providerApiKey`, `data-1p-ignore`/`data-lpignore`/`data-bwignore`, `mcpServerEnv`. **Smoke ROPC-логин тестовой УЗ (`lucky`): `POST /auth/login` → 200 (роли `USER`), cookie `user_session`, `/auth/status` → `authenticated:true`, `/api/v2/sessions` → 200.**
+- **Внимание:** рестарт backend сбрасывает in-memory сессии (`packages/backend/src/auth/middleware.ts:9`) — все пользователи (включая текущий браузер) будут разлогинены, это ожидаемо (см. инцидент 14.09).
