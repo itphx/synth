@@ -11,14 +11,16 @@ import { PwaUpdatePrompt } from './PwaUpdatePrompt'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-type WaitingWorker = { postMessage: (message: unknown) => void }
+class MockWaitingWorker extends EventTarget {
+  postMessage = vi.fn()
+}
 
 class MockRegistration extends EventTarget {
-  waiting: WaitingWorker | null
+  waiting: MockWaitingWorker | null
   installing: (EventTarget & { state: string }) | null = null
   update = vi.fn(async () => this)
 
-  constructor(waiting: WaitingWorker | null) {
+  constructor(waiting: MockWaitingWorker | null) {
     super()
     this.waiting = waiting
   }
@@ -32,6 +34,7 @@ class MockServiceWorkerContainer extends EventTarget {
 }
 
 let container: MockServiceWorkerContainer
+let reloadSpy: ReturnType<typeof vi.fn>
 const mounted: { host: HTMLElement; root: Root }[] = []
 
 async function mountPrompt(): Promise<HTMLElement> {
@@ -53,6 +56,11 @@ function findButton(host: HTMLElement, label: string): HTMLButtonElement {
 
 beforeEach(() => {
   vi.stubEnv('PROD', true)
+  reloadSpy = vi.fn()
+  // jsdom не даёт навигацию — подменяем getter window.location, чтобы проверить reload.
+  vi.spyOn(window, 'location', 'get').mockReturnValue({
+    reload: reloadSpy,
+  } as unknown as Location)
   container = new MockServiceWorkerContainer()
   Object.defineProperty(navigator, 'serviceWorker', {
     value: container,
@@ -69,12 +77,13 @@ afterEach(async () => {
     })
     host.remove()
   }
+  vi.restoreAllMocks()
 })
 
 describe('PwaUpdatePrompt', () => {
   it('показывает баннер при ожидающем SW и активном controller', async () => {
     container.controller = {}
-    container.registration = new MockRegistration({ postMessage: vi.fn() })
+    container.registration = new MockRegistration(new MockWaitingWorker())
 
     const host = await mountPrompt()
 
@@ -83,21 +92,27 @@ describe('PwaUpdatePrompt', () => {
   })
 
   it('по кнопке «Обновить» отправляет SKIP_WAITING', async () => {
-    const worker = { postMessage: vi.fn() }
-    container.controller = {}
-    container.registration = new MockRegistration(worker)
+    vi.useFakeTimers()
+    try {
+      const worker = new MockWaitingWorker()
+      container.controller = {}
+      container.registration = new MockRegistration(worker)
 
-    const host = await mountPrompt()
-    await act(async () => {
-      findButton(host, 'pwa.updateNow').click()
-    })
+      const host = await mountPrompt()
+      await act(async () => {
+        findButton(host, 'pwa.updateNow').click()
+      })
 
-    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' })
+      expect(worker.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' })
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
   })
 
   it('«Позже» скрывает баннер', async () => {
     container.controller = {}
-    container.registration = new MockRegistration({ postMessage: vi.fn() })
+    container.registration = new MockRegistration(new MockWaitingWorker())
 
     const host = await mountPrompt()
     await act(async () => {
@@ -109,10 +124,44 @@ describe('PwaUpdatePrompt', () => {
 
   it('не показывает баннер при первой установке без controller', async () => {
     container.controller = null
-    container.registration = new MockRegistration({ postMessage: vi.fn() })
+    container.registration = new MockRegistration(new MockWaitingWorker())
 
     const host = await mountPrompt()
 
+    expect(host.textContent).not.toContain('pwa.updateAvailable')
+  })
+
+  it('сбрасывает баннер, когда ожидающий SW исчез', async () => {
+    container.controller = {}
+    const worker = new MockWaitingWorker()
+    container.registration = new MockRegistration(worker)
+
+    const host = await mountPrompt()
+    expect(host.textContent).toContain('pwa.updateAvailable')
+
+    await act(async () => {
+      container.registration!.waiting = null
+      worker.dispatchEvent(new Event('statechange'))
+    })
+
+    expect(host.textContent).not.toContain('pwa.updateAvailable')
+  })
+
+  it('по «Обновить» без ожидающего SW перезагружает страницу и скрывает баннер', async () => {
+    container.controller = {}
+    container.registration = new MockRegistration(new MockWaitingWorker())
+
+    const host = await mountPrompt()
+    expect(host.textContent).toContain('pwa.updateAvailable')
+
+    // К моменту клика ждать уже нечего — registration без waiting.
+    container.getRegistration.mockResolvedValueOnce(new MockRegistration(null))
+
+    await act(async () => {
+      findButton(host, 'pwa.updateNow').click()
+    })
+
+    expect(reloadSpy).toHaveBeenCalled()
     expect(host.textContent).not.toContain('pwa.updateAvailable')
   })
 })

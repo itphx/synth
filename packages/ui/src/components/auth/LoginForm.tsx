@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react'
-import { SYNTH_VERSION } from '@itphx/synth-shared'
 import { useAuthStore } from '@/stores/authStore'
 import { api } from '@/lib/api/client'
 import { synthApi } from '@/lib/api/synthApi'
@@ -110,7 +109,12 @@ export const LoginForm = () => {
     if (!(e.target instanceof HTMLInputElement)) return
     if (blurTimerRef.current !== null) window.clearTimeout(blurTimerRef.current)
     // небольшая задержка, чтобы переход фокуса между полями не сбрасывал резерв
-    blurTimerRef.current = window.setTimeout(() => setKeyboardReserve(false), 200)
+    blurTimerRef.current = window.setTimeout(() => {
+      blurTimerRef.current = null
+      setKeyboardReserve(false)
+      const el = loginRef.current
+      if (el) el.scrollTo({ top: 0, behavior: 'smooth' })
+    }, 200)
   }
 
   useEffect(() => {
@@ -312,10 +316,6 @@ export const LoginForm = () => {
             {isLoading ? t('common.loading') : t('auth.loginButton')}
           </button>
         </form>
-
-        <div className="mt-6 text-center text-[0.7rem] text-muted-foreground">
-          Synth v{SYNTH_VERSION}
-        </div>
       </div>
     </div>
   )

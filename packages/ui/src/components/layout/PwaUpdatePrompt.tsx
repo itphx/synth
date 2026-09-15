@@ -22,25 +22,46 @@ export function PwaUpdatePrompt() {
 
     let registration: ServiceWorkerRegistration | null = null
     let cancelled = false
+    let intervalId: number | null = null
+    const removeListeners: Array<() => void> = []
+    const watchedWorkers = new WeakSet<ServiceWorker>()
 
-    const showIfReady = () => {
-      if (dismissed.current) return
-      if (registration?.waiting && navigator.serviceWorker.controller) {
-        setUpdateReady(true)
+    const addListener = (target: EventTarget, type: string, handler: EventListener) => {
+      target.addEventListener(type, handler)
+      removeListeners.push(() => target.removeEventListener(type, handler))
+    }
+
+    // Единая синхронизация баннера с реальным ожиданием SW: включение И сброс.
+    const sync = () => {
+      if (cancelled) return
+      if (dismissed.current) {
+        setUpdateReady(false)
+        return
       }
+      setUpdateReady(Boolean(registration?.waiting && navigator.serviceWorker.controller))
+    }
+
+    // `waiting` может появиться позже — следим за его statechange.
+    const watchWaiting = (worker: ServiceWorker | null) => {
+      if (!worker || watchedWorkers.has(worker)) return
+      watchedWorkers.add(worker)
+      addListener(worker, 'statechange', sync)
     }
 
     const onUpdateFound = () => {
       const installing = registration?.installing
       if (!installing) return
-      installing.addEventListener('statechange', () => {
+      addListener(installing, 'statechange', () => {
         if (installing.state === 'installed' && navigator.serviceWorker.controller) {
-          showIfReady()
+          sync()
         }
+        watchWaiting(registration?.waiting ?? null)
       })
     }
 
     const onControllerChange = () => {
+      // Новый SW принял управление — ждать больше нечего.
+      setUpdateReady(false)
       if (!reloadOnControllerChange.current) return
       reloadOnControllerChange.current = false
       window.location.reload()
@@ -50,7 +71,7 @@ export function PwaUpdatePrompt() {
     const onVisibilityChange = () => {
       if (document.visibilityState !== 'visible') return
       dismissed.current = false
-      registration?.update().catch(() => {}).then(showIfReady)
+      registration?.update().catch(() => {}).then(sync)
     }
 
     navigator.serviceWorker
@@ -58,27 +79,42 @@ export function PwaUpdatePrompt() {
       .then((reg) => {
         if (cancelled) return
         registration = reg
-        showIfReady()
-        reg.addEventListener('updatefound', onUpdateFound)
+        watchWaiting(reg.waiting)
+        sync()
+        addListener(reg, 'updatefound', onUpdateFound)
       })
       .catch(() => {})
 
-    navigator.serviceWorker.addEventListener('controllerchange', onControllerChange)
-    document.addEventListener('visibilitychange', onVisibilityChange)
+    addListener(navigator.serviceWorker, 'controllerchange', onControllerChange)
+    addListener(document, 'visibilitychange', onVisibilityChange)
+
+    // Периодическая проверка обновлений — состояние не «залипает».
+    intervalId = window.setInterval(() => {
+      registration?.update().catch(() => {}).then(sync)
+    }, 60_000)
 
     return () => {
       cancelled = true
-      registration?.removeEventListener('updatefound', onUpdateFound)
-      navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
+      if (intervalId !== null) window.clearInterval(intervalId)
+      for (const remove of removeListeners) remove()
     }
   }, [])
 
   const handleUpdate = useCallback(async () => {
     const reg = await navigator.serviceWorker.getRegistration()
-    if (!reg?.waiting) return
-    reloadOnControllerChange.current = true
-    reg.waiting.postMessage({ type: 'SKIP_WAITING' })
+    if (reg?.waiting) {
+      reloadOnControllerChange.current = true
+      reg.waiting.postMessage({ type: 'SKIP_WAITING' })
+      // страховка: если controllerchange не придёт — перезагружаемся сами
+      window.setTimeout(() => {
+        reloadOnControllerChange.current = false
+        window.location.reload()
+      }, 1500)
+    } else {
+      // ждать нечего — просто перезагружаем страницу, баннер снимаем
+      setUpdateReady(false)
+      window.location.reload()
+    }
   }, [])
 
   const handleLater = useCallback(() => {
