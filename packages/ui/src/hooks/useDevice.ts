@@ -3,7 +3,7 @@ import { BREAKPOINTS, type DeviceType } from '@/lib/device'
 
 export interface DeviceInfo {
   deviceType: DeviceType
-  /** Сенсорный ввод без точного указателя (совпадает с html.pointer-coarse). */
+  /** Есть грубый указатель (touch) — совпадает с html.pointer-coarse. */
   isTouch: boolean
 }
 
@@ -14,9 +14,8 @@ export function useDevice(): DeviceInfo {
     `(min-width: ${BREAKPOINTS.phoneMax + 1}px) and (max-width: ${BREAKPOINTS.tabletMax}px)`
   )
   const coarse = useMediaQuery('(pointer: coarse)')
-  const anyFine = useMediaQuery('(any-pointer: fine)')
 
   const deviceType: DeviceType = isPhone ? 'phone' : isTablet ? 'tablet' : 'desktop'
 
-  return { deviceType, isTouch: coarse && !anyFine }
+  return { deviceType, isTouch: coarse }
 }

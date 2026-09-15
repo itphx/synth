@@ -1,1 +1,1 @@
-export const SYNTH_VERSION = '0.5.17';
+export const SYNTH_VERSION = '0.5.18';

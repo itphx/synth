@@ -97,6 +97,18 @@ html.device-tablet {
   height: var(--oc-app-height);
 }
 
+/* «Экранные» контейнеры используют видимую высоту (--oc-app-height, которую
+   пишет useViewportHeight как min(100dvh, innerHeight)), а не 100vh: в ландшафте
+   с браузерной панелью 100vh = large viewport и низ уходит за экран.
+   Вне @layer, чтобы перекрывать утилиты Tailwind. */
+.desktop-shell {
+  height: var(--oc-app-height, 100dvh);
+}
+
+.viewport-min-h {
+  min-height: var(--oc-app-height, 100dvh);
+}
+
 /* Имитация скролла для Yandex/Firefox на Android: мобильному root-документу
    даётся небольшой реальный запас прокрутки (NUDGE_PX в useBrowserChromeCollapse),
    чтобы у браузера был повод свернуть свою панель. Сам .app-shell фиксируется и

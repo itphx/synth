@@ -17,7 +17,7 @@ export const AuthGate = ({ children }: AuthGateProps) => {
 
   if (!isInitialized) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="viewport-min-h flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
           <div className="size-8 rounded-full border-2 border-foreground/20 border-t-foreground animate-spin" />
           <p className="text-sm text-muted-foreground">{t('common.loading')}</p>

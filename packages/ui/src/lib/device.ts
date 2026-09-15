@@ -12,7 +12,7 @@ const QUERIES = {
   desktop: '(min-width: 1200px)',
 } as const
 
-const POINTER_QUERIES = ['(pointer: coarse)', '(any-pointer: fine)'] as const
+const POINTER_QUERIES = ['(pointer: coarse)'] as const
 
 function hasMatchMedia(): boolean {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
@@ -20,7 +20,7 @@ function hasMatchMedia(): boolean {
 
 /**
  * Применяет device-классы на <html>: device-phone / device-tablet / device-desktop
- * (по ширине вьюпорта) и pointer-coarse (сенсор без точного указателя).
+ * (по ширине вьюпорта) и pointer-coarse (есть грубый указатель).
  * Возвращает функцию отписки. Вызывать один раз при старте (main.tsx).
  */
 export function initDeviceClasses(): () => void {
@@ -34,7 +34,6 @@ export function initDeviceClasses(): () => void {
     window.matchMedia(QUERIES.tablet),
     window.matchMedia(QUERIES.desktop),
     window.matchMedia(POINTER_QUERIES[0]),
-    window.matchMedia(POINTER_QUERIES[1]),
   ]
 
   const apply = () => {
@@ -42,8 +41,7 @@ export function initDeviceClasses(): () => void {
     root.classList.toggle('device-tablet', mqls[1]!.matches)
     root.classList.toggle('device-desktop', mqls[2]!.matches)
     const coarse = mqls[3]!.matches
-    const anyFine = mqls[4]!.matches
-    root.classList.toggle('pointer-coarse', coarse && !anyFine)
+    root.classList.toggle('pointer-coarse', coarse)
   }
 
   apply()
@@ -76,5 +74,4 @@ export function getDeviceType(): DeviceType {
 export function isCoarsePointer(): boolean {
   if (!hasMatchMedia()) return false
   return window.matchMedia(POINTER_QUERIES[0]).matches
-    && !window.matchMedia(POINTER_QUERIES[1]).matches
 }

@@ -145,7 +145,7 @@ function App() {
   )
 
   const desktopLayout = (
-    <div className="flex h-screen">
+    <div className="flex desktop-shell">
       <Sidebar
         side="left"
         width={leftPanel.width}

@@ -127,7 +127,7 @@ export const LoginForm = () => {
     <div
       ref={loginRef}
       className={cn(
-        'login-screen min-h-screen flex items-center justify-center bg-background',
+        'login-screen viewport-min-h flex items-center justify-center bg-background',
         keyboardReserve && 'login-screen--keyboard'
       )}
       onFocus={handleScreenFocus}

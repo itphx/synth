@@ -126,10 +126,9 @@ export function ChatInput({
   onToggleExpand,
 }: ChatInputProps) {
   const { t } = useI18n()
-  // Фаза 4: на чисто-сенсорных устройствах (coarse без fine-указателя) Enter на
-  // композере = перенос строки; отправка — только кнопкой «Отправить».
-  // При наличии физического указателя/клавиатуры (any-pointer: fine) isTouch=false
-  // и возвращается десктопное поведение Enter = отправка.
+  // Есть грубый указатель (тач): Enter на композере = перенос строки;
+  // отправка — только кнопкой «Отправить». На устройствах с тачем это также
+  // касается десктопов с тачскрином (isTouch = pointer: coarse).
   const { isTouch } = useDevice()
   const [value, setValue] = useState('')
   const retryText = useChatStore((s) => s.retryInputBySession[sessionId])
