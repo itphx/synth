@@ -239,6 +239,9 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITVERSE_OUTPUT"
 
+      - name: Ожидание доступности версии в npmjs
+        run: bash scripts/wait-npm-version.sh "${{ steps.docker_tags.outputs.version }}"
+
       - name: Авторизация для Docker Registry
         run: |
           mkdir -p "${{ gitverse.workspace }}/.docker"
