@@ -51,9 +51,9 @@ export const ColorPicker = ({ value, onChange }: ColorPickerProps) => {
       type="button"
       onClick={() => onChange('')}
       className={cn(
-        'size-7 rounded-full border-2 flex items-center justify-center text-[10px]',
+        'size-7 rounded-full border-2 flex items-center justify-center text-[0.625rem]',
         !value
-          ? 'border-blue-500'
+          ? 'border-primary'
           : 'border-border hover:border-muted-foreground',
       )}
       title={t('admin.colorPicker.default')}
@@ -69,7 +69,7 @@ export const ColorPicker = ({ value, onChange }: ColorPickerProps) => {
         className={cn(
           'size-7 rounded-full border-2 transition-colors',
           value === c
-            ? 'border-blue-500 scale-110'
+            ? 'border-primary scale-110'
             : 'border-transparent hover:scale-105',
         )}
         style={{ background: `var(${c})` }}

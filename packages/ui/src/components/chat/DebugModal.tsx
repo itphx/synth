@@ -18,7 +18,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function JsonBlock({ data }: { data: unknown }) {
   const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
   return (
-    <pre className="bg-muted/30 rounded p-2 overflow-auto max-h-64 text-[11px] leading-relaxed whitespace-pre-wrap">
+    <pre className="bg-muted/30 rounded p-2 overflow-auto max-h-64 text-[0.6875rem] leading-relaxed whitespace-pre-wrap">
       {text}
     </pre>
   );
@@ -148,7 +148,7 @@ export function DebugModal({ debug, onClose }: DebugModalProps) {
           {/* Reasoning */}
           {reasoning && (
             <Section title="Рассуждения (Reasoning)">
-              <div className="whitespace-pre-wrap bg-muted/30 rounded p-2 text-[11px] max-h-48 overflow-auto">
+              <div className="whitespace-pre-wrap bg-muted/30 rounded p-2 text-[0.6875rem] max-h-48 overflow-auto">
                 {reasoning}
               </div>
             </Section>
@@ -172,14 +172,14 @@ export function DebugModal({ debug, onClose }: DebugModalProps) {
                   <div className="mt-1 space-y-1">
                     {sa.prompt != null && (
                       <div>
-                        <span className="text-muted-foreground text-[10px] uppercase">Prompt</span>
-                        <div className="whitespace-pre-wrap text-[11px]">{String(sa.prompt).slice(0, 500)}</div>
+                        <span className="text-muted-foreground text-[0.625rem] uppercase">Prompt</span>
+                        <div className="whitespace-pre-wrap text-[0.6875rem]">{String(sa.prompt).slice(0, 500)}</div>
                       </div>
                     )}
                     {sa.response != null && (
                       <div>
-                        <span className="text-muted-foreground text-[10px] uppercase">Response</span>
-                        <div className="whitespace-pre-wrap text-[11px]">{String(sa.response).slice(0, 500)}</div>
+                        <span className="text-muted-foreground text-[0.625rem] uppercase">Response</span>
+                        <div className="whitespace-pre-wrap text-[0.6875rem]">{String(sa.response).slice(0, 500)}</div>
                       </div>
                     )}
                   </div>
@@ -198,12 +198,12 @@ export function DebugModal({ debug, onClose }: DebugModalProps) {
                   </summary>
                   <div className="mt-1 space-y-1">
                     <details className="mt-1">
-                      <summary className="text-muted-foreground cursor-pointer text-[10px] uppercase">Arguments</summary>
+                      <summary className="text-muted-foreground cursor-pointer text-[0.625rem] uppercase">Arguments</summary>
                       <JsonBlock data={tc.arguments} />
                     </details>
                     {tc.result != null && (
                       <details className="mt-1">
-                        <summary className="text-muted-foreground cursor-pointer text-[10px] uppercase">Result</summary>
+                        <summary className="text-muted-foreground cursor-pointer text-[0.625rem] uppercase">Result</summary>
                         <JsonBlock data={tc.result} />
                       </details>
                     )}
@@ -226,13 +226,13 @@ export function DebugModal({ debug, onClose }: DebugModalProps) {
                   </summary>
                   <div className="mt-1 space-y-1">
                     <details className="mt-1">
-                      <summary className="text-muted-foreground cursor-pointer text-[10px] uppercase">Arguments</summary>
+                      <summary className="text-muted-foreground cursor-pointer text-[0.625rem] uppercase">Arguments</summary>
                       <JsonBlock data={mc.arguments} />
                     </details>
                     {mc.result != null && (
                       <details className="mt-1">
-                        <summary className="text-muted-foreground cursor-pointer text-[10px] uppercase">Result</summary>
-                        <div className="whitespace-pre-wrap text-[11px] bg-muted/30 rounded p-2 max-h-64 overflow-auto">
+                        <summary className="text-muted-foreground cursor-pointer text-[0.625rem] uppercase">Result</summary>
+                        <div className="whitespace-pre-wrap text-[0.6875rem] bg-muted/30 rounded p-2 max-h-64 overflow-auto">
                           {typeof mc.result === 'string' && mc.result.length > 1000
                             ? mc.result.slice(0, 1000) + '\n...(обрезано)'
                             : String(mc.result)}

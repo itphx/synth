@@ -96,7 +96,7 @@ function StickyNoteItem({
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={handleKeyDown}
           onBlur={handleSave}
-          className="flex-1 bg-transparent border border-border rounded px-1 py-0.5 text-xs text-foreground outline-none resize-none min-h-[24px]"
+          className="flex-1 bg-transparent border border-border rounded px-1 py-0.5 text-xs text-foreground outline-none resize-none min-h-[1.5rem]"
           rows={1}
         />
       ) : (

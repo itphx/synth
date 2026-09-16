@@ -98,8 +98,8 @@ export function PlanActModeToggle({ sessionId }: { sessionId: string }) {
             onClick={() => handleChange(opt.mode)}
             disabled={disabled}
             aria-pressed={active}
-            title={!modeApplicable ? t('chat.mode.unavailable') : opt.hintKey ? t(opt.hintKey) : t(opt.labelKey)}
-            className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+            aria-label={!modeApplicable ? t('chat.mode.unavailable') : t(opt.labelKey)}
+            className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               active
                 ? opt.activeClass
                 : 'text-muted-foreground hover:text-foreground hover:bg-interactive-hover/50'

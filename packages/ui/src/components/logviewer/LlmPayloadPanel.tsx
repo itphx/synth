@@ -28,14 +28,14 @@ function ContentBlock({ content }: { content: string }) {
 
   return (
     <div className="space-y-1">
-      <pre className="bg-muted/40 rounded-lg p-2 overflow-auto text-[11px] leading-relaxed font-mono whitespace-pre-wrap break-all text-foreground">
+      <pre className="bg-muted/40 rounded-lg p-2 overflow-auto text-[0.6875rem] leading-relaxed font-mono whitespace-pre-wrap break-all text-foreground">
         {shown}
         {truncated && '…'}
       </pre>
       {content.length > MAX_CONTENT && (
         <button
           onClick={() => setExpanded((v) => !v)}
-          className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2"
+          className="text-[0.6875rem] text-muted-foreground hover:text-foreground underline underline-offset-2"
         >
           {expanded ? 'свернуть' : 'показать всё'}
         </button>

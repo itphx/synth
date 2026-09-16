@@ -34,6 +34,14 @@
             }
           }
           var root = document.documentElement;
+          var storedScale = parseFloat(localStorage.getItem('synth-ui-scale'));
+          if (!isFinite(storedScale)) {
+            var mqMobile = typeof window.matchMedia === 'function' && window.matchMedia('(max-width:1199px)').matches;
+            var mqPwa = typeof window.matchMedia === 'function' && window.matchMedia('(display-mode: standalone)').matches;
+            var isPwa = mqPwa || navigator.standalone === true;
+            storedScale = (mqMobile || isPwa) ? 0.85 : 1;
+          }
+          root.style.setProperty('--ui-scale', String(Math.min(1.2, Math.max(0.5, storedScale))));
           // Huawei Browser: собственный ночной режим затемняет светлую тему и
           // игнорирует color-scheme. Помечаем страницу и объявляем её dark,
           // чтобы браузер считал её уже тёмной и не применял затемнение.

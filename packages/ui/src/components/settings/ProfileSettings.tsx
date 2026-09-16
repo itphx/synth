@@ -4,6 +4,8 @@ import { useI18n } from '@/lib/i18n'
 import { api } from '@/lib/api/client'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { SettingsPage, SettingsCard } from './settings-layout'
 
 const MAX_AVATAR_SIZE = 500 * 1024
 
@@ -14,6 +16,7 @@ export const ProfileSettings = () => {
     username: '',
     display_name: '',
     email: '',
+    phone: '',
     team_roles: [] as string[],
     notes: '',
     avatar: null as string | null,
@@ -31,6 +34,7 @@ export const ProfileSettings = () => {
           username: profile.username || user?.username || '',
           display_name: profile.display_name || '',
           email: profile.email || user?.email || '',
+          phone: profile.phone || '',
           team_roles: profile.team_roles || [],
           notes: profile.notes || '',
           avatar: profile.preferences?.avatar || null,
@@ -40,6 +44,7 @@ export const ProfileSettings = () => {
           username: user?.username || '',
           display_name: '',
           email: user?.email || '',
+          phone: '',
           team_roles: [],
           notes: '',
           avatar: null,
@@ -75,6 +80,7 @@ export const ProfileSettings = () => {
       const updated = await api.updateProfile({
         display_name: form.display_name || undefined,
         email: form.email || undefined,
+        phone: form.phone || undefined,
         notes: form.notes,
         team_roles: form.team_roles,
         preferences: { avatar: form.avatar },
@@ -104,161 +110,182 @@ export const ProfileSettings = () => {
   const avatarInitial = form.display_name?.charAt(0).toUpperCase() || form.username?.charAt(0).toUpperCase() || '?'
 
   return (
-    <div className="max-w-lg">
-      <h2 className="text-lg font-semibold text-foreground mb-1">{t('auth.profile')}</h2>
-      <p className="text-sm text-muted-foreground mb-6">{t('auth.profileDescription')}</p>
-
-      <div className="flex flex-col gap-6">
-        <div className="flex items-center gap-4">
-          <div
-            className="size-20 rounded-full bg-interactive-selection flex items-center justify-center overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            {form.avatar ? (
-              <img src={form.avatar} alt="Avatar" className="size-full object-cover" />
-            ) : (
-              <span className="text-2xl font-medium text-interactive-selection-foreground">
-                {avatarInitial}
-              </span>
-            )}
-          </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            onChange={handleAvatarChange}
-            className="hidden"
-          />
-          <div>
-            <button
+    <SettingsPage title={t('auth.profile')} description={t('auth.profileDescription')}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <SettingsCard>
+          <div className="flex items-center gap-4">
+            <div
+              className="size-20 rounded-full bg-interactive-selection flex items-center justify-center overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
               onClick={() => fileInputRef.current?.click()}
+            >
+              {form.avatar ? (
+                <img src={form.avatar} alt="Avatar" className="size-full object-cover" />
+              ) : (
+                <span className="text-2xl font-medium text-interactive-selection-foreground">
+                  {avatarInitial}
+                </span>
+              )}
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleAvatarChange}
+              className="hidden"
+            />
+            <div className="min-w-0">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-sm font-medium",
+                  "bg-interactive-selection hover:bg-interactive-selection/90",
+                  "text-interactive-selection-foreground",
+                  "transition-colors"
+                )}
+              >
+                {form.avatar ? t('auth.changeAvatar') : t('auth.uploadAvatar')}
+              </button>
+              {form.avatar && (
+                <button
+                  onClick={() => setForm({ ...form, avatar: null })}
+                  className="ml-2 px-3 py-1.5 rounded-lg text-sm font-medium text-muted-foreground hover:bg-interactive-hover transition-colors"
+                >
+                  {t('auth.removeAvatar')}
+                </button>
+              )}
+            </div>
+          </div>
+        </SettingsCard>
+
+        <SettingsCard>
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium text-foreground" htmlFor="profile-username">{t('auth.login')}</label>
+            <input
+              id="profile-username"
+              type="text"
+              value={form.username}
+              readOnly
+              disabled
               className={cn(
-                "px-3 py-1.5 rounded-lg text-sm font-medium",
-                "bg-interactive-selection hover:bg-interactive-selection/90",
-                "text-interactive-selection-foreground",
+                "w-full px-3 py-2 rounded-lg border bg-muted text-muted-foreground",
+                "cursor-not-allowed"
+              )}
+            />
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium text-foreground" htmlFor="profile-display-name">{t('auth.displayName')}</label>
+            <input
+              id="profile-display-name"
+              type="text"
+              value={form.display_name}
+              onChange={(e) => setForm({ ...form, display_name: e.target.value })}
+              className={cn(
+                "w-full px-3 py-2 rounded-lg border bg-background text-foreground",
+                "focus:outline-none focus:ring-2 focus:ring-ring",
                 "transition-colors"
               )}
+            />
+          </div>
+        </SettingsCard>
+
+        <SettingsCard>
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium text-foreground" htmlFor="profile-email">{t('common.email')}</label>
+            <input
+              id="profile-email"
+              type="email"
+              value={form.email || ''}
+              onChange={(e) => setForm({ ...form, email: e.target.value })}
+              className={cn(
+                "w-full px-3 py-2 rounded-lg border bg-background text-foreground",
+                "focus:outline-none focus:ring-2 focus:ring-ring",
+                "transition-colors"
+              )}
+            />
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium text-foreground" htmlFor="profile-phone">{t('auth.phone')}</label>
+            <input
+              id="profile-phone"
+              type="tel"
+              value={form.phone || ''}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              className={cn(
+                "w-full px-3 py-2 rounded-lg border bg-background text-foreground",
+                "focus:outline-none focus:ring-2 focus:ring-ring",
+                "transition-colors"
+              )}
+            />
+          </div>
+        </SettingsCard>
+
+        <SettingsCard>
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium text-foreground" htmlFor="profile-team-role">{t('auth.teamRole')}</label>
+            <Select
+              value={form.team_roles[0] || 'developer'}
+              onValueChange={(value) => setForm({ ...form, team_roles: [value] })}
             >
-              {form.avatar ? t('auth.changeAvatar') : t('auth.uploadAvatar')}
-            </button>
-            {form.avatar && (
-              <button
-                onClick={() => setForm({ ...form, avatar: null })}
-                className="ml-2 px-3 py-1.5 rounded-lg text-sm font-medium text-muted-foreground hover:bg-interactive-hover transition-colors"
-              >
-                {t('auth.removeAvatar')}
-              </button>
-            )}
+              <SelectTrigger id="profile-team-role" className="w-full" aria-label={t('auth.teamRole')}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {teamRoleOptions.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-        </div>
+        </SettingsCard>
 
-        <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-foreground" htmlFor="profile-username">{t('auth.login')}</label>
-          <input
-            id="profile-username"
-            type="text"
-            value={form.username}
-            readOnly
-            disabled
-            className={cn(
-              "w-full px-3 py-2 rounded-lg border bg-muted text-muted-foreground",
-              "cursor-not-allowed"
-            )}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-foreground" htmlFor="profile-display-name">{t('auth.displayName')}</label>
-          <input
-            id="profile-display-name"
-            type="text"
-            value={form.display_name}
-            onChange={(e) => setForm({ ...form, display_name: e.target.value })}
-            className={cn(
-              "w-full px-3 py-2 rounded-lg border bg-background text-foreground",
-              "focus:outline-none focus:ring-2 focus:ring-ring",
-              "transition-colors"
-            )}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-foreground" htmlFor="profile-email">{t('common.email')}</label>
-          <input
-            id="profile-email"
-            type="email"
-            value={form.email || ''}
-            onChange={(e) => setForm({ ...form, email: e.target.value })}
-            className={cn(
-              "w-full px-3 py-2 rounded-lg border bg-background text-foreground",
-              "focus:outline-none focus:ring-2 focus:ring-ring",
-              "transition-colors"
-            )}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-foreground" htmlFor="profile-team-role">{t('auth.teamRole')}</label>
-          <select
-            id="profile-team-role"
-            value={form.team_roles[0] || 'developer'}
-            onChange={(e) => setForm({ ...form, team_roles: [e.target.value] })}
-            className={cn(
-              "w-full px-3 py-2 rounded-lg border bg-background text-foreground",
-              "focus:outline-none focus:ring-2 focus:ring-ring",
-              "transition-colors"
-            )}
-          >
-            {teamRoleOptions.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-foreground" htmlFor="profile-notes">{t('auth.notes')}</label>
-          <textarea
-            id="profile-notes"
-            value={form.notes}
-            onChange={(e) => setForm({ ...form, notes: e.target.value })}
-            rows={3}
-            className={cn(
-              "w-full px-3 py-2 rounded-lg border bg-background text-foreground",
-              "focus:outline-none focus:ring-2 focus:ring-ring",
-              "transition-colors resize-none"
-            )}
-          />
-        </div>
-
-        {error && (
-          <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
-            <Icon name="error-warning" className="size-4 shrink-0" />
-            {error}
+        <SettingsCard className="sm:col-span-2">
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium text-foreground" htmlFor="profile-notes">{t('auth.notes')}</label>
+            <textarea
+              id="profile-notes"
+              value={form.notes}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              rows={3}
+              className={cn(
+                "w-full px-3 py-2 rounded-lg border bg-background text-foreground",
+                "focus:outline-none focus:ring-2 focus:ring-ring",
+                "transition-colors resize-none"
+              )}
+            />
           </div>
-        )}
-
-        {success && (
-          <div className="flex items-center gap-2 p-3 rounded-lg bg-status-success/10 text-status-success text-sm">
-            <Icon name="check" className="size-4 shrink-0" />
-            {t('common.saved')}
-          </div>
-        )}
-
-        <div className="flex justify-end gap-3">
-          <button
-            onClick={handleSave}
-            disabled={isLoading}
-            className={cn(
-              "px-4 py-2 rounded-lg text-sm font-medium",
-              "bg-interactive-selection hover:bg-interactive-selection/90",
-              "disabled:opacity-50",
-              "transition-colors"
-            )}
-          >
-            {isLoading ? t('common.loading') : t('common.save')}
-          </button>
-        </div>
+        </SettingsCard>
       </div>
-    </div>
+
+      {error && (
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+          <Icon name="error-warning" className="size-4 shrink-0" />
+          {error}
+        </div>
+      )}
+
+      {success && (
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-status-success/10 text-status-success text-sm">
+          <Icon name="check" className="size-4 shrink-0" />
+          {t('common.saved')}
+        </div>
+      )}
+
+      <div className="flex justify-end border-t border-border pt-4">
+        <button
+          onClick={handleSave}
+          disabled={isLoading}
+          className={cn(
+            "px-4 py-2 rounded-lg text-sm font-medium",
+            "bg-interactive-selection hover:bg-interactive-selection/90",
+            "disabled:opacity-50",
+            "transition-colors"
+          )}
+        >
+          {isLoading ? t('common.loading') : t('common.save')}
+        </button>
+      </div>
+    </SettingsPage>
   )
 }

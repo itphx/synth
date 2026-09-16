@@ -611,7 +611,7 @@ function SessionTreeItem({
     <>
       <TreeNode {...node} />
       {hasChildren && isExpanded && (
-        <div className="ml-[15px] border-l border-sidebar-border pl-4">
+        <div className="ml-[0.9375rem] border-l border-sidebar-border pl-4">
           {childSessions.map((child) => (
             <SessionTreeItem
               key={child.id}
@@ -1217,7 +1217,7 @@ function FilesTab() {
               >
                 <div className="flex items-center gap-1 px-2 py-0.5">
                   <Icon name="folder-3" className="h-3 w-3 shrink-0 text-muted-foreground/50" />
-                  <span className="text-[11px] text-muted-foreground/60 truncate">{project.workspace || ''}</span>
+                  <span className="text-[0.6875rem] text-muted-foreground/60 truncate">{project.workspace || ''}</span>
                 </div>
                 {entries.map((entry) => {
                   const node = renderEntry(project.id, entry, 0)
@@ -1701,7 +1701,7 @@ export const LeftPanel: React.FC = () => {
 
   return (
     <div className="flex h-full flex-col">
-      <div ref={containerRef} className="left-tabs flex h-8 shrink-0 items-center px-2 py-1">
+      <div ref={containerRef} className="left-tabs flex shrink-0 px-2 py-1">
         <div data-tab-row className="flex w-full rounded-lg border border-sidebar-border overflow-hidden">
           {LEFT_TABS.map((tab) => {
             const active = leftPanelTab === tab.id
@@ -1710,14 +1710,15 @@ export const LeftPanel: React.FC = () => {
                 key={tab.id}
                 onClick={() => setLeftPanelTab(tab.id)}
                 title={t(tab.labelKey)}
-                className={`flex items-center justify-center gap-1.5 py-1 text-xs transition-colors
+                data-compact
+                className={`flex items-center justify-center gap-1.5 py-1.5 text-xs transition-colors
                   border-r border-sidebar-border last:border-r-0
                   flex-1
-                  ${iconsOnly ? 'min-w-0 px-2' : 'min-w-[72px] px-3'}
+                  ${iconsOnly ? 'min-w-0 px-2' : 'min-w-[4.5rem] px-3'}
                   ${active ? 'bg-primary/15 text-foreground' : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'}
                 `}
               >
-                <Icon name={tab.icon} className="h-3.5 w-3.5 shrink-0" />
+                <Icon name={tab.icon} className="h-4 w-4 shrink-0" />
                 {!iconsOnly && <span data-tab-label className="truncate">{t(tab.labelKey)}</span>}
               </button>
             )

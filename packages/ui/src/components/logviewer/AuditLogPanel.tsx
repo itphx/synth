@@ -260,7 +260,7 @@ export const AuditLogPanel = () => {
                 <tr key={`${e.ts}-${idx}`} className="border-t border-border align-top">
                   <td className="px-3 py-2 whitespace-nowrap text-muted-foreground tabular-nums">{formatTime(e.ts)}</td>
                   <td className="px-3 py-2 whitespace-nowrap">
-                    <span className={cn('inline-block rounded px-1.5 py-0.5 text-[10px] font-medium', TYPE_COLORS[e.type] || 'bg-muted text-muted-foreground')}>
+                    <span className={cn('inline-block rounded px-1.5 py-0.5 text-[0.625rem] font-medium', TYPE_COLORS[e.type] || 'bg-muted text-muted-foreground')}>
                       {e.type}
                     </span>
                   </td>
@@ -281,7 +281,7 @@ export const AuditLogPanel = () => {
                       : '—'}
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap tabular-nums">{formatCost(e.costUsd)}</td>
-                  <td className="px-3 py-2 min-w-[140px] text-muted-foreground">{e.reason ?? '—'}</td>
+                  <td className="px-3 py-2 min-w-[8.75rem] text-muted-foreground">{e.reason ?? '—'}</td>
                 </tr>
               ))}
             </tbody>

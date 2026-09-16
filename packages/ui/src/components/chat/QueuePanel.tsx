@@ -60,20 +60,20 @@ export function QueuePanel({
           {isStalled && (
             <button
               onClick={onResume}
-              className="rounded px-2 py-0.5 text-[11px] font-medium bg-yellow-500/20 text-yellow-700 dark:text-yellow-300 hover:bg-yellow-500/30 transition-colors"
+              className="rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-yellow-500/20 text-yellow-700 dark:text-yellow-300 hover:bg-yellow-500/30 transition-colors"
             >
               {t('chat.queue.resume')}
             </button>
           )}
           <button
             onClick={onReturnAll}
-            className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
+            className="rounded px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
           >
             {t('chat.queue.return')}
           </button>
           <button
             onClick={onClear}
-            className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+            className="rounded px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
           >
             {t('chat.queue.clear')}
           </button>

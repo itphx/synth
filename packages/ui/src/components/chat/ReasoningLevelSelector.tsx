@@ -53,7 +53,7 @@ export function ReasoningLevelSelector({ sessionId }: { sessionId: string }) {
         <DropdownMenu.Trigger asChild>
           <button
             type="button"
-            className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-foreground hover:bg-interactive-hover/50 transition-colors cursor-pointer"
+            className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] font-medium text-foreground hover:bg-interactive-hover/50 transition-colors cursor-pointer"
             title={t('chat.reasoning.title')}
             aria-label={t('chat.reasoning.title')}
           >
@@ -68,9 +68,10 @@ export function ReasoningLevelSelector({ sessionId }: { sessionId: string }) {
           side="top"
           sideOffset={4}
           align="end"
-          className="min-w-[140px] p-1 bg-popover border border-border rounded-lg shadow-lg z-50"
+          collisionPadding={8}
+          className="min-w-[8.75rem] p-1 bg-popover border border-border rounded-lg shadow-lg z-50"
         >
-          <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          <div className="px-2 py-1 text-[0.625rem] font-medium uppercase tracking-wide text-muted-foreground">
             {t('chat.reasoning.title')}
           </div>
           {availableLevels.map((level) => {

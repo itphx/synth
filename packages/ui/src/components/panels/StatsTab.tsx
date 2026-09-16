@@ -87,7 +87,7 @@ export const StatsTab: React.FC = () => {
               />
             </div>
             {isContextNearLimit && (
-              <div className="mt-1 text-[11px] text-destructive">
+              <div className="mt-1 text-[0.6875rem] text-destructive">
                 Лимит контекста близко
               </div>
             )}

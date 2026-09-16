@@ -81,8 +81,9 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
           <DropdownMenu.Content
             side="top"
             sideOffset={4}
-            className="min-w-[200px] p-1 bg-popover border border-border rounded-lg shadow-lg z-50"
+            className="min-w-[12.5rem] p-1 bg-popover border border-border rounded-lg shadow-lg z-50"
             align="end"
+            collisionPadding={8}
           >
             {models.filter((m) => m.enabled).slice(0, 10).map((m) => {
               const p = providers.find((pv) => pv.name === m.provider)
@@ -293,18 +294,17 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
       <DropdownMenu.Trigger asChild>
         <button
           className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0"
-          title={selectedModelName || currentProvider?.model || '—'}
           aria-label={selectedModelName || currentProvider?.model || t('chat.modelControls.searchModels')}
         >
           <ProviderIcon icon={currentProvider?.icon ?? ''} baseUrl={currentProvider?.url} size={14} className="text-muted-foreground shrink-0" />
           {(!isMobile || alwaysShowLabel) && (
             <>
               {alwaysShowLabel && currentProvider?.name && (
-                <span className="min-w-0 max-w-[120px] truncate text-xs text-muted-foreground">
+                <span className="min-w-0 max-w-[7.5rem] truncate text-xs text-muted-foreground">
                   {currentProvider.name}
                 </span>
               )}
-              <span className="min-w-0 font-medium text-xs text-foreground whitespace-nowrap max-w-[200px] truncate">
+              <span className="min-w-0 font-medium text-xs text-foreground whitespace-nowrap max-w-[12.5rem] truncate">
                 {selectedModelName || currentProvider?.model || '—'}
               </span>
             </>
@@ -319,6 +319,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
           className="w-[min(380px,calc(100vw-2rem))] p-0 flex flex-col bg-popover border border-border rounded-lg shadow-lg z-50"
           align="end"
           alignOffset={-40}
+          collisionPadding={8}
         >
           <div className="p-2 border-b border-border/40">
             <div className="relative flex items-center gap-1">
@@ -328,7 +329,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
                 placeholder={t('chat.modelControls.searchModels')}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 pr-[88px] h-8 w-full text-xs bg-background border border-border rounded-md px-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                className="pl-8 pr-[5.5rem] h-8 w-full text-xs bg-background border border-border rounded-md px-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
                 autoFocus={!isMobile}
               />
               {searchQuery.trim().length > 0 && (
@@ -337,7 +338,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
                     e.stopPropagation()
                     setSearchQuery('')
                   }}
-                  className="absolute right-[50px] top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover/50 text-muted-foreground hover:text-foreground transition-colors"
+                  className="absolute right-[3.125rem] top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover/50 text-muted-foreground hover:text-foreground transition-colors"
                 >
                   <Icon name="close" className="h-3.5 w-3.5" />
                 </button>
@@ -348,7 +349,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
                     e.stopPropagation()
                     virtualizer.scrollToIndex(0, { align: 'start' })
                   }}
-                  className="absolute right-[72px] top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover/50 text-muted-foreground hover:text-foreground transition-colors"
+                  className="absolute right-[4.5rem] top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover/50 text-muted-foreground hover:text-foreground transition-colors"
                 >
                   <Icon name="arrow-up-s" className="h-3.5 w-3.5" />
                 </button>
@@ -441,7 +442,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
                     return (
                       <div key={item.id} style={style} className="flex items-center gap-2 px-3 py-1.5 border-b border-border/30">
                         <Icon name={iconName as 'star-fill' | 'time'} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">{item.text}</span>
+                        <span className="text-[0.625rem] font-semibold text-muted-foreground uppercase tracking-wider">{item.text}</span>
                       </div>
                     )
                   }
@@ -508,7 +509,7 @@ const VirtualModelRow = memo(function VirtualModelRow({
       <span className="font-medium truncate flex-1">{model.name}</span>
       {isSelected && <Icon name="check" className="h-3.5 w-3.5 text-primary shrink-0" />}
       {model.context_window != null && model.context_window > 0 && (
-        <span className="text-[10px] text-muted-foreground shrink-0">{model.context_window}</span>
+        <span className="text-[0.625rem] text-muted-foreground shrink-0">{model.context_window}</span>
       )}
       <button
         onClick={(e) => {

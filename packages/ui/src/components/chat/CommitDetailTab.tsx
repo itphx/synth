@@ -81,21 +81,21 @@ export function CommitDetailTab({ tab }: CommitDetailTabProps) {
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[0.6875rem] text-muted-foreground">
           <span className="flex items-center gap-1">
-            <span className="text-[10px] opacity-60">{t('commit.hash')}:</span>
-            <code className="font-mono text-[10px] bg-interactive rounded px-1 py-px">{commit.shortHash}</code>
+            <span className="text-[0.625rem] opacity-60">{t('commit.hash')}:</span>
+            <code className="font-mono text-[0.625rem] bg-interactive rounded px-1 py-px">{commit.shortHash}</code>
           </span>
           <span className="flex items-center gap-1">
-            <span className="text-[10px] opacity-60">{t('commit.author')}:</span>
+            <span className="text-[0.625rem] opacity-60">{t('commit.author')}:</span>
             {commit.author}
           </span>
           <span className="flex items-center gap-1">
-            <span className="text-[10px] opacity-60">{t('git.branch')}:</span>
-            <code className="font-mono text-[10px] bg-interactive rounded px-1 py-px">{commit.branch}</code>
+            <span className="text-[0.625rem] opacity-60">{t('git.branch')}:</span>
+            <code className="font-mono text-[0.625rem] bg-interactive rounded px-1 py-px">{commit.branch}</code>
           </span>
           <span className="flex items-center gap-1">
-            <span className="text-[10px] opacity-60">{t('commit.date')}:</span>
+            <span className="text-[0.625rem] opacity-60">{t('commit.date')}:</span>
             {dateStr}
           </span>
         </div>
@@ -104,14 +104,14 @@ export function CommitDetailTab({ tab }: CommitDetailTabProps) {
       {/* Файлы */}
       {commit.files.length > 0 && (
         <div className="px-4 pb-2">
-          <div className="text-[11px] text-muted-foreground mb-1.5 flex items-center gap-2">
+          <div className="text-[0.6875rem] text-muted-foreground mb-1.5 flex items-center gap-2">
             <Icon name="file-text" className="size-3" />
             <span>{t('commit.filesCount', { count: String(commit.files.length) })}</span>
           </div>
           <div className="space-y-0.5">
             {commit.files.map((f) => (
               <div key={f.path} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <span className={`w-3.5 text-center text-[10px] font-mono ${
+                <span className={`w-3.5 text-center text-[0.625rem] font-mono ${
                   f.status === 'added' ? 'text-green-500' :
                   f.status === 'deleted' ? 'text-red-500' :
                   f.status === 'renamed' ? 'text-yellow-500' :
@@ -120,8 +120,8 @@ export function CommitDetailTab({ tab }: CommitDetailTabProps) {
                   {f.status === 'added' ? 'A' : f.status === 'deleted' ? 'D' : f.status === 'renamed' ? 'R' : 'M'}
                 </span>
                 <span className="truncate">{f.path}</span>
-                {f.additions > 0 && <span className="text-[10px] text-green-500">+{f.additions}</span>}
-                {f.deletions > 0 && <span className="text-[10px] text-red-500">-{f.deletions}</span>}
+                {f.additions > 0 && <span className="text-[0.625rem] text-green-500">+{f.additions}</span>}
+                {f.deletions > 0 && <span className="text-[0.625rem] text-red-500">-{f.deletions}</span>}
               </div>
             ))}
           </div>

@@ -84,8 +84,8 @@ export function TreeChildren({
 }: TreeChildrenProps) {
   const { t } = useI18n()
 
-  const indentClass = indent ? 'ml-[15px] border-l border-sidebar-border pl-4' : ''
-  const borderClass = borderOnHover ? 'ml-[15px] border-l border-transparent hover:border-sidebar-border pl-[4px]' : ''
+  const indentClass = indent ? 'ml-[0.9375rem] border-l border-sidebar-border pl-4' : ''
+  const borderClass = borderOnHover ? 'ml-[0.9375rem] border-l border-transparent hover:border-sidebar-border pl-[0.25rem]' : ''
 
   if (totalCount === 0) {
     return (

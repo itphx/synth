@@ -355,7 +355,7 @@ export function SessionSettingsTab() {
           {sessionAllowRules.length === 0 ? (
             <div className="rounded-lg border border-dashed border-border px-3 py-2">
               <div className="text-xs text-muted-foreground">Нет одобренных инструментов</div>
-              <div className="mt-0.5 text-[10px] text-muted-foreground/60">
+              <div className="mt-0.5 text-[0.625rem] text-muted-foreground/60">
                 Allow-правила появляются после «Разрешить в сессии» в панели подтверждения
               </div>
             </div>
@@ -366,7 +366,7 @@ export function SessionSettingsTab() {
                   <span className="min-w-0 flex-1 truncate text-xs text-foreground font-mono">{rule.label}</span>
                   <button
                     onClick={() => handleRemoveAllowRule(rule)}
-                    className="shrink-0 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                    className="shrink-0 rounded px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
                   >
                     Удалить
                   </button>
@@ -422,7 +422,7 @@ export function SessionSettingsTab() {
         {/* Embedding */}
         {microFirst && (
           <Section title="Embedding">
-            <div className="text-[10px] text-muted-foreground/60 mb-2">
+            <div className="text-[0.625rem] text-muted-foreground/60 mb-2">
               Эмбеддинг-модель для семантической классификации в микро-слое
             </div>
             <label className="flex items-center gap-3 cursor-pointer">
@@ -478,7 +478,7 @@ export function SessionSettingsTab() {
               <>
                 {/* Стратегия */}
                 <div className="flex flex-col gap-1">
-                  <label className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">
+                  <label className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
                     {t('routing.strategy')}
                   </label>
                   <select
@@ -495,7 +495,7 @@ export function SessionSettingsTab() {
 
                 {/* Контентная */}
                 <div className="space-y-2 pl-2 border-l-2 border-border/30">
-                  <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">
+                  <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
                     📝 {t('routing.content')}
                   </span>
                   <RoutingModelPair
@@ -530,7 +530,7 @@ export function SessionSettingsTab() {
                 {/* Эскалация */}
                 <div className="space-y-2 pl-2 border-l-2 border-border/30">
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">
+                    <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
                       ⚠️ {t('routing.escalation')}
                     </span>
                     <Toggle enabled={routingEscalationEnabled} onToggle={() => setRoutingEscalationEnabled(!routingEscalationEnabled)} />
@@ -563,7 +563,7 @@ export function SessionSettingsTab() {
                 {/* Стоимость */}
                 <div className="space-y-2 pl-2 border-l-2 border-border/30">
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">
+                    <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
                       💰 {t('routing.cost')}
                     </span>
                     <Toggle enabled={routingCostEnabled} onToggle={() => setRoutingCostEnabled(!routingCostEnabled)} />
@@ -596,14 +596,14 @@ export function SessionSettingsTab() {
                 {/* Саб-агенты */}
                 <div className="space-y-2 pl-2 border-l-2 border-border/30">
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">
+                    <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
                       🤖 {t('routing.subagent')}
                     </span>
                     <Toggle enabled={routingSubagentEnabled} onToggle={() => setRoutingSubagentEnabled(!routingSubagentEnabled)} />
                   </div>
                   {routingSubagentEnabled && (
                     <div className="flex flex-col gap-1">
-                      <label className="text-[10px] text-muted-foreground/60">{t('routing.subagent.model')}</label>
+                      <label className="text-[0.625rem] text-muted-foreground/60">{t('routing.subagent.model')}</label>
                       <select
                         value={routingSubagentProvider ? `${routingSubagentProvider}:${routingSubagentModel}` : 'auto'}
                         onChange={(e) => {
@@ -700,7 +700,7 @@ export function SessionSettingsTab() {
 function Section({ title, children }: { title: React.ReactNode; children: React.ReactNode }) {
   return (
     <div>
-      <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wide mb-2">{title}</div>
+      <div className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide mb-2">{title}</div>
       <div className="space-y-2">{children}</div>
     </div>
   )
@@ -710,7 +710,7 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
   return (
     <div className="flex items-center justify-between text-xs">
       <span className="text-muted-foreground">{label}</span>
-      <span className={mono ? 'font-mono text-[11px]' : ''}>{value}</span>
+      <span className={mono ? 'font-mono text-[0.6875rem]' : ''}>{value}</span>
     </div>
   )
 }
@@ -735,7 +735,7 @@ function SessionTodosBlock({ todos }: { todos?: TodoItem[] | null }) {
     return (
       <div className="rounded-lg border border-dashed border-border px-3 py-2">
         <div className="text-xs text-muted-foreground">{t('sessionTab.todos.empty')}</div>
-        <div className="mt-0.5 text-[10px] text-muted-foreground/60">{t('sessionTab.todos.hint')}</div>
+        <div className="mt-0.5 text-[0.625rem] text-muted-foreground/60">{t('sessionTab.todos.hint')}</div>
       </div>
     )
   }
@@ -747,14 +747,14 @@ function SessionTodosBlock({ todos }: { todos?: TodoItem[] | null }) {
         const priorityStyle = TODO_PRIORITY_STYLES[todo.priority] || TODO_PRIORITY_STYLES.low
         return (
           <div key={todo.id ?? i} className="flex items-start gap-2 rounded-lg border border-border/60 bg-input px-2.5 py-1.5">
-            <span className={`mt-0.5 inline-flex shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${statusStyle.className}`}>
+            <span className={`mt-0.5 inline-flex shrink-0 rounded px-1.5 py-0.5 text-[0.625rem] font-medium ${statusStyle.className}`}>
               {t(statusStyle.labelKey)}
             </span>
             <div className="min-w-0 flex-1">
               <div className={`text-xs text-foreground ${todo.status === 'completed' ? 'line-through opacity-60' : ''}`}>
                 {todo.content}
               </div>
-              <div className={`mt-0.5 text-[10px] font-medium uppercase tracking-wide ${priorityStyle.className}`}>
+              <div className={`mt-0.5 text-[0.625rem] font-medium uppercase tracking-wide ${priorityStyle.className}`}>
                 {t(priorityStyle.labelKey)}
               </div>
             </div>
@@ -790,7 +790,7 @@ function RoutingModelPair({
 
   return (
     <div className="space-y-1">
-      <span className="text-[10px] text-muted-foreground/60">{label}</span>
+      <span className="text-[0.625rem] text-muted-foreground/60">{label}</span>
       <div className="flex gap-1">
         <select
           value={provider}
@@ -798,7 +798,7 @@ function RoutingModelPair({
             onProviderChange(e.target.value)
             onModelChange('')
           }}
-          className="flex-1 min-w-0 rounded-md bg-input border border-border px-1.5 py-0.5 text-[10px] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          className="flex-1 min-w-0 rounded-md bg-input border border-border px-1.5 py-0.5 text-[0.625rem] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
         >
           <option value="">Провайдер</option>
           {availableProviders.map((p) => (
@@ -808,7 +808,7 @@ function RoutingModelPair({
         <select
           value={model}
           onChange={(e) => onModelChange(e.target.value)}
-          className="flex-1 min-w-0 rounded-md bg-input border border-border px-1.5 py-0.5 text-[10px] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          className="flex-1 min-w-0 rounded-md bg-input border border-border px-1.5 py-0.5 text-[0.625rem] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           disabled={!provider}
         >
           <option value="">Модель</option>

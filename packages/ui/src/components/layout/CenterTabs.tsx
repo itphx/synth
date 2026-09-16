@@ -30,7 +30,7 @@ const TAB_ICONS: Record<CenterTab['type'], string> = {
 }
 
 const TAB_CONTENT_FLOOR = 160
-const TAB_MAX_WIDTH = 200
+const TAB_MAX_WIDTH = '12.5rem'
 
 function TabTooltipLabel({ tab }: { tab: CenterTab }) {
   const { t } = useI18n()

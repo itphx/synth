@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
+import { SYNTH_VERSION } from '@itphx/synth-shared/version'
 import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
-import { api } from '@/lib/api/client'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 
@@ -9,12 +9,11 @@ interface Stats {
   totalSessions: number
   totalProjects: number
   totalUsers: number
-  version: string
 }
 
 export const DashboardPanel = () => {
   const { t } = useI18n()
-  const [stats, setStats] = useState<Stats>({ totalSessions: 0, totalProjects: 0, totalUsers: 0, version: '0.1.0' })
+  const [stats, setStats] = useState<Stats>({ totalSessions: 0, totalProjects: 0, totalUsers: 0 })
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -23,13 +22,12 @@ export const DashboardPanel = () => {
         const [sessions, projects, users] = await Promise.all([
           synthApi.getSessions().catch(() => []),
           synthApi.getProjects().catch(() => []),
-          api.getUsers().then((d) => d.users || []).catch(() => []),
+          synthApi.getUsers().then((d) => d.users || []).catch(() => []),
         ])
         setStats({
           totalSessions: sessions.length,
           totalProjects: projects.length,
           totalUsers: users.length,
-          version: '0.1.0',
         })
       } finally {
         setLoading(false)
@@ -39,10 +37,10 @@ export const DashboardPanel = () => {
   }, [])
 
   const cards = [
-    { label: t('admin.dashboard.totalSessions'), value: stats.totalSessions, icon: 'chat-new', color: 'text-blue-600 dark:text-blue-400' },
-    { label: t('admin.dashboard.projects'), value: stats.totalProjects, icon: 'briefcase', color: 'text-emerald-600 dark:text-emerald-400' },
-    { label: t('admin.dashboard.users'), value: stats.totalUsers, icon: 'user-smile', color: 'text-purple-600 dark:text-purple-400' },
-    { label: t('admin.dashboard.version'), value: stats.version, icon: 'rocket', color: 'text-amber-600 dark:text-amber-400' },
+    { label: t('admin.dashboard.totalSessions'), value: stats.totalSessions, icon: 'chat-new', color: 'text-status-info' },
+    { label: t('admin.dashboard.projects'), value: stats.totalProjects, icon: 'briefcase', color: 'text-status-success' },
+    { label: t('admin.dashboard.users'), value: stats.totalUsers, icon: 'user-smile', color: 'text-primary' },
+    { label: t('admin.dashboard.version'), value: SYNTH_VERSION, icon: 'rocket', color: 'text-status-warning' },
   ]
 
   return (

@@ -57,10 +57,10 @@ function NotificationRow({ item, isRead, onDismiss, onRead }: RowProps) {
       className={`flex items-start gap-2 rounded px-2 py-1.5 hover:bg-interactive-hover transition-colors group cursor-pointer ${isRead ? 'opacity-40' : ''}`}
     >
       <span
-        className="inline-flex shrink-0 text-[8px] font-medium px-1 py-px rounded leading-none mt-0.5"
+        className="inline-flex shrink-0 text-[0.5rem] font-medium px-1 py-px rounded leading-none mt-0.5"
         style={{ minWidth: 'auto' }}
       >
-        <span className={CATEGORY_COLORS[item.category] || ''} style={{ padding: '0 3px', borderRadius: '2px', lineHeight: '14px' }}>
+        <span className={CATEGORY_COLORS[item.category] || ''} style={{ padding: '0 0.1875rem', borderRadius: '0.125rem', lineHeight: '0.875rem' }}>
           {CATEGORY_LABELS[item.category] || '?'}
         </span>
       </span>
@@ -74,7 +74,7 @@ function NotificationRow({ item, isRead, onDismiss, onRead }: RowProps) {
           <span className="text-muted-foreground/50 ml-1">— {item.sessionId}</span>
         )}
       </span>
-      <span className="shrink-0 text-[10px] text-muted-foreground/40 tabular-nums mt-0.5">
+      <span className="shrink-0 text-[0.625rem] text-muted-foreground/40 tabular-nums mt-0.5">
         {formatTime(item.timestamp)}
       </span>
       <button
@@ -124,14 +124,14 @@ export function NotificationPopup() {
       >
         <Icon name="notification-3" className="h-5 w-5" />
         {unreadCount > 0 && (
-          <span className="absolute top-0.5 right-0 h-3.5 min-w-[14px] rounded-full bg-orange-500 text-[8px] font-medium text-white flex items-center justify-center px-0.5 leading-none pointer-events-none">
+          <span className="absolute top-0.5 right-0 h-3.5 min-w-[0.875rem] rounded-full bg-orange-500 text-[0.5rem] font-medium text-white flex items-center justify-center px-0.5 leading-none pointer-events-none">
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
         )}
       </button>
 
       {isOpen && (
-        <div className="notifications-popup absolute right-0 top-full mt-1 w-[720px] max-w-[calc(100vw-1rem)] rounded-lg border bg-card shadow-lg z-50">
+        <div className="notifications-popup absolute right-0 top-full mt-1 w-[45rem] max-w-[calc(100vw-1rem)] rounded-lg border bg-card shadow-lg z-50">
           <div className="flex items-center justify-between px-3 py-2 border-b border-border">
             <span className="text-sm font-medium text-foreground">{t('notifications.popup.title')}</span>
             <div className="flex items-center gap-0.5">

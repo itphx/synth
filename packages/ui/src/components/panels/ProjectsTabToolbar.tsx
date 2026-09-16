@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { Icon } from '@/components/icon/Icon'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { OriginSelector } from '@/components/ui/OriginSelector'
+import { CreateProjectPopover } from '@/components/panels/CreateProjectPopover'
 import { useSessionsTreeStore } from '@/stores/useSessionsTreeStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
@@ -11,7 +12,7 @@ import { useI18n } from '@/lib/i18n'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
 import type { EntityOrigin } from '@/lib/api/synthApi'
 
-type PopoverType = null | 'project' | 'session'
+type PopoverType = null | 'session'
 
 export const ProjectsTabToolbar: React.FC = () => {
   const { t } = useI18n()
@@ -22,7 +23,6 @@ export const ProjectsTabToolbar: React.FC = () => {
     toggleSelectionMode,
   } = useSessionsTreeStore()
   const { projects } = useProjectsStore()
-  const { createProject } = useProjectsStore()
   const { createSession } = useSessionsStore()
   const { collapsedProjects } = useUIStore()
   const hybridEnabled = useHybridStore((s) => s.enabled)
@@ -30,17 +30,9 @@ export const ProjectsTabToolbar: React.FC = () => {
   const openTab = useUIStore((s) => s.openTab)
 
   const [popover, setPopover] = useState<PopoverType>(null)
-  const [projectName, setProjectName] = useState('')
   const [sessionProjectId, setSessionProjectId] = useState<string | null>(null)
   // Гибридный режим: где создать сущность — локально или на удалённом сервере.
   const [createOrigin, setCreateOrigin] = useState<EntityOrigin>('local')
-
-  const handleCreateProject = async () => {
-    const name = projectName.trim()
-    if (!name) return
-    await createProject({ name, origin: createOrigin })
-    setPopover(null)
-  }
 
   const handleCreateSession = async () => {
     const selectedProject = sessionProjectId ? projects.find((p) => p.id === sessionProjectId) : null
@@ -65,7 +57,6 @@ export const ProjectsTabToolbar: React.FC = () => {
 
   const handleOpenChange = (type: PopoverType) => (open: boolean) => {
     if (open) {
-      setProjectName('')
       setSessionProjectId(null)
       setCreateOrigin('local')
       setPopover(type)
@@ -124,42 +115,16 @@ export const ProjectsTabToolbar: React.FC = () => {
         <Icon name={allCollapsed ? 'arrow-down-s' : 'arrow-up-s'} className="h-4 w-4" />
       </button>
       <div className="mx-0.5 h-4 w-px bg-sidebar-border" />
-      <Popover open={popover === 'project'} onOpenChange={handleOpenChange('project')}>
-        <PopoverTrigger asChild>
+      <CreateProjectPopover
+        trigger={
           <button
-            className={`flex h-6 w-6 items-center justify-center rounded transition-colors ${
-              popover === 'project'
-                ? 'bg-interactive-hover text-foreground'
-                : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'
-            }`}
+            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
             title={t('leftPanel.newProject')}
           >
             <Icon name="folder-add" className="h-4 w-4" />
           </button>
-        </PopoverTrigger>
-        <PopoverContent
-          className="w-56 p-3"
-          onOpenAutoFocus={(e) => e.preventDefault()}
-        >
-          <form
-            onSubmit={(e) => { e.preventDefault(); handleCreateProject() }}
-            className="flex flex-col gap-2"
-          >
-            <input
-              autoFocus
-              type="text"
-              value={projectName}
-              onChange={(e) => setProjectName(e.target.value)}
-              placeholder={t('leftPanel.projectName')}
-              className="rounded bg-interactive px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground outline-none w-full"
-            />
-            {hybridEnabled && <OriginSelector value={createOrigin} onChange={setCreateOrigin} offline={isOffline} />}
-            <button type="submit" className="self-end rounded px-3 py-1 text-xs text-primary hover:bg-primary/10">
-              {t('common.create')}
-            </button>
-          </form>
-        </PopoverContent>
-      </Popover>
+        }
+      />
 
       <Popover open={popover === 'session'} onOpenChange={handleOpenChange('session')}>
         <PopoverTrigger asChild>

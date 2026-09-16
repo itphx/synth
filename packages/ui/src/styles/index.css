@@ -85,6 +85,11 @@ html.huawei.dark {
   --chat-column-width: 50vw;
   --chat-pad-left: 0px;
   --chat-pad-right: 0px;
+  --ui-scale: 1;
+}
+
+html {
+  font-size: calc(100% * var(--ui-scale, 1));
 }
 
 @supports (height: 100dvh) {
@@ -226,7 +231,7 @@ html.device-tablet .login-screen.login-screen--keyboard {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: min(360px, 86vw);
+  width: min(22.5rem, 86vw);
   display: flex;
   flex-direction: column;
   background: var(--sidebar);
@@ -275,16 +280,7 @@ html.pointer-coarse .overlay-scrollbar-target::-webkit-scrollbar {
 /* Минимальные тач-таргеты в хедере/дроверах */
 html.pointer-coarse header button:not([role="switch"]):not([data-compact]),
 html.pointer-coarse .mobile-drawer-panel button:not([role="switch"]):not([data-compact]) {
-  min-width: 40px;
-  min-height: 40px;
-}
-
-/* Контейнер вкладок левой панели: на телефоне/планшете кнопки вкладок получают
-   min-height 40px (правило выше), а контейнер жёстко h-8 (2rem) — кнопки выходят
-   за его границы. Высота контейнера подстраивается; десктоп (h-8) не затронут. */
-html.device-phone .left-tabs,
-html.device-tablet .left-tabs {
-  height: auto;
+  min-width: 2.5rem;
   min-height: 2.5rem;
 }
 
@@ -324,11 +320,11 @@ html.pointer-coarse .chat-composer button:not([role="switch"]):not([data-compact
 html.device-phone .chat-composer button:not([role="switch"]):not([data-compact]),
 html.device-tablet .chat-composer button:not([role="switch"]):not([data-compact]),
 html.central-narrow .chat-composer button:not([role="switch"]):not([data-compact]) {
-  min-width: 28px;
-  min-height: 28px;
+  min-width: 1.75rem;
+  min-height: 1.75rem;
   align-items: center;
   justify-content: center;
-  padding: 4px;
+  padding: 0.25rem;
 }
 
 /* Компактные иконки тулбара на мобильных (~16px) */
@@ -336,8 +332,8 @@ html.pointer-coarse .chat-composer button svg,
 html.device-phone .chat-composer button svg,
 html.device-tablet .chat-composer button svg,
 html.central-narrow .chat-composer button svg {
-  width: 16px;
-  height: 16px;
+  width: 1rem;
+  height: 1rem;
 }
 
 /* 4.x Композер: компактный размер кнопок/иконок определяется по ШИРИНЕ КОМПОЗЕРА
@@ -346,15 +342,15 @@ html.central-narrow .chat-composer button svg {
    обычный размер. Сам «один ряд» уже задан универсально выше. */
 @container (max-width: 800px) {
   .chat-composer button:not([role="switch"]):not([data-compact]) {
-    min-width: 28px;
-    min-height: 28px;
+    min-width: 1.75rem;
+    min-height: 1.75rem;
     align-items: center;
     justify-content: center;
-    padding: 4px;
+    padding: 0.25rem;
   }
   .chat-composer button:not([role="switch"]):not([data-compact]) svg {
-    width: 16px;
-    height: 16px;
+    width: 1rem;
+    height: 1rem;
   }
 }
 
@@ -365,7 +361,7 @@ html.central-narrow .chat-composer button svg {
 html.pointer-coarse [data-tab-id],
 html.device-phone [data-tab-id],
 html.device-tablet [data-tab-id] {
-  min-height: 36px;
+  min-height: 2.25rem;
 }
 
 /* Кнопка закрытия вкладки — маленькая (~18-20px), иконка по центру. Вкладка
@@ -377,18 +373,18 @@ html.device-tablet [data-tab-id] button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
-  min-height: 18px;
-  width: 18px;
-  height: 18px;
+  min-width: 1.125rem;
+  min-height: 1.125rem;
+  width: 1.125rem;
+  height: 1.125rem;
   padding: 0;
 }
 
 html.pointer-coarse [data-tab-id] button svg,
 html.device-phone [data-tab-id] button svg,
 html.device-tablet [data-tab-id] button svg {
-  width: 14px;
-  height: 14px;
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 /* =============================================================
@@ -427,8 +423,8 @@ html.device-tablet [data-tree-node] .group-hover\:block {
 /* 2.2 Touch-таргеты: действия внутри hover-контейнеров (сообщения, стикеры,
    очередь, нотификации, ссылки) — ~40px */
 html.pointer-coarse .group-hover\:opacity-100 button:not([role="switch"]):not([data-compact]) {
-  min-width: 40px;
-  min-height: 40px;
+  min-width: 2.5rem;
+  min-height: 2.5rem;
 }
 
 /* 2.2 Действия под сообщениями — компактные (~28px) вместо общих 40px,
@@ -436,9 +432,9 @@ html.pointer-coarse .group-hover\:opacity-100 button:not([role="switch"]):not([d
 html.pointer-coarse .message-actions button:not([role="switch"]):not([data-compact]),
 html.device-phone .message-actions button:not([role="switch"]):not([data-compact]),
 html.device-tablet .message-actions button:not([role="switch"]):not([data-compact]) {
-  min-width: 28px;
-  min-height: 28px;
-  padding: 2px;
+  min-width: 1.75rem;
+  min-height: 1.75rem;
+  padding: 0.125rem;
 }
 
 html.pointer-coarse .message-actions,
@@ -451,29 +447,29 @@ html.device-tablet .message-actions {
 
 /* 2.2 Строки дерева — тапобласть ≥40px, кнопки действий ≥36px */
 html.pointer-coarse [data-tree-node] {
-  min-height: 40px;
+  min-height: 1.75rem;
 }
 
 html.pointer-coarse [data-tree-node] button:not([role="switch"]):not([data-compact]) {
-  min-width: 36px;
-  min-height: 36px;
+  min-width: 1.75rem;
+  min-height: 1.75rem;
 }
 
 /* 2.2 Fallback для мобильных зон: touch-таргеты строк дерева */
 html.device-phone [data-tree-node],
 html.device-tablet [data-tree-node] {
-  min-height: 40px;
+  min-height: 1.75rem;
 }
 
 html.device-phone [data-tree-node] button:not([role="switch"]):not([data-compact]),
 html.device-tablet [data-tree-node] button:not([role="switch"]):not([data-compact]) {
-  min-width: 36px;
-  min-height: 36px;
+  min-width: 1.75rem;
+  min-height: 1.75rem;
 }
 
 /* 2.2 Кнопки в модалках (DialogContent) — тапобласть ≥40px */
 html.pointer-coarse [data-slot="dialog-content"] button:not([role="switch"]):not([data-compact]) {
-  min-height: 40px;
+  min-height: 2.5rem;
 }
 
 /* Вкладка «Агенты» (настройки): карточки в одну колонку на телефоне/планшете */
@@ -505,4 +501,57 @@ html.device-tablet .notifications-popup {
   max-width: none;
   top: calc(2.75rem + env(safe-area-inset-top, 0px));
   margin-top: 0;
+}
+
+.ui-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 1rem;
+  background: transparent;
+  border: 0;
+  outline: none;
+  cursor: pointer;
+}
+
+.ui-range::-webkit-slider-runnable-track {
+  height: 0.25rem;
+  border: 0;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    var(--primary) 0 var(--ui-range-fill, 0%),
+    color-mix(in oklab, var(--muted-foreground) 28%, transparent) var(--ui-range-fill, 0%) 100%
+  );
+}
+
+.ui-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-top: -0.25rem; /* (1rem трек - 0.75rem бегунок) / 2 */
+  border: 0;
+  border-radius: 9999px;
+  background: var(--primary);
+}
+
+.ui-range::-moz-range-track {
+  height: 0.25rem;
+  border: 0;
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--muted-foreground) 28%, transparent);
+}
+
+.ui-range::-moz-range-progress {
+  height: 0.25rem;
+  border-radius: 9999px;
+  background: var(--primary);
+}
+
+.ui-range::-moz-range-thumb {
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--primary);
 }

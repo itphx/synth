@@ -6,7 +6,7 @@ import { useUIStore } from '@/stores/useUIStore'
 function ToastContent({ text, sessionId }: { text: string; sessionId?: string }) {
   return (
     <div className="min-w-0">
-      {sessionId && <div className="text-[11px] opacity-50 mb-0.5 truncate">{sessionId}</div>}
+      {sessionId && <div className="text-[0.6875rem] opacity-50 mb-0.5 truncate">{sessionId}</div>}
       <div className="text-sm">{text}</div>
     </div>
   )

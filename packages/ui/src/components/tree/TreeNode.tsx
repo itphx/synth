@@ -18,12 +18,12 @@ function ActionButton({ action, alwaysVisible }: { action: TreeAction; alwaysVis
   const variantClass = action.variant === 'destructive'
     ? 'hover:bg-status-error/10 hover:text-status-error'
     : action.variant === 'primary'
-      ? 'hover:bg-primary/10 hover:text-primary'
-      : 'text-muted-foreground hover:text-foreground'
+      ? 'bg-primary/10 text-primary hover:bg-primary/20'
+      : 'bg-interactive-hover/40 text-muted-foreground hover:bg-interactive-hover hover:text-foreground'
 
   const visibilityClass = alwaysVisible ? '' : 'hidden group-hover:inline-flex'
   const buttonClass = cn(
-    'h-5 w-5 items-center justify-center rounded transition-colors',
+    'h-4 w-4 items-center justify-center rounded transition-colors',
     visibilityClass,
     variantClass,
   )
@@ -229,7 +229,7 @@ export function TreeNode({
             <div className="flex items-center gap-1 min-w-0">
               <span
                 className={cn(
-                  'truncate text-sm',
+                  'truncate text-sm leading-tight',
                   hasUnread ? 'text-orange-400' : labelMuted ? 'text-muted-foreground' : 'text-foreground',
                 )}
                 title={label}
@@ -256,7 +256,7 @@ export function TreeNode({
       )}
 
       {!selectionMode && !isRenaming && hasHoverActions && (
-        <div className="shrink-0 flex items-center gap-0.5 bg-sidebar rounded">
+        <div className="shrink-0 flex items-center gap-1">
           {alwaysVisibleButtons.map((action) => (
             <ActionButton key={action.id} action={action} alwaysVisible />
           ))}
@@ -274,7 +274,7 @@ export function TreeNode({
             trigger={
               <button
                 onClick={(e) => e.stopPropagation()}
-                className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+                className="flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:text-foreground"
               >
                 <Icon name="more-2" className="h-3.5 w-3.5" />
               </button>

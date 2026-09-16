@@ -42,7 +42,7 @@ export function SubagentResumeBar({ sessionId, lastError, onResume, onStop }: Su
           <span className="text-xs text-purple-600 dark:text-purple-400 flex-1">
             {t('chat.subagent.resuming')}
             {retry && (
-              <span className="block text-[10px] text-muted-foreground">
+              <span className="block text-[0.625rem] text-muted-foreground">
                 {t('chat.retry.inProgress', {
                   current: String(retry.attempt),
                   max: String(retry.maxRetries),
@@ -53,7 +53,7 @@ export function SubagentResumeBar({ sessionId, lastError, onResume, onStop }: Su
           </span>
           <button
             onClick={onStop}
-            className="shrink-0 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
+            className="shrink-0 rounded px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
           >
             {t('chat.subagent.stop')}
           </button>
@@ -79,13 +79,13 @@ export function SubagentResumeBar({ sessionId, lastError, onResume, onStop }: Su
         <span className="text-xs text-destructive flex-1 min-w-0">
           {t('chat.subagent.errorStopped')}
           {attemptsLabel && (
-            <span className="ml-1 text-[10px] text-muted-foreground">({attemptsLabel})</span>
+            <span className="ml-1 text-[0.625rem] text-muted-foreground">({attemptsLabel})</span>
           )}
         </span>
         {recoverable && (
           <button
             onClick={onResume}
-            className="shrink-0 rounded px-2 py-0.5 text-[11px] font-medium bg-destructive/15 text-destructive hover:bg-destructive/25 transition-colors"
+            className="shrink-0 rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-destructive/15 text-destructive hover:bg-destructive/25 transition-colors"
           >
             {t('chat.subagent.resume')}
           </button>

@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { useUIStore } from "../../stores/useUIStore"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select"
 import { THEME_PRESETS } from "@/lib/theme/themes"
 import type { ThemeMode } from "@/types/theme"
 import { useThemeSystem } from "@/contexts/useThemeSystem"
@@ -8,12 +7,8 @@ import { useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 import { profileService } from '@/lib/api/profileService'
 import { ConfirmDialog } from '../ui/confirm-dialog'
-
-const THEME_MODE_OPTIONS: { value: ThemeMode; labelKey: string }[] = [
-  { value: "system", labelKey: 'settings.appearance.themeMode.system' },
-  { value: "light", labelKey: 'settings.appearance.themeMode.light' },
-  { value: "dark", labelKey: 'settings.appearance.themeMode.dark' },
-]
+import { UiScaleControl } from './UiScaleControl'
+import { SettingsCard, ThemeModeControl, ThemeControl, LanguageControl } from './appearance-controls'
 
 export const AppearanceSettings = () => {
   const { setLocale: setUILocale, setThemeMode: setUIThemeMode } = useUIStore()
@@ -27,8 +22,7 @@ export const AppearanceSettings = () => {
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [isResetting, setIsResetting] = useState(false)
 
-  const handleLocaleChange = (value: string) => {
-    const locale = value as 'en' | 'ru'
+  const handleLocaleChange = (locale: 'ru' | 'en') => {
     setI18nLocale(locale)
     setUILocale(locale)
   }
@@ -83,78 +77,48 @@ export const AppearanceSettings = () => {
 
   const currentPresetName = getCurrentPresetName()
 
-  const getLocaleName = (loc: 'en' | 'ru') => {
-    return loc === 'ru' ? t('common.language.russian') : t('common.language.english')
-  }
-
   return (
-    <div className="space-y-6 max-w-lg">
-      <div>
+    <div className="space-y-6">
+      <header className="max-w-2xl">
         <h2 className="text-lg font-semibold mb-1">{t('settings.appearance.title')}</h2>
         <p className="text-sm text-muted-foreground">{t('settings.appearance.description')}</p>
+      </header>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <SettingsCard className="sm:col-span-2" title={t('settings.appearance.themeMode.label')}>
+          <ThemeModeControl
+            value={themeMode}
+            onChange={handleThemeModeChange}
+            ariaLabel={t('settings.appearance.themeMode.label')}
+          />
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground">
+              {t('settings.appearance.theme.label')}
+            </label>
+            <ThemeControl
+              value={currentPresetName}
+              onChange={handleThemeChange}
+              ariaLabel={t('settings.appearance.theme.label')}
+            />
+          </div>
+        </SettingsCard>
+
+        <SettingsCard title={t('settings.appearance.uiScale.label')}>
+          <UiScaleControl />
+        </SettingsCard>
+
+        <SettingsCard title={t('settings.appearance.language.label')}>
+          <LanguageControl
+            value={i18nLocale}
+            onChange={handleLocaleChange}
+            labels={{
+              ru: t('common.language.russian'),
+              en: t('common.language.english'),
+            }}
+          />
+        </SettingsCard>
       </div>
 
-      {/* Theme mode */}
-      <div className="space-y-3">
-        <label className="text-sm font-medium">{t('settings.appearance.themeMode.label')}</label>
-        <div className="flex gap-2" role="radiogroup" aria-label={t('settings.appearance.themeMode.label')}>
-          {THEME_MODE_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              role="radio"
-              aria-checked={themeMode === option.value}
-              onClick={() => handleThemeModeChange(option.value)}
-              className={cn(
-                "px-4 py-2 rounded-lg text-sm font-medium transition-colors",
-                themeMode === option.value
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-              )}
-            >
-              {t(option.labelKey)}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Theme selector */}
-      <div className="space-y-2">
-        <label className="text-sm font-medium">{t('settings.appearance.theme.label')}</label>
-        <Select value={currentPresetName} onValueChange={handleThemeChange}>
-          <SelectTrigger className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {THEME_PRESETS.map((preset) => (
-              <SelectItem key={preset.name} value={preset.name}>
-                {preset.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {/* Divider */}
-      <div className="border-t border-border" />
-
-      {/* Language */}
-      <div className="space-y-2">
-        <label className="text-sm font-medium">{t('settings.appearance.language.label')}</label>
-        <Select value={i18nLocale} onValueChange={handleLocaleChange}>
-          <SelectTrigger className="w-full">
-            <SelectValue>{getLocaleName(i18nLocale)}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {(['en', 'ru'] as const).map((loc) => (
-              <SelectItem key={loc} value={loc}>
-                {getLocaleName(loc)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {/* Reset button */}
       <div className="border-t border-border pt-4">
         <button
           onClick={() => setShowResetConfirm(true)}
@@ -168,7 +132,6 @@ export const AppearanceSettings = () => {
         </button>
       </div>
 
-      {/* Reset confirmation dialog */}
       <ConfirmDialog
         open={showResetConfirm}
         onOpenChange={setShowResetConfirm}

@@ -19,16 +19,21 @@ vi.mock('@/stores/authStore', () => ({
   ),
 }))
 
-vi.mock('@/stores/useUIStore', () => ({
-  useUIStore: () => ({
+vi.mock('@/stores/useUIStore', () => {
+  const state = {
     themeMode: 'system',
     setThemeMode: vi.fn(),
     locale: 'ru',
     setLocale: vi.fn(),
     setSettingsDialogOpen: vi.fn(),
     setSettingsPage: vi.fn(),
-  }),
-}))
+    uiScale: 1,
+    setUiScale: vi.fn(),
+  }
+  return {
+    useUIStore: (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state),
+  }
+})
 
 vi.mock('@/contexts/useThemeSystem', () => ({
   useThemeSystem: () => ({ setThemeMode: vi.fn() }),

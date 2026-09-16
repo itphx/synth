@@ -8,6 +8,8 @@ import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { isPwaStandalone } from '@/lib/pwa'
 import { useFullscreen } from '@/hooks/useFullscreen'
+import { UiScaleControl } from '@/components/settings/UiScaleControl'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface QuickSettingsPopupProps {
   onSettingsClick: () => void
@@ -98,9 +100,9 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 top-full mt-1 w-64 rounded-lg border bg-background shadow-md z-50">
-          <div className="px-3 py-2 border-b border-border">
-            <p className="text-sm font-medium text-foreground">{profile?.display_name || user.username}</p>
+        <div className="absolute right-0 top-full mt-1 w-64 rounded-lg border border-border bg-popover shadow-lg z-50">
+          <div className="px-3 py-2 border-b border-border/30">
+            <p className="text-xs font-medium text-foreground">{profile?.display_name || user.username}</p>
             {user.email && (
               <p className="text-xs text-muted-foreground truncate">{user.email}</p>
             )}
@@ -115,8 +117,9 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
                     key={opt.value}
                     onClick={() => handleThemeModeChange(opt.value)}
                     title={opt.title}
+                    data-compact
                     className={cn(
-                      "flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-colors",
+                      "flex-1 px-2 py-1.5 rounded-md text-base leading-none font-medium transition-colors",
                       themeMode === opt.value
                         ? "bg-interactive-selection text-interactive-selection-foreground"
                         : "bg-interactive-hover text-muted-foreground hover:text-foreground"
@@ -131,25 +134,23 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
             <div>
               <p className="text-xs text-muted-foreground mb-2">{t('settings.appearance.language.label')}</p>
               {locales.length > 2 ? (
-                <select
-                  value={uiLocale}
-                  onChange={(e) => handleLocaleChange(e.target.value)}
-                  className={cn(
-                    "w-full px-3 py-2 rounded-lg border bg-background text-foreground",
-                    "focus:outline-none focus:ring-2 focus:ring-ring",
-                    "transition-colors"
-                  )}
-                >
-                  {locales.map((loc) => (
-                    <option key={loc.value} value={loc.value}>{loc.label}</option>
-                  ))}
-                </select>
+                <Select value={uiLocale} onValueChange={handleLocaleChange}>
+                  <SelectTrigger className="w-full" aria-label={t('settings.appearance.language.label')}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {locales.map((loc) => (
+                      <SelectItem key={loc.value} value={loc.value}>{loc.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               ) : (
                 <div className="flex gap-1">
                   {locales.map((opt) => (
                     <button
                       key={opt.value}
                       onClick={() => handleLocaleChange(opt.value)}
+                      data-compact
                       className={cn(
                         "flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-colors",
                         uiLocale === opt.value
@@ -163,33 +164,35 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
                 </div>
               )}
             </div>
+
+            <UiScaleControl />
           </div>
 
-          <div className="py-1 border-t border-border">
+          <div className="p-1 border-t border-border/30">
             <button
               onClick={() => {
                 setIsOpen(false)
                 window.location.reload()
               }}
               className={cn(
-                "w-full flex items-center gap-2 px-3 py-2 text-sm text-left",
-                "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
+                "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left",
+                "text-muted-foreground hover:bg-interactive-hover/50 hover:text-foreground",
                 "transition-colors"
               )}
             >
-              <Icon name="refresh" className="size-4" />
+              <Icon name="refresh" className="size-3.5" />
               {t('auth.reloadPage')}
             </button>
             {fullscreenSupported && !isPwaStandalone() && (
               <button
                 onClick={() => toggleFullscreen()}
                 className={cn(
-                  "w-full flex items-center gap-2 px-3 py-2 text-sm text-left",
-                  "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
+                  "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left",
+                  "text-muted-foreground hover:bg-interactive-hover/50 hover:text-foreground",
                   "transition-colors"
                 )}
               >
-                <Icon name={isFullscreen ? 'fullscreen-exit' : 'fullscreen'} className="size-4" />
+                <Icon name={isFullscreen ? 'fullscreen-exit' : 'fullscreen'} className="size-3.5" />
                 {isFullscreen ? t('auth.exitFullscreen') : t('auth.fullscreen')}
               </button>
             )}
@@ -199,12 +202,12 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
                 setIsOpen(false)
               }}
               className={cn(
-                "w-full flex items-center gap-2 px-3 py-2 text-sm text-left",
-                "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
+                "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left",
+                "text-muted-foreground hover:bg-interactive-hover/50 hover:text-foreground",
                 "transition-colors"
               )}
             >
-              <Icon name="settings" className="size-4" />
+              <Icon name="settings" className="size-3.5" />
               {t('auth.openSettings')}
             </button>
             {user?.roles?.includes('ADMIN') && (
@@ -215,12 +218,12 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
                   setIsOpen(false)
                 }}
                 className={cn(
-                  "w-full flex items-center gap-2 px-3 py-2 text-sm text-left",
-                  "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
+                  "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left",
+                  "text-muted-foreground hover:bg-interactive-hover/50 hover:text-foreground",
                   "transition-colors"
                 )}
               >
-                <Icon name="admin" className="size-4" />
+                <Icon name="admin" className="size-3.5" />
                 {t('auth.admin')}
               </button>
             )}
@@ -230,12 +233,12 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
                 useAuthStore.getState().logout()
               }}
               className={cn(
-                "w-full flex items-center gap-2 px-3 py-2 text-sm text-left",
-                "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
+                "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left",
+                "text-muted-foreground hover:bg-interactive-hover/50 hover:text-foreground",
                 "transition-colors"
               )}
             >
-              <Icon name="logout" className="size-4" />
+              <Icon name="logout" className="size-3.5" />
               {t('auth.logout')}
             </button>
           </div>

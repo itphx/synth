@@ -3,6 +3,7 @@ import { synthApi, type ModelGroup, type ModelInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ProviderIcon } from './ProviderIcon'
 
 type EditingPrices = Record<string, {
@@ -285,7 +286,7 @@ export const ModelsPanel = () => {
           <button
             onClick={() => handleFetch()}
             disabled={fetching !== null}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
             <Icon name="refresh" className={cn("size-3.5", fetching === 'all' && "animate-spin")} />
             {t('admin.models.syncAll')}
@@ -295,28 +296,29 @@ export const ModelsPanel = () => {
 
       {/* Сообщения */}
       {fetchMsg && (
-        <div className="bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 rounded-lg p-3 text-sm text-emerald-700 dark:text-emerald-300">
+        <div className="bg-status-success/10 border border-status-success/30 rounded-lg p-3 text-sm text-status-success">
           {fetchMsg}
         </div>
       )}
       {fetchError && (
-        <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm text-red-700 dark:text-red-300">
+        <div className="bg-status-error/10 border border-status-error/30 rounded-lg p-3 text-sm text-status-error">
           {fetchError}
         </div>
       )}
 
       {/* Фильтры */}
       <div className="flex gap-3 items-center flex-wrap">
-        <select
-          value={filterProvider}
-          onChange={(e) => setFilterProvider(e.target.value)}
-          className="px-3 py-1.5 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-        >
-          <option value="">{t('admin.models.allProviders')}</option>
-          {allProviders.map((p) => (
-            <option key={p} value={p}>{p}</option>
-          ))}
-        </select>
+        <Select value={filterProvider} onValueChange={setFilterProvider}>
+          <SelectTrigger className="min-w-40" aria-label={t('admin.models.allProviders')}>
+            <SelectValue>{filterProvider || t('admin.models.allProviders')}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">{t('admin.models.allProviders')}</SelectItem>
+            {allProviders.map((p) => (
+              <SelectItem key={p} value={p}>{p}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
           <input
             type="checkbox"
@@ -339,26 +341,27 @@ export const ModelsPanel = () => {
         <div className="bg-background rounded-lg border p-4 space-y-3">
           <div className="text-sm font-medium">{t('admin.models.addManual')}</div>
           {addError && (
-            <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded p-2 text-xs text-red-700 dark:text-red-300">
+            <div className="bg-status-error/10 border border-status-error/30 rounded p-2 text-xs text-status-error">
               {addError}
             </div>
           )}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div>
-              <label className="text-[11px] text-muted-foreground block mb-1">{t('admin.models.provider')}</label>
-              <select
-                value={addProvider}
-                onChange={(e) => setAddProvider(e.target.value)}
-                className="w-full px-2 py-1.5 rounded border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              >
-                <option value="">—</option>
-                {allProviders.map((p) => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
-              </select>
+              <label className="text-[0.6875rem] text-muted-foreground block mb-1">{t('admin.models.provider')}</label>
+              <Select value={addProvider} onValueChange={setAddProvider}>
+                <SelectTrigger className="w-full" aria-label={t('admin.models.provider')}>
+                  <SelectValue>{addProvider || '—'}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">—</SelectItem>
+                  {allProviders.map((p) => (
+                    <SelectItem key={p} value={p}>{p}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div>
-              <label className="text-[11px] text-muted-foreground block mb-1">{t('admin.models.name')}</label>
+              <label className="text-[0.6875rem] text-muted-foreground block mb-1">{t('admin.models.name')}</label>
               <input
                 type="text"
                 value={addName}
@@ -369,7 +372,7 @@ export const ModelsPanel = () => {
               />
             </div>
             <div>
-              <label className="text-[11px] text-muted-foreground block mb-1">{t('admin.models.contextK')}</label>
+              <label className="text-[0.6875rem] text-muted-foreground block mb-1">{t('admin.models.contextK')}</label>
               <input
                 type="number"
                 value={addCtx}
@@ -382,7 +385,7 @@ export const ModelsPanel = () => {
             </div>
             <div className="grid grid-cols-2 gap-1">
               <div>
-                <label className="text-[11px] text-muted-foreground block mb-1">{t('admin.models.priceIn')}</label>
+                <label className="text-[0.6875rem] text-muted-foreground block mb-1">{t('admin.models.priceIn')}</label>
                 <input
                   type="number"
                   value={addInPrice}
@@ -394,7 +397,7 @@ export const ModelsPanel = () => {
                 />
               </div>
               <div>
-                <label className="text-[11px] text-muted-foreground block mb-1">{t('admin.models.priceOut')}</label>
+                <label className="text-[0.6875rem] text-muted-foreground block mb-1">{t('admin.models.priceOut')}</label>
                 <input
                   type="number"
                   value={addOutPrice}
@@ -411,7 +414,7 @@ export const ModelsPanel = () => {
             <button
               onClick={handleAddModel}
               disabled={addSaving}
-              className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+              className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
               {addSaving ? '...' : t('admin.models.addButton')}
             </button>
@@ -494,7 +497,7 @@ export const ModelsPanel = () => {
                 {!isCollapsed && (
                   <div className="overflow-x-auto">
                     {/* Шапка таблицы */}
-                    <div className="grid grid-cols-[1fr_80px_140px_70px_40px_32px] min-w-[560px] gap-2 px-4 py-2 text-[11px] font-medium text-muted-foreground border-b">
+                    <div className="grid grid-cols-[1fr_5rem_8.75rem_4.375rem_2.5rem_2rem] min-w-[35rem] gap-2 px-4 py-2 text-[0.6875rem] font-medium text-muted-foreground border-b">
                       <span className="pl-1">{t('admin.models.model')}</span>
                       <span className="text-center">{t('admin.models.context')}</span>
                       <span className="text-center">{t('admin.models.prices')}</span>
@@ -513,7 +516,7 @@ export const ModelsPanel = () => {
                         return (
                           <div
                             key={model.id}
-                            className="grid grid-cols-[1fr_80px_140px_70px_40px_32px] min-w-[560px] gap-2 px-4 py-2 items-center border-b border-dashed last:border-b-0 hover:bg-muted/30 text-sm"
+                            className="grid grid-cols-[1fr_5rem_8.75rem_4.375rem_2.5rem_2rem] min-w-[35rem] gap-2 px-4 py-2 items-center border-b border-dashed last:border-b-0 hover:bg-muted/30 text-sm"
                           >
                             {/* Название модели + иконка */}
                             <div className="flex items-center gap-2 min-w-0">
@@ -540,7 +543,7 @@ export const ModelsPanel = () => {
                                 onFocus={(e) => e.target.select()}
                                 className={cn(
                                   "w-full text-center bg-transparent border rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring tabular-nums",
-                                  model.context_source === 'reference' && "italic text-muted-foreground italic",
+                                  model.context_source === 'reference' && "italic text-muted-foreground",
                                 )}
                                 title={model.context_window
                                   ? t('admin.models.contextTitle', {
@@ -558,7 +561,7 @@ export const ModelsPanel = () => {
                             </div>
 
                             {/* Цены */}
-                            <div className="grid grid-cols-2 gap-0.5 text-[10px] tabular-nums">
+                            <div className="grid grid-cols-2 gap-0.5 text-[0.625rem] tabular-nums">
                               <input
                                 type="number"
                                 min="0"
@@ -567,7 +570,7 @@ export const ModelsPanel = () => {
                                 value={editing?.inputPrice ?? formatPrice(model.input_price)}
                                 onChange={(e) => updatePriceField(model.id, 'inputPrice', e.target.value)}
                                 onFocus={() => !editing && startEditPrice(model)}
-                                className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-ring"
+                                className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
                                 title={t('admin.models.priceInTitle')}
                               />
                               <input
@@ -578,7 +581,7 @@ export const ModelsPanel = () => {
                                 value={editing?.outputPrice ?? formatPrice(model.output_price)}
                                 onChange={(e) => updatePriceField(model.id, 'outputPrice', e.target.value)}
                                 onFocus={() => !editing && startEditPrice(model)}
-                                className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-ring"
+                                className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
                                 title={t('admin.models.priceOutTitle')}
                               />
                               <input
@@ -589,7 +592,7 @@ export const ModelsPanel = () => {
                                 value={editing?.cacheReadPrice ?? formatPrice(model.cache_read_price)}
                                 onChange={(e) => updatePriceField(model.id, 'cacheReadPrice', e.target.value)}
                                 onFocus={() => !editing && startEditPrice(model)}
-                                className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-ring"
+                                className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
                                 title={t('admin.models.priceCrTitle')}
                               />
                               <input
@@ -600,7 +603,7 @@ export const ModelsPanel = () => {
                                 value={editing?.cacheWritePrice ?? formatPrice(model.cache_write_price)}
                                 onChange={(e) => updatePriceField(model.id, 'cacheWritePrice', e.target.value)}
                                 onFocus={() => !editing && startEditPrice(model)}
-                                className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-ring"
+                                className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
                                 title={t('admin.models.priceCwTitle')}
                               />
                             </div>
@@ -610,10 +613,10 @@ export const ModelsPanel = () => {
                               <button
                                 onClick={() => toggleEnabled(model)}
                                 className={cn(
-                                  "px-2 py-0.5 rounded text-[10px] font-medium transition-colors cursor-pointer",
+                                  "px-2 py-0.5 rounded text-[0.625rem] font-medium transition-colors cursor-pointer",
                                   model.enabled
-                                    ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900 dark:text-emerald-300'
-                                    : 'bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400'
+                                    ? 'bg-status-success/10 text-status-success hover:bg-status-success/20'
+                                    : 'bg-secondary text-muted-foreground hover:bg-secondary/80'
                                 )}
                                 title={model.enabled ? t('admin.models.disableModel') : t('admin.models.enableModel')}
                               >
@@ -628,8 +631,8 @@ export const ModelsPanel = () => {
                                 className={cn(
                                   "p-0.5 rounded transition-colors",
                                   model.isDefault
-                                    ? 'text-amber-500 hover:text-amber-600'
-                                    : 'text-muted-foreground/30 hover:text-amber-400'
+                                    ? 'text-status-warning hover:text-status-warning/80'
+                                    : 'text-muted-foreground/30 hover:text-status-warning/70'
                                 )}
                                 title={model.isDefault ? t('admin.models.defaultModelTitle') : t('admin.models.makeDefault')}
                               >
@@ -641,7 +644,7 @@ export const ModelsPanel = () => {
                             <div className="flex justify-center">
                               <button
                                 onClick={() => handleDelete(model.id)}
-                                className="p-0.5 rounded text-muted-foreground/40 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"
+                                className="p-0.5 rounded text-muted-foreground/40 hover:bg-status-error/10 hover:text-status-error"
                                 title={t('admin.models.deleteModel')}
                               >
                                 <Icon name="delete-bin" className="size-3.5" />

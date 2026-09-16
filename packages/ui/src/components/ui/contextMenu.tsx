@@ -42,7 +42,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           sideOffset={sideOffset}
           collisionPadding={8}
           className={cn(
-            'z-50 min-w-[180px] rounded-lg border border-sidebar-border bg-background p-1 shadow-lg',
+            'z-50 min-w-[11.25rem] rounded-lg border border-border bg-popover p-1 shadow-lg',
           )}
         >
           {items.map((item, index) => {
@@ -50,7 +50,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
               return (
                 <div
                   key={`sep-${index}`}
-                  className="my-1 h-px bg-border"
+                  className="my-1 border-t border-border/30"
                 />
               )
             }
@@ -60,11 +60,11 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
                   onClick={item.onClick}
                   disabled={item.disabled}
                   className={cn(
-                    'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none transition-colors',
-                    '[&>svg]:h-4 [&>svg]:w-4',
+                    'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left outline-none transition-colors',
+                    '[&>svg]:size-3.5',
                     item.destructive
                       ? 'text-status-error hover:bg-status-error/10 focus:bg-status-error/10'
-                      : 'text-foreground hover:bg-interactive-hover focus:bg-interactive-focus',
+                      : 'text-muted-foreground hover:bg-interactive-hover/50 hover:text-foreground focus:bg-interactive-hover/50 focus:text-foreground',
                     item.disabled && 'opacity-50 pointer-events-none',
                   )}
                 >

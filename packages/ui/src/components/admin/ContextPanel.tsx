@@ -147,10 +147,10 @@ export const ContextPanel = () => {
           <h3 className="text-lg font-semibold">{t('admin.context.title')}</h3>
           <p className="text-muted-foreground text-sm">
             {t('admin.context.count', { count: filtered.length, status: '' })}
-            {status && <span className="ml-2 text-blue-600">— {status}</span>}
+            {status && <span className="ml-2 text-primary">— {status}</span>}
           </p>
         </div>
-        <button onClick={() => setShowCreate(!showCreate)} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">
+        <button onClick={() => setShowCreate(!showCreate)} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">
           <Icon name="add" className="size-3.5" />{t('admin.context.add')}
         </button>
       </div>
@@ -190,7 +190,7 @@ export const ContextPanel = () => {
               className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring font-mono" />
           </div>
           <div className="flex gap-2">
-            <button onClick={handleCreate} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">{t('admin.context.create')}</button>
+            <button onClick={handleCreate} className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">{t('admin.context.create')}</button>
             <button onClick={() => setShowCreate(false)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.context.cancel')}</button>
           </div>
         </div>
@@ -203,7 +203,7 @@ export const ContextPanel = () => {
             rows={8}
             className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring font-mono" />
           <div className="flex gap-2">
-            <button onClick={handleSave} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">{t('admin.context.save')}</button>
+            <button onClick={handleSave} className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">{t('admin.context.save')}</button>
             <button onClick={() => setEditFile(null)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.context.cancel')}</button>
           </div>
         </div>
@@ -222,19 +222,19 @@ export const ContextPanel = () => {
               <div className="flex items-center gap-3">
                 {f.category === 'user' ? (
                   <input type="checkbox" checked={f.enabled} onChange={() => handleToggle(f.name)}
-                    className="size-4 rounded accent-blue-600" />
+                    className="size-4 rounded accent-primary" />
                 ) : (
                   <div className="size-4" />
                 )}
                 <Icon name="file-text" className="size-4 text-muted-foreground" />
                 <span className="text-sm font-medium">{f.name}</span>
                 {f.is_overridden && (
-                  <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300">
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-status-warning/15 text-status-warning">
                     {t('admin.context.modified')}
                   </span>
                 )}
                 {f.is_system && (
-                  <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground">
                     {t('admin.context.system')}
                   </span>
                 )}
@@ -243,12 +243,12 @@ export const ContextPanel = () => {
               <div className="flex gap-1">
                 <button onClick={() => handleEdit(f.name, f.category)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.context.edit')}</button>
                 {f.is_overridden && (
-                  <button onClick={() => handleRestore(f.name, f.category)} className="px-2 py-1 rounded text-xs text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950">
+                  <button onClick={() => handleRestore(f.name, f.category)} className="px-2 py-1 rounded text-xs text-status-warning hover:bg-status-warning/10">
                     {t('admin.context.reset')}
                   </button>
                 )}
                 {f.category === 'user' && (
-                  <button onClick={() => handleDelete(f.name, f.category)} className="p-1 rounded text-muted-foreground hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950">
+                  <button onClick={() => handleDelete(f.name, f.category)} className="p-1 rounded text-muted-foreground hover:bg-status-error/10 hover:text-status-error">
                     <Icon name="delete-bin" className="size-3.5" />
                   </button>
                 )}

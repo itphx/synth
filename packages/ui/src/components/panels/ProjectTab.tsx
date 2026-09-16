@@ -6,6 +6,7 @@ import { useProjectsStore } from '@/stores/projectsStore'
 import { useNotification } from '@/hooks/useNotification'
 import { synthApi, type ProjectData } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
+import { CreateProjectPopover } from '@/components/panels/CreateProjectPopover'
 import type { ProjectPlan } from '@itphx/synth-shared'
 
 export function ProjectTab() {
@@ -22,7 +23,6 @@ export function ProjectTab() {
   const [loading, setLoading] = useState(false)
   const [workspaceDraft, setWorkspaceDraft] = useState('')
   const [saving, setSaving] = useState(false)
-  const [creating, setCreating] = useState(false)
   const [invariantsDraft, setInvariantsDraft] = useState('')
   const [invariantsSaving, setInvariantsSaving] = useState(false)
 
@@ -79,27 +79,6 @@ export function ProjectTab() {
   }
 
   if (!projectId) {
-    const handleCreateProject = async () => {
-      const name = window.prompt(t('projectTab.noProject.prompt'))?.trim()
-      if (!name) return
-      setCreating(true)
-      try {
-        const created = await useProjectsStore.getState().createProject({ name })
-        if (!created) {
-          notify({ text: t('projectTab.noProject.createError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
-          return
-        }
-        const updated = await useSessionsStore.getState().moveSession(session.id, created.id)
-        if (!updated) {
-          notify({ text: t('projectTab.noProject.moveError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
-          return
-        }
-        notify({ text: t('projectTab.noProject.created'), type: 'success', category: 'system', sessionId: sessionId || undefined })
-      } finally {
-        setCreating(false)
-      }
-    }
-
     const handleAttachProject = async (e: React.ChangeEvent<HTMLSelectElement>) => {
       const targetId = e.target.value
       if (!targetId) return
@@ -116,16 +95,30 @@ export function ProjectTab() {
         <Section title={t('rightPanel.tab.project')}>
           <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center space-y-3">
             <div className="text-xs text-muted-foreground">{t('projectTab.noProject.title')}</div>
-            <div className="text-[10px] text-muted-foreground/60">{t('projectTab.noProject.hint')}</div>
+            <div className="text-[0.625rem] text-muted-foreground/60">{t('projectTab.noProject.hint')}</div>
             <div className="flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={handleCreateProject}
-                disabled={creating}
-                className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-              >
-                {creating ? t('projectTab.noProject.creating') : t('projectTab.noProject.create')}
-              </button>
+              <CreateProjectPopover
+                align="center"
+                trigger={
+                  <button
+                    type="button"
+                    className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity"
+                  >
+                    {t('projectTab.noProject.create')}
+                  </button>
+                }
+                onCreated={async (created) => {
+                  const updated = await useSessionsStore.getState().moveSession(session.id, created.id)
+                  if (!updated) {
+                    notify({ text: t('projectTab.noProject.moveError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
+                    return
+                  }
+                  notify({ text: t('projectTab.noProject.created'), type: 'success', category: 'system', sessionId: sessionId || undefined })
+                }}
+                onError={() => {
+                  notify({ text: t('projectTab.noProject.createError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
+                }}
+              />
               <select
                 value=""
                 onChange={handleAttachProject}
@@ -220,7 +213,7 @@ export function ProjectTab() {
             {saving ? t('projectTab.workspace.saving') : t('projectTab.workspace.save')}
           </button>
         </div>
-        <div className="text-[10px] text-muted-foreground/60">{t('projectTab.workspace.hint')}</div>
+        <div className="text-[0.625rem] text-muted-foreground/60">{t('projectTab.workspace.hint')}</div>
       </Section>
 
       <Section title={t('projectTab.invariants.title')}>
@@ -233,7 +226,7 @@ export function ProjectTab() {
             className="w-full rounded-md bg-input border border-border px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-y"
           />
           <div className="flex items-center justify-between gap-2">
-            <div className="text-[10px] text-muted-foreground/60">{t('projectTab.invariants.hint')}</div>
+            <div className="text-[0.625rem] text-muted-foreground/60">{t('projectTab.invariants.hint')}</div>
             <button
               onClick={handleSaveInvariants}
               disabled={invariantsSaving}
@@ -280,7 +273,7 @@ function ProjectLogBlock({ project }: { project: ProjectData | null }) {
     <div className="space-y-1.5">
       {sorted.map((entry) => (
         <div key={entry.id} className="rounded-md border border-border bg-input px-2 py-1.5">
-          <div className="text-[10px] text-muted-foreground/60">{entry.created_at}</div>
+          <div className="text-[0.625rem] text-muted-foreground/60">{entry.created_at}</div>
           <div className="text-xs">{entry.text}</div>
         </div>
       ))}
@@ -291,7 +284,7 @@ function ProjectLogBlock({ project }: { project: ProjectData | null }) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="mb-2 text-[10px] text-muted-foreground/60 uppercase tracking-wide">{title}</div>
+      <div className="mb-2 text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">{title}</div>
       <div className="space-y-2">{children}</div>
     </div>
   )
@@ -301,7 +294,7 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
   return (
     <div className="flex items-center justify-between text-xs">
       <span className="text-muted-foreground">{label}</span>
-      <span className={mono ? 'font-mono text-[11px]' : ''}>{value}</span>
+      <span className={mono ? 'font-mono text-[0.6875rem]' : ''}>{value}</span>
     </div>
   )
 }
@@ -322,7 +315,7 @@ function ProjectPlanBlock({ plan }: { plan: ProjectPlan | null }) {
     return (
       <div className="rounded-lg border border-dashed border-border px-3 py-2">
         <div className="text-xs text-muted-foreground">{t('sessionTab.plan.empty')}</div>
-        <div className="mt-0.5 text-[10px] text-muted-foreground/60">{t('sessionTab.plan.hint')}</div>
+        <div className="mt-0.5 text-[0.625rem] text-muted-foreground/60">{t('sessionTab.plan.hint')}</div>
       </div>
     )
   }
@@ -337,24 +330,24 @@ function ProjectPlanBlock({ plan }: { plan: ProjectPlan | null }) {
               .sort((a, b) => a.order - b.order)
             return (
               <div key={col.id}>
-                <div className="mb-1 flex items-center gap-1.5 text-[10px] text-muted-foreground/80">
+                <div className="mb-1 flex items-center gap-1.5 text-[0.625rem] text-muted-foreground/80">
                   <span className="font-medium">{col.name}</span>
                   <span className="text-muted-foreground/50">({colItems.length})</span>
                 </div>
                 {colItems.length === 0 ? (
-                  <div className="text-[10px] text-muted-foreground/50">—</div>
+                  <div className="text-[0.625rem] text-muted-foreground/50">—</div>
                 ) : (
                   <ul className="space-y-1">
                     {colItems.map((item) => (
                       <li key={item.id} className="rounded-md bg-background/60 px-2 py-1">
                         <div className="flex items-center gap-1.5">
-                          <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[9px] font-medium uppercase text-muted-foreground">
+                          <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[0.5625rem] font-medium uppercase text-muted-foreground">
                             {PRIORITY_LABELS[item.priority] ?? item.priority}
                           </span>
                           <span className="text-xs">{item.title}</span>
                         </div>
                         {item.description && (
-                          <div className="mt-0.5 text-[10px] text-muted-foreground/70">{item.description}</div>
+                          <div className="mt-0.5 text-[0.625rem] text-muted-foreground/70">{item.description}</div>
                         )}
                       </li>
                     ))}

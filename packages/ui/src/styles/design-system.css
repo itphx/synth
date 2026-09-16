@@ -517,7 +517,7 @@
 
 /* --- Scroll Shadow (mask-image fade at edges) --- */
 .chat-scroll-container {
-  --scroll-shadow-size: 48px;
+  --scroll-shadow-size: 3rem;
   mask-mode: alpha;
   -webkit-mask-repeat: no-repeat;
   mask-repeat: no-repeat;
@@ -574,7 +574,7 @@
 
 /* --- Tab Scroll Shadow (horizontal) --- */
 .tab-scroll-container {
-  --tab-scroll-shadow-size: 36px;
+  --tab-scroll-shadow-size: 2.25rem;
   mask-mode: alpha;
   -webkit-mask-repeat: no-repeat;
   mask-repeat: no-repeat;

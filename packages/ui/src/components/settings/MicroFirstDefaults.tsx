@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react'
+import { useI18n } from '@/lib/i18n'
 import { useProvidersStore } from '@/stores/providersStore'
 import { Toggle } from '../ui/Toggle'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { SettingsPage, SettingsCard } from './settings-layout'
 
 const STORAGE_KEY = 'synth-microfirst-defaults'
 
@@ -41,6 +44,7 @@ function saveDefaults(defaults: MicroFirstDefaults) {
 }
 
 export function MicroFirstDefaults() {
+  const { t } = useI18n()
   const providers = useProvidersStore((s) => s.providers)
   const models = useProvidersStore((s) => s.models)
 
@@ -58,78 +62,79 @@ export function MicroFirstDefaults() {
   const filteredModels = models.filter((m) => m.enabled && (!settings.embedProvider || m.provider === settings.embedProvider))
 
   return (
-    <div className="space-y-6 max-w-lg">
-      <div>
-        <h2 className="text-lg font-semibold mb-1">Быстрые ответы</h2>
-        <p className="text-sm text-muted-foreground">
-          Простые запросы — приветствия, да/нет, классификация задач — обрабатываются мгновенно по правилам или embedding, без вызова большой модели. Это ускоряет ответ и экономит токены. Если запрос сложный или уверенность низкая — автоматически вызывается LLM. Порог уверенности настраивается ниже.
-        </p>
-      </div>
+    <SettingsPage
+      title={t('settings.microFirst.title')}
+      description={t('settings.microFirst.description')}
+    >
+      <div className="grid gap-4 sm:grid-cols-2">
+        <SettingsCard title={t('settings.microFirst.enabled')}>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <Toggle enabled={settings.microFirst} onToggle={() => update({ microFirst: !settings.microFirst })} />
+            <span className="text-sm text-foreground">
+              {settings.microFirst ? t('common.enabled') : t('common.disabled')}
+            </span>
+          </label>
+        </SettingsCard>
 
-      <div className="space-y-4">
-        {/* Быстрые ответы вкл/выкл */}
-        <label className="flex items-center gap-3 cursor-pointer">
-          <Toggle enabled={settings.microFirst} onToggle={() => update({ microFirst: !settings.microFirst })} />
-          <span className="text-sm text-foreground">
-            {settings.microFirst ? 'Включено' : 'Выключено'}
-          </span>
-        </label>
-
-        {/* Confidence threshold */}
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-muted-foreground">Confidence Threshold</span>
-          <div className="flex items-center gap-2">
+        <SettingsCard title={t('settings.microFirst.confidence')}>
+          <div className="flex items-center gap-3">
             <input
               type="range"
               min="0.5" max="1.0" step="0.05"
               value={settings.microConfidenceThreshold}
               onChange={(e) => update({ microConfidenceThreshold: parseFloat(e.target.value) })}
-              className="w-20 h-1 accent-primary"
+              className="ui-range w-full"
+              style={{
+                ['--ui-range-fill' as string]: `${Math.round(((settings.microConfidenceThreshold - 0.5) / (1.0 - 0.5)) * 100)}%`,
+              }}
             />
             <span className="text-sm text-foreground font-mono tabular-nums min-w-[3ch]">
               {settings.microConfidenceThreshold.toFixed(2)}
             </span>
           </div>
-        </div>
+        </SettingsCard>
 
-        {/* Embedding */}
-        <div className="space-y-3 pl-4 border-l-2 border-border/30 pt-2">
+        <SettingsCard title={t('settings.microFirst.embedding')}>
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">Embedding</span>
             <Toggle enabled={settings.embeddingEnabled} onToggle={() => update({ embeddingEnabled: !settings.embeddingEnabled })} />
+            <span className="text-sm text-foreground">
+              {settings.embeddingEnabled ? t('common.enabled') : t('common.disabled')}
+            </span>
           </div>
           {settings.embeddingEnabled && (
-            <div className="space-y-1">
-              <span className="text-sm text-muted-foreground">Embedding модель</span>
-              <div className="flex gap-2">
-                <select
-                  value={settings.embedProvider}
-                  aria-label="Провайдер"
-                  onChange={(e) => update({ embedProvider: e.target.value, embedModel: '' })}
-                  className="flex-1 min-w-0 rounded-md bg-input border border-border px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                >
-                  <option value="">Провайдер</option>
+            <div className="space-y-2">
+              <Select
+                value={settings.embedProvider}
+                onValueChange={(value) => update({ embedProvider: value, embedModel: '' })}
+              >
+                <SelectTrigger className="w-full" aria-label={t('settings.microFirst.provider')}>
+                  <SelectValue>{settings.embedProvider || t('settings.microFirst.provider')}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">{t('settings.microFirst.provider')}</SelectItem>
                   {availableProviders.map((p) => (
-                    <option key={p.name} value={p.name}>{p.name}</option>
+                    <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>
                   ))}
-                </select>
-                <select
-                  value={settings.embedModel}
-                  aria-label="Модель"
-                  onChange={(e) => update({ embedModel: e.target.value })}
-                  className="flex-1 min-w-0 rounded-md bg-input border border-border px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                  disabled={!settings.embedProvider}
-                >
-                  <option value="">Модель</option>
+                </SelectContent>
+              </Select>
+              <Select
+                value={settings.embedModel}
+                onValueChange={(value) => update({ embedModel: value })}
+              >
+                <SelectTrigger className="w-full" aria-label={t('settings.microFirst.model')} disabled={!settings.embedProvider}>
+                  <SelectValue>{settings.embedModel || t('settings.microFirst.model')}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">{t('settings.microFirst.model')}</SelectItem>
                   {filteredModels.map((m) => (
-                    <option key={m.name} value={m.name}>{m.name}</option>
+                    <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>
                   ))}
-                </select>
-              </div>
+                </SelectContent>
+              </Select>
             </div>
           )}
-        </div>
+        </SettingsCard>
       </div>
-    </div>
+    </SettingsPage>
   )
 }

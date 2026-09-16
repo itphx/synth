@@ -19,6 +19,8 @@ export interface UserPreferences {
   favoriteModels?: string[]
   recentModels?: string[]
   intermediateTextDisplay?: 'inline' | 'bottom'
+  uiScaleMobile?: number | null
+  uiScaleDesktop?: number | null
   [key: string]: unknown
 }
 
@@ -27,6 +29,7 @@ export interface Profile extends User {
   is_active?: boolean
   preferences?: UserPreferences
   display_name?: string | null
+  phone?: string | null
   created_at?: string
   updated_at?: string
   last_login?: string | null

@@ -80,10 +80,10 @@ export function MentionPopup({ query, agents, position, onSelect, onClose }: Men
     <div
       ref={ref}
       className="absolute z-50 rounded-lg border border-border bg-popover shadow-lg overflow-hidden"
-      style={{ bottom: position.top, left: position.left, minWidth: '200px' }}
+      style={{ bottom: position.top, left: position.left, minWidth: '12.5rem' }}
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <div className="px-3 py-1.5 border-b border-border/50 text-[10px] text-muted-foreground/60 uppercase tracking-wide">
+      <div className="px-3 py-1.5 border-b border-border/50 text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
         {t('chat.input.mentionHint')}
       </div>
       <div className="max-h-72 overflow-y-auto p-1">
@@ -109,7 +109,7 @@ export function MentionPopup({ query, agents, position, onSelect, onClose }: Men
             )}
             <span className="font-medium">{agent.display_name}</span>
             {agent.capabilities.length > 0 && (
-              <span className="text-[10px] text-muted-foreground/50 ml-auto hidden group-hover:block">
+              <span className="text-[0.625rem] text-muted-foreground/50 ml-auto hidden group-hover:block">
                 {agent.capabilities.slice(0, 2).join(', ')}
               </span>
             )}

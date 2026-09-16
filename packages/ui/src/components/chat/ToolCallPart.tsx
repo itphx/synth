@@ -88,7 +88,7 @@ function parseDiff(diffText: string): DiffLine[] {
 function DiffView({ diff }: { diff: string }) {
   const parsed = parseDiff(diff)
   return (
-    <pre className="text-[11px] leading-relaxed overflow-x-auto font-mono m-0 p-0 bg-transparent">
+    <pre className="text-[0.6875rem] leading-relaxed overflow-x-auto font-mono m-0 p-0 bg-transparent">
       {parsed.map((line, i) => (
         <span
           key={i}
@@ -126,7 +126,7 @@ function SubagentResult({ result, toolCall: _toolCall }: { result: ToolCallData[
         <div>
           <button
             onClick={() => setShowReasoning(!showReasoning)}
-            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors mb-1"
+            className="flex items-center gap-1 text-[0.6875rem] text-muted-foreground hover:text-foreground transition-colors mb-1"
           >
             <Icon
               name={showReasoning ? 'arrow-down-s' : 'arrow-right-s'}
@@ -146,7 +146,7 @@ function SubagentResult({ result, toolCall: _toolCall }: { result: ToolCallData[
         <div>
           <button
             onClick={() => setShowToolCalls(!showToolCalls)}
-            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors mb-1"
+            className="flex items-center gap-1 text-[0.6875rem] text-muted-foreground hover:text-foreground transition-colors mb-1"
           >
             <Icon
               name={showToolCalls ? 'arrow-down-s' : 'arrow-right-s'}
@@ -157,7 +157,7 @@ function SubagentResult({ result, toolCall: _toolCall }: { result: ToolCallData[
           {showToolCalls && (
             <div className="pl-4 space-y-1">
               {toolCalls.map((tc, i) => (
-                <div key={i} className="text-[11px] flex items-start gap-1.5">
+                <div key={i} className="text-[0.6875rem] flex items-start gap-1.5">
                   <Icon name={getToolIcon(tc.name)} className="size-3 shrink-0 mt-0.5 text-muted-foreground" />
                   <div className="min-w-0">
                     <span className="font-medium">{getToolDisplayName(tc.name)}</span>
@@ -237,12 +237,12 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
               : toolDisplayName}
           </span>
           {toolCall.iteration != null && (
-            <span className="text-[10px] opacity-40 shrink-0">
+            <span className="text-[0.625rem] opacity-40 shrink-0">
               #{toolCall.iteration}
             </span>
           )}
           {duration && (
-            <span className="text-[10px] opacity-40 shrink-0">
+            <span className="text-[0.625rem] opacity-40 shrink-0">
               {duration}
             </span>
           )}
@@ -252,7 +252,7 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
             {hasResult && !isRunning && (
               <div className="flex gap-0 border-b border-border/30">
                 <button
-                  className={`px-3 py-1 text-[11px] font-medium transition-colors ${
+                  className={`px-3 py-1 text-[0.6875rem] font-medium transition-colors ${
                     viewMode === 'args'
                       ? 'text-foreground border-b-2 border-primary'
                       : 'text-muted-foreground hover:text-foreground'
@@ -263,7 +263,7 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
                 </button>
                 {!isSubagent && (
                   <button
-                    className={`px-3 py-1 text-[11px] font-medium transition-colors ${
+                    className={`px-3 py-1 text-[0.6875rem] font-medium transition-colors ${
                       viewMode === 'result'
                         ? 'text-foreground border-b-2 border-primary'
                         : 'text-muted-foreground hover:text-foreground'
@@ -274,7 +274,7 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
                   </button>
                 )}
                 <button
-                  className={`ml-auto px-2 py-1 text-[10px] font-mono transition-colors ${
+                  className={`ml-auto px-2 py-1 text-[0.625rem] font-mono transition-colors ${
                     showDebug
                       ? 'text-amber-400'
                       : 'text-muted-foreground/40 hover:text-muted-foreground'
@@ -287,11 +287,11 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
             )}
             {isRunning && (
               <div className="flex items-center gap-0 border-b border-border/30">
-                <div className="px-3 py-1 text-[11px] font-medium text-blue-400">
+                <div className="px-3 py-1 text-[0.6875rem] font-medium text-blue-400">
                   {t('chat.toolCall.arguments')}
                 </div>
                 <button
-                  className={`ml-auto px-2 py-1 text-[10px] font-mono transition-colors ${
+                  className={`ml-auto px-2 py-1 text-[0.625rem] font-mono transition-colors ${
                     showDebug
                       ? 'text-amber-400'
                       : 'text-muted-foreground/40 hover:text-muted-foreground'
@@ -304,7 +304,7 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
             )}
             {showDebug && (
               <div className="px-3 py-2 border-b border-amber-500/20 bg-amber-500/5">
-                <pre className="text-[11px] text-amber-600 dark:text-amber-400 whitespace-pre-wrap overflow-x-auto font-mono leading-relaxed">
+                <pre className="text-[0.6875rem] text-amber-600 dark:text-amber-400 whitespace-pre-wrap overflow-x-auto font-mono leading-relaxed">
                   {JSON.stringify({
                     name: toolCall.name,
                     args: toolCall.args,

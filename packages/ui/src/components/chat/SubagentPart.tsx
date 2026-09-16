@@ -147,14 +147,14 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
         <Icon name="git-branch" className="size-3.5 text-purple-400" />
         <span className="font-medium">{t('chat.subagent.title')}: {subagent.name}</span>
         {shortSessionId && (
-          <span className="font-mono text-[10px] text-muted-foreground/70">
+          <span className="font-mono text-[0.625rem] text-muted-foreground/70">
             {shortSessionId}
           </span>
         )}
         {subagent.sessionId && (
           <button
             type="button"
-            className="ml-auto inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] text-purple-400 hover:text-purple-300 hover:bg-purple-500/10 transition-colors cursor-pointer"
+            className="ml-auto inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[0.625rem] text-purple-400 hover:text-purple-300 hover:bg-purple-500/10 transition-colors cursor-pointer"
             onClick={handleOpenSession}
             title={subagent.sessionId}
           >
@@ -163,7 +163,7 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
           </button>
         )}
         {subagent.steps != null && (
-          <span className="text-[10px] text-muted-foreground/60">
+          <span className="text-[0.625rem] text-muted-foreground/60">
             {subagent.steps} {t('chat.subagent.steps')}
           </span>
         )}
@@ -172,7 +172,7 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
         <div className="p-3 border-t border-border/50 bg-muted/10 space-y-2">
           {subagent.prompt && (
             <div>
-              <div className="text-[10px] text-muted-foreground/60 mb-1 uppercase tracking-wide">Prompt</div>
+              <div className="text-[0.625rem] text-muted-foreground/60 mb-1 uppercase tracking-wide">Prompt</div>
               <MarkdownContent content={subagent.prompt} className="text-xs" />
             </div>
           )}
@@ -211,7 +211,7 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
 
           {subagent.response && (
             <div>
-              <div className="text-[10px] text-muted-foreground/60 mb-1 uppercase tracking-wide">Response</div>
+              <div className="text-[0.625rem] text-muted-foreground/60 mb-1 uppercase tracking-wide">Response</div>
               <MarkdownContent content={subagent.response} className="text-xs" />
             </div>
           )}
@@ -240,7 +240,7 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
           </span>
           <button
             onClick={handleStopResume}
-            className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
+            className="rounded px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
           >
             {t('chat.subagent.stop')}
           </button>
@@ -253,13 +253,13 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
           <span className="text-xs text-destructive flex-1 min-w-0">
             {t('chat.subagent.errorStopped')}
             {errorAttemptsLabel && (
-              <span className="ml-1 text-[10px] text-muted-foreground">({errorAttemptsLabel})</span>
+              <span className="ml-1 text-[0.625rem] text-muted-foreground">({errorAttemptsLabel})</span>
             )}
           </span>
           {errorRecoverable && (
             <button
               onClick={handleResume}
-              className="shrink-0 rounded px-2 py-0.5 text-[11px] font-medium bg-destructive/15 text-destructive hover:bg-destructive/25 transition-colors"
+              className="shrink-0 rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-destructive/15 text-destructive hover:bg-destructive/25 transition-colors"
             >
               {t('chat.subagent.resume')}
             </button>

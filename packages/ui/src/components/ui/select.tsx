@@ -55,7 +55,7 @@ function SelectContent({
 }: React.ComponentProps<typeof BaseSelect.Popup>) {
   return (
     <BaseSelect.Portal>
-      <BaseSelect.Positioner sideOffset={4} className="z-[120]">
+      <BaseSelect.Positioner sideOffset={4} collisionPadding={8} className="z-[120]">
         <BaseSelect.Popup
           data-slot="select-content"
           className={cn(

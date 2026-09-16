@@ -34,7 +34,7 @@ export function StreamErrorPanel({ error, errorType, onRetry }: StreamErrorPanel
         <span className="text-xs text-destructive flex-1 min-w-0">
           {text}
           {errorType !== 'context_length' && errorType !== 'auth' && error && (
-            <span className="block truncate text-[10px] text-muted-foreground" title={error}>
+            <span className="block truncate text-[0.625rem] text-muted-foreground" title={error}>
               {error}
             </span>
           )}
@@ -42,7 +42,7 @@ export function StreamErrorPanel({ error, errorType, onRetry }: StreamErrorPanel
         {showRetry && (
           <button
             onClick={onRetry}
-            className="shrink-0 rounded px-2 py-0.5 text-[11px] font-medium bg-destructive/15 text-destructive hover:bg-destructive/25 transition-colors"
+            className="shrink-0 rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-destructive/15 text-destructive hover:bg-destructive/25 transition-colors"
           >
             {t('chat.streamError.retry')}
           </button>

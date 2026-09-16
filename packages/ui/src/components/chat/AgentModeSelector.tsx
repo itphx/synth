@@ -57,7 +57,6 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
       <DropdownMenu.Trigger asChild>
         <button
           className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0"
-          title={activeAgent?.display_name || activeAgentId || 'Agent'}
           aria-label={activeAgent?.display_name || activeAgentId || t('chat.modelControls.searchAgents')}
         >
           {activeAgent?.icon ? (
@@ -74,7 +73,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
           )}
           {!isMobile && (
             <span
-              className={`font-medium text-xs whitespace-nowrap max-w-[200px] truncate ${activeAgent?.color ? '' : 'text-foreground'}`}
+              className={`font-medium text-xs whitespace-nowrap max-w-[12.5rem] truncate ${activeAgent?.color ? '' : 'text-foreground'}`}
               style={activeAgent?.color ? { color: resolveColor(activeAgent.color) } : undefined}
             >
               {activeAgent?.display_name || activeAgentId || 'Agent'}
@@ -90,6 +89,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
           className="w-[min(280px,calc(100vw-2rem))] p-0 flex flex-col bg-popover border border-border rounded-lg shadow-lg z-50"
           align="end"
           alignOffset={-40}
+          collisionPadding={8}
         >
           <div className="p-2 border-b border-border/40">
             <div className="relative">
@@ -171,7 +171,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
                     )}
                   </div>
                   {agent.description && (
-                    <span className="text-[10px] text-muted-foreground max-w-[200px] ml-[22px] break-words leading-tight">
+                    <span className="text-[0.625rem] text-muted-foreground max-w-[12.5rem] ml-[1.375rem] break-words leading-tight">
                       {agent.description}
                     </span>
                   )}

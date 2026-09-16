@@ -97,7 +97,7 @@ export const ProjectsPanel = () => {
         </div>
         <button
           onClick={() => setShowCreate(!showCreate)}
-          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700"
+          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90"
         >
           <Icon name="add" className="size-3.5" />
           {t('admin.projects.create')}
@@ -120,7 +120,7 @@ export const ProjectsPanel = () => {
           <button
             onClick={handleSaveWorkspace}
             disabled={workspaceSaving}
-            className="shrink-0 px-3 py-2 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+            className="shrink-0 px-3 py-2 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
             {workspaceSaving ? t('admin.projects.workspace.saving') : t('admin.projects.workspace.save')}
           </button>
@@ -133,7 +133,7 @@ export const ProjectsPanel = () => {
         <p className="text-xs text-muted-foreground/70">
           {t('admin.projects.workspace.hint')}
         </p>
-        {error && <p className="text-xs text-red-500">{error}</p>}
+        {error && <p className="text-xs text-status-error">{error}</p>}
       </div>
 
       {showCreate && (
@@ -147,11 +147,11 @@ export const ProjectsPanel = () => {
             className="w-full px-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
           />
-          {error && <p className="text-xs text-red-500">{error}</p>}
+          {error && <p className="text-xs text-status-error">{error}</p>}
           <div className="flex gap-2">
             <button
               onClick={handleCreate}
-              className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700"
+              className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90"
             >
               {t('admin.projects.create')}
             </button>
@@ -196,7 +196,7 @@ export const ProjectsPanel = () => {
                 </div>
                 <button
                   onClick={() => handleDelete(p.id, p.name)}
-                  className="p-1 rounded text-muted-foreground hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"
+                  className="p-1 rounded text-muted-foreground hover:bg-status-error/10 hover:text-status-error"
                 >
                   <Icon name="delete-bin" className="size-4" />
                 </button>

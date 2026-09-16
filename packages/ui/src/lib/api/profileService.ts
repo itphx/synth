@@ -38,6 +38,8 @@ export const profileService = {
         locale: 'ru',
         themeMode: 'system',
         theme: 'flexoki',
+        uiScaleMobile: null,
+        uiScaleDesktop: null,
       }
     }
   },

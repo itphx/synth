@@ -123,7 +123,7 @@ export function ReferencesTab({ sessionId }: ReferencesTabProps) {
                   «{ref.autoSummary}»
                 </p>
               )}
-              <div className="text-muted-foreground text-[10px] mt-1">
+              <div className="text-muted-foreground text-[0.625rem] mt-1">
                 {t('reference.attached')}: {formatDate(ref.createdAt)}
               </div>
             </div>

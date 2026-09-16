@@ -5,13 +5,6 @@ import { Toggle } from '../ui/Toggle'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 
-const ROLE_COLORS: Record<string, string> = {
-  ADMIN: 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300',
-  USER: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
-  LEAD: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
-  AUDITOR: 'bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-300',
-}
-
 const ROLES = ['ADMIN', 'USER', 'LEAD', 'AUDITOR'] as const
 
 interface UserForm {
@@ -144,14 +137,14 @@ export const UsersPanel = () => {
       <div className="flex items-center justify-between">
         <h4 className="font-medium text-sm">{expanded ? t('admin.users.editUser', { username: form.username }) : t('admin.users.newUser')}</h4>
         <div className="flex gap-2">
-          <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
+          <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
             {saving ? t('admin.users.saving') : t('admin.users.save')}
           </button>
           <button onClick={handleCancel} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.users.cancel')}</button>
         </div>
       </div>
 
-      {error && <p className="text-xs text-red-500">{error}</p>}
+      {error && <p className="text-xs text-status-error">{error}</p>}
 
       <div className="grid grid-cols-2 gap-3">
         <div>
@@ -182,7 +175,7 @@ export const UsersPanel = () => {
             <button key={role} type="button" onClick={() => toggleRole(role)} className={cn(
               'px-2.5 py-1 rounded text-xs transition-colors',
               form.roles.includes(role)
-                ? `${ROLE_COLORS[role]} font-medium`
+                ? 'bg-secondary text-secondary-foreground font-medium'
                 : 'bg-muted text-muted-foreground hover:bg-interactive-hover',
             )}>{role}</button>
           ))}
@@ -214,7 +207,7 @@ export const UsersPanel = () => {
           <h3 className="text-lg font-semibold">{t('admin.users.title')}</h3>
           <p className="text-muted-foreground text-sm">{t('admin.users.count', { count: users.length })}</p>
         </div>
-        <button onClick={handleCreate} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">
+        <button onClick={handleCreate} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">
           <Icon name="add" className="size-3.5" />{t('admin.users.add')}
         </button>
       </div>
@@ -222,7 +215,7 @@ export const UsersPanel = () => {
 
       <div className="flex-1 overflow-y-auto min-h-0 overscroll-behavior-contain mt-4">
       {error && !creating && !expanded && (
-        <div className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-lg p-4 text-sm text-amber-700 dark:text-amber-300">
+        <div className="bg-status-warning/10 border border-status-warning/30 rounded-lg p-4 text-sm text-status-warning">
           {error}
         </div>
       )}
@@ -251,13 +244,13 @@ export const UsersPanel = () => {
               )}>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className="size-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-sm font-medium shrink-0">
+                    <div className="size-8 rounded-full bg-muted flex items-center justify-center text-sm font-medium shrink-0">
                       {u.display_name?.charAt(0) || u.username.charAt(0).toUpperCase()}
                     </div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5">
                         <span className="font-medium text-sm truncate">{u.display_name || u.username}</span>
-                        <code className="text-[10px] text-muted-foreground shrink-0">{u.username}</code>
+                        <code className="text-[0.625rem] text-muted-foreground shrink-0">{u.username}</code>
                       </div>
                       {u.email && (
                         <p className="text-xs text-muted-foreground truncate">{u.email}</p>
@@ -269,15 +262,15 @@ export const UsersPanel = () => {
 
                 <div className="flex flex-wrap gap-1 mb-2">
                   {u.roles.length === 0 && (
-                    <span className="text-[10px] text-muted-foreground">{t('admin.users.noRoles')}</span>
+                    <span className="text-[0.625rem] text-muted-foreground">{t('admin.users.noRoles')}</span>
                   )}
                   {u.roles.map((r) => (
-                    <span key={r} className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium', ROLE_COLORS[r] || 'bg-slate-100 text-slate-600')}>
+                    <span key={r} className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-secondary text-secondary-foreground">
                       {r}
                     </span>
                   ))}
                   {u.last_login && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">
                       {t('admin.users.wasLastLogin', { date: new Date(u.last_login).toLocaleDateString('ru') })}
                     </span>
                   )}
@@ -285,7 +278,7 @@ export const UsersPanel = () => {
 
                 <div className="flex gap-1">
                   <button onClick={() => handleEdit(u)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.users.edit')}</button>
-                  <button onClick={() => handleDelete(u)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950">{t('admin.users.delete')}</button>
+                  <button onClick={() => handleDelete(u)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-status-error/10 hover:text-status-error">{t('admin.users.delete')}</button>
                 </div>
               </div>
             </div>

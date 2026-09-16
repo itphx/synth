@@ -380,7 +380,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
                     style={{ width: `${Math.min(windowPercent, 100)}%` }}
                   />
                 </div>
-                <span className={cn('text-[10px] tabular-nums device-hide-label', nearContextLimit ? 'text-destructive' : 'text-muted-foreground')}>
+                <span className={cn('text-[0.625rem] tabular-nums device-hide-label', nearContextLimit ? 'text-destructive' : 'text-muted-foreground')}>
                   {windowPercent}%
                 </span>
               </div>
@@ -426,29 +426,29 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
               <div className="flex items-center gap-1 ml-1">
                 <button
                   onClick={handleToggleSelectionMode}
-                  className="rounded px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10"
+                  className="rounded px-2 py-0.5 text-[0.6875rem] font-medium text-primary hover:bg-primary/10"
                 >
                   ✕ Выйти
                 </button>
                 <button
                   onClick={handleSelectAll}
-                  className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover"
+                  className="rounded px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-foreground hover:bg-interactive-hover"
                 >
                   Выделить всё
                 </button>
                 <button
                   onClick={handleClearSelection}
-                  className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover"
+                  className="rounded px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-foreground hover:bg-interactive-hover"
                 >
                   Снять
                 </button>
-                <span className="text-[11px] text-muted-foreground mx-0.5">
+                <span className="text-[0.6875rem] text-muted-foreground mx-0.5">
                   {selectedCount}/{totalMessageCount}
                 </span>
                 <button
                   onClick={handleBulkPin}
                   disabled={selectedCount === 0}
-                  className="rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover disabled:opacity-30"
+                  className="rounded px-1 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-foreground hover:bg-interactive-hover disabled:opacity-30"
                   title="Закрепить"
                 >
                   📌
@@ -456,7 +456,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
                 <button
                   onClick={handleBulkToggle}
                   disabled={selectedCount === 0}
-                  className="rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover disabled:opacity-30"
+                  className="rounded px-1 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-foreground hover:bg-interactive-hover disabled:opacity-30"
                   title="Отключить"
                 >
                   👁
@@ -464,7 +464,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
                 <button
                   onClick={handleBulkDelete}
                   disabled={selectedCount === 0}
-                  className="rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-30"
+                  className="rounded px-1 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-30"
                   title="Удалить"
                 >
                   🗑
@@ -472,7 +472,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
                 <button
                   onClick={handleForward}
                   disabled={selectedCount === 0}
-                  className="rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover disabled:opacity-30"
+                  className="rounded px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-foreground hover:bg-interactive-hover disabled:opacity-30"
                   title="Переслать"
                 >
                   ↗ Переслать
@@ -483,7 +483,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
             {/* Merge button — always visible, independent of selection */}
             <button
               onClick={handleMerge}
-              className="shrink-0 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors ml-1"
+              className="shrink-0 rounded px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors ml-1"
               title="Слияние"
             >
               🔗 <span className="device-hide-label">Слияние</span>
@@ -494,7 +494,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
         {/* File viewer toolbar */}
         {isFileViewer && activeTab && (
           <div className="flex items-center gap-1 ml-1">
-            <span className="text-xs font-mono text-muted-foreground truncate max-w-[260px]">
+            <span className="text-xs font-mono text-muted-foreground truncate max-w-[16.25rem]">
               {activeTab.data.filePath}
             </span>
             <button
@@ -517,7 +517,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
         {/* File editor toolbar */}
         {isFileEditor && activeTab && (
           <div className="flex items-center gap-1 ml-1">
-            <span className="text-xs font-mono text-muted-foreground truncate max-w-[260px]">
+            <span className="text-xs font-mono text-muted-foreground truncate max-w-[16.25rem]">
               {activeTab.data.filePath}
             </span>
             <span className={cn(
@@ -538,7 +538,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
               onClick={handleFileSave}
               disabled={!isEditorDirty || isSaving}
               className={cn(
-                'shrink-0 inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium transition-colors',
+                'shrink-0 inline-flex items-center gap-1 rounded px-2 py-0.5 text-[0.6875rem] font-medium transition-colors',
                 isEditorDirty && !isSaving
                   ? 'text-primary hover:bg-primary/10'
                   : 'text-muted-foreground opacity-50 cursor-default',
@@ -561,7 +561,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
         {/* Commit detail toolbar */}
         {isCommitDetail && activeTab && (
           <div className="flex items-center gap-1 ml-1">
-            <code className="text-[10px] font-mono text-muted-foreground bg-interactive rounded px-1.5 py-px">
+            <code className="text-[0.625rem] font-mono text-muted-foreground bg-interactive rounded px-1.5 py-px">
               {activeTab.data.commitHash?.slice(0, 7)}
             </code>
             <button

@@ -195,7 +195,7 @@ export function StreamingPlaceholder({ stream, onStop, retry, onRetryNow, onCanc
             ? 'bg-amber-500/5 border border-amber-500/30 text-amber-600 dark:text-amber-400'
             : 'bg-card border border-border/50 rounded-bl-sm',
       )}>
-        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70 mb-1">
+        <div className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground/70 mb-1">
           {isSummary && (
             <span className="inline-flex items-center gap-1 rounded-sm py-0.5 text-primary">
               <Icon name="subtract" className="size-3" />

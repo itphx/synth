@@ -78,7 +78,7 @@ export const SessionsPanel = () => {
                   <div className="flex items-center gap-3 min-w-0">
                     <div className={cn(
                       "size-2 rounded-full shrink-0",
-                      isBlocked ? "bg-red-500" : "bg-emerald-500"
+                      isBlocked ? "bg-status-error" : "bg-status-success"
                     )} />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
@@ -86,10 +86,10 @@ export const SessionsPanel = () => {
                           {s.id.slice(0, 12)}...
                         </code>
                         <span className={cn(
-                          "px-1.5 py-0.5 rounded text-[10px] font-medium",
+                          "px-1.5 py-0.5 rounded text-[0.625rem] font-medium",
                           isBlocked
-                            ? "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300"
-                            : "bg-slate-100 text-slate-600"
+                            ? "bg-status-error/15 text-status-error"
+                            : "bg-secondary text-muted-foreground"
                         )}>
                           {isBlocked ? t('admin.sessions.blocked') : '—'}
                         </span>
@@ -112,7 +112,7 @@ export const SessionsPanel = () => {
                     {isBlocked && (
                       <button
                         onClick={() => handleUnlock(s.id)}
-                        className="px-2 py-1 rounded text-xs bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900 dark:text-amber-300"
+                        className="px-2 py-1 rounded text-xs bg-status-warning/15 text-status-warning hover:bg-status-warning/25"
                       >
                         {t('admin.sessions.unlock')}
                       </button>
@@ -121,7 +121,7 @@ export const SessionsPanel = () => {
                 </div>
 
                 {isExpanded && (
-                  <div className="border-t border-border px-4 py-3 bg-slate-50 dark:bg-slate-900 space-y-2 text-xs">
+                  <div className="border-t border-border px-4 py-3 bg-surface-subtle space-y-2 text-xs">
                     <div><span className="text-muted-foreground">{t('admin.sessions.id')}</span> <code>{s.id}</code></div>
                     <div><span className="text-muted-foreground">{t('admin.sessions.engine')}</span> {s.engine}</div>
                     <div><span className="text-muted-foreground">{t('admin.sessions.project')}</span> {s.project_id || '—'}</div>
@@ -129,7 +129,7 @@ export const SessionsPanel = () => {
                     <div><span className="text-muted-foreground">{t('admin.sessions.updated')}</span> {new Date(s.updated_at).toLocaleString('ru')}</div>
                     <div><span className="text-muted-foreground">{t('admin.sessions.pending')}</span> {s.pending_messages?.length || 0}</div>
                     {isBlocked && (
-                      <div className="text-red-600 dark:text-red-400">
+                      <div className="text-status-error">
                         <span className="text-muted-foreground">{t('admin.sessions.blockedStatus')}</span> {s.status.blocked}
                       </div>
                     )}

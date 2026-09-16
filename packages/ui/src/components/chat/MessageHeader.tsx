@@ -88,7 +88,7 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick, processing }: 
   )
 
   return (
-    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70 -mt-1 mb-2">
+    <div className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground/70 -mt-1 mb-2">
       {userBadge}
       {agentBadge}
 
@@ -116,7 +116,7 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick, processing }: 
             <button
               title={message.source_msg_id ? `Из сообщения ${message.source_msg_id.slice(0, 8)}...` : undefined}
               onClick={onOriginClick}
-              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity border ${
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[0.625rem] font-medium cursor-pointer hover:opacity-80 transition-opacity border ${
                 message.origin === 'merged' ? 'bg-blue-500/10 text-blue-600 border-blue-500/20' :
                 'bg-teal-500/10 text-teal-600 border-teal-500/20'
               }`}

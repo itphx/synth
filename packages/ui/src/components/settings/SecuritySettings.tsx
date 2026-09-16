@@ -10,6 +10,8 @@ import {
   type ProtectedPathsPolicy,
 } from '@/lib/api/synthApi'
 import { Toggle } from '../ui/Toggle'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
+import { SettingsPage, SettingsCard } from './settings-layout'
 
 const DEFAULT_SETTINGS: LlmGatewaySettings = {
   enabled: false,
@@ -375,300 +377,303 @@ export function SecuritySettings() {
   }
 
   return (
-    <div className="space-y-6 max-w-lg">
-      {/* Подсекция «Шлюз безопасности» */}
-      <div>
-        <h2 className="text-lg font-semibold mb-1">{t('gateway.title')}</h2>
-        <p className="text-sm text-muted-foreground">{t('gateway.description')}</p>
-      </div>
+    <SettingsPage stickyHeader title={t('gateway.title')} description={t('gateway.description')}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {/* Шлюз: основные настройки */}
+        <SettingsCard className="sm:col-span-2">
+          <label className="flex items-center gap-3 cursor-pointer">
+            <Toggle
+              enabled={settings.enabled}
+              onToggle={() => setSettings((s) => ({ ...s, enabled: !s.enabled }))}
+            />
+            <span className="text-sm text-foreground">
+              {settings.enabled ? t('common.enabled') : t('common.disabled')}
+            </span>
+          </label>
 
-      <div className="space-y-4">
-        <label className="flex items-center gap-3 cursor-pointer">
-          <Toggle
-            enabled={settings.enabled}
-            onToggle={() => setSettings((s) => ({ ...s, enabled: !s.enabled }))}
-          />
-          <span className="text-sm text-foreground">
-            {settings.enabled ? t('common.enabled') : t('common.disabled')}
-          </span>
-        </label>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <Toggle
+              enabled={settings.logPayloads ?? false}
+              onToggle={() => setSettings((s) => ({ ...s, logPayloads: !(s.logPayloads ?? false) }))}
+            />
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm text-foreground">{t('gateway.logPayloads')}</span>
+              <span className="text-xs text-muted-foreground">{t('gateway.logPayloadsHelp')}</span>
+            </div>
+          </label>
 
-        <label className="flex items-center gap-3 cursor-pointer">
-          <Toggle
-            enabled={settings.logPayloads ?? false}
-            onToggle={() => setSettings((s) => ({ ...s, logPayloads: !(s.logPayloads ?? false) }))}
-          />
-          <div className="flex flex-col gap-0.5">
-            <span className="text-sm text-foreground">{t('gateway.logPayloads')}</span>
-            <span className="text-xs text-muted-foreground">{t('gateway.logPayloadsHelp')}</span>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="flex flex-col gap-1">
+              <label className="text-sm font-medium">{t('gateway.inputMode')}</label>
+              <Select
+                value={settings.inputMode}
+                onValueChange={(value) =>
+                  setSettings((s) => ({ ...s, inputMode: value as LlmGatewaySettings['inputMode'] }))
+                }
+              >
+                <SelectTrigger className="w-full" aria-label={t('gateway.inputMode')}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="obfuscate">{t('gateway.inputMode.obfuscate')}</SelectItem>
+                  <SelectItem value="block">{t('gateway.inputMode.block')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-sm font-medium">{t('gateway.rateLimit')}</label>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">{t('gateway.rateLimit.user')}</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={settings.rateLimit.userPerMinute}
+                  onChange={(e) =>
+                    setSettings((s) => ({
+                      ...s,
+                      rateLimit: { ...s.rateLimit, userPerMinute: Number(e.target.value) || 1 },
+                    }))
+                  }
+                  className="w-20 rounded-md bg-input border border-border px-2 py-0.5 text-xs text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">{t('gateway.rateLimit.provider')}</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={settings.rateLimit.providerPerMinute}
+                  onChange={(e) =>
+                    setSettings((s) => ({
+                      ...s,
+                      rateLimit: { ...s.rateLimit, providerPerMinute: Number(e.target.value) || 1 },
+                    }))
+                  }
+                  className="w-20 rounded-md bg-input border border-border px-2 py-0.5 text-xs text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+            </div>
           </div>
-        </label>
 
-        <div className="flex flex-col gap-1">
-          <label className="text-sm font-medium">{t('gateway.inputMode')}</label>
-          <select
-            value={settings.inputMode}
-            onChange={(e) =>
-              setSettings((s) => ({ ...s, inputMode: e.target.value as LlmGatewaySettings['inputMode'] }))
-            }
-            className="w-full rounded-md bg-input border border-border px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          <button
+            onClick={handleSave}
+            disabled={saving || loading}
+            className="w-full rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
           >
-            <option value="obfuscate">{t('gateway.inputMode.obfuscate')}</option>
-            <option value="block">{t('gateway.inputMode.block')}</option>
-          </select>
-        </div>
+            {saving ? t('sessionSettings.saving') : t('common.save')}
+          </button>
+        </SettingsCard>
 
-        <div className="flex flex-col gap-1">
-          <label className="text-sm font-medium">{t('gateway.rateLimit')}</label>
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">{t('gateway.rateLimit.user')}</span>
-            <input
-              type="number"
-              min={1}
-              value={settings.rateLimit.userPerMinute}
-              onChange={(e) =>
-                setSettings((s) => ({
-                  ...s,
-                  rateLimit: { ...s.rateLimit, userPerMinute: Number(e.target.value) || 1 },
-                }))
-              }
-              className="w-20 rounded-md bg-input border border-border px-2 py-0.5 text-xs text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
-            />
-          </div>
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">{t('gateway.rateLimit.provider')}</span>
-            <input
-              type="number"
-              min={1}
-              value={settings.rateLimit.providerPerMinute}
-              onChange={(e) =>
-                setSettings((s) => ({
-                  ...s,
-                  rateLimit: { ...s.rateLimit, providerPerMinute: Number(e.target.value) || 1 },
-                }))
-              }
-              className="w-20 rounded-md bg-input border border-border px-2 py-0.5 text-xs text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
-            />
-          </div>
-        </div>
-
-        <button
-          onClick={handleSave}
-          disabled={saving || loading}
-          className="w-full rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
+        {/* Паттерны обфускации (llmGateway) */}
+        <SettingsCard
+          title={t('gateway.patterns.title')}
+          description={t('gateway.patterns.description')}
+          className="sm:col-span-2"
         >
-          {saving ? t('sessionSettings.saving') : t('common.save')}
-        </button>
-      </div>
-
-      {/* Паттерны обфускации (llmGateway) */}
-      <div className="flex flex-col gap-3 border-t border-border pt-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h3 className="text-base font-semibold">{t('gateway.patterns.title')}</h3>
-            <p className="text-sm text-muted-foreground">{t('gateway.patterns.description')}</p>
-          </div>
           {!isOverridden && (
-            <span className="shrink-0 rounded-full bg-interactive-hover px-2 py-0.5 text-[11px] text-muted-foreground">
-              {t('gateway.patterns.defaultBadge')}
-            </span>
+            <div className="flex justify-end">
+              <span className="shrink-0 rounded-full bg-interactive-hover px-2 py-0.5 text-[0.6875rem] text-muted-foreground">
+                {t('gateway.patterns.defaultBadge')}
+              </span>
+            </div>
           )}
-        </div>
 
-        {patternsLoadError && (
-          <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{patternsLoadError}</div>
-        )}
+          {patternsLoadError && (
+            <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{patternsLoadError}</div>
+          )}
 
-        {patternsLoading && (
-          <div className="text-center text-muted-foreground py-6 text-sm">{t('common.loading')}</div>
-        )}
+          {patternsLoading && (
+            <div className="text-center text-muted-foreground py-6 text-sm">{t('common.loading')}</div>
+          )}
 
-        {!patternsLoading && !patternsLoadError && patterns.length === 0 && (
-          <div className="text-center text-muted-foreground py-6 text-sm">{t('gateway.patterns.empty')}</div>
-        )}
+          {!patternsLoading && !patternsLoadError && patterns.length === 0 && (
+            <div className="text-center text-muted-foreground py-6 text-sm">{t('gateway.patterns.empty')}</div>
+          )}
 
-        {!patternsLoading && patterns.length > 0 && (
-          <div className="space-y-2">
-            {patterns.map((p, idx) => {
-              const regexInvalid = !isValidRegex(p.regex)
-              return (
-                <div key={idx} className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={p.type}
-                    onChange={(e) => updatePattern(idx, { type: e.target.value })}
-                    placeholder={t('common.type')}
-                    className="w-28 shrink-0 rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                  />
-                  <input
-                    type="text"
-                    value={p.regex}
-                    onChange={(e) => updatePattern(idx, { regex: e.target.value })}
-                    placeholder="regex"
-                    className={cn(
-                      'flex-1 min-w-0 rounded-md bg-input border px-2 py-1 text-xs text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-ring',
-                      regexInvalid ? 'border-destructive' : 'border-border'
+          {!patternsLoading && patterns.length > 0 && (
+            <div className="space-y-2">
+              {patterns.map((p, idx) => {
+                const regexInvalid = !isValidRegex(p.regex)
+                return (
+                  <div key={idx} className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={p.type}
+                      onChange={(e) => updatePattern(idx, { type: e.target.value })}
+                      placeholder={t('common.type')}
+                      className="w-28 shrink-0 rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                    <input
+                      type="text"
+                      value={p.regex}
+                      onChange={(e) => updatePattern(idx, { regex: e.target.value })}
+                      placeholder="regex"
+                      className={cn(
+                        'flex-1 min-w-0 rounded-md bg-input border px-2 py-1 text-xs text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-ring',
+                        regexInvalid ? 'border-destructive' : 'border-border'
+                      )}
+                    />
+                    {regexInvalid && (
+                      <span className="shrink-0 text-[0.6875rem] text-destructive">{t('gateway.patterns.invalidRegex')}</span>
                     )}
-                  />
-                  {regexInvalid && (
-                    <span className="shrink-0 text-[11px] text-destructive">{t('gateway.patterns.invalidRegex')}</span>
-                  )}
-                  <button
-                    onClick={() => removePattern(idx)}
-                    className="shrink-0 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-                  >
-                    {t('gateway.patterns.remove')}
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-        )}
-
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <button
-            onClick={() => setPatterns((prev) => [...prev, { type: '', regex: '' }])}
-            disabled={patternsLoading}
-            className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-interactive-hover transition-colors disabled:opacity-50"
-          >
-            {t('gateway.patterns.add')}
-          </button>
-          <button
-            onClick={handlePatternsSave}
-            disabled={patternsSaving || patternsLoading}
-            className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-          >
-            {patternsSaving ? t('sessionSettings.saving') : t('gateway.patterns.save')}
-          </button>
-          <button
-            onClick={handlePatternsReset}
-            disabled={patternsResetting || patternsLoading}
-            className="rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
-          >
-            {patternsResetting ? t('sessionSettings.saving') : t('gateway.patterns.reset')}
-          </button>
-        </div>
-      </div>
-
-      {/* Подсекция «Защищённые пути» */}
-      <div className="flex flex-col gap-3 border-t border-border pt-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold mb-1">{t('security.protectedPaths.title')}</h2>
-            <p className="text-sm text-muted-foreground">{t('security.protectedPaths.description')}</p>
-          </div>
-          {!policyOverridden && (
-            <span className="shrink-0 rounded-full bg-interactive-hover px-2 py-0.5 text-[11px] text-muted-foreground">
-              {t('security.protectedPaths.defaultBadge')}
-            </span>
+                    <button
+                      onClick={() => removePattern(idx)}
+                      className="shrink-0 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                    >
+                      {t('gateway.patterns.remove')}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
           )}
-        </div>
 
-        <label className="flex items-center gap-3 cursor-pointer">
-          <Toggle
-            enabled={security.protectedPaths.enabled}
-            onToggle={() => setSecurity((s) => ({ ...s, protectedPaths: { enabled: !s.protectedPaths.enabled } }))}
-          />
-          <span className="text-sm text-foreground">
-            {security.protectedPaths.enabled ? t('common.enabled') : t('common.disabled')}
-          </span>
-        </label>
-
-        <div className="text-sm font-medium">{t('sessionSettings.askTimeout')}</div>
-
-        <label className="flex items-center gap-3 cursor-pointer">
-          <Toggle
-            enabled={askTimeoutEnabled}
-            onToggle={() => setAskTimeoutEnabled(!askTimeoutEnabled)}
-          />
-          <span className="text-sm text-foreground">
-            {askTimeoutEnabled ? t('sessionSettings.askTimeoutEnabled') : t('sessionSettings.askTimeoutDisabled')}
-          </span>
-        </label>
-
-        {askTimeoutEnabled && (
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-sm text-foreground">{t('sessionSettings.askTimeoutSeconds')}</span>
-            <input
-              type="number"
-              min={0}
-              value={askTimeoutSec}
-              onChange={(e) => setAskTimeoutSec(e.target.value)}
-              placeholder="30"
-              className="w-20 rounded-md bg-input border border-border px-2 py-0.5 text-xs text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
-            />
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setPatterns((prev) => [...prev, { type: '', regex: '' }])}
+              disabled={patternsLoading}
+              className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-interactive-hover transition-colors disabled:opacity-50"
+            >
+              {t('gateway.patterns.add')}
+            </button>
+            <button
+              onClick={handlePatternsSave}
+              disabled={patternsSaving || patternsLoading}
+              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
+            >
+              {patternsSaving ? t('sessionSettings.saving') : t('gateway.patterns.save')}
+            </button>
+            <button
+              onClick={handlePatternsReset}
+              disabled={patternsResetting || patternsLoading}
+              className="rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
+            >
+              {patternsResetting ? t('sessionSettings.saving') : t('gateway.patterns.reset')}
+            </button>
           </div>
-        )}
+        </SettingsCard>
 
-        {policyLoadError && (
-          <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{policyLoadError}</div>
-        )}
+        {/* Защищённые пути */}
+        <SettingsCard
+          title={t('security.protectedPaths.title')}
+          description={t('security.protectedPaths.description')}
+          className="sm:col-span-2"
+        >
+          {!policyOverridden && (
+            <div className="flex justify-end">
+              <span className="shrink-0 rounded-full bg-interactive-hover px-2 py-0.5 text-[0.6875rem] text-muted-foreground">
+                {t('security.protectedPaths.defaultBadge')}
+              </span>
+            </div>
+          )}
 
-        {policyLoading && (
-          <div className="text-center text-muted-foreground py-6 text-sm">{t('common.loading')}</div>
-        )}
+          <label className="flex items-center gap-3 cursor-pointer">
+            <Toggle
+              enabled={security.protectedPaths.enabled}
+              onToggle={() => setSecurity((s) => ({ ...s, protectedPaths: { enabled: !s.protectedPaths.enabled } }))}
+            />
+            <span className="text-sm text-foreground">
+              {security.protectedPaths.enabled ? t('common.enabled') : t('common.disabled')}
+            </span>
+          </label>
 
-        {!policyLoading && !policyLoadError && (
-          <div className="flex flex-col gap-3">
-            <StringListEditor
-              label={t('security.protectedPaths.deniedPaths')}
-              values={policy.deniedPaths}
-              onChange={(v) => updatePolicyList('deniedPaths', v)}
-              addLabel={t('security.protectedPaths.add')}
-              removeLabel={t('security.protectedPaths.remove')}
+          <div className="text-sm font-medium">{t('sessionSettings.askTimeout')}</div>
+
+          <label className="flex items-center gap-3 cursor-pointer">
+            <Toggle
+              enabled={askTimeoutEnabled}
+              onToggle={() => setAskTimeoutEnabled(!askTimeoutEnabled)}
             />
-            <StringListEditor
-              label={t('security.protectedPaths.deniedPrefixes')}
-              values={policy.deniedPrefixes}
-              onChange={(v) => updatePolicyList('deniedPrefixes', v)}
-              addLabel={t('security.protectedPaths.add')}
-              removeLabel={t('security.protectedPaths.remove')}
-            />
-            <StringListEditor
-              label={t('security.protectedPaths.approvalPaths')}
-              values={policy.approvalPaths}
-              onChange={(v) => updatePolicyList('approvalPaths', v)}
-              addLabel={t('security.protectedPaths.add')}
-              removeLabel={t('security.protectedPaths.remove')}
-            />
-            <StringListEditor
-              label={t('security.protectedPaths.deniedCommandPrefixes')}
-              values={policy.deniedCommandPrefixes}
-              onChange={(v) => updatePolicyList('deniedCommandPrefixes', v)}
-              addLabel={t('security.protectedPaths.add')}
-              removeLabel={t('security.protectedPaths.remove')}
-            />
+            <span className="text-sm text-foreground">
+              {askTimeoutEnabled ? t('sessionSettings.askTimeoutEnabled') : t('sessionSettings.askTimeoutDisabled')}
+            </span>
+          </label>
+
+          {askTimeoutEnabled && (
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm text-foreground">{t('sessionSettings.askTimeoutSeconds')}</span>
+              <input
+                type="number"
+                min={0}
+                value={askTimeoutSec}
+                onChange={(e) => setAskTimeoutSec(e.target.value)}
+                placeholder="30"
+                className="w-20 rounded-md bg-input border border-border px-2 py-0.5 text-xs text-foreground text-right focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+            </div>
+          )}
+
+          {policyLoadError && (
+            <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{policyLoadError}</div>
+          )}
+
+          {policyLoading && (
+            <div className="text-center text-muted-foreground py-6 text-sm">{t('common.loading')}</div>
+          )}
+
+          {!policyLoading && !policyLoadError && (
+            <div className="flex flex-col gap-3">
+              <StringListEditor
+                label={t('security.protectedPaths.deniedPaths')}
+                values={policy.deniedPaths}
+                onChange={(v) => updatePolicyList('deniedPaths', v)}
+                addLabel={t('security.protectedPaths.add')}
+                removeLabel={t('security.protectedPaths.remove')}
+              />
+              <StringListEditor
+                label={t('security.protectedPaths.deniedPrefixes')}
+                values={policy.deniedPrefixes}
+                onChange={(v) => updatePolicyList('deniedPrefixes', v)}
+                addLabel={t('security.protectedPaths.add')}
+                removeLabel={t('security.protectedPaths.remove')}
+              />
+              <StringListEditor
+                label={t('security.protectedPaths.approvalPaths')}
+                values={policy.approvalPaths}
+                onChange={(v) => updatePolicyList('approvalPaths', v)}
+                addLabel={t('security.protectedPaths.add')}
+                removeLabel={t('security.protectedPaths.remove')}
+              />
+              <StringListEditor
+                label={t('security.protectedPaths.deniedCommandPrefixes')}
+                values={policy.deniedCommandPrefixes}
+                onChange={(v) => updatePolicyList('deniedCommandPrefixes', v)}
+                addLabel={t('security.protectedPaths.add')}
+                removeLabel={t('security.protectedPaths.remove')}
+              />
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={handleSecuritySave}
+              disabled={securitySaving || securityLoading}
+              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
+            >
+              {securitySaving ? t('sessionSettings.saving') : t('common.save')}
+            </button>
+            <button
+              onClick={handlePolicySave}
+              disabled={policySaving || policyLoading}
+              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
+            >
+              {policySaving ? t('sessionSettings.saving') : t('security.protectedPaths.save')}
+            </button>
+            <button
+              onClick={handlePolicyReset}
+              disabled={policyResetting || policyLoading}
+              className="rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
+            >
+              {policyResetting ? t('sessionSettings.saving') : t('security.protectedPaths.reset')}
+            </button>
           </div>
-        )}
 
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <button
-            onClick={handleSecuritySave}
-            disabled={securitySaving || securityLoading}
-            className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-          >
-            {securitySaving ? t('sessionSettings.saving') : t('common.save')}
-          </button>
-          <button
-            onClick={handlePolicySave}
-            disabled={policySaving || policyLoading}
-            className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-          >
-            {policySaving ? t('sessionSettings.saving') : t('security.protectedPaths.save')}
-          </button>
-          <button
-            onClick={handlePolicyReset}
-            disabled={policyResetting || policyLoading}
-            className="rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
-          >
-            {policyResetting ? t('sessionSettings.saving') : t('security.protectedPaths.reset')}
-          </button>
-        </div>
-
-        {!policyOverridden && (
-          <div className="text-xs text-muted-foreground">{t('security.protectedPaths.baseHint')}</div>
-        )}
+          {!policyOverridden && (
+            <div className="text-xs text-muted-foreground">{t('security.protectedPaths.baseHint')}</div>
+          )}
+        </SettingsCard>
       </div>
-    </div>
+    </SettingsPage>
   )
 }

@@ -3,6 +3,7 @@ import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface DebugConfig {
   groups: Record<string, string>
@@ -10,11 +11,11 @@ interface DebugConfig {
 }
 
 const LEVEL_COLORS: Record<string, string> = {
-  NONE: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400',
-  DEBUG: 'bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300',
-  INFO: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300',
-  WARNING: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
-  ERROR: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
+  NONE: 'bg-secondary text-muted-foreground',
+  DEBUG: 'bg-status-info/10 text-status-info',
+  INFO: 'bg-status-success/10 text-status-success',
+  WARNING: 'bg-status-warning/15 text-status-warning',
+  ERROR: 'bg-status-error/10 text-status-error',
 }
 
 export const DebugPanel = () => {
@@ -94,19 +95,20 @@ export const DebugPanel = () => {
                 <div key={group} className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <span className="text-sm font-medium">{group}</span>
-                    <span className={cn('px-2 py-0.5 rounded text-[11px] font-medium', LEVEL_COLORS[levels[group] ?? defaultLevel] || 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400')}>
+                    <span className={cn('px-2 py-0.5 rounded text-[0.6875rem] font-medium', LEVEL_COLORS[levels[group] ?? defaultLevel] || 'bg-secondary text-muted-foreground')}>
                       {levels[group] ?? defaultLevel}
                     </span>
                   </div>
-                  <select
-                    value={levels[group] ?? defaultLevel}
-                    onChange={(e) => handleLevelChange(group, e.target.value)}
-                    className="bg-interactive-selection border border-border rounded-lg px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                  >
-                    {(config?.available_levels || ['NONE', 'DEBUG', 'INFO', 'WARNING', 'ERROR']).map((lvl) => (
-                      <option key={lvl} value={lvl}>{lvl}</option>
-                    ))}
-                  </select>
+                  <Select value={levels[group] ?? defaultLevel} onValueChange={(value) => handleLevelChange(group, value)}>
+                    <SelectTrigger aria-label={group}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(config?.available_levels || ['NONE', 'DEBUG', 'INFO', 'WARNING', 'ERROR']).map((lvl) => (
+                        <SelectItem key={lvl} value={lvl}>{lvl}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               ))}
             </div>
@@ -130,7 +132,7 @@ export const DebugPanel = () => {
               )}
             </button>
             {status && (
-              <span className={cn('text-sm', status === t('admin.debug.saved') ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500')}>
+              <span className={cn('text-sm', status === t('admin.debug.saved') ? 'text-status-success' : 'text-status-error')}>
                 {status}
               </span>
             )}

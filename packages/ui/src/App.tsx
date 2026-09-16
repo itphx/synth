@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { ToastContainer } from 'react-toastify'
 import { TooltipProvider } from './components/ui/tooltip'
+import { TitleTooltipBridge } from './components/ui/TitleTooltipBridge'
 import { useUIStore } from '@/stores/useUIStore'
 import { useI18nStore } from '@/lib/i18n/store'
 import { DEFAULT_THEME, DEFAULT_THEME_MODE, DEFAULT_LOCALE } from '@/lib/defaults'
@@ -23,6 +24,12 @@ import { LogsModal } from './components/logviewer/LogsModal'
 import { ConfirmDialog } from './components/ui/confirm-dialog'
 import { AuthGate } from './components/auth/AuthGate'
 import { profileService } from '@/lib/api/profileService'
+import {
+  applyServerDefaultUiScale,
+  getDefaultUiScale,
+  normalizeUiScale,
+  setServerScaleDefaults,
+} from '@/lib/uiScale'
 import { useAuthStore } from '@/stores/authStore'
 import { useConfirmStore } from '@/stores/confirmStore'
 import { useDevice } from '@/hooks/useDevice'
@@ -57,6 +64,15 @@ function DefaultsSync() {
         if (prefs.locale) {
           useI18nStore.getState().setLocale(prefs.locale)
         }
+      }
+
+      const defaults = await profileService.getDefaults()
+      setServerScaleDefaults({
+        mobile: defaults.uiScaleMobile ?? null,
+        desktop: defaults.uiScaleDesktop ?? null,
+      })
+      if (applyServerDefaultUiScale()) {
+        useUIStore.setState({ uiScale: normalizeUiScale(getDefaultUiScale()) })
       }
     }
     apply()
@@ -196,6 +212,7 @@ function App() {
         <ConnectionGuard />
         <UpdateNotification />
         <TooltipProvider>
+          <TitleTooltipBridge />
           {isMobile ? mobileLayout : desktopLayout}
         </TooltipProvider>
 
@@ -225,8 +242,8 @@ function App() {
         toastClassName="synth-toast"
         style={{
           // @ts-expect-error CSS custom properties
-          '--toastify-toast-min-height': '44px',
-          '--toastify-toast-padding': '10px 14px',
+          '--toastify-toast-min-height': '2.75rem',
+          '--toastify-toast-padding': '0.625rem 0.875rem',
           '--toastify-color-success': 'oklch(0.68 0.12 145)',
           '--toastify-color-warning': 'oklch(0.7 0.13 95)',
           '--toastify-color-error': 'oklch(0.65 0.15 30)',

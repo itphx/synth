@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { ThemeMode, Locale } from '../lib/theme/themes'
 import { profileService } from '@/lib/api/profileService'
+import { applyUiScale, normalizeUiScale, persistUiScale, readUiScale } from '@/lib/uiScale'
 
 export type TransportMode = 'auto' | 'ws' | 'sse'
 
@@ -106,6 +107,9 @@ interface UIStore {
 
   locale: Locale
   setLocale: (locale: Locale) => void
+
+  uiScale: number
+  setUiScale: (scale: number) => void
 
   centerTabs: CenterTab[]
   activeCenterTabId: string | null
@@ -254,6 +258,13 @@ export const useUIStore = create<UIStore>()(
       setLocale: (locale) => {
         set({ locale })
         profileService.syncLocaleToProfile(locale)
+      },
+
+      uiScale: readUiScale(),
+      setUiScale: (scale) => {
+        applyUiScale(scale)
+        persistUiScale(scale)
+        set({ uiScale: normalizeUiScale(scale) })
       },
 
       centerTabs: [],

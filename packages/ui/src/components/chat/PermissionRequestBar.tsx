@@ -91,7 +91,7 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
             {t('permission.bar.request', { tool: toolDisplayName })}
           </span>
           {waitingCount > 0 && (
-            <span className="text-[10px] text-muted-foreground shrink-0">
+            <span className="text-[0.625rem] text-muted-foreground shrink-0">
               {t('permission.bar.waiting', { count: String(waitingCount) })}
             </span>
           )}
@@ -105,14 +105,14 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
 
         <div className="flex items-center gap-1 ml-auto shrink-0">
           {current.held || current.timeoutMs <= 0 ? (
-            <span className="flex items-center gap-1 px-2 py-0.5 text-[10px] text-muted-foreground">
+            <span className="flex items-center gap-1 px-2 py-0.5 text-[0.625rem] text-muted-foreground">
               <Icon name="time" className="size-3 shrink-0" />
               {t('permission.bar.noTimeout')}
             </span>
           ) : (
             <>
               <span
-                className="flex items-center gap-1 px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground"
+                className="flex items-center gap-1 px-2 py-0.5 text-[0.625rem] tabular-nums text-muted-foreground"
                 title={t('permission.bar.timeoutTitle')}
               >
                 <Icon name="time" className="size-3 shrink-0" />
@@ -120,7 +120,7 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
               </span>
               <button
                 onClick={handleHold}
-                className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
+                className="flex items-center gap-1 rounded px-2 py-0.5 text-[0.625rem] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
                 title={t('permission.bar.stopTimerHint')}
               >
                 <Icon name="stop" className="size-3 shrink-0" />
@@ -130,21 +130,21 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
           )}
           <button
             onClick={() => handleAction(true, false)}
-            className="rounded px-2 py-0.5 text-[11px] font-medium bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+            className="rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
             title={t('permission.bar.allowSessionHint')}
           >
             {t('permission.bar.allowSession')}
           </button>
           <button
             onClick={() => handleAction(true, true)}
-            className="rounded px-2 py-0.5 text-[11px] font-medium bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+            className="rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
             title={t('permission.bar.allowOnceHint')}
           >
             {t('permission.bar.allowOnce')}
           </button>
           <button
             onClick={() => handleAction(false)}
-            className="rounded px-2 py-0.5 text-[11px] text-destructive hover:bg-destructive/10 transition-colors"
+            className="rounded px-2 py-0.5 text-[0.6875rem] text-destructive hover:bg-destructive/10 transition-colors"
           >
             {t('permission.bar.deny')}
           </button>
@@ -161,10 +161,10 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
           )}
           {Object.keys(current.params).length > 0 && (
             <div>
-              <div className="text-[11px] font-medium text-muted-foreground mb-0.5">
+              <div className="text-[0.6875rem] font-medium text-muted-foreground mb-0.5">
                 {t('permission.bar.params')}
               </div>
-              <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap overflow-x-auto font-mono leading-relaxed">
+              <pre className="text-[0.6875rem] text-muted-foreground whitespace-pre-wrap overflow-x-auto font-mono leading-relaxed">
                 {JSON.stringify(current.params, null, 2)}
               </pre>
             </div>

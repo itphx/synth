@@ -16,7 +16,7 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Request failed' }))
     const msg = error.detail || error.error?.error || error.error?.message || `HTTP ${response.status}`
-    throw new Error(msg)
+    throw Object.assign(new Error(msg), { status: response.status })
   }
   if (response.status === 204) return undefined as T
   return response.json()
@@ -1049,6 +1049,38 @@ export const synthApi = {
     const qs = q.toString()
     return fetchJSON<LlmPayloadListResponse>(`${BASE_URL}/logs/llm${qs ? `?${qs}` : ''}`)
   },
+
+  // --- Словари классификации (AD-034/AD-035) ---
+  async getDictionaries(): Promise<{ dictionaries: DictionaryEntry[] }> {
+    return fetchJSON<{ dictionaries: DictionaryEntry[] }>(`${BASE_URL}/dictionaries`)
+  },
+
+  async getDictionary(category: string, lang: string): Promise<{ dictionary: DictionaryDetail }> {
+    return fetchJSON<{ dictionary: DictionaryDetail }>(
+      `${BASE_URL}/dictionaries/${encodeURIComponent(category)}/${encodeURIComponent(lang)}`,
+    )
+  },
+
+  async saveDictionary(
+    category: string,
+    lang: string,
+    data: { content: string },
+  ): Promise<{ status: string; dictionary: DictionaryDetail }> {
+    return fetchJSON<{ status: string; dictionary: DictionaryDetail }>(
+      `${BASE_URL}/dictionaries/${encodeURIComponent(category)}/${encodeURIComponent(lang)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      },
+    )
+  },
+
+  async resetDictionary(category: string, lang: string): Promise<{ status: string; dictionary: DictionaryDetail }> {
+    return fetchJSON<{ status: string; dictionary: DictionaryDetail }>(
+      `${BASE_URL}/dictionaries/${encodeURIComponent(category)}/${encodeURIComponent(lang)}`,
+      { method: 'DELETE' },
+    )
+  },
 }
 
 export interface LlmGatewaySettings {
@@ -1215,4 +1247,20 @@ export interface HybridStatus {
   knownServers?: string[]
   /** URL последнего использованного сервера (предзаполнение поля адреса). */
   lastServer?: string | null
+}
+
+/** Словарь классификации (AD-034/AD-035): GET/PUT/DELETE /api/v2/dictionaries. */
+export interface DictionaryEntry {
+  category: string
+  language: string
+  source: 'system' | 'user'
+  keywords: string[]
+  tools?: string[]
+  /** Размер действующего содержимого (YAML) в байтах. */
+  size: number
+}
+
+/** Словарь классификации с действующим содержимым (YAML) — ответ GET/PUT/DELETE элемента. */
+export interface DictionaryDetail extends DictionaryEntry {
+  content: string
 }

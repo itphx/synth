@@ -408,7 +408,7 @@ function SessionReferenceCard({
           {displayName}
         </span>
         {displayName !== shortId && (
-          <span className="text-muted-foreground font-mono text-[10px] shrink-0">{shortId}</span>
+          <span className="text-muted-foreground font-mono text-[0.625rem] shrink-0">{shortId}</span>
         )}
       </div>
 
@@ -429,7 +429,7 @@ function SessionReferenceCard({
       <div className="flex gap-2">
         <button
           onClick={handleOpen}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium text-blue-600 hover:bg-blue-500/10 transition-colors"
+          className="inline-flex items-center gap-1 px-2 py-1 rounded text-[0.6875rem] font-medium text-blue-600 hover:bg-blue-500/10 transition-colors"
         >
           <Icon name="external-link" className="h-3 w-3" />
           Открыть сессию
@@ -437,7 +437,7 @@ function SessionReferenceCard({
         {currentSessionId && (
           <button
             onClick={handleRemove}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+            className="inline-flex items-center gap-1 px-2 py-1 rounded text-[0.6875rem] text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
           >
             <Icon name="close" className="h-3 w-3" />
             Удалить

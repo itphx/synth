@@ -75,7 +75,7 @@ export const LogFilePanel = ({ logName, title, description }: LogFilePanelProps)
           </select>
         </label>
 
-        <div className="relative flex-1 min-w-[160px]">
+        <div className="relative flex-1 min-w-[10rem]">
           <Icon name="search" className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
           <input
             type="text"
@@ -133,7 +133,7 @@ export const LogFilePanel = ({ logName, title, description }: LogFilePanelProps)
                   {total - lines.length + idx + 1}
                 </span>
                 {level && (
-                  <span className={cn('shrink-0 rounded px-1 py-px text-[10px] font-medium h-fit mt-0.5', colorForLevel(level))}>
+                  <span className={cn('shrink-0 rounded px-1 py-px text-[0.625rem] font-medium h-fit mt-0.5', colorForLevel(level))}>
                     {level}
                   </span>
                 )}

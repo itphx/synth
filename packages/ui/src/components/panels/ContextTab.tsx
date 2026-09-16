@@ -254,7 +254,7 @@ export function ContextTab() {
 function SectionHeader({ label }: { label: string }) {
   return (
     <div className="pt-1 pb-0">
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">{label}</span>
+      <span className="text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground/60">{label}</span>
     </div>
   )
 }

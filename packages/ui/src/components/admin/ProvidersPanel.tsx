@@ -3,6 +3,7 @@ import { synthApi, type ProviderInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ProviderIcon, PROVIDER_RI_ICONS, PROVIDER_BRAND_NAMES } from './ProviderIcon'
 
 interface FetchIconResult {
@@ -151,7 +152,7 @@ export const ProvidersPanel = () => {
           <h3 className="text-lg font-semibold">{t('admin.providers.title')}</h3>
           <p className="text-muted-foreground text-sm">{t('admin.providers.count', { count: providers.length })}</p>
         </div>
-        <button onClick={handleCreate} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">
+        <button onClick={handleCreate} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">
           <Icon name="add" className="size-3.5" />{t('admin.providers.add')}
         </button>
       </div>
@@ -163,7 +164,7 @@ export const ProvidersPanel = () => {
           <div className="flex items-center justify-between">
             <h4 className="font-medium text-sm">{editName ? t('admin.providers.edit') : t('admin.providers.new')}</h4>
             <div className="flex gap-2">
-              <button onClick={handleSave} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">{t('admin.providers.save')}</button>
+              <button onClick={handleSave} className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">{t('admin.providers.save')}</button>
               <button onClick={() => setShowForm(false)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.providers.cancel')}</button>
             </div>
           </div>
@@ -180,15 +181,16 @@ export const ProvidersPanel = () => {
             </div>
             <div>
               <label className="text-xs text-muted-foreground">{t('admin.providers.type')}</label>
-              <select
-                value={form.type}
-                onChange={(e) => setForm({ ...form, type: e.target.value })}
-                className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              >
-                <option value="openai">OpenAI</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="ollama">Ollama</option>
-              </select>
+              <Select value={form.type} onValueChange={(value) => setForm({ ...form, type: value })}>
+                <SelectTrigger className="w-full" aria-label={t('admin.providers.type')}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="openai">OpenAI</SelectItem>
+                  <SelectItem value="anthropic">Anthropic</SelectItem>
+                  <SelectItem value="ollama">Ollama</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="col-span-2">
               <label className="text-xs text-muted-foreground">{t('admin.providers.url')}</label>
@@ -244,7 +246,7 @@ export const ProvidersPanel = () => {
               <div className="flex items-center gap-2">
                 <ProviderIcon icon={form.icon} baseUrl={form.base_url} size={20} />
                 {form.icon && (
-                    <button onClick={resetIcon} className="text-[11px] text-muted-foreground hover:text-red-500">
+                    <button onClick={resetIcon} className="text-[0.6875rem] text-muted-foreground hover:text-status-error">
                       {t('admin.providers.reset')}
                     </button>
                 )}
@@ -256,21 +258,21 @@ export const ProvidersPanel = () => {
                 <button
                   onClick={handleFetchIcon}
                   disabled={fetchingIcon || !form.base_url}
-                  className="px-3 py-1 rounded-md text-xs bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                  className="px-3 py-1 rounded-md text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 >
                   {fetchingIcon ? t('admin.providers.searchIcon') : t('admin.providers.detect')}
                 </button>
                 {fetchedIcon?.icon && (
                   <>
                     <img src={fetchedIcon.icon} width={20} height={20} className="rounded" alt="" />
-                    <span className="text-xs text-emerald-600 dark:text-emerald-400">{t('admin.providers.found')}</span>
-                    <button onClick={applyFetchedIcon} className="px-2 py-0.5 rounded text-xs bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300 hover:bg-emerald-200">
+                    <span className="text-xs text-status-success">{t('admin.providers.found')}</span>
+                    <button onClick={applyFetchedIcon} className="px-2 py-0.5 rounded text-xs bg-status-success/10 text-status-success hover:bg-status-success/20">
                       {t('admin.providers.use')}
                     </button>
                   </>
                 )}
                 {fetchedIcon?.error && (
-                  <span className="text-xs text-red-500">{fetchedIcon.error}</span>
+                  <span className="text-xs text-status-error">{fetchedIcon.error}</span>
                 )}
               </div>
             </IconPickerSection>
@@ -285,7 +287,7 @@ export const ProvidersPanel = () => {
                     className={cn(
                       'p-1.5 rounded-md border',
                       form.icon === `ri:${riName}`
-                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-950'
+                        ? 'border-primary bg-primary/10'
                         : 'border-border hover:bg-interactive-hover',
                     )}
                   >
@@ -305,7 +307,7 @@ export const ProvidersPanel = () => {
                     className={cn(
                       'p-1.5 rounded-md border',
                       form.icon === `brand:${brand}`
-                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-950'
+                        ? 'border-primary bg-primary/10'
                         : 'border-border hover:bg-interactive-hover',
                     )}
                   >
@@ -316,9 +318,9 @@ export const ProvidersPanel = () => {
             </IconPickerSection>
           </div>
 
-          {error && <p className="text-xs text-red-500">{error}</p>}
+          {error && <p className="text-xs text-status-error">{error}</p>}
           <div className="flex gap-2">
-            <button onClick={handleSave} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">{t('admin.providers.save')}</button>
+            <button onClick={handleSave} className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">{t('admin.providers.save')}</button>
             <button onClick={() => setShowForm(false)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.providers.cancel')}</button>
           </div>
         </div>
@@ -327,10 +329,10 @@ export const ProvidersPanel = () => {
       {testResult && (
         <div className={cn(
           "rounded-lg border p-4 text-sm",
-          testResult.status === 'testing' ? 'bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-950 dark:border-blue-800 dark:text-blue-300' :
-          testResult.status === 'ok' ? 'bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-950 dark:border-emerald-800 dark:text-emerald-300' :
-          testResult.status === 'disabled' ? 'bg-slate-50 border-slate-200 text-slate-600 dark:bg-slate-950 dark:border-slate-800 dark:text-slate-400' :
-          'bg-red-50 border-red-200 text-red-700 dark:bg-red-950 dark:border-red-800 dark:text-red-300'
+          testResult.status === 'testing' ? 'bg-status-info/10 border-status-info/30 text-status-info' :
+          testResult.status === 'ok' ? 'bg-status-success/10 border-status-success/30 text-status-success' :
+          testResult.status === 'disabled' ? 'bg-muted border-border text-muted-foreground' :
+          'bg-status-error/10 border-status-error/30 text-status-error'
         )}>
           <div className="flex items-center justify-between">
             <span className="font-medium">{testResult.id}</span>
@@ -365,10 +367,10 @@ export const ProvidersPanel = () => {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-sm">{p.name}</span>
-                      <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">{p.type}</span>
-                      {p.is_default && <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">{t('admin.providers.default_2')}</span>}
+                      <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-secondary text-secondary-foreground">{p.type}</span>
+                      {p.is_default && <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-status-success/10 text-status-success">{t('admin.providers.default_2')}</span>}
                       {p.enabled === false && (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">{t('admin.providers.off')}</span>
+                        <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-secondary text-muted-foreground">{t('admin.providers.off')}</span>
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1 truncate max-w-md">{p.url}</p>
@@ -377,7 +379,7 @@ export const ProvidersPanel = () => {
                 <div className="flex items-center gap-1">
                   <button onClick={() => handleTest(p.name)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.providers.test')}</button>
                   <button onClick={() => handleEdit(p)} className="p-1 rounded text-muted-foreground hover:bg-interactive-hover"><Icon name="edit-2" className="size-3.5" /></button>
-                  <button onClick={() => handleDelete(p.name)} className="p-1 rounded text-muted-foreground hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"><Icon name="delete-bin" className="size-3.5" /></button>
+                  <button onClick={() => handleDelete(p.name)} className="p-1 rounded text-muted-foreground hover:bg-status-error/10 hover:text-status-error"><Icon name="delete-bin" className="size-3.5" /></button>
                 </div>
               </div>
             </div>

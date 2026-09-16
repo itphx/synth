@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { SYNTH_VERSION } from '@itphx/synth-shared'
+import { SYNTH_VERSION } from '@itphx/synth-shared/version'
 import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
 

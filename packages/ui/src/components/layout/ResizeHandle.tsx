@@ -56,7 +56,7 @@ export const ResizeHandle = ({
 
   return (
     <div
-      className={`absolute top-0 h-full w-[3px] cursor-col-resize hover:bg-orange-500/50 transition-colors ${
+      className={`absolute top-0 h-full w-[0.1875rem] cursor-col-resize hover:bg-orange-500/50 transition-colors ${
         position === 'right' ? 'right-0' : 'left-0'
       }`}
       onPointerDown={handlePointerDown}

@@ -4,6 +4,7 @@ import { Icon } from '@/components/icon/Icon'
 import { IconPicker } from './IconPicker'
 import { ColorPicker } from './ColorPicker'
 import { Toggle } from '../ui/Toggle'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 
@@ -257,6 +258,13 @@ export const AgentsPanel = () => {
     return Array.from(new Set(['', 'none', ...(REASONING_BY_PROVIDER_TYPE[type ?? ''] ?? [])]))
   }
 
+  const reasoningLabel = (level: string): string =>
+    level === ''
+      ? t('admin.agents.reasoning.unset')
+      : level === 'none'
+        ? t('admin.agents.reasoning.none')
+        : t(`chat.reasoning.${level}`)
+
   const showSubagentFields = form.agent_mode.includes('subagent')
 
   const renderForm = () => (
@@ -264,14 +272,14 @@ export const AgentsPanel = () => {
       <div className="flex items-center justify-between">
         <h4 className="font-medium text-sm">{expanded ? t('admin.agents.edit', { id: form.id }) : t('admin.agents.new')}</h4>
         <div className="flex gap-2">
-          <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
+          <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
             {saving ? t('admin.agents.saving') : t('admin.agents.save')}
           </button>
           <button onClick={handleCancel} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.agents.cancel')}</button>
         </div>
       </div>
 
-      {error && <p className="text-xs text-red-500">{error}</p>}
+      {error && <p className="text-xs text-status-error">{error}</p>}
 
       <div className="grid grid-cols-2 gap-3">
         <div>
@@ -304,7 +312,7 @@ export const AgentsPanel = () => {
                 <label key={m} className={cn(
                   "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs cursor-pointer select-none transition-colors",
                   checked
-                    ? "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/40 dark:text-blue-300 dark:border-blue-800"
+                    ? "bg-secondary text-secondary-foreground border-border"
                     : "bg-muted text-muted-foreground border-transparent hover:bg-interactive-hover",
                 )}>
                   <input
@@ -318,7 +326,7 @@ export const AgentsPanel = () => {
                           : [...f.agent_mode, m],
                       }))
                     }}
-                    className="accent-blue-600"
+                    className="accent-primary"
                   />
                   {t(`admin.agents.agentMode.${m}`)}
                 </label>
@@ -330,31 +338,46 @@ export const AgentsPanel = () => {
         {/* Provider select */}
         <div>
           <label className="text-xs text-muted-foreground">{t('admin.agents.provider')}</label>
-          <select value={form.provider} onChange={(e) => setForm({ ...form, provider: e.target.value, model: form.provider !== e.target.value ? '' : form.model })}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-            <option value="">{t('admin.agents.default_2')}</option>
-            {providers.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
-          </select>
+          <Select
+            value={form.provider}
+            onValueChange={(value) => setForm({ ...form, provider: value, model: form.provider !== value ? '' : form.model })}
+          >
+            <SelectTrigger className="w-full" aria-label={t('admin.agents.provider')}>
+              <SelectValue>{form.provider || t('admin.agents.default_2')}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">{t('admin.agents.default_2')}</SelectItem>
+              {providers.map((p) => <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
 
         {/* Model select */}
         <div>
           <label className="text-xs text-muted-foreground">{t('admin.agents.model')}</label>
-          <select value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-            <option value="">{t('admin.agents.default_2')}</option>
-            {availableModels().map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
+          <Select value={form.model} onValueChange={(value) => setForm({ ...form, model: value })}>
+            <SelectTrigger className="w-full" aria-label={t('admin.agents.model')}>
+              <SelectValue>{form.model || t('admin.agents.default_2')}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">{t('admin.agents.default_2')}</SelectItem>
+              {availableModels().map((m) => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
 
         {/* Context file select */}
         <div>
           <label className="text-xs text-muted-foreground">{t('admin.agents.contextFile')}</label>
-          <select value={form.context_file} onChange={(e) => setForm({ ...form, context_file: e.target.value })}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-            <option value="">{t('admin.agents.autoById')}</option>
-            {contextFiles.map((f) => <option key={f} value={f}>{f}</option>)}
-          </select>
+          <Select value={form.context_file} onValueChange={(value) => setForm({ ...form, context_file: value })}>
+            <SelectTrigger className="w-full" aria-label={t('admin.agents.contextFile')}>
+              <SelectValue>{form.context_file || t('admin.agents.autoById')}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">{t('admin.agents.autoById')}</SelectItem>
+              {contextFiles.map((f) => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
 
         {/* Temperature */}
@@ -362,7 +385,7 @@ export const AgentsPanel = () => {
           <label className="text-xs text-muted-foreground">{t('admin.agents.temperature', { value: form.temperature.toFixed(2) })}</label>
           <input type="range" min="0" max="2" step="0.05" value={form.temperature}
             onChange={(e) => setForm({ ...form, temperature: parseFloat(e.target.value) })}
-            className="w-full accent-blue-600" />
+            className="w-full accent-primary" />
         </div>
 
         {/* Top P */}
@@ -384,18 +407,18 @@ export const AgentsPanel = () => {
         {/* Reasoning level */}
         <div>
           <label className="text-xs text-muted-foreground">{t('admin.agents.reasoning')}</label>
-          <select value={form.reasoning_level} onChange={(e) => setForm({ ...form, reasoning_level: e.target.value })}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-            {reasoningOptions().map((level) => (
-              <option key={level} value={level}>
-                {level === ''
-                  ? t('admin.agents.reasoning.unset')
-                  : level === 'none'
-                    ? t('admin.agents.reasoning.none')
-                    : t(`chat.reasoning.${level}`)}
-              </option>
-            ))}
-          </select>
+          <Select value={form.reasoning_level} onValueChange={(value) => setForm({ ...form, reasoning_level: value })}>
+            <SelectTrigger className="w-full" aria-label={t('admin.agents.reasoning')}>
+              <SelectValue>{reasoningLabel(form.reasoning_level)}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {reasoningOptions().map((level) => (
+                <SelectItem key={level} value={level}>
+                  {reasoningLabel(level)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         {/* Max steps — для всех режимов, 0 = без ограничений */}
@@ -432,9 +455,9 @@ export const AgentsPanel = () => {
         <div className="flex flex-wrap gap-1">
           {CAP_KEYS.map((k) => (
             <button key={k} type="button" onClick={() => toggleCap(k)} className={cn(
-              "px-2 py-0.5 rounded text-[11px] transition-colors",
+              "px-2 py-0.5 rounded text-[0.6875rem] transition-colors",
               form.capabilities.includes(k)
-                ? "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"
+                ? "bg-secondary text-secondary-foreground"
                 : "bg-muted text-muted-foreground hover:bg-interactive-hover"
             )}>{t(`admin.agents.cap.${k}`)}</button>
           ))}
@@ -448,7 +471,7 @@ export const AgentsPanel = () => {
           {form.icon && <Icon name={form.icon as never} className="size-5" />}
           <span className="text-xs text-muted-foreground">{form.icon || t('admin.agents.notSelected')}</span>
           {form.icon && (
-            <button onClick={() => setForm({ ...form, icon: '' })} className="text-[11px] text-muted-foreground hover:text-red-500">{t('admin.agents.reset')}</button>
+            <button onClick={() => setForm({ ...form, icon: '' })} className="text-[0.6875rem] text-muted-foreground hover:text-status-error">{t('admin.agents.reset')}</button>
           )}
         </div>
         <IconPicker value={form.icon || null} onChange={(icon) => setForm({ ...form, icon })} />
@@ -494,7 +517,7 @@ export const AgentsPanel = () => {
         </div>
         <div className="flex items-center gap-2">
           {renderFilterTabs()}
-          <button onClick={handleCreate} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700">
+          <button onClick={handleCreate} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">
             <Icon name="add" className="size-3.5" />{t('admin.agents.add')}
           </button>
         </div>
@@ -519,7 +542,7 @@ export const AgentsPanel = () => {
                   <div className="flex items-center gap-2 min-w-0">
                     <Icon name={a.icon as never || 'robot-2'} className="size-4 shrink-0" style={a.color ? { color: `var(${a.color})` } : undefined} />
                     <span className="font-medium text-sm truncate">{a.display_name}</span>
-                    <code className="text-[10px] text-muted-foreground shrink-0">{a.id}</code>
+                    <code className="text-[0.625rem] text-muted-foreground shrink-0">{a.id}</code>
                   </div>
                   <div className="ml-1">
                     <Toggle enabled={a.enabled} onToggle={() => handleToggle(a)} />
@@ -529,60 +552,60 @@ export const AgentsPanel = () => {
                 {/* Badges row */}
                 <div className="flex flex-wrap gap-1 mb-2">
                   {(!a.agent_mode || a.agent_mode.includes('primary')) && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-secondary text-secondary-foreground">
                       {t('admin.agents.agentMode.primary')}
                     </span>
                   )}
                   {a.agent_mode?.includes('subagent') && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-status-success/10 text-status-success">
                       {t('admin.agents.agentMode.subagent')}
                     </span>
                   )}
                   {a.agent_mode?.includes('system') && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300">
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-status-info/10 text-status-info">
                       {t('admin.agents.system')}
                     </span>
                   )}
                   {a.provider && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">{a.provider}</span>
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">{a.provider}</span>
                   )}
                   {a.model && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">{a.model}</span>
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">{a.model}</span>
                   )}
                   {a.context_file && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300">{a.context_file}</span>
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-status-warning/15 text-status-warning">{a.context_file}</span>
                   )}
                   {a.is_builtin && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400">{t('admin.agents.builtin')}</span>
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-muted text-muted-foreground">{t('admin.agents.builtin')}</span>
                   )}
                   {a.is_builtin && a.is_overridden && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300">{t('admin.agents.modified')}</span>
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-status-warning/15 text-status-warning">{t('admin.agents.modified')}</span>
                   )}
                 </div>
 
                 {/* Capabilities */}
                 <div className="flex flex-wrap gap-1 mb-2">
                   {a.capabilities.slice(0, 6).map((c) => (
-                    <span key={c} className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                    <span key={c} className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">
                       {t(`admin.agents.cap.${c}`)}
                     </span>
                   ))}
                   {a.capabilities.length > 6 && (
-                    <span className="text-[10px] text-muted-foreground">+{a.capabilities.length - 6}</span>
+                    <span className="text-[0.625rem] text-muted-foreground">+{a.capabilities.length - 6}</span>
                   )}
                   {a.capabilities.length === 0 && (
-                    <span className="text-[10px] text-muted-foreground">{t('admin.agents.noCapabilities')}</span>
+                    <span className="text-[0.625rem] text-muted-foreground">{t('admin.agents.noCapabilities')}</span>
                   )}
                 </div>
 
                 {/* Agent steps info */}
                 <div className="flex gap-1 mb-2">
                   {a.max_steps === 0 || a.max_steps == null ? (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300">
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-status-success/10 text-status-success">
                       {t('admin.agents.stepsCount')}: {t('admin.agents.unlimited')}
                     </span>
                   ) : (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">
                       {t('admin.agents.stepsCount')}: ≤{a.max_steps}
                     </span>
                   )}
@@ -591,7 +614,7 @@ export const AgentsPanel = () => {
                 {/* Actions */}
                 <div className="flex gap-1">
                   <button onClick={() => handleEdit(a)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">{t('common.edit')}</button>
-                  <button onClick={() => handleDelete(a)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950">
+                  <button onClick={() => handleDelete(a)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-status-error/10 hover:text-status-error">
                     {a.is_builtin ? t('admin.agents.reset') : t('common.delete')}
                   </button>
                 </div>

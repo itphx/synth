@@ -51,7 +51,7 @@ export const IconPicker = ({ value, onChange }: IconPickerProps) => {
             className={cn(
               'p-1.5 rounded-md border transition-colors',
               value === name
-                ? 'border-blue-500 bg-blue-50 dark:bg-blue-950'
+                ? 'border-primary bg-primary/10'
                 : 'border-border hover:bg-interactive-hover',
             )}
           >
