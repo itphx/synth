@@ -1,0 +1,36 @@
+{{- if and .Values.ingress.enabled (eq .Values.ingress.controller "traefik") .Values.ingress.redirectHttpToHttps (gt (len .Values.ingress.hosts) 0) }}
+{{- $host := (index .Values.ingress.hosts 0).host }}
+---
+# Редирект HTTP → HTTPS для первого хоста ingress. Только для controller: traefik.
+# Приложение (Ingress synth) слушает только websecure; сюда приходит трафик на web (80).
+# Для nginx-редиректа этот файл не рендерится — используется аннотация ssl-redirect
+# (см. templates/ingress.yaml).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "synth.name" . }}-redirect-to-https
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ include "synth.name" . }}-https-redirect
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+spec:
+  entryPoints:
+    - web
+  routes:
+    - kind: Rule
+      match: Host(`{{ $host }}`)
+      middlewares:
+        - name: {{ include "synth.name" . }}-redirect-to-https
+      services:
+        - name: {{ include "synth.ui.fullname" . }}
+          port: {{ $.Values.ui.service.port }}
+{{- end }}

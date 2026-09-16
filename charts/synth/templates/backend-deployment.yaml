@@ -1,0 +1,115 @@
+{{- /* Провайдеры, для которых нужен API-ключ из Secret (apiKey не равен false). */ -}}
+{{- $providerKeys := list -}}
+{{- range .Values.backend.providers -}}
+{{- if ne .apiKey false -}}
+{{- $providerKeys = append $providerKeys .name -}}
+{{- end -}}
+{{- end -}}
+{{- $needEnv := or .Values.backend.oidc.enabled $providerKeys .Values.caCert -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "synth.backend.fullname" . }}
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  replicas: {{ .Values.backend.replicaCount }}
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      {{- include "synth.backend.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "synth.backend.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.backend.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "synth.backend.fullname" . }}
+      {{- with .Values.backend.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: backend
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.backend.service.targetPort }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "synth.name" . }}-env
+          {{- if $needEnv }}
+          env:
+            {{- if .Values.backend.oidc.enabled }}
+            - name: SYNTH_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: SYNTH_OIDC_CLIENT_SECRET
+            {{- end }}
+            {{- range .Values.backend.providers }}
+            {{- if ne .apiKey false }}
+            - name: SYNTH_PROVIDER_{{ include "synth.envName" . }}_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.existingSecret }}
+                  key: SYNTH_PROVIDER_{{ include "synth.envName" . }}_API_KEY
+            {{- end }}
+            {{- end }}
+            {{- if .Values.caCert }}
+            - name: NODE_EXTRA_CA_CERTS
+              value: /etc/ssl/certs/itphx-ca.crt
+            {{- end }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/synth/data
+            {{- if .Values.caCert }}
+            - name: itphx-ca
+              mountPath: /etc/ssl/certs/itphx-ca.crt
+              subPath: itphx-ca.crt
+            {{- end }}
+          {{- with .Values.backend.probes.liveness }}
+          livenessProbe:
+            httpGet:
+              path: {{ .path }}
+              port: {{ $.Values.backend.service.targetPort }}
+            initialDelaySeconds: {{ .initialDelaySeconds }}
+            periodSeconds: {{ .periodSeconds }}
+          {{- end }}
+          {{- with .Values.backend.probes.readiness }}
+          readinessProbe:
+            httpGet:
+              path: {{ .path }}
+              port: {{ $.Values.backend.service.targetPort }}
+            initialDelaySeconds: {{ .initialDelaySeconds }}
+            periodSeconds: {{ .periodSeconds }}
+          {{- end }}
+          {{- with .Values.backend.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.backend.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: data
+          {{- if .Values.backend.persistence.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.backend.persistence.existingClaim }}
+          {{- else }}
+          persistentVolumeClaim:
+            claimName: {{ include "synth.backend.fullname" . }}-data
+          {{- end }}
+        {{- if .Values.caCert }}
+        - name: itphx-ca
+          configMap:
+            name: {{ include "synth.name" . }}-itphx-ca
+        {{- end }}

@@ -267,12 +267,31 @@ cd synth/packages/core && pnpm test -- --run src/engine/tools/task.test.ts
 
 ---
 
-## K3s-инстанс (managed-деплой)
+## Среды
 
-Боевой инстанс развёрнут в K3s (Rancher Fleet) на `itphx.loc`. Код приложения — в монорепо `synth/`,
-код деплоя — в отдельном git-репозитории `synth-deploy/` (каталог рядом с `synth/`).
+| Среда | Что это | Как разворачивается |
+|---|---|---|
+| **dev** | локальная отладка | `./scripts/dev.sh` |
+| **test** | внутренний тестовый, `https://synth.k3s.itphx.loc` | Fleet (`synth-deploy`), образы собираются локально и пушатся в `git.itphx.ru` |
+| **preprod** | `https://synth-release.k3s.itphx.loc`, проверка процесса развёртывания | публикуемый Helm-чарт (GitVerse), релизные образы `gitverse.ru` |
+| **prod** | у нас отсутствует — разворачивают клиенты/заказчики сами | публикуемый Helm-чарт (self-host) |
+
+Правило: проверить текущие изменения — **dev** (`./scripts/dev.sh`); протестировать
+перед релизом — **test** (Fleet); релиз — push master → сборка пакетов → раскатка
+**preprod**.
+
+---
+
+## K3s-инстанс (managed-деплой, среда **test**)
+
+**Среда test** (внутренний тестовый инстанс) развёрнута в K3s (Rancher Fleet) на `itphx.loc`.
+Код приложения — в монорепо `synth/`, код деплоя test-среды — в отдельном git-репозитории
+`synth-deploy/` (каталог рядом с `synth/`).
 
 ### Репозиторий деплоя
+
+Fleet-деплой **test-среды** (namespace `synth`). preprod и prod разворачиваются из
+публикуемого Helm-чарта (см. «Среды» и «Helm-чарт»), а не через Fleet.
 
 - Helm-чарт + Fleet-конфиг: `Chart.yaml`, `values.yaml`, `fleet.yaml`, `templates/` (namespace `synth`)
 - Fleet-репозиторий: `https://git.itphx.ru/itphx/synth-deploy.git`, ветка `main`
@@ -1119,6 +1138,37 @@ workspace-сборки. Dockerfile: `docker/Dockerfile` (контекст — к
 `.dockerignore` в корне). Образ: `gitverse.ru/itphx/synth:<version>` (latest).
 Токен: `GV_TOKEN`.
 
+### Helm-чарт
+
+Чарт приложения — `charts/synth/` в монорепозитории. Версия чарта и `appVersion` равны
+версии релиза: при bump в CI (`version-bump` в `release.yaml`) они обновляются вместе с
+`version.ts` и `package.json`.
+
+Реестр — **нативный Helm-реестр GitVerse** (не OCI):
+
+```
+https://gitverse.ru/api/packages/itphx/helm
+```
+
+Публикация (в CI — job `publish-helm` в `release.yaml`):
+
+```bash
+helm package charts/synth --version <version> --app-version <version> --destination dist/helm
+curl --user "itphx:$GV_TOKEN" -X POST \
+  --upload-file dist/helm/synth-<version>.tgz \
+  https://gitverse.ru/api/packages/itphx/helm/api/charts
+```
+
+Установка:
+
+```bash
+helm repo add synth https://gitverse.ru/api/packages/itphx/helm
+helm repo update
+helm install synth synth/synth --version <version> -f my-values.yaml
+```
+
+Кастомные values хранятся в каталоге `secrets/` (вне git-репозитория `synth/`), пример — `charts/synth/values.example.yaml`.
+
 ---
 
 ## CI/CD (GitVerse)
@@ -1127,8 +1177,8 @@ workspace-сборки. Dockerfile: `docker/Dockerfile` (контекст — к
 
 | Файл | Назначение | Триггер |
 |------|------------|---------|
-| `.gitverse/workflows/ci.yaml` | CI: typecheck, lint, тесты | `push`, `pull_request` |
-| `.gitverse/workflows/release.yaml` | Релиз: bump, сборка, npm, Docker, Release | `workflow_dispatch`, `push tags v*` |
+| `.gitverse/workflows/ci.yaml` | CI: typecheck, lint, тесты, `helm lint` | `push`, `pull_request` |
+| `.gitverse/workflows/release.yaml` | Релиз: bump, сборка, npm, Docker, Helm, Release | `workflow_dispatch`, `push tags v*` |
 
 ### Секреты (настроены в репозитории)
 

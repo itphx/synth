@@ -49,6 +49,45 @@ gitverse.ru/itphx/synth:<version>
 gitverse.ru/itphx/synth:latest
 ```
 
+## Helm-чарт
+
+Чарт приложения — `charts/synth/` в монорепозитории. Версия чарта и `appVersion` равны версии релиза: при bump в CI (`version-bump` в `release.yaml`) они обновляются вместе с `version.ts` и `package.json`.
+
+Реестр — **нативный Helm-реестр GitVerse**, не OCI (путь `helm push oci://...` на GitVerse не используется):
+
+```
+https://gitverse.ru/api/packages/itphx/helm
+```
+
+Индекс-репозиторий — `https://gitverse.ru/api/packages/itphx/helm/index.yaml` (доступен анонимно).
+
+### Публикация
+
+В CI — job `publish-helm` в `.gitverse/workflows/release.yaml` (не запускается при `dry_run`): установка Helm → `helm lint charts/synth` → `helm package` → `curl` POST в `.../helm/api/charts` (успех = HTTP 201).
+
+Вручную:
+
+```bash
+helm package charts/synth --version <version> --app-version <version> --destination dist/helm
+curl --user "itphx:$GV_TOKEN" -X POST \
+  --upload-file dist/helm/synth-<version>.tgz \
+  https://gitverse.ru/api/packages/itphx/helm/api/charts
+```
+
+### Установка
+
+```bash
+helm repo add synth https://gitverse.ru/api/packages/itphx/helm
+helm repo update
+helm install synth synth/synth --version <version> -f my-values.yaml
+```
+
+Образы `gitverse.ru/itphx/synth{,-ui,-backend}` (включая `:latest`) тянутся **анонимно** — imagePullSecret не нужен.
+
+### Кастомные values
+
+Кастомные values (адреса, секреты, ресурсы) хранятся в каталоге `secrets/` **вне git-репозитория** `synth/`. В репозитории лежит только пример — `charts/synth/values.example.yaml`.
+
 ## Скрипты
 
 Все скрипты — в `synth/scripts/`.
@@ -96,7 +135,7 @@ gitverse.ru/itphx/synth:latest
 
 ## CI/CD (GitVerse)
 
-Workflow-файлы: `.gitverse/workflows/ci.yaml` (push/PR: typecheck, lint, тесты) и `.gitverse/workflows/release.yaml` (релиз).
+Workflow-файлы: `.gitverse/workflows/ci.yaml` (push/PR: typecheck, lint, тесты, `helm lint`) и `.gitverse/workflows/release.yaml` (релиз).
 
 ### Запуск релиза
 
@@ -104,7 +143,7 @@ Workflow-файлы: `.gitverse/workflows/ci.yaml` (push/PR: typecheck, lint, т
 2. **Реальная публикация:** `workflow_dispatch` с `dry_run: false` (входы: `bump` patch/minor/major, `pre_release`)
 3. **Автоматически:** создать тег `vX.Y.Z` и запушить — workflow запустится по push тега (пропускает bump-стадию, версия берётся из тега)
 
-Релизный workflow: bump версии (version.ts + package.json) → CI-проверки → сборка → CHANGELOG → публикация npmjs → публикация GitVerse npm → Docker (kaniko, `gitverse.ru/itphx/synth`) → создание GitVerse Release.
+Релизный workflow: bump версии (version.ts + package.json + `charts/synth/Chart.yaml`) → CI-проверки → сборка → CHANGELOG → публикация npmjs → публикация GitVerse npm → Docker (kaniko, `gitverse.ru/itphx/synth`) → публикация Helm-чарта (`publish-helm`) → создание GitVerse Release.
 
 ### Особенности GitVerse CI
 

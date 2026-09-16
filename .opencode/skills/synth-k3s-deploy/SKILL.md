@@ -1,19 +1,31 @@
 ---
 name: synth-k3s-deploy
-description: Managed-деплой Synth в K3s (Rancher Fleet): helm-чарт, адреса, Keycloak, kubectl-доступ. Используй при работе с боевым инстансом.
+description: Managed-деплой Synth в K3s (Rancher Fleet): test-инстанс, preprod, prod, helm-чарт, адреса, Keycloak, kubectl-доступ. Используй при работе с инстансами Synth.
 ---
 
 # K3s-инстанс (managed-деплой)
 
-Боевой инстанс развёрнут в K3s (Rancher Fleet) на `itphx.loc`. Код приложения — в монорепо `synth/`, код деплоя — в отдельном git-репозитории `synth-deploy/` (каталог рядом с `synth/`).
+Текущий managed-инстанс — **среда test** (внутренний тестовый). Он развёрнут в K3s (Rancher Fleet) на `itphx.loc`. Код приложения — в монорепо `synth/`, код деплоя test-среды — в отдельном git-репозитории `synth-deploy/` (каталог рядом с `synth/`).
 
-## Репозиторий деплоя
+## Среды
+
+| Среда | Адрес | Как разворачивается |
+|-------|-------|---------------------|
+| **test** | https://synth.k3s.itphx.loc | Fleet (`synth-deploy`), образы собираются локально и пушатся в `git.itphx.ru` |
+| **preprod** | https://synth-release.k3s.itphx.loc | публикуемый Helm-чарт (GitVerse), релизные образы `gitverse.ru` |
+| **prod** | у нас отсутствует — разворачивают клиенты/заказчики сами | публикуемый Helm-чарт (self-host) |
+
+preprod и prod ставятся из опубликованного Helm-чарта (`helm repo add synth https://gitverse.ru/api/packages/itphx/helm`), **не** через Fleet.
+
+## Репозиторий деплоя (test)
+
+Fleet-деплой **test-среды** (namespace `synth`).
 
 - Helm-чарт + Fleet-конфиг: `Chart.yaml`, `values.yaml`, `fleet.yaml`, `templates/` (namespace `synth`)
 - Fleet-репозиторий: `https://git.itphx.ru/itphx/synth-deploy.git`, ветка `main`
 - Подробности: `synth-deploy/README.md`
 
-## Адреса
+## Адреса (test)
 
 | Сервис | Адрес |
 |--------|-------|

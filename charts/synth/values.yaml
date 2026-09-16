@@ -1,0 +1,165 @@
+# --- Дефолтные значения чарта synth (backend + ui) ---
+# Универсальные дефолты без привязки к конкретному окружению.
+# Переопределяются при установке (values-файл, --set) — см. values.example.yaml.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Backend — @itphx/synth-backend (API Hub: OIDC/RBAC, встроенный движок).
+# Хранилище JSON-файлы → НЕ масштабируется, всегда 1 реплика.
+# ─────────────────────────────────────────────────────────────────────────────
+backend:
+  nameOverride: ""
+  fullnameOverride: ""
+  replicaCount: 1
+
+  image:
+    repository: gitverse.ru/itphx/synth-backend
+    # Пустой tag → подставляется .Chart.AppVersion (см. templates/backend-deployment.yaml).
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # Секреты для приватного реестра (kubernetes.io/dockerconfigjson).
+  # По умолчанию пусто — публичные образы не требуют авторизации.
+  imagePullSecrets: []
+
+  service:
+    type: ClusterIP
+    port: 5000
+    targetPort: 5000
+
+  # Хранилище JSON-данных Synth (сессии, проекты, провайдеры, настройки).
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""            # "" = storageClass по умолчанию кластера
+    accessMode: ReadWriteOnce
+    existingClaim: ""
+
+  # OIDC (Keycloak/иной IdP). issuer/client_id/redirect_uri — ConfigMap.
+  # client_secret берётся из Secret secrets.existingSecret по ключу SYNTH_OIDC_CLIENT_SECRET.
+  # Пример заполнения — values.example.yaml.
+  oidc:
+    enabled: false
+    issuer: ""
+    clientId: ""
+    redirectUri: ""
+
+  # Провайдеры LLM → env SYNTH_PROVIDER_<NAME>_URL/TYPE/MODEL (ConfigMap).
+  # API-ключи — по имени SYNTH_PROVIDER_<NAME>_API_KEY из secrets.existingSecret.
+  # apiKey: false — без ключа (env API_KEY не создаётся).
+  # Формат (пример): [{name, type, url, model, apiKey}]
+  providers: []
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 200m
+      memory: 256Mi
+
+  probes:
+    liveness:
+      path: /health
+      initialDelaySeconds: 15
+      periodSeconds: 30
+    readiness:
+      path: /health
+      initialDelaySeconds: 5
+      periodSeconds: 10
+
+  podSecurityContext:
+    fsGroup: 1000
+  containerSecurityContext:
+    runAsUser: 1000
+    runAsNonRoot: true
+    readOnlyRootFilesystem: false
+    allowPrivilegeEscalation: false
+
+  # Доп. env для backend (попадают в ConfigMap → env pod).
+  # Если задан caCert, чарт сам добавляет NODE_EXTRA_CA_CERTS — вручную дублировать не нужно.
+  extraEnv: {}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UI — @itphx/synth-ui (React SPA) под nginx, проксирует /api /ws /auth /admin на backend.
+# ─────────────────────────────────────────────────────────────────────────────
+ui:
+  nameOverride: ""
+  fullnameOverride: ""
+  replicaCount: 1
+
+  image:
+    repository: gitverse.ru/itphx/synth-ui
+    # Пустой tag → подставляется .Chart.AppVersion (см. templates/ui-deployment.yaml).
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  imagePullSecrets: []
+
+  service:
+    type: ClusterIP
+    port: 8080
+    targetPort: 8080
+
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+  podSecurityContext:
+    # nginx:alpine требует root для entrypoint (чтение/генерация конфигов).
+    # RunAsUser не задаём — контейнер стартует как root, nginx сам дропает на worker'ы.
+    fsGroup: 101
+  containerSecurityContext:
+    readOnlyRootFilesystem: false
+    allowPrivilegeEscalation: false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ingress — трафик на UI (nginx проксирует /api /ws /auth /admin /health на backend).
+# По умолчанию выключен (self-host может использовать свой балансировщик/Ingress).
+# ─────────────────────────────────────────────────────────────────────────────
+ingress:
+  enabled: false
+  # Ingress-контроллер: nginx | traefik | none.
+  #   nginx   — HTTP→HTTPS через аннотацию nginx.ingress.kubernetes.io/ssl-redirect
+  #             (при redirectHttpToHttps); TLS терминируется на nginx-контроллере.
+  #   traefik — HTTP→HTTPS через CRD Middleware + IngressRoute (templates/traefik-redirect.yaml)
+  #             плюс аннотация entrypoints; TLS терминируется на Traefik.
+  #   none    — чарт не добавляет ни аннотаций контроллера, ни CRD
+  #             (контроллер и редирект настраиваются вне чарта).
+  controller: nginx
+  className: ""            # например, nginx, traefik, "" = класс по умолчанию
+  # Произвольные аннотации Ingress (например cert-manager.io/cluster-issuer).
+  # Мержатся с авто-аннотациями контроллера; заданные здесь значения имеют приоритет.
+  annotations: {}
+  # Только для controller: traefik. Аннотация
+  # traefik.ingress.kubernetes.io/router.entrypoints добавляется, если значение не пустое.
+  entrypoints: ""
+  # HTTP→HTTPS-редирект:
+  #   nginx   — аннотация ssl-redirect (нужен настроенный TLS, см. tls ниже);
+  #   traefik — Middleware redirect-to-https + IngressRoute (web) → 301 на https;
+  #   none    — игнорируется.
+  redirectHttpToHttps: true
+  # Формат: [{host, paths: [{path, pathType}]}] — сейчас рендерится только host.
+  hosts: []
+  tls: []
+
+# Имя существующего Secret с ключами:
+#   SYNTH_OIDC_CLIENT_SECRET, SYNTH_PROVIDER_<NAME>_API_KEY (при необходимости).
+# Чарт НЕ создаёт Secret — предполагается, что он уже есть в namespace релиза
+# (или создаётся отдельно: External Secrets, sealed-secrets, ручной kubectl create).
+secrets:
+  existingSecret: synth-secrets
+
+# CA внутренней инфраструктуры (PEM, опционально).
+# Пусто по умолчанию. Если задан непустым:
+#   - создаётся ConfigMap <release>-itphx-ca;
+#   - в backend-под монтируется /etc/ssl/certs/itphx-ca.crt;
+#   - автоматически добавляется env NODE_EXTRA_CA_CERTS.
+# Пример заполнения — values.example.yaml.
+caCert: ""

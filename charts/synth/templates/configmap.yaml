@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "synth.name" . }}-env
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+data:
+  # --- OIDC (Keycloak/иной IdP) — только при oidc.enabled ---
+  {{- if .Values.backend.oidc.enabled }}
+  SYNTH_OIDC_ENABLED: "true"
+  SYNTH_OIDC_ISSUER: {{ .Values.backend.oidc.issuer | quote }}
+  SYNTH_OIDC_CLIENT_ID: {{ .Values.backend.oidc.clientId | quote }}
+  SYNTH_OIDC_REDIRECT_URI: {{ .Values.backend.oidc.redirectUri | quote }}
+  {{- end }}
+  # --- Провайдеры LLM: env SYNTH_PROVIDER_<NAME>_URL/TYPE/MODEL ---
+  # Подхватываются syncProvidersFromEnv при старте и записываются в storage.
+  {{- range .Values.backend.providers }}
+  SYNTH_PROVIDER_{{ include "synth.envName" . }}_URL: {{ .url | quote }}
+  SYNTH_PROVIDER_{{ include "synth.envName" . }}_TYPE: {{ .type | quote }}
+  {{- if .model }}
+  SYNTH_PROVIDER_{{ include "synth.envName" . }}_MODEL: {{ .model | quote }}
+  {{- end }}
+  {{- end }}
+  {{- range $k, $v := .Values.backend.extraEnv }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+{{- if .Values.caCert }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "synth.name" . }}-itphx-ca
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+data:
+  itphx-ca.crt: |
+    {{- .Values.caCert | nindent 4 }}
+{{- end }}

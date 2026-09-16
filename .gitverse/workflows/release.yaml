@@ -78,13 +78,26 @@ jobs:
           done
           echo "Все package.json обновлены до $NEW"
 
+      - name: Обновить Chart.yaml
+        run: |
+          NEW="${{ steps.bump.outputs.new_version }}"
+          node -e "
+            const fs = require('fs');
+            const path = './charts/synth/Chart.yaml';
+            let y = fs.readFileSync(path, 'utf8');
+            y = y.replace(/^version:.*$/m, 'version: ' + '$NEW');
+            y = y.replace(/^appVersion:.*$/m, 'appVersion: \"' + '$NEW' + '\"');
+            fs.writeFileSync(path, y);
+          "
+          echo "charts/synth/Chart.yaml обновлён до $NEW"
+
       - name: Коммит + тег
         if: ${{ !inputs.dry_run }}
         run: |
           NEW="${{ steps.bump.outputs.new_version }}"
           git config user.name "synth-bot"
           git config user.email "bot@synth.dev"
-          git add packages/shared/src/version.ts packages/*/package.json
+          git add packages/shared/src/version.ts packages/*/package.json charts/synth/Chart.yaml
           git commit -m "chore: bump version to v$NEW"
           git tag -a "v$NEW" -m "Release v$NEW"
           git push --follow-tags
@@ -303,6 +316,52 @@ jobs:
             --snapshot-mode=redo
             --push-retry=3
             --verbosity=info
+
+  # --- Публикация Helm-чарта ---
+  # Чарт лежит в charts/synth, версия чарта = версии релиза.
+  # Публикуется в нативный Helm-реестр GitVerse (не OCI).
+  publish-helm:
+    name: Helm-чарт
+    needs: [build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Определить версию
+        id: helm_version
+        run: |
+          if [ "${{ gitverse.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ needs.version-bump.outputs.version }}"
+          else
+            VERSION=$(echo "${{ gitverse.ref }}" | sed 's|refs/tags/v||')
+          fi
+          echo "version=$VERSION" >> "$GITVERSE_OUTPUT"
+
+      - name: Установка Helm
+        run: |
+          curl -fsSL -o helm.tgz https://get.helm.sh/helm-v3.20.1-linux-amd64.tar.gz
+          tar -xzf helm.tgz
+
+      - name: Lint чарта
+        run: ./linux-amd64/helm lint charts/synth
+
+      - name: Упаковка чарта
+        run: |
+          mkdir -p dist/helm
+          ./linux-amd64/helm package charts/synth \
+            --version "${{ steps.helm_version.outputs.version }}" \
+            --app-version "${{ steps.helm_version.outputs.version }}" \
+            --destination dist/helm
+
+      - name: Публикация в Helm-реестр GitVerse
+        run: |
+          curl -fsS --user "itphx:${{ secrets.GV_TOKEN }}" \
+            -X POST \
+            --upload-file "dist/helm/synth-${{ steps.helm_version.outputs.version }}.tgz" \
+            -w "HTTP %{http_code}\n" \
+            https://gitverse.ru/api/packages/itphx/helm/api/charts
 
   # --- GitVerse Release ---
   create-release:

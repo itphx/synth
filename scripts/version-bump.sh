@@ -6,6 +6,7 @@
 #   1. packages/shared/src/version.ts          — SYNTH_VERSION
 #   2. packages/*/package.json                 — поле version
 #   3. packages/synth/package.json             — поле version (публикуемый пакет)
+#   4. charts/synth/Chart.yaml                 — version и appVersion (синхронно с релизом)
 #
 # Использование:
 #   ./version-bump.sh 0.2.0                   — установить конкретную версию
@@ -74,20 +75,21 @@ if $DRY_RUN; then
     for pkg in shared core backend ui runner synth; do
         echo "    packages/$pkg/package.json"
     done
+    echo "    charts/synth/Chart.yaml (version + appVersion)"
     echo ""
     echo "━━━ dry-run завершён ━━━"
     exit 0
 fi
 
 # Шаг 1: version.ts
-echo "[1/3] Обновление $VERSION_FILE..."
+echo "[1/4] Обновление $VERSION_FILE..."
 TMP=$(mktemp)
 sed "s/export const SYNTH_VERSION = '[^']*';/export const SYNTH_VERSION = '$NEW_VERSION';/" "$VERSION_FILE" > "$TMP"
 mv "$TMP" "$VERSION_FILE"
 echo "  готово"
 
 # Шаг 2: package.json для всех пакетов (все синхронизируются с одной версией)
-echo "[2/3] Обновление package.json..."
+echo "[2/4] Обновление package.json..."
 cd "$SYNTH" || die "Не удалось перейти в $SYNTH"
 
 for pkg_dir in packages/shared packages/core packages/backend packages/ui packages/runner packages/synth; do
@@ -103,8 +105,20 @@ for pkg_dir in packages/shared packages/core packages/backend packages/ui packag
 done
 echo "  готово"
 
-# Шаг 3: проверка на оставшиеся hardcoded строки
-echo "[3/3] Проверка на оставшийся хардкод..."
+# Шаг 3: charts/synth/Chart.yaml (version + appVersion)
+echo "[3/4] Обновление charts/synth/Chart.yaml..."
+CHART_FILE="$SYNTH/charts/synth/Chart.yaml"
+if [ -f "$CHART_FILE" ]; then
+    TMP=$(mktemp)
+    sed -E "s/^version: .*/version: $NEW_VERSION/; s/^appVersion: .*/appVersion: \"$NEW_VERSION\"/" "$CHART_FILE" > "$TMP"
+    mv "$TMP" "$CHART_FILE"
+    echo "  version/appVersion → $NEW_VERSION"
+else
+    echo "  пропуск: файл не найден"
+fi
+
+# Шаг 4: проверка на оставшиеся hardcoded строки
+echo "[4/4] Проверка на оставшийся хардкод..."
 FOUND=$(grep -rn "'$CURRENT_VERSION'" "$SYNTH/packages" --include='*.ts' --include='*.tsx' | grep -v node_modules | grep -v '/dist/' || true)
 if [ -n "$FOUND" ]; then
     echo "  ⚠ Найдены ссылки на старую версию $CURRENT_VERSION:"

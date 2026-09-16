@@ -1,0 +1,44 @@
+{{- if .Values.ingress.enabled }}
+{{- $annotations := dict }}
+{{- if and (eq .Values.ingress.controller "traefik") .Values.ingress.entrypoints }}
+{{- $_ := set $annotations "traefik.ingress.kubernetes.io/router.entrypoints" .Values.ingress.entrypoints }}
+{{- end }}
+{{- if and (eq .Values.ingress.controller "nginx") .Values.ingress.redirectHttpToHttps }}
+{{- $_ := set $annotations "nginx.ingress.kubernetes.io/ssl-redirect" "true" }}
+{{- end }}
+{{- range $key, $value := .Values.ingress.annotations }}
+{{- $_ := set $annotations $key $value }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "synth.name" . }}
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+  {{- if $annotations }}
+  annotations:
+    {{- toYaml $annotations | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          # SPA и корень → UI-сервис (nginx проксирует /api /ws /auth /admin /health на backend).
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "synth.ui.fullname" $ }}
+                port:
+                  number: {{ $.Values.ui.service.port }}
+    {{- end }}
+{{- end }}

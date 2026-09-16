@@ -63,8 +63,9 @@ venv/
 *.egg-info/
 
 # Kubernetes / Helm
+# Артефакты чартов (запакованные), но сам каталог charts/synth — отслеживается.
 *.tgz
-charts/
+charts/**/charts/
 
 # Секреты
 *.pem

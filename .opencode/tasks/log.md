@@ -899,3 +899,20 @@
   - `.gitverse/workflows/release.yaml` (джоба `build-docker`): шаг «Ожидание доступности версии в npmjs» добавлен сразу после «Определить теги» и **перед** «Авторизацией»/«Очисткой старых Docker-образов» — если версия не появилась, джоба падает, не снося теги gitverse (рецидив 0.6.0/0.6.1 исключён).
 - **Проверки:** `bash -n` — OK; `wait-npm-version.sh 0.6.1 2 1` → exit 0; `999.999.999 2 1` → exit 1; YAML валиден (PyYAML); в шаге нет inline `${...}` (GitVerse-совместимость).
 - **Коммит:** `8ac58f9` (ci), запушен в master.
+
+## 2026-09-16 — helm: чарт в монорепо, публикация GitVerse, preprod-деплой
+- **Задача:** «Добавить в монорепозиторий helm-chart (копия из synth-deploy с проверкой на специфику тестового окружения), настроить сборку/публикацию в GitVerse, протестировать в K3s без Fleet. FQDN: synth-release.k3s.itphx.loc. Продумать хранение кастомных values вне git».
+- **Тип:** infra/helm/ci/ops
+- **Исполнитель:** @orchestrator → @fixer (чарт, CI, docs, ingress-контроллер), проверки — оркестратор (curl/Playwright)
+- **Результат:** PASS
+- **Терминология (утверждена пользователем, зафиксирована в AGENTS.md):** dev (dev.sh) / test (`synth.k3s.itphx.loc`, Fleet+synth-deploy, образы локально → git.itphx.ru) / preprod (`synth-release.k3s.itphx.loc`, публикуемый чарт, релизные образы gitverse.ru) / prod (у нас нет — self-host клиентами).
+- **Что сделано:**
+  - Новый чарт `charts/synth/` (копия `synth-deploy` с генерализацией): нейтральные дефолты (реестр `gitverse.ru/itphx/synth-*`, `tag: ""` → `.Chart.AppVersion`, пустые host/OIDC/providers/caCert), CA монтируется только при непустом `caCert`, `secrets.existingSecret`, **удалён** `templates/sealedsecret.yaml` (шифртекст тестового кластера), ingress-контроллер настраиваемый (`controller: nginx|traefik|none`, дефолт **nginx**; для nginx — аннотация `ssl-redirect`, Traefik-CRD только при `controller: traefik`); убраны AD-упоминания из комментариев.
+  - `.gitignore`: `charts/` → `charts/**/charts/` (чарт теперь отслеживается).
+  - `scripts/version-bump.sh` — bump также `charts/synth/Chart.yaml` (version+appVersion).
+  - CI: `release.yaml` job `publish-helm` (helm package + curl POST в `gitverse.ru/api/packages/itphx/helm/api/charts`), bump Chart.yaml в `version-bump`; `ci.yaml` job `helm-lint`. Docs: `AGENTS.md` (раздел «Среды», «Helm-чарт»), `docs/PUBLISHING.md`, `skills/synth-k3s-deploy`.
+  - **Публикация:** чарт `synth-0.6.1` опубликован (`HTTP 201`), индекс `https://gitverse.ru/api/packages/itphx/helm/index.yaml`; `helm repo add synth ...` + установка работают **анонимно**.
+  - **Хранение values:** внешние values вне git — `secrets/helm/preprod.values.yaml` (не-секретное), `secrets/helm/itphx-ca.pem`, `secrets/helm/preprod.sealedsecret.yaml` (SealedSecret scope strict, ns `synth-release`); шаблон — `charts/synth/values.example.yaml`.
+- **preprod-деплой:** ns/release `synth-release`, `helm upgrade --install synth-release synth/synth --version 0.6.1 -n synth-release -f secrets/helm/preprod.values.yaml --set-file caCert=...`; SealedSecret расшифрован; Keycloak-клиент `synth` → добавлены redirectUri/webOrigins `synth-release.k3s.itphx.loc`; Fleet не задействован (отдельный namespace).
+- **Проверки:** `helm lint`/`template` (nginx/traefik/none) — 0 failed; HTTP→HTTPS `301`; `https://synth-release.k3s.itphx.loc/` и `/health` → 200; бандл `index-cQC3GR2v.js` = 0.6.1; провайдеры синхронизированы; ROPC-логин тестовой УЗ (`lucky`, роль USER) → 200, `/api/v2/projects` → 200 `[]`; браузер (Playwright): форма входа → приложение загрузилось, ошибок после логина нет. Образы `gitverse.ru` тянутся анонимно (проверено подом в K3s).
+- **Замечания:** коммитов не делалось (не просили); ветка master не трогалась. CI-job `publish-helm`/`helm-lint` в живом workflow ещё не запускался — логика проверена вручную эквивалентными командами. GitVerse: helm-пакеты входят в общий лимит 500 МБ на организацию — при переполнении публикация упадёт.

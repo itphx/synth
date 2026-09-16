@@ -106,3 +106,22 @@ jobs:
         run: pnpm --filter @itphx/synth-shared build
       - name: Тесты
         run: pnpm --filter @itphx/synth-runner test
+
+  # Helm-чарт не зависит от сборки npm-пакетов: только lint и рендер шаблонов.
+  helm-lint:
+    name: Helm-чарт (lint + template)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установка Helm
+        run: |
+          curl -fsSL -o helm.tgz https://get.helm.sh/helm-v3.20.1-linux-amd64.tar.gz
+          tar -xzf helm.tgz
+
+      - name: Lint чарта
+        run: ./linux-amd64/helm lint charts/synth
+
+      - name: Рендер шаблонов
+        run: ./linux-amd64/helm template synth charts/synth
