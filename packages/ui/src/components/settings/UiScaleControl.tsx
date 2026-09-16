@@ -3,6 +3,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useI18n } from '@/lib/i18n'
 import { getDefaultUiScale, UI_SCALE_MIN, UI_SCALE_MAX } from '@/lib/uiScale'
 import { Icon } from '@/components/icon/Icon'
+import { cn } from '@/lib/utils'
 
 export interface UiScaleSliderProps {
   value: number
@@ -12,6 +13,7 @@ export interface UiScaleSliderProps {
   onReset?: () => void
   resetDisabled?: boolean
   resetTitle?: string
+  stacked?: boolean
 }
 
 export const UiScaleSlider: React.FC<UiScaleSliderProps> = ({
@@ -22,12 +24,18 @@ export const UiScaleSlider: React.FC<UiScaleSliderProps> = ({
   onReset,
   resetDisabled,
   resetTitle,
+  stacked = false,
 }) => {
   const percent = Math.round(value * 100)
 
   return (
-    <div className="flex items-center justify-between gap-3">
-      {label && <span className="text-xs text-muted-foreground">{label}</span>}
+    <div className={cn(stacked ? 'space-y-2' : 'flex items-center justify-between gap-3')}>
+      {label &&
+        (stacked ? (
+          <p className="text-xs text-muted-foreground">{label}</p>
+        ) : (
+          <span className="text-xs text-muted-foreground">{label}</span>
+        ))}
       <div className="flex items-center gap-2">
         <input
           type="range"
@@ -37,7 +45,10 @@ export const UiScaleSlider: React.FC<UiScaleSliderProps> = ({
           value={percent}
           onChange={(event) => onChange(Number(event.target.value) / 100)}
           aria-label={ariaLabel ?? label}
-          className="ui-range w-24 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0 rounded-full"
+          className={cn(
+            'ui-range focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0 rounded-full',
+            stacked ? 'flex-1 min-w-0' : 'w-24',
+          )}
           style={{
             ['--ui-range-fill' as string]: `${Math.round(((value - UI_SCALE_MIN) / (UI_SCALE_MAX - UI_SCALE_MIN)) * 100)}%`,
           }}
@@ -63,7 +74,7 @@ export const UiScaleSlider: React.FC<UiScaleSliderProps> = ({
   )
 }
 
-export const UiScaleControl = () => {
+export const UiScaleControl = ({ stacked }: { stacked?: boolean }) => {
   const { t } = useI18n()
   const uiScale = useUIStore((state) => state.uiScale)
   const setUiScale = useUIStore((state) => state.setUiScale)
@@ -78,6 +89,7 @@ export const UiScaleControl = () => {
       onReset={() => setUiScale(getDefaultUiScale())}
       resetDisabled={isDefault}
       resetTitle={t('settings.appearance.uiScale.reset')}
+      stacked={stacked}
     />
   )
 }

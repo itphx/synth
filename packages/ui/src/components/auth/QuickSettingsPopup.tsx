@@ -165,7 +165,7 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
               )}
             </div>
 
-            <UiScaleControl />
+            <UiScaleControl stacked />
           </div>
 
           <div className="p-1 border-t border-border/30">
