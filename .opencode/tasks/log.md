@@ -527,3 +527,320 @@
 - **Проверки:** typecheck 0; lint 0 errors; тесты shared 72 / ui 136 / core 1220 / backend 229; build.sh 0.5.29.
 - **Коммит:** synth — не коммитился; synth-deploy — `db470ba`.
 - **Деплой K3s (0.5.29, UI-only):** `synth-ui:0.5.29` (sha256:698ddf92…); `synth-backend` 0.5.14 не перезапускался; `/` → 200.
+
+## 2026-09-15 19:02 — feat(ui): ползунок масштабирования UI (80–120%) в меню профиля и Настройки→Внешний вид
+- **Задача:** ползунок масштаба интерфейса в контекстном меню профиля, приоритетно для мобильных; обсуждали подход — масштабировать весь UI.
+- **Тип:** feature (UI)
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS
+- **Решение:** масштаб через root `font-size: calc(100% * var(--ui-scale, 1))` — один множитель масштабирует rem-based отступы/размеры/иконки/шрифты (Tailwind v4 компилирует spacing/size в `calc(<N>rem * var(--padding-scale,1))`; `--padding-scale` не трогали, чтобы не было двойного масштабирования). CSS `zoom` отклонён (ломает инсет клавиатуры: px из visualViewport масштабировались бы дважды). Диапазон 80–120%, шаг 5%, дефолт/сброс 100%. Применение мгновенное, запись в localStorage — дебаунс 300мс. Хранение локальное на устройстве (отдельный ключ `synth-ui-scale`), pre-paint в `index.html` против мигания.
+- **Файлы:** new `packages/ui/src/lib/uiScale.ts`, `lib/uiScale.test.ts`, `components/settings/UiScaleControl.tsx`; mod `packages/ui/index.html`, `styles/index.css`, `stores/useUIStore.ts`, `components/auth/QuickSettingsPopup.tsx`(+test), `components/settings/AppearanceSettings.tsx`, `lib/i18n/messages/{ru,en}.ts`.
+- **Проверки:** typecheck 0; lint 0 errors (warnings `no-explicit-any` предсуществующие); тесты shared 72 / ui 148 / core 1220 / backend 229. Live-проверка (prod-сборка, headless chromium): 120% → `--ui-scale=1.2`, root font 19.2px, `.p-4` 19.2px, `.size-4` 19.19px; 80% → 12.8px.
+- **Ограничения:** ~180 захардкоженных `text-[Npx]` и px-ширины (дровер, панели) не масштабируются; Tailwind rem-брейкпоинты (`md:`) при масштабе смещаются (~10 использований, некритично); сброс визуальных настроек профиля масштаб не трогает (он локальный).
+- **Коммит:** не коммитился (по правилам проекта без явной просьбы).
+
+## 2026-09-15 19:06 — deploy(ui): K3s 0.5.30 (ползунок масштаба UI 80–120%)
+- **Задача:** собрать и задеплоить в K3s фичу «ползунок масштабирования UI».
+- **Тип:** feature + ops (UI-only)
+- **Исполнитель:** @orchestrator → @general
+- **Результат:** PASS (K3s)
+- **Что сделано:** `./scripts/version-bump.sh patch` 0.5.29→0.5.30 (`version.ts` + 6 `package.json`); локальная сборка shared+ui (527 модулей); `docker build -f docker/Dockerfile.ui` + push `git.itphx.ru/itphx/synth-ui:0.5.30` (image ID/digest `sha256:d07eb9b4…cd0bdb`); в `synth-deploy/values.yaml` `ui.image.tag` 0.5.29→0.5.30, commit `faaf6e7`, push `main` (`db470ba..faaf6e7`); Fleet раскатал.
+- **Проверки (независимо):** `deploy/synth-ui` → `git.itphx.ru/itphx/synth-ui:0.5.30`, 1/1 Ready, новый под `synth-ui-cfd5b4457-42r2h` Running; `synth-backend` остался `0.5.14`, под `synth-backend-85cfbbf886-8845t` возраст 8h — не перезапускался; `https://synth.k3s.itphx.loc/` → 200; отданный `index-BJLOdJj6.js` содержит `synth-ui-scale` и версию `0.5.30`; ru-чанк — «Масштаб интерфейса».
+- **Коммит:** synth — не коммитился (фича+version-bump лежат в рабочем дереве); synth-deploy — `faaf6e7`.
+- **Деплой K3s (0.5.30, UI-only):** `synth-ui:0.5.30` (sha256:d07eb9b4…cd0bdb); `synth-backend` 0.5.14 не перезапускался; `/` → 200.
+
+## 2026-09-15 19:23 — fix(ui): устранение px-хардкода (пропорциональный масштаб) + диапазон 50–120%
+- **Задача:** при масштабе кнопки/тач-таргеты/часть текста не менялись (яркий кейс — кнопки тем в меню профиля: иконки уменьшаются, кнопки остаются 40px); сделать пропорциональными кнопки, элементы панелей, дерево, а также кнопки поля ввода; диапазон масштаба расширить до 50–120%.
+- **Тип:** fix (UI) + refactor
+- **Исполнитель:** @orchestrator → @fixer
+- **Причина:** root-`font-size` масштабирует только rem. В `index.css` тач-таргеты были в px: `html.pointer-coarse header button { min-width/height:40px }` (кнопки тем входят в это правило), дерево `[data-tree-node] 40px`/кнопки `36px`, композер `.chat-composer button 28px` + `svg 16px`, закрытие вкладок `18px`/`14px`, дровер `min(360px,86vw)`. Плюс 180 `text-[Npx]` (106×10px, 71×11px, 1×9px, 2×8px) и точечные arbitrary-px.
+- **Изменения:** `uiScale.ts` `UI_SCALE_MIN 0.8→0.5`; `index.html` clamp `0.5`; `index.css` px→rem (дровер 22.5rem, тач-таргеты 2.5/2.25/1.75/1.125rem, композер `1.75rem`/`svg 1rem`, паддинги 0.25/0.125rem); `design-system.css` scroll-shadow 48/36px→3/2.25rem; все `text-[Npx]`→rem (`0.625`/`0.6875`/`0.5625`/`0.5rem`); arbitrary-px→rem (`Toggle` translate-x `1.1875`/`0.1875rem`, `CenterTabs TAB_MAX_WIDTH` 12.5rem, `ModelsPanel` grid-cols, `ModelSelector` right/pr, `NotificationPopup` w-720px→45rem + inline, `MentionPopup`, toastify-переменные и др.). Всего 66 файлов (50 TSX + 2 CSS + uiScale/test + index.html и др.).
+- **Проверки (независимо):** typecheck 0; lint 0 errors (warnings pre-existing); тесты shared 72 / ui 148 / core 1220 / backend 229; build UI успешен. Grep: `text-\[[0-9]*px\]` → 0; из `[Npx]` остались только `ring-[3px]` и контейнерные `@max-[212px]` (осознанно). Замеры fixer'а (prod-build, 390×844, pointer-coarse): root font 19.2/16/8px; `header button` min-height 48/40/20px; `.chat-composer button` 33.6/28/14px и `svg` 19.19/16/8px; `[data-tree-node]` 48/40/20px; `text-[0.625rem]` 12/10/5px.
+- **Осознанно в px:** рамки 1px/border-left 4px, box-shadow/ring, скроллбары 6px, safe-area, vw/vh/%, virtualizer, `--synth-app-height`, inline-ширина desktop-панелей (drag), `ProviderIcon` numeric size.
+- **Коммит:** не коммитился; деплой не делался (по запросу).
+
+## 2026-09-15 19:36 — deploy(ui): K3s 0.5.31 (пропорциональный масштаб UI, 50–120%)
+- **Задача:** собрать и задеплоить в K3s правки px→rem и диапазон 50–120%.
+- **Тип:** fix + ops (UI-only)
+- **Исполнитель:** @orchestrator → @general
+- **Результат:** PASS (K3s)
+- **Что сделано:** version-bump 0.5.30→0.5.31 (version.ts + 6 package.json); сборка shared+ui; `docker build -f docker/Dockerfile.ui` + push `git.itphx.ru/itphx/synth-ui:0.5.31` (image ID/digest `sha256:fe7a043b…e13e3f`); `synth-deploy/values.yaml` `ui.image.tag` 0.5.30→0.5.31, commit `1162e83`, push `main` (`faaf6e7..1162e83`); Fleet раскатал.
+- **Проверки (независимо):** `deploy/synth-ui` → `synth-ui:0.5.31`, 1/1 Ready, новый под `synth-ui-576c87bf8b-f2znj` Running (старый 0.5.30 Terminating); `synth-backend:0.5.14`, под `synth-backend-85cfbbf886-8845t` возраст 8h — не перезапускался; `/` → 200; CSS `index-BGdm1vNm.css` содержит `min(22.5rem,86vw)` и `min-height:1.75rem`; JS `index-B4s0rQnO.js` содержит `0.5.31`.
+- **Коммит:** synth — не коммитился; synth-deploy — `1162e83`.
+- **Деплой K3s (0.5.31, UI-only):** `synth-ui:0.5.31` (sha256:fe7a043b…e13e3f); `synth-backend` 0.5.14 не перезапускался; `/` → 200.
+
+## 2026-09-15 20:01 — fix(ui): мобильные кнопки, ползунок масштаба, платформенный дефолт
+- **Задача:** в мобильном варианте кнопки непропорционально большие, иконки мелкие (меню профиля, вкладки панелей); ползунок масштаба не масштабируется, «Сбросить» уезжает за границу; дефолт масштаба: мобильный/PWA 85%, ПК 100% (диапазон 50–120 не меняем).
+- **Тип:** fix (UI)
+- **Исполнитель:** @orchestrator → @fixer
+- **Диагностика (живой UI, Playwright):** на 0.5.31 тач-правило `html.pointer-coarse (header|.mobile-drawer-panel) button { min 2.5rem }` натягивало 40px на компактные контролы попапа профиля и вкладок панелей (в мобильном варианте панели — в дровере), при мелком контенте (глиф темы text-xs, иконка вкладки h-3.5). Подтверждён overflow: `input[type=range]` intrinsic `min-width:129px` при попапе `w-64` (128px на 50%). У пользователя в UI висела плашка «Доступна новая версия» → он, вероятно, был на старом кэше 0.5.30, где px-фикса ещё не было.
+- **Изменения:** `QuickSettingsPopup.tsx` — кнопки тем `data-compact` + глиф `text-base leading-none`, кнопки языка `data-compact`; `LeftPanel.tsx`/`RightPanel.tsx` — таб-кнопки `data-compact`, иконка `h-3.5`→`h-4`, `py-1`→`py-1.5`; `index.css` — удалено правило `device-phone/tablet .left-tabs` (min-height 2.5rem), добавлен кастомный `.ui-scale-range` (трек 0.25rem, бегунок 1rem, rem); `UiScaleControl.tsx` — `min-w-0 w-full`, сброс иконкой `refresh` (`size-7`, `data-compact`, title/aria); `uiScale.ts` — `getDefaultUiScale()` (≤1199px или PWA standalone → 0.85, иначе 1), `readUiScale`/`normalizeUiScale` на пустом/битом → платформенный дефолт; `index.html` pre-paint — дефолт 0.85 для mobile/PWA; тесты обновлены.
+- **Проверки (независимо):** typecheck 0; lint 0 errors; тесты shared 72 / ui 155 / core 1220 / backend 229; build UI успешен. Harness-замеры @85% (root 13.6px): кнопка темы/языка `data-compact` = 23.78px (было 34px), иконка вкладки 13.59px, `.left-tabs` 27.19px (вкладки в границах), `.ui-scale-range` thumb 13.6px / track 3.4px; на 50% попап без overflow. Скриншот — `synth/tmp/scale-harness-390x844.png`.
+- **Риск/примечание:** дефолт 85% применяется, только если в localStorage ещё нет `synth-ui-scale`; у тех, кто уже менял масштаб, значение сохранится (сброс иконкой вернёт платформенный дефолт). Сборку 0.5.31 нужно получить, нажав «Обновить» в PWA-плашке/сделав hard refresh.
+- **Коммит:** не коммитился; деплой не делался (по запросу).
+
+## 2026-09-15 20:10 — deploy(ui): K3s 0.5.32 (мобильные кнопки, слайдер, дефолт 85/100%)
+- **Задача:** собрать и задеплоить в K3s правки мобильных кнопок, ползунка масштаба и платформенного дефолта.
+- **Тип:** fix + ops (UI-only)
+- **Исполнитель:** @orchestrator → @general
+- **Результат:** PASS (K3s)
+- **Что сделано:** version-bump 0.5.31→0.5.32; сборка shared+ui; `docker build -f docker/Dockerfile.ui` + push `git.itphx.ru/itphx/synth-ui:0.5.32` (image ID `sha256:14d1815a…7f30b5`); `synth-deploy/values.yaml` `ui.image.tag` 0.5.31→0.5.32, commit `4d16dce`, push `main` (`1162e83..4d16dce`); Fleet (gitrepo в `fleet-local`) раскатал.
+- **Проверки (независимо):** `deploy/synth-ui` → `synth-ui:0.5.32`, 1/1 Ready, новый под `synth-ui-5bc948db99-nxgwz`; `synth-backend:0.5.14`, под возраст 9h — не перезапускался; `/` → 200; CSS `index-B5qNpqw7.css` содержит `ui-scale-range` и `::-webkit-slider-thumb`; JS `index-C803LteR.js` содержит `0.5.32`.
+- **Live-проверка (Playwright, 390×844, pointer-coarse, localStorage очищен):** дефолт `--ui-scale=0.85`, root 13.6px; кнопки тем/языка 23.8px с глифом 13.6px (minH auto — `data-compact` работает); ползунок: попап 218px, range 165px, `overflow=false`, бегунок/трек rem; сброс — иконка. Скриншот: `tmp/mobile-profile-menu-032.png`.
+- **Коммит:** synth — не коммитился (69 изменённых файлов, HEAD `b6ab048`); synth-deploy — `4d16dce`.
+- **Деплой K3s (0.5.32, UI-only):** `synth-ui:0.5.32` (sha256:14d1815a…7f30b5); `synth-backend` 0.5.14 не перезапускался; `/` → 200.
+
+## 2026-09-15 20:25 — fix(ui): верхний отступ вкладок левой панели + вертикальные интервалы дерева (мобайл)
+- **Задача:** (1) в левой панели расстояние от верхней границы панели до переключателя вкладок сделать как в правой; (2) в мобильном дереве поправить вертикальные интервалы (скриншот с пометками).
+- **Тип:** fix (UI)
+- **Исполнитель:** @orchestrator → @fixer
+- **Диагностика:** (1) у левой `.left-tabs` был `h-8` + `items-center`, а ряд выше свободной высоты → ряд центрировался и верхний `py-1` «съедался» (замер: `row.top − container.top` = 0.7px против 3.4px справа при root 13.6px). (2) тач-правило `[data-tree-node] { min-height: 2.5rem }` при однострочном контенте давало пустой запас вокруг строки (разрыв родитель→потомок); плюс `text-sm` (line-height 1.25rem) vs `leading-none` подписи давал зазор заголовок→подпись.
+- **Изменения:** `LeftPanel.tsx` — `.left-tabs` класс `flex h-8 shrink-0 items-center px-2 py-1` → `flex shrink-0 px-2 py-1`; `styles/index.css` — `[data-tree-node]` `min-height: 2.5rem → 2.25rem` (правила pointer-coarse и device-phone/tablet), кнопки не тронуты; `TreeNode.tsx` — заголовок `truncate text-sm` → `truncate text-sm leading-tight`.
+- **Проверки (независимо):** typecheck 0; lint 0 errors; тесты shared 72 / ui 155 / core 1220 / backend 229; build UI успешен. Замеры fixer'а: `row.top − container.top` слева = справа (3.39px при root 13.6 / 4.00px при 16); `[data-tree-node] min-height` 36px при root 16 (было 40); label line-height 17.5px (было 20). `truncate` сохраняет однострочный ellipsis — перенос не ломается.
+- **Тредофф:** мин. тап-таргет строки дерева на мобильном теперь 36px (было 40px) — плотнее, но чуть меньше гайдлайна 40px; при необходимости подстроить.
+- **Коммит:** не коммитился; деплой не делался (по запросу).
+
+## 2026-09-15 20:33 — deploy(ui): K3s 0.5.33 (отступ вкладок левой панели, интервалы дерева)
+- **Задача:** собрать и задеплоить в K3s правки левой панели и дерева.
+- **Тип:** fix + ops (UI-only)
+- **Исполнитель:** @orchestrator → @general
+- **Результат:** PASS (K3s)
+- **Что сделано:** version-bump 0.5.32→0.5.33; сборка shared+ui; `docker build -f docker/Dockerfile.ui` + push `git.itphx.ru/itphx/synth-ui:0.5.33` (image ID `sha256:02a886a7…13d6506`); `synth-deploy/values.yaml` тег 0.5.32→0.5.33, commit `bc25f88`, push `main` (`4d16dce..bc25f88`); Fleet (ns `fleet-local`) раскатал.
+- **Проверки (независимо):** `deploy/synth-ui` → `synth-ui:0.5.33`, 1/1 Ready, новый под `synth-ui-5d5b5485dd-rzgqv`; `synth-backend:0.5.14`, под 9h — не перезапускался; `/` → 200; JS `index-Rt4q53Xp.js` содержит `0.5.33`; CSS `index-CZE_1rTe.css` содержит `data-tree-node]{min-height:2.25rem`.
+- **Коммит:** synth — не коммитился (HEAD `b6ab048`); synth-deploy — `bc25f88`.
+- **Деплой K3s (0.5.33, UI-only):** `synth-ui:0.5.33` (sha256:02a886a7…13d6506); `synth-backend` 0.5.14 не перезапускался; `/` → 200.
+- **Процесс:** по указанию пользователя дальше деплой в K3s делается без дополнительного подтверждения.
+
+## 2026-09-15 20:53 — fix(dev+ui): разблокировка dev UI (shared/version) + плотные строки дерева; деплой K3s 0.5.34
+- **Задача:** (1) в мобильном дереве всё ещё много вертикальных промежутков — разобраться на локальных данных; (2) почему dev без данных.
+- **Тип:** fix (dev) + fix (UI) + ops
+- **Исполнитель:** @orchestrator → @fixer (2 задачи) → @general (деплой)
+- **Dev-разблокировка:** dev-UI не монтировался: `PwaUpdatePrompt` импортировал `SYNTH_VERSION` из корня `@itphx/synth-shared`, индекс которого реэкспортирует `config/loader.js` с `node:fs/promises`; в dev Vite экстернализует модуль → падение (в prod Rollup tree-shake'ит). Решение: подпуть `"./version"` в `packages/shared/package.json` + импорт `@itphx/synth-shared/version`. Теперь `./scripts/dev.sh` поднимается, данные из `/home/eof/dev/Synth/data` (=`/mnt/data/Agent/dev/Synth/data`, bind-mount) — «Тестовый проект», 221 сессия; вход `admin`/`admin-key-123`.
+- **Диагностика дерева (локальный dev, 390×844, pointer-coarse):** строки раздувала не только `[data-tree-node] min-height`, а `[data-tree-node] button { min-width/height: 2.25rem }` — кнопка-меню `⋮` (иконка 1.25rem) натягивала строку сессии до 52.8px при root 19.2 / 37.4px при root 13.6.
+- **Исправление:** в мобильных тач-правилах `styles/index.css` `[data-tree-node]` min-height и `[data-tree-node] button` min-width/height `2.25rem → 1.75rem` (4 места; десктоп и dialog-content не тронуты). Плюс ранее в этой сессии: `leading-tight` заголовку и `.left-tabs` без `h-8/items-center`.
+- **Замеры (dev, root 13.6px):** строка дерева 37.4 → **30.6px**, min-height 23.8, кнопка 23.8, разрывы между строками 0. Скриншот `tmp/tree-after-fix.png`.
+- **Проверки:** typecheck 0; lint 0 errors; тесты shared 72 / ui 155 / core 1220 / backend 229; build UI; локальный прод-бандл без `node:fs`.
+- **Деплой K3s (0.5.34, UI-only):** версия 0.5.33→0.5.34; образ `synth-ui:0.5.34` (sha256:ad470768…50226f); synth-deploy commit `b6057df`; новый под `synth-ui-7864f7b4f-xv5rl`; `synth-backend` 0.5.14 не перезапускался; `/` → 200; JS `index-BA57JlgQ.js` = 0.5.34; CSS `index-CeW7vg1k.css` содержит `data-tree-node]{min-height:1.75rem`.
+- **Коммит:** synth — не коммитился; synth-deploy — `b6057df`.
+- **Dev:** локальный `./scripts/dev.sh` оставлен запущенным (backend :5000, UI :5002, core :4300).
+
+## 2026-09-15 21:14 — fix(ui): hover-рост дерева, единый тип тултипов, стиль контекстных меню; деплой K3s 0.5.35
+- **Задача:** (1) на десктопе при hover на проект/сессию строка увеличивалась по высоте; (2) два типа контекстных подсказок — оставить один (как на вкладках); (3) контекстные меню проектов/сессий по стилю как меню профиля.
+- **Тип:** fix (UI) + ops
+- **Исполнитель:** @orchestrator → @fixer (3 задачи) → @general (деплой)
+- **Hover-рост:** строка покоя = только label (line-height 17.5px + py-1 = 25.5px), при hover появляются кнопки `h-5` (20px) → строка 28px. Фикс: `TreeNode` — `ActionButton` и триггер `ContextMenu` `h-5 w-5 → h-4 w-4` (16px < 17.5). Замер на dev: 21.7px до и после hover (root 13.6), стабильно; на мобильном тап-таргет сохранён CSS `[data-tree-node] button { min 1.75rem }`.
+- **Единые тултипы:** вкладки (`CenterTabs`) используют Radix-тултип, а ~50 файлов — нативный `title` (170 шт.). Добавлен `components/ui/TitleTooltipBridge.tsx` (глобальный мост через делегирование `mouseover/mouseout`): `title` временно снимается и показывается кастомный тултип (стиль как `TooltipContent`, задержка 300мс, снизу), при уходе `title` восстанавливается; клэмп по ширине и флип вверх у краёв (через `useLayoutEffect` + ref, `visibility:hidden` до измерения). Смонтирован в `App.tsx` внутри `TooltipProvider`. Проверено на dev: подсказка «Скрыть левую панель» — `role="tooltip"`, `left=8` (в пределах вьюпорта).
+- **Стиль меню:** `components/ui/contextMenu.tsx` приведён к меню профиля: контейнер `rounded-lg border bg-background py-1 shadow-md`, пункты `px-3 py-2 text-sm text-left text-muted-foreground hover:bg-interactive-hover hover:text-foreground`, иконки `size-4`, разделитель `border-t border-border`.
+- **Проверки:** typecheck 0; lint 0 errors; тесты shared 72 / ui 155 / core 1220 / backend 229; build UI успешен. Визуально на dev (HMR): меню проекта = стиль профиля; тултип кастомный; строка при hover не растёт.
+- **Замечание:** сабагент правки клэмпа тултипа был случайно прерван пользователем, но успел завершить файл — проверено и принято.
+- **Деплой K3s (0.5.35, UI-only):** version-bump 0.5.34→0.5.35; образ `synth-ui:0.5.35` (sha256:ef12baef…98ff51); synth-deploy commit `65261f1`; новый под `synth-ui-78dcbc68b6-blwt6`; `synth-backend` 0.5.14 не перезапускался; `/` → 200; JS `index-Dw9cHP9-.js` = 0.5.35.
+- **Коммит:** synth — не коммитился; synth-deploy — `65261f1`.
+- **Dev:** работает (UI http://<host>:5002), оставлен для проверки пользователем.
+
+## 2026-09-15 21:27 — fix(ui): отступ мобильных дропдаунов от краёв экрана; деплой K3s 0.5.36
+- **Задача:** в мобильной версии контекстное меню выбора агентов прижимается к краю — подобные меню не должны касаться краёв (небольшой отступ).
+- **Тип:** fix (UI) + ops
+- **Исполнитель:** @orchestrator → @fixer → @general (деплой)
+- **Причина:** Radix `DropdownMenu.Content` (агент/модель/размышления) и Base UI `SelectPositioner` использовали дефолтный `collisionPadding=0`; у `Popover`/`ContextMenu`/`Tooltip` уже было 8.
+- **Исправление:** `collisionPadding={8}` добавлен в `AgentModeSelector.tsx`, `ModelSelector.tsx` (оба Content), `ReasoningLevelSelector.tsx`, `ui/select.tsx` (`BaseSelect.Positioner`).
+- **Проверки:** typecheck 0; lint 0 errors; ui-тесты 155; build UI. На dev (390×844): меню агента `left=74, right=354` (gapRight=36), меню модели `left=8, right=370.8` (gapLeft=8), `--radix-popper-available-width=374px` (=390−16) — отступы ≥8px.
+- **Деплой K3s (0.5.36, UI-only):** version-bump 0.5.35→0.5.36; образ `synth-ui:0.5.36` (sha256:58fda160…9e71b9); synth-deploy commit `e5bed4e`; новый под `synth-ui-754b96b8c9-jw8cv`; `synth-backend` 0.5.14 не перезапускался; `/` → 200; JS `index-BeTO6lw_.js` = 0.5.36.
+- **Коммит:** synth — не коммитился; synth-deploy — `e5bed4e`.
+- **Dev:** работает (UI :5002).
+
+## 2026-09-15 21:40 — fix(ui): кастомный тултип сбрасывался при движении внутри кнопки; деплой K3s 0.5.37
+- **Задача:** на кнопках области ввода не все подсказки в новом формате (часть показывала нативный тултип).
+- **Тип:** fix (UI) + ops
+- **Исполнитель:** @orchestrator → @fixer → @general (деплой)
+- **Причина:** в `TitleTooltipBridge.onOver` искался только `t.closest('[title]')`. После снятия `title` с кнопки при переходе курсора на дочерний элемент (svg-иконку внутри кнопки) селектор ничего не находил → ветка `hide()` возвращала `title` → всплывал нативный тултип. Особенно проявлялось на триггерах Radix DropdownMenu (модель/агент/размышления), где кнопка почти целиком занята иконкой.
+- **Исправление:** в `onOver` добавлен ранний выход `if (current && current.contains(t)) return`.
+- **Проверки:** typecheck 0; lint 0 errors; ui-тесты 155; build UI. На dev (390×844, сценарий «навести → сдвинуть курсор на +3px внутри»): все 10 кнопок композера держат кастомный тултип, `title=null`, `data-title-tip` сохранён; уход/переход между кнопками и mousedown/scroll/resize корректны.
+- **Деплой K3s (0.5.37, UI-only):** version-bump 0.5.36→0.5.37; образ `synth-ui:0.5.37` (sha256:2abaa04a…3215f); synth-deploy commit `9244d2b`; новый под `synth-ui-76ffb46b8-zkj4x`; `synth-backend` 0.5.14 не перезапускался; `/` → 200; JS `index-Cqd9DXgu.js` = 0.5.37.
+- **Коммит:** synth — не коммитился; synth-deploy — `9244d2b`.
+- **Dev:** работает (UI :5002).
+
+## 2026-09-15 21:40 — fix(ui, локально): двойной тултип на кнопках режима сессии (title предков) — БЕЗ деплоя
+- **Задача:** на кнопках режима сессии (План/Действия/YOLO) в композере одновременно два тултипа — кастомный и нативный; убрать старый (нативный).
+- **Тип:** fix (UI), только локально (по указанию пользователя деплой в K3s пока не делать)
+- **Исполнитель:** @orchestrator → @fixer
+- **Причина:** у контейнера `role="group"` в `PlanActModeToggle.tsx` свой `title`, и у каждой кнопки свой. Мост `TitleTooltipBridge` снимал `title` только с наведённой кнопки → браузер показывал нативный тултип предка.
+- **Исправление:** в `TitleTooltipBridge` при показе тултипа глушить `title` у самого элемента И у всех предков с непустым `title` (список `ancestors`), при скрытии — восстанавливать в обратном порядке (в `hide()`, включая mousedown/scroll/resize/cleanup). Логика тултипа (delay 300, клэмп/флип, guard `current.contains`) сохранена.
+- **Проверки:** typecheck 0; lint 0 errors; ui-тесты 155; build UI. На dev (390×844): для всех трёх кнопок режима — ровно **1** кастомный тултип, `title=null`, `data-title-tip` установлен, предков с `title` — **0** (нативный не появится); после ухода `title` группы и кнопок восстановлены, тултипов 0.
+- **Коммит/деплой:** не делались (локальная проверка). Dev работает (UI :5002).
+
+## 2026-09-15 21:42 — fix(ui, локально): задержка тултипов 300→600мс; убраны тултипы у селекторов модели/агента
+- **Задача:** (1) немного увеличить время появления наших тултипов; (2) полностью убрать тултипы с кнопок выбора модели и агента (нет смысла).
+- **Тип:** fix (UI), только локально (деплой в K3s не делался)
+- **Исполнитель:** @orchestrator → @fixer
+- **Изменения:** `TitleTooltipBridge.tsx` `DELAY_MS 300→600`; `ui/tooltip.tsx` `delayDuration 300→600` (Provider и Root, для консистентности с вкладками); в `ModelSelector.tsx` и `AgentModeSelector.tsx` удалён `title` у триггеров (их `aria-label` сохранён). Подсказка недоступного агента (`agentProjectOnly`) и `title` кнопок внутри меню не тронуты.
+- **Проверки:** typecheck 0; lint 0 errors; ui-тесты 155; build UI. На dev (390×844): у триггеров модели/агента `title=null` и тултип не появляется даже через 1.1с; у кнопки «Развернуть» тултип появляется через ~615мс.
+- **Коммит/деплой:** не делались. Dev работает (UI :5002).
+
+## 2026-09-15 21:50 — fix(ui, локально): двойной тултип при переходе «группа режима → кнопка»
+- **Задача:** пользователь сообщил, что двойные тултипы на кнопках режимов остались (скриншот: большой кастомный тултип группы + нативный «План»).
+- **Тип:** fix (UI), локально (без деплоя)
+- **Исполнитель:** @orchestrator → @fixer
+- **Причина:** ранний guard `if (current && current.contains(t)) return` в `onOver` стоял ДО вычисления `el = t.closest('[title]')`. Если сначала замостена группа (её padding), то при переходе на кнопку внутри группы guard срабатывал и `title` кнопки не снимался → нативный тултип поверх кастомного группы.
+- **Исправление:** в `onOver` сначала вычисляется `el`; guard `current.contains(t)` применяется только в ветке `!el` (движение внутри элемента на безымянных потомков). Если у потомка свой `title` (`el !== current`) — `hide(); show(el)`.
+- **Проверки:** typecheck 0; lint 0 errors; ui-тесты 155; build UI. На dev (390×844): hover padding группы → 1 тултип «Режим сессии…» (title группы снят); переход на кнопку «План» → 1 тултип «План», `title` группы и кнопки = null (нативного нет); сдвиг внутри кнопки — остаётся «План»; уход — `title` восстановлены.
+- **Коммит/деплой:** не делались. Dev работает (UI :5002).
+
+## 2026-09-15 22:10 — fix(ui, локально): вернули общий тултип группы режимов + тултипы выше якоря
+- **Задача:** вернуть общий тултип с подробным описанием на кнопках режимов в композере, убрать персональные тултипы кнопок, размещать тултипы выше кнопок (без перекрытия).
+- **Тип:** fix (UI), локально (без деплоя)
+- **Исполнитель:** @orchestrator → @fixer
+- **Причина:** подробное описание — это `title` группы (`chat.mode.title`), но у каждой кнопки был свой `title` (`chat.mode.hint.*`), который перебивал групповой; мост позиционировал тултип снизу (`y = rect.bottom + 4`).
+- **Исправление:** в `PlanActModeToggle.tsx` убран `title` у кнопок (оставлен `aria-label`), `title` группы сохранён; в `TitleTooltipBridge.tsx` `Tip` расширен до `{ text, x, top, bottom }`, приоритет позиции — сверху (`GAP = 6`), флип вниз только при нехватке места сверху, иначе клэмп.
+- **Проверки:** typecheck 0; lint 0 errors; build ок; тесты (shared 72, ui 155, core 1220, backend 229). На dev 390×844: наведение на каждую из трёх кнопок → ровно 1 тултип = «Режим сессии: …», `title` группы и кнопок = null (нативного нет), `tooltip.bottom(459) ≤ group.top(465)`, зазор 6px; уход → 0 тултипов, `title` группы восстановлен. Десктоп 1280×800 — то же. Регрессия: тултипы «Развернуть» (композер) и узла дерева — выше якоря; у якоря у самой кромки — флип вниз.
+- **Коммит/деплой:** не делались. Dev работает (UI :5002).
+
+## 2026-09-15 22:30 — style(ui, локально): единый стиль контекстных меню (эталон — меню моделей)
+- **Задача:** привести к единому стилю контекстные меню элементов дерева (левая панель) и меню профиля по образцу меню выбора моделей.
+- **Тип:** style/refactor (UI), локально (без деплоя)
+- **Исполнитель:** @orchestrator → @fixer
+- **Эталон** (`ModelSelector.tsx`): контейнер `p-1 bg-popover border border-border rounded-lg shadow-lg z-50`, пункт `text-xs flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-interactive-hover/50 outline-none`, иконки `size-3.5`.
+- **Правки:**
+  - `src/components/ui/contextMenu.tsx` (используется `tree/TreeNode.tsx` — оба меню узла): контейнер `bg-background py-1 shadow-md` → `border-border bg-popover p-1 shadow-lg`; пункт `px-3 py-2 text-sm` → `rounded-md px-2 py-1.5 text-xs`, `[&>svg]:size-3.5`, hover/focus `bg-interactive-hover/50`, destructive `hover:bg-status-error/10 focus:bg-status-error/10`; разделитель `border-border/30`.
+  - `src/components/auth/QuickSettingsPopup.tsx`: контейнер → `border border-border bg-popover shadow-lg`; шапка/разделители `border-border/30`, имя `text-xs`; блок кнопок `p-1`; 5 пунктов → `rounded-md px-2 py-1.5 text-xs`, иконки `size-3.5`. Логика/структура (`data-compact`, `title`, тема/язык/масштаб) не менялись.
+- **Проверки (dev, computed):** контейнеры всех трёх меню — bg `rgb(23,32,42)`, border `rgb(43,52,64)`, radius `8.5px`, `shadow-lg`; пункты — font `10.2px`, padding `5.1/6.8px`, radius `6.8px`, высота `23.8px`, иконка `11.9px`. Дерево: destructive-пункт «Удалить» = `rgb(245,133,114)`. Клики работают (дерево: «Переименовать» → инпут; профиль: «Настройки профиля» → модалка), меню закрываются по клику вне; мобильные 390×844 — без переполнения. typecheck 0, lint 0 errors, build ок, тесты (shared 72, ui 155, core 1220, backend 229).
+- **Скриншоты:** `tmp/menu-models-verify.png`, `tmp/menu-profile-verify.png`, `tmp/menu-tree-verify.png`.
+- **Коммит/деплой:** не делались. Dev работает (UI :5002).
+
+## 2026-09-15 22:45 — deploy: synth-ui 0.5.38 в K3s
+- **Задача:** собрать и задеплоить накопленные UI-правки в K3s.
+- **Тип:** deploy (UI-only; backend не перезапускался, остаётся 0.5.14)
+- **Что вошло в релиз:** единый стиль контекстных меню (дерево + профиль по образцу меню моделей), тултипы выше якоря + групповой тултип режимов, ползунок масштаба (трек = фон чата `var(--background)`), разделение кнопок действий в дереве (gap-1 + подложки, без `bg-sidebar` у контейнера).
+- **Сборка:** `version-bump.sh patch` → 0.5.38; `pnpm --filter @itphx/synth-shared build`, `pnpm --filter @itphx/synth-ui build` (js `index-CzEBprXn.js`, css `index-aIpS05SV.css`).
+- **Образ:** `git.itphx.ru/itphx/synth-ui:0.5.38`, digest `sha256:3dbfd018e6205c4abc4a4fe951fb646b75b5340438f8d088ef868fa887c5fd70`, запушен.
+- **Деплой:** `synth-deploy` commit `685a75a` (values.yaml `ui.image.tag: 0.5.38`) → push main; Fleet gitrepo `fleet-local/synth` подхватил (commit 685a75a), `rollout status` — успешно, под `synth-ui-6cfd7d6bb5-xdj8j`.
+- **Верификация:** `https://synth.k3s.itphx.loc/` → 200; JS `assets/index-CzEBprXn.js` содержит `0.5.38`; в CSS трек `ui-scale-range::-webkit-slider-runnable-track{background:var(--background);...}`.
+- **Коммит в synth:** не делался (в репозитории кода изменения не коммитятся).
+
+## 2026-09-15 23:05 — feat(ui, локально): создание проекта в правой панели — тот же поповер, что в левой
+- **Задача:** в правой панели (вкладка «Проект», сессия без проекта) кнопка «Создать проект» вызывала системный `window.prompt`; нужен тот же диалог, что в левой панели.
+- **Тип:** feature/refactor (UI), локально (без деплоя)
+- **Исполнитель:** @orchestrator → @fixer
+- **Правки:**
+  - `src/components/panels/CreateProjectPopover.tsx` (новый): общий поповер `{ trigger, align?, onCreated?, onError? }` — поле имени (`leftPanel.projectName`), `OriginSelector` в гибриде, submit (`common.create`) с блокировкой; при `createProject() === null` → `onError` и поповер остаётся открытым.
+  - `src/components/panels/ProjectsTabToolbar.tsx`: инлайновый поповер заменён на `CreateProjectPopover` (тулбар левой панели), убраны `'project'` из `PopoverType`, `projectName`, `handleCreateProject`; сессионный поповер не тронут.
+  - `src/components/panels/ProjectTab.tsx`: `window.prompt`-обработчик и состояние `creating` убраны, вместо кнопки — `CreateProjectPopover align="center"` с `onCreated` (moveSession + нотификации) и `onError`.
+- **Проверки:** typecheck 0, lint 0 errors, build ок, ui-тесты 155/155; `window.prompt` в UI отсутствует (grep пусто). Dev, 1280×800 и 390×844: подмена `window.prompt` на throw — не вызывается; поповер с полем имени открывается, создание проходит (проект создан, сессия переехала); левая панель — тот же поповер; поповер «Создать сессию» работает как раньше.
+- **Созданы тестовые проекты в dev:** `QA right create test`, `QA left create test`, `QA mobile right create test` (не удалялись).
+- **Скриншоты:** `tmp/create-project-right.png`, `tmp/create-project-left.png`.
+- **Коммит/деплой:** не делались.
+
+## 2026-09-15 23:20 — fix(ui, локально): порядок категорий настроек + версия и счётчик пользователей в дашборде
+- **Задача:** «Панель управления» поднять выше «Безопасности»; в дашборде неверная версия и количество пользователей.
+- **Тип:** fix (UI), локально (без деплоя)
+- **Исполнитель:** @orchestrator → @fixer (без браузерных проверок — проверял оркестратор)
+- **Причины:**
+  - версия захардкожена `'0.1.0'` в `DashboardPanel.tsx`;
+  - счётчик брал `api.getUsers()` → `/auth/users` — эндпоинт **только debug-режима** (`packages/backend/src/routes/auth.ts:353`: в проде 403 → `catch(() => [])` → 0). Правильный источник — `synthApi.getUsers()` → `GET /api/v2/users` (`requireAdmin`, полный список профилей, как в `UsersPanel.tsx:55`).
+- **Правки:** `SettingsModal.tsx` — `dashboard` перенесён выше `security` (разделитель админ-блока теперь перед «Панель управления»); `DashboardPanel.tsx` — `SYNTH_VERSION` из `@itphx/synth-shared/version`, `version` убран из `Stats`/состояния, счётчик через `synthApi.getUsers()`, импорт `api` из `@/lib/api/client` удалён.
+- **Проверки:** typecheck 0, lint 0 errors, build ок, ui-тесты 155/155. Dev (1280×800), проверка оркестратором: порядок «… MCP-серверы → Панель управления → Безопасность → Сессии …»; в дашборде версия `0.5.38`, «Всего сессий 221», «Проектов 7», «Пользователей 4» — совпадает с `GET /api/v2/users` (admin, developer, lead, auditor).
+- **Скриншот:** `tmp/dashboard-verify.png`.
+- **Коммит/деплой:** не делались.
+
+## 2026-09-16 00:10 — feat(ui+backend, локально): раздел «Оформление», два умолчания масштаба, единый ползунок
+- **Задача:** «Умолчания» → «Оформление» + ползунок масштаба; «Внешний вид» и «Оформление» привести к общему виду и разложить содержимое по доступной области; ползунок в меню профиля — как в «Быстрых ответах»; по умолчанию два ползунка (мобильный + десктопный).
+- **Тип:** feature/UI+backend, локально (без деплоя); применялись скиллы `better-interface` + `better-layout`.
+- **Решение пользователя:** ползунок в «Оформлении» = **серверное умолчание для всех**; раздел остаётся только для ADMIN; два ползунка только в «Оформлении», во «Внешнем виде» — один (личное значение).
+- **Бэкенд:** `src/lib/defaults-store.ts` — `uiScale` → `uiScaleMobile` + `uiScaleDesktop` (валидация 0.5–1.2 независимо, мусор игнорируется), `{dataDir}/defaults.json` (атомарная запись, `DefaultsStore` инстанцируется в `app.ts`); `src/routes/auth.ts` — `GET /defaults` отдаёт `{locale, themeMode, theme, uiScaleMobile|null, uiScaleDesktop|null}` (встроенные: system/flexoki/null), `PUT /defaults` под `kit.requireAdmin`.
+- **UI:** `lib/uiScale.ts` — `isMobileScaleDevice()` (≤1199px или PWA), `setServerScaleDefaults`, `getBuiltInDefaultUiScale`, `getServerDefaultUiScale`, `getDefaultUiScale() = server ?? built-in`, `hasLocalUiScale`, `applyServerDefaultUiScale()` (применяет без записи в localStorage); `App.tsx` (boot) подтягивает умолчания и применяет их при отсутствии личного значения; `UiScaleSlider` (новый презентационный: нативный `input[type=range]` `w-24 h-1 accent-primary` + значение `tabular-nums` + сброс) и `UiScaleControl` поверх него; удалены кастомные правила `.ui-scale-range`; `client.ts`/`profileService.ts` — поля `uiScaleMobile/uiScaleDesktop`; i18n: `settings.category.defaults` → «Оформление» (en `System appearance`), +`settings.appearance.uiScale.mobile|desktop`; `settings/appearance-controls.tsx` (`SettingsCard`, `ThemeModeControl` с radiogroup+focus-ring, `ThemeControl`, `LanguageControl`); `AppearanceSettings` и `DefaultsPanel` переверстаны одинаково: шапка → `grid gap-4 sm:grid-cols-2` (карточка темы на 2 колонки, ниже «Масштаб» и «Язык») → футер действий; убраны `max-w-lg` и линии-разделители; в «Оформлении» два ползунка + Save (`updateDefaults`), список тем переведён на `THEME_PRESETS` (был свой список с несуществующими id).
+- **Проверки:** корневые `pnpm typecheck` 0, `pnpm lint` 0 errors; тесты: shared 72, ui 165, core 1220, backend 244 — всё зелёное; сборки пакетов ок.
+- **Проверки оркестратором (браузер, dev):** меню настроек — «Оформление» вместо «Умолчаний»; в «Оформлении» карточки «Режим темы» (651px, на 2 колонки), «Масштаб интерфейса» (2 ползунка: Мобильный 85%, Десктопный 100%), «Язык интерфейса», кнопка «Сохранить»; во «Внешнем виде» — та же сетка и один ползунок; ползунок в меню профиля идентичен «Быстрым ответам» (`w-24 h-1 accent-primary`, accent `rgb(63,183,227)`).
+- **Проверки бэкенда (на временном инстансе :5010, рабочий dev не трогали):** `PUT` не-админом → 403; `PUT` админом → `{dataDir}/defaults.json` создан; мусор (`99`) игнорируется, прежнее значение сохраняется; `GET` отдаёт смёрженные значения. Временный инстанс остановлен, значения возвращены к нейтральным (0.85/1.0).
+- **Проверки клиента (подмена ответа `/auth/defaults`):** 390px без личного значения → `--ui-scale 0.9` (мобильное умолчание), 1400px → `1.05` (десктопное), личное `1.15` приоритетнее, после очистки — снова `0.9`; в localStorage умолчание не пишется.
+- **ВАЖНО:** рабочий dev-бэкенд (процесс внутри `dev.sh`, без watch) **не перезапускался** — до его перезапуска «Сохранить» в «Оформлении» не персистится, а серверные умолчания не применяются (нужен рестарт `dev.sh`).
+- **Скриншоты:** `tmp/settings-defaults.png`, `tmp/settings-appearance.png`, `tmp/profile-menu-slider.png`.
+- **Коммит/деплой:** не делались.
+
+## 2026-09-16 00:35 — fix(ui, локально): описание «Оформления» + убрана кайма у ползунка
+- **Задача:** заменить описание раздела «Оформление»; убрать «окантовку» (кайму) у ползунка масштаба.
+- **Тип:** fix (UI), локально (без деплоя); исполнитель @fixer, проверка оркестратором в браузере.
+- **Причина каймы:** нативный `input[type=range]` с `accent-color` рисует у дорожки 1px рамку; на светлых поверхностях (карточки настроек, попап профиля) она читается как окантовка.
+- **Правки:**
+  - i18n `admin.defaults.description` → ru «Настройки оформления по-умолчанию для новых пользователей», en «Default appearance settings for new users».
+  - `styles/index.css`: новый класс `.ui-range` — кастомные трек/бегунок (`appearance: none`, `border: 0`, без `box-shadow`) с заполнением через `--ui-range-fill` (`linear-gradient` по `var(--primary)`), Firefox — `::-moz-range-track` + `::-moz-range-progress`.
+  - `settings/UiScaleControl.tsx` (`UiScaleSlider`): класс `ui-range w-24 …` + `--ui-range-fill = (value − UI_SCALE_MIN)/(UI_SCALE_MAX − UI_SCALE_MIN)`.
+  - `settings/MicroFirstDefaults.tsx`: тот же класс/переменная (min 0.5, max 1.0) — единый вид без каймы у обоих ползунков.
+- **Проверки:** typecheck 0, build ок. Оркестратор (dev, элементные скриншоты): трек без рамки, видна только заполненная акцентная линия + кружок; ползунки — меню профиля (`ui-range w-24`, fill 71%), «Оформление» (85% → fill 50%, 100% → 71%), «Быстрые ответы» (`ui-range w-20`, fill 60%); текст описания обновлён.
+- **Скриншоты:** `tmp/slider-after.png`, `tmp/settings-defaults-after.png`, `tmp/slider-profile-after.png`.
+- **Коммит/деплой:** не делались. Напоминание: dev-бэкенд не перезапускался (см. запись выше).
+
+## 2026-09-16 01:05 — style(ui, локально): разделы Профиль, Уведомления, Чат, Быстрые ответы, Маршрутизация, MCP-серверы
+- **Задача:** привести шесть разделов настроек к общему виду (better-interface/better-layout), аккуратно распределить содержимое по пространству; в «Чате» — блочная структура на будущее.
+- **Тип:** style/рефакторинг вёрстки (UI), локально (без деплоя); исполнители @fixer (4 потока), проверка оркестратором в браузере.
+- **Общий каркас:** новый `src/components/settings/settings-layout.tsx` — `SettingsPage` (шапка `max-w-2xl` + контейнер), `SettingsCard` (перенесён из `appearance-controls.tsx`, `title` теперь необязателен; там — ре-экспорт), `SegmentedControl<T>` (единый сегментированный контрол; `ThemeModeControl` переписан поверх него).
+- **Разделы:** убран `max-w-lg`, везде `SettingsPage` + `grid gap-4 sm:grid-cols-2` с карточками; линии-разделители и `border-l-2` подблоки убраны (группировка формой карточек и отступами).
+  - Профиль: 4 карточки (аватар; логин+имя; email+роль; заметки на всю ширину), сообщения над футером, сохранение в футере.
+  - Уведомления: одна карточка, строки в 2 колонки, чекбоксы → `Toggle` (в `ui/Toggle.tsx` добавлен `ariaLabel` и `focus-visible:ring-2`).
+  - Чат: одна карточка «Промежуточные ответы» с `SegmentedControl` (вторая колонка свободна под будущие блоки).
+  - Быстрые ответы: карточки «Быстрые ответы» / «Порог уверенности» (ползунок переведён на общий `ui-range` + `--ui-range-fill`) / «Embedding»; хардкод-тексты раздела сохранены (i18n не вводился — отдельная тема).
+  - Маршрутизация: 7 карточек (вкл/выкл, стратегия, контентная, контроль качества, стоимость, саб-агенты, словари), единые классы полей.
+  - MCP-серверы: `SettingsPage` + карточки (список серверов и permissions — на всю ширину), форма добавления/редактирования — карточка; логика стора/probe/CRUD не тронута.
+- **Проверки:** корневые `pnpm typecheck` 0, `pnpm lint` 0 errors (51/139 предсуществующих warning в core/backend), тесты shared 72 / ui 165 / core 1220 / backend 244; ui build ок.
+- **Проверки оркестратором (dev):** 1400×950 — все шесть разделов: заголовок + карточки, 2 колонки (Профиль 375+375+375+766, Быстрые ответы 375×3, Маршрутизация 375/375/766…), горизонтального переполнения нет; 390×844 — одна колонка, карточки, переполнения нет.
+- **Скриншоты:** `tmp/settings-профиль.png`, `-уведомления.png`, `-чат.png`, `-быстрыеответы.png`, `-маршрутизация.png`, `-mcpсерверы.png`, `tmp/settings-mobile.png`.
+- **Коммит/деплой:** не делались.
+
+## 2026-09-16 02:00 — feat(ui+core+backend, локально): единые селекты, i18n, редактируемые словари, телефон в профиле
+- **Задача:** (1) единый стиль выпадающих списков как у выбора темы; (2) добить i18n; (3) словари классификации — редактируемые/переопределяемые и по языкам; (4) в профиль — телефон и отдельный блок роли.
+- **Тип:** feature/fix (UI + core + backend), локально (без деплоя); 4 потока @fixer, проверка оркестратором.
+- **Решение пользователя:** словари — полное редактирование по языкам (API + редактор в UI, запись в `$SYNTH_DATA_DIR/dictionaries/`).
+- **1. Селекты:** все нативные `<select>` в пользовательских разделах заменены на общий `Select` (`ui/select.tsx`): Профиль (роль), Быстрые ответы (провайдер/модель embedding), Маршрутизация (стратегия, модель сабагента, пары провайдер/модель ×3), MCP (тип сервера), Безопасность, меню профиля (язык). Проверено в браузере: `select` = 0, вместо них `[role="combobox"]`.
+- **2. i18n:** «Быстрые ответы» полностью вынесены в словари (title/description/enabled/confidence/embedding/provider/model + `common.enabled|disabled`); секция словарей — `routing.dictionaries.*` (title, source.system/user, 6 категорий, tools, addKeyword, addTool, remove, reset, hint, unavailable, loadError); профиль — `auth.phone`.
+- **3. Словари классификации:** API `GET /api/v2/dictionaries`, `GET|PUT|DELETE /api/v2/dictionaries/:category/:lang` (один модуль, смонтирован и в core, и в backend; в backend запись под `requireAdmin`, в core — аутентификация). `DictionaryStore` расширен: `listDictionaries`, `getDictionary`, `saveUserDictionary`, `deleteUserDictionary` (атомарная запись YAML в `{dataDir}/dictionaries/`, для `coding` tools зеркалятся в `coding.tools.yaml`); UI — не сворачивающаяся карточка «Словари классификации»: переключатель языка (ru/en), блоки категорий с бейджем источника, редактируемые чипы ключевых слов и инструментов, «Сохранить»/«Вернуть системный словарь»; при 404 (managed без core) — подсказка.
+- **4. Профиль:** добавлено поле «Телефон» (в блоке Email), «Роль в команде» вынесена в отдельную карточку; `phone` добавлен в `ProfileData` (shared), персистентность в `core/storage/profile-store.ts`, чтение/запись в `backend/routes/auth.ts` (`GET|PUT /auth/profile`), отдаётся в `/api/v2/users`; тесты round-trip.
+- **Проверки:** корневые typecheck 0, lint 0 errors (33/59/139 предсуществующих warning), тесты shared 72 / ui 165 / core **1245** / backend 244; сборки shared/core ок.
+- **Проверки оркестратором:** API на временном инстансе :5010 — `GET` список 12 словарей, `PUT coding/ru` создал `coding.ru.yaml` (+ `coding.tools.yaml`), `DELETE` вернул системный (20 слов / 10 инструментов) и удалил оба файла; UI (мок-ответ API) — карточка без сворачивания, языки ru/en, бейджи «Системный/Пользовательский», 6 чипов удаления, секция инструментов, добавление слова по Enter и `PUT` с корректным телом `{keywords:[…], tools:[…]}` на `/api/v2/dictionaries/coding/ru`; профиль — 5 карточек (аватар · логин+имя · email+телефон · роль · заметки), поле `#profile-phone` на месте; «Быстрые ответы» — тексты из словаря, при включённом embedding 2 `combobox`.
+- **Уборка:** временный инстанс :5010 остановлен, тестовые override-файлы удалены, каталог `{dataDir}/dictionaries` убран, `tmp/backend.env`/лог удалены; процессы пользователя (:5000/:5002) не тронуты.
+- **Скриншоты:** `tmp/routing-dictionaries.png`, `tmp/profile-phone.png`.
+- **ВАЖНО:** dev-бэкенд (внутри `dev.sh`, без watch) по-прежнему не перезапускался — до рестарта не работают ни «Сохранить» в «Оформлении», ни API словарей (UI покажет подсказку «доступно в локальном режиме»).
+- **Коммит/деплой:** не делались.
+
+## 2026-09-16 02:40 — feat(ui+core, локально): «Маршрутизация» в админку, словари — как контекстные файлы
+- **Задача:** словари не должны редактироваться в пользовательских настройках → перенести «Маршрутизацию» в админский раздел; редактирование словарей сделать по аналогии с «Контекстными файлами» (переопределение + восстановление системных).
+- **Тип:** feature/UX (UI + core API), локально (без деплоя); 2 потока @fixer, проверка оркестратором.
+- **UI (`SettingsModal.tsx`):** категория `routing` перенесена в админский блок (`roles: ["ADMIN"]`, перед `context`). Проверено в браузере: пользовательский блок = Профиль…MCP-серверы, затем разделитель, в админском — «Маршрутизация» перед «Контекстными файлами».
+- **API словарей расширен (core; смонтирован и в backend):** `GET /:category/:lang` и list теперь отдают `content` (действующий YAML: пользовательский файл, иначе системный) и `size`; `PUT` принимает `{ content: string }` (YAML; парсинг/валидация/нормализация, ошибка парсинга → 400) **и** прежний `{ keywords, tools }`; `DELETE` — восстановление системного. `DictionaryStore.getContent`/`saveUserContent`, строгий YAML-парсер, лимиты 2000 слов / 500 инструментов, для `coding` tools зеркалятся в `coding.tools.yaml`.
+- **UI словарей (`RoutingSettings.tsx`, `DictionarySection`):** вместо чипов — список строк (категория, бейдж «Системный»/«Переопределён», размер, «Редактировать», «Вернуть системный словарь» только для переопределённых) + инлайн-редактор сырого YAML (`textarea rows=10 font-mono`), «Сохранить»/«Отмена», `confirm` на восстановление; переключатель языка ru/en; при 404 (managed без core) — подсказка `routing.dictionaries.unavailable`. Новые ключи i18n: `modified`, `edit`, `cancel`, `editing`, `confirmReset`, `restored` (ru/en). `synthApi`: `getDictionary`, `saveDictionary({ content })`, `resetDictionary`; чиповый редактор и мёртвый код удалены.
+- **Проверки:** корневые typecheck 0, lint 0 errors; тесты shared 72 / ui 165 / core **1262** / backend 244.
+- **Проверки оркестратором (dev, API замокан):** список — строки «Кодирование»/«Исследование», бейджи «Системный»/«Переопределён», размеры; «Редактировать» → textarea с YAML (`mono`, rows=10) → «Сохранить» отправил `PUT /api/v2/dictionaries/coding/ru` с телом `{"content":"keywords:\n  - напиши\n  - новое-слово\n"}`; «Вернуть системный словарь» → `DELETE /api/v2/dictionaries/coding/ru` + статус «восстановлен»; сворачиваемых блоков нет.
+- **Скриншот:** `tmp/dictionaries-context-style.png`.
+- **Коммит/деплой:** не делались.
+
+## 2026-09-16 02:55 — chore: перезапуск dev-инстанса и сквозная проверка словарей
+- **Почему:** пользователь-админ не мог редактировать словари в dev. Причина — процесс бэкенда от 20:46 (до появления API словарей и умолчаний); `dev.sh` запускает backend через `tsx` **без watch** (scripts/dev.sh:128), поэтому новые роуты не подхватились: `GET /api/v2/dictionaries` → 404, UI показывал заглушку «доступно в локальном режиме».
+- **Что сделано:** остановлен старый `dev.sh` (pid 473674, его cleanup погасил backend+UI) и запущен заново (`setsid nohup ./scripts/dev.sh`, лог `tmp/dev-restart.log`): backend :5000, UI :5002, core :4300.
+- **Проверки после рестарта:** `GET /api/v2/dictionaries` → 200 (12 словарей, с `content`/`size`); `GET /auth/defaults` → `{locale, themeMode, system, flexoki, uiScaleMobile: 0.85, uiScaleDesktop: 1}`.
+- **Сквозная проверка через UI (реальный API):** вход заново (после рестарта сессия сброшена — форма логина, API-ключ); «Настройки → Маршрутизация» → 6 словарей ru с бейджем «Системный» и размерами; «Редактировать» показал реальный системный YAML (304 симв., mono); сохранение правки → строка стала «Переопределён» 433 B и появилась «Вернуть системный словарь», на диске создан `{dataDir}/dictionaries/coding.ru.yaml`; восстановление из UI → снова «Системный» 482 B, файл удалён.
+- **Уборка:** тестовые override-файлы удалены, пустой каталог `{dataDir}/dictionaries` убран.
+- **Скриншот:** `tmp/dict-live.png`.
+- **Коммит/деплой:** не делались.
+
+## 2026-09-16 03:35 — style(ui, локально): админские разделы — шапка «Безопасности», токены темы, селекты, чистка
+- **Задача:** пройтись по админским разделам: в «Безопасности» — шапка + закрепление + полная ширина; синие кнопки → токены темы; все выпадающие списки — в едином стиле; почистить мусор/мёртвый код.
+- **Тип:** style/чистка (UI), локально (без деплоя); 4 потока @fixer, проверка оркестратором.
+- **Каркас:** `settings-layout.tsx` — у `SettingsPage` новый проп `stickyHeader?: boolean` (sticky `-top-6 -mx-6 -mt-6 px-6 pt-6 pb-4`, `bg-background/95 backdrop-blur`, нижняя граница); обычный режим не изменился.
+- **Безопасность:** `SettingsPage stickyHeader` + три карточки на всю ширину (`sm:col-span-2`): шлюз (Input Guard/Rate limit разложены в 2 колонки), паттерны обфускации, защищённые пути; внутренние разделители и `max-w-lg` убраны. Проверено: `position: sticky`, после скролла 500px шапка на верхней кромке, карточки 766/766/766 при контенте 814.
+- **Цвета → токены:** `bg-blue-600 text-white hover:bg-blue-700` → `bg-primary text-primary-foreground hover:bg-primary/90`; палитровые бейджи → `bg-secondary text-secondary-foreground` / `bg-status-warning/15 text-status-warning` / `bg-status-success/10 text-status-success` / `bg-status-error/15 text-status-error`; `accent-blue-600` → `accent-primary`; `text-blue-600` → `text-primary`; удалён мёртвый `ROLE_COLORS`. Затронуты: ContextPanel, UsersPanel, AgentsPanel, ColorPicker, IconPicker, ProvidersPanel, ModelsPanel, ProjectsPanel, DebugPanel, DashboardPanel, RoutingSettings, SessionsPanel (был пропущен ранее).
+- **Селекты:** нативные `<select>` → общий `Select` в AgentsPanel (4), ProvidersPanel (1), ModelsPanel (2), DebugPanel (1). Итог по `admin/*` и `settings/*`: **нативных `<select>` — 0, палитровых утилит — 0**.
+- **Мёртвый код:** удалены неиспользуемые `ROLE_COLORS`, дубль класса в ModelsPanel, и два никем не импортируемых файла — `components/chat/QueueBanner.tsx`, `components/chat/QueueChips.tsx` (подтверждено grep: 0 внешних ссылок).
+- **Проверки:** корневые typecheck 0, lint 0 errors; тесты shared 72 / ui 165 / core 1262 / backend 244; build ок.
+- **Осталось за рамками (не админские разделы, нативные `<select>`):** `logviewer/LogFilePanel.tsx`, `logviewer/LlmPayloadPanel.tsx` (2), `logviewer/AuditLogPanel.tsx` (4), `auth/LoginForm.tsx` (выбор тестового пользователя), `panels/ProjectTab.tsx`, `panels/SessionSettingsTab.tsx` (4). Палитровые утилиты вне админки: StatsTab (цвета графиков — как данные), NotificationPopup, chat-части (ToolCallPart, CommitDetailTab, SubagentPart, QueuePanel, ChatMessage, SecretPlaceholder, RetryStatus, SubagentResumeBar), GlobalTransportIndicator, Header, SessionSettingsTab. Не трогал — ждём решения.
+- **Скриншоты:** `tmp/admin-security-top.png`, `tmp/admin-security-sticky.png`, `tmp/admin-sessions.png`, `tmp/admin-пользователи.png`, `tmp/admin-агенты.png`, `tmp/admin-провайдеры.png`.
+- **Коммит/деплой:** не делались.
+
+## 2026-09-16 04:15 — deploy: synth-ui + synth-backend 0.5.39 в K3s
+- **Задача:** собрать и задеплоить накопленные правки (UI + core + backend) в K3s.
+- **Тип:** deploy (в этот раз **два образа**: UI и backend, т.к. были правки core/backend — API словарей, персистентные умолчания, `phone`).
+- **Состав релиза:** админ-разделы (токены темы вместо палитровых цветов, sticky-шапка и полная ширина «Безопасности», единые селекты), редактируемые словари классификации (API + редактор), персистентные умолчания оформления (`uiScaleMobile/Desktop`), телефон в профиле, «Маршрутизация» в админ-блоке, удаление мёртвых файлов `QueueBanner`/`QueueChips`.
+- **Проблема по пути:** при сборке образов диск был заполнен на 100% (`no space left on device` при экспорте слоёв). Освобождено ~15 ГБ: `docker container prune` (1.0 ГБ) + удаление старых тегов `synth-ui` (0.5.21…0.5.37, ~13.9 ГБ); старый `synth-ui:0.5.38` оставлен для откАТА. После этого образы собрались.
+- **Сборка:** `version-bump.sh patch` → **0.5.39**; shared/core/ui/backend собраны локально (UI-бандл `index-BMuIng24.js`).
+- **Образы:**
+  - `git.itphx.ru/itphx/synth-ui:0.5.39` — digest `sha256:81b31da4a0d5…368a` (115 МБ);
+  - `git.itphx.ru/itphx/synth-backend:0.5.39` — digest `sha256:939af0975cc1…bd6f` (285 МБ, из исходников монорепо).
+- **Деплой:** `synth-deploy` commit `f4d71b1` (`ui.image.tag: 0.5.39`, `backend.image.tag: 0.5.14 → 0.5.39`) → push main; Fleet `fleet-local/synth` подхватил `f4d71b1`; `rollout status` по обоим деплойментам — успешно (поды `synth-ui-5485bcc66-79v4b`, `synth-backend-58b6dcdf99-899p5`).
+- **Верификация:** `https://synth.k3s.itphx.loc/` → 200; JS `assets/index-BMuIng24.js` содержит `0.5.39`; `GET /api/v2/dictionaries` → **401** (маршрут существует, требует аутентификации; раньше был бы 404), `GET /auth/defaults` → 200 с новыми полями `{locale:'ru',themeMode:'system',theme:'flexoki',uiScaleMobile:null,uiScaleDesktop:null}`, `/health` → 200; в логах backend ошибок нет.
+- **Коммит в synth:** не делался (код не коммитится, кроме bump-версии — `version-bump.sh` меняет файлы в рабочем дереве).
