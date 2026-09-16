@@ -859,3 +859,17 @@
   - Docker: kaniko-джоба падает (413 QRATOR); образы `synth`/`synth-backend`/`synth-ui` (0.6.0 + latest) собраны и запушены **локальным docker CLI** в gitverse.ru — digest `synth` sha256:ad49b8a3…, `synth-backend` sha256:db8ca6a5…, `synth-ui` sha256:33f5aa8b…. Standalone — из npm-пакета @itphx/synth@0.6.0, backend/ui — из исходников монорепо.
   - GitVerse Release создан вручную (MCP) — https://gitverse.ru/itphx/synth/releases/tag/v0.6.0 (CI create-release падает с 403: у GV_TOKEN нет прав Releases API). Тело — масштаб UI, настройки/админка, словари, профиль, мобильные фиксы, публикация.
 - **Проблемы/оговорки:** CI-джобы «Docker образ» (kaniko 413 QRATOR) и «GitVerse Release» (403 GV_TOKEN) требуют правки токенов/release.yaml — обход прежний (локальный docker push + ручной Release). K3s уже работал на 0.5.39 (тот же код, что 0.6.0); обновление `synth-deploy` в задачу не входило.
+
+## 2026-09-16 — ops: чистка реестра git.itphx.ru + деплой v0.6.0 в K3s
+- **Задача:** «Там места нет. Удали предыдущие версии и 403 ошибка уйдет. В NPM запушено? Задеплой на K3s.»
+- **Тип:** git/ops (registry cleanup + release deploy)
+- **Исполнитель:** @orchestrator + @general
+- **Результат:** PASS
+- **Что сделано:**
+  - Выяснено, что место кончается во **внутреннем реестре git.itphx.ru** (его использует K3s), а не в gitverse.ru: у `synth-ui` накопилось 46 тегов (0.3.0…0.5.39), у `synth-backend` — 12 (в gitverse.ru-реестре уже только 0.6.0/latest).
+  - Удалены все предыдущие версии `synth-ui` (45) и `synth-backend` (11) через Gitea API (MCP `gitea_package_write/delete`); оставлена `0.5.39` для отката. Чужие пакеты (`slang`, `protec`, `synth-landing`) не тронуты. В реестре по каждому образу осталось ровно `0.5.39` и `0.6.0`.
+  - Собраны и запушены в git.itphx.ru образы 0.6.0: `synth-ui` digest `sha256:33f5aa8b…`, `synth-backend` digest `sha256:7eacbaf5…` (push без 403 после чистки).
+  - `synth-deploy`: `values.yaml` теги 0.5.39 → 0.6.0, commit `fadd12e`, push `main`; Fleet раскатал.
+  - K3s: `deploy/synth-ui` и `deploy/synth-backend` — образы 0.6.0; поды `synth-ui-5df5d9b8ff-xjjkj`, `synth-backend-7c644669db-76hzb` — 1/1 Running.
+  - Верификация (оркестратор): `https://synth.k3s.itphx.loc/` → 200, `/health` → 200, JS `assets/index-CeVKXKrp.js` содержит `0.6.0`.
+- **Замечания:** CI-джоба «Docker образ» падала **не** из-за переполнения, а из-за гонки с npm (`npm error notarget @itphx/synth@0.6.0` — kaniko стартовала раньше, чем версия появилась в npmjs); образы 0.6.0 при этом уже опубликованы локальным push. npm: `@itphx/synth` latest = **0.6.0** (npmjs.org + GitVerse Package Registry) — подтверждено.
