@@ -7,14 +7,40 @@ import { createLazyOidcClient, oidcUserToUser } from '../auth/oidc.js';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { t } from '../lib/i18n.js';
 import { getDefaultLang, setDefaultLang, type Lang } from '../lib/i18n-config.js';
+import type { DefaultsStore, AppearanceDefaults } from '../lib/defaults-store.js';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const OIDC_STATE_COOKIE = 'oidc_state';
 
-export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: ProfileStore, dataDir?: string): Hono {
+// Встроенные умолчания оформления (совпадают с тем, что использует UI
+// по умолчанию: packages/ui/src/lib/defaults.ts + uiScale.ts).
+const BUILT_IN_DEFAULTS = {
+  themeMode: 'system' as const,
+  theme: 'flexoki',
+  uiScaleMobile: null as number | null,
+  uiScaleDesktop: null as number | null,
+};
+
+export function createAuthRoutes(
+  kit: AuthKit,
+  config: AuthConfig,
+  profiles?: ProfileStore,
+  dataDir?: string,
+  defaultsStore?: DefaultsStore | null,
+): Hono {
   const app = new Hono();
   const avatarsDir = dataDir ? join(dataDir, 'auth', 'avatars') : null;
+
+  // Сохранённые умолчания перекрывают встроенные; uiScaleMobile/uiScaleDesktop: null — умолчание не задано.
+  const resolveDefaults = async () => {
+    const stored: AppearanceDefaults = defaultsStore ? await defaultsStore.loadDefaults() : {};
+    return {
+      locale: getDefaultLang(),
+      ...BUILT_IN_DEFAULTS,
+      ...stored,
+    };
+  };
   const getOidcClient = createLazyOidcClient(config.oidc);
 
   // GET /auth/login — редирект на Keycloak authorize endpoint
@@ -238,6 +264,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
       id: user.id,
       username: user.username,
       email: profile?.email ?? user.email,
+      phone: profile?.phone ?? null,
       roles: profile?.roles ?? user.roles,
       preferred_language: user.preferredLanguage,
       team_role: profile?.teamRoles?.[0] ?? user.teamRole,
@@ -277,6 +304,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
         profile.preferences = { ...(profile.preferences || {}), ...body.preferences };
       }
       if (body.email !== undefined) profile.email = body.email;
+      if (body.phone !== undefined) profile.phone = body.phone;
       await profiles.saveProfile(profile);
 
       return c.json({
@@ -286,6 +314,7 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
           username: user.username,
           roles: user.roles,
           email: profile.email,
+          phone: profile.phone,
           display_name: profile.displayName,
           notes: profile.notes,
           team_role: profile.teamRoles?.[0],
@@ -362,19 +391,29 @@ export function createAuthRoutes(kit: AuthKit, config: AuthConfig, profiles?: Pr
   });
 
   // GET /auth/defaults
-  app.get('/defaults', (c) => {
-    const lang = getDefaultLang();
-    return c.json({ locale: lang, themeMode: 'dark', theme: 'flexoki' });
+  app.get('/defaults', async (c) => {
+    return c.json(await resolveDefaults());
   });
 
-  // PUT /auth/defaults
-  app.put('/defaults', async (c) => {
-    const body = await c.req.json();
-    const locale = body.locale || body.language;
+  // PUT /auth/defaults — сохранение умолчаний оформления (только ADMIN).
+  app.put('/defaults', kit.requireAdmin, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+
+    // locale может прийти как locale или language (обратная совместимость).
+    const locale = body.locale ?? body.language;
     if (locale === 'en' || locale === 'ru') {
       setDefaultLang(locale as Lang);
     }
-    return c.json({ status: 'ok', defaults: { ...body, locale: getDefaultLang() } });
+
+    if (defaultsStore) {
+      const patch: AppearanceDefaults = { ...body };
+      if (patch.locale === undefined && (locale === 'en' || locale === 'ru')) {
+        patch.locale = locale;
+      }
+      await defaultsStore.saveDefaults(patch);
+    }
+
+    return c.json({ status: 'ok', defaults: await resolveDefaults() });
   });
 
   // GET /auth/profile/avatar — отдаёт файл аватара

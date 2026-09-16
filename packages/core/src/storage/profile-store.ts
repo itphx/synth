@@ -10,6 +10,7 @@ interface SerializedProfile {
   id: string;
   username: string;
   email?: string;
+  phone?: string;
   roles: string[];
   team_roles: string[];
   is_active: boolean;
@@ -37,6 +38,7 @@ export class FileProfileStore implements ProfileStore {
       id: profile.id,
       username: profile.username,
       email: profile.email,
+      phone: profile.phone,
       roles: profile.roles,
       team_roles: profile.teamRoles,
       is_active: profile.isActive,
@@ -54,6 +56,7 @@ export class FileProfileStore implements ProfileStore {
       id: data.id,
       username: data.username,
       email: data.email,
+      phone: data.phone,
       roles: data.roles,
       teamRoles: data.team_roles,
       isActive: data.is_active,

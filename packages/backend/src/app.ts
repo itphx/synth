@@ -26,6 +26,7 @@ import {
   mergeSecurityConfig, ProtectedPathsStore,
   SecretPatternStore,
   RateLimiter,
+  DictionaryStore, createDictionaryRoutes,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
@@ -55,6 +56,7 @@ import { createGatewayPatternsRoutes } from './routes/gateway-patterns.js';
 import { createLlmRoutes } from './routes/llm.js';
 import { createRateLimiter } from './middleware/rate-limiter.js';
 import { YamlMcpConfigStore } from './lib/mcp-config-store.js';
+import { DefaultsStore } from './lib/defaults-store.js';
 import { t, getTranslations } from './lib/i18n.js';
 import { ProjectStore } from './storage/project-store.js';
 import { JsonStore } from './storage/json-store.js';
@@ -209,6 +211,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Runtime-настройки (AD-005): workspace/mcp из {dataDir}/settings.json (переживают рестарт)
     const settingsStore = new RuntimeSettingsStore({ dataDir });
 
+    // Умолчания оформления (AD-005): {dataDir}/defaults.json (переживают рестарт)
+    const defaultsStore = new DefaultsStore({ dataDir });
+
     // MCP
     const configPath = findConfigPath() || './config.yaml';
     const mcpConfigStore = new YamlMcpConfigStore(configPath);
@@ -217,7 +222,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     mcpManager.setConfig(mcpConfigStore.getServers());
 
     // Auth routes (после profilesStore)
-    app.route('/auth', createAuthRoutes(auth, backendConfig.auth, profilesStore, dataDir));
+    app.route('/auth', createAuthRoutes(auth, backendConfig.auth, profilesStore, dataDir, defaultsStore));
 
     // Сидирование тестовых пользователей (debug mode)
     if (backendConfig.auth.debugMode && backendConfig.auth.testUsers) {
@@ -526,6 +531,15 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       },
       protectedPathsStore,
     }));
+
+    // Словари классификации: чтение — все авторизованные, запись/сброс — ADMIN
+    // (тот же guard, что у users.ts). Реализация общая с core.
+    const dictionaryStore = new DictionaryStore(dataDir);
+    app.route('/api/v2/dictionaries', createDictionaryRoutes(
+      auth,
+      dictionaryStore,
+      { writeGuard: auth.requireAdmin },
+    ));
 
     // Глобальный SSE-хаб для всех сессий пользователя
     app.get('/api/v2/events', auth.requireAuth, async (c) => {

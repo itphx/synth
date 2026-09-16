@@ -12,7 +12,7 @@ import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
-  SecretPatternStore, ProtectedPathsStore,
+  SecretPatternStore, ProtectedPathsStore, DictionaryStore,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } from '@itphx/synth-shared';
@@ -44,6 +44,7 @@ import { createQueueRoutes } from './routes/queue.js';
 import { createUpdateRoutes } from './routes/updates.js';
 import { createMessageRoutes } from './routes/messages.js';
 import { createSettingsRoutes } from './routes/settings.js';
+import { createDictionaryRoutes } from './routes/dictionaries.js';
 import { createMcpRoutes } from './routes/mcp.js';
 import { createRemoteProxyMiddleware } from './proxy.js';
 
@@ -792,6 +793,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     },
     protectedPathsStore,
   }));
+
+  // Словари классификации: чтение — все аутентифицированные, запись/сброс —
+  // аутентификация (в standalone достаточно --api-key, локальный режим).
+  // Модуль общий с backend, отличается только writeGuard.
+  const dictionaryStore = new DictionaryStore(dataDir);
+  app.route('/api/v2/dictionaries', createDictionaryRoutes(auth, dictionaryStore));
 
   // MCP (probe подключения к серверу)
   app.route('/api/v2/mcp', createMcpRoutes(auth, { mcpManager }));

@@ -49,7 +49,8 @@ export type { SubagentResumeDeps, SubagentResumeOptions, SubagentResumeResult, S
 export { SUBAGENT_MAX_ATTEMPTS, SUBAGENT_RETRY_DELAYS_MS } from './engine/tools/task.js';
 export type { SubagentRetryConfig, SubagentRunConfig } from './engine/tools/task.js';
 
-export { ModelRouter, ContentClassifier, ProviderPool, QualityChecker } from './engine/router/index.js';
+export { ModelRouter, ContentClassifier, ProviderPool, QualityChecker, DictionaryStore, DICTIONARY_LANGUAGES } from './engine/router/index.js';
+export type { StoredDictionary, DictionaryLanguage } from './engine/router/index.js';
 export type { RoutingRequest, RoutingDecision, ContentCategory, ClassifyRequest, ClassifyResult, QualityCheckInput, QualityCheckResult } from './engine/router/index.js';
 
 export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
@@ -91,6 +92,8 @@ export { createLocalAuth } from './auth/local.js';
 export type { AuthKit, LocalAuthConfig } from './auth/local.js';
 export { createSettingsRoutes } from './server/routes/settings.js';
 export type { SettingsRoutesDeps } from './server/routes/settings.js';
+export { createDictionaryRoutes } from './server/routes/dictionaries.js';
+export type { DictionaryRoutesAuth, DictionaryRoutesOptions } from './server/routes/dictionaries.js';
 export { createStandaloneApp } from './server/app.js';
 export type { StandaloneConfig } from './server/app.js';
 export { serializeSession, serializeMessage, serializeProject } from './server/serialize.js';

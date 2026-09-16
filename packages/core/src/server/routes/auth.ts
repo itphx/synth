@@ -394,6 +394,7 @@ export function createAuthRoutes(auth: LocalAuthKit, deps: AuthRoutesRemoteDeps)
     return c.json({
       id: user.id,
       username: user.username,
+      phone: null,
       roles: user.roles,
       preferences: {},
     });

@@ -488,6 +488,7 @@ export interface ProfileData {
   id: string;
   username: string;
   email?: string;
+  phone?: string;
   roles: string[];
   teamRoles: string[];
   isActive: boolean;

@@ -6,7 +6,8 @@
 export { ContentClassifier } from './content-classifier.js';
 export type { ContentCategory, ClassifyRequest, ClassifyResult } from './content-classifier.js';
 
-export { DictionaryStore } from './dictionary-store.js';
+export { DictionaryStore, DICTIONARY_LANGUAGES } from './dictionary-store.js';
+export type { StoredDictionary, DictionaryLanguage } from './dictionary-store.js';
 
 export { ProviderPool } from './provider-pool.js';
 

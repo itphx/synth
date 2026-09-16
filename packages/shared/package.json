@@ -1,6 +1,6 @@
 {
   "name": "@itphx/synth-shared",
-  "version": "0.5.29",
+  "version": "0.5.39",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -11,6 +11,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./version": {
+      "types": "./dist/version.d.ts",
+      "import": "./dist/version.js"
     },
     "./types": {
       "types": "./dist/types/index.d.ts",
