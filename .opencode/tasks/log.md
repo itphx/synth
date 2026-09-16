@@ -873,3 +873,18 @@
   - K3s: `deploy/synth-ui` и `deploy/synth-backend` — образы 0.6.0; поды `synth-ui-5df5d9b8ff-xjjkj`, `synth-backend-7c644669db-76hzb` — 1/1 Running.
   - Верификация (оркестратор): `https://synth.k3s.itphx.loc/` → 200, `/health` → 200, JS `assets/index-CeVKXKrp.js` содержит `0.6.0`.
 - **Замечания:** CI-джоба «Docker образ» падала **не** из-за переполнения, а из-за гонки с npm (`npm error notarget @itphx/synth@0.6.0` — kaniko стартовала раньше, чем версия появилась в npmjs); образы 0.6.0 при этом уже опубликованы локальным push. npm: `@itphx/synth` latest = **0.6.0** (npmjs.org + GitVerse Package Registry) — подтверждено.
+
+## 2026-09-16 — релиз v0.6.1 (фикс строки «Масштаб интерфейса» в меню профиля)
+- **Задача:** «после “Масштаб интерфейса” подпись должна быть выше ползунка и кнопки обновления; отлаживаем локально, проверю я; затем новый релиз 0.6.1.»
+- **Тип:** fix (UI) + release
+- **Исполнитель:** @orchestrator → @fixer → @general
+- **Результат:** PASS
+- **Что сделано:**
+  - **Фикс:** `UiScaleControl` — новый проп `stacked` (подпись сверху, ползунок на всю ширину, справа значение и кнопка сброса); `QuickSettingsPopup` → `<UiScaleControl stacked />`. `DefaultsPanel`/`AppearanceSettings` не тронуты. 2 файла, +17/−5.
+  - Коммиты: `4522b6d` (fix ui), `1180287` (chore bump v0.6.1); push `master` + тег `v0.6.1`.
+  - Release-workflow #1560991: CI-проверки, сборка, changelog, **npmjs.org и GitVerse Package Registry** — success (все 6 пакетов 0.6.1; `@itphx/synth` latest = 0.6.1). CI-джобы Docker/Release снова упали (kaniko — гонка npm `ETARGET @itphx/synth@0.6.1`; create-release — 403).
+  - Docker: kaniko-очистка удалила **все** теги gitverse (в т.ч. 0.6.0/latest). Образы 0.6.1 (+latest) собраны и запушены локальным docker CLI: gitverse.ru — `synth` sha256:c8aa7101…, `synth-ui` sha256:a88e1b10…, `synth-backend` sha256:cb6fb271…; git.itphx.ru — ui/backend те же digest'ы.
+  - GitVerse Release v0.6.1 создан вручную (MCP): https://gitverse.ru/itphx/synth/releases/tag/v0.6.1
+  - K3s: `synth-deploy` commit `ee2e79f` (values 0.6.0→0.6.1), Fleet раскатал; деплойменты на 0.6.1, поды `synth-ui-577f65db4d-qrk2p` / `synth-backend-7966b9746f-pnkfb` Running; `/` и `/health` → 200; бандл `index-cQC3GR2v.js` содержит `0.6.1`.
+- **Проверки (оркестратор):** typecheck 0, lint 0 errors, ui-тесты 165; браузерная проверка до релиза (Playwright): подпись «Масштаб интерфейса» в одну строку, `labelBottom < rangeTop`, без переполнения.
+- **Замечания:** npm-репликация 0.6.1 заняла ~5 минут (сначала 404, затем 200 и latest=0.6.1) — из-за этого упала kaniko-джоба. На будущее: docker-джобу в release.yaml стоит запускать с ретраем/ожиданием доступности версии в npmjs.
