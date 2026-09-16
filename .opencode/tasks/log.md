@@ -844,3 +844,18 @@
 - **Деплой:** `synth-deploy` commit `f4d71b1` (`ui.image.tag: 0.5.39`, `backend.image.tag: 0.5.14 → 0.5.39`) → push main; Fleet `fleet-local/synth` подхватил `f4d71b1`; `rollout status` по обоим деплойментам — успешно (поды `synth-ui-5485bcc66-79v4b`, `synth-backend-58b6dcdf99-899p5`).
 - **Верификация:** `https://synth.k3s.itphx.loc/` → 200; JS `assets/index-BMuIng24.js` содержит `0.5.39`; `GET /api/v2/dictionaries` → **401** (маршрут существует, требует аутентификации; раньше был бы 404), `GET /auth/defaults` → 200 с новыми полями `{locale:'ru',themeMode:'system',theme:'flexoki',uiScaleMobile:null,uiScaleDesktop:null}`, `/health` → 200; в логах backend ошибок нет.
 - **Коммит в synth:** не делался (код не коммитится, кроме bump-версии — `version-bump.sh` меняет файлы в рабочем дереве).
+
+## 2026-09-16 — gitverse: полноценный релиз v0.6.0 (UI-переработка, словари, масштаб)
+- **Задача:** «Готовим полноценный релиз 0.6.0; собрать информацию из лога с прошлого релиза, закоммитить всё незакоммиченное, пуш в мастер.»
+- **Тип:** git/release
+- **Исполнитель:** @orchestrator + @general (Docker)
+- **Результат:** PASS (npm + Docker + Release; CI-джобы Docker/Release по-прежнему падают — обход штатный, как в 0.4.x/0.5.7)
+- **Что сделано:**
+  - Собрана сводка изменений после v0.5.7 (37 коммитов, версии 0.5.8–0.5.39) по журналу и git-логу.
+  - Локальная проверка перед пушем: build shared+core, `pnpm typecheck` 0, `pnpm lint` 0 errors, тесты shared 72 / ui 165 / core 1262 / backend 244, `pnpm build` всех пакетов — успешно.
+  - Закоммичены накопленные правки (рабочее дерево было грязным, 0.5.29→0.5.39): `31290c8` (feat core/backend/shared: словари классификации, умолчания оформления, телефон в профиле), `7c5eb43` (feat ui: масштаб интерфейса, единые меню/тултипы, переработка настроек и админки), `b196a9c` (docs журнал), `e0b1405` (chore bump v0.6.0).
+  - Push `master` (`35cc048..e0b1405`, 37 коммитов) и тег `v0.6.0`.
+  - Release-workflow (#1560852): CI-проверки, сборка, changelog, **npmjs.org и GitVerse Package Registry** — success (все 6 пакетов 0.6.0; `@itphx/synth` latest = 0.6.0).
+  - Docker: kaniko-джоба падает (413 QRATOR); образы `synth`/`synth-backend`/`synth-ui` (0.6.0 + latest) собраны и запушены **локальным docker CLI** в gitverse.ru — digest `synth` sha256:ad49b8a3…, `synth-backend` sha256:db8ca6a5…, `synth-ui` sha256:33f5aa8b…. Standalone — из npm-пакета @itphx/synth@0.6.0, backend/ui — из исходников монорепо.
+  - GitVerse Release создан вручную (MCP) — https://gitverse.ru/itphx/synth/releases/tag/v0.6.0 (CI create-release падает с 403: у GV_TOKEN нет прав Releases API). Тело — масштаб UI, настройки/админка, словари, профиль, мобильные фиксы, публикация.
+- **Проблемы/оговорки:** CI-джобы «Docker образ» (kaniko 413 QRATOR) и «GitVerse Release» (403 GV_TOKEN) требуют правки токенов/release.yaml — обход прежний (локальный docker push + ручной Release). K3s уже работал на 0.5.39 (тот же код, что 0.6.0); обновление `synth-deploy` в задачу не входило.
