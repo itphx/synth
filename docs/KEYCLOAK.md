@@ -163,3 +163,12 @@ curl -s -X POST "https://<keycloak-host>/realms/synth/protocol/openid-connect/to
 | Роль есть в Keycloak, но в UI её нет | Роль называется не из списка известных (`ADMIN/USER/LEAD/AUDITOR`) | Переименовать роль или добавить её в `KNOWN_ROLES` |
 | Роль выдана, но как client-роль другому клиенту | `resource_access.<clientId>` не совпадает с `clientId` Synth | Выдавать роль клиенту `synth` или назначить realm-роль |
 | Backend не может проверить JWT / 401 при входе | Backend не доверяет CA Keycloak | Настроить `NODE_EXTRA_CA_CERTS` (см. 3.3) |
+
+## 5. Учётные записи тестового окружения
+
+- Тестовая УЗ (realm `synth`, роль `user`) и временная админская УЗ (realm `master`) — в файле
+  `secrets/keycloak-accounts.md` в корне проекта, **вне** git-репозитория `synth/`.
+- Временная админская УЗ используется для admin API Keycloak (`admin-cli`) — например, для диагностики
+  ролей и мапперов.
+- Client secret клиента `synth` — в SealedSecret `synth-secrets` (namespace `synth`, ключ
+  `SYNTH_OIDC_CLIENT_SECRET`).

@@ -2,6 +2,13 @@
 
 Synth поддерживает провайдеров трёх типов: `openai`, `anthropic`, `ollama` (проверяется в `synth config provider add --type`).
 
+## Провайдеры для разработки
+
+| Имя | Тип | Назначение |
+|-----|-----|------------|
+| `itphx` | openai | Рабочий провайдер (ai.itphx.ru), модель `local.qwen3:14b` |
+| `ollama` | ollama | Локальный Ollama (owu.itphx.loc:11434) |
+
 ## Настройка через переменные окружения
 
 Все переменные провайдеров имеют префикс `SYNTH_PROVIDER_<NAME>_`:
