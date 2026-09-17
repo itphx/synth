@@ -47,14 +47,14 @@
 
 ## Нереализованные AD
 
-Остаются в `AGENTS.md` до реализации. После реализации — переносятся в этот каталог.
+Живут в этом каталоге. После реализации переходят в раздел «Актуальные AD».
 
 | AD | Решение |
 |----|---------|
-| AD-030 | Hooks для событий агента |
-| AD-031 | Verification синт |
-| AD-032 | Миграция хранения истории на PostgreSQL (логическая модель уже в JSON — AD-005/AD-033) |
-| AD-037 | Security step перед коммитом |
+| AD-030 | Hooks для событий агента: [ad-030-hooks-agent-events.md](./ad-030-hooks-agent-events.md) |
+| AD-031 | [Verification синт](./ad-031-verification-agent.md) |
+| AD-032 | [Миграция хранения истории на PostgreSQL](./ad-032-history-storage-postgresql.md) (логическая модель уже в JSON — AD-005/AD-033) |
+| AD-037 | [Security step перед коммитом](./ad-037-commit-security-step.md) |
 | AD-046 | [Скиллы и slash-команды](./ad-046-skills-and-slash-commands.md): формат SKILL.md, discovery, progressive disclosure, core-тул skill, bundles, capability-aware |
 | AD-068 | [Реестр и каталог скиллов и агентов](./ad-068-skills-agents-registry.md): свой репозиторий, индекс, trust/guard, install-policy, agent-packs |
 | AD-069 | [Проектные инструкции (AGENTS.md) и /init](./ad-069-project-instructions-agents-md.md): discovery, merged chain, lazy-догрузка, обрезка, threat-scan, install-tree guard |
