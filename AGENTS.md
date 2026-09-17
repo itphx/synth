@@ -22,6 +22,7 @@
 12. Прототип `~/dev/aic/t11` — **read-only**: сначала смотрим, как сделано там; решения конечного продукта могут отличаться.
 13. Коммит — только по явной просьбе пользователя. Новые зависимости/инструменты — только с разрешения.
 14. Секреты (токены, ключи, пароли) — не коммитить; секреты живут в `secrets/` вне git-репозитория `synth/`.
+15. AGENTS.md (корневой и пакетные) держать в актуальном состоянии: изменил поведение пакета/процесс/окружение — обнови соответствующий файл; правки инструкций согласовывать с пользователем; процедура — скилл `synth-agents-md`.
 
 ## Прототип
 
@@ -29,7 +30,7 @@
 
 ## Карта репозитория
 
-Монорепозиторий `synth/` (pnpm workspaces), единый стек TypeScript. Подробности по пакету — в `packages/<pkg>/AGENTS.md` (есть у `core` и `backend`).
+Монорепозиторий `synth/` (pnpm workspaces), единый стек TypeScript. Подробности по пакету — в `packages/<pkg>/AGENTS.md` (есть у `core`, `backend`, `ui`, `shared`; у тонких `runner` и `synth` — нет).
 
 ```text
 synth/
@@ -52,7 +53,7 @@ tmp/                   # Временные файлы. Использовать
 ### Слои зависимостей
 
 ```text
-@itphx/synth-shared  ←  только контракты, никакой логики
+@itphx/synth-shared  ←  контракты + межупаковочная инфраструктура, без бизнес-логики
        ↑
 @itphx/synth-core    ←  импортирует shared, содержит всю общую логику
        ↑
@@ -148,7 +149,7 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ aut
 2. **Plan** — атомарный todo-список, оценка влияния на другие части, подтверждение пользователя. *Критерий:* пользователь подтвердил план (или сказал «приступай»).
 3. **Implement** — строго по плану, минимальными правками, в код-стиле проекта. *Критерий:* `pnpm build` из `synth/` без ошибок.
 4. **Verify** — по порядку: `pnpm typecheck` → `pnpm lint` → `pnpm test`; затем `./scripts/dev.sh backend` + curl затронутых эндпоинтов; затем `./scripts/dev.sh` (backend+UI) и визуальная проверка UI в браузере. Не ставить новые инструменты, не писать сложные bash-скрипты, не гонять LLM без просьбы, не писать в JSON-хранилище вручную (провайдер/модель — через API, сообщение — `POST /sessions/:id/prompt`). *Критерий:* typecheck+lint+test зелёные, эндпоинты отвечают ожидаемым кодом/форматом.
-5. **Document** — обновить `AGENTS.md`, если изменилось окружение/процессы; неочевидные решения зафиксировать в задаче. *Критерий:* готово к следующей сессии.
+5. **Document** — обновить затронутые `AGENTS.md` (корневой и пакетные), если изменилось окружение/процессы/поведение пакета; неочевидные решения зафиксировать в задаче; правки инструкций согласовать с пользователем (скилл `synth-agents-md`). *Критерий:* готово к следующей сессии.
 
 ### Роутинг задач по агентам
 
@@ -306,7 +307,6 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-024 | Единый транспорт: EventHub (backend) + TransportClient (UI) | ✅ Реализовано | [ad-024](./docs/arch_decisions/ad-024-eventhub-transport.md) |
 | AD-025 | Plan/Act как глобальный permission toggle (не отдельные агенты) | ✅ Реализовано | [ad-025](./docs/arch_decisions/ad-025-plan-act-toggle.md) |
 | AD-026 | Режимы контекста саб-агента: none / inherit / summary / last_n | ✅ Реализовано | [ad-026](./docs/arch_decisions/ad-026-subagent-context-modes.md) |
-| AD-027 | Двойная передача плана: диск + system prompt | ⛔ Deprecated (AD-039) | [legacy/ad-027](./docs/arch_decisions/legacy/ad-027-double-plan-passing.md) |
 | AD-028 | Строгость цикла Plan→Build: auto / strict / off | ✅ Реализовано | [ad-028](./docs/arch_decisions/ad-028-plan-build-strictness.md) |
 | AD-029 | Гранулярные permissions: allow/deny/ask per tool + file patterns | ✅ Реализовано | [ad-029](./docs/arch_decisions/ad-029-granular-permissions.md) |
 | AD-030 | Hooks для событий агента (pre/post tool use, session, plan, spawn) | ⏳ Не реализовано | [ad-030](./docs/arch_decisions/ad-030-hooks-agent-events.md) |
@@ -329,7 +329,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-068 | Реестр и каталог скиллов и агентов: индекс, trust/guard, install-policy, agent-packs | ⏳ Не реализовано | [ad-068](./docs/arch_decisions/ad-068-skills-agents-registry.md) |
 | AD-069 | Проектные инструкции (AGENTS.md) и /init: discovery, merged chain git root→cwd, lazy-догрузка, threat-scan, install-tree guard | ⏳ Не реализовано | [ad-069](./docs/arch_decisions/ad-069-project-instructions-agents-md.md) |
 
-Deprecated/исторические AD (AD-001..010, Python-стек) — в `./docs/arch_decisions/legacy/`; архив — `archive/AGENTS_OLD.md` (вне репозитория). Правило: реализованные AD переносятся в `./docs/arch_decisions/` (в AGENTS.md остаётся строка таблицы + ссылка).
+Правило: реализованные AD переносятся в `./docs/arch_decisions/` (в AGENTS.md остаётся строка таблицы + ссылка).
 
 ## Куда смотреть (триггеры)
 
@@ -338,7 +338,7 @@ Deprecated/исторические AD (AD-001..010, Python-стек) — в `./
 | storage / JSON / FileStore | [AD-005](./docs/arch_decisions/ad-005-json-storage.md) |
 | события / WS / SSE | [AD-008](./docs/arch_decisions/ad-008-websocket-events.md), [AD-009](./docs/arch_decisions/ad-009-session-event-bus.md), [AD-024](./docs/arch_decisions/ad-024-eventhub-transport.md) |
 | проект / сессии / ветвление / merge | [AD-014](./docs/arch_decisions/ad-014-project-container.md), [AD-033](./docs/arch_decisions/ad-033-session-branching-merge.md), [AD-040](./docs/arch_decisions/ad-040-sessions-without-project.md) |
-| API v2 / Hono | [AD-017](./docs/arch_decisions/ad-017-api-v2-hono.md) |
+| API v2 / Hono | [AD-017](./docs/arch_decisions/ad-017-api-v2-hono.md), [docs/API_V2.md](./docs/API_V2.md) |
 | движки / engine | [AD-018](./docs/arch_decisions/ad-018-session-engine-selection.md), [AD-022](./docs/arch_decisions/ad-022-typescript-stack-runner.md) |
 | UI / React / PWA | [AD-019](./docs/arch_decisions/ad-019-react-spa.md), [AD-044](./docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md), [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) |
 | саб-агенты / контекст | [AD-026](./docs/arch_decisions/ad-026-subagent-context-modes.md), [AD-033](./docs/arch_decisions/ad-033-session-branching-merge.md) |
@@ -358,13 +358,14 @@ Deprecated/исторические AD (AD-001..010, Python-стек) — в `./
 | API-тесты | скилл `synth-api-testing` |
 | скиллы / команды | [AD-046](./docs/arch_decisions/ad-046-skills-and-slash-commands.md) |
 | реестр скиллов / агентов | [AD-068](./docs/arch_decisions/ad-068-skills-agents-registry.md) |
-| инструкции AGENTS.md | [AD-069](./docs/arch_decisions/ad-069-project-instructions-agents-md.md) |
+| инструкции AGENTS.md | [AD-069](./docs/arch_decisions/ad-069-project-instructions-agents-md.md), скилл `synth-agents-md` |
 
 ## Документация
 
 | Файл | Назначение |
 |------|------------|
 | `AGENTS.md` | Архитектурные соглашения (этот файл) |
+| [docs/API_V2.md](./docs/API_V2.md) | Справочник API v2 (эндпоинты, RBAC, ошибки, транспорт) |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | Обзор архитектуры |
 | [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) | Конфигурация |
 | [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) | Dev-окружение, скрипты |

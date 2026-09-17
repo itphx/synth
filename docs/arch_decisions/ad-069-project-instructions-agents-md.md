@@ -3,7 +3,7 @@
 > **Статус:** ⏳ Не реализовано (проект)
 > **Дата:** 2026-09-17
 > **Парные документы:**
-> - [AD-046](./ad-046-skills-and-slash-commands.md) «Скиллы и slash-команды» — механизм скиллов и `/`-команд, в рамках которого реализуется встроенная команда `/init` и скилл `agents-md`;
+> - [AD-046](./ad-046-skills-and-slash-commands.md) «Скиллы и slash-команды» — механизм скиллов и `/`-команд, в рамках которого реализуется встроенная команда `/init` и скилл `synth-agents-md`;
 > - [AD-036](./ad-036-llm-gateway.md) «LLM Gateway» — источник модуля защиты от indirect prompt injection (`engine/security/prompt-injection.ts`), переиспользуемого для threat-scan проектных инструкций;
 > - [AD-040](./ad-040-sessions-without-project.md) «Сессии без проекта» — проектный контекст существует только при наличии `project.workspace`, сессия без проекта инструкции репозитория не грузит.
 
@@ -15,7 +15,7 @@
 4. **Обрезка** head/tail с маркером и точным путём для `read_file`; динамический кап от окна модели.
 5. **Threat-scan** перед вставкой через существующий модуль AD-036; при срабатывании контент не грузится или помечается.
 6. **Install-tree guard** — каталог внутри исходников Synth не становится проектным контекстом (dev-режим).
-7. **Встроенные `/init`** (механизм AD-046) и **скилл `agents-md`** — генерация/обновление/аудит `AGENTS.md`.
+7. **Встроенные `/init`** (механизм AD-046) и **скилл `synth-agents-md`** — генерация/обновление/аудит `AGENTS.md`.
 8. **Прозрачность** — UI показывает, какие instruction-файлы загружены, откуда и как обрезаны.
 
 ---
@@ -50,7 +50,7 @@
 - **Prompt-cache.** Вставка подкаталожных инструкций в system prompt ломает кэш на каждом шаге; гермес грузит их в tool result — сохраняем это поведение.
 - **Безопасность.** Инструкции — это управляющий текст для агента; подмена через `git pull`/чужой репозиторий = indirect prompt injection. Нужен threat-scan (AD-036) и trust-гейт (AD-046).
 - **Install-tree leak.** При разработке самого Synth cwd может оказаться внутри дерева исходников — contributor-`AGENTS.md` не должен становиться «проектным» для пользовательских сессий (пробел, закрытый в hermes).
-- **Онбординг.** Новому пользователю нужен способ быстро создать `AGENTS.md` в своём репозитории → `/init` + скилл `agents-md`.
+- **Онбординг.** Новому пользователю нужен способ быстро создать `AGENTS.md` в своём репозитории → `/init` + скилл `synth-agents-md`.
 
 ---
 
@@ -309,8 +309,8 @@ const { content: safe, blocked, detail } = applyPolicy(content, policy, detectio
 | `packages/core/src/engine/security/prompt-injection.ts` | `detectPromptInjection`, `applyPolicy`, `wrapContent` | Переиспользование без изменений |
 | `packages/core/src/security/trust.ts` | `trust.ts` (project-trust) | Гейт для инструкций недоверенного проекта |
 | `packages/core/src/engine/commands/` (AD-046) | Резолвер `/`-команд | Встроенная команда `/init` |
-| `packages/core/src/engine/skills/` (AD-046) | Реестр скиллов | Встроенный скилл `agents-md` |
-| `packages/shared/src/types/tools.ts` | 3–16 (`ToolCapability`) | `requires_capabilities` для скилла `agents-md` |
+| `packages/core/src/engine/skills/` (AD-046) | Реестр скиллов | Встроенный скилл `synth-agents-md` |
+| `packages/shared/src/types/tools.ts` | 3–16 (`ToolCapability`) | `requires_capabilities` для скилла `synth-agents-md` |
 | `@itphx/synth-shared/config` (AD-023) | Zod-схема | Секция `instructions` (`enabled`, `claudeCompat`, `maxChars`, `excludeDirs`, `urls`, `trusted…`) |
 | `packages/core/src/server/routes/context.ts` | — | `GET /api/v2/context/instructions` (для UI-прозрачности) |
 | `packages/ui/src/` | — | Индикатор загруженных instruction-файлов (см. §9) |
@@ -319,7 +319,7 @@ const { content: safe, blocked, detail } = applyPolicy(content, policy, detectio
 
 ---
 
-## 8. `/init` и скилл `agents-md`
+## 8. `/init` и скилл `synth-agents-md`
 
 ### 8.1. Встроенная команда `/init`
 
@@ -413,20 +413,20 @@ $ARGUMENTS
 устаревшие утверждения, согласовывай с текущим состоянием кодовой базы.
 ```
 
-### 8.2. Скилл `agents-md`
+### 8.2. Скилл `synth-agents-md`
 
 Встроенный (instance) скилл для создания/обновления/аудита `AGENTS.md` — семейства `skill-creator` (AD-046).
 
 ```markdown
 ---
-name: agents-md
+name: synth-agents-md
 description: Создаёт, обновляет и аудирует AGENTS.md — проектные инструкции для агентов.
 license: MIT
 compatibility: synth>=0.1
 allowed-tools: [read_file, grep_files, glob, list_directory, write_file, edit_file]
 metadata:
   synth:
-    tags: [agents-md, onboarding, instructions, docs]
+    tags: [synth-agents-md, onboarding, instructions, docs]
     category: meta
     related_skills: [skill-creator, docs-style]
     requires_capabilities: [file_read, search, file_write]
@@ -513,19 +513,19 @@ instructions:
 
 | AD | Связь |
 |---|---|
-| [**AD-046**](./ad-046-skills-and-slash-commands.md) | Механизм, в рамках которого реализуются `/init` и скилл `agents-md`; project-trust гейт для инструкций недоверенного проекта; событие-параллель `skill.invoked` |
+| [**AD-046**](./ad-046-skills-and-slash-commands.md) | Механизм, в рамках которого реализуются `/init` и скилл `synth-agents-md`; project-trust гейт для инструкций недоверенного проекта; событие-параллель `skill.invoked` |
 | [**AD-036**](./ad-036-llm-gateway.md) | `engine/security/prompt-injection.ts` (`detectPromptInjection`, `applyPolicy`, `wrapContent`) переиспользуется для threat-scan инструкций |
 | [**AD-040**](./ad-040-sessions-without-project.md) | Инструкции грузятся только при `project.workspace`; сессия без проекта — без проектных инструкций |
 | [AD-014](./ad-014-project-container.md) | `project.workspace` — источник проектного контекста и граница lazy-догрузки |
 | [AD-023](./ad-023-configuration.md) | Секция `instructions` в Zod-схеме `@itphx/synth-shared/config` |
 | [AD-025](./ad-025-plan-act-toggle.md) | В plan/act поведение одинаково; в `strict` инструкции могут содержать обязательные проверки |
 | [AD-026](./ad-026-subagent-context-modes.md) | Промпт саб-агента (`task.ts`) получает инструкции опционально (`skip_context_files`) |
-| [AD-029](./ad-029-granular-permissions.md) | Права на запись `AGENTS.md` через скилл `agents-md` (`allowed-tools`, `requires_capabilities`) |
+| [AD-029](./ad-029-granular-permissions.md) | Права на запись `AGENTS.md` через скилл `synth-agents-md` (`allowed-tools`, `requires_capabilities`) |
 | [AD-039](./ad-039-plan-in-project.md) | Инструкции — не план и не todo; контекст, не состояние |
 | [AD-042](./ad-042-hybrid-mode.md) | В гибриде инструкции грузит локальный core для локальных проектов; удалённые — сервер/клиент (граница уточняется) |
 | [AD-044](./ad-044-mobile-adaptive-ui-pwa.md) | UI-индикатор загруженных инструкций адаптируется под мобильный |
 | [AD-045](./ad-045-hybrid-server-profiles.md) | Единый dataDir; глобальные instruction-файлы (если появятся) — в `{dataDir}` |
-| [AD-068](./ad-068-skills-agents-registry.md) | Каталог/установка скилла `agents-md` как обычного скилла; реестр владеет доставкой |
+| [AD-068](./ad-068-skills-agents-registry.md) | Каталог/установка скилла `synth-agents-md` как обычного скилла; реестр владеет доставкой |
 
 ---
 
@@ -551,7 +551,7 @@ instructions:
 ### Фаза 3 — `/init` и скилл
 
 - Встроенная команда `/init` (AD-046), `$ARGUMENTS`.
-- Скилл `agents-md` (instance), `requires_capabilities`, семейство `skill-creator`.
+- Скилл `synth-agents-md` (instance), `requires_capabilities`, семейство `skill-creator`.
 - CLI-вызов `/init` в REPL.
 - Совместимость `CLAUDE.md` (opt-in), диагностика deprecated `CONTEXT.md`.
 
@@ -570,7 +570,7 @@ instructions:
 | Identity vs project | Тир 1 (`SOUL.md`/`COMPANY.md`/`ABOUT.md`) отдельно; не смешивается |
 | Саб-агенты | `skip_context_files`; инструкции в `resolveSubagentPrompt` |
 | `/init` | Резолвинг в core; `$ARGUMENTS`; merge in place; промпт содержит investigate/extract/questions/writing rules |
-| Скилл `agents-md` | Валидация frontmatter; `requires_capabilities`; capability-aware недоступность |
+| Скилл `synth-agents-md` | Валидация frontmatter; `requires_capabilities`; capability-aware недоступность |
 | Отключение | `instructions.enabled=false`; `--ignore-rules`; `--safe-mode`; `excludeProjects`; override `systemPrompt` |
 | Прозрачность | Список/провенанс в API; событие `context.instructions_loaded` |
 
