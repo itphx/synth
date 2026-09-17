@@ -7,10 +7,17 @@
 
 | AD | Решение | Статус | Файл |
 |----|---------|--------|------|
+| AD-005 | JSON-файлы как хранилище (атомарная запись tmp + rename) | ✅ | [ad-005-json-storage.md](./ad-005-json-storage.md) |
+| AD-008 | WebSocket для real-time событий | ✅ | [ad-008-websocket-events.md](./ad-008-websocket-events.md) |
+| AD-009 | SessionEventBus — шина событий сессии | ✅ | [ad-009-session-event-bus.md](./ad-009-session-event-bus.md) |
+| AD-014 | Проект как контейнер (сессии, файлы, контекст) | ✅ | [ad-014-project-container.md](./ad-014-project-container.md) |
+| AD-017 | Собственный API-контракт (API v2 на Hono) | ✅ | [ad-017-api-v2-hono.md](./ad-017-api-v2-hono.md) |
+| AD-019 | React 19 SPA с нуля (без форка OpenChamber) | ✅ | [ad-019-react-spa.md](./ad-019-react-spa.md) |
 | AD-022 | Единый TypeScript стек + Runner архитектура | ✅ | [ad-022-typescript-stack-runner.md](./ad-022-typescript-stack-runner.md) |
 | AD-023 | Единая система конфигурации (@itphx/synth-shared/config) | ✅ | [ad-023-configuration.md](./ad-023-configuration.md) |
 | AD-024 | Единый транспорт: EventHub + TransportClient | ✅ | [ad-024-eventhub-transport.md](./ad-024-eventhub-transport.md) |
 | AD-025 | Plan/Act как глобальный permission toggle | ✅ | [ad-025-plan-act-toggle.md](./ad-025-plan-act-toggle.md) |
+| AD-026 | Режимы контекста саб-агента: none / inherit / summary / last_n | ✅ | [ad-026-subagent-context-modes.md](./ad-026-subagent-context-modes.md) |
 | AD-028 | Настраиваемая строгость цикла Plan → Build | ✅ | [ad-028-plan-build-strictness.md](./ad-028-plan-build-strictness.md) |
 | AD-029 | Гранулярные permissions: allow/deny/ask + file patterns | ✅ | [ad-029-granular-permissions.md](./ad-029-granular-permissions.md) |
 | AD-033 | Ветвление сессий и межсессионное слияние | ✅ | [ad-033-session-branching-merge.md](./ad-033-session-branching-merge.md) |
@@ -26,15 +33,28 @@
 | AD-044 | Адаптивный мобильный UI + PWA | ✅ | [ad-044-mobile-adaptive-ui-pwa.md](./ad-044-mobile-adaptive-ui-pwa.md) |
 | AD-045 | Профили серверов и лёгкий runtime-вход в гибриде: единый dataDir, мета-реестр profiles.json, logout = забыть токен + revoke | ✅ | [ad-045-hybrid-server-profiles.md](./ad-045-hybrid-server-profiles.md) |
 
+## Частично реализованные AD
+
+| AD | Решение | Статус | Файл |
+|----|---------|--------|------|
+| AD-018 | Выбор AI-движка на уровне сессии (выбор движка персистится, механика — в работе) | ⚠️ | [ad-018-session-engine-selection.md](./ad-018-session-engine-selection.md) |
+
+## Deprecated AD
+
+| AD | Решение | Файл |
+|----|---------|------|
+| AD-027 | Двойная передача плана (⛔ переопределено AD-039) | [legacy/ad-027-double-plan-passing.md](./legacy/ad-027-double-plan-passing.md) |
+
 ## Нереализованные AD
 
 Остаются в `AGENTS.md` до реализации. После реализации — переносятся в этот каталог.
 
 | AD | Решение |
 |----|---------|
-| AD-026 | Режимы контекста саб-агента: inherit / summary / none |
-| AD-027 | Двойная передача плана (⚠️ переопределено AD-039) |
 | AD-030 | Hooks для событий агента |
 | AD-031 | Verification синт |
-| AD-032 | Хранение истории: PostgreSQL нормализованная схема |
+| AD-032 | Миграция хранения истории на PostgreSQL (логическая модель уже в JSON — AD-005/AD-033) |
 | AD-037 | Security step перед коммитом |
+| AD-046 | [Скиллы и slash-команды](./ad-046-skills-and-slash-commands.md): формат SKILL.md, discovery, progressive disclosure, core-тул skill, bundles, capability-aware |
+| AD-068 | [Реестр и каталог скиллов и агентов](./ad-068-skills-agents-registry.md): свой репозиторий, индекс, trust/guard, install-policy, agent-packs |
+| AD-069 | [Проектные инструкции (AGENTS.md) и /init](./ad-069-project-instructions-agents-md.md): discovery, merged chain, lazy-догрузка, обрезка, threat-scan, install-tree guard |

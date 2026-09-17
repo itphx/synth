@@ -454,24 +454,24 @@ synth serve --oidc-issuer https://keycloak.itphx.loc/realms/synth \
 
 | AD | Суть | Подробно |
 |----|------|----------|
-| AD-005 | JSON-файлы как хранилище (атомарная запись через tmp-файл + rename) | — |
-| AD-008 | WebSocket для real-time событий | — |
-| AD-009 | SessionEventBus — шина событий сессии | — |
-| AD-014 | Проект как контейнер (сессии, файлы, контекст внутри проекта) | — |
-| AD-017 | Собственный API-контракт (API v2 на Hono) | — |
-| AD-018 | Выбор AI-движка на уровне сессии | — |
-| AD-019 | React 19 SPA с нуля | — |
+| AD-005 | JSON-файлы как хранилище (атомарная запись через tmp-файл + rename) ✅ Реализовано | [ad-005](./docs/arch_decisions/ad-005-json-storage.md) |
+| AD-008 | WebSocket для real-time событий ✅ Реализовано | [ad-008](./docs/arch_decisions/ad-008-websocket-events.md) |
+| AD-009 | SessionEventBus — шина событий сессии ✅ Реализовано | [ad-009](./docs/arch_decisions/ad-009-session-event-bus.md) |
+| AD-014 | Проект как контейнер (сессии, файлы, контекст внутри проекта) ✅ Реализовано | [ad-014](./docs/arch_decisions/ad-014-project-container.md) |
+| AD-017 | Собственный API-контракт (API v2 на Hono) ✅ Реализовано | [ad-017](./docs/arch_decisions/ad-017-api-v2-hono.md) |
+| AD-018 | Выбор AI-движка на уровне сессии ⚠️ Частично (поле/плумбинг; адаптеры движков не реализованы) | [ad-018](./docs/arch_decisions/ad-018-session-engine-selection.md) |
+| AD-019 | React 19 SPA с нуля ✅ Реализовано | [ad-019](./docs/arch_decisions/ad-019-react-spa.md) |
 | AD-022 | Единый TypeScript стек + Runner архитектура | [ad-022](./docs/arch_decisions/ad-022-typescript-stack-runner.md) |
 | AD-023 | Единая система конфигурации (@itphx/synth-shared/config) | [ad-023](./docs/arch_decisions/ad-023-configuration.md) |
 | AD-024 | Единый транспорт: EventHub (backend) + TransportClient (UI) | [ad-024](./docs/arch_decisions/ad-024-eventhub-transport.md) |
 | AD-025 | Plan/Act как глобальный permission toggle (не отдельные агенты) ✅ Реализовано | [ad-025](./docs/arch_decisions/ad-025-plan-act-toggle.md) |
-| AD-026 | Режимы контекста саб-агента: inherit / summary / none | — |
-| AD-027 | Двойная передача плана: диск + system prompt ⚠️ Переопределено AD-039 (план — в проекте) | — |
+| AD-026 | Режимы контекста саб-агента: none / inherit / summary / last_n ✅ Реализовано | [ad-026](./docs/arch_decisions/ad-026-subagent-context-modes.md) |
+| AD-027 | Двойная передача плана: диск + system prompt ⛔ Deprecated (AD-039) | [legacy/ad-027](./docs/arch_decisions/legacy/ad-027-double-plan-passing.md) |
 | AD-028 | Настраиваемая строгость цикла Plan→Build: auto / strict / off ✅ Реализовано | [ad-028](./docs/arch_decisions/ad-028-plan-build-strictness.md) |
 | AD-029 | Гранулярные permissions: allow/deny/ask per tool + file patterns ✅ Реализовано | [ad-029](./docs/arch_decisions/ad-029-granular-permissions.md) |
 | AD-030 | Hooks для событий агента (pre/post tool use, session, plan, spawn) | — |
 | AD-031 | Verification синт (аналог VerificationAgent из Claude Code) | — |
-| AD-032 | Хранение истории: PostgreSQL нормализованная схема (сессии, сообщения, части) | — |
+| AD-032 | Миграция хранения истории на PostgreSQL (нормализованная схема); логическая модель уже в JSON — AD-005/AD-033 | — |
 | AD-033 | Ветвление сессий, наследование контекста и межсессионное слияние ✅ Реализовано | [ad-033](./docs/arch_decisions/ad-033-session-branching-merge.md) |
 | AD-034 | Routing между моделями (content + confidence + cost) ✅ Реализовано | [ad-034](./docs/arch_decisions/ad-034-model-routing.md) |
 | AD-035 | Micro-model first: дешёвый слой перед LLM (правила/embedding) ✅ Реализовано | [ad-035](./docs/arch_decisions/ad-035-micro-model-first.md) |
@@ -485,10 +485,13 @@ synth serve --oidc-issuer https://keycloak.itphx.loc/realms/synth \
 | AD-043 | Единая идентичность гибрида: вход в UI без Keycloak (runtime-подключение, ROPC, дискавери oidc-meta, единая личность) ✅ Реализовано | [ad-043](./docs/arch_decisions/ad-043-unified-identity-login.md) |
 | AD-044 | Адаптивный мобильный UI + PWA (три зоны, панели-дроверы, touch-first, ручной app-shell) ✅ Реализовано | [ad-044](./docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md) |
 | AD-045 | Профили серверов и лёгкий runtime-вход в гибриде: единый dataDir, мета-реестр profiles.json, вход без рестарта (отмена switch-profile/exit 77/409), logout = забыть токен + best-effort revoke, ConnectionWatcher ✅ Реализовано | [ad-045](./docs/arch_decisions/ad-045-hybrid-server-profiles.md) |
+| AD-046 | Скиллы и slash-команды: формат SKILL.md, discovery, progressive disclosure, core-тул skill, bundles, capability-aware | [ad-046](./docs/arch_decisions/ad-046-skills-and-slash-commands.md) |
+| AD-068 | Реестр и каталог скиллов и агентов: свой репозиторий, индекс, trust/guard, install-policy, agent-packs | [ad-068](./docs/arch_decisions/ad-068-skills-agents-registry.md) |
+| AD-069 | Проектные инструкции (AGENTS.md) и /init: discovery, merged chain git root→cwd, lazy-догрузка в tool result, обрезка, threat-scan (AD-036), install-tree guard | [ad-069](./docs/arch_decisions/ad-069-project-instructions-agents-md.md) |
 
 > **Перенос AD:** реализованные AD переносятся в `docs/arch_decisions/` (в AGENTS.md остаётся краткая строка + ссылка). Нереализованные остаются в AGENTS.md до реализации.
 
-Подробности deprecated решений — в `archive/AGENTS_OLD.md` (вне репозитория), исторические AD (AD-001..010, Python-стек) — в `docs/arch_decisions/legacy/`.
+Подробности deprecated решений — в `archive/AGENTS_OLD.md` (вне репозитория); исторические AD (AD-001..010, Python-стек) и ⛔ AD-027 — в `docs/arch_decisions/legacy/`.
 
 ### AD-022: TypeScript стек + Runner ✅ Реализовано
 
@@ -510,73 +513,15 @@ synth serve --oidc-issuer https://keycloak.itphx.loc/realms/synth \
 **Кратко:** Plan/Act/YOLO — глобальный permission toggle сессии (не отдельные агенты); mode_applicable для read-only агентов.
 **Подробно:** [docs/arch_decisions/ad-025-plan-act-toggle.md](./docs/arch_decisions/ad-025-plan-act-toggle.md)
 
-### AD-026: Режимы контекста саб-агента
+### AD-026: Режимы контекста саб-агента ✅ Реализовано
 
-**Решение:** три режима передачи контекста при запуске саб-агента.
+**Кратко:** `context_mode` инструмента `task`: none (дефолт) / inherit / summary (через ContextOptimizer.summarize с кэшем) / last_n; CLI `synth task --context` нет.
+**Подробно:** [docs/arch_decisions/ad-026-subagent-context-modes.md](./docs/arch_decisions/ad-026-subagent-context-modes.md)
 
-**Контекст:** fork-модель Claude Code (агент наследует всю историю родительской сессии) удобна на коротких диалогах, но на длинных — саб-агент получает 50K+ токенов мусора. Изоляция OpenCode (агент — чистый лист, только prompt) дешевле, но легко упустить важный контекст. Synth даёт выбор.
+### AD-027: Двойная передача плана ⛔ Deprecated (AD-039)
 
-| Режим | Поведение | Токены | Когда использовать |
-|---|---|---|---|
-| `inherit` | Саб-агент получает полную историю родительской сессии + свой prompt | Много (fork-модель) | Короткие диалоги (<10K токенов), продолжение разговора, тесная связь с родителем |
-| `summary` | Контекст сжимается через отдельную LLM перед отправкой саб-агенту. В саммари попадают: ключевые решения, соглашения, результаты предыдущих шагов | Среднее (авто-саммари) | Длинные диалоги, нужно сохранить суть без мусора. **Дефолт для продакшена** |
-| `none` | Саб-агент получает только prompt. Никакого контекста родителя | Минимальное | Самодостаточные задачи, параллельные workers, чистое выполнение по спецификации |
-
-**Выбор режима:**
-
-```bash
-synth task "Исправь баг в auth.ts" --context summary
-synth task "Проверь build"         --context none
-synth task "Продолжи рефакторинг"   --context inherit
-```
-
-**Внутренняя механика:** `summary` реализуется через дополнительный вызов LLM (быстрой/дешёвой модели) для компрессии контекста перед spawn-ом саб-агента. Саммари кешируется до следующего значимого изменения родительской сессии.
-
-### AD-027: Двойная передача плана
-
-> ⚠️ **Переопределено AD-039:** план хранится в проекте (`project.plan`), файлы `.synth/plans/` не используются; в system prompt план попадает из `project.plan`.
-
-**Решение:** после утверждения план записывается в файл `.synth/plans/{timestamp}-{slug}.md` **и** вставляется в system prompt исполнителя.
-
-**Контекст:** Claude Code встраивает план в `tool_result` выхода из plan mode — модель видит план сразу, но он существует только в контексте сессии. OpenCode пишет план на диск, модель должна прочитать его отдельным tool call. Synth берёт оба подхода.
-
-```
-plan (план написан)
-  │
-  ├─1─→ .synth/plans/{ts}-{slug}.md    ← файл на диске
-  │       • персистентность между сессиями
-  │       • аудит: видно что и когда планировали
-  │       • возобновление: можно продолжить через неделю
-  │
-  └─2─→ system prompt исполнителя       ← встроен в контекст
-          • немедленная видимость без tool call
-          • не тратит токены на чтение файла
-```
-
-**Формат плана:**
-
-```markdown
-# План: {краткое описание}
-> Создан: 2026-07-22 14:30 (analyst)
-> Утверждён: 2026-07-22 14:35
-
-## Подход
-...
-
-## Критические файлы
-- src/auth/validate.ts:42
-- src/auth/types.ts:15
-
-## Шаги
-1. ...
-2. ...
-
-## Верификация
-- Прогнать тесты auth/*.test.ts
-- Проверить edge cases: ...
-```
-
-**Защита от потери:** при возобновлении сессии план восстанавливается из файла. Если файл не найден (CCR/remote сессия) — ищется в снапшотах и истории сообщений (аналог `copyPlanForResume` из Claude Code).
+**Кратко:** План писался в `.synth/plans/*` + system prompt; переопределён AD-039 — план в `project.plan`.
+**Подробно:** [docs/arch_decisions/legacy/ad-027-double-plan-passing.md](./docs/arch_decisions/legacy/ad-027-double-plan-passing.md)
 
 ### AD-028: Настраиваемая строгость цикла Plan → Build ✅ Реализовано
 
@@ -687,7 +632,9 @@ plan_exit (план утверждён)
 
 ### AD-032: Хранение истории сессий
 
-**Решение:** нормализованная модель «сессия → сообщения → части» с parent-child связями.
+> **Статус:** ⏳ Не реализовано (логическая модель — в JSON, AD-005/AD-033; не реализован физический уровень).
+
+**Решение:** переход физического хранилища истории с JSON-файлов (AD-005) на **PostgreSQL** с нормализованной схемой «сессия → сообщения → части» (миграции, схема БД).
 
 **Контекст:** Claude Code хранит историю в плоских JSONL-файлах (`~/.claude/transcripts/{sessionId}.jsonl`), саб-агенты — в sidechain. Это просто, но не даёт parent-child связей и запросов между сессиями. OpenCode использует нормализованную модель с parent_id — лучшая основа для командной работы.
 
@@ -697,7 +644,7 @@ plan_exit (план утверждён)
 Сессия (id, parent_id, project_id, agent, title, ...)
   │
   ├── parent_id → Сессия (parent-child дерево)
-  ├── plan_path → путь к plan-файлу
+  ├── project.plan → kanban-план (AD-039; ранее plan_path)
   ├── branch_point → точка развилки для дочерних веток
   │
   └─1:N──→ Сообщение (id, session_id, seq, role, content, origin, source_msg_id, ...)
@@ -711,11 +658,13 @@ plan_exit (план утверждён)
                           └── data — содержимое блока
 ```
 
+**Статус реализации:** `parent_id`, `branch_point`, `seq`, `origin`, `source_msg_id`, `parts` уже реализованы в JSON-схеме (`packages/shared/src/types/index.ts`, `FileStore`); не реализованы только физический PostgreSQL (миграции/схема) и сущность `context_snapshot`. Поля `plan_path` в модели больше нет — план живёт в `project.plan` (AD-039).
+
 **Ключевые сущности:**
 
 | Сущность | Назначение |
 |---|---|
-| **Сессия** | Контейнер диалога. Имеет `parent_id` — дерево сессий. Хранит `agent`, `plan_path`, `branch_point` |
+| **Сессия** | Контейнер диалога. Имеет `parent_id` — дерево сессий. Хранит `agent`, `branch_point` |
 | **Сообщение** | Одна реплика (user/assistant/tool/system). Имеет `seq` — порядок внутри сессии. Имеет `origin` — откуда пришло |
 | **Часть (part)** | Блок контента внутри сообщения: text, tool_use, tool_result, reasoning. Одно сообщение → много частей |
 | **context_snapshot** | Сжатый контекст для summary-режима саб-агентов. Создаётся через отдельный LLM-вызов |
@@ -729,9 +678,10 @@ plan_exit (план утверждён)
 | `merged` | Скопировано из другой сессии пользователем (smart paste) | ID оригинального сообщения |
 | `crosspost` | Существует в нескольких сессиях одновременно | Синхронизировано |
 
-**Способы хранения (физический уровень):**
+**Физический уровень (не реализовано):**
 - Целевое хранилище: **PostgreSQL** (нормализованная схема). Идём сразу в PostgreSQL — SQLite как промежуточный вариант не используется.
-- Переход с JSON-файлов (AD-005) на PostgreSQL.
+- Логическая модель уже живёт в JSON-схеме (AD-005) и используется ветвлением/merge (AD-033); миграция затрагивает только физический слой — схему БД и перенос данных.
+- Сущность `context_snapshot` (сжатый контекст для `summary`-режима) пока не выделена — `summary` реализован через `ContextOptimizer.summarize()` с кэшем (AD-026).
 
 ### AD-033: Ветвление сессий и межсессионное слияние ✅ Реализовано
 

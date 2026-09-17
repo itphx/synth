@@ -1,0 +1,524 @@
+# AD-046: Скиллы и slash-команды
+
+> **Статус:** ⏳ Не реализовано (проект)
+> **Дата:** 2026-09-17
+> **Парный документ:** [AD-068](./ad-068-skills-agents-registry.md) «Реестр и каталог скиллов и агентов» — контент-платформа, реестр, доверие и распространение
+
+**Решение:** ввести в Synth механизм **скиллов** (папка с `SKILL.md` + supporting-файлы) и **slash-команд** (встроенные, шаблонные и скиллы-как-команды). Скиллы — это переиспользуемые инструкции/процедуры, которые:
+1. попадают в системный промпт **только каталогом** (`name` + краткое `description`) — progressive disclosure;
+2. загружаются целиком по явному `/name` пользователя или вызовом core-тула `skill({name})`;
+3. проходят **project-trust гейт** (недоверенные проектные скиллы видны, но не грузятся);
+4. подчиняются гранулярным правам (AD-029) и capability-модели агентов.
+
+Резолвинг команд — **в core**, единообразно для UI, CLI и гибрида (AD-042). Механизма в коде сейчас нет; переиспользуются подходы `~/dev/opencode` (`skill({name})`, discovery), `~/dev/hermes-agent` (progressive disclosure, trust-гейт, bundles) и хардкод-команды прототипа `~/dev/aic/t11` (`/help`, `/add_repo`, `/review`, `/commands`).
+
+---
+
+## 1. Контекст и проблема
+
+Сегодня в Synth нет способа переиспользовать процедурное знание («как ревьюить API», «как писать миграции»), кроме как:
+- вручную вставлять текст в сообщение;
+- класть все инструкции в role-промпт агента (`engine/context/config.ts:321–351`, `getRolePrompt`) — раздувает промпт для всех сессий.
+
+Что есть в референсах:
+
+| Источник | Что даёт | Ограничение |
+|---|---|---|
+| `~/dev/aic/t11/synth/app/handlers/chat_handler.py` | хардкод `/help`, `/add_repo`, `/review`, `/commands`; парсинг `^/(\w+)(?:\s+(.*))?$` | команды зашиты в код, нет расширяемости |
+| `~/dev/opencode` | `skill({name})` → `<skill_content>` + base dir + supporting-файлы; discovery `.opencode/{skill,skills}`, `~/.config/opencode`, `.claude/skills`, `.agents/skills`, `skills.paths`, `skills.urls`; скилл = команда | кэш требует рестарта; нет project-trust |
+| `~/dev/hermes-agent` | `skills_list` → `skill_view` → file; trust-гейт (`skills trust|untrust`, ре-скан после `git pull`); bundles; inline shell выключен по умолчанию | Python-реализация, нет capability-модели |
+| Архив форка (вне репозитория `synth/`): `archive/synth-frontend/src/stores/useSkillsStore.ts`, `useCommandsStore.ts`, `components/chat/CommandAutocomplete.tsx`, `SkillAutocomplete.tsx` | готовый UI-слой: сторы, автокомплит, вкладки, API-контракт `/api/config/skills\|commands`, `/api/magic-prompts` | UI без серверного механизма |
+
+**Проблемы, которые решаем:**
+- **Раздувание промпта.** Нельзя класть тела скиллов в системный промпт — только каталог с короткими описаниями.
+- **Безопасность.** Скилл — это инструкции, исполняемые агентом (в т.ч. `` !`cmd` ``). Проектный скилл может быть подменён через `git pull` — нужен trust-гейт и ре-скан.
+- **Единство путей входа.** `/review` должен одинаково резолвиться в UI, CLI и гибридном режиме; резолвинг в UI привёл бы к расхождению.
+- **Capability-несоответствие.** Скилл может требовать `shell`, которого у read-only агента нет. Скилл должен быть виден («агент осведомлён о процессе»), но помечен недоступным, с указанием делегировать через `task`.
+- **Кэш.** Изменение `SKILL.md` на диске должно подхватываться без перезапуска процесса (пробел opencode).
+
+---
+
+## 2. Решение
+
+### 2.1. Поток
+
+```
+                          ┌──────────────────────────────────────────┐
+  instance: {dataDir}/skills                                        │
+  project:  {ws}/.synth/skills                                      │
+  external (ro): .opencode/skills, .claude/skills, .agents/skills,  │
+                 ~/.config/opencode/skills                          │
+  config:  skills.paths, skills.urls                                │
+                          └──────────────────┬───────────────────────┘
+                                             ▼
+              discovery ──► реестр скиллов (нормализация, валидация,
+                            дедупликация по приоритету, trust-статус)
+                                             │
+                    ┌────────────────────────┴────────────────────────┐
+                    ▼                                                 ▼
+        уровень 1: КАТАЛОГ                              runtime-резолвинг
+        (name + ≤60–100 символов description,            ┌─ /name (UI/CLI/гибрид)
+         группировка по category)                        ├─ skill({name}) (LLM)
+                    │                                     └─ /bundle-name (bundles)
+                    ▼                                                 │
+     system prompt: основная сессия (builder.ts)                      ▼
+                    + саб-агенты (task.ts)               тело SKILL.md → <skill_content>
+                    ─────────────────────►               + base dir + ≤10 файлов
+     уровень 3: supporting files — по требованию         → ToolOutputStore: 50 KB / 2000 строк
+```
+
+### 2.2. Ключевые принципы
+
+| Принцип | Формулировка |
+|---|---|
+| **Progressive disclosure** | Промпт получает только каталог; тело — по вызову; supporting-файлы — по требованию |
+| **Один core-тул** | `skill({name, file_path?})` — встроенный тул ядра; скиллы **не регистрируют** тулы |
+| **Единый резолвинг** | `/`-команды разбираются в core (UI/CLI/гибрид — тонкие клиенты) |
+| **Trust по умолчанию** | Проектные скиллы недоверенного каталога видны, но не загружаются |
+| **Capability-aware** | Скилл виден при нехватке capability, но помечен недоступным + делегирование |
+| **Права как у тулов** | allow/deny/ask + glob, наследование саб-агентами (AD-029) |
+| **Read-only до явного действия** | Никакого кода до подтверждения пользователя; inline shell выключен по умолчанию |
+
+---
+
+## 3. Формат `SKILL.md`
+
+### 3.1. Общие правила
+
+- Файл — Markdown с YAML frontmatter (`---` … `---` в начале).
+- Frontmatter-парсер **толерантен к неизвестным ключам**: не ошибка, а запись в metadata/игнор. Это обеспечивает совместимость с Anthropic/opencode/Claude Code.
+- Тело — свободный Markdown; относительные пути (`references/`, `scripts/`, `assets/`) считаются от base dir скилла (каталога с `SKILL.md`).
+
+### 3.2. Поля
+
+| Поле | Группа | Обяз. | Тип / формат | Назначение |
+|---|---|---|---|---|
+| `name` | Synth core | ✅ | string, 1–64, `^[a-z0-9]+(-[a-z0-9]+)*$`, **совпадает с именем каталога** | Уникальный id скилла; при несовпадении — ошибка discovery |
+| `description` | Synth core | ✅ | string, 1–1024 | Что делает; в каталоге обрезается до ~60–100 символов |
+| `license` | Anthropic/opencode | — | string | Лицензия содержимого |
+| `compatibility` | Anthropic/opencode | — | string | Совместимость (напр. `synth>=0.1`) |
+| `metadata` | Anthropic/opencode | — | object | Свободный контейнер; толерантен к любым ключам |
+| `allowed-tools` | Claude Code | — | string \| string[] | Рекомендуемый whitelist тулов; транслируется в deny-политику скилла |
+| `when_to_use` | Claude Code | — | string | Подсказка модели, когда применять (в отличие от `description`) |
+| `model` | Claude Code | — | string | Предпочтительная модель для скилла |
+| `agent` | Claude Code | — | string | Предпочтительный агент-исполнитель |
+| `argument-hint` | Claude Code | — | string | Плейсхолдер аргументов в `/`-автокомплите |
+| `user-invocable` | Claude Code | — | boolean, default `true` | `false` — скилл отсутствует в `/`-автокомплите |
+| `disable-model-invocation` | Claude Code | — | boolean, default `false` | `true` — скилл отсутствует в каталоге для модели |
+| `metadata.synth.tags` | Synth | — | string[] | Теги для поиска/каталога (AD-068) |
+| `metadata.synth.category` | Synth | — | string | Категория для группировки в каталоге |
+| `metadata.synth.related_skills` | Synth | — | string[] | Связанные скиллы |
+| `metadata.synth.requires_capabilities` | Synth | — | `ToolCapability[]` | Требуемые возможности агента (`packages/shared/src/types/tools.ts:3–16`) |
+| `metadata.synth.requires_toolsets` | Synth | — | string[] | Именованные группы тулов (напр. `git`, `web`, `mcp:<server>`) |
+| `metadata.synth.fallback_for_capabilities` | Synth | — | `ToolCapability[]` | Для каких возможностей скилл является fallback-инструкцией |
+| `metadata.synth.agents` | Synth | — | string[] | Привязка к agent id; **пусто = все агенты** |
+| `metadata.synth.groups` | Synth | — | string[] | Привязка к категориям/группам агентов |
+| `metadata.synth.scope` | Synth | — | `'instance' \| 'project'` | Декларативная подсказка; фактический scope — от источника |
+| `metadata.synth.trigger` | Synth | — | `'manual' \| 'auto'` | Подсказка авто-применения (не является разрешением) |
+| `metadata.synth.command` | Synth | — | string | Имя `/`-команды, если отличается от `name` |
+| `metadata.synth.mode` | Synth | — | `'plan' \| 'act' \| 'any'` | Применимость по режиму сессии (AD-025) |
+
+### 3.3. Пример
+
+```markdown
+---
+name: api-contract-review
+description: Проверяет изменения публичного API на обратную совместимость и полноту контракта.
+license: MIT
+compatibility: synth>=0.1
+allowed-tools: [read_file, grep_files, git_diff]
+when_to_use: When a public API route or a shared type is modified.
+model: local.qwen3:14b
+agent: reviewer
+argument-hint: "[path/to/contract]"
+user-invocable: true
+disable-model-invocation: false
+metadata:
+  synth:
+    tags: [api, review, backward-compatibility]
+    category: quality
+    related_skills: [contract-testing]
+    requires_capabilities: [file_read, search, git_read]
+    requires_toolsets: [git]
+    fallback_for_capabilities: [file_write]
+    agents: []          # пусто = все агенты
+    groups: [review]
+    scope: project
+    trigger: manual
+    command: api-review
+    mode: plan
+---
+
+# API Contract Review
+
+## Когда применять
+Публичный маршрут или общий тип в `packages/shared` изменён.
+
+## Шаги
+1. Прочитай diff: `git_diff`.
+2. Сверь сигнатуры с `references/checklist.md`.
+3. Запусти `scripts/check-openapi.ts` (если есть контракт).
+4. Верни отчёт: breaking / non-breaking / требует версии.
+
+## Supporting files
+- `references/checklist.md`
+- `scripts/check-openapi.ts`
+```
+
+**Валидация:** при загрузке проверяются `name` (regex + совпадение с каталогом) и `description`. Невалидный скилл не попадает в реестр; ошибка видна в логах и в `GET /api/v2/skills?diagnostics=1` (не ломает discovery остальных).
+
+---
+
+## 4. Discovery, скоупы, приоритет, project-trust
+
+### 4.1. Скоупы
+
+| Scope | Каталог | Права | Запись |
+|---|---|---|---|
+| `instance` | `{dataDir}/skills` | общие для инстанса | через API/админку |
+| `project` | `{project.workspace}/.synth/skills` | принадлежат проекту | напрямую/через API |
+
+### 4.2. Дополнительные источники
+
+| Источник | Тип | Примечание |
+|---|---|---|
+| `skills.paths` (config) | каталоги | пользовательские, read-write |
+| `skills.urls` (config) | удалённые каталоги | opencode-совместимый `index.json`, скачивание в кэш |
+| `.opencode/skills`, `.opencode/skill` | внешний | read-only discovery |
+| `.claude/skills` | внешний | read-only discovery |
+| `.agents/skills` | внешний | read-only discovery |
+| `~/.config/opencode/skills` | внешний | read-only discovery |
+
+Внешние источники — **только discovery** (совместимость), изменять их через Synth API нельзя.
+
+Локальные каталоги агентов-совместимости (`.opencode/skills`, `.claude/skills`, `.agents/skills`, `~/.config/opencode/skills`) — read-only discovery **механизма** (AD-046). **Удалённые каталоги-реестры** (github/well-known/url/skills.sh и т.п.) — предмет [AD-068](./ad-068-skills-agents-registry.md): по умолчанию **выключены**, пользователю/админу лишь предлагается список проверенных источников, включение — явное действие.
+
+### 4.3. Приоритет
+
+При совпадении имён: **project > instance > external, first-wins**. Побеждает первое вхождение по порядку источников; проигравшие не перезатирают, но фиксируются в диагностике как `shadowed`.
+
+```
+project ({ws}/.synth/skills)
+  └─ instance ({dataDir}/skills)
+       └─ config skills.paths
+            └─ external (.opencode, .claude, .agents, ~/.config/opencode)
+                 └─ config skills.urls (кэш)
+```
+
+### 4.4. Project-trust гейт (безопасность)
+
+- Проектные скиллы из **недоверенного** каталога **видны в реестре, но не загружаются**: не попадают ни в каталог для модели, ни в `skill`-тул, ни в `/`-автокомплит (либо помечены «недоверенный» в UI — см. AD-068).
+- Доверие выдаётся явно: `synth skills trust-project <dir>` / `synth skills untrust-project <dir>`; хранится в `skills.trustedProjectDirs` (config).
+- Это **доверие к локальному проектному каталогу** (бинарное trusted/untrusted, механизм AD-046). Ортогональная иерархия trust-уровней **источников/записей реестра** (`builtin`/`verified`/`trusted`/`community`/`agent-created`, install-policy) и команда `synth skills trust <source> --level` — [AD-068](./ad-068-skills-agents-registry.md); не путать одно с другим.
+- **Ре-скан при изменении:** watcher отслеживает `SKILL.md`/файлы скиллов; после `git pull` (или любого изменения mtime/содержимого) trust-статус пересчитывается, содержимое перечитывается. Это защита от инъекции инструкций через обновление репозитория.
+
+```yaml
+# config.yaml
+skills:
+  paths:
+    - ~/my-skills
+  urls:
+    - https://example.com/skills
+  trustedProjectDirs:
+    - /home/user/work/trusted-project
+  inlineShell: false        # !`cmd` в шаблонных командах — выключено по умолчанию
+
+tools:
+  skill: true               # глобальный тумблер core-тула skill
+```
+
+---
+
+## 5. Доставка — progressive disclosure
+
+### Уровень 1 — каталог в системном промпте
+
+- Формат строки: `name` + обрезанный `description` (**~60–100 символов**) + при необходимости маркер недоступности.
+- Группировка по `metadata.synth.category`.
+- Добавляется:
+  - в основную сессию — `engine/context/builder.ts:42–132` (`buildSystemPrompt`);
+  - в саб-агентов — `engine/tools/task.ts` (там промпт собирается через `resolveSubagentPrompt`, **не** через `buildSystemPrompt`; см. `task.ts:84, 219–228` и `task-resume.ts:206`).
+- Каталог учитывает binding агента и capabilities; при пустом списке доступных скиллов секция не добавляется.
+
+Секция каталога собирается в `orchestrator.ts:798–836` (после CLASSIFICATION, gateway, plan- и session-context-блоков). Если задан `session.settings.systemPrompt` override — он **заменяет** собранный промпт; каталог в этом случае не добавляется (сохраняем текущую семантику override).
+
+### Уровень 2 — тело скилла
+
+Два равнозначных входа:
+
+| Вход | Кто инициирует | Поведение |
+|---|---|---|
+| `/name` (аргументы) | Пользователь (UI/CLI/гибрид) | core-резолвер подставляет тело в сообщение как явный контекст |
+| `skill({name, file_path?})` | Модель | core-тул возвращает `ToolResult` |
+
+Возврат тула `skill` (по образцу opencode):
+
+```
+<skill_content name="api-contract-review">
+# Skill: api-contract-review
+
+<тело SKILL.md>
+
+Base directory for this skill: file:///.../.synth/skills/api-contract-review
+Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.
+<skill_files>
+<references/checklist.md>
+<scripts/check-openapi.ts>
+</skill_files>
+</skill_content>
+```
+
+- **До 10 supporting-файлов** в `<skill_files>` (пути, не содержимое).
+- Обрезка результата — через `ToolOutputStore`: **50 KB / 2000 строк** (как у прочих тулов).
+- `file_path` позволяет точечно прочитать supporting-файл без повторной загрузки тела.
+
+### Уровень 3 — supporting files
+
+`references/`, `scripts/`, `assets/` читаются по требованию через `read_file` или `skill({name, file_path})`. В промпт/каталог они не попадают.
+
+---
+
+## 6. Invocation и binding
+
+### 6.1. Invocation
+
+`invocation` вычисляется из двух совместимых флагов:
+
+| `user-invocable` | `disable-model-invocation` | `invocation` | В каталоге для модели | В `/`-автокомплите |
+|---|---|---|---|---|
+| `true` (default) | `false` (default) | `both` | ✅ | ✅ |
+| `true` | `true` | `user` | ❌ | ✅ |
+| `false` | `false` | `model` | ✅ | ❌ |
+| `false` | `true` | `none` | ❌ | ❌ (диагностика) |
+
+### 6.2. Binding (ортогонально scope)
+
+| Поле | Значение по умолчанию | Назначение |
+|---|---|---|
+| `metadata.synth.agents` | все агенты | Явная привязка к agent id |
+| `metadata.synth.groups` | все группы | Привязка к категориям агентов |
+
+Явная привязка нужна в первую очередь для **глобальных instance-скиллов**, чтобы сузить каталог для конкретных агентов и не засорять промпты. Проектный скилл по умолчанию доступен всем агентам проекта.
+
+### 6.3. Capability-aware и делегирование
+
+Если агенту не хватает `requires_capabilities`:
+- скилл **остаётся видимым** в каталоге (агент «осведомлён о процессе»), но помечается `unavailable`;
+- `skill({name})` возвращает не тело, а действие-делегирование:
+
+> «Для скилла `db-migration` нужны capabilities: `shell`, `file_write`; у агента `reviewer` их нет. Вызови `task` с агентом `developer`.»
+
+- Проверка доступности опирается на `getToolsForAgent` (`engine/agents/registry.ts:53–61` — фильтр тулов по capabilities).
+
+---
+
+## 7. Slash-команды и bundles
+
+### 7.1. Резолвинг в core
+
+Разбор `/`-команд выполняется в core **до** обращения к LLM, единообразно для UI, CLI и удалённых сессий в гибриде (AD-042). UI/CLI лишь передают исходное сообщение; автокомплит — подсказка клиента.
+
+Источник вдохновения — t11: шаблон `^/(\w+)(?:\s+(.*))?$` (`chat_handler.py:125–139`), диспетчеризация в начале обработки сообщения (`chat_handler.py:505–514`).
+
+### 7.2. Три вида команд
+
+| Вид | Пример | Описание |
+|---|---|---|
+| **Встроенные продуктовые** | `/help`, `/skills`, `/commands`, `/compact`, `/summary`, `/review` | Реализованы в core, не расширяются конфигом |
+| **Шаблонные `.md`-команды** | пользовательские файлы команд | opencode-совместимые подстановки: `$ARGUMENTS`, `@file`, `` !`cmd` `` |
+| **Скиллы как команды** | `/api-review` | Команда резолвится в загрузку тела соответствующего скилла (уровень 2) |
+
+`/help` — RAG-команда, зависит от памяти D2 (отдельная задача) → **Фаза 2**.
+
+### 7.3. Bundles
+
+Bundle — YAML-группа скиллов; `/bundle-name` грузит N скиллов одним сообщением (модель hermes, `agent/skill_bundles.py`):
+
+```yaml
+name: backend-dev
+description: Backend feature work — code review, testing, PR workflow.
+skills:
+  - github-code-review
+  - test-driven-development
+instruction: |
+  Дополнительная инструкция над телами скиллов (опционально).
+```
+
+- **Bundle побеждает одноимённый skill** при резолвинге (осознанный приоритет).
+- Файлы bundle — в каталоге bundles под `dataDir` (единый dataDir, AD-045), API — `/api/v2/skill-bundles`.
+
+### 7.4. Inline shell `` !`cmd` ``
+
+- **По умолчанию выключено** (`skills.inlineShell: false`).
+- При включении: только через `execute_shell` + `PermissionEvaluator` (AD-029), с timeout и лимитом вывода, с аудитом.
+- Обоснование: `` !`cmd` `` — прямой **RCE-вектор** в проектном контенте; включение должно быть явным действием пользователя/администратора. Недоверенные проектные скиллы с inline shell не исполняются даже при включённом флаге.
+
+---
+
+## 8. Права и аудит
+
+### 8.1. Permissions
+
+- **Per-skill permissions**: `allow` / `deny` / `ask` + glob-паттерны (по имени скилла/команды), расширение модели AD-029.
+- **Наследование саб-агентами**: дочерняя сессия получает права родителя + собственные deny (через `deriveSubagentSessionPermission`, `engine/permission/derive.ts`).
+- `deny` **скрывает** скилл из каталога (в отличие от capability-unavailable, где скилл виден).
+- Глобальный тумблер `tools.skill: false` полностью отключает тул `skill` (и, соответственно, model-invocation).
+- `allowed-tools` из frontmatter — рекомендательный whitelist; ужесточение идёт через `PermissionEvaluator` (`engine/permission/evaluator.ts`).
+
+### 8.2. События
+
+| Событие | Момент | Данные |
+|---|---|---|
+| `skill.invoked` | Загрузка тела скилла (`/name` или `skill`) | `{ session_id, name, source: user\|model, scope, agent }` |
+| `command.invoked` | Резолвинг `/`-команды (встроенной/шаблонной/bundle) | `{ session_id, command, args, actor: user\|cli }` |
+
+Публикуются в `SessionEventBus` рядом с `tool_call.started` (`engine/orchestrator.ts:1135`). Используются для аудита, метрик и UI-подсветки.
+
+### 8.3. Runtime и данные
+
+- **FS-watch инвалидация кэша:** изменение `SKILL.md`/supporting-файла → пере-чтение и пересборка каталога без рестарта (закрываем пробел opencode).
+- **Единый dataDir** (AD-045): instance-скиллы, bundles и кэш `skills.urls` живут в `{dataDir}`, не зависят от сервера.
+
+---
+
+## 9. API / UI / CLI
+
+### 9.1. Core API
+
+| Метод / путь | Назначение |
+|---|---|
+| `GET /api/v2/skills` | Реестр (с учётом trust-статуса, `?diagnostics=1`) |
+| `POST /api/v2/skills` | Создать скилл (instance) |
+| `GET/PATCH/DELETE /api/v2/skills/:name` | Чтение/правка/удаление |
+| `GET/PUT /api/v2/skills/:name/files/*` | Supporting-файлы |
+| `GET /api/v2/skills/catalog` | Публичный каталог для контент-платформы (стык с AD-068) |
+| `GET /api/v2/commands` | Список команд (встроенные + шаблонные + скиллы) |
+| `GET/POST/PATCH/DELETE /api/v2/skill-bundles[/:name]` | Bundles |
+
+### 9.2. Backend (managed)
+
+Админка instance-скиллов под RBAC `ADMIN` (аналогично провайдерам/моделям). Публичные эндпоинты каталога — для AD-068.
+
+### 9.3. UI
+
+Переиспользовать архивный слой форка (вне репозитория `synth/`):
+- `archive/synth-frontend/src/stores/useSkillsStore.ts`, `useSkillsCatalogStore.ts`, `useCommandsStore.ts`;
+- `archive/synth-frontend/src/components/chat/CommandAutocomplete.tsx`, `SkillAutocomplete.tsx`;
+- контракт `/api/config/skills|commands`, `/api/magic-prompts` — переложить на `/api/v2/skills|commands`.
+- Вкладки: commands / agents / files; автокомплит по `/`; маркеры trust/unavailable.
+
+### 9.4. CLI
+
+Перехват `/`-команд в REPL `packages/synth/src/cli.ts:596` (`startRepl`): строка, начинающаяся с `/`, уходит в core-резолвер, а не в LLM.
+
+### 9.5. Встроенный мета-скилл `skill-creator`
+
+Скаффолдер `SKILL.md`: генерирует frontmatter, **обязательно** запрашивает требуемые тулы/capabilities и создаёт структуру supporting-файлов. Референсы: `innokod/.opencode/skills/skill-creator`, `mattpocock/writing-great-skills`.
+
+---
+
+## 10. Точки интеграции в коде
+
+| Файл | Строки / сущность | Что менять |
+|---|---|---|
+| `packages/core/src/engine/context/builder.ts` | 42–132 (`buildSystemPrompt`) | Секция каталога скиллов в системный промпт |
+| `packages/core/src/engine/context/config.ts` | 321–351 (`getRolePrompt`) | Согласовать роль-промпты и поставку каталога/секции |
+| `packages/core/src/engine/orchestrator.ts` | 798–836 | Вставка каталога после plan/session-context; учёт override `session.settings.systemPrompt`; резолвинг `/`-команд до LLM |
+| `packages/core/src/engine/orchestrator.ts` | 1135 (`tool_call.started`) | Публикация `skill.invoked` / `command.invoked` |
+| `packages/core/src/engine/tools/task.ts` | 84, 219–228 (`resolveSubagentPrompt`) | Каталог для саб-агентов + capability-aware фильтр binding |
+| `packages/core/src/engine/tools/task-resume.ts` | 206 (`resolveSubagentPrompt`) | То же для ветки resume |
+| `packages/core/src/engine/agents/registry.ts` | 53–61 (`getToolsForAgent`) | Доступность тула `skill` по capabilities агента |
+| `packages/core/src/engine/tools/index.ts` | Реестр тулов | Регистрация core-тула `skill` |
+| `packages/core/src/engine/permission/evaluator.ts`, `derive.ts` | — | Per-skill permissions, наследование саб-агентами |
+| `packages/core/src/events/bus.ts` | — | Типы событий `skill.invoked` / `command.invoked` |
+| `packages/shared/src/types/tools.ts` | 3–16 (`ToolCapability`) | Метаданные capabilities/toolsets для `requires_*` |
+| `packages/shared/src/types/index.ts` | 120–195 (`SessionSettings`) | Сессионные настройки `tools.skill` / `skills.*` |
+| `@itphx/synth-shared/config` (AD-023) | — | Секции `skills.paths|urls|trustedProjectDirs|inlineShell`, `tools.skill` |
+| `packages/core/src/server/routes/` | — | Роуты `/api/v2/skills`, `/commands`, `/skill-bundles` |
+| `packages/backend/src/routes/` | — | Админка instance-скиллов (RBAC `ADMIN`) |
+| `packages/ui/src/` | — | Портал архивных сторов/автокомплита на API v2 |
+| `packages/synth/src/cli.ts` | 596 (`startRepl`) | Перехват `/`-команд в REPL |
+
+**Новые модули core:** `engine/skills/` (discovery, parser, registry, loader, trust), `engine/commands/` (resolver, builtin, template, bundles), `engine/tools/skill.ts`.
+
+---
+
+## 11. Связь с AD-068 и другими AD
+
+| AD | Связь |
+|---|---|
+| [**AD-068**](./ad-068-skills-agents-registry.md) | Реестр и каталог скиллов/агентов как контент-платформа. AD-046 — механизм исполнения; AD-068 — доверие (trust-уровни источников), guard-уровни, публикация/каталог, install-policy, `GET /api/v2/skills/catalog` |
+| [AD-025](./ad-025-plan-act-toggle.md) | `metadata.synth.mode` — применимость скилла к plan/act |
+| [AD-029](./ad-029-granular-permissions.md) | Per-skill allow/deny/ask + glob; наследование; `deny` скрывает скилл |
+| [AD-035](./ad-035-micro-model-first.md) | Микро-слой может маршрутизировать «`/name` → скилл» без LLM |
+| [AD-036](./ad-036-llm-gateway.md) | Тела скиллов проходят через LLM Gateway (guard/обфускация/аудит) |
+| [AD-039](./ad-039-plan-in-project.md) | Скиллы — не план и не todo; взаимодействуют через инструменты, не через состояние |
+| [AD-042](./ad-042-hybrid-mode.md) | Резолвинг команд в core → одинаков в локальном и удалённом мире |
+| [AD-045](./ad-045-hybrid-server-profiles.md) | Единый dataDir для instance-скиллов/bundles/кэша |
+
+---
+
+## 12. Фазы реализации и тесты
+
+### Фаза 1 — ядро
+
+- Парсер `SKILL.md` + Zod-схема (толерантная к неизвестным ключам), валидация `name`/`description`.
+- Discovery (instance/project/external/config paths), приоритет, дедупликация, диагностика.
+- Project-trust гейт + FS-watch инвалидация.
+- Реестр, каталог в промпт (основная сессия + саб-агенты), capability-aware/binding.
+- Core-тул `skill` (тело + base dir + ≤10 файлов, обрезка `ToolOutputStore`), `tools.skill` тумблер.
+- Core API `/api/v2/skills[/:name]` + файлы.
+
+### Фаза 2 — команды и bundles
+
+- Резолвер `/`-команд в core, встроенные продуктовые команды.
+- Шаблонные `.md`-команды (`$ARGUMENTS`, `@file`).
+- Bundles + API `/api/v2/skill-bundles`.
+- `/help` (RAG) — после готовности памяти D2.
+- CLI-перехват `/` в REPL; UI-автокомплит.
+
+### Фаза 3 — расширения
+
+- `skills.paths`/`skills.urls` (удалённые каталоги).
+- Inline shell (opt-in, через `execute_shell` + AD-029).
+- Встроенный `skill-creator`.
+- Backend-админка (RBAC) и стык с каталогом AD-068.
+
+### Тесты (Vitest)
+
+| Область | Что проверяем |
+|---|---|
+| Парсер | frontmatter, неизвестные ключи, `name` regex, несовпадение с каталогом, границы 1/64 и 1/1024 |
+| Discovery/приоритет | project > instance > external, first-wins, `shadowed`-диагностика |
+| Project-trust | untrusted не в каталоге/туле; trust-project/untrust-project; ре-скан после изменения |
+| Тул `skill` | `<skill_content>` + base dir + ≤10 файлов; обрезка 50 KB/2000 строк; `file_path` |
+| Capability-aware | видимость при нехватке capability; сообщение делегирования через `task` |
+| Invocation/binding | четыре комбинации флагов; `agents`/`groups` по умолчанию — все |
+| Команды | встроенные, шаблонные `$ARGUMENTS`/`@file`, приоритет bundle > skill |
+| Bundles | парсинг YAML, `/bundle-name` грузит N скиллов |
+| Inline shell | выключено по умолчанию; при включении — только `execute_shell` + permissions |
+| Права/события | `deny` скрывает, `ask` спрашивает, наследование; `skill.invoked`/`command.invoked` |
+
+---
+
+## 13. Что НЕ делаем
+
+- **Регистрация тулов скиллами.** Скиллы — инструкции; новых тулов не создают. Тул один — `skill`.
+- **Произвольный код из скилла.** `scripts/` — файлы для чтения/запуска агентом через обычные тулы, не autoload-плагины.
+- **Автозагрузка недоверенного.** Проектные скиллы без trust не грузятся (видны — да, исполняются — нет).
+- **Inline shell по умолчанию.** `` !`cmd` `` включается только явно.
+- **Резолвинг команд в UI.** Только core.
+- **ClawHub и подобные публичные реестры** — вне рамок; контент-платформа — AD-068.
+- **Автоматическое доверие «своему» репозиторию** — trust выдаётся явно, не по факту наличия `.git`.
+
+---
+
+## 14. Открытые вопросы
+
+1. **Формат `skills.urls`** — строго opencode `index.json` или допускаем git-источники/архивы?
+2. **`requires_toolsets`** — фиксированный словарь групп или произвольные имена, маппящиеся на capabilities конфигом?
+3. **Кэш удалённых каталогов/индекса** — TTL, версионирование и офлайн-поведение относятся к реестру: см. [AD-068](./ad-068-skills-agents-registry.md) §3 и §11.6.
+4. **Приоритет bundle vs встроенная команда** — сейчас bundle побеждает только одноимённый skill; нужен ли приоритет над встроенными?
+5. **UI недоверенных скиллов** — показывать контент read-only или только метаданные до trust (граница с [AD-068](./ad-068-skills-agents-registry.md))?
+6. **Наследование binding в саб-агентах** — каталог саб-агента фильтруется по parent binding или по binding самого саб-агента?
+7. **`allowed-tools`** — делать мягким whitelist (advisory) или автоматически транслировать в deny по AD-029?
