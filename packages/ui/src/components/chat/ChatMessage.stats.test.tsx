@@ -3,10 +3,34 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
 
+// persist (zustand) в useUIStore пишет в localStorage — в Node/vitest его нет.
+// Заглушку ставим до импорта стора (vi.hoisted выполняется раньше импортов).
+vi.hoisted(() => {
+  const data = new Map<string, string>()
+  const ls = {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      data.set(k, v)
+    },
+    removeItem: (k: string) => {
+      data.delete(k)
+    },
+    clear: () => {
+      data.clear()
+    },
+  }
+  Object.defineProperty(globalThis, 'localStorage', { value: ls, configurable: true })
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'localStorage', { value: ls, configurable: true })
+  }
+})
+
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { ChatMessage } from './ChatMessage'
 import type { MessageData } from '@/stores/chatStore'
+import { useChatStore } from '@/stores/chatStore'
+import { useUIStore } from '@/stores/useUIStore'
 
 // Управляемый мок устройства: desktop (fine pointer) / mobile (touch).
 const device = vi.hoisted(() => ({ isTouch: false }))
@@ -69,6 +93,8 @@ afterEach(async () => {
     container.remove()
   }
   document.body.innerHTML = ''
+  useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
+  useChatStore.setState({ debugModalSessionId: null, debugModalMessageIndex: null })
 })
 
 describe('ChatMessage: статистика desktop/mobile', () => {
@@ -103,5 +129,57 @@ describe('ChatMessage: статистика desktop/mobile', () => {
     expect(stats!.className).toContain('flex-nowrap')
     expect(stats!.className).toContain('whitespace-nowrap')
     expect(stats!.querySelectorAll('[aria-hidden="true"]').length).toBeGreaterThan(0)
+  })
+
+  it('mobile: кнопка статистики подсвечивается, пока открыт popover', async () => {
+    device.isTouch = true
+    const container = await renderChat(makeMessage({}))
+    const trigger = container.querySelector('button[title="Response stats"]') as HTMLButtonElement
+    expect(trigger.className).not.toContain('text-primary')
+    await act(async () => {
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const opened = container.querySelector('button[title="Response stats"]') as HTMLButtonElement
+    expect(opened.className).toContain('text-primary')
+    expect(opened.className).toContain('bg-primary/10')
+  })
+
+  it('«Отладка» подсвечивается для открытого сообщения активной сессии', async () => {
+    device.isTouch = false
+    useUIStore.setState({
+      centerTabs: [{ id: 'chat-s1', type: 'chat', title: 'S1', data: { sessionId: 's1' } }],
+      activeCenterTabId: 'chat-s1',
+    })
+    useChatStore.setState({ debugModalSessionId: 's1', debugModalMessageIndex: 0 })
+    const container = await renderChat(makeMessage({ index: 0, debug_data: { prompt: 'x' } }))
+    const btn = container.querySelector('button[title="Debug"]') as HTMLButtonElement
+    expect(btn).not.toBeNull()
+    expect(btn.className).toContain('text-primary')
+  })
+
+  it('«Отладка» не подсвечивается для другого сообщения', async () => {
+    device.isTouch = false
+    useUIStore.setState({
+      centerTabs: [{ id: 'chat-s1', type: 'chat', title: 'S1', data: { sessionId: 's1' } }],
+      activeCenterTabId: 'chat-s1',
+    })
+    useChatStore.setState({ debugModalSessionId: 's1', debugModalMessageIndex: 1 })
+    const container = await renderChat(makeMessage({ index: 0, debug_data: { prompt: 'x' } }))
+    const btn = container.querySelector('button[title="Debug"]') as HTMLButtonElement
+    expect(btn).not.toBeNull()
+    expect(btn.className).not.toContain('text-primary')
+  })
+
+  it('«Отладка» не подсвечивается для другой сессии', async () => {
+    device.isTouch = false
+    useUIStore.setState({
+      centerTabs: [{ id: 'chat-s1', type: 'chat', title: 'S1', data: { sessionId: 's1' } }],
+      activeCenterTabId: 'chat-s1',
+    })
+    useChatStore.setState({ debugModalSessionId: 'other', debugModalMessageIndex: 0 })
+    const container = await renderChat(makeMessage({ index: 0, debug_data: { prompt: 'x' } }))
+    const btn = container.querySelector('button[title="Debug"]') as HTMLButtonElement
+    expect(btn).not.toBeNull()
+    expect(btn.className).not.toContain('text-primary')
   })
 })

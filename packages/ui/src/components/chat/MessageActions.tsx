@@ -1,4 +1,4 @@
-import { forwardRef, type ReactNode } from 'react'
+import { forwardRef, useState, type ReactNode } from 'react'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
@@ -10,6 +10,8 @@ interface MessageActionsProps {
   pinned: boolean
   canRetry: boolean
   hasDebug: boolean
+  /** Открыто окно отладки именно для этого сообщения — подсветить кнопку. */
+  debugActive?: boolean
   readOnly?: boolean
   /** У сообщения есть статистика ответа — на mobile показать кнопку (popover). */
   hasStats?: boolean
@@ -31,6 +33,7 @@ export function MessageActions({
   pinned,
   canRetry,
   hasDebug,
+  debugActive,
   readOnly,
   hasStats,
   statsContent,
@@ -44,6 +47,7 @@ export function MessageActions({
 }: MessageActionsProps) {
   const { t } = useI18n()
   const isUser = role === 'user'
+  const [statsOpen, setStatsOpen] = useState(false)
 
   return (
     <div className="message-actions flex items-center gap-0.5 mt-2 pt-1.5 -mb-1.5 border-t border-border/30 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -78,14 +82,14 @@ export function MessageActions({
       )}
 
       {!isUser && hasDebug && (
-        <ActionBtn onClick={onDebug} title={t('chat.actions.debug')} icon="bug" />
+        <ActionBtn onClick={onDebug} title={t('chat.actions.debug')} icon="bug" active={debugActive} />
       )}
 
       {/* AD-070 §2.6 (mobile): статистика ответа — в popover, инлайн не рендерится. */}
       {!isUser && hasStats && statsContent && (
-        <Popover>
+        <Popover open={statsOpen} onOpenChange={setStatsOpen}>
           <PopoverTrigger asChild>
-            <ActionBtn title={t('chat.messageStats.toggle')} icon="chart-line" />
+            <ActionBtn title={t('chat.messageStats.toggle')} icon="chart-line" active={statsOpen} />
           </PopoverTrigger>
           <PopoverContent className="w-max max-w-[calc(100vw-2rem)] overflow-x-auto p-3">
             {statsContent}

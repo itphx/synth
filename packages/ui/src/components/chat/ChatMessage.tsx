@@ -118,6 +118,12 @@ function ChatMessageInner({
   const i18nMeta = message.metadata?.i18n
   const activeTab = useUIStore((s) => s.centerTabs.find((t) => t.id === s.activeCenterTabId))
   const sessionId = (activeTab?.data?.sessionId as string) || undefined
+  // Отладка открыта глобально (chatStore) — подсветить кнопку только у того
+  // сообщения и сессии, для которых вызвано окно.
+  const debugModalSessionId = useChatStore((s) => s.debugModalSessionId)
+  const debugModalMessageIndex = useChatStore((s) => s.debugModalMessageIndex)
+  const debugActive =
+    !!sessionId && debugModalSessionId === sessionId && debugModalMessageIndex === message.index
 
   const containerClass = cn(
     'flex px-4 py-3 group',
@@ -353,6 +359,7 @@ function ChatMessageInner({
             pinned={message.pinned}
             canRetry={canRetry}
             hasDebug={hasDebug}
+            debugActive={debugActive}
             readOnly={readOnly}
             hasStats={showStats}
             statsContent={isTouch ? <MessageStats message={message} variant="popover" /> : undefined}
