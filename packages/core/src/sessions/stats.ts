@@ -260,9 +260,10 @@ function buildUserStats(
  * - `agents` — агрегация по `agent_role` сообщений сессии; usage суммируется,
  *   `cost_usd` — по цене модели каждого сообщения, `cache_hit_rate` —
  *   `computeCacheHitRate`, `output_tps` = output / (duration_ms / 1000),
- *   `duration_ms` — сумма длительностей ответов агента. `subagent_*` —
- *   рекурсивно подтянутый usage дочерних сессий tool `task` (глубина ≤ 5,
- *   защита от циклов).
+ *   `duration_ms` — сумма длительностей ответов агента. Итоги агента
+ *   (`input_tokens`/`output_tokens`/`cache_*`/`reasoning_tokens`/`cost_usd`)
+ *   включают его сабагентов (own + все потомки), а `subagent_sessions`/
+ *   `subagent_tokens` — детализация только по детям (глубина ≤ 5, защита от циклов).
  * - `users` — атрибуция usage автору предыдущего user-сообщения.
  */
 export async function computeSessionStats(
@@ -304,6 +305,14 @@ export async function computeSessionStats(
     }
     acc.subagentSessions += sub.sessions;
     acc.subagentTokens += sub.tokens;
+    // Агентские итоги включают usage/cost всех потомков (own + сабагенты);
+    // `subagent_*` остаются детализацией только по детям.
+    acc.usage.input += sub.usage.input;
+    acc.usage.output += sub.usage.output;
+    acc.usage.cacheRead += sub.usage.cacheRead;
+    acc.usage.cacheWrite += sub.usage.cacheWrite;
+    acc.usage.reasoning += sub.usage.reasoning;
+    acc.cost += sub.cost;
     subagents.sessions += sub.sessions;
     subagents.input_tokens += sub.usage.input;
     subagents.output_tokens += sub.usage.output;

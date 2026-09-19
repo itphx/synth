@@ -240,5 +240,36 @@ describe('Project API Routes', () => {
       const res = await app.request('/api/v2/projects/non-existent/stats');
       expect(res.status).toBe(404);
     });
+
+    it('учитывает дочерние сессии сабагентов (projectId наследуется)', async () => {
+      const { app, store, sessionManager } = createTestApp();
+      const project = store.create('WithSubagents', 'test-user');
+      await store.save(project);
+      sessionManager.listSessions.mockResolvedValue([
+        {
+          id: 'parent', projectId: project.id,
+          inputTokens: 100, outputTokens: 10, totalTokens: 110,
+          cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+          messages: [{}],
+        },
+        {
+          id: 'child', projectId: project.id, parentId: 'parent',
+          inputTokens: 300, outputTokens: 30, totalTokens: 330,
+          cacheReadTokens: 10, cacheWriteTokens: 0, reasoningTokens: 0,
+          messages: [{}, {}],
+        },
+      ]);
+
+      const res = await app.request(`/api/v2/projects/${project.id}/stats`);
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.total_sessions).toBe(2);
+      expect(body.total_input_tokens).toBe(400);
+      expect(body.total_output_tokens).toBe(40);
+      expect(body.total_tokens).toBe(440);
+      expect(body.total_cache_read_tokens).toBe(10);
+      expect(body.total_messages).toBe(3);
+      expect(sessionManager.listSessions).toHaveBeenCalledWith({ projectId: project.id });
+    });
   });
 });

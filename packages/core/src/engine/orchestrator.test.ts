@@ -178,6 +178,46 @@ class ToolChainProvider extends BaseProvider {
   }
 }
 
+/**
+ * Мок-провайдер для per-message статистики сабагентов: первая итерация
+ * вызывает тул `task`, вторая — финальный ответ.
+ */
+class SubagentStatsProvider extends BaseProvider {
+  async chat(): Promise<import('@itphx/synth-shared').LLMResponse> {
+    return { content: 'done', model: this.model, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
+  }
+
+  async *chatAsync(
+    messages: LLMMessage[],
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    const hasToolResult = messages.some((m) => m.role === 'tool');
+    if (!hasToolResult) {
+      yield {
+        content: 'запускаю сабагента',
+        isFinal: false,
+        toolCalls: [{
+          id: 'call_task',
+          type: 'function',
+          function: { name: 'task', arguments: JSON.stringify({}) },
+        }],
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        model: this.model,
+      };
+    } else {
+      yield {
+        content: 'готово',
+        isFinal: false,
+        usage: { inputTokens: 20, outputTokens: 8, totalTokens: 28 },
+        model: this.model,
+      };
+    }
+  }
+
+  getProviderName(): string {
+    return 'subagentstats';
+  }
+}
+
 describe('ChatOrchestrator — персистентность tool-chain (Вариант B)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
@@ -272,6 +312,76 @@ describe('ChatOrchestrator — персистентность tool-chain (Вар
     expect(finalAssistant.content).toContain('Готово');
     expect(finalAssistant.metadata?.tool_results).toBeDefined();
     expect(finalAssistant.toolCalls).toBeUndefined();
+  });
+
+  it('AD-070 §2.6: metadata.subagents агрегируется из task-результатов хода', async () => {
+    ProviderFactory.register('subagentstats', SubagentStatsProvider);
+    try {
+      const toolRegistry = createToolRegistry();
+      toolRegistry.register({
+        name: 'task',
+        description: 'fake task',
+        parameters: z.object({}),
+        capabilities: [ToolCapability.TASK],
+        async execute() {
+          return {
+            content: 'task result',
+            metadata: {
+              subagent_type: 'explore',
+              child_session_id: 'child-1',
+              subagent_model: 'm',
+              subagent_usage: {
+                inputTokens: 300,
+                outputTokens: 30,
+                totalTokens: 330,
+                cacheReadTokens: 10,
+              },
+            },
+          };
+        },
+      });
+
+      const orchestrator = new ChatOrchestrator({
+        sessionManager,
+        eventBus: new EventBus(),
+        contextBuilder: makeCtxBuilder(),
+        providerLoader: (name: string) => {
+          return { name, type: 'subagentstats', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
+        },
+        toolRegistry,
+        modelPriceLoader: (m: string) => (m === 'm'
+          ? { inputPrice: 1, outputPrice: 2, cacheReadPrice: 0.5 }
+          : null),
+        defaultWorkingDir: tmpDir,
+      });
+
+      const session = await sessionManager.createSession({
+        title: 'SubagentStats',
+        settings: { provider: 'subagentstats', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+      });
+      const msg = makeUserMessage();
+      await sessionManager.addMessage(session.id, msg);
+      const fresh = (await sessionManager.getSession(session.id))!;
+
+      const processMessage = orchestrator.createProcessMessage();
+      await processMessage(fresh, msg, new AbortController().signal, () => {});
+
+      const updated = (await sessionManager.getSession(session.id))!;
+      const finalAssistant = [...updated.messages].reverse()
+        .find((m) => m.role === MessageRole.ASSISTANT && m.metadata?.tool_results)!;
+      const subagents = finalAssistant.metadata?.subagents as Record<string, number>;
+      expect(subagents).toBeDefined();
+      expect(subagents.sessions).toBe(1);
+      expect(subagents.input_tokens).toBe(300);
+      expect(subagents.output_tokens).toBe(30);
+      expect(subagents.cache_read_tokens).toBe(10);
+      expect(subagents.cache_write_tokens).toBe(0);
+      expect(subagents.reasoning_tokens).toBe(0);
+      // 300*1/1e6 + 30*2/1e6 + 10*0.5/1e6 = 0.000365
+      expect(subagents.cost_usd).toBeCloseTo(0.000365, 12);
+    } finally {
+      ProviderFactory['_providers'].delete('subagentstats');
+    }
   });
 
   it('_sessionMessagesToLlm возвращает assistant с toolUse и tool с toolCallId', async () => {

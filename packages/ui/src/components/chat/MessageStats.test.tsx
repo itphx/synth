@@ -252,9 +252,96 @@ describe('MessageStats', () => {
   })
 })
 
+describe('MessageStats — сабагенты (AD-070 §2.6)', () => {
+  const subagents = {
+    sessions: 2,
+    input_tokens: 12_300,
+    output_tokens: 1_100,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    reasoning_tokens: 0,
+    cost_usd: 0.03,
+  }
+
+  it('показывает строку сабагентов второй строкой (после основной)', async () => {
+    const container = await renderStats(
+      makeMessage({
+        usage: { input_tokens: 1000, output_tokens: 100, total_tokens: 1100 },
+        metadata: { duration_ms: 2000, subagents },
+      }),
+    )
+    const text = container.textContent ?? ''
+    expect(text).toContain('Subagents: 2')
+    expect(text).toContain('12.3k in')
+    expect(text).toContain('1.1k out')
+    expect(text).toContain('~$0.03')
+
+    const el = container.querySelector('[data-testid="message-stats"]') as HTMLElement
+    expect(el.className).toContain('flex-col')
+    // Две строки сегментов.
+    expect(el.children.length).toBe(2)
+    // Порядок: основная строка идёт до строки сабагентов.
+    expect(text.indexOf('2s')).toBeLessThan(text.indexOf('Subagents: 2'))
+  })
+
+  it('только metadata.subagents без usage/duration/cost → рендерится одна строка сабагентов', async () => {
+    const container = await renderStats(makeMessage({ usage: null, metadata: { subagents } }))
+    const el = container.querySelector('[data-testid="message-stats"]')
+    expect(el).not.toBeNull()
+    const text = container.textContent ?? ''
+    expect(text).toContain('Subagents: 2')
+    expect(text).toContain('12.3k in')
+    expect(el!.children.length).toBe(1)
+  })
+
+  it('без metadata.subagents строка сабагентов не показывается', async () => {
+    const container = await renderStats(
+      makeMessage({
+        usage: { input_tokens: 1000, output_tokens: 100, total_tokens: 1100 },
+        metadata: { duration_ms: 2000 },
+      }),
+    )
+    expect(container.textContent).not.toContain('Subagents')
+    const el = container.querySelector('[data-testid="message-stats"]') as HTMLElement
+    expect(el.className).not.toContain('flex-col')
+  })
+
+  it('ru-локаль: строка сабагентов локализована', async () => {
+    const container = await renderStats(
+      makeMessage({ usage: null, metadata: { subagents } }),
+      'ru',
+    )
+    expect(container.textContent).toContain('Сабагенты: 2')
+    expect(container.textContent).toContain('12.3k вх')
+    expect(container.textContent).toContain('1.1k исх')
+  })
+})
+
 describe('hasMessageStats', () => {
   it('usage есть → true', () => {
     expect(hasMessageStats(makeMessage({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }))).toBe(true)
+  })
+
+  it('только metadata.subagents → true', () => {
+    expect(
+      hasMessageStats(
+        makeMessage({
+          usage: null,
+          metadata: {
+            subagents: {
+              sessions: 1, input_tokens: 10, output_tokens: 1,
+              cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, cost_usd: 0,
+            },
+          },
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  it('metadata.subagents без сессий → false', () => {
+    expect(
+      hasMessageStats(makeMessage({ usage: null, metadata: { subagents: { sessions: 0 } } })),
+    ).toBe(false)
   })
 
   it('только cost_usd → true', () => {

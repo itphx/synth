@@ -186,9 +186,11 @@ describe('computeSessionStats (AD-070 §2.6)', () => {
     // Дедупликация: child найден и в tool-сообщении, и в tool_results → 1 сессия.
     expect(dev.subagent_sessions).toBe(1);
     expect(dev.subagent_tokens).toBe(330);
-    // Агентские итоги не включают детей: только usage самого агента (100/10).
-    expect(dev.input_tokens).toBe(100);
-    expect(dev.output_tokens).toBe(10);
+    // Агентские итоги = own + все потомки: 100+300 input, 10+30 output.
+    expect(dev.input_tokens).toBe(400);
+    expect(dev.output_tokens).toBe(40);
+    // own 0.00012 + child 0.00036 = 0.00048
+    expect(dev.cost_usd).toBeCloseTo(0.00048, 12);
     // Отдельная сводка по сабагентам: usage всех сообщений дочерних сессий.
     expect(stats.subagents.sessions).toBe(1);
     expect(stats.subagents.input_tokens).toBe(300);
@@ -251,6 +253,9 @@ describe('computeSessionStats (AD-070 §2.6)', () => {
     // Глубина ≤ MAX_SUBAGENT_DEPTH (5): учитываются c1..c5, не c6/c7.
     expect(dev.subagent_sessions).toBe(MAX_SUBAGENT_DEPTH);
     expect(dev.subagent_tokens).toBe(MAX_SUBAGENT_DEPTH * 110);
+    // Итоги агента включают всех потомков (у dev собственного usage нет).
+    expect(dev.input_tokens).toBe(MAX_SUBAGENT_DEPTH * 100);
+    expect(dev.output_tokens).toBe(MAX_SUBAGENT_DEPTH * 10);
   });
 
   it('защита от циклов: ребёнок ссылается на корень', async () => {
@@ -273,6 +278,9 @@ describe('computeSessionStats (AD-070 §2.6)', () => {
     const dev = stats.agents.find((a) => a.agent_role === 'developer')!;
     expect(dev.subagent_sessions).toBe(1);
     expect(dev.subagent_tokens).toBe(55);
+    // Итоги агента включают usage ребёнка (own у dev нет).
+    expect(dev.input_tokens).toBe(50);
+    expect(dev.output_tokens).toBe(5);
   });
 
   it('нули: без usage и duration output_tps/cache_hit_rate = 0', async () => {

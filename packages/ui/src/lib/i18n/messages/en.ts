@@ -371,6 +371,7 @@ export const dict = {
   'rightPanel.stats.subagentsTitle': 'Subagents',
   'rightPanel.stats.subagentsSessions': 'Sessions',
   'rightPanel.stats.subagentsNote': 'Separate from the answer — not counted in the context window',
+  'rightPanel.stats.subagentsIncluded': 'incl. subagents',
   'rightPanel.stats.speed': 'Speed',
   'rightPanel.stats.duration': 'Duration',
   'rightPanel.stats.cost': 'Cost',

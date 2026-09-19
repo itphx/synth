@@ -231,6 +231,69 @@ export class ChatOrchestrator {
   }
 
   /**
+   * AD-070 §2.6: агрегация per-message статистики сабагентов из tool-результатов
+   * `task` (`result.metadata.subagent_usage`/`subagent_model`). Возвращает
+   * breakdown для `metadata.subagents` финального assistant-сообщения; `undefined`,
+   * если в сообщении нет ни одного task-результата с usage/child_session_id.
+   */
+  private _aggregateSubagentStats(
+    toolResults: Array<Record<string, unknown>>,
+  ): {
+    sessions: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    reasoning_tokens: number;
+    cost_usd: number;
+  } | undefined {
+    let sessions = 0;
+    let input = 0;
+    let output = 0;
+    let cacheRead = 0;
+    let cacheWrite = 0;
+    let reasoning = 0;
+    let cost = 0;
+    let found = false;
+
+    for (const raw of toolResults) {
+      if (!raw || typeof raw !== 'object') continue;
+      const entry = raw as Record<string, unknown>;
+      if (entry.name !== 'task') continue;
+      const resultMeta = (entry.result as { metadata?: Record<string, unknown> } | undefined)?.metadata;
+      if (!resultMeta) continue;
+      const childId = resultMeta.child_session_id;
+      const usage = resultMeta.subagent_usage as TokenUsage | undefined;
+      if (!childId && !usage) continue;
+
+      found = true;
+      sessions += 1;
+      if (usage) {
+        input += usage.inputTokens || 0;
+        output += usage.outputTokens || 0;
+        cacheRead += usage.cacheReadTokens || 0;
+        cacheWrite += usage.cacheWriteTokens || 0;
+        reasoning += usage.reasoningTokens || 0;
+        const model = (resultMeta.subagent_model as string | undefined)
+          || (resultMeta.routing_model as string | undefined);
+        const c = this._computeMessageCost(model, usage);
+        if (c) cost += c.costUsd;
+      }
+    }
+
+    if (!found) return undefined;
+    return {
+      sessions,
+      input_tokens: input,
+      output_tokens: output,
+      cache_read_tokens: cacheRead,
+      cache_write_tokens: cacheWrite,
+      reasoning_tokens: reasoning,
+      cost_usd: cost,
+    };
+  }
+
+  /**
    * Политика защищённых путей: системный дефолт definitions/protected-paths.json
    * + override {dataDir}/security/protected-paths.json (каскад add/remove).
    * Ленивая загрузка с кэшем; при недоступности dataDir/файлов — системный дефолт.
@@ -2695,6 +2758,10 @@ export class ChatOrchestrator {
     metadata.status = this._resolveAssistantStatus(isCancelled, metadataExtra);
     if (toolResults && toolResults.length > 0) {
       metadata.tool_results = toolResults;
+      // AD-070 §2.6: per-message статистика сабагентов (попап сообщения и
+      // «Последний ответ») — агрегируется из task-результатов этого хода.
+      const subagents = this._aggregateSubagentStats(toolResults);
+      if (subagents) metadata.subagents = subagents;
     }
     if (intermediateTextBlocks && intermediateTextBlocks.length > 0) {
       metadata.intermediate_text_blocks = intermediateTextBlocks;

@@ -11,6 +11,7 @@ import type { ContextOptimizer } from '../context/optimizer.js';
 import type { ContextConfig } from '../context/config.js';
 import type { ModelRouter } from '../router/router.js';
 import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from '../llm-error.js';
+import { computeCacheHitRate } from '../../providers/usage.js';
 import { deriveSubagentPermission } from '../permission/derive.js';
 import { PermissionEvaluator } from '../permission/evaluator.js';
 import { PermissionApprovalManager } from '../permission/approval.js';
@@ -711,6 +712,34 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     }
   };
 
+  // AD-070 §2.6 / project stats: session-счётчики дочерней сессии обновляются
+  // вручную (как `_saveAssistantMessage` оркестратора), потому что task.ts
+  // пишет сообщения через `addMessage`, а тот не трогает агрегаты сессии.
+  // Иначе `GET /projects/:id/stats` (суммирует `session.inputTokens`) не видит
+  // токены саб-агентов. Ровно один раз на прогон саб-агента.
+  let childUsageCommitted = false;
+  const commitChildUsage = async (): Promise<void> => {
+    if (childUsageCommitted) return;
+    childUsageCommitted = true;
+    const sessionManager = extra.sessionManager;
+    if (!childSessionId || !sessionManager) return;
+    try {
+      await sessionManager.withLock(childSessionId, async (s) => {
+        s.inputTokens += subagentUsage.inputTokens || 0;
+        s.outputTokens += subagentUsage.outputTokens || 0;
+        s.totalTokens += subagentUsage.totalTokens || 0;
+        s.cacheReadTokens += subagentUsage.cacheReadTokens || 0;
+        s.cacheWriteTokens += subagentUsage.cacheWriteTokens || 0;
+        s.reasoningTokens += subagentUsage.reasoningTokens || 0;
+        s.cacheHitRate = computeCacheHitRate(s.cacheReadTokens, s.inputTokens);
+        s.updatedAt = nowISO();
+        await sessionManager.saveSession(s);
+      });
+    } catch {
+      // не фатально
+    }
+  };
+
   try {
     let finalContent = '';
     let iteration = 0;
@@ -784,6 +813,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       });
 
       // 3. Финализация дочерней сессии
+      await commitChildUsage();
       await finalizeChildSession();
 
       // 4. tool_result родителю: маркер отмены + частичный текст + шаги + id сессии
@@ -809,6 +839,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           child_session_id: childSessionId,
           stopped_by: 'user',
           interrupted: true,
+          // AD-070 §2.6: per-message статистика сабагентов (попап сообщения).
+          subagent_usage: subagentUsage,
+          subagent_model: subagentModel,
           tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
           partial_output: partialContent || undefined,
         },
@@ -855,7 +888,11 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               toolCalls = chunk.toolCalls;
             }
             // AD-070 §2.6: usage и модель саб-агента для статистики родителя.
-            accumulateUsage(chunk.usage);
+            // Провайдеры отдают в каждом чанке НАКОПИТЕЛЬНЫЙ usage (running total),
+            // поэтому суммируем только финальный чанк итерации — иначе usage
+            // многократно раздувается. Каждый вызов chatAsync в финальном чанке
+            // несёт итог своей итерации.
+            if (chunk.isFinal) accumulateUsage(chunk.usage);
             if (chunk.model) subagentModel = chunk.model;
 
             // Стримим размышления/промежуточный текст саб-агента РОДИТЕЛЮ,
@@ -949,6 +986,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             i18n: i18nMeta(errKey, attempts > 1 ? { ...errParams, attempts: String(attempts) } : errParams),
           },
         });
+        await commitChildUsage();
         await finalizeChildSession();
         return {
           content: [
@@ -971,6 +1009,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             attempts,
             max_retries: retryMaxAttempts,
             error_type: llmFailure.errorType,
+            // AD-070 §2.6: per-message статистика сабагентов (попап сообщения).
+            subagent_usage: subagentUsage,
+            subagent_model: subagentModel,
             tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
           },
         };
@@ -1506,6 +1547,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     }
 
     // Финализировать дочернюю сессию
+    await commitChildUsage();
     await finalizeChildSession();
 
     // ─── Формирование результата tool_result ──────────────────────
@@ -1542,6 +1584,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         routing_strategy: routingDecisionInfo?.strategy,
         routing_provider: routingDecisionInfo?.providerName,
         routing_model: routingDecisionInfo?.modelName,
+        // AD-070 §2.6: per-message статистика сабагентов (попап сообщения).
+        subagent_usage: subagentUsage,
+        subagent_model: subagentModel,
       },
     };
   } catch (err: unknown) {

@@ -1371,4 +1371,121 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
     expect(dev.subagent_sessions).toBe(1);
     expect(dev.subagent_tokens).toBe(168);
   });
+
+  it('usage накапливается только по финальным чанкам итераций, а не по всем чанкам', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    // Провайдеры отдают в каждом чанке НАКОПИТЕЛЬНЫЙ usage; суммировать нужно
+    // только финальный чанк каждой итерации (30 + 50), а не все (10+20+30+40+50).
+    let call = 0;
+    const provider = {
+      chatAsync: vi.fn().mockImplementation(async function* () {
+        call++;
+        if (call === 1) {
+          yield { isFinal: false, content: 'часть ', usage: { inputTokens: 10, outputTokens: 1, totalTokens: 11 } };
+          yield { isFinal: false, content: 'ответа ', usage: { inputTokens: 20, outputTokens: 2, totalTokens: 22 } };
+          yield {
+            isFinal: true,
+            content: 'ответ ',
+            model: 'test-model',
+            usage: { inputTokens: 30, outputTokens: 3, totalTokens: 33 },
+            toolCalls: [{ id: 'c1', function: { name: 'noop', arguments: '{}' } }],
+          };
+          return;
+        }
+        yield { isFinal: false, content: 'финал ', usage: { inputTokens: 40, outputTokens: 4, totalTokens: 44 } };
+        yield {
+          isFinal: true,
+          content: 'финал',
+          model: 'test-model',
+          usage: { inputTokens: 50, outputTokens: 5, totalTokens: 55 },
+          toolCalls: [],
+        };
+      }),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+    const registry = {
+      get: () => ({ id: 'explore', agentMode: ['subagent'], subagentPrompt: 'test', maxSteps: 3 }),
+      getSubagents: () => [{ id: 'explore' }],
+      getToolsForAgent: () => [],
+    };
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: registry,
+        },
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(provider.chatAsync).toHaveBeenCalledTimes(2);
+    const usage = result.metadata!.subagent_usage as { inputTokens: number; outputTokens: number };
+    expect(usage.inputTokens).toBe(80); // 30 + 50, а не 150
+    expect(usage.outputTokens).toBe(8); // 3 + 5
+
+    const childSessionId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childSessionId))!;
+    const assistant = [...child.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(assistant.usage?.inputTokens).toBe(80);
+  });
+
+  it('дочерняя сессия наследует projectId и её session-счётчики попадают в project stats', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent', projectId: 'proj-1' });
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: {
+            chatAsync: vi.fn().mockReturnValue(
+              (async function* () {
+                yield {
+                  isFinal: true,
+                  content: 'sub answer',
+                  toolCalls: [],
+                  model: 'test-model',
+                  usage: { inputTokens: 123, outputTokens: 45, totalTokens: 168, cacheReadTokens: 20 },
+                };
+              })(),
+            ),
+            model: 'test-model',
+            name: 'test-provider',
+          },
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+        },
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    const childSessionId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childSessionId))!;
+    // projectId проброшен → ребёнок попадает в listSessions({ projectId }).
+    expect(child.projectId).toBe('proj-1');
+    // session-счётчики обновлены вручную (task.ts пишет через addMessage).
+    expect(child.inputTokens).toBe(123);
+    expect(child.outputTokens).toBe(45);
+    expect(child.totalTokens).toBe(168);
+    expect(child.cacheReadTokens).toBe(20);
+
+    const projectSessions = await sessionManager.listSessions({ projectId: 'proj-1' });
+    expect(projectSessions.map((s) => s.id)).toContain(childSessionId);
+    const totalInput = projectSessions.reduce((sum, s) => sum + s.inputTokens, 0);
+    expect(totalInput).toBe(123);
+  });
 });

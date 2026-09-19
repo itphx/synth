@@ -171,7 +171,12 @@ describe('StatsTab — секция «История» (AD-070 §2.5)', () => {
 })
 
 describe('StatsTab — блок «Сабагенты» в «Последнем ответе» (AD-070 §2.6)', () => {
-  function setLastAssistantWithUsage(): void {
+  const subagentBreakdown = {
+    sessions: 1, input_tokens: 300, output_tokens: 30,
+    cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, cost_usd: 0.00036,
+  }
+
+  function setLastAssistant(metadata?: Record<string, unknown>): void {
     useChatStore.setState({
       messagesBySession: {
         s1: [
@@ -182,30 +187,21 @@ describe('StatsTab — блок «Сабагенты» в «Последнем �
             disabled: false,
             hidden: false,
             usage: { input_tokens: 100, output_tokens: 10 },
+            metadata: metadata ?? null,
           },
         ],
       },
     } as never)
   }
 
-  it('показывает отдельный блок сабагентов (сессии/токены/стоимость) и подпись', async () => {
+  it('показывает блок сабагентов из последнего сообщения (сессии/токены/стоимость) и подпись', async () => {
     mocks.getSessionStats.mockResolvedValue({
       session_id: 's1',
-      agents: [
-        {
-          agent_role: 'developer', messages: 1, input_tokens: 100, output_tokens: 10,
-          cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0,
-          cost_usd: 0, cache_hit_rate: 0, duration_ms: 0, output_tps: 0,
-          subagent_sessions: 1, subagent_tokens: 330,
-        },
-      ],
+      agents: [],
       users: [],
-      subagents: {
-        sessions: 1, input_tokens: 300, output_tokens: 30,
-        cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, cost_usd: 0.00036,
-      },
+      subagents: subagentBreakdown,
     })
-    setLastAssistantWithUsage()
+    setLastAssistant({ subagents: subagentBreakdown })
 
     const container = await renderStats()
 
@@ -276,23 +272,58 @@ describe('StatsTab — блок «Сабагенты» в «Последнем �
     expect(mocks.getProjectStats).toHaveBeenLastCalledWith('p1')
   })
 
-  it('скрывает блок, когда сабагентов нет', async () => {
+  it('скрывает блок, если у последнего ответа нет сабагентов (даже при ненулевой сессионной сводке)', async () => {
+    // Регрессия: раньше блок брался из sessionStats.subagents и висел после
+    // ответов без сабагентов.
+    mocks.getSessionStats.mockResolvedValue({
+      session_id: 's1',
+      agents: [],
+      users: [],
+      subagents: subagentBreakdown,
+    })
+    setLastAssistant()
+
+    const container = await renderStats()
+    const section = findSection(container, 'Last answer')!
+    expect(section.textContent).not.toContain('Subagents')
+    expect(section.textContent).not.toContain('Separate from the answer')
+  })
+
+  it('секция «Сессия» суммирует activeSession и sessionStats.subagents', async () => {
+    useSessionsStore.setState({
+      sessions: [
+        {
+          id: 's1',
+          title: 'S',
+          settings: { model: 'm' },
+          input_tokens: 1000,
+          output_tokens: 100,
+          cache_read_tokens: 500,
+          cache_write_tokens: 50,
+          reasoning_tokens: 20,
+        },
+      ],
+    } as never)
     mocks.getSessionStats.mockResolvedValue({
       session_id: 's1',
       agents: [],
       users: [],
       subagents: {
-        sessions: 0, input_tokens: 0, output_tokens: 0,
-        cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, cost_usd: 0,
+        sessions: 1, input_tokens: 300, output_tokens: 30,
+        cache_read_tokens: 100, cache_write_tokens: 5, reasoning_tokens: 7, cost_usd: 0.001,
       },
     })
-    setLastAssistantWithUsage()
+    setLastAssistant()
 
     const container = await renderStats()
-    const text = container.textContent ?? ''
-
-    expect(text).toContain('Last answer')
-    expect(text).not.toContain('Subagents')
-    expect(text).not.toContain('Separate from the answer')
+    const section = findSection(container, 'Session')!
+    const text = section.textContent ?? ''
+    expect(text).toContain((1300).toLocaleString()) // input 1000 + 300
+    expect(text).toContain('130') // output 100 + 30
+    expect(text).toContain('600') // cache read 500 + 100
+    expect(text).toContain('55') // cache write 50 + 5
+    expect(text).toContain('27') // reasoning 20 + 7
+    expect(text).toContain('46%') // 600 / 1300
+    expect(text).toContain('incl. subagents')
   })
 })

@@ -370,6 +370,7 @@ export const dict = {
   'rightPanel.stats.subagentsTitle': 'Сабагенты',
   'rightPanel.stats.subagentsSessions': 'Сессий',
   'rightPanel.stats.subagentsNote': 'Отдельно от ответа — не входит в контекстное окно',
+  'rightPanel.stats.subagentsIncluded': 'в т.ч. сабагенты',
   'rightPanel.stats.speed': 'Скорость',
   'rightPanel.stats.duration': 'Длительность',
   'rightPanel.stats.cost': 'Стоимость',

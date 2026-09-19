@@ -3,6 +3,7 @@ import type { MessageData, MessageStatus } from '@/stores/chatStore'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { formatCost, formatDuration, formatTokens, formatTps } from '@/lib/formatStats'
+import { readMessageSubagents } from '@/lib/subagentStats'
 
 /** metadata.duration_ms / metadata.cost_usd приходят как unknown — читаем только number. */
 function readNumber(
@@ -50,6 +51,8 @@ export function hasMessageStats(message: Pick<MessageData, 'usage' | 'metadata'>
   // Содержательный статус (остановлено/ошибка/лимит) — сам по себе сегмент.
   const status = readStatus(message.metadata)
   if (status && status !== 'completed') return true
+  // AD-070 §2.6: сабагенты без usage/duration/cost — тоже валидный сегмент.
+  if (readMessageSubagents(message.metadata)) return true
   return false
 }
 
@@ -62,6 +65,9 @@ interface MessageStatsProps {
  * Компактная статистика ответа ассистента (AD-070 §2.6):
  * `[Остановлено ·] 11m 34s · 1.7M вх · 33.3k исх · ~$0.03 · 93% кэш · 12.3 tok/s`
  * — одной строкой без переноса.
+ *
+ * При наличии `metadata.subagents` добавляется вторая строка:
+ * `Сабагенты: 2 · 12.3k вх · 1.1k исх [· ~$0.0003]`.
  *
  * Префикс-сегмент отражает состояние ответа: cancelled/stopped → «Остановлено»,
  * error → «Ошибка», limit → «Лимит итераций»; completed — без префикса.
@@ -112,17 +118,41 @@ export function MessageStats({ message, className }: MessageStatsProps) {
     segments.push(t('chat.messageStats.speed', { speed: formatTps(tps) }))
   }
 
-  if (segments.length === 0) return null
+  // AD-070 §2.6: отдельная (вторая) строка статистики сабагентов этого хода.
+  const subagents = readMessageSubagents(message.metadata)
+  const subagentSegments: string[] = []
+  if (subagents) {
+    subagentSegments.push(`${t('rightPanel.stats.subagentsTitle')}: ${subagents.sessions}`)
+    subagentSegments.push(`${formatTokens(subagents.input_tokens)} ${t('chat.messageStats.in')}`)
+    subagentSegments.push(`${formatTokens(subagents.output_tokens)} ${t('chat.messageStats.out')}`)
+    if (subagents.cost_usd > 0) {
+      subagentSegments.push(t('chat.messageStats.cost', { cost: formatCost(subagents.cost_usd) }))
+    }
+  }
+
+  if (segments.length === 0 && subagentSegments.length === 0) return null
 
   return (
     <div
       data-testid="message-stats"
       className={cn(
         'text-[0.6875rem] text-foreground tabular-nums',
-        'flex flex-nowrap items-center gap-x-1.5 whitespace-nowrap',
+        subagents
+          ? 'flex flex-col gap-y-0.5'
+          : 'flex flex-nowrap items-center gap-x-1.5 whitespace-nowrap',
         className,
       )}
     >
+      {segments.length > 0 && <StatsRow segments={segments} />}
+      {subagentSegments.length > 0 && <StatsRow segments={subagentSegments} />}
+    </div>
+  )
+}
+
+/** Одна строка сегментов, разделённых `·`, без переноса. */
+function StatsRow({ segments }: { segments: string[] }) {
+  return (
+    <div className="flex flex-nowrap items-center gap-x-1.5 whitespace-nowrap">
       {segments.map((segment, i) => (
         <Fragment key={i}>
           {i > 0 && <span aria-hidden="true">·</span>}

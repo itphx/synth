@@ -9,6 +9,7 @@ import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { formatCost, formatDuration, formatTokens, formatTps } from '@/lib/formatStats'
+import { readMessageSubagents } from '@/lib/subagentStats'
 import type { ProjectStats, ModelGroup, PromptInfoResponse } from '@/lib/api/synthApi'
 
 const fmt = (v: number): string => v.toLocaleString()
@@ -16,6 +17,12 @@ const fmt = (v: number): string => v.toLocaleString()
 function dash(v: number | undefined): string {
   if (v === undefined) return '\u2014'
   return fmt(v)
+}
+
+/** Сумма двух возможно-undefined значений: undefined, только если оба не заданы. */
+function sumDefined(a: number | undefined, b: number | undefined): number | undefined {
+  if (a === undefined && b === undefined) return undefined
+  return (a ?? 0) + (b ?? 0)
 }
 
 /** AD-070 §2.3: cache hit rate = cacheRead / input (0 при input = 0). */
@@ -148,9 +155,24 @@ export const StatsTab: React.FC = () => {
 
   const hasLastMsgUsage = !!(lastAssistantMsg?.usage && Object.keys(lastAssistantMsg.usage).length > 0)
   const hasSubagents = !!sessionStats?.agents.some((a) => a.subagent_sessions > 0)
-  // AD-070 §2.6: отдельная сводка по сабагентам (не входит в контекст родителя).
-  const subagentStats = sessionStats?.subagents
-  const hasSubagentStats = !!subagentStats && subagentStats.sessions > 0
+  // AD-070 §2.6: блок сабагентов в «Последнем ответе» — из статистики самого
+  // последнего сообщения (metadata.subagents), а не сессионной сводки: иначе он
+  // висит и после ответов без сабагентов.
+  const lastSubagents = readMessageSubagents(lastAssistantMsg?.metadata)
+  const hasLastSubagents = !!lastSubagents && lastSubagents.sessions > 0
+
+  // AD-070 §2.6: суммы секции «Сессия» включают сабагентов (sessionStats.subagents),
+  // если сессионная статистика загружена.
+  const sessionSub = sessionStats?.subagents
+  const sessionInput = (activeSession?.input_tokens || 0) + (sessionSub?.input_tokens || 0)
+  const sessionOutput = (activeSession?.output_tokens || 0) + (sessionSub?.output_tokens || 0)
+  const sessionCacheRead = sumDefined(activeSession?.cache_read_tokens, sessionSub?.cache_read_tokens)
+  const sessionCacheWrite = sumDefined(activeSession?.cache_write_tokens, sessionSub?.cache_write_tokens)
+  const sessionReasoning = sumDefined(activeSession?.reasoning_tokens, sessionSub?.reasoning_tokens)
+  const sessionHitRate = sessionStats
+    ? hitRate(sessionCacheRead, sessionInput)
+    : (activeSession?.cache_hit_rate ?? hitRate(activeSession?.cache_read_tokens, activeSession?.input_tokens))
+  const hasSessionSubagents = !!sessionSub && sessionSub.sessions > 0
 
   return (
     <div className="flex flex-col gap-4 p-3">
@@ -204,19 +226,19 @@ export const StatsTab: React.FC = () => {
             )}
           </div>
 
-          {hasSubagentStats && (
+          {hasLastSubagents && (
             <div className="mt-3 border-t border-border/40 pt-3">
               <div className="mb-1 flex items-center gap-1.5 text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
                 <Icon name="user-3" className="size-3 shrink-0" />
                 <span>{t('rightPanel.stats.subagentsTitle')}</span>
               </div>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                <StatCell icon="chat-new" color="text-cyan-400" label={t('rightPanel.stats.subagentsSessions')} value={fmt(subagentStats!.sessions)} />
-                <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={formatTokens(subagentStats!.input_tokens)} />
-                <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={formatTokens(subagentStats!.output_tokens)} />
-                <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={formatTokens(subagentStats!.cache_read_tokens)} />
+                <StatCell icon="chat-new" color="text-cyan-400" label={t('rightPanel.stats.subagentsSessions')} value={fmt(lastSubagents!.sessions)} />
+                <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={formatTokens(lastSubagents!.input_tokens)} />
+                <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={formatTokens(lastSubagents!.output_tokens)} />
+                <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={formatTokens(lastSubagents!.cache_read_tokens)} />
                 <div className="col-span-2">
-                  <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCost(subagentStats!.cost_usd)} />
+                  <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCost(lastSubagents!.cost_usd)} />
                 </div>
               </div>
               <div className="mt-1 text-[0.6875rem] text-muted-foreground">
@@ -235,24 +257,28 @@ export const StatsTab: React.FC = () => {
 
       <Section title={t('rightPanel.stats.session')}>
         <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-          <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={fmt(activeSession?.input_tokens || 0)} />
-          <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={fmt(activeSession?.output_tokens || 0)} />
-          <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={dash(activeSession?.cache_read_tokens)} />
-          <StatCell icon="server" color="text-purple-400" label={t('rightPanel.stats.cacheWriteTokens')} value={dash(activeSession?.cache_write_tokens)} />
+          <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={fmt(sessionInput)} />
+          <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={fmt(sessionOutput)} />
+          <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={dash(sessionCacheRead)} />
+          <StatCell icon="server" color="text-purple-400" label={t('rightPanel.stats.cacheWriteTokens')} value={dash(sessionCacheWrite)} />
           <div className="col-span-2">
-            <StatCell icon="brain" color="text-pink-400" label={t('rightPanel.stats.reasoningTokens')} value={dash(activeSession?.reasoning_tokens)} />
+            <StatCell icon="brain" color="text-pink-400" label={t('rightPanel.stats.reasoningTokens')} value={dash(sessionReasoning)} />
           </div>
           <div className="col-span-2">
             <StatCell
               icon="line-chart"
               color="text-teal-400"
               label={t('rightPanel.stats.cacheHitRate')}
-              value={pct(
-                activeSession?.cache_hit_rate
-                  ?? hitRate(activeSession?.cache_read_tokens, activeSession?.input_tokens),
-              )}
+              value={pct(sessionHitRate)}
             />
           </div>
+          {hasSessionSubagents && (
+            <div className="col-span-2 text-[0.6875rem] text-muted-foreground">
+              {t('rightPanel.stats.subagentsIncluded')}:{' '}
+              {formatTokens(sessionSub!.input_tokens)} {t('chat.messageStats.in')} ·{' '}
+              {formatTokens(sessionSub!.output_tokens)} {t('chat.messageStats.out')}
+            </div>
+          )}
         </div>
       </Section>
 

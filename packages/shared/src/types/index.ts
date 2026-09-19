@@ -157,8 +157,9 @@ export interface PromptHistoryInfo {
 // --- Session statistics (AD-070 §2.6) ---
 /**
  * Статистика по агенту в рамках сессии (`GET /sessions/:id/stats`).
- * Usage — по сообщениям агента; `subagent_*` — рекурсивно подтянутый usage
- * дочерних сессий (tool `task`), инициированных агентом.
+ * Итоги (`input_tokens`/`output_tokens`/`cache_*`/`reasoning_tokens`/`cost_usd`)
+ * включают usage/cost сабагентов (own + все потомки); `subagent_*` — детализация
+ * только по дочерним сессиям (tool `task`), инициированным агентом.
  */
 export interface SessionAgentStats {
   agent_role: string;
@@ -194,9 +195,10 @@ export interface SessionUserStats {
 }
 
 /**
- * Сводка по сабагентам сессии (рекурсивно, tool `task`). Учитывается отдельно
- * от токенов ответа родителя: usage дочерних сессий не входит в контекстное
- * окно родителя, поэтому показывается отдельным блоком (AD-070 §2.6).
+ * Сводка по сабагентам сессии (рекурсивно, tool `task`). Отдельный блок:
+ * `SessionAgentStats` уже включает usage детей в свои итоги, а здесь — только
+ * суммарная детализация по всем дочерним сессиям (в контекстное окно родителя
+ * их usage не входит, AD-070 §2.6).
  */
 export interface SessionSubagentStats {
   sessions: number;

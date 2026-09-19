@@ -98,12 +98,12 @@ describe('MessageActions: активное состояние кнопок', () 
     expect(opened.className).toContain('bg-primary/10')
     const body = document.querySelector('[data-testid="stats-body"]')
     expect(body).not.toBeNull()
-    // Поповер: выравнивание по левому краю кнопки, сторона top, высота как у
-    // блока выбора режима сессии (34px), содержимое центрировано по вертикали.
+    // Поповер: выравнивание по левому краю кнопки, сторона top, минимальная
+    // высота как у блока выбора режима сессии (34px); при сабагентах — 2 строки.
     const popoverContent = body!.parentElement as HTMLElement
     expect(popoverContent.getAttribute('data-align')).toBe('start')
     expect(popoverContent.getAttribute('data-side')).toBe('top')
-    expect(popoverContent.className).toContain('h-[34px]')
+    expect(popoverContent.className).toContain('min-h-[34px]')
     expect(popoverContent.className).toContain('items-center')
 
     await act(async () => {
