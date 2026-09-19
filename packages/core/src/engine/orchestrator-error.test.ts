@@ -70,6 +70,22 @@ class PartialContentFailingProvider extends BaseProvider {
   }
 }
 
+/** Провайдер с non-recoverable ошибкой авторизации (ретраи не выполняются). */
+class AuthFailingProvider extends BaseProvider {
+  async chat(): Promise<import('@itphx/synth-shared').LLMResponse> {
+    throw new Error('401 Unauthorized');
+  }
+
+  async *chatAsync(): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    yield { content: '', isFinal: false, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
+    throw new Error('401 Unauthorized');
+  }
+
+  getProviderName(): string {
+    return 'mockauthfail';
+  }
+}
+
 function makeCtxBuilder(): ContextBuilder {
   return {
     buildSystemPrompt: async () => 'system prompt',
@@ -117,7 +133,10 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function run(providerType = 'mockfail'): Promise<{
+  async function run(
+    providerType = 'mockfail',
+    opts: { attempt?: number; debug?: boolean } = {},
+  ): Promise<{
     result: Awaited<ReturnType<ReturnType<ChatOrchestrator['createProcessMessage']>>>;
     chunks: Array<{ event: string; data: Record<string, unknown> }>;
     sessionId: string;
@@ -131,11 +150,20 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
         return { name, type: providerType, baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
       },
       defaultWorkingDir: tmpDir,
+      // Цены модели 'm' — чтобы проверить cost_usd у сообщения об ошибке.
+      modelPriceLoader: (model: string) =>
+        model === 'm' ? { inputPrice: 1, outputPrice: 2 } : null,
     });
 
     const session = await sessionManager.createSession({
       title: 'Err',
-      settings: { provider: providerType, model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+      settings: {
+        provider: providerType,
+        model: 'm',
+        systemPrompt: 'test',
+        agentRole: 'developer',
+        debugEnabled: opts.debug ?? false,
+      },
     });
     const msg = makeMessage();
     await sessionManager.addMessage(session.id, msg);
@@ -145,7 +173,7 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
     const processMessage = orchestrator.createProcessMessage();
     const result = await processMessage(fresh, msg, new AbortController().signal, (event, data) => {
       chunks.push({ event, data });
-    });
+    }, opts.attempt);
 
     return {
       result,
@@ -177,13 +205,75 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
     expect(userMsg!.metadata?.last_error).toContain('LLM provider');
   });
 
-  it('при ошибке стрима с частичным контентом НЕ создаёт assistant-сообщение', async () => {
+  // Баг 1 (AD-070 §2.6): при сбое провайдера сохраняется assistant-сообщение
+  // об ошибке — иначе нет записи в истории, агрегаты сессии 0, debug теряется.
+  it('при сбое сохраняет assistant-сообщение об ошибке со status/usage/duration/cost/i18n', async () => {
     const { sessionId } = await run('mockpartial');
     const session = await sessionManager.getSession(sessionId);
     const assistants = session!.messages.filter((m) => m.role === MessageRole.ASSISTANT);
-    expect(assistants).toHaveLength(0);
+    expect(assistants).toHaveLength(1);
+
+    const assistant = assistants[0]!;
+    // content — человекочитаемая ошибка, а не частичный ответ.
+    expect(assistant.content).toContain('LLM provider');
+    expect(assistant.metadata?.status).toBe('error');
+    expect((assistant.metadata?.i18n as { key?: string } | undefined)?.key).toBe('router.timeout');
+    expect(typeof assistant.metadata?.duration_ms).toBe('number');
+
+    // Bug 4: пустой usage оценён из промпта/контента, флаг обязателен.
+    expect(assistant.usage).toBeDefined();
+    expect(assistant.usage!.inputTokens).toBeGreaterThan(0);
+    expect(assistant.usage!.outputTokens).toBeGreaterThan(0);
+    expect(assistant.metadata?.usage_estimated).toBe(true);
+
+    // cost_usd считается по цене модели (modelPriceLoader).
+    expect(typeof assistant.metadata?.cost_usd).toBe('number');
+    expect(assistant.metadata?.cost_usd as number).toBeGreaterThan(0);
+    expect(assistant.metadata?.cost_breakdown).toBeDefined();
+
+    // Агрегаты сессии обновлены через _saveAssistantMessage.
+    expect(session!.inputTokens).toBeGreaterThan(0);
+    expect(session!.outputTokens).toBeGreaterThan(0);
+
+    // last_error по-прежнему пишется в user-сообщение.
     const userMsg = session!.messages.find((m) => m.role === MessageRole.USER);
     expect(userMsg).toBeDefined();
     expect(userMsg!.metadata?.last_error).toContain('LLM provider');
+  });
+
+  it('сохраняет debug_data при debugEnabled', async () => {
+    const { sessionId } = await run('mockpartial', { debug: true });
+    const session = await sessionManager.getSession(sessionId);
+    const assistant = session!.messages.find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(assistant).toBeDefined();
+    expect(assistant.debugData).toBeDefined();
+  });
+
+  // Не допускаем дублей: на промежуточной recoverable-попытке QueueProcessor
+  // сделает ретрай, поэтому сообщение об ошибке не сохраняется.
+  it('НЕ сохраняет assistant-сообщение об ошибке на промежуточной попытке', async () => {
+    const { sessionId } = await run('mockfail', { attempt: 1 });
+    const session = await sessionManager.getSession(sessionId);
+    expect(session!.messages.filter((m) => m.role === MessageRole.ASSISTANT)).toHaveLength(0);
+  });
+
+  it('сохраняет assistant-сообщение об ошибке на последней попытке', async () => {
+    const { sessionId } = await run('mockfail', { attempt: 4 });
+    const session = await sessionManager.getSession(sessionId);
+    const assistants = session!.messages.filter((m) => m.role === MessageRole.ASSISTANT);
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]!.metadata?.status).toBe('error');
+  });
+
+  // non-recoverable сбой терминален даже на первой попытке.
+  it('сохраняет сообщение об ошибке для non-recoverable сбоя на первой попытке', async () => {
+    ProviderFactory.register('mockauthfail', AuthFailingProvider);
+    const { sessionId } = await run('mockauthfail', { attempt: 1 });
+    ProviderFactory['_providers'].delete('mockauthfail');
+    const session = await sessionManager.getSession(sessionId);
+    const assistants = session!.messages.filter((m) => m.role === MessageRole.ASSISTANT);
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]!.metadata?.status).toBe('error');
+    expect((assistants[0]!.metadata?.i18n as { key?: string } | undefined)).toBeUndefined();
   });
 });

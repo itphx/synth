@@ -49,6 +49,18 @@ export function computeUsageCost(
   pricing: UsagePricing | null | undefined,
 ): UsageCost | null {
   if (!usage || !pricing) return null;
+  const { inputPrice, outputPrice, cacheReadPrice, cacheWritePrice } = pricing;
+  // AD-070 §2.6 (LOW): если ни одна цена не задана — стоимость неизвестна,
+  // а не «бесплатно». Возвращаем null, чтобы `metadata.cost_usd`/
+  // `cost_breakdown` не писались (как для модели без записи цен).
+  if (
+    inputPrice == null &&
+    outputPrice == null &&
+    cacheReadPrice == null &&
+    cacheWritePrice == null
+  ) {
+    return null;
+  }
   const div = 1_000_000;
   const input = ((usage.inputTokens || 0) * (pricing.inputPrice ?? 0)) / div;
   const output = ((usage.outputTokens || 0) * (pricing.outputPrice ?? 0)) / div;

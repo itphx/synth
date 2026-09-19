@@ -82,6 +82,11 @@ export function MessageStats({ message, className }: MessageStatsProps) {
   const durationMs = readNumber(message.metadata, 'duration_ms')
   const costUsd = readNumber(message.metadata, 'cost_usd')
   const status = readStatus(message.metadata)
+  // Bug 4 (AD-070 §2.6): usage мог быть оценён (провайдер не успел отдать
+  // финальный чанк при отмене/сбое) — помечаем токены `~`, чтобы не выдавать
+  // оценку за точные данные.
+  const usageEstimated = message.metadata?.usage_estimated === true
+  const tokenPrefix = usageEstimated ? '~' : ''
 
   const segments: string[] = []
 
@@ -99,8 +104,8 @@ export function MessageStats({ message, className }: MessageStatsProps) {
   }
 
   if (usage) {
-    segments.push(`${formatTokens(usage.input_tokens ?? 0)} ${t('chat.messageStats.in')}`)
-    segments.push(`${formatTokens(usage.output_tokens ?? 0)} ${t('chat.messageStats.out')}`)
+    segments.push(`${tokenPrefix}${formatTokens(usage.input_tokens ?? 0)} ${t('chat.messageStats.in')}`)
+    segments.push(`${tokenPrefix}${formatTokens(usage.output_tokens ?? 0)} ${t('chat.messageStats.out')}`)
   }
 
   if (costUsd !== undefined) {

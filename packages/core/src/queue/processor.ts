@@ -17,6 +17,8 @@ export type ProcessMessageFn = (
   message: Message,
   signal: AbortSignal,
   publishChunk: (event: string, data: Record<string, unknown>) => void,
+  /** Номер попытки (1-based) — для решения о терминальности сбоя (AD-070 §2.6). */
+  attempt?: number,
 ) => Promise<{ error?: string; errorType?: string; canRetry?: boolean }>;
 
 /**
@@ -275,6 +277,9 @@ export class QueueProcessor {
               this._appendToRingBuffer(streamId, data);
             }
           },
+          // AD-070 §2.6: текущая попытка (1-based). _retryDelays хранит число
+          // уже совершённых неудачных попыток.
+          (this._retryDelays[streamId] ?? 0) + 1,
         );
         this._activeController = null;
 

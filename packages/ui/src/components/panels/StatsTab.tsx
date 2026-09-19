@@ -113,6 +113,8 @@ export const StatsTab: React.FC = () => {
   const lastTps = lastDurationMs && lastDurationMs > 0 && typeof lastOutputTokens === 'number'
     ? lastOutputTokens / (lastDurationMs / 1000)
     : undefined
+  // Bug 4 (AD-070 §2.6): usage мог быть оценён при отмене/сбое — помечаем `~`.
+  const lastTokenPrefix = lastAssistantMsg?.metadata?.usage_estimated === true ? '~' : ''
 
   useEffect(() => {
     if (sessionProjectId) {
@@ -198,8 +200,8 @@ export const StatsTab: React.FC = () => {
             )}
           </div>
           <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-            <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={fmt(lastInputTokens)} />
-            <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={fmt(lastAssistantMsg!.usage!.output_tokens)} />
+            <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={`${lastTokenPrefix}${fmt(lastInputTokens)}`} />
+            <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={`${lastTokenPrefix}${fmt(lastAssistantMsg!.usage!.output_tokens)}`} />
             <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={dash(lastAssistantMsg!.usage!.cache_read_tokens)} />
             <StatCell icon="server" color="text-purple-400" label={t('rightPanel.stats.cacheWriteTokens')} value={dash(lastAssistantMsg!.usage!.cache_write_tokens)} />
             <div className="col-span-2">

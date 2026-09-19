@@ -49,7 +49,7 @@ import { PermissionEvaluator, extractPaths } from './permission/evaluator.js';
 import { computeToolAvailability } from './permission/availability.js';
 import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
-import { classifyLlmError, isLlmErrorRecoverable } from './llm-error.js';
+import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS } from './llm-error.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine } from './security/prompt-injection.js';
@@ -72,6 +72,36 @@ const CONTEXT_LIMIT_WARNING_PERCENT = 90;
  * - `limit` — достигнут лимит итераций.
  */
 export type AssistantMessageStatus = 'completed' | 'cancelled' | 'stopped' | 'error' | 'limit';
+
+const ASSISTANT_MESSAGE_STATUSES: readonly AssistantMessageStatus[] = [
+  'completed', 'cancelled', 'stopped', 'error', 'limit',
+];
+
+/** Валидный ли статус (защита от произвольного значения в metadata.status). */
+function isAssistantMessageStatus(value: unknown): value is AssistantMessageStatus {
+  return typeof value === 'string' && (ASSISTANT_MESSAGE_STATUSES as readonly string[]).includes(value);
+}
+
+/**
+ * AD-070 §2.6: контекст для сохранения assistant-сообщения об ошибке LLM.
+ * Заполняется на месте сбоя (там доступны накопленные usage/контент/debug).
+ */
+interface LlmFailureContext {
+  debugCollector: DebugCollector;
+  /** Длительность прогона до сбоя (metadata.duration_ms). */
+  durationMs: number;
+  /** Фактический usage, если провайдер успел его отдать (иначе — оценка). */
+  usage?: TokenUsage;
+  model?: string;
+  providerName?: string;
+  agentRole?: string;
+  /** Частичный ответ до сбоя — база для оценки output-токенов. */
+  content?: string;
+  /** Размер отправленного промпта в символах — база для оценки input-токенов. */
+  promptChars?: number;
+  toolResults?: Array<Record<string, unknown>>;
+  promptMeta?: PromptMeta;
+}
 
 export interface ModelPricing {
   inputPrice?: number;
@@ -228,6 +258,84 @@ export class ChatOrchestrator {
   ): ReturnType<typeof computeUsageCost> {
     if (!model || !usage) return null;
     return computeUsageCost(usage, this._modelPriceLoader?.(model) ?? null);
+  }
+
+  /**
+   * AD-070 §2.6: fallback-цепочка модели сообщения. Провайдеры выставляют
+   * `model` только в финальном чанке (`isFinal`), поэтому при отмене/сбое
+   * `chunkModel`/`finalModel` пусты — берём модель провайдера или настройку
+   * сессии, иначе `_computeMessageCost` вернёт null и `cost_usd` потеряется.
+   */
+  private _resolveMessageModel(
+    chunkModel: string | undefined,
+    finalModel: string | undefined,
+    provider: BaseProvider | undefined,
+    session: Session,
+  ): string | undefined {
+    return chunkModel || finalModel || provider?.model || session.settings.model || undefined;
+  }
+
+  /**
+   * AD-070 §2.6 (Bug 4): best-effort оценка usage, когда провайдер не успел
+   * отдать финальный чанк (отмена/сбой). Эвристика `chars / 4` (как в
+   * `estTokens`): input — из размера промпта, output — из накопленного
+   * контента. Реальные значения не перетираются; при любой дозаполненной
+   * части `estimated = true` (вызывающий пишет `metadata.usage_estimated`).
+   */
+  private _estimateUsage(
+    usage: TokenUsage | undefined,
+    promptChars: number,
+    outputChars: number,
+  ): { usage: TokenUsage; estimated: boolean } {
+    const base: TokenUsage = usage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    let inputTokens = base.inputTokens || 0;
+    let outputTokens = base.outputTokens || 0;
+    let estimated = false;
+
+    if (inputTokens <= 0 && promptChars > 0) {
+      inputTokens = Math.ceil(promptChars / 4);
+      estimated = true;
+    }
+    if (outputTokens <= 0 && outputChars > 0) {
+      outputTokens = Math.ceil(outputChars / 4);
+      estimated = true;
+    }
+
+    const totalTokens = base.totalTokens && base.totalTokens > 0
+      ? base.totalTokens
+      : inputTokens + outputTokens;
+
+    return {
+      usage: {
+        ...base,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+      },
+      estimated,
+    };
+  }
+
+  /**
+   * Оценка размера промпта (символы) для best-effort input-токенов: сообщения
+   * (content + toolUse + reasoning) + system prompt + JSON тулов. Зеркалит
+   * отправку в провайдер, не мутирует данные.
+   */
+  private _estimatePromptChars(
+    messages: LLMMessage[],
+    systemPrompt: SystemPromptPayload | string | undefined,
+    tools?: Record<string, unknown>[],
+  ): number {
+    let chars = 0;
+    for (const msg of messages) {
+      chars += msg.content?.length ?? 0;
+      if (msg.toolUse) chars += JSON.stringify(msg.toolUse).length;
+      if (msg.reasoning) chars += msg.reasoning.length;
+    }
+    const systemText = typeof systemPrompt === 'string' ? systemPrompt : (systemPrompt?.text ?? '');
+    chars += systemText.length;
+    if (tools && tools.length > 0) chars += JSON.stringify(tools).length;
+    return chars;
   }
 
   /**
@@ -781,9 +889,11 @@ export class ChatOrchestrator {
     message: Message,
     signal: AbortSignal,
     publishChunk: (event: string, data: Record<string, unknown>) => void,
+    /** Номер попытки (1-based) для решения о терминальности сбоя (AD-070 §2.6). */
+    attempt?: number,
   ) => Promise<ProcessMessageResult> {
-    return async (session, message, signal, publishChunk) => {
-      return this._processMessage(session, message, signal, publishChunk);
+    return async (session, message, signal, publishChunk, attempt) => {
+      return this._processMessage(session, message, signal, publishChunk, attempt);
     };
   }
 
@@ -792,6 +902,7 @@ export class ChatOrchestrator {
     message: Message,
     signal: AbortSignal,
     publishChunk: (event: string, data: Record<string, unknown>) => void,
+    attempt?: number,
   ): Promise<ProcessMessageResult> {
     const streamId = (message.metadata?.stream_id as string) || 'unknown';
     const effectiveAgentRole = message.agentRole || session.settings.agentRole;
@@ -825,10 +936,10 @@ export class ChatOrchestrator {
 
     // --- Обработка системных сообщений (суммаризация, шедулер, etc.) ---
     if (message.role === MessageRole.SYSTEM && message.metadata?.type === 'summarization_request') {
-      return this._handleSummarization(session, message, signal, publishChunk, debugCollector, streamId);
+      return this._handleSummarization(session, message, signal, publishChunk, debugCollector, streamId, attempt);
     }
     if (message.role === MessageRole.SYSTEM && message.metadata?.type === 'debug_system_message') {
-      return this._handleDebugSystemMessage(session, message, signal, publishChunk, debugCollector, streamId, effectiveReasoningLevel);
+      return this._handleDebugSystemMessage(session, message, signal, publishChunk, debugCollector, streamId, effectiveReasoningLevel, attempt);
     }
 
     // --- AD-035: Micro-first — пробуем ответить без LLM ---
@@ -1120,6 +1231,10 @@ export class ChatOrchestrator {
       const allIntermediateTexts: Array<{ text: string; iteration: number }> = [];
       let finalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
       let finalModel: string | undefined;
+      // Модель последнего завершённого стрима итерации: нужна ветке отмены
+      // во время тула, где `chunkModel` уже вне области видимости, а
+      // `finalModel` ещё не обновлён (AD-070 §2.6, Bug 2).
+      let lastChunkModel: string | undefined;
       const allToolCalls: Array<Record<string, unknown>> = [];
       const allRawToolCalls: Array<{ iteration: number; calls: Record<string, unknown>[] }> = [];
       let stopAfterDeny = false;
@@ -1194,15 +1309,36 @@ export class ChatOrchestrator {
           warning('ORCHESTRATOR', `LLM stream error: ${errMsg}`);
 
           this._cancellationTokens.delete(streamId);
-          return this._handleLlmFailure(session.id, streamId, e, publishChunk);
+          return this._handleLlmFailure(session.id, streamId, e, publishChunk, attempt, {
+            debugCollector,
+            durationMs: Date.now() - streamStartedAt,
+            usage: finalUsage,
+            model: this._resolveMessageModel(chunkModel, finalModel, provider, session),
+            providerName,
+            agentRole: effectiveAgentRole,
+            content: accumulatedContent,
+            promptChars: this._estimatePromptChars(
+              currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
+            ),
+            toolResults: allToolCalls.length > 0 ? allToolCalls : undefined,
+            promptMeta,
+          });
         }
 
+        // Стрим итерации завершён — фиксируем модель до возможной отмены
+        // (в т.ч. во время исполнения тулов ниже).
+        lastChunkModel = chunkModel;
+
         if (cancelToken.cancelled) {
+          // Bug 2: модель для cost — провайдеры отдают `model` только в финале,
+          // поэтому fallback на provider.model/session.settings.model.
+          const cancelModel = this._resolveMessageModel(chunkModel, finalModel, provider, session);
+
           // Отмена: сохраняем уже выполненные tool-вызовы (персистентность
           // tool-chain) — иначе timeline вызовов пропадает из истории.
           await this._persistToolChain(
             session.id, streamId, providerName, effectiveAgentRole,
-            chunkModel ?? finalModel,
+            cancelModel,
             allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
           );
 
@@ -1213,15 +1349,33 @@ export class ChatOrchestrator {
           // allIntermediateTexts и раньше не попадали в content).
           const partialContent = this._joinAccumulatedTexts(allIntermediateTexts, accumulatedContent);
 
+          // Bug 3/4: usage/duration/cost в событии отмены; при пустом usage —
+          // best-effort оценка (metadata.usage_estimated) из размера промпта и
+          // накопленного текста.
+          const cancelDurationMs = Date.now() - streamStartedAt;
+          const cancelEstimated = this._estimateUsage(
+            finalUsage,
+            this._estimatePromptChars(
+              currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
+            ),
+            partialContent.length,
+          );
+          const cancelCost = this._computeMessageCost(cancelModel, cancelEstimated.usage);
+
           // При отмене НЕ кладём allIntermediateTexts в metadata
           // (intermediate_text_blocks): они уже вошли в partialContent, иначе
           // UI (режим 'bottom') склеит их с content повторно — дубль.
           if (partialContent || accumulatedReasoning || allToolCalls.length > 0) {
             await this._saveAssistantMessage(
               session.id, partialContent, streamId, effectiveAgentRole,
-              finalUsage, chunkModel, accumulatedReasoning, debugCollector, true, providerName,
+              cancelEstimated.usage, cancelModel, accumulatedReasoning, debugCollector, true, providerName,
               MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
-              undefined, undefined, { duration_ms: Date.now() - streamStartedAt }, promptMeta,
+              undefined, undefined,
+              {
+                duration_ms: cancelDurationMs,
+                ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
+              },
+              promptMeta,
             );
           }
 
@@ -1229,6 +1383,12 @@ export class ChatOrchestrator {
             stream_id: streamId,
             content: partialContent,
             status: 'cancelled',
+            model: cancelModel,
+            provider: providerName,
+            usage: cancelEstimated.usage,
+            duration_ms: cancelDurationMs,
+            ...(cancelCost ? { cost_usd: cancelCost.costUsd } : {}),
+            ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
           });
 
           this._cancellationTokens.delete(streamId);
@@ -1670,22 +1830,43 @@ export class ChatOrchestrator {
       // (persist tool-chain + stream.cancelled), а не как обычное завершение
       // с подставленным «Не удалось выполнить запрос: ответ модели пуст».
       if (cancelledDuringTool) {
+        // Bug 2: при отмене модель могла не прийти ни в одном финальном чанке —
+        // fallback на provider.model/session.settings.model для cost.
+        const cancelModel = this._resolveMessageModel(lastChunkModel, finalModel, provider, session);
+
         await this._persistToolChain(
           session.id, streamId, providerName, effectiveAgentRole,
-          finalModel,
+          cancelModel,
           allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
         );
 
         const partialContent = this._joinAccumulatedTexts(allIntermediateTexts, '');
+
+        // Bug 3/4: usage/duration/cost в событии отмены + best-effort оценка
+        // usage (metadata.usage_estimated) при пустом usage.
+        const cancelDurationMs = Date.now() - streamStartedAt;
+        const cancelEstimated = this._estimateUsage(
+          finalUsage,
+          this._estimatePromptChars(
+            currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
+          ),
+          partialContent.length,
+        );
+        const cancelCost = this._computeMessageCost(cancelModel, cancelEstimated.usage);
 
         // Промежуточные тексты уже вошли в partialContent — как в ветке отмены
         // выше, НЕ дублируем их в metadata.intermediate_text_blocks.
         if (partialContent || allToolCalls.length > 0) {
           await this._saveAssistantMessage(
             session.id, partialContent, streamId, effectiveAgentRole,
-            finalUsage, finalModel, allReasoning.map((r) => r.text).join('\n\n---\n\n'), debugCollector, true, providerName,
+            cancelEstimated.usage, cancelModel, allReasoning.map((r) => r.text).join('\n\n---\n\n'), debugCollector, true, providerName,
             MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
-            undefined, undefined, { duration_ms: Date.now() - streamStartedAt }, promptMeta,
+            undefined, undefined,
+            {
+              duration_ms: cancelDurationMs,
+              ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
+            },
+            promptMeta,
           );
         }
 
@@ -1693,6 +1874,12 @@ export class ChatOrchestrator {
           stream_id: streamId,
           content: partialContent,
           status: 'cancelled',
+          model: cancelModel,
+          provider: providerName,
+          usage: cancelEstimated.usage,
+          duration_ms: cancelDurationMs,
+          ...(cancelCost ? { cost_usd: cancelCost.costUsd } : {}),
+          ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
         });
 
         this._cancellationTokens.delete(streamId);
@@ -1949,7 +2136,15 @@ export class ChatOrchestrator {
       const errMsg = String(e);
       warning('ORCHESTRATOR', `Unexpected error: ${errMsg}`);
       this._cancellationTokens.delete(streamId);
-      return this._handleLlmFailure(session.id, streamId, e, publishChunk);
+      // Внешний catch может сработать до инициализации локальных переменных
+      // (usage/model/prompt) — сохраняем ошибку с безопасным минимумом.
+      return this._handleLlmFailure(session.id, streamId, e, publishChunk, attempt, {
+        debugCollector,
+        durationMs: Date.now() - streamStartedAt,
+        model: session.settings.model,
+        providerName: session.settings.provider,
+        agentRole: effectiveAgentRole,
+      });
     }
   }
 
@@ -2086,6 +2281,7 @@ export class ChatOrchestrator {
     debugCollector: DebugCollector,
     streamId: string,
     reasoningLevel?: ReasoningLevel,
+    attempt?: number,
   ): Promise<ProcessMessageResult> {
     // AD-070 §2.6: длительность этого прогона.
     const startedAt = Date.now();
@@ -2150,7 +2346,16 @@ export class ChatOrchestrator {
     } catch (e) {
       warning('ORCHESTRATOR', `Debug system message stream error: ${e}`);
       this._cancellationTokens.delete(streamId);
-      return this._handleLlmFailure(session.id, streamId, e, publishChunk);
+      return this._handleLlmFailure(session.id, streamId, e, publishChunk, attempt, {
+        debugCollector,
+        durationMs: Date.now() - startedAt,
+        usage: finalUsage,
+        model: finalModel ?? provider.model ?? session.settings.model,
+        providerName,
+        agentRole: 'debug',
+        content: accumulatedContent,
+        promptChars: this._estimatePromptChars(llmMessages, systemPrompt),
+      });
     }
 
     if (cancelToken.cancelled) {
@@ -2197,6 +2402,7 @@ export class ChatOrchestrator {
     publishChunk: (event: string, data: Record<string, unknown>) => void,
     debugCollector: DebugCollector,
     streamId: string,
+    attempt?: number,
   ): Promise<ProcessMessageResult> {
     if (!this._optimizer) {
       return { error: 'ContextOptimizer not available', errorType: 'internal', canRetry: false };
@@ -2265,7 +2471,16 @@ export class ChatOrchestrator {
     } catch (e) {
       warning('ORCHESTRATOR', `Summarization stream error: ${e}`);
       this._cancellationTokens.delete(streamId);
-      return this._handleLlmFailure(session.id, streamId, e, publishChunk);
+      return this._handleLlmFailure(session.id, streamId, e, publishChunk, attempt, {
+        debugCollector,
+        durationMs: Date.now() - startedAt,
+        usage: finalUsage,
+        model: finalModel ?? provider.model ?? session.settings.model,
+        providerName,
+        agentRole: 'summary',
+        content: accumulatedContent,
+        promptChars: this._estimatePromptChars(prep.llmMessages, prep.summarizerPrompt),
+      });
     }
 
     if (cancelToken.cancelled) {
@@ -2700,6 +2915,8 @@ export class ChatOrchestrator {
       case 'session.empty_response':
       case 'router.timeout':
       case 'router.network_error':
+      case 'router.rate_limit_exceeded':
+      case 'router.context_length_exceeded':
         return 'error';
       default:
         return 'completed';
@@ -2755,7 +2972,12 @@ export class ChatOrchestrator {
     // AD-070 §2.6: единая точка простановки статуса ответа — ни один путь
     // сохранения (обычный, cancel, tool-chain, summary, debug, micro) не
     // пропускает его. UI показывает префикс по этому полю.
-    metadata.status = this._resolveAssistantStatus(isCancelled, metadataExtra);
+    // Явный status (например 'error' для assistant-сообщения о сбое LLM)
+    // приоритетнее вывода из i18n — иначе rate_limit/context_length без
+    // маппинга получили бы 'completed'.
+    metadata.status = isAssistantMessageStatus(metadataExtra?.status)
+      ? metadataExtra.status
+      : this._resolveAssistantStatus(isCancelled, metadataExtra);
     if (toolResults && toolResults.length > 0) {
       metadata.tool_results = toolResults;
       // AD-070 §2.6: per-message статистика сабагентов (попап сообщения и
@@ -2867,37 +3089,53 @@ export class ChatOrchestrator {
 
   /**
    * Человекочитаемое описание ошибки LLM (таймаут/обрыв соединения, сетевая
-   * ошибка). Для остальных ошибок — исходный текст.
+   * ошибка). Для остальных ошибок — исходный текст. `i18n` — ключ AD-041 для
+   * metadata (UI локализует сам).
    */
-  private _formatLlmError(error: unknown): string {
+  private _formatLlmError(error: unknown): { text: string; i18n?: ReturnType<typeof i18nMeta> } {
     const raw = error instanceof Error ? error.message : String(error);
     const lower = raw.toLowerCase();
     if (lower.includes('abort') || lower.includes('operation was aborted') || lower.includes('timed out') || lower.includes('timeout')) {
-      return sm('router.timeout');
+      return { text: sm('router.timeout'), i18n: i18nMeta('router.timeout') };
     }
     if (lower.includes('fetch failed') || lower.includes('network') || lower.includes('econnrefused') || lower.includes('enotfound') || lower.includes('eai_again')) {
-      return sm('router.network_error');
+      return { text: sm('router.network_error'), i18n: i18nMeta('router.network_error') };
     }
-    return raw;
+    return { text: raw };
+  }
+
+  /** i18n-ключ по типу ошибки (AD-041) для metadata assistant-сообщения об ошибке. */
+  private _errorTypeI18n(errorType: string): ReturnType<typeof i18nMeta> | undefined {
+    switch (errorType) {
+      case 'timeout': return i18nMeta('router.timeout');
+      case 'network_error': return i18nMeta('router.network_error');
+      case 'rate_limit': return i18nMeta('router.rate_limit_exceeded');
+      case 'context_length': return i18nMeta('router.context_length_exceeded');
+      default: return undefined;
+    }
   }
 
   /**
    * Единая обработка ошибки LLM-стрима: пишет last_error в user-сообщение
-   * сессии (по stream_id) и возвращает ProcessMessageResult. Публикация
-   * финального исхода (stream.retry для recoverable / stream.error для
-   * non-recoverable) — зона ответственности QueueProcessor, чтобы не было
-   * двойной публикации stream.error. Если ошибка recoverable — session
-   * разблокируется на уровне QueueProcessor после исчерпания попыток; сессия
-   * не остаётся заблокированной навсегда.
+   * сессии (по stream_id), сохраняет assistant-сообщение об ошибке (только
+   * когда повтор невозможен/исчерпан — см. `attempt`) и возвращает
+   * ProcessMessageResult. Публикация финального исхода (stream.retry для
+   * recoverable / stream.error для non-recoverable) — зона ответственности
+   * QueueProcessor, чтобы не было двойной публикации stream.error. Если ошибка
+   * recoverable — session разблокируется на уровне QueueProcessor после
+   * исчерпания попыток; сессия не остаётся заблокированной навсегда.
    */
   private async _handleLlmFailure(
     sessionId: string,
     streamId: string,
     error: unknown,
     _publishChunk: (event: string, data: Record<string, unknown>) => void,
+    attempt?: number,
+    ctx?: LlmFailureContext,
   ): Promise<ProcessMessageResult> {
     const rawError = error instanceof Error ? error.message : String(error);
-    const humanError = this._formatLlmError(error);
+    const formatted = this._formatLlmError(error);
+    const humanError = formatted.text;
     // ContextLengthExceededError несёт русское сообщение («Контекстное окно
     // превышено») — текстовый классификатор его не распознаёт, поэтому тип
     // определяем по классу ошибки, чтобы UI показал дружелюбное сообщение.
@@ -2905,6 +3143,38 @@ export class ChatOrchestrator {
       ? 'context_length'
       : this._classifyError(rawError);
     const canRetry = isLlmErrorRecoverable(error, rawError, errorType);
+
+    // AD-070 §2.6 (Bug 1): assistant-сообщение об ошибке пишем только тогда,
+    // когда повтора уже не будет (unrecoverable / последняя попытка / прямой
+    // вызов без QueueProcessor). Иначе на каждый recoverable-ретрай в истории
+    // появлялся бы дубль, а `message.added` мигал бы в UI.
+    const isTerminal = !canRetry || attempt === undefined || attempt > LLM_MAX_ATTEMPTS;
+
+    if (isTerminal && ctx) {
+      try {
+        const estimated = this._estimateUsage(
+          ctx.usage,
+          ctx.promptChars ?? 0,
+          (ctx.content ?? '').length,
+        );
+        const i18n = formatted.i18n ?? this._errorTypeI18n(errorType);
+        await this._saveAssistantMessage(
+          sessionId, humanError, streamId, ctx.agentRole,
+          estimated.usage, ctx.model, undefined, ctx.debugCollector, false, ctx.providerName,
+          MessageRole.ASSISTANT, undefined, false, ctx.toolResults, undefined,
+          undefined, undefined,
+          {
+            duration_ms: ctx.durationMs,
+            status: 'error',
+            ...(i18n ? { i18n } : {}),
+            ...(estimated.estimated ? { usage_estimated: true } : {}),
+          },
+          ctx.promptMeta,
+        );
+      } catch (err) {
+        warning('ORCHESTRATOR', `Не удалось сохранить assistant-сообщение об ошибке: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
 
     try {
       await this._sessionManager.withLock(sessionId, async (s) => {

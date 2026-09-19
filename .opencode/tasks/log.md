@@ -92,3 +92,18 @@
 - **Ветка:** `feat/ad-070-system-prompt-composer`
 - **Коммит:** нет (по правилу «коммит только по просьбе пользователя»).
 - **Замечания:** открытые вопросы AD-070 зафиксированы в §7 самого AD; реализация AD-069 по-прежнему отложена.
+
+## 2026-09-19 — Проверка и фикс сбора статистики/дебага при отмене и сбое стрима
+- **Задача:** «Проверить и починить сбор статистики/дебага при отмене стрима и сбое провайдера (assistant-сообщение, usage, duration, cost, debug, агрегаты сессии, `stream.cancelled`/`stream.done`)».
+- **Тип:** bug fix + verification
+- **Исполнитель:** @orchestrator → @tester ×2, @fixer ×3
+- **Результат:** PASS
+- **Что сделано:**
+  - **(1) сбой провайдера:** assistant-сообщение не сохранялось — терялись `status='error'`, usage, duration, cost и debug. Теперь при сбое сохраняется сообщение с `metadata.status='error'` и полной статистикой, без дублей.
+  - **(2) отмена:** терялись `model`/`cost_usd` — модель бралась только из финального чанка. Введена fallback-цепочка `chunkModel || finalModel || provider.model || session.settings.model`.
+  - **(3) `stream.cancelled`:** событие шло без usage/duration/cost. Теперь несёт usage, duration_ms и cost_usd.
+  - **(4) отмена при usage=0 (OpenAI):** добавлена best-effort оценка (`_estimateUsage`, `chars/4`), проставляется `metadata.usage_estimated=true`, в UI стоимость/токены с префиксом `~`.
+- **Проверки:** `pnpm typecheck` — 6/6 пакетов; `pnpm lint` — 0 errors; тесты: shared 73 / ui 239 / core 1421 / backend 249. E2E на трёх типах провайдеров (openai `routerai`, anthropic `routerai-anthropic`, ollama `omn`): abort — assistant-сообщение со status/usage(est)/duration/cost/debug и ненулевыми агрегатами, `stream.cancelled` с usage/duration/cost; сбой (недоступный URL + mocktimeout) — `status='error'`, без дублей; tool-chain без сирот; сессия пригодна после отмены.
+- **Замечания:** `reasoning_tokens` на отмене = 0 (не оценивается); LOW-фикс cost при неизвестных ценах; `metadata.subagents` при task не покрыт.
+- **Ветка:** `feat/ad-070-system-prompt-composer`
+- **Коммит:** нет (по правилу «коммит только по просьбе пользователя»).

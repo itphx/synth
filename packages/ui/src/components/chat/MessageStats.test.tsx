@@ -124,6 +124,30 @@ describe('MessageStats', () => {
     expect(text).toContain('100 out')
   })
 
+  it('usage_estimated → префикс ~ у токенов (оценка не выдаётся за точную)', async () => {
+    const container = await renderStats(
+      makeMessage({
+        usage: { input_tokens: 8800, output_tokens: 1200, total_tokens: 10000 },
+        metadata: { duration_ms: 2000, usage_estimated: true },
+      }),
+    )
+    const text = container.textContent ?? ''
+    expect(text).toContain('~8.8k in')
+    expect(text).toContain('~1.2k out')
+  })
+
+  it('без usage_estimated токены без ~', async () => {
+    const container = await renderStats(
+      makeMessage({
+        usage: { input_tokens: 8800, output_tokens: 1200, total_tokens: 10000 },
+        metadata: { duration_ms: 2000 },
+      }),
+    )
+    const text = container.textContent ?? ''
+    expect(text).toContain('8.8k in')
+    expect(text).not.toContain('~8.8k')
+  })
+
   it('duration без usage → только duration, без tok/s и токенов', async () => {
     const container = await renderStats(
       makeMessage({ usage: null, metadata: { duration_ms: 12_000 } }),

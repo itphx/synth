@@ -87,7 +87,14 @@ describe('ChatOrchestrator — per-message stats (AD-070 §2.6)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function run(): Promise<{ session: import('@itphx/synth-shared').Session; events: Array<{ type: string; data: Record<string, unknown> }> }> {
+  async function run(
+    priceLoader?: (model: string) => {
+      inputPrice?: number;
+      outputPrice?: number;
+      cacheReadPrice?: number;
+      cacheWritePrice?: number;
+    } | null,
+  ): Promise<{ session: import('@itphx/synth-shared').Session; events: Array<{ type: string; data: Record<string, unknown> }> }> {
     const orchestrator = new ChatOrchestrator({
       sessionManager,
       eventBus: new EventBus(),
@@ -101,10 +108,12 @@ describe('ChatOrchestrator — per-message stats (AD-070 §2.6)', () => {
           defaultModel: 'm',
         }) as unknown as import('@itphx/synth-shared').ProviderConfig,
       defaultWorkingDir: tmpDir,
-      modelPriceLoader: (model: string) =>
-        model === 'm'
-          ? { inputPrice: 1, outputPrice: 2, cacheReadPrice: 0.5, cacheWritePrice: 1.5 }
-          : null,
+      modelPriceLoader:
+        priceLoader ??
+        ((model: string) =>
+          model === 'm'
+            ? { inputPrice: 1, outputPrice: 2, cacheReadPrice: 0.5, cacheWritePrice: 1.5 }
+            : null),
     });
 
     const session = await sessionManager.createSession({
@@ -158,5 +167,36 @@ describe('ChatOrchestrator — per-message stats (AD-070 §2.6)', () => {
     expect(done!.data.usage).toBeTruthy();
     // AD-070 §2.6: status доносится до UI в stream.done.
     expect(done!.data.status).toBe('completed');
+  });
+
+  it('модель без цен — cost_usd/cost_breakdown не пишутся, агрегаты сессии нулевые', async () => {
+    const { session } = await run(() => ({
+      inputPrice: undefined,
+      outputPrice: undefined,
+      cacheReadPrice: undefined,
+      cacheWritePrice: undefined,
+    }));
+
+    const assistant = [...session.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(assistant).toBeTruthy();
+
+    // Цены не заданы → «стоимость неизвестна», а не «бесплатно».
+    expect(assistant.metadata?.cost_usd).toBeUndefined();
+    expect(assistant.metadata?.cost_breakdown).toBeUndefined();
+    // usage при этом сохраняется.
+    expect(assistant.usage?.inputTokens).toBe(100);
+
+    // Агрегаты сессии не должны накапливать нулевую стоимость.
+    expect(session.inputCost).toBe(0);
+    expect(session.outputCost).toBe(0);
+    expect(session.cacheReadCost).toBe(0);
+    expect(session.cacheWriteCost).toBe(0);
+  });
+
+  it('модель без записи цен (loader → null) — cost_usd не пишется', async () => {
+    const { session } = await run(() => null);
+    const assistant = [...session.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(assistant.metadata?.cost_usd).toBeUndefined();
+    expect(session.inputCost).toBe(0);
   });
 });

@@ -137,6 +137,43 @@ class MockAbortProvider extends BaseProvider {
   }
 }
 
+/**
+ * Провайдер, который НЕ отдаёт `model` в промежуточных чанках (как реальные
+ * openai/anthropic) — проверка fallback-цепочки модели при отмене (Bug 2):
+ * иначе cost_usd не считается, а message.model = null.
+ */
+class MockAbortNoModelProvider extends BaseProvider {
+  static calls = 0;
+
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+  ): Promise<import('@itphx/synth-shared').LLMResponse> {
+    return { content: 'x', model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    ct?: CancellationToken,
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    const parts = ['Первая', ' часть', ' ответа'];
+    for (const p of parts) {
+      if (ct?.cancelled) return;
+      yield { content: p, isFinal: false, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    yield { content: 'конец', isFinal: true, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+  }
+
+  getProviderName(): string {
+    return 'mockabortnomodel';
+  }
+}
+
 /** Провайдер: 3 одинаковых вызова read_file (НЕ deny), затем текст — для проверки сохранения doom loop. */
 class MockDoomProvider extends BaseProvider {
   static calls = 0;
@@ -231,6 +268,8 @@ async function makeHarness(providerName: string): Promise<Harness> {
     permissionConfig: { rules: {}, askTimeoutMs: 1000 } as PermissionConfig,
     defaultWorkingDir: tmpDir,
     contextConfig: new ContextConfig({ userDataDir: join(tmpDir, 'context') }),
+    // Цены модели 'm' — проверка cost_usd при отмене (Bug 2/3).
+    modelPriceLoader: (model: string) => (model === 'm' ? { inputPrice: 1, outputPrice: 2 } : null),
   });
   const session = await sessionManager.createSession({
     title: 'DenyAbort',
@@ -256,16 +295,19 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
   beforeEach(() => {
     ProviderFactory.register('mockdenyloop', MockDenyLoopProvider);
     ProviderFactory.register('mockabort', MockAbortProvider);
+    ProviderFactory.register('mockabortnomodel', MockAbortNoModelProvider);
     ProviderFactory.register('mockdoom', MockDoomProvider);
     ProviderFactory.register('mockempty', MockEmptyProvider);
     MockDenyLoopProvider.calls = 0;
     MockAbortProvider.calls = 0;
+    MockAbortNoModelProvider.calls = 0;
     MockDoomProvider.calls = 0;
   });
 
   afterEach(async () => {
     ProviderFactory['_providers'].delete('mockdenyloop');
     ProviderFactory['_providers'].delete('mockabort');
+    ProviderFactory['_providers'].delete('mockabortnomodel');
     ProviderFactory['_providers'].delete('mockdoom');
     ProviderFactory['_providers'].delete('mockempty');
   });
@@ -358,6 +400,53 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     // При отмене blocks НЕ дублируются: они уже вошли в content (иначе UI
     // режима 'bottom' склеил бы их с content повторно)
     expect(meta.intermediate_text_blocks).toBeUndefined();
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  // Bug 2/3/4: провайдер не отдаёт model/usage в промежуточных чанках, отмена
+  // до финального чанка — модель берётся из fallback, usage оценивается,
+  // stream.cancelled несёт usage/duration/cost.
+  it('отмена без model/usage в чанках: fallback модели, оценка usage и cost в сообщении и stream.cancelled', async () => {
+    const h = await makeHarness('mockabortnomodel');
+    const ac = new AbortController();
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    let textChunks = 0;
+
+    const promise = run(h, ac.signal, (event, data) => {
+      chunks.push({ event, data });
+      if (event === 'stream.chunk') {
+        textChunks++;
+        if (textChunks >= 2) setTimeout(() => ac.abort(), 5);
+      }
+    });
+
+    const result = await promise;
+    expect(result.error).toBeUndefined();
+
+    // Bug 3: stream.cancelled несёт статистику, как stream.done.
+    const cancelled = chunks.find((c) => c.event === 'stream.cancelled')!;
+    expect(cancelled).toBeDefined();
+    expect(cancelled.data.model).toBe('m');
+    expect(typeof cancelled.data.duration_ms).toBe('number');
+    expect(cancelled.data.usage_estimated).toBe(true);
+    const eventUsage = cancelled.data.usage as { inputTokens: number; outputTokens: number };
+    expect(eventUsage.inputTokens).toBeGreaterThan(0);
+    expect(eventUsage.outputTokens).toBeGreaterThan(0);
+    expect(typeof cancelled.data.cost_usd).toBe('number');
+    expect(cancelled.data.cost_usd as number).toBeGreaterThan(0);
+
+    // Bug 2: сохранённое сообщение получает модель (fallback) и cost_usd.
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const assistant = [...session.messages].reverse().find(
+      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+    )!;
+    expect(assistant).toBeDefined();
+    expect(assistant.model).toBe('m');
+    expect(assistant.usage!.inputTokens).toBeGreaterThan(0);
+    expect(assistant.metadata?.usage_estimated).toBe(true);
+    expect(typeof assistant.metadata?.cost_usd).toBe('number');
+    expect(assistant.metadata?.status).toBe('cancelled');
+
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 

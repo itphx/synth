@@ -213,6 +213,22 @@ describe('StatsTab — блок «Сабагенты» в «Последнем �
     expect(section!.textContent).toContain('Separate from the answer — not counted in the context window')
   })
 
+  it('usage_estimated → префикс ~ у входных/выходных токенов последнего ответа', async () => {
+    setLastAssistant({ usage_estimated: true })
+    const container = await renderStats()
+    const section = findSection(container, 'Last answer')
+    expect(section).not.toBeNull()
+    expect(section!.textContent).toContain('~100')
+    expect(section!.textContent).toContain('~10')
+  })
+
+  it('без usage_estimated токены последнего ответа без ~', async () => {
+    setLastAssistant({})
+    const container = await renderStats()
+    const section = findSection(container, 'Last answer')!
+    expect(section.textContent).not.toContain('~100')
+  })
+
   it('перезапрашивает статистику при инкременте streamFinishTick', async () => {
     const container = await renderStats()
 
