@@ -92,7 +92,11 @@ export function MessageActions({
           <PopoverTrigger asChild>
             <ActionBtn title={t('chat.messageStats.toggle')} icon="chart-line" active={statsOpen} />
           </PopoverTrigger>
-          <PopoverContent className="w-max max-w-[calc(100vw-2rem)] overflow-x-auto p-3">
+          <PopoverContent
+            side="top"
+            sideOffset={6}
+            className="w-max max-w-[calc(100vw-2rem)] overflow-x-auto p-3"
+          >
             {statsContent}
           </PopoverContent>
         </Popover>
