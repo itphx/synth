@@ -131,6 +131,7 @@ function createTestApp(remote?: RemoteBackendClient, tmpDir?: string): TestWorld
     orchestrator as any,
     undefined,
     projectStore,
+    undefined,
     remote ? () => remote : undefined,
   ));
   app.route('/api/v2/projects', createProjectRoutes(createMockAuth(), projectStore, remote ? () => remote : undefined));

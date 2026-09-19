@@ -446,7 +446,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, backendConfig.workspacesRoot));
 
     // Sessions routes
-    app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore));
+    app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore, profilesStore));
 
     // Messages routes
     app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager, contextOptimizer, eventBus));

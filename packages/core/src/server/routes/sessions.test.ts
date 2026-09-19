@@ -5,10 +5,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSessionRoutes } from './sessions.js';
-import { SessionManager, EventBus, FileStore } from '../../index.js';
+import { SessionManager, EventBus, FileStore, FileProfileStore } from '../../index.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import type { AuthKit } from '../../auth/local.js';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
+import type { ProfileStore } from '@itphx/synth-shared';
 
 function createMockAuth(): AuthKit {
   return {
@@ -49,7 +50,7 @@ function createMockOrchestrator() {
   };
 }
 
-function createTestApp(tmpDir: string) {
+function createTestApp(tmpDir: string, profilesStore?: ProfileStore) {
   const app = new Hono();
   const fileStore = new FileStore({ dataDir: tmpDir });
   const sessionManager = new SessionManager(fileStore);
@@ -67,6 +68,7 @@ function createTestApp(tmpDir: string) {
     orchestrator as any,
     undefined,
     projectStore,
+    profilesStore,
   );
 
   app.route('/api/v2/sessions', sessionRoutes);
@@ -344,7 +346,12 @@ describe('Session API Routes (PATCH mode)', () => {
 
   describe('GET /api/v2/sessions/:id/stats (AD-070 §2.6)', () => {
     it('возвращает агрегацию по агентам и пользователям', async () => {
-      const { app, sessionManager } = createTestApp(tmpDir);
+      const profilesStore = new FileProfileStore({ dataDir: tmpDir });
+      await profilesStore.getOrCreateProfile({ username: 'local' });
+      const profile = (await profilesStore.getProfileByUsername('local'))!;
+      await profilesStore.saveProfile({ ...profile, displayName: 'Local Dev' });
+
+      const { app, sessionManager } = createTestApp(tmpDir, profilesStore);
       const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
       await sessionManager.addMessage(session.id, {
         id: generateId(), role: MessageRole.USER, seq: 0, origin: 'local',
@@ -374,6 +381,7 @@ describe('Session API Routes (PATCH mode)', () => {
       const local = body.users.find((u: any) => u.author === 'local');
       expect(local).toBeTruthy();
       expect(local.messages).toBe(1);
+      expect(local.display_name).toBe('Local Dev');
     });
 
     it('возвращает 404 для отсутствующей сессии', async () => {
@@ -382,6 +390,25 @@ describe('Session API Routes (PATCH mode)', () => {
       expect(res.status).toBe(404);
       const body: any = await res.json();
       expect(body.error.code).toBe('NOT_FOUND');
+    });
+
+    it('fallback на username при пустом displayName', async () => {
+      const profilesStore = new FileProfileStore({ dataDir: tmpDir });
+      await profilesStore.getOrCreateProfile({ username: 'local' });
+      const profile = (await profilesStore.getProfileByUsername('local'))!;
+      await profilesStore.saveProfile({ ...profile, displayName: '' });
+
+      const { app, sessionManager } = createTestApp(tmpDir, profilesStore);
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      await sessionManager.addMessage(session.id, {
+        id: generateId(), role: MessageRole.USER, seq: 0, origin: 'local',
+        parts: [makeTextPart('hi')], content: 'hi', createdAt: nowISO(),
+        disabled: false, pinned: false, hidden: false, author: 'local',
+      });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/stats`);
+      const body: any = await res.json();
+      expect(body.users.find((u: any) => u.author === 'local').display_name).toBe('local');
     });
   });
 });

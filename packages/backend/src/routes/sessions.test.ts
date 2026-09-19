@@ -5,9 +5,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSessionRoutes } from './sessions.js';
-import { SessionManager, EventBus, FileStore } from '@itphx/synth-core';
+import { SessionManager, EventBus, FileStore, FileProfileStore } from '@itphx/synth-core';
 import { ProjectStore } from '../storage/project-store.js';
 import type { User } from '@itphx/synth-shared';
+import type { ProfileStore } from '@itphx/synth-shared';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 
 const testUser: User = {
@@ -71,7 +72,7 @@ function createMockEventHub() {
   };
 }
 
-function createTestApp(tmpDir: string) {
+function createTestApp(tmpDir: string, profilesStore?: ProfileStore) {
   const app = new Hono();
   const kit = createMockKit();
   const fileStore = new FileStore({ dataDir: tmpDir });
@@ -92,6 +93,7 @@ function createTestApp(tmpDir: string) {
     eventHub as any,
     undefined,
     projectStore,
+    profilesStore,
   );
 
   app.route('/api/v2/sessions', sessionRoutes);
@@ -632,7 +634,12 @@ describe('Session API Routes', () => {
 
   describe('GET /api/v2/sessions/:id/stats (AD-070 §2.6)', () => {
     it('возвращает агрегацию по агентам и пользователям', async () => {
-      const { app, sessionManager } = createTestApp(tmpDir);
+      const profilesStore = new FileProfileStore({ dataDir: tmpDir });
+      await profilesStore.getOrCreateProfile({ username: testUser.username });
+      const profile = (await profilesStore.getProfileByUsername(testUser.username))!;
+      await profilesStore.saveProfile({ ...profile, displayName: 'Test User' });
+
+      const { app, sessionManager } = createTestApp(tmpDir, profilesStore);
       const session = await sessionManager.createSession({ title: 'S', userId: testUser.id });
       await sessionManager.addMessage(session.id, {
         id: generateId(), role: MessageRole.USER, seq: 0, origin: 'local',
@@ -658,6 +665,7 @@ describe('Session API Routes', () => {
       const user = body.users.find((u: any) => u.author === testUser.username);
       expect(user).toBeTruthy();
       expect(user.messages).toBe(1);
+      expect(user.display_name).toBe('Test User');
     });
 
     it('возвращает 404 для отсутствующей сессии', async () => {

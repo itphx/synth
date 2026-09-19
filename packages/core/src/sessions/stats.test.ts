@@ -271,4 +271,65 @@ describe('computeSessionStats (AD-070 §2.6)', () => {
     });
     expect(stats.agents.find((a) => a.agent_role === 'developer')!.cost_usd).toBe(0.25);
   });
+
+  it('resolveAuthorName подставляет display_name автора', async () => {
+    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'a', author: 'alice' }));
+    await sessionManager.addMessage(session.id, msg({
+      role: MessageRole.ASSISTANT, content: 'a1', agentRole: 'developer', model: 'm', usage: usage(100, 10),
+    }));
+
+    const stats = await computeSessionStats(await load(session), {
+      ...deps(),
+      resolveAuthorName: async (author) => (author === 'alice' ? 'Alice Smith' : null),
+    });
+    const alice = stats.users.find((u) => u.author === 'alice')!;
+    expect(alice.display_name).toBe('Alice Smith');
+  });
+
+  it('без resolveAuthorName или при null — только author', async () => {
+    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'a', author: 'alice' }));
+    await sessionManager.addMessage(session.id, msg({
+      role: MessageRole.ASSISTANT, content: 'a1', agentRole: 'developer', model: 'm', usage: usage(100, 10),
+    }));
+
+    const withoutResolver = await computeSessionStats(await load(session), deps());
+    expect(withoutResolver.users.find((u) => u.author === 'alice')!.display_name).toBeUndefined();
+
+    const withNull = await computeSessionStats(await load(session), {
+      ...deps(),
+      resolveAuthorName: async () => null,
+    });
+    expect(withNull.users.find((u) => u.author === 'alice')!.display_name).toBeUndefined();
+  });
+
+  it('кэширует resolveAuthorName: один вызов на автора', async () => {
+    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'a', author: 'alice' }));
+    await sessionManager.addMessage(session.id, msg({
+      role: MessageRole.ASSISTANT, content: 'a1', agentRole: 'developer', model: 'm', usage: usage(100, 10),
+    }));
+    await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'b', author: 'alice' }));
+    await sessionManager.addMessage(session.id, msg({
+      role: MessageRole.ASSISTANT, content: 'a2', agentRole: 'developer', model: 'm', usage: usage(50, 5),
+    }));
+    await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'c', author: 'bob' }));
+    await sessionManager.addMessage(session.id, msg({
+      role: MessageRole.ASSISTANT, content: 'b1', agentRole: 'developer', model: 'm', usage: usage(20, 2),
+    }));
+
+    const calls: string[] = [];
+    const stats = await computeSessionStats(await load(session), {
+      ...deps(),
+      resolveAuthorName: async (author) => {
+        calls.push(author);
+        return null;
+      },
+    });
+
+    expect(calls.filter((a) => a === 'alice')).toHaveLength(1);
+    expect(calls.filter((a) => a === 'bob')).toHaveLength(1);
+    expect(stats.users).toHaveLength(2);
+  });
 });

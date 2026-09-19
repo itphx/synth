@@ -179,6 +179,8 @@ export interface SessionAgentStats {
 /** Статистика по автору user-сообщений (атрибуция usage последующего ответа). */
 export interface SessionUserStats {
   author: string;
+  /** Display name профиля автора; при отсутствии профиля/имени — не задаётся. */
+  display_name?: string;
   messages: number;
   input_tokens: number;
   output_tokens: number;

@@ -399,18 +399,18 @@ export const StatsTab: React.FC = () => {
             <table className="w-full text-[0.6875rem]">
               <thead>
                 <tr className="text-muted-foreground">
-                  <th className="px-2 py-0.5 text-left font-medium">{t('rightPanel.stats.agent')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.messages')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.inputTokens')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.outputTokens')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colCache')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colCacheHit')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.cost')}</th>
+                  <th className="px-2 py-0.5 text-left font-medium first:pl-0 last:pr-0">{t('rightPanel.stats.agent')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium first:pl-0 last:pr-0">{t('rightPanel.stats.messages')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium first:pl-0 last:pr-0">{t('rightPanel.stats.inputTokens')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium first:pl-0 last:pr-0">{t('rightPanel.stats.outputTokens')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium first:pl-0 last:pr-0">{t('rightPanel.stats.colCache')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium first:pl-0 last:pr-0">{t('rightPanel.stats.colCacheHit')}</th>
+                  <th className={cn('px-2 py-0.5 font-medium first:pl-0 last:pr-0', hasSubagents ? 'text-center' : 'text-right')}>{t('rightPanel.stats.cost')}</th>
                   {hasSubagents && (
-                    <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.subagents')}</th>
+                    <th className="px-2 py-0.5 text-center font-medium first:pl-0 last:pr-0">{t('rightPanel.stats.subagents')}</th>
                   )}
                   {hasSubagents && (
-                    <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.subagentTokens')}</th>
+                    <th className="px-2 py-0.5 text-right font-medium first:pl-0 last:pr-0">{t('rightPanel.stats.subagentTokens')}</th>
                   )}
                 </tr>
               </thead>
@@ -421,7 +421,7 @@ export const StatsTab: React.FC = () => {
                   const agentColor = resolveColor(agent?.color ?? null)
                   return (
                     <tr key={a.agent_role} className="border-t border-border/30">
-                      <td className="px-2 py-0.5 text-left max-w-[8rem]">
+                      <td className="px-2 py-0.5 text-left max-w-[8rem] first:pl-0 last:pr-0">
                         <span
                           className={cn('inline-flex items-center gap-1', !agentColor && 'text-primary')}
                           style={agentColor ? { color: agentColor } : undefined}
@@ -430,19 +430,19 @@ export const StatsTab: React.FC = () => {
                           <span className="truncate">{agentName}</span>
                         </span>
                       </td>
-                      <td className="px-2 py-0.5 text-center tabular-nums">{a.messages}</td>
-                      <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(a.input_tokens)}</td>
-                      <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(a.output_tokens)}</td>
-                      <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(a.cache_read_tokens)}</td>
-                      <td className="px-2 py-0.5 text-center tabular-nums">{pct(a.cache_hit_rate)}</td>
-                      <td className="px-2 py-0.5 text-center tabular-nums">{formatCost(a.cost_usd)}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{a.messages}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{formatTokens(a.input_tokens)}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{formatTokens(a.output_tokens)}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{formatTokens(a.cache_read_tokens)}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{pct(a.cache_hit_rate)}</td>
+                      <td className={cn('px-2 py-0.5 tabular-nums first:pl-0 last:pr-0', hasSubagents ? 'text-center' : 'text-right')}>{formatCost(a.cost_usd)}</td>
                       {hasSubagents && (
-                        <td className="px-2 py-0.5 text-center tabular-nums">
+                        <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">
                           {a.subagent_sessions > 0 ? a.subagent_sessions : '\u2014'}
                         </td>
                       )}
                       {hasSubagents && (
-                        <td className="px-2 py-0.5 text-center tabular-nums">
+                        <td className="px-2 py-0.5 text-right tabular-nums first:pl-0 last:pr-0">
                           {a.subagent_sessions > 0 ? formatTokens(a.subagent_tokens) : '\u2014'}
                         </td>
                       )}
@@ -461,32 +461,35 @@ export const StatsTab: React.FC = () => {
             <table className="w-full text-[0.6875rem]">
               <thead>
                 <tr className="text-muted-foreground">
-                  <th className="px-2 py-0.5 text-left font-medium">{t('rightPanel.stats.user')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.messages')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.inputTokens')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.outputTokens')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colCache')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colCacheHit')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.cost')}</th>
+                  <th className="px-2 py-0.5 text-left font-medium first:pl-0 last:pr-0">{t('rightPanel.stats.user')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium first:pl-0 last:pr-0">{t('rightPanel.stats.messages')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium first:pl-0 last:pr-0">{t('rightPanel.stats.inputTokens')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium first:pl-0 last:pr-0">{t('rightPanel.stats.outputTokens')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium first:pl-0 last:pr-0">{t('rightPanel.stats.colCache')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium first:pl-0 last:pr-0">{t('rightPanel.stats.colCacheHit')}</th>
+                  <th className="px-2 py-0.5 text-right font-medium first:pl-0 last:pr-0">{t('rightPanel.stats.cost')}</th>
                 </tr>
               </thead>
               <tbody>
-                {sessionStats.users.map((u) => (
-                  <tr key={u.author} className="border-t border-border/30">
-                    <td className="px-2 py-0.5 text-left max-w-[8rem]">
-                      <span className="inline-flex items-center gap-1" style={{ color: userColor(u.author) }}>
-                        <Icon name="user-3" className="size-3 shrink-0" />
-                        <span className="truncate">{u.author}</span>
-                      </span>
-                    </td>
-                    <td className="px-2 py-0.5 text-center tabular-nums">{u.messages}</td>
-                    <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(u.input_tokens)}</td>
-                    <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(u.output_tokens)}</td>
-                    <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(u.cache_read_tokens)}</td>
-                    <td className="px-2 py-0.5 text-center tabular-nums">{pct(u.cache_hit_rate)}</td>
-                    <td className="px-2 py-0.5 text-center tabular-nums">{formatCost(u.cost_usd)}</td>
-                  </tr>
-                ))}
+                {sessionStats.users.map((u) => {
+                  const userName = u.display_name || u.author
+                  return (
+                    <tr key={u.author} className="border-t border-border/30">
+                      <td className="px-2 py-0.5 text-left max-w-[8rem] first:pl-0 last:pr-0">
+                        <span className="inline-flex items-center gap-1" style={{ color: userColor(userName) }}>
+                          <Icon name="user-3" className="size-3 shrink-0" />
+                          <span className="truncate">{userName}</span>
+                        </span>
+                      </td>
+                      <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{u.messages}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{formatTokens(u.input_tokens)}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{formatTokens(u.output_tokens)}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{formatTokens(u.cache_read_tokens)}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{pct(u.cache_hit_rate)}</td>
+                      <td className="px-2 py-0.5 text-right tabular-nums first:pl-0 last:pr-0">{formatCost(u.cost_usd)}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

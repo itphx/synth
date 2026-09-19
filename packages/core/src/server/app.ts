@@ -634,8 +634,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const eventBus = new EventBus();
   const queueManager = new QueueProcessorManager();
 
+  const profilesStore = new FileProfileStore({ dataDir });
   const contextBuilder = new ContextBuilder(contextConfig, {
-    profilesStore: new FileProfileStore({ dataDir }),
+    profilesStore,
     projectDataDir: `${dataDir}/projects`,
     defaultLanguage: 'ru',
   });
@@ -728,6 +729,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // Sessions
   app.route('/api/v2/sessions', createSessionRoutes(
     auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore,
+    profilesStore,
     () => connection.client,
   ));
 

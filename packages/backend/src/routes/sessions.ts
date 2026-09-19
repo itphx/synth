@@ -7,6 +7,7 @@ import type { ChatOrchestrator } from '@itphx/synth-core';
 import type { ContextOptimizer } from '@itphx/synth-core';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema } from '@itphx/synth-shared';
 import type { Message, Session, SessionSettings } from '@itphx/synth-shared';
+import type { ProfileStore } from '@itphx/synth-shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '@itphx/synth-core';
 import { serializeSession } from '../lib/serialize.js';
@@ -24,9 +25,17 @@ export function createSessionRoutes(
   eventHub: EventHub,
   contextOptimizer?: ContextOptimizer,
   projectStore?: ProjectStore,
+  /** Профили пользователей: display name для статистики (fallback — username). */
+  profilesStore?: ProfileStore,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
+  const resolveAuthorName = profilesStore
+    ? async (author: string): Promise<string | null> => {
+        const profile = await profilesStore.getProfileByUsername(author);
+        return profile ? profile.displayName || profile.username : null;
+      }
+    : undefined;
 
   // GET /api/v2/sessions — список сессий
   app.get('/', kit.requireAuth, async (c) => {
@@ -338,6 +347,7 @@ export function createSessionRoutes(
     const stats = await computeSessionStats(session, {
       getSession: (id) => sessionManager.getSession(id),
       getModelPricing: (model) => orchestrator.getModelPricing(model),
+      resolveAuthorName,
     });
     return c.json(stats);
   });

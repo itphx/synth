@@ -17,6 +17,11 @@ export interface SessionStatsDeps {
   getSession: (sessionId: string) => Promise<Session | null>;
   /** Цены модели (обычно `ChatOrchestrator.getModelPricing`) для `cost_usd`. */
   getModelPricing?: (modelName: string) => UsagePricing | null;
+  /**
+   * Display name автора user-сообщения (обычно профиль по username).
+   * `null`/отсутствие профиля — поле `display_name` не добавляется.
+   */
+  resolveAuthorName?: (author: string) => Promise<string | null>;
 }
 
 interface UsageTotals {
@@ -291,19 +296,35 @@ export async function computeSessionStats(
     }))
     .sort((a, b) => b.messages - a.messages || a.agent_role.localeCompare(b.agent_role));
 
-  const userStats: SessionUserStats[] = [...users.values()]
-    .map((acc) => ({
-      author: acc.author,
-      messages: acc.messages,
-      input_tokens: acc.usage.input,
-      output_tokens: acc.usage.output,
-      cache_read_tokens: acc.usage.cacheRead,
-      cache_write_tokens: acc.usage.cacheWrite,
-      reasoning_tokens: acc.usage.reasoning,
-      cost_usd: round(acc.cost, 6),
-      cache_hit_rate: computeCacheHitRate(acc.usage.cacheRead, acc.usage.input),
-    }))
-    .sort((a, b) => b.messages - a.messages || a.author.localeCompare(b.author));
+  // Display name автора: резолвим один раз на автора (кэш), иначе — не добавляем.
+  const displayNameCache = new Map<string, string | null>();
+  const resolveDisplayName = async (author: string): Promise<string | null> => {
+    if (!deps.resolveAuthorName) return null;
+    if (displayNameCache.has(author)) return displayNameCache.get(author)!;
+    const name = await deps.resolveAuthorName(author);
+    displayNameCache.set(author, name);
+    return name;
+  };
+
+  const userStats: SessionUserStats[] = await Promise.all(
+    [...users.values()].map(async (acc) => {
+      const displayName = await resolveDisplayName(acc.author);
+      return {
+        author: acc.author,
+        ...(displayName ? { display_name: displayName } : {}),
+        messages: acc.messages,
+        input_tokens: acc.usage.input,
+        output_tokens: acc.usage.output,
+        cache_read_tokens: acc.usage.cacheRead,
+        cache_write_tokens: acc.usage.cacheWrite,
+        reasoning_tokens: acc.usage.reasoning,
+        cost_usd: round(acc.cost, 6),
+        cache_hit_rate: computeCacheHitRate(acc.usage.cacheRead, acc.usage.input),
+      };
+    }),
+  );
+
+  userStats.sort((a, b) => b.messages - a.messages || a.author.localeCompare(b.author));
 
   return { session_id: session.id, agents: agentStats, users: userStats };
 }

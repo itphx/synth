@@ -5,6 +5,7 @@ import type { AuthKit } from '../../auth/local.js';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer } from '../../index.js';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
+import type { ProfileStore } from '@itphx/synth-shared';
 import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
 import { serializeSession, serializeMessage } from '../serialize.js';
 import type { ProjectStore } from '../../storage/project-store.js';
@@ -33,6 +34,8 @@ export function createSessionRoutes(
   orchestrator: ChatOrchestrator,
   contextOptimizer?: ContextOptimizer,
   projectStore?: ProjectStore,
+  /** Профили пользователей: display name для статистики (fallback — username). */
+  profilesStore?: ProfileStore,
   /**
    * Геттер текущего клиента к удалённому backend (runtime-подключение):
    * возвращает null, когда гибрид не подключён. Роуты резолвят клиента
@@ -43,6 +46,12 @@ export function createSessionRoutes(
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
   const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
+  const resolveAuthorName = profilesStore
+    ? async (author: string): Promise<string | null> => {
+        const profile = await profilesStore.getProfileByUsername(author);
+        return profile ? profile.displayName || profile.username : null;
+      }
+    : undefined;
 
   app.get('/', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
@@ -294,6 +303,7 @@ export function createSessionRoutes(
     const stats = await computeSessionStats(session, {
       getSession: (id) => sessionManager.getSession(id),
       getModelPricing: (model) => orchestrator.getModelPricing(model),
+      resolveAuthorName,
     });
     return c.json(stats);
   });
