@@ -87,7 +87,7 @@ export function MessageActions({
           <PopoverTrigger asChild>
             <ActionBtn title={t('chat.messageStats.toggle')} icon="chart-line" />
           </PopoverTrigger>
-          <PopoverContent className="w-56 p-3">
+          <PopoverContent className="w-max max-w-[calc(100vw-2rem)] overflow-x-auto p-3">
             {statsContent}
           </PopoverContent>
         </Popover>
@@ -111,7 +111,7 @@ const ActionBtn = forwardRef<
       ref={ref}
       onClick={onClick}
       title={title}
-      className={`rounded p-1 transition-colors ${
+      className={`inline-flex items-center justify-center rounded p-1 transition-colors ${
         danger
           ? 'hover:bg-destructive/10 hover:text-destructive'
           : active

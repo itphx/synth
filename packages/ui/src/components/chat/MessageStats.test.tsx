@@ -221,7 +221,7 @@ describe('MessageStats', () => {
     })
   })
 
-  it('variant="popover": сегменты колонкой без разделителей', async () => {
+  it('variant="popover": одна строка без переноса с разделителями `·`', async () => {
     const container = await renderStats(
       makeMessage({
         usage: { input_tokens: 1000, output_tokens: 100, total_tokens: 1100 },
@@ -232,11 +232,22 @@ describe('MessageStats', () => {
     )
     const el = container.querySelector('[data-testid="message-stats"]') as HTMLElement
     expect(el).not.toBeNull()
-    expect(el.className).toContain('flex-col')
-    // В popover нет разделителей `·`.
-    expect(container.querySelectorAll('[aria-hidden="true"]').length).toBe(0)
-    expect(container.textContent).toContain('Stopped')
-    expect(container.textContent).toContain('2s')
+    // Одна строка без переноса (nowrap), не колонка.
+    expect(el.className).toContain('flex-nowrap')
+    expect(el.className).toContain('whitespace-nowrap')
+    expect(el.className).not.toContain('flex-col')
+    expect(el.className).not.toContain('flex-wrap')
+
+    // 7 сегментов → 6 разделителей `·`.
+    const separators = container.querySelectorAll('[aria-hidden="true"]')
+    expect(separators.length).toBe(6)
+    expect([...separators].every((s) => s.textContent === '·')).toBe(true)
+
+    // Порядок сегментов сохранён.
+    const segments = [...el.querySelectorAll('span:not([aria-hidden="true"])')].map(
+      (s) => s.textContent,
+    )
+    expect(segments).toEqual(['Stopped', '2s', '1k in', '100 out', '~$0.01', '0% cached', '50 tok/s'])
   })
 })
 

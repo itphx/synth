@@ -57,8 +57,8 @@ interface MessageStatsProps {
   message: MessageData
   className?: string
   /**
-   * inline (desktop) — строка сегментов через `·`;
-   * popover (mobile) — сегменты колонкой без разделителей.
+   * inline (desktop) — сегменты через `·` с переносом строк;
+   * popover (mobile) — те же сегменты через `·` одной строкой без переноса.
    */
   variant?: 'inline' | 'popover'
 }
@@ -126,21 +126,17 @@ export function MessageStats({ message, className, variant = 'inline' }: Message
       className={cn(
         'text-[0.6875rem] text-muted-foreground tabular-nums',
         isPopover
-          ? 'flex flex-col items-start gap-0.5'
+          ? 'flex flex-nowrap items-center gap-x-1.5 whitespace-nowrap'
           : 'flex flex-wrap items-center gap-x-1.5 gap-y-0.5',
         className,
       )}
     >
-      {segments.map((segment, i) =>
-        isPopover ? (
-          <span key={i}>{segment}</span>
-        ) : (
-          <Fragment key={i}>
-            {i > 0 && <span aria-hidden="true">·</span>}
-            <span>{segment}</span>
-          </Fragment>
-        ),
-      )}
+      {segments.map((segment, i) => (
+        <Fragment key={i}>
+          {i > 0 && <span aria-hidden="true">·</span>}
+          <span>{segment}</span>
+        </Fragment>
+      ))}
     </div>
   )
 }

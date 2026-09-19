@@ -99,6 +99,9 @@ describe('ChatMessage: статистика desktop/mobile', () => {
     })
     const stats = document.querySelector('[data-testid="message-stats"]')
     expect(stats).not.toBeNull()
-    expect(stats!.className).toContain('flex-col')
+    // Popover-вариант — одна строка без переноса с разделителями.
+    expect(stats!.className).toContain('flex-nowrap')
+    expect(stats!.className).toContain('whitespace-nowrap')
+    expect(stats!.querySelectorAll('[aria-hidden="true"]').length).toBeGreaterThan(0)
   })
 })
