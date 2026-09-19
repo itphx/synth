@@ -348,6 +348,9 @@ export const dict = {
   'rightPanel.stats.cacheReadTokens': 'Кэш чтение',
   'rightPanel.stats.cacheWriteTokens': 'Кэш запись',
   'rightPanel.stats.cacheHitRate': 'Попадание в кэш',
+  // AD-070 §2.6: короткие заголовки столбцов в таблицах агентов/пользователей
+  'rightPanel.stats.colCache': 'Кэш',
+  'rightPanel.stats.colCacheHit': '%',
   'rightPanel.stats.reasoningTokens': 'Размышления',
   'rightPanel.stats.noData': 'Нет данных',
   'rightPanel.stats.lastAnswer': 'Последний ответ',
@@ -402,6 +405,7 @@ export const dict = {
   'rightPanel.stats.promptBlock.participants': 'Участники',
   'rightPanel.stats.promptBlock.summary': 'Сжатый диалог',
   'rightPanel.stats.promptBlock.interview': 'Опросник',
+  'rightPanel.stats.promptBlock.tools': 'Описание инструментов',
   'rightPanel.params.session': 'Сессия',
   'rightPanel.params.id': 'ID',
   'rightPanel.params.engine': 'Движок',

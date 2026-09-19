@@ -262,16 +262,20 @@ describe('SystemPromptComposer', () => {
       const composed = await composer.compose(makeCtx(session));
       const manifest = await composer.manifest(makeCtx(session));
 
-      expect(manifest.entries.map((e) => e.key)).toEqual(composed.blocks.map((b) => b.key));
+      // Запись tools (`source: 'tools'`) — не system-блок: сравниваем
+      // system-подмножество манифеста с блоками compose().
+      const systemEntries = manifest.entries.filter((e) => e.source !== 'tools');
+      expect(systemEntries.map((e) => e.key)).toEqual(composed.blocks.map((b) => b.key));
 
-      composed.blocks.forEach((block, i) => {
-        const entry = manifest.entries[i]!;
+      systemEntries.forEach((entry, i) => {
+        const block = composed.blocks[i]!;
         expect(entry.chars).toBe(block.content.length);
         expect(entry.estTokens).toBe(Math.ceil(block.content.length / 4));
       });
 
       const nonEmpty = composed.blocks.filter((b) => b.content !== '');
       const sumChars = nonEmpty.reduce((sum, b) => sum + b.content.length, 0);
+      // tools в этом контексте нет → вклад в размеры нулевой.
       expect(manifest.totalChars).toBe(sumChars);
       expect(manifest.estTokens).toBe(Math.ceil(sumChars / 4));
       // joinPromptBlocks склеивает блоки разделителем '\n\n' (2 символа).
@@ -281,6 +285,47 @@ describe('SystemPromptComposer', () => {
       const stableChars = stableNonEmpty.reduce((sum, b) => sum + b.content.length, 0);
       expect(manifest.staticPrefixChars).toBe(stableChars);
       expect(composed.stablePrefix.length).toBe(stableChars + 2 * (stableNonEmpty.length - 1));
+    });
+
+    it('tools: запись stable с ненулевыми chars и учётом в total/staticPrefix; без tools — empty', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const tools = [
+        { type: 'function', function: { name: 'read_file', description: 'Read a file', parameters: {} } },
+        { type: 'function', function: { name: 'write_file', description: 'Write a file', parameters: {} } },
+      ];
+      const toolsChars = JSON.stringify(tools).length;
+
+      const withTools = await composer.manifest(makeCtx(session, { tools }));
+      const entry = withTools.entries.find((e) => e.key === 'tools');
+      expect(entry).toBeDefined();
+      expect(entry!.tier).toBe('stable');
+      expect(entry!.source).toBe('tools');
+      expect(entry!.status).toBe('loaded');
+      expect(entry!.chars).toBe(toolsChars);
+      expect(entry!.estTokens).toBe(Math.ceil(toolsChars / 4));
+
+      const systemChars = withTools.entries
+        .filter((e) => e.source !== 'tools' && e.status !== 'empty')
+        .reduce((sum, e) => sum + e.chars, 0);
+      const stableSystemChars = withTools.entries
+        .filter((e) => e.source !== 'tools' && e.status !== 'empty' && e.tier === 'stable')
+        .reduce((sum, e) => sum + e.chars, 0);
+      expect(withTools.totalChars).toBe(systemChars + toolsChars);
+      expect(withTools.staticPrefixChars).toBe(stableSystemChars + toolsChars);
+
+      // compose() не содержит tools-текста (инструменты — не часть system).
+      const composed = await composer.compose(makeCtx(session, { tools }));
+      expect(composed.blocks.some((b) => b.key === 'tools')).toBe(false);
+      expect(composed.system).not.toContain('read_file');
+
+      // Без tools запись присутствует, но пустая.
+      const withoutTools = await composer.manifest(makeCtx(session));
+      const emptyEntry = withoutTools.entries.find((e) => e.key === 'tools');
+      expect(emptyEntry).toBeDefined();
+      expect(emptyEntry!.status).toBe('empty');
+      expect(emptyEntry!.chars).toBe(0);
+      expect(withoutTools.totalChars).toBe(systemChars);
     });
 
     it('generation берётся из promptStates активного агента', async () => {

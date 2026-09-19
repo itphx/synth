@@ -349,6 +349,9 @@ export const dict = {
   'rightPanel.stats.cacheReadTokens': 'Cache read',
   'rightPanel.stats.cacheWriteTokens': 'Cache write',
   'rightPanel.stats.cacheHitRate': 'Cache hit rate',
+  // AD-070 §2.6: short column headers in agent/user tables
+  'rightPanel.stats.colCache': 'Cache',
+  'rightPanel.stats.colCacheHit': '%',
   'rightPanel.stats.reasoningTokens': 'Reasoning',
   'rightPanel.stats.noData': 'No data',
   'rightPanel.stats.lastAnswer': 'Last answer',
@@ -403,6 +406,7 @@ export const dict = {
   'rightPanel.stats.promptBlock.participants': 'Participants notice',
   'rightPanel.stats.promptBlock.summary': 'Compressed dialog',
   'rightPanel.stats.promptBlock.interview': 'Interview prompt',
+  'rightPanel.stats.promptBlock.tools': 'Tool descriptions',
   'rightPanel.params.session': 'Session',
   'rightPanel.params.id': 'ID',
   'rightPanel.params.engine': 'Engine',

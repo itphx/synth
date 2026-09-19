@@ -113,6 +113,11 @@ export interface PromptManifestEntry {
   estTokens: number;
   status: PromptManifestStatus;
   provenance?: string;
+  /**
+   * Источник записи: `system` — блок системного промпта, `tools` — слой
+   * описаний инструментов (не входит в system-текст, AD-070 §2.5).
+   */
+  source?: 'system' | 'tools';
 }
 
 /** AD-070 §2.5: манифест состава системного промпта (для API/UI/тестов). */

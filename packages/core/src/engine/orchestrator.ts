@@ -609,6 +609,13 @@ export class ChatOrchestrator {
       showInterview: session.settings.showInterview,
       stickyNotes: session.stickyNotes,
       summaryContent: summaryContent || undefined,
+      // AD-070 §2.5: тот же список инструментов, что уходит в запрос
+      // (`_processMessage`), чтобы манифест отражал реальный `tools`-слой.
+      tools: this._toolRegistry
+        ? (agentDef && effectiveAgentRole
+            ? this._agentRegistry!.getToolsForAgent(effectiveAgentRole) as Array<Record<string, unknown>> | undefined
+            : [])
+        : undefined,
     };
 
     const manifest = await this._composer.manifest(ctx);

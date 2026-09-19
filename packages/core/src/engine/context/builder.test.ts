@@ -3,6 +3,7 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Message, StickyNote } from '@itphx/synth-shared';
+import type { ProfileStore } from '@itphx/synth-shared';
 import { ContextConfig } from './config.js';
 import { ContextBuilder } from './builder.js';
 import { joinPromptBlocks, sortPromptBlocks, type PromptBlock } from './prompt-blocks.js';
@@ -194,6 +195,37 @@ describe('ContextBuilder.buildBaseBlocks', () => {
     expect(byKey.get('additional')!.content).toBe('');
     expect(byKey.get('profile')!.content).toBe('');
     expect(byKey.get('project.info')!.content).toBe('');
+  });
+
+  it('profile: фолбэк на getProfileByUsername, если loadProfile(userId) вернул null', async () => {
+    const config = new ContextConfig({ userDataDir });
+    const profile = {
+      id: 'uuid-1',
+      username: 'admin',
+      email: 'admin@example.com',
+      roles: ['ADMIN'],
+      teamRoles: [],
+      isActive: true,
+      preferences: {},
+      notes: 'Зови меня Босс',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const profilesStore = {
+      loadProfile: async (id: string) => (id === 'uuid-1' ? profile : null),
+      getProfileByUsername: async (username: string) => (username === 'admin' ? profile : null),
+    } as unknown as ProfileStore;
+    const builder = new ContextBuilder(config, { profilesStore });
+
+    // userId = username ('admin') → loadProfile(null) → фолбэк по username.
+    const blocks = await builder.buildBaseBlocks({ language: 'ru', userId: 'admin' });
+    const byKey = new Map(blocks.map((b) => [b.key, b]));
+    expect(byKey.get('profile')!.content).toContain('Зови меня Босс');
+    expect(byKey.get('profile')!.content).toContain('admin');
+
+    // Ни id, ни username не найдены → блок пуст (поведение как раньше).
+    const missing = await builder.buildBaseBlocks({ language: 'ru', userId: 'ghost' });
+    expect(new Map(missing.map((b) => [b.key, b])).get('profile')!.content).toBe('');
   });
 
   it('заполняет sticky/participants/summary при наличии данных (agentRole задан)', async () => {

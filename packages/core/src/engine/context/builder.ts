@@ -213,7 +213,10 @@ export class ContextBuilder {
   private async _getProfilePrompt(userId: string | undefined, language: string): Promise<string | null> {
     if (!userId || !this._profiles) return null;
 
-    const profile = await this._profiles.loadProfile(userId);
+    // `userId` в сессии может быть username (`admin`), а не id-профиля (UUID).
+    // Сначала пробуем id, затем — фолбэк по username.
+    const profile = (await this._profiles.loadProfile(userId))
+      ?? (await this._profiles.getProfileByUsername(userId));
     if (!profile) return null;
 
     const template = this._config.getUserContextTemplate(language);

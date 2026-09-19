@@ -42,6 +42,7 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   participants: 'Participants notice',
   summary: 'Compressed dialog',
   interview: 'Interview prompt',
+  tools: 'Tool descriptions',
 };
 
 export interface ComposerContext {
@@ -63,6 +64,12 @@ export interface ComposerContext {
   showInterview?: boolean;
   stickyNotes?: StickyNote[];
   summaryContent?: string;
+  /**
+   * AD-070 §2.5: описания инструментов, реально уходящие в запрос
+   * (`tools`). Учитываются только в манифесте (`tools → system → messages`),
+   * в system-текст `compose()` не входят.
+   */
+  tools?: Array<Record<string, unknown>>;
   /**
    * AD-070 §2.5: per-message `DebugCollector`. Передаётся оркестратором на
    * каждый ход и имеет приоритет над `deps.debugCollector` (сборка промпта —
@@ -128,11 +135,13 @@ export class SystemPromptComposer {
   }
 
   /**
-   * AD-070 §2.5: манифест состава системного промпта. Использует тот же обход
+   * AD-070 §2.5: манифест состава промпта. Использует тот же обход
    * источников, что и `compose()`, но **без побочных эффектов**: не вызывает
    * `captureSystemPromptParts` и не пишет состояние. Размеры блоков считаются
    * без разделителей `\n\n`, поэтому тест паритета сравнивает сумму `chars`
-   * с длинами блоков (и учитывает разделители отдельно).
+   * с длинами блоков (и учитывает разделители отдельно). Запись `tools`
+   * (`source: 'tools'`) описывает слой инструментов и в system-блоки
+   * `compose()` не входит.
    */
   async manifest(ctx: ComposerContext): Promise<PromptManifest> {
     const blocks = await this._collectBlocks(ctx);
@@ -144,14 +153,32 @@ export class SystemPromptComposer {
       chars: block.content.length,
       estTokens: Math.ceil(block.content.length / EST_TOKENS_DIVISOR),
       status: block.content === '' ? 'empty' : 'loaded',
+      source: 'system',
       ...(block.provenance ? { provenance: block.provenance } : {}),
     }));
 
+    // AD-070 §2.5: слой описаний инструментов — самый ранний кэшируемый слой
+    // (`tools → system → messages`). В system-текст (`compose`) не входит, но
+    // отражается в манифесте и учитывается в общих размерах и staticPrefix.
+    const toolsChars = ctx.tools && ctx.tools.length > 0 ? JSON.stringify(ctx.tools).length : 0;
+    entries.unshift({
+      key: 'tools',
+      label: PROMPT_BLOCK_LABELS.tools ?? 'Tool descriptions',
+      tier: 'stable',
+      chars: toolsChars,
+      estTokens: Math.ceil(toolsChars / EST_TOKENS_DIVISOR),
+      status: toolsChars === 0 ? 'empty' : 'loaded',
+      provenance: 'tools',
+      source: 'tools',
+    });
+
     const nonEmpty = blocks.filter((block) => block.content !== '');
-    const totalChars = nonEmpty.reduce((sum, block) => sum + block.content.length, 0);
-    const staticPrefixChars = nonEmpty
-      .filter((block) => block.tier === 'stable')
-      .reduce((sum, block) => sum + block.content.length, 0);
+    const totalChars =
+      nonEmpty.reduce((sum, block) => sum + block.content.length, 0) + toolsChars;
+    const staticPrefixChars =
+      nonEmpty
+        .filter((block) => block.tier === 'stable')
+        .reduce((sum, block) => sum + block.content.length, 0) + toolsChars;
 
     const agentRole = ctx.agentRole ?? ctx.agentDef?.id ?? ctx.session.settings.agentRole;
     const generation = ctx.session.promptStates?.[agentKeyOf(agentRole)]?.generation;

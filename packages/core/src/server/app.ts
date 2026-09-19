@@ -28,6 +28,7 @@ import { isRemoteRef, toLocalId } from '../remote/aggregate.js';
 import { ConnectionWatcher } from './connection-watcher.js';
 import { setRemoteTokenProvider, removeRemoteTokenProvider } from '../providers/remote.js';
 import { JsonStore } from '../storage/json-store.js';
+import { FileProfileStore } from '../storage/profile-store.js';
 import { ProjectStore } from '../storage/project-store.js';
 import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig } from '../storage/runtime-settings.js';
 import { createHealthRoutes } from './routes/health.js';
@@ -634,6 +635,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const queueManager = new QueueProcessorManager();
 
   const contextBuilder = new ContextBuilder(contextConfig, {
+    profilesStore: new FileProfileStore({ dataDir }),
     projectDataDir: `${dataDir}/projects`,
     defaultLanguage: 'ru',
   });

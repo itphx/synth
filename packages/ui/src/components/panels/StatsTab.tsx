@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import type { SessionStats } from '@itphx/synth-shared'
-import { cn } from '@/lib/utils'
+import { cn, resolveColor, userColor } from '@/lib/utils'
 import { useChatStore } from '@/stores/chatStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
+import { useAgentsStore } from '@/stores/agentsStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
@@ -56,6 +57,7 @@ export const StatsTab: React.FC = () => {
   const activeSessionId = activeTab?.data?.sessionId
   const { messagesBySession } = useChatStore()
   const { sessions } = useSessionsStore()
+  const agents = useAgentsStore((s) => s.agents)
 
   const activeSession = activeSessionId ? sessions.find((s) => s.id === activeSessionId) : undefined
 
@@ -320,11 +322,9 @@ export const StatsTab: React.FC = () => {
                   <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.messages')}</th>
                   <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.inputTokens')}</th>
                   <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.outputTokens')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.cacheReadTokens')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.cacheHitRate')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colCache')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colCacheHit')}</th>
                   <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.cost')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.speed')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.duration')}</th>
                   {hasSubagents && (
                     <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.subagents')}</th>
                   )}
@@ -334,29 +334,40 @@ export const StatsTab: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {sessionStats.agents.map((a) => (
-                  <tr key={a.agent_role} className="border-t border-border/30">
-                    <td className="px-2 py-0.5 text-left truncate max-w-[8rem]">{a.agent_role}</td>
-                    <td className="px-2 py-0.5 text-center tabular-nums">{a.messages}</td>
-                    <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(a.input_tokens)}</td>
-                    <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(a.output_tokens)}</td>
-                    <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(a.cache_read_tokens)}</td>
-                    <td className="px-2 py-0.5 text-center tabular-nums">{pct(a.cache_hit_rate)}</td>
-                    <td className="px-2 py-0.5 text-center tabular-nums">{formatCost(a.cost_usd)}</td>
-                    <td className="px-2 py-0.5 text-center tabular-nums">{formatTps(a.output_tps)}</td>
-                    <td className="px-2 py-0.5 text-center tabular-nums">{formatDuration(a.duration_ms)}</td>
-                    {hasSubagents && (
-                      <td className="px-2 py-0.5 text-center tabular-nums">
-                        {a.subagent_sessions > 0 ? a.subagent_sessions : '\u2014'}
+                {sessionStats.agents.map((a) => {
+                  const agent = agents.find((x) => x.id === a.agent_role)
+                  const agentName = agent?.display_name || a.agent_role
+                  const agentColor = resolveColor(agent?.color ?? null)
+                  return (
+                    <tr key={a.agent_role} className="border-t border-border/30">
+                      <td className="px-2 py-0.5 text-left max-w-[8rem]">
+                        <span
+                          className={cn('inline-flex items-center gap-1', !agentColor && 'text-primary')}
+                          style={agentColor ? { color: agentColor } : undefined}
+                        >
+                          <Icon name={agent?.icon || 'user-smile'} className="size-3 shrink-0" />
+                          <span className="truncate">{agentName}</span>
+                        </span>
                       </td>
-                    )}
-                    {hasSubagents && (
-                      <td className="px-2 py-0.5 text-center tabular-nums">
-                        {a.subagent_sessions > 0 ? formatTokens(a.subagent_tokens) : '\u2014'}
-                      </td>
-                    )}
-                  </tr>
-                ))}
+                      <td className="px-2 py-0.5 text-center tabular-nums">{a.messages}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(a.input_tokens)}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(a.output_tokens)}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(a.cache_read_tokens)}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums">{pct(a.cache_hit_rate)}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums">{formatCost(a.cost_usd)}</td>
+                      {hasSubagents && (
+                        <td className="px-2 py-0.5 text-center tabular-nums">
+                          {a.subagent_sessions > 0 ? a.subagent_sessions : '\u2014'}
+                        </td>
+                      )}
+                      {hasSubagents && (
+                        <td className="px-2 py-0.5 text-center tabular-nums">
+                          {a.subagent_sessions > 0 ? formatTokens(a.subagent_tokens) : '\u2014'}
+                        </td>
+                      )}
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -373,15 +384,20 @@ export const StatsTab: React.FC = () => {
                   <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.messages')}</th>
                   <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.inputTokens')}</th>
                   <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.outputTokens')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.cacheReadTokens')}</th>
-                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.cacheHitRate')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colCache')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colCacheHit')}</th>
                   <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.cost')}</th>
                 </tr>
               </thead>
               <tbody>
                 {sessionStats.users.map((u) => (
                   <tr key={u.author} className="border-t border-border/30">
-                    <td className="px-2 py-0.5 text-left truncate max-w-[8rem]">{u.author}</td>
+                    <td className="px-2 py-0.5 text-left max-w-[8rem]">
+                      <span className="inline-flex items-center gap-1" style={{ color: userColor(u.author) }}>
+                        <Icon name="user-3" className="size-3 shrink-0" />
+                        <span className="truncate">{u.author}</span>
+                      </span>
+                    </td>
                     <td className="px-2 py-0.5 text-center tabular-nums">{u.messages}</td>
                     <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(u.input_tokens)}</td>
                     <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(u.output_tokens)}</td>

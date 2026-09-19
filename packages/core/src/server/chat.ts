@@ -8,6 +8,7 @@ import {
   createToolRegistry, createAgentRegistry, SecretPatternStore,
 } from '../index.js';
 import { JsonStore } from '../storage/json-store.js';
+import { FileProfileStore } from '../storage/profile-store.js';
 import type { ProviderConfig, ModelConfig, SummarizationConfig } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
@@ -65,6 +66,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   const eventBus = new EventBus();
   const contextConfig = new ContextConfig({ userDataDir: `${dataDir}/context` });
   const contextBuilder = new ContextBuilder(contextConfig, {
+    profilesStore: new FileProfileStore({ dataDir }),
     projectDataDir: `${dataDir}/projects`,
     defaultLanguage: 'ru',
   });
