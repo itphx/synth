@@ -100,10 +100,19 @@ afterEach(async () => {
 describe('ChatMessage: статистика desktop/mobile', () => {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
 
-  it('desktop: строка статистики видна всегда, кнопки статистики нет', async () => {
+  it('desktop: строка статистики — внутри .message-actions (в ряду кнопок), отдельного блока нет', async () => {
     device.isTouch = false
     const container = await renderChat(makeMessage({}))
-    expect(container.querySelector('[data-testid="message-stats"]')).not.toBeNull()
+    const stats = container.querySelector('[data-testid="message-stats"]')
+    const actions = container.querySelector('.message-actions')
+    expect(stats).not.toBeNull()
+    expect(actions).not.toBeNull()
+    // Статистика лежит в ряду кнопок, а не отдельным блоком вне него.
+    expect(actions!.contains(stats!)).toBe(true)
+    expect(container.querySelectorAll('[data-testid="message-stats"]').length).toBe(1)
+    // Прижата вправо.
+    expect(stats!.parentElement?.className).toContain('ml-auto')
+    // Кнопка-переключатель на десктопе не нужна.
     expect(container.querySelector('button[title="Response stats"]')).toBeNull()
   })
 
@@ -112,7 +121,9 @@ describe('ChatMessage: статистика desktop/mobile', () => {
     const container = await renderChat(makeMessage({}))
     // Инлайн не рендерится (popover-контент закрыт и порталится только при открытии).
     expect(container.querySelector('[data-testid="message-stats"]')).toBeNull()
-    expect(container.querySelector('button[title="Response stats"]')).not.toBeNull()
+    const trigger = container.querySelector('button[title="Response stats"]')
+    expect(trigger).not.toBeNull()
+    expect(container.querySelector('.message-actions')!.contains(trigger!)).toBe(true)
   })
 
   it('mobile: по клику открывается popover со статистикой', async () => {

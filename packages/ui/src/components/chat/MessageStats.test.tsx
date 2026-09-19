@@ -80,7 +80,7 @@ describe('MessageStats', () => {
     expect(text).toContain('1.7M in')
     expect(text).toContain('33.3k out')
     expect(text).toContain('~$0.03')
-    expect(text).toContain('93% cached')
+    expect(text).toContain('93% cache')
     expect(text).toContain('48 tok/s')
     // 6 сегментов → 5 разделителей; completed не добавляет префикс.
     expect(container.querySelectorAll('[aria-hidden="true"]').length).toBe(5)
@@ -120,7 +120,7 @@ describe('MessageStats', () => {
       }),
     )
     const text = container.textContent ?? ''
-    expect(text).not.toContain('cached')
+    expect(text).not.toContain('cache')
     expect(text).toContain('0 in')
     expect(text).toContain('100 out')
   })
@@ -155,7 +155,7 @@ describe('MessageStats', () => {
     expect(text).toContain('1.5k вх')
     expect(text).toContain('300 исх')
     expect(text).toContain('~$0.01')
-    expect(text).toContain('50% из кэша')
+    expect(text).toContain('50% кэш')
     expect(text).toContain('5 tok/s')
   })
 
@@ -247,7 +247,7 @@ describe('MessageStats', () => {
     const segments = [...el.querySelectorAll('span:not([aria-hidden="true"])')].map(
       (s) => s.textContent,
     )
-    expect(segments).toEqual(['Stopped', '2s', '1k in', '100 out', '~$0.01', '0% cached', '50 tok/s'])
+    expect(segments).toEqual(['Stopped', '2s', '1k in', '100 out', '~$0.01', '0% cache', '50 tok/s'])
   })
 })
 

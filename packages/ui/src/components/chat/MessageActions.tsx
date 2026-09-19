@@ -13,10 +13,14 @@ interface MessageActionsProps {
   /** Открыто окно отладки именно для этого сообщения — подсветить кнопку. */
   debugActive?: boolean
   readOnly?: boolean
-  /** У сообщения есть статистика ответа — на mobile показать кнопку (popover). */
+  /** У сообщения есть статистика ответа — показать (desktop inline / mobile popover). */
   hasStats?: boolean
-  /** Содержимое popover со статистикой (mobile); на десктопе не передаётся. */
+  /** true — touch-устройство: статистика в popover-кнопке, а не инлайном. */
+  isTouch?: boolean
+  /** Инлайн-статистика (desktop) — в ряду кнопок, прижата вправо. */
   statsContent?: ReactNode
+  /** Содержимое popover со статистикой (mobile). */
+  statsPopoverContent?: ReactNode
   onCopy: () => void
   onToggle: () => void
   onPin: () => void
@@ -36,7 +40,9 @@ export function MessageActions({
   debugActive,
   readOnly,
   hasStats,
+  isTouch,
   statsContent,
+  statsPopoverContent,
   onCopy,
   onToggle,
   onPin,
@@ -85,14 +91,20 @@ export function MessageActions({
         <ActionBtn onClick={onDebug} title={t('chat.actions.debug')} icon="bug" active={debugActive} />
       )}
 
+      {/* AD-070 §2.6 (desktop): статистика — в том же ряду, что и кнопки, прижата
+          вправо; видна вместе с кнопками при наведении (opacity ряда). */}
+      {!isTouch && hasStats && statsContent && (
+        <div className="ml-auto min-w-0 overflow-hidden whitespace-nowrap">{statsContent}</div>
+      )}
+
       {/* AD-070 §2.6 (mobile): статистика ответа — в popover, инлайн не рендерится. */}
-      {!isUser && hasStats && statsContent && (
+      {isTouch && !isUser && hasStats && statsPopoverContent && (
         <Popover open={statsOpen} onOpenChange={setStatsOpen}>
           <PopoverTrigger asChild>
             <ActionBtn title={t('chat.messageStats.toggle')} icon="chart-line" active={statsOpen} />
           </PopoverTrigger>
           <PopoverContent className="w-max max-w-[calc(100vw-2rem)] overflow-x-auto p-3">
-            {statsContent}
+            {statsPopoverContent}
           </PopoverContent>
         </Popover>
       )}

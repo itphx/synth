@@ -342,15 +342,6 @@ function ChatMessageInner({
           />
         )}
 
-        {/* AD-070 §2.6: на десктопе строка статистики видна всегда (места
-            достаточно) вместо hover-скрытия и кнопки-переключателя. На mobile
-            она не рендерится инлайн — доступна из popover в MessageActions. */}
-        {showStats && !isTouch && (
-          <div className="mt-1.5">
-            <MessageStats message={message} />
-          </div>
-        )}
-
         {showActions && (
           <MessageActions
             messageIndex={message.index}
@@ -362,7 +353,11 @@ function ChatMessageInner({
             debugActive={debugActive}
             readOnly={readOnly}
             hasStats={showStats}
-            statsContent={isTouch ? <MessageStats message={message} variant="popover" /> : undefined}
+            isTouch={isTouch}
+            // AD-070 §2.6: desktop — статистика инлайном в ряду кнопок (справа,
+            // по hover); mobile — в popover. Одна строка без переноса.
+            statsContent={<MessageStats message={message} className="flex-nowrap" />}
+            statsPopoverContent={<MessageStats message={message} variant="popover" />}
             onCopy={onCopy}
             onToggle={onToggle}
             onPin={onPin}

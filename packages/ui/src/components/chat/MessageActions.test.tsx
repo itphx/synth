@@ -79,10 +79,26 @@ describe('MessageActions: активное состояние кнопок', () 
     expect(btn.className).not.toContain('bg-primary/10')
   })
 
-  it('кнопка статистики подсвечивается при открытии popover и гаснет при закрытии', async () => {
+  it('desktop: инлайн-статистика рендерится в ряду, кнопки-переключателя нет', async () => {
     const container = await renderActions({
       hasStats: true,
-      statsContent: <div data-testid="stats-body">stats</div>,
+      statsContent: <div data-testid="stats-inline">stats</div>,
+      statsPopoverContent: <div data-testid="stats-popover">stats</div>,
+    })
+    const inline = container.querySelector('[data-testid="stats-inline"]')
+    expect(inline).not.toBeNull()
+    expect(container.querySelector('.message-actions')!.contains(inline!)).toBe(true)
+    expect(inline!.parentElement?.className).toContain('ml-auto')
+    expect(container.querySelector('button[title="Response stats"]')).toBeNull()
+    expect(container.querySelector('[data-testid="stats-popover"]')).toBeNull()
+  })
+
+  it('mobile: кнопка статистики подсвечивается при открытии popover и гаснет при закрытии', async () => {
+    const container = await renderActions({
+      hasStats: true,
+      isTouch: true,
+      statsContent: <div data-testid="stats-inline">stats</div>,
+      statsPopoverContent: <div data-testid="stats-body">stats</div>,
     })
     const trigger = getButton(container, 'Response stats')
     expect(trigger.className).not.toContain('text-primary')

@@ -602,7 +602,7 @@ export const dict = {
   'chat.messageStats.stopped': 'Stopped',
   'chat.messageStats.error': 'Error',
   'chat.messageStats.limit': 'Iteration limit',
-  'chat.messageStats.cache': '{pct} cached',
+  'chat.messageStats.cache': '{pct} cache',
   'chat.messageStats.in': 'in',
   'chat.messageStats.out': 'out',
   'chat.messageStats.speed': '{speed}',

@@ -601,7 +601,7 @@ export const dict = {
   'chat.messageStats.stopped': 'Остановлено',
   'chat.messageStats.error': 'Ошибка',
   'chat.messageStats.limit': 'Лимит итераций',
-  'chat.messageStats.cache': '{pct} из кэша',
+  'chat.messageStats.cache': '{pct} кэш',
   'chat.messageStats.in': 'вх',
   'chat.messageStats.out': 'исх',
   'chat.messageStats.speed': '{speed}',
