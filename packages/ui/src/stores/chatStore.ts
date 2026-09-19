@@ -168,8 +168,22 @@ export interface QueuedMessage {
   agentRole?: string | null
 }
 
+/**
+ * Сигнал завершения стрима для сессии: инкрементируется в `finishStream`/`cancelStream`.
+ * Нужен панели «Статистика» — `finishStream` часто обновляет существующее
+ * assistant-сообщение на месте (id не меняется), поэтому `lastAssistantMsg?.id`
+ * не срабатывает как триггер перезапроса.
+ */
+function bumpStreamFinishTick(
+  ticks: Record<string, number>,
+  sessionId: string,
+): Record<string, number> {
+  return { ...ticks, [sessionId]: (ticks[sessionId] ?? 0) + 1 }
+}
+
 interface ChatStore {
   messagesBySession: Record<string, MessageData[]>
+  streamFinishTickBySession: Record<string, number>
   streamingBySession: Record<string, Record<string, StreamState>>
   queueBySession: Record<string, QueueState>
   pendingBySession: Record<string, QueuedMessage[]>
@@ -231,6 +245,7 @@ interface ChatStore {
 
 export const useChatStore = create<ChatStore>((set) => ({
   messagesBySession: {},
+  streamFinishTickBySession: {},
   streamingBySession: {},
   queueBySession: {},
   pendingBySession: {},
@@ -399,6 +414,7 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   finishStream: (sessionId, streamId, metadata) =>
     set((s) => {
+      const streamFinishTickBySession = bumpStreamFinishTick(s.streamFinishTickBySession, sessionId)
       const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
       const streamState = sessionStreams[streamId]
       // AD-070 §2.6: status из stream.done доносим до metadata сообщения —
@@ -438,9 +454,10 @@ export const useChatStore = create<ChatStore>((set) => ({
           return {
             messagesBySession: { ...s.messagesBySession, [sessionId]: msgs },
             streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
+            streamFinishTickBySession,
           }
         }
-        return s
+        return { streamFinishTickBySession }
       }
 
       if (!metadata.cancelled && (streamState.content || metadata.content)) {
@@ -534,11 +551,15 @@ export const useChatStore = create<ChatStore>((set) => ({
         return {
           streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
           messagesBySession: { ...s.messagesBySession, [sessionId]: msgs },
+          streamFinishTickBySession,
         }
       }
 
       delete sessionStreams[streamId]
-      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
+      return {
+        streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
+        streamFinishTickBySession,
+      }
     }),
 
   cancelStream: (sessionId, streamId, status) =>
@@ -567,6 +588,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       return {
         streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
         ...(messagesBySession !== s.messagesBySession ? { messagesBySession } : {}),
+        streamFinishTickBySession: bumpStreamFinishTick(s.streamFinishTickBySession, sessionId),
       }
     }),
 

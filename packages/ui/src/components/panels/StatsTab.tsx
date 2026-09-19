@@ -54,6 +54,12 @@ export const StatsTab: React.FC = () => {
   const activeTab = centerTabs.find((tab) => tab.id === activeTabId)
   const activeSessionId = activeTab?.data?.sessionId
   const { messagesBySession } = useChatStore()
+  // Сигнал завершения стрима (успех/отмена/ошибка): `finishStream` часто
+  // обновляет существующее assistant-сообщение без смены id, поэтому
+  // `lastAssistantMsg?.id` не гарантирует перезапрос статистики.
+  const streamFinishTick = useChatStore((s) =>
+    activeSessionId ? s.streamFinishTickBySession[activeSessionId] ?? 0 : 0,
+  )
   const { sessions } = useSessionsStore()
   const agents = useAgentsStore((s) => s.agents)
 
@@ -107,7 +113,7 @@ export const StatsTab: React.FC = () => {
     } else {
       setProjectStats(null)
     }
-  }, [sessionProjectId])
+  }, [sessionProjectId, streamFinishTick])
 
   // AD-070 §2.5: состав системного промпта (read-only). Обновляем при смене
   // сессии и после каждого нового ответа (меняется promptMeta).
@@ -121,7 +127,7 @@ export const StatsTab: React.FC = () => {
       .then((info) => { if (!cancelled) setPromptInfo(info) })
       .catch(() => { if (!cancelled) setPromptInfo(null) })
     return () => { cancelled = true }
-  }, [activeSessionId, lastAssistantMsg?.id])
+  }, [activeSessionId, lastAssistantMsg?.id, streamFinishTick])
 
   // AD-070 §2.6: статистика по агентам/авторам. Тот же триггер, что и у промпта.
   useEffect(() => {
@@ -134,7 +140,7 @@ export const StatsTab: React.FC = () => {
       .then((stats) => { if (!cancelled) setSessionStats(stats) })
       .catch(() => { if (!cancelled) setSessionStats(null) })
     return () => { cancelled = true }
-  }, [activeSessionId, lastAssistantMsg?.id])
+  }, [activeSessionId, lastAssistantMsg?.id, streamFinishTick])
 
   // AD-070 §2.5: порядок записей задаёт бэкенд (реальный порядок отправки:
   // тир → order, tools — последним). UI не пересортировывает.

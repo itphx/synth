@@ -105,7 +105,7 @@ beforeEach(() => {
       },
     ],
   } as never)
-  useChatStore.setState({ messagesBySession: { s1: [] } })
+  useChatStore.setState({ messagesBySession: { s1: [] }, streamFinishTickBySession: {} })
   useAgentsStore.setState({ agents: [] })
 })
 
@@ -215,6 +215,65 @@ describe('StatsTab — блок «Сабагенты» в «Последнем �
     expect(section!.textContent).toContain('Sessions')
     expect(section!.textContent).toContain('300')
     expect(section!.textContent).toContain('Separate from the answer — not counted in the context window')
+  })
+
+  it('перезапрашивает статистику при инкременте streamFinishTick', async () => {
+    const container = await renderStats()
+
+    const promptCalls = mocks.getSessionPrompt.mock.calls.length
+    const statsCalls = mocks.getSessionStats.mock.calls.length
+    expect(promptCalls).toBeGreaterThanOrEqual(1)
+    expect(statsCalls).toBeGreaterThanOrEqual(1)
+
+    // Симуляция завершения стрима: finishStream/cancelStream увеличивают тик,
+    // не меняя id assistant-сообщения.
+    await act(async () => {
+      useChatStore.setState((s) => ({
+        streamFinishTickBySession: {
+          ...s.streamFinishTickBySession,
+          s1: (s.streamFinishTickBySession['s1'] ?? 0) + 1,
+        },
+      }))
+    })
+    await act(async () => {})
+
+    expect(mocks.getSessionPrompt.mock.calls.length).toBe(promptCalls + 1)
+    expect(mocks.getSessionStats.mock.calls.length).toBe(statsCalls + 1)
+    expect(container.textContent).toContain('History')
+  })
+
+  it('перезапрашивает project stats при инкременте streamFinishTick', async () => {
+    useSessionsStore.setState({
+      sessions: [
+        {
+          id: 's1',
+          title: 'S',
+          project_id: 'p1',
+          settings: { model: 'm' },
+          input_tokens: 0,
+          output_tokens: 0,
+        },
+      ],
+    } as never)
+
+    await renderStats()
+
+    const projectCalls = mocks.getProjectStats.mock.calls.length
+    expect(projectCalls).toBeGreaterThanOrEqual(1)
+    expect(mocks.getProjectStats).toHaveBeenLastCalledWith('p1')
+
+    await act(async () => {
+      useChatStore.setState((s) => ({
+        streamFinishTickBySession: {
+          ...s.streamFinishTickBySession,
+          s1: (s.streamFinishTickBySession['s1'] ?? 0) + 1,
+        },
+      }))
+    })
+    await act(async () => {})
+
+    expect(mocks.getProjectStats.mock.calls.length).toBe(projectCalls + 1)
+    expect(mocks.getProjectStats).toHaveBeenLastCalledWith('p1')
   })
 
   it('скрывает блок, когда сабагентов нет', async () => {
