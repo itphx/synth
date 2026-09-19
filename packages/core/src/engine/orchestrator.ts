@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
@@ -138,6 +138,8 @@ export interface ProcessMessageResult {
 /** AD-070 §2.5: read-only диагностика промпта для `GET /sessions/:id/prompt`. */
 export interface PromptDiagnostics {
   manifest: PromptManifest;
+  /** AD-070 §2.5: состав слоя истории (`messages`), зеркалит реальную отправку. */
+  history: PromptHistoryInfo;
   /** Состояние промпта активного агента (null, если ещё не собирался). */
   promptState: PromptState | null;
   /** `promptMeta` последнего ответа активного агента (null, если нет). */
@@ -621,7 +623,80 @@ export class ChatOrchestrator {
     const manifest = await this._composer.manifest(ctx);
     const promptState = session.promptStates?.[agentKeyOf(effectiveAgentRole)] ?? null;
     const lastPromptMeta = this._lastPromptMeta(session, effectiveAgentRole);
-    return { manifest, promptState, lastPromptMeta };
+    const history = this._buildPromptHistoryInfo(session, effectiveAgentRole);
+    return { manifest, history, promptState, lastPromptMeta };
+  }
+
+  /**
+   * AD-070 §2.5: состав слоя истории (`messages`) — read-only. Зеркалит
+   * реальную отправку через тот же `_sessionMessagesToLlm`, что и
+   * `_processMessage`, чтобы статистика не расходилась с запросом.
+   */
+  private _buildPromptHistoryInfo(session: Session, agentRole?: string): PromptHistoryInfo {
+    const sent = ChatOrchestrator._sessionMessagesToLlm(session.messages, agentRole, session.userId);
+
+    // Сообщения: chars = content + JSON(toolUse) + reasoning, estTokens = ceil(chars/4).
+    let chars = 0;
+    let secretPlaceholders = 0;
+    const placeholderRe = new RegExp(PLACEHOLDER_PATTERN.source, 'g');
+    for (const msg of sent) {
+      let msgChars = msg.content.length;
+      if (msg.toolUse) msgChars += JSON.stringify(msg.toolUse).length;
+      if (msg.reasoning) msgChars += msg.reasoning.length;
+      chars += msgChars;
+      const matches = msg.content.match(placeholderRe);
+      if (matches) secretPlaceholders += matches.length;
+    }
+
+    // State-сообщения: role system (не disabled/hidden), текст — как уходит в LLM.
+    const stateMap = new Map<string, { count: number; chars: number }>();
+    for (const msg of session.messages) {
+      if (msg.role !== MessageRole.SYSTEM || msg.disabled || msg.hidden) continue;
+      const type = typeof msg.metadata?.type === 'string' ? msg.metadata.type : 'state';
+      const entry = stateMap.get(type) ?? { count: 0, chars: 0 };
+      entry.count += 1;
+      entry.chars += wrapStateContent(type, msg.content).length;
+      stateMap.set(type, entry);
+    }
+    const stateMessages: PromptHistoryStateMessage[] = [...stateMap.entries()]
+      .map(([type, v]) => ({
+        type,
+        count: v.count,
+        chars: v.chars,
+        estTokens: Math.ceil(v.chars / 4),
+      }))
+      .sort((a, b) => b.chars - a.chars || a.type.localeCompare(b.type));
+
+    // Исключённые: ровно то, что отфильтровывает `_sessionMessagesToLlm`.
+    const excluded = { disabled: 0, hidden: 0, info: 0 };
+    for (const msg of session.messages) {
+      if (msg.disabled) excluded.disabled += 1;
+      if (msg.hidden) excluded.hidden += 1;
+      if (msg.role === MessageRole.INFO) excluded.info += 1;
+    }
+
+    // Вложения: нетекстовые части отправляемых сообщений.
+    let attachmentCount = 0;
+    let attachmentChars = 0;
+    for (const msg of session.messages) {
+      if (msg.disabled || msg.hidden || msg.role === MessageRole.INFO) continue;
+      for (const part of msg.parts) {
+        if (part.type === 'text') continue;
+        attachmentCount += 1;
+        const data = part.data === undefined ? '' : JSON.stringify(part.data) ?? '';
+        const meta = (part as { metadata?: unknown }).metadata;
+        const metaStr = meta === undefined ? '' : JSON.stringify(meta) ?? '';
+        attachmentChars += data.length + metaStr.length;
+      }
+    }
+
+    return {
+      messages: { count: sent.length, chars, estTokens: Math.ceil(chars / 4) },
+      stateMessages,
+      excluded,
+      attachments: { count: attachmentCount, chars: attachmentChars },
+      secretPlaceholders,
+    };
   }
 
   /** `promptMeta` последнего assistant-сообщения активного агента. */

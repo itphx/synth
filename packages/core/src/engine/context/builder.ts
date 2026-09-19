@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import type { Message, StickyNote } from '@itphx/synth-shared';
-import type { ProfileStore } from '@itphx/synth-shared';
+import type { ProfileData, ProfileStore } from '@itphx/synth-shared';
 import { ContextConfig } from './config.js';
 import { InterviewManager } from './interview.js';
 import { joinPromptBlocks, sortPromptBlocks, type PromptBlock } from './prompt-blocks.js';
@@ -112,7 +112,7 @@ export class ContextBuilder {
     // 8. Interview prompt (volatile)
     let interviewContent = '';
     if (showInterview && params.userId && this._profiles) {
-      const profile = await this._profiles.loadProfile(params.userId);
+      const profile = await this._resolveProfile(params.userId);
       const intManager = new InterviewManager(this._profiles, this._config);
       if (intManager.shouldStartInterview(profile, showInterview)) {
         const interview = this._config.getInterviewTemplate(lang);
@@ -210,13 +210,19 @@ export class ContextBuilder {
     return `\n\n[ADDITIONAL CONTEXT]\n${contextParts.join('\n\n')}\n`;
   }
 
-  private async _getProfilePrompt(userId: string | undefined, language: string): Promise<string | null> {
+  /**
+   * Резолвинг профиля: `userId` в сессии может быть username (`admin`), а не
+   * id-профиля (UUID). Сначала пробуем id, затем — фолбэк по username.
+   * Используется и для профиля в промпте, и для блока интервью.
+   */
+  private async _resolveProfile(userId: string | undefined): Promise<ProfileData | null> {
     if (!userId || !this._profiles) return null;
-
-    // `userId` в сессии может быть username (`admin`), а не id-профиля (UUID).
-    // Сначала пробуем id, затем — фолбэк по username.
-    const profile = (await this._profiles.loadProfile(userId))
+    return (await this._profiles.loadProfile(userId))
       ?? (await this._profiles.getProfileByUsername(userId));
+  }
+
+  private async _getProfilePrompt(userId: string | undefined, language: string): Promise<string | null> {
+    const profile = await this._resolveProfile(userId);
     if (!profile) return null;
 
     const template = this._config.getUserContextTemplate(language);

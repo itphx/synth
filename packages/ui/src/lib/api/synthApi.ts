@@ -1,5 +1,5 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem, ProjectPlan, PromptManifest, PromptState, PromptMeta, SessionStats } from '@itphx/synth-shared'
+import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, SessionStats } from '@itphx/synth-shared'
 import { normalizeModelInfo } from './modelNormalize'
 
 const BASE_URL = '/api/v2'
@@ -209,6 +209,7 @@ export interface MessageListResponse {
 /** AD-070 §2.5: ответ GET /sessions/:id/prompt — состав системного промпта. */
 export interface PromptInfoResponse {
   manifest: PromptManifest
+  history: PromptHistoryInfo
   promptState: PromptState | null
   lastPromptMeta: PromptMeta | null
 }

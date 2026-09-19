@@ -157,11 +157,14 @@ export class SystemPromptComposer {
       ...(block.provenance ? { provenance: block.provenance } : {}),
     }));
 
-    // AD-070 §2.5: слой описаний инструментов — самый ранний кэшируемый слой
+    // AD-070 §2.5: слой описаний инструментов — отдельный кэшируемый слой
     // (`tools → system → messages`). В system-текст (`compose`) не входит, но
     // отражается в манифесте и учитывается в общих размерах и staticPrefix.
+    // Добавляется в конец списка: system-блоки сохраняют свой порядок (role —
+    // первым), а `tools` идёт после них (UI-сортировка по тирам стабильна и не
+    // поднимает его наверх).
     const toolsChars = ctx.tools && ctx.tools.length > 0 ? JSON.stringify(ctx.tools).length : 0;
-    entries.unshift({
+    entries.push({
       key: 'tools',
       label: PROMPT_BLOCK_LABELS.tools ?? 'Tool descriptions',
       tier: 'stable',

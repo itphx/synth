@@ -47,6 +47,13 @@ function createMockOrchestrator() {
     cancel: vi.fn(),
     getPromptInfo: vi.fn().mockResolvedValue({
       manifest: { totalChars: 10, estTokens: 3, staticPrefixChars: 5, entries: [] },
+      history: {
+        messages: { count: 2, chars: 20, estTokens: 5 },
+        stateMessages: [{ type: 'mode_change', count: 1, chars: 40, estTokens: 10 }],
+        excluded: { disabled: 0, hidden: 0, info: 1 },
+        attachments: { count: 0, chars: 0 },
+        secretPlaceholders: 0,
+      },
       promptState: null,
       lastPromptMeta: null,
     }),
@@ -606,6 +613,10 @@ describe('Session API Routes', () => {
       const body: any = await res.json();
       expect(body.manifest).toBeTruthy();
       expect(body.manifest.totalChars).toBe(10);
+      expect(body.history).toBeTruthy();
+      expect(body.history.messages.count).toBe(2);
+      expect(body.history.stateMessages[0].type).toBe('mode_change');
+      expect(body.history.excluded.info).toBe(1);
       expect(body.promptState).toBeNull();
       expect(body.lastPromptMeta).toBeNull();
     });

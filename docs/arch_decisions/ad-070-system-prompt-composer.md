@@ -321,7 +321,7 @@ export interface PromptMeta {      // кладётся в assistant-сообще
 
 ### 2.5. Прозрачность и дебаг
 
-Composer отдаёт **манифест источников** (по образцу hermes `context_file_sources.py`):
+Composer отдаёт **манифест источников** (по образцу hermes `context_file_sources.py`) и **состав слоя истории**:
 
 ```ts
 export interface PromptManifestEntry {
@@ -332,19 +332,32 @@ export interface PromptManifestEntry {
   estTokens: number;
   status: 'loaded' | 'truncated' | 'empty' | 'blocked' | 'suppressed';
   provenance?: string;
+  source?: 'system' | 'tools';   // 'system' — блок system, 'tools' — слой инструментов
 }
 export interface PromptManifest {
-  generation: number;
+  generation?: number;
   totalChars: number;
   estTokens: number;
   staticPrefixChars: number;
   entries: PromptManifestEntry[];
 }
+
+/** Слой истории (`messages`) — состав реально отправляемых сообщений. */
+export interface PromptHistoryInfo {
+  messages: { count: number; chars: number; estTokens: number };
+  stateMessages: Array<{ type: string; count: number; chars: number; estTokens: number }>;
+  excluded: { disabled: number; hidden: number; info: number };
+  attachments: { count: number; chars: number };
+  secretPlaceholders: number;
+}
 ```
 
+- **Манифест: system-блоки + отдельный слой `tools`.** `manifest()` возвращает записи system-блоков в **реальном порядке отправки** (`role` — первой, `source: 'system'`), затем отдельную запись `tools` (`tier: 'stable'`, `source: 'tools'`, `provenance: 'tools'`). `chars` = длина `JSON.stringify` **реально отправляемых** инструментов (тот же список, что уходит в запрос); запись `tools` учтена в `totalChars`/`estTokens`/`staticPrefixChars`, но в текст `compose()` не входит — это отдельный, самый ранний кэшируемый слой (`tools → system → messages`). В список запись добавляется **в конец** (`entries.push`), чтобы не поднимать `tools` над system-блоками: UI-сортировка по тирам стабильна и сохраняет порядок, где `role` — первая.
+- **Слой истории.** `GET /api/v2/sessions/:id/prompt` вместе с `manifest` отдаёт `history: PromptHistoryInfo` — состав слоя `messages`, посчитанный **тем же** `_sessionMessagesToLlm`, что и реальная отправка (статистика не расходится с запросом): суммарные отправляемые сообщения (`messages`: count/chars/estTokens), сгруппированные chronological state-сообщения (`stateMessages` по `type`: `mode_change`/`agent_switch`/`plan_updated`/`todos_updated`/…), исключённые (`excluded`: `disabled`/`hidden`/`info`), вложения (не-text части: `attachments` count/chars) и число плейсхолдеров секретов `⟦SYNTH_SECRET_N⟧` (`secretPlaceholders`, AD-036). **Request-параметры (model/temperature/maxTokens) в состав промпта не включаются — осознанно:** это параметры запроса, а не промпт.
 - **Тест паритета:** `manifest(ctx)` и `compose(ctx)` используют один и тот же обход источников; тест проверяет, что сумма `chars`/`estTokens` манифеста соответствует реально отправленным байтам (в пределах известных приближений, как в hermes).
-- **API:** `GET /api/v2/sessions/:id/prompt` (manifest + последний `promptMeta`).
-- **UI:** секция «Состав промпта» (аналог `/context`): тир, размер, токены, статус, provenance, hit/miss по ходам.
+- **API:** `GET /api/v2/sessions/:id/prompt` (manifest + `history` + последний `promptMeta`).
+- **UI:** секция «Состав промпта» (аналог `/context`): тир, размер, токены, статус, provenance, hit/miss по ходам; в неё входят строка «Описание инструментов» (`tools`) и секция «История» — раскрывающаяся таблица state-сообщений по типам, исключённые (`disabled`/`hidden`/`info`), вложения и число секретов.
+- **Профиль.** `_getProfilePrompt` и блок интервью резолвят профиль единым `_resolveProfile(userId)` = `loadProfile(userId) ?? getProfileByUsername(userId)`: `session.userId` хранит username (`admin`), а профиль ключуется по id-UUID. `profilesStore` проброшен в standalone `ContextBuilder` (`server/app.ts`, `server/chat.ts`), поэтому профиль и интервью работают и в standalone-core, не только на managed-бэкенде.
 - **DebugCollector** пробрасывается в `ContextBuilder`/`SystemPromptComposer` во **всех** точках создания (`server/app.ts:634`, `server/chat.ts:67`, `backend/src/app.ts:241`) — `captureSystemPromptParts` перестаёт быть мёртвым кодом.
 
 ### 2.6. `ContextSource`-шов
@@ -687,11 +700,18 @@ Chronological-сообщения — **обычные system-сообщения 
 
 ### Фаза 4 — Прозрачность/debug
 
-- `manifest()` + `PromptManifest` (key/label/tier/chars/estTokens/status/provenance).
+- `manifest()` + `PromptManifest` (key/label/tier/chars/estTokens/status/provenance/source).
 - `GET /api/v2/sessions/:id/prompt`; UI-секция «Состав промпта» (`components/panels/StatsTab.tsx`).
 - `captureSystemPromptParts` оживлён: Composer вызывает его через per-message `debugCollector` во всех точках создания.
 
+### Доработки: прозрачность промпта и профиль пользователя (2026-09-19)
+
+- **Манифест расширен слоем `tools`.** Запись `tools` (`tier: 'stable'`, `source: 'tools'`, `provenance: 'tools'`): `chars` = длина `JSON.stringify` реально отправляемых инструментов; учтена в `totalChars`/`estTokens`/`staticPrefixChars`. System-блоки идут в **реальном порядке отправки** (`role` — первой записью), `tools` добавлен **отдельным слоем в конец** списка (UI-сортировка по тирам стабильна). В `compose()`-текст `tools` не входит.
+- **Слой истории.** `GET /api/v2/sessions/:id/prompt` отдаёт `history: PromptHistoryInfo`: суммарные отправляемые сообщения (count/chars/estTokens), сгруппированные chronological state-сообщения (`mode_change`/`agent_switch`/`plan_updated`/`todos_updated`), исключённые (`disabled`/`hidden`/`info`), вложения (не-text части) и число плейсхолдеров секретов `⟦SYNTH_SECRET_N⟧`. Вычисляется зеркально `_sessionMessagesToLlm` (`orchestrator._buildPromptHistoryInfo`). Request-параметры (model/temperature/maxTokens) в состав промпта **не включаются — осознанно**.
+- **Профиль пользователя.** `_getProfilePrompt`/интервью резолвят профиль через `_resolveProfile(userId)` = `loadProfile(userId) ?? getProfileByUsername(userId)` (`session.userId` хранит username, профиль ключуется по id-UUID); `profilesStore` проброшен в standalone `ContextBuilder` (`server/app.ts`, `server/chat.ts`).
+- **UI.** В «Составе промпта» появились строка «Описание инструментов» (`tools`) и секция «История» (раскрывающаяся таблица state-сообщений по типам + исключённые/вложения/секреты). Статистика приведена к единому виду: иконка + имя, окрашенные в цвет сущности (агент — `resolveColor`, пользователь — `userColor`); заголовки колонок «Кэш»/«%»; у агентов убраны «Скорость»/«Длительность»; единый поповер статистики; центрирование иконок.
+
 ### Проверки
 
-- `pnpm typecheck` — 6/6 пакетов; `pnpm lint` — 0 errors; тесты: shared 73, core 1372, ui 169, backend 246.
-- E2E на провайдере routerai (`qwen/qwen3.7-flash`): 43 тула и в `act`, и в `plan`; `cacheReadTokens` 0 → 7469, `cacheHitRate` 0.499; `promptMeta.expected`/`validated` отрабатывают.
+- `pnpm typecheck` — 6/6 пакетов; `pnpm lint` — 0 errors; тесты: shared 73, core 1407, ui 220, backend 248.
+- E2E на провайдере routerai (`qwen/qwen3.7-flash`): 43 тула и в `act`, и в `plan`; `cacheReadTokens` 0 → 7469, `cacheHitRate` 0.499; `promptMeta.expected`/`validated` отрабатывают. Профиль в промпте (83 chars, notes «Зови меня Босс»), `tools` 19126 в `stable`, строки таблиц статистики корректны.

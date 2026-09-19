@@ -13,6 +13,7 @@ import { FileStore } from '../storage/file-store.js';
 import { EventBus } from '../events/bus.js';
 import { ProviderFactory, BaseProvider } from '../providers/base.js';
 import type { ContextBuilder } from './context/builder.js';
+import { wrapStateContent } from './context/state-messages.js';
 import { generateId, MessageRole, nowISO, makeTextPart } from '@itphx/synth-shared';
 import type { Message, Session, TokenUsage } from '@itphx/synth-shared';
 
@@ -124,6 +125,50 @@ describe('ChatOrchestrator — promptStates/promptMeta (AD-070 §2.4)', () => {
     return [...session.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
   }
 
+  function makeAssistantMessage(content: string, agentRole = 'developer'): Message {
+    return {
+      id: generateId(),
+      role: MessageRole.ASSISTANT,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(content)],
+      content,
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      agentRole,
+    };
+  }
+
+  function makeStateMessage(type: string, content: string): Message {
+    return {
+      id: generateId(),
+      role: MessageRole.SYSTEM,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(content)],
+      content,
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      metadata: { type, state: true },
+    };
+  }
+
+  function makeInfoMessage(content: string): Message {
+    return { ...makeUserMessage(content), role: MessageRole.INFO };
+  }
+
+  async function createSessionWithUser(userId = 'user'): Promise<Session> {
+    return sessionManager.createSession({
+      title: 'History',
+      userId,
+      settings: { provider: 'cachemeta', model: 'm', agentRole: 'developer' },
+    });
+  }
+
   it('первый ход: promptStates[agentKey] generation=1, reason=init, expected=miss', async () => {
     const session = await createSession();
     expect(session.promptStates).toBeUndefined();
@@ -222,5 +267,99 @@ describe('ChatOrchestrator — promptStates/promptMeta (AD-070 §2.4)', () => {
     // Побочных эффектов нет: состояние в хранилище не перезаписано.
     const reloaded = (await sessionManager.getSession(session.id))!;
     expect(reloaded.promptStates!.developer!.updatedAt).toBe(after.promptStates!.developer!.updatedAt);
+  });
+
+  describe('_buildPromptHistoryInfo (AD-070 §2.5, слой messages)', () => {
+    it('считает отправляемые сообщения, а disabled/hidden/info — в excluded', async () => {
+      const session = await createSessionWithUser();
+      await sessionManager.addMessage(session.id, makeUserMessage('Привет'));
+      await sessionManager.addMessage(session.id, makeAssistantMessage('ok'));
+
+      const disabled = makeUserMessage('d');
+      disabled.disabled = true;
+      const hidden = makeUserMessage('h');
+      hidden.hidden = true;
+      await sessionManager.addMessage(session.id, disabled);
+      await sessionManager.addMessage(session.id, hidden);
+      await sessionManager.addMessage(session.id, makeInfoMessage('i'));
+      await sessionManager.addMessage(session.id, makeStateMessage('mode_change', 'MODE'));
+
+      const fresh = (await sessionManager.getSession(session.id))!;
+      const { history } = await orchestrator.getPromptInfo(fresh);
+
+      // user + assistant + state-сообщение (role system → user в LLM).
+      expect(history.messages.count).toBe(3);
+      expect(history.messages.chars).toBeGreaterThan(0);
+      expect(history.messages.estTokens).toBe(Math.ceil(history.messages.chars / 4));
+      expect(history.excluded).toEqual({ disabled: 1, hidden: 1, info: 1 });
+
+      const wrapped = wrapStateContent('mode_change', 'MODE');
+      expect(history.stateMessages).toEqual([
+        {
+          type: 'mode_change',
+          count: 1,
+          chars: wrapped.length,
+          estTokens: Math.ceil(wrapped.length / 4),
+        },
+      ]);
+    });
+
+    it('группирует state-сообщения по type и сортирует по chars убыв.', async () => {
+      const session = await createSessionWithUser();
+      await sessionManager.addMessage(session.id, makeStateMessage('mode_change', 'AAA'));
+      await sessionManager.addMessage(session.id, makeStateMessage('mode_change', 'BBB'));
+      await sessionManager.addMessage(session.id, makeStateMessage('plan_updated', 'P'));
+
+      const fresh = (await sessionManager.getSession(session.id))!;
+      const { history } = await orchestrator.getPromptInfo(fresh);
+
+      expect(history.stateMessages).toHaveLength(2);
+      const byType = Object.fromEntries(history.stateMessages.map((s) => [s.type, s]));
+      expect(byType.mode_change!.count).toBe(2);
+      expect(byType.mode_change!.chars).toBe(
+        wrapStateContent('mode_change', 'AAA').length + wrapStateContent('mode_change', 'BBB').length,
+      );
+      expect(byType.plan_updated!.count).toBe(1);
+      // Сортировка: по chars убыв.
+      expect(history.stateMessages[0]!.chars).toBeGreaterThanOrEqual(history.stateMessages[1]!.chars);
+    });
+
+    it('считает нетекстовые вложения отправляемых сообщений', async () => {
+      const session = await createSessionWithUser();
+      const withAttachment = makeUserMessage('see');
+      withAttachment.parts = [
+        { id: generateId(), type: 'tool_result', data: { content: 'abc' } },
+        makeTextPart('see'),
+      ];
+      await sessionManager.addMessage(session.id, withAttachment);
+
+      // Вложение в исключённом сообщении не учитывается.
+      const excludedAttachment = makeUserMessage('x');
+      excludedAttachment.hidden = true;
+      excludedAttachment.parts = [{ id: generateId(), type: 'tool_result', data: { content: 'zzz' } }];
+      await sessionManager.addMessage(session.id, excludedAttachment);
+
+      const fresh = (await sessionManager.getSession(session.id))!;
+      const { history } = await orchestrator.getPromptInfo(fresh);
+
+      expect(history.attachments.count).toBe(1);
+      expect(history.attachments.chars).toBe(JSON.stringify({ content: 'abc' }).length);
+    });
+
+    it('считает плейсхолдеры секретов ⟦SYNTH_SECRET_N⟧ в отправляемых сообщениях', async () => {
+      const session = await createSessionWithUser();
+      await sessionManager.addMessage(
+        session.id,
+        makeUserMessage('ключ ⟦SYNTH_SECRET_1⟧ и ⟦SYNTH_SECRET_2⟧'),
+      );
+      const hidden = makeUserMessage('⟦SYNTH_SECRET_3⟧');
+      hidden.hidden = true;
+      await sessionManager.addMessage(session.id, hidden);
+
+      const fresh = (await sessionManager.getSession(session.id))!;
+      const { history } = await orchestrator.getPromptInfo(fresh);
+
+      expect(history.secretPlaceholders).toBe(2);
+    });
   });
 });

@@ -50,6 +50,7 @@ export const StatsTab: React.FC = () => {
   const [promptInfo, setPromptInfo] = useState<PromptInfoResponse | null>(null)
   const [sessionStats, setSessionStats] = useState<SessionStats | null>(null)
   const [promptExpanded, setPromptExpanded] = useState(false)
+  const [historyExpanded, setHistoryExpanded] = useState(false)
 
   const activeTabId = useUIStore((s) => s.activeCenterTabId)
   const centerTabs = useUIStore((s) => s.centerTabs)
@@ -311,6 +312,86 @@ export const StatsTab: React.FC = () => {
           </div>
         )}
       </Section>
+
+      {promptInfo && (
+        <Section title={t('rightPanel.stats.history')}>
+          <div className="mb-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+            <StatCell
+              icon="chat-new"
+              color="text-blue-400"
+              label={t('rightPanel.stats.historyMessages')}
+              value={fmt(promptInfo.history.messages.count)}
+            />
+            <StatCell
+              icon="file-text"
+              color="text-amber-400"
+              label={t('rightPanel.stats.promptColChars')}
+              value={fmt(promptInfo.history.messages.chars)}
+            />
+            <div className="col-span-2">
+              <StatCell
+                icon="line-chart"
+                color="text-teal-400"
+                label={t('rightPanel.stats.promptColTokens')}
+                value={`~${fmt(promptInfo.history.messages.estTokens)}`}
+              />
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-expanded={historyExpanded}
+            onClick={() => setHistoryExpanded((v) => !v)}
+            className="flex w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Icon name={historyExpanded ? 'arrow-down-s' : 'arrow-right-s'} className="size-3.5" />
+            <span>{historyExpanded ? t('rightPanel.stats.historyCollapse') : t('rightPanel.stats.historyExpand')}</span>
+          </button>
+          {historyExpanded && (
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full text-[0.6875rem]">
+                <thead>
+                  <tr className="text-muted-foreground">
+                    <th className="px-2 py-0.5 text-left font-medium">{t('rightPanel.stats.historyColType')}</th>
+                    <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.historyColCount')}</th>
+                    <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.promptColChars')}</th>
+                    <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.promptColTokens')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {promptInfo.history.stateMessages.map((state) => (
+                    <tr key={state.type} className="border-t border-border/30">
+                      <td className="px-2 py-0.5 text-left truncate max-w-[8rem]">{state.type}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums">{fmt(state.count)}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums">{fmt(state.chars)}</td>
+                      <td className="px-2 py-0.5 text-center tabular-nums">{fmt(state.estTokens)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="mt-2 space-y-0.5 text-[0.6875rem] text-muted-foreground">
+                <div className="flex items-center justify-between gap-2">
+                  <span>{t('rightPanel.stats.historyExcluded')}</span>
+                  <span className="tabular-nums">
+                    {t('rightPanel.stats.historyDisabled')} {promptInfo.history.excluded.disabled} ·{' '}
+                    {t('rightPanel.stats.historyHidden')} {promptInfo.history.excluded.hidden} ·{' '}
+                    {t('rightPanel.stats.historyInfo')} {promptInfo.history.excluded.info}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span>{t('rightPanel.stats.historyAttachments')}</span>
+                  <span className="tabular-nums">
+                    {fmt(promptInfo.history.attachments.count)} / {fmt(promptInfo.history.attachments.chars)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span>{t('rightPanel.stats.historySecrets')}</span>
+                  <span className="tabular-nums">{fmt(promptInfo.history.secretPlaceholders)}</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </Section>
+      )}
 
       {sessionStats && sessionStats.agents.length > 0 && (
         <Section title={t('rightPanel.stats.agentsStats')}>

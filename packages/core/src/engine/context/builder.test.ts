@@ -222,10 +222,14 @@ describe('ContextBuilder.buildBaseBlocks', () => {
     const byKey = new Map(blocks.map((b) => [b.key, b]));
     expect(byKey.get('profile')!.content).toContain('Зови меня Босс');
     expect(byKey.get('profile')!.content).toContain('admin');
+    // Профиль, резолвнутый по username, также запускает интервью.
+    expect(byKey.get('interview')!.content.length).toBeGreaterThan(0);
 
-    // Ни id, ни username не найдены → блок пуст (поведение как раньше).
+    // Ни id, ни username не найдены → блоки пусты (поведение как раньше).
     const missing = await builder.buildBaseBlocks({ language: 'ru', userId: 'ghost' });
-    expect(new Map(missing.map((b) => [b.key, b])).get('profile')!.content).toBe('');
+    const missingByKey = new Map(missing.map((b) => [b.key, b]));
+    expect(missingByKey.get('profile')!.content).toBe('');
+    expect(missingByKey.get('interview')!.content).toBe('');
   });
 
   it('заполняет sticky/participants/summary при наличии данных (agentRole задан)', async () => {

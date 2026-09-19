@@ -129,6 +129,29 @@ export interface PromptManifest {
   entries: PromptManifestEntry[];
 }
 
+// --- Prompt history (AD-070 §2.5, слой messages) ---
+/** AD-070 §2.5: state-сообщения истории, сгруппированные по типу. */
+export interface PromptHistoryStateMessage {
+  type: string;
+  count: number;
+  chars: number;
+  estTokens: number;
+}
+
+/** AD-070 §2.5: состав слоя истории (`messages`), зеркалит реальную отправку. */
+export interface PromptHistoryInfo {
+  /** Реально отправляемые сообщения (после фильтрации), суммарно. */
+  messages: { count: number; chars: number; estTokens: number };
+  /** Chronological state-сообщения (mode_change/agent_switch/plan_updated/todos_updated/…), сгруппированы по type. */
+  stateMessages: PromptHistoryStateMessage[];
+  /** Что НЕ уходит в LLM. */
+  excluded: { disabled: number; hidden: number; info: number };
+  /** Мультимодальные части (не text). */
+  attachments: { count: number; chars: number };
+  /** Число плейсхолдеров секретов ⟦SYNTH_SECRET_N⟧ в отправляемых сообщениях (AD-036). */
+  secretPlaceholders: number;
+}
+
 // --- Session statistics (AD-070 §2.6) ---
 /**
  * Статистика по агенту в рамках сессии (`GET /sessions/:id/stats`).

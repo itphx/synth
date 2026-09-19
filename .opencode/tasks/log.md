@@ -77,3 +77,18 @@
 - **Файлы:** `packages/core/src/providers/anthropic.ts`, `packages/core/src/providers/anthropic.test.ts` (new), `openai.test.ts`, `remote.test.ts`, `ollama.test.ts`.
 - **Ветка:** `feat/ad-070-system-prompt-composer`
 - **Коммит:** нет (по правилу «коммит только по просьбе пользователя»).
+
+## 2026-09-19 — AD-070: прозрачность промпта — tools и слой истории, профиль пользователя, UI-статистика
+- **Задача:** «Доработать AD-070: показать в статистике реальный состав промпта (слой инструментов и слой истории), починить попадание профиля пользователя в промпт и привести UI-статистику к единому виду».
+- **Тип:** feature / fix
+- **Исполнитель:** @orchestrator → @fixer ×4
+- **Результат:** PASS
+- **Что сделано:**
+  - **Профиль пользователя (fix):** `session.userId` хранит username, а профиль ключуется по id-UUID — `_getProfilePrompt` и интервью не находили профиль. Добавлен фолбэк `loadProfile(userId) ?? getProfileByUsername(userId)` (`_resolveProfile`), `profilesStore` проброшен в standalone `ContextBuilder` (`server/app.ts`, `server/chat.ts`); интервью теперь тоже запускается по username-профилю.
+  - **Манифест — слой `tools`:** запись `tools` (tier `stable`, `source: 'tools'`, `provenance: 'tools'`), `chars` = `JSON.stringify` реально отправляемых инструментов; учтена в `totalChars`/`estTokens`/`staticPrefixChars`, в текст `compose()` не входит. System-блоки идут в реальном порядке (`role` — первой), `tools` добавлен отдельным слоем в конец списка.
+  - **Слой истории:** `GET /api/v2/sessions/:id/prompt` отдаёт `history: PromptHistoryInfo` — суммарные отправляемые сообщения (count/chars/estTokens), сгруппированные chronological state-сообщения (`mode_change`/`agent_switch`/`plan_updated`/`todos_updated`), исключённые (`disabled`/`hidden`/`info`), вложения (не-text части) и число плейсхолдеров секретов `⟦SYNTH_SECRET_N⟧`. Вычисляется зеркально `_sessionMessagesToLlm`. Request-параметры (model/temperature/maxTokens) в состав промпта не включаются — осознанно.
+  - **UI:** в «Составе промпта» — строка «Описание инструментов» (`tools`) и секция «История» (раскрывающаяся таблица state-сообщений по типам + исключённые/вложения/секреты). Статистика: иконки/цвета/имена (агент — `resolveColor`, пользователь — `userColor`), колонки «Кэш»/«%», убраны «Скорость»/«Длительность» у агентов, единый поповер статистики, центрирование иконок.
+- **Проверки:** `pnpm typecheck` — 6/6 пакетов; `pnpm lint` — 0 errors; тесты: shared 73 / ui 220 / core 1407 / backend 248; E2E — профиль в промпте (83 chars, notes «Зови меня Босс»), `tools` 19126 в `stable`, строки таблиц статистики корректны.
+- **Ветка:** `feat/ad-070-system-prompt-composer`
+- **Коммит:** нет (по правилу «коммит только по просьбе пользователя»).
+- **Замечания:** открытые вопросы AD-070 зафиксированы в §7 самого AD; реализация AD-069 по-прежнему отложена.

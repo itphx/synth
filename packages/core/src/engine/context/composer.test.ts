@@ -305,6 +305,13 @@ describe('SystemPromptComposer', () => {
       expect(entry!.chars).toBe(toolsChars);
       expect(entry!.estTokens).toBe(Math.ceil(toolsChars / 4));
 
+      // Порядок: первой идёт роль (как в реальном system prompt), tools — в
+      // конце списка, а не в начале.
+      expect(withTools.entries[0]!.key).toBe('role');
+      expect(withTools.entries[withTools.entries.length - 1]!.key).toBe('tools');
+      expect(withTools.entries.findIndex((e) => e.key === 'role'))
+        .toBeLessThan(withTools.entries.findIndex((e) => e.key === 'tools'));
+
       const systemChars = withTools.entries
         .filter((e) => e.source !== 'tools' && e.status !== 'empty')
         .reduce((sum, e) => sum + e.chars, 0);
