@@ -1,4 +1,4 @@
-import type { AgentDefinition, ToolCapability } from '@itphx/synth-shared';
+import type { AgentDefinition } from '@itphx/synth-shared';
 import { normalizeAgentModes } from './normalize.js';
 import type { ToolRegistry } from '../tools/registry.js';
 
@@ -50,13 +50,19 @@ export class AgentRegistry {
     return this.list({ mode: 'subagent' });
   }
 
+  /**
+   * AD-070 §2.9: тулы постоянны — найденный агент видит **все** тулы, без
+   * фильтра по capabilities. Definition остаётся в запросе; ролевые ограничения
+   * передаются permission-слоем как `unavailable(role)` (см. AD-070 §2.9.1), а
+   * не скрытием тула. Неизвестный агент (или отсутствующий ToolRegistry) →
+   * `undefined` — safety-fallback вызывающей стороны.
+   */
   getToolsForAgent(agentId: string) {
     if (!this._toolRegistry) return undefined;
 
     const agent = this._agents.get(agentId);
     if (!agent) return undefined;
 
-    const capabilities = (agent.capabilities || []) as ToolCapability[];
-    return this._toolRegistry.filterByCapabilities(capabilities);
+    return this._toolRegistry.toLLMFormat();
   }
 }

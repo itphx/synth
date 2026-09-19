@@ -1,5 +1,5 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage } from '@itphx/synth-shared';
-import { MessageRole, nowISO, ToolCapability, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
@@ -7,15 +7,30 @@ import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
 import { DebugCollector } from '../debug.js';
 import { ProviderFactory } from '../providers/base.js';
+import { computeCacheHitRate } from '../providers/usage.js';
 import { ContextLengthExceededError } from '../providers/exceptions.js';
-import type { LLMMessage, CancellationToken, ProviderConfig as CoreProviderConfig, BaseProvider } from '../providers/base.js';
+import type { LLMMessage, CancellationToken, ProviderConfig as CoreProviderConfig, BaseProvider, SystemPromptPayload, CachePolicy } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import { ContextConfig } from './context/config.js';
+import { SystemPromptComposer, type ComposerContext } from './context/composer.js';
+import {
+  agentKeyOf,
+  buildPromptState,
+  computeExpected,
+  isPrefixUnchanged,
+  validateExpected,
+  type PromptStateReason,
+} from './context/prompt-state.js';
+import {
+  syncStateMessages,
+  createStateMessage,
+  findLastStateMessage,
+  buildModeChangeContent,
+  wrapStateContent,
+  type UnavailableTool,
+} from './context/state-messages.js';
 import type { ToolRegistry } from './tools/registry.js';
-import { renderPlanMarkdown } from './tools/plan.js';
-import { renderTodosMarkdown } from './tools/todo.js';
-import type { ToolForLLM } from '@itphx/synth-shared';
 import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
 import { info, warning } from '../logger.js';
@@ -30,7 +45,8 @@ import { TaskClassifier } from './router/micro/task-classifier.js';
 import { RulesModel, EmbeddingModel, MicroLlmModel } from './router/micro/models/index.js';
 import type { MicroModel } from './router/micro/models/base.js';
 import type { RoutingDecision } from './router/router.js';
-import { PermissionEvaluator, isPlanRestricted, isPlanBlockedTool, getMcpToolAvailability, extractPaths } from './permission/evaluator.js';
+import { PermissionEvaluator, extractPaths } from './permission/evaluator.js';
+import { computeToolAvailability } from './permission/availability.js';
 import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { classifyLlmError, isLlmErrorRecoverable } from './llm-error.js';
@@ -99,12 +115,23 @@ export interface OrchestratorOptions {
   gatewayAuditLogger?: AuditLogger;
   /** Хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт). */
   gatewayPatternStore?: SecretPatternStore;
+  /** AD-070 §2.2: политика prompt-cache (config llm.cache). Дефолт — auto. */
+  cachePolicy?: CachePolicy;
 }
 
 export interface ProcessMessageResult {
   error?: string;
   errorType?: string;
   canRetry?: boolean;
+}
+
+/** AD-070 §2.5: read-only диагностика промпта для `GET /sessions/:id/prompt`. */
+export interface PromptDiagnostics {
+  manifest: PromptManifest;
+  /** Состояние промпта активного агента (null, если ещё не собирался). */
+  promptState: PromptState | null;
+  /** `promptMeta` последнего ответа активного агента (null, если нет). */
+  lastPromptMeta: PromptMeta | null;
 }
 
 function toCoreProviderConfig(shared: SharedProviderConfig, model: string, reasoningLevel?: ReasoningLevel): CoreProviderConfig {
@@ -140,6 +167,7 @@ export class ChatOrchestrator {
   private readonly _microPipeline: MicroPipeline | null;
   private readonly _contextConfig: ContextConfig | null;
   private readonly _projectStore: ProjectStoreLike | null;
+  private readonly _composer: SystemPromptComposer;
   private readonly _defaultWorkingDir: string;
   private readonly _workspacesRoot: string;
   private _permissionConfig: PermissionConfig;
@@ -157,6 +185,8 @@ export class ChatOrchestrator {
   private readonly _gatewayPayloadLogPath: string | undefined;
   /** Внешний audit-logger (backend/runner) — переиспользуется при live-включении gateway. */
   private readonly _gatewayAuditExternal: AuditLogger | null;
+  /** AD-070 §2.2: политика prompt-cache (auto | none) из config llm.cache. */
+  private readonly _cachePolicy: CachePolicy;
   private _providerPool: ProviderPool | null;
   /** Политика защищённых путей (СКВОЗНАЯ проверка файловых тулов + shell) — ленивая загрузка с кэшем. */
   private _protectedPaths: ProtectedPathsPolicy | null = null;
@@ -211,6 +241,12 @@ export class ChatOrchestrator {
     this._routerConfig = options.routerConfig ?? null;
     this._contextConfig = options.contextConfig ?? null;
     this._projectStore = options.projectStore ?? null;
+    // AD-070 §2.1: единая точка сборки системного промпта (идемпотентно).
+    this._composer = new SystemPromptComposer({
+      contextBuilder: this._contextBuilder,
+      contextConfig: this._contextConfig,
+      projectStore: this._projectStore,
+    });
     this._defaultWorkingDir = options.defaultWorkingDir ?? join(options.dataDir || '/var/synth/data', 'workspaces', 'default');
     this._workspacesRoot = options.workspacesRoot ?? join(options.dataDir || '/var/synth/data', 'workspaces');
     this._permissionConfig = options.permissionConfig ?? emptyPermissionConfig();
@@ -221,6 +257,7 @@ export class ChatOrchestrator {
     this._dataDir = options.dataDir || '/var/synth/data';
     this._gatewayPayloadLogPath = options.gatewayPayloadLogPath
       ?? join(options.dataDir || '/var/synth/data', 'audit', 'llm-payloads.jsonl');
+    this._cachePolicy = options.cachePolicy ?? 'auto';
 
     // AD-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
     // ObfuscationMapStore живёт в сессии, RateLimiter и AuditLogger — общие.
@@ -441,187 +478,123 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-025/AD-039: добавляет в system prompt блоки режима Plan/Act и
-   * утверждённого плана проекта. Вызывается при старте обработки и
-   * пересобирается после plan_enter/plan_exit в текущей итерации.
+   * AD-070 §2.9.1: собирает недоступные сейчас тулы реестра с причиной
+   * (`mode`/`role`) для chronological-сообщений `mode_change`/`agent_switch`.
+   * Список tool-дефинишенов постоянен — фильтрация по режиму/роли здесь только
+   * для информирования модели, а не для скрытия тулов.
    */
-  private async _buildPlanSystemPrompt(
-    base: string,
+  private _collectUnavailableTools(
     session: Session,
-    planMode: PlanMode,
     sessionMode: SessionMode,
+    planMode: PlanMode,
     planApproved: boolean,
-  ): Promise<string> {
-    const parts: string[] = [];
+    agentDef: AgentDefinition | undefined,
+  ): UnavailableTool[] {
+    if (!this._toolRegistry) return [];
+    const unavailable: UnavailableTool[] = [];
+    for (const tool of this._toolRegistry.list()) {
+      const availability = computeToolAvailability(tool.name, tool.capabilities, {
+        sessionMode,
+        planMode,
+        planApproved,
+        mcpToolSettings: session.settings.mcpToolSettings,
+        agentCapabilities: agentDef?.capabilities,
+      });
+      if (!availability.available && availability.reason) {
+        unavailable.push({ name: tool.name, reason: availability.reason });
+      }
+    }
+    return unavailable;
+  }
 
-    // AD-025: промпт текущего режима загружается из contextConfig.getModePrompt
-    // (prompts/system/MODE_{PLAN,ACT,YOLO}.{lang}.md, переопределяемые через dataDir/context/user/system).
-    // Если getModePrompt вернул null (нет contextConfig или файла) — блок режима
-    // не добавляется ни для одного режима.
+  /**
+   * AD-070 §2.8: смена режима в середине хода — добавляет durable
+   * `mode_change` state-сообщение в историю и синтетическое user-сообщение с
+   * обёрткой `<system-state>` в текущий LLM-диалог (для последующих итераций).
+   * System prompt не пересобирается — смена режима его не меняет.
+   */
+  private async _appendModeChangeState(
+    session: Session,
+    sessionMode: SessionMode,
+    planMode: PlanMode,
+    planApproved: boolean,
+    language: string,
+    currentMessages: LLMMessage[],
+    unavailableTools: UnavailableTool[] = [],
+  ): Promise<void> {
+    const content = buildModeChangeContent(
+      sessionMode, planMode, planApproved, language, this._contextConfig, unavailableTools,
+    );
+    if (!content) return;
+    // Идемпотентно: не дублируем mode_change, если состояние не изменилось
+    // (например, plan_enter при уже активном plan-режиме).
+    const last = findLastStateMessage(session.messages, 'mode_change');
+    if (last && last.content === content) return;
+    const stateMsg = createStateMessage('mode_change', content);
+    await this._sessionManager.addMessage(session.id, stateMsg);
+    session.messages.push(stateMsg);
+    currentMessages.push({
+      id: '',
+      role: 'user',
+      content: wrapStateContent('mode_change', content),
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      disabled: false,
+      pinned: false,
+      branchId: '',
+    });
+  }
+
+  /**
+   * AD-070 §2.5: read-only диагностика состава системного промпта для API/UI.
+   * Возвращает манифест (тот же обход, что и `compose`), состояние промпта
+   * активного агента и `promptMeta` последнего ответа. Побочных эффектов нет:
+   * `promptStates` не пишется, `captureSystemPromptParts` не вызывается.
+   */
+  async getPromptInfo(session: Session): Promise<PromptDiagnostics> {
+    const effectiveAgentRole = session.settings.agentRole;
+    const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
+    const workingDir = await this._resolveWorkingDir(session);
     const language = session.settings.language || 'ru';
-    const modePrompt = this._contextConfig?.getModePrompt(sessionMode, language) ?? null;
-    if (modePrompt) {
-      parts.push(modePrompt);
-    }
 
-    // AD-028/AD-039: промпт строгости цикла Plan→Build загружается из contextConfig
-    // (prompts/system/PLAN_MODE_{AUTO,STRICT_APPROVED,STRICT_NOT_APPROVED}.{lang}.md,
-    // переопределяемые через dataDir/context/user/system). planMode 'off' → null —
-    // блок не добавляется.
-    const planModePrompt = this._contextConfig?.getPlanModePrompt(planMode, planApproved, language) ?? null;
-    if (planModePrompt) {
-      parts.push(planModePrompt);
-    }
+    const optimizedMessages = this._optimizer
+      ? this._optimizer.getMessagesForLlm(session)
+      : session.messages;
+    const summaryContent = optimizedMessages
+      .filter((m) => m.role === MessageRole.SUMMARY)
+      .map((m) => m.content)
+      .join('\n\n');
 
-    // AD-039: блок [APPROVED PLAN] собирается из плана проекта (project.plan).
-    const approvedPlan = await this._renderProjectPlan(session);
-    if (approvedPlan) {
-      parts.push(`[APPROVED PLAN]\n${approvedPlan}`);
-    }
+    const ctx: ComposerContext = {
+      session,
+      agentDef,
+      agentRole: effectiveAgentRole,
+      agentContextFile: agentDef?.contextFile,
+      workingDir,
+      language,
+      routingEnabled: !!this._router && session.settings.routingEnabled !== false,
+      gatewayEnabled: !!this._gatewayConfig,
+      historyMessages: session.messages,
+      userId: session.userId,
+      showInterview: session.settings.showInterview,
+      stickyNotes: session.stickyNotes,
+      summaryContent: summaryContent || undefined,
+    };
 
-    // AD-039: блок [TODO] собирается из session.todos.
-    const todosMarkdown = renderTodosMarkdown(session.todos ?? []);
-    if (todosMarkdown) {
-      parts.push(`[TODO]\n${todosMarkdown}`);
-    }
-
-    // AD-039: инструкция по ведению плана и todo (PLAN_GUIDE) встраивается
-    // всегда, когда доступен контекст (contextConfig), независимо от наличия
-    // плана или todo — модель должна знать разницу между ними с первого запроса.
-    const guide = this._contextConfig?.getPlanGuide(language) ?? null;
-    if (guide) {
-      parts.push(guide);
-    }
-
-    if (parts.length === 0) return base;
-    return `${base}\n\n${parts.join('\n\n')}`;
+    const manifest = await this._composer.manifest(ctx);
+    const promptState = session.promptStates?.[agentKeyOf(effectiveAgentRole)] ?? null;
+    const lastPromptMeta = this._lastPromptMeta(session, effectiveAgentRole);
+    return { manifest, promptState, lastPromptMeta };
   }
 
-  /**
-   * AD-025: фильтрует список тулов, передаваемых LLM, по текущему режиму сессии.
-   * В plan-режиме (или strict без утверждённого плана) из списка убираются
-   * write/edit-тулы и git-запись (группы edit/git_write) — модель не видит
-   * инструментов, которые всё равно будут отклонены PermissionEvaluator'ом.
-   * MCP-инструменты фильтруются по настройкам доступности (plan/act).
-   * Режимы act/yolo — полный список без изменений.
-   */
-  private _filterToolsByMode(
-    tools: ToolForLLM[] | undefined,
-    session: Session,
-    sessionMode: SessionMode,
-    planMode: PlanMode,
-    planApproved: boolean,
-  ): ToolForLLM[] | undefined {
-    if (!tools || tools.length === 0) return tools;
-    // Рестрикция не активна (act/yolo/off) — полный список тулов.
-    if (!isPlanRestricted(sessionMode, planMode, planApproved)) return tools;
-
-    const mcpToolSettings = session.settings.mcpToolSettings;
-    const result: ToolForLLM[] = [];
-    for (const tool of tools) {
-      const toolName = tool.function.name;
-      const toolDef = this._toolRegistry?.get(toolName);
-      const capabilities = toolDef?.capabilities;
-
-      // Edit-группа (write/edit/delete) и git-запись блокируются в plan-режиме —
-      // скрываем их от модели, чтобы она не пыталась их вызывать.
-      if (isPlanBlockedTool(toolName, capabilities)) continue;
-
-      // MCP-инструменты: в plan-режиме недоступный по настройкам тул убираем из
-      // списка (консистентно с PermissionEvaluator: modeKey = 'plan').
-      if (capabilities?.includes(ToolCapability.MCP) && mcpToolSettings) {
-        const availability = getMcpToolAvailability(mcpToolSettings, toolName);
-        if (availability && !availability.plan) continue;
-      }
-
-      result.push(tool);
+  /** `promptMeta` последнего assistant-сообщения активного агента. */
+  private _lastPromptMeta(session: Session, agentRole?: string): PromptMeta | null {
+    for (let i = session.messages.length - 1; i >= 0; i--) {
+      const msg = session.messages[i]!;
+      if (msg.role !== MessageRole.ASSISTANT || !msg.promptMeta) continue;
+      if (agentRole && msg.promptMeta.agentRole && msg.promptMeta.agentRole !== agentRole) continue;
+      return msg.promptMeta;
     }
-    return result;
-  }
-
-  /**
-   * AD-039: markdown-рендер плана проекта. Null — если проекта нет, нет plan
-   * или план пуст (нет пунктов).
-   */
-  private async _renderProjectPlan(session: Session): Promise<string | null> {
-    if (!session.projectId || !this._projectStore) return null;
-    try {
-      const project = await this._projectStore.load(session.projectId);
-      const plan = project?.plan;
-      if (!plan || plan.items.length === 0) return null;
-      return renderPlanMarkdown(plan);
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * AD-040: добавляет в system prompt контекстный блок сессии — наличие/отсутствие
-   * проекта, рабочий каталог и ограничения. Вызывается после резолва workingDir.
-   */
-  private async _buildSessionContextPrompt(
-    base: string,
-    session: Session,
-    workingDir: string,
-  ): Promise<string> {
-    const lang = session.settings.language || 'ru';
-    const lines: string[] = [];
-
-    if (session.projectId) {
-      let project: Project | null = null;
-      if (this._projectStore) {
-        try {
-          project = await this._projectStore.load(session.projectId);
-        } catch {
-          project = null;
-        }
-      }
-
-      if (project) {
-        lines.push('[КОНТЕКСТ СЕССИИ]');
-        lines.push(`Проект: ${project.name}`);
-        lines.push(`ID проекта: ${session.projectId}`);
-        lines.push(`Рабочий каталог: ${project.workspace || workingDir}`);
-
-        const invariants = project.invariants?.trim();
-        if (invariants) {
-          lines.push('');
-          lines.push(lang === 'en' ? '[PROJECT INVARIANTS]' : '[ИНВАРИАНТЫ ПРОЕКТА]');
-          lines.push(project.invariants);
-        }
-      } else {
-        lines.push('[КОНТЕКСТ СЕССИИ]');
-        lines.push(`Проект: не найден (id: ${session.projectId})`);
-        lines.push(`Рабочий каталог: ${workingDir}`);
-      }
-    } else if (lang === 'en') {
-      lines.push('[SESSION CONTEXT]');
-      lines.push('Project: none');
-      lines.push(`Working directory: ${workingDir}`);
-      lines.push(
-        'Limitations: a plan is unavailable (the plan is bound to a project). '
-        + 'File and git tools operate within the working directory. Todo is available.',
-      );
-      lines.push(
-        'If the task requires long-term work with files, git, or a plan — suggest that the user '
-        + 'create a project and move the session into it.',
-      );
-    } else {
-      lines.push('[КОНТЕКСТ СЕССИИ]');
-      lines.push('Проект: отсутствует');
-      lines.push(`Рабочий каталог: ${workingDir}`);
-      lines.push(
-        'Ограничения: план недоступен (план привязан к проекту). '
-        + 'Файловые и git-инструменты работают в рамках рабочего каталога. Todo доступен.',
-      );
-      lines.push(
-        'Если задача требует длительной работы с файлами, git или планом — предложи пользователю '
-        + 'создать проект и перенести сессию в него.',
-      );
-    }
-
-    if (lines.length === 0) return base;
-    return `${base}\n\n${lines.join('\n')}`;
+    return null;
   }
 
   /**
@@ -785,6 +758,36 @@ export class ChatOrchestrator {
         context_optimization: session.settings.contextOptimization,
       });
 
+      // AD-070 §2.8: синхронизируем режим/план/todo durable state-сообщениями
+      // истории (до сборки LLM-сообщений). Идемпотентно — при неизменном
+      // состоянии ничего не добавляется; system prompt при этом не меняется.
+      const language = session.settings.language || 'ru';
+      let projectForState: Project | null = null;
+      if (session.projectId && this._projectStore) {
+        try {
+          projectForState = await this._projectStore.load(session.projectId);
+        } catch {
+          projectForState = null;
+        }
+      }
+      const stateSync = syncStateMessages(session, {
+        contextConfig: this._contextConfig,
+        language,
+        plan: projectForState?.plan ?? null,
+        agentRole: effectiveAgentRole,
+        unavailableTools: this._collectUnavailableTools(
+          session, sessionMode, planMode, planApproved, agentDef,
+        ),
+      });
+      if (stateSync.changed) {
+        for (const stateMsg of stateSync.added) {
+          await this._sessionManager.addMessage(session.id, stateMsg);
+        }
+        // Локальная сессия должна увидеть новые state-сообщения при сборке
+        // messagesForLlm в этом же ходе.
+        session.messages.push(...stateSync.added);
+      }
+
       // 2. Build context (сначала получить summary из сообщений)
       const optimizedMessages = this._optimizer
         ? this._optimizer.getMessagesForLlm(session)
@@ -795,45 +798,74 @@ export class ChatOrchestrator {
         .map((m) => m.content)
         .join('\n\n');
 
-      const systemPrompt = session.settings.systemPrompt
-        || await this._contextBuilder.buildSystemPrompt({
-          agentRole: effectiveAgentRole,
-          agentContextFile: agentDef?.contextFile,
-          historyMessages: session.messages,
-          userId: session.userId,
-          projectName: session.projectId,
-          language: session.settings.language,
-          showInterview: session.settings.showInterview,
-          stickyNotes: session.stickyNotes,
-          summaryContent: summaryContent || undefined,
-        });
+      // AD-070 §2.1/§2.8: единая идемпотентная сборка системного промпта
+      // Composer'ом. `session.settings.systemPrompt` override, classification/
+      // gateway/plan-guide/mode-policy/session-context — внутри compose.
+      // Режим/план/todo — уже в state-сообщениях истории (выше), не в system.
+      const composerCtx: ComposerContext = {
+        session,
+        agentDef,
+        agentRole: effectiveAgentRole,
+        agentContextFile: agentDef?.contextFile,
+        workingDir,
+        language,
+        routingEnabled: !!this._router && session.settings.routingEnabled !== false,
+        gatewayEnabled: !!this._gatewayConfig,
+        historyMessages: session.messages,
+        userId: session.userId,
+        showInterview: session.settings.showInterview,
+        stickyNotes: session.stickyNotes,
+        summaryContent: summaryContent || undefined,
+        // AD-070 §2.5: per-message collector доходит до Composer через контекст
+        // (Composer создаётся один раз, а коллектор живёт в рамках хода).
+        debugCollector,
+      };
+      const composed = await this._composer.compose(composerCtx);
+      // AD-070 §2.2: в провайдер уходит payload с границей stable-префикса и
+      // ключом кэша (стабильный id сессии). При override
+      // `session.settings.systemPrompt` stablePrefix не задаём (безопаснее).
+      const hasSystemPromptOverride = !!session.settings.systemPrompt?.trim();
+      const finalSystemPrompt: SystemPromptPayload = {
+        text: composed.system,
+        stablePrefix: hasSystemPromptOverride ? undefined : (composed.stablePrefix || undefined),
+        cacheKey: session.id,
+        cachePolicy: this._cachePolicy,
+      };
 
-      // Добавляем инструкцию classify_conversation если routing включен (AD-034)
-      let finalSystemPrompt = systemPrompt;
-      if (this._router && session.settings.routingEnabled !== false) {
-        const lang = session.settings.language || 'ru';
-        const classifyInstruction = lang === 'ru'
-          ? '\n\n[CLASSIFICATION]\n\nКогда определишь характер задачи, вызови инструмент `classify_conversation` с категорией: coding (написание/изменение кода), research (анализ/исследование), или chat (общий разговор). Это поможет выбрать оптимальную модель для последующих запросов.'
-          : '\n\n[CLASSIFICATION]\n\nWhen you determine the nature of the task, call the `classify_conversation` tool with the category: coding (writing/modifying code), research (analysis/investigation), or chat (general conversation). This helps select the optimal model for subsequent requests.';
-        finalSystemPrompt = systemPrompt + classifyInstruction;
+      // AD-070 §2.4/§2.7 (Ф2-часть 2): состояние промпта per-agent. При
+      // `systemPrompt`-override закреплённый префикс пустой (не кэшируем
+      // пользовательский оверрайд). Запись в сессию — только при смене
+      // generation (init / смена префикса / override); на обычном сообщении
+      // состояние только сравнивается.
+      const agentKey = agentKeyOf(effectiveAgentRole);
+      const prevPromptState = session.promptStates?.[agentKey] ?? null;
+      const promptStateInput = {
+        system: composed.system,
+        stablePrefix: hasSystemPromptOverride ? '' : composed.stablePrefix,
+        blocks: composed.blocks,
+      };
+      const expectedCache = computeExpected(prevPromptState, promptStateInput);
+      let activePromptState = prevPromptState;
+      if (!prevPromptState || !isPrefixUnchanged(prevPromptState, promptStateInput)) {
+        const reason: PromptStateReason = hasSystemPromptOverride
+          ? 'override'
+          : prevPromptState
+            ? 'generation-change'
+            : 'init';
+        activePromptState = buildPromptState(promptStateInput, prevPromptState, reason);
+        session.promptStates = {
+          ...(session.promptStates ?? {}),
+          [agentKey]: activePromptState,
+        };
+        await this._sessionManager.saveSession(session);
       }
-
-      // AD-036: если включена обфускация — сообщаем модели о токенах ⟦SYNTH_SECRET_N⟧
-      if (this._gatewayConfig && this._contextBuilder) {
-        const lang = session.settings.language || 'ru';
-        const gatewayInstructions = this._contextBuilder.getGatewayInstructions(lang);
-        if (gatewayInstructions) {
-          finalSystemPrompt = `${finalSystemPrompt}\n\n${gatewayInstructions}`;
-        }
-      }
-
-      // AD-025/AD-039: блоки режима Plan/Act + утверждённый план проекта
-      finalSystemPrompt = await this._buildPlanSystemPrompt(
-        finalSystemPrompt, session, planMode, sessionMode, planApproved,
-      );
-
-      // AD-040: контекстный блок сессии (проект/рабочий каталог/ограничения)
-      finalSystemPrompt = await this._buildSessionContextPrompt(finalSystemPrompt, session, workingDir);
+      const promptMeta: PromptMeta = {
+        agentRole: effectiveAgentRole,
+        generation: activePromptState?.generation ?? 0,
+        expected: expectedCache,
+        cachedTokens: 0,
+        validated: false,
+      };
 
       // 3. Convert messages for LLM (без summary — они уже в system prompt)
       const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
@@ -867,23 +899,15 @@ export class ChatOrchestrator {
         }
       }
 
-      // 4. Get tools from registry, filtered by agent capabilities.
-      // baseTools — полный набор по агентам; tools — с учётом режима сессии
-      // (AD-025): пересобирается из baseTools после plan_enter/plan_exit.
-      let baseTools: ToolForLLM[] | undefined;
-      if (this._toolRegistry) {
-        // agentRole всегда определён при нормальной работе (пользователь, @-mention,
-        // сабагент). Если агент НЕ найден в реестре или role undefined — модель получает
-        // НИКАКИХ инструментов. Никакого молчаливого fallback на «все non-MCP», иначе
-        // агент без shell видит execute_shell и «гадает по именам» вместо честного ответа.
-        const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
-        if (agentDef && effectiveAgentRole) {
-          baseTools = this._agentRegistry!.getToolsForAgent(effectiveAgentRole);
-        } else {
-          baseTools = [];
-        }
-      }
-      let tools = this._filterToolsByMode(baseTools, session, sessionMode, planMode, planApproved);
+      // 4. Get tools from registry. AD-070 §2.9: список тулов постоянен — не
+      // фильтруется по режиму/ролям; ограничения обеспечивает permission-слой
+      // (unavailable(mode|role)). Если агент НЕ найден в реестре или role
+      // undefined — модель получает НИКАКИХ инструментов (safety-fallback).
+      const tools = this._toolRegistry
+        ? (agentDef && effectiveAgentRole
+            ? this._agentRegistry!.getToolsForAgent(effectiveAgentRole)
+            : [])
+        : undefined;
 
       // 5. Create cancellation token
       // Внутренний AbortController: абортится и по cancelToken.cancel()
@@ -1017,6 +1041,7 @@ export class ChatOrchestrator {
               session.id, partialContent, streamId, effectiveAgentRole,
               finalUsage, chunkModel, accumulatedReasoning, debugCollector, true, providerName,
               MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
+              undefined, undefined, undefined, promptMeta,
             );
           }
 
@@ -1096,6 +1121,7 @@ export class ChatOrchestrator {
             params: toolArgs,
             workingDir,
             capabilities: toolDef?.capabilities,
+            agentCapabilities: agentDef?.capabilities,
             sessionMode,
             planMode,
             planApproved,
@@ -1389,22 +1415,23 @@ export class ChatOrchestrator {
             }
           }
 
-          // AD-025/AD-039: обновляем локальный режим после plan_enter/plan_exit,
-          // чтобы ограничения, system prompt и список тулов применились к
-          // следующим тулам/итерациям.
+          // AD-025/AD-070 §2.8: после plan_enter/plan_exit обновляем локальный
+          // режим и добавляем durable mode_change state-сообщение в историю +
+          // синтетическое user-сообщение в текущий диалог. System prompt
+          // mid-turn больше не пересобирается (смена режима его не меняет).
           if (!toolResult.isError && toolName === 'plan_enter') {
             sessionMode = 'plan';
-            finalSystemPrompt = await this._buildPlanSystemPrompt(
-              finalSystemPrompt, session, planMode, sessionMode, planApproved,
+            await this._appendModeChangeState(
+              session, sessionMode, planMode, planApproved, language, currentMessages,
+              this._collectUnavailableTools(session, sessionMode, planMode, planApproved, agentDef),
             );
-            tools = this._filterToolsByMode(baseTools, session, sessionMode, planMode, planApproved);
           } else if (!toolResult.isError && toolName === 'plan_exit') {
             planApproved = true;
             sessionMode = 'act';
-            finalSystemPrompt = await this._buildPlanSystemPrompt(
-              finalSystemPrompt, session, planMode, sessionMode, planApproved,
+            await this._appendModeChangeState(
+              session, sessionMode, planMode, planApproved, language, currentMessages,
+              this._collectUnavailableTools(session, sessionMode, planMode, planApproved, agentDef),
             );
-            tools = this._filterToolsByMode(baseTools, session, sessionMode, planMode, planApproved);
           }
 
           allToolCalls.push({
@@ -1477,6 +1504,7 @@ export class ChatOrchestrator {
             session.id, partialContent, streamId, effectiveAgentRole,
             finalUsage, finalModel, allReasoning.map((r) => r.text).join('\n\n---\n\n'), debugCollector, true, providerName,
             MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
+            undefined, undefined, undefined, promptMeta,
           );
         }
 
@@ -1595,6 +1623,7 @@ export class ChatOrchestrator {
         finalUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
         MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
         qaPass, qaReason, fallbackI18n ? { i18n: fallbackI18n } : undefined,
+        promptMeta,
       );
 
       // Получаем актуальную сессию после сохранения
@@ -1715,6 +1744,7 @@ export class ChatOrchestrator {
             cache_read_tokens: updatedSession2.cacheReadTokens,
             cache_write_tokens: updatedSession2.cacheWriteTokens,
             reasoning_tokens: updatedSession2.reasoningTokens,
+            cache_hit_rate: updatedSession2.cacheHitRate ?? 0,
             input_cost: updatedSession2.inputCost,
             output_cost: updatedSession2.outputCost,
             cache_read_cost: updatedSession2.cacheReadCost,
@@ -2095,6 +2125,7 @@ export class ChatOrchestrator {
         cache_read_tokens: freshSession?.cacheReadTokens ?? 0,
         cache_write_tokens: freshSession?.cacheWriteTokens ?? 0,
         reasoning_tokens: freshSession?.reasoningTokens ?? 0,
+        cache_hit_rate: freshSession?.cacheHitRate ?? 0,
         input_cost: freshSession?.inputCost ?? 0,
         output_cost: freshSession?.outputCost ?? 0,
         cache_read_cost: freshSession?.cacheReadCost ?? 0,
@@ -2264,6 +2295,24 @@ export class ChatOrchestrator {
 
       const role = msg.role;
       if (role === MessageRole.INFO) continue;
+
+      // AD-070 §2.8: durable state-сообщения хранятся с role system (скрыты в
+      // UI), но в LLM-запрос уходят как синтетическое user-сообщение с
+      // обёрткой `<system-state>` — Anthropic не принимает role system в
+      // messages. Без префикса `[anonymous]`.
+      if (role === MessageRole.SYSTEM) {
+        const stateType = typeof msg.metadata?.type === 'string' ? msg.metadata.type : 'state';
+        result.push({
+          id: '',
+          role: 'user',
+          content: wrapStateContent(stateType, msg.content),
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          disabled: false,
+          pinned: false,
+          branchId: '',
+        });
+        continue;
+      }
 
       const isOwnMessage =
         role === MessageRole.TOOL ||
@@ -2446,6 +2495,8 @@ export class ChatOrchestrator {
     qaReason?: string,
     /** Дополнительные поля metadata (например metadata.i18n фоллбек-статусов). */
     metadataExtra?: Record<string, unknown>,
+    /** AD-070 §2.4: предсказание prompt-cache; cachedTokens/validated — из usage. */
+    promptMeta?: PromptMeta,
   ): Promise<string> {
     const finalContent = content;
 
@@ -2458,6 +2509,16 @@ export class ChatOrchestrator {
     }
 
     const debugInfo = debugCollector.getDebugInfo();
+
+    // AD-070 §2.4: usage доступен в момент сохранения — заполняем фактические
+    // cachedTokens и подтверждаем/опровергаем предсказание.
+    const resolvedPromptMeta: PromptMeta | undefined = promptMeta
+      ? {
+          ...promptMeta,
+          cachedTokens: usage?.cacheReadTokens ?? 0,
+          validated: validateExpected(promptMeta.expected, usage?.cacheReadTokens ?? 0),
+        }
+      : undefined;
 
     const metadata: Record<string, unknown> = { stream_id: streamId, ...metadataExtra };
     if (toolResults && toolResults.length > 0) {
@@ -2495,6 +2556,7 @@ export class ChatOrchestrator {
       agentRole,
       debugData: debugInfo ?? undefined,
       metadata,
+      ...(resolvedPromptMeta ? { promptMeta: resolvedPromptMeta } : {}),
       ...(summaryOf ? { summaryOf } : {}),
       ...(qaPass !== undefined ? { qa_pass: qaPass } : {}),
       ...(qaReason !== undefined ? { qa_reason: qaReason } : {}),
@@ -2511,6 +2573,8 @@ export class ChatOrchestrator {
         s.cacheReadTokens += usage.cacheReadTokens || 0;
         s.cacheWriteTokens += usage.cacheWriteTokens || 0;
         s.reasoningTokens += usage.reasoningTokens || 0;
+        // AD-070 §2.3: hit rate по накопленным токенам сессии.
+        s.cacheHitRate = computeCacheHitRate(s.cacheReadTokens, s.inputTokens);
 
         const effectiveModel = model || msg.model;
         if (effectiveModel && this._modelPriceLoader) {

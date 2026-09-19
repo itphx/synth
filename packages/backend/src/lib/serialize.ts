@@ -42,6 +42,8 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
       blocked: session.status.blocked || null,
     },
     settings: session.settings,
+    /** AD-070 §2.4: состояние промпта per-agent (generation/hash/prefix). */
+    prompt_states: session.promptStates ?? null,
     sticky_notes: session.stickyNotes.map((n) => ({
       id: n.id,
       content: n.content,
@@ -68,6 +70,7 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
     output_cost: session.outputCost,
     cache_read_cost: session.cacheReadCost,
     cache_write_cost: session.cacheWriteCost,
+    cache_hit_rate: session.cacheHitRate ?? 0,
     processor_running: null,
     created_at: session.createdAt,
     updated_at: session.updatedAt,
@@ -91,6 +94,8 @@ export function serializeMessage(msg: Message, index: number) {
     provider_type: msg.providerType || null,
     reasoning: msg.reasoning || null,
     debug_data: msg.debugData || null,
+    /** AD-070 §2.4: предсказание/валидация prompt-cache для хода. */
+    prompt_meta: msg.promptMeta ?? null,
     summary_of: msg.summaryOf || null,
     usage: msg.usage
       ? {

@@ -109,6 +109,7 @@ export class SessionManager {
       outputCost: 0,
       cacheReadCost: 0,
       cacheWriteCost: 0,
+      cacheHitRate: 0,
       createdAt: nowISO(),
       updatedAt: nowISO(),
       inputTokens: 0,

@@ -1,5 +1,5 @@
 import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
-import { BaseProvider, type LLMMessage, type CancellationToken } from './base.js';
+import { BaseProvider, resolveSystemPromptText, type LLMMessage, type SystemPromptInput, type CancellationToken } from './base.js';
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
 import { ContextLengthExceededError, RateLimitError } from './exceptions.js';
@@ -11,7 +11,7 @@ export class OllamaProvider extends BaseProvider {
 
   async chat(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     stream?: boolean,
     debugCollector?: DebugCollector,
@@ -25,7 +25,8 @@ export class OllamaProvider extends BaseProvider {
     };
     if (this.reasoningLevel === 'low') body.think = true;
     else if (this.reasoningLevel === 'none') body.think = false;
-    if (systemPrompt) body.system = systemPrompt;
+    const systemText = resolveSystemPromptText(systemPrompt);
+    if (systemText) body.system = systemText;
     if (tools?.length) body.tools = this._formatTools(tools);
     if (this.numCtx && this.numCtx > 0) body.options = { num_ctx: this.numCtx };
 
@@ -61,7 +62,7 @@ export class OllamaProvider extends BaseProvider {
 
   async *chatAsync(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     debugCollector?: DebugCollector,
     cancellationToken?: CancellationToken,
@@ -75,7 +76,8 @@ export class OllamaProvider extends BaseProvider {
     };
     if (this.reasoningLevel === 'low') body.think = true;
     else if (this.reasoningLevel === 'none') body.think = false;
-    if (systemPrompt) body.system = systemPrompt;
+    const systemText = resolveSystemPromptText(systemPrompt);
+    if (systemText) body.system = systemText;
     if (tools?.length) body.tools = this._formatTools(tools);
     if (this.numCtx && this.numCtx > 0) body.options = { num_ctx: this.numCtx };
 
@@ -84,7 +86,14 @@ export class OllamaProvider extends BaseProvider {
 
     let accumulatedReasoning = '';
     let accumulatedContent = '';
-    const accumulatedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    // AD-070 §2.3: у Ollama cache-полей нет — cacheRead/cacheWrite = 0.
+    const accumulatedUsage: TokenUsage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
     const accumulatedToolCalls: Record<string, unknown>[] = [];
 
     const controller = new AbortController();
@@ -215,6 +224,8 @@ export class OllamaProvider extends BaseProvider {
               if (typeof chunkData.eval_count === 'number') {
                 accumulatedUsage.outputTokens += chunkData.eval_count;
               }
+              accumulatedUsage.totalTokens =
+                accumulatedUsage.inputTokens + accumulatedUsage.outputTokens;
             } catch {
               continue;
             }
@@ -428,10 +439,15 @@ export class OllamaProvider extends BaseProvider {
       }));
     }
 
+    const inputTokens = (data.prompt_eval_count as number) || 0;
+    const outputTokens = (data.eval_count as number) || 0;
+    // AD-070 §2.3: у Ollama cache-полей нет — cacheRead/cacheWrite = 0.
     const parsedUsage: TokenUsage = {
-      inputTokens: (data.prompt_eval_count as number) || 0,
-      outputTokens: (data.eval_count as number) || 0,
-      totalTokens: 0,
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
     };
 
     return { content, model: this.model, usage: parsedUsage, toolCalls, reasoning };

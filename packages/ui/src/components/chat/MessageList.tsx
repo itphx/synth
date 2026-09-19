@@ -4,6 +4,7 @@ import { ChatMessage, type PendingStreamStatus } from './ChatMessage'
 import { StreamingPlaceholder } from './StreamingPlaceholder'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { ScrollableOverlay } from '../ui/ScrollableOverlay'
+import { isVisibleMessage } from './messageVisibility'
 import type { MessageData, StreamState, StreamRetry } from '@/stores/chatStore'
 
 interface MessageListProps {
@@ -88,8 +89,9 @@ export function MessageList({
 
   // Служебные сообщения tool-chain (metadata.tool_chain === true) не рендерятся
   // отдельными пузырями — их визуальное представление уже в финальном сообщении
-  // (tool_calls / reasoning_blocks / intermediate_text_blocks).
-  const visibleMessages = messages.filter((m) => !(m.metadata && m.metadata.tool_chain === true))
+  // (tool_calls / reasoning_blocks / intermediate_text_blocks). Durable
+  // state-сообщения режима/плана/todo (AD-070 §2.8) тоже скрыты в UI.
+  const visibleMessages = messages.filter(isVisibleMessage)
 
   const virtualizer = useVirtualizer({
     count: visibleMessages.length,

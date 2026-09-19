@@ -8,12 +8,12 @@ import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import type { TokenUsage } from '@itphx/synth-shared';
-import type { LLMMessage } from '../../providers/base.js';
+import type { LLMMessage, SystemPromptInput } from '../../providers/base.js';
 import { warning } from '../../logger.js';
 
 export interface LlmPayloadRequest {
   messages: LLMMessage[];
-  systemPrompt?: string;
+  systemPrompt?: SystemPromptInput;
 }
 
 export interface LlmPayloadResponse {

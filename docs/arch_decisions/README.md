@@ -32,6 +32,7 @@
 | AD-043 | Единая идентичность гибрида: вход в UI без Keycloak | ✅ | [ad-043-unified-identity-login.md](./ad-043-unified-identity-login.md) |
 | AD-044 | Адаптивный мобильный UI + PWA | ✅ | [ad-044-mobile-adaptive-ui-pwa.md](./ad-044-mobile-adaptive-ui-pwa.md) |
 | AD-045 | Профили серверов и лёгкий runtime-вход в гибриде: единый dataDir, мета-реестр profiles.json, logout = забыть токен + revoke | ✅ | [ad-045-hybrid-server-profiles.md](./ad-045-hybrid-server-profiles.md) |
+| AD-070 | SystemPromptComposer: консистентность промпта, prompt-cache, статистика и прозрачность | ✅ | [ad-070-system-prompt-composer.md](./ad-070-system-prompt-composer.md) |
 
 ## Частично реализованные AD
 

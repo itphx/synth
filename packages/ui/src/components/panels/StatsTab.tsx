@@ -6,7 +6,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
-import type { ProjectStats, ModelGroup } from '@/lib/api/synthApi'
+import type { ProjectStats, ModelGroup, PromptInfoResponse } from '@/lib/api/synthApi'
 
 const fmt = (v: number): string => v.toLocaleString()
 
@@ -15,10 +15,33 @@ function dash(v: number | undefined): string {
   return fmt(v)
 }
 
+/** AD-070 §2.3: cache hit rate = cacheRead / input (0 при input = 0). */
+function hitRate(read: number | undefined, input: number | undefined): number {
+  const inp = input || 0
+  if (inp <= 0) return 0
+  return (read || 0) / inp
+}
+
+function pct(rate: number): string {
+  return `${Math.round(rate * 100)}%`
+}
+
+/** AD-070 §2.5: подпись hit/miss последнего хода (из `promptMeta`). */
+function promptCacheLabel(info: PromptInfoResponse, t: (key: string) => string): string {
+  const meta = info.lastPromptMeta
+  if (!meta) return '\u2014'
+  const verdict = meta.expected === 'hit'
+    ? t('rightPanel.stats.promptHit')
+    : t('rightPanel.stats.promptMiss')
+  const cached = meta.cachedTokens > 0 ? ` · ${meta.cachedTokens.toLocaleString()}` : ''
+  return `${verdict} · gen ${meta.generation}${cached}`
+}
+
 export const StatsTab: React.FC = () => {
   const { t } = useI18n()
   const [projectStats, setProjectStats] = useState<ProjectStats | null>(null)
   const [modelGroups, setModelGroups] = useState<ModelGroup[]>([])
+  const [promptInfo, setPromptInfo] = useState<PromptInfoResponse | null>(null)
 
   const activeTabId = useUIStore((s) => s.activeCenterTabId)
   const centerTabs = useUIStore((s) => s.centerTabs)
@@ -67,6 +90,20 @@ export const StatsTab: React.FC = () => {
     }
   }, [sessionProjectId])
 
+  // AD-070 §2.5: состав системного промпта (read-only). Обновляем при смене
+  // сессии и после каждого нового ответа (меняется promptMeta).
+  useEffect(() => {
+    if (!activeSessionId) {
+      setPromptInfo(null)
+      return
+    }
+    let cancelled = false
+    synthApi.getSessionPrompt(activeSessionId)
+      .then((info) => { if (!cancelled) setPromptInfo(info) })
+      .catch(() => { if (!cancelled) setPromptInfo(null) })
+    return () => { cancelled = true }
+  }, [activeSessionId, lastAssistantMsg?.id])
+
   const hasLastMsgUsage = !!(lastAssistantMsg?.usage && Object.keys(lastAssistantMsg.usage).length > 0)
 
   return (
@@ -100,6 +137,14 @@ export const StatsTab: React.FC = () => {
             <div className="col-span-2">
               <StatCell icon="brain" color="text-pink-400" label={t('rightPanel.stats.reasoningTokens')} value={dash(lastAssistantMsg!.usage!.reasoning_tokens)} />
             </div>
+            <div className="col-span-2">
+              <StatCell
+                icon="line-chart"
+                color="text-teal-400"
+                label={t('rightPanel.stats.cacheHitRate')}
+                value={pct(hitRate(lastAssistantMsg!.usage!.cache_read_tokens, lastInputTokens))}
+              />
+            </div>
           </div>
         </Section>
       )}
@@ -119,7 +164,88 @@ export const StatsTab: React.FC = () => {
           <div className="col-span-2">
             <StatCell icon="brain" color="text-pink-400" label={t('rightPanel.stats.reasoningTokens')} value={dash(activeSession?.reasoning_tokens)} />
           </div>
+          <div className="col-span-2">
+            <StatCell
+              icon="line-chart"
+              color="text-teal-400"
+              label={t('rightPanel.stats.cacheHitRate')}
+              value={pct(
+                activeSession?.cache_hit_rate
+                  ?? hitRate(activeSession?.cache_read_tokens, activeSession?.input_tokens),
+              )}
+            />
+          </div>
         </div>
+      </Section>
+
+      <Section title={t('rightPanel.stats.promptComposition')}>
+        {promptInfo ? (
+          <>
+            <div className="mb-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+              <StatCell
+                icon="database-2"
+                color="text-amber-400"
+                label={t('rightPanel.stats.promptTotal')}
+                value={`${fmt(promptInfo.manifest.totalChars)} / ~${fmt(promptInfo.manifest.estTokens)}`}
+              />
+              <StatCell
+                icon="server"
+                color="text-purple-400"
+                label={t('rightPanel.stats.promptStaticPrefix')}
+                value={fmt(promptInfo.manifest.staticPrefixChars)}
+              />
+              <div className="col-span-2">
+                <StatCell
+                  icon="line-chart"
+                  color="text-teal-400"
+                  label={t('rightPanel.stats.promptCache')}
+                  value={promptCacheLabel(promptInfo, t)}
+                />
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-[0.6875rem]">
+                <thead>
+                  <tr className="text-muted-foreground">
+                    <th className="text-left font-medium py-0.5">{t('rightPanel.stats.promptColTier')}</th>
+                    <th className="text-left font-medium py-0.5">{t('rightPanel.stats.promptColKey')}</th>
+                    <th className="text-right font-medium py-0.5">{t('rightPanel.stats.promptColChars')}</th>
+                    <th className="text-right font-medium py-0.5">{t('rightPanel.stats.promptColTokens')}</th>
+                    <th className="text-left font-medium py-0.5">{t('rightPanel.stats.promptColStatus')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {promptInfo.manifest.entries.map((entry) => {
+                    const labelKey = `rightPanel.stats.promptBlock.${entry.key}`
+                    const translated = t(labelKey)
+                    return (
+                      <tr
+                        key={entry.key}
+                        className={cn(
+                          'border-t border-border/30',
+                          entry.status !== 'loaded' && 'text-muted-foreground/60',
+                        )}
+                        title={entry.provenance || undefined}
+                      >
+                        <td className="py-0.5">{t(`rightPanel.stats.promptTier.${entry.tier}`)}</td>
+                        <td className="py-0.5 truncate max-w-[8rem]">
+                          {translated === labelKey ? entry.label : translated}
+                        </td>
+                        <td className="py-0.5 text-right tabular-nums">{fmt(entry.chars)}</td>
+                        <td className="py-0.5 text-right tabular-nums">{fmt(entry.estTokens)}</td>
+                        <td className="py-0.5">{t(`rightPanel.stats.promptStatus.${entry.status}`)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : (
+          <div className="text-xs text-muted-foreground italic">
+            {t('rightPanel.stats.noData')}
+          </div>
+        )}
       </Section>
 
       <Section title={t('rightPanel.stats.project')}>

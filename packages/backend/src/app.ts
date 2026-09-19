@@ -422,6 +422,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       gatewayAuditLogger,
       gatewayPayloadLogPath,
       gatewayPatternStore: patternStore,
+      cachePolicy: backendConfig.synth.llm.cache,
     });
 
     const processMessage = orchestrator.createProcessMessage();

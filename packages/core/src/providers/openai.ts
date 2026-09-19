@@ -1,5 +1,5 @@
 import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
-import { BaseProvider, type LLMMessage, type CancellationToken } from './base.js';
+import { BaseProvider, resolveSystemPromptText, type LLMMessage, type SystemPromptInput, type CancellationToken } from './base.js';
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
 import { ContextLengthExceededError, RateLimitError } from './exceptions.js';
@@ -11,7 +11,7 @@ export class OpenAIProvider extends BaseProvider {
 
   async chat(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     stream?: boolean,
     debugCollector?: DebugCollector,
@@ -30,6 +30,7 @@ export class OpenAIProvider extends BaseProvider {
     if (tools?.length) body.tools = tools;
     if (stream) body.stream = true;
     if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
+    this._applyPromptCacheKey(body, systemPrompt);
 
     const headers = this._getHeaders();
     debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
@@ -63,7 +64,7 @@ export class OpenAIProvider extends BaseProvider {
 
   async *chatAsync(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     debugCollector?: DebugCollector,
     cancellationToken?: CancellationToken,
@@ -76,12 +77,16 @@ export class OpenAIProvider extends BaseProvider {
       messages: formattedMessages,
       temperature: this.temperature,
       stream: true,
+      // AD-070 §2.3: просим провайдера прислать usage в стриме — иначе
+      // cached_tokens/reasoning_tokens в статистику не попадают.
+      stream_options: { include_usage: true },
     };
     if (this.reasoningLevel && this.reasoningLevel !== 'default') body.reasoning_effort = this.reasoningLevel;
     if (this.topP !== undefined) body.top_p = this.topP;
     if (this.topK !== undefined) body.top_k = this.topK;
     if (tools?.length) body.tools = tools;
     if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
+    this._applyPromptCacheKey(body, systemPrompt);
 
     const headers = this._getHeaders();
     debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
@@ -227,14 +232,7 @@ export class OpenAIProvider extends BaseProvider {
               }
 
               if (chunkData.usage) {
-                const usage = chunkData.usage as Record<string, unknown>;
-                const details = usage.completion_tokens_details as Record<string, number> | undefined;
-                accumulatedUsage = {
-                  inputTokens: (usage.prompt_tokens as number) || 0,
-                  outputTokens: (usage.completion_tokens as number) || 0,
-                  totalTokens: (usage.total_tokens as number) || 0,
-                  reasoningTokens: details?.reasoning_tokens || 0,
-                };
+                accumulatedUsage = this._parseUsage(chunkData.usage as Record<string, unknown>);
               }
             } catch {
               continue;
@@ -303,14 +301,15 @@ export class OpenAIProvider extends BaseProvider {
 
   private _formatMessages(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
   ): Array<Record<string, unknown>> {
     const formatted: Array<Record<string, unknown>> = [];
 
-    if (systemPrompt) {
+    const systemText = resolveSystemPromptText(systemPrompt);
+    if (systemText) {
       formatted.push({
         role: 'system',
-        content: [{ type: 'text', text: systemPrompt }],
+        content: [{ type: 'text', text: systemText }],
       });
     }
 
@@ -355,6 +354,17 @@ export class OpenAIProvider extends BaseProvider {
     return formatted;
   }
 
+  /**
+   * AD-070 §2.2: OpenAI не поддерживает явный cache_control — используется
+   * implicit prefix caching через `prompt_cache_key` (стабильный id сессии).
+   * При `cachePolicy: 'none'` ключ не отправляется.
+   */
+  private _applyPromptCacheKey(body: Record<string, unknown>, systemPrompt?: SystemPromptInput): void {
+    if (typeof systemPrompt !== 'object' || systemPrompt === null) return;
+    if (systemPrompt.cachePolicy === 'none') return;
+    if (systemPrompt.cacheKey) body.prompt_cache_key = systemPrompt.cacheKey;
+  }
+
   private _getHeaders(): Record<string, string> {
     return {
       Authorization: `Bearer ${this.apiKey}`,
@@ -369,21 +379,34 @@ export class OpenAIProvider extends BaseProvider {
     const toolCalls = message?.tool_calls as Record<string, unknown>[] | undefined;
     const reasoning = message?.reasoning_content as string | undefined;
 
-    const usage = data.usage as Record<string, unknown> | undefined;
-    const details = usage?.completion_tokens_details as Record<string, number> | undefined;
-    const parsedUsage: TokenUsage = {
-      inputTokens: (usage?.prompt_tokens as number) || 0,
-      outputTokens: (usage?.completion_tokens as number) || 0,
-      totalTokens: (usage?.total_tokens as number) || 0,
-      reasoningTokens: details?.reasoning_tokens || 0,
-    };
-
     return {
       content,
       model: this.model,
-      usage: parsedUsage,
+      usage: this._parseUsage(data.usage as Record<string, unknown> | undefined),
       toolCalls,
       reasoning: reasoning || undefined,
+    };
+  }
+
+  /**
+   * AD-070 §2.3: нормализация OpenAI usage. `prompt_tokens` уже включает
+   * кэшированные токены; `prompt_tokens_details.cached_tokens` → cacheRead,
+   * `nonCached = prompt_tokens − cached_tokens` вычисляется потребителем.
+   * Явных cache write у OpenAI нет — 0.
+   */
+  private _parseUsage(usage?: Record<string, unknown>): TokenUsage {
+    if (!usage) {
+      return { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    }
+    const completionDetails = usage.completion_tokens_details as Record<string, number> | undefined;
+    const promptDetails = usage.prompt_tokens_details as Record<string, number> | undefined;
+    return {
+      inputTokens: (usage.prompt_tokens as number) || 0,
+      outputTokens: (usage.completion_tokens as number) || 0,
+      totalTokens: (usage.total_tokens as number) || 0,
+      cacheReadTokens: promptDetails?.cached_tokens || 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: completionDetails?.reasoning_tokens || 0,
     };
   }
 

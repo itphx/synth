@@ -622,8 +622,9 @@ describe('taskTool — context modes', () => {
 
     let capturedSystemMsg = '';
     const capturingProvider = {
-      chatAsync: vi.fn().mockImplementation(async function* (messages: any[]) {
-        capturedSystemMsg = messages[0]?.content || '';
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: any[], systemPrompt: string) {
+        // AD-070 §1.5: system — только вторым аргументом, в messages его нет.
+        capturedSystemMsg = systemPrompt || '';
         yield { isFinal: true, content: 'OK', toolCalls: [] };
       }),
       model: 'test-model',
@@ -657,8 +658,9 @@ describe('taskTool — context modes', () => {
 
     let capturedSystemMsg = '';
     const capturingProvider = {
-      chatAsync: vi.fn().mockImplementation(async function* (messages: any[]) {
-        capturedSystemMsg = messages[0]?.content || '';
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: any[], systemPrompt: string) {
+        // AD-070 §1.5: system — только вторым аргументом, в messages его нет.
+        capturedSystemMsg = systemPrompt || '';
         yield { isFinal: true, content: 'OK', toolCalls: [] };
       }),
       model: 'test-model',
@@ -692,8 +694,9 @@ describe('taskTool — context modes', () => {
 
     let capturedSystemMsg = '';
     const capturingProvider = {
-      chatAsync: vi.fn().mockImplementation(async function* (messages: any[]) {
-        capturedSystemMsg = messages[0]?.content || '';
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: any[], systemPrompt: string) {
+        // AD-070 §1.5: system — только вторым аргументом, в messages его нет.
+        capturedSystemMsg = systemPrompt || '';
         yield { isFinal: true, content: 'OK', toolCalls: [] };
       }),
       model: 'test-model',
@@ -959,7 +962,7 @@ describe('taskTool × shellPolicy саб-агента (B3/B5)', () => {
     expect(toolMsg!.content).toContain('id_rsa');
   });
 
-  it('B5: саб-агент в plan-режиме не получает write/git-тулы (режимная фильтрация)', async () => {
+  it('B5: саб-агент в plan-режиме получает постоянный список тулов (без режимной фильтрации)', async () => {
     const parent = await sessionManager.createSession({ title: 'Parent' });
     parent.mode = 'plan';
     await sessionManager.updateSession(parent);
@@ -998,10 +1001,12 @@ describe('taskTool × shellPolicy саб-агента (B3/B5)', () => {
       },
     );
 
+    // AD-070 §2.9: definition остаётся в запросе; ограничения plan-режима
+    // обеспечивает permission-слой (unavailable(mode)), а не скрытие тулов.
     const names = (capturedTools as Array<{ function: { name: string } }>).map((t) => t.function.name);
-    expect(names).not.toContain('write_file');
-    expect(names).not.toContain('edit_file');
-    expect(names).not.toContain('git_commit');
+    expect(names).toContain('write_file');
+    expect(names).toContain('edit_file');
+    expect(names).toContain('git_commit');
     expect(names).toContain('read_file');
     expect(names).toContain('execute_shell');
   });

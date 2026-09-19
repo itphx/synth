@@ -45,6 +45,11 @@ function createMockOrchestrator() {
   return {
     createProcessMessage: () => processMessage,
     cancel: vi.fn(),
+    getPromptInfo: vi.fn().mockResolvedValue({
+      manifest: { totalChars: 10, estTokens: 3, staticPrefixChars: 5, entries: [] },
+      promptState: null,
+      lastPromptMeta: null,
+    }),
   };
 }
 
@@ -586,6 +591,30 @@ describe('Session API Routes', () => {
       expect(res.status).toBe(400);
       const body: any = await res.json();
       expect(body.error.code).toBe('PROJECT_NOT_FOUND');
+    });
+  });
+
+  describe('GET /api/v2/sessions/:id/prompt (AD-070 §2.5)', () => {
+    it('возвращает манифест для существующей сессии', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'S', userId: testUser.id });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/prompt`);
+
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.manifest).toBeTruthy();
+      expect(body.manifest.totalChars).toBe(10);
+      expect(body.promptState).toBeNull();
+      expect(body.lastPromptMeta).toBeNull();
+    });
+
+    it('возвращает 404 для отсутствующей сессии', async () => {
+      const { app } = createTestApp(tmpDir);
+      const res = await app.request('/api/v2/sessions/non-existent/prompt');
+      expect(res.status).toBe(404);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('NOT_FOUND');
     });
   });
 });

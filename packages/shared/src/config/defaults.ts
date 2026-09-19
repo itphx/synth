@@ -21,6 +21,7 @@ export const defaultConfig: SynthConfig = {
     defaultModel: '',
     maxRetries: 3,
     timeout: 60,
+    cache: 'auto',
   },
   core: {
     port: 4300,

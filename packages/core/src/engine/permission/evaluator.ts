@@ -3,6 +3,7 @@ import { globMatch, ToolCapability } from '@itphx/synth-shared';
 import type { PermissionAction, PermissionConfig, PermissionDecision, PermissionRule, PlanMode, SessionMode, McpServerToolSettings, McpToolAvailability } from '@itphx/synth-shared';
 import { resolvePath } from '../tools/path-utils.js';
 import { t as sm } from '../system-messages.js';
+import { computeToolAvailability } from './availability.js';
 import { getToolGroups, TOOL_PATH_PARAMS } from './groups.js';
 import { checkShellCommand, isMutatingCommand, tokenizeCommand, matchShellCommandPattern } from '../security/shell-guard.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
@@ -28,6 +29,12 @@ export interface PermissionCheckInput {
   protectedPaths?: ProtectedPathsPolicy;
   /** Тумблер полного отключения защищённых путей (default true). false — проверка путей пропускается. */
   protectedPathsEnabled?: boolean;
+  /**
+   * AD-070 §2.9.1: capabilities агента, выполняющего tool_call. Если заданы и
+   * ни одна из них не пересекается с capabilities тула — тул недоступен по роли
+   * (`unavailable(role)`), а не жёстко запрещён.
+   */
+  agentCapabilities?: readonly string[];
 }
 
 /**
@@ -103,6 +110,24 @@ export class PermissionEvaluator {
   }
 
   check(input: PermissionCheckInput): PermissionDecision {
+    // AD-070 §2.9.1: ролевая недоступность — приоритетнее прочих правил. Тул
+    // виден модели (список тулов постоянен), но недоступен текущему агенту;
+    // отказ несёт подсказку делегировать задачу другому агенту через `@`.
+    if (input.agentCapabilities) {
+      const availability = computeToolAvailability(input.toolName, input.capabilities, {
+        agentCapabilities: input.agentCapabilities,
+      });
+      if (!availability.available && availability.reason === 'role') {
+        return {
+          action: 'deny',
+          reason: 'tool unavailable for agent role',
+          matchedRule: 'role.unavailable',
+          unavailable: { reason: 'role' },
+          messageId: 'tool-unavailable-role',
+        };
+      }
+    }
+
     const decision = this._computeDecision(input);
 
     // AD-025-yolo: в режиме yolo все ask-запросы автоматически подтверждаются
@@ -139,6 +164,8 @@ export class PermissionEvaluator {
         action: 'deny',
         reason: sm('permission.plan_write_blocked', { source: restrictionSource }),
         matchedRule: 'plan.deny',
+        unavailable: { reason: 'mode' },
+        messageId: 'tool-unavailable-mode',
       };
     }
 
@@ -212,6 +239,8 @@ export class PermissionEvaluator {
             action: 'deny',
             reason: sm('permission.mcp_unavailable', { mode: modeKey }),
             matchedRule: 'mcp.mode',
+            unavailable: { reason: 'mode' },
+            messageId: 'tool-unavailable-mode',
           };
         }
       }

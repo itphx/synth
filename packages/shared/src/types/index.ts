@@ -58,6 +58,72 @@ export interface MessageI18n {
 // --- SessionOrigin ---
 export type SessionOrigin = 'user' | 'fork' | 'subagent';
 
+// --- Prompt state (AD-070 §2.4) ---
+/** Состояние одного блока системного промпта (хэш/размер для диагностики). */
+export interface PromptBlockState {
+  key: string;
+  hash: string;
+  chars: number;
+}
+
+/**
+ * AD-070 §2.4: состояние системного промпта per-agent. Хранится в сессии
+ * (`Session.promptStates`) и пишется только при смене generation.
+ */
+export interface PromptState {
+  generation: number;
+  /** sha256(stablePrefix). */
+  staticPrefixHash: string;
+  /** Закреплённые байты кэшируемого префикса. */
+  staticPrefix: string;
+  /** sha256(полного system). */
+  systemHash: string;
+  blocks: PromptBlockState[];
+  reason: 'init' | 'compaction' | 'generation-change' | 'override' | 'agent-change';
+  updatedAt: string;
+}
+
+/** AD-070 §2.4: компактная мета промпта, кладётся в assistant-сообщение. */
+export interface PromptMeta {
+  /** agentKey, к которому относится ход (agentRole или `__default__`). */
+  agentRole?: string;
+  generation: number;
+  /** Предсказание по staticPrefixHash. */
+  expected: 'hit' | 'miss';
+  /** Фактический cacheRead из usage. */
+  cachedTokens: number;
+  /** expected подтверждён/опровергнут фактом. */
+  validated: boolean;
+}
+
+// --- Prompt manifest (AD-070 §2.5) ---
+/** Тир консистентности блока системного промпта (AD-070 §2.1). */
+export type PromptTier = 'stable' | 'context' | 'volatile';
+
+/** Статус блока в манифесте промпта. */
+export type PromptManifestStatus = 'loaded' | 'truncated' | 'empty' | 'blocked' | 'suppressed';
+
+/** AD-070 §2.5: запись манифеста — источник системного промпта. */
+export interface PromptManifestEntry {
+  key: string;
+  label: string;
+  tier: PromptTier;
+  chars: number;
+  /** Эвристика: Math.ceil(chars / 4). */
+  estTokens: number;
+  status: PromptManifestStatus;
+  provenance?: string;
+}
+
+/** AD-070 §2.5: манифест состава системного промпта (для API/UI/тестов). */
+export interface PromptManifest {
+  generation?: number;
+  totalChars: number;
+  estTokens: number;
+  staticPrefixChars: number;
+  entries: PromptManifestEntry[];
+}
+
 // --- Message ---
 export interface Message {
   id: string;
@@ -83,6 +149,8 @@ export interface Message {
   author?: string;
   agentRole?: string;
   metadata?: Record<string, unknown>;
+  /** AD-070 §2.4: предсказание/валидация prompt-cache для этого хода. */
+  promptMeta?: PromptMeta;
   summaryOf?: number[];
   qa_pass?: boolean;
   qa_reason?: string;
@@ -246,6 +314,11 @@ export interface Session {
   mode?: SessionMode;
   /** Todo-список сессии (тул todo_write), как в OpenCode. */
   todos?: TodoItem[];
+  /**
+   * AD-070 §2.4/§2.7: состояние промпта per-agent (ключ — agentRole или
+   * `__default__`). Пишется только при смене generation.
+   */
+  promptStates?: Record<string, PromptState>;
   /** Карта обфускации LLM Gateway (AD-036). Живёт всю сессию независимо от глобального тумблера. */
   obfuscationMap?: Record<string, string>;
   userId?: string;
@@ -275,6 +348,11 @@ export interface Session {
   outputCost: number;
   cacheReadCost: number;
   cacheWriteCost: number;
+  /**
+   * AD-070 §2.3: доля кэшированных входных токенов сессии —
+   * `cacheReadTokens / inputTokens` (0 при `inputTokens === 0`).
+   */
+  cacheHitRate?: number;
 }
 
 // --- Git ---

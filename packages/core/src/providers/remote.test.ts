@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { RemoteProvider, setRemoteTokenProvider, clearRemoteTokenProviders } from './remote.js';
 import { ProviderFactory } from './index.js';
 import { ProviderError, ContextLengthExceededError, RateLimitError } from './exceptions.js';
-import type { LLMMessage, CancellationToken } from './base.js';
+import type { LLMMessage, CancellationToken, SystemPromptPayload } from './base.js';
 import type { LLMChunk } from '@itphx/synth-shared';
 
 function makeMessage(overrides: Partial<LLMMessage> = {}): LLMMessage {
@@ -309,5 +309,164 @@ describe('RemoteProvider: регистрация и токен-реестр', ()
 
     const [, init] = fetchMock.mock.calls[0]!;
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer registry-tok');
+  });
+});
+
+describe('RemoteProvider — prompt_cache_key (AD-070 §2.2)', () => {
+  function okResponse(): Response {
+    return jsonResponse({
+      choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+      usage: {},
+    });
+  }
+
+  it('auto + cacheKey → prompt_cache_key и system из payload.text', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider();
+    const payload: SystemPromptPayload = { text: 'sys', cacheKey: 'sess-1', cachePolicy: 'auto' };
+    await provider.chat([makeMessage()], payload);
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.prompt_cache_key).toBe('sess-1');
+    expect(body.messages).toEqual([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'hi' },
+    ]);
+  });
+
+  it('cachePolicy none → prompt_cache_key отсутствует', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider();
+    const payload: SystemPromptPayload = { text: 'sys', cacheKey: 'sess-1', cachePolicy: 'none' };
+    await provider.chat([makeMessage()], payload);
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.prompt_cache_key).toBeUndefined();
+  });
+});
+
+describe('RemoteProvider — usage (AD-070 §2.3)', () => {
+  function sseResponse(events: string[]): Response {
+    return new Response(events.map((e) => `data: ${e}\n\n`).join(''), {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  }
+
+  it('non-stream: prompt_tokens_details.cached_tokens → cacheReadTokens', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+      usage: {
+        prompt_tokens: 100,
+        completion_tokens: 5,
+        total_tokens: 105,
+        prompt_tokens_details: { cached_tokens: 64 },
+      },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider();
+    const resp = await provider.chat([makeMessage()]);
+
+    expect(resp.usage).toMatchObject({
+      inputTokens: 100,
+      outputTokens: 5,
+      totalTokens: 105,
+      cacheReadTokens: 64,
+      cacheWriteTokens: 0,
+    });
+  });
+
+  it('stream: cached_tokens в финальном чанке → cacheReadTokens', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ choices: [{ index: 0, delta: { content: 'ok' } }] }),
+      JSON.stringify({
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        usage: {
+          prompt_tokens: 80,
+          completion_tokens: 4,
+          total_tokens: 84,
+          prompt_tokens_details: { cached_tokens: 32 },
+        },
+      }),
+      '[DONE]',
+    ]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider();
+    const chunks: LLMChunk[] = [];
+    for await (const c of provider.chatAsync([makeMessage()])) chunks.push(c);
+
+    const final = chunks.find((c) => c.isFinal)!;
+    expect(final.usage).toMatchObject({
+      inputTokens: 80,
+      cacheReadTokens: 32,
+      cacheWriteTokens: 0,
+    });
+  });
+});
+
+// Доступ к приватным методам для юнит-проверки.
+type RemotePrivate = {
+  _formatMessages(messages: LLMMessage[], systemPrompt?: string): Array<Record<string, unknown>>;
+};
+
+describe('RemoteProvider — форматирование tool_use/tool_result', () => {
+  const provider = makeProvider() as unknown as RemotePrivate;
+
+  it('assistant(tool_use) + tool(tool_result): tool-сообщение присутствует, tool_call_id совпадает', () => {
+    const formatted = provider._formatMessages([
+      makeMessage({
+        role: 'assistant',
+        content: '',
+        toolUse: [
+          { id: 'call_1', type: 'function', function: { name: 'web_search', arguments: '{"query":"x"}' } },
+        ],
+      }),
+      makeMessage({ role: 'tool', content: 'Paris', toolCallId: 'call_1' }),
+    ]);
+
+    expect(formatted[0]!.role).toBe('assistant');
+    expect(formatted[1]).toMatchObject({
+      role: 'tool',
+      content: 'Paris',
+      tool_call_id: 'call_1',
+    });
+  });
+
+  it('несколько tool_result подряд → отдельные tool-сообщения (OpenAI-формат)', () => {
+    const formatted = provider._formatMessages([
+      makeMessage({
+        role: 'assistant',
+        content: '',
+        toolUse: [
+          { id: 'call_a', type: 'function', function: { name: 'a', arguments: '{}' } },
+          { id: 'call_b', type: 'function', function: { name: 'b', arguments: '{}' } },
+        ],
+      }),
+      makeMessage({ role: 'tool', content: 'res-a', toolCallId: 'call_a' }),
+      makeMessage({ role: 'tool', content: 'res-b', toolCallId: 'call_b' }),
+    ]);
+
+    const toolMessages = formatted.filter((m) => m.role === 'tool');
+    expect(toolMessages).toHaveLength(2);
+    expect(toolMessages.map((m) => m.tool_call_id)).toEqual(['call_a', 'call_b']);
+  });
+
+  it('arguments-строка остаётся строкой (OpenAI-совместимый LLM Proxy)', () => {
+    const argsStr = '{"query":"x"}';
+    const formatted = provider._formatMessages([
+      makeMessage({
+        role: 'assistant',
+        content: '',
+        toolUse: [{ id: 'call_s', type: 'function', function: { name: 'web_search', arguments: argsStr } }],
+      }),
+    ]);
+    const fn = (formatted[0]!.tool_calls as Record<string, unknown>[])[0]!.function as Record<string, unknown>;
+    expect(fn.arguments).toBe(argsStr);
   });
 });

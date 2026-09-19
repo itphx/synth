@@ -3,6 +3,7 @@ import type { Message, StickyNote } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { ContextConfig } from './config.js';
 import { InterviewManager } from './interview.js';
+import { joinPromptBlocks, sortPromptBlocks, type PromptBlock } from './prompt-blocks.js';
 import type { DebugCollector } from '../../debug.js';
 
 export interface BuildSystemPromptParams {
@@ -39,8 +40,12 @@ export class ContextBuilder {
     this._defaultLanguage = options?.defaultLanguage || 'ru';
   }
 
-  async buildSystemPrompt(params: BuildSystemPromptParams): Promise<string> {
-    const parts: string[] = [];
+  /**
+   * AD-070 §2.1: собирает «сырые» блоки системного промпта с тирами.
+   * Пустой `content` означает, что блок не отправляется. Порядок блоков
+   * фиксирован, финальную сортировку по тирам делает `sortPromptBlocks`.
+   */
+  async buildBaseBlocks(params: BuildSystemPromptParams): Promise<PromptBlock[]> {
     const lang = params.language || this._getLanguage(params.userId);
     const showInterview = params.showInterview ?? true;
     const agentRole = params.agentRole;
@@ -54,57 +59,58 @@ export class ContextBuilder {
       });
     }
 
-    // 1. Role prompt
+    // 1. Role prompt (stable)
+    let roleContent = '';
     if (agentRole) {
       const rolePrompt = this._config.getRolePrompt(agentRole, params.agentContextFile, lang);
       if (rolePrompt) {
-        parts.push(rolePrompt);
+        roleContent = rolePrompt;
         this._debugAdd('role', { agentRole, loaded: true, language: lang });
       } else {
-        const desc = this._config.getRolesDescription(lang);
-        if (desc) parts.push(desc);
+        roleContent = this._config.getRolesDescription(lang);
         this._debugAdd('role', { agentRole, loaded: false, language: lang });
       }
+    } else {
+      roleContent = this._config.getRolesDescription(lang);
+      this._debugAdd('role', { agentRole: null, descriptionUsed: true });
+    }
 
-    // 2. Participants notice
-    if (params.historyMessages && this._hasMultipleParticipants(params.historyMessages)) {
+    // 2. Participants notice (volatile). Сохранено текущее условие: notice
+    // добавляется только при заданном agentRole.
+    let participantsContent = '';
+    if (agentRole && params.historyMessages && this._hasMultipleParticipants(params.historyMessages)) {
       const notice = this._config.getParticipantsNotice(lang);
       if (notice) {
-        parts.push(notice);
+        participantsContent = notice;
         this._debugAdd('participants_notice', { loaded: true, language: lang });
       }
     }
 
-    // 2.5. Sticky notes (если есть активные)
-    const notesPart = this._getStickyNotesPart(params.stickyNotes, lang);
-    if (notesPart) parts.push(notesPart);
-  } else {
-      const desc = this._config.getRolesDescription(lang);
-      if (desc) parts.push(desc);
-      this._debugAdd('role', { agentRole: null, descriptionUsed: true });
+    // 3. Sticky notes (volatile). Сохранено текущее условие: только при agentRole.
+    let stickyContent = '';
+    if (agentRole) {
+      stickyContent = this._getStickyNotesPart(params.stickyNotes, lang) ?? '';
     }
 
-    // 2.6. Compressed dialog (summary)
+    // 4. Compressed dialog (summary, volatile)
+    let summaryContent = '';
     if (params.summaryContent) {
       const template = this._config.getCompressedDialogTemplate(lang);
-      const summaryPart = template.replace('{content}', params.summaryContent);
-      parts.push(summaryPart);
+      summaryContent = template.replace('{content}', params.summaryContent);
       this._debugAdd('summary', { included: true, language: lang });
     }
 
-    // 3. Additional context (enabled user files)
-    const additional = this._getAdditionalContext();
-    if (additional) parts.push(additional);
+    // 5. Additional context (enabled user files, stable)
+    const additionalContent = this._getAdditionalContext();
 
-    // 4. Profile prompt
-    const profile = await this._getProfilePrompt(params.userId, lang);
-    if (profile) parts.push(profile);
+    // 6. Profile prompt (context)
+    const profileContent = (await this._getProfilePrompt(params.userId, lang)) ?? '';
 
-    // 5. Project prompt
-    const project = await this._getProjectPrompt(params.projectName);
-    if (project) parts.push(project);
+    // 7. Project prompt (context)
+    const projectContent = (await this._getProjectPrompt(params.projectName)) ?? '';
 
-    // 6. Interview prompt
+    // 8. Interview prompt (volatile)
+    let interviewContent = '';
     if (showInterview && params.userId && this._profiles) {
       const profile = await this._profiles.loadProfile(params.userId);
       const intManager = new InterviewManager(this._profiles, this._config);
@@ -112,23 +118,44 @@ export class ContextBuilder {
         const interview = this._config.getInterviewTemplate(lang);
         if (interview) {
           if (this._getAnsweredCount(profile?.notes ?? '') === 0) {
-            parts.push(interview);
+            interviewContent = interview;
             this._debugAdd('interview', { shown: true, language: lang });
           }
         }
       }
     }
 
-    const result = parts.join('\n\n');
+    const blocks: PromptBlock[] = [
+      { key: 'role', tier: 'stable', order: 10, content: roleContent, provenance: agentRole ? `roles/${agentRole}` : 'roles' },
+      { key: 'additional', tier: 'stable', order: 20, content: additionalContent, provenance: 'context' },
+      { key: 'profile', tier: 'context', order: 10, content: profileContent, provenance: 'profile' },
+      { key: 'project.info', tier: 'context', order: 20, content: projectContent, provenance: params.projectName ? `projects/${params.projectName}/info.md` : 'projects' },
+      { key: 'sticky', tier: 'volatile', order: 10, content: stickyContent, provenance: 'stickyNotes' },
+      { key: 'participants', tier: 'volatile', order: 20, content: participantsContent, provenance: 'history' },
+      { key: 'summary', tier: 'volatile', order: 30, content: summaryContent, provenance: 'summary' },
+      { key: 'interview', tier: 'volatile', order: 90, content: interviewContent, provenance: 'interview' },
+    ];
+
+    const emitted = blocks.filter((block) => block.content !== '');
+    const result = joinPromptBlocks(sortPromptBlocks(emitted));
 
     this._debugAdd('system_prompt', {
       agentRole: agentRole ?? null,
       language: lang,
-      partsCount: parts.length,
+      partsCount: emitted.length,
       totalLength: result.length,
     });
 
-    return result;
+    return blocks;
+  }
+
+  /**
+   * AD-070 §2.1: тонкая обёртка — блоки → сортировка по тирам → склейка.
+   * Поведение (содержимое) сохраняется; меняется только порядок на tier-порядок.
+   */
+  async buildSystemPrompt(params: BuildSystemPromptParams): Promise<string> {
+    const blocks = await this.buildBaseBlocks(params);
+    return joinPromptBlocks(sortPromptBlocks(blocks));
   }
 
   /**

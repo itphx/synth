@@ -273,6 +273,17 @@ export function createSessionRoutes(
     });
   });
 
+  // GET /api/v2/sessions/:id/prompt — состав системного промпта (AD-070 §2.5):
+  // манифест источников + состояние промпта активного агента + последний promptMeta.
+  app.get('/:id/prompt', auth.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+    }
+    const info = await orchestrator.getPromptInfo(session);
+    return c.json(info);
+  });
+
   app.post('/:id/prompt', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
     const sessionId = c.req.param('id');

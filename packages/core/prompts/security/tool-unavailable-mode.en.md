@@ -1,0 +1,1 @@
+Permission denied: The tool is unavailable in the current mode. This is a temporary restriction: the tool will become available after the user switches the session mode (plan/act/yolo). Do not repeat the call and do not look for workarounds: complete the part of the work that is available and ask the user to switch the mode. The switching decision is made by the user.

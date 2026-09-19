@@ -13,7 +13,7 @@ import { ChatOrchestrator } from '../orchestrator.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
-import { ProviderFactory, BaseProvider } from '../../providers/base.js';
+import { ProviderFactory, BaseProvider, resolveSystemPromptText } from '../../providers/base.js';
 import type { LLMMessage, CancellationToken } from '../../providers/base.js';
 import { GatewayProvider, AuditLogger } from './index.js';
 import { DebugCollector } from '../../debug.js';
@@ -43,7 +43,7 @@ class MockGwProvider extends BaseProvider {
     _debugCollector?: unknown,
     _cancellationToken?: CancellationToken,
   ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
-    MockGwProvider.capturedSystemPrompt = systemPrompt ?? null;
+    MockGwProvider.capturedSystemPrompt = resolveSystemPromptText(systemPrompt) ?? null;
     yield { content: 'ok', isFinal: true, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
   }
 
@@ -55,6 +55,9 @@ class MockGwProvider extends BaseProvider {
 function makeCtxBuilder(): ContextBuilder {
   return {
     buildSystemPrompt: async () => 'system prompt',
+    buildBaseBlocks: async () => [
+      { key: 'role', tier: 'stable', order: 10, content: 'system prompt' },
+    ],
   } as unknown as ContextBuilder;
 }
 

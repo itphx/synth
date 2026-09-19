@@ -671,3 +671,77 @@ describe('PermissionEvaluator — защищённые пути (ProtectedPaths)
 });
 
 const EMPTY_CFG: PermissionConfig = { rules: {}, askTimeoutMs: 30_000 };
+
+describe('PermissionEvaluator — unavailable (AD-070 §2.9.1)', () => {
+  const evalWith = (input: Partial<Parameters<PermissionEvaluator['check']>[0]>) =>
+    new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 }).check({
+      toolName: 'read_file',
+      params: { file_path: 'a.txt' },
+      workingDir: CWD,
+      ...input,
+    });
+
+  it('plan + write-тул → deny с unavailable(mode) и messageId', () => {
+    const d = evalWith({
+      toolName: 'write_file',
+      params: { file_path: 'a.txt', content: 'x' },
+      capabilities: ['file_write'],
+      sessionMode: 'plan',
+      planMode: 'auto',
+      planApproved: false,
+    });
+    expect(d.action).toBe('deny');
+    expect(d.unavailable).toEqual({ reason: 'mode' });
+    expect(d.messageId).toBe('tool-unavailable-mode');
+    expect(d.matchedRule).toBe('plan.deny');
+  });
+
+  it('MCP-тул, выключенный в режиме → deny с unavailable(mode) и messageId', () => {
+    const d = evalWith({
+      toolName: 'github_create_issue',
+      params: {},
+      capabilities: ['mcp'],
+      sessionMode: 'plan',
+      mcpToolSettings: { github: { default: { plan: false, act: true } } },
+    });
+    expect(d.action).toBe('deny');
+    expect(d.unavailable).toEqual({ reason: 'mode' });
+    expect(d.messageId).toBe('tool-unavailable-mode');
+    expect(d.matchedRule).toBe('mcp.mode');
+  });
+
+  it('роль без пересечения capabilities → deny с unavailable(role) и messageId', () => {
+    const d = evalWith({
+      toolName: 'write_file',
+      params: { file_path: 'a.txt', content: 'x' },
+      capabilities: ['file_write'],
+      agentCapabilities: ['file_read'],
+    });
+    expect(d.action).toBe('deny');
+    expect(d.unavailable).toEqual({ reason: 'role' });
+    expect(d.messageId).toBe('tool-unavailable-role');
+    expect(d.matchedRule).toBe('role.unavailable');
+  });
+
+  it('роль с пересечением capabilities не блокирует (обычный allow)', () => {
+    const d = evalWith({
+      toolName: 'write_file',
+      params: { file_path: 'a.txt', content: 'x' },
+      capabilities: ['file_write'],
+      agentCapabilities: ['file_write'],
+    });
+    expect(d.action).toBe('allow');
+    expect(d.unavailable).toBeUndefined();
+    expect(d.messageId).toBeUndefined();
+  });
+
+  it('без agentCapabilities ролевая проверка не применяется', () => {
+    const d = evalWith({
+      toolName: 'write_file',
+      params: { file_path: 'a.txt', content: 'x' },
+      capabilities: ['file_write'],
+    });
+    expect(d.action).toBe('allow');
+  });
+});
+

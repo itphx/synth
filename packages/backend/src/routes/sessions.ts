@@ -317,6 +317,17 @@ export function createSessionRoutes(
     });
   });
 
+  // GET /api/v2/sessions/:id/prompt — состав системного промпта (AD-070 §2.5):
+  // манифест источников + состояние промпта активного агента + последний promptMeta.
+  app.get('/:id/prompt', kit.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+    const info = await orchestrator.getPromptInfo(session);
+    return c.json(info);
+  });
+
   // POST /api/v2/sessions/:id/prompt — отправить сообщение (очередь + SSE-стрим)
   app.post('/:id/prompt', kit.requireAuth, createRateLimiter(30, 60_000), async (c) => {
     const user = (await kit.getCurrentUser(c))!;

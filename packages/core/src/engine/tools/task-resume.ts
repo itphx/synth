@@ -239,7 +239,6 @@ export async function runSubagentResume(
       description: child.title ?? '',
       contextMode: 'none',
       maxSteps: agentDef.maxSteps,
-      systemPrompt,
       llmSystemPrompt: systemPrompt,
       initialMessages,
       provider,

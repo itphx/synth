@@ -12,7 +12,7 @@ import type { ContextConfig } from '../context/config.js';
 import type { ModelRouter } from '../router/router.js';
 import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from '../llm-error.js';
 import { deriveSubagentPermission } from '../permission/derive.js';
-import { PermissionEvaluator, isPlanRestricted, isPlanBlockedTool, getMcpToolAvailability } from '../permission/evaluator.js';
+import { PermissionEvaluator } from '../permission/evaluator.js';
 import { PermissionApprovalManager } from '../permission/approval.js';
 import { serializeSession, serializeMessage } from '../../server/serialize.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
@@ -454,17 +454,10 @@ export const taskTool: ToolDefinition = {
       }
     }
 
-    const messages: LLMMessage[] = [
-      {
-        id: '',
-        role: 'system' as const,
-        content: llmSystemPrompt,
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-        disabled: false,
-        pinned: false,
-        branchId: '',
-      },
-    ];
+    // AD-070 §2.1/§1.5: system prompt передаётся ТОЛЬКО вторым аргументом
+    // chatAsync (как в оркестраторе), в messages system-сообщения нет —
+    // иначе у OpenAI/Remote получаются два system-сообщения подряд.
+    const messages: LLMMessage[] = [];
 
     if ((contextMode === 'inherit' || contextMode === 'last_n') && childMessages.length > 0) {
       for (const msg of childMessages) {
@@ -520,9 +513,8 @@ export const taskTool: ToolDefinition = {
       description: params.description,
       contextMode,
       maxSteps,
-      systemPrompt,
       llmSystemPrompt,
-      initialMessages: messages.slice(1),
+      initialMessages: messages,
       provider: effectiveProvider,
       tools,
       childSessionId,
@@ -552,9 +544,11 @@ export interface SubagentRunConfig {
   contextMode: ContextMode;
   /** Лимит шагов агента (0/undefined — без ограничений). */
   maxSteps?: number;
-  /** Сырой системный промпт саб-агента (второй аргумент chatAsync). */
-  systemPrompt: string;
-  /** Расширенный системный промпт (заметки/роутинг) — messages[0]. */
+  /**
+   * Системный промпт саб-агента (role + parent notes/summary + routing).
+   * AD-070 §1.5: единственный путь — второй аргумент `chatAsync`; в `messages`
+   * system-сообщения нет.
+   */
   llmSystemPrompt: string;
   /** Начальные LLM-сообщения БЕЗ system: история дочерней сессии + user-промпт. */
   initialMessages: LLMMessage[];
@@ -588,13 +582,13 @@ async function sleepAbortable(ms: number, isAborted: () => boolean): Promise<boo
 export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult> {
   const {
     subagentType, description, contextMode, maxSteps,
-    systemPrompt, llmSystemPrompt, initialMessages,
+    llmSystemPrompt, initialMessages,
     provider: effectiveProvider,
     tools: toolsInput,
     childSessionId, parentSessionId,
     extra, ctx,
   } = config;
-  let tools = toolsInput;
+  const tools = toolsInput;
   let routingDecisionInfo = config.routingDecisionInfo;
   const publish = extra.publish;
 
@@ -611,19 +605,8 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   // ─── Permissions дочерней сессии (AD-029): родитель + deny-дополнения ──
   const derivedPermission = deriveSubagentPermission(extra.permissionConfig);
 
-  // ─── LLM-сообщения: system + начальные (история/промпт) ─────────
-  const messages: LLMMessage[] = [
-    {
-      id: '',
-      role: 'system' as const,
-      content: llmSystemPrompt,
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      disabled: false,
-      pinned: false,
-      branchId: '',
-    },
-    ...initialMessages,
-  ];
+  // ─── LLM-сообщения: только начальные (история/промпт); system — аргумент chatAsync ──
+  const messages: LLMMessage[] = [...initialMessages];
 
   const cancelToken: CancellationToken = { cancelled: false, cancel: () => { cancelToken.cancelled = true; } };
 
@@ -644,6 +627,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   // видит пользователь основной сессии, approval_id связывает ответ.
   const childEvaluator = new PermissionEvaluator(derivedPermission);
   const childApprovalManager = new PermissionApprovalManager(extra.eventBus ?? new EventBus());
+  // AD-070 §2.9.1: ролевые ограничения саб-агента — через unavailable(role),
+  // а не скрытием тулов; capabilities нужны permission-слою.
+  const subagentDef = extra.agentRegistry?.get(subagentType);
   let childSessionMode: SessionMode = 'act';
   let childPlanApproved = false;
   let childPlanMode: PlanMode = 'auto';
@@ -662,26 +648,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     }
   }
 
-  // B5: режимная фильтрация списка тулов саб-агента (аналог
-  // orchestrator._filterToolsByMode). В plan-режиме (или strict без
-  // утверждённого плана) скрываем write/edit-тулы и git-запись — модель не
-  // видит инструменты, которые всё равно будут отклонены evaluator'ом.
-  if (isPlanRestricted(childSessionMode, childPlanMode, childPlanApproved) && tools) {
-    const filtered: ToolForLLM[] = [];
-    for (const tool of tools) {
-      const toolName = tool.function.name;
-      const toolDef = extra.toolRegistry?.get(toolName);
-      const capabilities = toolDef?.capabilities;
-      if (isPlanBlockedTool(toolName, capabilities)) continue;
-      // MCP-инструменты: в plan-режиме недоступный по настройкам тул убираем.
-      if (capabilities?.includes(ToolCapability.MCP) && childMcpToolSettings) {
-        const availability = getMcpToolAvailability(childMcpToolSettings, toolName);
-        if (availability && !availability.plan) continue;
-      }
-      filtered.push(tool);
-    }
-    tools = filtered;
-  }
+  // AD-070 §2.9: список тулов саб-агента постоянен (без режимной фильтрации).
+  // Ограничения plan/act/yolo и роли обеспечивает permission-слой ниже —
+  // `unavailable(mode|role)` с подсказкой, definition остаётся в запросе.
 
   // Финализация дочерней сессии: обновление updatedAt + события для UI.
   // Отдельного статусного поля «завершена/прервана» у сессии нет
@@ -846,7 +815,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         try {
           for await (const chunk of effectiveProvider.chatAsync(
             messages,
-            systemPrompt || undefined,
+            llmSystemPrompt || undefined,
             tools as Record<string, unknown>[] | undefined,
             undefined,
             cancelToken,
@@ -1176,6 +1145,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           params: toolArgs,
           workingDir: ctx.workingDir,
           capabilities: toolDef?.capabilities,
+          agentCapabilities: subagentDef?.capabilities,
           sessionMode: childSessionMode,
           planMode: childPlanMode,
           planApproved: childPlanApproved,
@@ -1468,14 +1438,14 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             const fbEffectiveProvider = extra.modelRouter.getProvider(fbDecision);
             if (fbEffectiveProvider) {
               try {
-                // Перевызываем с fallback-моделью (только последний user-запрос)
-                const fbMessages: LLMMessage[] = [messages[0]!];
-                // Добавляем только user-сообщение без tool-результатов
+                // Перевызываем с fallback-моделью (только последний user-запрос);
+                // system — вторым аргументом chat, в messages его нет (AD-070 §1.5).
+                const fbMessages: LLMMessage[] = [];
                 const userMsg = messages.find(m => m.role === 'user');
                 if (userMsg) fbMessages.push(userMsg);
                 const fbResponse = await fbEffectiveProvider.chat(
                   fbMessages,
-                  systemPrompt || undefined,
+                  llmSystemPrompt || undefined,
                   undefined,
                   false,
                 );

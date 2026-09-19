@@ -24,6 +24,10 @@ describe('defaultConfig', () => {
     expect(defaultConfig.llm.defaultModel).toBe('');
   });
 
+  it('llm.cache по умолчанию auto (AD-070)', () => {
+    expect(defaultConfig.llm.cache).toBe('auto');
+  });
+
   it('core.port == 4300', () => {
     expect(defaultConfig.core.port).toBe(4300);
   });

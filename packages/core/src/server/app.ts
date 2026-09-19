@@ -65,6 +65,8 @@ export interface StandaloneConfig {
   securityConfig?: SecurityConfig;
   /** LLM Gateway (AD-036) из config.yaml — глобальный тумблер и конфиг. */
   gatewayConfig?: LLMGatewayConfig;
+  /** AD-070 §2.2: политика prompt-cache из config.yaml llm.cache (auto | none). */
+  llmCachePolicy?: 'auto' | 'none';
   /** Конфигурация MCP-серверов из config.yaml mcp.servers (для probe и загрузки тулов). */
   mcpServers?: Record<string, McpServerConfig>;
   /**
@@ -713,6 +715,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     gatewayConfig,
     gatewayPatternStore: patternStore,
     mcpManager,
+    cachePolicy: config.llmCachePolicy,
   });
 
   const processMessage = orchestrator.createProcessMessage();

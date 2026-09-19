@@ -43,6 +43,40 @@ export interface ProviderConfig {
   numCtx?: number;
 }
 
+/**
+ * AD-070 §2.2: политика prompt-cache. `auto` — ставить маркеры кэша,
+ * `none` — полностью отключить (для отладки/сравнений).
+ */
+export type CachePolicy = 'auto' | 'none';
+
+/**
+ * AD-070 §2.2: system prompt как payload для управления prompt-cache.
+ * Провайдеры принимают как строку (обратная совместимость, в т.ч. саб-агенты),
+ * так и этот объект.
+ */
+export interface SystemPromptPayload {
+  /** Полный текст системного промпта. */
+  text: string;
+  /** Кэшируемый префикс (если задан — граница stable-префикса). */
+  stablePrefix?: string;
+  /** Ключ кэша (OpenAI prompt_cache_key) — стабильный id сессии. */
+  cacheKey?: string;
+  /** Политика кэша: auto (по умолчанию) | none. */
+  cachePolicy?: CachePolicy;
+}
+
+export type SystemPromptInput = string | SystemPromptPayload;
+
+/**
+ * Возвращает текст системного промпта из строки или payload'а.
+ * `undefined`, если input не задан или текст пуст.
+ */
+export function resolveSystemPromptText(input: SystemPromptInput | undefined): string | undefined {
+  if (input === undefined) return undefined;
+  const text = typeof input === 'string' ? input : input.text;
+  return text || undefined;
+}
+
 export abstract class BaseProvider {
   url: string;
   apiKey: string;
@@ -87,7 +121,7 @@ export abstract class BaseProvider {
 
   abstract chat(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     stream?: boolean,
     debugCollector?: DebugCollector,
@@ -95,7 +129,7 @@ export abstract class BaseProvider {
 
   abstract chatAsync(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     debugCollector?: DebugCollector,
     cancellationToken?: CancellationToken,

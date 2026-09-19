@@ -1,5 +1,5 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem, ProjectPlan } from '@itphx/synth-shared'
+import type { TodoItem, ProjectPlan, PromptManifest, PromptState, PromptMeta } from '@itphx/synth-shared'
 import { normalizeModelInfo } from './modelNormalize'
 
 const BASE_URL = '/api/v2'
@@ -109,6 +109,7 @@ export interface SessionData {
   cache_read_tokens: number
   cache_write_tokens: number
   reasoning_tokens: number
+  cache_hit_rate?: number
   processor_running: boolean | null
   created_at: string
   updated_at: string
@@ -203,6 +204,13 @@ export interface MessageListResponse {
   messages: MessageData[]
   session_id: string
   engine: string
+}
+
+/** AD-070 §2.5: ответ GET /sessions/:id/prompt — состав системного промпта. */
+export interface PromptInfoResponse {
+  manifest: PromptManifest
+  promptState: PromptState | null
+  lastPromptMeta: PromptMeta | null
 }
 
 export interface ChatStatusResponse {
@@ -330,6 +338,11 @@ export const synthApi = {
 
   async getSession(sessionId: string): Promise<SessionData> {
     return fetchJSON<SessionData>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}`)
+  },
+
+  /** AD-070 §2.5: манифест промпта + состояние активного агента + последний promptMeta. */
+  async getSessionPrompt(sessionId: string): Promise<PromptInfoResponse> {
+    return fetchJSON<PromptInfoResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/prompt`)
   },
 
   async createSession(data: {

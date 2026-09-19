@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAgentRegistry } from './index.js';
+import { createToolRegistry } from '../tools/index.js';
 import type { AgentDefinition } from '@itphx/synth-shared';
 
 describe('createAgentRegistry', () => {
@@ -124,5 +125,31 @@ describe('createAgentRegistry', () => {
     expect(allIds).toContain('title');
     expect(allIds).toContain('assistant');
     expect(allIds).toContain('general');
+  });
+});
+
+describe('AgentRegistry.getToolsForAgent (AD-070 §2.9)', () => {
+  it('найденный агент получает ВСЕ тулы, без фильтра по capabilities', () => {
+    const toolRegistry = createToolRegistry();
+    const registry = createAgentRegistry(toolRegistry);
+
+    const allNames = toolRegistry.toLLMFormat().map((t) => t.function.name).sort();
+    const agentTools = registry.getToolsForAgent('assistant');
+
+    expect(agentTools).toBeDefined();
+    expect(agentTools!.map((t) => t.function.name).sort()).toEqual(allNames);
+    // assistant без capability shell — но тул всё равно виден модели
+    // (недоступность обеспечивает permission-слой: unavailable(role)).
+    expect(allNames).toContain('execute_shell');
+  });
+
+  it('неизвестный агент → undefined', () => {
+    const registry = createAgentRegistry(createToolRegistry());
+    expect(registry.getToolsForAgent('no-such-agent')).toBeUndefined();
+  });
+
+  it('без ToolRegistry → undefined', () => {
+    const registry = createAgentRegistry();
+    expect(registry.getToolsForAgent('assistant')).toBeUndefined();
   });
 });

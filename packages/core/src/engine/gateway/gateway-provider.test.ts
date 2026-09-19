@@ -11,7 +11,7 @@ import { join } from 'node:path';
 
 import type { LLMGatewayConfig, LLMChunk, LLMResponse } from '@itphx/synth-shared';
 
-import { BaseProvider, type LLMMessage, type CancellationToken } from '../../providers/base.js';
+import { BaseProvider, resolveSystemPromptText, type LLMMessage, type CancellationToken } from '../../providers/base.js';
 import { AuditLogger, GatewayProvider, RateLimiter } from './index.js';
 
 const SK_KEY = 'sk-abcdefghijklmnopqrst';
@@ -33,7 +33,7 @@ class MockCaptureProvider extends BaseProvider {
   ): Promise<LLMResponse> {
     MockCaptureProvider.calls++;
     MockCaptureProvider.capturedMessages = messages;
-    MockCaptureProvider.capturedSystemPrompt = systemPrompt ?? null;
+    MockCaptureProvider.capturedSystemPrompt = resolveSystemPromptText(systemPrompt) ?? null;
     MockCaptureProvider.capturedTools = tools ?? null;
     return {
       content: MockCaptureProvider.responseContent,
@@ -51,7 +51,7 @@ class MockCaptureProvider extends BaseProvider {
   ): AsyncGenerator<LLMChunk> {
     MockCaptureProvider.calls++;
     MockCaptureProvider.capturedMessages = messages;
-    MockCaptureProvider.capturedSystemPrompt = systemPrompt ?? null;
+    MockCaptureProvider.capturedSystemPrompt = resolveSystemPromptText(systemPrompt) ?? null;
     MockCaptureProvider.capturedTools = tools ?? null;
     yield {
       content: MockCaptureProvider.responseContent,

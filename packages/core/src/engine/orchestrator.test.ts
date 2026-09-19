@@ -8,7 +8,7 @@ import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { ProjectStore } from '../storage/project-store.js';
 import { EventBus } from '../events/bus.js';
-import { ProviderFactory, BaseProvider } from '../providers/base.js';
+import { ProviderFactory, BaseProvider, resolveSystemPromptText } from '../providers/base.js';
 import type { LLMMessage, CancellationToken } from '../providers/base.js';
 import type { ContextBuilder } from './context/builder.js';
 import { ContextConfig } from './context/config.js';
@@ -20,6 +20,9 @@ import type { Session, Message, SecurityConfig, SessionSettings } from '@itphx/s
 function makeCtxBuilder(): ContextBuilder {
   return {
     buildSystemPrompt: async () => 'system prompt',
+    buildBaseBlocks: async () => [
+      { key: 'role', tier: 'stable', order: 10, content: 'system prompt' },
+    ],
   } as unknown as ContextBuilder;
 }
 
@@ -244,7 +247,9 @@ describe('ChatOrchestrator — персистентность tool-chain (Вар
   it('сохраняет цепочку assistant(toolCalls) → tool(toolCallId) → final assistant', async () => {
     const { messages } = await runToolChain();
 
-    const roles = messages.map((m) => m.role);
+    // AD-070 §2.8: state-сообщения (agent_switch) в цепочку tool-chain не входят.
+    const chain = messages.filter((m) => m.metadata?.state !== true);
+    const roles = chain.map((m) => m.role);
     expect(roles).toEqual([
       MessageRole.USER,
       MessageRole.ASSISTANT,
@@ -252,18 +257,18 @@ describe('ChatOrchestrator — персистентность tool-chain (Вар
       MessageRole.ASSISTANT,
     ]);
 
-    const intermediateAssistant = messages[1]!;
+    const intermediateAssistant = chain[1]!;
     expect(intermediateAssistant.toolCalls).toBeDefined();
     expect(intermediateAssistant.toolCalls).toHaveLength(1);
     expect((intermediateAssistant.toolCalls![0] as { function?: { name?: string } }).function?.name).toBe('read_file');
     expect(intermediateAssistant.metadata?.tool_chain).toBe(true);
 
-    const toolMsg = messages[2]!;
+    const toolMsg = chain[2]!;
     expect(toolMsg.toolCallId).toBe('call_1');
     expect(toolMsg.metadata?.tool_chain).toBe(true);
     expect(toolMsg.metadata?.tool_name).toBe('read_file');
 
-    const finalAssistant = messages[3]!;
+    const finalAssistant = chain[3]!;
     expect(finalAssistant.content).toContain('Готово');
     expect(finalAssistant.metadata?.tool_results).toBeDefined();
     expect(finalAssistant.toolCalls).toBeUndefined();
@@ -281,6 +286,64 @@ describe('ChatOrchestrator — персистентность tool-chain (Вар
     const toolLlm = llm.find((m) => m.role === 'tool');
     expect(toolLlm).toBeDefined();
     expect(toolLlm!.toolCallId).toBe('call_1');
+  });
+
+  it('_sessionMessagesToLlm: role system (state) → user с <system-state>, без [anonymous]', () => {
+    const stateMsg: Message = {
+      id: 'st1',
+      role: MessageRole.SYSTEM,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('MODE')],
+      content: 'MODE',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      metadata: { type: 'mode_change', state: true },
+    };
+    const userMsg: Message = {
+      id: 'u1',
+      role: MessageRole.USER,
+      seq: 1,
+      origin: 'local',
+      parts: [makeTextPart('привет')],
+      content: 'привет',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      author: 'user',
+    };
+    const assistantMsg: Message = {
+      id: 'a1',
+      role: MessageRole.ASSISTANT,
+      seq: 2,
+      origin: 'local',
+      parts: [makeTextPart('ответ')],
+      content: 'ответ',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      agentRole: 'developer',
+    };
+
+    const llm = ChatOrchestrator._sessionMessagesToLlm(
+      [stateMsg, userMsg, assistantMsg],
+      'developer',
+      'user',
+    );
+
+    expect(llm).toHaveLength(3);
+    expect(llm[0]!.role).toBe('user');
+    expect(llm[0]!.content).toBe('<system-state type="mode_change">\nMODE\n</system-state>');
+    expect(llm[0]!.content).not.toContain('[anonymous]');
+    // Обычные сообщения не изменились.
+    expect(llm[1]!.role).toBe('user');
+    expect(llm[1]!.content).toBe('привет');
+    expect(llm[2]!.role).toBe('assistant');
+    expect(llm[2]!.content).toBe('ответ');
   });
 });
 
@@ -385,7 +448,9 @@ describe('ChatOrchestrator — отмена сохраняет tool-вызовы
     await promise;
 
     const updated = (await sessionManager.getSession(session.id))!;
-    const roles = updated.messages.map((m) => m.role);
+    // AD-070 §2.8: state-сообщения (agent_switch) в цепочку tool-chain не входят.
+    const chain = updated.messages.filter((m) => m.metadata?.state !== true);
+    const roles = chain.map((m) => m.role);
     expect(roles).toEqual([
       MessageRole.USER,
       MessageRole.ASSISTANT,
@@ -393,16 +458,16 @@ describe('ChatOrchestrator — отмена сохраняет tool-вызовы
       MessageRole.ASSISTANT,
     ]);
 
-    const intermediate = updated.messages[1]!;
+    const intermediate = chain[1]!;
     expect(intermediate.metadata?.tool_chain).toBe(true);
     expect(intermediate.toolCalls).toHaveLength(1);
     expect((intermediate.toolCalls![0] as { id: string }).id).toBe('call_abort');
 
-    const toolMsg = updated.messages[2]!;
+    const toolMsg = chain[2]!;
     expect(toolMsg.toolCallId).toBe('call_abort');
     expect(toolMsg.metadata?.tool_chain).toBe(true);
 
-    const finalMsg = updated.messages[3]!;
+    const finalMsg = chain[3]!;
     expect(finalMsg.metadata?.tool_results).toBeDefined();
     const toolResults = finalMsg.metadata!.tool_results as Array<{ id: string }>;
     expect(toolResults).toHaveLength(1);
@@ -573,6 +638,7 @@ class ModeToolsProvider extends BaseProvider {
   private static _step = 0;
   private static _capturedTools: Array<Record<string, unknown>[] | undefined> = [];
   private static _capturedPrompts: string[] = [];
+  private static _capturedMessages: LLMMessage[][] = [];
 
   static configure(
     script: Array<{
@@ -584,6 +650,7 @@ class ModeToolsProvider extends BaseProvider {
     this._step = 0;
     this._capturedTools = [];
     this._capturedPrompts = [];
+    this._capturedMessages = [];
   }
 
   static capturedTools(): Array<Record<string, unknown>[] | undefined> {
@@ -592,6 +659,10 @@ class ModeToolsProvider extends BaseProvider {
 
   static capturedPrompts(): string[] {
     return this._capturedPrompts;
+  }
+
+  static capturedMessages(): LLMMessage[][] {
+    return this._capturedMessages;
   }
 
   private _currentStep() {
@@ -604,7 +675,7 @@ class ModeToolsProvider extends BaseProvider {
   }
 
   async *chatAsync(
-    _messages: LLMMessage[],
+    messages: LLMMessage[],
     systemPrompt?: string,
     tools?: Record<string, unknown>[],
     _debugCollector?: unknown,
@@ -612,7 +683,8 @@ class ModeToolsProvider extends BaseProvider {
   ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
     const step = this._currentStep();
     ModeToolsProvider._capturedTools.push(tools);
-    ModeToolsProvider._capturedPrompts.push(systemPrompt ?? '');
+    ModeToolsProvider._capturedPrompts.push(resolveSystemPromptText(systemPrompt) ?? '');
+    ModeToolsProvider._capturedMessages.push(messages);
     ModeToolsProvider._step++;
     const toolCalls = step.toolCalls?.map((t) => ({
       id: `call_${t.name}_${ModeToolsProvider._step}`,
@@ -646,7 +718,7 @@ function toolNamesOf(
 const WRITE_TOOLS = ['write_file', 'edit_file', 'create_directory', 'delete_file'];
 const GIT_WRITE_TOOLS = ['git_commit', 'git_push', 'git_pull', 'git_checkout', 'git_stash'];
 
-describe('ChatOrchestrator — фильтрация тулов по режиму (AD-025)', () => {
+describe('ChatOrchestrator — список тулов постоянен по режиму (AD-070 §2.9)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 
@@ -696,19 +768,19 @@ describe('ChatOrchestrator — фильтрация тулов по режиму
     expect(result.error).toBeUndefined();
   }
 
-  it('plan: список тулов не содержит write/edit/git_write, но содержит read/shell/git_read', async () => {
+  it('plan: список тулов идентичен act — write/edit/git_write присутствуют (definition не скрывается)', async () => {
     await runMode('plan', [{ content: 'готово' }]);
 
     const names = toolNamesOf(ModeToolsProvider.capturedTools(), 0);
     for (const t of [...WRITE_TOOLS, ...GIT_WRITE_TOOLS]) {
-      expect(names).not.toContain(t);
+      expect(names).toContain(t);
     }
     expect(names).toContain('read_file');
     expect(names).toContain('execute_shell');
     expect(names).toContain('git_status');
   });
 
-  it('strict без утверждённого плана: список тулов урезан так же, как в plan', async () => {
+  it('strict без утверждённого плана: список тулов тоже полный', async () => {
     ModeToolsProvider.configure([{ content: 'готово' }]);
 
     const toolRegistry = createToolRegistry();
@@ -739,7 +811,7 @@ describe('ChatOrchestrator — фильтрация тулов по режиму
 
     const names = toolNamesOf(ModeToolsProvider.capturedTools(), 0);
     for (const t of [...WRITE_TOOLS, ...GIT_WRITE_TOOLS]) {
-      expect(names).not.toContain(t);
+      expect(names).toContain(t);
     }
     expect(names).toContain('read_file');
   });
@@ -762,7 +834,7 @@ describe('ChatOrchestrator — фильтрация тулов по режиму
     }
   });
 
-  it('plan_enter в цикле пересобирает список тулов для следующей итерации', async () => {
+  it('plan_enter не меняет список тулов следующей итерации (постоянство)', async () => {
     await runMode('act', [
       { toolCalls: [{ name: 'plan_enter', args: {} }] },
       { content: 'готово' },
@@ -776,15 +848,15 @@ describe('ChatOrchestrator — фильтрация тулов по режиму
     expect(firstNames).toContain('write_file');
     expect(firstNames).toContain('git_commit');
 
-    // Второй вызов — после plan_enter (режим plan): write/git_write убраны
+    // Второй вызов — после plan_enter: список НЕ пересобирается (постоянен)
     const secondNames = toolNamesOf(all, 1);
-    for (const t of [...WRITE_TOOLS, ...GIT_WRITE_TOOLS]) {
-      expect(secondNames).not.toContain(t);
-    }
+    expect(secondNames).toContain('write_file');
+    expect(secondNames).toContain('git_commit');
     expect(secondNames).toContain('read_file');
+    expect(secondNames.sort()).toEqual(firstNames.sort());
   });
 
-  it('plan_exit в цикле возвращает полный список тулов (act)', async () => {
+  it('plan_exit не меняет список тулов следующей итерации (постоянство)', async () => {
     await runMode('plan', [
       { toolCalls: [{ name: 'plan_exit', args: {} }] },
       { content: 'готово' },
@@ -794,11 +866,12 @@ describe('ChatOrchestrator — фильтрация тулов по режиму
     expect(all.length).toBeGreaterThanOrEqual(2);
 
     const firstNames = toolNamesOf(all, 0);
-    expect(firstNames).not.toContain('write_file');
+    expect(firstNames).toContain('write_file');
 
     const secondNames = toolNamesOf(all, 1);
     expect(secondNames).toContain('write_file');
     expect(secondNames).toContain('git_commit');
+    expect(secondNames.sort()).toEqual(firstNames.sort());
   });
 
   it('без contextConfig описание режима не добавляется ни для одного режима', async () => {
@@ -813,11 +886,10 @@ describe('ChatOrchestrator — фильтрация тулов по режиму
   });
 });
 
-// Баг: orchestrator.ts:613 — `|| 'assistant'` + fallback на «все non-MCP» давали
-// агенту без shell инструмент execute_shell (и «гадали по именам» вместо честного
-// ответа «инструмент не найден»). Проверяем, что при заданном/не заданном agentRole
-// модель получает РОВНО те инструменты, что принадлежат агенту (или ничего).
-describe('ChatOrchestrator — agentRole определяет набор инструментов (нет fallback на assistant)', () => {
+// AD-070 §2.9: тулы постоянны и по роли — агент видит ВСЕ тулы; недоступные
+// помечаются permission-слоем как unavailable(role). Неизвестный агент / role
+// undefined — по-прежнему НОЛЬ тулов (safety-fallback).
+describe('ChatOrchestrator — список тулов постоянен по роли (AD-070 §2.9)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 
@@ -860,9 +932,11 @@ describe('ChatOrchestrator — agentRole определяет набор инс�
     return toolNamesOf(ModeToolsProvider.capturedTools(), 0);
   }
 
-  it('assistant (агент без shell): в переданных модели тулах НЕТ execute_shell', async () => {
+  it('assistant (без capability shell): execute_shell виден модели — недоступность решает permission-слой', async () => {
     const names = await runAgentRole('assistant');
-    expect(names).not.toContain('execute_shell');
+    // Список тулов постоянен: definition не скрывается, даже если capability
+    // тула нет у агента (при вызове вернётся unavailable(role)).
+    expect(names).toContain('execute_shell');
     expect(names).toContain('read_file');
   });
 
@@ -882,7 +956,7 @@ describe('ChatOrchestrator — agentRole определяет набор инс�
   });
 });
 
-describe('ChatOrchestrator — блоки PLAN MODE/TODO/PLAN_GUIDE в system prompt (AD-028/AD-039)', () => {
+describe('ChatOrchestrator — режим/план/todo как state-сообщения истории (AD-070 §2.8)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 
@@ -904,9 +978,12 @@ describe('ChatOrchestrator — блоки PLAN MODE/TODO/PLAN_GUIDE в system pr
       defaultPlanMode?: 'auto' | 'strict' | 'off';
       planApproved?: boolean;
       todos?: Session['todos'];
+      mode?: Session['mode'];
+      script?: Array<{ toolCalls?: Array<{ name: string; args: Record<string, unknown> }>; content?: string }>;
     } = {},
-  ): Promise<string[]> {
-    ModeToolsProvider.configure([{ content: 'готово' }]);
+    existingSessionId?: string,
+  ): Promise<{ prompts: string[]; messages: LLMMessage[][]; session: Session | null; sessionId: string }> {
+    ModeToolsProvider.configure(opts.script ?? [{ content: 'готово' }]);
 
     const toolRegistry = createToolRegistry();
     const orchestrator = new ChatOrchestrator({
@@ -924,66 +1001,118 @@ describe('ChatOrchestrator — блоки PLAN MODE/TODO/PLAN_GUIDE в system pr
       defaultWorkingDir: tmpDir,
     });
 
-    const session = await sessionManager.createSession({
-      title: 'PlanPrompt',
-      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'developer', ...settings },
-    });
-    if (opts.planApproved !== undefined) {
-      session.planApproved = opts.planApproved;
+    let sessionId = existingSessionId;
+    if (!sessionId) {
+      const session = await sessionManager.createSession({
+        title: 'PlanPrompt',
+        settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'developer', ...settings },
+      });
+      if (opts.planApproved !== undefined) session.planApproved = opts.planApproved;
+      if (opts.todos !== undefined) session.todos = opts.todos;
+      if (opts.mode !== undefined) session.mode = opts.mode;
+      await sessionManager.updateSession(session);
+      sessionId = session.id;
     }
-    if (opts.todos !== undefined) {
-      session.todos = opts.todos;
-    }
-    await sessionManager.updateSession(session);
 
     const msg = makeUserMsg();
-    await sessionManager.addMessage(session.id, msg);
-    const fresh = (await sessionManager.getSession(session.id))!;
+    await sessionManager.addMessage(sessionId, msg);
+    const fresh = (await sessionManager.getSession(sessionId))!;
     const processMessage = orchestrator.createProcessMessage();
     const result = await processMessage(fresh, msg, new AbortController().signal, () => {});
     expect(result.error).toBeUndefined();
-    return ModeToolsProvider.capturedPrompts();
+
+    return {
+      prompts: ModeToolsProvider.capturedPrompts(),
+      messages: ModeToolsProvider.capturedMessages(),
+      session: await sessionManager.getSession(sessionId),
+      sessionId,
+    };
   }
 
-  it('auto + contextConfig → [PLAN MODE: AUTO] в system prompt', async () => {
-    const prompts = await runPlanPrompt(
+  const stateMessages = (session: Session | null, type: string): Message[] =>
+    (session?.messages ?? []).filter((m) => m.metadata?.state === true && m.metadata?.type === type);
+
+  it('system prompt не содержит MODE/PLAN MODE/APPROVED PLAN/TODO, но содержит mode.policy и plan.guide', async () => {
+    const { prompts } = await runPlanPrompt(
+      { planMode: 'auto' },
+      {
+        contextConfig: new ContextConfig({ userDataDir: tmpDir }),
+        planApproved: true,
+        todos: [{ id: 't1', content: 'шаг 1', status: 'pending', priority: 'high' }],
+      },
+    );
+    expect(prompts[0]).toContain('[MODE POLICY]');
+    expect(prompts[0]).toContain('[PLAN GUIDE]');
+    expect(prompts[0]).not.toContain('[MODE:');
+    expect(prompts[0]).not.toContain('[PLAN MODE:');
+    expect(prompts[0]).not.toContain('[APPROVED PLAN]');
+    expect(prompts[0]).not.toContain('[TODO]');
+  });
+
+  it('при старте сессии добавляется mode_change и уходит в LLM как user с <system-state>', async () => {
+    const { messages, session } = await runPlanPrompt(
+      { planMode: 'auto' },
+      { contextConfig: new ContextConfig({ userDataDir: tmpDir }), mode: 'plan' },
+    );
+
+    const modeChanges = stateMessages(session, 'mode_change');
+    expect(modeChanges).toHaveLength(1);
+    expect(modeChanges[0]!.role).toBe(MessageRole.SYSTEM);
+    expect(modeChanges[0]!.hidden).toBe(false);
+
+    const first = messages[0]!;
+    const stateMsg = first.find((m) => m.role === 'user' && m.content.includes('<system-state'));
+    expect(stateMsg).toBeDefined();
+    expect(stateMsg!.content).toContain('<system-state type="mode_change">');
+    expect(stateMsg!.content).toContain('[MODE: PLAN]');
+    expect(stateMsg!.content).not.toContain('[anonymous]');
+  });
+
+  it('повторный ход без смены режима не дублирует mode_change (идемпотентность)', async () => {
+    const first = await runPlanPrompt(
+      { planMode: 'auto' },
+      { contextConfig: new ContextConfig({ userDataDir: tmpDir }), mode: 'plan' },
+    );
+    expect(stateMessages(first.session, 'mode_change')).toHaveLength(1);
+
+    const second = await runPlanPrompt(
       { planMode: 'auto' },
       { contextConfig: new ContextConfig({ userDataDir: tmpDir }) },
+      first.sessionId,
     );
-    expect(prompts[0]).toContain('[PLAN MODE: AUTO]');
-    expect(prompts[0]).toContain('plan_enter');
+    expect(stateMessages(second.session, 'mode_change')).toHaveLength(1);
   });
 
-  it('strict без утверждённого плана → [PLAN MODE: STRICT] с требованием плана', async () => {
-    const prompts = await runPlanPrompt(
-      { planMode: 'strict' },
-      { contextConfig: new ContextConfig({ userDataDir: tmpDir }) },
+  it('plan_enter добавляет ровно одно mode_change (plan), дублей нет; system prompt не меняется', async () => {
+    const { prompts, messages, session } = await runPlanPrompt(
+      { planMode: 'auto' },
+      {
+        contextConfig: new ContextConfig({ userDataDir: tmpDir }),
+        script: [
+          { toolCalls: [{ name: 'plan_enter', args: {} }] },
+          { content: 'готово' },
+        ],
+      },
     );
-    expect(prompts[0]).toContain('[PLAN MODE: STRICT]');
-    expect(prompts[0]).toContain('план обязателен');
+
+    const modeChanges = stateMessages(session, 'mode_change');
+    // Стартовый mode_change (act) + один mode_change после plan_enter.
+    expect(modeChanges.filter((m) => m.content.includes('[MODE: PLAN]'))).toHaveLength(1);
+    expect(modeChanges.filter((m) => m.content.includes('[MODE: ACT]'))).toHaveLength(1);
+
+    // System prompt mid-turn не пересобирается.
+    expect(prompts.length).toBeGreaterThanOrEqual(2);
+    expect(prompts[0]).toBe(prompts[1]);
+
+    // Следующая итерация видит mode_change как user с обёрткой.
+    const second = messages[1]!;
+    expect(second.some(
+      (m) => m.role === 'user' && m.content.includes('<system-state type="mode_change">') && m.content.includes('[MODE: PLAN]'),
+    )).toBe(true);
   });
 
-  it('strict + план утверждён → [PLAN MODE: STRICT] с "План утверждён"', async () => {
-    const prompts = await runPlanPrompt(
-      { planMode: 'strict' },
-      { contextConfig: new ContextConfig({ userDataDir: tmpDir }), planApproved: true },
-    );
-    expect(prompts[0]).toContain('[PLAN MODE: STRICT]');
-    expect(prompts[0]).toContain('План утверждён');
-    expect(prompts[0]).not.toContain('план обязателен');
-  });
-
-  it('planMode off → блок [PLAN MODE] не добавляется, но [PLAN GUIDE] присутствует', async () => {
-    const prompts = await runPlanPrompt(
-      { planMode: 'off' },
-      { contextConfig: new ContextConfig({ userDataDir: tmpDir }) },
-    );
-    expect(prompts[0]).not.toContain('[PLAN MODE:');
-    expect(prompts[0]).toContain('[PLAN GUIDE]');
-  });
-
-  it('session.todos → блок [TODO] в system prompt; [PLAN GUIDE] присутствует всегда с contextConfig', async () => {
-    const prompts = await runPlanPrompt(
+  it('session.todos → todos_updated state-сообщение, а не блок system', async () => {
+    const { prompts, session } = await runPlanPrompt(
       { planMode: 'auto' },
       {
         contextConfig: new ContextConfig({ userDataDir: tmpDir }),
@@ -993,31 +1122,130 @@ describe('ChatOrchestrator — блоки PLAN MODE/TODO/PLAN_GUIDE в system pr
         ],
       },
     );
-    expect(prompts[0]).toContain('[TODO]');
-    expect(prompts[0]).toContain('- [pending] [high] шаг 1');
-    expect(prompts[0]).toContain('- [done] [low] шаг 2');
-    expect(prompts[0]).toContain('[PLAN GUIDE]');
-  });
-
-  it('[PLAN GUIDE] добавляется даже без плана и без todo (при наличии contextConfig)', async () => {
-    const prompts = await runPlanPrompt(
-      { planMode: 'auto' },
-      { contextConfig: new ContextConfig({ userDataDir: tmpDir }) },
-    );
-    expect(prompts[0]).toContain('[PLAN GUIDE]');
     expect(prompts[0]).not.toContain('[TODO]');
-    expect(prompts[0]).not.toContain('[APPROVED PLAN]');
+    const todosMessages = stateMessages(session, 'todos_updated');
+    expect(todosMessages).toHaveLength(1);
+    expect(todosMessages[0]!.content).toContain('[TODO]');
+    expect(todosMessages[0]!.content).toContain('- [pending] [high] шаг 1');
+    expect(todosMessages[0]!.content).toContain('- [done] [low] шаг 2');
   });
 
-  it('без contextConfig блоки PLAN MODE и PLAN_GUIDE не добавляются', async () => {
-    const prompts = await runPlanPrompt(
+  it('план проекта → plan_updated state-сообщение (при наличии projectStore)', async () => {
+    const projectStore = new ProjectStore({ dataDir: tmpDir });
+    const project = projectStore.create('Proj', 'u1');
+    project.plan = {
+      version: 1,
+      updatedAt: nowISO(),
+      columns: [{ id: 'backlog', name: 'Бэклог', order: 0 }],
+      items: [
+        {
+          id: 'p1',
+          title: 'пункт из плана',
+          columnId: 'backlog',
+          priority: 'medium',
+          order: 0,
+          dependsOn: [],
+          createdAt: nowISO(),
+          updatedAt: nowISO(),
+        },
+      ],
+    };
+    await projectStore.save(project);
+
+    ModeToolsProvider.configure([{ content: 'готово' }]);
+    const toolRegistry = createToolRegistry();
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus: new EventBus(),
+      contextBuilder: makeCtxBuilder(),
+      contextConfig: new ContextConfig({ userDataDir: tmpDir }),
+      providerLoader: (name: string) => {
+        return { name, type: 'modetools', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
+      },
+      toolRegistry,
+      agentRegistry: createAgentRegistry(toolRegistry),
+      permissionConfig: { rules: {}, askTimeoutMs: 1000 },
+      projectStore,
+      defaultWorkingDir: tmpDir,
+    });
+
+    const session = await sessionManager.createSession({
+      title: 'PlanUpdated',
+      settings: { provider: 'modetools', model: 'm', systemPrompt: 'test', agentRole: 'developer', planMode: 'auto' },
+    });
+    session.projectId = project.id;
+    await sessionManager.updateSession(session);
+
+    const msg = makeUserMsg();
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+    const result = await orchestrator.createProcessMessage()(fresh, msg, new AbortController().signal, () => {});
+    expect(result.error).toBeUndefined();
+
+    const final = await sessionManager.getSession(session.id);
+    expect(final!.messages.some(
+      (m) => m.metadata?.state === true && m.metadata?.type === 'plan_updated' && m.content.includes('пункт из плана'),
+    )).toBe(true);
+  });
+
+  it('без contextConfig state-сообщения режима не добавляются', async () => {
+    const { session } = await runPlanPrompt({ planMode: 'auto' }, { mode: 'plan' });
+    expect(stateMessages(session, 'mode_change')).toHaveLength(0);
+  });
+
+  it('plan_enter: mode_change перечисляет write/edit/git-write как mode-недоступные', async () => {
+    const { session } = await runPlanPrompt(
       { planMode: 'auto' },
-      { todos: [{ id: 't1', content: 'шаг 1', status: 'pending', priority: 'high' }] },
+      {
+        contextConfig: new ContextConfig({ userDataDir: tmpDir }),
+        script: [
+          { toolCalls: [{ name: 'plan_enter', args: {} }] },
+          { content: 'готово' },
+        ],
+      },
     );
-    expect(prompts[0]).not.toContain('[PLAN MODE: AUTO]');
-    expect(prompts[0]).not.toContain('[PLAN MODE: STRICT]');
-    expect(prompts[0]).not.toContain('[PLAN GUIDE]');
-    // TODO не зависит от contextConfig — блок всё равно есть
-    expect(prompts[0]).toContain('[TODO]');
+
+    const planChange = stateMessages(session, 'mode_change')
+      .find((m) => m.content.includes('[MODE: PLAN]'));
+    expect(planChange).toBeDefined();
+    expect(planChange!.content).toContain('[НЕДОСТУПНЫЕ ТУЛЫ]');
+    for (const tool of ['write_file', 'edit_file', 'git_commit']) {
+      expect(planChange!.content).toContain(tool);
+    }
+    expect(planChange!.content).toContain('переключите режим');
+  });
+
+  it('агент с ограниченными capabilities: agent_switch и mode_change перечисляют role-недоступные', async () => {
+    const { session } = await runPlanPrompt(
+      { agentRole: 'analyst', planMode: 'auto' },
+      { contextConfig: new ContextConfig({ userDataDir: tmpDir }), mode: 'act' },
+    );
+
+    const agentSwitch = stateMessages(session, 'agent_switch');
+    expect(agentSwitch).toHaveLength(1);
+    expect(agentSwitch[0]!.content).toContain('Активный агент: analyst');
+    expect(agentSwitch[0]!.content).toContain('execute_shell');
+    expect(agentSwitch[0]!.content).toContain('делегируйте через @');
+
+    const mode = stateMessages(session, 'mode_change')[0]!;
+    expect(mode.content).toContain('execute_shell');
+    expect(mode.content).toContain('недоступно для текущего агента');
+  });
+
+  it('agent_switch не дублируется при повторном sync (идемпотентность)', async () => {
+    const first = await runPlanPrompt(
+      { agentRole: 'analyst', planMode: 'auto' },
+      { contextConfig: new ContextConfig({ userDataDir: tmpDir }), mode: 'act' },
+    );
+    expect(stateMessages(first.session, 'agent_switch')).toHaveLength(1);
+    expect(stateMessages(first.session, 'mode_change')).toHaveLength(1);
+
+    const second = await runPlanPrompt(
+      { agentRole: 'analyst', planMode: 'auto' },
+      { contextConfig: new ContextConfig({ userDataDir: tmpDir }) },
+      first.sessionId,
+    );
+    expect(stateMessages(second.session, 'agent_switch')).toHaveLength(1);
+    expect(stateMessages(second.session, 'mode_change')).toHaveLength(1);
   });
 });
