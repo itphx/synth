@@ -5,7 +5,7 @@ import { useSessionsStore } from './sessionsStore'
 import { useUIStore } from './useUIStore'
 import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS } from './permissionStore'
 import type { TransportMode } from './useUIStore'
-import type { StreamDoneMetadata, MessageData } from './chatStore'
+import type { StreamDoneMetadata, MessageData, MessageStatus } from './chatStore'
 import { synthApi } from '@/lib/api/synthApi'
 import type { SessionData } from '@/lib/api/synthApi'
 import { notifyMessage } from '@/hooks/useNotification'
@@ -197,6 +197,7 @@ export function createDispatcher(): EventDispatcher {
           message_index: payload.message_index as number | undefined,
           cancelled: payload.cancelled as boolean | undefined,
           pending_count: payload.pending_count as number | undefined,
+          status: payload.status as MessageStatus | undefined,
           metadata: payload.metadata as { type?: string; indices?: number[]; [key: string]: unknown } | undefined,
           reasoning_blocks: (payload.reasoning_blocks as Array<{ text: string; iteration: number }>) || undefined,
           intermediate_text_blocks: (payload.intermediate_text_blocks as Array<{ text: string; iteration: number }>) || undefined,
@@ -217,7 +218,7 @@ export function createDispatcher(): EventDispatcher {
 
       case 'stream_cancelled':
       case 'stream.cancelled': {
-        cancelStream(sid, payload.stream_id as string)
+        cancelStream(sid, payload.stream_id as string, payload.status as MessageStatus | undefined)
         setStreamRetry(sid, null)
         break
       }

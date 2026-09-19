@@ -7,7 +7,7 @@ import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { dict as ruDict } from '@/lib/i18n/messages/ru'
 import { MessageStats, hasMessageStats } from './MessageStats'
-import type { MessageData } from '@/stores/chatStore'
+import type { MessageData, MessageStatus } from '@/stores/chatStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -27,7 +27,11 @@ function makeMessage(partial: Partial<MessageData>): MessageData {
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
 
-async function renderStats(message: MessageData, locale: 'en' | 'ru' = 'en'): Promise<HTMLElement> {
+async function renderStats(
+  message: MessageData,
+  locale: 'en' | 'ru' = 'en',
+  variant: 'inline' | 'popover' = 'inline',
+): Promise<HTMLElement> {
   useI18nStore.setState({
     locale,
     dictionary: locale === 'ru' ? ruDict : enDict,
@@ -40,7 +44,7 @@ async function renderStats(message: MessageData, locale: 'en' | 'ru' = 'en'): Pr
   await act(async () => {
     root.render(
       <I18nProvider>
-        <MessageStats message={message} />
+        <MessageStats message={message} variant={variant} />
       </I18nProvider>,
     )
   })
@@ -58,7 +62,7 @@ afterEach(async () => {
 })
 
 describe('MessageStats', () => {
-  it('полный набор сегментов: duration, in/out, cost, cache, tok/s', async () => {
+  it('полный набор сегментов: duration, in/out, cost, cache, tok/s (completed — без префикса)', async () => {
     const container = await renderStats(
       makeMessage({
         usage: {
@@ -67,21 +71,22 @@ describe('MessageStats', () => {
           total_tokens: 1_733_300,
           cache_read_tokens: 1_581_000,
         },
-        metadata: { duration_ms: 694_000, cost_usd: 0.03 },
+        metadata: { duration_ms: 694_000, cost_usd: 0.03, status: 'completed' },
       }),
     )
     const text = container.textContent ?? ''
-    expect(text).toContain('Done in 11m 34s')
+    expect(text).toContain('11m 34s')
+    expect(text).not.toContain('Done in')
     expect(text).toContain('1.7M in')
     expect(text).toContain('33.3k out')
     expect(text).toContain('~$0.03')
     expect(text).toContain('93% cached')
     expect(text).toContain('48 tok/s')
-    // Разделители между сегментами.
+    // 6 сегментов → 5 разделителей; completed не добавляет префикс.
     expect(container.querySelectorAll('[aria-hidden="true"]').length).toBe(5)
   })
 
-  it('без duration нет сегмента Done in и нет tok/s', async () => {
+  it('без duration нет сегмента tok/s', async () => {
     const container = await renderStats(
       makeMessage({
         usage: { input_tokens: 1000, output_tokens: 500, total_tokens: 1500 },
@@ -120,12 +125,13 @@ describe('MessageStats', () => {
     expect(text).toContain('100 out')
   })
 
-  it('duration без usage → только Done in, без tok/s и токенов', async () => {
+  it('duration без usage → только duration, без tok/s и токенов', async () => {
     const container = await renderStats(
       makeMessage({ usage: null, metadata: { duration_ms: 12_000 } }),
     )
     const text = container.textContent ?? ''
-    expect(text).toContain('Done in 12s')
+    expect(text).toContain('12s')
+    expect(text).not.toContain('Done in')
     expect(text).not.toContain('tok/s')
     expect(text).not.toContain(' out')
   })
@@ -144,12 +150,93 @@ describe('MessageStats', () => {
       'ru',
     )
     const text = container.textContent ?? ''
-    expect(text).toContain('Готово за 1m')
+    expect(text).toContain('1m')
+    expect(text).not.toContain('Готово за')
     expect(text).toContain('1.5k вх')
     expect(text).toContain('300 исх')
     expect(text).toContain('~$0.01')
     expect(text).toContain('50% из кэша')
     expect(text).toContain('5 tok/s')
+  })
+
+  describe('префикс состояния', () => {
+    const usage = { input_tokens: 1000, output_tokens: 100, total_tokens: 1100 }
+    const base = { usage, metadata: { duration_ms: 2000 } }
+
+    it.each<[MessageStatus, string]>([
+      ['cancelled', 'Stopped'],
+      ['stopped', 'Stopped'],
+      ['error', 'Error'],
+      ['limit', 'Iteration limit'],
+    ])('status=%s → «%s» первым сегментом', async (status, label) => {
+      const container = await renderStats(
+        makeMessage({ ...base, metadata: { ...base.metadata, status } }),
+      )
+      const text = container.textContent ?? ''
+      expect(text).toContain(label)
+      // Префикс идёт до duration.
+      expect(text.indexOf(label)).toBeLessThan(text.indexOf('2s'))
+    })
+
+    it('completed → без префикса', async () => {
+      const container = await renderStats(
+        makeMessage({ ...base, metadata: { ...base.metadata, status: 'completed' } }),
+      )
+      const text = container.textContent ?? ''
+      expect(text).not.toContain('Stopped')
+      expect(text).not.toContain('Error')
+      expect(text).not.toContain('Iteration limit')
+    })
+
+    it('fallback по metadata.i18n.key для старых сообщений', async () => {
+      const error = await renderStats(
+        makeMessage({ ...base, metadata: { duration_ms: 2000, i18n: { key: 'session.empty_response' } } }),
+      )
+      expect(error.textContent).toContain('Error')
+
+      const stopped = await renderStats(
+        makeMessage({ ...base, metadata: { duration_ms: 2000, i18n: { key: 'session.stopped' } } }),
+      )
+      expect(stopped.textContent).toContain('Stopped')
+
+      const limit = await renderStats(
+        makeMessage({ ...base, metadata: { duration_ms: 2000, i18n: { key: 'session.max_iterations' } } }),
+      )
+      expect(limit.textContent).toContain('Iteration limit')
+    })
+
+    it('неизвестный статус → без префикса', async () => {
+      const container = await renderStats(
+        makeMessage({ ...base, metadata: { duration_ms: 2000, status: 'weird' } }),
+      )
+      expect(container.textContent).not.toContain('Stopped')
+    })
+
+    it('ru-локаль: префиксы локализованы', async () => {
+      const container = await renderStats(
+        makeMessage({ usage, metadata: { duration_ms: 2000, status: 'limit' } }),
+        'ru',
+      )
+      expect(container.textContent).toContain('Лимит итераций')
+    })
+  })
+
+  it('variant="popover": сегменты колонкой без разделителей', async () => {
+    const container = await renderStats(
+      makeMessage({
+        usage: { input_tokens: 1000, output_tokens: 100, total_tokens: 1100 },
+        metadata: { duration_ms: 2000, cost_usd: 0.01, status: 'stopped' },
+      }),
+      'en',
+      'popover',
+    )
+    const el = container.querySelector('[data-testid="message-stats"]') as HTMLElement
+    expect(el).not.toBeNull()
+    expect(el.className).toContain('flex-col')
+    // В popover нет разделителей `·`.
+    expect(container.querySelectorAll('[aria-hidden="true"]').length).toBe(0)
+    expect(container.textContent).toContain('Stopped')
+    expect(container.textContent).toContain('2s')
   })
 })
 
@@ -164,6 +251,14 @@ describe('hasMessageStats', () => {
 
   it('только duration_ms → true', () => {
     expect(hasMessageStats(makeMessage({ usage: null, metadata: { duration_ms: 1000 } }))).toBe(true)
+  })
+
+  it('только содержательный status → true', () => {
+    expect(hasMessageStats(makeMessage({ usage: null, metadata: { status: 'cancelled' } }))).toBe(true)
+  })
+
+  it('completed-статус без метрик → false', () => {
+    expect(hasMessageStats(makeMessage({ usage: null, metadata: { status: 'completed' } }))).toBe(false)
   })
 
   it('нечисловой duration/cost → false', () => {

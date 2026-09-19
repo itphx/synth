@@ -63,6 +63,16 @@ const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
 /** Порог заполненности контекстного окна (%), после которого публикуем context.limit_warning. */
 const CONTEXT_LIMIT_WARNING_PERCENT = 90;
 
+/**
+ * AD-070 §2.6: статус ответа ассистента для строки статистики в UI.
+ * - `completed` — нормальный ответ (без префикса);
+ * - `cancelled` — отменён пользователем;
+ * - `stopped` — остановлен (отказ в туле / блокировка);
+ * - `error` — ошибка/пустой ответ LLM;
+ * - `limit` — достигнут лимит итераций.
+ */
+export type AssistantMessageStatus = 'completed' | 'cancelled' | 'stopped' | 'error' | 'limit';
+
 export interface ModelPricing {
   inputPrice?: number;
   outputPrice?: number;
@@ -1073,6 +1083,7 @@ export class ChatOrchestrator {
           publishChunk('stream.cancelled', {
             stream_id: streamId,
             content: partialContent,
+            status: 'cancelled',
           });
 
           this._cancellationTokens.delete(streamId);
@@ -1536,6 +1547,7 @@ export class ChatOrchestrator {
         publishChunk('stream.cancelled', {
           stream_id: streamId,
           content: partialContent,
+          status: 'cancelled',
         });
 
         this._cancellationTokens.delete(streamId);
@@ -1668,6 +1680,7 @@ export class ChatOrchestrator {
         provider: providerName,
         usage: finalUsage,
         duration_ms: durationMs,
+        status: this._resolveAssistantStatus(false, fallbackI18n ? { i18n: fallbackI18n } : undefined),
         ...(messageCost ? { cost_usd: messageCost.costUsd } : {}),
         reasoning_blocks: allReasoning.length > 0 ? allReasoning : undefined,
         intermediate_text_blocks: allIntermediateTexts.length > 0 ? allIntermediateTexts : undefined,
@@ -1996,7 +2009,7 @@ export class ChatOrchestrator {
     }
 
     if (cancelToken.cancelled) {
-      publishChunk('stream.cancelled', { stream_id: streamId, content: accumulatedContent });
+      publishChunk('stream.cancelled', { stream_id: streamId, content: accumulatedContent, status: 'cancelled' });
       this._cancellationTokens.delete(streamId);
       return {};
     }
@@ -2023,6 +2036,7 @@ export class ChatOrchestrator {
       provider: providerName,
       usage: finalUsage,
       duration_ms: durationMs,
+      status: 'completed',
       ...(messageCost ? { cost_usd: messageCost.costUsd } : {}),
       metadata: { type: 'debug_system_message' },
     });
@@ -2110,7 +2124,7 @@ export class ChatOrchestrator {
     }
 
     if (cancelToken.cancelled) {
-      publishChunk('stream.cancelled', { stream_id: streamId, content: accumulatedContent });
+      publishChunk('stream.cancelled', { stream_id: streamId, content: accumulatedContent, status: 'cancelled' });
       this._cancellationTokens.delete(streamId);
       return {};
     }
@@ -2146,6 +2160,7 @@ export class ChatOrchestrator {
       provider: providerName,
       usage: finalUsage,
       duration_ms: durationMs,
+      status: 'completed',
       ...(messageCost ? { cost_usd: messageCost.costUsd } : {}),
       metadata: { type: 'summary', indices: prep.indices },
     };
@@ -2521,6 +2536,31 @@ export class ChatOrchestrator {
     return parts.join('\n\n');
   }
 
+  /**
+   * AD-070 §2.6: статус ответа по данным сохранения. Централизованно, чтобы
+   * ни один путь (`_saveAssistantMessage`) не пропустил поле `metadata.status`.
+   */
+  private _resolveAssistantStatus(
+    isCancelled: boolean,
+    metadataExtra?: Record<string, unknown>,
+  ): AssistantMessageStatus {
+    if (isCancelled) return 'cancelled';
+    const key = (metadataExtra?.i18n as { key?: string } | undefined)?.key;
+    switch (key) {
+      case 'session.stopped':
+      case 'session.denied_blocked':
+        return 'stopped';
+      case 'session.max_iterations':
+        return 'limit';
+      case 'session.empty_response':
+      case 'router.timeout':
+      case 'router.network_error':
+        return 'error';
+      default:
+        return 'completed';
+    }
+  }
+
   private async _saveAssistantMessage(
     sessionId: string,
     content: string,
@@ -2567,6 +2607,10 @@ export class ChatOrchestrator {
       : undefined;
 
     const metadata: Record<string, unknown> = { stream_id: streamId, ...metadataExtra };
+    // AD-070 §2.6: единая точка простановки статуса ответа — ни один путь
+    // сохранения (обычный, cancel, tool-chain, summary, debug, micro) не
+    // пропускает его. UI показывает префикс по этому полю.
+    metadata.status = this._resolveAssistantStatus(isCancelled, metadataExtra);
     if (toolResults && toolResults.length > 0) {
       metadata.tool_results = toolResults;
     }

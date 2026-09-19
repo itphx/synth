@@ -296,6 +296,8 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     // Пустой финальный ответ модели подставлен
     const done = chunks.find((c) => c.event === 'stream.done')!;
     expect(done.data.content).toBe('Could not proceed: the action was blocked by the security policy');
+    // AD-070 §2.6: отказ в туле → status 'stopped'.
+    expect(done.data.status).toBe('stopped');
 
     // В истории нет пустого assistant-сообщения
     const session = (await h.sessionManager.getSession(h.sessionId))!;
@@ -303,6 +305,7 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     expect(assistant).toBeDefined();
     expect(assistant!.content.length).toBeGreaterThan(0);
     expect(assistant!.content).toContain('Could not proceed');
+    expect(assistant!.metadata?.status).toBe('stopped');
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
@@ -329,6 +332,8 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     const cancelledContent = cancelled.data.content as string;
     expect(cancelledContent).toContain('Шаг 1: анализ команды');
     expect(cancelledContent).toContain('Полный');
+    // AD-070 §2.6: отмена → status 'cancelled'.
+    expect(cancelled.data.status).toBe('cancelled');
 
     // Финальное assistant-сообщение содержит полный текст (не обрывок последней итерации)
     const session = (await h.sessionManager.getSession(h.sessionId))!;
@@ -339,6 +344,7 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     expect(assistant!.content).toContain('Шаг 1: анализ команды');
     expect(assistant!.content).toContain('Полный');
     expect(assistant!.content).not.toContain('Конец');
+    expect(assistant!.metadata?.status).toBe('cancelled');
 
     // deny сохранился в tool_results финального сообщения
     const meta = assistant!.metadata as Record<string, unknown>;
@@ -371,6 +377,7 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     // Нормальное завершение текстом
     const done = chunks.find((c) => c.event === 'stream.done')!;
     expect(done.data.content).toBe('Готово');
+    expect(done.data.status).toBe('completed');
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
@@ -382,11 +389,14 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
 
     const done = chunks.find((c) => c.event === 'stream.done')!;
     expect(done.data.content).toBe('Could not complete the request: the model response was empty');
+    // AD-070 §2.6: пустой ответ модели → status 'error'.
+    expect(done.data.status).toBe('error');
 
     const session = (await h.sessionManager.getSession(h.sessionId))!;
     const assistant = [...session.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT);
     expect(assistant).toBeDefined();
     expect(assistant!.content).toBe('Could not complete the request: the model response was empty');
+    expect(assistant!.metadata?.status).toBe('error');
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 });
@@ -516,6 +526,7 @@ describe('ChatOrchestrator: отмена во время исполнения т
     expect((cancelled!.data as Record<string, unknown>).stream_id).toBe(
       (msg.metadata as Record<string, unknown>).stream_id,
     );
+    expect((cancelled!.data as Record<string, unknown>).status).toBe('cancelled');
     const done = chunks.find((c) => c.event === 'stream.done');
     expect(done).toBeUndefined();
 
@@ -535,6 +546,7 @@ describe('ChatOrchestrator: отмена во время исполнения т
     );
     expect(cancelledAssistant).toBeDefined();
     expect(cancelledAssistant!.metadata?.tool_results).toBeDefined();
+    expect(cancelledAssistant!.metadata?.status).toBe('cancelled');
     await rm(tmpDir, { recursive: true, force: true });
   });
 });

@@ -598,7 +598,9 @@ export const dict = {
   'chat.message.empty': 'Пустое сообщение',
 
   // AD-070 §2.6: статистика под ответом ассистента
-  'chat.messageStats.doneIn': 'Готово за {duration}',
+  'chat.messageStats.stopped': 'Остановлено',
+  'chat.messageStats.error': 'Ошибка',
+  'chat.messageStats.limit': 'Лимит итераций',
   'chat.messageStats.cache': '{pct} из кэша',
   'chat.messageStats.in': 'вх',
   'chat.messageStats.out': 'исх',

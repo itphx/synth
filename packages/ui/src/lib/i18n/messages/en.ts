@@ -599,7 +599,9 @@ export const dict = {
   'chat.message.empty': 'Empty message',
 
   // AD-070 §2.6: per-message answer stats
-  'chat.messageStats.doneIn': 'Done in {duration}',
+  'chat.messageStats.stopped': 'Stopped',
+  'chat.messageStats.error': 'Error',
+  'chat.messageStats.limit': 'Iteration limit',
   'chat.messageStats.cache': '{pct} cached',
   'chat.messageStats.in': 'in',
   'chat.messageStats.out': 'out',

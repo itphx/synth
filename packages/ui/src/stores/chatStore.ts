@@ -13,6 +13,9 @@ export interface IntermediateTextBlockData {
   iteration: number
 }
 
+/** AD-070 §2.6: статус ответа ассистента (metadata.status), определяет префикс статистики. */
+export type MessageStatus = 'completed' | 'cancelled' | 'stopped' | 'error' | 'limit'
+
 export interface MessageData {
   index: number
   id?: string
@@ -100,6 +103,8 @@ export interface StreamDoneMetadata {
   message_index?: number
   cancelled?: boolean
   pending_count?: number
+  /** AD-070 §2.6: статус завершения стрима (stream.done.status). */
+  status?: MessageStatus
   metadata?: { type?: string; indices?: number[]; [key: string]: unknown }
   reasoning_blocks?: ReasoningBlockData[]
   intermediate_text_blocks?: IntermediateTextBlockData[]
@@ -188,7 +193,7 @@ interface ChatStore {
   updateToolCallResult: (sessionId: string, streamId: string, callId: string, result: { content: string; isError?: boolean; metadata?: Record<string, unknown> }) => void
   updateToolCallSubagentProgress: (sessionId: string, streamId: string, callId: string, patch: { reasoning?: string; content?: string; iteration?: number }) => void
   finishStream: (sessionId: string, streamId: string, metadata: StreamDoneMetadata) => void
-  cancelStream: (sessionId: string, streamId: string) => void
+  cancelStream: (sessionId: string, streamId: string, status?: MessageStatus) => void
   addStreamError: (sessionId: string, error: StreamError) => void
   clearStreamError: (sessionId: string) => void
   setStreamRetry: (sessionId: string, retry: StreamRetry | null) => void
@@ -396,6 +401,11 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((s) => {
       const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
       const streamState = sessionStreams[streamId]
+      // AD-070 §2.6: status из stream.done доносим до metadata сообщения —
+      // строка статистики показывает префикс состояния сразу, без перезагрузки.
+      const statusMetadata = metadata.status
+        ? { ...(metadata.metadata || {}), status: metadata.status }
+        : metadata.metadata || null
       if (!streamState) {
         console.warn(`[chatStore] finishStream: no stream state for ${streamId} in session ${sessionId}, adding message from metadata`)
         if (metadata.content && !metadata.cancelled) {
@@ -407,7 +417,7 @@ export const useChatStore = create<ChatStore>((set) => ({
             content: metadata.content,
             model: metadata.model || undefined,
             usage: metadata.usage || undefined,
-            metadata: metadata.metadata || null,
+            metadata: statusMetadata,
             intermediate_text_blocks: metadata.intermediate_text_blocks || null,
             reasoning_blocks: metadata.reasoning_blocks || null,
             debug_data: metadata.debug_info || undefined,
@@ -462,7 +472,7 @@ export const useChatStore = create<ChatStore>((set) => ({
           intermediate_text_blocks: intermediateTextBlocks || null,
           debug_data: metadata.debug_info || undefined,
           summary_of: metadata.metadata?.indices || null,
-          metadata: metadata.metadata || null,
+          metadata: statusMetadata,
           tool_calls: streamState.toolCalls.length > 0
             ? streamState.toolCalls.map((tc) => ({
                 name: tc.name,
@@ -493,7 +503,7 @@ export const useChatStore = create<ChatStore>((set) => ({
             provider: streamState.provider || msgs[existingIdx]!.provider,
             usage: metadata.usage || msgs[existingIdx]!.usage,
             summary_of: metadata.metadata?.indices || msgs[existingIdx]!.summary_of,
-            metadata: metadata.metadata || msgs[existingIdx]!.metadata,
+            metadata: statusMetadata ?? msgs[existingIdx]!.metadata,
             tool_calls: streamState.toolCalls.length > 0
               ? streamState.toolCalls.map((tc) => ({
                   name: tc.name,
@@ -531,11 +541,33 @@ export const useChatStore = create<ChatStore>((set) => ({
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
 
-  cancelStream: (sessionId, streamId) =>
+  cancelStream: (sessionId, streamId, status) =>
     set((s) => {
       const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
       delete sessionStreams[streamId]
-      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
+      // AD-070 §2.6: stream.cancelled несёт status — если message.added уже
+      // добавил assistant-сообщение, проставляем status в его metadata (по
+      // stream_id), чтобы префикс состояния был виден сразу.
+      let messagesBySession = s.messagesBySession
+      if (status) {
+        const msgs = s.messagesBySession[sessionId]
+        if (msgs) {
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            const m = msgs[i]!
+            const meta = m.metadata as Record<string, unknown> | null | undefined
+            if (m.role === 'assistant' && meta?.stream_id === streamId) {
+              const next = [...msgs]
+              next[i] = { ...m, metadata: { ...(m.metadata || {}), status } }
+              messagesBySession = { ...s.messagesBySession, [sessionId]: next }
+              break
+            }
+          }
+        }
+      }
+      return {
+        streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
+        ...(messagesBySession !== s.messagesBySession ? { messagesBySession } : {}),
+      }
     }),
 
   addStreamError: (sessionId, error) =>

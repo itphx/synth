@@ -1,3 +1,5 @@
+import { forwardRef, type ReactNode } from 'react'
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
 
@@ -9,11 +11,10 @@ interface MessageActionsProps {
   canRetry: boolean
   hasDebug: boolean
   readOnly?: boolean
-  /** У сообщения есть статистика ответа — показать кнопку-переключатель. */
+  /** У сообщения есть статистика ответа — на mobile показать кнопку (popover). */
   hasStats?: boolean
-  /** Строка статистики раскрыта. */
-  statsOpen?: boolean
-  onToggleStats?: () => void
+  /** Содержимое popover со статистикой (mobile); на десктопе не передаётся. */
+  statsContent?: ReactNode
   onCopy: () => void
   onToggle: () => void
   onPin: () => void
@@ -32,8 +33,7 @@ export function MessageActions({
   hasDebug,
   readOnly,
   hasStats,
-  statsOpen,
-  onToggleStats,
+  statsContent,
   onCopy,
   onToggle,
   onPin,
@@ -81,33 +81,34 @@ export function MessageActions({
         <ActionBtn onClick={onDebug} title={t('chat.actions.debug')} icon="bug" />
       )}
 
-      {!isUser && hasStats && (
-        <ActionBtn
-          onClick={() => onToggleStats?.()}
-          title={t('chat.messageStats.toggle')}
-          icon="chart-line"
-          active={statsOpen}
-        />
+      {/* AD-070 §2.6 (mobile): статистика ответа — в popover, инлайн не рендерится. */}
+      {!isUser && hasStats && statsContent && (
+        <Popover>
+          <PopoverTrigger asChild>
+            <ActionBtn title={t('chat.messageStats.toggle')} icon="chart-line" />
+          </PopoverTrigger>
+          <PopoverContent className="w-56 p-3">
+            {statsContent}
+          </PopoverContent>
+        </Popover>
       )}
     </div>
   )
 }
 
-function ActionBtn({
-  onClick,
-  title,
-  icon,
-  active,
-  danger,
-}: {
-  onClick: () => void
-  title: string
-  icon: string
-  active?: boolean
-  danger?: boolean
-}) {
+const ActionBtn = forwardRef<
+  HTMLButtonElement,
+  {
+    onClick?: () => void
+    title: string
+    icon: string
+    active?: boolean
+    danger?: boolean
+  }
+>(function ActionBtn({ onClick, title, icon, active, danger }, ref) {
   return (
     <button
+      ref={ref}
       onClick={onClick}
       title={title}
       className={`rounded p-1 transition-colors ${
@@ -121,4 +122,4 @@ function ActionBtn({
       <Icon name={icon} className="size-3.5" />
     </button>
   )
-}
+})

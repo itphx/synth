@@ -140,6 +140,8 @@ describe('ChatOrchestrator — per-message stats (AD-070 §2.6)', () => {
       cacheRead: (40 * 0.5) / div,
       cacheWrite: (20 * 1.5) / div,
     });
+    // AD-070 §2.6: нормальный ответ — status 'completed' (UI не рисует префикс).
+    expect(assistant.metadata?.status).toBe('completed');
   });
 
   it('событие stream.done несёт duration_ms и cost_usd', async () => {
@@ -154,5 +156,7 @@ describe('ChatOrchestrator — per-message stats (AD-070 §2.6)', () => {
     expect(done!.data.cost_usd).toBeCloseTo((100 * 1 + 10 * 2 + 40 * 0.5 + 20 * 1.5) / div, 12);
     // usage сохранён для обратной совместимости.
     expect(done!.data.usage).toBeTruthy();
+    // AD-070 §2.6: status доносится до UI в stream.done.
+    expect(done!.data.status).toBe('completed');
   });
 });

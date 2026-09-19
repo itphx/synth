@@ -1,5 +1,5 @@
 import { cn } from '@/lib/utils'
-import { memo, useState } from 'react'
+import { memo } from 'react'
 import { MarkdownContent } from './MarkdownContent'
 import { SecretMarkdown, SecretPlainText } from './SecretPlaceholder'
 import { MessageHeader } from './MessageHeader'
@@ -110,7 +110,6 @@ function ChatMessageInner({
   const canRetry = isUser
   const hasDebug = !!message.debug_data && Object.keys(message.debug_data).length > 0
   const { isTouch } = useDevice()
-  const [statsOpen, setStatsOpen] = useState(false)
 
   // LLM Gateway (AD-036): реальные значения секретов для плейсхолдеров ⟦SYNTH_SECRET_N⟧.
   const secrets = (message.metadata?.secrets as Record<string, string> | undefined) ?? undefined
@@ -337,17 +336,11 @@ function ChatMessageInner({
           />
         )}
 
-        {showStats && (!isTouch || statsOpen) && (
-          <div
-            className={cn(
-              'mt-1.5 transition-opacity',
-              isTouch
-                ? undefined
-                : statsOpen
-                  ? 'opacity-100'
-                  : 'opacity-0 group-hover:opacity-100',
-            )}
-          >
+        {/* AD-070 §2.6: на десктопе строка статистики видна всегда (места
+            достаточно) вместо hover-скрытия и кнопки-переключателя. На mobile
+            она не рендерится инлайн — доступна из popover в MessageActions. */}
+        {showStats && !isTouch && (
+          <div className="mt-1.5">
             <MessageStats message={message} />
           </div>
         )}
@@ -362,8 +355,7 @@ function ChatMessageInner({
             hasDebug={hasDebug}
             readOnly={readOnly}
             hasStats={showStats}
-            statsOpen={statsOpen}
-            onToggleStats={() => setStatsOpen((v) => !v)}
+            statsContent={isTouch ? <MessageStats message={message} variant="popover" /> : undefined}
             onCopy={onCopy}
             onToggle={onToggle}
             onPin={onPin}
