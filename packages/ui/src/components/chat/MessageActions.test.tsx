@@ -79,28 +79,15 @@ describe('MessageActions: активное состояние кнопок', () 
     expect(btn.className).not.toContain('bg-primary/10')
   })
 
-  it('desktop: инлайн-статистика рендерится в ряду, кнопки-переключателя нет', async () => {
+  it('статистика: кнопка в ряду, поповер открывается и подсвечивает кнопку', async () => {
     const container = await renderActions({
       hasStats: true,
-      statsContent: <div data-testid="stats-inline">stats</div>,
-      statsPopoverContent: <div data-testid="stats-popover">stats</div>,
-    })
-    const inline = container.querySelector('[data-testid="stats-inline"]')
-    expect(inline).not.toBeNull()
-    expect(container.querySelector('.message-actions')!.contains(inline!)).toBe(true)
-    expect(inline!.parentElement?.className).toContain('ml-auto')
-    expect(container.querySelector('button[title="Response stats"]')).toBeNull()
-    expect(container.querySelector('[data-testid="stats-popover"]')).toBeNull()
-  })
-
-  it('mobile: кнопка статистики подсвечивается при открытии popover и гаснет при закрытии', async () => {
-    const container = await renderActions({
-      hasStats: true,
-      isTouch: true,
-      statsContent: <div data-testid="stats-inline">stats</div>,
-      statsPopoverContent: <div data-testid="stats-body">stats</div>,
+      statsContent: <div data-testid="stats-body">stats</div>,
     })
     const trigger = getButton(container, 'Response stats')
+    expect(container.querySelector('.message-actions')!.contains(trigger)).toBe(true)
+    // Инлайн-строки нет, поповер закрыт.
+    expect(container.querySelector('[data-testid="stats-body"]')).toBeNull()
     expect(trigger.className).not.toContain('text-primary')
 
     await act(async () => {
@@ -109,11 +96,21 @@ describe('MessageActions: активное состояние кнопок', () 
     const opened = getButton(container, 'Response stats')
     expect(opened.className).toContain('text-primary')
     expect(opened.className).toContain('bg-primary/10')
+    expect(document.querySelector('[data-testid="stats-body"]')).not.toBeNull()
 
     await act(async () => {
       opened.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     const closed = getButton(container, 'Response stats')
     expect(closed.className).not.toContain('text-primary')
+  })
+
+  it('без статистики кнопки нет', async () => {
+    const container = await renderActions({
+      hasStats: false,
+      statsContent: <div data-testid="stats-body">stats</div>,
+    })
+    expect(container.querySelector('button[title="Response stats"]')).toBeNull()
+    expect(container.querySelector('[data-testid="stats-body"]')).toBeNull()
   })
 })

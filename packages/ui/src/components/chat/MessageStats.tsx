@@ -41,7 +41,7 @@ function readStatus(metadata: Record<string, unknown> | null | undefined): Messa
 
 /**
  * true — есть хотя бы один сегмент статистики, который отрендерит MessageStats.
- * Используется для гейтинга кнопки статистики в MessageActions (mobile).
+ * Используется для гейтинга кнопки статистики в MessageActions.
  */
 export function hasMessageStats(message: Pick<MessageData, 'usage' | 'metadata'>): boolean {
   if (message.usage) return true
@@ -56,16 +56,12 @@ export function hasMessageStats(message: Pick<MessageData, 'usage' | 'metadata'>
 interface MessageStatsProps {
   message: MessageData
   className?: string
-  /**
-   * inline (desktop) — сегменты через `·` с переносом строк;
-   * popover (mobile) — те же сегменты через `·` одной строкой без переноса.
-   */
-  variant?: 'inline' | 'popover'
 }
 
 /**
  * Компактная статистика ответа ассистента (AD-070 §2.6):
- * `[Остановлено ·] 11m 34s · 1.7M вх · 33.3k исх · ~$0.03 · 93% кэш · 12.3 tok/s`.
+ * `[Остановлено ·] 11m 34s · 1.7M вх · 33.3k исх · ~$0.03 · 93% кэш · 12.3 tok/s`
+ * — одной строкой без переноса.
  *
  * Префикс-сегмент отражает состояние ответа: cancelled/stopped → «Остановлено»,
  * error → «Ошибка», limit → «Лимит итераций»; completed — без префикса.
@@ -73,7 +69,7 @@ interface MessageStatsProps {
  * Кэш: `cache_read_tokens / input_tokens` (0 при input = 0).
  * Скорость: `output_tokens / (duration_ms / 1000)`.
  */
-export function MessageStats({ message, className, variant = 'inline' }: MessageStatsProps) {
+export function MessageStats({ message, className }: MessageStatsProps) {
   const { t } = useI18n()
 
   const usage = message.usage
@@ -118,16 +114,12 @@ export function MessageStats({ message, className, variant = 'inline' }: Message
 
   if (segments.length === 0) return null
 
-  const isPopover = variant === 'popover'
-
   return (
     <div
       data-testid="message-stats"
       className={cn(
         'text-[0.6875rem] text-muted-foreground tabular-nums',
-        isPopover
-          ? 'flex flex-nowrap items-center gap-x-1.5 whitespace-nowrap'
-          : 'flex flex-wrap items-center gap-x-1.5 gap-y-0.5',
+        'flex flex-nowrap items-center gap-x-1.5 whitespace-nowrap',
         className,
       )}
     >

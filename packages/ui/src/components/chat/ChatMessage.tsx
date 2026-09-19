@@ -5,7 +5,6 @@ import { SecretMarkdown, SecretPlainText } from './SecretPlaceholder'
 import { MessageHeader } from './MessageHeader'
 import { MessageActions } from './MessageActions'
 import { MessageStats, hasMessageStats } from './MessageStats'
-import { useDevice } from '@/hooks/useDevice'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
 import { SubagentPart, type SubagentPartData } from './SubagentPart'
@@ -109,7 +108,6 @@ function ChatMessageInner({
   const isDebug = message.role === 'debug'
   const canRetry = isUser
   const hasDebug = !!message.debug_data && Object.keys(message.debug_data).length > 0
-  const { isTouch } = useDevice()
 
   // LLM Gateway (AD-036): реальные значения секретов для плейсхолдеров ⟦SYNTH_SECRET_N⟧.
   const secrets = (message.metadata?.secrets as Record<string, string> | undefined) ?? undefined
@@ -353,11 +351,8 @@ function ChatMessageInner({
             debugActive={debugActive}
             readOnly={readOnly}
             hasStats={showStats}
-            isTouch={isTouch}
-            // AD-070 §2.6: desktop — статистика инлайном в ряду кнопок (справа,
-            // по hover); mobile — в popover. Одна строка без переноса.
-            statsContent={<MessageStats message={message} className="flex-nowrap" />}
-            statsPopoverContent={<MessageStats message={message} variant="popover" />}
+            // AD-070 §2.6: статистика ответа — в поповере по кнопке (единый путь).
+            statsContent={<MessageStats message={message} />}
             onCopy={onCopy}
             onToggle={onToggle}
             onPin={onPin}

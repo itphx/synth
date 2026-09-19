@@ -32,15 +32,6 @@ import type { MessageData } from '@/stores/chatStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useUIStore } from '@/stores/useUIStore'
 
-// Управляемый мок устройства: desktop (fine pointer) / mobile (touch).
-const device = vi.hoisted(() => ({ isTouch: false }))
-vi.mock('@/hooks/useDevice', () => ({
-  useDevice: () => ({
-    deviceType: device.isTouch ? 'phone' : 'desktop',
-    isTouch: device.isTouch,
-  }),
-}))
-
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 function makeMessage(partial: Partial<MessageData>): MessageData {
@@ -97,37 +88,19 @@ afterEach(async () => {
   useChatStore.setState({ debugModalSessionId: null, debugModalMessageIndex: null })
 })
 
-describe('ChatMessage: статистика desktop/mobile', () => {
+describe('ChatMessage: статистика (единый поповер)', () => {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
 
-  it('desktop: строка статистики — внутри .message-actions (в ряду кнопок), отдельного блока нет', async () => {
-    device.isTouch = false
+  it('инлайн-строки нет, кнопка статистики — в ряду кнопок', async () => {
     const container = await renderChat(makeMessage({}))
-    const stats = container.querySelector('[data-testid="message-stats"]')
-    const actions = container.querySelector('.message-actions')
-    expect(stats).not.toBeNull()
-    expect(actions).not.toBeNull()
-    // Статистика лежит в ряду кнопок, а не отдельным блоком вне него.
-    expect(actions!.contains(stats!)).toBe(true)
-    expect(container.querySelectorAll('[data-testid="message-stats"]').length).toBe(1)
-    // Прижата вправо.
-    expect(stats!.parentElement?.className).toContain('ml-auto')
-    // Кнопка-переключатель на десктопе не нужна.
-    expect(container.querySelector('button[title="Response stats"]')).toBeNull()
-  })
-
-  it('mobile: инлайн-строки нет, кнопка статистики есть', async () => {
-    device.isTouch = true
-    const container = await renderChat(makeMessage({}))
-    // Инлайн не рендерится (popover-контент закрыт и порталится только при открытии).
+    // Поповер закрыт — статистика не рендерится инлайном.
     expect(container.querySelector('[data-testid="message-stats"]')).toBeNull()
     const trigger = container.querySelector('button[title="Response stats"]')
     expect(trigger).not.toBeNull()
     expect(container.querySelector('.message-actions')!.contains(trigger!)).toBe(true)
   })
 
-  it('mobile: по клику открывается popover со статистикой', async () => {
-    device.isTouch = true
+  it('по клику открывается popover со статистикой одной строкой', async () => {
     const container = await renderChat(makeMessage({}))
     const trigger = container.querySelector('button[title="Response stats"]') as HTMLButtonElement
     expect(trigger).not.toBeNull()
@@ -136,14 +109,13 @@ describe('ChatMessage: статистика desktop/mobile', () => {
     })
     const stats = document.querySelector('[data-testid="message-stats"]')
     expect(stats).not.toBeNull()
-    // Popover-вариант — одна строка без переноса с разделителями.
+    // Единый рендер — одна строка без переноса с разделителями.
     expect(stats!.className).toContain('flex-nowrap')
     expect(stats!.className).toContain('whitespace-nowrap')
     expect(stats!.querySelectorAll('[aria-hidden="true"]').length).toBeGreaterThan(0)
   })
 
-  it('mobile: кнопка статистики подсвечивается, пока открыт popover', async () => {
-    device.isTouch = true
+  it('кнопка статистики подсвечивается, пока открыт popover', async () => {
     const container = await renderChat(makeMessage({}))
     const trigger = container.querySelector('button[title="Response stats"]') as HTMLButtonElement
     expect(trigger.className).not.toContain('text-primary')
@@ -156,7 +128,6 @@ describe('ChatMessage: статистика desktop/mobile', () => {
   })
 
   it('«Отладка» подсвечивается для открытого сообщения активной сессии', async () => {
-    device.isTouch = false
     useUIStore.setState({
       centerTabs: [{ id: 'chat-s1', type: 'chat', title: 'S1', data: { sessionId: 's1' } }],
       activeCenterTabId: 'chat-s1',
@@ -169,7 +140,6 @@ describe('ChatMessage: статистика desktop/mobile', () => {
   })
 
   it('«Отладка» не подсвечивается для другого сообщения', async () => {
-    device.isTouch = false
     useUIStore.setState({
       centerTabs: [{ id: 'chat-s1', type: 'chat', title: 'S1', data: { sessionId: 's1' } }],
       activeCenterTabId: 'chat-s1',
@@ -182,7 +152,6 @@ describe('ChatMessage: статистика desktop/mobile', () => {
   })
 
   it('«Отладка» не подсвечивается для другой сессии', async () => {
-    device.isTouch = false
     useUIStore.setState({
       centerTabs: [{ id: 'chat-s1', type: 'chat', title: 'S1', data: { sessionId: 's1' } }],
       activeCenterTabId: 'chat-s1',

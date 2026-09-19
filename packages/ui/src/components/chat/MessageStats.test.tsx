@@ -30,7 +30,6 @@ const roots: Array<{ root: Root; container: HTMLElement }> = []
 async function renderStats(
   message: MessageData,
   locale: 'en' | 'ru' = 'en',
-  variant: 'inline' | 'popover' = 'inline',
 ): Promise<HTMLElement> {
   useI18nStore.setState({
     locale,
@@ -44,7 +43,7 @@ async function renderStats(
   await act(async () => {
     root.render(
       <I18nProvider>
-        <MessageStats message={message} variant={variant} />
+        <MessageStats message={message} />
       </I18nProvider>,
     )
   })
@@ -221,14 +220,12 @@ describe('MessageStats', () => {
     })
   })
 
-  it('variant="popover": одна строка без переноса с разделителями `·`', async () => {
+  it('единый рендер: одна строка без переноса с разделителями `·`', async () => {
     const container = await renderStats(
       makeMessage({
         usage: { input_tokens: 1000, output_tokens: 100, total_tokens: 1100 },
         metadata: { duration_ms: 2000, cost_usd: 0.01, status: 'stopped' },
       }),
-      'en',
-      'popover',
     )
     const el = container.querySelector('[data-testid="message-stats"]') as HTMLElement
     expect(el).not.toBeNull()
