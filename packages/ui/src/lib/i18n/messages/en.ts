@@ -367,6 +367,10 @@ export const dict = {
   'rightPanel.stats.messages': 'Messages',
   'rightPanel.stats.subagents': 'Subagents',
   'rightPanel.stats.subagentTokens': 'Subagent tokens',
+  // AD-070 §2.6: separate subagent block in "Last answer"
+  'rightPanel.stats.subagentsTitle': 'Subagents',
+  'rightPanel.stats.subagentsSessions': 'Sessions',
+  'rightPanel.stats.subagentsNote': 'Separate from the answer — not counted in the context window',
   'rightPanel.stats.speed': 'Speed',
   'rightPanel.stats.duration': 'Duration',
   'rightPanel.stats.cost': 'Cost',

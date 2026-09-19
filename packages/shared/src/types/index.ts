@@ -193,11 +193,28 @@ export interface SessionUserStats {
   cache_hit_rate: number;
 }
 
+/**
+ * Сводка по сабагентам сессии (рекурсивно, tool `task`). Учитывается отдельно
+ * от токенов ответа родителя: usage дочерних сессий не входит в контекстное
+ * окно родителя, поэтому показывается отдельным блоком (AD-070 §2.6).
+ */
+export interface SessionSubagentStats {
+  sessions: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  cost_usd: number;
+}
+
 /** Ответ `GET /api/v2/sessions/:id/stats`. */
 export interface SessionStats {
   session_id: string;
   agents: SessionAgentStats[];
   users: SessionUserStats[];
+  /** Суммарная статистика дочерних сессий сабагентов (отдельно от ответа). */
+  subagents: SessionSubagentStats;
 }
 
 // --- Message ---

@@ -169,3 +169,71 @@ describe('StatsTab — секция «История» (AD-070 §2.5)', () => {
     expect(text).toContain('5')
   })
 })
+
+describe('StatsTab — блок «Сабагенты» в «Последнем ответе» (AD-070 §2.6)', () => {
+  function setLastAssistantWithUsage(): void {
+    useChatStore.setState({
+      messagesBySession: {
+        s1: [
+          {
+            id: 'm1',
+            role: 'assistant',
+            content: 'ok',
+            disabled: false,
+            hidden: false,
+            usage: { input_tokens: 100, output_tokens: 10 },
+          },
+        ],
+      },
+    } as never)
+  }
+
+  it('показывает отдельный блок сабагентов (сессии/токены/стоимость) и подпись', async () => {
+    mocks.getSessionStats.mockResolvedValue({
+      session_id: 's1',
+      agents: [
+        {
+          agent_role: 'developer', messages: 1, input_tokens: 100, output_tokens: 10,
+          cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0,
+          cost_usd: 0, cache_hit_rate: 0, duration_ms: 0, output_tps: 0,
+          subagent_sessions: 1, subagent_tokens: 330,
+        },
+      ],
+      users: [],
+      subagents: {
+        sessions: 1, input_tokens: 300, output_tokens: 30,
+        cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, cost_usd: 0.00036,
+      },
+    })
+    setLastAssistantWithUsage()
+
+    const container = await renderStats()
+
+    const section = findSection(container, 'Last answer')
+    expect(section).not.toBeNull()
+    expect(section!.textContent).toContain('Subagents')
+    expect(section!.textContent).toContain('Sessions')
+    expect(section!.textContent).toContain('300')
+    expect(section!.textContent).toContain('Separate from the answer — not counted in the context window')
+  })
+
+  it('скрывает блок, когда сабагентов нет', async () => {
+    mocks.getSessionStats.mockResolvedValue({
+      session_id: 's1',
+      agents: [],
+      users: [],
+      subagents: {
+        sessions: 0, input_tokens: 0, output_tokens: 0,
+        cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, cost_usd: 0,
+      },
+    })
+    setLastAssistantWithUsage()
+
+    const container = await renderStats()
+    const text = container.textContent ?? ''
+
+    expect(text).toContain('Last answer')
+    expect(text).not.toContain('Subagents')
+    expect(text).not.toContain('Separate from the answer')
+  })
+})

@@ -256,7 +256,7 @@ describe('SystemPromptComposer', () => {
       expect(manifest.entries.find((e) => e.key === 'classification')).toBeUndefined();
     });
 
-    it('entries идут в реальном порядке (tier → order), role первый, tools последний', async () => {
+    it('entries идут в реальном порядке (tier → order), role первый, tools в конце stable', async () => {
       const composer = makeComposer();
       const session = makeSession({ projectId: 'p1' });
       const tools = [
@@ -267,9 +267,17 @@ describe('SystemPromptComposer', () => {
       const manifest = await composer.manifest(ctx);
       const systemEntries = manifest.entries.filter((e) => e.source !== 'tools');
 
-      // role — первый, tools — последний (отдельный слой запроса).
+      // role — первый; tools — сразу после последнего stable-блока (mode.policy)
+      // и перед первым context-блоком (profile). После tools идут context/volatile.
       expect(systemEntries[0]!.key).toBe('role');
-      expect(manifest.entries[manifest.entries.length - 1]!.key).toBe('tools');
+      const iTools = manifest.entries.findIndex((e) => e.key === 'tools');
+      const iMode = manifest.entries.findIndex((e) => e.key === 'mode.policy');
+      const iProfile = manifest.entries.findIndex((e) => e.key === 'profile');
+      expect(iMode).toBeGreaterThanOrEqual(0);
+      expect(iProfile).toBeGreaterThan(iMode);
+      expect(iTools).toBe(iMode + 1);
+      expect(iTools).toBeLessThan(iProfile);
+      expect(manifest.entries[manifest.entries.length - 1]!.key).not.toBe('tools');
 
       // Монотонность по (tier, order).
       const tierRank: Record<string, number> = { stable: 0, context: 1, volatile: 2 };
@@ -347,12 +355,16 @@ describe('SystemPromptComposer', () => {
       expect(entry!.chars).toBe(toolsChars);
       expect(entry!.estTokens).toBe(Math.ceil(toolsChars / 4));
 
-      // Порядок: первой идёт роль (как в реальном system prompt), tools — в
-      // конце списка, а не в начале.
+      // Порядок: первой идёт роль (как в реальном system prompt); tools — в
+      // конце тира `stable` (перед первой context-записью), не в начале и не
+      // после volatile.
       expect(withTools.entries[0]!.key).toBe('role');
-      expect(withTools.entries[withTools.entries.length - 1]!.key).toBe('tools');
-      expect(withTools.entries.findIndex((e) => e.key === 'role'))
-        .toBeLessThan(withTools.entries.findIndex((e) => e.key === 'tools'));
+      const iTools = withTools.entries.findIndex((e) => e.key === 'tools');
+      const iMode = withTools.entries.findIndex((e) => e.key === 'mode.policy');
+      const iProfile = withTools.entries.findIndex((e) => e.key === 'profile');
+      expect(iTools).toBe(iMode + 1);
+      expect(iTools).toBeLessThan(iProfile);
+      expect(withTools.entries.findIndex((e) => e.key === 'role')).toBeLessThan(iTools);
 
       const systemChars = withTools.entries
         .filter((e) => e.source !== 'tools' && e.status !== 'empty')

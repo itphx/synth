@@ -142,6 +142,9 @@ export const StatsTab: React.FC = () => {
 
   const hasLastMsgUsage = !!(lastAssistantMsg?.usage && Object.keys(lastAssistantMsg.usage).length > 0)
   const hasSubagents = !!sessionStats?.agents.some((a) => a.subagent_sessions > 0)
+  // AD-070 §2.6: отдельная сводка по сабагентам (не входит в контекст родителя).
+  const subagentStats = sessionStats?.subagents
+  const hasSubagentStats = !!subagentStats && subagentStats.sessions > 0
 
   return (
     <div className="flex flex-col gap-4 p-3">
@@ -194,6 +197,27 @@ export const StatsTab: React.FC = () => {
               </div>
             )}
           </div>
+
+          {hasSubagentStats && (
+            <div className="mt-3 border-t border-border/40 pt-3">
+              <div className="mb-1 flex items-center gap-1.5 text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
+                <Icon name="user-3" className="size-3 shrink-0" />
+                <span>{t('rightPanel.stats.subagentsTitle')}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                <StatCell icon="chat-new" color="text-cyan-400" label={t('rightPanel.stats.subagentsSessions')} value={fmt(subagentStats!.sessions)} />
+                <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={formatTokens(subagentStats!.input_tokens)} />
+                <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={formatTokens(subagentStats!.output_tokens)} />
+                <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={formatTokens(subagentStats!.cache_read_tokens)} />
+                <div className="col-span-2">
+                  <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCost(subagentStats!.cost_usd)} />
+                </div>
+              </div>
+              <div className="mt-1 text-[0.6875rem] text-muted-foreground">
+                {t('rightPanel.stats.subagentsNote')}
+              </div>
+            </div>
+          )}
         </Section>
       )}
 

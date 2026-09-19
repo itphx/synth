@@ -366,6 +366,10 @@ export const dict = {
   'rightPanel.stats.messages': 'Сообщений',
   'rightPanel.stats.subagents': 'Сабагентов',
   'rightPanel.stats.subagentTokens': 'Токенов сабагентов',
+  // AD-070 §2.6: отдельный блок сабагентов в «Последнем ответе»
+  'rightPanel.stats.subagentsTitle': 'Сабагенты',
+  'rightPanel.stats.subagentsSessions': 'Сессий',
+  'rightPanel.stats.subagentsNote': 'Отдельно от ответа — не входит в контекстное окно',
   'rightPanel.stats.speed': 'Скорость',
   'rightPanel.stats.duration': 'Длительность',
   'rightPanel.stats.cost': 'Стоимость',

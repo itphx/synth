@@ -3,6 +3,7 @@ import type {
   Session,
   SessionAgentStats,
   SessionStats,
+  SessionSubagentStats,
   SessionUserStats,
   TokenUsage,
 } from '@itphx/synth-shared';
@@ -148,21 +149,38 @@ async function collectSubagentUsage(
   deps: SessionStatsDeps,
   visited: Set<string>,
   depth: number,
-): Promise<{ sessions: number; tokens: number }> {
-  if (depth > MAX_SUBAGENT_DEPTH) return { sessions: 0, tokens: 0 };
+): Promise<{ sessions: number; tokens: number; usage: UsageTotals; cost: number }> {
+  if (depth > MAX_SUBAGENT_DEPTH) {
+    return { sessions: 0, tokens: 0, usage: emptyUsage(), cost: 0 };
+  }
   const session = await deps.getSession(sessionId);
-  if (!session) return { sessions: 0, tokens: 0 };
+  if (!session) return { sessions: 0, tokens: 0, usage: emptyUsage(), cost: 0 };
 
   let sessions = 1;
   let tokens = totalTokens(session);
+  const usage = emptyUsage();
+  let cost = 0;
+  // Разбивка по всем сообщениям дочерней сессии (та же семантика, что у
+  // `totalTokens`, но с детализацией и стоимостью по ценам моделей).
+  for (const msg of session.messages) {
+    addUsage(usage, msg.usage);
+    cost += messageCost(msg, deps.getModelPricing);
+  }
+
   for (const child of extractTaskChildren(session)) {
     if (visited.has(child.childSessionId)) continue;
     visited.add(child.childSessionId);
     const sub = await collectSubagentUsage(child.childSessionId, deps, visited, depth + 1);
     sessions += sub.sessions;
     tokens += sub.tokens;
+    usage.input += sub.usage.input;
+    usage.output += sub.usage.output;
+    usage.cacheRead += sub.usage.cacheRead;
+    usage.cacheWrite += sub.usage.cacheWrite;
+    usage.reasoning += sub.usage.reasoning;
+    cost += sub.cost;
   }
-  return { sessions, tokens };
+  return { sessions, tokens, usage, cost };
 }
 
 /** Агрегация по `agent_role` сообщений сессии + рекурсивный usage саб-агентов. */
@@ -255,7 +273,17 @@ export async function computeSessionStats(
   const users = buildUserStats(session, deps.getModelPricing);
 
   // Сабагенты: глобальный visited на весь расчёт — каждый ребёнок учитывается
-  // один раз, циклы (ребёнок == предок) отсекаются.
+  // один раз, циклы (ребёнок == предок) отсекаются. Параллельно с `subagent_*`
+  // в агентах собираем отдельную суммарную разбивку по всем дочерним сессиям.
+  const subagents: SessionSubagentStats = {
+    sessions: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    reasoning_tokens: 0,
+    cost_usd: 0,
+  };
   const visited = new Set<string>([session.id]);
   for (const ref of extractTaskChildren(session)) {
     if (visited.has(ref.childSessionId)) continue;
@@ -276,6 +304,13 @@ export async function computeSessionStats(
     }
     acc.subagentSessions += sub.sessions;
     acc.subagentTokens += sub.tokens;
+    subagents.sessions += sub.sessions;
+    subagents.input_tokens += sub.usage.input;
+    subagents.output_tokens += sub.usage.output;
+    subagents.cache_read_tokens += sub.usage.cacheRead;
+    subagents.cache_write_tokens += sub.usage.cacheWrite;
+    subagents.reasoning_tokens += sub.usage.reasoning;
+    subagents.cost_usd += sub.cost;
   }
 
   const agentStats: SessionAgentStats[] = [...agents.values()]
@@ -326,5 +361,10 @@ export async function computeSessionStats(
 
   userStats.sort((a, b) => b.messages - a.messages || a.author.localeCompare(b.author));
 
-  return { session_id: session.id, agents: agentStats, users: userStats };
+  return {
+    session_id: session.id,
+    agents: agentStats,
+    users: userStats,
+    subagents: { ...subagents, cost_usd: round(subagents.cost_usd, 6) },
+  };
 }

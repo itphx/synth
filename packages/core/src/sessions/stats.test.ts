@@ -186,6 +186,36 @@ describe('computeSessionStats (AD-070 §2.6)', () => {
     // Дедупликация: child найден и в tool-сообщении, и в tool_results → 1 сессия.
     expect(dev.subagent_sessions).toBe(1);
     expect(dev.subagent_tokens).toBe(330);
+    // Агентские итоги не включают детей: только usage самого агента (100/10).
+    expect(dev.input_tokens).toBe(100);
+    expect(dev.output_tokens).toBe(10);
+    // Отдельная сводка по сабагентам: usage всех сообщений дочерних сессий.
+    expect(stats.subagents.sessions).toBe(1);
+    expect(stats.subagents.input_tokens).toBe(300);
+    expect(stats.subagents.output_tokens).toBe(30);
+    expect(stats.subagents.cache_read_tokens).toBe(0);
+    expect(stats.subagents.cache_write_tokens).toBe(0);
+    expect(stats.subagents.reasoning_tokens).toBe(0);
+    // 300*1/1e6 + 30*2/1e6 = 0.00036
+    expect(stats.subagents.cost_usd).toBeCloseTo(0.00036, 12);
+  });
+
+  it('subagents: без дочерних сессий сводка нулевая', async () => {
+    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    await sessionManager.addMessage(session.id, msg({
+      role: MessageRole.ASSISTANT, content: 'solo', agentRole: 'developer', model: 'm', usage: usage(100, 10),
+    }));
+
+    const stats = await computeSessionStats(await load(session), deps());
+    expect(stats.subagents).toEqual({
+      sessions: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      reasoning_tokens: 0,
+      cost_usd: 0,
+    });
   });
 
   it('рекурсивно подтягивает внуков и ограничивает глубину', async () => {

@@ -163,10 +163,12 @@ export class SystemPromptComposer {
     // AD-070 §2.5: слой описаний инструментов — отдельный кэшируемый слой
     // (`tools → system → messages`). В system-текст (`compose`) не входит, но
     // отражается в манифесте и учитывается в общих размерах и staticPrefix.
-    // Добавляется в конец списка после system-блоков, идущих в реальном порядке
-    // отправки (`sortPromptBlocks`): role — первым, `tools` — последним.
+    // Инструменты — `stable`, поэтому запись вставляется в конце тира `stable`
+    // (перед первой `context`-записью), а не после volatile: это самый ранний
+    // кэшируемый слой, и в реальном префиксе он идёт сразу за stable-блоками.
+    // `role` при этом остаётся первой записью.
     const toolsChars = ctx.tools && ctx.tools.length > 0 ? JSON.stringify(ctx.tools).length : 0;
-    entries.push({
+    const toolsEntry: PromptManifestEntry = {
       key: 'tools',
       label: PROMPT_BLOCK_LABELS.tools ?? 'Tool descriptions',
       tier: 'stable',
@@ -175,7 +177,13 @@ export class SystemPromptComposer {
       status: toolsChars === 0 ? 'empty' : 'loaded',
       provenance: 'tools',
       source: 'tools',
-    });
+    };
+    // `entries` отсортированы `sortPromptBlocks` (tier → order), поэтому все
+    // stable-записи занимают префикс [0, stableCount); вставка по индексу
+    // stableCount ставит `tools` сразу после последней stable-записи. При
+    // отсутствии stable-записей — в начало (индекс 0).
+    const stableCount = entries.filter((entry) => entry.tier === 'stable').length;
+    entries.splice(stableCount, 0, toolsEntry);
 
     const nonEmpty = blocks.filter((block) => block.content !== '');
     const totalChars =
