@@ -402,14 +402,14 @@ export function ChatInput({
                 <button
                   onClick={handleEnqueue}
                   disabled={!value.trim()}
-                  className="rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="inline-flex items-center justify-center rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                   title={t('chat.input.enqueue')}
                 >
                   <Icon name="arrow-up" className="size-5" />
                 </button>
                 <button
                   onClick={onStop}
-                  className="rounded-lg p-1.5 text-destructive hover:bg-destructive/10 transition-colors"
+                  className="inline-flex items-center justify-center rounded-lg p-1.5 text-destructive hover:bg-destructive/10 transition-colors"
                   title={t('chat.input.stop')}
                 >
                   <Icon name="stop" className="size-5" />
@@ -421,7 +421,7 @@ export function ChatInput({
                 <button
                   onClick={handleCreateNote}
                   disabled={!value.trim()}
-                  className="rounded-lg p-1.5 text-amber-600/70 dark:text-amber-400/70 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-amber-500/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="inline-flex items-center justify-center rounded-lg p-1.5 text-amber-600/70 dark:text-amber-400/70 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-amber-500/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                   title={t('chat.input.createNote')}
                 >
                   <Icon name="pushpin" className="size-5" />
@@ -429,7 +429,7 @@ export function ChatInput({
                 <button
                   onClick={handleSend}
                   disabled={!value.trim()}
-                  className="rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="inline-flex items-center justify-center rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                   title={t('chat.input.send')}
                 >
                   <Icon name="send-plane" className="size-5" />
@@ -456,7 +456,7 @@ function FooterBtn({
 }) {
   return (
     <button
-      className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-30"
+      className="inline-flex items-center justify-center rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-30"
       title={title}
       onClick={onClick}
       disabled={disabled}
