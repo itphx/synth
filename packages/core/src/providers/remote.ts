@@ -388,6 +388,9 @@ export class RemoteProvider extends BaseProvider {
       temperature: this.temperature,
     };
     if (stream) body.stream = true;
+    // AD-070: просим backend-proxy отдать usage в стриме (как OpenAIProvider),
+    // иначе live-статистика remote-провайдера до финального чанка недоступна.
+    if (stream) body.stream_options = { include_usage: true };
     if (tools?.length) body.tools = tools;
     if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
     // AD-070 §2.2: prompt_cache_key пробрасывается на backend LLM Proxy, который

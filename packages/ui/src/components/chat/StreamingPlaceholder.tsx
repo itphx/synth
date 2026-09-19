@@ -1,3 +1,4 @@
+import { Fragment } from 'react'
 import { cn, resolveColor } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { useAgentsStore } from '@/stores/agentsStore'
@@ -7,6 +8,7 @@ import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
 import { SubagentPart, type SubagentPartData } from './SubagentPart'
 import { MarkdownContent } from './MarkdownContent'
+import { buildUsageSegments } from '@/lib/statsSegments'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { RetryStatus } from './RetryStatus'
@@ -182,6 +184,17 @@ export function StreamingPlaceholder({ stream, onStop, retry, onRetryNow, onCanc
     stream.toolCalls || [],
   )
 
+  // AD-070 §2.6: live-строка статистики внизу плейсхолдера (токены/стоимость/
+  // кэш) — тот же билдер сегментов, что у MessageStats. Оценка помечается `~`.
+  const liveSegments = buildUsageSegments(
+    {
+      usage: stream.usage,
+      costUsd: stream.costUsd,
+      tokenPrefix: stream.usageEstimated ? '~' : '',
+    },
+    t,
+  )
+
   return (
     <div className={cn(
       'flex flex-col px-4 py-3 group',
@@ -262,6 +275,20 @@ export function StreamingPlaceholder({ stream, onStop, retry, onRetryNow, onCanc
         })}
 
         {displayContent && <MarkdownContent content={displayContent} />}
+
+        {liveSegments.length > 0 && (
+          <div
+            data-testid="stream-live-stats"
+            className="mt-2 flex flex-nowrap items-center gap-x-1.5 whitespace-nowrap text-[0.6875rem] text-muted-foreground tabular-nums"
+          >
+            {liveSegments.map((segment, i) => (
+              <Fragment key={i}>
+                {i > 0 && <span aria-hidden="true">·</span>}
+                <span>{segment}</span>
+              </Fragment>
+            ))}
+          </div>
+        )}
 
         {stream.isStreaming && (
           <div className="flex items-center gap-0.5 mt-2 pt-1.5 border-t border-border/30">

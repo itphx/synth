@@ -11,7 +11,8 @@ import type { ContextOptimizer } from '../context/optimizer.js';
 import type { ContextConfig } from '../context/config.js';
 import type { ModelRouter } from '../router/router.js';
 import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from '../llm-error.js';
-import { computeCacheHitRate } from '../../providers/usage.js';
+import type { AssistantMessageStatus } from '../orchestrator.js';
+import { computeCacheHitRate, computeUsageCost, type UsagePricing } from '../../providers/usage.js';
 import { deriveSubagentPermission } from '../permission/derive.js';
 import { PermissionEvaluator } from '../permission/evaluator.js';
 import { PermissionApprovalManager } from '../permission/approval.js';
@@ -57,6 +58,8 @@ export interface TaskExtra {
   protectedPathsEnabled?: boolean;
   /** Override retry-параметров саб-агента (по умолчанию 3 попытки, backoff 5/15/30с). */
   retry?: SubagentRetryConfig;
+  /** AD-070: цены моделей для live-стоимости саб-агента (как в оркестраторе). */
+  modelPriceLoader?: (model: string) => UsagePricing | null;
 }
 
 type ContextMode = 'none' | 'inherit' | 'summary' | 'last_n';
@@ -629,6 +632,88 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     if (usage.reasoningTokens) subagentUsage.reasoningTokens = (subagentUsage.reasoningTokens || 0) + usage.reasoningTokens;
   };
 
+  // ─── AD-070: live-статистика саб-агента (`stream.usage` + `subagent.progress`) ──
+  // Троттлинг ~300 мс; публикуем при изменении контента/размышлений или usage.
+  const SUBAGENT_USAGE_THROTTLE_MS = 300;
+  let liveUsageLastPublishedAt = 0;
+  let liveUsageLastSignature = '';
+
+  /** Сумма двух usage (running total саб-агента + точный/оценочный текущей итерации). */
+  const addUsage = (a: TokenUsage, b: TokenUsage): TokenUsage => ({
+    inputTokens: (a.inputTokens || 0) + (b.inputTokens || 0),
+    outputTokens: (a.outputTokens || 0) + (b.outputTokens || 0),
+    totalTokens: (a.totalTokens || 0) + (b.totalTokens || 0),
+    ...(a.cacheReadTokens || b.cacheReadTokens
+      ? { cacheReadTokens: (a.cacheReadTokens || 0) + (b.cacheReadTokens || 0) }
+      : {}),
+    ...(a.cacheWriteTokens || b.cacheWriteTokens
+      ? { cacheWriteTokens: (a.cacheWriteTokens || 0) + (b.cacheWriteTokens || 0) }
+      : {}),
+    ...(a.reasoningTokens || b.reasoningTokens
+      ? { reasoningTokens: (a.reasoningTokens || 0) + (b.reasoningTokens || 0) }
+      : {}),
+  });
+
+  /** Оценка размера промпта саб-агента (символы) — best-effort input-токены. */
+  const estimateSubagentPromptChars = (): number => {
+    let chars = 0;
+    for (const m of messages) {
+      chars += m.content?.length ?? 0;
+      if (m.toolUse) chars += JSON.stringify(m.toolUse).length;
+      if (m.reasoning) chars += m.reasoning.length;
+    }
+    if (llmSystemPrompt) chars += llmSystemPrompt.length;
+    if (tools && tools.length > 0) chars += JSON.stringify(tools).length;
+    return chars;
+  };
+
+  /**
+   * Live-usage саб-агента: накопленный `subagentUsage` (завершённые итерации)
+   * + точный usage текущего чанка либо best-effort оценка текущей итерации.
+   * Финальный чанк уже включён в `subagentUsage` (accumulateUsage вызван до).
+   *
+   * Точным считаем usage с output>0/reasoning (AD-070 §2.6, как в оркестраторе).
+   * Anthropic отдаёт input/cache в `message_start` (output ещё 0): сохраняем
+   * точный input/cache, но output оцениваем из накопленного текста, пока не
+   * придёт `message_delta` с output. Полностью нулевой usage — оценка обоих.
+   */
+  const buildLiveSubagentUsage = (
+    chunk: { usage?: TokenUsage; isFinal: boolean },
+    accumulatedContent: string,
+    reasoning: string,
+  ): { usage: TokenUsage; estimated: boolean } => {
+    const usage = chunk.usage;
+    const hasExactOutput = !!usage
+      && (usage.outputTokens > 0 || (usage.reasoningTokens ?? 0) > 0);
+    if (hasExactOutput) {
+      if (chunk.isFinal) return { usage: { ...subagentUsage }, estimated: false };
+      return { usage: addUsage(subagentUsage, usage!), estimated: false };
+    }
+
+    const outputChars = accumulatedContent.length + reasoning.length;
+    const estOutput = Math.ceil(outputChars / 4);
+    if (usage && usage.inputTokens > 0) {
+      // Точный input/cache + оценка output текущей итерации.
+      const current: TokenUsage = {
+        ...usage,
+        outputTokens: estOutput,
+        totalTokens: (usage.inputTokens || 0) + estOutput,
+      };
+      return { usage: addUsage(subagentUsage, current), estimated: true };
+    }
+
+    const promptChars = estimateSubagentPromptChars();
+    const estInput = Math.ceil(promptChars / 4);
+    return {
+      usage: addUsage(subagentUsage, {
+        inputTokens: estInput,
+        outputTokens: estOutput,
+        totalTokens: estInput + estOutput,
+      }),
+      estimated: true,
+    };
+  };
+
   // Связка локального cancel-токена саб-агента с родительским сигналом отмены:
   // «Стоп» в родительской сессии (POST /sessions/:id/abort → orchestrator.cancel
   // → внутренний toolAbortController.abort → ctx.abortSignal) должен немедленно
@@ -685,6 +770,15 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         await extra.sessionManager.updateSession(childSession);
 
         if (extra.eventBus) {
+          // AD-070 §2.6: терминальное live-событие дочерней сессии. Дочерний
+          // саб-агент не публикует stream.start/stream.done, а его live-статистика
+          // идёт только stream.usage. Это событие гарантирует, что открытая
+          // дочерняя сессия сбросит live-плейсхолдер после завершения работы
+          // (сообщение ребёнка сохраняется отдельно, дубля не возникает).
+          extra.eventBus.publish(childSessionId, 'stream.ended', {
+            session_id: childSessionId,
+            stream_id: extra.streamId,
+          });
           extra.eventBus.publish(childSessionId, 'session.updated', {
             session_id: childSessionId,
           });
@@ -710,6 +804,29 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     } catch {
       // не фатально
     }
+  };
+
+  /**
+   * AD-070 §2.6: metadata финального assistant-сообщения дочерней сессии.
+   * Единая точка простановки `status`/`cost_usd`/`cost_breakdown` — как
+   * `_saveAssistantMessage` оркестратора: стоимость считается по ценам модели
+   * (`extra.modelPriceLoader` + `subagentModel`), только если они заданы.
+   * `usage_estimated` здесь НЕ пишется: `subagentUsage` собран из финальных
+   * чанков провайдера и потому точен (оценка в live-событиях не персистится).
+   */
+  const buildChildAssistantMetadata = (
+    status: AssistantMessageStatus,
+    extraMeta: Record<string, unknown> = {},
+  ): Record<string, unknown> => {
+    const metadata: Record<string, unknown> = { ...extraMeta, status };
+    const cost = subagentModel && extra.modelPriceLoader
+      ? computeUsageCost(subagentUsage, extra.modelPriceLoader(subagentModel))
+      : null;
+    if (cost) {
+      metadata.cost_usd = cost.costUsd;
+      metadata.cost_breakdown = cost.breakdown;
+    }
+    return metadata;
   };
 
   // AD-070 §2.6 / project stats: session-счётчики дочерней сессии обновляются
@@ -781,12 +898,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           // AD-070 §2.6: usage, накопленный до отмены, — чтобы rollup не терял токены.
           usage: subagentUsage,
           ...(partialReasoning ? { reasoning: partialReasoning } : {}),
-          metadata: {
+          metadata: buildChildAssistantMetadata('cancelled', {
             stream_id: extra.streamId,
             duration_ms: Date.now() - subagentStartedAt,
             partial: true,
             interrupted: true,
-          },
+          }),
         });
       }
 
@@ -895,12 +1012,37 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             if (chunk.isFinal) accumulateUsage(chunk.usage);
             if (chunk.model) subagentModel = chunk.model;
 
-            // Стримим размышления/промежуточный текст саб-агента РОДИТЕЛЮ,
-            // чтобы в блоке `task` (по parent_call_id) они были видны во время работы.
-            if (publish) {
-              const liveReasoning = reasoning || '';
-              const liveContent = accumulatedContent || '';
-              if (liveReasoning !== lastPublishedReasoning || liveContent.length !== lastPublishedContentLen) {
+            // AD-070: live-usage = накопленное + точный/оценка текущей итерации;
+            // стоимость — по ценам модели, если загрузчик передан в extra.
+            const liveUsage = buildLiveSubagentUsage(chunk, accumulatedContent, reasoning);
+            const liveModel = subagentModel || effectiveProvider.model || undefined;
+            const liveProvider = effectiveProvider.name || undefined;
+            const liveCost = liveModel && extra.modelPriceLoader
+              ? computeUsageCost(liveUsage.usage, extra.modelPriceLoader(liveModel))
+              : null;
+            const liveReasoning = reasoning || '';
+            const liveContent = accumulatedContent || '';
+            const usageSignature = [
+              liveUsage.estimated ? 'e' : 'x',
+              liveUsage.usage.inputTokens,
+              liveUsage.usage.outputTokens,
+              liveUsage.usage.totalTokens,
+            ].join(':');
+
+            // Стримим размышления/промежуточный текст (и usage) саб-агента
+            // РОДИТЕЛЮ, чтобы в блоке `task` (по parent_call_id) всё было видно
+            // во время работы. Троттлинг ~300 мс, дедуп по подписи.
+            const changed = liveReasoning !== lastPublishedReasoning
+              || liveContent.length !== lastPublishedContentLen
+              || usageSignature !== liveUsageLastSignature;
+            const nowLive = Date.now();
+            if (changed && nowLive - liveUsageLastPublishedAt >= SUBAGENT_USAGE_THROTTLE_MS) {
+              liveUsageLastPublishedAt = nowLive;
+              liveUsageLastSignature = usageSignature;
+              lastPublishedReasoning = liveReasoning;
+              lastPublishedContentLen = liveContent.length;
+
+              if (publish) {
                 publish('subagent.progress', {
                   stream_id: extra.streamId,
                   session_id: extra.sessionId,
@@ -908,9 +1050,28 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
                   reasoning: liveReasoning,
                   content: liveContent,
                   iteration,
+                  usage: liveUsage.usage,
+                  ...(liveCost ? { cost_usd: liveCost.costUsd, cost_breakdown: liveCost.breakdown } : {}),
+                  ...(liveModel ? { model: liveModel } : {}),
+                  ...(liveProvider ? { provider: liveProvider } : {}),
+                  estimated: liveUsage.estimated,
                 });
-                lastPublishedReasoning = liveReasoning;
-                lastPublishedContentLen = liveContent.length;
+              }
+
+              // Live-статистика в дочернюю сессию (если она есть) — открытая
+              // дочерняя сессия показывает токены/стоимость по ходу работы.
+              if (childSessionId && extra.eventBus) {
+                extra.eventBus.publish(childSessionId, 'stream.usage', {
+                  session_id: childSessionId,
+                  stream_id: extra.streamId,
+                  iteration,
+                  agent_role: subagentType,
+                  ...(liveModel ? { model: liveModel } : {}),
+                  ...(liveProvider ? { provider: liveProvider } : {}),
+                  usage: liveUsage.usage,
+                  ...(liveCost ? { cost_usd: liveCost.costUsd, cost_breakdown: liveCost.breakdown } : {}),
+                  estimated: liveUsage.estimated,
+                });
               }
             }
           }
@@ -976,7 +1137,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           model: subagentModel,
           // AD-070 §2.6: usage, потраченный до ошибки, — чтобы rollup его учёл.
           usage: subagentUsage,
-          metadata: {
+          metadata: buildChildAssistantMetadata('error', {
             stream_id: extra.streamId,
             duration_ms: Date.now() - subagentStartedAt,
             error: true,
@@ -984,7 +1145,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             max_retries: retryMaxAttempts,
             error_type: llmFailure.errorType,
             i18n: i18nMeta(errKey, attempts > 1 ? { ...errParams, attempts: String(attempts) } : errParams),
-          },
+          }),
         });
         await commitChildUsage();
         await finalizeChildSession();
@@ -1067,12 +1228,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               // Как в _persistToolChain родителя: финальное сообщение несёт
               // свёрнутую цепочку тулов, чтобы UI дочерней сессии отрисовал её
               // так же аккуратно, как финал родительской.
-              metadata: {
+              metadata: buildChildAssistantMetadata('completed', {
                 stream_id: extra.streamId,
                 duration_ms: Date.now() - subagentStartedAt,
                 ...(allSubagentToolCalls.length > 0 ? { tool_results: allSubagentToolCalls } : {}),
                 ...(allSubagentIntermediateTexts.length > 0 ? { intermediate_text_blocks: allSubagentIntermediateTexts } : {}),
-              },
+              }),
             };
             const updated = await extra.sessionManager.addMessage(childSessionId, assistantMsg);
             if (updated && extra.eventBus) {
@@ -1590,6 +1751,14 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       },
     };
   } catch (err: unknown) {
+    // Жёсткий сбой вне штатных веток: дочерняя сессия не финализировалась, но
+    // live-плейсхолдер в UI нужно сбросить тем же терминальным событием.
+    if (childSessionId && extra.eventBus) {
+      extra.eventBus.publish(childSessionId, 'stream.ended', {
+        session_id: childSessionId,
+        stream_id: extra.streamId,
+      });
+    }
     return {
       content: sm('task.subagent_exec_error', { type: subagentType, error: String(err) }),
       isError: true,

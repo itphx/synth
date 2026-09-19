@@ -59,6 +59,10 @@ const chatCompletionsSchema = z.object({
   max_tokens: z.number().int().positive().optional(),
   top_p: z.number().optional(),
   stream: z.boolean().optional(),
+  // AD-070: remote-зеркала (RemoteProvider) просят usage в стриме. Внутренний
+  // OpenAIProvider всегда шлёт stream_options.include_usage, но поле принимаем
+  // явно, чтобы Zod его не срезал (контракт запроса).
+  stream_options: z.object({ include_usage: z.boolean().optional() }).optional(),
   tools: z.array(z.record(z.unknown())).optional(),
   session_id: z.string().optional(),
   // Имя серверного провайдера (шлют remote-зеркала RemoteProvider в гибриде).

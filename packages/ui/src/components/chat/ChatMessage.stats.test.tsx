@@ -151,6 +151,23 @@ describe('ChatMessage: статистика (единый поповер)', () =
     expect(btn.className).not.toContain('text-primary')
   })
 
+  it('пустой отменённый ответ рендерится и показывает статус «Остановлено»', async () => {
+    const container = await renderChat(makeMessage({
+      content: '',
+      usage: { input_tokens: 1000, output_tokens: 0, total_tokens: 1000 },
+      metadata: { status: 'cancelled', duration_ms: 1200, usage_estimated: true },
+    }))
+    // Раньше пустое сообщение возвращало null — статус и статистика не были видны.
+    const trigger = container.querySelector('button[title="Response stats"]')
+    expect(trigger).not.toBeNull()
+    await act(async () => {
+      trigger!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const stats = document.querySelector('[data-testid="message-stats"]')
+    expect(stats).not.toBeNull()
+    expect(stats!.textContent).toContain('Stopped')
+  })
+
   it('«Отладка» не подсвечивается для другой сессии', async () => {
     useUIStore.setState({
       centerTabs: [{ id: 'chat-s1', type: 'chat', title: 'S1', data: { sessionId: 's1' } }],

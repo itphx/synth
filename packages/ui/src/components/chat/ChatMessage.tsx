@@ -208,7 +208,16 @@ function ChatMessageInner({
     ? [...intermediateTextBlocks.map((it) => it.text), message.content].filter(Boolean).join('\n\n')
     : null
   const displayContent = bottomContent ?? message.content
-  if (!displayContent && !message.reasoning && liveToolCalls.length === 0 && reasoningBlocks.length === 0 && intermediateTextBlocks.length === 0) return null
+  // AD-070 §2.6: пустой отменённый ответ (отмена до первого токена) всё равно
+  // показываем — статус «Остановлено» и статистика идут через metadata.
+  if (
+    !displayContent &&
+    !message.reasoning &&
+    liveToolCalls.length === 0 &&
+    reasoningBlocks.length === 0 &&
+    intermediateTextBlocks.length === 0 &&
+    !showStats
+  ) return null
 
   return (
     <div className={containerClass}>

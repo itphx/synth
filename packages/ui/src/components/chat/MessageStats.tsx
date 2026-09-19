@@ -3,6 +3,7 @@ import type { MessageData, MessageStatus } from '@/stores/chatStore'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { formatCost, formatDuration, formatTokens, formatTps } from '@/lib/formatStats'
+import { buildUsageSegments } from '@/lib/statsSegments'
 import { readMessageSubagents } from '@/lib/subagentStats'
 
 /** metadata.duration_ms / metadata.cost_usd приходят как unknown — читаем только number. */
@@ -103,20 +104,8 @@ export function MessageStats({ message, className }: MessageStatsProps) {
     segments.push(formatDuration(durationMs))
   }
 
-  if (usage) {
-    segments.push(`${tokenPrefix}${formatTokens(usage.input_tokens ?? 0)} ${t('chat.messageStats.in')}`)
-    segments.push(`${tokenPrefix}${formatTokens(usage.output_tokens ?? 0)} ${t('chat.messageStats.out')}`)
-  }
-
-  if (costUsd !== undefined) {
-    segments.push(t('chat.messageStats.cost', { cost: formatCost(costUsd) }))
-  }
-
-  const inputTokens = usage?.input_tokens ?? 0
-  if (inputTokens > 0) {
-    const pct = Math.round(((usage?.cache_read_tokens ?? 0) / inputTokens) * 100)
-    segments.push(t('chat.messageStats.cache', { pct: `${pct}%` }))
-  }
+  // AD-070 §2.6: общий с live-строкой стрима билдер сегментов usage/cost/cache.
+  segments.push(...buildUsageSegments({ usage, costUsd, tokenPrefix }, t))
 
   if (durationMs !== undefined && durationMs > 0 && usage) {
     const tps = (usage.output_tokens ?? 0) / (durationMs / 1000)

@@ -232,6 +232,8 @@ describe('RemoteProvider.chatAsync (SSE-стрим)', () => {
     const [url, init] = fetchMock.mock.calls[0]!;
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
     expect(body.stream).toBe(true);
+    // AD-070: remote-зеркало просит backend-proxy вернуть usage в стриме.
+    expect(body.stream_options).toEqual({ include_usage: true });
     expect(String(url)).toBe('https://backend.test/api/v2/llm/chat/completions');
   });
 

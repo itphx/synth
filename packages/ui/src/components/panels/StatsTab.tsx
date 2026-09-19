@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { Fragment, useEffect, useState, useMemo } from 'react'
 import type { SessionStats } from '@itphx/synth-shared'
 import { cn, resolveColor, userColor } from '@/lib/utils'
-import { useChatStore } from '@/stores/chatStore'
+import { useChatStore, selectLiveSubagentUsage } from '@/stores/chatStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -9,6 +9,7 @@ import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { formatCost, formatDuration, formatTokens, formatTps } from '@/lib/formatStats'
+import { buildUsageSegments } from '@/lib/statsSegments'
 import { readMessageSubagents } from '@/lib/subagentStats'
 import type { ProjectStats, ModelGroup, PromptInfoResponse } from '@/lib/api/synthApi'
 
@@ -82,6 +83,18 @@ export const StatsTab: React.FC = () => {
     return null
   }, [sessionMessages])
 
+  // AD-070 §2.6 (live): активный стрим сессии — источник live-значений
+  // «Последнего ответа» и дельты секции «Сессия». `finishStream`/`cancelStream`
+  // удаляют StreamState и сбрасывают live-сабагентов, поэтому после завершения
+  // панель автоматически возвращается к серверным/сообщенческим значениям.
+  const activeStream = useChatStore((s) => {
+    if (!activeSessionId) return undefined
+    const streams = s.streamingBySession[activeSessionId]
+    if (!streams) return undefined
+    return Object.values(streams).find((st) => st.isStreaming)
+  })
+  const liveSubagent = useChatStore(selectLiveSubagentUsage(activeSessionId ?? ''))
+
   useEffect(() => {
     synthApi.getModels().then(setModelGroups).catch(() => {})
   }, [])
@@ -94,11 +107,6 @@ export const StatsTab: React.FC = () => {
   }, [modelGroups, sessionModelId])
 
   const contextWindowMax = contextWindowModel?.context_window ?? 200_000
-  const lastInputTokens = lastAssistantMsg?.usage?.input_tokens ?? 0
-  const windowPercent = contextWindowMax > 0 ? (lastInputTokens / contextWindowMax) * 100 : 0
-  // Предупреждение только при реальном окне модели (не фолбэк 200_000)
-  const hasRealContextWindow = !!contextWindowModel?.context_window && contextWindowModel.context_window > 0
-  const isContextNearLimit = hasRealContextWindow && windowPercent >= 90
 
   const sessionProjectId = activeSession?.project_id
 
@@ -115,6 +123,38 @@ export const StatsTab: React.FC = () => {
     : undefined
   // Bug 4 (AD-070 §2.6): usage мог быть оценён при отмене/сбое — помечаем `~`.
   const lastTokenPrefix = lastAssistantMsg?.metadata?.usage_estimated === true ? '~' : ''
+
+  // AD-070 §2.6 (live): если активный стрим уже отдал usage — «Последний ответ»
+  // берёт значения из него, иначе из последнего assistant-сообщения. Оценка
+  // (`usageEstimated`) помечается `~`; точный usage оценкой не подменяется.
+  const liveStreamUsage = activeStream?.usage
+  const hasLiveUsage = !!liveStreamUsage && Object.keys(liveStreamUsage).length > 0
+  const displayUsage = hasLiveUsage ? liveStreamUsage : lastAssistantMsg?.usage
+  const displayCostUsd = hasLiveUsage ? activeStream?.costUsd : lastCostUsd
+  const displayTokenPrefix = hasLiveUsage ? (activeStream?.usageEstimated ? '~' : '') : lastTokenPrefix
+  const displayModel = activeStream?.model ?? lastAssistantMsg?.model
+  // Пока стрим активен, длительность/скорость ответа ещё не финализированы.
+  const displayDurationMs = hasLiveUsage ? undefined : lastDurationMs
+  const displayTps = hasLiveUsage ? undefined : lastTps
+
+  const displayInputTokens = displayUsage?.input_tokens ?? 0
+  const windowPercent = contextWindowMax > 0 ? (displayInputTokens / contextWindowMax) * 100 : 0
+  // Предупреждение только при реальном окне модели (не фолбэк 200_000)
+  const hasRealContextWindow = !!contextWindowModel?.context_window && contextWindowModel.context_window > 0
+  const isContextNearLimit = hasRealContextWindow && windowPercent >= 90
+
+  // AD-070 §2.6 (live): компактная live-строка стрима — тот же билдер сегментов,
+  // что у StreamingPlaceholder/MessageStats.
+  const liveSegments = activeStream
+    ? buildUsageSegments(
+        {
+          usage: activeStream.usage,
+          costUsd: activeStream.costUsd,
+          tokenPrefix: activeStream.usageEstimated ? '~' : '',
+        },
+        t,
+      )
+    : []
 
   useEffect(() => {
     if (sessionProjectId) {
@@ -155,7 +195,7 @@ export const StatsTab: React.FC = () => {
   // тир → order, tools — последним). UI не пересортировывает.
   const promptEntries = promptInfo?.manifest.entries ?? []
 
-  const hasLastMsgUsage = !!(lastAssistantMsg?.usage && Object.keys(lastAssistantMsg.usage).length > 0)
+  const hasLastMsgUsage = !!displayUsage && Object.keys(displayUsage).length > 0
   const hasSubagents = !!sessionStats?.agents.some((a) => a.subagent_sessions > 0)
   // AD-070 §2.6: блок сабагентов в «Последнем ответе» — из статистики самого
   // последнего сообщения (metadata.subagents), а не сессионной сводки: иначе он
@@ -163,28 +203,77 @@ export const StatsTab: React.FC = () => {
   const lastSubagents = readMessageSubagents(lastAssistantMsg?.metadata)
   const hasLastSubagents = !!lastSubagents && lastSubagents.sessions > 0
 
-  // AD-070 §2.6: суммы секции «Сессия» включают сабагентов (sessionStats.subagents),
-  // если сессионная статистика загружена.
+  // AD-070 §2.6 (live): live-вклад саб-агентов родителя (subagent.progress).
+  const liveSubUsage = liveSubagent?.usage
+  const hasLiveSubagents = !!liveSubUsage
+    && (liveSubUsage.input_tokens > 0 || liveSubUsage.output_tokens > 0)
+  const hasLiveStream = !!activeStream && (!!activeStream.usage || !!activeStream.agentRole)
+
+  // AD-070 §2.6: суммы секции «Сессия» включают сабагентов (sessionStats.subagents)
+  // и live-дельту активного стрима/сабагентов. Live-значения ещё не в хранилище,
+  // поэтому сложение не даёт задвоения; после завершения стрима live сбрасывается.
   const sessionSub = sessionStats?.subagents
-  const sessionInput = (activeSession?.input_tokens || 0) + (sessionSub?.input_tokens || 0)
-  const sessionOutput = (activeSession?.output_tokens || 0) + (sessionSub?.output_tokens || 0)
-  const sessionCacheRead = sumDefined(activeSession?.cache_read_tokens, sessionSub?.cache_read_tokens)
-  const sessionCacheWrite = sumDefined(activeSession?.cache_write_tokens, sessionSub?.cache_write_tokens)
-  const sessionReasoning = sumDefined(activeSession?.reasoning_tokens, sessionSub?.reasoning_tokens)
+  const liveInput = (liveStreamUsage?.input_tokens || 0) + (liveSubUsage?.input_tokens || 0)
+  const liveOutput = (liveStreamUsage?.output_tokens || 0) + (liveSubUsage?.output_tokens || 0)
+  const liveCacheRead = sumDefined(liveStreamUsage?.cache_read_tokens, liveSubUsage?.cache_read_tokens)
+  const liveCacheWrite = sumDefined(liveStreamUsage?.cache_write_tokens, liveSubUsage?.cache_write_tokens)
+  const liveReasoning = sumDefined(liveStreamUsage?.reasoning_tokens, liveSubUsage?.reasoning_tokens)
+  const liveCost = (activeStream?.costUsd || 0) + (liveSubagent?.costUsd || 0)
+
+  const sessionInput = (activeSession?.input_tokens || 0) + (sessionSub?.input_tokens || 0) + liveInput
+  const sessionOutput = (activeSession?.output_tokens || 0) + (sessionSub?.output_tokens || 0) + liveOutput
+  const sessionCacheRead = sumDefined(
+    sumDefined(activeSession?.cache_read_tokens, sessionSub?.cache_read_tokens),
+    liveCacheRead,
+  )
+  const sessionCacheWrite = sumDefined(
+    sumDefined(activeSession?.cache_write_tokens, sessionSub?.cache_write_tokens),
+    liveCacheWrite,
+  )
+  const sessionReasoning = sumDefined(
+    sumDefined(activeSession?.reasoning_tokens, sessionSub?.reasoning_tokens),
+    liveReasoning,
+  )
   const sessionHitRate = sessionStats
     ? hitRate(sessionCacheRead, sessionInput)
-    : (activeSession?.cache_hit_rate ?? hitRate(activeSession?.cache_read_tokens, activeSession?.input_tokens))
+    : (activeSession?.cache_hit_rate ?? hitRate(sessionCacheRead, sessionInput))
   const hasSessionSubagents = !!sessionSub && sessionSub.sessions > 0
+
+  // AD-070 §2.6: стоимость сессии — сумма по агентам (их итоги включают
+  // сабагентов) + live-дельта текущего стрима/сабагентов.
+  const serverSessionCost = sessionStats && sessionStats.agents.length > 0
+    ? sessionStats.agents.reduce((acc, a) => acc + (a.cost_usd || 0), 0)
+    : undefined
+  const hasSessionCost = serverSessionCost !== undefined || liveCost > 0
+  const sessionCost = (serverSessionCost ?? 0) + liveCost
 
   return (
     <div className="flex flex-col gap-4 p-3">
       {hasLastMsgUsage && (
         <Section title={t('rightPanel.stats.lastAnswer')}>
+          {activeStream && (liveSegments.length > 0 || displayModel) && (
+            <div
+              data-testid="stats-live"
+              className="mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[0.6875rem] text-muted-foreground tabular-nums"
+            >
+              <span className="inline-flex items-center gap-1 text-primary">
+                <span className="size-1.5 rounded-full bg-primary animate-pulse" />
+                {t('rightPanel.stats.live')}
+              </span>
+              {displayModel && <span className="text-foreground">{displayModel}</span>}
+              {liveSegments.map((segment, i) => (
+                <Fragment key={i}>
+                  {i > 0 && <span aria-hidden="true">·</span>}
+                  <span>{segment}</span>
+                </Fragment>
+              ))}
+            </div>
+          )}
           <div className="mb-2">
             <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
               <span>{t('rightPanel.stats.contextWindow')}</span>
               <span className="tabular-nums">
-                {fmt(lastInputTokens)} / {fmt(contextWindowMax)} ({Math.round(windowPercent)}%)
+                {fmt(displayInputTokens)} / {fmt(contextWindowMax)} ({Math.round(windowPercent)}%)
               </span>
             </div>
             <div className="h-2 w-full rounded-full bg-foreground/10">
@@ -200,30 +289,30 @@ export const StatsTab: React.FC = () => {
             )}
           </div>
           <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-            <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={`${lastTokenPrefix}${fmt(lastInputTokens)}`} />
-            <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={`${lastTokenPrefix}${fmt(lastAssistantMsg!.usage!.output_tokens)}`} />
-            <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={dash(lastAssistantMsg!.usage!.cache_read_tokens)} />
-            <StatCell icon="server" color="text-purple-400" label={t('rightPanel.stats.cacheWriteTokens')} value={dash(lastAssistantMsg!.usage!.cache_write_tokens)} />
+            <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={`${displayTokenPrefix}${fmt(displayInputTokens)}`} />
+            <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={`${displayTokenPrefix}${fmt(displayUsage!.output_tokens)}`} />
+            <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={dash(displayUsage!.cache_read_tokens)} />
+            <StatCell icon="server" color="text-purple-400" label={t('rightPanel.stats.cacheWriteTokens')} value={dash(displayUsage!.cache_write_tokens)} />
             <div className="col-span-2">
-              <StatCell icon="brain" color="text-pink-400" label={t('rightPanel.stats.reasoningTokens')} value={dash(lastAssistantMsg!.usage!.reasoning_tokens)} />
+              <StatCell icon="brain" color="text-pink-400" label={t('rightPanel.stats.reasoningTokens')} value={dash(displayUsage!.reasoning_tokens)} />
             </div>
             <div className="col-span-2">
               <StatCell
                 icon="line-chart"
                 color="text-teal-400"
                 label={t('rightPanel.stats.cacheHitRate')}
-                value={pct(hitRate(lastAssistantMsg!.usage!.cache_read_tokens, lastInputTokens))}
+                value={pct(hitRate(displayUsage!.cache_read_tokens, displayInputTokens))}
               />
             </div>
-            {lastTps !== undefined && (
-              <StatCell icon="rocket" color="text-orange-400" label={t('rightPanel.stats.speed')} value={formatTps(lastTps)} />
+            {displayTps !== undefined && (
+              <StatCell icon="rocket" color="text-orange-400" label={t('rightPanel.stats.speed')} value={formatTps(displayTps)} />
             )}
-            {lastDurationMs !== undefined && (
-              <StatCell icon="time" color="text-sky-400" label={t('rightPanel.stats.duration')} value={formatDuration(lastDurationMs)} />
+            {displayDurationMs !== undefined && (
+              <StatCell icon="time" color="text-sky-400" label={t('rightPanel.stats.duration')} value={formatDuration(displayDurationMs)} />
             )}
-            {lastCostUsd !== undefined && (
+            {displayCostUsd !== undefined && (
               <div className="col-span-2">
-                <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCost(lastCostUsd)} />
+                <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCost(displayCostUsd)} />
               </div>
             )}
           </div>
@@ -274,11 +363,36 @@ export const StatsTab: React.FC = () => {
               value={pct(sessionHitRate)}
             />
           </div>
+          {hasSessionCost && (
+            <div className="col-span-2">
+              <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCost(sessionCost)} />
+            </div>
+          )}
           {hasSessionSubagents && (
             <div className="col-span-2 text-[0.6875rem] text-muted-foreground">
               {t('rightPanel.stats.subagentsIncluded')}:{' '}
               {formatTokens(sessionSub!.input_tokens)} {t('chat.messageStats.in')} ·{' '}
               {formatTokens(sessionSub!.output_tokens)} {t('chat.messageStats.out')}
+            </div>
+          )}
+          {hasLiveSubagents && (
+            <div
+              data-testid="stats-session-live-subagents"
+              className="col-span-2 flex flex-wrap items-center gap-x-1.5 text-[0.6875rem] text-muted-foreground tabular-nums"
+            >
+              <span className="inline-flex items-center gap-1 text-primary">
+                <span className="size-1.5 rounded-full bg-primary animate-pulse" />
+                {t('rightPanel.stats.subagentsTitle')}:
+              </span>
+              <span>{formatTokens(liveSubUsage!.input_tokens)} {t('chat.messageStats.in')}</span>
+              <span aria-hidden="true">·</span>
+              <span>{formatTokens(liveSubUsage!.output_tokens)} {t('chat.messageStats.out')}</span>
+              {liveSubagent!.costUsd !== undefined && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span>{formatCost(liveSubagent!.costUsd)}</span>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -445,8 +559,9 @@ export const StatsTab: React.FC = () => {
         </Section>
       )}
 
-      {sessionStats && sessionStats.agents.length > 0 && (
+      {(hasLiveStream || hasLiveSubagents || (sessionStats && sessionStats.agents.length > 0)) && (
         <Section title={t('rightPanel.stats.agentsStats')}>
+          {sessionStats && sessionStats.agents.length > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full text-[0.6875rem]">
               <thead>
@@ -504,6 +619,35 @@ export const StatsTab: React.FC = () => {
               </tbody>
             </table>
           </div>
+          )}
+          {(hasLiveStream || hasLiveSubagents) && (
+            <div
+              data-testid="stats-agents-live"
+              className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-t border-border/40 pt-2 text-[0.6875rem] text-muted-foreground tabular-nums"
+            >
+              <span className="inline-flex items-center gap-1 text-primary">
+                <span className="size-1.5 rounded-full bg-primary animate-pulse" />
+                {t('rightPanel.stats.live')}
+              </span>
+              {hasLiveStream && activeStream?.agentRole && (
+                <span className="text-foreground">
+                  {agents.find((x) => x.id === activeStream.agentRole)?.display_name || activeStream.agentRole}
+                </span>
+              )}
+              {hasLiveUsage && liveStreamUsage && (
+                <span>
+                  {formatTokens(liveStreamUsage.input_tokens)} {t('chat.messageStats.in')} ·{' '}
+                  {formatTokens(liveStreamUsage.output_tokens)} {t('chat.messageStats.out')}
+                </span>
+              )}
+              {hasLiveSubagents && (
+                <span>
+                  {t('rightPanel.stats.subagentsTitle')}: {formatTokens(liveSubUsage!.input_tokens)} {t('chat.messageStats.in')} ·{' '}
+                  {formatTokens(liveSubUsage!.output_tokens)} {t('chat.messageStats.out')}
+                </span>
+              )}
+            </div>
+          )}
         </Section>
       )}
 

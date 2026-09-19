@@ -372,6 +372,8 @@ export const dict = {
   'rightPanel.stats.subagentsSessions': 'Sessions',
   'rightPanel.stats.subagentsNote': 'Separate from the answer — not counted in the context window',
   'rightPanel.stats.subagentsIncluded': 'incl. subagents',
+  // AD-070 §2.6: live-строка статистики активного стрима
+  'rightPanel.stats.live': 'live',
   'rightPanel.stats.speed': 'Speed',
   'rightPanel.stats.duration': 'Duration',
   'rightPanel.stats.cost': 'Cost',

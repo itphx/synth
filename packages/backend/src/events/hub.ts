@@ -9,6 +9,36 @@ export interface EventClient {
 }
 
 /**
+ * Извлечь id новой дочерней сессии из события, опубликованного в родительскую
+ * сессию. Дочерние сессии саб-агентов создаются тулом `task` напрямую через
+ * `SessionManager`, минуя роуты, поэтому клиент изначально на них не подписан.
+ * Тул `task` публикует `session.created` (payload — serializeSession ребёнка) в
+ * родителя ДО старта LLM-стрима ребёнка, так что автоподписка успевает.
+ * `child.session.updated` несёт `session` (id внутри), `child.message.added` и
+ * resume-события — `child_session_id`.
+ */
+function extractChildSessionId(event: BusEvent): string | undefined {
+  const data = event.data as Record<string, unknown> | undefined;
+  if (!data) return undefined;
+
+  switch (event.type) {
+    case 'session.created':
+      return typeof data.id === 'string' ? data.id : undefined;
+    case 'child.session.updated': {
+      const session = data.session as Record<string, unknown> | undefined;
+      if (session && typeof session.id === 'string') return session.id;
+      return typeof data.child_session_id === 'string' ? data.child_session_id : undefined;
+    }
+    case 'child.message.added':
+    case 'subagent.resume.started':
+    case 'subagent.resume.finished':
+      return typeof data.child_session_id === 'string' ? data.child_session_id : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/**
  * EventHub — центральный диспетчер подписок на события сессий.
  * Управляет active-клиентами пользователя (WS и SSE),
  * автоматически подписывает их на события всех сессий.
@@ -98,6 +128,18 @@ export class EventHub {
         client.send(event);
       } catch {
         // ignore send errors
+      }
+
+      // Автоподписка на дочернюю сессию саб-агента. Раньше клиент получал
+      // live-события (`stream.usage`/`stream.chunk`) только по сессиям из
+      // `listSessions` и созданным/форкнутым через роуты; child-сессию тул
+      // `task` создаёт напрямую, и её события терялись (0 subscribers).
+      // Безопасно: id берётся только из событий уже авторизованной сессии
+      // клиента, чужие сессии так не всплывают. `_subscribeClientToSession`
+      // идемпотентна (guard `subs.has`).
+      const childId = extractChildSessionId(event);
+      if (childId && childId !== sessionId) {
+        this._subscribeClientToSession(client, childId);
       }
     });
     subs.set(sessionId, unsub);

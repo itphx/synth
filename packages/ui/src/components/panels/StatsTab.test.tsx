@@ -105,7 +105,12 @@ beforeEach(() => {
       },
     ],
   } as never)
-  useChatStore.setState({ messagesBySession: { s1: [] }, streamFinishTickBySession: {} })
+  useChatStore.setState({
+    messagesBySession: { s1: [] },
+    streamFinishTickBySession: {},
+    streamingBySession: {},
+    liveSubagentUsageBySession: {},
+  })
   useAgentsStore.setState({ agents: [] })
 })
 
@@ -341,5 +346,175 @@ describe('StatsTab — блок «Сабагенты» в «Последнем �
     expect(text).toContain('27') // reasoning 20 + 7
     expect(text).toContain('46%') // 600 / 1300
     expect(text).toContain('incl. subagents')
+  })
+})
+
+describe('StatsTab — live-обновление (AD-070 §2.6)', () => {
+  function makeStream(overrides: Record<string, unknown> = {}) {
+    return {
+      streamId: 'st1',
+      agentRole: 'coder',
+      content: 'partial',
+      reasoningBlocks: [],
+      intermediateTextBlocks: [],
+      isStreaming: true,
+      hasContent: true,
+      model: 'live-model',
+      provider: 'prov',
+      usage: {
+        input_tokens: 2000, output_tokens: 300, total_tokens: 2300,
+        cache_read_tokens: 1000, cache_write_tokens: 20, reasoning_tokens: 10,
+      },
+      costUsd: 0.05,
+      usageEstimated: false,
+      toolCalls: [],
+      toolIteration: 0,
+      _lastContentLen: 0,
+      ...overrides,
+    }
+  }
+
+  function setActiveStream(
+    sessionId = 's1',
+    streamId = 'st1',
+    overrides: Record<string, unknown> = {},
+  ): void {
+    useChatStore.setState({
+      streamingBySession: { [sessionId]: { [streamId]: makeStream({ streamId, ...overrides }) } },
+    } as never)
+  }
+
+  function setLiveSubagents(sessionId = 's1'): void {
+    useChatStore.setState({
+      liveSubagentUsageBySession: {
+        [sessionId]: {
+          usage: {
+            input_tokens: 500, output_tokens: 50, total_tokens: 550,
+            cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0,
+          },
+          costUsd: 0.002,
+          estimated: false,
+          byCall: {},
+        },
+      },
+    } as never)
+  }
+
+  it('«Последний ответ» при активном стриме показывает live-значения и ~ при usageEstimated', async () => {
+    useChatStore.setState({
+      messagesBySession: {
+        s1: [
+          {
+            id: 'm1', role: 'assistant', content: 'old', disabled: false, hidden: false,
+            usage: { input_tokens: 100, output_tokens: 10 }, metadata: null,
+          },
+        ],
+      },
+    } as never)
+    setActiveStream('s1', 'st1', {
+      usageEstimated: true,
+      usage: { input_tokens: 2000, output_tokens: 300, total_tokens: 2300 },
+    })
+
+    const container = await renderStats()
+    const section = findSection(container, 'Last answer')!
+    const text = section.textContent ?? ''
+    expect(text).toContain(`~${(2000).toLocaleString()}`)
+    expect(text).toContain('~300')
+    expect(text).toContain('live-model')
+    expect(text).toContain('live')
+  })
+
+  it('«Последний ответ» без оценки не добавляет ~ к live-токенам', async () => {
+    setActiveStream('s1', 'st1', {
+      usageEstimated: false,
+      usage: { input_tokens: 2000, output_tokens: 300, total_tokens: 2300 },
+    })
+    const container = await renderStats()
+    const section = findSection(container, 'Last answer')!
+    expect(section.textContent).toContain((2000).toLocaleString())
+    expect(section.textContent).not.toContain(`~${(2000).toLocaleString()}`)
+  })
+
+  it('секция «Сессия» = серверные значения + live активного стрима', async () => {
+    useSessionsStore.setState({
+      sessions: [
+        { id: 's1', title: 'S', settings: { model: 'm' }, input_tokens: 1000, output_tokens: 100 },
+      ],
+    } as never)
+    setActiveStream('s1', 'st1', {
+      usage: { input_tokens: 200, output_tokens: 20, total_tokens: 220 },
+    })
+
+    const container = await renderStats()
+    const section = findSection(container, 'Session')!
+    const text = section.textContent ?? ''
+    expect(text).toContain((1200).toLocaleString()) // 1000 + 200
+    expect(text).toContain('120') // 100 + 20
+  })
+
+  it('строка «Сабагенты» в «Сессии» растёт из liveSubagentUsageBySession и входит в итог', async () => {
+    setLiveSubagents('s1')
+
+    const container = await renderStats()
+    const section = findSection(container, 'Session')!
+    const text = section.textContent ?? ''
+    expect(text).toContain('Subagents')
+    expect(text).toContain('500')
+    expect(text).toContain('50')
+    expect(text).toContain('~$0.002')
+    // Итог включает live-сабагентов (серверных токенов нет).
+    expect(text).toContain('500')
+  })
+
+  it('дочерняя сессия показывает live из своего stream.usage без спец-условий', async () => {
+    useUIStore.setState({
+      activeCenterTabId: 'tab-1',
+      centerTabs: [{ id: 'tab-1', type: 'chat', title: 'Child', data: { sessionId: 'child' } }],
+    })
+    useSessionsStore.setState({
+      sessions: [
+        { id: 'child', title: 'Child', settings: { model: 'm' }, input_tokens: 0, output_tokens: 0 },
+      ],
+    } as never)
+    useChatStore.setState({ messagesBySession: { child: [] } })
+    setActiveStream('child', 'stc', {
+      usage: { input_tokens: 400, output_tokens: 40, total_tokens: 440 },
+    })
+
+    const container = await renderStats()
+    const section = findSection(container, 'Last answer')!
+    expect(section.textContent).toContain('400')
+  })
+
+  it('после stream.done live сбрасывается — панель снова из серверных/сообщения', async () => {
+    useSessionsStore.setState({
+      sessions: [
+        { id: 's1', title: 'S', settings: { model: 'm' }, input_tokens: 1000, output_tokens: 100 },
+      ],
+    } as never)
+    setActiveStream('s1', 'st1', {
+      usage: { input_tokens: 9999, output_tokens: 999, total_tokens: 10998 },
+    })
+    setLiveSubagents('s1')
+
+    const container = await renderStats()
+    // 1000 (сервер) + 9999 (live-стрим) + 500 (live-сабагенты)
+    expect(findSection(container, 'Session')!.textContent).toContain((11499).toLocaleString())
+
+    await act(async () => {
+      useChatStore.getState().finishStream('s1', 'st1', {
+        content: 'final',
+        usage: { input_tokens: 50, output_tokens: 5, total_tokens: 55 },
+      })
+    })
+    await act(async () => {})
+
+    const sessionSection = findSection(container, 'Session')!
+    expect(sessionSection.textContent).not.toContain((11499).toLocaleString())
+    expect(sessionSection.textContent).not.toContain('Subagents')
+    expect(sessionSection.textContent).toContain((1000).toLocaleString())
+    const lastSection = findSection(container, 'Last answer')
+    if (lastSection) expect(lastSection.textContent).not.toContain(`~${(2000).toLocaleString()}`)
   })
 })

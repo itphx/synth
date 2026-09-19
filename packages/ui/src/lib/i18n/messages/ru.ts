@@ -371,6 +371,8 @@ export const dict = {
   'rightPanel.stats.subagentsSessions': 'Сессий',
   'rightPanel.stats.subagentsNote': 'Отдельно от ответа — не входит в контекстное окно',
   'rightPanel.stats.subagentsIncluded': 'в т.ч. сабагенты',
+  // AD-070 §2.6: live-строка статистики активного стрима
+  'rightPanel.stats.live': 'в процессе',
   'rightPanel.stats.speed': 'Скорость',
   'rightPanel.stats.duration': 'Длительность',
   'rightPanel.stats.cost': 'Стоимость',

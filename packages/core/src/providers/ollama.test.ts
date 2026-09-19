@@ -188,6 +188,36 @@ describe('OllamaProvider — usage (AD-070 §2.3)', () => {
     });
   });
 
+  it('chatAsync: usage в чанке актуален (накопление до yield, не отстаёт)', async () => {
+    // prompt_eval_count/eval_count приходят в том же чанке, что и content.
+    // Накопление должно происходить ДО yield — иначе чанк несёт предыдущее
+    // (устаревшее) значение.
+    const lines = [
+      JSON.stringify({ message: { content: 'a' }, done: false, prompt_eval_count: 5, eval_count: 1 }),
+      JSON.stringify({ message: { content: 'b' }, done: false, prompt_eval_count: 3, eval_count: 2 }),
+      JSON.stringify({ message: { content: '' }, done: true, prompt_eval_count: 0, eval_count: 0 }),
+    ].join('\n') + '\n';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(lines, {
+      status: 200,
+      headers: { 'Content-Type': 'application/x-ndjson' },
+    })));
+
+    const provider = new OllamaProvider(baseParams);
+    const chunks: LLMChunk[] = [];
+    // Снимаем значения usage в момент yield: провайдер мутирует объект
+    // running total in place, поэтому ссылка после полного прохода уже финальна.
+    const seen: Array<{ inputTokens: number; outputTokens: number; totalTokens: number }> = [];
+    for await (const c of provider.chatAsync([makeMessage()])) {
+      chunks.push(c);
+      if (c.usage) seen.push({ ...c.usage });
+    }
+
+    // Первый чанк уже несёт 5/1 (running total), а не 0/0.
+    expect(seen[0]).toMatchObject({ inputTokens: 5, outputTokens: 1, totalTokens: 6 });
+    // Второй — накопленные 8/3.
+    expect(seen[1]).toMatchObject({ inputTokens: 8, outputTokens: 3, totalTokens: 11 });
+  });
+
   it('chatAsync: cache-поля = 0 в финальном чанке', async () => {
     const lines = [
       JSON.stringify({ message: { content: 'ok' }, done: false }),

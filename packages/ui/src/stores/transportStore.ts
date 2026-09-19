@@ -5,7 +5,7 @@ import { useSessionsStore } from './sessionsStore'
 import { useUIStore } from './useUIStore'
 import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS } from './permissionStore'
 import type { TransportMode } from './useUIStore'
-import type { StreamDoneMetadata, MessageData, MessageStatus } from './chatStore'
+import type { StreamDoneMetadata, MessageData, MessageStatus, CostBreakdown } from './chatStore'
 import { synthApi } from '@/lib/api/synthApi'
 import type { SessionData } from '@/lib/api/synthApi'
 import { notifyMessage } from '@/hooks/useNotification'
@@ -19,6 +19,33 @@ function refreshSessionFromApi(sid: string) {
   synthApi.getSession(sid)
     .then((sess) => useSessionsStore.getState().upsertSession(sess))
     .catch(() => {})
+}
+
+/** AD-070 §2.6: usage live-события (camelCase из ядра) → snake_case стора. */
+function mapUsage(raw: unknown): {
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  cache_read_tokens?: number
+  cache_write_tokens?: number
+  reasoning_tokens?: number
+} | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const u = raw as Record<string, number>
+  return {
+    input_tokens: u.inputTokens || 0,
+    output_tokens: u.outputTokens || 0,
+    total_tokens: u.totalTokens || 0,
+    cache_read_tokens: u.cacheReadTokens,
+    cache_write_tokens: u.cacheWriteTokens,
+    reasoning_tokens: u.reasoningTokens,
+  }
+}
+
+/** AD-070 §2.6: cost_breakdown live-события уже в camelCase — как в сторе. */
+function mapCostBreakdown(raw: unknown): CostBreakdown | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  return raw as CostBreakdown
 }
 
 interface TransportState {
@@ -53,6 +80,9 @@ export function createDispatcher(): EventDispatcher {
       addMessage,
       startStream,
       updateStreamChunk,
+      updateStreamUsage,
+      clearUsageStream,
+      updateLiveSubagentUsage,
       finishStream,
       cancelStream,
       clearStreamError,
@@ -84,24 +114,38 @@ export function createDispatcher(): EventDispatcher {
 
       case 'message_added':
       case 'message.added': {
+        // События родителя — плоские поля; события дочерней сессии
+        // (`publishMessageAdded` в task.ts) несут сериализованное сообщение во
+        // вложенном `message` (+ top-level `index`). Без разворачивания вложенный
+        // payload давал фантомное пустое сообщение с index: undefined.
+        const nested = payload.message && typeof payload.message === 'object'
+          ? payload.message as Record<string, unknown>
+          : undefined
+        const src = nested ?? payload
+        const usage = (src.usage as MessageData['usage']) ?? undefined
         const msg: MessageData = {
-          index: payload.message_index as number,
-          role: (payload.role as string) || 'assistant',
-          content: (payload.content as string) || '',
-          agent_role: payload.agent_role as string | undefined,
-          author: payload.author as string | undefined,
-          model: payload.model as string | undefined,
-          provider: payload.provider as string | undefined,
-          reasoning: (payload.reasoning as string) || undefined,
-          intermediate_text_blocks: payload.intermediate_text_blocks as Array<{ text: string; iteration: number }> | undefined,
-          tool_calls: (payload.tool_calls as MessageData['tool_calls']) ?? null,
-          metadata: payload.metadata as Record<string, unknown> | undefined,
+          index: (src.index as number) ?? (src.message_index as number) ?? (payload.index as number),
+          role: (src.role as string) || 'assistant',
+          content: (src.content as string) || '',
+          agent_role: (src.agent_role as string) || undefined,
+          author: (src.author as string) || undefined,
+          model: (src.model as string) || undefined,
+          provider: (src.provider as string) || undefined,
+          reasoning: (src.reasoning as string) || undefined,
+          intermediate_text_blocks: src.intermediate_text_blocks as Array<{ text: string; iteration: number }> | undefined,
+          tool_calls: (src.tool_calls as MessageData['tool_calls']) ?? null,
+          usage,
+          metadata: src.metadata as Record<string, unknown> | undefined,
           disabled: false,
           pinned: false,
           hidden: false,
           created_at: new Date().toISOString(),
         }
         addMessage(sid, msg)
+        // AD-070 §2.6: финальное сообщение дочернего саб-агента несёт usage —
+        // подстраховка к stream.ended: снимаем usage-only live-плейсхолдер, чтобы
+        // после сохранения сообщения панель показывала его итоговую статистику.
+        if (usage) clearUsageStream(sid)
         break
       }
 
@@ -178,6 +222,25 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
+      // AD-070 §2.6: live-статистика стрима (кумулятивный usage, cost, model).
+      // Публикуется в родительскую сессию основного стрима и в дочернюю сессию
+      // саб-агента (sid = childSessionId) — общий механизм streamingBySession.
+      case 'stream_usage':
+      case 'stream.usage': {
+        const streamId = payload.stream_id as string
+        if (!streamId) break
+        updateStreamUsage(sid, streamId, {
+          usage: mapUsage(payload.usage),
+          costUsd: payload.cost_usd as number | undefined,
+          costBreakdown: mapCostBreakdown(payload.cost_breakdown),
+          usageEstimated: payload.estimated as boolean | undefined,
+          model: payload.model as string | undefined,
+          provider: payload.provider as string | undefined,
+          agentRole: payload.agent_role as string | undefined,
+        })
+        break
+      }
+
       case 'stream_done':
       case 'stream.done': {
         const metadata: StreamDoneMetadata = {
@@ -201,6 +264,13 @@ export function createDispatcher(): EventDispatcher {
           metadata: payload.metadata as { type?: string; indices?: number[]; [key: string]: unknown } | undefined,
           reasoning_blocks: (payload.reasoning_blocks as Array<{ text: string; iteration: number }>) || undefined,
           intermediate_text_blocks: (payload.intermediate_text_blocks as Array<{ text: string; iteration: number }>) || undefined,
+          // AD-070 §2.6: top-level финальная статистика — в metadata оптимистичного
+          // сообщения, чтобы панель показала финал без перезагрузки.
+          provider: payload.provider as string | undefined,
+          duration_ms: payload.duration_ms as number | undefined,
+          cost_usd: payload.cost_usd as number | undefined,
+          cost_breakdown: mapCostBreakdown(payload.cost_breakdown),
+          usage_estimated: payload.usage_estimated as boolean | undefined,
         }
         finishStream(sid, payload.stream_id as string, metadata)
         setStreamRetry(sid, null)
@@ -216,9 +286,30 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
+      // AD-070 §2.6: терминальное live-событие дочерней сессии саб-агента
+      // (task.ts). Сообщение ребёнка сохраняется отдельно, поэтому здесь только
+      // снимаем usage-only StreamState — без создания/дубля сообщений.
+      case 'stream_ended':
+      case 'stream.ended': {
+        clearUsageStream(sid, payload.stream_id as string | undefined)
+        break
+      }
+
       case 'stream_cancelled':
       case 'stream.cancelled': {
-        cancelStream(sid, payload.stream_id as string, payload.status as MessageStatus | undefined)
+        // AD-070 §2.6: событие отмены несёт usage/cost/usage_estimated —
+        // сохраняем их в финализируемом сообщении, а не игнорируем.
+        cancelStream(
+          sid,
+          payload.stream_id as string,
+          payload.status as MessageStatus | undefined,
+          {
+            usage: mapUsage(payload.usage),
+            costUsd: payload.cost_usd as number | undefined,
+            costBreakdown: mapCostBreakdown(payload.cost_breakdown),
+            usageEstimated: payload.usage_estimated as boolean | undefined,
+          },
+        )
         setStreamRetry(sid, null)
         break
       }
@@ -464,16 +555,28 @@ export function createDispatcher(): EventDispatcher {
         // вкладываются в блок `task` (по parent_call_id, т.е. call_id задачи).
         const streamId = payload.stream_id as string
         if (!streamId) break
+        const parentCallId = (payload.parent_call_id as string) || ''
         updateToolCallSubagentProgress(
           sid,
           streamId,
-          (payload.parent_call_id as string) || '',
+          parentCallId,
           {
             reasoning: (payload.reasoning as string) || '',
             content: (payload.content as string) || '',
             iteration: (payload.iteration as number) || 0,
           },
         )
+        // AD-070 §2.6: live-вклад саб-агента (для строки статистики в блоке
+        // `task` и секции StatsTab). Событие несёт накопленный usage вызова.
+        if (parentCallId) {
+          updateLiveSubagentUsage(sid, parentCallId, {
+            usage: mapUsage(payload.usage),
+            costUsd: payload.cost_usd as number | undefined,
+            estimated: payload.estimated as boolean | undefined,
+            model: payload.model as string | undefined,
+            provider: payload.provider as string | undefined,
+          })
+        }
         break
       }
 

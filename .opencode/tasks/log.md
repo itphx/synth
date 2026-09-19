@@ -107,3 +107,20 @@
 - **Замечания:** `reasoning_tokens` на отмене = 0 (не оценивается); LOW-фикс cost при неизвестных ценах; `metadata.subagents` при task не покрыт.
 - **Ветка:** `feat/ad-070-system-prompt-composer`
 - **Коммит:** нет (по правилу «коммит только по просьбе пользователя»).
+
+## 2026-09-19 — Оперативное (live) обновление стоимости и счётчиков в статистике
+- **Задача:** «Обновлять стоимость и счётчики в панели статистики оперативно, как в opencode» (сравнение с `~/dev/opencode` / `~/dev/openchamber`).
+- **Тип:** feature + bug fix + verification
+- **Исполнитель:** @orchestrator → @researcher, @fixer ×6, @tester ×4
+- **Результат:** PASS
+- **Что выяснено (эталон):** в opencode usage приходит только на `step-finish`/`finish` (не per-token); TUI обновляет `session.cost` по шагу (`sync-v2.tsx:241`, `sidebar/context.tsx:17`), стоимость дочерней сессии — `subagent-footer.tsx:44`. OpenAI отдаёт usage только в финальном чанке (`include_usage`); Anthropic — `message_start` (input/cache) + `message_delta` (output); Ollama — `eval_count` по чанкам. Наша реализация точнее: per-chunk там, где провайдер даёт данные, иначе оценка.
+- **Что сделано:**
+  - **Ядро:** новое событие `stream.usage` (payload: `usage` camelCase cumulative, `cost_usd`/`cost_breakdown`, `model`, `provider`, `estimated`, `agent_role`, `iteration`) по существующему EventHub (AD-024). Троттлинг ~300 мс + дедуп по подписи. Точный usage — при `output>0`; при `input>0, output=0` (Anthropic) точные input/cache + оценённый output; при нулях (OpenAI) — оценка `chars/4`. Стартовая оценка input до первого чанка. Стоимость — `computeUsageCost` (без цен не пишется). Live не персистится.
+  - **Провайдеры:** исправлен порядок накопления usage в `ollama.ts` (был на итерацию позже); `remote.ts` + Zod-схема backend-proxy — `stream_options.include_usage`.
+  - **Сабагенты:** `subagent.progress` несёт live usage/cost/model/estimated; `stream.usage` публикуется в дочернюю сессию; `stream.ended` — терминальное событие child; child-сообщение теперь несёт `status`/`cost_usd`/`cost_breakdown`.
+  - **UI:** `StreamState` + `updateStreamUsage`/`cancelStream` (usage/cost); live-строка под стримом (`stream-live-stats`) с `~` при оценке; `StatsTab` — live «Последний ответ»/«Сессия» + строка «Сабагенты» (parent и child); `finishStream` переносит top-level `cost_usd`/`duration_ms`/`usage_estimated` в metadata.
+- **Исправленные при верификации баги:** (1) `EventHub` не подписывал клиента на child-сессии, созданные тулом `task` → `stream.usage` дропался (`EVENT LOST`); добавлена автоподписка по `session.created`/`child.*`. (2) У Anthropic не рос live output. (3) После `stream.done` пропадали стоимость/длительность/скорость без F5. (4) Child-сообщение без cost/status. (5) Отмена до первого токена не сохраняла «Остановлено». (6) Латентный фантом пустого child-сообщения (вложенный payload `message.added`).
+- **Проверки:** `pnpm typecheck` — 6/6 пакетов; `pnpm lint` — 0 errors; тесты: shared 73 / ui 277 / core 1449 / backend 256. E2E: openai `routerai` — 72 `stream.usage`, интервал ≥300 мс, `estimated` true→false, финал совпал, cost есть; anthropic — live input + оценённый растущий output, финал точный; ollama `omn` — реальный `eval_count` по чанкам, cost отсутствует (нет цен); отмена — `stream.cancelled` с usage/cost и сохранением «Остановлено» даже без токенов; сабагенты — live «Сабагенты» у родителя, `stream.usage` в child, live в панели child, дублей нет. UI (Playwright): live-строка и панель растут, `~` при оценке, финальные значения без перезагрузки.
+- **Замечания:** для OpenAI/Remote точная стоимость в процессе недоступна — только оценка «~» (как и в opencode, где цифры не растут до `step-finish`); `reasoning_tokens` на отмене не оценивается; `context_mode` дочерней сессии наследует историю родителя (наблюдение, требует уточнения ожиданий).
+- **Ветка:** `feat/ad-070-system-prompt-composer`
+- **Коммит:** нет (ожидает явной просьбы пользователя).

@@ -166,6 +166,18 @@ export class OllamaProvider extends BaseProvider {
 
               const msg = chunkData.message as Record<string, unknown> | undefined;
 
+              // AD-070: накапливаем usage ДО yield'ов, иначе чанк уносит
+              // предыдущее (устаревшее) значение, а актуальное попадёт только
+              // в следующий чанк/финал. Семантика — running total.
+              if (typeof chunkData.prompt_eval_count === 'number') {
+                accumulatedUsage.inputTokens += chunkData.prompt_eval_count;
+              }
+              if (typeof chunkData.eval_count === 'number') {
+                accumulatedUsage.outputTokens += chunkData.eval_count;
+              }
+              accumulatedUsage.totalTokens =
+                accumulatedUsage.inputTokens + accumulatedUsage.outputTokens;
+
               if (msg?.content && typeof msg.content === 'string') {
                 if (!firstChunkReceived) {
                   firstChunkReceived = true;
@@ -217,15 +229,6 @@ export class OllamaProvider extends BaseProvider {
                   reasoning: accumulatedReasoning || undefined,
                 };
               }
-
-              if (typeof chunkData.prompt_eval_count === 'number') {
-                accumulatedUsage.inputTokens += chunkData.prompt_eval_count;
-              }
-              if (typeof chunkData.eval_count === 'number') {
-                accumulatedUsage.outputTokens += chunkData.eval_count;
-              }
-              accumulatedUsage.totalTokens =
-                accumulatedUsage.inputTokens + accumulatedUsage.outputTokens;
             } catch {
               continue;
             }

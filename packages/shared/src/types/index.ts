@@ -756,7 +756,9 @@ export type EventType =
   | 'child.session.updated'
   | 'stream.start'
   | 'stream.chunk'
+  | 'stream.usage'
   | 'stream.done'
+  | 'stream.ended'
   | 'stream.cancelled'
   | 'stream.error'
   | 'stream.retry'
@@ -795,6 +797,31 @@ export interface BusEvent {
   sessionId: string;
   data: Record<string, unknown>;
   timestamp: string;
+}
+
+/**
+ * AD-070: payload события `stream.usage` — live-статистика стрима.
+ * Публикуется по ходу генерации (EventHub/EventBus), `usage` — кумулятивный
+ * running total текущего LLM-вызова; `estimated: true` — best-effort оценка,
+ * когда провайдер ещё не отдал точные токены (типично для OpenAI до финала).
+ * `cost_usd`/`cost_breakdown` присутствуют только при известных ценах модели.
+ */
+export interface StreamUsagePayload {
+  session_id: string;
+  stream_id: string;
+  iteration: number;
+  agent_role?: string;
+  model?: string;
+  provider?: string;
+  usage: TokenUsage;
+  cost_usd?: number;
+  cost_breakdown?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  };
+  estimated: boolean;
 }
 
 // --- File System ---

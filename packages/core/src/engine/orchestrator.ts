@@ -60,6 +60,8 @@ import { t as sm, i18n as i18nMeta } from './system-messages.js';
 
 const MAX_DOOM_LOOP_COUNT = 3;
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
+/** AD-070: окно троттлинга live-события `stream.usage` (~300 мс). */
+const STREAM_USAGE_THROTTLE_MS = 300;
 /** Порог заполненности контекстного окна (%), после которого публикуем context.limit_warning. */
 const CONTEXT_LIMIT_WARNING_PERCENT = 90;
 
@@ -336,6 +338,71 @@ export class ChatOrchestrator {
     chars += systemText.length;
     if (tools && tools.length > 0) chars += JSON.stringify(tools).length;
     return chars;
+  }
+
+  /**
+   * AD-070 §2.6: публикация live-статистики стрима (`stream.usage`) через
+   * существующий транспорт (publishChunk → EventBus, AD-024).
+   *
+   * Троттлинг ~300 мс + дедуп по подписи usage (не спамим одинаковыми
+   * значениями). Точный usage (`estimated: false`) приоритетнее оценки и
+   * публикуется принудительно при первой же возможности, чтобы панель быстро
+   * получила реальные токены. `cost_usd`/`cost_breakdown` добавляются только
+   * если у модели заданы цены (иначе `computeUsageCost` возвращает null).
+   *
+   * Live-значения эфемерны: в сессию/агрегаты НЕ пишутся (персистится только
+   * финальное сообщение/`stream.done`).
+   */
+  private _publishLiveUsage(params: {
+    publishChunk: (event: string, data: Record<string, unknown>) => void;
+    state: {
+      lastPublishedAt: number;
+      lastSignature: string;
+      /** Опубликован точный output (output>0/reasoning) — форсируем один раз. */
+      exactPublished: boolean;
+      /** Опубликован точный input (Anthropic message_start) — форсируем один раз. */
+      inputExactPublished: boolean;
+    };
+    sessionId: string;
+    streamId: string;
+    iteration: number;
+    agentRole?: string;
+    model?: string;
+    provider?: string;
+    usage: TokenUsage;
+    estimated: boolean;
+    force?: boolean;
+  }): void {
+    const signature = [
+      params.estimated ? 'e' : 'x',
+      params.usage.inputTokens,
+      params.usage.outputTokens,
+      params.usage.totalTokens,
+      params.usage.cacheReadTokens ?? 0,
+      params.usage.cacheWriteTokens ?? 0,
+      params.usage.reasoningTokens ?? 0,
+    ].join(':');
+    const now = Date.now();
+    if (!params.force && signature === params.state.lastSignature) return;
+    if (!params.force && now - params.state.lastPublishedAt < STREAM_USAGE_THROTTLE_MS) return;
+    params.state.lastPublishedAt = now;
+    params.state.lastSignature = signature;
+
+    const cost = params.model ? this._computeMessageCost(params.model, params.usage) : null;
+
+    params.publishChunk('stream.usage', {
+      session_id: params.sessionId,
+      stream_id: params.streamId,
+      iteration: params.iteration,
+      ...(params.agentRole ? { agent_role: params.agentRole } : {}),
+      ...(params.model ? { model: params.model } : {}),
+      ...(params.provider ? { provider: params.provider } : {}),
+      // Копия: провайдеры мутируют объект running total in place — событие
+      // должно нести снимок значений на момент публикации.
+      usage: { ...params.usage },
+      ...(cost ? { cost_usd: cost.costUsd, cost_breakdown: cost.breakdown } : {}),
+      estimated: params.estimated,
+    });
   }
 
   /**
@@ -1243,19 +1310,65 @@ export class ChatOrchestrator {
       let fallbackI18n: ReturnType<typeof i18nMeta> | undefined;
       /** Были ли deny-отказы за цикл (для осмысленного fallback пустого ответа). */
       let hadDeny = false;
-      /** Отмена пришла во время исполнения тула — завершать обработку как отмену. */
-      let cancelledDuringTool = false;
+      /** Отмена до финального сохранения (до входа в итерацию, во время тула) —
+       *  завершать обработку как отмену, а не как пустой ответ. */
+      let cancelledBeforeFinal = false;
+
+      // AD-070 §2.6: live-статистика стрима (`stream.usage`). Состояние
+      // троттлинга — на поток; публикуется через publishChunk (EventBus).
+      const liveUsageState = {
+        lastPublishedAt: 0,
+        lastSignature: '',
+        exactPublished: false,
+        inputExactPublished: false,
+      };
+
+      // Стартовая оценка input сразу после сборки сообщений — чтобы панель
+      // статистики не пустовала до первого чанка провайдера.
+      this._publishLiveUsage({
+        publishChunk,
+        state: liveUsageState,
+        sessionId: session.id,
+        streamId,
+        iteration: 0,
+        agentRole: effectiveAgentRole,
+        model: this._resolveMessageModel(undefined, undefined, provider, session),
+        provider: providerName,
+        usage: this._estimateUsage(
+          undefined,
+          this._estimatePromptChars(
+            currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
+          ),
+          0,
+        ).usage,
+        estimated: true,
+        force: true,
+      });
 
       // Предупреждение о заполненности контекстного окна (fire-and-forget, не блокирует вызов)
       this._publishContextLimitWarning(session.id, routeResult.modelName, messagesForLlm);
 
       while (toolIteration < maxIterations) {
-        if (cancelToken.cancelled) break;
+        // Отмена до входа в итерацию (уже абортированный signal, «Стоп» на
+        // стартовом stream.usage) — обрабатываем общей веткой отмены ниже.
+        // Иначе пустой ход превращался бы в «ответ модели пуст» (error).
+        if (cancelToken.cancelled) {
+          cancelledBeforeFinal = true;
+          break;
+        }
 
         let accumulatedContent = '';
         let accumulatedReasoning = '';
         let toolCalls: Record<string, unknown>[] | undefined = [];
         let chunkModel: string | undefined;
+        // AD-070: usage текущей итерации (running total от провайдера) для live.
+        let iterationUsage: TokenUsage | undefined;
+
+        // Размер промпта этой итерации (символы) — считаем один раз и
+        // переиспользуем для best-effort оценки input, пока нет точных токенов.
+        const iterationPromptChars = this._estimatePromptChars(
+          currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
+        );
 
         try {
           for await (const chunk of provider.chatAsync(
@@ -1273,8 +1386,60 @@ export class ChatOrchestrator {
               accumulatedContent += chunk.content;
             }
             if (chunk.reasoning) accumulatedReasoning = chunk.reasoning;
-            if (chunk.usage) finalUsage = chunk.usage;
+            if (chunk.usage) {
+              finalUsage = chunk.usage;
+              iterationUsage = chunk.usage;
+            }
             if (chunk.model) chunkModel = chunk.model;
+
+            // AD-070 §2.6: live-статистика. Anthropic отдаёт input/cache в
+            // `message_start` (output ещё 0), а output — только в `message_delta`
+            // в конце. Поэтому «точным» считаем usage с output>0/reasoning:
+            // при output===0 и input>0 сохраняем точные input/cache, но output
+            // оцениваем из накопленного текста (estimated: true). Полностью
+            // нулевой usage (типично для OpenAI до финала) — оценка обоих, как
+            // раньше. Точный output оценкой не понижаем. Первые точные input и
+            // output публикуем принудительно (сквозь троттлинг), чтобы панель
+            // быстро получила реальные значения.
+            const chunkUsage = iterationUsage;
+            const hasExactOutput = !!chunkUsage
+              && (chunkUsage.outputTokens > 0 || (chunkUsage.reasoningTokens ?? 0) > 0);
+            const hasExactInput = !!chunkUsage && chunkUsage.inputTokens > 0;
+
+            let liveUsage: TokenUsage;
+            let liveEstimated: boolean;
+            let forceLive = false;
+            if (hasExactOutput) {
+              liveUsage = chunkUsage!;
+              liveEstimated = false;
+              forceLive = !liveUsageState.exactPublished;
+              liveUsageState.exactPublished = true;
+            } else {
+              liveUsage = this._estimateUsage(
+                chunkUsage,
+                iterationPromptChars,
+                accumulatedContent.length + accumulatedReasoning.length,
+              ).usage;
+              liveEstimated = true;
+              if (hasExactInput) {
+                // Anthropic: input/cache уже точные — форсируем первый такой снимок.
+                forceLive = !liveUsageState.inputExactPublished;
+                liveUsageState.inputExactPublished = true;
+              }
+            }
+            this._publishLiveUsage({
+              publishChunk,
+              state: liveUsageState,
+              sessionId: session.id,
+              streamId,
+              iteration: toolIteration,
+              agentRole: effectiveAgentRole,
+              model: this._resolveMessageModel(chunkModel, finalModel, provider, session),
+              provider: providerName,
+              usage: liveUsage,
+              estimated: liveEstimated,
+              force: forceLive,
+            });
 
             if (chunk.toolCalls && chunk.toolCalls.length > 0) {
               toolCalls = chunk.toolCalls;
@@ -1365,19 +1530,19 @@ export class ChatOrchestrator {
           // При отмене НЕ кладём allIntermediateTexts в metadata
           // (intermediate_text_blocks): они уже вошли в partialContent, иначе
           // UI (режим 'bottom') склеит их с content повторно — дубль.
-          if (partialContent || accumulatedReasoning || allToolCalls.length > 0) {
-            await this._saveAssistantMessage(
-              session.id, partialContent, streamId, effectiveAgentRole,
-              cancelEstimated.usage, cancelModel, accumulatedReasoning, debugCollector, true, providerName,
-              MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
-              undefined, undefined,
-              {
-                duration_ms: cancelDurationMs,
-                ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
-              },
-              promptMeta,
-            );
-          }
+          // Сообщение сохраняем ВСЕГДА, даже если контент пуст: иначе теряются
+          // статус «Остановлено», usage/duration/cost и сам ход в истории.
+          await this._saveAssistantMessage(
+            session.id, partialContent, streamId, effectiveAgentRole,
+            cancelEstimated.usage, cancelModel, accumulatedReasoning, debugCollector, true, providerName,
+            MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
+            undefined, undefined,
+            {
+              duration_ms: cancelDurationMs,
+              ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
+            },
+            promptMeta,
+          );
 
           publishChunk('stream.cancelled', {
             stream_id: streamId,
@@ -1625,6 +1790,8 @@ export class ChatOrchestrator {
                       shellPolicy: this._getProtectedPaths() ?? undefined,
                       protectedPaths: this._getProtectedPaths() ?? undefined,
                       protectedPathsEnabled: this._getProtectedPathsEnabled(),
+                      // AD-070: live-стоимость саб-агента тем же загрузчиком цен.
+                      modelPriceLoader: this._modelPriceLoader ?? undefined,
                     },
                   });
                 } catch (execError) {
@@ -1667,7 +1834,7 @@ export class ChatOrchestrator {
               result: toolResult,
               iteration: toolIteration,
             });
-            cancelledDuringTool = true;
+            cancelledBeforeFinal = true;
             break;
           }
 
@@ -1811,7 +1978,7 @@ export class ChatOrchestrator {
         // Отмена между тулами итерации (например во время IPI-обработки) —
         // тоже завершаем как отмену, а не идём на следующую LLM-итерацию.
         if (!stopAfterDeny && (cancelToken.cancelled || toolAbortController.signal.aborted)) {
-          cancelledDuringTool = true;
+          cancelledBeforeFinal = true;
           break;
         }
 
@@ -1826,10 +1993,11 @@ export class ChatOrchestrator {
         if (stopAfterDeny) break;
       }
 
-      // Отмена во время исполнения тула: завершаем ровно как ветку отмены
-      // (persist tool-chain + stream.cancelled), а не как обычное завершение
-      // с подставленным «Не удалось выполнить запрос: ответ модели пуст».
-      if (cancelledDuringTool) {
+      // Отмена до финального сохранения (во время исполнения тула или до входа
+      // в итерацию): завершаем ровно как ветку отмены (persist tool-chain +
+      // stream.cancelled), а не как обычное завершение с подставленным
+      // «Не удалось выполнить запрос: ответ модели пуст».
+      if (cancelledBeforeFinal) {
         // Bug 2: при отмене модель могла не прийти ни в одном финальном чанке —
         // fallback на provider.model/session.settings.model для cost.
         const cancelModel = this._resolveMessageModel(lastChunkModel, finalModel, provider, session);
@@ -1856,19 +2024,19 @@ export class ChatOrchestrator {
 
         // Промежуточные тексты уже вошли в partialContent — как в ветке отмены
         // выше, НЕ дублируем их в metadata.intermediate_text_blocks.
-        if (partialContent || allToolCalls.length > 0) {
-          await this._saveAssistantMessage(
-            session.id, partialContent, streamId, effectiveAgentRole,
-            cancelEstimated.usage, cancelModel, allReasoning.map((r) => r.text).join('\n\n---\n\n'), debugCollector, true, providerName,
-            MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
-            undefined, undefined,
-            {
-              duration_ms: cancelDurationMs,
-              ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
-            },
-            promptMeta,
-          );
-        }
+        // Сообщение сохраняем всегда (в т.ч. при пустом контенте) — статус и
+        // статистика отмены не должны теряться.
+        await this._saveAssistantMessage(
+          session.id, partialContent, streamId, effectiveAgentRole,
+          cancelEstimated.usage, cancelModel, allReasoning.map((r) => r.text).join('\n\n---\n\n'), debugCollector, true, providerName,
+          MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
+          undefined, undefined,
+          {
+            duration_ms: cancelDurationMs,
+            ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
+          },
+          promptMeta,
+        );
 
         publishChunk('stream.cancelled', {
           stream_id: streamId,

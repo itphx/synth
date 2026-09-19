@@ -174,6 +174,41 @@ class MockAbortNoModelProvider extends BaseProvider {
   }
 }
 
+/**
+ * Провайдер для отмены ДО первого токена: не отдаёт ни одного чанка, ждёт
+ * отмены и завершается. Так «Стоп» приходит раньше контента/размышлений/тулов.
+ */
+class MockAbortBeforeFirstTokenProvider extends BaseProvider {
+  static calls = 0;
+
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+  ): Promise<import('@itphx/synth-shared').LLMResponse> {
+    return { content: '', model: this.model, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    ct?: CancellationToken,
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    MockAbortBeforeFirstTokenProvider.calls++;
+    // Ни одного чанка: держим стрим открытым до отмены.
+    while (!ct?.cancelled) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    yield* [] as import('@itphx/synth-shared').LLMChunk[];
+  }
+
+  getProviderName(): string {
+    return 'mockabortbefore';
+  }
+}
+
 /** Провайдер: 3 одинаковых вызова read_file (НЕ deny), затем текст — для проверки сохранения doom loop. */
 class MockDoomProvider extends BaseProvider {
   static calls = 0;
@@ -296,11 +331,13 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     ProviderFactory.register('mockdenyloop', MockDenyLoopProvider);
     ProviderFactory.register('mockabort', MockAbortProvider);
     ProviderFactory.register('mockabortnomodel', MockAbortNoModelProvider);
+    ProviderFactory.register('mockabortbefore', MockAbortBeforeFirstTokenProvider);
     ProviderFactory.register('mockdoom', MockDoomProvider);
     ProviderFactory.register('mockempty', MockEmptyProvider);
     MockDenyLoopProvider.calls = 0;
     MockAbortProvider.calls = 0;
     MockAbortNoModelProvider.calls = 0;
+    MockAbortBeforeFirstTokenProvider.calls = 0;
     MockDoomProvider.calls = 0;
   });
 
@@ -308,6 +345,7 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     ProviderFactory['_providers'].delete('mockdenyloop');
     ProviderFactory['_providers'].delete('mockabort');
     ProviderFactory['_providers'].delete('mockabortnomodel');
+    ProviderFactory['_providers'].delete('mockabortbefore');
     ProviderFactory['_providers'].delete('mockdoom');
     ProviderFactory['_providers'].delete('mockempty');
   });
@@ -447,6 +485,116 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     expect(typeof assistant.metadata?.cost_usd).toBe('number');
     expect(assistant.metadata?.status).toBe('cancelled');
 
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  // AD-070 §2.6: отмена ДО первого токена не должна терять ход — assistant-
+  // сообщение сохраняется (status cancelled, usage/estimated/duration/cost),
+  // публикуется message.added до stream.cancelled.
+  it('отмена до первого токена: assistant-сообщение со status cancelled, usage/estimated/duration/cost', async () => {
+    const h = await makeHarness('mockabortbefore');
+    const ac = new AbortController();
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    // Единая последовательность событий из двух каналов (publishChunk и EventBus).
+    const sequence: string[] = [];
+    h.eventBus.subscribe(h.sessionId, (e) => sequence.push(e.type));
+
+    // Аборт по первому же событию стрима (stream.usage) — до чанков/тулов.
+    const promise = run(h, ac.signal, (event, data) => {
+      chunks.push({ event, data });
+      sequence.push(event);
+      if (event === 'stream.usage') setTimeout(() => ac.abort(), 5);
+    });
+
+    const result = await promise;
+    expect(result.error).toBeUndefined();
+    expect(MockAbortBeforeFirstTokenProvider.calls).toBe(1);
+
+    // stream.cancelled несёт статистику.
+    const cancelled = chunks.find((c) => c.event === 'stream.cancelled');
+    expect(cancelled).toBeDefined();
+    expect(cancelled!.data.status).toBe('cancelled');
+    expect(typeof cancelled!.data.duration_ms).toBe('number');
+    expect(cancelled!.data.usage_estimated).toBe(true);
+    const eventUsage = cancelled!.data.usage as { inputTokens: number };
+    expect(eventUsage.inputTokens).toBeGreaterThan(0);
+    expect(typeof cancelled!.data.cost_usd).toBe('number');
+    expect(cancelled!.data.cost_usd as number).toBeGreaterThan(0);
+
+    // Ровно одно assistant-сообщение хода (без tool_chain), с контентом ''.
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const assistants = session.messages.filter(
+      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+    );
+    expect(assistants).toHaveLength(1);
+    const a = assistants[0]!;
+    expect(a.content).toBe('');
+    expect(a.metadata?.status).toBe('cancelled');
+    expect(a.metadata?.usage_estimated).toBe(true);
+    expect(typeof a.metadata?.duration_ms).toBe('number');
+    expect(typeof a.metadata?.cost_usd).toBe('number');
+    expect((a.metadata?.cost_usd as number)).toBeGreaterThan(0);
+    expect(a.usage!.inputTokens).toBeGreaterThan(0);
+
+    // message.added опубликован раньше stream.cancelled (UI успевает создать
+    // сообщение, затем cancelStream лишь дополняет его — без дубля).
+    const addedIdx = sequence.indexOf('message.added');
+    const cancelledIdx = sequence.indexOf('stream.cancelled');
+    expect(addedIdx).toBeGreaterThanOrEqual(0);
+    expect(cancelledIdx).toBeGreaterThan(addedIdx);
+
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('двойной cancel до первого токена: ровно одно assistant-сообщение', async () => {
+    const h = await makeHarness('mockabortbefore');
+    const fresh = (await h.sessionManager.getSession(h.sessionId))!;
+    const streamId = (fresh.messages.find((m) => m.role === MessageRole.USER)!.metadata as Record<string, unknown>)
+      .stream_id as string;
+
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const promise = run(h, new AbortController().signal, (event, data) => {
+      chunks.push({ event, data });
+      if (event === 'stream.usage') {
+        // Двойной/повторный «Стоп»: второй cancel — no-op.
+        h.orchestrator.cancel(streamId);
+        h.orchestrator.cancel(streamId);
+      }
+    });
+
+    await promise;
+
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const assistants = session.messages.filter(
+      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+    );
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]!.metadata?.status).toBe('cancelled');
+    expect(chunks.filter((c) => c.event === 'stream.cancelled')).toHaveLength(1);
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('отмена с контентом: по-прежнему ровно одно assistant-сообщение', async () => {
+    const h = await makeHarness('mockabortnomodel');
+    const ac = new AbortController();
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    let textChunks = 0;
+    const promise = run(h, ac.signal, (event, data) => {
+      chunks.push({ event, data });
+      if (event === 'stream.chunk') {
+        textChunks++;
+        if (textChunks >= 2) setTimeout(() => ac.abort(), 5);
+      }
+    });
+    await promise;
+
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const assistants = session.messages.filter(
+      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+    );
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]!.content.length).toBeGreaterThan(0);
+    expect(assistants[0]!.metadata?.status).toBe('cancelled');
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 

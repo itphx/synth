@@ -480,6 +480,25 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
       expect(text.trimEnd().endsWith('data: [DONE]')).toBe(true);
     });
 
+    it('AD-070: stream_options.include_usage принимается и usage есть в финальном чанке', async () => {
+      const { app } = createTestContext(userUser);
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'привет' }],
+        stream: true,
+        stream_options: { include_usage: true },
+      }));
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      const lines = text.split('\n').filter((l) => l.startsWith('data: '));
+      const parsed = lines
+        .filter((l) => !l.includes('[DONE]'))
+        .map((l) => JSON.parse(l.slice(6)));
+      const last = parsed[parsed.length - 1]!;
+      expect(last.choices[0].finish_reason).toBe('stop');
+      expect(last.usage).toEqual({ prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 });
+    });
+
     it('ошибка провайдера в стриме шлёт error-объект и [DONE]', async () => {
       const fake = new FakeProvider();
       fake.throwError = new RateLimitError('too many requests');
