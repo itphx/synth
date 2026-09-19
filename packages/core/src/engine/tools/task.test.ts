@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { taskTool } from './task.js';
 import { SessionManager } from '../../sessions/manager.js';
+import { computeSessionStats } from '../../sessions/stats.js';
 import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
 import { ToolCapability, MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
@@ -1301,5 +1302,73 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
     expect(match).not.toBeNull();
     // id из content совпадает с id из metadata
     expect(match![1]).toBe(result.metadata!.child_session_id);
+  });
+
+  it('AD-070 §2.6: usage саб-агента сохраняется и подтягивается rollup-статистикой', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const provider = {
+      chatAsync: vi.fn().mockReturnValue(
+        (async function* () {
+          yield {
+            isFinal: true,
+            content: 'sub answer',
+            toolCalls: [],
+            model: 'test-model',
+            usage: { inputTokens: 123, outputTokens: 45, totalTokens: 168, cacheReadTokens: 20 },
+          };
+        })(),
+      ),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+        },
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    const childSessionId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childSessionId))!;
+    const assistant = [...child.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(assistant.usage?.inputTokens).toBe(123);
+    expect(assistant.usage?.outputTokens).toBe(45);
+    expect(assistant.usage?.cacheReadTokens).toBe(20);
+    expect(typeof assistant.metadata?.duration_ms).toBe('number');
+
+    // Rollup: как _persistToolChain родителя — tool-сообщение с child_session_id.
+    await sessionManager.addMessage(parent.id, {
+      id: generateId(),
+      role: MessageRole.TOOL,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('task result')],
+      content: 'task result',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      agentRole: 'developer',
+      metadata: { tool_name: 'task', child_session_id: childSessionId },
+    });
+
+    const stats = await computeSessionStats((await sessionManager.getSession(parent.id))!, {
+      getSession: (id) => sessionManager.getSession(id),
+    });
+    const dev = stats.agents.find((a) => a.agent_role === 'developer')!;
+    expect(dev.subagent_sessions).toBe(1);
+    expect(dev.subagent_tokens).toBe(168);
   });
 });

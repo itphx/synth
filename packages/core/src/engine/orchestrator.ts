@@ -7,7 +7,7 @@ import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
 import { DebugCollector } from '../debug.js';
 import { ProviderFactory } from '../providers/base.js';
-import { computeCacheHitRate } from '../providers/usage.js';
+import { computeCacheHitRate, computeUsageCost } from '../providers/usage.js';
 import { ContextLengthExceededError } from '../providers/exceptions.js';
 import type { LLMMessage, CancellationToken, ProviderConfig as CoreProviderConfig, BaseProvider, SystemPromptPayload, CachePolicy } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
@@ -195,6 +195,27 @@ export class ChatOrchestrator {
   /** Публичный доступ к реестру агентов (для сериализации modeApplicable). */
   get agentRegistry(): AgentRegistry | null {
     return this._agentRegistry;
+  }
+
+  /**
+   * AD-070 §2.6: цены модели для расчёта стоимости сообщений/статистики.
+   * Публичный доступ, чтобы роут `/sessions/:id/stats` переиспользовал тот же
+   * загрузчик, что и оркестратор (backend не конструирует его повторно).
+   */
+  getModelPricing(modelName: string): ModelPricing | null {
+    return this._modelPriceLoader?.(modelName) ?? null;
+  }
+
+  /**
+   * Стоимость usage сообщения по цене модели (USD). `null` — цен нет
+   * (в этом случае `metadata.cost_usd` не пишется).
+   */
+  private _computeMessageCost(
+    model: string | undefined,
+    usage: TokenUsage | undefined,
+  ): ReturnType<typeof computeUsageCost> {
+    if (!model || !usage) return null;
+    return computeUsageCost(usage, this._modelPriceLoader?.(model) ?? null);
   }
 
   /**
@@ -621,6 +642,9 @@ export class ChatOrchestrator {
     const effectiveAgentRole = message.agentRole || session.settings.agentRole;
     const author = message.author || 'unknown';
     const workingDir = await this._resolveWorkingDir(session);
+    // AD-070 §2.6: старт прогона — для per-message duration_ms (полная
+    // длительность у финального сообщения потока, включая tool-chain).
+    const streamStartedAt = Date.now();
 
     // AD-025: режим Plan/Act — runtime-состояние сессии + строгость из настроек
     const planMode: PlanMode = session.settings.planMode ?? this._defaultPlanMode ?? 'auto';
@@ -677,6 +701,7 @@ export class ChatOrchestrator {
         // Сохраняем сообщение ассистента
         const microMetadata: Record<string, unknown> = {
           stream_id: streamId,
+          duration_ms: Date.now() - streamStartedAt,
           ...(microResult.microResult.i18nKey
             ? { i18n: i18nMeta(microResult.microResult.i18nKey) }
             : {}),
@@ -1041,7 +1066,7 @@ export class ChatOrchestrator {
               session.id, partialContent, streamId, effectiveAgentRole,
               finalUsage, chunkModel, accumulatedReasoning, debugCollector, true, providerName,
               MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
-              undefined, undefined, undefined, promptMeta,
+              undefined, undefined, { duration_ms: Date.now() - streamStartedAt }, promptMeta,
             );
           }
 
@@ -1504,7 +1529,7 @@ export class ChatOrchestrator {
             session.id, partialContent, streamId, effectiveAgentRole,
             finalUsage, finalModel, allReasoning.map((r) => r.text).join('\n\n---\n\n'), debugCollector, true, providerName,
             MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
-            undefined, undefined, undefined, promptMeta,
+            undefined, undefined, { duration_ms: Date.now() - streamStartedAt }, promptMeta,
           );
         }
 
@@ -1617,12 +1642,17 @@ export class ChatOrchestrator {
       );
 
       // 8. Save final assistant message
+      // AD-070 §2.6: полная длительность прогона (включая tool-chain) и
+      // стоимость по цене модели — в metadata финального сообщения и stream.done.
+      const durationMs = Date.now() - streamStartedAt;
+      const messageCost = this._computeMessageCost(finalModel, finalUsage);
       const reasoningJoined = allReasoning.map((r) => r.text).join('\n\n---\n\n');
       const savedContent = await this._saveAssistantMessage(
         session.id, finalContent, streamId, effectiveAgentRole,
         finalUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
         MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
-        qaPass, qaReason, fallbackI18n ? { i18n: fallbackI18n } : undefined,
+        qaPass, qaReason,
+        { ...(fallbackI18n ? { i18n: fallbackI18n } : {}), duration_ms: durationMs },
         promptMeta,
       );
 
@@ -1637,6 +1667,8 @@ export class ChatOrchestrator {
         model: finalModel,
         provider: providerName,
         usage: finalUsage,
+        duration_ms: durationMs,
+        ...(messageCost ? { cost_usd: messageCost.costUsd } : {}),
         reasoning_blocks: allReasoning.length > 0 ? allReasoning : undefined,
         intermediate_text_blocks: allIntermediateTexts.length > 0 ? allIntermediateTexts : undefined,
       };
@@ -1897,6 +1929,8 @@ export class ChatOrchestrator {
     streamId: string,
     reasoningLevel?: ReasoningLevel,
   ): Promise<ProcessMessageResult> {
+    // AD-070 §2.6: длительность этого прогона.
+    const startedAt = Date.now();
     const providerName = (message.provider as string) || session.settings.provider || '';
     const provider = this._getProvider(providerName, session, reasoningLevel);
     if (!provider) {
@@ -1969,10 +2003,13 @@ export class ChatOrchestrator {
 
     // Сохранить debug-сообщение (без message.added — UI получит его через stream.done)
 
+    const durationMs = Date.now() - startedAt;
+    const messageCost = this._computeMessageCost(finalModel, finalUsage);
     await this._saveAssistantMessage(
       session.id, accumulatedContent, streamId, 'debug',
       finalUsage, finalModel, accumulatedReasoning, debugCollector, false, providerName,
       MessageRole.DEBUG, undefined, true,
+      undefined, undefined, undefined, undefined, { duration_ms: durationMs },
     );
 
     const updatedSession = await this._sessionManager.getSession(session.id);
@@ -1985,6 +2022,8 @@ export class ChatOrchestrator {
       model: finalModel,
       provider: providerName,
       usage: finalUsage,
+      duration_ms: durationMs,
+      ...(messageCost ? { cost_usd: messageCost.costUsd } : {}),
       metadata: { type: 'debug_system_message' },
     });
 
@@ -2004,6 +2043,8 @@ export class ChatOrchestrator {
       return { error: 'ContextOptimizer not available', errorType: 'internal', canRetry: false };
     }
 
+    // AD-070 §2.6: длительность этого прогона суммаризации.
+    const startedAt = Date.now();
     const lang = session.settings.language || 'ru';
 
     let prep: {
@@ -2075,10 +2116,13 @@ export class ChatOrchestrator {
     }
 
     // Сохранить summary-сообщение (без message.added — UI получит его через stream.done)
+    const durationMs = Date.now() - startedAt;
+    const messageCost = this._computeMessageCost(finalModel, finalUsage);
     await this._saveAssistantMessage(
       session.id, accumulatedContent, streamId, 'summary',
       finalUsage, finalModel, accumulatedReasoning, debugCollector, false, providerName,
       MessageRole.SUMMARY, prep.indices, true,
+      undefined, undefined, undefined, undefined, { duration_ms: durationMs },
     );
 
     // Отключить засуммаризированные сообщения
@@ -2101,6 +2145,8 @@ export class ChatOrchestrator {
       model: finalModel,
       provider: providerName,
       usage: finalUsage,
+      duration_ms: durationMs,
+      ...(messageCost ? { cost_usd: messageCost.costUsd } : {}),
       metadata: { type: 'summary', indices: prep.indices },
     };
 
@@ -2528,6 +2574,13 @@ export class ChatOrchestrator {
       metadata.intermediate_text_blocks = intermediateTextBlocks;
     }
 
+    // AD-070 §2.6: стоимость хода по цене модели (только если цены известны).
+    const messageCost = this._computeMessageCost(model, usage);
+    if (messageCost) {
+      metadata.cost_usd = messageCost.costUsd;
+      metadata.cost_breakdown = messageCost.breakdown;
+    }
+
     // AD-036: раскрытие секретов в UI. Реальные значения плейсхолдеров из
     // карты обфускации сессии встраиваются в metadata.secrets (клик раскрывает
     // локально). Только существующие плейсхолдеры; карта — секрет, в логи не пишется.
@@ -2576,20 +2629,16 @@ export class ChatOrchestrator {
         // AD-070 §2.3: hit rate по накопленным токенам сессии.
         s.cacheHitRate = computeCacheHitRate(s.cacheReadTokens, s.inputTokens);
 
+        // AD-070 §2.6: единый helper стоимости — тот же, что для per-message.
         const effectiveModel = model || msg.model;
-        if (effectiveModel && this._modelPriceLoader) {
-          const pricing = this._modelPriceLoader(effectiveModel);
-          if (pricing) {
-            const div = 1_000_000;
-            s.inputCost += ((usage.inputTokens || 0) * (pricing.inputPrice ?? 0)) / div;
-            s.outputCost += ((usage.outputTokens || 0) * (pricing.outputPrice ?? 0)) / div;
-            if (usage.cacheReadTokens && pricing.cacheReadPrice) {
-              s.cacheReadCost += (usage.cacheReadTokens * pricing.cacheReadPrice) / div;
-            }
-            if (usage.cacheWriteTokens && pricing.cacheWritePrice) {
-              s.cacheWriteCost += (usage.cacheWriteTokens * pricing.cacheWritePrice) / div;
-            }
-          }
+        const cost = effectiveModel
+          ? computeUsageCost(usage, this._modelPriceLoader?.(effectiveModel) ?? null)
+          : null;
+        if (cost) {
+          s.inputCost += cost.breakdown.input;
+          s.outputCost += cost.breakdown.output;
+          s.cacheReadCost += cost.breakdown.cacheRead;
+          s.cacheWriteCost += cost.breakdown.cacheWrite;
         }
         s.updatedAt = nowISO();
         await this._sessionManager.saveSession(s);

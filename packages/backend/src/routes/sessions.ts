@@ -8,7 +8,7 @@ import type { ContextOptimizer } from '@itphx/synth-core';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema } from '@itphx/synth-shared';
 import type { Message, Session, SessionSettings } from '@itphx/synth-shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
-import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError } from '@itphx/synth-core';
+import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '@itphx/synth-core';
 import { serializeSession } from '../lib/serialize.js';
 import { t } from '../lib/i18n.js';
 import type { EventHub } from '../events/hub.js';
@@ -326,6 +326,20 @@ export function createSessionRoutes(
     }
     const info = await orchestrator.getPromptInfo(session);
     return c.json(info);
+  });
+
+  // GET /api/v2/sessions/:id/stats — статистика по агентам/пользователям
+  // (AD-070 §2.6): usage сообщений + рекурсивный usage саб-агентов (tool `task`).
+  app.get('/:id/stats', kit.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+    const stats = await computeSessionStats(session, {
+      getSession: (id) => sessionManager.getSession(id),
+      getModelPricing: (model) => orchestrator.getModelPricing(model),
+    });
+    return c.json(stats);
   });
 
   // POST /api/v2/sessions/:id/prompt — отправить сообщение (очередь + SSE-стрим)

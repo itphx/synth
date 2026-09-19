@@ -1,9 +1,11 @@
 import { cn } from '@/lib/utils'
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import { MarkdownContent } from './MarkdownContent'
 import { SecretMarkdown, SecretPlainText } from './SecretPlaceholder'
 import { MessageHeader } from './MessageHeader'
 import { MessageActions } from './MessageActions'
+import { MessageStats, hasMessageStats } from './MessageStats'
+import { useDevice } from '@/hooks/useDevice'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
 import { SubagentPart, type SubagentPartData } from './SubagentPart'
@@ -107,6 +109,8 @@ function ChatMessageInner({
   const isDebug = message.role === 'debug'
   const canRetry = isUser
   const hasDebug = !!message.debug_data && Object.keys(message.debug_data).length > 0
+  const { isTouch } = useDevice()
+  const [statsOpen, setStatsOpen] = useState(false)
 
   // LLM Gateway (AD-036): реальные значения секретов для плейсхолдеров ⟦SYNTH_SECRET_N⟧.
   const secrets = (message.metadata?.secrets as Record<string, string> | undefined) ?? undefined
@@ -139,6 +143,15 @@ function ChatMessageInner({
   )
 
   const showActions = isUser || isAssistant || isSummary || isDebug
+
+  // AD-070 §2.6: строка статистики — только для ответов ассистента с данными.
+  // Скрытые/выключенные и служебные tool-chain сообщения исключаем.
+  const showStats =
+    isAssistant &&
+    !message.disabled &&
+    !message.hidden &&
+    message.metadata?.tool_chain !== true &&
+    hasMessageStats(message)
 
   const handleOriginClick = () => {
     const parentSessionId = (message.metadata as Record<string, unknown>)?.source_session_id as string | undefined
@@ -324,6 +337,21 @@ function ChatMessageInner({
           />
         )}
 
+        {showStats && (!isTouch || statsOpen) && (
+          <div
+            className={cn(
+              'mt-1.5 transition-opacity',
+              isTouch
+                ? undefined
+                : statsOpen
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover:opacity-100',
+            )}
+          >
+            <MessageStats message={message} />
+          </div>
+        )}
+
         {showActions && (
           <MessageActions
             messageIndex={message.index}
@@ -333,6 +361,9 @@ function ChatMessageInner({
             canRetry={canRetry}
             hasDebug={hasDebug}
             readOnly={readOnly}
+            hasStats={showStats}
+            statsOpen={statsOpen}
+            onToggleStats={() => setStatsOpen((v) => !v)}
             onCopy={onCopy}
             onToggle={onToggle}
             onPin={onPin}

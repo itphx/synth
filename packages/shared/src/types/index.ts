@@ -124,6 +124,50 @@ export interface PromptManifest {
   entries: PromptManifestEntry[];
 }
 
+// --- Session statistics (AD-070 §2.6) ---
+/**
+ * Статистика по агенту в рамках сессии (`GET /sessions/:id/stats`).
+ * Usage — по сообщениям агента; `subagent_*` — рекурсивно подтянутый usage
+ * дочерних сессий (tool `task`), инициированных агентом.
+ */
+export interface SessionAgentStats {
+  agent_role: string;
+  messages: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  cost_usd: number;
+  /** cache_read / input (0 при input = 0). */
+  cache_hit_rate: number;
+  duration_ms: number;
+  /** output_tokens / (duration_ms / 1000); 0 при отсутствии длительности. */
+  output_tps: number;
+  subagent_sessions: number;
+  subagent_tokens: number;
+}
+
+/** Статистика по автору user-сообщений (атрибуция usage последующего ответа). */
+export interface SessionUserStats {
+  author: string;
+  messages: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  cost_usd: number;
+  cache_hit_rate: number;
+}
+
+/** Ответ `GET /api/v2/sessions/:id/stats`. */
+export interface SessionStats {
+  session_id: string;
+  agents: SessionAgentStats[];
+  users: SessionUserStats[];
+}
+
 // --- Message ---
 export interface Message {
   id: string;

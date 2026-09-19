@@ -8,6 +8,7 @@ import { createSessionRoutes } from './sessions.js';
 import { SessionManager, EventBus, FileStore } from '../../index.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import type { AuthKit } from '../../auth/local.js';
+import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 
 function createMockAuth(): AuthKit {
   return {
@@ -37,6 +38,7 @@ function createMockOrchestrator() {
       promptState: null,
       lastPromptMeta: null,
     }),
+    getModelPricing: vi.fn().mockReturnValue(null),
   };
 }
 
@@ -323,6 +325,49 @@ describe('Session API Routes (PATCH mode)', () => {
     it('возвращает 404 для отсутствующей сессии', async () => {
       const { app } = createTestApp(tmpDir);
       const res = await app.request('/api/v2/sessions/non-existent/prompt');
+      expect(res.status).toBe(404);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('NOT_FOUND');
+    });
+  });
+
+  describe('GET /api/v2/sessions/:id/stats (AD-070 §2.6)', () => {
+    it('возвращает агрегацию по агентам и пользователям', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      await sessionManager.addMessage(session.id, {
+        id: generateId(), role: MessageRole.USER, seq: 0, origin: 'local',
+        parts: [makeTextPart('hi')], content: 'hi', createdAt: nowISO(),
+        disabled: false, pinned: false, hidden: false, author: 'local',
+      });
+      await sessionManager.addMessage(session.id, {
+        id: generateId(), role: MessageRole.ASSISTANT, seq: 0, origin: 'local',
+        parts: [makeTextPart('ok')], content: 'ok', createdAt: nowISO(),
+        disabled: false, pinned: false, hidden: false, agentRole: 'developer',
+        model: 'm', usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 },
+        metadata: { duration_ms: 1000 },
+      });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/stats`);
+
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.session_id).toBe(session.id);
+      expect(Array.isArray(body.agents)).toBe(true);
+      expect(Array.isArray(body.users)).toBe(true);
+      const dev = body.agents.find((a: any) => a.agent_role === 'developer');
+      expect(dev).toBeTruthy();
+      expect(dev.messages).toBe(1);
+      expect(dev.input_tokens).toBe(100);
+      expect(dev.output_tps).toBe(10);
+      const local = body.users.find((u: any) => u.author === 'local');
+      expect(local).toBeTruthy();
+      expect(local.messages).toBe(1);
+    });
+
+    it('возвращает 404 для отсутствующей сессии', async () => {
+      const { app } = createTestApp(tmpDir);
+      const res = await app.request('/api/v2/sessions/non-existent/stats');
       expect(res.status).toBe(404);
       const body: any = await res.json();
       expect(body.error.code).toBe('NOT_FOUND');

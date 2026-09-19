@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react'
+import type { SessionStats } from '@itphx/synth-shared'
 import { cn } from '@/lib/utils'
 import { useChatStore } from '@/stores/chatStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
@@ -6,6 +7,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
+import { formatCost, formatDuration, formatTokens, formatTps } from '@/lib/formatStats'
 import type { ProjectStats, ModelGroup, PromptInfoResponse } from '@/lib/api/synthApi'
 
 const fmt = (v: number): string => v.toLocaleString()
@@ -26,6 +28,9 @@ function pct(rate: number): string {
   return `${Math.round(rate * 100)}%`
 }
 
+/** Порядок тиров в манифесте промпта (AD-070 §2.1). */
+const TIER_ORDER: Record<string, number> = { stable: 0, context: 1, volatile: 2 }
+
 /** AD-070 §2.5: подпись hit/miss последнего хода (из `promptMeta`). */
 function promptCacheLabel(info: PromptInfoResponse, t: (key: string) => string): string {
   const meta = info.lastPromptMeta
@@ -42,6 +47,8 @@ export const StatsTab: React.FC = () => {
   const [projectStats, setProjectStats] = useState<ProjectStats | null>(null)
   const [modelGroups, setModelGroups] = useState<ModelGroup[]>([])
   const [promptInfo, setPromptInfo] = useState<PromptInfoResponse | null>(null)
+  const [sessionStats, setSessionStats] = useState<SessionStats | null>(null)
+  const [promptExpanded, setPromptExpanded] = useState(false)
 
   const activeTabId = useUIStore((s) => s.activeCenterTabId)
   const centerTabs = useUIStore((s) => s.centerTabs)
@@ -82,6 +89,18 @@ export const StatsTab: React.FC = () => {
 
   const sessionProjectId = activeSession?.project_id
 
+  // AD-070 §2.6: скорость/длительность/стоимость последнего ответа из metadata.
+  const lastDurationMs = typeof lastAssistantMsg?.metadata?.duration_ms === 'number'
+    ? lastAssistantMsg.metadata.duration_ms
+    : undefined
+  const lastCostUsd = typeof lastAssistantMsg?.metadata?.cost_usd === 'number'
+    ? lastAssistantMsg.metadata.cost_usd
+    : undefined
+  const lastOutputTokens = lastAssistantMsg?.usage?.output_tokens
+  const lastTps = lastDurationMs && lastDurationMs > 0 && typeof lastOutputTokens === 'number'
+    ? lastOutputTokens / (lastDurationMs / 1000)
+    : undefined
+
   useEffect(() => {
     if (sessionProjectId) {
       synthApi.getProjectStats(sessionProjectId).then(setProjectStats).catch(() => {})
@@ -104,7 +123,28 @@ export const StatsTab: React.FC = () => {
     return () => { cancelled = true }
   }, [activeSessionId, lastAssistantMsg?.id])
 
+  // AD-070 §2.6: статистика по агентам/авторам. Тот же триггер, что и у промпта.
+  useEffect(() => {
+    if (!activeSessionId) {
+      setSessionStats(null)
+      return
+    }
+    let cancelled = false
+    synthApi.getSessionStats(activeSessionId)
+      .then((stats) => { if (!cancelled) setSessionStats(stats) })
+      .catch(() => { if (!cancelled) setSessionStats(null) })
+    return () => { cancelled = true }
+  }, [activeSessionId, lastAssistantMsg?.id])
+
+  // Сортировка манифеста: stable → context → volatile, внутри тира — исходный
+  // порядок (Array.prototype.sort стабилен). Исходный массив не мутируем.
+  const promptEntries = useMemo(() => {
+    const entries = promptInfo?.manifest.entries ?? []
+    return [...entries].sort((a, b) => (TIER_ORDER[a.tier] ?? 99) - (TIER_ORDER[b.tier] ?? 99))
+  }, [promptInfo])
+
   const hasLastMsgUsage = !!(lastAssistantMsg?.usage && Object.keys(lastAssistantMsg.usage).length > 0)
+  const hasSubagents = !!sessionStats?.agents.some((a) => a.subagent_sessions > 0)
 
   return (
     <div className="flex flex-col gap-4 p-3">
@@ -145,6 +185,17 @@ export const StatsTab: React.FC = () => {
                 value={pct(hitRate(lastAssistantMsg!.usage!.cache_read_tokens, lastInputTokens))}
               />
             </div>
+            {lastTps !== undefined && (
+              <StatCell icon="rocket" color="text-orange-400" label={t('rightPanel.stats.speed')} value={formatTps(lastTps)} />
+            )}
+            {lastDurationMs !== undefined && (
+              <StatCell icon="time" color="text-sky-400" label={t('rightPanel.stats.duration')} value={formatDuration(lastDurationMs)} />
+            )}
+            {lastCostUsd !== undefined && (
+              <div className="col-span-2">
+                <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCost(lastCostUsd)} />
+              </div>
+            )}
           </div>
         </Section>
       )}
@@ -203,43 +254,54 @@ export const StatsTab: React.FC = () => {
                 />
               </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-[0.6875rem]">
-                <thead>
-                  <tr className="text-muted-foreground">
-                    <th className="text-left font-medium py-0.5">{t('rightPanel.stats.promptColTier')}</th>
-                    <th className="text-left font-medium py-0.5">{t('rightPanel.stats.promptColKey')}</th>
-                    <th className="text-right font-medium py-0.5">{t('rightPanel.stats.promptColChars')}</th>
-                    <th className="text-right font-medium py-0.5">{t('rightPanel.stats.promptColTokens')}</th>
-                    <th className="text-left font-medium py-0.5">{t('rightPanel.stats.promptColStatus')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {promptInfo.manifest.entries.map((entry) => {
-                    const labelKey = `rightPanel.stats.promptBlock.${entry.key}`
-                    const translated = t(labelKey)
-                    return (
-                      <tr
-                        key={entry.key}
-                        className={cn(
-                          'border-t border-border/30',
-                          entry.status !== 'loaded' && 'text-muted-foreground/60',
-                        )}
-                        title={entry.provenance || undefined}
-                      >
-                        <td className="py-0.5">{t(`rightPanel.stats.promptTier.${entry.tier}`)}</td>
-                        <td className="py-0.5 truncate max-w-[8rem]">
-                          {translated === labelKey ? entry.label : translated}
-                        </td>
-                        <td className="py-0.5 text-right tabular-nums">{fmt(entry.chars)}</td>
-                        <td className="py-0.5 text-right tabular-nums">{fmt(entry.estTokens)}</td>
-                        <td className="py-0.5">{t(`rightPanel.stats.promptStatus.${entry.status}`)}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <button
+              type="button"
+              aria-expanded={promptExpanded}
+              onClick={() => setPromptExpanded((v) => !v)}
+              className="flex w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <Icon name={promptExpanded ? 'arrow-down-s' : 'arrow-right-s'} className="size-3.5" />
+              <span>{promptExpanded ? t('rightPanel.stats.collapse') : t('rightPanel.stats.expand')}</span>
+            </button>
+            {promptExpanded && (
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full text-[0.6875rem]">
+                  <thead>
+                    <tr className="text-muted-foreground">
+                      <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.promptColTier')}</th>
+                      <th className="px-2 py-0.5 text-left font-medium">{t('rightPanel.stats.promptColKey')}</th>
+                      <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.promptColChars')}</th>
+                      <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.promptColTokens')}</th>
+                      <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.promptColStatus')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {promptEntries.map((entry) => {
+                      const labelKey = `rightPanel.stats.promptBlock.${entry.key}`
+                      const translated = t(labelKey)
+                      return (
+                        <tr
+                          key={entry.key}
+                          className={cn(
+                            'border-t border-border/30',
+                            entry.status !== 'loaded' && 'text-muted-foreground/60',
+                          )}
+                          title={entry.provenance || undefined}
+                        >
+                          <td className="px-2 py-0.5 text-center">{t(`rightPanel.stats.promptTier.${entry.tier}`)}</td>
+                          <td className="px-2 py-0.5 text-left truncate max-w-[8rem]">
+                            {translated === labelKey ? entry.label : translated}
+                          </td>
+                          <td className="px-2 py-0.5 text-center tabular-nums">{fmt(entry.chars)}</td>
+                          <td className="px-2 py-0.5 text-center tabular-nums">{fmt(entry.estTokens)}</td>
+                          <td className="px-2 py-0.5 text-center">{t(`rightPanel.stats.promptStatus.${entry.status}`)}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </>
         ) : (
           <div className="text-xs text-muted-foreground italic">
@@ -247,6 +309,92 @@ export const StatsTab: React.FC = () => {
           </div>
         )}
       </Section>
+
+      {sessionStats && sessionStats.agents.length > 0 && (
+        <Section title={t('rightPanel.stats.agentsStats')}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[0.6875rem]">
+              <thead>
+                <tr className="text-muted-foreground">
+                  <th className="px-2 py-0.5 text-left font-medium">{t('rightPanel.stats.agent')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.messages')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.inputTokens')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.outputTokens')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.cacheReadTokens')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.cacheHitRate')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.cost')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.speed')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.duration')}</th>
+                  {hasSubagents && (
+                    <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.subagents')}</th>
+                  )}
+                  {hasSubagents && (
+                    <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.subagentTokens')}</th>
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {sessionStats.agents.map((a) => (
+                  <tr key={a.agent_role} className="border-t border-border/30">
+                    <td className="px-2 py-0.5 text-left truncate max-w-[8rem]">{a.agent_role}</td>
+                    <td className="px-2 py-0.5 text-center tabular-nums">{a.messages}</td>
+                    <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(a.input_tokens)}</td>
+                    <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(a.output_tokens)}</td>
+                    <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(a.cache_read_tokens)}</td>
+                    <td className="px-2 py-0.5 text-center tabular-nums">{pct(a.cache_hit_rate)}</td>
+                    <td className="px-2 py-0.5 text-center tabular-nums">{formatCost(a.cost_usd)}</td>
+                    <td className="px-2 py-0.5 text-center tabular-nums">{formatTps(a.output_tps)}</td>
+                    <td className="px-2 py-0.5 text-center tabular-nums">{formatDuration(a.duration_ms)}</td>
+                    {hasSubagents && (
+                      <td className="px-2 py-0.5 text-center tabular-nums">
+                        {a.subagent_sessions > 0 ? a.subagent_sessions : '\u2014'}
+                      </td>
+                    )}
+                    {hasSubagents && (
+                      <td className="px-2 py-0.5 text-center tabular-nums">
+                        {a.subagent_sessions > 0 ? formatTokens(a.subagent_tokens) : '\u2014'}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+      )}
+
+      {sessionStats && sessionStats.users.length > 0 && (
+        <Section title={t('rightPanel.stats.usersStats')}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[0.6875rem]">
+              <thead>
+                <tr className="text-muted-foreground">
+                  <th className="px-2 py-0.5 text-left font-medium">{t('rightPanel.stats.user')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.messages')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.inputTokens')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.outputTokens')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.cacheReadTokens')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.cacheHitRate')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.cost')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessionStats.users.map((u) => (
+                  <tr key={u.author} className="border-t border-border/30">
+                    <td className="px-2 py-0.5 text-left truncate max-w-[8rem]">{u.author}</td>
+                    <td className="px-2 py-0.5 text-center tabular-nums">{u.messages}</td>
+                    <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(u.input_tokens)}</td>
+                    <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(u.output_tokens)}</td>
+                    <td className="px-2 py-0.5 text-center tabular-nums">{formatTokens(u.cache_read_tokens)}</td>
+                    <td className="px-2 py-0.5 text-center tabular-nums">{pct(u.cache_hit_rate)}</td>
+                    <td className="px-2 py-0.5 text-center tabular-nums">{formatCost(u.cost_usd)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+      )}
 
       <Section title={t('rightPanel.stats.project')}>
         {projectStats ? (

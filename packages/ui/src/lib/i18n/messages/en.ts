@@ -356,6 +356,19 @@ export const dict = {
   'rightPanel.stats.project': 'Project',
   'rightPanel.stats.noProject': 'No project',
   'rightPanel.stats.contextWindow': 'Context window',
+  // AD-070 §2.6: agent and author stats
+  'rightPanel.stats.agentsStats': 'Agent stats',
+  'rightPanel.stats.usersStats': 'User stats',
+  'rightPanel.stats.agent': 'Agent',
+  'rightPanel.stats.user': 'User',
+  'rightPanel.stats.messages': 'Messages',
+  'rightPanel.stats.subagents': 'Subagents',
+  'rightPanel.stats.subagentTokens': 'Subagent tokens',
+  'rightPanel.stats.speed': 'Speed',
+  'rightPanel.stats.duration': 'Duration',
+  'rightPanel.stats.cost': 'Cost',
+  'rightPanel.stats.expand': 'Show composition',
+  'rightPanel.stats.collapse': 'Hide composition',
   // AD-070 §2.5: prompt composition (manifest)
   'rightPanel.stats.promptComposition': 'Prompt composition',
   'rightPanel.stats.promptTotal': 'Total chars / ~tokens',
@@ -584,6 +597,15 @@ export const dict = {
   'chat.message.retrying': 'Returned to input',
   'chat.message.forked': 'Branch created',
   'chat.message.empty': 'Empty message',
+
+  // AD-070 §2.6: per-message answer stats
+  'chat.messageStats.doneIn': 'Done in {duration}',
+  'chat.messageStats.cache': '{pct} cached',
+  'chat.messageStats.in': 'in',
+  'chat.messageStats.out': 'out',
+  'chat.messageStats.speed': '{speed}',
+  'chat.messageStats.cost': '{cost}',
+  'chat.messageStats.toggle': 'Response stats',
 
   'chat.session.cleared': 'Session cleared',
 

@@ -5,7 +5,7 @@ import type { AuthKit } from '../../auth/local.js';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer } from '../../index.js';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
-import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError } from '../../index.js';
+import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
 import { serializeSession, serializeMessage } from '../serialize.js';
 import type { ProjectStore } from '../../storage/project-store.js';
 import { isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
@@ -282,6 +282,20 @@ export function createSessionRoutes(
     }
     const info = await orchestrator.getPromptInfo(session);
     return c.json(info);
+  });
+
+  // GET /api/v2/sessions/:id/stats — статистика по агентам/пользователям
+  // (AD-070 §2.6): usage сообщений + рекурсивный usage саб-агентов (tool `task`).
+  app.get('/:id/stats', auth.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+    }
+    const stats = await computeSessionStats(session, {
+      getSession: (id) => sessionManager.getSession(id),
+      getModelPricing: (model) => orchestrator.getModelPricing(model),
+    });
+    return c.json(stats);
   });
 
   app.post('/:id/prompt', auth.requireAuth, async (c) => {

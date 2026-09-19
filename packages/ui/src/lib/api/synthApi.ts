@@ -1,5 +1,5 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem, ProjectPlan, PromptManifest, PromptState, PromptMeta } from '@itphx/synth-shared'
+import type { TodoItem, ProjectPlan, PromptManifest, PromptState, PromptMeta, SessionStats } from '@itphx/synth-shared'
 import { normalizeModelInfo } from './modelNormalize'
 
 const BASE_URL = '/api/v2'
@@ -343,6 +343,11 @@ export const synthApi = {
   /** AD-070 §2.5: манифест промпта + состояние активного агента + последний promptMeta. */
   async getSessionPrompt(sessionId: string): Promise<PromptInfoResponse> {
     return fetchJSON<PromptInfoResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/prompt`)
+  },
+
+  /** AD-070 §2.6: статистика сессии по агентам и авторам сообщений. */
+  async getSessionStats(sessionId: string): Promise<SessionStats> {
+    return fetchJSON<SessionStats>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/stats`)
   },
 
   async createSession(data: {

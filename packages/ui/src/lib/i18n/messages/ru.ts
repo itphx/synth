@@ -355,6 +355,19 @@ export const dict = {
   'rightPanel.stats.project': 'Проект',
   'rightPanel.stats.noProject': 'Нет проекта',
   'rightPanel.stats.contextWindow': 'Контекстное окно',
+  // AD-070 §2.6: статистика агентов и авторов
+  'rightPanel.stats.agentsStats': 'Статистика агентов',
+  'rightPanel.stats.usersStats': 'Статистика пользователей',
+  'rightPanel.stats.agent': 'Агент',
+  'rightPanel.stats.user': 'Пользователь',
+  'rightPanel.stats.messages': 'Сообщений',
+  'rightPanel.stats.subagents': 'Сабагентов',
+  'rightPanel.stats.subagentTokens': 'Токенов сабагентов',
+  'rightPanel.stats.speed': 'Скорость',
+  'rightPanel.stats.duration': 'Длительность',
+  'rightPanel.stats.cost': 'Стоимость',
+  'rightPanel.stats.expand': 'Показать состав',
+  'rightPanel.stats.collapse': 'Скрыть состав',
   // AD-070 §2.5: состав промпта (манифест)
   'rightPanel.stats.promptComposition': 'Состав промпта',
   'rightPanel.stats.promptTotal': 'Всего символов / ~токенов',
@@ -583,6 +596,15 @@ export const dict = {
   'chat.message.retrying': 'Возвращено в поле ввода',
   'chat.message.forked': 'Создана ветка',
   'chat.message.empty': 'Пустое сообщение',
+
+  // AD-070 §2.6: статистика под ответом ассистента
+  'chat.messageStats.doneIn': 'Готово за {duration}',
+  'chat.messageStats.cache': '{pct} из кэша',
+  'chat.messageStats.in': 'вх',
+  'chat.messageStats.out': 'исх',
+  'chat.messageStats.speed': '{speed}',
+  'chat.messageStats.cost': '{cost}',
+  'chat.messageStats.toggle': 'Статистика ответа',
 
   'chat.session.cleared': 'Сессия очищена',
 

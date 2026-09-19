@@ -9,6 +9,11 @@ interface MessageActionsProps {
   canRetry: boolean
   hasDebug: boolean
   readOnly?: boolean
+  /** У сообщения есть статистика ответа — показать кнопку-переключатель. */
+  hasStats?: boolean
+  /** Строка статистики раскрыта. */
+  statsOpen?: boolean
+  onToggleStats?: () => void
   onCopy: () => void
   onToggle: () => void
   onPin: () => void
@@ -26,6 +31,9 @@ export function MessageActions({
   canRetry,
   hasDebug,
   readOnly,
+  hasStats,
+  statsOpen,
+  onToggleStats,
   onCopy,
   onToggle,
   onPin,
@@ -71,6 +79,15 @@ export function MessageActions({
 
       {!isUser && hasDebug && (
         <ActionBtn onClick={onDebug} title={t('chat.actions.debug')} icon="bug" />
+      )}
+
+      {!isUser && hasStats && (
+        <ActionBtn
+          onClick={() => onToggleStats?.()}
+          title={t('chat.messageStats.toggle')}
+          icon="chart-line"
+          active={statsOpen}
+        />
       )}
     </div>
   )

@@ -4,6 +4,8 @@
 export { FileStore } from './storage/file-store.js';
 export type { StorageConfig } from './storage/file-store.js';
 export { SessionManager } from './sessions/manager.js';
+export { computeSessionStats, MAX_SUBAGENT_DEPTH } from './sessions/stats.js';
+export type { SessionStatsDeps } from './sessions/stats.js';
 export { EventBus, sseEventStream } from './events/bus.js';
 export { QueueProcessor, QueueProcessorManager, enqueueUserMessage } from './queue/processor.js';
 export type { ProcessMessageFn } from './queue/processor.js';

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
-import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, ToolForLLM, ToolContext } from '@itphx/synth-shared';
+import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, ToolForLLM, ToolContext, TokenUsage } from '@itphx/synth-shared';
 import type { AgentRegistry } from '../agents/registry.js';
 import { normalizeAgentModes } from '../agents/normalize.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
@@ -610,6 +610,24 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
 
   const cancelToken: CancellationToken = { cancelled: false, cancel: () => { cancelToken.cancelled = true; } };
 
+  // AD-070 §2.6: usage саб-агента для rollup в статистике родителя. Собирается
+  // по всем итерациям LLM-стрима и пишется в финальное assistant-сообщение
+  // дочерней сессии (промежуточные tool-chain — без usage, чтобы не удваивать).
+  const subagentUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  let subagentModel: string | undefined;
+  const subagentStartedAt = Date.now();
+
+  /** Накопить usage одного LLM-ответа саб-агента (все итерации суммируются). */
+  const accumulateUsage = (usage: TokenUsage | undefined): void => {
+    if (!usage) return;
+    subagentUsage.inputTokens += usage.inputTokens || 0;
+    subagentUsage.outputTokens += usage.outputTokens || 0;
+    subagentUsage.totalTokens += usage.totalTokens || 0;
+    if (usage.cacheReadTokens) subagentUsage.cacheReadTokens = (subagentUsage.cacheReadTokens || 0) + usage.cacheReadTokens;
+    if (usage.cacheWriteTokens) subagentUsage.cacheWriteTokens = (subagentUsage.cacheWriteTokens || 0) + usage.cacheWriteTokens;
+    if (usage.reasoningTokens) subagentUsage.reasoningTokens = (subagentUsage.reasoningTokens || 0) + usage.reasoningTokens;
+  };
+
   // Связка локального cancel-токена саб-агента с родительским сигналом отмены:
   // «Стоп» в родительской сессии (POST /sessions/:id/abort → orchestrator.cancel
   // → внутренний toolAbortController.abort → ctx.abortSignal) должен немедленно
@@ -730,9 +748,13 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           pinned: false,
           hidden: false,
           agentRole: subagentType,
+          model: subagentModel,
+          // AD-070 §2.6: usage, накопленный до отмены, — чтобы rollup не терял токены.
+          usage: subagentUsage,
           ...(partialReasoning ? { reasoning: partialReasoning } : {}),
           metadata: {
             stream_id: extra.streamId,
+            duration_ms: Date.now() - subagentStartedAt,
             partial: true,
             interrupted: true,
           },
@@ -832,6 +854,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             if (chunk.toolCalls && chunk.toolCalls.length > 0) {
               toolCalls = chunk.toolCalls;
             }
+            // AD-070 §2.6: usage и модель саб-агента для статистики родителя.
+            accumulateUsage(chunk.usage);
+            if (chunk.model) subagentModel = chunk.model;
 
             // Стримим размышления/промежуточный текст саб-агента РОДИТЕЛЮ,
             // чтобы в блоке `task` (по parent_call_id) они были видны во время работы.
@@ -911,8 +936,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           pinned: false,
           hidden: false,
           agentRole: subagentType,
+          model: subagentModel,
+          // AD-070 §2.6: usage, потраченный до ошибки, — чтобы rollup его учёл.
+          usage: subagentUsage,
           metadata: {
             stream_id: extra.streamId,
+            duration_ms: Date.now() - subagentStartedAt,
             error: true,
             attempts,
             max_retries: retryMaxAttempts,
@@ -983,6 +1012,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               pinned: false,
               hidden: false,
               agentRole: subagentType,
+              model: subagentModel,
+              // AD-070 §2.6: суммарный usage саб-агента — основа rollup в
+              // статистике родителя (subagent_tokens) и сессионной статистики.
+              usage: subagentUsage,
               // Все размышления сабагента (по итерациям), склеенные в поле
               // reasoning — UI дочерней сессии показывает их блоками
               // (ReasoningBlock разбивает по «\n\n---\n\n»). Без этого размышления
@@ -995,6 +1028,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               // так же аккуратно, как финал родительской.
               metadata: {
                 stream_id: extra.streamId,
+                duration_ms: Date.now() - subagentStartedAt,
                 ...(allSubagentToolCalls.length > 0 ? { tool_results: allSubagentToolCalls } : {}),
                 ...(allSubagentIntermediateTexts.length > 0 ? { intermediate_text_blocks: allSubagentIntermediateTexts } : {}),
               },
