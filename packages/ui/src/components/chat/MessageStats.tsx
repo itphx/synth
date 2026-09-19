@@ -118,7 +118,7 @@ export function MessageStats({ message, className }: MessageStatsProps) {
     <div
       data-testid="message-stats"
       className={cn(
-        'text-[0.6875rem] text-muted-foreground tabular-nums',
+        'text-[0.6875rem] text-foreground tabular-nums',
         'flex flex-nowrap items-center gap-x-1.5 whitespace-nowrap',
         className,
       )}

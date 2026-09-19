@@ -96,7 +96,15 @@ describe('MessageActions: активное состояние кнопок', () 
     const opened = getButton(container, 'Response stats')
     expect(opened.className).toContain('text-primary')
     expect(opened.className).toContain('bg-primary/10')
-    expect(document.querySelector('[data-testid="stats-body"]')).not.toBeNull()
+    const body = document.querySelector('[data-testid="stats-body"]')
+    expect(body).not.toBeNull()
+    // Поповер: выравнивание по левому краю кнопки, сторона top, высота как у
+    // блока выбора режима сессии (34px), содержимое центрировано по вертикали.
+    const popoverContent = body!.parentElement as HTMLElement
+    expect(popoverContent.getAttribute('data-align')).toBe('start')
+    expect(popoverContent.getAttribute('data-side')).toBe('top')
+    expect(popoverContent.className).toContain('h-[34px]')
+    expect(popoverContent.className).toContain('items-center')
 
     await act(async () => {
       opened.dispatchEvent(new MouseEvent('click', { bubbles: true }))

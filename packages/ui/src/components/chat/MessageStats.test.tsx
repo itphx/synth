@@ -235,6 +235,10 @@ describe('MessageStats', () => {
     expect(el.className).not.toContain('flex-col')
     expect(el.className).not.toContain('flex-wrap')
 
+    // Яркость как у основного текста сообщения (не приглушённый muted).
+    expect(el.className).toContain('text-foreground')
+    expect(el.className).not.toContain('text-muted-foreground')
+
     // 7 сегментов → 6 разделителей `·`.
     const separators = container.querySelectorAll('[aria-hidden="true"]')
     expect(separators.length).toBe(6)

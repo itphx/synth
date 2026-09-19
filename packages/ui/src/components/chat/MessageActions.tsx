@@ -94,8 +94,9 @@ export function MessageActions({
           </PopoverTrigger>
           <PopoverContent
             side="top"
-            sideOffset={6}
-            className="w-max max-w-[calc(100vw-2rem)] overflow-x-auto p-3"
+            sideOffset={12}
+            align="start"
+            className="h-[34px] w-max max-w-[calc(100vw-2rem)] overflow-x-auto px-2 py-0 flex items-center"
           >
             {statsContent}
           </PopoverContent>
