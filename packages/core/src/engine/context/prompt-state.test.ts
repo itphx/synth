@@ -24,7 +24,7 @@ function composed(system = 'SYS', stablePrefix = 'STABLE') {
   return {
     system,
     stablePrefix,
-    blocks: [block('role', stablePrefix), block('session.context', 'CTX')],
+    blocks: [block('role', stablePrefix), block('session.info', 'CTX')],
   };
 }
 
@@ -60,7 +60,7 @@ describe('buildPromptState', () => {
     expect(state.systemHash).toBe(hashText('SYS'));
     expect(state.blocks).toEqual([
       { key: 'role', hash: hashText('STABLE'), chars: 6 },
-      { key: 'session.context', hash: hashText('CTX'), chars: 3 },
+      { key: 'session.info', hash: hashText('CTX'), chars: 3 },
     ]);
     expect(typeof state.updatedAt).toBe('string');
   });

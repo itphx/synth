@@ -29,9 +29,6 @@ function pct(rate: number): string {
   return `${Math.round(rate * 100)}%`
 }
 
-/** Порядок тиров в манифесте промпта (AD-070 §2.1). */
-const TIER_ORDER: Record<string, number> = { stable: 0, context: 1, volatile: 2 }
-
 /** AD-070 §2.5: подпись hit/miss последнего хода (из `promptMeta`). */
 function promptCacheLabel(info: PromptInfoResponse, t: (key: string) => string): string {
   const meta = info.lastPromptMeta
@@ -139,12 +136,9 @@ export const StatsTab: React.FC = () => {
     return () => { cancelled = true }
   }, [activeSessionId, lastAssistantMsg?.id])
 
-  // Сортировка манифеста: stable → context → volatile, внутри тира — исходный
-  // порядок (Array.prototype.sort стабилен). Исходный массив не мутируем.
-  const promptEntries = useMemo(() => {
-    const entries = promptInfo?.manifest.entries ?? []
-    return [...entries].sort((a, b) => (TIER_ORDER[a.tier] ?? 99) - (TIER_ORDER[b.tier] ?? 99))
-  }, [promptInfo])
+  // AD-070 §2.5: порядок записей задаёт бэкенд (реальный порядок отправки:
+  // тир → order, tools — последним). UI не пересортировывает.
+  const promptEntries = promptInfo?.manifest.entries ?? []
 
   const hasLastMsgUsage = !!(lastAssistantMsg?.usage && Object.keys(lastAssistantMsg.usage).length > 0)
   const hasSubagents = !!sessionStats?.agents.some((a) => a.subagent_sessions > 0)
@@ -240,7 +234,7 @@ export const StatsTab: React.FC = () => {
                 icon="database-2"
                 color="text-amber-400"
                 label={t('rightPanel.stats.promptTotal')}
-                value={`${fmt(promptInfo.manifest.totalChars)} / ~${fmt(promptInfo.manifest.estTokens)}`}
+                value={`${fmt(promptInfo.manifest.totalChars)}\n~${fmt(promptInfo.manifest.estTokens)}`}
               />
               <StatCell
                 icon="server"
@@ -344,7 +338,7 @@ export const StatsTab: React.FC = () => {
             className="flex w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             <Icon name={historyExpanded ? 'arrow-down-s' : 'arrow-right-s'} className="size-3.5" />
-            <span>{historyExpanded ? t('rightPanel.stats.historyCollapse') : t('rightPanel.stats.historyExpand')}</span>
+            <span>{historyExpanded ? t('rightPanel.stats.collapse') : t('rightPanel.stats.expand')}</span>
           </button>
           {historyExpanded && (
             <div className="mt-2 overflow-x-auto">
@@ -521,8 +515,8 @@ function StatCell({ icon, color, label, value }: { icon: string; color: string; 
   return (
     <div className="flex items-center gap-1.5">
       <Icon name={icon} className={`size-3 ${color} shrink-0`} />
-      <span className="text-muted-foreground">{label}</span>
-      <span className="ml-auto tabular-nums text-foreground">{value}</span>
+      <span className="whitespace-pre-line text-muted-foreground">{label}</span>
+      <span className="ml-auto whitespace-pre-line text-right tabular-nums text-foreground">{value}</span>
     </div>
   )
 }

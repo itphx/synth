@@ -108,6 +108,8 @@ export interface PromptManifestEntry {
   key: string;
   label: string;
   tier: PromptTier;
+  /** Порядок блока внутри тира (реальный порядок отправки, AD-070 §2.5). */
+  order?: number;
   chars: number;
   /** Эвристика: Math.ceil(chars / 4). */
   estTokens: number;

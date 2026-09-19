@@ -6,6 +6,7 @@ import type { Project, Session, SessionSettings, TodoItem } from '@itphx/synth-s
 import { ContextConfig } from './config.js';
 import { ContextBuilder } from './builder.js';
 import { SystemPromptComposer, type ComposerContext } from './composer.js';
+import { sortPromptBlocks } from './prompt-blocks.js';
 import { DebugCollector } from '../../debug.js';
 
 interface SessionOverrides {
@@ -157,7 +158,7 @@ describe('SystemPromptComposer', () => {
     const { system } = await composer.compose(makeCtx(session, { routingEnabled: true }));
 
     const iRole = system.indexOf('ROLE-MARKER');
-    const iContext = system.indexOf('[КОНТЕКСТ СЕССИИ]');
+    const iContext = system.indexOf('[ИНФОРМАЦИЯ О СЕССИИ]');
     const iVolatile = system.indexOf('[CLASSIFICATION]');
 
     expect(iRole).toBeGreaterThanOrEqual(0);
@@ -176,12 +177,12 @@ describe('SystemPromptComposer', () => {
     expect(stablePrefix).toContain('[PLAN GUIDE]');
     expect(stablePrefix).toContain('[MODE POLICY]');
 
-    expect(stablePrefix).not.toContain('[КОНТЕКСТ СЕССИИ]');
+    expect(stablePrefix).not.toContain('[ИНФОРМАЦИЯ О СЕССИИ]');
     expect(stablePrefix).not.toContain('[TODO]');
     expect(stablePrefix).not.toContain('[APPROVED PLAN]');
 
     // Полный system содержит и динамику.
-    expect(system).toContain('[КОНТЕКСТ СЕССИИ]');
+    expect(system).toContain('[ИНФОРМАЦИЯ О СЕССИИ]');
   });
 
   it('безопасное поведение без contextConfig/projectStore', async () => {
@@ -213,7 +214,7 @@ describe('SystemPromptComposer', () => {
     expect(system).not.toContain('ROLE-MARKER');
     expect(system).toContain('[GATEWAY]');
     expect(system).toContain('[MODE POLICY]');
-    expect(system).toContain('[КОНТЕКСТ СЕССИИ]');
+    expect(system).toContain('[ИНФОРМАЦИЯ О СЕССИИ]');
     expect(system).not.toContain('[MODE:');
   });
 
@@ -255,6 +256,44 @@ describe('SystemPromptComposer', () => {
       expect(manifest.entries.find((e) => e.key === 'classification')).toBeUndefined();
     });
 
+    it('entries идут в реальном порядке (tier → order), role первый, tools последний', async () => {
+      const composer = makeComposer();
+      const session = makeSession({ projectId: 'p1' });
+      const tools = [
+        { type: 'function', function: { name: 'read_file', description: 'Read a file', parameters: {} } },
+      ];
+      const ctx = makeCtx(session, { routingEnabled: true, tools });
+
+      const manifest = await composer.manifest(ctx);
+      const systemEntries = manifest.entries.filter((e) => e.source !== 'tools');
+
+      // role — первый, tools — последний (отдельный слой запроса).
+      expect(systemEntries[0]!.key).toBe('role');
+      expect(manifest.entries[manifest.entries.length - 1]!.key).toBe('tools');
+
+      // Монотонность по (tier, order).
+      const tierRank: Record<string, number> = { stable: 0, context: 1, volatile: 2 };
+      for (let i = 1; i < systemEntries.length; i++) {
+        const prev = systemEntries[i - 1]!;
+        const cur = systemEntries[i]!;
+        const prevRank = tierRank[prev.tier]!;
+        const curRank = tierRank[cur.tier]!;
+        expect(prevRank < curRank || (prevRank === curRank && prev.order! <= cur.order!)).toBe(true);
+      }
+
+      // classification (volatile, order 80) идёт перед interview (volatile, order 90).
+      const iClass = systemEntries.findIndex((e) => e.key === 'classification');
+      const iInterview = systemEntries.findIndex((e) => e.key === 'interview');
+      expect(iClass).toBeGreaterThanOrEqual(0);
+      expect(iInterview).toBeGreaterThan(iClass);
+
+      // Порядок совпадает с реальным порядком system-блоков в compose().
+      const composed = await composer.compose(ctx);
+      expect(systemEntries.map((e) => e.key)).toEqual(
+        sortPromptBlocks(composed.blocks).map((b) => b.key),
+      );
+    });
+
     it('паритет: сумма chars манифеста = длины блоков compose(); system учитывает разделители', async () => {
       const composer = makeComposer();
       const session = makeSession({ projectId: 'p1' });
@@ -263,12 +302,15 @@ describe('SystemPromptComposer', () => {
       const manifest = await composer.manifest(makeCtx(session));
 
       // Запись tools (`source: 'tools'`) — не system-блок: сравниваем
-      // system-подмножество манифеста с блоками compose().
+      // system-подмножество манифеста с блоками compose() в реальном порядке
+      // отправки (sortPromptBlocks: тир → order).
+      const sortedBlocks = sortPromptBlocks(composed.blocks);
       const systemEntries = manifest.entries.filter((e) => e.source !== 'tools');
-      expect(systemEntries.map((e) => e.key)).toEqual(composed.blocks.map((b) => b.key));
+      expect(systemEntries.map((e) => e.key)).toEqual(sortedBlocks.map((b) => b.key));
 
       systemEntries.forEach((entry, i) => {
-        const block = composed.blocks[i]!;
+        const block = sortedBlocks[i]!;
+        expect(entry.order).toBe(block.order);
         expect(entry.chars).toBe(block.content.length);
         expect(entry.estTokens).toBe(Math.ceil(block.content.length / 4));
       });

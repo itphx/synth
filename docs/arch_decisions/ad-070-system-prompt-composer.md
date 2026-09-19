@@ -52,7 +52,7 @@
 | 13 | `[APPROVED PLAN]` | там же (из `project.plan`) | динамический |
 | 14 | `[TODO]` | там же (из `session.todos`) | динамический |
 | 15 | `PLAN_GUIDE` | там же | статический |
-| 16 | `[КОНТЕКСТ СЕССИИ]` | `orchestrator.ts:835–836` → `_buildSessionContextPrompt:562–625` | динамический |
+| 16 | `[ИНФОРМАЦИЯ О СЕССИИ]` | `orchestrator.ts:835–836` → `_buildSessionContextPrompt:562–625` | динамический |
 
 Проблема очевидна: **динамические блоки (2, 3, 4) стоят в начале**, а статические (5–12, 15) — после них. Любое изменение sticky/summary/participants сдвигает весь дальнейший префикс и обнуляет кэш, даже если содержательно промпт не изменился.
 
@@ -189,7 +189,7 @@ stable    role-prompt (+ политики: «профиль пуст → про�
             (компакция / смена оверрайда / role этого агента)
 
 context   profile, [PROJECT: info.md], проектные инструкции (AD-069),
-          каталог скиллов (AD-046), [КОНТЕКСТ СЕССИИ]
+          каталог скиллов (AD-046), [ИНФОРМАЦИЯ О СЕССИИ]
           → привязано к проекту/workspace; стабильно внутри сессии
 
 volatile  sticky notes, participants notice, summary, компактные state-маркеры
@@ -470,7 +470,7 @@ type ToolAccess =
 | 7 | `context` | `[PROJECT: …]` (`info.md`) | `project.info` |
 | 8 | `context` | проектные инструкции (AD-069) | `instructions` |
 | 9 | `context` | каталог скиллов (AD-046) | `skills.catalog` |
-| 10 | `context` | `[КОНТЕКСТ СЕССИИ]` | `session.context` |
+| 10 | `context` | `[ИНФОРМАЦИЯ О СЕССИИ]` | `session.info` |
 | 11 | `volatile` | sticky notes | `sticky` |
 | 12 | `volatile` | participants notice | `participants` |
 | 13 | `volatile` | summary (compressed dialog) | `summary` |

@@ -37,7 +37,7 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   classification: 'Classification instruction',
   profile: 'User profile',
   'project.info': 'Project info',
-  'session.context': 'Session context',
+  'session.info': 'Session info',
   sticky: 'Sticky notes',
   participants: 'Participants notice',
   summary: 'Compressed dialog',
@@ -146,10 +146,13 @@ export class SystemPromptComposer {
   async manifest(ctx: ComposerContext): Promise<PromptManifest> {
     const blocks = await this._collectBlocks(ctx);
 
-    const entries: PromptManifestEntry[] = blocks.map((block) => ({
+    // AD-070 §2.5: порядок записей = реальный порядок отправки system-блоков
+    // (`sortPromptBlocks`: тир → order), тот же, что в `compose().system`.
+    const entries: PromptManifestEntry[] = sortPromptBlocks(blocks).map((block) => ({
       key: block.key,
       label: PROMPT_BLOCK_LABELS[block.key] ?? block.key,
       tier: block.tier,
+      order: block.order,
       chars: block.content.length,
       estTokens: Math.ceil(block.content.length / EST_TOKENS_DIVISOR),
       status: block.content === '' ? 'empty' : 'loaded',
@@ -160,9 +163,8 @@ export class SystemPromptComposer {
     // AD-070 §2.5: слой описаний инструментов — отдельный кэшируемый слой
     // (`tools → system → messages`). В system-текст (`compose`) не входит, но
     // отражается в манифесте и учитывается в общих размерах и staticPrefix.
-    // Добавляется в конец списка: system-блоки сохраняют свой порядок (role —
-    // первым), а `tools` идёт после них (UI-сортировка по тирам стабильна и не
-    // поднимает его наверх).
+    // Добавляется в конец списка после system-блоков, идущих в реальном порядке
+    // отправки (`sortPromptBlocks`): role — первым, `tools` — последним.
     const toolsChars = ctx.tools && ctx.tools.length > 0 ? JSON.stringify(ctx.tools).length : 0;
     entries.push({
       key: 'tools',
@@ -198,7 +200,7 @@ export class SystemPromptComposer {
   /**
    * Общий обход источников для `compose()` и `manifest()`: базовые блоки из
    * ContextBuilder + блоки Composer (gateway/plan.guide/mode.policy/
-   * classification/session.context). Возвращает блоки в порядке добавления
+   * classification/session.info). Возвращает блоки в порядке добавления
    * (сортировка по тирам — на вызывающей стороне).
    */
   private async _collectBlocks(ctx: ComposerContext): Promise<PromptBlock[]> {
@@ -225,7 +227,7 @@ export class SystemPromptComposer {
           summaryContent: ctx.summaryContent,
         });
 
-    // Проект загружается один раз для session.context.
+    // Проект загружается один раз для session.info.
     let project: Project | null = null;
     if (session.projectId && this._projectStore) {
       try {
@@ -279,13 +281,13 @@ export class SystemPromptComposer {
       });
     }
 
-    // AD-040: контекст сессии — проект/рабочий каталог/ограничения (context).
+    // AD-040: информация о сессии — проект/рабочий каталог/ограничения (context).
     extraBlocks.push({
-      key: 'session.context',
+      key: 'session.info',
       tier: 'context',
       order: 30,
       content: this._buildSessionContext(session, ctx.workingDir, project, lang),
-      provenance: session.projectId ? `projects/${session.projectId}` : 'session',
+      provenance: session.projectId ? `projects/${session.projectId}` : 'session.info',
     });
 
     return [...baseBlocks, ...extraBlocks];
@@ -314,7 +316,7 @@ export class SystemPromptComposer {
   }
 
   /**
-   * AD-040: контекстный блок сессии — наличие/отсутствие проекта, рабочий
+   * AD-040: блок «информация о сессии» — наличие/отсутствие проекта, рабочий
    * каталог и ограничения. Перенесён из `ChatOrchestrator._buildSessionContextPrompt`.
    */
   private _buildSessionContext(
@@ -327,7 +329,7 @@ export class SystemPromptComposer {
 
     if (session.projectId) {
       if (project) {
-        lines.push('[КОНТЕКСТ СЕССИИ]');
+        lines.push('[ИНФОРМАЦИЯ О СЕССИИ]');
         lines.push(`Проект: ${project.name}`);
         lines.push(`ID проекта: ${session.projectId}`);
         lines.push(`Рабочий каталог: ${project.workspace || workingDir}`);
@@ -339,12 +341,12 @@ export class SystemPromptComposer {
           lines.push(project.invariants);
         }
       } else {
-        lines.push('[КОНТЕКСТ СЕССИИ]');
+        lines.push('[ИНФОРМАЦИЯ О СЕССИИ]');
         lines.push(`Проект: не найден (id: ${session.projectId})`);
         lines.push(`Рабочий каталог: ${workingDir}`);
       }
     } else if (lang === 'en') {
-      lines.push('[SESSION CONTEXT]');
+      lines.push('[SESSION INFO]');
       lines.push('Project: none');
       lines.push(`Working directory: ${workingDir}`);
       lines.push(
@@ -356,7 +358,7 @@ export class SystemPromptComposer {
         + 'create a project and move the session into it.',
       );
     } else {
-      lines.push('[КОНТЕКСТ СЕССИИ]');
+      lines.push('[ИНФОРМАЦИЯ О СЕССИИ]');
       lines.push('Проект: отсутствует');
       lines.push(`Рабочий каталог: ${workingDir}`);
       lines.push(
