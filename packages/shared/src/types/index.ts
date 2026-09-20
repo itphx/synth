@@ -353,6 +353,41 @@ export const DEFAULT_MCP_NETWORK_POLICY: McpNetworkPolicy = {
   list: [...DEFAULT_MCP_PRIVATE_CIDRS],
 };
 
+// --- MCP: уровни/скоуп и эффективный набор (AD-071 §2.2/§2.4) ---
+
+export const MCP_SERVER_LEVELS = ['system', 'project', 'session'] as const;
+export type McpServerLevel = (typeof MCP_SERVER_LEVELS)[number];
+
+/**
+ * AD-071 §2.2: почему сервер отключён в эффективном наборе сессии:
+ * - `config` — выключен в конфиге записи (`config.enabled === false`);
+ * - `session_optout` — явный opt-out в сессии (`mcpDisabledServers`);
+ * - `project_disabled` — проектный сервер не включён в проекте (`project.defaultOn`);
+ * - `not_default` — нет `enabledByDefault` и не включён явно.
+ */
+export const MCP_DISABLED_REASONS = [
+  'session_optout',
+  'project_disabled',
+  'not_default',
+  'config',
+] as const;
+export type McpDisabledReason = (typeof MCP_DISABLED_REASONS)[number];
+
+/**
+ * AD-071 §2.4: эффективное состояние MCP-сервера для сессии. Отдаётся API
+ * `GET /api/v2/sessions/:id/mcp`; отключённые серверы не исчезают из выдачи.
+ */
+export interface McpServerEffective {
+  name: string;
+  level: McpServerLevel;
+  enabled: boolean;
+  /** Причина отключения (только при `enabled === false`). */
+  reason?: McpDisabledReason;
+  connected?: boolean;
+  origin: McpRegistryOrigin;
+  trust: McpRegistryTrust;
+}
+
 export const TODO_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'] as const;
 export type TodoStatus = (typeof TODO_STATUSES)[number];
 
@@ -381,7 +416,13 @@ export interface SessionSettings {
   debugEnabled: boolean;
   streamEnabled: boolean;
   agentRole?: string;
+  /** AD-071 §2.4: явно включённые в сессии серверы (session level). */
   mcpServers?: string[];
+  /**
+   * AD-071 §2.4: явные opt-out серверы сессии (включая системные). Вычитаются
+   * из эффективного набора (`(instance.defaultOn ∪ project.defaultOn ∪ enabled) − disabled`).
+   */
+  mcpDisabledServers?: string[];
   contextOptimization: 'none' | 'sliding_window' | 'summarization' | 'sticky_notes';
   slidingWindowMode: 'messages' | 'tokens';
   slidingWindowMessageLimit: number;
@@ -601,6 +642,16 @@ export interface ProjectLogEntry {
   author?: string;
 }
 
+/**
+ * AD-071 §2.4/§2.5: проектный скоуп MCP — ссылки на записи единого реестра по
+ * имени. `enabled` — доступные проекту серверы (гейт owner/lead),
+ * `defaultOn` — включённые по умолчанию для всех сессий проекта.
+ */
+export interface ProjectMcpSettings {
+  enabled: string[];
+  defaultOn: string[];
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -613,6 +664,8 @@ export interface Project {
   color?: string;
   workspace?: string;
   repos?: GitRepoConfig[];
+  /** AD-071 §2.4: проектный скоуп MCP (owner/lead). */
+  mcp?: ProjectMcpSettings;
   statusMessages: StatusMessage[];
   /** Kanban-план проекта (AD-039). Владеет проектом, а не сессией. */
   plan?: ProjectPlan;

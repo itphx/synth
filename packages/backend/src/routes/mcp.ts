@@ -13,9 +13,17 @@ const addServerSchema = z.object({
 
 const updateServerSchema = mcpServerConfigSchema;
 
-const sessionMcpSchema = z.object({
-  mcpServers: z.array(z.string()),
-});
+const sessionMcpSchema = z
+  .object({
+    /** Явно включённые в сессии серверы (session level). */
+    mcpServers: z.array(z.string()).optional(),
+    /** AD-071 §2.4: явные opt-out сессии (включая системные). */
+    mcpDisabledServers: z.array(z.string()).optional(),
+  })
+  .refine(
+    (v) => v.mcpServers !== undefined || v.mcpDisabledServers !== undefined,
+    { message: 'Требуется mcpServers или mcpDisabledServers' },
+  );
 
 // AD-071 §2.5: единый реестр MCP-серверов.
 const registryAddSchema = z.object({
@@ -257,8 +265,14 @@ export function createMcpRoutes(
     });
   });
 
-  // --- MCP-серверы сессии ---
+  // --- MCP-серверы сессии (legacy; канонический эндпоинт — /api/v2/sessions/:id/mcp) ---
   if (sessionManager) {
+    /** Известные серверы: YAML-конфиг + синхронизированный реестр. */
+    const knownServerNames = (): Set<string> => new Set([
+      ...Object.keys(configStore.getServers()),
+      ...Object.keys(mcpManager?.getConfig() ?? {}),
+    ]);
+
     app.get('/session/:sessionId', kit.requireAuth, async (c) => {
       const sessionId = c.req.param('sessionId');
       const session = await sessionManager.getSession(sessionId);
@@ -274,6 +288,7 @@ export function createMcpRoutes(
 
       return c.json({
         mcpServers: session.settings.mcpServers || [],
+        mcpDisabledServers: session.settings.mcpDisabledServers || [],
         allServers,
       });
     });
@@ -285,28 +300,34 @@ export function createMcpRoutes(
         return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
       }
 
-      const body = await c.req.json();
+      const body = await c.req.json().catch(() => ({}));
       const parsed = sessionMcpSchema.safeParse(body);
       if (!parsed.success) {
         return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
       }
 
-      const { mcpServers } = parsed.data;
+      const { mcpServers, mcpDisabledServers } = parsed.data;
+      const known = knownServerNames();
 
-      for (const name of mcpServers) {
-        if (!configStore.hasServer(name)) {
+      for (const name of [...(mcpServers ?? []), ...(mcpDisabledServers ?? [])]) {
+        if (!known.has(name)) {
           return c.json({ error: { code: 'VALIDATION_ERROR', message: `Сервер "${name}" не настроен` } }, 400);
         }
       }
 
-      session.settings.mcpServers = mcpServers;
+      // Legacy-совместимость: `mcpServers` — явно включённые; `mcpDisabledServers`
+      // — явные opt-out. Оба поля независимы (новый opt-out доступен и здесь).
+      if (mcpServers !== undefined) session.settings.mcpServers = mcpServers;
+      if (mcpDisabledServers !== undefined) session.settings.mcpDisabledServers = mcpDisabledServers;
       await sessionManager.saveSession(session);
 
+      const configured = configStore.getServers();
       return c.json({
-        mcpServers: session.settings.mcpServers,
-        allServers: Object.keys(configStore.getServers()).map((name) => ({
+        mcpServers: session.settings.mcpServers || [],
+        mcpDisabledServers: session.settings.mcpDisabledServers || [],
+        allServers: Object.keys(configured).map((name) => ({
           name,
-          active: mcpServers.includes(name),
+          active: (session.settings.mcpServers || []).includes(name),
         })),
       });
     });
@@ -321,6 +342,8 @@ export function createMcpRoutes(
       if (!mcpManager) return;
       mcpManager.setConfig(await registry.toServerConfigMap());
       mcpManager.setServerOrigins(await registry.toOriginMap());
+      mcpManager.setServerTrusts(await registry.toTrustMap());
+      mcpManager.setDefaultServers(await registry.toDefaultServers());
     };
 
     const currentUser = (c: { get(key: 'user'): unknown }): User | null =>

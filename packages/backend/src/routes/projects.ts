@@ -4,8 +4,9 @@ import { resolve } from 'node:path';
 import { stat } from 'node:fs/promises';
 import type { AuthKit } from '../auth/middleware.js';
 import type { ProjectStore } from '../storage/project-store.js';
-import type { SessionManager } from '@itphx/synth-core';
+import type { SessionManager, McpManager } from '@itphx/synth-core';
 import type { Project } from '@itphx/synth-shared';
+import { ProjectRole } from '@itphx/synth-shared';
 import { serializeProject } from '../lib/serialize.js';
 import { t } from '../lib/i18n.js';
 import { WorkspaceResolver } from '../lib/workspace-resolver.js';
@@ -17,16 +18,37 @@ import { WorkspaceResolver } from '../lib/workspace-resolver.js';
  */
 const planFieldSchema = z.unknown().nullable().optional();
 
+/** AD-071 §2.4: тело проектного MCP-скоупа (ссылки на реестр по имени). */
+const projectMcpUpdateSchema = z.object({
+  enabled: z.array(z.string()).optional(),
+  defaultOn: z.array(z.string()).optional(),
+});
+
 export function createProjectRoutes(
   kit: AuthKit,
   store: ProjectStore,
   sessionManager: SessionManager,
   workspacesRoot: string,
+  /** AD-071 §2.4: источник известных MCP-серверов для проектного скоупа. */
+  mcpManager?: McpManager,
 ): Hono {
   const app = new Hono();
   const wsResolver = new WorkspaceResolver(workspacesRoot,
     (projectId) => store.load(projectId),
   );
+
+  /** AD-071 §2.4: owner проекта или глобальные LEAD/ADMIN (через AuthKit). */
+  const canManageProjectMcp = (
+    c: Parameters<typeof kit.isAdmin>[0],
+    project: Project,
+    userId: string,
+  ): boolean =>
+    kit.isAdmin(c)
+    || (typeof kit.hasRole === 'function' && kit.hasRole(c, 'LEAD'))
+    || project.ownerId === userId
+    || project.members?.[userId] === ProjectRole.OWNER;
+
+  const knownMcpServers = (): string[] => Object.keys(mcpManager?.getConfig() ?? {});
 
   async function validateWorkspaceValue(workspace: string | undefined | null): Promise<string | null> {
     if (!workspace) {
@@ -98,6 +120,66 @@ export function createProjectRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.project', undefined, c) } }, 404);
     }
     return c.json(serializeProject(project));
+  });
+
+  // GET /api/v2/projects/:id/mcp — проектный MCP-скоуп (AD-071 §2.4).
+  // RBAC: ProjectRole.OWNER или глобальные LEAD/ADMIN.
+  app.get('/:id/mcp', kit.requireAuth, async (c) => {
+    const project = await store.load(c.req.param('id'));
+    if (!project) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.project', undefined, c) } }, 404);
+    }
+    const user = (await kit.getCurrentUser(c))!;
+    if (!canManageProjectMcp(c, project, user.id)) {
+      return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
+    }
+    return c.json({
+      enabled: project.mcp?.enabled ?? [],
+      defaultOn: project.mcp?.defaultOn ?? [],
+      knownServers: knownMcpServers(),
+    });
+  });
+
+  // PUT /api/v2/projects/:id/mcp — задать проектный MCP-скоуп (AD-071 §2.4).
+  // RBAC: ProjectRole.OWNER или глобальные LEAD/ADMIN.
+  app.put('/:id/mcp', kit.requireAuth, async (c) => {
+    const project = await store.load(c.req.param('id'));
+    if (!project) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.project', undefined, c) } }, 404);
+    }
+    const user = (await kit.getCurrentUser(c))!;
+    if (!canManageProjectMcp(c, project, user.id)) {
+      return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
+    }
+
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = projectMcpUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
+    }
+
+    const known = new Set(knownMcpServers());
+    for (const name of [...(parsed.data.enabled ?? []), ...(parsed.data.defaultOn ?? [])]) {
+      if (!known.has(name)) {
+        return c.json({
+          error: { code: 'VALIDATION_ERROR', message: `MCP-сервер "${name}" не найден` },
+        }, 400);
+      }
+    }
+
+    const current = project.mcp ?? { enabled: [], defaultOn: [] };
+    project.mcp = {
+      enabled: parsed.data.enabled ?? current.enabled,
+      defaultOn: parsed.data.defaultOn ?? current.defaultOn,
+    };
+    project.updatedAt = new Date().toISOString();
+    await store.save(project);
+
+    return c.json({
+      enabled: project.mcp.enabled,
+      defaultOn: project.mcp.defaultOn,
+      knownServers: knownMcpServers(),
+    });
   });
 
   // PUT /api/v2/projects/:id — обновить

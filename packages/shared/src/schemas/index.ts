@@ -22,6 +22,9 @@ export const sessionSettingsSchema = z.object({
   debugEnabled: z.boolean().default(true),
   streamEnabled: z.boolean().default(true),
   agentRole: z.string().optional(),
+  // AD-071 §2.4: сессионный скоуп MCP (явно включённые / opt-out).
+  mcpServers: z.array(z.string()).optional(),
+  mcpDisabledServers: z.array(z.string()).optional(),
   contextOptimization: z.enum(['none', 'sliding_window', 'summarization', 'sticky_notes']).default('none'),
   slidingWindowMode: z.enum(['messages', 'tokens']).default('messages'),
   slidingWindowMessageLimit: z.number().int().min(1).default(10),
@@ -80,6 +83,12 @@ export const projectUpdateSchema = z.object({
   color: z.string().optional(),
   workspace: z.string().optional(),
   repos: z.array(gitRepoConfigSchema).optional(),
+});
+
+/** AD-071 §2.4: проектный скоуп MCP (ссылки на реестр по имени). */
+export const projectMcpSettingsSchema = z.object({
+  enabled: z.array(z.string()).default([]),
+  defaultOn: z.array(z.string()).default([]),
 });
 
 export const promptRequestSchema = z.object({

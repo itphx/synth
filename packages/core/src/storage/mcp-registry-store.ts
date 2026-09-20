@@ -218,4 +218,25 @@ export class McpRegistryStore {
     }
     return map;
   }
+
+  /** Карта trust для `McpManager.setServerTrusts` (имя → builtin|community). */
+  async toTrustMap(): Promise<Record<string, McpRegistryTrust>> {
+    const entries = await this.list();
+    const map: Record<string, McpRegistryTrust> = {};
+    for (const entry of entries) {
+      map[entry.name] = entry.trust;
+    }
+    return map;
+  }
+
+  /**
+   * AD-071 §2.4: instance-серверы, включённые по умолчанию (`enabledByDefault`)
+   * для `McpManager.setDefaultServers`. Пользовательские записи не входят.
+   */
+  async toDefaultServers(): Promise<string[]> {
+    const entries = await this.list();
+    return entries
+      .filter((e) => e.origin === 'instance' && e.enabledByDefault)
+      .map((e) => e.name);
+  }
 }

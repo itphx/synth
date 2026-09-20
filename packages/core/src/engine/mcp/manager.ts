@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { McpServerConfig, McpNetworkPolicy, McpRegistryOrigin, ToolDefinition } from '@itphx/synth-shared';
+import type { McpServerConfig, McpNetworkPolicy, McpRegistryOrigin, McpRegistryTrust, ToolDefinition } from '@itphx/synth-shared';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolContext, ToolResult } from '@itphx/synth-shared';
@@ -27,6 +27,13 @@ export class McpManager {
   private _networkPolicy: McpNetworkPolicy | undefined;
   /** AD-071 §2.5: origin серверов; сетевая политика применяется только к `user`. */
   private _serverOrigins = new Map<string, McpRegistryOrigin>();
+  /** AD-071 §2.5: trust записей реестра (builtin|community) для отображения. */
+  private _serverTrusts = new Map<string, McpRegistryTrust>();
+  /**
+   * AD-071 §2.4: instance-серверы, включённые по умолчанию (`enabledByDefault`).
+   * `null` — явный набор не задан, берётся из `config.enabledByDefault`.
+   */
+  private _defaultServers: Set<string> | null = null;
 
   setConfig(servers: Record<string, McpServerConfig>): void {
     this._config = servers;
@@ -48,6 +55,33 @@ export class McpManager {
   /** AD-071 §2.5: origin серверов (instance — доверенные, user — community). */
   setServerOrigins(origins: Record<string, McpRegistryOrigin>): void {
     this._serverOrigins = new Map(Object.entries(origins));
+  }
+
+  /** AD-071 §2.5: origin одного сервера (по умолчанию `instance` — config). */
+  getServerOrigin(name: string): McpRegistryOrigin {
+    return this._serverOrigins.get(name) ?? 'instance';
+  }
+
+  /** AD-071 §2.5: trust записей реестра (по умолчанию `builtin`). */
+  setServerTrusts(trusts: Record<string, McpRegistryTrust>): void {
+    this._serverTrusts = new Map(Object.entries(trusts));
+  }
+
+  getServerTrust(name: string): McpRegistryTrust {
+    return this._serverTrusts.get(name) ?? 'builtin';
+  }
+
+  /**
+   * AD-071 §2.4: instance default-on набор (`enabledByDefault` из реестра).
+   * Если не задан явно — деривируется из `config.enabledByDefault`.
+   */
+  setDefaultServers(names: string[]): void {
+    this._defaultServers = new Set(names);
+  }
+
+  isDefaultServer(name: string): boolean {
+    if (this._defaultServers) return this._defaultServers.has(name);
+    return this._config[name]?.enabledByDefault === true;
   }
 
   /**

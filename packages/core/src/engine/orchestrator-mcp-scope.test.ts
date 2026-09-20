@@ -82,7 +82,7 @@ class ToolCaptureProvider extends BaseProvider {
 }
 
 /** Мок McpManager: лениво регистрирует MCP-тулы активных серверов. */
-function makeMockMcpManager(): McpManager {
+function makeMockMcpManager(opts: { defaultOn?: string[] } = {}): McpManager {
   const tools: Record<string, string[]> = { srvA: ['search'], srvB: ['fetch'] };
   const descriptions: Record<string, string> = { srvA: 'Сервер A', srvB: 'Сервер B' };
   const connected = new Set<string>();
@@ -111,6 +111,16 @@ function makeMockMcpManager(): McpManager {
     },
     getServerStatus(name: string) {
       return connected.has(name) ? 'connected' : 'disconnected';
+    },
+    getServerOrigin(name: string) {
+      // srvB — пользовательский (community), srvA — instance.
+      return name === 'srvB' ? 'user' : 'instance';
+    },
+    getServerTrust() {
+      return 'builtin';
+    },
+    isDefaultServer(name: string) {
+      return (opts.defaultOn ?? []).includes(name);
     },
     getServerTools(name: string) {
       if (!connected.has(name)) return null;
@@ -141,8 +151,12 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
     ToolCaptureProvider.lastTools = undefined;
     ProviderFactory.register('toolcapture', ToolCaptureProvider);
 
+    orchestrator = makeOrchestrator(makeMockMcpManager());
+  });
+
+  function makeOrchestrator(mcpManager: McpManager): ChatOrchestrator {
     const toolRegistry = createToolRegistry();
-    orchestrator = new ChatOrchestrator({
+    return new ChatOrchestrator({
       sessionManager,
       eventBus: new EventBus(),
       contextBuilder: makeCtxBuilder(),
@@ -157,9 +171,9 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
       defaultWorkingDir: tmpDir,
       toolRegistry,
       agentRegistry: createAgentRegistry(toolRegistry),
-      mcpManager: makeMockMcpManager(),
+      mcpManager,
     });
-  });
+  }
 
   afterEach(async () => {
     ProviderFactory['_providers'].delete('toolcapture');
@@ -266,5 +280,45 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
     expect(toolNames()).toContain('read_file');
     expect(toolNames()).not.toContain('srvA_search');
     expect(toolNames()).not.toContain('srvB_fetch');
+  });
+
+  it('AD-071 §2.4: instance defaultOn включается, session opt-out отключает', async () => {
+    orchestrator = makeOrchestrator(makeMockMcpManager({ defaultOn: ['srvA'] }));
+    const session = await sessionManager.createSession({
+      title: 'opt-out',
+      settings: {
+        provider: 'toolcapture',
+        model: 'm',
+        agentRole: 'developer',
+        mcpServers: [],
+        mcpDisabledServers: ['srvA'],
+      },
+    });
+    await runTurn(session.id);
+
+    // srvA включён по умолчанию, но сессия сделала opt-out — тулы недоступны.
+    expect(toolNames()).toContain('read_file');
+    expect(toolNames()).not.toContain('srvA_search');
+  });
+
+  it('AD-071 §2.4: resolveMcpServers отдаёт уровень и причину', async () => {
+    orchestrator = makeOrchestrator(makeMockMcpManager({ defaultOn: ['srvA'] }));
+    const session = await sessionManager.createSession({
+      title: 'scope',
+      settings: {
+        provider: 'toolcapture',
+        model: 'm',
+        agentRole: 'developer',
+        mcpServers: ['srvB'],
+        mcpDisabledServers: ['srvA'],
+      },
+    });
+
+    const servers = await orchestrator.resolveMcpServers(session);
+    const srvA = servers.find((s) => s.name === 'srvA')!;
+    const srvB = servers.find((s) => s.name === 'srvB')!;
+
+    expect(srvA).toMatchObject({ level: 'system', enabled: false, reason: 'session_optout' });
+    expect(srvB).toMatchObject({ level: 'session', enabled: true });
   });
 });

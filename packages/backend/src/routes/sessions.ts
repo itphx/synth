@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AuthKit } from '../auth/middleware.js';
 import type { SessionManager } from '@itphx/synth-core';
 import type { EventBus } from '@itphx/synth-core';
@@ -15,6 +16,25 @@ import { t } from '../lib/i18n.js';
 import type { EventHub } from '../events/hub.js';
 import type { ProjectStore } from '../storage/project-store.js';
 
+/**
+ * AD-071 §2.4: тело переключения MCP в сессии. Поддерживаются:
+ * - точечный toggle `{ name, enabled }` (в т.ч. opt-out системного сервера);
+ * - полная замена `{ mcpServers?, mcpDisabledServers? }`.
+ */
+const sessionMcpUpdateSchema = z
+  .object({
+    name: z.string().min(1).optional(),
+    enabled: z.boolean().optional(),
+    mcpServers: z.array(z.string()).optional(),
+    mcpDisabledServers: z.array(z.string()).optional(),
+  })
+  .refine(
+    (v) => v.name !== undefined
+      || v.mcpServers !== undefined
+      || v.mcpDisabledServers !== undefined,
+    { message: 'Требуется name, mcpServers или mcpDisabledServers' },
+  );
+
 export function createSessionRoutes(
   kit: AuthKit,
   sessionManager: SessionManager,
@@ -30,6 +50,22 @@ export function createSessionRoutes(
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
+
+  // AD-071 §2.4: владелец сессии — обычный пользователь, управляющий её MCP-скоупом.
+  const isSessionOwner = (session: Session, userId: string): boolean =>
+    (session.ownerId ?? session.userId) === userId;
+
+  /** AD-071 §2.4: эффективный MCP-скоуп сессии (включая отключённые с причиной). */
+  const buildSessionMcpPayload = async (session: Session) => {
+    const servers = await orchestrator.resolveMcpServers(session);
+    return {
+      servers,
+      enabled: servers.filter((s) => s.enabled).map((s) => s.name),
+      disabled: servers.filter((s) => !s.enabled).map((s) => s.name),
+      mcpServers: session.settings.mcpServers ?? [],
+      mcpDisabledServers: session.settings.mcpDisabledServers ?? [],
+    };
+  };
   const resolveAuthorName = profilesStore
     ? async (author: string): Promise<string | null> => {
         const profile = await profilesStore.getProfileByUsername(author);
@@ -82,6 +118,74 @@ export function createSessionRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
     return c.json(serializeSession(session, { agentRegistry }));
+  });
+
+  // GET /api/v2/sessions/:id/mcp — эффективный MCP-скоуп (AD-071 §2.4).
+  // Показывает все серверы, включая отключённые (reason). RBAC: владелец сессии/ADMIN.
+  app.get('/:id/mcp', kit.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+    const user = (await kit.getCurrentUser(c))!;
+    if (!isSessionOwner(session, user.id) && !kit.isAdmin(c)) {
+      return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
+    }
+    return c.json(await buildSessionMcpPayload(session));
+  });
+
+  // PUT /api/v2/sessions/:id/mcp — переключение MCP пользователем (AD-071 §2.4),
+  // включая opt-out системных серверов. RBAC: владелец сессии/ADMIN.
+  app.put('/:id/mcp', kit.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+    const user = (await kit.getCurrentUser(c))!;
+    if (!isSessionOwner(session, user.id) && !kit.isAdmin(c)) {
+      return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
+    }
+
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = sessionMcpUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
+    }
+
+    const { name, enabled, mcpServers, mcpDisabledServers } = parsed.data;
+    const known = new Set((await orchestrator.resolveMcpServers(session)).map((s) => s.name));
+    const toValidate = name !== undefined
+      ? [name]
+      : [...(mcpServers ?? []), ...(mcpDisabledServers ?? [])];
+    for (const serverName of toValidate) {
+      if (!known.has(serverName)) {
+        return c.json({
+          error: { code: 'VALIDATION_ERROR', message: `MCP-сервер "${serverName}" не найден` },
+        }, 400);
+      }
+    }
+
+    if (name !== undefined) {
+      // Точечный toggle: enabled → session.enabled; disabled → opt-out.
+      const enabledList = new Set(session.settings.mcpServers ?? []);
+      const disabledList = new Set(session.settings.mcpDisabledServers ?? []);
+      if (enabled === false) {
+        enabledList.delete(name);
+        disabledList.add(name);
+      } else {
+        enabledList.add(name);
+        disabledList.delete(name);
+      }
+      session.settings.mcpServers = [...enabledList];
+      session.settings.mcpDisabledServers = [...disabledList];
+    } else {
+      if (mcpServers !== undefined) session.settings.mcpServers = mcpServers;
+      if (mcpDisabledServers !== undefined) session.settings.mcpDisabledServers = mcpDisabledServers;
+    }
+
+    await sessionManager.updateSession(session);
+    eventBus.publish(session.id, 'session.updated', serializeSession(session, { agentRegistry }));
+    return c.json(await buildSessionMcpPayload(session));
   });
 
   // GET /api/v2/sessions/:id/secrets — карта обфускации LLM Gateway (AD-036).

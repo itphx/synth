@@ -10,6 +10,8 @@
 
 import type {
   AgentDefinition,
+  McpDisabledReason,
+  McpServerLevel,
   Message,
   Project,
   PromptManifest,
@@ -73,8 +75,14 @@ export interface ComposerMcpServer {
   instructions?: string;
   tools: ComposerMcpServerTool[];
   status: ComposerMcpServerStatus;
-  /** Причина `disabled`: выключен в конфиге или не включён в сессии. */
-  disabledReason?: 'config' | 'session';
+  /** AD-071 §2.4: уровень сервера (`system`/`project`/`session`). */
+  level?: McpServerLevel;
+  /**
+   * AD-071 §2.2: причина `disabled` — конфиг, opt-out сессии, проектный
+   * default или отсутствие `enabledByDefault`. `'session'` оставлен для
+   * обратной совместимости с прежним значением.
+   */
+  disabledReason?: McpDisabledReason | 'session';
 }
 
 export interface ComposerContext {
@@ -444,6 +452,9 @@ export class SystemPromptComposer {
     for (const server of servers) {
       lines.push('');
       lines.push(`## ${server.name}`);
+      if (server.level) {
+        lines.push(`${en ? 'Level' : 'Уровень'}: ${server.level}`);
+      }
       if (server.description) {
         lines.push(`${en ? 'Description' : 'Описание'}: ${server.description}`);
       }
@@ -471,13 +482,30 @@ export class SystemPromptComposer {
     const reasonText = (reason: ComposerMcpServer['disabledReason']): string => {
       if (reason === 'config') return en ? 'disabled in config' : 'отключён в конфиге';
       if (reason === 'session') return en ? 'not enabled in session' : 'не включён в сессии';
+      if (reason === 'session_optout') {
+        return en ? 'disabled in session (opt-out)' : 'отключён в сессии (opt-out)';
+      }
+      if (reason === 'project_disabled') {
+        return en ? 'not enabled in project' : 'не включён в проекте';
+      }
+      if (reason === 'not_default') {
+        return en ? 'not enabled by default' : 'не включён по умолчанию';
+      }
       return '';
     };
 
     const lines: string[] = [en ? '[MCP STATUS]' : '[СТАТУС MCP]'];
     for (const server of servers) {
-      const reason = server.status === 'disabled' ? reasonText(server.disabledReason) : '';
-      lines.push(`- ${server.name}: ${server.status}${reason ? ` (${reason})` : ''}`);
+      const parts: string[] = [];
+      if (server.status === 'disabled') {
+        const reason = reasonText(server.disabledReason);
+        if (reason) parts.push(reason);
+      }
+      if (server.level) {
+        parts.push(`${en ? 'level' : 'уровень'}=${server.level}`);
+      }
+      const suffix = parts.length > 0 ? ` (${parts.join(', ')})` : '';
+      lines.push(`- ${server.name}: ${server.status}${suffix}`);
     }
 
     return lines.join('\n');

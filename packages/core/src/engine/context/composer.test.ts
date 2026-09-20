@@ -586,6 +586,48 @@ describe('SystemPromptComposer', () => {
       expect(system).not.toContain('Description:');
       expect(system).not.toContain('Instructions:');
     });
+
+    it('AD-071 §2.4: level-aware — уровень сервера и причина отключения', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const servers: ComposerMcpServer[] = [
+        {
+          name: 'sys-srv',
+          description: 'Системный',
+          tools: [],
+          status: 'disabled',
+          level: 'system',
+          disabledReason: 'session_optout',
+        },
+        {
+          name: 'proj-srv',
+          description: 'Проектный',
+          tools: [],
+          status: 'disabled',
+          level: 'project',
+          disabledReason: 'project_disabled',
+        },
+        {
+          name: 'community-srv',
+          tools: [],
+          status: 'disabled',
+          level: 'session',
+          disabledReason: 'not_default',
+        },
+      ];
+
+      const { system } = await composer.compose(makeCtx(session, { mcpServers: servers }));
+
+      // Уровень показан в stable-блоке описаний.
+      expect(system).toContain('Уровень: system');
+      expect(system).toContain('Уровень: project');
+      expect(system).toContain('Уровень: session');
+
+      // volatile-статус: причина + уровень для отключённых.
+      expect(system).toContain('- sys-srv: disabled (отключён в сессии (opt-out), уровень=system)');
+      expect(system).toContain('- proj-srv: disabled (не включён в проекте, уровень=project)');
+      expect(system).toContain('- community-srv: disabled (не включён по умолчанию, уровень=session)');
+    });
   });
 
   describe('tools.policy (AD-071 §2.3)', () => {

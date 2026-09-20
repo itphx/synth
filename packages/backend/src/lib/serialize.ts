@@ -128,6 +128,8 @@ export function serializeProject(project: Project) {
     color: project.color || null,
     workspace: project.workspace || null,
     repos: project.repos || null,
+    /** AD-071 §2.4: проектный скоуп MCP (owner/lead). */
+    mcp: project.mcp ?? null,
     status_messages: (project.statusMessages || []).map((sm: StatusMessage) => ({
       id: sm.id,
       text: sm.text,

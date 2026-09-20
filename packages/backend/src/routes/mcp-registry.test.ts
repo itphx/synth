@@ -60,6 +60,8 @@ function createMockMcpManager() {
   return {
     setConfig: vi.fn(),
     setServerOrigins: vi.fn(),
+    setServerTrusts: vi.fn(),
+    setDefaultServers: vi.fn(),
     disconnectServer: vi.fn(async () => {}),
     getConfiguredServers: vi.fn(() => []),
   };

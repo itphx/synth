@@ -131,6 +131,15 @@ function makeMockMcpManager(): McpManager {
     getServerStatus(name: string) {
       return connected.has(name) ? 'connected' : 'disconnected';
     },
+    getServerOrigin() {
+      return 'instance';
+    },
+    getServerTrust() {
+      return 'builtin';
+    },
+    isDefaultServer() {
+      return false;
+    },
     getServerTools(name: string) {
       if (!connected.has(name)) return null;
       return (tools[name] ?? []).map((tool) => ({

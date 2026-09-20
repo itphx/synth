@@ -227,6 +227,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     await mcpRegistryStore.seedFromConfig(backendConfig.synth.mcp.servers);
     mcpManager.setConfig(await mcpRegistryStore.toServerConfigMap());
     mcpManager.setServerOrigins(await mcpRegistryStore.toOriginMap());
+    mcpManager.setServerTrusts(await mcpRegistryStore.toTrustMap());
+    mcpManager.setDefaultServers(await mcpRegistryStore.toDefaultServers());
     // AD-071 §2.3.1: политика сетевого доступа HTTP-серверов (SSRF/egress).
     mcpManager.setNetworkPolicy(backendConfig.synth.mcp.networkPolicy);
 
@@ -456,7 +458,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.get('/api/v2/i18n/translations/en', (c) => c.json(getTranslations('en')));
 
     // Projects routes
-    app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, backendConfig.workspacesRoot));
+    app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, backendConfig.workspacesRoot, mcpManager));
 
     // Sessions routes
     app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore, profilesStore));

@@ -84,6 +84,8 @@ export class SessionManager {
         // AD-071 §2.1: активные MCP-серверы сессии. Раньше терялись при создании
         // (`POST /sessions` с `settings.mcpServers`) — сессия теряла их.
         mcpServers: data.settings?.mcpServers,
+        // AD-071 §2.4: явные opt-out сессии (включая системные) не теряются.
+        mcpDisabledServers: data.settings?.mcpDisabledServers,
         provider: data.settings?.provider,
         model: data.settings?.model,
         systemPrompt: data.settings?.systemPrompt,

@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, ToolsPolicy } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, ToolsPolicy, McpServerEffective } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
@@ -33,6 +33,7 @@ import {
 import type { ToolRegistry } from './tools/registry.js';
 import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
+import { resolveMcpScope, type McpScopeDecision } from './mcp/scope.js';
 import { info, warning } from '../logger.js';
 import { autoTitleSession } from '../sessions/auto-title.js';
 import { ModelRouter } from './router/router.js';
@@ -853,32 +854,74 @@ export class ChatOrchestrator {
     return unavailable;
   }
 
+  /** AD-071 §2.4: загрузка проекта сессии (для проектного MCP-скоупа). */
+  private async _loadProject(session: Session): Promise<Project | null> {
+    if (!session.projectId || !this._projectStore) return null;
+    try {
+      return await this._projectStore.load(session.projectId);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * AD-071 §2.4: решения по эффективному набору MCP — `(instance.defaultOn ∪
+   * project.defaultOn ∪ session.enabled) − session.disabled`, уровень по
+   * приоритету `system > project > session`. Чистый резолвинг — I/O только
+   * загрузка проекта (передаётся снаружи, чтобы не читать дважды).
+   */
+  private _resolveMcpDecisions(session: Session, project: Project | null): McpScopeDecision[] {
+    const manager = this._mcpManager;
+    if (!manager) return [];
+    const config = manager.getConfig();
+    const servers = Object.entries(config).map(([name, cfg]) => ({
+      name,
+      origin: manager.getServerOrigin(name),
+      enabledByDefault: manager.isDefaultServer(name),
+      configEnabled: cfg.enabled !== false,
+    }));
+    return resolveMcpScope(servers, project?.mcp, {
+      enabled: session.settings.mcpServers,
+      disabled: session.settings.mcpDisabledServers,
+    });
+  }
+
+  /**
+   * AD-071 §2.4: эффективный список MCP-серверов сессии (включая отключённые с
+   * причиной) — единый источник для API `GET /sessions/:id/mcp` и промпта.
+   */
+  async resolveMcpServers(session: Session): Promise<McpServerEffective[]> {
+    const manager = this._mcpManager;
+    if (!manager) return [];
+    const project = await this._loadProject(session);
+    const decisions = this._resolveMcpDecisions(session, project);
+    return decisions.map((d) => ({
+      name: d.name,
+      level: d.level,
+      enabled: d.enabled,
+      ...(d.reason ? { reason: d.reason } : {}),
+      connected: d.enabled && manager.getServerStatus(d.name) === 'connected',
+      origin: d.origin,
+      trust: manager.getServerTrust(d.name),
+    }));
+  }
+
   /**
    * AD-071 §2.2: данные MCP-серверов для промпта (`mcp.servers` — stable,
    * `mcp.status` — volatile). Возвращает **все** настроенные серверы, включая
-   * отключённые (с причиной `config`/`session`), чтобы состав был наблюдаем.
+   * отключённые (с уровнем и причиной), чтобы состав был наблюдаем.
    * `undefined`, если менеджера нет или список серверов пуст (тогда блоков нет).
    */
-  private _collectComposerMcpServers(activeMcpServers: string[]): ComposerMcpServer[] | undefined {
+  private _collectComposerMcpServers(decisions: McpScopeDecision[]): ComposerMcpServer[] | undefined {
     const manager = this._mcpManager;
     if (!manager) return undefined;
+    if (decisions.length === 0) return undefined;
 
-    const config = manager.getConfig();
-    const names = Object.keys(config);
-    if (names.length === 0) return undefined;
-
-    const active = new Set(activeMcpServers);
-    return names.map((name) => {
-      const serverConfig = config[name];
+    return decisions.map((decision) => {
+      const name = decision.name;
       let status: ComposerMcpServerStatus;
-      let disabledReason: ComposerMcpServer['disabledReason'];
-
-      if (serverConfig?.enabled === false) {
+      if (!decision.enabled) {
         status = 'disabled';
-        disabledReason = 'config';
-      } else if (!active.has(name)) {
-        status = 'disabled';
-        disabledReason = 'session';
       } else {
         const raw = manager.getServerStatus(name);
         status = raw === 'circuit-open' ? 'circuit-open' : raw === 'connected' ? 'connected' : 'error';
@@ -890,6 +933,7 @@ export class ChatOrchestrator {
 
       return {
         name,
+        level: decision.level,
         ...(description ? { description } : {}),
         ...(instructions ? { instructions } : {}),
         tools: tools.map((tool) => ({
@@ -897,7 +941,7 @@ export class ChatOrchestrator {
           ...(tool.description ? { description: tool.description } : {}),
         })),
         status,
-        ...(disabledReason ? { disabledReason } : {}),
+        ...(decision.reason ? { disabledReason: decision.reason } : {}),
       };
     });
   }
@@ -959,10 +1003,13 @@ export class ChatOrchestrator {
       .map((m) => m.content)
       .join('\n\n');
 
-    // AD-071 §2.1/§2.3: тот же per-session список инструментов, что уходит в
-    // запрос (`_processMessage`) — встроенные + MCP активных серверов сессии;
+    // AD-071 §2.1/§2.3/§2.4: тот же per-session список инструментов, что уходит в
+    // запрос (`_processMessage`) — встроенные + MCP эффективного набора сессии
+    // (instance defaultOn ∪ project defaultOn ∪ session enabled − opt-out);
     // в режиме `available` — только доступные (mode/role/mcpToolSettings).
-    const activeMcpServers = session.settings.mcpServers || [];
+    const project = await this._loadProject(session);
+    const mcpDecisions = this._resolveMcpDecisions(session, project);
+    const activeMcpServers = mcpDecisions.filter((d) => d.enabled).map((d) => d.name);
     const planMode: PlanMode = session.settings.planMode ?? this._defaultPlanMode ?? 'auto';
     const sessionMode: SessionMode = session.mode ?? 'act';
     const planApproved = Boolean(session.planApproved);
@@ -997,8 +1044,8 @@ export class ChatOrchestrator {
         ? toolSelection.mcp as unknown as Array<Record<string, unknown>>
         : undefined,
       toolsPolicy,
-      // AD-071 §2.2: блоки `mcp.servers`/`mcp.status` — все настроенные серверы.
-      mcpServers: this._collectComposerMcpServers(activeMcpServers),
+      // AD-071 §2.2: блоки `mcp.servers`/`mcp.status` — все серверы эффективного набора.
+      mcpServers: this._collectComposerMcpServers(mcpDecisions),
     };
 
     const manifest = await this._composer.manifest(ctx);
@@ -1263,17 +1310,8 @@ export class ChatOrchestrator {
       // истории (до сборки LLM-сообщений). Идемпотентно — при неизменном
       // состоянии ничего не добавляется; system prompt при этом не меняется.
       const language = session.settings.language || 'ru';
-      // AD-071 §2.1: активные MCP-серверы сессии — per-session скоуп. Определяем
-      // до state-сообщений (unavailable-подсказки) и до сборки tools.
-      const activeMcpServers = session.settings.mcpServers || [];
-      const activeMcpSet = new Set(activeMcpServers);
-      // AD-071 §2.3: эффективная политика инструментов для этого хода (per-session
-      // override → глобальная; `auto` → по типу провайдера). В `available` тулы
-      // фильтруются по доступности, а подсказки `unavailable` не нужны.
-      const toolsPolicy = this._resolveToolsPolicy(session, provider.type);
-      const availability = toolsPolicy === 'available'
-        ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef)
-        : undefined;
+      // AD-071 §2.4: проект сессии — носитель project-скоупа MCP (загружаем один
+      // раз: нужен и state-сообщениям, и резолвингу MCP).
       let projectForState: Project | null = null;
       if (session.projectId && this._projectStore) {
         try {
@@ -1282,6 +1320,19 @@ export class ChatOrchestrator {
           projectForState = null;
         }
       }
+      // AD-071 §2.1/§2.4: эффективный набор MCP сессии — per-session скоуп:
+      // (instance defaultOn ∪ project defaultOn ∪ session enabled) − opt-out.
+      // Определяем до state-сообщений (unavailable-подсказки) и до сборки tools.
+      const mcpDecisions = this._resolveMcpDecisions(session, projectForState);
+      const activeMcpServers = mcpDecisions.filter((d) => d.enabled).map((d) => d.name);
+      const activeMcpSet = new Set(activeMcpServers);
+      // AD-071 §2.3: эффективная политика инструментов для этого хода (per-session
+      // override → глобальная; `auto` → по типу провайдера). В `available` тулы
+      // фильтруются по доступности, а подсказки `unavailable` не нужны.
+      const toolsPolicy = this._resolveToolsPolicy(session, provider.type);
+      const availability = toolsPolicy === 'available'
+        ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef)
+        : undefined;
       const stateSync = syncStateMessages(session, {
         contextConfig: this._contextConfig,
         language,
@@ -1343,8 +1394,8 @@ export class ChatOrchestrator {
         summaryContent: summaryContent || undefined,
         // AD-071 §2.3: политика влияет на тир `tools` и инструкцию `tools.guide`.
         toolsPolicy,
-        // AD-071 §2.2: блоки `mcp.servers`/`mcp.status` — все настроенные серверы.
-        mcpServers: this._collectComposerMcpServers(activeMcpServers),
+        // AD-071 §2.2: блоки `mcp.servers`/`mcp.status` — все серверы эффективного набора.
+        mcpServers: this._collectComposerMcpServers(mcpDecisions),
         // AD-070 §2.5: per-message collector доходит до Composer через контекст
         // (Composer создаётся один раз, а коллектор живёт в рамках хода).
         debugCollector,

@@ -59,6 +59,8 @@ export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
 export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions, normalizeAgentModes, isModeApplicable, DEFAULT_AGENT_ID } from './engine/agents/index.js';
 export { McpClient, McpManager } from './engine/mcp/index.js';
 export type { McpToolDef, McpToolResult } from './engine/mcp/index.js';
+export { resolveMcpScope } from './engine/mcp/index.js';
+export type { McpScopeServer, McpScopeSession, McpScopeDecision } from './engine/mcp/index.js';
 export {
   evaluateMcpNetworkAccess,
   isIpInCidr,

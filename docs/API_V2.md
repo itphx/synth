@@ -220,6 +220,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/sessions` | оба | auth | Список сессий; `?project_id=` |
 | POST | `/api/v2/sessions` | оба | auth | Создать; `{name|title, project_id, engine, settings}` → 201 |
 | GET | `/api/v2/sessions/:id` | оба | auth | Сессия (сериализованная) |
+| GET | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Эффективный MCP-скоуп (AD-071 §2.4): `{servers:[{name, level, enabled, reason?, connected?, origin, trust}], enabled, disabled, mcpServers, mcpDisabledServers}` |
+| PUT | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Переключить MCP: `{name, enabled}` или `{mcpServers?, mcpDisabledServers?}` (opt-out системных — через `enabled:false`) |
 | PATCH | `/api/v2/sessions/:id` | оба | auth | `{name, title, engine, mode: plan\|act\|yolo, settings, project_id}` |
 | DELETE | `/api/v2/sessions/:id` | оба | auth | Удалить → 204 |
 | GET | `/api/v2/sessions/:id/secrets` | backend | ADMIN/AUDITOR | Карта обфускации Gateway `{sessionId, secrets}` |
@@ -281,6 +283,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | PUT | `/api/v2/projects/:id` | оба | auth | Обновить поля (name, workspace, plan, invariants, …) |
 | DELETE | `/api/v2/projects/:id` | оба | auth | Удалить → 204 |
 | GET | `/api/v2/projects/:id/stats` | backend | auth | Агрегаты токенов/сообщений |
+| GET | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Проектный MCP-скоуп (AD-071 §2.4): `{enabled, defaultOn, knownServers}` |
+| PUT | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Задать `{enabled?, defaultOn?}` (ссылки на реестр по имени) |
 | POST | `/api/v2/projects/:id/publish` | core | auth | Локальный проект → сервер (гибрид) |
 | POST | `/api/v2/projects/:id/fork-local` | core | auth | Серверный проект → локальный мир (гибрид) |
 
@@ -374,9 +378,13 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | DELETE | `/api/v2/mcp/servers/:name` | backend | ADMIN | Удалить |
 | POST | `/api/v2/mcp/servers/:name/test` | backend | ADMIN | Проверить подключение (+опц. `config`) |
 | GET | `/api/v2/mcp/servers/:name/tools` | backend | auth | Инструменты сервера (probe при необходимости) |
-| GET | `/api/v2/mcp/session/:sessionId` | backend | auth | `{mcpServers, allServers}` |
-| PUT | `/api/v2/mcp/session/:sessionId` | backend | auth | `{mcpServers:[]}` |
+| GET | `/api/v2/mcp/session/:sessionId` | backend | auth | Legacy: `{mcpServers, mcpDisabledServers, allServers}` (канонический — `/sessions/:id/mcp`) |
+| PUT | `/api/v2/mcp/session/:sessionId` | backend | auth | Legacy: `{mcpServers?, mcpDisabledServers?}` (совместим с `/sessions/:id/mcp`) |
 | POST | `/api/v2/mcp/probe` | оба | auth | `{name}` → `{name, tools}`, `MCP_CONNECT_ERROR` |
+| GET | `/api/v2/mcp/registry` | backend | auth | Единый реестр MCP-серверов (AD-071 §2.5): `{entries}` |
+| POST | `/api/v2/mcp/registry` | backend | auth (stdio — ADMIN) | Добавить запись: `{name, config, enabledByDefault?, origin?}` → 201; stdio — только ADMIN, HTTP — любой |
+| PUT | `/api/v2/mcp/registry/:id` | backend | автор/ADMIN | Обновить запись |
+| DELETE | `/api/v2/mcp/registry/:id` | backend | автор/ADMIN | Удалить запись |
 
 ### 5.17 Audit — `/api/v2/audit` (backend)
 
