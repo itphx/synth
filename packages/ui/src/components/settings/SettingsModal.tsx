@@ -15,6 +15,7 @@ import { MicroFirstDefaults } from "./MicroFirstDefaults"
 import { SecuritySettings } from "./SecuritySettings"
 import { McpUserSettings } from "./McpUserSettings"
 import { McpAdminSettings } from "./McpAdminSettings"
+import { ToolsDisabledSettings } from "./ToolsDisabledSettings"
 import { DashboardPanel } from "../admin/DashboardPanel"
 import { SessionsPanel } from "../admin/SessionsPanel"
 import { ProjectsPanel } from "../admin/ProjectsPanel"
@@ -44,6 +45,7 @@ export const CATEGORIES: CategoryItem[] = [
   { id: "dashboard", labelKey: "settings.category.dashboard", icon: "home", roles: ["ADMIN", "LEAD"] },
   { id: "security", labelKey: "settings.category.security", icon: "shield-keyhole", roles: ["ADMIN"] },
   { id: "mcpAdmin", labelKey: "settings.category.mcpAdmin", icon: "tools", roles: ["ADMIN"] },
+  { id: "builtinTools", labelKey: "settings.category.builtinTools", icon: "terminal-box", roles: ["ADMIN"] },
   { id: "sessions", labelKey: "settings.category.sessions", icon: "chat-new", roles: ["ADMIN", "LEAD"] },
   { id: "projects", labelKey: "settings.category.projects", icon: "briefcase", roles: ["ADMIN", "LEAD"] },
   { id: "providers", labelKey: "settings.category.providers", icon: "server", roles: ["ADMIN"] },
@@ -133,6 +135,7 @@ export const SettingsModal = () => {
             {settingsPage === "microFirst" && <MicroFirstDefaults />}
             {settingsPage === "mcp" && <McpUserSettings />}
             {settingsPage === "mcpAdmin" && <McpAdminSettings />}
+            {settingsPage === "builtinTools" && <ToolsDisabledSettings />}
             {settingsPage === "security" && <SecuritySettings />}
             {settingsPage === "dashboard" && <DashboardPanel />}
             {settingsPage === "sessions" && <SessionsPanel />}

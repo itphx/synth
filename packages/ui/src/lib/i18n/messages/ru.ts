@@ -95,6 +95,7 @@ export const dict = {
   'settings.category.agents': 'Агенты',
   'settings.category.mcp': 'MCP-серверы',
   'settings.category.mcpAdmin': 'MCP (админ)',
+  'settings.category.builtinTools': 'Встроенные инструменты',
   'settings.category.notifications': 'Уведомления',
   'settings.category.routing': 'Маршрутизация',
   'settings.category.microFirst': 'Быстрые ответы',
@@ -1323,9 +1324,10 @@ export const dict = {
   'mcp.user.httpOnly': 'Здесь можно добавлять только HTTP/SSE-серверы; stdio-серверы настраивает администратор.',
   'mcp.user.saveError': 'Не удалось сохранить MCP-сервер: {error}',
 
-  // MCP: админское отключение встроенных инструментов (AD-071 §2.6)
-  'mcpAdmin.tools.title': 'Отключение встроенных инструментов',
-  'mcpAdmin.tools.description': 'Жёсткое отключение на уровне инстанса. Отключённые инструменты не попадают в запрос к модели независимо от политики инструментов; runtime-инструменты сессии отключить нельзя.',
+  // MCP: админское управление встроенными инструментами (AD-071 §2.6)
+  'mcpAdmin.tools.title': 'Встроенные инструменты',
+  'mcpAdmin.tools.description': 'Управление доступностью встроенных инструментов на уровне инстанса. Отмеченный инструмент включён; снимите галочку, чтобы отключить — отключённые инструменты не попадают в запрос к модели независимо от политики инструментов. Runtime-инструменты сессии всегда включены.',
+  'mcpAdmin.tools.checkHint': 'Галочка — инструмент включён. Снимите, чтобы отключить.',
   'mcpAdmin.tools.groups': 'Группы capability',
   'mcpAdmin.tools.perTool': 'Отдельные инструменты',
   'mcpAdmin.tools.group.file_read': 'Чтение файлов',
@@ -1338,11 +1340,11 @@ export const dict = {
   'mcpAdmin.tools.group.task': 'Саб-агенты',
   'mcpAdmin.tools.group.mcp': 'MCP-инструменты',
   'mcpAdmin.tools.group.runtime': 'Runtime сессии',
-  'mcpAdmin.tools.runtimeHint': 'Runtime-инструменты сессии (ядро) доступны всегда и не отключаются',
-  'mcpAdmin.tools.notDisableable': 'не отключается',
+  'mcpAdmin.tools.runtimeHint': 'Runtime-инструменты сессии (ядро) всегда включены и не отключаются',
+  'mcpAdmin.tools.alwaysOn': 'всегда включён',
   'mcpAdmin.tools.noSession': 'Откройте сессию, чтобы увидеть отдельные инструменты (из состава её промпта).',
-  'mcpAdmin.tools.saved': 'Настройки отключения инструментов сохранены',
-  'mcpAdmin.tools.saveError': 'Не удалось сохранить отключение инструментов: {error}',
+  'mcpAdmin.tools.saved': 'Настройки инструментов сохранены',
+  'mcpAdmin.tools.saveError': 'Не удалось сохранить настройки инструментов: {error}',
 
   // Reference & Merge
   'reference.title': 'Прикрепить ссылку на сессию',

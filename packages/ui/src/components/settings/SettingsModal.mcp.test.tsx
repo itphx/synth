@@ -22,4 +22,17 @@ describe('SettingsModal — разделение MCP-категорий (AD-071 
     expect(userIds).toContain('mcp')
     expect(userIds).not.toContain('mcpAdmin')
   })
+
+  it('«Встроенные инструменты» — отдельная ADMIN-категория рядом с «MCP (админ)»', () => {
+    const builtin = CATEGORIES.find((cat) => cat.id === 'builtinTools')!
+    expect(builtin).toBeDefined()
+    expect(builtin.roles).toEqual(['ADMIN'])
+    expect(builtin.labelKey).toBe('settings.category.builtinTools')
+
+    const order = CATEGORIES.map((cat) => cat.id)
+    expect(order.indexOf('builtinTools')).toBe(order.indexOf('mcpAdmin') + 1)
+
+    const userIds = visibleFor(['USER']).map((cat) => cat.id)
+    expect(userIds).not.toContain('builtinTools')
+  })
 })

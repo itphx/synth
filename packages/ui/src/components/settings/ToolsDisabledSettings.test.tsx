@@ -98,26 +98,35 @@ afterEach(async () => {
 })
 
 describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §2.6)', () => {
-  it('рендерит группы capability и точечные тулы; runtime защищён', async () => {
+  it('галочка = включён: по умолчанию все группы и тулы отмечены; runtime защищён', async () => {
     const container = await renderSettings()
 
     expect(container.querySelector('[data-testid="tools-disabled-group-git_read"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="tools-disabled-group-file_read"]')).not.toBeNull()
 
+    // checked = включён (в disabled-списке пусто).
+    const gitGroup = container.querySelector('[data-testid="tools-disabled-group-git_read"]') as HTMLInputElement
+    expect(gitGroup.checked).toBe(true)
+    const readTool = container.querySelector('[data-testid="tools-disabled-tool-read_file"]') as HTMLInputElement
+    expect(readTool.checked).toBe(true)
+
     const runtimeGroupInput = container.querySelector('[data-testid="tools-disabled-runtime"] input') as HTMLInputElement
     expect(runtimeGroupInput.disabled).toBe(true)
+    expect(runtimeGroupInput.checked).toBe(true)
 
     const runtimeTool = container.querySelector('[data-testid="tools-disabled-runtime-tool-plan_read"] input') as HTMLInputElement
     expect(runtimeTool).not.toBeNull()
     expect(runtimeTool.disabled).toBe(true)
+    expect(runtimeTool.checked).toBe(true)
 
     expect(container.querySelector('[data-testid="tools-disabled-tool-read_file"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="tools-disabled-tool-git_status"]')).not.toBeNull()
   })
 
-  it('сохранение отключения группы git_read вызывает PUT и обновляет тик', async () => {
+  it('снятие галочки группы git_read добавляет её в disabled, PUT и тик', async () => {
     const container = await renderSettings()
     const gitGroup = container.querySelector('[data-testid="tools-disabled-group-git_read"]') as HTMLInputElement
+    expect(gitGroup.checked).toBe(true)
 
     await act(async () => {
       gitGroup.click()
@@ -125,6 +134,7 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
     // Тул группы становится недоступен для точечного управления.
     const gitTool = container.querySelector('[data-testid="tools-disabled-tool-git_status"]') as HTMLInputElement
     expect(gitTool.disabled).toBe(true)
+    expect(gitTool.checked).toBe(false)
 
     const saveButton = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Save'))!
     await act(async () => {
@@ -136,13 +146,40 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
     expect(useUIStore.getState().toolsDisabledTick).toBe(1)
   })
 
-  it('загружает ранее отключённые группы и тулы', async () => {
+  it('ранее отключённые группы/тулы показаны без галочки', async () => {
     mocks.getToolsDisabled.mockResolvedValue({ capabilities: ['web'], tools: ['git_status'] })
     const container = await renderSettings()
 
     const webGroup = container.querySelector('[data-testid="tools-disabled-group-web"]') as HTMLInputElement
-    expect(webGroup.checked).toBe(true)
+    expect(webGroup.checked).toBe(false)
+    const gitReadGroup = container.querySelector('[data-testid="tools-disabled-group-git_read"]') as HTMLInputElement
+    expect(gitReadGroup.checked).toBe(true)
     const gitTool = container.querySelector('[data-testid="tools-disabled-tool-git_status"]') as HTMLInputElement
-    expect(gitTool.checked).toBe(true)
+    expect(gitTool.checked).toBe(false)
+    const readTool = container.querySelector('[data-testid="tools-disabled-tool-read_file"]') as HTMLInputElement
+    expect(readTool.checked).toBe(true)
+  })
+
+  it('установка галочки убирает группу и тул из disabled', async () => {
+    mocks.getToolsDisabled.mockResolvedValue({ capabilities: ['web'], tools: ['git_status'] })
+    const container = await renderSettings()
+
+    const webGroup = container.querySelector('[data-testid="tools-disabled-group-web"]') as HTMLInputElement
+    const gitTool = container.querySelector('[data-testid="tools-disabled-tool-git_status"]') as HTMLInputElement
+
+    await act(async () => {
+      webGroup.click()
+    })
+    await act(async () => {
+      gitTool.click()
+    })
+
+    const saveButton = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Save'))!
+    await act(async () => {
+      saveButton.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.saveToolsDisabled).toHaveBeenCalledWith({ capabilities: [], tools: [] })
   })
 })

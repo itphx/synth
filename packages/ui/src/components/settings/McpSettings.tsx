@@ -787,7 +787,7 @@ function ServerAvailabilityCard({
       )}
 
       {/* Default для всех инструментов */}
-      <div className="flex items-center justify-between gap-3 rounded-lg bg-interactive-hover/50 px-3 py-2">
+      <div className="flex items-center justify-between gap-3 rounded-md bg-interactive-hover/50 px-3 py-2">
         <div className="min-w-0">
           <div className="text-sm font-medium">{t('mcp.permissions.defaultTools')}</div>
           <div className="text-xs text-muted-foreground truncate">{t('mcp.permissions.defaultToolsHint')}</div>
@@ -813,7 +813,7 @@ function ServerAvailabilityCard({
                   <div
                     key={tool.name}
                     className={cn(
-                      "flex items-center justify-between gap-3 px-3 py-2 rounded-lg border border-border/60",
+                      "flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-border/60",
                       !toolSettings && "opacity-80"
                     )}
                   >
@@ -853,11 +853,19 @@ function ModeToggles({
     <div className="flex items-center gap-3 shrink-0">
       <label className="flex items-center gap-1.5 cursor-pointer">
         <span className="text-xs text-muted-foreground">{t('mcp.permissions.mode.plan')}</span>
-        <Toggle enabled={availability.plan} onToggle={() => onToggle('plan', !availability.plan)} />
+        <Toggle
+          enabled={availability.plan}
+          onToggle={() => onToggle('plan', !availability.plan)}
+          ariaLabel={t('mcp.permissions.mode.plan')}
+        />
       </label>
       <label className="flex items-center gap-1.5 cursor-pointer">
         <span className="text-xs text-muted-foreground">{t('mcp.permissions.mode.act')}</span>
-        <Toggle enabled={availability.act} onToggle={() => onToggle('act', !availability.act)} />
+        <Toggle
+          enabled={availability.act}
+          onToggle={() => onToggle('act', !availability.act)}
+          ariaLabel={t('mcp.permissions.mode.act')}
+        />
       </label>
     </div>
   )

@@ -10,9 +10,10 @@ import { SettingsCard } from './settings-layout'
 import { cn } from '@/lib/utils'
 
 /**
- * AD-071 §2.6: instance-wide жёсткое отключение встроенных инструментов
- * администратором. Группы capability + точечные тулы (список из `toolsDetail`
- * активной сессии). `runtime` неотключаем (ядро сессии).
+ * AD-071 §2.6: instance-wide управление встроенными инструментами
+ * администратором. Галочка = инструмент включён; снятие добавляет группу/тул
+ * в `tools.disabled`, установка — убирает. Группы capability + точечные тулы
+ * (список из `toolsDetail` активной сессии). `runtime` неотключаем (ядро сессии).
  */
 const DISABLEABLE_GROUPS = [
   'file_read',
@@ -45,8 +46,9 @@ export function ToolsDisabledSettings() {
 
   const [tools, setTools] = useState<PromptToolDetail[]>([])
   const [saving, setSaving] = useState(false)
-  const [draftCapabilities, setDraftCapabilities] = useState<Set<string>>(new Set())
-  const [draftTools, setDraftTools] = useState<Set<string>>(new Set())
+  // Наборы отключённого (`tools.disabled`): галочка снята ⇔ элемент в наборе.
+  const [draftDisabledCapabilities, setDraftDisabledCapabilities] = useState<Set<string>>(new Set())
+  const [draftDisabledTools, setDraftDisabledTools] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     void fetchToolsDisabled()
@@ -67,8 +69,8 @@ export function ToolsDisabledSettings() {
 
   useEffect(() => {
     if (!toolsDisabled) return
-    setDraftCapabilities(new Set(toolsDisabled.capabilities))
-    setDraftTools(new Set(toolsDisabled.tools))
+    setDraftDisabledCapabilities(new Set(toolsDisabled.capabilities))
+    setDraftDisabledTools(new Set(toolsDisabled.tools))
   }, [toolsDisabled])
 
   const builtinTools = useMemo(
@@ -80,8 +82,8 @@ export function ToolsDisabledSettings() {
     [tools],
   )
 
-  const toggleCapability = (capability: string) => {
-    setDraftCapabilities((prev) => {
+  const toggleDisabledCapability = (capability: string) => {
+    setDraftDisabledCapabilities((prev) => {
       const next = new Set(prev)
       if (next.has(capability)) next.delete(capability)
       else next.add(capability)
@@ -89,8 +91,8 @@ export function ToolsDisabledSettings() {
     })
   }
 
-  const toggleTool = (name: string) => {
-    setDraftTools((prev) => {
+  const toggleDisabledTool = (name: string) => {
+    setDraftDisabledTools((prev) => {
       const next = new Set(prev)
       if (next.has(name)) next.delete(name)
       else next.add(name)
@@ -102,8 +104,8 @@ export function ToolsDisabledSettings() {
     setSaving(true)
     try {
       await saveToolsDisabled({
-        capabilities: [...draftCapabilities],
-        tools: [...draftTools],
+        capabilities: [...draftDisabledCapabilities],
+        tools: [...draftDisabledTools],
       })
       // Статистика/таблицы MCP перезапрашивают данные без рестарта.
       bumpToolsDisabledTick()
@@ -125,11 +127,13 @@ export function ToolsDisabledSettings() {
       description={t('mcpAdmin.tools.description')}
     >
       {toolsDisabledError && (
-        <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{toolsDisabledError}</div>
+        <div role="alert" className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{toolsDisabledError}</div>
       )}
       {toolsDisabledLoading && !toolsDisabled && (
         <div className="text-center text-muted-foreground py-4 text-sm">{t('common.loading')}</div>
       )}
+
+      <p className="text-xs text-muted-foreground">{t('mcpAdmin.tools.checkHint')}</p>
 
       {/* Группы capability */}
       <div className="space-y-1.5" data-testid="tools-disabled-groups">
@@ -137,33 +141,50 @@ export function ToolsDisabledSettings() {
           {t('mcpAdmin.tools.groups')}
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-          {DISABLEABLE_GROUPS.map((capability) => (
-            <label
-              key={capability}
-              className="flex items-center gap-2 rounded-lg border border-border/60 px-2.5 py-1.5 cursor-pointer hover:bg-interactive-hover/50"
-            >
-              <input
-                type="checkbox"
-                data-testid={`tools-disabled-group-${capability}`}
-                checked={draftCapabilities.has(capability)}
-                onChange={() => toggleCapability(capability)}
-                className="accent-primary"
-              />
-              <span className="text-xs text-foreground">{t(`mcpAdmin.tools.group.${capability}`)}</span>
-              <span className="ml-auto text-[0.625rem] text-muted-foreground/60 font-mono">{capability}</span>
-            </label>
-          ))}
-          {/* runtime — ядро сессии, неотключаем */}
+          {DISABLEABLE_GROUPS.map((capability) => {
+            const enabled = !draftDisabledCapabilities.has(capability)
+            return (
+              <label
+                key={capability}
+                className={cn(
+                  'flex min-h-10 items-center gap-2 rounded-lg border border-border/60 px-2.5 py-1.5 cursor-pointer',
+                  'transition-colors duration-150 ease-out hover:bg-interactive-hover/50',
+                  'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring',
+                  !enabled && 'bg-interactive-hover/30',
+                )}
+              >
+                <input
+                  type="checkbox"
+                  data-testid={`tools-disabled-group-${capability}`}
+                  checked={enabled}
+                  onChange={() => toggleDisabledCapability(capability)}
+                  className="size-4 shrink-0 accent-primary focus-visible:outline-none"
+                  aria-label={t(`mcpAdmin.tools.group.${capability}`)}
+                />
+                <span className={cn('text-xs', enabled ? 'text-foreground' : 'text-muted-foreground')}>
+                  {t(`mcpAdmin.tools.group.${capability}`)}
+                </span>
+                <span className="ml-auto text-[0.625rem] text-muted-foreground/60 font-mono">{capability}</span>
+              </label>
+            )
+          })}
+          {/* runtime — ядро сессии, всегда включён */}
           <label
             data-testid="tools-disabled-runtime"
-            className="flex items-center gap-2 rounded-lg border border-dashed border-border/60 bg-interactive-hover/30 px-2.5 py-1.5 opacity-70 cursor-not-allowed"
+            className="flex min-h-10 items-center gap-2 rounded-lg border border-dashed border-border/60 bg-interactive-hover/30 px-2.5 py-1.5 opacity-70 cursor-not-allowed"
             title={t('mcpAdmin.tools.runtimeHint')}
           >
-            <input type="checkbox" checked disabled className="accent-primary" />
+            <input
+              type="checkbox"
+              checked
+              disabled
+              className="size-4 shrink-0 accent-primary"
+              aria-label={t('mcpAdmin.tools.group.runtime')}
+            />
             <span className="text-xs text-foreground">{t('mcpAdmin.tools.group.runtime')}</span>
             <span className="ml-auto inline-flex items-center gap-1 text-[0.625rem] text-muted-foreground/60">
-              <Icon name="shield" className="size-3" />
-              {t('mcpAdmin.tools.notDisableable')}
+              <Icon name="shield" className="size-3" aria-hidden="true" />
+              {t('mcpAdmin.tools.alwaysOn')}
             </span>
           </label>
         </div>
@@ -179,25 +200,31 @@ export function ToolsDisabledSettings() {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-72 overflow-y-auto pr-1">
             {builtinTools.map((tool) => {
-              const disabledByGroup = tool.capabilities.some((c) => draftCapabilities.has(c))
+              const disabledByGroup = tool.capabilities.some((c) => draftDisabledCapabilities.has(c))
+              const enabled = !disabledByGroup && !draftDisabledTools.has(tool.name)
               return (
                 <label
                   key={tool.name}
                   className={cn(
-                    'flex items-center gap-2 rounded-lg border border-border/60 px-2.5 py-1.5 cursor-pointer hover:bg-interactive-hover/50',
-                    disabledByGroup && 'opacity-50',
+                    'flex min-h-10 items-center gap-2 rounded-lg border border-border/60 px-2.5 py-1.5 cursor-pointer',
+                    'transition-colors duration-150 ease-out hover:bg-interactive-hover/50',
+                    'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring',
+                    disabledByGroup ? 'cursor-not-allowed opacity-50' : !enabled && 'bg-interactive-hover/30',
                   )}
                   title={tool.capabilities.join(', ')}
                 >
                   <input
                     type="checkbox"
                     data-testid={`tools-disabled-tool-${tool.name}`}
-                    checked={draftTools.has(tool.name)}
+                    checked={enabled}
                     disabled={disabledByGroup}
-                    onChange={() => toggleTool(tool.name)}
-                    className="accent-primary"
+                    onChange={() => toggleDisabledTool(tool.name)}
+                    className="size-4 shrink-0 accent-primary focus-visible:outline-none"
+                    aria-label={tool.name}
                   />
-                  <span className="text-xs font-mono truncate">{tool.name}</span>
+                  <span className={cn('text-xs font-mono truncate', enabled ? 'text-foreground' : 'text-muted-foreground')}>
+                    {tool.name}
+                  </span>
                 </label>
               )
             })}
@@ -205,12 +232,12 @@ export function ToolsDisabledSettings() {
               <label
                 key={tool.name}
                 data-testid={`tools-disabled-runtime-tool-${tool.name}`}
-                className="flex items-center gap-2 rounded-lg border border-dashed border-border/60 px-2.5 py-1.5 opacity-60 cursor-not-allowed"
+                className="flex min-h-10 items-center gap-2 rounded-lg border border-dashed border-border/60 px-2.5 py-1.5 opacity-60 cursor-not-allowed"
                 title={t('mcpAdmin.tools.runtimeHint')}
               >
-                <input type="checkbox" checked disabled className="accent-primary" />
+                <input type="checkbox" checked disabled className="size-4 shrink-0 accent-primary" aria-label={tool.name} />
                 <span className="text-xs font-mono truncate">{tool.name}</span>
-                <span className="ml-auto text-[0.625rem] text-muted-foreground/60">{t('mcpAdmin.tools.notDisableable')}</span>
+                <span className="ml-auto text-[0.625rem] text-muted-foreground/60">{t('mcpAdmin.tools.alwaysOn')}</span>
               </label>
             ))}
           </div>
@@ -221,7 +248,7 @@ export function ToolsDisabledSettings() {
         <button
           onClick={handleSave}
           disabled={saving || toolsDisabledLoading}
-          className="shrink-0 px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50"
+          className="shrink-0 px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-[transform,opacity] duration-150 ease-out active:scale-[0.96]"
         >
           {saving ? t('common.saving') : t('common.save')}
         </button>

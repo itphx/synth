@@ -372,7 +372,7 @@ export const StatsTab: React.FC = () => {
             </div>
             <div className="h-2 w-full rounded-full bg-foreground/10">
               <div
-                className={cn('h-2 rounded-full transition-all', isContextNearLimit ? 'bg-destructive' : 'bg-primary')}
+                className={cn('h-2 rounded-full transition-[width,background-color] duration-150 ease-out', isContextNearLimit ? 'bg-destructive' : 'bg-primary')}
                 style={{ width: `${Math.min(windowPercent, 100)}%` }}
               />
             </div>

@@ -96,6 +96,7 @@ export const dict = {
   'settings.category.agents': 'Agents',
   'settings.category.mcp': 'MCP Servers',
   'settings.category.mcpAdmin': 'MCP (admin)',
+  'settings.category.builtinTools': 'Built-in tools',
   'settings.category.notifications': 'Notifications',
   'settings.category.routing': 'Routing',
   'settings.category.microFirst': 'Quick answers',
@@ -1327,8 +1328,9 @@ export const dict = {
   'mcp.user.saveError': 'Failed to save MCP server: {error}',
 
   // MCP: admin tools.disabled (AD-071 §2.6)
-  'mcpAdmin.tools.title': 'Disable built-in tools',
-  'mcpAdmin.tools.description': 'Instance-wide hard disable. Disabled tools never go into the model request regardless of the tools policy; session runtime tools cannot be disabled.',
+  'mcpAdmin.tools.title': 'Built-in tools',
+  'mcpAdmin.tools.description': 'Manage which built-in tools are available instance-wide. A checked tool is enabled; uncheck it to disable it — disabled tools never go into the model request regardless of the tools policy. Session runtime tools are always on.',
+  'mcpAdmin.tools.checkHint': 'Checked — enabled. Uncheck to disable.',
   'mcpAdmin.tools.groups': 'Capability groups',
   'mcpAdmin.tools.perTool': 'Individual tools',
   'mcpAdmin.tools.group.file_read': 'File reading',
@@ -1341,11 +1343,11 @@ export const dict = {
   'mcpAdmin.tools.group.task': 'Sub-agents',
   'mcpAdmin.tools.group.mcp': 'MCP tools',
   'mcpAdmin.tools.group.runtime': 'Session runtime',
-  'mcpAdmin.tools.runtimeHint': 'Session runtime tools (core) are always available and cannot be disabled',
-  'mcpAdmin.tools.notDisableable': 'not disableable',
+  'mcpAdmin.tools.runtimeHint': 'Session runtime tools (core) are always on and cannot be disabled',
+  'mcpAdmin.tools.alwaysOn': 'always on',
   'mcpAdmin.tools.noSession': 'Open a session to list individual tools (from its prompt composition).',
-  'mcpAdmin.tools.saved': 'Tool disable settings saved',
-  'mcpAdmin.tools.saveError': 'Failed to save tool disable settings: {error}',
+  'mcpAdmin.tools.saved': 'Tool settings saved',
+  'mcpAdmin.tools.saveError': 'Failed to save tool settings: {error}',
 
   // Reference & Merge
   'reference.title': 'Add Session Reference',
