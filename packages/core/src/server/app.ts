@@ -68,8 +68,10 @@ export interface StandaloneConfig {
   gatewayConfig?: LLMGatewayConfig;
   /** AD-070 §2.2: политика prompt-cache из config.yaml llm.cache (auto | none). */
   llmCachePolicy?: 'auto' | 'none';
-  /** AD-071 §2.3: глобальная политика включения инструментов из config.yaml tools.policy. */
+  /** AD-071 §2.3: глобальная политика включения встроенных инструментов из config.yaml tools.policy. */
   toolsPolicy?: ToolsPolicy;
+  /** AD-071 §2.3: глобальная политика включения MCP-инструментов из config.yaml mcp.policy. */
+  mcpPolicy?: ToolsPolicy;
   /** AD-071 §2.6: instance-wide отключение инструментов из config.yaml tools.disabled. */
   toolsDisabled?: ToolsDisabledConfig;
   /** Конфигурация MCP-серверов из config.yaml mcp.servers (для probe и загрузки тулов). */
@@ -610,9 +612,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const runtimeSecurity = await settingsStore.getSecuritySettings();
   const effectiveSecurityConfig = mergeSecurityConfig(config.securityConfig, runtimeSecurity);
 
-  // AD-071 §2.3: runtime-политика инструментов (админка) приоритетнее config.yaml tools.policy
+  // AD-071 §2.3: runtime-политика встроенных инструментов (админка) приоритетнее config.yaml tools.policy
   const runtimeToolsPolicy = await settingsStore.getToolsPolicy();
-  const effectiveToolsPolicy: ToolsPolicy = runtimeToolsPolicy ?? config.toolsPolicy ?? 'consistency';
+  const effectiveToolsPolicy: ToolsPolicy = runtimeToolsPolicy ?? config.toolsPolicy ?? 'auto';
+  // AD-071 §2.3: runtime-политика MCP-инструментов (админка) приоритетнее config.yaml mcp.policy
+  const runtimeMcpPolicy = await settingsStore.getMcpPolicy();
+  const effectiveMcpPolicy: ToolsPolicy = runtimeMcpPolicy ?? config.mcpPolicy ?? 'auto';
   // AD-071 §2.6: runtime-отключение инструментов (админка) приоритетнее config.yaml tools.disabled
   const runtimeToolsDisabled = await settingsStore.getToolsDisabled();
   const effectiveToolsDisabled: ToolsDisabledConfig =
@@ -732,6 +737,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     mcpManager,
     cachePolicy: config.llmCachePolicy,
     toolsPolicy: effectiveToolsPolicy,
+    mcpPolicy: effectiveMcpPolicy,
     toolsDisabled: effectiveToolsDisabled,
     // AD-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
     tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
@@ -815,10 +821,15 @@ export async function createStandaloneApp(config: StandaloneConfig) {
         orchestrator.setDefaultPermissionTimeout(merged.askTimeoutMs);
       }
     },
-    // AD-071 §2.3: live-применение политики инструментов из админки.
-    fallbackToolsPolicy: config.toolsPolicy ?? 'consistency',
+    // AD-071 §2.3: live-применение политики встроенных инструментов из админки.
+    fallbackToolsPolicy: config.toolsPolicy ?? 'auto',
     onToolsPolicyChange: async (policy) => {
       orchestrator.setToolsPolicy(policy);
+    },
+    // AD-071 §2.3: live-применение политики MCP-инструментов из админки.
+    fallbackMcpPolicy: config.mcpPolicy ?? 'auto',
+    onMcpPolicyChange: async (policy) => {
+      orchestrator.setMcpPolicy(policy);
     },
     // AD-071 §2.6: live-применение instance-wide отключения инструментов.
     fallbackToolsDisabled: config.toolsDisabled ?? { capabilities: [], tools: [] },

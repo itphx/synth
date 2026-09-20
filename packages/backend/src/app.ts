@@ -409,9 +409,12 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // приоритетнее config.yaml — мёржим при старте, чтобы защита применялась к оркестратору.
     const runtimeSecurity = await settingsStore.getSecuritySettings();
     const securityConfig = mergeSecurityConfig(backendConfig.synth.security, runtimeSecurity);
-    // AD-071 §2.3: runtime-политика инструментов (админка) приоритетнее config.yaml
+    // AD-071 §2.3: runtime-политика встроенных инструментов (админка) приоритетнее config.yaml
     const runtimeToolsPolicy = await settingsStore.getToolsPolicy();
     const toolsPolicy = runtimeToolsPolicy ?? backendConfig.synth.tools.policy;
+    // AD-071 §2.3: runtime-политика MCP-инструментов (админка) приоритетнее config.yaml
+    const runtimeMcpPolicy = await settingsStore.getMcpPolicy();
+    const mcpPolicy = runtimeMcpPolicy ?? backendConfig.synth.mcp.policy;
     // AD-071 §2.6: runtime-отключение инструментов (админка) приоритетнее config.yaml
     const runtimeToolsDisabled = await settingsStore.getToolsDisabled();
     const toolsDisabled: ToolsDisabledConfig =
@@ -446,6 +449,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       gatewayPatternStore: patternStore,
       cachePolicy: backendConfig.synth.llm.cache,
       toolsPolicy,
+      mcpPolicy,
       toolsDisabled,
       // AD-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
       tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
@@ -561,10 +565,15 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         const merged = mergeSecurityConfig(backendConfig.synth.security, runtime);
         orchestrator.setSecurityConfig(merged);
       },
-      // AD-071 §2.3: live-применение политики инструментов из админки.
+      // AD-071 §2.3: live-применение политики встроенных инструментов из админки.
       fallbackToolsPolicy: backendConfig.synth.tools.policy,
       onToolsPolicyChange: async (policy) => {
         orchestrator.setToolsPolicy(policy);
+      },
+      // AD-071 §2.3: live-применение политики MCP-инструментов из админки.
+      fallbackMcpPolicy: backendConfig.synth.mcp.policy,
+      onMcpPolicyChange: async (policy) => {
+        orchestrator.setMcpPolicy(policy);
       },
       // AD-071 §2.6: live-применение instance-wide отключения инструментов.
       fallbackToolsDisabled: backendConfig.synth.tools.disabled,

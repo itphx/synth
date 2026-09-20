@@ -260,7 +260,7 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
     expect(info.manifest.staticPrefixChars).toBeLessThan(info.manifest.totalChars);
   });
 
-  it('getPromptInfo: mcp.servers (stable) показывает все серверы, mcp.status (volatile) — статусы', async () => {
+  it('getPromptInfo: mcp.servers/mcp.status (volatile) показывают серверы и статусы', async () => {
     const session = await createSession(['srvA']);
     await runTurn(session.id);
 
@@ -268,13 +268,19 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
 
     const servers = info.manifest.entries.find((e) => e.key === 'mcp.servers');
     expect(servers).toBeDefined();
-    expect(servers!.tier).toBe('stable');
+    expect(servers!.tier).toBe('volatile');
     expect(servers!.chars).toBeGreaterThan(0);
 
     const status = info.manifest.entries.find((e) => e.key === 'mcp.status');
     expect(status).toBeDefined();
     expect(status!.tier).toBe('volatile');
     expect(status!.chars).toBeGreaterThan(0);
+
+    // AD-071 §2.3: MCP-блоки не входят в кэшируемый stable-префикс.
+    const stableOnly = info.manifest.entries
+      .filter((e) => e.tier === 'stable' && e.status !== 'empty')
+      .reduce((sum, e) => sum + e.chars, 0);
+    expect(info.manifest.staticPrefixChars).toBe(stableOnly);
   });
 
   it('сессия без активных MCP-серверов не видит MCP-тулы', async () => {

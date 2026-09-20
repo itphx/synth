@@ -109,9 +109,15 @@ i18n:
 session:
   planMode: "auto"                # строгость цикла Plan→Build: auto | strict | off
 
+mcp:
+  policy: "auto"                  # AD-071 §2.3: политика включения MCP-инструментов
+                                  # consistency | available | auto (дефолт auto)
+                                  # независима от tools.policy; per-session override: session.settings.mcpPolicy
+  # servers / networkPolicy — см. packages/shared/src/config/types.ts
+
 tools:
-  policy: "consistency"           # AD-071 §2.3: политика включения инструментов
-                                  # consistency | available | auto
+  policy: "auto"                  # AD-071 §2.3: политика включения ВСТРОЕННЫХ инструментов
+                                  # consistency | available | auto (дефолт auto)
                                   # consistency — все определения + подсказки unavailable(mode|role);
                                   # available — только доступные тулы (экономия контекста);
                                   # auto — по провайдеру: локальные (ollama) → available, облачные → consistency.
@@ -186,6 +192,18 @@ remote:                           # гибридный режим: локаль�
 ```
 
 Полный список полей (включая `logging`, `tsm`, `context`, `summarization`, `mcp`, `auth.oidc`) — в `packages/shared/src/config/types.ts`.
+
+### Политики инструментов (`tools.policy` / `mcp.policy`)
+
+Две **независимые** админские политики (AD-071 §2.3; UI-раздел — ADMIN-категория):
+`tools.policy` управляет только **встроенными** инструментами, `mcp.policy` —
+только **MCP**-инструментами. Обе: `consistency` | `available` | `auto`
+(дефолт `auto`). Per-session override — `session.settings.toolsPolicy` и
+`session.settings.mcpPolicy` соответственно. Runtime-правка:
+`GET/PUT /api/v2/settings/tools-policy` и `GET/PUT /api/v2/settings/mcp-policy`
+(живое применение, persist в `settings.json`). MCP-блоки промпта
+(`mcp.servers`/`mcp.tools`/`mcp.status`) всегда `volatile` и не входят в
+кэшируемый `staticPrefixChars`.
 
 ### Отключение встроенных инструментов (`tools.disabled`)
 

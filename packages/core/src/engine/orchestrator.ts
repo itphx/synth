@@ -162,11 +162,17 @@ export interface OrchestratorOptions {
   /** AD-070 §2.2: политика prompt-cache (config llm.cache). Дефолт — auto. */
   cachePolicy?: CachePolicy;
   /**
-   * AD-071 §2.3: глобальная админская политика включения инструментов
-   * (config.yaml tools.policy). Дефолт — `consistency`. Per-session override —
-   * `session.settings.toolsPolicy`.
+   * AD-071 §2.3: глобальная админская политика включения **встроенных**
+   * инструментов (config.yaml tools.policy). Дефолт — `auto`. Per-session
+   * override — `session.settings.toolsPolicy`.
    */
   toolsPolicy?: ToolsPolicy;
+  /**
+   * AD-071 §2.3: глобальная админская политика включения **MCP**-инструментов
+   * (config.yaml mcp.policy). Дефолт — `auto`. Независима от `toolsPolicy`;
+   * per-session override — `session.settings.mcpPolicy`.
+   */
+  mcpPolicy?: ToolsPolicy;
   /**
    * AD-071 §2.6: instance-wide жёсткое отключение инструментов (config.yaml
    * `tools.disabled`). Runtime-значение приходит через `setToolsDisabled`.
@@ -252,8 +258,10 @@ export class ChatOrchestrator {
   private readonly _gatewayAuditExternal: AuditLogger | null;
   /** AD-070 §2.2: политика prompt-cache (auto | none) из config llm.cache. */
   private readonly _cachePolicy: CachePolicy;
-  /** AD-071 §2.3: глобальная политика включения инструментов (runtime-изменяемая). */
+  /** AD-071 §2.3: глобальная политика включения встроенных инструментов (runtime-изменяемая). */
   private _toolsPolicy: ToolsPolicy;
+  /** AD-071 §2.3: глобальная политика включения MCP-инструментов (runtime-изменяемая). */
+  private _mcpPolicy: ToolsPolicy;
   /** AD-071 §2.6: instance-wide отключение инструментов (runtime-изменяемая, admin). */
   private _toolsDisabled: ToolsDisabledConfig;
   /** AD-071 §2.6: загрузчик chars-per-token модели (калибровка). */
@@ -558,8 +566,10 @@ export class ChatOrchestrator {
     this._gatewayPayloadLogPath = options.gatewayPayloadLogPath
       ?? join(options.dataDir || '/var/synth/data', 'audit', 'llm-payloads.jsonl');
     this._cachePolicy = options.cachePolicy ?? 'auto';
-    // AD-071 §2.3: глобальная политика инструментов; per-session override — в сессии.
-    this._toolsPolicy = options.toolsPolicy ?? 'consistency';
+    // AD-071 §2.3: глобальные политики встроенных/MCP-инструментов (независимы);
+    // per-session override — в сессии.
+    this._toolsPolicy = options.toolsPolicy ?? 'auto';
+    this._mcpPolicy = options.mcpPolicy ?? 'auto';
     // AD-071 §2.6: instance-wide отключение инструментов (admin) + калибровка ratio.
     this._toolsDisabled = options.toolsDisabled ?? { capabilities: [], tools: [] };
     this._tokenRatioLoader = options.tokenRatioLoader;
@@ -722,11 +732,21 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.3: live-применение глобальной политики включения инструментов
-   * (runtime-настройка из админки). Per-session override в сессии приоритетнее.
+   * AD-071 §2.3: live-применение глобальной политики включения **встроенных**
+   * инструментов (runtime-настройка из админки). Per-session override в сессии
+   * приоритетнее.
    */
   setToolsPolicy(policy: ToolsPolicy): void {
     this._toolsPolicy = policy;
+  }
+
+  /**
+   * AD-071 §2.3: live-применение глобальной политики включения **MCP**-инструментов
+   * (runtime-настройка из админки). Независима от `setToolsPolicy`; per-session
+   * override в сессии приоритетнее.
+   */
+  setMcpPolicy(policy: ToolsPolicy): void {
+    this._mcpPolicy = policy;
   }
 
   /**
@@ -805,17 +825,38 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.3: резолвит эффективную политику инструментов для сессии.
-   * Приоритет: `session.settings.toolsPolicy` → глобальная (`tools.policy`).
-   * `auto` разрешается по провайдеру запроса: локальные (`ollama`) → `available`,
-   * облачные → `consistency`. Флага локальности у провайдера/модели нет, поэтому
-   * признак — тип провайдера `ollama` (см. AD-071 §2.3, решение зафиксировано).
+   * AD-071 §2.3: резолвит эффективную политику **встроенных** инструментов для
+   * сессии. Приоритет: `session.settings.toolsPolicy` → глобальная
+   * (`tools.policy`). `auto` разрешается по провайдеру запроса: локальные
+   * (`ollama`) → `available`, облачные → `consistency`. Флага локальности у
+   * провайдера/модели нет, поэтому признак — тип провайдера `ollama`
+   * (см. AD-071 §2.3, решение зафиксировано).
    */
   private _resolveToolsPolicy(
     session: Session,
     providerType?: string,
   ): Exclude<ToolsPolicy, 'auto'> {
-    const requested = session.settings.toolsPolicy ?? this._toolsPolicy;
+    return this._resolvePolicy(session.settings.toolsPolicy ?? this._toolsPolicy, providerType);
+  }
+
+  /**
+   * AD-071 §2.3: резолвит эффективную политику **MCP**-инструментов для сессии.
+   * Приоритет: `session.settings.mcpPolicy` → глобальная (`mcp.policy`).
+   * Независима от `_resolveToolsPolicy`; `auto` разрешается так же — по
+   * провайдеру запроса (`ollama` → `available`, иначе `consistency`).
+   */
+  private _resolveMcpPolicy(
+    session: Session,
+    providerType?: string,
+  ): Exclude<ToolsPolicy, 'auto'> {
+    return this._resolvePolicy(session.settings.mcpPolicy ?? this._mcpPolicy, providerType);
+  }
+
+  /** AD-071 §2.3: общий резолв `auto` по типу провайдера для обеих политик. */
+  private _resolvePolicy(
+    requested: ToolsPolicy,
+    providerType?: string,
+  ): Exclude<ToolsPolicy, 'auto'> {
     if (requested === 'auto') {
       return providerType === 'ollama' ? 'available' : 'consistency';
     }
@@ -929,6 +970,12 @@ export class ChatOrchestrator {
     planApproved: boolean,
     agentDef: AgentDefinition | undefined,
     mcpServers: Iterable<string> = [],
+    /**
+     * AD-071 §2.3: какие слои включать в подсказки. Слой с политикой
+     * `available` в запросе уже сужен до доступных — подсказки о его
+     * недоступных тулах не нужны.
+     */
+    include: { builtin: boolean; mcp: boolean } = { builtin: true, mcp: true },
   ): UnavailableTool[] {
     if (!this._toolRegistry) return [];
     const unavailable: UnavailableTool[] = [];
@@ -936,8 +983,11 @@ export class ChatOrchestrator {
     // глобальный реестр держит их постоянно, но скоуп сессии фильтруется.
     const activeMcp = new Set(mcpServers);
     for (const tool of this._toolRegistry.list()) {
-      if ((tool.source ?? 'builtin') === 'mcp'
-        && (tool.mcpServer == null || !activeMcp.has(tool.mcpServer))) {
+      const source = tool.source ?? 'builtin';
+      if (source === 'mcp') {
+        if (!include.mcp) continue;
+        if (tool.mcpServer == null || !activeMcp.has(tool.mcpServer)) continue;
+      } else if (!include.builtin) {
         continue;
       }
       // AD-071 §2.6: admin-disabled — не подсказываем (ограничение администратора,
@@ -1158,14 +1208,20 @@ export class ChatOrchestrator {
     const planMode: PlanMode = session.settings.planMode ?? this._defaultPlanMode ?? 'auto';
     const sessionMode: SessionMode = session.mode ?? 'act';
     const planApproved = Boolean(session.planApproved);
-    const toolsPolicy = this._resolveToolsPolicy(session, this._sessionProviderType(session));
-    const availability = toolsPolicy === 'available'
+    const providerType = this._sessionProviderType(session);
+    const toolsPolicy = this._resolveToolsPolicy(session, providerType);
+    const mcpPolicy = this._resolveMcpPolicy(session, providerType);
+    // AD-071 §2.3: встроенные и MCP фильтруются независимо — своя политика на слой.
+    const availabilityPredicate = (toolsPolicy === 'available' || mcpPolicy === 'available')
       ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef)
       : undefined;
     // AD-071 §2.6: admin-disabled исключаются всегда, независимо от политики.
-    const toolPredicate = this._toolPredicate(availability);
+    const toolPredicates = {
+      builtin: this._toolPredicate(toolsPolicy === 'available' ? availabilityPredicate : undefined),
+      mcp: this._toolPredicate(mcpPolicy === 'available' ? availabilityPredicate : undefined),
+    };
     const toolSelection = this._toolRegistry && agentDef && effectiveAgentRole
-      ? this._toolRegistry.selectForSession(activeMcpServers, toolPredicate)
+      ? this._toolRegistry.selectForSession(activeMcpServers, toolPredicates)
       : { builtin: [], mcp: [] };
     // AD-071 §2.6: chars-per-token модели (калибровка) для оценок токенов.
     const tokenRatio = await this._resolveTokenRatio(session.settings.model);
@@ -1185,7 +1241,8 @@ export class ChatOrchestrator {
       stickyNotes: session.stickyNotes,
       summaryContent: summaryContent || undefined,
       // AD-070 §2.5 + AD-071 §2.1/§2.3: манифест отражает реальные слои запроса —
-      // `tools` (встроенные) и `mcp.tools` (MCP сессии); тир `tools` зависит от политики.
+      // `tools` (встроенные) и `mcp.tools` (MCP сессии); тир `tools` зависит от
+      // `tools.policy`, MCP-блоки всегда volatile.
       tools: this._toolRegistry
         ? toolSelection.builtin as unknown as Array<Record<string, unknown>>
         : undefined,
@@ -1193,6 +1250,7 @@ export class ChatOrchestrator {
         ? toolSelection.mcp as unknown as Array<Record<string, unknown>>
         : undefined,
       toolsPolicy,
+      mcpPolicy,
       // AD-071 §2.6: admin-disabled — строка про ограничения в `tools.guide`.
       adminDisabled: this._toolsDisabled,
       tokenRatio,
@@ -1507,27 +1565,32 @@ export class ChatOrchestrator {
       const mcpDecisions = this._resolveMcpDecisions(session, projectForState);
       const activeMcpServers = mcpDecisions.filter((d) => d.enabled).map((d) => d.name);
       const activeMcpSet = new Set(activeMcpServers);
-      // AD-071 §2.3: эффективная политика инструментов для этого хода (per-session
-      // override → глобальная; `auto` → по типу провайдера). В `available` тулы
-      // фильтруются по доступности, а подсказки `unavailable` не нужны.
+      // AD-071 §2.3: эффективные политики инструментов для этого хода (per-session
+      // override → глобальная; `auto` → по типу провайдера). Встроенные и MCP —
+      // независимо; в `available` слой фильтруется по доступности, а подсказки
+      // `unavailable` для него не нужны.
       const toolsPolicy = this._resolveToolsPolicy(session, provider.type);
-      const availability = toolsPolicy === 'available'
+      const mcpPolicy = this._resolveMcpPolicy(session, provider.type);
+      const availabilityPredicate = (toolsPolicy === 'available' || mcpPolicy === 'available')
         ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef)
         : undefined;
       // AD-071 §2.6: admin-disabled исключаются из запроса всегда.
-      const toolPredicate = this._toolPredicate(availability);
+      const toolPredicates = {
+        builtin: this._toolPredicate(toolsPolicy === 'available' ? availabilityPredicate : undefined),
+        mcp: this._toolPredicate(mcpPolicy === 'available' ? availabilityPredicate : undefined),
+      };
       const stateSync = syncStateMessages(session, {
         contextConfig: this._contextConfig,
         language,
         plan: projectForState?.plan ?? null,
         agentRole: effectiveAgentRole,
-        // AD-071 §2.3: в режиме `available` недоступных тулов в запросе нет —
-        // подсказки `unavailable(mode|role)` не добавляем.
-        unavailableTools: toolsPolicy === 'available'
-          ? []
-          : this._collectUnavailableTools(
-              session, sessionMode, planMode, planApproved, agentDef, activeMcpServers,
-            ),
+        // AD-071 §2.3: слой с политикой `available` уже сужен до доступных —
+        // подсказки `unavailable(mode|role)` для него не добавляем (слои
+        // независимы: built-in-подсказки сохраняются при mcp=available и наоборот).
+        unavailableTools: this._collectUnavailableTools(
+          session, sessionMode, planMode, planApproved, agentDef, activeMcpServers,
+          { builtin: toolsPolicy !== 'available', mcp: mcpPolicy !== 'available' },
+        ),
       });
       if (stateSync.changed) {
         for (const stateMsg of stateSync.added) {
@@ -1578,8 +1641,10 @@ export class ChatOrchestrator {
         showInterview: session.settings.showInterview,
         stickyNotes: session.stickyNotes,
         summaryContent: summaryContent || undefined,
-        // AD-071 §2.3: политика влияет на тир `tools` и инструкцию `tools.guide`.
+        // AD-071 §2.3: `toolsPolicy` влияет на тир `tools`, `mcpPolicy` — на
+        // инструкцию `tools.guide`; MCP-блоки всегда volatile.
         toolsPolicy,
+        mcpPolicy,
         // AD-071 §2.6: admin-disabled + ratio для оценок/инструкции.
         adminDisabled: this._toolsDisabled,
         tokenRatio,
@@ -1641,12 +1706,12 @@ export class ChatOrchestrator {
       const baseLlmMessages = ChatOrchestrator._sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author);
 
       // 4. Get tools from registry. AD-070 §2.9 + AD-071 §2.1/§2.3: встроенные —
-      // постоянно, MCP — только активных серверов сессии; в `available` — только
-      // доступные (mode/role/mcpToolSettings). Порядок: builtin → MCP.
-      // Если агент НЕ найден в реестре или role undefined — модель получает
-      // НИКАКИХ инструментов (safety-fallback).
+      // постоянно, MCP — только активных серверов сессии; каждый слой в своём
+      // `available` — только доступные (mode/role/mcpToolSettings). Порядок:
+      // builtin → MCP. Если агент НЕ найден в реестре или role undefined —
+      // модель получает НИКАКИХ инструментов (safety-fallback).
       const toolSelection = this._toolRegistry && agentDef && effectiveAgentRole
-        ? this._toolRegistry.selectForSession(activeMcpServers, toolPredicate)
+        ? this._toolRegistry.selectForSession(activeMcpServers, toolPredicates)
         : { builtin: [], mcp: [] };
       const tools = this._toolRegistry
         ? [...toolSelection.builtin, ...toolSelection.mcp]
@@ -2328,18 +2393,20 @@ export class ChatOrchestrator {
             sessionMode = 'plan';
             await this._appendModeChangeState(
               session, sessionMode, planMode, planApproved, language, currentMessages,
-              toolsPolicy === 'available'
-                ? []
-                : this._collectUnavailableTools(session, sessionMode, planMode, planApproved, agentDef),
+              this._collectUnavailableTools(
+                session, sessionMode, planMode, planApproved, agentDef, activeMcpServers,
+                { builtin: toolsPolicy !== 'available', mcp: mcpPolicy !== 'available' },
+              ),
             );
           } else if (!toolResult.isError && toolName === 'plan_exit') {
             planApproved = true;
             sessionMode = 'act';
             await this._appendModeChangeState(
               session, sessionMode, planMode, planApproved, language, currentMessages,
-              toolsPolicy === 'available'
-                ? []
-                : this._collectUnavailableTools(session, sessionMode, planMode, planApproved, agentDef),
+              this._collectUnavailableTools(
+                session, sessionMode, planMode, planApproved, agentDef, activeMcpServers,
+                { builtin: toolsPolicy !== 'available', mcp: mcpPolicy !== 'available' },
+              ),
             );
           }
 

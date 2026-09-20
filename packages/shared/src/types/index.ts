@@ -134,10 +134,17 @@ export interface PromptManifest {
   estTokens: number;
   staticPrefixChars: number;
   /**
-   * AD-071 §2.3: фактически применённая политика инструментов (`auto`
-   * уже разрешён в `consistency`/`available`) — видно, какая политика сработала.
+   * AD-071 §2.3: фактически применённая политика **встроенных** инструментов
+   * (`auto` уже разрешён в `consistency`/`available`) — видно, какая политика
+   * сработала.
    */
   toolsPolicy?: Exclude<ToolsPolicy, 'auto'>;
+  /**
+   * AD-071 §2.3: фактически применённая политика **MCP**-инструментов
+   * (`auto` уже разрешён в `consistency`/`available`). Независима от
+   * `toolsPolicy`.
+   */
+  mcpPolicy?: Exclude<ToolsPolicy, 'auto'>;
   /**
    * AD-071 §2.6: chars-per-token, применённый к `estTokens` (калибровка по
    * фактическому usage; 4 — без калибровки). `estTokens` — оценка, не факт.
@@ -553,11 +560,17 @@ export interface SessionSettings {
   mcpToolSettings?: Record<string, McpServerToolSettings>;
   // === Инструменты (AD-071 §2.3) ===
   /**
-   * Per-session override политики включения инструментов. Если задан —
-   * перекрывает глобальную `tools.policy` из config.yaml. `auto` резолвится по
-   * провайдеру/модели текущего запроса.
+   * Per-session override политики включения **встроенных** инструментов. Если
+   * задан — перекрывает глобальную `tools.policy` из config.yaml. `auto`
+   * резолвится по провайдеру/модели текущего запроса.
    */
   toolsPolicy?: ToolsPolicy;
+  /**
+   * Per-session override политики включения **MCP**-инструментов. Если задан —
+   * перекрывает глобальную `mcp.policy` из config.yaml. Независима от
+   * `toolsPolicy`; `auto` резолвится по провайдеру/модели текущего запроса.
+   */
+  mcpPolicy?: ToolsPolicy;
   // === Plan/Act (AD-025, AD-028) ===
   /** Строгость цикла Plan→Build: auto — модель сама решает, strict — план обязателен, off — планирование отключено. */
   planMode?: PlanMode;

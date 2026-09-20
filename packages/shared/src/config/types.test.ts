@@ -35,6 +35,19 @@ describe('mcpNetworkPolicySchema (AD-071 §2.3.1)', () => {
     expect(parsed.servers).toEqual({});
   });
 
+  it('mcpConfigSchema: policy по умолчанию auto (AD-071 §2.3)', () => {
+    expect(mcpConfigSchema.parse({}).policy).toBe('auto');
+  });
+
+  it('mcpConfigSchema принимает available/consistency', () => {
+    expect(mcpConfigSchema.parse({ policy: 'available' }).policy).toBe('available');
+    expect(mcpConfigSchema.parse({ policy: 'consistency' }).policy).toBe('consistency');
+  });
+
+  it('mcpConfigSchema отклоняет неизвестную политику', () => {
+    expect(mcpConfigSchema.safeParse({ policy: 'all' }).success).toBe(false);
+  });
+
   it('принимает настраиваемую allow-политику', () => {
     const parsed = mcpNetworkPolicySchema.parse({ mode: 'allow', list: ['127.0.0.0/8'] });
     expect(parsed.mode).toBe('allow');
@@ -47,8 +60,8 @@ describe('mcpNetworkPolicySchema (AD-071 §2.3.1)', () => {
 });
 
 describe('toolsConfigSchema (AD-071 §2.3)', () => {
-  it('дефолт policy=consistency', () => {
-    expect(toolsConfigSchema.parse({}).policy).toBe('consistency');
+  it('дефолт policy=auto', () => {
+    expect(toolsConfigSchema.parse({}).policy).toBe('auto');
   });
 
   it('принимает available/auto', () => {

@@ -17,8 +17,12 @@ export interface SettingsRoutesDeps {
   onSecurityChange?: (runtime: Partial<SecurityRuntimeSettings>) => void | Promise<void>;
   /** AD-071 §2.3: значение tools.policy из config.yaml (если runtime не задан). */
   fallbackToolsPolicy?: ToolsPolicy;
-  /** Вызывается после успешного PUT /tools-policy (live-применение политики инструментов). */
+  /** Вызывается после успешного PUT /tools-policy (live-применение политики встроенных инструментов). */
   onToolsPolicyChange?: (policy: ToolsPolicy) => void | Promise<void>;
+  /** AD-071 §2.3: значение mcp.policy из config.yaml (если runtime не задан). */
+  fallbackMcpPolicy?: ToolsPolicy;
+  /** Вызывается после успешного PUT /mcp-policy (live-применение политики MCP-инструментов). */
+  onMcpPolicyChange?: (policy: ToolsPolicy) => void | Promise<void>;
   /** AD-071 §2.3.1: значение mcp.networkPolicy из config.yaml (если runtime не задан). */
   fallbackMcpNetworkPolicy?: McpNetworkPolicy;
   /** Вызывается после успешного PUT /mcp-network-policy (live-применение). */
@@ -308,7 +312,7 @@ export function createSettingsRoutes(
    */
   app.get('/tools-policy', auth.requireAuth, async (c) => {
     const runtime = await deps.settingsStore.getToolsPolicy();
-    return c.json({ toolsPolicy: runtime ?? deps.fallbackToolsPolicy ?? 'consistency' });
+    return c.json({ toolsPolicy: runtime ?? deps.fallbackToolsPolicy ?? 'auto' });
   });
 
   app.put('/tools-policy', auth.requireAuth, async (c) => {
@@ -325,10 +329,42 @@ export function createSettingsRoutes(
     }
 
     await deps.settingsStore.setToolsPolicy(toolsPolicy);
-    // Live-применение политики инструментов — оркестратор переконфигурируется
-    // без рестарта сервера.
+    // Live-применение политики встроенных инструментов — оркестратор
+    // переконфигурируется без рестарта сервера.
     await deps.onToolsPolicyChange?.(toolsPolicy);
     return c.json({ toolsPolicy });
+  });
+
+  /**
+   * GET/PUT /api/v2/settings/mcp-policy — AD-071 §2.3: глобальная админская
+   * политика включения **MCP**-инструментов (`consistency` | `available` |
+   * `auto`). Независима от `tools.policy` (встроенные). Runtime-значение
+   * ({dataDir}/settings.json) приоритетнее config.yaml `mcp.policy`;
+   * per-session override — `session.settings.mcpPolicy`.
+   */
+  app.get('/mcp-policy', auth.requireAuth, async (c) => {
+    const runtime = await deps.settingsStore.getMcpPolicy();
+    return c.json({ mcpPolicy: runtime ?? deps.fallbackMcpPolicy ?? 'auto' });
+  });
+
+  app.put('/mcp-policy', auth.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const mcpPolicy = (body as { mcpPolicy?: unknown }).mcpPolicy;
+
+    if (!isValidToolsPolicy(mcpPolicy)) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'mcpPolicy: ожидается "consistency" | "available" | "auto"',
+        },
+      }, 400);
+    }
+
+    await deps.settingsStore.setMcpPolicy(mcpPolicy);
+    // Live-применение политики MCP-инструментов — оркестратор
+    // переконфигурируется без рестарта сервера.
+    await deps.onMcpPolicyChange?.(mcpPolicy);
+    return c.json({ mcpPolicy });
   });
 
   /**

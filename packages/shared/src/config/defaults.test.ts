@@ -28,8 +28,12 @@ describe('defaultConfig', () => {
     expect(defaultConfig.llm.cache).toBe('auto');
   });
 
-  it('tools.policy по умолчанию consistency (AD-071 §2.3)', () => {
-    expect(defaultConfig.tools.policy).toBe('consistency');
+  it('tools.policy по умолчанию auto (AD-071 §2.3)', () => {
+    expect(defaultConfig.tools.policy).toBe('auto');
+  });
+
+  it('mcp.policy по умолчанию auto (AD-071 §2.3)', () => {
+    expect(defaultConfig.mcp.policy).toBe('auto');
   });
 
   it('tools.disabled по умолчанию пусто (AD-071 §2.6)', () => {

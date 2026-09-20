@@ -118,11 +118,17 @@ export interface ComposerContext {
    */
   tools?: Array<Record<string, unknown>>;
   /**
-   * AD-071 §2.3: фактически применённая политика инструментов (`auto` уже
-   * разрешён вызывающей стороной в `consistency`/`available`). Влияет на тир
-   * слоя `tools` и текст инструкции `tools.guide`.
+   * AD-071 §2.3: фактически применённая политика **встроенных** инструментов
+   * (`auto` уже разрешён вызывающей стороной в `consistency`/`available`).
+   * Влияет на тир слоя `tools` и текст инструкции `tools.guide`.
    */
   toolsPolicy?: Exclude<ToolsPolicy, 'auto'>;
+  /**
+   * AD-071 §2.3: фактически применённая политика **MCP**-инструментов (`auto`
+   * уже разрешён). Независима от `toolsPolicy`; влияет на текст инструкции
+   * `tools.guide`, но не на тиры MCP-блоков (они всегда `volatile`).
+   */
+  mcpPolicy?: Exclude<ToolsPolicy, 'auto'>;
   /**
    * AD-071 §2.1: описания MCP-инструментов активных серверов сессии (слой
    * `mcp.tools`, volatile). В system-текст не входят; входят в `totalChars`, но
@@ -131,9 +137,9 @@ export interface ComposerContext {
   mcpTools?: Array<Record<string, unknown>>;
   /**
    * AD-071 §2.2: данные MCP-серверов (все настроенные, включая отключённые).
-   * Формируют блок `mcp.servers` (stable: имя/description/instructions/тулы) и
-   * `mcp.status` (volatile: статус подключения). Пустой/отсутствующий список —
-   * блоки не добавляются.
+   * Формируют блоки `mcp.servers` (имя/description/instructions/тулы) и
+   * `mcp.status` (статус подключения) — оба **всегда `volatile`** (§2.3: MCP не
+   * кэшируется). Пустой/отсутствующий список — блоки не добавляются.
    */
   mcpServers?: ComposerMcpServer[];
   /**
@@ -240,14 +246,18 @@ export class SystemPromptComposer {
     }));
 
     // AD-070 §2.5 + AD-071 §2.1/§2.3: слои описаний инструментов — отдельные
-    // записи (`tools → mcp.tools → system → messages`). В system-текст (`compose`)
-    // не входят, но отражаются в манифесте и учитываются в общих размерах.
+    // записи (`tools → mcp.servers → mcp.tools → mcp.status → system → messages`).
+    // В system-текст (`compose`) `tools`/`mcp.tools` не входят, но отражаются в
+    // манифесте и учитываются в общих размерах.
     //  - `tools` (встроенные) — `stable` в `consistency`, `context` в `available`
     //    (состав зависит от режима/роли); в staticPrefix входит только в stable;
     //  - `mcp.tools` (MCP активных серверов) — `volatile`, в staticPrefix НЕ входит.
     // `tools` вставляется в конце своего тира (перед записями более поздних
-    // тиров), `mcp.tools` — сразу после `tools`. `role` остаётся первой записью.
+    // тиров), `mcp.tools` — сразу после блока `mcp.servers` (или после `tools`,
+    // если серверов нет), чтобы MCP-регион шёл после встроенных инструментов.
+    // `role` остаётся первой записью.
     const toolsPolicy = ctx.toolsPolicy ?? 'consistency';
+    const mcpPolicy = ctx.mcpPolicy ?? 'consistency';
     const toolsTier: PromptTier = toolsPolicy === 'available' ? 'context' : 'stable';
     const toolsChars = ctx.tools && ctx.tools.length > 0 ? JSON.stringify(ctx.tools).length : 0;
     const mcpToolsChars = ctx.mcpTools && ctx.mcpTools.length > 0 ? JSON.stringify(ctx.mcpTools).length : 0;
@@ -273,17 +283,21 @@ export class SystemPromptComposer {
     };
     // `entries` отсортированы `sortPromptBlocks` (tier → order). Вставляем `tools`
     // после всех записей своего и более ранних тиров (в конец своего тира),
-    // `mcp.tools` — сразу за ним (начало следующего тира). `role` — первая.
+    // `mcp.tools` — сразу после `mcp.servers` (MCP-регион: servers → tools →
+    // status), либо сразу после `tools`, если серверов нет. `role` — первая.
     const tierRank: Record<PromptTier, number> = { stable: 0, context: 1, volatile: 2 };
     const toolsInsertIndex = entries.filter((entry) => tierRank[entry.tier] <= tierRank[toolsTier]).length;
     entries.splice(toolsInsertIndex, 0, toolsEntry);
-    entries.splice(toolsInsertIndex + 1, 0, mcpToolsEntry);
+    const mcpServersIndex = entries.findIndex((entry) => entry.key === 'mcp.servers');
+    const mcpToolsInsertIndex = mcpServersIndex >= 0 ? mcpServersIndex + 1 : toolsInsertIndex + 1;
+    entries.splice(mcpToolsInsertIndex, 0, mcpToolsEntry);
 
     const nonEmpty = blocks.filter((block) => block.content !== '');
     const totalChars =
       nonEmpty.reduce((sum, block) => sum + block.content.length, 0) + toolsChars + mcpToolsChars;
-    // AD-071 §2.1/§2.3: MCP-инструменты (volatile) и `tools` в режиме `available`
-    // (context) не входят в кэшируемый stable-префикс.
+    // AD-071 §2.1/§2.3: MCP-блоки (`mcp.servers`/`mcp.tools`/`mcp.status`) всегда
+    // volatile и в кэшируемый stable-префикс не входят; `tools` в режиме
+    // `available` (context) — тоже.
     const staticPrefixChars =
       nonEmpty
         .filter((block) => block.tier === 'stable')
@@ -299,6 +313,7 @@ export class SystemPromptComposer {
       estTokens: Math.ceil(totalChars / ratio),
       staticPrefixChars,
       toolsPolicy,
+      mcpPolicy,
       // AD-071 §2.6: применённый chars-per-token — признак оценочности.
       ratio,
       entries,
@@ -378,39 +393,43 @@ export class SystemPromptComposer {
       provenance: 'prompts/system/MODE_POLICY',
     });
 
-    // AD-071 §2.2/§2.3: тир блока `mcp.servers`/`mcp.status` зависит от политики.
-    //  - consistency (приоритет кэша) → split: описания в stable, статус в volatile;
-    //  - available (приоритет контекстного окна) → весь блок в context.
-    const mcpPolicy = ctx.toolsPolicy ?? 'consistency';
-    const mcpServersTier: PromptTier = mcpPolicy === 'available' ? 'context' : 'stable';
-    const mcpStatusTier: PromptTier = mcpPolicy === 'available' ? 'context' : 'volatile';
+    // AD-071 §2.2/§2.3: MCP-блоки всегда volatile — MCP не участвует в
+    // prompt-cache (состав динамичен: серверы включаются/выключаются, статус
+    // меняется), поэтому ни `mcp.servers`, ни `mcp.status` не должны попадать
+    // в stable-префикс. Политики `tools.policy`/`mcp.policy` на тир не влияют.
     if (ctx.mcpServers && ctx.mcpServers.length > 0) {
       extraBlocks.push({
         key: 'mcp.servers',
-        tier: mcpServersTier,
+        tier: 'volatile',
         order: 50,
         content: this._buildMcpServersBlock(ctx.mcpServers, lang),
         provenance: 'mcp.servers',
       });
       extraBlocks.push({
         key: 'mcp.status',
-        tier: mcpStatusTier,
+        tier: 'volatile',
         order: 70,
         content: this._buildMcpStatusBlock(ctx.mcpServers, lang),
         provenance: 'mcp.status',
       });
     }
 
-    // AD-071 §2.3/§2.6: блок добавляется в режиме `available` (состав сужен до
-    // доступных) и/или при наличии instance-wide отключений администратора
-    // (`tools.disabled`) — тогда модель предупреждена об административных
-    // ограничениях даже в `consistency`.
-    if (mcpPolicy === 'available' || hasAdminDisabled(ctx.adminDisabled)) {
+    // AD-071 §2.3/§2.6: блок добавляется, если **любая** из политик сужает
+    // состав до доступных (`available` — встроенные и/или MCP) и/или при
+    // наличии instance-wide отключений администратора (`tools.disabled`) —
+    // тогда модель предупреждена об ограничениях даже в `consistency`.
+    const toolsRestricted = (ctx.toolsPolicy ?? 'consistency') === 'available';
+    const mcpRestricted = (ctx.mcpPolicy ?? 'consistency') === 'available';
+    if (toolsRestricted || mcpRestricted || hasAdminDisabled(ctx.adminDisabled)) {
       extraBlocks.push({
         key: 'tools.guide',
         tier: 'context',
         order: 25,
-        content: this._buildToolsGuideBlock(lang, mcpPolicy === 'available', ctx.adminDisabled),
+        content: this._buildToolsGuideBlock(
+          lang,
+          { builtin: toolsRestricted, mcp: mcpRestricted },
+          ctx.adminDisabled,
+        ),
         provenance: 'inline',
       });
     }
@@ -535,19 +554,26 @@ export class SystemPromptComposer {
 
   /**
    * AD-071 §2.3/§2.6: инструкция к слою инструментов. Для `available` —
-   * «доступны только перечисленные»; при административных отключениях —
+   * «доступны только перечисленные» с указанием, каких инструментов касается
+   * ограничение (встроенные / MCP); при административных отключениях —
    * дополнительная строка про ограничения администратора.
    */
   private _buildToolsGuideBlock(
     lang: string,
-    restrictedByPolicy = false,
+    restricted: { builtin: boolean; mcp: boolean },
     adminDisabled?: { capabilities: string[]; tools: string[] },
   ): string {
     const lines: string[] = [];
+    const anyRestricted = restricted.builtin || restricted.mcp;
     if (lang === 'en') {
-      if (restrictedByPolicy) {
+      if (anyRestricted) {
+        const scope = restricted.builtin && restricted.mcp
+          ? 'built-in and MCP tools'
+          : restricted.builtin
+            ? 'built-in tools'
+            : 'MCP tools';
         lines.push(
-          '[TOOLS]\n\nOnly the tools listed in this request are available. If a tool you need is missing, it is unavailable in the current mode or to the current agent: do not try to call it or work around the restriction — complete the available part of the work and suggest that the user switch the mode (plan/act/yolo) or delegate the task via `@`.',
+          `[TOOLS]\n\nOnly the available ${scope} are included in this request. If a tool you need is missing, it is unavailable in the current mode or to the current agent: do not try to call it or work around the restriction — complete the available part of the work and suggest that the user switch the mode (plan/act/yolo) or delegate the task via \`@\`.`,
         );
       }
       if (hasAdminDisabled(adminDisabled)) {
@@ -556,9 +582,14 @@ export class SystemPromptComposer {
         );
       }
     } else {
-      if (restrictedByPolicy) {
+      if (anyRestricted) {
+        const scope = restricted.builtin && restricted.mcp
+          ? 'встроенные и MCP-инструменты'
+          : restricted.builtin
+            ? 'встроенные инструменты'
+            : 'MCP-инструменты';
         lines.push(
-          '[ИНСТРУМЕНТЫ]\n\nВ запросе переданы только инструменты, доступные в текущем режиме и текущему агенту. Если нужного инструмента нет — он недоступен в этом режиме или для этой роли: не пытайся вызвать его или обойти ограничение — выполни доступную часть работы и предложи пользователю переключить режим (plan/act/yolo) либо делегировать задачу через `@`.',
+          `[ИНСТРУМЕНТЫ]\n\nВ запросе переданы только доступные ${scope}, доступные в текущем режиме и текущему агенту. Если нужного инструмента нет — он недоступен в этом режиме или для этой роли: не пытайся вызвать его или обойти ограничение — выполни доступную часть работы и предложи пользователю переключить режим (plan/act/yolo) либо делегировать задачу через \`@\`.`,
         );
       }
       if (hasAdminDisabled(adminDisabled)) {

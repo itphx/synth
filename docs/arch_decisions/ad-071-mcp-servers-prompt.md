@@ -2,8 +2,9 @@
 
 > **Статус:** ✅ Реализовано
 > **Дата:** 2026-09-20
-> **Реализация:** Ф1 — слои `tools`/`mcp.tools` и per-session выборка (фикс кросс-сессионной утечки); Ф2 — блоки `mcp.servers`/`mcp.status` (`description` + `instructions`); Ф3 — политика `tools.policy` (`consistency`/`available`/`auto` + per-session override); Ф4 — единый PostgreSQL-ready реестр MCP, уровни `system`/`project`/`session`, RBAC, сетевой доступ; Ф5 — таблицы «Встроенные инструменты»/«MCP» и UI управления (сессия/проект/админка).
+> **Реализация:** Ф1 — слои `tools`/`mcp.tools` и per-session выборка (фикс кросс-сессионной утечки); Ф2 — блоки `mcp.servers`/`mcp.status` (`description` + `instructions`); Ф3 — политики `tools.policy`/`mcp.policy` (`consistency`/`available`/`auto`, дефолт `auto` + per-session override); Ф4 — единый PostgreSQL-ready реестр MCP, уровни `system`/`project`/`session`, RBAC, сетевой доступ; Ф5 — таблицы «Встроенные инструменты»/«MCP» и UI управления (сессия/проект/админка).
 > **Дополнение (2026-09-20):** §2.6, §2.8, §2.9 — вкладки правой панели, оценка/калибровка токенов инструментов, admin-отключение встроенных инструментов (`tools.disabled`), разделение настроек MCP на пользовательские и админские (Ф6).
+> **Дополнение (2026-09-21):** §2.3 — политика разделена на две независимые: `tools.policy` (только встроенные, default `auto`) и `mcp.policy` (только MCP, default `auto`); MCP-блоки (`mcp.servers`/`mcp.tools`/`mcp.status`) — **всегда `volatile`**; порядок `tools → mcp.servers → mcp.tools → mcp.status`.
 > **Парные документы:**
 > - [AD-070](./ad-070-system-prompt-composer.md) «SystemPromptComposer» — тиры `stable`/`context`/`volatile`, манифест промпта, CachePolicy; AD-071 добавляет слои `mcp.tools`/`mcp.servers` и уточняет правило «tools всегда `stable`»;
 > - [AD-029](./ad-029-granular-permissions.md) «Гранулярные permissions» — `mcpToolSettings` (доступность MCP-тулов по режимам plan/act) сохраняется и учитывается политикой включения;
@@ -15,9 +16,9 @@
 
 **Решение:** отделить MCP от встроенных инструментов на всех уровнях (промпт, реестр, UI) и ввести явную модель уровней/скоупа и политику включения инструментов:
 
-1. **Разделить слои инструментов:** встроенные — `tools` (`stable`), MCP — `mcp.tools` (`volatile`); в запросе встроенные идут первыми, кэш-брейкпоинт ставится после них.
-2. **Добавить блок `mcp.servers`** с описаниями серверов (имя, `description`, `instructions` из MCP, тулы, статус, уровень); тир блока зависит от политики (split при приоритете кэша, `context` при приоритете контекстного окна).
-3. **Ввести глобальную админскую политику `tools.policy`:** `consistency` (дефолт) | `available` (context-first) | `auto` (по модели/провайдеру); per-session override разрешён.
+1. **Разделить слои инструментов:** встроенные — `tools` (`stable`), MCP — `mcp.tools`/`mcp.servers`/`mcp.status` (**всегда `volatile`**); в запросе встроенные идут первыми, кэш-брейкпоинт ставится после них.
+2. **Добавить блок `mcp.servers`** с описаниями серверов (имя, `description`, `instructions` из MCP, тулы, статус, уровень); блок всегда `volatile` (MCP не кэшируется).
+3. **Ввести две независимые глобальные админские политики:** `tools.policy` (только встроенные, default `auto`) и `mcp.policy` (только MCP, default `auto`); обе — `consistency` | `available` | `auto`, per-session override разрешён (`toolsPolicy`/`mcpPolicy`).
 4. **Три уровня MCP:** `system` (admin, instance), `project` (owner/lead), `session` (пользователь); merge с приоритетом `system > project > session`.
 5. **Реестр MCP-серверов:** любой пользователь может добавить HTTP-сервер (с фиксацией автора); `stdio` — только admin на уровне инстанса; включение «по умолчанию для проекта» — только owner/lead.
 6. **Безопасность:** `stdio` (RCE) — только admin; пользовательские HTTP-серверы — `community`/unverified, project-wide включение проходит через человека (owner/lead).
@@ -57,22 +58,29 @@
 
 **Показываются все серверы, включая неактивные.** Отключённый сервер присутствует в блоке и в списках с пометкой `disabled` и причиной (opt-out в сессии, выключен в проекте, нет `enabledByDefault`), а не исчезает из выдачи.
 
-**Тир блока зависит от политики (§2.3):**
-- `tools.policy = consistency` (приоритет кэша) → **split**: `mcp.servers` (описания/instructions/тулы) в `stable`, а статус/доступность — в `volatile`;
-- `tools.policy = available` (приоритет контекстного окна) → весь блок в `context`.
+**Тир блока не зависит от политики (§2.3):** `mcp.servers`, `mcp.tools` и `mcp.status` — **всегда `volatile`** и не входят в `staticPrefixChars`. MCP динамичен (серверы включаются/выключаются, статус меняется), поэтому в prompt-cache не участвует. Порядок блоков в запросе/манифесте: встроенные `tools` → `mcp.servers` → `mcp.tools` → `mcp.status` (MCP-регион не идёт выше «Инструментов»).
 
-### 2.3. Политика включения инструментов (`tools.policy`)
+### 2.3. Политики включения инструментов (`tools.policy` / `mcp.policy`)
 
-Глобальная админская настройка (config.yaml + admin UI), с возможностью per-session override.
+Две **независимые** глобальные админские настройки (config.yaml + admin UI), с возможностью per-session override:
 
-| Значение | Поведение | Тир `tools` |
-|---|---|---|
-| `consistency` (дефолт) | в запрос идут все определения; недоступность кодируется permission-слоем (`unavailable(mode\|role)`); приоритет — валидность кэша | `stable` |
-| `available` | в запрос идут только доступные агенту/режиму/роли инструменты; инструкция по инструментам переписывается (без подсказок о недоступных); приоритет — экономия контекстного окна | `context`/`volatile` |
-| `auto` | выбор по модели/провайдеру: локальные → `available`, облачные → `consistency` | зависит от выбора |
+- **`tools.policy`** — только **встроенные** инструменты (слой `tools`); per-session override — `session.settings.toolsPolicy`;
+- **`mcp.policy`** — только **MCP**-инструменты (слои `mcp.tools`/`mcp.servers`/`mcp.status`); per-session override — `session.settings.mcpPolicy`.
 
-- В `available` режиме `mcpToolSettings` (AD-029) влияет на **состав** запроса, а не только на permission-вердикт.
-- Инструкция по инструментам должна соответствовать режиму (в `available` — «доступны только перечисленные инструменты»).
+Обе принимают одно из значений:
+
+| Значение | Поведение |
+|---|---|
+| `consistency` | в запрос идут все определения; недоступность кодируется permission-слоем (`unavailable(mode\|role)`); приоритет — валидность кэша |
+| `available` | в запрос идут только доступные агенту/режиму/роли инструменты **своего слоя**; инструкция по инструментам переписывается (без подсказок о недоступных); приоритет — экономия контекстного окна |
+| `auto` (**дефолт обеих**) | выбор по модели/провайдеру: локальные (`ollama`) → `available`, облачные → `consistency` |
+
+- **Дефолт — `auto`** для обеих политик (config.yaml и runtime-настройки).
+- **Независимость слоёв:** в `available` для встроенных MCP-слой **не** фильтруется, и наоборот. `tools.guide` добавляется, если **любая** из политик `available`; текст учитывает, что ограничение может касаться встроенных и/или MCP.
+- **Тир `tools`:** `stable` в `consistency`, `context` в `available` (состав зависит от режима/роли). MCP-блоки всегда `volatile`.
+- В `available` режиме `mcpToolSettings` (AD-029) влияет на **состав** MCP-слоя запроса, а не только на permission-вердикт.
+- **Манифест:** `manifest.toolsPolicy` и `manifest.mcpPolicy` несут фактически применённые (уже разрешённые из `auto`) политики; `mcp.servers`/`mcp.tools`/`mcp.status` не входят в `staticPrefixChars`.
+- **Runtime API:** `GET/PUT /api/v2/settings/tools-policy` (встроенные) и `GET/PUT /api/v2/settings/mcp-policy` (MCP).
 
 #### 2.3.1. Сетевой доступ пользовательских MCP (admin-настройка)
 
@@ -115,12 +123,12 @@
 
 **Настройки MCP разделены на два раздела:**
 - **Пользовательские** (настройки/сессия): вкл/выкл серверов в своей сессии, персональные HTTP-серверы, opt-out системных;
-- **Отдельная админ-категория** (RBAC `ADMIN`): system MCP и `stdio`, `enabledByDefault`, `tools.policy`, `tools.disabled` (§2.9), сетевой доступ (§2.3.1), управление единым реестром.
+- **Отдельная админ-категория** (RBAC `ADMIN`): system MCP и `stdio`, `enabledByDefault`, `tools.policy` + `mcp.policy`, `tools.disabled` (§2.9), сетевой доступ (§2.3.1), управление единым реестром.
 
 ### 2.7. Связь с другими AD
 
 - **AD-029:** `mcpToolSettings` сохраняется; в `available` влияет на состав запроса.
-- **AD-070:** добавляются `mcp.servers`/`mcp.tools`; правило «tools всегда `stable`» заменяется на «`tools` стабильны, `mcp.tools` — volatile».
+- **AD-070:** добавляются `mcp.servers`/`mcp.tools`; правило «tools всегда `stable`» заменяется на «`tools` стабильны, все MCP-блоки (`mcp.servers`/`mcp.tools`/`mcp.status`) — volatile».
 - **AD-014/AD-040:** проектный и сессионный скоуп.
 - **AD-068:** переиспользование trust/guard/install-policy для реестра MCP.
 - **AD-046/AD-068 (скиллы):** модель уровней и включения (`system`/`project`/`session`, enable/disable группами и точечно, стабильный каталог vs volatile) переиспользуется для скиллов — AD-046 §4.5, AD-068 §8.1.
@@ -175,7 +183,7 @@ tools:
 
 1. **Разделение и фикс утечки:** тегирование источника тулов, per-session выборка, разделение `tools`/`mcp.tools`, манифест, брейкпоинт после встроенных.
 2. **Блок `mcp.servers`:** `description` в конфиге, захват `instructions`/`serverInfo` в `McpClient`, блок и его тир по политике.
-3. **Политика `tools.policy`:** `consistency`/`available`/`auto`, per-session override, адаптация инструкции по инструментам, admin UI.
+3. **Политики `tools.policy`/`mcp.policy`:** `consistency`/`available`/`auto` (дефолт `auto`), независимые слои (встроенные / MCP), per-session override (`toolsPolicy`/`mcpPolicy`), адаптация инструкции по инструментам, admin UI.
 4. **Уровни и скоуп:** единый реестр MCP (`McpRegistryEntry`, PostgreSQL-ready), `Project.mcp`, RBAC, `enabledByDefault`, сетевой доступ (§2.3.1), безопасность `stdio`/HTTP, показ отключённых.
 5. **UI:** таблицы инструментов/MCP, управление уровнями.
 6. **Токены, калибровка и admin-отключение (дополнение, §2.6/§2.8/§2.9):** колонка `chars`/`estTokens` и сворачивание таблиц, калибровка ratio per-model, admin `tools.disabled` (группы + отдельные тулы, runtime API), разделение настроек MCP на пользовательские/админские, таблица MCP с переключателями во вкладке «Контекст», обмен вкладок.

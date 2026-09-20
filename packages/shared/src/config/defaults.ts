@@ -80,6 +80,7 @@ export const defaultConfig: SynthConfig = {
   },
   mcp: {
     servers: {},
+    policy: 'auto',
     networkPolicy: {
       mode: 'deny',
       list: [
@@ -95,7 +96,7 @@ export const defaultConfig: SynthConfig = {
     },
   },
   tools: {
-    policy: 'consistency',
+    policy: 'auto',
     disabled: {
       capabilities: [],
       tools: [],

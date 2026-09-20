@@ -497,14 +497,14 @@ describe('SystemPromptComposer', () => {
       ];
     }
 
-    it('stable mcp.servers: description/instructions/тулы; volatile mcp.status', async () => {
+    it('mcp.servers и mcp.status всегда volatile (AD-071 §2.3), не в stablePrefix', async () => {
       const composer = makeComposer();
       const session = makeSession();
       const { system, stablePrefix } = await composer.compose(
         makeCtx(session, { mcpServers: makeMcpServers() }),
       );
 
-      // stable-часть: описания/instructions/тулы обоих серверов.
+      // Описания/instructions/тулы обоих серверов.
       expect(system).toContain('[MCP-СЕРВЕРЫ]');
       expect(system).toContain('## active-srv');
       expect(system).toContain('Описание: Активный сервер');
@@ -520,12 +520,12 @@ describe('SystemPromptComposer', () => {
       expect(system).toContain('- active-srv: connected');
       expect(system).toContain('- disabled-srv: disabled (не включён в сессии)');
 
-      // stablePrefix содержит mcp.servers, но не volatile-статус.
-      expect(stablePrefix).toContain('[MCP-СЕРВЕРЫ]');
+      // AD-071 §2.3: ни один MCP-блок не входит в кэшируемый stablePrefix.
+      expect(stablePrefix).not.toContain('[MCP-СЕРВЕРЫ]');
       expect(stablePrefix).not.toContain('[СТАТУС MCP]');
     });
 
-    it('манифест: mcp.servers (stable) и mcp.status (volatile) с label/provenance', async () => {
+    it('манифест: mcp.servers и mcp.status (volatile) с label/provenance; не в staticPrefix', async () => {
       const composer = makeComposer();
       const session = makeSession();
 
@@ -533,7 +533,7 @@ describe('SystemPromptComposer', () => {
 
       const servers = manifest.entries.find((e) => e.key === 'mcp.servers');
       expect(servers).toBeDefined();
-      expect(servers!.tier).toBe('stable');
+      expect(servers!.tier).toBe('volatile');
       expect(servers!.source).toBe('system');
       expect(servers!.label).toBe('MCP servers');
       expect(servers!.provenance).toBe('mcp.servers');
@@ -546,11 +546,11 @@ describe('SystemPromptComposer', () => {
       expect(status!.label).toBe('MCP status');
       expect(status!.chars).toBeGreaterThan(0);
 
-      // stable mcp.servers входит в staticPrefix, volatile mcp.status — нет.
-      const withoutStatus = manifest.entries
+      // Ни mcp.servers, ни mcp.status не входят в staticPrefix.
+      const stableOnly = manifest.entries
         .filter((e) => e.tier === 'stable' && e.status !== 'empty')
         .reduce((sum, e) => sum + e.chars, 0);
-      expect(manifest.staticPrefixChars).toBe(withoutStatus);
+      expect(manifest.staticPrefixChars).toBe(stableOnly);
       expect(manifest.staticPrefixChars).toBeLessThan(manifest.totalChars);
     });
 
@@ -680,7 +680,7 @@ describe('SystemPromptComposer', () => {
       expect(composed.stablePrefix).not.toContain('[ИНСТРУМЕНТЫ]');
     });
 
-    it('available: mcp.servers/mcp.status переводятся в context', async () => {
+    it('любая политика available: mcp.servers/mcp.status остаются volatile', async () => {
       const composer = makeComposer();
       const session = makeSession();
       const servers: ComposerMcpServer[] = [
@@ -688,10 +688,15 @@ describe('SystemPromptComposer', () => {
       ];
 
       const manifest = await composer.manifest(
-        makeCtx(session, { mcpServers: servers, toolsPolicy: 'available' }),
+        makeCtx(session, { mcpServers: servers, toolsPolicy: 'available', mcpPolicy: 'available' }),
       );
-      expect(manifest.entries.find((e) => e.key === 'mcp.servers')!.tier).toBe('context');
-      expect(manifest.entries.find((e) => e.key === 'mcp.status')!.tier).toBe('context');
+      expect(manifest.entries.find((e) => e.key === 'mcp.servers')!.tier).toBe('volatile');
+      expect(manifest.entries.find((e) => e.key === 'mcp.status')!.tier).toBe('volatile');
+      // MCP-блоки не в staticPrefix.
+      const stableOnly = manifest.entries
+        .filter((e) => e.tier === 'stable' && e.status !== 'empty')
+        .reduce((sum, e) => sum + e.chars, 0);
+      expect(manifest.staticPrefixChars).toBe(stableOnly);
     });
 
     it('en: инструкция tools.guide на английском', async () => {
@@ -701,7 +706,73 @@ describe('SystemPromptComposer', () => {
         makeCtx(session, { language: 'en', toolsPolicy: 'available' }),
       );
       expect(composed.system).toContain('[TOOLS]');
-      expect(composed.system).toContain('Only the tools listed');
+      expect(composed.system).toContain('Only the available built-in tools');
+    });
+  });
+
+  describe('mcp.policy (AD-071 §2.3)', () => {
+    const tools = [
+      { type: 'function', function: { name: 'read_file', description: 'Read', parameters: {} } },
+    ];
+    const servers: ComposerMcpServer[] = [
+      { name: 'srv', tools: [{ name: 'ping' }], status: 'connected' },
+    ];
+
+    it('mcpPolicy=available добавляет tools.guide, даже если toolsPolicy=consistency', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+
+      const manifest = await composer.manifest(
+        makeCtx(session, { mcpServers: servers, toolsPolicy: 'consistency', mcpPolicy: 'available' }),
+      );
+      expect(manifest.mcpPolicy).toBe('available');
+      expect(manifest.entries.find((e) => e.key === 'tools.guide')).toBeDefined();
+      // tools остаются stable (политика встроенных не меняется).
+      expect(manifest.entries.find((e) => e.key === 'tools')!.tier).toBe('stable');
+      // MCP-блоки всё равно volatile.
+      expect(manifest.entries.find((e) => e.key === 'mcp.servers')!.tier).toBe('volatile');
+    });
+
+    it('mcpPolicy=consistency и toolsPolicy=consistency → tools.guide нет', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+
+      const manifest = await composer.manifest(
+        makeCtx(session, { tools, mcpServers: servers, toolsPolicy: 'consistency', mcpPolicy: 'consistency' }),
+      );
+      expect(manifest.mcpPolicy).toBe('consistency');
+      expect(manifest.entries.find((e) => e.key === 'tools.guide')).toBeUndefined();
+    });
+
+    it('порядок манифеста: tools → mcp.servers → mcp.tools → mcp.status', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const mcpTools = [
+        { type: 'function', function: { name: 'srv_ping', description: 'MCP', parameters: {} } },
+      ];
+
+      const manifest = await composer.manifest(
+        makeCtx(session, { tools, mcpTools, mcpServers: servers, toolsPolicy: 'available', mcpPolicy: 'available' }),
+      );
+      const iTools = manifest.entries.findIndex((e) => e.key === 'tools');
+      const iServers = manifest.entries.findIndex((e) => e.key === 'mcp.servers');
+      const iMcpTools = manifest.entries.findIndex((e) => e.key === 'mcp.tools');
+      const iStatus = manifest.entries.findIndex((e) => e.key === 'mcp.status');
+
+      expect(iTools).toBeGreaterThanOrEqual(0);
+      expect(iTools).toBeLessThan(iServers);
+      expect(iServers).toBeLessThan(iMcpTools);
+      expect(iMcpTools).toBeLessThan(iStatus);
+    });
+
+    it('en: mcpPolicy=available → [TOOLS] упоминает MCP', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const composed = await composer.compose(
+        makeCtx(session, { language: 'en', toolsPolicy: 'consistency', mcpPolicy: 'available' }),
+      );
+      expect(composed.system).toContain('[TOOLS]');
+      expect(composed.system).toContain('MCP tools');
     });
   });
 

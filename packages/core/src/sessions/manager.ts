@@ -92,8 +92,10 @@ export class SessionManager {
         agentRole: data.settings?.agentRole,
         language: data.settings?.language,
         planMode: data.settings?.planMode,
-        // AD-071 §2.3: per-session override политики инструментов не теряется при создании.
+        // AD-071 §2.3: per-session override политик встроенных/MCP-инструментов
+        // не теряется при создании.
         toolsPolicy: data.settings?.toolsPolicy,
+        mcpPolicy: data.settings?.mcpPolicy,
         routingEnabled: data.settings?.routingEnabled ?? false,
         routingStrategy: data.settings?.routingStrategy ?? 'auto',
         routingContent: data.settings?.routingContent ?? { coding: { provider: '', model: '' }, chat: { provider: '', model: '' }, research: { provider: '', model: '' } },

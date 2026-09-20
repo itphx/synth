@@ -97,6 +97,7 @@ program
       gatewayConfig: synth.llmGateway,
       llmCachePolicy: synth.llm.cache,
       toolsPolicy: synth.tools.policy,
+      mcpPolicy: synth.mcp?.policy,
       toolsDisabled: synth.tools.disabled,
       mcpServers: synth.mcp?.servers ?? {},
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,

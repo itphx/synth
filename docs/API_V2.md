@@ -232,7 +232,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | POST | `/api/v2/sessions/import` | backend | auth | Импорт сессии из экспорта → 201 |
 | GET | `/api/v2/sessions/:id/status` | оба | auth | `{blocked, pending_count, processor_running}` |
 | POST | `/api/v2/sessions/:id/prompt` | оба | auth | Поставить сообщение в очередь, вернуть **SSE-стрим** |
-| GET | `/api/v2/sessions/:id/prompt` | оба | auth | Состав системного промпта (AD-070 §2.5): `manifest` + `history` + `promptState` + `lastPromptMeta` + `toolsDetail` (тулы с `chars`/`estTokens` и флагом оценки, AD-071 §2.8) |
+| GET | `/api/v2/sessions/:id/prompt` | оба | auth | Состав системного промпта (AD-070 §2.5): `manifest` + `history` + `promptState` + `lastPromptMeta` + `toolsDetail` (тулы с `chars`/`estTokens` и флагом оценки, AD-071 §2.8). `manifest.toolsPolicy`/`manifest.mcpPolicy` — применённые политики встроенных/MCP (AD-071 §2.3); записи: `tools` (stable/context) → `mcp.servers`/`mcp.tools`/`mcp.status` (volatile, не в `staticPrefixChars`) |
 | GET | `/api/v2/sessions/:id/messages` | оба | auth | `{messages, session_id, engine}` |
 | POST | `/api/v2/sessions/:id/clear` | оба | auth | Очистить историю (кроме pinned) |
 | POST | `/api/v2/sessions/:id/abort` | оба | auth | Отменить стрим `{status:'aborted'}` |
@@ -417,6 +417,10 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | PUT | `/api/v2/settings/workspace` | auth | `{workspace}` |
 | GET | `/api/v2/settings/mcp` | auth | Доступность MCP по режимам |
 | PUT | `/api/v2/settings/mcp` | auth | `{servers}` |
+| GET | `/api/v2/settings/tools-policy` | auth | Политика включения **встроенных** инструментов (AD-071 §2.3): `{toolsPolicy:"consistency"\|"available"\|"auto"}` (runtime из `settings.json`, иначе `tools.policy` из config.yaml; дефолт `auto`) |
+| PUT | `/api/v2/settings/tools-policy` | auth | `{toolsPolicy}` (live-применение, persist); неизвестное значение → 400 |
+| GET | `/api/v2/settings/mcp-policy` | auth | Политика включения **MCP**-инструментов (AD-071 §2.3): `{mcpPolicy:"consistency"\|"available"\|"auto"}` (runtime из `settings.json`, иначе `mcp.policy` из config.yaml; дефолт `auto`) |
+| PUT | `/api/v2/settings/mcp-policy` | auth | `{mcpPolicy}` (live-применение, persist); независима от `tools-policy`; неизвестное значение → 400 |
 | GET | `/api/v2/settings/tools-disabled` | auth | Отключение встроенных инструментов (AD-071 §2.6): `{toolsDisabled:{capabilities,tools}}` (runtime-значение из `settings.json`, иначе `tools.disabled` из config.yaml) |
 | PUT | `/api/v2/settings/tools-disabled` | auth | `{toolsDisabled:{capabilities:string[],tools:string[]}}` (live-применение, persist); неизвестная capability → 400, `runtime`-тулы неотключаемы. UI-раздел — ADMIN-категория |
 | GET | `/api/v2/settings/llm-gateway` | auth | Настройки LLM Gateway |

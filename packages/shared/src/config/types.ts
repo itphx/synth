@@ -142,6 +142,12 @@ export const mcpNetworkPolicySchema = z.object({
 export const mcpConfigSchema = z.object({
   servers: z.record(z.string(), mcpServerConfigSchema).default({}),
   networkPolicy: mcpNetworkPolicySchema.default({}),
+  /**
+   * AD-071 §2.3: глобальная админская политика включения **MCP**-инструментов.
+   * Независима от `tools.policy` (только встроенные). Per-session override —
+   * `SessionSettings.mcpPolicy`.
+   */
+  policy: z.enum(TOOLS_POLICIES).default('auto'),
 });
 
 // --- Инструменты (AD-071 §2.3) ---
@@ -159,11 +165,12 @@ export const toolsDisabledConfigSchema = z.object({
 });
 
 /**
- * AD-071 §2.3: глобальная админская политика включения инструментов.
- * Per-session override — `SessionSettings.toolsPolicy`.
+ * AD-071 §2.3: глобальная админская политика включения **встроенных**
+ * инструментов (MCP — отдельная `mcp.policy`). Per-session override —
+ * `SessionSettings.toolsPolicy`.
  */
 export const toolsConfigSchema = z.object({
-  policy: z.enum(TOOLS_POLICIES).default('consistency'),
+  policy: z.enum(TOOLS_POLICIES).default('auto'),
   /** AD-071 §2.6: instance-wide отключение инструментов (admin). */
   disabled: toolsDisabledConfigSchema.default({}),
 });

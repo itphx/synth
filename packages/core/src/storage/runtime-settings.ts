@@ -34,8 +34,10 @@ export interface RuntimeSettings {
   llmGateway?: Partial<LlmGatewayRuntimeSettings>;
   /** Глобальные настройки секции «Безопасность» (защищённые пути). */
   security?: Partial<SecurityRuntimeSettings>;
-  /** AD-071 §2.3: глобальная политика включения инструментов (админка). */
+  /** AD-071 §2.3: глобальная политика включения встроенных инструментов (админка). */
   toolsPolicy?: ToolsPolicy;
+  /** AD-071 §2.3: глобальная политика включения MCP-инструментов (админка). */
+  mcpPolicy?: ToolsPolicy;
   /** AD-071 §2.6: instance-wide отключение инструментов (админка). */
   toolsDisabled?: ToolsDisabledConfig;
   /** AD-071 §2.3.1: runtime-политика сетевого доступа пользовательских HTTP MCP. */
@@ -183,7 +185,7 @@ export class RuntimeSettingsStore {
     await this._update((current) => ({ ...current, security: config }));
   }
 
-  /** AD-071 §2.3: runtime-политика инструментов (админка), undefined — не задана. */
+  /** AD-071 §2.3: runtime-политика встроенных инструментов (админка), undefined — не задана. */
   async getToolsPolicy(): Promise<ToolsPolicy | undefined> {
     const settings = await this.load();
     return settings.toolsPolicy;
@@ -191,6 +193,16 @@ export class RuntimeSettingsStore {
 
   async setToolsPolicy(policy: ToolsPolicy): Promise<void> {
     await this._update((current) => ({ ...current, toolsPolicy: policy }));
+  }
+
+  /** AD-071 §2.3: runtime-политика MCP-инструментов (админка), undefined — не задана. */
+  async getMcpPolicy(): Promise<ToolsPolicy | undefined> {
+    const settings = await this.load();
+    return settings.mcpPolicy;
+  }
+
+  async setMcpPolicy(policy: ToolsPolicy): Promise<void> {
+    await this._update((current) => ({ ...current, mcpPolicy: policy }));
   }
 
   /** AD-071 §2.6: instance-wide отключение инструментов (админка), undefined — не задано. */

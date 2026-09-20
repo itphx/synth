@@ -202,6 +202,7 @@ describe('ChatOrchestrator — tools.policy (AD-071 §2.3)', () => {
     mode?: SessionMode;
     mcpServers?: string[];
     toolsPolicy?: ToolsPolicy;
+    mcpPolicy?: ToolsPolicy;
     mcpToolSettings?: Record<string, McpServerToolSettings>;
   } = {}): Promise<Session> {
     return sessionManager.createSession({
@@ -212,6 +213,7 @@ describe('ChatOrchestrator — tools.policy (AD-071 §2.3)', () => {
         agentRole: 'developer',
         mcpServers: opts.mcpServers ?? [],
         toolsPolicy: opts.toolsPolicy,
+        mcpPolicy: opts.mcpPolicy,
         mcpToolSettings: opts.mcpToolSettings,
       },
     }).then(async (session) => {
@@ -276,11 +278,12 @@ describe('ChatOrchestrator — tools.policy (AD-071 §2.3)', () => {
     expect(info.manifest.entries.find((e) => e.key === 'tools.guide')).toBeDefined();
   });
 
-  it('available: MCP-тулы фильтруются по mcpToolSettings (plan/act)', async () => {
+  it('mcp available: MCP-тулы фильтруются по mcpToolSettings (plan/act)', async () => {
     const session = await createSession({
       mode: 'plan',
       mcpServers: ['srvA', 'srvB'],
-      toolsPolicy: 'available',
+      toolsPolicy: 'consistency',
+      mcpPolicy: 'available',
       mcpToolSettings: { srvA: { default: { plan: false, act: true } } },
     });
     await runTurn(session.id);
@@ -288,6 +291,84 @@ describe('ChatOrchestrator — tools.policy (AD-071 §2.3)', () => {
     const names = toolNames();
     expect(names).not.toContain('srvA_search'); // выключен в plan
     expect(names).toContain('srvB_fetch'); // default-доступен
+  });
+
+  it('разделение политик: tools=available не фильтрует MCP (mcp=consistency)', async () => {
+    const session = await createSession({
+      mode: 'plan',
+      mcpServers: ['srvA'],
+      toolsPolicy: 'available',
+      mcpPolicy: 'consistency',
+      mcpToolSettings: { srvA: { default: { plan: false, act: true } } },
+    });
+    await runTurn(session.id);
+
+    const names = toolNames();
+    // Встроенные сужены политикой.
+    expect(names).not.toContain('write_file');
+    // MCP не сужен (consistency) — тул на месте, несмотря на plan=false.
+    expect(names).toContain('srvA_search');
+
+    const after = (await sessionManager.getSession(session.id))!;
+    const info = await orchestrator.getPromptInfo(after);
+    expect(info.manifest.toolsPolicy).toBe('available');
+    expect(info.manifest.mcpPolicy).toBe('consistency');
+  });
+
+  it('разделение политик: mcp=available не фильтрует встроенные (tools=consistency)', async () => {
+    const session = await createSession({
+      mode: 'plan',
+      mcpServers: ['srvA'],
+      toolsPolicy: 'consistency',
+      mcpPolicy: 'available',
+      mcpToolSettings: { srvA: { default: { plan: false, act: true } } },
+    });
+    await runTurn(session.id);
+
+    const names = toolNames();
+    // Встроенные не сужены (consistency): plan-блокированный write_file в запросе.
+    expect(names).toContain('write_file');
+    // MCP сужен политикой.
+    expect(names).not.toContain('srvA_search');
+
+    const after = (await sessionManager.getSession(session.id))!;
+    const info = await orchestrator.getPromptInfo(after);
+    expect(info.manifest.toolsPolicy).toBe('consistency');
+    expect(info.manifest.mcpPolicy).toBe('available');
+  });
+
+  it('дефолт auto: облачный провайдер → обе политики consistency', async () => {
+    const session = await createSession({ mode: 'plan', mcpServers: ['srvA'] });
+    await runTurn(session.id);
+
+    const after = (await sessionManager.getSession(session.id))!;
+    const info = await orchestrator.getPromptInfo(after);
+    expect(info.manifest.toolsPolicy).toBe('consistency');
+    expect(info.manifest.mcpPolicy).toBe('consistency');
+  });
+
+  it('дефолт auto: локальный провайдер (ollama) → обе политики available', async () => {
+    const session = await createSession({ provider: 'local', mode: 'plan', mcpServers: ['srvA'] });
+    await runTurn(session.id);
+
+    const after = (await sessionManager.getSession(session.id))!;
+    const info = await orchestrator.getPromptInfo(after);
+    expect(info.manifest.toolsPolicy).toBe('available');
+    expect(info.manifest.mcpPolicy).toBe('available');
+  });
+
+  it('mcp=available добавляет tools.guide и volatile mcp.servers', async () => {
+    const session = await createSession({
+      mcpServers: ['srvA'],
+      toolsPolicy: 'consistency',
+      mcpPolicy: 'available',
+    });
+    await runTurn(session.id);
+
+    const after = (await sessionManager.getSession(session.id))!;
+    const info = await orchestrator.getPromptInfo(after);
+    expect(info.manifest.entries.find((e) => e.key === 'tools.guide')).toBeDefined();
+    expect(info.manifest.entries.find((e) => e.key === 'mcp.servers')!.tier).toBe('volatile');
   });
 
   it('available: plan-approve (act) возвращает write-тулы', async () => {

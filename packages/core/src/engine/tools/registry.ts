@@ -69,19 +69,27 @@ export class ToolRegistry {
    * активных серверов сессии. Порядок: сначала встроенные, затем MCP
    * (кэш-брейкпоинт ставится после встроенных, см. `stableToolCount`).
    *
-   * AD-071 §2.3: опциональный `predicate` отбирает только доступные тулы
-   * (режим `available`) — фильтрация на уровне `ToolDefinition`, до конвертации
-   * в LLM-формат (capabilities теряются в `ToolForLLM`).
+   * AD-071 §2.3: фильтр отбирает только доступные тулы (режим `available`) —
+   * на уровне `ToolDefinition`, до конвертации в LLM-формат (capabilities
+   * теряются в `ToolForLLM`). Встроенные и MCP фильтруются **независимо**:
+   * `predicate`-функция применяется к обоим слоям, объект — по слоям.
    */
   selectForSession(
     mcpServers?: Iterable<string>,
-    predicate?: (tool: ToolDefinition) => boolean,
+    predicate?:
+      | ((tool: ToolDefinition) => boolean)
+      | { builtin?: (tool: ToolDefinition) => boolean; mcp?: (tool: ToolDefinition) => boolean },
   ): { builtin: ToolForLLM[]; mcp: ToolForLLM[] } {
-    const allow = predicate ?? (() => true);
+    const allowBuiltin = typeof predicate === 'function'
+      ? predicate
+      : (predicate?.builtin ?? (() => true));
+    const allowMcp = typeof predicate === 'function'
+      ? predicate
+      : (predicate?.mcp ?? (() => true));
     return {
-      builtin: this.listBuiltin().filter(allow).map((tool) => this._toolToLLM(tool)),
+      builtin: this.listBuiltin().filter(allowBuiltin).map((tool) => this._toolToLLM(tool)),
       // Без набора серверов MCP-слой пуст (не «все MCP»): safety против утечки.
-      mcp: this.listMcp(mcpServers ?? []).filter(allow).map((tool) => this._toolToLLM(tool)),
+      mcp: this.listMcp(mcpServers ?? []).filter(allowMcp).map((tool) => this._toolToLLM(tool)),
     };
   }
 
