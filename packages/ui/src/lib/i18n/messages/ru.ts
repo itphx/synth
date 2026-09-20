@@ -8,6 +8,7 @@ export const dict = {
   'common.showMore': 'Ещё {count}',
   'common.showFewer': 'Скрыть',
   'common.save': 'Сохранить',
+  'common.saving': 'Сохранение...',
   'common.saved': 'Сохранено',
   'common.create': 'Создать',
   'common.delete': 'Удалить',
@@ -93,6 +94,7 @@ export const dict = {
   'settings.category.models': 'Модели',
   'settings.category.agents': 'Агенты',
   'settings.category.mcp': 'MCP-серверы',
+  'settings.category.mcpAdmin': 'MCP (админ)',
   'settings.category.notifications': 'Уведомления',
   'settings.category.routing': 'Маршрутизация',
   'settings.category.microFirst': 'Быстрые ответы',
@@ -454,6 +456,7 @@ export const dict = {
   'rightPanel.stats.mcpReason.project_disabled': 'выключен в проекте',
   'rightPanel.stats.mcpReason.not_default': 'не включён по умолчанию',
   'rightPanel.stats.mcpReason.config': 'выключен в конфиге',
+  'rightPanel.stats.tokenEstimate': 'Оценка токенов: ~{tokens} (символов {chars}, ratio {ratio})',
   // AD-070 §2.5: слой истории (messages) — состав отправляемых сообщений
   'rightPanel.stats.history': 'История',
   'rightPanel.stats.historyMessages': 'Сообщений',
@@ -572,6 +575,12 @@ export const dict = {
   'rightPanel.context.notLoaded': 'Сессия не загружена',
   'rightPanel.context.noStickyNotes': 'Нет заметок',
   'rightPanel.context.hint.stickyNotes': 'Заметки добавляются в системный промпт и видны модели в каждом запросе.',
+  // AD-071 §2.4: MCP-серверы сессии (переключатели)
+  'rightPanel.context.mcp.title': 'MCP-серверы',
+  'rightPanel.context.mcp.empty': 'MCP-серверы недоступны',
+  'rightPanel.context.mcp.colEnabled': 'Вкл',
+  'rightPanel.context.mcp.toggleError': 'Не удалось изменить состояние MCP-сервера',
+  'rightPanel.context.mcp.hint': 'Включайте и выключайте серверы для этой сессии, в том числе системные. Выключение — явный opt-out; оставьте включённым, чтобы следовать настройкам проекта/администратора.',
   'rightPanel.scheduler.placeholder': 'Шедулер — в разработке',
 
   // Center panel (tabs)
@@ -1306,6 +1315,34 @@ export const dict = {
   'mcp.permissions.noServerSettings': 'Нет серверов с настройками доступности.',
   'mcp.permissions.perTool': 'Инструменты сервера',
   'mcp.permissions.toolDefaultHint': 'Без отдельной настройки — как «Все инструменты»',
+
+  // MCP: пользовательские настройки (AD-071 §2.5)
+  'mcp.user.title': 'Мои MCP-серверы',
+  'mcp.user.description': 'Добавляйте свои HTTP MCP-серверы. Они становятся доступны сессиям согласно политике администратора.',
+  'mcp.user.empty': 'У вас пока нет серверов. Добавьте HTTP-сервер, чтобы расширить возможности моделей.',
+  'mcp.user.httpOnly': 'Здесь можно добавлять только HTTP/SSE-серверы; stdio-серверы настраивает администратор.',
+  'mcp.user.saveError': 'Не удалось сохранить MCP-сервер: {error}',
+
+  // MCP: админское отключение встроенных инструментов (AD-071 §2.6)
+  'mcpAdmin.tools.title': 'Отключение встроенных инструментов',
+  'mcpAdmin.tools.description': 'Жёсткое отключение на уровне инстанса. Отключённые инструменты не попадают в запрос к модели независимо от политики инструментов; runtime-инструменты сессии отключить нельзя.',
+  'mcpAdmin.tools.groups': 'Группы capability',
+  'mcpAdmin.tools.perTool': 'Отдельные инструменты',
+  'mcpAdmin.tools.group.file_read': 'Чтение файлов',
+  'mcpAdmin.tools.group.file_write': 'Запись файлов',
+  'mcpAdmin.tools.group.shell': 'Shell-команды',
+  'mcpAdmin.tools.group.search': 'Поиск',
+  'mcpAdmin.tools.group.web': 'Веб',
+  'mcpAdmin.tools.group.git_read': 'Чтение Git',
+  'mcpAdmin.tools.group.git_write': 'Запись Git',
+  'mcpAdmin.tools.group.task': 'Саб-агенты',
+  'mcpAdmin.tools.group.mcp': 'MCP-инструменты',
+  'mcpAdmin.tools.group.runtime': 'Runtime сессии',
+  'mcpAdmin.tools.runtimeHint': 'Runtime-инструменты сессии (ядро) доступны всегда и не отключаются',
+  'mcpAdmin.tools.notDisableable': 'не отключается',
+  'mcpAdmin.tools.noSession': 'Откройте сессию, чтобы увидеть отдельные инструменты (из состава её промпта).',
+  'mcpAdmin.tools.saved': 'Настройки отключения инструментов сохранены',
+  'mcpAdmin.tools.saveError': 'Не удалось сохранить отключение инструментов: {error}',
 
   // Reference & Merge
   'reference.title': 'Прикрепить ссылку на сессию',

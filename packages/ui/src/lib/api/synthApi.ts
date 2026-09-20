@@ -1,5 +1,5 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings } from '@itphx/synth-shared'
+import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig } from '@itphx/synth-shared'
 import { normalizeModelInfo } from './modelNormalize'
 
 const BASE_URL = '/api/v2'
@@ -1097,6 +1097,20 @@ export const synthApi = {
       method: 'PUT',
       body: JSON.stringify({ toolsPolicy }),
     }).then((r) => r.toolsPolicy)
+  },
+
+  // --- Инструменты: instance-wide отключение (AD-071 §2.6) ---
+  /** GET /settings/tools-disabled — жёстко отключённые admin'ом capability и тулы. */
+  async getToolsDisabled(): Promise<ToolsDisabledConfig> {
+    return fetchJSON<{ toolsDisabled: ToolsDisabledConfig }>(`${BASE_URL}/settings/tools-disabled`).then((r) => r.toolsDisabled)
+  },
+
+  /** PUT /settings/tools-disabled — сохранить и live-применить отключение инструментов. */
+  async saveToolsDisabled(config: ToolsDisabledConfig): Promise<ToolsDisabledConfig> {
+    return fetchJSON<{ toolsDisabled: ToolsDisabledConfig }>(`${BASE_URL}/settings/tools-disabled`, {
+      method: 'PUT',
+      body: JSON.stringify({ toolsDisabled: config }),
+    }).then((r) => r.toolsDisabled)
   },
 
   async getProtectedPaths(): Promise<ProtectedPathsRaw> {

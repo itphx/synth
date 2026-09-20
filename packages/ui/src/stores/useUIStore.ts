@@ -125,6 +125,11 @@ interface UIStore {
 
   intermediateTextDisplay: 'inline' | 'bottom'
   setIntermediateTextDisplay: (mode: 'inline' | 'bottom') => void
+
+  /** AD-071 §2.6: сигнал изменения instance-wide `tools.disabled` — статистика
+   *  и таблицы MCP перезапрашиваются без рестарта. Runtime, не персистится. */
+  toolsDisabledTick: number
+  bumpToolsDisabledTick: () => void
 }
 
 export const useUIStore = create<UIStore>()(
@@ -207,7 +212,8 @@ export const useUIStore = create<UIStore>()(
 
       leftPanelTab: 'projects',
       setLeftPanelTab: (tab) => set({ leftPanelTab: tab }),
-      rightPanelTab: 'stats',
+      // AD-071: вкладка «Контекст» идёт первой в правой панели — дефолт совпадает.
+      rightPanelTab: 'context',
       setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
       collapsedProjects: new Set<string>(),
       toggleProjectCollapse: (projectId) =>
@@ -336,6 +342,9 @@ export const useUIStore = create<UIStore>()(
         set({ intermediateTextDisplay: mode })
         profileService.syncIntermediateTextDisplayToProfile(mode)
       },
+
+      toolsDisabledTick: 0,
+      bumpToolsDisabledTick: () => set((state) => ({ toolsDisabledTick: state.toolsDisabledTick + 1 })),
     }),
     {
       name: 'synth-ui-settings',

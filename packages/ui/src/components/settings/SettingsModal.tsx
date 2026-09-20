@@ -13,7 +13,8 @@ import { ChatSettings } from "./ChatSettings"
 import { RoutingSettings } from "./RoutingSettings"
 import { MicroFirstDefaults } from "./MicroFirstDefaults"
 import { SecuritySettings } from "./SecuritySettings"
-import { McpSettings } from "./McpSettings"
+import { McpUserSettings } from "./McpUserSettings"
+import { McpAdminSettings } from "./McpAdminSettings"
 import { DashboardPanel } from "../admin/DashboardPanel"
 import { SessionsPanel } from "../admin/SessionsPanel"
 import { ProjectsPanel } from "../admin/ProjectsPanel"
@@ -32,7 +33,7 @@ interface CategoryItem {
   roles?: string[]
 }
 
-const CATEGORIES: CategoryItem[] = [
+export const CATEGORIES: CategoryItem[] = [
   { id: "profile", labelKey: "settings.category.profile", icon: "user-smile" },
   { id: "appearance", labelKey: "settings.category.appearance", icon: "palette" },
   { id: "notifications", labelKey: "settings.category.notifications", icon: "alert" },
@@ -42,6 +43,7 @@ const CATEGORIES: CategoryItem[] = [
   // Admin sections below
   { id: "dashboard", labelKey: "settings.category.dashboard", icon: "home", roles: ["ADMIN", "LEAD"] },
   { id: "security", labelKey: "settings.category.security", icon: "shield-keyhole", roles: ["ADMIN"] },
+  { id: "mcpAdmin", labelKey: "settings.category.mcpAdmin", icon: "tools", roles: ["ADMIN"] },
   { id: "sessions", labelKey: "settings.category.sessions", icon: "chat-new", roles: ["ADMIN", "LEAD"] },
   { id: "projects", labelKey: "settings.category.projects", icon: "briefcase", roles: ["ADMIN", "LEAD"] },
   { id: "providers", labelKey: "settings.category.providers", icon: "server", roles: ["ADMIN"] },
@@ -129,7 +131,8 @@ export const SettingsModal = () => {
             {settingsPage === "chat" && <ChatSettings />}
             {settingsPage === "routing" && <RoutingSettings />}
             {settingsPage === "microFirst" && <MicroFirstDefaults />}
-            {settingsPage === "mcp" && <McpSettings />}
+            {settingsPage === "mcp" && <McpUserSettings />}
+            {settingsPage === "mcpAdmin" && <McpAdminSettings />}
             {settingsPage === "security" && <SecuritySettings />}
             {settingsPage === "dashboard" && <DashboardPanel />}
             {settingsPage === "sessions" && <SessionsPanel />}

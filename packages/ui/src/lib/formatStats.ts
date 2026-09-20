@@ -1,5 +1,12 @@
 /** Компактное форматирование статистики (AD-070 §2.6). */
 
+/**
+ * AD-071 §2.6: дефолтный chars-per-token. Дублирует shared-константу
+ * `DEFAULT_CHARS_PER_TOKEN` намеренно: value-импорт из корня
+ * `@itphx/synth-shared` тянет `./config` (node:fs) и ломает браузер.
+ */
+export const DEFAULT_CHARS_PER_TOKEN = 4
+
 function trimTrailingZero(s: string): string {
   return s.replace(/\.0$/, '')
 }

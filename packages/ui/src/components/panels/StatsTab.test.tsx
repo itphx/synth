@@ -85,6 +85,18 @@ function findSection(container: HTMLElement, title: string): HTMLElement | null 
   return (h?.parentElement as HTMLElement) ?? null
 }
 
+/** AD-071 §2.6: таблицы инструментов/MCP свёрнуты — раскрываем через toggle. */
+async function expandSection(container: HTMLElement, title: string): Promise<HTMLElement> {
+  const section = findSection(container, title)
+  expect(section).not.toBeNull()
+  const toggle = section!.querySelector('button[aria-expanded]') as HTMLButtonElement
+  expect(toggle).not.toBeNull()
+  await act(async () => {
+    toggle.click()
+  })
+  return section!
+}
+
 beforeEach(() => {
   mocks.getModels.mockResolvedValue([])
   mocks.getProjectStats.mockResolvedValue(null)
@@ -201,9 +213,8 @@ describe('StatsTab — таблицы инструментов и MCP (AD-071 §
   it('рендерит таблицу «Встроенные инструменты»: имя, capability, доступность, источник', async () => {
     setPromptWithTools('consistency')
     const container = await renderStats()
-    const section = findSection(container, 'Built-in tools')
-    expect(section).not.toBeNull()
-    const text = section!.textContent ?? ''
+    const section = await expandSection(container, 'Built-in tools')
+    const text = section.textContent ?? ''
     expect(text).toContain('read_file')
     expect(text).toContain('file_read')
     expect(text).toContain('write_file')
@@ -217,7 +228,7 @@ describe('StatsTab — таблицы инструментов и MCP (AD-071 §
   it('в режиме available недоступные инструменты помечены как скрытые', async () => {
     setPromptWithTools('available')
     const container = await renderStats()
-    const section = findSection(container, 'Built-in tools')!
+    const section = await expandSection(container, 'Built-in tools')
     const text = section.textContent ?? ''
     expect(text).toContain('hidden')
     expect(text).not.toContain('unavailable (mode)')
@@ -249,9 +260,8 @@ describe('StatsTab — таблицы инструментов и MCP (AD-071 §
     })
 
     const container = await renderStats()
-    const section = findSection(container, 'MCP')
-    expect(section).not.toBeNull()
-    const text = section!.textContent ?? ''
+    const section = await expandSection(container, 'MCP')
+    const text = section.textContent ?? ''
     // Активный сервер: уровень, статус, тулы.
     expect(text).toContain('sys')
     expect(text).toContain('system')
@@ -266,6 +276,97 @@ describe('StatsTab — таблицы инструментов и MCP (AD-071 §
     // Список имён тулов в title.
     const toolsCell = container.querySelector('[data-testid="stats-mcp-sys"] td[title="echo, ping"]')
     expect(toolsCell).not.toBeNull()
+  })
+
+  it('таблицы «Встроенные инструменты» и «MCP» свёрнуты по умолчанию и раскрываются', async () => {
+    setPromptWithTools('consistency')
+    mocks.getSessionMcpEffective.mockResolvedValue({
+      servers: [
+        {
+          name: 'sys', level: 'system', enabled: true, connected: true, status: 'connected',
+          origin: 'instance', trust: 'builtin', author: null, tools: ['echo'],
+        },
+      ],
+      enabled: ['sys'],
+      disabled: [],
+      mcpServers: [],
+      mcpDisabledServers: [],
+    })
+
+    const container = await renderStats()
+    const toolsSection = findSection(container, 'Built-in tools')!
+    const mcpSection = findSection(container, 'MCP')!
+    expect(toolsSection.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded')).toBe('false')
+    expect(mcpSection.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded')).toBe('false')
+    expect(toolsSection.textContent).not.toContain('read_file')
+    expect(mcpSection.textContent).not.toContain('sys')
+
+    await expandSection(container, 'Built-in tools')
+    await expandSection(container, 'MCP')
+    expect(findSection(container, 'Built-in tools')!.textContent).toContain('read_file')
+    expect(findSection(container, 'MCP')!.textContent).toContain('sys')
+  })
+
+  it('колонка токенов: ~ при некалиброванном ratio, без ~ при калиброванном', async () => {
+    mocks.getSessionPrompt.mockResolvedValue({
+      ...promptInfo,
+      manifest: { ...promptInfo.manifest, toolsPolicy: 'consistency' },
+      toolsDetail: [
+        { name: 'read_file', capabilities: ['file_read'], available: true, source: 'built-in' as const, chars: 326, estTokens: 82, ratio: 4 },
+        { name: 'grep_files', capabilities: ['search'], available: true, source: 'built-in' as const, chars: 100, estTokens: 10, ratio: 2.5 },
+      ],
+    })
+    const container = await renderStats()
+    await expandSection(container, 'Built-in tools')
+
+    const readRow = container.querySelector('[data-testid="stats-tool-read_file"]')!
+    expect(readRow.textContent).toContain('~82')
+    const grepRow = container.querySelector('[data-testid="stats-tool-grep_files"]')!
+    expect(grepRow.textContent).toContain('10')
+    expect(grepRow.textContent).not.toContain('~10')
+  })
+
+  it('admin-disabled тулы не показываются в таблице состава промпта', async () => {
+    mocks.getSessionPrompt.mockResolvedValue({
+      ...promptInfo,
+      manifest: { ...promptInfo.manifest, toolsPolicy: 'consistency' },
+      toolsDetail: [
+        { name: 'read_file', capabilities: ['file_read'], available: true, source: 'built-in' as const },
+        {
+          name: 'git_status', capabilities: ['git_read'], available: false,
+          reason: 'admin_disabled' as const, adminDisabled: true, source: 'built-in' as const,
+        },
+      ],
+    })
+    const container = await renderStats()
+    const section = await expandSection(container, 'Built-in tools')
+    expect(section.textContent).toContain('read_file')
+    expect(section.textContent).not.toContain('git_status')
+  })
+
+  it('MCP: агрегат токенов по серверу и строки тулов при раскрытии', async () => {
+    mocks.getSessionMcpEffective.mockResolvedValue({
+      servers: [
+        {
+          name: 'sys', level: 'system', enabled: true, connected: true, status: 'connected',
+          origin: 'instance', trust: 'builtin', author: null, tools: ['echo'],
+          chars: 100, estTokens: 25, ratio: 4,
+          toolDetails: [{ name: 'echo', chars: 100, estTokens: 25, ratio: 4 }],
+        },
+      ],
+      enabled: ['sys'],
+      disabled: [],
+      mcpServers: [],
+      mcpDisabledServers: [],
+    })
+
+    const container = await renderStats()
+    await expandSection(container, 'MCP')
+    const serverRow = container.querySelector('[data-testid="stats-mcp-sys"]')!
+    expect(serverRow.textContent).toContain('~25')
+    const toolRow = container.querySelector('[data-testid="stats-mcp-tool-sys-echo"]')!
+    expect(toolRow.textContent).toContain('echo')
+    expect(toolRow.textContent).toContain('~25')
   })
 
   it('пустое состояние «MCP»', async () => {

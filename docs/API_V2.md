@@ -417,8 +417,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | PUT | `/api/v2/settings/workspace` | auth | `{workspace}` |
 | GET | `/api/v2/settings/mcp` | auth | Доступность MCP по режимам |
 | PUT | `/api/v2/settings/mcp` | auth | `{servers}` |
-| GET | `/api/v2/settings/tools-disabled` | ADMIN | Отключение встроенных инструментов (AD-071 §2.9): `{disabled:{capabilities,tools}}` + эффективный набор/признак override |
-| PUT | `/api/v2/settings/tools-disabled` | ADMIN | `{disabled:{capabilities:string[],tools:string[]}}` (live-применение, persist); `runtime`-тулы неотключаемы |
+| GET | `/api/v2/settings/tools-disabled` | auth | Отключение встроенных инструментов (AD-071 §2.6): `{toolsDisabled:{capabilities,tools}}` (runtime-значение из `settings.json`, иначе `tools.disabled` из config.yaml) |
+| PUT | `/api/v2/settings/tools-disabled` | auth | `{toolsDisabled:{capabilities:string[],tools:string[]}}` (live-применение, persist); неизвестная capability → 400, `runtime`-тулы неотключаемы. UI-раздел — ADMIN-категория |
 | GET | `/api/v2/settings/llm-gateway` | auth | Настройки LLM Gateway |
 | PUT | `/api/v2/settings/llm-gateway` | auth | `{llmGateway}` (live-применение) |
 | GET | `/api/v2/settings/security` | auth | `{security:{protectedPaths, askTimeoutMs}}` |

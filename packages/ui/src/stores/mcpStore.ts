@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { McpNetworkPolicy, McpRegistryEntry } from '@itphx/synth-shared'
+import type { McpNetworkPolicy, McpRegistryEntry, ToolsDisabledConfig } from '@itphx/synth-shared'
 import {
   synthApi,
   type McpRegistryAddInput,
@@ -23,6 +23,11 @@ interface McpStore {
   networkPolicyLoading: boolean
   networkPolicyError: string | null
 
+  // AD-071 §2.6: instance-wide жёсткое отключение инструментов администратором
+  toolsDisabled: ToolsDisabledConfig | null
+  toolsDisabledLoading: boolean
+  toolsDisabledError: string | null
+
   fetchRegistry: () => Promise<void>
   addRegistryEntry: (input: McpRegistryAddInput) => Promise<McpRegistryEntry>
   updateRegistryEntry: (id: string, patch: McpRegistryUpdateInput) => Promise<McpRegistryEntry>
@@ -35,6 +40,9 @@ interface McpStore {
 
   fetchNetworkPolicy: () => Promise<void>
   saveNetworkPolicy: (policy: McpNetworkPolicy) => Promise<void>
+
+  fetchToolsDisabled: () => Promise<void>
+  saveToolsDisabled: (config: ToolsDisabledConfig) => Promise<void>
 }
 
 const DEFAULT_AVAILABILITY = { plan: false, act: true }
@@ -51,6 +59,10 @@ export const useMcpStore = create<McpStore>((set, get) => ({
   networkPolicy: null,
   networkPolicyLoading: false,
   networkPolicyError: null,
+
+  toolsDisabled: null,
+  toolsDisabledLoading: false,
+  toolsDisabledError: null,
 
   fetchRegistry: async () => {
     set({ loading: true, error: null })
@@ -179,6 +191,33 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       set({
         networkPolicyError: err instanceof Error ? err.message : 'Ошибка сохранения сетевой политики',
         networkPolicyLoading: false,
+      })
+      throw err
+    }
+  },
+
+  fetchToolsDisabled: async () => {
+    set({ toolsDisabledLoading: true, toolsDisabledError: null })
+    try {
+      const config = await synthApi.getToolsDisabled()
+      set({ toolsDisabled: config, toolsDisabledLoading: false })
+    } catch (err) {
+      set({
+        toolsDisabledError: err instanceof Error ? err.message : 'Ошибка загрузки отключённых инструментов',
+        toolsDisabledLoading: false,
+      })
+    }
+  },
+
+  saveToolsDisabled: async (config) => {
+    set({ toolsDisabledLoading: true, toolsDisabledError: null })
+    try {
+      const saved = await synthApi.saveToolsDisabled(config)
+      set({ toolsDisabled: saved, toolsDisabledLoading: false })
+    } catch (err) {
+      set({
+        toolsDisabledError: err instanceof Error ? err.message : 'Ошибка сохранения отключённых инструментов',
+        toolsDisabledLoading: false,
       })
       throw err
     }

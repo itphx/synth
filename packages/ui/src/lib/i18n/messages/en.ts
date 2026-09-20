@@ -8,6 +8,7 @@ export const dict = {
   'common.showMore': '{count} more',
   'common.showFewer': 'Show fewer',
   'common.save': 'Save',
+  'common.saving': 'Saving...',
   'common.saved': 'Saved',
   'common.create': 'Create',
   'common.delete': 'Delete',
@@ -94,6 +95,7 @@ export const dict = {
   'settings.category.models': 'Models',
   'settings.category.agents': 'Agents',
   'settings.category.mcp': 'MCP Servers',
+  'settings.category.mcpAdmin': 'MCP (admin)',
   'settings.category.notifications': 'Notifications',
   'settings.category.routing': 'Routing',
   'settings.category.microFirst': 'Quick answers',
@@ -455,6 +457,7 @@ export const dict = {
   'rightPanel.stats.mcpReason.project_disabled': 'project disabled',
   'rightPanel.stats.mcpReason.not_default': 'not default',
   'rightPanel.stats.mcpReason.config': 'config',
+  'rightPanel.stats.tokenEstimate': 'Estimated tokens: ~{tokens} (chars {chars}, ratio {ratio})',
   // AD-070 §2.5: history layer (messages) — composition of sent messages
   'rightPanel.stats.history': 'History',
   'rightPanel.stats.historyMessages': 'Messages',
@@ -573,6 +576,12 @@ export const dict = {
   'rightPanel.context.notLoaded': 'Session not loaded',
   'rightPanel.context.noStickyNotes': 'No notes',
   'rightPanel.context.hint.stickyNotes': 'Notes are added to the system prompt and visible to the model in every request.',
+  // AD-071 §2.4: MCP servers of the session (toggles)
+  'rightPanel.context.mcp.title': 'MCP servers',
+  'rightPanel.context.mcp.empty': 'No MCP servers available',
+  'rightPanel.context.mcp.colEnabled': 'On',
+  'rightPanel.context.mcp.toggleError': 'Failed to change MCP server state',
+  'rightPanel.context.mcp.hint': 'Turn servers on/off for this session, including system ones. Off is an explicit opt-out; leave it on to follow the project/admin default.',
   'rightPanel.scheduler.placeholder': 'Scheduler — in development',
 
   // Center panel (tabs)
@@ -1309,6 +1318,34 @@ export const dict = {
   'mcp.permissions.noServerSettings': 'No servers with availability settings.',
   'mcp.permissions.perTool': 'Server tools',
   'mcp.permissions.toolDefaultHint': 'No custom setting — uses "All tools"',
+
+  // MCP: user settings (AD-071 §2.5)
+  'mcp.user.title': 'My MCP servers',
+  'mcp.user.description': 'Add your own HTTP MCP servers. They become available to sessions according to the administrator policy.',
+  'mcp.user.empty': 'You have no servers yet. Add an HTTP server to extend model capabilities.',
+  'mcp.user.httpOnly': 'Only HTTP/SSE servers can be added here; stdio servers are configured by an administrator.',
+  'mcp.user.saveError': 'Failed to save MCP server: {error}',
+
+  // MCP: admin tools.disabled (AD-071 §2.6)
+  'mcpAdmin.tools.title': 'Disable built-in tools',
+  'mcpAdmin.tools.description': 'Instance-wide hard disable. Disabled tools never go into the model request regardless of the tools policy; session runtime tools cannot be disabled.',
+  'mcpAdmin.tools.groups': 'Capability groups',
+  'mcpAdmin.tools.perTool': 'Individual tools',
+  'mcpAdmin.tools.group.file_read': 'File reading',
+  'mcpAdmin.tools.group.file_write': 'File writing',
+  'mcpAdmin.tools.group.shell': 'Shell commands',
+  'mcpAdmin.tools.group.search': 'Search',
+  'mcpAdmin.tools.group.web': 'Web',
+  'mcpAdmin.tools.group.git_read': 'Git read',
+  'mcpAdmin.tools.group.git_write': 'Git write',
+  'mcpAdmin.tools.group.task': 'Sub-agents',
+  'mcpAdmin.tools.group.mcp': 'MCP tools',
+  'mcpAdmin.tools.group.runtime': 'Session runtime',
+  'mcpAdmin.tools.runtimeHint': 'Session runtime tools (core) are always available and cannot be disabled',
+  'mcpAdmin.tools.notDisableable': 'not disableable',
+  'mcpAdmin.tools.noSession': 'Open a session to list individual tools (from its prompt composition).',
+  'mcpAdmin.tools.saved': 'Tool disable settings saved',
+  'mcpAdmin.tools.saveError': 'Failed to save tool disable settings: {error}',
 
   // Reference & Merge
   'reference.title': 'Add Session Reference',

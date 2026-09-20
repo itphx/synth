@@ -11,11 +11,12 @@ import { ProjectTab } from './ProjectTab'
 import { ReferencesTab } from './ReferencesTab'
 import { SecretsTab } from './SecretsTab'
 
-const RIGHT_TABS = [
-  { id: 'stats', icon: 'bar-chart-2' as const, labelKey: 'rightPanel.tab.stats' },
+// AD-071: «Контекст» — первая вкладка, «Статистика» — на её прежнем месте (индекс 3).
+export const RIGHT_TABS = [
+  { id: 'context', icon: 'file-text' as const, labelKey: 'rightPanel.tab.context' },
   { id: 'params', icon: 'settings-3' as const, labelKey: 'rightPanel.tab.session' },
   { id: 'project', icon: 'folder-3' as const, labelKey: 'rightPanel.tab.project' },
-  { id: 'context', icon: 'file-text' as const, labelKey: 'rightPanel.tab.context' },
+  { id: 'stats', icon: 'bar-chart-2' as const, labelKey: 'rightPanel.tab.stats' },
   { id: 'references', icon: 'link' as const, labelKey: 'rightPanel.tab.references' },
   { id: 'scheduler', icon: 'calendar-schedule' as const, labelKey: 'rightPanel.tab.scheduler' },
 ] as const
@@ -36,7 +37,7 @@ export const RightPanel: React.FC = () => {
   // Нормализация: если вкладка secrets недоступна (роль без прав) — сбрасываем на дефолтную
   useEffect(() => {
     if (rightPanelTab === 'secrets' && !canViewSecrets) {
-      setRightPanelTab('stats')
+      setRightPanelTab('context')
     }
   }, [rightPanelTab, canViewSecrets, setRightPanelTab])
 

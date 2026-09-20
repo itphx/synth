@@ -1,12 +1,22 @@
 import { useState, useEffect } from 'react'
+import type { McpServerEffective } from '@itphx/synth-shared'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useNotification } from '@/hooks/useNotification'
 import { synthApi } from '@/lib/api/synthApi'
+import { cn } from '@/lib/utils'
+import { DEFAULT_CHARS_PER_TOKEN } from '@/lib/formatStats'
 import { Toggle } from '../ui/Toggle'
 import { Icon } from '../icon/Icon'
+
+/** AD-071 §2.6: оценка токенов с `~`, если ratio не калиброван. */
+function formatMcpTokens(estTokens: number | undefined, ratio: number | undefined): string {
+  if (estTokens === undefined) return '\u2014'
+  const calibrated = ratio !== undefined && ratio !== DEFAULT_CHARS_PER_TOKEN
+  return `${calibrated ? '' : '~'}${estTokens.toLocaleString()}`
+}
 
 export function ContextTab() {
   const { t } = useI18n()
@@ -30,6 +40,51 @@ export function ContextTab() {
   const [headMessages, setHeadMessages] = useState(2)
   const [tailMessages, setTailMessages] = useState(3)
   const [saving, setSaving] = useState(false)
+
+  // AD-071 §2.4/§2.6: эффективный MCP-скоуп сессии — таблица с переключателями.
+  const [mcpServers, setMcpServers] = useState<McpServerEffective[]>([])
+  const [mcpLoading, setMcpLoading] = useState(false)
+  const [mcpToggling, setMcpToggling] = useState<string | null>(null)
+  const [mcpError, setMcpError] = useState<string | null>(null)
+  const streamFinishTick = useChatStore((s) =>
+    sessionId ? s.streamFinishTickBySession[sessionId] ?? 0 : 0,
+  )
+  const toolsDisabledTick = useUIStore((s) => s.toolsDisabledTick)
+
+  useEffect(() => {
+    if (!sessionId) {
+      setMcpServers([])
+      return
+    }
+    let cancelled = false
+    setMcpLoading(true)
+    setMcpError(null)
+    synthApi.getSessionMcpEffective(sessionId)
+      .then((r) => { if (!cancelled) setMcpServers(r.servers) })
+      .catch((err) => {
+        if (!cancelled) {
+          setMcpServers([])
+          setMcpError(err instanceof Error ? err.message : String(err))
+        }
+      })
+      .finally(() => { if (!cancelled) setMcpLoading(false) })
+    return () => { cancelled = true }
+  }, [sessionId, streamFinishTick, toolsDisabledTick])
+
+  /** AD-071 §2.4: точечный toggle MCP-сервера (включая opt-out системных). */
+  const handleToggleMcpServer = async (server: McpServerEffective) => {
+    if (!sessionId || mcpToggling) return
+    setMcpToggling(server.name)
+    setMcpError(null)
+    try {
+      const r = await synthApi.updateSessionMcp(sessionId, { name: server.name, enabled: !server.enabled })
+      setMcpServers(r.servers)
+    } catch (err) {
+      setMcpError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setMcpToggling(null)
+    }
+  }
 
   useEffect(() => {
     if (!sessionId) return
@@ -234,6 +289,75 @@ export function ContextTab() {
           />
           <p className="text-xs text-muted-foreground leading-relaxed">
             {t('rightPanel.context.hint.summarization')}
+          </p>
+        </Block>
+
+        {/* AD-071 §2.4/§2.6: MCP-серверы сессии — переключатели вкл/выкл,
+            уровень, статус, число тулов и оценка токенов. */}
+        <Block title={t('rightPanel.context.mcp.title')}>
+          {mcpLoading && mcpServers.length === 0 ? (
+            <p className="text-xs text-muted-foreground">{t('common.loading')}</p>
+          ) : mcpServers.length === 0 ? (
+            <p className="text-xs text-muted-foreground">{t('rightPanel.context.mcp.empty')}</p>
+          ) : (
+            <div className="overflow-x-auto" data-testid="context-mcp-list">
+              <table className="w-full text-[0.6875rem]">
+                <thead>
+                  <tr className="text-muted-foreground">
+                    <th className="px-2 py-0.5 text-left font-medium first:pl-0">{t('rightPanel.stats.colServer')}</th>
+                    <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colLevel')}</th>
+                    <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colStatus')}</th>
+                    <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colTools')}</th>
+                    <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.promptColTokens')}</th>
+                    <th className="px-2 py-0.5 text-center font-medium last:pr-0">{t('rightPanel.context.mcp.colEnabled')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mcpServers.map((server) => {
+                    const status = server.status
+                      ?? (server.enabled ? (server.connected ? 'connected' : 'error') : 'disabled')
+                    return (
+                      <tr
+                        key={server.name}
+                        data-testid={`context-mcp-${server.name}`}
+                        className={cn('border-t border-border/30', !server.enabled && 'text-muted-foreground/60')}
+                      >
+                        <td className="px-2 py-1 text-left max-w-[7rem] truncate first:pl-0" title={server.name}>{server.name}</td>
+                        <td className="px-2 py-1 text-center">{t(`rightPanel.stats.mcpLevel.${server.level}`)}</td>
+                        <td className="px-2 py-1 text-center">
+                          {t(`rightPanel.stats.mcpStatus.${status}`)}
+                          {!server.enabled && server.reason && (
+                            <span className="block text-[0.5625rem] text-muted-foreground/70">
+                              {t(`rightPanel.stats.mcpReason.${server.reason}`)}
+                            </span>
+                          )}
+                        </td>
+                        <td
+                          className="px-2 py-1 text-center tabular-nums"
+                          title={server.tools && server.tools.length > 0 ? server.tools.join(', ') : undefined}
+                        >
+                          {server.tools?.length ?? 0}
+                        </td>
+                        <td className="px-2 py-1 text-center tabular-nums">{formatMcpTokens(server.estTokens, server.ratio)}</td>
+                        <td className="px-2 py-1 text-center last:pr-0">
+                          <Toggle
+                            enabled={server.enabled}
+                            onToggle={() => handleToggleMcpServer(server)}
+                            ariaLabel={server.enabled ? t('mcp.disable') : t('mcp.enable')}
+                          />
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {mcpError && (
+            <p className="text-xs text-destructive">{t('rightPanel.context.mcp.toggleError')}</p>
+          )}
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            {t('rightPanel.context.mcp.hint')}
           </p>
         </Block>
       </div>

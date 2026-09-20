@@ -189,17 +189,19 @@ remote:                           # гибридный режим: локаль�
 
 ### Отключение встроенных инструментов (`tools.disabled`)
 
-Instance-wide настройка (AD-071 §2.9, RBAC `ADMIN`): жёстко исключает встроенные
-инструменты из запроса **независимо** от `tools.policy` — и по группам
-(`capabilities`, значения `ToolCapability`: `git`, `web`, `file_read`,
-`file_write`, `shell`, `mcp`, …), и по отдельным тулам (`tools`). Эффективный
+Instance-wide настройка (AD-071 §2.6; UI-раздел — ADMIN-категория `mcpAdmin`):
+жёстко исключает встроенные инструменты из запроса **независимо** от
+`tools.policy` — и по группам (`capabilities`, значения `ToolCapability`:
+`file_read`, `file_write`, `shell`, `search`, `web`, `git_read`, `git_write`,
+`task`, `mcp`), и по отдельным тулам (`tools`). Эффективный
 набор = доступные агенту/режиму тулы − (union отключённых групп и имён).
 
 `runtime`-инструменты (управление планом/todo, проект, reference, classify)
 неотключаемы — иначе ломается инвариант AD-039. Отключённые тулы не уходят в
-запрос и не упоминаются в подсказках, но видны в статистике с пометкой
-`disabled (admin)`. Runtime-правка: `GET/PUT /api/v2/settings/tools-disabled`
-(живое применение, persist в `settings.json`).
+запрос и не показываются в таблице состава промпта (в админ-UI их можно
+включить/отключить). Runtime-правка: `GET/PUT /api/v2/settings/tools-disabled`
+телом `{toolsDisabled:{capabilities,tools}}` (живое применение, persist в
+`settings.json`).
 
 ### Гибридный режим (remote)
 
