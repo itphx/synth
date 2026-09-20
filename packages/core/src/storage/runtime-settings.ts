@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { McpServerToolSettings, LLMGatewayConfig, SecurityConfig, ToolsPolicy } from '@itphx/synth-shared';
+import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 
 /** Runtime-настройки LLM Gateway, сохраняемые через UI (раздел «Шлюз безопасности»). */
@@ -36,6 +36,8 @@ export interface RuntimeSettings {
   security?: Partial<SecurityRuntimeSettings>;
   /** AD-071 §2.3: глобальная политика включения инструментов (админка). */
   toolsPolicy?: ToolsPolicy;
+  /** AD-071 §2.3.1: runtime-политика сетевого доступа пользовательских HTTP MCP. */
+  mcpNetworkPolicy?: McpNetworkPolicy;
 }
 
 /**
@@ -86,6 +88,22 @@ export function mergeSecurityConfig(
     askTimeoutMs: runtime.askTimeoutMs
       ?? (base as SecurityConfig & { askTimeoutMs?: number })?.askTimeoutMs
       ?? DEFAULT_ASK_TIMEOUT_MS,
+  };
+}
+
+/**
+ * AD-071 §2.3.1: мёржит runtime-политику сетевого доступа MCP поверх config.yaml.
+ * Runtime приоритетнее; при отсутствии обоих возвращает undefined (вызывающий
+ * подставляет дефолт `DEFAULT_MCP_NETWORK_POLICY`).
+ */
+export function mergeMcpNetworkPolicy(
+  base: McpNetworkPolicy | undefined,
+  runtime: McpNetworkPolicy | undefined,
+): McpNetworkPolicy | undefined {
+  if (!runtime && !base) return undefined;
+  return {
+    mode: runtime?.mode ?? base?.mode ?? 'deny',
+    list: runtime?.list ?? base?.list ?? [],
   };
 }
 
@@ -166,6 +184,16 @@ export class RuntimeSettingsStore {
 
   async setToolsPolicy(policy: ToolsPolicy): Promise<void> {
     await this._update((current) => ({ ...current, toolsPolicy: policy }));
+  }
+
+  /** AD-071 §2.3.1: runtime-политика сетевого доступа MCP (админка). */
+  async getMcpNetworkPolicy(): Promise<McpNetworkPolicy | undefined> {
+    const settings = await this.load();
+    return settings.mcpNetworkPolicy;
+  }
+
+  async setMcpNetworkPolicy(policy: McpNetworkPolicy): Promise<void> {
+    await this._update((current) => ({ ...current, mcpNetworkPolicy: policy }));
   }
 
   private async _update(mutate: (current: RuntimeSettings) => RuntimeSettings): Promise<void> {

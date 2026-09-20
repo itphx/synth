@@ -3,8 +3,8 @@ import type { AuthKit } from '../../auth/local.js';
 import type { RuntimeSettingsStore, LlmGatewayRuntimeSettings, SecurityRuntimeSettings } from '../../storage/runtime-settings.js';
 import type { ProtectedPathsStore } from '../../engine/security/protected-paths-store.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
-import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy } from '@itphx/synth-shared';
-import { TOOLS_POLICIES } from '@itphx/synth-shared';
+import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy } from '@itphx/synth-shared';
+import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY } from '@itphx/synth-shared';
 
 export interface SettingsRoutesDeps {
   /** Store runtime-настроек ({dataDir}/settings.json). */
@@ -19,6 +19,10 @@ export interface SettingsRoutesDeps {
   fallbackToolsPolicy?: ToolsPolicy;
   /** Вызывается после успешного PUT /tools-policy (live-применение политики инструментов). */
   onToolsPolicyChange?: (policy: ToolsPolicy) => void | Promise<void>;
+  /** AD-071 §2.3.1: значение mcp.networkPolicy из config.yaml (если runtime не задан). */
+  fallbackMcpNetworkPolicy?: McpNetworkPolicy;
+  /** Вызывается после успешного PUT /mcp-network-policy (live-применение). */
+  onMcpNetworkPolicyChange?: (policy: McpNetworkPolicy) => void | Promise<void>;
   /** Store override политики защищённых путей ({dataDir}/security/protected-paths.json). */
   protectedPathsStore?: ProtectedPathsStore;
 }
@@ -26,6 +30,15 @@ export interface SettingsRoutesDeps {
 /** AD-071 §2.3: валидна ли политика включения инструментов. */
 function isValidToolsPolicy(value: unknown): value is ToolsPolicy {
   return typeof value === 'string' && (TOOLS_POLICIES as readonly string[]).includes(value);
+}
+
+/** AD-071 §2.3.1: валидна ли политика сетевого доступа MCP ({ mode, list }). */
+function isValidMcpNetworkPolicy(value: unknown): value is McpNetworkPolicy {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const p = value as Record<string, unknown>;
+  if (p.mode !== 'allow' && p.mode !== 'deny') return false;
+  if (!Array.isArray(p.list) || !p.list.every((x) => typeof x === 'string' && x.trim().length > 0)) return false;
+  return true;
 }
 
 function isValidAvailability(value: unknown): value is McpToolAvailability {
@@ -263,6 +276,38 @@ export function createSettingsRoutes(
     // без рестарта сервера.
     await deps.onToolsPolicyChange?.(toolsPolicy);
     return c.json({ toolsPolicy });
+  });
+
+  /**
+   * GET/PUT /api/v2/settings/mcp-network-policy — AD-071 §2.3.1: политика
+   * сетевого доступа пользовательских HTTP MCP-серверов (`allow`/`deny` +
+   * список host/CIDR). Runtime-значение ({dataDir}/settings.json) приоритетнее
+   * config.yaml `mcp.networkPolicy`; дефолт — deny приватных диапазонов.
+   */
+  app.get('/mcp-network-policy', auth.requireAuth, async (c) => {
+    const runtime = await deps.settingsStore.getMcpNetworkPolicy();
+    const policy = runtime ?? deps.fallbackMcpNetworkPolicy ?? DEFAULT_MCP_NETWORK_POLICY;
+    return c.json({ policy });
+  });
+
+  app.put('/mcp-network-policy', auth.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const policy = (body as { policy?: unknown }).policy;
+
+    if (!isValidMcpNetworkPolicy(policy)) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'policy: ожидается { mode: "allow" | "deny", list: string[] }',
+        },
+      }, 400);
+    }
+
+    await deps.settingsStore.setMcpNetworkPolicy(policy);
+    // Live-применение политики сетевого доступа — McpManager переконфигурируется
+    // без рестарта сервера.
+    await deps.onMcpNetworkPolicyChange?.(policy);
+    return c.json({ policy });
   });
 
   /**

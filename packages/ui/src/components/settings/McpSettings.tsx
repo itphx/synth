@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
+import type { McpNetworkPolicy, McpRegistryEntry } from '@itphx/synth-shared'
 import { Icon } from '../icon/Icon'
 import { useMcpStore } from '../../stores/mcpStore'
+import { useAuthStore } from '../../stores/authStore'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { ConfirmDialog } from '../ui/confirm-dialog'
@@ -15,26 +17,42 @@ import type {
   McpProbedTool,
 } from '../../lib/api/synthApi'
 
-const EMPTY_CONFIG: McpServerConfig = { type: 'stdio' }
+const EMPTY_CONFIG: McpServerConfig = { type: 'http' }
 const DEFAULT_AVAILABILITY = { plan: false, act: true }
+
+const ORIGIN_BADGE: Record<string, string> = {
+  instance: 'bg-primary/15 text-primary',
+  user: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
+}
+
+const TRUST_BADGE: Record<string, string> = {
+  builtin: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+  community: 'bg-muted text-muted-foreground',
+}
 
 export const McpSettings = () => {
   const { t } = useI18n()
   const { notify } = useNotification()
   const {
-    servers, loading, error, fetchServers, addServer, updateServer, deleteServer, testServer,
+    registry, loading, error, fetchRegistry, addRegistryEntry, updateRegistryEntry, deleteRegistryEntry,
     toolSettings, toolSettingsLoading, toolSettingsError,
     fetchToolSettings, updateToolAvailability, saveToolSettings, probeServer,
+    networkPolicy, networkPolicyLoading, networkPolicyError, fetchNetworkPolicy, saveNetworkPolicy,
   } = useMcpStore()
+  const userId = useAuthStore((s) => s.user?.id)
+  const roles = useAuthStore((s) => s.user?.roles ?? [])
+  const isAdmin = roles.includes('ADMIN')
+
   const [editing, setEditing] = useState<string | null>(null)
   const [formName, setFormName] = useState('')
   const [formConfig, setFormConfig] = useState<McpServerConfig>(EMPTY_CONFIG)
+  const [formDefault, setFormDefault] = useState(false)
   const [testResult, setTestResult] = useState<string | null>(null)
   const [testSucceeded, setTestSucceeded] = useState<boolean | null>(null)
   const [testing, setTesting] = useState(false)
 
   // Delete confirmation state
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<McpRegistryEntry | null>(null)
 
   // Доступность инструментов по режимам (W4c)
   const [probedTools, setProbedTools] = useState<Record<string, McpProbedTool[] | null>>({})
@@ -45,9 +63,14 @@ export const McpSettings = () => {
   const prevToolSettingsRef = useRef<typeof toolSettings>(null)
 
   useEffect(() => {
-    fetchServers()
+    fetchRegistry()
     fetchToolSettings()
-  }, [fetchServers, fetchToolSettings])
+  }, [fetchRegistry, fetchToolSettings])
+
+  // AD-071 §2.3.1: сетевую политику читают только админы (секция скрыта для остальных).
+  useEffect(() => {
+    if (isAdmin) fetchNetworkPolicy()
+  }, [isAdmin, fetchNetworkPolicy])
 
   // Снапшот исходных настроек — только при первичной загрузке
   useEffect(() => {
@@ -62,31 +85,32 @@ export const McpSettings = () => {
     initialSettingsRef.current !== null &&
     JSON.stringify(toolSettings) !== JSON.stringify(initialSettingsRef.current)
 
-  // Секция «Доступность инструментов» строится от серверов из MCP-конфига (CRUD-список).
-  // Настройки plan/act берутся из settings/mcp по имени сервера; серверы из settings/mcp,
-  // отсутствующие в конфиге, не показываем — probe и точечная настройка для них невозможны.
+  // Секция «Доступность инструментов» строится от имён реестра.
   const availabilityServers =
-    servers === null
+    registry === null
       ? null
-      : Object.keys(servers).map((name) => ({
-          name,
-          entry: toolSettings?.[name] ?? { default: { ...DEFAULT_AVAILABILITY }, tools: {} },
+      : registry.map((entry) => ({
+          name: entry.name,
+          entry: toolSettings?.[entry.name] ?? { default: { ...DEFAULT_AVAILABILITY }, tools: {} },
         }))
+
+  const canManageEntry = (entry: McpRegistryEntry): boolean =>
+    isAdmin || (!!entry.author?.userId && entry.author.userId === userId)
 
   const openAdd = () => {
     setEditing('__new__')
     setFormName('')
-    setFormConfig({ type: 'stdio' })
+    setFormConfig({ type: 'http' })
+    setFormDefault(false)
     setTestResult(null)
     setTestSucceeded(null)
   }
 
-  const openEdit = (name: string) => {
-    const entry = servers?.[name]
-    if (!entry) return
-    setEditing(name)
-    setFormName(name)
+  const openEdit = (entry: McpRegistryEntry) => {
+    setEditing(entry.id)
+    setFormName(entry.name)
     setFormConfig({ ...entry.config })
+    setFormDefault(entry.enabledByDefault)
     setTestResult(null)
     setTestSucceeded(null)
   }
@@ -101,9 +125,17 @@ export const McpSettings = () => {
     if (!formName.trim()) return
     try {
       if (editing === '__new__') {
-        await addServer(formName.trim(), formConfig)
-      } else {
-        await updateServer(formName.trim(), formConfig)
+        await addRegistryEntry({
+          name: formName.trim(),
+          config: formConfig,
+          enabledByDefault: formDefault,
+        })
+      } else if (editing) {
+        await updateRegistryEntry(editing, {
+          name: formName.trim(),
+          config: formConfig,
+          enabledByDefault: formDefault,
+        })
       }
       closeForm()
     } catch {
@@ -113,12 +145,21 @@ export const McpSettings = () => {
 
   const handleDeleteConfirm = async () => {
     if (!deleteTarget) return
-    await deleteServer(deleteTarget)
+    try {
+      await deleteRegistryEntry(deleteTarget.id)
+    } catch {
+      // ошибка уже в сторе
+    }
     setDeleteTarget(null)
   }
 
-  const handleToggle = async (name: string, currentConfig: McpServerConfig) => {
-    await updateServer(name, { ...currentConfig, enabled: !currentConfig.enabled })
+  const handleToggleDefault = async (entry: McpRegistryEntry) => {
+    if (!canManageEntry(entry)) return
+    try {
+      await updateRegistryEntry(entry.id, { enabledByDefault: !entry.enabledByDefault })
+    } catch {
+      // ошибка уже в сторе
+    }
   }
 
   const handleTest = async () => {
@@ -126,10 +167,18 @@ export const McpSettings = () => {
     setTesting(true)
     setTestResult(null)
     setTestSucceeded(null)
-    const result = await testServer(formName.trim(), formConfig)
+    // Проверка до сохранения возможна только для уже зарегистрированного сервера
+    // (probe идёт по имени из реестра); для нового — подсказка сохранить.
+    if (editing === '__new__') {
+      setTesting(false)
+      setTestSucceeded(null)
+      setTestResult(t('mcp.registry.testAfterSave'))
+      return
+    }
+    const result = await probeServer(formName.trim())
     setTesting(false)
     if (result.success) {
-      setTestResult(t('mcp.testSuccess', { count: result.toolCount ?? 0 }))
+      setTestResult(t('mcp.testSuccess', { count: result.tools?.length ?? 0 }))
       setTestSucceeded(true)
     } else {
       setTestResult(t('mcp.testError', { error: result.error ?? 'unknown' }))
@@ -167,6 +216,19 @@ export const McpSettings = () => {
     }
   }
 
+  const handleSaveNetworkPolicy = async (policy: McpNetworkPolicy) => {
+    try {
+      await saveNetworkPolicy(policy)
+      notify({ text: t('mcp.network.saved'), type: 'success', category: 'system' })
+    } catch (err) {
+      notify({
+        text: t('mcp.network.saveError', { error: err instanceof Error ? err.message : 'unknown' }),
+        type: 'error',
+        category: 'error',
+      })
+    }
+  }
+
   const updateConfig = (patch: Partial<McpServerConfig>) => {
     setFormConfig((prev) => ({ ...prev, ...patch }))
   }
@@ -185,13 +247,15 @@ export const McpSettings = () => {
       .join('\n')
   }
 
+  const isHttpType = formConfig.type === 'sse' || formConfig.type === 'http'
+
   return (
     <SettingsPage title={t('mcp.title')} description={t('mcp.description')}>
       {error && (
         <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{error}</div>
       )}
 
-      {loading && servers === null && (
+      {loading && registry === null && (
         <div className="text-center text-muted-foreground py-8">{t('common.loading')}</div>
       )}
 
@@ -229,16 +293,21 @@ export const McpSettings = () => {
                 <label className="block text-xs font-medium text-muted-foreground mb-1">{t('mcp.type')}</label>
                 <Select
                   value={formConfig.type}
-                  onValueChange={(value) => updateConfig({ type: value as 'stdio' | 'sse' })}
+                  onValueChange={(value) => updateConfig({ type: value as McpServerConfig['type'] })}
                 >
                   <SelectTrigger className="w-full" aria-label={t('mcp.type')}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="stdio">{t('mcp.type.stdio')}</SelectItem>
-                    <SelectItem value="sse">{t('mcp.type.sse')}</SelectItem>
+                    {/* AD-071 §2.5: stdio (RCE) — только ADMIN. */}
+                    {isAdmin && <SelectItem value="stdio">{t('mcp.type.stdio')}</SelectItem>}
+                    <SelectItem value="http">{t('mcp.type.http')}</SelectItem>
+                    <SelectItem value="sse">{t('mcp.type.sse.legacy')}</SelectItem>
                   </SelectContent>
                 </Select>
+                {!isAdmin && (
+                  <p className="mt-1 text-[0.625rem] text-muted-foreground/70">{t('mcp.registry.stdioAdminOnly')}</p>
+                )}
               </div>
 
               {formConfig.type === 'stdio' && (
@@ -299,7 +368,7 @@ export const McpSettings = () => {
                 </>
               )}
 
-              {formConfig.type === 'sse' && (
+              {isHttpType && (
                 <div>
                   <label className="block text-xs font-medium text-muted-foreground mb-1">{t('mcp.url')}</label>
                   <input
@@ -315,8 +384,8 @@ export const McpSettings = () => {
               <div className="flex items-center gap-2">
                 <input
                   type="checkbox"
-                  checked={formConfig.enabledByDefault ?? false}
-                  onChange={(e) => updateConfig({ enabledByDefault: e.target.checked })}
+                  checked={formDefault}
+                  onChange={(e) => setFormDefault(e.target.checked)}
                   className="rounded"
                   id="mcp-enabled-default"
                 />
@@ -332,7 +401,9 @@ export const McpSettings = () => {
                     "p-2 rounded text-sm",
                     testSucceeded
                       ? "bg-success/10 text-success"
-                      : "bg-destructive/10 text-destructive"
+                      : testSucceeded === false
+                        ? "bg-destructive/10 text-destructive"
+                        : "bg-interactive-hover text-muted-foreground"
                   )}
                 >
                   {testResult}
@@ -355,17 +426,9 @@ export const McpSettings = () => {
               >
                 {testing ? t('common.testing') : t('common.test')}
               </button>
-              {editing !== '__new__' && (
-                <button
-                  onClick={() => setDeleteTarget(formName.trim())}
-                  className="px-4 py-2 rounded-lg border border-destructive/40 text-destructive text-sm hover:bg-destructive/10 ml-auto"
-                >
-                  {t('common.delete')}
-                </button>
-              )}
               <button
                 onClick={closeForm}
-                className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground"
+                className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground ml-auto"
               >
                 {t('common.cancel')}
               </button>
@@ -373,11 +436,11 @@ export const McpSettings = () => {
           </SettingsCard>
         )}
 
-        {/* Server list */}
+        {/* Registry list */}
         <SettingsCard className="sm:col-span-2">
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm font-medium text-foreground">
-              {servers ? t('mcp.count', { count: Object.keys(servers).length }) : ''}
+              {registry ? t('mcp.count', { count: registry.length }) : ''}
             </span>
             <button
               onClick={openAdd}
@@ -388,82 +451,109 @@ export const McpSettings = () => {
             </button>
           </div>
 
-          {servers && Object.keys(servers).length === 0 && !editing && (
+          {registry && registry.length === 0 && !editing && (
             <div className="text-center text-muted-foreground py-8">
-              <Icon name="plug" className="size-8 mx-auto mb-2 opacity-40" />
+              <Icon name="server" className="size-8 mx-auto mb-2 opacity-40" />
               <p className="text-sm">{t('mcp.noServers')}</p>
             </div>
           )}
 
-          {servers && Object.keys(servers).length > 0 && (
-            <div className="space-y-2">
-              {Object.entries(servers).map(([name, entry]) => (
-                <div
-                  key={name}
-                  className={cn(
-                    "flex items-center gap-3 p-3 rounded-lg border border-border hover:border-interactive-accent/50 transition-colors",
-                    entry.config.enabled === false && "opacity-50"
-                  )}
-                >
-                  <span
-                    title={entry.config.enabledByDefault ? t('mcp.enabledByDefaultTitle') : t('mcp.disabledByDefaultTitle')}
-                  >
-                    <Icon
-                      name="checkbox"
-                      className={cn(
-                        "size-4 shrink-0",
-                        entry.config.enabledByDefault ? "text-interactive-accent" : "text-muted-foreground/40"
-                      )}
-                    />
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{name}</div>
-                    {entry.config.description && (
-                      <div className="text-xs text-muted-foreground truncate" title={entry.config.description}>
-                        {entry.config.description}
-                      </div>
-                    )}
-                    <div className="text-xs text-muted-foreground">
-                      {entry.config.type === 'stdio'
-                        ? `stdio: ${entry.config.command || '?'}`
-                        : `sse: ${entry.config.url || '?'}`}
-                      {entry.config.enabledByDefault && ` · ${t('mcp.autoEnabled')}`}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => handleToggle(name, entry.config)}
-                    role="switch"
-                    aria-checked={entry.config.enabled !== false}
-                    aria-label={entry.config.enabled !== false ? t('mcp.disable') : t('mcp.enable')}
+          {registry && registry.length > 0 && (
+            <div className="space-y-2" data-testid="mcp-registry-list">
+              {registry.map((entry) => {
+                const manageable = canManageEntry(entry)
+                return (
+                  <div
+                    key={entry.id}
+                    data-testid={`mcp-registry-${entry.name}`}
                     className={cn(
-                      "relative w-9 h-5 rounded-full transition-colors shrink-0",
-                      entry.config.enabled !== false ? 'bg-primary' : 'bg-muted-foreground/20'
+                      "flex items-center gap-3 p-3 rounded-lg border border-border hover:border-interactive-accent/50 transition-colors",
+                      entry.config.enabled === false && "opacity-50"
                     )}
                   >
-                    <span className={cn(
-                      "block size-3.5 rounded-full bg-card shadow-sm transition-transform",
-                      entry.config.enabled !== false ? 'translate-x-[1.1875rem]' : 'translate-x-[0.1875rem]'
-                    )} />
-                  </button>
-                  <button
-                    onClick={() => openEdit(name)}
-                    className="p-1.5 rounded-lg hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
-                    aria-label={t('mcp.edit')}
-                  >
-                    <Icon name="edit-2" className="size-4" />
-                  </button>
-                  <button
-                    onClick={() => setDeleteTarget(name)}
-                    className="p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-                    aria-label={t('mcp.delete')}
-                  >
-                    <Icon name="delete-bin" className="size-4" />
-                  </button>
-                </div>
-              ))}
+                    <span
+                      title={entry.enabledByDefault ? t('mcp.enabledByDefaultTitle') : t('mcp.disabledByDefaultTitle')}
+                    >
+                      <Icon
+                        name="checkbox"
+                        className={cn(
+                          "size-4 shrink-0",
+                          entry.enabledByDefault ? "text-interactive-accent" : "text-muted-foreground/40"
+                        )}
+                      />
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-sm font-medium truncate">{entry.name}</span>
+                        <span className={cn('rounded px-1.5 py-0.5 text-[0.625rem] font-medium', ORIGIN_BADGE[entry.origin] ?? 'bg-muted text-muted-foreground')}>
+                          {t(`mcp.origin.${entry.origin}`)}
+                        </span>
+                        <span className={cn('rounded px-1.5 py-0.5 text-[0.625rem] font-medium', TRUST_BADGE[entry.trust] ?? 'bg-muted text-muted-foreground')}>
+                          {t(`mcp.trust.${entry.trust}`)}
+                        </span>
+                      </div>
+                      {entry.config.description && (
+                        <div className="text-xs text-muted-foreground truncate" title={entry.config.description}>
+                          {entry.config.description}
+                        </div>
+                      )}
+                      <div className="text-xs text-muted-foreground">
+                        {entry.config.type === 'stdio'
+                          ? `stdio: ${entry.config.command || '?'}`
+                          : `${entry.config.type}: ${entry.config.url || '?'}`}
+                        {entry.author?.username && ` · ${t('mcp.registry.author', { name: entry.author.username })}`}
+                        {entry.enabledByDefault && ` · ${t('mcp.autoEnabled')}`}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleToggleDefault(entry)}
+                      disabled={!manageable}
+                      role="switch"
+                      aria-checked={entry.enabledByDefault}
+                      aria-label={entry.enabledByDefault ? t('mcp.disable') : t('mcp.enable')}
+                      title={entry.enabledByDefault ? t('mcp.enabledByDefaultTitle') : t('mcp.disabledByDefaultTitle')}
+                      className={cn(
+                        "relative w-9 h-5 rounded-full transition-colors shrink-0 disabled:opacity-40",
+                        entry.enabledByDefault ? 'bg-primary' : 'bg-muted-foreground/20'
+                      )}
+                    >
+                      <span className={cn(
+                        "block size-3.5 rounded-full bg-card shadow-sm transition-transform",
+                        entry.enabledByDefault ? 'translate-x-[1.1875rem]' : 'translate-x-[0.1875rem]'
+                      )} />
+                    </button>
+                    <button
+                      onClick={() => openEdit(entry)}
+                      disabled={!manageable}
+                      className="p-1.5 rounded-lg hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
+                      aria-label={t('mcp.edit')}
+                    >
+                      <Icon name="edit-2" className="size-4" />
+                    </button>
+                    <button
+                      onClick={() => setDeleteTarget(entry)}
+                      disabled={!manageable}
+                      className="p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors disabled:opacity-40"
+                      aria-label={t('mcp.delete')}
+                    >
+                      <Icon name="delete-bin" className="size-4" />
+                    </button>
+                  </div>
+                )
+              })}
             </div>
           )}
         </SettingsCard>
+
+        {/* AD-071 §2.3.1: сетевой доступ пользовательских HTTP MCP (только ADMIN) */}
+        {isAdmin && (
+          <NetworkPolicySection
+            policy={networkPolicy}
+            loading={networkPolicyLoading}
+            error={networkPolicyError}
+            onSave={handleSaveNetworkPolicy}
+          />
+        )}
 
         {/* Доступность инструментов по режимам (W4c) */}
         <SettingsCard
@@ -531,13 +621,126 @@ export const McpSettings = () => {
         open={deleteTarget !== null}
         onOpenChange={() => setDeleteTarget(null)}
         title={t('mcp.deleteConfirm')}
-        message={deleteTarget ? t('mcp.deleteConfirmMessage', { name: deleteTarget }) : ''}
+        message={deleteTarget ? t('mcp.deleteConfirmMessage', { name: deleteTarget.name }) : ''}
         confirmLabel={t('common.delete')}
         variant="danger"
         icon="delete-bin"
         onConfirm={handleDeleteConfirm}
       />
     </SettingsPage>
+  )
+}
+
+/** AD-071 §2.3.1: редактор политики сетевого доступа (allow/deny + host/CIDR). */
+function NetworkPolicySection({
+  policy,
+  loading,
+  error,
+  onSave,
+}: {
+  policy: McpNetworkPolicy | null
+  loading: boolean
+  error: string | null
+  onSave: (policy: McpNetworkPolicy) => void
+}) {
+  const { t } = useI18n()
+  const [mode, setMode] = useState<'allow' | 'deny'>('deny')
+  const [list, setList] = useState<string[]>([])
+  const [draft, setDraft] = useState('')
+
+  useEffect(() => {
+    if (policy) {
+      setMode(policy.mode)
+      setList(policy.list)
+    }
+  }, [policy])
+
+  const addEntry = () => {
+    const value = draft.trim()
+    if (!value || list.includes(value)) return
+    setList((prev) => [...prev, value])
+    setDraft('')
+  }
+
+  return (
+    <SettingsCard
+      className="sm:col-span-2"
+      title={t('mcp.network.title')}
+      description={t('mcp.network.description')}
+    >
+      {loading && !policy && (
+        <div className="text-center text-muted-foreground py-4 text-sm">{t('common.loading')}</div>
+      )}
+      {error && (
+        <div className="p-2 rounded-lg bg-destructive/10 text-destructive text-sm">{error}</div>
+      )}
+
+      <div className="space-y-3" data-testid="mcp-network-policy">
+        <div className="flex items-center gap-3">
+          <label className="text-xs font-medium text-muted-foreground w-24">{t('mcp.network.mode')}</label>
+          <select
+            value={mode}
+            onChange={(e) => setMode(e.target.value as 'allow' | 'deny')}
+            aria-label={t('mcp.network.mode')}
+            className="rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          >
+            <option value="deny">{t('mcp.network.mode.deny')}</option>
+            <option value="allow">{t('mcp.network.mode.allow')}</option>
+          </select>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          {mode === 'deny' ? t('mcp.network.denyHelp') : t('mcp.network.allowHelp')}
+        </p>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-medium text-muted-foreground">{t('mcp.network.list')}</label>
+          {list.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {list.map((value) => (
+                <span key={value} className="inline-flex items-center gap-1 rounded bg-interactive-hover px-2 py-0.5 text-xs font-mono">
+                  {value}
+                  <button
+                    onClick={() => setList((prev) => prev.filter((v) => v !== value))}
+                    className="text-muted-foreground hover:text-destructive"
+                    aria-label={t('common.delete')}
+                  >
+                    <Icon name="close" className="size-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addEntry() } }}
+              placeholder="10.0.0.0/8"
+              className="flex-1 min-w-0 rounded-md bg-input border border-border px-2 py-1 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+            <button
+              onClick={addEntry}
+              disabled={!draft.trim()}
+              className="shrink-0 rounded-md border border-border px-2 py-1 text-xs hover:bg-interactive-hover disabled:opacity-50"
+            >
+              {t('common.add')}
+            </button>
+          </div>
+        </div>
+
+        <div className="flex justify-end">
+          <button
+            onClick={() => onSave({ mode, list })}
+            disabled={loading}
+            className="shrink-0 px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50"
+          >
+            {loading ? t('mcp.permissions.saving') : t('common.save')}
+          </button>
+        </div>
+      </div>
+    </SettingsCard>
   )
 }
 
@@ -574,7 +777,7 @@ function ServerAvailabilityCard({
           disabled={probing}
           className="shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-interactive-hover disabled:opacity-50"
         >
-          <Icon name="plug" className="size-3.5" />
+          <Icon name="link" className="size-3.5" />
           {probing ? t('mcp.permissions.probing') : t('mcp.permissions.probe')}
         </button>
       </div>

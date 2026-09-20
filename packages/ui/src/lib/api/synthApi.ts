@@ -1,5 +1,5 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats } from '@itphx/synth-shared'
+import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings } from '@itphx/synth-shared'
 import { normalizeModelInfo } from './modelNormalize'
 
 const BASE_URL = '/api/v2'
@@ -46,6 +46,8 @@ export interface ProjectData {
   }>
   log?: { id: string; text: string; created_at: string; session_id?: string | null; author?: string | null }[] | null
   plan: ProjectPlan | null
+  /** AD-071 §2.4: проектный скоуп MCP (owner/lead). */
+  mcp?: ProjectMcpSettings | null
   created_at: string
   updated_at: string
 }
@@ -318,6 +320,22 @@ export const synthApi = {
     })
   },
 
+  /** AD-071 §2.4: проектный MCP-скоуп (owner/lead/admin). */
+  async getProjectMcp(projectId: string): Promise<ProjectMcpResponse> {
+    return fetchJSON<ProjectMcpResponse>(`${BASE_URL}/projects/${encodeURIComponent(projectId)}/mcp`)
+  },
+
+  /** AD-071 §2.4: задать проектный MCP-скоуп (owner/lead/admin). */
+  async updateProjectMcp(
+    projectId: string,
+    body: { enabled?: string[]; defaultOn?: string[] },
+  ): Promise<ProjectMcpResponse> {
+    return fetchJSON<ProjectMcpResponse>(`${BASE_URL}/projects/${encodeURIComponent(projectId)}/mcp`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+  },
+
   // Перенос проектов между мирами (гибрид): publish — локальный проект на сервер,
   // fork-local — удалённый проект в локальный мир. Сессии и файлы переносятся всегда.
   async publishProject(id: string, opts?: { remote_project_id?: string }): Promise<PublishProjectResult> {
@@ -360,6 +378,20 @@ export const synthApi = {
   /** AD-071 §2.4/§2.6: эффективный MCP-скоуп сессии (включая отключённые с причиной). */
   async getSessionMcpEffective(sessionId: string): Promise<SessionMcpEffectiveResponse> {
     return fetchJSON<SessionMcpEffectiveResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/mcp`)
+  },
+
+  /**
+   * AD-071 §2.4: переключение MCP-сервера в сессии. Точечный toggle `{ name, enabled }`
+   * (в т.ч. opt-out системного) либо полная замена `{ mcpServers, mcpDisabledServers }`.
+   */
+  async updateSessionMcp(
+    sessionId: string,
+    body: { name?: string; enabled?: boolean; mcpServers?: string[]; mcpDisabledServers?: string[] },
+  ): Promise<SessionMcpEffectiveResponse> {
+    return fetchJSON<SessionMcpEffectiveResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/mcp`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
   },
 
   /** AD-070 §2.6: статистика сессии по агентам и авторам сообщений. */
@@ -968,6 +1000,43 @@ export const synthApi = {
     })
   },
 
+  // --- MCP: единый реестр (AD-071 §2.5) ---
+  async getMcpRegistry(): Promise<{ entries: McpRegistryEntry[] }> {
+    return fetchJSON(`${BASE_URL}/mcp/registry`)
+  },
+
+  async addMcpRegistryEntry(input: McpRegistryAddInput): Promise<McpRegistryEntry> {
+    return fetchJSON(`${BASE_URL}/mcp/registry`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  async updateMcpRegistryEntry(id: string, patch: McpRegistryUpdateInput): Promise<McpRegistryEntry> {
+    return fetchJSON(`${BASE_URL}/mcp/registry/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    })
+  },
+
+  async deleteMcpRegistryEntry(id: string): Promise<{ success: boolean }> {
+    return fetchJSON(`${BASE_URL}/mcp/registry/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  // --- MCP: политика сетевого доступа (AD-071 §2.3.1) ---
+  async getMcpNetworkPolicy(): Promise<McpNetworkPolicy> {
+    return fetchJSON<{ policy: McpNetworkPolicy }>(`${BASE_URL}/settings/mcp-network-policy`).then((r) => r.policy)
+  },
+
+  async saveMcpNetworkPolicy(policy: McpNetworkPolicy): Promise<McpNetworkPolicy> {
+    return fetchJSON<{ policy: McpNetworkPolicy }>(`${BASE_URL}/settings/mcp-network-policy`, {
+      method: 'PUT',
+      body: JSON.stringify({ policy }),
+    }).then((r) => r.policy)
+  },
+
   // --- LLM Gateway (AD-036) ---
   async getLlmGatewaySettings(): Promise<LlmGatewaySettings> {
     return fetchJSON<{ llmGateway: LlmGatewaySettings }>(`${BASE_URL}/settings/llm-gateway`).then((r) => r.llmGateway)
@@ -1267,13 +1336,14 @@ export interface McpSettingsPayload {
 }
 
 export interface McpServerConfig {
-  type: 'stdio' | 'sse'
+  type: 'stdio' | 'sse' | 'http'
   /** AD-071 §2.2: человекочитаемое описание сервера (попадает в блок промпта `mcp.servers`). */
   description?: string
   command?: string
   args?: string[]
   env?: Record<string, string>
   url?: string
+  headers?: Record<string, string>
   enabled?: boolean
   enabledByDefault?: boolean
   timeout?: number
@@ -1284,6 +1354,28 @@ export interface McpServerEntry {
   name: string
   config: McpServerConfig
   connected: boolean
+}
+
+/** AD-071 §2.5: тело добавления записи реестра MCP. */
+export interface McpRegistryAddInput {
+  name: string
+  config: McpServerConfig
+  enabledByDefault?: boolean
+  origin?: 'instance' | 'user'
+}
+
+/** AD-071 §2.5: тело обновления записи реестра MCP. */
+export interface McpRegistryUpdateInput {
+  name?: string
+  config?: McpServerConfig
+  enabledByDefault?: boolean
+}
+
+/** AD-071 §2.4: ответ GET/PUT /projects/:id/mcp — проектный MCP-скоуп. */
+export interface ProjectMcpResponse {
+  enabled: string[]
+  defaultOn: string[]
+  knownServers: string[]
 }
 
 /** Ответ GET /api/v2/hybrid/status — статус гибридного режима (core ↔ удалённый backend). */

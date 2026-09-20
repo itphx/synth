@@ -231,7 +231,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     mcpManager.setServerAuthors(await mcpRegistryStore.toAuthorMap());
     mcpManager.setDefaultServers(await mcpRegistryStore.toDefaultServers());
     // AD-071 §2.3.1: политика сетевого доступа HTTP-серверов (SSRF/egress).
-    mcpManager.setNetworkPolicy(backendConfig.synth.mcp.networkPolicy);
+    // Runtime-настройка из админки приоритетнее config.yaml; храним в изменяемой
+    // переменной, чтобы registry-роуты видели свежее значение без рестарта.
+    let effectiveNetworkPolicy = backendConfig.synth.mcp.networkPolicy;
+    mcpManager.setNetworkPolicy(effectiveNetworkPolicy);
 
     // Auth routes (после profilesStore)
     app.route('/auth', createAuthRoutes(auth, backendConfig.auth, profilesStore, dataDir, defaultsStore));
@@ -495,6 +498,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/mcp', createMcpRoutes(auth, mcpConfigStore, mcpManager, sessionManager, {
       registry: mcpRegistryStore,
       networkPolicy: backendConfig.synth.mcp.networkPolicy,
+      getNetworkPolicy: () => effectiveNetworkPolicy,
     }));
 
     // LLM Gateway audit routes (AD-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные
@@ -553,6 +557,12 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       fallbackToolsPolicy: backendConfig.synth.tools.policy,
       onToolsPolicyChange: async (policy) => {
         orchestrator.setToolsPolicy(policy);
+      },
+      // AD-071 §2.3.1: live-применение политики сетевого доступа MCP из админки.
+      fallbackMcpNetworkPolicy: backendConfig.synth.mcp.networkPolicy,
+      onMcpNetworkPolicyChange: async (policy) => {
+        effectiveNetworkPolicy = policy;
+        mcpManager.setNetworkPolicy(policy);
       },
       protectedPathsStore,
     }));

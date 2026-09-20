@@ -810,6 +810,10 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     onToolsPolicyChange: async (policy) => {
       orchestrator.setToolsPolicy(policy);
     },
+    // AD-071 §2.3.1: live-применение политики сетевого доступа MCP из админки.
+    onMcpNetworkPolicyChange: async (policy) => {
+      mcpManager.setNetworkPolicy(policy);
+    },
     protectedPathsStore,
   }));
 

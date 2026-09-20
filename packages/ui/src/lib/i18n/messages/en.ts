@@ -507,6 +507,14 @@ export const dict = {
   'projectTab.invariants.saved': 'Invariants saved',
   'projectTab.log.title': 'Log',
   'projectTab.log.hint': 'Project work log (maintained by the model via project_log_write)',
+  // AD-071 §2.4: project MCP scope (owner/lead/admin)
+  'projectTab.mcp.title': 'MCP servers',
+  'projectTab.mcp.empty': 'No MCP servers in the registry yet.',
+  'projectTab.mcp.available': 'Available',
+  'projectTab.mcp.defaultOn': 'Default on',
+  'projectTab.mcp.systemHint': 'System server — managed by the administrator; can only be disabled in a session.',
+  'projectTab.mcp.hint': 'Available — servers allowed for the project; Default on — enabled for all project sessions by default.',
+  'projectTab.mcp.saveError': 'Failed to save project MCP settings',
   'sessionTab.plan.title': 'Project plan',
   'sessionTab.plan.empty': 'No plan',
   'sessionTab.plan.hint': 'The project plan will appear here after plan_write',
@@ -864,6 +872,10 @@ export const dict = {
   'sessionSettings.askTimeoutSeconds': 'Approval timeout (sec)',
   'sessionSettings.askTimeoutEnabled': 'Enabled',
   'sessionSettings.askTimeoutDisabled': 'Disabled',
+  // AD-071 §2.4: MCP scope in session
+  'sessionSettings.mcp.title': 'MCP servers',
+  'sessionSettings.mcp.hint': 'Turn servers on/off for this session, including system and project ones. Off means an explicit opt-out; leave untouched to follow the project/admin default.',
+  'sessionSettings.mcp.toggleError': 'Failed to change MCP server state',
 
   // Chat settings
   'chatSettings.intermediateTextDisplay': 'Intermediate responses',
@@ -1250,6 +1262,29 @@ export const dict = {
   'mcp.autoEnabled': 'auto',
   'mcp.enabledByDefaultTitle': 'Enabled by default',
   'mcp.disabledByDefaultTitle': 'Not enabled by default',
+  'mcp.type.http': 'HTTP (streamable)',
+  'mcp.type.sse.legacy': 'SSE (legacy)',
+
+  // MCP: registry (AD-071 §2.5)
+  'mcp.registry.author': 'author: {name}',
+  'mcp.registry.stdioAdminOnly': 'stdio servers can only be added by an administrator',
+  'mcp.registry.testAfterSave': 'Save the server first, then test the connection.',
+  'mcp.origin.instance': 'system',
+  'mcp.origin.user': 'user',
+  'mcp.trust.builtin': 'trusted',
+  'mcp.trust.community': 'community',
+
+  // MCP: network access policy (AD-071 §2.3.1)
+  'mcp.network.title': 'Network access for user MCP servers',
+  'mcp.network.description': 'Restricts which hosts user-added HTTP MCP servers may connect to (SSRF/egress protection).',
+  'mcp.network.mode': 'Mode',
+  'mcp.network.mode.deny': 'deny — block listed addresses',
+  'mcp.network.mode.allow': 'allow — only listed addresses',
+  'mcp.network.denyHelp': 'Addresses in the list are forbidden; everything else is allowed. Default is deny of private ranges (10/8, 172.16/12, 192.168/16, 127/8, link-local, metadata).',
+  'mcp.network.allowHelp': 'Only addresses in the list are allowed; everything else is forbidden.',
+  'mcp.network.list': 'Hosts / CIDR',
+  'mcp.network.saved': 'Network policy saved',
+  'mcp.network.saveError': 'Failed to save network policy: {error}',
 
   // MCP: tool availability per mode
   'mcp.permissions.title': 'Tool availability by mode',

@@ -54,6 +54,11 @@ export interface McpRoutesOptions {
   registry?: McpRegistryStore;
   /** AD-071 §2.3.1: политика сетевого доступа HTTP-серверов. */
   networkPolicy?: McpNetworkPolicy;
+  /**
+   * AD-071 §2.3.1: динамический источник политики (runtime-настройка из админки).
+   * Приоритетнее статической `networkPolicy`; читается на каждый запрос.
+   */
+  getNetworkPolicy?: () => McpNetworkPolicy | undefined;
 }
 
 export function createMcpRoutes(
@@ -337,6 +342,8 @@ export function createMcpRoutes(
   if (options.registry) {
     const registry = options.registry;
     const networkPolicy = options.networkPolicy;
+    const resolveNetworkPolicy = (): McpNetworkPolicy | undefined =>
+      options.getNetworkPolicy?.() ?? networkPolicy;
 
     const syncManagerConfig = async (): Promise<void> => {
       if (!mcpManager) return;
@@ -356,8 +363,10 @@ export function createMcpRoutes(
     ): Promise<{ code: string; message: string } | null> => {
       // AD-071 §2.3.1: политика — для пользовательских HTTP-серверов; instance
       // (в т.ч. приватные сети инстанса) доверенные.
-      if (origin !== 'user' || config.type === 'stdio' || !config.url || !networkPolicy) return null;
-      const result = await evaluateMcpNetworkAccess(config.url, networkPolicy);
+      if (origin !== 'user' || config.type === 'stdio' || !config.url) return null;
+      const policy = resolveNetworkPolicy();
+      if (!policy) return null;
+      const result = await evaluateMcpNetworkAccess(config.url, policy);
       if (result.allowed) return null;
       return { code: 'NETWORK_POLICY_VIOLATION', message: result.reason ?? 'Адрес запрещён сетевой политикой' };
     };

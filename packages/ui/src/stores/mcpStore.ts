@@ -1,8 +1,15 @@
 import { create } from 'zustand'
-import { synthApi, type McpServerConfig, type McpServerEntry, type McpServerToolsSettings } from '../lib/api/synthApi'
+import type { McpNetworkPolicy, McpRegistryEntry } from '@itphx/synth-shared'
+import {
+  synthApi,
+  type McpRegistryAddInput,
+  type McpRegistryUpdateInput,
+  type McpServerToolsSettings,
+} from '../lib/api/synthApi'
 
 interface McpStore {
-  servers: Record<string, McpServerEntry> | null
+  /** AD-071 §2.5: единый реестр MCP-серверов (instance + пользовательские). */
+  registry: McpRegistryEntry[] | null
   loading: boolean
   error: string | null
 
@@ -11,22 +18,29 @@ interface McpStore {
   toolSettingsLoading: boolean
   toolSettingsError: string | null
 
-  fetchServers: () => Promise<void>
-  addServer: (name: string, config: McpServerConfig) => Promise<void>
-  updateServer: (name: string, config: McpServerConfig) => Promise<void>
-  deleteServer: (name: string) => Promise<void>
-  testServer: (name: string, config?: McpServerConfig) => Promise<{ success: boolean; toolCount?: number; error?: string }>
+  // AD-071 §2.3.1: политика сетевого доступа пользовательских HTTP MCP
+  networkPolicy: McpNetworkPolicy | null
+  networkPolicyLoading: boolean
+  networkPolicyError: string | null
+
+  fetchRegistry: () => Promise<void>
+  addRegistryEntry: (input: McpRegistryAddInput) => Promise<McpRegistryEntry>
+  updateRegistryEntry: (id: string, patch: McpRegistryUpdateInput) => Promise<McpRegistryEntry>
+  deleteRegistryEntry: (id: string) => Promise<void>
 
   fetchToolSettings: () => Promise<void>
   updateToolAvailability: (name: string, toolName: string | 'default', mode: 'plan' | 'act', value: boolean) => void
   saveToolSettings: () => Promise<void>
   probeServer: (name: string) => Promise<{ success: boolean; tools?: Array<{ name: string; description: string }>; error?: string }>
+
+  fetchNetworkPolicy: () => Promise<void>
+  saveNetworkPolicy: (policy: McpNetworkPolicy) => Promise<void>
 }
 
 const DEFAULT_AVAILABILITY = { plan: false, act: true }
 
 export const useMcpStore = create<McpStore>((set, get) => ({
-  servers: null,
+  registry: null,
   loading: false,
   error: null,
 
@@ -34,59 +48,59 @@ export const useMcpStore = create<McpStore>((set, get) => ({
   toolSettingsLoading: false,
   toolSettingsError: null,
 
-  fetchServers: async () => {
+  networkPolicy: null,
+  networkPolicyLoading: false,
+  networkPolicyError: null,
+
+  fetchRegistry: async () => {
     set({ loading: true, error: null })
     try {
-      const servers = await synthApi.getMcpServers()
-      set({ servers, loading: false })
+      const { entries } = await synthApi.getMcpRegistry()
+      set({ registry: entries, loading: false })
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : 'Ошибка загрузки серверов', loading: false })
+      set({ error: err instanceof Error ? err.message : 'Ошибка загрузки реестра MCP', loading: false })
     }
   },
 
-  addServer: async (name, config) => {
+  addRegistryEntry: async (input) => {
     set({ loading: true, error: null })
     try {
-      const entry = await synthApi.addMcpServer(name, config)
-      const current = get().servers || {}
-      set({ servers: { ...current, [name]: entry }, loading: false })
+      const entry = await synthApi.addMcpRegistryEntry(input)
+      const current = get().registry || []
+      set({ registry: [...current, entry].sort((a, b) => a.name.localeCompare(b.name)), loading: false })
+      return entry
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Ошибка добавления сервера', loading: false })
       throw err
     }
   },
 
-  updateServer: async (name, config) => {
+  updateRegistryEntry: async (id, patch) => {
     set({ loading: true, error: null })
     try {
-      const entry = await synthApi.updateMcpServer(name, config)
-      const current = get().servers || {}
-      set({ servers: { ...current, [name]: entry }, loading: false })
+      const entry = await synthApi.updateMcpRegistryEntry(id, patch)
+      const current = get().registry || []
+      set({
+        registry: current
+          .map((e) => (e.id === id ? entry : e))
+          .sort((a, b) => a.name.localeCompare(b.name)),
+        loading: false,
+      })
+      return entry
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Ошибка обновления сервера', loading: false })
       throw err
     }
   },
 
-  deleteServer: async (name) => {
+  deleteRegistryEntry: async (id) => {
     set({ loading: true, error: null })
     try {
-      await synthApi.deleteMcpServer(name)
-      const current = get().servers || {}
-      const newServers = { ...current }
-      delete newServers[name]
-      set({ servers: newServers, loading: false })
+      await synthApi.deleteMcpRegistryEntry(id)
+      set({ registry: (get().registry || []).filter((e) => e.id !== id), loading: false })
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Ошибка удаления сервера', loading: false })
       throw err
-    }
-  },
-
-  testServer: async (name, config?) => {
-    try {
-      return await synthApi.testMcpServer(name, config)
-    } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : 'Ошибка тестирования' }
     }
   },
 
@@ -140,6 +154,33 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       return { success: true, tools: result.tools }
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Ошибка проверки подключения' }
+    }
+  },
+
+  fetchNetworkPolicy: async () => {
+    set({ networkPolicyLoading: true, networkPolicyError: null })
+    try {
+      const policy = await synthApi.getMcpNetworkPolicy()
+      set({ networkPolicy: policy, networkPolicyLoading: false })
+    } catch (err) {
+      set({
+        networkPolicyError: err instanceof Error ? err.message : 'Ошибка загрузки сетевой политики',
+        networkPolicyLoading: false,
+      })
+    }
+  },
+
+  saveNetworkPolicy: async (policy) => {
+    set({ networkPolicyLoading: true, networkPolicyError: null })
+    try {
+      const saved = await synthApi.saveMcpNetworkPolicy(policy)
+      set({ networkPolicy: saved, networkPolicyLoading: false })
+    } catch (err) {
+      set({
+        networkPolicyError: err instanceof Error ? err.message : 'Ошибка сохранения сетевой политики',
+        networkPolicyLoading: false,
+      })
+      throw err
     }
   },
 }))

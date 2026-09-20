@@ -3,11 +3,13 @@ import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
+import { useAuthStore } from '@/stores/authStore'
 import { useNotification } from '@/hooks/useNotification'
-import { synthApi, type ProjectData } from '@/lib/api/synthApi'
+import { synthApi, type ProjectData, type ProjectMcpResponse } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
+import { Toggle } from '@/components/ui/Toggle'
 import { CreateProjectPopover } from '@/components/panels/CreateProjectPopover'
-import type { ProjectPlan } from '@itphx/synth-shared'
+import type { ProjectPlan, McpRegistryEntry } from '@itphx/synth-shared'
 
 export function ProjectTab() {
   const { t } = useI18n()
@@ -26,8 +28,74 @@ export function ProjectTab() {
   const [invariantsDraft, setInvariantsDraft] = useState('')
   const [invariantsSaving, setInvariantsSaving] = useState(false)
 
+  // AD-071 §2.4: проектный MCP-скоуп (owner/lead/admin)
+  const user = useAuthStore((s) => s.user)
+  const [projectMcp, setProjectMcp] = useState<ProjectMcpResponse | null>(null)
+  const [mcpRegistry, setMcpRegistry] = useState<McpRegistryEntry[]>([])
+  const [mcpSaving, setMcpSaving] = useState(false)
+
   const projectId = session?.project_id ?? null
   const projects = useProjectsStore((s) => s.projects)
+
+  const canManageMcp = !!user && (
+    user.roles?.includes('ADMIN')
+    || user.roles?.includes('LEAD')
+    || project?.owner_id === user.id
+    || project?.members?.[user.id] === 'owner'
+  )
+
+  useEffect(() => {
+    if (!projectId || !canManageMcp) {
+      setProjectMcp(null)
+      setMcpRegistry([])
+      return
+    }
+    let cancelled = false
+    Promise.all([synthApi.getProjectMcp(projectId), synthApi.getMcpRegistry()])
+      .then(([mcp, reg]) => {
+        if (cancelled) return
+        setProjectMcp(mcp)
+        setMcpRegistry(reg.entries)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProjectMcp(null)
+          setMcpRegistry([])
+        }
+      })
+    return () => { cancelled = true }
+  }, [projectId, canManageMcp])
+
+  const handleToggleProjectMcp = async (name: string, kind: 'enabled' | 'defaultOn') => {
+    if (!projectId || !projectMcp || mcpSaving) return
+    const enabled = new Set(projectMcp.enabled)
+    const defaultOn = new Set(projectMcp.defaultOn)
+    if (kind === 'enabled') {
+      if (enabled.has(name)) {
+        enabled.delete(name)
+        defaultOn.delete(name)
+      } else {
+        enabled.add(name)
+      }
+    } else if (defaultOn.has(name)) {
+      defaultOn.delete(name)
+    } else {
+      defaultOn.add(name)
+      enabled.add(name)
+    }
+    setMcpSaving(true)
+    try {
+      const updated = await synthApi.updateProjectMcp(projectId, {
+        enabled: [...enabled],
+        defaultOn: [...defaultOn],
+      })
+      setProjectMcp(updated)
+    } catch {
+      notify({ text: t('projectTab.mcp.saveError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
+    } finally {
+      setMcpSaving(false)
+    }
+  }
 
   useEffect(() => {
     if (!projectId) {
@@ -238,6 +306,16 @@ export function ProjectTab() {
         </div>
       </Section>
 
+      {canManageMcp && (
+        <Section title={t('projectTab.mcp.title')}>
+          <ProjectMcpBlock
+            mcp={projectMcp}
+            registry={mcpRegistry}
+            onToggle={handleToggleProjectMcp}
+          />
+        </Section>
+      )}
+
       <Section title={t('projectTab.log.title')}>
         <ProjectLogBlock project={project} />
       </Section>
@@ -247,8 +325,86 @@ export function ProjectTab() {
   )
 }
 
-function PlanSection({ project }: { project: ProjectData | null }) {
+/** AD-071 §2.4: проектный скоуп MCP — доступность и default-on (owner/lead/admin). */
+function ProjectMcpBlock({
+  mcp,
+  registry,
+  onToggle,
+}: {
+  mcp: ProjectMcpResponse | null
+  registry: McpRegistryEntry[]
+  onToggle: (name: string, kind: 'enabled' | 'defaultOn') => void
+}) {
   const { t } = useI18n()
+
+  if (!mcp) {
+    return <div className="text-xs text-muted-foreground">{t('common.loading')}</div>
+  }
+
+  if (mcp.knownServers.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-border px-3 py-2">
+        <div className="text-xs text-muted-foreground">{t('projectTab.mcp.empty')}</div>
+      </div>
+    )
+  }
+
+  const originByName = new Map(registry.map((e) => [e.name, e.origin]))
+
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="project-mcp-list">
+      {mcp.knownServers.map((name) => {
+        const isSystem = originByName.get(name) === 'instance'
+        const enabled = mcp.enabled.includes(name) || mcp.defaultOn.includes(name)
+        const defaultOn = mcp.defaultOn.includes(name)
+        return (
+          <div
+            key={name}
+            data-testid={`project-mcp-${name}`}
+            className="flex items-center gap-2 rounded-lg border border-border/60 bg-input px-2.5 py-1.5"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="truncate text-xs text-foreground">{name}</span>
+                {isSystem && (
+                  <span className="rounded bg-primary/15 px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-primary">
+                    {t('rightPanel.stats.mcpLevel.system')}
+                  </span>
+                )}
+              </div>
+              {isSystem && (
+                <div className="mt-0.5 text-[0.625rem] text-muted-foreground/70">{t('projectTab.mcp.systemHint')}</div>
+              )}
+            </div>
+            {!isSystem && (
+              <div className="flex shrink-0 items-center gap-2">
+                <label className="flex items-center gap-1">
+                  <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.mcp.available')}</span>
+                  <Toggle
+                    enabled={enabled}
+                    onToggle={() => onToggle(name, 'enabled')}
+                    ariaLabel={`${name}: ${t('projectTab.mcp.available')}`}
+                  />
+                </label>
+                <label className="flex items-center gap-1">
+                  <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.mcp.defaultOn')}</span>
+                  <Toggle
+                    enabled={defaultOn}
+                    onToggle={() => onToggle(name, 'defaultOn')}
+                    ariaLabel={`${name}: ${t('projectTab.mcp.defaultOn')}`}
+                  />
+                </label>
+              </div>
+            )}
+          </div>
+        )
+      })}
+      <p className="text-[0.625rem] text-muted-foreground/60">{t('projectTab.mcp.hint')}</p>
+    </div>
+  )
+}
+
+function PlanSection({ project }: { project: ProjectData | null }) {  const { t } = useI18n()
   return (
     <Section title={t('sessionTab.plan.title')}>
       <ProjectPlanBlock plan={project?.plan ?? null} />

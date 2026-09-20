@@ -533,6 +533,88 @@ describe('Settings API Routes (workspace)', () => {
       expect(onToolsPolicyChange).toHaveBeenCalledWith('auto');
     });
   });
+
+  describe('mcp-network-policy (AD-071 §2.3.1)', () => {
+    it('GET по умолчанию возвращает deny приватных диапазонов', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/mcp-network-policy');
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.policy.mode).toBe('deny');
+      expect(body.policy.list).toContain('10.0.0.0/8');
+      expect(body.policy.list).toContain('127.0.0.0/8');
+    });
+
+    it('GET возвращает fallback (config), если runtime не задан', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        fallbackMcpNetworkPolicy: { mode: 'allow', list: ['10.0.0.0/8'] },
+      }));
+      const res = await app.request('/api/v2/settings/mcp-network-policy');
+      const body: any = await res.json();
+      expect(body).toEqual({ policy: { mode: 'allow', list: ['10.0.0.0/8'] } });
+    });
+
+    it('PUT сохраняет, GET возвращает; переживает рестарт', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const put = await app.request('/api/v2/settings/mcp-network-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy: { mode: 'allow', list: ['example.com', '192.168.0.0/16'] } }),
+      });
+      expect(put.status).toBe(200);
+      const putBody: any = await put.json();
+      expect(putBody).toEqual({ policy: { mode: 'allow', list: ['example.com', '192.168.0.0/16'] } });
+
+      const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      expect(await restartedStore.getMcpNetworkPolicy()).toEqual({
+        mode: 'allow',
+        list: ['example.com', '192.168.0.0/16'],
+      });
+    });
+
+    it('PUT отклоняет неизвестный режим и не-массив списка', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const badMode = await app.request('/api/v2/settings/mcp-network-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy: { mode: 'block', list: [] } }),
+      });
+      expect(badMode.status).toBe(400);
+      const badModeBody: any = await badMode.json();
+      expect(badModeBody.error.code).toBe('VALIDATION_ERROR');
+
+      const badList = await app.request('/api/v2/settings/mcp-network-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy: { mode: 'deny', list: '10.0.0.0/8' } }),
+      });
+      expect(badList.status).toBe(400);
+    });
+
+    it('PUT вызывает onMcpNetworkPolicyChange (live-применение)', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const onMcpNetworkPolicyChange = vi.fn(async (_policy: unknown) => {});
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        onMcpNetworkPolicyChange,
+      }));
+
+      const res = await app.request('/api/v2/settings/mcp-network-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy: { mode: 'allow', list: ['example.com'] } }),
+      });
+      expect(res.status).toBe(200);
+      expect(onMcpNetworkPolicyChange).toHaveBeenCalledTimes(1);
+      expect(onMcpNetworkPolicyChange).toHaveBeenCalledWith({ mode: 'allow', list: ['example.com'] });
+    });
+  });
 });
 
 async function settingsLoad(tmpDir: string): Promise<{ workspace?: string; mcpServers?: Record<string, any> }> {

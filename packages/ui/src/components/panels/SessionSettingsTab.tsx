@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import type { TodoItem, TodoStatus, TodoPriority } from '@itphx/synth-shared'
+import type { TodoItem, TodoStatus, TodoPriority, McpServerEffective } from '@itphx/synth-shared'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
@@ -33,8 +33,9 @@ export function SessionSettingsTab() {
   const [debugEnabled, setDebugEnabled] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  const [mcpServers, setMcpServers] = useState<Array<{ name: string; active: boolean }>>([])
-  const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([])
+  const [mcpEffective, setMcpEffective] = useState<McpServerEffective[]>([])
+  const [mcpLoading, setMcpLoading] = useState(false)
+  const [mcpToggling, setMcpToggling] = useState<string | null>(null)
 
   // AD-071 §2.3: per-session override политики инструментов ('' = следовать глобальной)
   const [toolsPolicy, setToolsPolicy] = useState<ToolsPolicy | ''>('')
@@ -90,15 +91,38 @@ export function SessionSettingsTab() {
     loadModels()
   }, [])
 
+  const loadMcpEffective = useCallback(async (id: string) => {
+    setMcpLoading(true)
+    try {
+      const r = await synthApi.getSessionMcpEffective(id)
+      setMcpEffective(r.servers)
+      // Синхронизируем локальную сессию, чтобы общий Save не затёр свежие overrides.
+      const current = useSessionsStore.getState().sessions.find((s) => s.id === id)
+      if (current) {
+        useSessionsStore.getState().upsertSession({
+          ...current,
+          settings: {
+            ...(current.settings as Record<string, unknown>),
+            mcpServers: r.mcpServers,
+            mcpDisabledServers: r.mcpDisabledServers,
+          },
+        } as typeof current)
+      }
+    } catch {
+      setMcpEffective([])
+    } finally {
+      setMcpLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     if (sessionId) {
       synthApi.getAgents(sessionId).then((r) => setAgents(r.agents)).catch(() => {})
-      synthApi.getSessionMcp(sessionId).then((r) => {
-        setMcpServers(r.allServers)
-        setSelectedMcpServers(r.mcpServers || [])
-      }).catch(() => {})
+      void loadMcpEffective(sessionId)
+    } else {
+      setMcpEffective([])
     }
-  }, [sessionId])
+  }, [sessionId, loadMcpEffective])
 
   useEffect(() => {
     synthApi.getSecuritySettings()
@@ -212,7 +236,6 @@ export function SessionSettingsTab() {
           provider: selectedProviderName,
           model: selectedModelName,
           debugEnabled: debugEnabled,
-          mcpServers: selectedMcpServers,
           routingEnabled,
           routingStrategy,
           routingContent: {
@@ -287,6 +310,31 @@ export function SessionSettingsTab() {
         return []
       })
     : []
+
+  /** AD-071 §2.4: точечный toggle MCP-сервера в сессии (в т.ч. opt-out системного). */
+  const handleToggleMcp = async (server: McpServerEffective) => {
+    if (!sessionId || mcpToggling) return
+    setMcpToggling(server.name)
+    try {
+      const r = await synthApi.updateSessionMcp(sessionId, { name: server.name, enabled: !server.enabled })
+      setMcpEffective(r.servers)
+      const current = useSessionsStore.getState().sessions.find((s) => s.id === sessionId)
+      if (current) {
+        useSessionsStore.getState().upsertSession({
+          ...current,
+          settings: {
+            ...(current.settings as Record<string, unknown>),
+            mcpServers: r.mcpServers,
+            mcpDisabledServers: r.mcpDisabledServers,
+          },
+        } as typeof current)
+      }
+    } catch {
+      notify({ text: t('sessionSettings.mcp.toggleError'), type: 'error', category: 'error', sessionId })
+    } finally {
+      setMcpToggling(null)
+    }
+  }
 
   const handleRemoveAllowRule = async (rule: { tool: string; path?: string }) => {
     if (!sessionId || !session) return
@@ -647,27 +695,41 @@ export function SessionSettingsTab() {
           </label>
         </Section>
 
-        {mcpServers.length > 0 && (
-          <Section title={t('mcp.title')}>
-            <div className="flex flex-col gap-1.5">
-              {mcpServers.map((srv) => (
-                <label key={srv.name} className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={selectedMcpServers.includes(srv.name)}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedMcpServers((prev) => [...prev, srv.name])
-                      } else {
-                        setSelectedMcpServers((prev) => prev.filter((n) => n !== srv.name))
-                      }
-                    }}
-                    className="rounded size-3"
-                  />
-                  <span className="text-xs text-foreground">{srv.name}</span>
-                </label>
-              ))}
-            </div>
+        {(mcpEffective.length > 0 || mcpLoading) && (
+          <Section title={t('sessionSettings.mcp.title')}>
+            {mcpLoading && mcpEffective.length === 0 ? (
+              <div className="text-xs text-muted-foreground">{t('common.loading')}</div>
+            ) : (
+              <div className="flex flex-col gap-1.5" data-testid="session-mcp-list">
+                {mcpEffective.map((srv) => (
+                  <div
+                    key={srv.name}
+                    data-testid={`session-mcp-${srv.name}`}
+                    className="flex items-center gap-2 rounded-lg border border-border/60 bg-input px-2.5 py-1.5"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="truncate text-xs text-foreground">{srv.name}</span>
+                        <span className="rounded bg-muted px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-muted-foreground">
+                          {t(`rightPanel.stats.mcpLevel.${srv.level}`)}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 text-[0.625rem] text-muted-foreground/70">
+                        {srv.enabled
+                          ? t(`rightPanel.stats.mcpStatus.${srv.status ?? 'connected'}`)
+                          : `${t('rightPanel.stats.mcpStatus.disabled')}${srv.reason ? ` · ${t(`rightPanel.stats.mcpReason.${srv.reason}`)}` : ''}`}
+                      </div>
+                    </div>
+                    <Toggle
+                      enabled={srv.enabled}
+                      onToggle={() => handleToggleMcp(srv)}
+                      ariaLabel={srv.enabled ? t('mcp.disable') : t('mcp.enable')}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-[0.625rem] text-muted-foreground/60">{t('sessionSettings.mcp.hint')}</p>
           </Section>
         )}
 

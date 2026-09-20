@@ -506,6 +506,14 @@ export const dict = {
   'projectTab.invariants.saved': 'Инварианты сохранены',
   'projectTab.log.title': 'Лог',
   'projectTab.log.hint': 'Журнал работ по проекту (ведёт модель через project_log_write)',
+  // AD-071 §2.4: проектный MCP-скоуп (owner/lead/admin)
+  'projectTab.mcp.title': 'MCP-серверы',
+  'projectTab.mcp.empty': 'В реестре пока нет MCP-серверов.',
+  'projectTab.mcp.available': 'Доступен',
+  'projectTab.mcp.defaultOn': 'По умолчанию',
+  'projectTab.mcp.systemHint': 'Системный сервер — управляется администратором; отключить можно только в сессии.',
+  'projectTab.mcp.hint': '«Доступен» — серверы, разрешённые проекту; «По умолчанию» — включены для всех сессий проекта.',
+  'projectTab.mcp.saveError': 'Не удалось сохранить настройки MCP проекта',
   'sessionTab.plan.title': 'План проекта',
   'sessionTab.plan.empty': 'Плана нет',
   'sessionTab.plan.hint': 'План проекта появится здесь после plan_write',
@@ -861,6 +869,10 @@ export const dict = {
   'sessionSettings.askTimeoutSeconds': 'Таймаут подтверждения (сек)',
   'sessionSettings.askTimeoutEnabled': 'Включено',
   'sessionSettings.askTimeoutDisabled': 'Выключено',
+  // AD-071 §2.4: MCP-скоуп в сессии
+  'sessionSettings.mcp.title': 'MCP-серверы',
+  'sessionSettings.mcp.hint': 'Включайте/выключайте серверы для этой сессии, включая системные и проектные. Выключено — явный opt-out; не трогайте, чтобы следовать дефолту проекта/админа.',
+  'sessionSettings.mcp.toggleError': 'Не удалось изменить состояние MCP-сервера',
 
   // Chat settings
   'chatSettings.intermediateTextDisplay': 'Промежуточные ответы',
@@ -1247,6 +1259,29 @@ export const dict = {
   'mcp.autoEnabled': 'авто',
   'mcp.enabledByDefaultTitle': 'Включён по умолчанию',
   'mcp.disabledByDefaultTitle': 'Не включён по умолчанию',
+  'mcp.type.http': 'HTTP (streamable)',
+  'mcp.type.sse.legacy': 'SSE (устаревший)',
+
+  // MCP: реестр (AD-071 §2.5)
+  'mcp.registry.author': 'автор: {name}',
+  'mcp.registry.stdioAdminOnly': 'stdio-серверы может добавлять только администратор',
+  'mcp.registry.testAfterSave': 'Сначала сохраните сервер, затем проверьте подключение.',
+  'mcp.origin.instance': 'системный',
+  'mcp.origin.user': 'пользовательский',
+  'mcp.trust.builtin': 'доверенный',
+  'mcp.trust.community': 'community',
+
+  // MCP: сетевой доступ (AD-071 §2.3.1)
+  'mcp.network.title': 'Сетевой доступ пользовательских MCP-серверов',
+  'mcp.network.description': 'Ограничивает, к каким хостам могут подключаться добавленные пользователями HTTP MCP-серверы (защита от SSRF/egress).',
+  'mcp.network.mode': 'Режим',
+  'mcp.network.mode.deny': 'deny — блокировать перечисленные адреса',
+  'mcp.network.mode.allow': 'allow — разрешить только перечисленные адреса',
+  'mcp.network.denyHelp': 'Адреса из списка запрещены, остальные разрешены. По умолчанию запрещены приватные диапазоны (10/8, 172.16/12, 192.168/16, 127/8, link-local, metadata).',
+  'mcp.network.allowHelp': 'Разрешены только адреса из списка, остальные запрещены.',
+  'mcp.network.list': 'Хосты / CIDR',
+  'mcp.network.saved': 'Сетевая политика сохранена',
+  'mcp.network.saveError': 'Не удалось сохранить сетевую политику: {error}',
 
   // MCP: доступность инструментов по режимам
   'mcp.permissions.title': 'Доступность инструментов по режимам',
