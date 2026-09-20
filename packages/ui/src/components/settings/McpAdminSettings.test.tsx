@@ -7,8 +7,10 @@ const mocks = vi.hoisted(() => ({
   getMcpRegistry: vi.fn(),
   getMcpToolSettings: vi.fn(),
   getMcpNetworkPolicy: vi.fn(),
+  getMcpPolicy: vi.fn(),
   saveMcpToolSettings: vi.fn(),
   saveMcpNetworkPolicy: vi.fn(),
+  saveMcpPolicy: vi.fn(),
   probeMcpServer: vi.fn(),
   notify: vi.fn(),
 }))
@@ -64,6 +66,8 @@ beforeEach(() => {
   mocks.getMcpNetworkPolicy.mockResolvedValue({ mode: 'deny', list: [] })
   mocks.saveMcpToolSettings.mockResolvedValue({ servers: {} })
   mocks.saveMcpNetworkPolicy.mockImplementation(async (p: unknown) => p)
+  mocks.getMcpPolicy.mockResolvedValue('auto')
+  mocks.saveMcpPolicy.mockImplementation(async (p: unknown) => p)
   mocks.probeMcpServer.mockResolvedValue({ name: 'sys', tools: [] })
 
   useMcpStore.setState({
@@ -97,5 +101,14 @@ describe('McpAdminSettings — только MCP (AD-071 §2.5/§2.6)', () => {
     expect(container.querySelector('[data-testid="mcp-registry-list"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="tools-disabled-groups"]')).toBeNull()
     expect(container.querySelector('[data-testid="tools-disabled-tools"]')).toBeNull()
+  })
+
+  it('содержит политику MCP и sticky-шапку', async () => {
+    const container = await renderSettings()
+    expect(container.querySelector('[data-testid="mcp-policy-save"]')).not.toBeNull()
+    expect(container.textContent).toContain('MCP policy')
+    const header = container.querySelector('header.sticky')
+    expect(header).not.toBeNull()
+    expect(header!.textContent).toContain('MCP Servers')
   })
 })

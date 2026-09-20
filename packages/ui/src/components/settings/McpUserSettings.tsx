@@ -36,6 +36,7 @@ export function McpUserSettings() {
   const [formName, setFormName] = useState('')
   const [formConfig, setFormConfig] = useState<McpServerConfig>(EMPTY_CONFIG)
   const [deleteTarget, setDeleteTarget] = useState<McpRegistryEntry | null>(null)
+  const [savingForm, setSavingForm] = useState(false)
 
   useEffect(() => {
     void fetchRegistry()
@@ -61,6 +62,7 @@ export function McpUserSettings() {
 
   const handleSave = async () => {
     if (!formName.trim()) return
+    setSavingForm(true)
     try {
       if (editing === '__new__') {
         await addRegistryEntry({ name: formName.trim(), config: formConfig })
@@ -74,6 +76,8 @@ export function McpUserSettings() {
         type: 'error',
         category: 'error',
       })
+    } finally {
+      setSavingForm(false)
     }
   }
 
@@ -92,7 +96,7 @@ export function McpUserSettings() {
   }
 
   return (
-    <SettingsPage title={t('mcp.user.title')} description={t('mcp.user.description')}>
+    <SettingsPage stickyHeader title={t('mcp.user.title')} description={t('mcp.user.description')}>
       {error && <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{error}</div>}
 
       <div className="grid gap-4">
@@ -150,8 +154,8 @@ export function McpUserSettings() {
             <div className="flex items-center gap-2">
               <button
                 onClick={handleSave}
-                disabled={!formName.trim()}
-                className="px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50"
+                disabled={!formName.trim() || savingForm}
+                className="px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-[transform,opacity] duration-150 ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {t('common.save')}
               </button>
@@ -173,7 +177,7 @@ export function McpUserSettings() {
             <button
               data-testid="mcp-user-add"
               onClick={openAdd}
-              className="shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-interactive-accent text-interactive-accent-foreground hover:opacity-90 transition-colors"
+              className="shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-interactive-accent text-interactive-accent-foreground hover:opacity-90 transition-[transform,opacity] duration-150 ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <Icon name="add" className="size-3.5" />
               {t('common.add')}

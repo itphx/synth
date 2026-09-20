@@ -9,8 +9,11 @@ import { ConfirmDialog } from '../ui/confirm-dialog'
 import { Toggle } from '../ui/Toggle'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { SettingsPage, SettingsCard } from './settings-layout'
+import { PolicySettingsCard } from './PolicySettingsCard'
 import { useNotification } from '@/hooks/useNotification'
+import { synthApi } from '../../lib/api/synthApi'
 import type {
+  ToolsPolicy,
   McpServerConfig,
   McpServerToolsSettings,
   McpModeAvailability,
@@ -50,6 +53,13 @@ export const McpSettings = () => {
   const [testResult, setTestResult] = useState<string | null>(null)
   const [testSucceeded, setTestSucceeded] = useState<boolean | null>(null)
   const [testing, setTesting] = useState(false)
+  const [savingForm, setSavingForm] = useState(false)
+
+  // AD-071 §2.3: глобальная политика MCP-инструментов (mcp.policy).
+  const [mcpPolicy, setMcpPolicy] = useState<ToolsPolicy>('auto')
+  const [mcpPolicyLoading, setMcpPolicyLoading] = useState(true)
+  const [mcpPolicySaving, setMcpPolicySaving] = useState(false)
+  const [mcpPolicyError, setMcpPolicyError] = useState<string | null>(null)
 
   // Delete confirmation state
   const [deleteTarget, setDeleteTarget] = useState<McpRegistryEntry | null>(null)
@@ -66,6 +76,26 @@ export const McpSettings = () => {
     fetchRegistry()
     fetchToolSettings()
   }, [fetchRegistry, fetchToolSettings])
+
+  // AD-071 §2.3: политику MCP читает любой пользователь (эндпоинт без admin-гейта),
+  // меняет только ADMIN — карточка доступна в админ-категории.
+  useEffect(() => {
+    let cancelled = false
+    synthApi
+      .getMcpPolicy()
+      .then((policy) => {
+        if (!cancelled) setMcpPolicy(policy)
+      })
+      .catch((e) => {
+        if (!cancelled) setMcpPolicyError(e instanceof Error ? e.message : 'HTTP')
+      })
+      .finally(() => {
+        if (!cancelled) setMcpPolicyLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // AD-071 §2.3.1: сетевую политику читают только админы (секция скрыта для остальных).
   useEffect(() => {
@@ -123,6 +153,7 @@ export const McpSettings = () => {
 
   const handleSave = async () => {
     if (!formName.trim()) return
+    setSavingForm(true)
     try {
       if (editing === '__new__') {
         await addRegistryEntry({
@@ -140,6 +171,28 @@ export const McpSettings = () => {
       closeForm()
     } catch {
       // ошибка уже в сторе
+    } finally {
+      setSavingForm(false)
+    }
+  }
+
+  const handleMcpPolicySave = async () => {
+    setMcpPolicySaving(true)
+    setMcpPolicyError(null)
+    try {
+      const saved = await synthApi.saveMcpPolicy(mcpPolicy)
+      setMcpPolicy(saved)
+      notify({ text: t('mcpPolicy.saved'), type: 'success', category: 'system' })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'HTTP'
+      setMcpPolicyError(message)
+      notify({
+        text: t('mcpPolicy.saveError', { error: message }),
+        type: 'error',
+        category: 'error',
+      })
+    } finally {
+      setMcpPolicySaving(false)
     }
   }
 
@@ -250,7 +303,7 @@ export const McpSettings = () => {
   const isHttpType = formConfig.type === 'sse' || formConfig.type === 'http'
 
   return (
-    <SettingsPage title={t('mcp.title')} description={t('mcp.description')}>
+    <SettingsPage stickyHeader title={t('mcp.title')} description={t('mcp.description')}>
       {error && (
         <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{error}</div>
       )}
@@ -260,6 +313,18 @@ export const McpSettings = () => {
       )}
 
       <div className="grid gap-4 sm:grid-cols-2">
+        {/* AD-071 §2.3: глобальная политика MCP-инструментов (mcp.policy). */}
+        <PolicySettingsCard
+          className="sm:col-span-2"
+          scope="mcp"
+          value={mcpPolicy}
+          loading={mcpPolicyLoading}
+          saving={mcpPolicySaving}
+          error={mcpPolicyError}
+          onChange={setMcpPolicy}
+          onSave={handleMcpPolicySave}
+        />
+
         {/* Form */}
         {editing && (
           <SettingsCard
@@ -414,8 +479,8 @@ export const McpSettings = () => {
             <div className="flex items-center gap-2">
               <button
                 onClick={handleSave}
-                disabled={!formName.trim()}
-                className="px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50"
+                disabled={!formName.trim() || savingForm}
+                className="px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-[transform,opacity] duration-150 ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {t('common.save')}
               </button>
@@ -444,7 +509,7 @@ export const McpSettings = () => {
             </span>
             <button
               onClick={openAdd}
-              className="shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-interactive-accent text-interactive-accent-foreground hover:opacity-90 transition-colors"
+              className="shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-interactive-accent text-interactive-accent-foreground hover:opacity-90 transition-[transform,opacity] duration-150 ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <Icon name="add" className="size-3.5" />
               {t('common.add')}
@@ -566,7 +631,7 @@ export const McpSettings = () => {
               <button
                 onClick={handleSaveSettings}
                 disabled={!dirty || savingSettings || toolSettingsLoading}
-                className="shrink-0 px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50"
+                className="shrink-0 px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-[transform,opacity] duration-150 ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {savingSettings ? t('mcp.permissions.saving') : t('mcp.permissions.save')}
               </button>
@@ -734,7 +799,7 @@ function NetworkPolicySection({
           <button
             onClick={() => onSave({ mode, list })}
             disabled={loading}
-            className="shrink-0 px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50"
+            className="shrink-0 px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-[transform,opacity] duration-150 ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {loading ? t('mcp.permissions.saving') : t('common.save')}
           </button>

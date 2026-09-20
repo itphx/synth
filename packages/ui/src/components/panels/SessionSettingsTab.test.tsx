@@ -229,3 +229,62 @@ describe('SessionSettingsTab — MCP-скоуп сессии (AD-071 §2.4)', ()
     expect(mocks.updateSessionMcp).toHaveBeenCalledWith('s1', { name: 'proj', enabled: true })
   })
 })
+
+describe('SessionSettingsTab — per-session политики инструментов (AD-071 §2.3)', () => {
+  it('переопределяет обе политики (встроенные + MCP) и сохраняет их', async () => {
+    const container = await renderTab()
+    const toolsSelect = container.querySelector(
+      'select[aria-label="Global built-in tools policy"]',
+    ) as HTMLSelectElement
+    const mcpSelect = container.querySelector('select[aria-label="Global MCP policy"]') as HTMLSelectElement
+    expect(toolsSelect).not.toBeNull()
+    expect(mcpSelect).not.toBeNull()
+    // «Как в глобальной» — дефолт (пусто).
+    expect(toolsSelect.value).toBe('')
+    expect(mcpSelect.value).toBe('')
+
+    await act(async () => {
+      toolsSelect.value = 'available'
+      toolsSelect.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => {
+      mcpSelect.value = 'consistency'
+      mcpSelect.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+
+    const saveButton = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Save',
+    ) as HTMLButtonElement
+    await act(async () => {
+      saveButton.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.updateSession).toHaveBeenCalledTimes(1)
+    const settings = mocks.updateSession.mock.calls[0][1].settings
+    expect(settings.toolsPolicy).toBe('available')
+    expect(settings.mcpPolicy).toBe('consistency')
+  })
+
+  it('подтягивает per-session переопределения обеих политик', async () => {
+    useSessionsStore.setState({
+      sessions: [
+        {
+          id: 's1',
+          name: 'S',
+          project_id: null,
+          engine: 'synth',
+          settings: { model: 'm', toolsPolicy: 'consistency', mcpPolicy: 'available' },
+        },
+      ],
+    } as never)
+    const container = await renderTab()
+
+    expect(
+      (container.querySelector('select[aria-label="Global built-in tools policy"]') as HTMLSelectElement).value,
+    ).toBe('consistency')
+    expect(
+      (container.querySelector('select[aria-label="Global MCP policy"]') as HTMLSelectElement).value,
+    ).toBe('available')
+  })
+})

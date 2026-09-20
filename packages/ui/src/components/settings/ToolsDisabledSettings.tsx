@@ -6,8 +6,8 @@ import { useMcpStore } from '@/stores/mcpStore'
 import { useNotification } from '@/hooks/useNotification'
 import { synthApi, type ToolsPolicy } from '@/lib/api/synthApi'
 import { Icon } from '../icon/Icon'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
-import { SettingsCard } from './settings-layout'
+import { SettingsCard, SettingsPage } from './settings-layout'
+import { PolicySettingsCard } from './PolicySettingsCard'
 import { cn } from '@/lib/utils'
 
 /**
@@ -56,6 +56,7 @@ export function ToolsDisabledSettings() {
   const [toolsPolicy, setToolsPolicy] = useState<ToolsPolicy>('consistency')
   const [toolsPolicyLoading, setToolsPolicyLoading] = useState(true)
   const [toolsPolicySaving, setToolsPolicySaving] = useState(false)
+  const [toolsPolicyError, setToolsPolicyError] = useState<string | null>(null)
 
   useEffect(() => {
     void fetchToolsDisabled()
@@ -68,7 +69,9 @@ export function ToolsDisabledSettings() {
       .then((policy) => {
         if (!cancelled) setToolsPolicy(policy)
       })
-      .catch(() => {})
+      .catch((e) => {
+        if (!cancelled) setToolsPolicyError(e instanceof Error ? e.message : 'HTTP')
+      })
       .finally(() => {
         if (!cancelled) setToolsPolicyLoading(false)
       })
@@ -125,13 +128,16 @@ export function ToolsDisabledSettings() {
 
   const handleToolsPolicySave = async () => {
     setToolsPolicySaving(true)
+    setToolsPolicyError(null)
     try {
       const saved = await synthApi.saveToolsPolicy(toolsPolicy)
       setToolsPolicy(saved)
       notify({ text: t('common.saved'), type: 'success', category: 'system' })
     } catch (e) {
+      const message = e instanceof Error ? e.message : 'HTTP'
+      setToolsPolicyError(message)
       notify({
-        text: `${t('common.saveError')}: ${e instanceof Error ? e.message : 'HTTP'}`,
+        text: `${t('common.saveError')}: ${message}`,
         type: 'error',
         category: 'error',
       })
@@ -162,48 +168,24 @@ export function ToolsDisabledSettings() {
   }
 
   return (
-    <div className="space-y-4">
-      {/* Политика инструментов (AD-071 §2.3): режим задаётся первым, отключение
-          ниже — исключения из него. */}
-      <SettingsCard
-        title={t('toolsPolicy.title')}
-        description={t('toolsPolicy.description')}
-      >
-        <div className="flex flex-col gap-1">
-          <label className="text-sm font-medium">{t('toolsPolicy.label')}</label>
-          {toolsPolicyLoading ? (
-            <div className="text-center text-muted-foreground py-4 text-sm">{t('common.loading')}</div>
-          ) : (
-            <Select value={toolsPolicy} onValueChange={(value) => setToolsPolicy(value as ToolsPolicy)}>
-              <SelectTrigger className="w-full" aria-label={t('toolsPolicy.label')}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="consistency">{t('toolsPolicy.consistency')}</SelectItem>
-                <SelectItem value="available">{t('toolsPolicy.available')}</SelectItem>
-                <SelectItem value="auto">{t('toolsPolicy.auto')}</SelectItem>
-              </SelectContent>
-            </Select>
-          )}
-          <p className="text-xs text-muted-foreground">{t('toolsPolicy.help')}</p>
-        </div>
+    <SettingsPage
+      stickyHeader
+      title={t('mcpAdmin.tools.title')}
+      description={t('mcpAdmin.tools.description')}
+    >
+      {/* Политика встроенных инструментов (AD-071 §2.3): режим задаётся первым,
+          отключение ниже — исключения из него. MCP управляется отдельной политикой. */}
+      <PolicySettingsCard
+        scope="tools"
+        value={toolsPolicy}
+        loading={toolsPolicyLoading}
+        saving={toolsPolicySaving}
+        error={toolsPolicyError}
+        onChange={setToolsPolicy}
+        onSave={handleToolsPolicySave}
+      />
 
-        <div className="flex justify-end">
-          <button
-            data-testid="tools-policy-save"
-            onClick={handleToolsPolicySave}
-            disabled={toolsPolicySaving || toolsPolicyLoading}
-            className="shrink-0 px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-[transform,opacity] duration-150 ease-out active:scale-[0.96]"
-          >
-            {toolsPolicySaving ? t('common.saving') : t('common.save')}
-          </button>
-        </div>
-      </SettingsCard>
-
-      <SettingsCard
-        title={t('mcpAdmin.tools.title')}
-        description={t('mcpAdmin.tools.description')}
-      >
+      <SettingsCard>
         {toolsDisabledError && (
           <div role="alert" className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{toolsDisabledError}</div>
         )}
@@ -327,12 +309,12 @@ export function ToolsDisabledSettings() {
             data-testid="tools-disabled-save"
             onClick={handleSave}
             disabled={saving || toolsDisabledLoading}
-            className="shrink-0 px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-[transform,opacity] duration-150 ease-out active:scale-[0.96]"
+            className="shrink-0 px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-[transform,opacity] duration-150 ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {saving ? t('common.saving') : t('common.save')}
           </button>
         </div>
       </SettingsCard>
-    </div>
+    </SettingsPage>
   )
 }

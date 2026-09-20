@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { CATEGORIES } from './SettingsModal'
+import { dict as enDict } from '@/lib/i18n/messages/en'
+import { dict as ruDict } from '@/lib/i18n/messages/ru'
 
 function visibleFor(roles: string[]) {
   return CATEGORIES.filter((cat) => !cat.roles || cat.roles.some((r) => roles.includes(r)))
@@ -34,5 +36,17 @@ describe('SettingsModal — разделение MCP-категорий (AD-071 
 
     const userIds = visibleFor(['USER']).map((cat) => cat.id)
     expect(userIds).not.toContain('builtinTools')
+  })
+
+  it('обе MCP-категории и заголовки страниц называются «MCP-серверы» (ru/en)', () => {
+    expect(enDict['settings.category.mcp']).toBe('MCP Servers')
+    expect(enDict['settings.category.mcpAdmin']).toBe('MCP Servers')
+    expect(ruDict['settings.category.mcp']).toBe('MCP-серверы')
+    expect(ruDict['settings.category.mcpAdmin']).toBe('MCP-серверы')
+
+    expect(enDict['mcp.title']).toBe('MCP Servers')
+    expect(enDict['mcp.user.title']).toBe('MCP Servers')
+    expect(ruDict['mcp.title']).toBe('MCP-серверы')
+    expect(ruDict['mcp.user.title']).toBe('MCP-серверы')
   })
 })

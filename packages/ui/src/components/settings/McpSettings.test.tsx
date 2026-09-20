@@ -7,11 +7,13 @@ const mocks = vi.hoisted(() => ({
   getMcpRegistry: vi.fn(),
   getMcpToolSettings: vi.fn(),
   getMcpNetworkPolicy: vi.fn(),
+  getMcpPolicy: vi.fn(),
   addMcpRegistryEntry: vi.fn(),
   updateMcpRegistryEntry: vi.fn(),
   deleteMcpRegistryEntry: vi.fn(),
   saveMcpToolSettings: vi.fn(),
   saveMcpNetworkPolicy: vi.fn(),
+  saveMcpPolicy: vi.fn(),
   probeMcpServer: vi.fn(),
   notify: vi.fn(),
 }))
@@ -84,6 +86,8 @@ beforeEach(() => {
   mocks.deleteMcpRegistryEntry.mockResolvedValue({ success: true })
   mocks.saveMcpToolSettings.mockResolvedValue({ servers: {} })
   mocks.saveMcpNetworkPolicy.mockImplementation(async (p: unknown) => p)
+  mocks.getMcpPolicy.mockResolvedValue('auto')
+  mocks.saveMcpPolicy.mockImplementation(async (p: unknown) => p)
   mocks.probeMcpServer.mockResolvedValue({ name: 'sys', tools: [] })
 
   useMcpStore.setState({
@@ -156,6 +160,57 @@ describe('McpSettings — реестр MCP (AD-071 §2.5)', () => {
     const comRow = container.querySelector('[data-testid="mcp-registry-community"]')!
     const edit = comRow.querySelector('button[aria-label="Edit"]') as HTMLButtonElement
     expect(edit.disabled).toBe(false)
+  })
+})
+
+describe('McpSettings — политика MCP (AD-071 §2.3)', () => {
+  it('ADMIN видит карточку «MCP policy» и сохраняет выбранное значение', async () => {
+    mocks.getMcpPolicy.mockResolvedValue('available')
+    const container = await renderSettings()
+
+    expect(mocks.getMcpPolicy).toHaveBeenCalledTimes(1)
+    expect(container.textContent).toContain('MCP policy')
+    // Текущее значение подтянуто с сервера и видно в триггере селекта.
+    expect(container.textContent).toContain('available')
+
+    const saveButton = container.querySelector('[data-testid="mcp-policy-save"]') as HTMLButtonElement
+    expect(saveButton).not.toBeNull()
+    await act(async () => {
+      saveButton.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.saveMcpPolicy).toHaveBeenCalledWith('available')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'success', category: 'system' }),
+    )
+  })
+
+  it('использует sticky-шапку SettingsPage с заголовком «MCP Servers»', async () => {
+    const container = await renderSettings()
+    const header = container.querySelector('header.sticky')
+    expect(header).not.toBeNull()
+    expect(header!.textContent).toContain('MCP Servers')
+    // Политика MCP описывается как относящаяся только к MCP-инструментам.
+    expect(container.textContent).toContain('Applies to MCP tools only')
+  })
+
+  it('все кнопки «Сохранить» — единый вид', async () => {
+    const container = await renderSettings()
+    const saveButtons = [...container.querySelectorAll('button')].filter(
+      (b) => b.textContent?.trim() === 'Save',
+    )
+    expect(saveButtons.length).toBeGreaterThanOrEqual(3)
+    for (const btn of saveButtons) {
+      expect(btn.className).toContain('bg-interactive-accent')
+      expect(btn.className).toContain('text-interactive-accent-foreground')
+      expect(btn.className).toContain('text-sm')
+      expect(btn.className).toContain('font-medium')
+      expect(btn.className).toContain('rounded-lg')
+      expect(btn.className).toContain('active:scale-[0.96]')
+      expect(btn.className).toContain('transition-[transform,opacity]')
+      expect(btn.className).toContain('focus-visible:ring-2')
+    }
   })
 })
 

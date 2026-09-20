@@ -187,13 +187,13 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
     expect(mocks.saveToolsDisabled).toHaveBeenCalledWith({ capabilities: [], tools: [] })
   })
 
-  it('карточка «Политика инструментов» отображается и сохраняет выбранное значение', async () => {
+  it('карточка «Политика встроенных инструментов» отображается и сохраняет выбранное значение', async () => {
     mocks.getToolsPolicy.mockResolvedValue('available')
     const container = await renderSettings()
 
     expect(mocks.getToolsPolicy).toHaveBeenCalledTimes(1)
-    // Заголовок карточки политики (en-словарь).
-    expect(container.textContent).toContain('Tools policy')
+    // Заголовок карточки политики встроенных (en-словарь).
+    expect(container.textContent).toContain('Built-in tools policy')
     // Текущее значение подтянуто с сервера и видно в триггере селекта.
     expect(container.textContent).toContain('available')
 
@@ -207,6 +207,31 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
     expect(mocks.notify).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'success', category: 'system' }),
     )
+  })
+
+  it('использует sticky-шапку SettingsPage с заголовком «Встроенные инструменты»', async () => {
+    const container = await renderSettings()
+    const header = container.querySelector('header.sticky')
+    expect(header).not.toBeNull()
+    expect(header!.textContent).toContain('Built-in tools')
+    // Политика встроенных описывается как относящаяся только к встроенным тулам.
+    expect(container.textContent).toContain('Applies to built-in tools only')
+  })
+
+  it('кнопки сохранения политики и инструментов — единый вид', async () => {
+    const container = await renderSettings()
+    for (const testId of ['tools-policy-save', 'tools-disabled-save']) {
+      const btn = container.querySelector(`[data-testid="${testId}"]`) as HTMLButtonElement
+      expect(btn, testId).not.toBeNull()
+      expect(btn.className).toContain('bg-interactive-accent')
+      expect(btn.className).toContain('text-interactive-accent-foreground')
+      expect(btn.className).toContain('text-sm')
+      expect(btn.className).toContain('font-medium')
+      expect(btn.className).toContain('rounded-lg')
+      expect(btn.className).toContain('active:scale-[0.96]')
+      expect(btn.className).toContain('transition-[transform,opacity]')
+      expect(btn.className).toContain('focus-visible:ring-2')
+    }
   })
 
   it('сохранение отключённых инструментов не трогает политику инструментов', async () => {

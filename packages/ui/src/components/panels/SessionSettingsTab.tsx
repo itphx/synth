@@ -39,6 +39,7 @@ export function SessionSettingsTab() {
 
   // AD-071 §2.3: per-session override политики инструментов ('' = следовать глобальной)
   const [toolsPolicy, setToolsPolicy] = useState<ToolsPolicy | ''>('')
+  const [mcpPolicy, setMcpPolicy] = useState<ToolsPolicy | ''>('')
 
   // Роутинг (AD-034)
   const [routingEnabled, setRoutingEnabled] = useState(false)
@@ -193,6 +194,7 @@ export function SessionSettingsTab() {
       setAskTimeoutSec(String(Math.round(effMs / 1000)))
       // AD-071 §2.3: per-session override политики инструментов ('' = глобальная).
       setToolsPolicy((session.settings.toolsPolicy as ToolsPolicy | undefined) ?? '')
+      setMcpPolicy((session.settings.mcpPolicy as ToolsPolicy | undefined) ?? '')
     }
   }, [session, defaultAskTimeoutMs])
 
@@ -268,6 +270,7 @@ export function SessionSettingsTab() {
           embedModel,
           // AD-071 §2.3: '' → undefined (сессия следует глобальной политике).
           toolsPolicy: toolsPolicy || undefined,
+          mcpPolicy: mcpPolicy || undefined,
           ...(permissionSettings ? { permission: permissionSettings } : {}),
         },
       })
@@ -733,13 +736,14 @@ export function SessionSettingsTab() {
           </Section>
         )}
 
-        {/* AD-071 §2.3: политика включения инструментов (per-session override) */}
+        {/* AD-071 §2.3: политики включения инструментов (per-session override) */}
         <Section title={t('toolsPolicy.title')}>
           <div className="flex flex-col gap-1">
             <select
               value={toolsPolicy}
               onChange={(e) => setToolsPolicy(e.target.value as ToolsPolicy | '')}
-              className="w-full rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              aria-label={t('toolsPolicy.label')}
+              className="w-full min-h-10 rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <option value="">{t('toolsPolicy.inherit')}</option>
               <option value="consistency">{t('toolsPolicy.consistency')}</option>
@@ -747,6 +751,23 @@ export function SessionSettingsTab() {
               <option value="auto">{t('toolsPolicy.auto')}</option>
             </select>
             <p className="text-[0.625rem] text-muted-foreground/60">{t('toolsPolicy.sessionHelp')}</p>
+          </div>
+        </Section>
+
+        <Section title={t('mcpPolicy.title')}>
+          <div className="flex flex-col gap-1">
+            <select
+              value={mcpPolicy}
+              onChange={(e) => setMcpPolicy(e.target.value as ToolsPolicy | '')}
+              aria-label={t('mcpPolicy.label')}
+              className="w-full min-h-10 rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="">{t('mcpPolicy.inherit')}</option>
+              <option value="consistency">{t('mcpPolicy.consistency')}</option>
+              <option value="available">{t('mcpPolicy.available')}</option>
+              <option value="auto">{t('mcpPolicy.auto')}</option>
+            </select>
+            <p className="text-[0.625rem] text-muted-foreground/60">{t('mcpPolicy.sessionHelp')}</p>
           </div>
         </Section>
 

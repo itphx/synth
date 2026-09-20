@@ -1099,6 +1099,18 @@ export const synthApi = {
     }).then((r) => r.toolsPolicy)
   },
 
+  // --- MCP: политика включения MCP-инструментов (AD-071 §2.3) ---
+  async getMcpPolicy(): Promise<ToolsPolicy> {
+    return fetchJSON<{ mcpPolicy: ToolsPolicy }>(`${BASE_URL}/settings/mcp-policy`).then((r) => r.mcpPolicy)
+  },
+
+  async saveMcpPolicy(mcpPolicy: ToolsPolicy): Promise<ToolsPolicy> {
+    return fetchJSON<{ mcpPolicy: ToolsPolicy }>(`${BASE_URL}/settings/mcp-policy`, {
+      method: 'PUT',
+      body: JSON.stringify({ mcpPolicy }),
+    }).then((r) => r.mcpPolicy)
+  },
+
   // --- Инструменты: instance-wide отключение (AD-071 §2.6) ---
   /** GET /settings/tools-disabled — жёстко отключённые admin'ом capability и тулы. */
   async getToolsDisabled(): Promise<ToolsDisabledConfig> {
