@@ -124,3 +124,14 @@
 - **Замечания:** для OpenAI/Remote точная стоимость в процессе недоступна — только оценка «~» (как и в opencode, где цифры не растут до `step-finish`); `reasoning_tokens` на отмене не оценивается; `context_mode` дочерней сессии наследует историю родителя (наблюдение, требует уточнения ожиданий).
 - **Ветка:** `feat/ad-070-system-prompt-composer`
 - **Коммит:** нет (ожидает явной просьбы пользователя).
+
+## 2026-09-20 — AD-071: MCP-серверы (уровни, скоуп, промпт)
+- **Задача:** «MCP-серверы уже реализованы, а места для их описания в промпте нет; отделить MCP от встроенных инструментов, добавить таблицы и политику включения инструментов, ввести уровни MCP».
+- **Тип:** research + архитектурное решение (AD)
+- **Исполнитель:** @orchestrator
+- **Результат:** AD-071 создан (черновик → решения согласованы), статус ⏳ Не реализовано.
+- **Что выяснено:** (1) `context_mode=inherit` в child — не баг, модель сама передала `inherit` (подтверждено `metadata.args`); (2) MCP-тулы смешаны со встроенными в один `tools`-слой (`stable`), хотя MCP динамичен; (3) кросс-сессионная утечка: `registerTools` пишет в глобальный `ToolRegistry`, `getToolsForAgent()` отдаёт весь реестр, а активация per-session (`orchestrator._loadedMcpServers` — синглтон); (4) в AD MCP в промпте не описан (AD-029 — только режимы, AD-036 — обфускация); (5) в прототипе t11 MCP-тулы добавляются текстом в system prompt.
+- **Решения AD-071:** разделение `tools`(stable)/`mcp.tools`(volatile) + брейкпоинт после встроенных; блок `mcp.servers` (имя, `description`, `instructions`, тулы, статус, уровень) с тиром по политике (split при `consistency`, `context` при `available`); политика `tools.policy` (`consistency`/`available`/`auto`, per-session override); уровни `system`(admin)/`project`(owner/lead)/`session`(user) с merge и приоритетом имён; единый PostgreSQL-ready реестр MCP (`McpRegistryEntry`, AD-032) с фиксацией автора (HTTP — любой пользователь, stdio — только admin, project-default — только owner/lead); admin-параметр сетевого доступа (SSRF allow/deny); approval-флоу не вводим; system-серверы можно отключать в сессии; отключённые серверы показываем с пометкой `disabled`; UI-таблицы «Встроенные инструменты» и «MCP».
+- **Изменённые файлы:** `docs/arch_decisions/ad-071-mcp-servers-prompt.md` (новый), `docs/arch_decisions/README.md`, `AGENTS.md` (индекс + триггер).
+- **Ветка:** `feat/ad-070-system-prompt-composer`
+- **Коммит:** нет (ожидает явной просьбы пользователя).
