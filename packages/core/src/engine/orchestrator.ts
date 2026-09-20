@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, ToolsPolicy } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
@@ -159,6 +159,12 @@ export interface OrchestratorOptions {
   gatewayPatternStore?: SecretPatternStore;
   /** AD-070 §2.2: политика prompt-cache (config llm.cache). Дефолт — auto. */
   cachePolicy?: CachePolicy;
+  /**
+   * AD-071 §2.3: глобальная админская политика включения инструментов
+   * (config.yaml tools.policy). Дефолт — `consistency`. Per-session override —
+   * `session.settings.toolsPolicy`.
+   */
+  toolsPolicy?: ToolsPolicy;
 }
 
 export interface ProcessMessageResult {
@@ -230,6 +236,8 @@ export class ChatOrchestrator {
   private readonly _gatewayAuditExternal: AuditLogger | null;
   /** AD-070 §2.2: политика prompt-cache (auto | none) из config llm.cache. */
   private readonly _cachePolicy: CachePolicy;
+  /** AD-071 §2.3: глобальная политика включения инструментов (runtime-изменяемая). */
+  private _toolsPolicy: ToolsPolicy;
   private _providerPool: ProviderPool | null;
   /** Политика защищённых путей (СКВОЗНАЯ проверка файловых тулов + shell) — ленивая загрузка с кэшем. */
   private _protectedPaths: ProtectedPathsPolicy | null = null;
@@ -528,6 +536,8 @@ export class ChatOrchestrator {
     this._gatewayPayloadLogPath = options.gatewayPayloadLogPath
       ?? join(options.dataDir || '/var/synth/data', 'audit', 'llm-payloads.jsonl');
     this._cachePolicy = options.cachePolicy ?? 'auto';
+    // AD-071 §2.3: глобальная политика инструментов; per-session override — в сессии.
+    this._toolsPolicy = options.toolsPolicy ?? 'consistency';
 
     // AD-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
     // ObfuscationMapStore живёт в сессии, RateLimiter и AuditLogger — общие.
@@ -683,6 +693,64 @@ export class ChatOrchestrator {
    */
   setDefaultPermissionTimeout(askTimeoutMs: number): void {
     this._permissionConfig = { ...this._permissionConfig, askTimeoutMs };
+  }
+
+  /**
+   * AD-071 §2.3: live-применение глобальной политики включения инструментов
+   * (runtime-настройка из админки). Per-session override в сессии приоритетнее.
+   */
+  setToolsPolicy(policy: ToolsPolicy): void {
+    this._toolsPolicy = policy;
+  }
+
+  /**
+   * AD-071 §2.3: резолвит эффективную политику инструментов для сессии.
+   * Приоритет: `session.settings.toolsPolicy` → глобальная (`tools.policy`).
+   * `auto` разрешается по провайдеру запроса: локальные (`ollama`) → `available`,
+   * облачные → `consistency`. Флага локальности у провайдера/модели нет, поэтому
+   * признак — тип провайдера `ollama` (см. AD-071 §2.3, решение зафиксировано).
+   */
+  private _resolveToolsPolicy(
+    session: Session,
+    providerType?: string,
+  ): Exclude<ToolsPolicy, 'auto'> {
+    const requested = session.settings.toolsPolicy ?? this._toolsPolicy;
+    if (requested === 'auto') {
+      return providerType === 'ollama' ? 'available' : 'consistency';
+    }
+    return requested;
+  }
+
+  /**
+   * AD-071 §2.3: тип провайдера сессии для резолва `auto` в read-only
+   * диагностике (`getPromptInfo`), где нет объекта провайдера запроса.
+   */
+  private _sessionProviderType(session: Session): string | undefined {
+    const name = session.settings.provider;
+    if (!name) return undefined;
+    return this._providerLoader(name)?.type;
+  }
+
+  /**
+   * AD-071 §2.3: предикат доступности тула для режима `available` — тот же
+   * `computeToolAvailability`, что использует permission-слой (AD-070 §2.9.1).
+   * В запрос попадают только тулы с `available: true`.
+   */
+  private _availabilityPredicate(
+    session: Session,
+    sessionMode: SessionMode,
+    planMode: PlanMode,
+    planApproved: boolean,
+    agentDef: AgentDefinition | undefined,
+  ): (tool: { name: string; capabilities: readonly string[] }) => boolean {
+    const opts = {
+      sessionMode,
+      planMode,
+      planApproved,
+      mcpToolSettings: session.settings.mcpToolSettings,
+      agentCapabilities: agentDef?.capabilities,
+    };
+    return (tool) => computeToolAvailability(tool.name, tool.capabilities, opts).available;
   }
 
   /**
@@ -891,11 +959,19 @@ export class ChatOrchestrator {
       .map((m) => m.content)
       .join('\n\n');
 
-    // AD-071 §2.1: тот же per-session список инструментов, что уходит в запрос
-    // (`_processMessage`) — встроенные + MCP активных серверов сессии.
+    // AD-071 §2.1/§2.3: тот же per-session список инструментов, что уходит в
+    // запрос (`_processMessage`) — встроенные + MCP активных серверов сессии;
+    // в режиме `available` — только доступные (mode/role/mcpToolSettings).
     const activeMcpServers = session.settings.mcpServers || [];
+    const planMode: PlanMode = session.settings.planMode ?? this._defaultPlanMode ?? 'auto';
+    const sessionMode: SessionMode = session.mode ?? 'act';
+    const planApproved = Boolean(session.planApproved);
+    const toolsPolicy = this._resolveToolsPolicy(session, this._sessionProviderType(session));
+    const availability = toolsPolicy === 'available'
+      ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef)
+      : undefined;
     const toolSelection = this._toolRegistry && agentDef && effectiveAgentRole
-      ? this._toolRegistry.selectForSession(activeMcpServers)
+      ? this._toolRegistry.selectForSession(activeMcpServers, availability)
       : { builtin: [], mcp: [] };
 
     const ctx: ComposerContext = {
@@ -912,14 +988,15 @@ export class ChatOrchestrator {
       showInterview: session.settings.showInterview,
       stickyNotes: session.stickyNotes,
       summaryContent: summaryContent || undefined,
-      // AD-070 §2.5 + AD-071 §2.1: манифест отражает реальные слои запроса —
-      // `tools` (встроенные, stable) и `mcp.tools` (MCP сессии, volatile).
+      // AD-070 §2.5 + AD-071 §2.1/§2.3: манифест отражает реальные слои запроса —
+      // `tools` (встроенные) и `mcp.tools` (MCP сессии); тир `tools` зависит от политики.
       tools: this._toolRegistry
         ? toolSelection.builtin as unknown as Array<Record<string, unknown>>
         : undefined,
       mcpTools: this._toolRegistry
         ? toolSelection.mcp as unknown as Array<Record<string, unknown>>
         : undefined,
+      toolsPolicy,
       // AD-071 §2.2: блоки `mcp.servers`/`mcp.status` — все настроенные серверы.
       mcpServers: this._collectComposerMcpServers(activeMcpServers),
     };
@@ -1190,6 +1267,13 @@ export class ChatOrchestrator {
       // до state-сообщений (unavailable-подсказки) и до сборки tools.
       const activeMcpServers = session.settings.mcpServers || [];
       const activeMcpSet = new Set(activeMcpServers);
+      // AD-071 §2.3: эффективная политика инструментов для этого хода (per-session
+      // override → глобальная; `auto` → по типу провайдера). В `available` тулы
+      // фильтруются по доступности, а подсказки `unavailable` не нужны.
+      const toolsPolicy = this._resolveToolsPolicy(session, provider.type);
+      const availability = toolsPolicy === 'available'
+        ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef)
+        : undefined;
       let projectForState: Project | null = null;
       if (session.projectId && this._projectStore) {
         try {
@@ -1203,9 +1287,13 @@ export class ChatOrchestrator {
         language,
         plan: projectForState?.plan ?? null,
         agentRole: effectiveAgentRole,
-        unavailableTools: this._collectUnavailableTools(
-          session, sessionMode, planMode, planApproved, agentDef, activeMcpServers,
-        ),
+        // AD-071 §2.3: в режиме `available` недоступных тулов в запросе нет —
+        // подсказки `unavailable(mode|role)` не добавляем.
+        unavailableTools: toolsPolicy === 'available'
+          ? []
+          : this._collectUnavailableTools(
+              session, sessionMode, planMode, planApproved, agentDef, activeMcpServers,
+            ),
       });
       if (stateSync.changed) {
         for (const stateMsg of stateSync.added) {
@@ -1253,6 +1341,8 @@ export class ChatOrchestrator {
         showInterview: session.settings.showInterview,
         stickyNotes: session.stickyNotes,
         summaryContent: summaryContent || undefined,
+        // AD-071 §2.3: политика влияет на тир `tools` и инструкцию `tools.guide`.
+        toolsPolicy,
         // AD-071 §2.2: блоки `mcp.servers`/`mcp.status` — все настроенные серверы.
         mcpServers: this._collectComposerMcpServers(activeMcpServers),
         // AD-070 §2.5: per-message collector доходит до Composer через контекст
@@ -1310,12 +1400,13 @@ export class ChatOrchestrator {
       const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
       const baseLlmMessages = ChatOrchestrator._sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author);
 
-      // 4. Get tools from registry. AD-070 §2.9 + AD-071 §2.1: встроенные —
-      // постоянно, MCP — только активных серверов сессии. Порядок: builtin → MCP.
+      // 4. Get tools from registry. AD-070 §2.9 + AD-071 §2.1/§2.3: встроенные —
+      // постоянно, MCP — только активных серверов сессии; в `available` — только
+      // доступные (mode/role/mcpToolSettings). Порядок: builtin → MCP.
       // Если агент НЕ найден в реестре или role undefined — модель получает
       // НИКАКИХ инструментов (safety-fallback).
       const toolSelection = this._toolRegistry && agentDef && effectiveAgentRole
-        ? this._toolRegistry.selectForSession(activeMcpServers)
+        ? this._toolRegistry.selectForSession(activeMcpServers, availability)
         : { builtin: [], mcp: [] };
       const tools = this._toolRegistry
         ? [...toolSelection.builtin, ...toolSelection.mcp]
@@ -1997,14 +2088,18 @@ export class ChatOrchestrator {
             sessionMode = 'plan';
             await this._appendModeChangeState(
               session, sessionMode, planMode, planApproved, language, currentMessages,
-              this._collectUnavailableTools(session, sessionMode, planMode, planApproved, agentDef),
+              toolsPolicy === 'available'
+                ? []
+                : this._collectUnavailableTools(session, sessionMode, planMode, planApproved, agentDef),
             );
           } else if (!toolResult.isError && toolName === 'plan_exit') {
             planApproved = true;
             sessionMode = 'act';
             await this._appendModeChangeState(
               session, sessionMode, planMode, planApproved, language, currentMessages,
-              this._collectUnavailableTools(session, sessionMode, planMode, planApproved, agentDef),
+              toolsPolicy === 'available'
+                ? []
+                : this._collectUnavailableTools(session, sessionMode, planMode, planApproved, agentDef),
             );
           }
 

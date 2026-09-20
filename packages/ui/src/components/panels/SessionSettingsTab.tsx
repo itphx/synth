@@ -7,7 +7,7 @@ import { useChatStore } from '@/stores/chatStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
-import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
+import { synthApi, type AgentInfo, type ToolsPolicy } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
 import { ModelSelector } from '../chat/ModelSelector'
@@ -35,6 +35,9 @@ export function SessionSettingsTab() {
 
   const [mcpServers, setMcpServers] = useState<Array<{ name: string; active: boolean }>>([])
   const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([])
+
+  // AD-071 §2.3: per-session override политики инструментов ('' = следовать глобальной)
+  const [toolsPolicy, setToolsPolicy] = useState<ToolsPolicy | ''>('')
 
   // Роутинг (AD-034)
   const [routingEnabled, setRoutingEnabled] = useState(false)
@@ -164,6 +167,8 @@ export function SessionSettingsTab() {
       const effMs = permCfg?.askTimeoutMs !== undefined ? permCfg.askTimeoutMs : defaultAskTimeoutMs
       setAskTimeoutEnabled(permCfg?.askTimeoutMs !== 0)
       setAskTimeoutSec(String(Math.round(effMs / 1000)))
+      // AD-071 §2.3: per-session override политики инструментов ('' = глобальная).
+      setToolsPolicy((session.settings.toolsPolicy as ToolsPolicy | undefined) ?? '')
     }
   }, [session, defaultAskTimeoutMs])
 
@@ -238,6 +243,8 @@ export function SessionSettingsTab() {
           embeddingEnabled,
           embedProvider,
           embedModel,
+          // AD-071 §2.3: '' → undefined (сессия следует глобальной политике).
+          toolsPolicy: toolsPolicy || undefined,
           ...(permissionSettings ? { permission: permissionSettings } : {}),
         },
       })
@@ -663,6 +670,23 @@ export function SessionSettingsTab() {
             </div>
           </Section>
         )}
+
+        {/* AD-071 §2.3: политика включения инструментов (per-session override) */}
+        <Section title={t('toolsPolicy.title')}>
+          <div className="flex flex-col gap-1">
+            <select
+              value={toolsPolicy}
+              onChange={(e) => setToolsPolicy(e.target.value as ToolsPolicy | '')}
+              className="w-full rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              <option value="">{t('toolsPolicy.inherit')}</option>
+              <option value="consistency">{t('toolsPolicy.consistency')}</option>
+              <option value="available">{t('toolsPolicy.available')}</option>
+              <option value="auto">{t('toolsPolicy.auto')}</option>
+            </select>
+            <p className="text-[0.625rem] text-muted-foreground/60">{t('toolsPolicy.sessionHelp')}</p>
+          </div>
+        </Section>
 
         {agents.length > 0 && (
           <Section title={t('rightPanel.params.agents')}>

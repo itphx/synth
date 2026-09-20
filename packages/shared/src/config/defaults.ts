@@ -81,6 +81,9 @@ export const defaultConfig: SynthConfig = {
   mcp: {
     servers: {},
   },
+  tools: {
+    policy: 'consistency',
+  },
   router: {
     enabled: true,
     strategy: 'auto',

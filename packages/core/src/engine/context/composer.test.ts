@@ -588,6 +588,81 @@ describe('SystemPromptComposer', () => {
     });
   });
 
+  describe('tools.policy (AD-071 §2.3)', () => {
+    const tools = [
+      { type: 'function', function: { name: 'read_file', description: 'Read', parameters: {} } },
+      { type: 'function', function: { name: 'write_file', description: 'Write', parameters: {} } },
+    ];
+
+    it('consistency (дефолт): tools stable, staticPrefix включает tools, tools.guide нет', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const toolsChars = JSON.stringify(tools).length;
+
+      const manifest = await composer.manifest(makeCtx(session, { tools, toolsPolicy: 'consistency' }));
+      const entry = manifest.entries.find((e) => e.key === 'tools');
+      expect(entry!.tier).toBe('stable');
+      expect(manifest.toolsPolicy).toBe('consistency');
+      expect(manifest.entries.find((e) => e.key === 'tools.guide')).toBeUndefined();
+      expect(manifest.staticPrefixChars).toBeGreaterThanOrEqual(toolsChars);
+
+      const composed = await composer.compose(makeCtx(session, { toolsPolicy: 'consistency' }));
+      expect(composed.system).not.toContain('[ИНСТРУМЕНТЫ]');
+    });
+
+    it('available: tools context, не в staticPrefix, добавлен tools.guide', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const toolsChars = JSON.stringify(tools).length;
+
+      const manifest = await composer.manifest(makeCtx(session, { tools, toolsPolicy: 'available' }));
+      const entry = manifest.entries.find((e) => e.key === 'tools');
+      expect(entry!.tier).toBe('context');
+      expect(entry!.chars).toBe(toolsChars);
+      expect(manifest.toolsPolicy).toBe('available');
+
+      const guide = manifest.entries.find((e) => e.key === 'tools.guide');
+      expect(guide).toBeDefined();
+      expect(guide!.tier).toBe('context');
+      expect(guide!.chars).toBeGreaterThan(0);
+
+      // staticPrefix не включает изменчивый tools (context).
+      const stableSystemChars = manifest.entries
+        .filter((e) => e.source === 'system' && e.status !== 'empty' && e.tier === 'stable')
+        .reduce((sum, e) => sum + e.chars, 0);
+      expect(manifest.staticPrefixChars).toBe(stableSystemChars);
+      expect(manifest.totalChars).toBeGreaterThan(manifest.staticPrefixChars);
+
+      const composed = await composer.compose(makeCtx(session, { toolsPolicy: 'available' }));
+      expect(composed.system).toContain('[ИНСТРУМЕНТЫ]');
+      expect(composed.stablePrefix).not.toContain('[ИНСТРУМЕНТЫ]');
+    });
+
+    it('available: mcp.servers/mcp.status переводятся в context', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const servers: ComposerMcpServer[] = [
+        { name: 'srv', tools: [{ name: 'ping' }], status: 'connected' },
+      ];
+
+      const manifest = await composer.manifest(
+        makeCtx(session, { mcpServers: servers, toolsPolicy: 'available' }),
+      );
+      expect(manifest.entries.find((e) => e.key === 'mcp.servers')!.tier).toBe('context');
+      expect(manifest.entries.find((e) => e.key === 'mcp.status')!.tier).toBe('context');
+    });
+
+    it('en: инструкция tools.guide на английском', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const composed = await composer.compose(
+        makeCtx(session, { language: 'en', toolsPolicy: 'available' }),
+      );
+      expect(composed.system).toContain('[TOOLS]');
+      expect(composed.system).toContain('Only the tools listed');
+    });
+  });
+
   it('compose с debugCollector заполняет system_prompt_parts', async () => {
     const composer = makeComposer();
     const session = makeSession();

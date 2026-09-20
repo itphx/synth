@@ -8,6 +8,7 @@ import {
   type SecretPattern,
   type SecuritySettings as SecuritySettingsType,
   type ProtectedPathsPolicy,
+  type ToolsPolicy,
 } from '@/lib/api/synthApi'
 import { Toggle } from '../ui/Toggle'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
@@ -143,6 +144,11 @@ export function SecuritySettings() {
   const [askTimeoutEnabled, setAskTimeoutEnabled] = useState(true)
   const [securityLoading, setSecurityLoading] = useState(true)
   const [securitySaving, setSecuritySaving] = useState(false)
+
+  // --- Политика включения инструментов (AD-071 §2.3) ---
+  const [toolsPolicy, setToolsPolicy] = useState<ToolsPolicy>('consistency')
+  const [toolsPolicyLoading, setToolsPolicyLoading] = useState(true)
+  const [toolsPolicySaving, setToolsPolicySaving] = useState(false)
   const [policy, setPolicy] = useState<ProtectedPathsPolicy>(EMPTY_POLICY)
   const [policyOverridden, setPolicyOverridden] = useState(false)
   const [policyLoading, setPolicyLoading] = useState(true)
@@ -215,6 +221,22 @@ export function SecuritySettings() {
       .catch(() => {})
       .finally(() => {
         if (!cancelled) setSecurityLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    synthApi
+      .getToolsPolicy()
+      .then((policy) => {
+        if (!cancelled) setToolsPolicy(policy)
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setToolsPolicyLoading(false)
       })
     return () => {
       cancelled = true
@@ -332,6 +354,23 @@ export function SecuritySettings() {
       })
     } finally {
       setSecuritySaving(false)
+    }
+  }
+
+  const handleToolsPolicySave = async () => {
+    setToolsPolicySaving(true)
+    try {
+      const saved = await synthApi.saveToolsPolicy(toolsPolicy)
+      setToolsPolicy(saved)
+      notify({ text: t('common.saved'), type: 'success', category: 'system' })
+    } catch (e) {
+      notify({
+        text: `${t('common.saveError')}: ${e instanceof Error ? e.message : 'HTTP'}`,
+        type: 'error',
+        category: 'error',
+      })
+    } finally {
+      setToolsPolicySaving(false)
     }
   }
 
@@ -462,6 +501,39 @@ export function SecuritySettings() {
             className="w-full rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
           >
             {saving ? t('sessionSettings.saving') : t('common.save')}
+          </button>
+        </SettingsCard>
+
+        {/* Политика включения инструментов (AD-071 §2.3) */}
+        <SettingsCard
+          title={t('toolsPolicy.title')}
+          description={t('toolsPolicy.description')}
+          className="sm:col-span-2"
+        >
+          <div className="flex flex-col gap-1">
+            <label className="text-sm font-medium">{t('toolsPolicy.label')}</label>
+            <Select
+              value={toolsPolicy}
+              onValueChange={(value) => setToolsPolicy(value as ToolsPolicy)}
+            >
+              <SelectTrigger className="w-full" aria-label={t('toolsPolicy.label')}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="consistency">{t('toolsPolicy.consistency')}</SelectItem>
+                <SelectItem value="available">{t('toolsPolicy.available')}</SelectItem>
+                <SelectItem value="auto">{t('toolsPolicy.auto')}</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">{t('toolsPolicy.help')}</p>
+          </div>
+
+          <button
+            onClick={handleToolsPolicySave}
+            disabled={toolsPolicySaving || toolsPolicyLoading}
+            className="w-full rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
+          >
+            {toolsPolicySaving ? t('sessionSettings.saving') : t('common.save')}
           </button>
         </SettingsCard>
 

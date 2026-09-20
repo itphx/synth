@@ -28,6 +28,10 @@ describe('defaultConfig', () => {
     expect(defaultConfig.llm.cache).toBe('auto');
   });
 
+  it('tools.policy по умолчанию consistency (AD-071 §2.3)', () => {
+    expect(defaultConfig.tools.policy).toBe('consistency');
+  });
+
   it('core.port == 4300', () => {
     expect(defaultConfig.core.port).toBe(4300);
   });

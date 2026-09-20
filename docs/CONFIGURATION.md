@@ -109,6 +109,14 @@ i18n:
 session:
   planMode: "auto"                # строгость цикла Plan→Build: auto | strict | off
 
+tools:
+  policy: "consistency"           # AD-071 §2.3: политика включения инструментов
+                                  # consistency | available | auto
+                                  # consistency — все определения + подсказки unavailable(mode|role);
+                                  # available — только доступные тулы (экономия контекста);
+                                  # auto — по провайдеру: локальные (ollama) → available, облачные → consistency.
+                                  # Per-session override: session.settings.toolsPolicy.
+
 router:
   enabled: true
   strategy: "auto"                # content | cost | content+cost | auto

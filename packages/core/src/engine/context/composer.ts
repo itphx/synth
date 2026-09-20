@@ -14,8 +14,10 @@ import type {
   Project,
   PromptManifest,
   PromptManifestEntry,
+  PromptTier,
   Session,
   StickyNote,
+  ToolsPolicy,
 } from '@itphx/synth-shared';
 import type { ContextBuilder } from './builder.js';
 import type { ContextConfig } from './config.js';
@@ -43,6 +45,7 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   summary: 'Compressed dialog',
   interview: 'Interview prompt',
   tools: 'Tool descriptions',
+  'tools.guide': 'Tools guide',
   'mcp.tools': 'MCP tools',
   'mcp.servers': 'MCP servers',
   'mcp.status': 'MCP status',
@@ -99,6 +102,12 @@ export interface ComposerContext {
    * (`tools → system → messages`), в system-текст `compose()` не входят.
    */
   tools?: Array<Record<string, unknown>>;
+  /**
+   * AD-071 §2.3: фактически применённая политика инструментов (`auto` уже
+   * разрешён вызывающей стороной в `consistency`/`available`). Влияет на тир
+   * слоя `tools` и текст инструкции `tools.guide`.
+   */
+  toolsPolicy?: Exclude<ToolsPolicy, 'auto'>;
   /**
    * AD-071 §2.1: описания MCP-инструментов активных серверов сессии (слой
    * `mcp.tools`, volatile). В system-текст не входят; входят в `totalChars`, но
@@ -202,20 +211,22 @@ export class SystemPromptComposer {
       ...(block.provenance ? { provenance: block.provenance } : {}),
     }));
 
-    // AD-070 §2.5 + AD-071 §2.1: слои описаний инструментов — отдельные записи
-    // (`tools → mcp.tools → system → messages`). В system-текст (`compose`) не
-    // входят, но отражаются в манифесте и учитываются в общих размерах.
-    //  - `tools` (встроенные) — `stable`, входит в staticPrefix;
+    // AD-070 §2.5 + AD-071 §2.1/§2.3: слои описаний инструментов — отдельные
+    // записи (`tools → mcp.tools → system → messages`). В system-текст (`compose`)
+    // не входят, но отражаются в манифесте и учитываются в общих размерах.
+    //  - `tools` (встроенные) — `stable` в `consistency`, `context` в `available`
+    //    (состав зависит от режима/роли); в staticPrefix входит только в stable;
     //  - `mcp.tools` (MCP активных серверов) — `volatile`, в staticPrefix НЕ входит.
-    // `tools` вставляется в конце тира `stable` (перед первой `context`-записью):
-    // это самый ранний кэшируемый слой. `mcp.tools` — сразу после `tools`.
-    // `role` при этом остаётся первой записью.
+    // `tools` вставляется в конце своего тира (перед записями более поздних
+    // тиров), `mcp.tools` — сразу после `tools`. `role` остаётся первой записью.
+    const toolsPolicy = ctx.toolsPolicy ?? 'consistency';
+    const toolsTier: PromptTier = toolsPolicy === 'available' ? 'context' : 'stable';
     const toolsChars = ctx.tools && ctx.tools.length > 0 ? JSON.stringify(ctx.tools).length : 0;
     const mcpToolsChars = ctx.mcpTools && ctx.mcpTools.length > 0 ? JSON.stringify(ctx.mcpTools).length : 0;
     const toolsEntry: PromptManifestEntry = {
       key: 'tools',
       label: PROMPT_BLOCK_LABELS.tools ?? 'Tool descriptions',
-      tier: 'stable',
+      tier: toolsTier,
       chars: toolsChars,
       estTokens: Math.ceil(toolsChars / EST_TOKENS_DIVISOR),
       status: toolsChars === 0 ? 'empty' : 'loaded',
@@ -232,22 +243,24 @@ export class SystemPromptComposer {
       provenance: 'mcp.tools',
       source: 'mcp.tools',
     };
-    // `entries` отсортированы `sortPromptBlocks` (tier → order), поэтому все
-    // stable-записи занимают префикс [0, stableCount); вставка по индексу
-    // stableCount ставит `tools` сразу после последней stable-записи, `mcp.tools`
-    // — следом. При отсутствии stable-записей — в начало (индекс 0).
-    const stableCount = entries.filter((entry) => entry.tier === 'stable').length;
-    entries.splice(stableCount, 0, toolsEntry);
-    entries.splice(stableCount + 1, 0, mcpToolsEntry);
+    // `entries` отсортированы `sortPromptBlocks` (tier → order). Вставляем `tools`
+    // после всех записей своего и более ранних тиров (в конец своего тира),
+    // `mcp.tools` — сразу за ним (начало следующего тира). `role` — первая.
+    const tierRank: Record<PromptTier, number> = { stable: 0, context: 1, volatile: 2 };
+    const toolsInsertIndex = entries.filter((entry) => tierRank[entry.tier] <= tierRank[toolsTier]).length;
+    entries.splice(toolsInsertIndex, 0, toolsEntry);
+    entries.splice(toolsInsertIndex + 1, 0, mcpToolsEntry);
 
     const nonEmpty = blocks.filter((block) => block.content !== '');
     const totalChars =
       nonEmpty.reduce((sum, block) => sum + block.content.length, 0) + toolsChars + mcpToolsChars;
-    // AD-071 §2.1: MCP-инструменты (volatile) не входят в кэшируемый stable-префикс.
+    // AD-071 §2.1/§2.3: MCP-инструменты (volatile) и `tools` в режиме `available`
+    // (context) не входят в кэшируемый stable-префикс.
     const staticPrefixChars =
       nonEmpty
         .filter((block) => block.tier === 'stable')
-        .reduce((sum, block) => sum + block.content.length, 0) + toolsChars;
+        .reduce((sum, block) => sum + block.content.length, 0)
+      + (toolsTier === 'stable' ? toolsChars : 0);
 
     const agentRole = ctx.agentRole ?? ctx.agentDef?.id ?? ctx.session.settings.agentRole;
     const generation = ctx.session.promptStates?.[agentKeyOf(agentRole)]?.generation;
@@ -257,6 +270,7 @@ export class SystemPromptComposer {
       totalChars,
       estTokens: Math.ceil(totalChars / EST_TOKENS_DIVISOR),
       staticPrefixChars,
+      toolsPolicy,
       entries,
     };
   }
@@ -334,23 +348,40 @@ export class SystemPromptComposer {
       provenance: 'prompts/system/MODE_POLICY',
     });
 
-    // AD-071 §2.2 (consistency → split): описания/instructions/тулы серверов —
-    // stable (описания не меняются от хода к ходу), статус подключения — volatile.
-    // Показываем все настроенные серверы, включая отключённые (с пометкой).
+    // AD-071 §2.2/§2.3: тир блока `mcp.servers`/`mcp.status` зависит от политики.
+    //  - consistency (приоритет кэша) → split: описания в stable, статус в volatile;
+    //  - available (приоритет контекстного окна) → весь блок в context.
+    const mcpPolicy = ctx.toolsPolicy ?? 'consistency';
+    const mcpServersTier: PromptTier = mcpPolicy === 'available' ? 'context' : 'stable';
+    const mcpStatusTier: PromptTier = mcpPolicy === 'available' ? 'context' : 'volatile';
     if (ctx.mcpServers && ctx.mcpServers.length > 0) {
       extraBlocks.push({
         key: 'mcp.servers',
-        tier: 'stable',
+        tier: mcpServersTier,
         order: 50,
         content: this._buildMcpServersBlock(ctx.mcpServers, lang),
         provenance: 'mcp.servers',
       });
       extraBlocks.push({
         key: 'mcp.status',
-        tier: 'volatile',
+        tier: mcpStatusTier,
         order: 70,
         content: this._buildMcpStatusBlock(ctx.mcpServers, lang),
         provenance: 'mcp.status',
+      });
+    }
+
+    // AD-071 §2.3: в режиме `available` состав инструментов сужен до доступных,
+    // поэтому инструкция переписывается («доступны только перечисленные»).
+    // В `consistency` блок не добавляется — подсказки о недоступных даёт
+    // MODE_POLICY + state-сообщения (не дублируем).
+    if (mcpPolicy === 'available') {
+      extraBlocks.push({
+        key: 'tools.guide',
+        tier: 'context',
+        order: 25,
+        content: this._buildToolsGuideBlock(lang),
+        provenance: 'inline',
       });
     }
 
@@ -450,6 +481,18 @@ export class SystemPromptComposer {
     }
 
     return lines.join('\n');
+  }
+
+  /**
+   * AD-071 §2.3: инструкция к слою инструментов для режима `available` — в
+   * запрос переданы только доступные в текущем режиме/роли инструменты.
+   * В `consistency` блок не добавляется (не дублирует MODE_POLICY).
+   */
+  private _buildToolsGuideBlock(lang: string): string {
+    if (lang === 'en') {
+      return '[TOOLS]\n\nOnly the tools listed in this request are available. If a tool you need is missing, it is unavailable in the current mode or to the current agent: do not try to call it or work around the restriction — complete the available part of the work and suggest that the user switch the mode (plan/act/yolo) or delegate the task via `@`.';
+    }
+    return '[ИНСТРУМЕНТЫ]\n\nВ запросе переданы только инструменты, доступные в текущем режиме и текущему агенту. Если нужного инструмента нет — он недоступен в этом режиме или для этой роли: не пытайся вызвать его или обойти ограничение — выполни доступную часть работы и предложи пользователю переключить режим (plan/act/yolo) либо делегировать задачу через `@`.';
   }
 
   /**

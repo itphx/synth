@@ -130,6 +130,11 @@ export interface PromptManifest {
   totalChars: number;
   estTokens: number;
   staticPrefixChars: number;
+  /**
+   * AD-071 §2.3: фактически применённая политика инструментов (`auto`
+   * уже разрешён в `consistency`/`available`) — видно, какая политика сработала.
+   */
+  toolsPolicy?: Exclude<ToolsPolicy, 'auto'>;
   entries: PromptManifestEntry[];
 }
 
@@ -265,6 +270,17 @@ export type PlanMode = (typeof PLAN_MODES)[number];
 export const SESSION_MODES = ['plan', 'act', 'yolo'] as const;
 export type SessionMode = (typeof SESSION_MODES)[number];
 
+/**
+ * AD-071 §2.3: политика включения инструментов в запрос.
+ * - `consistency` — в запрос идут все определения, недоступность кодируется
+ *   permission-слоем (`unavailable(mode|role)`); приоритет — валидность кэша;
+ * - `available` — в запрос идут только доступные агенту/режиму/роли тулы;
+ *   приоритет — экономия контекстного окна;
+ * - `auto` — выбор по провайдеру/модели: локальные → `available`, облачные → `consistency`.
+ */
+export const TOOLS_POLICIES = ['consistency', 'available', 'auto'] as const;
+export type ToolsPolicy = (typeof TOOLS_POLICIES)[number];
+
 export const TODO_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'] as const;
 export type TodoStatus = (typeof TODO_STATUSES)[number];
 
@@ -351,6 +367,13 @@ export interface SessionSettings {
   permission?: PermissionConfig;
   /** Доступность MCP-инструментов по режимам plan/act (serverName → настройки). */
   mcpToolSettings?: Record<string, McpServerToolSettings>;
+  // === Инструменты (AD-071 §2.3) ===
+  /**
+   * Per-session override политики включения инструментов. Если задан —
+   * перекрывает глобальную `tools.policy` из config.yaml. `auto` резолвится по
+   * провайдеру/модели текущего запроса.
+   */
+  toolsPolicy?: ToolsPolicy;
   // === Plan/Act (AD-025, AD-028) ===
   /** Строгость цикла Plan→Build: auto — модель сама решает, strict — план обязателен, off — планирование отключено. */
   planMode?: PlanMode;

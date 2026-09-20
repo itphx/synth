@@ -1002,6 +1002,18 @@ export const synthApi = {
     }).then((r) => r.security)
   },
 
+  // --- Инструменты: политика включения (AD-071 §2.3) ---
+  async getToolsPolicy(): Promise<ToolsPolicy> {
+    return fetchJSON<{ toolsPolicy: ToolsPolicy }>(`${BASE_URL}/settings/tools-policy`).then((r) => r.toolsPolicy)
+  },
+
+  async saveToolsPolicy(toolsPolicy: ToolsPolicy): Promise<ToolsPolicy> {
+    return fetchJSON<{ toolsPolicy: ToolsPolicy }>(`${BASE_URL}/settings/tools-policy`, {
+      method: 'PUT',
+      body: JSON.stringify({ toolsPolicy }),
+    }).then((r) => r.toolsPolicy)
+  },
+
   async getProtectedPaths(): Promise<ProtectedPathsRaw> {
     const r = await fetchJSON<{ policy: ProtectedPathsPolicy; base: ProtectedPathsPolicy; is_overridden: boolean }>(`${BASE_URL}/settings/protected-paths`)
     return { policy: r.policy, base: r.base, isOverridden: r.is_overridden }
@@ -1126,6 +1138,14 @@ export interface SecuritySettings {
   /** Глобальный дефолт таймаута подтверждения ask (мс). */
   askTimeoutMs?: number
 }
+
+/**
+ * AD-071 §2.3: политика включения инструментов.
+ * - `consistency` — все определения, недоступность через `unavailable`;
+ * - `available` — только доступные тулы (экономия контекста);
+ * - `auto` — по провайдеру: локальные (`ollama`) → `available`, облачные → `consistency`.
+ */
+export type ToolsPolicy = 'consistency' | 'available' | 'auto'
 
 /** Эффективная политика защищённых путей (списки строк). */
 export interface ProtectedPathsPolicy {

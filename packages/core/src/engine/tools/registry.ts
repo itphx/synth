@@ -68,12 +68,20 @@ export class ToolRegistry {
    * AD-071 §2.1: per-session выборка инструментов — встроенные + MCP только
    * активных серверов сессии. Порядок: сначала встроенные, затем MCP
    * (кэш-брейкпоинт ставится после встроенных, см. `stableToolCount`).
+   *
+   * AD-071 §2.3: опциональный `predicate` отбирает только доступные тулы
+   * (режим `available`) — фильтрация на уровне `ToolDefinition`, до конвертации
+   * в LLM-формат (capabilities теряются в `ToolForLLM`).
    */
-  selectForSession(mcpServers?: Iterable<string>): { builtin: ToolForLLM[]; mcp: ToolForLLM[] } {
+  selectForSession(
+    mcpServers?: Iterable<string>,
+    predicate?: (tool: ToolDefinition) => boolean,
+  ): { builtin: ToolForLLM[]; mcp: ToolForLLM[] } {
+    const allow = predicate ?? (() => true);
     return {
-      builtin: this.listBuiltin().map((tool) => this._toolToLLM(tool)),
+      builtin: this.listBuiltin().filter(allow).map((tool) => this._toolToLLM(tool)),
       // Без набора серверов MCP-слой пуст (не «все MCP»): safety против утечки.
-      mcp: this.listMcp(mcpServers ?? []).map((tool) => this._toolToLLM(tool)),
+      mcp: this.listMcp(mcpServers ?? []).filter(allow).map((tool) => this._toolToLLM(tool)),
     };
   }
 

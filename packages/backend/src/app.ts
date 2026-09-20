@@ -394,6 +394,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // приоритетнее config.yaml — мёржим при старте, чтобы защита применялась к оркестратору.
     const runtimeSecurity = await settingsStore.getSecuritySettings();
     const securityConfig = mergeSecurityConfig(backendConfig.synth.security, runtimeSecurity);
+    // AD-071 §2.3: runtime-политика инструментов (админка) приоритетнее config.yaml
+    const runtimeToolsPolicy = await settingsStore.getToolsPolicy();
+    const toolsPolicy = runtimeToolsPolicy ?? backendConfig.synth.tools.policy;
     const protectedPathsStore = new ProtectedPathsStore({ dataDir });
 
     // Orchestrator
@@ -423,6 +426,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       gatewayPayloadLogPath,
       gatewayPatternStore: patternStore,
       cachePolicy: backendConfig.synth.llm.cache,
+      toolsPolicy,
     });
 
     const processMessage = orchestrator.createProcessMessage();
@@ -529,6 +533,11 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       onSecurityChange: async (runtime) => {
         const merged = mergeSecurityConfig(backendConfig.synth.security, runtime);
         orchestrator.setSecurityConfig(merged);
+      },
+      // AD-071 §2.3: live-применение политики инструментов из админки.
+      fallbackToolsPolicy: backendConfig.synth.tools.policy,
+      onToolsPolicyChange: async (policy) => {
+        orchestrator.setToolsPolicy(policy);
       },
       protectedPathsStore,
     }));

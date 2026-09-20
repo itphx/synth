@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { permissionConfigSchema } from '../types/permission.js';
+import { TOOLS_POLICIES } from '../types/index.js';
 
 // --- SynthConfig: единый конфиг для всех компонентов ---
 
@@ -126,6 +127,16 @@ export const mcpServerConfigSchema = z.object({
 
 export const mcpConfigSchema = z.object({
   servers: z.record(z.string(), mcpServerConfigSchema).default({}),
+});
+
+// --- Инструменты (AD-071 §2.3) ---
+
+/**
+ * AD-071 §2.3: глобальная админская политика включения инструментов.
+ * Per-session override — `SessionSettings.toolsPolicy`.
+ */
+export const toolsConfigSchema = z.object({
+  policy: z.enum(TOOLS_POLICIES).default('consistency'),
 });
 
 // --- Security (IPI protection) ---
@@ -283,6 +294,7 @@ export const synthConfigSchema = z.object({
   context: contextConfigSchema.default({}),
   summarization: summarizationConfigSchema.default({}),
   mcp: mcpConfigSchema.default({}),
+  tools: toolsConfigSchema.default({}),
   router: routerConfigSchema.default({}),
   remote: remoteConfigSchema.default({}),
   microFirst: microFirstConfigSchema.default({}),
@@ -306,6 +318,7 @@ export type ContextConfigSchema = z.infer<typeof contextConfigSchema>;
 export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
 export type McpConfig = z.infer<typeof mcpConfigSchema>;
+export type ToolsConfig = z.infer<typeof toolsConfigSchema>;
 export type RouterContentConfig = z.infer<typeof routerContentConfigSchema>;
 export type RouterEscalationConfig = z.infer<typeof routerEscalationConfigSchema>;
 export type RouterCostConfig = z.infer<typeof routerCostConfigSchema>;

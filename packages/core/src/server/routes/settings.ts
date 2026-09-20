@@ -3,7 +3,8 @@ import type { AuthKit } from '../../auth/local.js';
 import type { RuntimeSettingsStore, LlmGatewayRuntimeSettings, SecurityRuntimeSettings } from '../../storage/runtime-settings.js';
 import type { ProtectedPathsStore } from '../../engine/security/protected-paths-store.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
-import type { McpServerToolSettings, McpToolAvailability } from '@itphx/synth-shared';
+import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy } from '@itphx/synth-shared';
+import { TOOLS_POLICIES } from '@itphx/synth-shared';
 
 export interface SettingsRoutesDeps {
   /** Store runtime-настроек ({dataDir}/settings.json). */
@@ -14,8 +15,17 @@ export interface SettingsRoutesDeps {
   onLlmGatewayChange?: (runtime: Partial<LlmGatewayRuntimeSettings>) => void | Promise<void>;
   /** Вызывается после успешного PUT /security (live-применение тумблера защищённых путей). */
   onSecurityChange?: (runtime: Partial<SecurityRuntimeSettings>) => void | Promise<void>;
+  /** AD-071 §2.3: значение tools.policy из config.yaml (если runtime не задан). */
+  fallbackToolsPolicy?: ToolsPolicy;
+  /** Вызывается после успешного PUT /tools-policy (live-применение политики инструментов). */
+  onToolsPolicyChange?: (policy: ToolsPolicy) => void | Promise<void>;
   /** Store override политики защищённых путей ({dataDir}/security/protected-paths.json). */
   protectedPathsStore?: ProtectedPathsStore;
+}
+
+/** AD-071 §2.3: валидна ли политика включения инструментов. */
+function isValidToolsPolicy(value: unknown): value is ToolsPolicy {
+  return typeof value === 'string' && (TOOLS_POLICIES as readonly string[]).includes(value);
 }
 
 function isValidAvailability(value: unknown): value is McpToolAvailability {
@@ -222,6 +232,37 @@ export function createSettingsRoutes(
         askTimeoutMs: security.askTimeoutMs,
       },
     });
+  });
+
+  /**
+   * GET/PUT /api/v2/settings/tools-policy — AD-071 §2.3: глобальная админская
+   * политика включения инструментов (`consistency` | `available` | `auto`).
+   * Runtime-значение ({dataDir}/settings.json) приоритетнее config.yaml;
+   * per-session override — `session.settings.toolsPolicy`.
+   */
+  app.get('/tools-policy', auth.requireAuth, async (c) => {
+    const runtime = await deps.settingsStore.getToolsPolicy();
+    return c.json({ toolsPolicy: runtime ?? deps.fallbackToolsPolicy ?? 'consistency' });
+  });
+
+  app.put('/tools-policy', auth.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const toolsPolicy = (body as { toolsPolicy?: unknown }).toolsPolicy;
+
+    if (!isValidToolsPolicy(toolsPolicy)) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'toolsPolicy: ожидается "consistency" | "available" | "auto"',
+        },
+      }, 400);
+    }
+
+    await deps.settingsStore.setToolsPolicy(toolsPolicy);
+    // Live-применение политики инструментов — оркестратор переконфигурируется
+    // без рестарта сервера.
+    await deps.onToolsPolicyChange?.(toolsPolicy);
+    return c.json({ toolsPolicy });
   });
 
   /**

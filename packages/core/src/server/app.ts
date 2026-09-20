@@ -7,7 +7,7 @@ import { join, extname } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig } from '@itphx/synth-shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -68,6 +68,8 @@ export interface StandaloneConfig {
   gatewayConfig?: LLMGatewayConfig;
   /** AD-070 §2.2: политика prompt-cache из config.yaml llm.cache (auto | none). */
   llmCachePolicy?: 'auto' | 'none';
+  /** AD-071 §2.3: глобальная политика включения инструментов из config.yaml tools.policy. */
+  toolsPolicy?: ToolsPolicy;
   /** Конфигурация MCP-серверов из config.yaml mcp.servers (для probe и загрузки тулов). */
   mcpServers?: Record<string, McpServerConfig>;
   /**
@@ -606,6 +608,10 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const runtimeSecurity = await settingsStore.getSecuritySettings();
   const effectiveSecurityConfig = mergeSecurityConfig(config.securityConfig, runtimeSecurity);
 
+  // AD-071 §2.3: runtime-политика инструментов (админка) приоритетнее config.yaml tools.policy
+  const runtimeToolsPolicy = await settingsStore.getToolsPolicy();
+  const effectiveToolsPolicy: ToolsPolicy = runtimeToolsPolicy ?? config.toolsPolicy ?? 'consistency';
+
   // AD-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
   const patternStore = new SecretPatternStore({ dataDir });
 
@@ -719,6 +725,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     gatewayPatternStore: patternStore,
     mcpManager,
     cachePolicy: config.llmCachePolicy,
+    toolsPolicy: effectiveToolsPolicy,
   });
 
   const processMessage = orchestrator.createProcessMessage();
@@ -797,6 +804,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       if (merged?.askTimeoutMs !== undefined) {
         orchestrator.setDefaultPermissionTimeout(merged.askTimeoutMs);
       }
+    },
+    // AD-071 §2.3: live-применение политики инструментов из админки.
+    fallbackToolsPolicy: config.toolsPolicy ?? 'consistency',
+    onToolsPolicyChange: async (policy) => {
+      orchestrator.setToolsPolicy(policy);
     },
     protectedPathsStore,
   }));

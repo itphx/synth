@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { McpServerToolSettings, LLMGatewayConfig, SecurityConfig } from '@itphx/synth-shared';
+import type { McpServerToolSettings, LLMGatewayConfig, SecurityConfig, ToolsPolicy } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 
 /** Runtime-настройки LLM Gateway, сохраняемые через UI (раздел «Шлюз безопасности»). */
@@ -34,6 +34,8 @@ export interface RuntimeSettings {
   llmGateway?: Partial<LlmGatewayRuntimeSettings>;
   /** Глобальные настройки секции «Безопасность» (защищённые пути). */
   security?: Partial<SecurityRuntimeSettings>;
+  /** AD-071 §2.3: глобальная политика включения инструментов (админка). */
+  toolsPolicy?: ToolsPolicy;
 }
 
 /**
@@ -154,6 +156,16 @@ export class RuntimeSettingsStore {
 
   async setSecuritySettings(config: Partial<SecurityRuntimeSettings>): Promise<void> {
     await this._update((current) => ({ ...current, security: config }));
+  }
+
+  /** AD-071 §2.3: runtime-политика инструментов (админка), undefined — не задана. */
+  async getToolsPolicy(): Promise<ToolsPolicy | undefined> {
+    const settings = await this.load();
+    return settings.toolsPolicy;
+  }
+
+  async setToolsPolicy(policy: ToolsPolicy): Promise<void> {
+    await this._update((current) => ({ ...current, toolsPolicy: policy }));
   }
 
   private async _update(mutate: (current: RuntimeSettings) => RuntimeSettings): Promise<void> {
