@@ -125,7 +125,24 @@
 - **Ветка:** `feat/ad-070-system-prompt-composer`
 - **Коммит:** нет (ожидает явной просьбы пользователя).
 
-## 2026-09-20 — AD-071: MCP-серверы (уровни, скоуп, промпт)
+## 2026-09-20 — AD-071: реализация (MCP-серверы: слои, уровни, скоуп, промпт)
+- **Задача:** «Реализовать AD-071» (MCP отделить от встроенных, политика инструментов, уровни MCP, описания в промпте, таблицы статистики).
+- **Тип:** feature (5 фаз) + bug fix + verification
+- **Исполнитель:** @orchestrator → @fixer ×7, @tester ×1
+- **Результат:** PASS. Ветка `feat/ad-071-mcp-tools-scope`, коммиты `67ae82a` (AD), `c2bb33c` (Ф1), `b810f2c` (Ф2), `8b518bd` (Ф3), `ff1fef9` (Ф4a), `a016d4d` (Ф4b), `80bd814` (Ф5a), `039716f` (Ф5b).
+- **Что сделано:**
+  - **Ф1:** `ToolDefinition.source` (builtin/mcp) + `mcpServer`; per-session выборка (MCP только активных серверов), устранена кросс-сессионная утечка (убран глобальный `_loadedMcpServers`); манифест `tools` (stable) + `mcp.tools` (volatile); кэш-брейкпоинт на последнем встроенном туле. Попутный фикс: `createSession` терял `settings.mcpServers`.
+  - **Ф2:** `description` у MCP-сервера; `McpClient` захватывает `serverInfo`/`instructions`; блоки `mcp.servers` (stable) + `mcp.status` (volatile), показываются все серверы включая отключённые с причиной.
+  - **Ф3:** политика `tools.policy` (`consistency`/`available`/`auto` + per-session override); `available` фильтрует тулы по доступности, добавляет `tools.guide`, `tools` в context; runtime API `GET/PUT /settings/tools-policy`.
+  - **Ф4:** единый PostgreSQL-ready реестр `McpRegistryEntry` (`origin`/`author`/`trust`/`enabledByDefault`), seed из config; `stdio` — только ADMIN, HTTP — любой с фиксацией автора; `mcp.networkPolicy` (SSRF allow/deny); уровни `system`/`project`/`session` с резолвером `resolveMcpScope` и приоритетом имён; API `/mcp/registry`, `/projects/:id/mcp`, `/sessions/:id/mcp`; RBAC.
+  - **Ф5:** таблицы «Встроенные инструменты» и «MCP» в статистике (live); UI управления — сессия (opt-out), проект (owner/lead, `defaultOn`), админка (реестр, stdio-ограничение, network policy).
+  - **Попутный фикс окружения:** `loadConfig` игнорировал `SYNTH_CONFIG`; `dev.sh` теперь выставляет `SYNTH_CONFIG=packages/backend/config.yaml` → `mcp.servers` сеются в dev.
+- **Проверки:** build/typecheck 6/6, lint 0 errors, тесты shared 86 / ui 297 / core 1543 / backend 286. E2E: манифест `tools`/`mcp.tools`/`mcp.servers`/`mcp.status` с тирами; `consistency` vs `available`; connected/opt-out/defaultOn; админ-реестр (origin/trust/author, stdio-ограничение); live-обновление таблиц.
+- **Замечания:** `auto` определяет локальность по типу провайдера (`ollama`); runtime-политика сети в standalone-core берёт дефолт (fallback из config не прокинут); `instructions` dev-сервер не отдаёт (блок формируется без строки «Инструкции»).
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** да (фазы закоммичены по ходу).
+
+## 2026-09-20 — AD-071: MCP-серверы (уровни, скоуп, промпт) — проектирование
 - **Задача:** «MCP-серверы уже реализованы, а места для их описания в промпте нет; отделить MCP от встроенных инструментов, добавить таблицы и политику включения инструментов, ввести уровни MCP».
 - **Тип:** research + архитектурное решение (AD)
 - **Исполнитель:** @orchestrator

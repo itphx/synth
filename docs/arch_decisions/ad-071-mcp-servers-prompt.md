@@ -1,7 +1,8 @@
 # AD-071: MCP-серверы — уровни, скоуп и представление в промпте
 
-> **Статус:** ⏳ Не реализовано (проект)
+> **Статус:** ✅ Реализовано
 > **Дата:** 2026-09-20
+> **Реализация:** Ф1 — слои `tools`/`mcp.tools` и per-session выборка (фикс кросс-сессионной утечки); Ф2 — блоки `mcp.servers`/`mcp.status` (`description` + `instructions`); Ф3 — политика `tools.policy` (`consistency`/`available`/`auto` + per-session override); Ф4 — единый PostgreSQL-ready реестр MCP, уровни `system`/`project`/`session`, RBAC, сетевой доступ; Ф5 — таблицы «Встроенные инструменты»/«MCP» и UI управления (сессия/проект/админка).
 > **Парные документы:**
 > - [AD-070](./ad-070-system-prompt-composer.md) «SystemPromptComposer» — тиры `stable`/`context`/`volatile`, манифест промпта, CachePolicy; AD-071 добавляет слои `mcp.tools`/`mcp.servers` и уточняет правило «tools всегда `stable`»;
 > - [AD-029](./ad-029-granular-permissions.md) «Гранулярные permissions» — `mcpToolSettings` (доступность MCP-тулов по режимам plan/act) сохраняется и учитывается политикой включения;
