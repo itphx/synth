@@ -6,6 +6,8 @@ import React from 'react'
 const mocks = vi.hoisted(() => ({
   getToolsDisabled: vi.fn(),
   saveToolsDisabled: vi.fn(),
+  getToolsPolicy: vi.fn(),
+  saveToolsPolicy: vi.fn(),
   getSessionPrompt: vi.fn(),
   notify: vi.fn(),
 }))
@@ -72,6 +74,8 @@ async function renderSettings(): Promise<HTMLElement> {
 beforeEach(() => {
   mocks.getToolsDisabled.mockResolvedValue({ capabilities: [], tools: [] })
   mocks.saveToolsDisabled.mockImplementation(async (config: unknown) => config)
+  mocks.getToolsPolicy.mockResolvedValue('consistency')
+  mocks.saveToolsPolicy.mockImplementation(async (policy: unknown) => policy)
   mocks.getSessionPrompt.mockResolvedValue({ manifest: {}, history: {}, toolsDetail: TOOLS_DETAIL })
 
   useMcpStore.setState({
@@ -136,7 +140,7 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
     expect(gitTool.disabled).toBe(true)
     expect(gitTool.checked).toBe(false)
 
-    const saveButton = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Save'))!
+    const saveButton = container.querySelector('[data-testid="tools-disabled-save"]') as HTMLButtonElement
     await act(async () => {
       saveButton.click()
     })
@@ -174,12 +178,47 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
       gitTool.click()
     })
 
-    const saveButton = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Save'))!
+    const saveButton = container.querySelector('[data-testid="tools-disabled-save"]') as HTMLButtonElement
     await act(async () => {
       saveButton.click()
     })
     await act(async () => {})
 
     expect(mocks.saveToolsDisabled).toHaveBeenCalledWith({ capabilities: [], tools: [] })
+  })
+
+  it('карточка «Политика инструментов» отображается и сохраняет выбранное значение', async () => {
+    mocks.getToolsPolicy.mockResolvedValue('available')
+    const container = await renderSettings()
+
+    expect(mocks.getToolsPolicy).toHaveBeenCalledTimes(1)
+    // Заголовок карточки политики (en-словарь).
+    expect(container.textContent).toContain('Tools policy')
+    // Текущее значение подтянуто с сервера и видно в триггере селекта.
+    expect(container.textContent).toContain('available')
+
+    const saveButton = container.querySelector('[data-testid="tools-policy-save"]') as HTMLButtonElement
+    await act(async () => {
+      saveButton.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.saveToolsPolicy).toHaveBeenCalledWith('available')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'success', category: 'system' }),
+    )
+  })
+
+  it('сохранение отключённых инструментов не трогает политику инструментов', async () => {
+    const container = await renderSettings()
+
+    const saveButton = container.querySelector('[data-testid="tools-disabled-save"]') as HTMLButtonElement
+    await act(async () => {
+      saveButton.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.saveToolsDisabled).toHaveBeenCalledTimes(1)
+    expect(mocks.saveToolsPolicy).not.toHaveBeenCalled()
   })
 })
