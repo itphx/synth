@@ -32,6 +32,10 @@ describe('defaultConfig', () => {
     expect(defaultConfig.tools.policy).toBe('consistency');
   });
 
+  it('tools.disabled по умолчанию пусто (AD-071 §2.6)', () => {
+    expect(defaultConfig.tools.disabled).toEqual({ capabilities: [], tools: [] });
+  });
+
   it('core.port == 4300', () => {
     expect(defaultConfig.core.port).toBe(4300);
   });

@@ -114,6 +114,14 @@ export class ToolRegistry {
     return result;
   }
 
+  /**
+   * AD-071 §2.6: LLM-представление одного тула — для расчёта `chars`/`estTokens`
+   * (тот же формат, что уходит в слой `tools`/`mcp.tools` манифеста).
+   */
+  toLLM(tool: ToolDefinition): ToolForLLM {
+    return this._toolToLLM(tool);
+  }
+
   private _toolToLLM(tool: ToolDefinition): ToolForLLM {
     const jsonSchema = tool.jsonSchema ?? zodToJsonSchema(tool.parameters);
     return {

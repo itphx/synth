@@ -96,6 +96,10 @@ export const defaultConfig: SynthConfig = {
   },
   tools: {
     policy: 'consistency',
+    disabled: {
+      capabilities: [],
+      tools: [],
+    },
   },
   router: {
     enabled: true,

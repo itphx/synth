@@ -615,6 +615,130 @@ describe('Settings API Routes (workspace)', () => {
       expect(onMcpNetworkPolicyChange).toHaveBeenCalledWith({ mode: 'allow', list: ['example.com'] });
     });
   });
+
+  describe('tools-disabled (AD-071 §2.6)', () => {
+    it('GET по умолчанию возвращает пустой конфиг', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/tools-disabled');
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body).toEqual({ toolsDisabled: { capabilities: [], tools: [] } });
+    });
+
+    it('GET возвращает fallback (config), если runtime не задан', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        fallbackToolsDisabled: { capabilities: ['web'], tools: ['git_read'] },
+      }));
+      const res = await app.request('/api/v2/settings/tools-disabled');
+      const body: any = await res.json();
+      expect(body).toEqual({ toolsDisabled: { capabilities: ['web'], tools: ['git_read'] } });
+    });
+
+    it('PUT сохраняет, GET возвращает; переживает рестарт', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const put = await app.request('/api/v2/settings/tools-disabled', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsDisabled: { capabilities: ['git_read'], tools: ['web_search'] } }),
+      });
+      expect(put.status).toBe(200);
+      const putBody: any = await put.json();
+      expect(putBody).toEqual({ toolsDisabled: { capabilities: ['git_read'], tools: ['web_search'] } });
+
+      const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      expect(await restartedStore.getToolsDisabled()).toEqual({
+        capabilities: ['git_read'],
+        tools: ['web_search'],
+      });
+    });
+
+    it('PUT отклоняет неизвестную capability (Zod enum)', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/tools-disabled', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsDisabled: { capabilities: ['nope'], tools: [] } }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('PUT отклоняет capability runtime (ядро сессии)', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/tools-disabled', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsDisabled: { capabilities: ['runtime'], tools: [] } }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.message).toContain('runtime');
+    });
+
+    it('PUT отклоняет инструмент с capability runtime (knownTools)', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        knownTools: () => [
+          { name: 'plan_read', capabilities: ['runtime'] },
+          { name: 'git_read', capabilities: ['git_read'] },
+        ],
+      }));
+      const res = await app.request('/api/v2/settings/tools-disabled', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsDisabled: { capabilities: [], tools: ['plan_read'] } }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.message).toContain('plan_read');
+    });
+
+    it('PUT принимает неизвестное имя инструмента (динамический MCP-реестр)', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        knownTools: () => [{ name: 'git_read', capabilities: ['git_read'] }],
+      }));
+      const res = await app.request('/api/v2/settings/tools-disabled', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsDisabled: { capabilities: [], tools: ['srvA_search'] } }),
+      });
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.toolsDisabled.tools).toEqual(['srvA_search']);
+    });
+
+    it('PUT вызывает onToolsDisabledChange (live-применение)', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const onToolsDisabledChange = vi.fn(async (_config: unknown) => {});
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        onToolsDisabledChange,
+      }));
+      const res = await app.request('/api/v2/settings/tools-disabled', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsDisabled: { capabilities: ['git_read'], tools: [] } }),
+      });
+      expect(res.status).toBe(200);
+      expect(onToolsDisabledChange).toHaveBeenCalledTimes(1);
+      expect(onToolsDisabledChange).toHaveBeenCalledWith({ capabilities: ['git_read'], tools: [] });
+    });
+  });
 });
 
 async function settingsLoad(tmpDir: string): Promise<{ workspace?: string; mcpServers?: Record<string, any> }> {

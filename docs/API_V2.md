@@ -220,7 +220,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/sessions` | оба | auth | Список сессий; `?project_id=` |
 | POST | `/api/v2/sessions` | оба | auth | Создать; `{name|title, project_id, engine, settings}` → 201 |
 | GET | `/api/v2/sessions/:id` | оба | auth | Сессия (сериализованная) |
-| GET | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Эффективный MCP-скоуп (AD-071 §2.4): `{servers:[{name, level, enabled, reason?, connected?, origin, trust}], enabled, disabled, mcpServers, mcpDisabledServers}` |
+| GET | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Эффективный MCP-скоуп (AD-071 §2.4): `{servers:[{name, level, enabled, reason?, connected?, origin, trust, chars?, estTokens?, estimated?}], enabled, disabled, mcpServers, mcpDisabledServers}`. Серверы/тулы несут `chars`/`estTokens` (AD-071 §2.8) |
 | PUT | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Переключить MCP: `{name, enabled}` или `{mcpServers?, mcpDisabledServers?}` (opt-out системных — через `enabled:false`) |
 | PATCH | `/api/v2/sessions/:id` | оба | auth | `{name, title, engine, mode: plan\|act\|yolo, settings, project_id}` |
 | DELETE | `/api/v2/sessions/:id` | оба | auth | Удалить → 204 |
@@ -232,6 +232,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | POST | `/api/v2/sessions/import` | backend | auth | Импорт сессии из экспорта → 201 |
 | GET | `/api/v2/sessions/:id/status` | оба | auth | `{blocked, pending_count, processor_running}` |
 | POST | `/api/v2/sessions/:id/prompt` | оба | auth | Поставить сообщение в очередь, вернуть **SSE-стрим** |
+| GET | `/api/v2/sessions/:id/prompt` | оба | auth | Состав системного промпта (AD-070 §2.5): `manifest` + `history` + `promptState` + `lastPromptMeta` + `toolsDetail` (тулы с `chars`/`estTokens` и флагом оценки, AD-071 §2.8) |
 | GET | `/api/v2/sessions/:id/messages` | оба | auth | `{messages, session_id, engine}` |
 | POST | `/api/v2/sessions/:id/clear` | оба | auth | Очистить историю (кроме pinned) |
 | POST | `/api/v2/sessions/:id/abort` | оба | auth | Отменить стрим `{status:'aborted'}` |
@@ -416,6 +417,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | PUT | `/api/v2/settings/workspace` | auth | `{workspace}` |
 | GET | `/api/v2/settings/mcp` | auth | Доступность MCP по режимам |
 | PUT | `/api/v2/settings/mcp` | auth | `{servers}` |
+| GET | `/api/v2/settings/tools-disabled` | ADMIN | Отключение встроенных инструментов (AD-071 §2.9): `{disabled:{capabilities,tools}}` + эффективный набор/признак override |
+| PUT | `/api/v2/settings/tools-disabled` | ADMIN | `{disabled:{capabilities:string[],tools:string[]}}` (live-применение, persist); `runtime`-тулы неотключаемы |
 | GET | `/api/v2/settings/llm-gateway` | auth | Настройки LLM Gateway |
 | PUT | `/api/v2/settings/llm-gateway` | auth | `{llmGateway}` (live-применение) |
 | GET | `/api/v2/settings/security` | auth | `{security:{protectedPaths, askTimeoutMs}}` |

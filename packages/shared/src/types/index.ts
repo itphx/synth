@@ -138,8 +138,24 @@ export interface PromptManifest {
    * уже разрешён в `consistency`/`available`) — видно, какая политика сработала.
    */
   toolsPolicy?: Exclude<ToolsPolicy, 'auto'>;
+  /**
+   * AD-071 §2.6: chars-per-token, применённый к `estTokens` (калибровка по
+   * фактическому usage; 4 — без калибровки). `estTokens` — оценка, не факт.
+   */
+  ratio?: number;
   entries: PromptManifestEntry[];
 }
+
+// --- Оценка токенов по символам (AD-071 §2.6) ---
+
+/** Дефолтный chars-per-token, если калибровки для модели нет. */
+export const DEFAULT_CHARS_PER_TOKEN = 4;
+/** Нижняя граница разумного chars-per-token (аномальные семплы отбрасываются). */
+export const MIN_CHARS_PER_TOKEN = 2;
+/** Верхняя граница разумного chars-per-token. */
+export const MAX_CHARS_PER_TOKEN = 8;
+/** Минимальный `usage.inputTokens` для калибровки — меньшие значения шумные. */
+export const MIN_CALIBRATION_INPUT_TOKENS = 500;
 
 /**
  * AD-071 §2.6: строка таблицы «Встроенные инструменты» в панели статистики.
@@ -150,10 +166,32 @@ export interface PromptToolDetail {
   capabilities: string[];
   /** Доступен ли тул текущему режиму/роли (`computeToolAvailability`). */
   available: boolean;
-  /** Причина недоступности: `mode` (переключить режим) или `role` (делегировать). */
-  reason?: 'mode' | 'role';
+  /**
+   * Причина недоступности: `mode` (переключить режим), `role` (делегировать),
+   * `admin_disabled` (жёстко отключён администратором через `tools.disabled`).
+   */
+  reason?: 'mode' | 'role' | 'admin_disabled';
   /** AD-071 §2.1: источник инструмента (`built-in` — слой `tools`). */
   source: 'built-in';
+  /** AD-071 §2.6: длина `JSON.stringify` LLM-определения тула (как слой `tools`). */
+  chars?: number;
+  /** AD-071 §2.6: оценка токенов (`ceil(chars / ratio)`) — значение оценочное. */
+  estTokens?: number;
+  /** AD-071 §2.6: chars-per-token, применённый к оценке (4 — без калибровки). */
+  ratio?: number;
+  /** AD-071 §2.6: тул жёстко отключён администратором (`tools.disabled`). */
+  adminDisabled?: boolean;
+}
+
+/** AD-071 §2.6: строка тула MCP-сервера с оценкой токенов. */
+export interface McpToolDetail {
+  name: string;
+  /** Длина `JSON.stringify` LLM-определения тула (имя с префиксом сервера). */
+  chars: number;
+  estTokens: number;
+  ratio: number;
+  /** AD-071 §2.6: тул отключён администратором (`tools.disabled`). */
+  adminDisabled?: boolean;
 }
 
 // --- Prompt history (AD-070 §2.5, слой messages) ---
@@ -411,6 +449,14 @@ export interface McpServerEffective {
   author?: McpRegistryAuthor | null;
   /** AD-071 §2.2/§2.6: имена инструментов сервера (пусто, если не подключён). */
   tools?: string[];
+  /** AD-071 §2.6: суммарные символы JSON-определений тулов сервера. */
+  chars?: number;
+  /** AD-071 §2.6: оценка токенов сервера (`ceil(chars / ratio)`). */
+  estTokens?: number;
+  /** AD-071 §2.6: chars-per-token, применённый к оценке (4 — без калибровки). */
+  ratio?: number;
+  /** AD-071 §2.6: пер-тульные chars/estTokens/ratio + признак admin_disabled. */
+  toolDetails?: McpToolDetail[];
 }
 
 export const TODO_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'] as const;

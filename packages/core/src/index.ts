@@ -106,6 +106,7 @@ export type {
 } from './storage/mcp-registry-store.js';
 export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig } from './storage/runtime-settings.js';
 export type { RuntimeSettings, LlmGatewayRuntimeSettings } from './storage/runtime-settings.js';
+export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';
 export { createLocalAuth } from './auth/local.js';
 export type { AuthKit, LocalAuthConfig } from './auth/local.js';
 export { createSettingsRoutes } from './server/routes/settings.js';

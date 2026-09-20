@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { MessageRole, GlobalRole, ProjectRole, StatusMessageType } from '../types/index.js';
+import { ToolCapability } from '../types/tools.js';
 
 export const messageRoleSchema = z.nativeEnum(MessageRole);
 export const globalRoleSchema = z.nativeEnum(GlobalRole);
@@ -169,6 +170,21 @@ export const gitCommitQuerySchema = z.object({
   repo_path: z.string().default(''),
   hash: z.string().min(1),
 });
+
+const toolCapabilityValues = Object.values(ToolCapability) as [string, ...string[]];
+
+/**
+ * AD-071 §2.6: тело `PUT /api/v2/settings/tools-disabled`. Неизвестная
+ * capability — ошибка (закрытый набор: опечатка молча ничего не отключит).
+ * Имена инструментов принимаются как строки (реестр динамический — MCP-тулы
+ * регистрируются лениво); непустые.
+ */
+export const toolsDisabledSchema = z.object({
+  capabilities: z.array(z.enum(toolCapabilityValues)).default([]),
+  tools: z.array(z.string().min(1)).default([]),
+});
+
+export type ToolsDisabledRequest = z.infer<typeof toolsDisabledSchema>;
 
 export type SessionCreateRequest = z.infer<typeof sessionCreateSchema>;
 export type SessionUpdateRequest = z.infer<typeof sessionUpdateSchema>;

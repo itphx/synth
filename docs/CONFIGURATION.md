@@ -116,6 +116,10 @@ tools:
                                   # available — только доступные тулы (экономия контекста);
                                   # auto — по провайдеру: локальные (ollama) → available, облачные → consistency.
                                   # Per-session override: session.settings.toolsPolicy.
+  disabled:                       # AD-071 §2.9: instance-wide отключение встроенных инструментов (ADMIN)
+    capabilities: []              # группы ToolCapability (git, web, file_read, file_write, shell, mcp, ...)
+    tools: []                     # отдельные тулы по имени (execute_shell, git_push, ...)
+                                  # runtime (plan/todo/project/reference/classify) неотключаем
 
 router:
   enabled: true
@@ -182,6 +186,20 @@ remote:                           # гибридный режим: локаль�
 ```
 
 Полный список полей (включая `logging`, `tsm`, `context`, `summarization`, `mcp`, `auth.oidc`) — в `packages/shared/src/config/types.ts`.
+
+### Отключение встроенных инструментов (`tools.disabled`)
+
+Instance-wide настройка (AD-071 §2.9, RBAC `ADMIN`): жёстко исключает встроенные
+инструменты из запроса **независимо** от `tools.policy` — и по группам
+(`capabilities`, значения `ToolCapability`: `git`, `web`, `file_read`,
+`file_write`, `shell`, `mcp`, …), и по отдельным тулам (`tools`). Эффективный
+набор = доступные агенту/режиму тулы − (union отключённых групп и имён).
+
+`runtime`-инструменты (управление планом/todo, проект, reference, classify)
+неотключаемы — иначе ломается инвариант AD-039. Отключённые тулы не уходят в
+запрос и не упоминаются в подсказках, но видны в статистике с пометкой
+`disabled (admin)`. Runtime-правка: `GET/PUT /api/v2/settings/tools-disabled`
+(живое применение, persist в `settings.json`).
 
 ### Гибридный режим (remote)
 

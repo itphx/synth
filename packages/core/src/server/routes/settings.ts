@@ -3,8 +3,8 @@ import type { AuthKit } from '../../auth/local.js';
 import type { RuntimeSettingsStore, LlmGatewayRuntimeSettings, SecurityRuntimeSettings } from '../../storage/runtime-settings.js';
 import type { ProtectedPathsStore } from '../../engine/security/protected-paths-store.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
-import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy } from '@itphx/synth-shared';
-import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY } from '@itphx/synth-shared';
+import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig } from '@itphx/synth-shared';
+import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, toolsDisabledSchema, ToolCapability } from '@itphx/synth-shared';
 
 export interface SettingsRoutesDeps {
   /** Store runtime-настроек ({dataDir}/settings.json). */
@@ -23,6 +23,16 @@ export interface SettingsRoutesDeps {
   fallbackMcpNetworkPolicy?: McpNetworkPolicy;
   /** Вызывается после успешного PUT /mcp-network-policy (live-применение). */
   onMcpNetworkPolicyChange?: (policy: McpNetworkPolicy) => void | Promise<void>;
+  /** AD-071 §2.6: значение tools.disabled из config.yaml (если runtime не задан). */
+  fallbackToolsDisabled?: ToolsDisabledConfig;
+  /** Вызывается после успешного PUT /tools-disabled (live-применение). */
+  onToolsDisabledChange?: (config: ToolsDisabledConfig) => void | Promise<void>;
+  /**
+   * AD-071 §2.6: известные инструменты (имя → capabilities) для защиты
+   * `runtime`-тулов от отключения. Не задан — проверка по имени пропускается
+   * (capability `runtime` всё равно отклоняется).
+   */
+  knownTools?: () => Array<{ name: string; capabilities: string[] }>;
   /** Store override политики защищённых путей ({dataDir}/security/protected-paths.json). */
   protectedPathsStore?: ProtectedPathsStore;
 }
@@ -39,6 +49,49 @@ function isValidMcpNetworkPolicy(value: unknown): value is McpNetworkPolicy {
   if (p.mode !== 'allow' && p.mode !== 'deny') return false;
   if (!Array.isArray(p.list) || !p.list.every((x) => typeof x === 'string' && x.trim().length > 0)) return false;
   return true;
+}
+
+/**
+ * AD-071 §2.6: валидация `tools.disabled`. Структура — Zod-схемой
+ * (`toolsDisabledSchema`), поэтому неизвестная capability отклоняется (закрытый
+ * набор: опечатка молча ничего бы не отключила). Имена инструментов — свободные
+ * строки (реестр динамический: MCP-тулы регистрируются лениво), но инструмент
+ * с capability `runtime` (ядро сессии) отключать нельзя — 400.
+ */
+function validateToolsDisabled(
+  value: unknown,
+  knownTools?: () => Array<{ name: string; capabilities: string[] }>,
+): { ok: true; config: ToolsDisabledConfig } | { ok: false; message: string } {
+  const parsed = toolsDisabledSchema.safeParse(value);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return {
+      ok: false,
+      message: `toolsDisabled: ожидается { capabilities: ToolCapability[], tools: string[] } (${issue?.message ?? 'невалидная структура'})`,
+    };
+  }
+  const config: ToolsDisabledConfig = {
+    capabilities: parsed.data.capabilities,
+    tools: parsed.data.tools,
+  };
+  if (config.capabilities.includes(ToolCapability.RUNTIME)) {
+    return {
+      ok: false,
+      message: `capability "${ToolCapability.RUNTIME}" неотключаема — это ядро сессии (plan/todo/project/reference/classify)`,
+    };
+  }
+  if (knownTools) {
+    const known = new Map(knownTools().map((tool) => [tool.name, tool.capabilities]));
+    for (const name of config.tools) {
+      if (known.get(name)?.includes(ToolCapability.RUNTIME)) {
+        return {
+          ok: false,
+          message: `инструмент "${name}" неотключаем — capability "${ToolCapability.RUNTIME}" (ядро сессии)`,
+        };
+      }
+    }
+  }
+  return { ok: true, config };
 }
 
 function isValidAvailability(value: unknown): value is McpToolAvailability {
@@ -308,6 +361,35 @@ export function createSettingsRoutes(
     // без рестарта сервера.
     await deps.onMcpNetworkPolicyChange?.(policy);
     return c.json({ policy });
+  });
+
+  /**
+   * GET/PUT /api/v2/settings/tools-disabled — AD-071 §2.6: instance-wide
+   * жёсткое отключение инструментов администратором (`capabilities` + `tools`).
+   * Отключённые тулы не попадают в запрос независимо от `tools.policy`;
+   * `runtime`-capability (ядро сессии) неотключаема. Runtime-значение
+   * ({dataDir}/settings.json) приоритетнее config.yaml `tools.disabled`.
+   */
+  app.get('/tools-disabled', auth.requireAuth, async (c) => {
+    const runtime = await deps.settingsStore.getToolsDisabled();
+    const config = runtime ?? deps.fallbackToolsDisabled ?? { capabilities: [], tools: [] };
+    return c.json({ toolsDisabled: config });
+  });
+
+  app.put('/tools-disabled', auth.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const result = validateToolsDisabled(
+      (body as { toolsDisabled?: unknown }).toolsDisabled,
+      deps.knownTools,
+    );
+    if (!result.ok) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: result.message } }, 400);
+    }
+
+    await deps.settingsStore.setToolsDisabled(result.config);
+    // Live-применение — оркестратор переконфигурируется без рестарта.
+    await deps.onToolsDisabledChange?.(result.config);
+    return c.json({ toolsDisabled: result.config });
   });
 
   /**

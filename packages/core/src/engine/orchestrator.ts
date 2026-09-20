@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, PromptToolDetail, ToolsPolicy, McpServerEffective } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
@@ -14,6 +14,7 @@ import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import { ContextConfig } from './context/config.js';
 import { SystemPromptComposer, type ComposerContext, type ComposerMcpServer, type ComposerMcpServerStatus } from './context/composer.js';
+import { calibrateCharsPerToken, estimateTokens, DEFAULT_CHARS_PER_TOKEN } from './context/token-ratio.js';
 import {
   agentKeyOf,
   buildPromptState,
@@ -166,6 +167,18 @@ export interface OrchestratorOptions {
    * `session.settings.toolsPolicy`.
    */
   toolsPolicy?: ToolsPolicy;
+  /**
+   * AD-071 §2.6: instance-wide жёсткое отключение инструментов (config.yaml
+   * `tools.disabled`). Runtime-значение приходит через `setToolsDisabled`.
+   */
+  toolsDisabled?: ToolsDisabledConfig;
+  /**
+   * AD-071 §2.6: chars-per-token модели из runtime-настроек (калибровка).
+   * Не задан/нет значения — дефолт `DEFAULT_CHARS_PER_TOKEN`.
+   */
+  tokenRatioLoader?: (model: string) => Promise<number | undefined>;
+  /** AD-071 §2.6: сохранение откалиброванного chars-per-token после ответа. */
+  onTokenRatioCalibrated?: (model: string, ratio: number) => void | Promise<void>;
 }
 
 export interface ProcessMessageResult {
@@ -241,6 +254,12 @@ export class ChatOrchestrator {
   private readonly _cachePolicy: CachePolicy;
   /** AD-071 §2.3: глобальная политика включения инструментов (runtime-изменяемая). */
   private _toolsPolicy: ToolsPolicy;
+  /** AD-071 §2.6: instance-wide отключение инструментов (runtime-изменяемая, admin). */
+  private _toolsDisabled: ToolsDisabledConfig;
+  /** AD-071 §2.6: загрузчик chars-per-token модели (калибровка). */
+  private readonly _tokenRatioLoader: ((model: string) => Promise<number | undefined>) | undefined;
+  /** AD-071 §2.6: сохранение калибровки chars-per-token после ответа. */
+  private readonly _onTokenRatioCalibrated: ((model: string, ratio: number) => void | Promise<void>) | undefined;
   private _providerPool: ProviderPool | null;
   /** Политика защищённых путей (СКВОЗНАЯ проверка файловых тулов + shell) — ленивая загрузка с кэшем. */
   private _protectedPaths: ProtectedPathsPolicy | null = null;
@@ -541,6 +560,10 @@ export class ChatOrchestrator {
     this._cachePolicy = options.cachePolicy ?? 'auto';
     // AD-071 §2.3: глобальная политика инструментов; per-session override — в сессии.
     this._toolsPolicy = options.toolsPolicy ?? 'consistency';
+    // AD-071 §2.6: instance-wide отключение инструментов (admin) + калибровка ratio.
+    this._toolsDisabled = options.toolsDisabled ?? { capabilities: [], tools: [] };
+    this._tokenRatioLoader = options.tokenRatioLoader;
+    this._onTokenRatioCalibrated = options.onTokenRatioCalibrated;
 
     // AD-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
     // ObfuscationMapStore живёт в сессии, RateLimiter и AuditLogger — общие.
@@ -707,6 +730,81 @@ export class ChatOrchestrator {
   }
 
   /**
+   * AD-071 §2.6: live-применение instance-wide отключения инструментов
+   * (runtime-настройка из админки). Жёсткое исключение из запроса независимо от
+   * `tools.policy`; `runtime`-capability неотключаема (валидируется на API).
+   */
+  setToolsDisabled(config: ToolsDisabledConfig): void {
+    this._toolsDisabled = {
+      capabilities: [...(config.capabilities ?? [])],
+      tools: [...(config.tools ?? [])],
+    };
+  }
+
+  /**
+   * AD-071 §2.6: тул жёстко отключён администратором (`tools.disabled`) — по
+   * capability или по имени. `runtime` неотключаем (защита на API + здесь).
+   */
+  private _isAdminDisabled(tool: { name: string; capabilities: readonly string[] }): boolean {
+    const disabled = this._toolsDisabled;
+    if (disabled.capabilities.length === 0 && disabled.tools.length === 0) return false;
+    // Ядро сессии (plan/todo/project/reference/classify) неотключаемо.
+    if (tool.capabilities.includes('runtime')) return false;
+    if (disabled.tools.includes(tool.name)) return true;
+    return tool.capabilities.some((cap) => disabled.capabilities.includes(cap));
+  }
+
+  /**
+   * AD-071 §2.6: chars-per-token модели. Нет калибровки — дефолт 4.
+   */
+  private async _resolveTokenRatio(model: string | undefined): Promise<number> {
+    if (!model || !this._tokenRatioLoader) return DEFAULT_CHARS_PER_TOKEN;
+    try {
+      const ratio = await this._tokenRatioLoader(model);
+      if (typeof ratio === 'number' && Number.isFinite(ratio) && ratio > 0) return ratio;
+    } catch {
+      // ошибка чтения runtime-настроек не должна ломать сборку промпта
+    }
+    return DEFAULT_CHARS_PER_TOKEN;
+  }
+
+  /**
+   * AD-071 §2.6: калибровка chars-per-token после успешного ответа
+   * (`promptChars / usage.inputTokens`). EWMA + границы/порог — в
+   * `calibrateCharsPerToken`. Ошибка сохранения не влияет на ход.
+   */
+  private async _calibrateTokenRatio(
+    model: string | undefined,
+    promptChars: number,
+    usage: TokenUsage | undefined,
+  ): Promise<void> {
+    if (!model || !usage || !this._onTokenRatioCalibrated) return;
+    const current = this._tokenRatioLoader ? await this._tokenRatioLoader(model).catch(() => undefined) : undefined;
+    const next = calibrateCharsPerToken(promptChars, usage.inputTokens, current);
+    if (next == null) return;
+    try {
+      await this._onTokenRatioCalibrated(model, next);
+    } catch (e) {
+      warning('ORCHESTRATOR', `Не удалось сохранить калибровку chars-per-token: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /**
+   * AD-071 §2.3/§2.6: единый предикат тулов для `selectForSession`.
+   * Всегда исключает admin-disabled; в режиме `available` дополнительно
+   * фильтрует по доступности (mode/role/mcpToolSettings).
+   */
+  private _toolPredicate(
+    availability?: (tool: { name: string; capabilities: readonly string[] }) => boolean,
+  ): (tool: { name: string; capabilities: readonly string[] }) => boolean {
+    return (tool) => {
+      if (this._isAdminDisabled(tool)) return false;
+      if (availability && !availability(tool)) return false;
+      return true;
+    };
+  }
+
+  /**
    * AD-071 §2.3: резолвит эффективную политику инструментов для сессии.
    * Приоритет: `session.settings.toolsPolicy` → глобальная (`tools.policy`).
    * `auto` разрешается по провайдеру запроса: локальные (`ollama`) → `available`,
@@ -842,6 +940,9 @@ export class ChatOrchestrator {
         && (tool.mcpServer == null || !activeMcp.has(tool.mcpServer))) {
         continue;
       }
+      // AD-071 §2.6: admin-disabled — не подсказываем (ограничение администратора,
+      // а не режим/роль).
+      if (this._isAdminDisabled(tool)) continue;
       const availability = computeToolAvailability(tool.name, tool.capabilities, {
         sessionMode,
         planMode,
@@ -897,6 +998,8 @@ export class ChatOrchestrator {
     if (!manager) return [];
     const project = await this._loadProject(session);
     const decisions = this._resolveMcpDecisions(session, project);
+    // AD-071 §2.6: единый ratio для оценок токенов (калибровка модели сессии).
+    const tokenRatio = await this._resolveTokenRatio(session.settings.model);
     return decisions.map((d) => {
       const rawStatus = manager.getServerStatus(d.name);
       const status: NonNullable<McpServerEffective['status']> = !d.enabled
@@ -906,7 +1009,29 @@ export class ChatOrchestrator {
           : rawStatus === 'connected'
             ? 'connected'
             : 'error';
-      const tools = manager.getServerTools(d.name)?.map((tool) => tool.name) ?? [];
+      const rawTools = manager.getServerTools(d.name) ?? [];
+      // AD-071 §2.6: пер-тульные chars/estTokens — по тому же JSON-определению,
+      // что уходит в слой `mcp.tools` (имя с префиксом сервера + [MCP:...]).
+      const toolDetails: McpToolDetail[] = rawTools.map((tool) => {
+        const fullName = `${d.name}_${tool.name}`;
+        const chars = JSON.stringify({
+          type: 'function',
+          function: {
+            name: fullName,
+            description: `[MCP:${d.name}] ${tool.description}`,
+            parameters: tool.inputSchema,
+          },
+        }).length;
+        const adminDisabled = this._isAdminDisabled({ name: fullName, capabilities: ['mcp'] });
+        return {
+          name: tool.name,
+          chars,
+          estTokens: estimateTokens(chars, tokenRatio),
+          ratio: tokenRatio,
+          ...(adminDisabled ? { adminDisabled: true } : {}),
+        };
+      });
+      const chars = toolDetails.reduce((sum, t) => sum + t.chars, 0);
       return {
         name: d.name,
         level: d.level,
@@ -917,7 +1042,11 @@ export class ChatOrchestrator {
         origin: d.origin,
         trust: manager.getServerTrust(d.name),
         author: manager.getServerAuthor(d.name),
-        tools,
+        tools: rawTools.map((tool) => tool.name),
+        chars,
+        estTokens: estimateTokens(chars, tokenRatio),
+        ratio: tokenRatio,
+        toolDetails,
       };
     });
   }
@@ -1033,9 +1162,13 @@ export class ChatOrchestrator {
     const availability = toolsPolicy === 'available'
       ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef)
       : undefined;
+    // AD-071 §2.6: admin-disabled исключаются всегда, независимо от политики.
+    const toolPredicate = this._toolPredicate(availability);
     const toolSelection = this._toolRegistry && agentDef && effectiveAgentRole
-      ? this._toolRegistry.selectForSession(activeMcpServers, availability)
+      ? this._toolRegistry.selectForSession(activeMcpServers, toolPredicate)
       : { builtin: [], mcp: [] };
+    // AD-071 §2.6: chars-per-token модели (калибровка) для оценок токенов.
+    const tokenRatio = await this._resolveTokenRatio(session.settings.model);
 
     const ctx: ComposerContext = {
       session,
@@ -1060,6 +1193,9 @@ export class ChatOrchestrator {
         ? toolSelection.mcp as unknown as Array<Record<string, unknown>>
         : undefined,
       toolsPolicy,
+      // AD-071 §2.6: admin-disabled — строка про ограничения в `tools.guide`.
+      adminDisabled: this._toolsDisabled,
+      tokenRatio,
       // AD-071 §2.2: блоки `mcp.servers`/`mcp.status` — все серверы эффективного набора.
       mcpServers: this._collectComposerMcpServers(mcpDecisions),
     };
@@ -1069,7 +1205,8 @@ export class ChatOrchestrator {
     const lastPromptMeta = this._lastPromptMeta(session, effectiveAgentRole);
     const history = this._buildPromptHistoryInfo(session, effectiveAgentRole);
     // AD-071 §2.6: per-tool данные встроенных инструментов для таблицы статистики.
-    // Доступность считается тем же `computeToolAvailability`, что и в запросе.
+    // Доступность считается тем же `computeToolAvailability`, что и в запросе;
+    // admin-disabled помечается отдельной причиной и имеет приоритет.
     const toolsDetail: PromptToolDetail[] = (this._toolRegistry?.listBuiltin() ?? []).map((tool) => {
       const availability = computeToolAvailability(tool.name, tool.capabilities, {
         sessionMode,
@@ -1078,12 +1215,22 @@ export class ChatOrchestrator {
         mcpToolSettings: session.settings.mcpToolSettings,
         agentCapabilities: agentDef?.capabilities,
       });
+      const adminDisabled = this._isAdminDisabled(tool);
+      // chars = JSON.stringify LLM-определения (тот же расчёт, что слой `tools`).
+      const chars = JSON.stringify(this._toolRegistry!.toLLM(tool)).length;
+      const reason: PromptToolDetail['reason'] = adminDisabled
+        ? 'admin_disabled'
+        : availability.reason;
       return {
         name: tool.name,
         capabilities: [...tool.capabilities],
-        available: availability.available,
-        ...(availability.reason ? { reason: availability.reason } : {}),
+        available: !adminDisabled && availability.available,
+        ...(reason ? { reason } : {}),
         source: 'built-in' as const,
+        chars,
+        estTokens: estimateTokens(chars, tokenRatio),
+        ratio: tokenRatio,
+        ...(adminDisabled ? { adminDisabled: true } : {}),
       };
     });
     return { manifest, history, promptState, lastPromptMeta, toolsDetail };
@@ -1367,6 +1514,8 @@ export class ChatOrchestrator {
       const availability = toolsPolicy === 'available'
         ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef)
         : undefined;
+      // AD-071 §2.6: admin-disabled исключаются из запроса всегда.
+      const toolPredicate = this._toolPredicate(availability);
       const stateSync = syncStateMessages(session, {
         contextConfig: this._contextConfig,
         language,
@@ -1408,6 +1557,9 @@ export class ChatOrchestrator {
         await this._mcpManager.ensureToolsLoaded(activeMcpServers, this._toolRegistry);
       }
 
+      // AD-071 §2.6: chars-per-token модели хода (калибровка) для оценок токенов.
+      const tokenRatio = await this._resolveTokenRatio(provider.model || session.settings.model);
+
       // AD-070 §2.1/§2.8: единая идемпотентная сборка системного промпта
       // Composer'ом. `session.settings.systemPrompt` override, classification/
       // gateway/plan-guide/mode-policy/session-context — внутри compose.
@@ -1428,6 +1580,9 @@ export class ChatOrchestrator {
         summaryContent: summaryContent || undefined,
         // AD-071 §2.3: политика влияет на тир `tools` и инструкцию `tools.guide`.
         toolsPolicy,
+        // AD-071 §2.6: admin-disabled + ratio для оценок/инструкции.
+        adminDisabled: this._toolsDisabled,
+        tokenRatio,
         // AD-071 §2.2: блоки `mcp.servers`/`mcp.status` — все серверы эффективного набора.
         mcpServers: this._collectComposerMcpServers(mcpDecisions),
         // AD-070 §2.5: per-message collector доходит до Composer через контекст
@@ -1491,7 +1646,7 @@ export class ChatOrchestrator {
       // Если агент НЕ найден в реестре или role undefined — модель получает
       // НИКАКИХ инструментов (safety-fallback).
       const toolSelection = this._toolRegistry && agentDef && effectiveAgentRole
-        ? this._toolRegistry.selectForSession(activeMcpServers, availability)
+        ? this._toolRegistry.selectForSession(activeMcpServers, toolPredicate)
         : { builtin: [], mcp: [] };
       const tools = this._toolRegistry
         ? [...toolSelection.builtin, ...toolSelection.mcp]
@@ -2412,6 +2567,16 @@ export class ChatOrchestrator {
         qaPass, qaReason,
         { ...(fallbackI18n ? { i18n: fallbackI18n } : {}), duration_ms: durationMs },
         promptMeta,
+      );
+
+      // AD-071 §2.6: калибровка chars-per-token по факту (promptChars / inputTokens)
+      // после успешного хода. promptChars — тот же расчёт, что уходит в провайдер.
+      await this._calibrateTokenRatio(
+        finalModel,
+        this._estimatePromptChars(
+          currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
+        ),
+        finalUsage,
       );
 
       // Получаем актуальную сессию после сохранения

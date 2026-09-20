@@ -327,4 +327,35 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
     expect(srvA.author).toBeNull();
     expect(srvA.tools).toEqual([]);
   });
+
+  it('AD-071 §2.6: resolveMcpServers отдаёт chars/estTokens/toolDetails подключённого сервера', async () => {
+    orchestrator = makeOrchestrator(makeMockMcpManager({ defaultOn: ['srvA'] }));
+    const session = await createSession([]);
+    await runTurn(session.id); // ensureToolsLoaded → srvA подключён
+
+    const servers = await orchestrator.resolveMcpServers(session);
+    const srvA = servers.find((s) => s.name === 'srvA')!;
+    expect(srvA.chars).toBeGreaterThan(0);
+    expect(srvA.estTokens).toBe(Math.ceil(srvA.chars! / 4));
+    expect(srvA.ratio).toBe(4);
+    expect(srvA.toolDetails).toHaveLength(1);
+
+    const td = srvA.toolDetails![0]!;
+    expect(td.name).toBe('search');
+    expect(td.chars).toBeGreaterThan(0);
+    expect(td.estTokens).toBe(Math.ceil(td.chars / td.ratio));
+    expect(td.adminDisabled).toBeUndefined();
+  });
+
+  it('AD-071 §2.6: capability mcp отключает MCP-тулы из запроса и помечает toolDetails', async () => {
+    orchestrator = makeOrchestrator(makeMockMcpManager({ defaultOn: ['srvA'] }));
+    orchestrator.setToolsDisabled({ capabilities: ['mcp'], tools: [] });
+    const session = await createSession([]);
+    await runTurn(session.id);
+
+    expect(toolNames()).not.toContain('srvA_search');
+    const servers = await orchestrator.resolveMcpServers(session);
+    const srvA = servers.find((s) => s.name === 'srvA')!;
+    expect(srvA.toolDetails![0]!.adminDisabled).toBe(true);
+  });
 });

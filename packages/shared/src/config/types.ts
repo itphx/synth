@@ -147,11 +147,25 @@ export const mcpConfigSchema = z.object({
 // --- Инструменты (AD-071 §2.3) ---
 
 /**
+ * AD-071 §2.6: instance-wide жёсткое отключение инструментов администратором.
+ * Отключённые тулы не попадают в запрос независимо от `tools.policy`.
+ * `runtime`-capability неотключаема (ядро сессии).
+ */
+export const toolsDisabledConfigSchema = z.object({
+  /** Отключённые capability (например `git_read`, `web`). */
+  capabilities: z.array(z.string()).default([]),
+  /** Отключённые инструменты по имени. */
+  tools: z.array(z.string()).default([]),
+});
+
+/**
  * AD-071 §2.3: глобальная админская политика включения инструментов.
  * Per-session override — `SessionSettings.toolsPolicy`.
  */
 export const toolsConfigSchema = z.object({
   policy: z.enum(TOOLS_POLICIES).default('consistency'),
+  /** AD-071 §2.6: instance-wide отключение инструментов (admin). */
+  disabled: toolsDisabledConfigSchema.default({}),
 });
 
 // --- Security (IPI protection) ---
@@ -334,6 +348,7 @@ export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
 export type McpConfig = z.infer<typeof mcpConfigSchema>;
 export type ToolsConfig = z.infer<typeof toolsConfigSchema>;
+export type ToolsDisabledConfig = z.infer<typeof toolsDisabledConfigSchema>;
 export type RouterContentConfig = z.infer<typeof routerContentConfigSchema>;
 export type RouterEscalationConfig = z.infer<typeof routerEscalationConfigSchema>;
 export type RouterCostConfig = z.infer<typeof routerCostConfigSchema>;

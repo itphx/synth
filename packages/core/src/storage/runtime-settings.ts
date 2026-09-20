@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy } from '@itphx/synth-shared';
+import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 
 /** Runtime-настройки LLM Gateway, сохраняемые через UI (раздел «Шлюз безопасности»). */
@@ -36,8 +36,15 @@ export interface RuntimeSettings {
   security?: Partial<SecurityRuntimeSettings>;
   /** AD-071 §2.3: глобальная политика включения инструментов (админка). */
   toolsPolicy?: ToolsPolicy;
+  /** AD-071 §2.6: instance-wide отключение инструментов (админка). */
+  toolsDisabled?: ToolsDisabledConfig;
   /** AD-071 §2.3.1: runtime-политика сетевого доступа пользовательских HTTP MCP. */
   mcpNetworkPolicy?: McpNetworkPolicy;
+  /**
+   * AD-071 §2.6: откалиброванный chars-per-token по модели (promptChars /
+   * usage.inputTokens). Используется для `estTokens`; отсутствие — дефолт 4.
+   */
+  tokenRatios?: Record<string, number>;
 }
 
 /**
@@ -184,6 +191,35 @@ export class RuntimeSettingsStore {
 
   async setToolsPolicy(policy: ToolsPolicy): Promise<void> {
     await this._update((current) => ({ ...current, toolsPolicy: policy }));
+  }
+
+  /** AD-071 §2.6: instance-wide отключение инструментов (админка), undefined — не задано. */
+  async getToolsDisabled(): Promise<ToolsDisabledConfig | undefined> {
+    const settings = await this.load();
+    return settings.toolsDisabled;
+  }
+
+  async setToolsDisabled(config: ToolsDisabledConfig): Promise<void> {
+    await this._update((current) => ({ ...current, toolsDisabled: config }));
+  }
+
+  /** AD-071 §2.6: chars-per-token модели (undefined — калибровки нет). */
+  async getTokenRatio(model: string): Promise<number | undefined> {
+    const settings = await this.load();
+    return settings.tokenRatios?.[model];
+  }
+
+  async getTokenRatios(): Promise<Record<string, number>> {
+    const settings = await this.load();
+    return settings.tokenRatios ?? {};
+  }
+
+  /** AD-071 §2.6: сохранить откалиброванный chars-per-token модели. */
+  async setTokenRatio(model: string, ratio: number): Promise<void> {
+    await this._update((current) => ({
+      ...current,
+      tokenRatios: { ...(current.tokenRatios ?? {}), [model]: ratio },
+    }));
   }
 
   /** AD-071 §2.3.1: runtime-политика сетевого доступа MCP (админка). */

@@ -53,6 +53,13 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   'mcp.status': 'MCP status',
 };
 
+/** AD-071 §2.6: есть ли непустые административные отключения инструментов. */
+export function hasAdminDisabled(
+  disabled?: { capabilities: string[]; tools: string[] },
+): boolean {
+  return !!disabled && (disabled.capabilities.length > 0 || disabled.tools.length > 0);
+}
+
 /** AD-071 §2.2: статус MCP-сервера в блоке `mcp.status`. */
 export type ComposerMcpServerStatus = 'connected' | 'error' | 'disabled' | 'circuit-open';
 
@@ -130,6 +137,17 @@ export interface ComposerContext {
    */
   mcpServers?: ComposerMcpServer[];
   /**
+   * AD-071 §2.6: instance-wide отключение инструментов администратором
+   * (`tools.disabled`). Непустой список добавляет в `tools.guide` строку про
+   * административные ограничения (даже в режиме `consistency`).
+   */
+  adminDisabled?: { capabilities: string[]; tools: string[] };
+  /**
+   * AD-071 §2.6: chars-per-token для оценки `estTokens` (калибровка по usage).
+   * Не задан — дефолт 4.
+   */
+  tokenRatio?: number;
+  /**
    * AD-070 §2.5: per-message `DebugCollector`. Передаётся оркестратором на
    * каждый ход и имеет приоритет над `deps.debugCollector` (сборка промпта —
    * общая точка, а коллектор живёт в рамках одного сообщения).
@@ -204,6 +222,8 @@ export class SystemPromptComposer {
    */
   async manifest(ctx: ComposerContext): Promise<PromptManifest> {
     const blocks = await this._collectBlocks(ctx);
+    // AD-071 §2.6: chars-per-token для оценки (калибровка per-model).
+    const ratio = ctx.tokenRatio && ctx.tokenRatio > 0 ? ctx.tokenRatio : EST_TOKENS_DIVISOR;
 
     // AD-070 §2.5: порядок записей = реальный порядок отправки system-блоков
     // (`sortPromptBlocks`: тир → order), тот же, что в `compose().system`.
@@ -213,7 +233,7 @@ export class SystemPromptComposer {
       tier: block.tier,
       order: block.order,
       chars: block.content.length,
-      estTokens: Math.ceil(block.content.length / EST_TOKENS_DIVISOR),
+      estTokens: Math.ceil(block.content.length / ratio),
       status: block.content === '' ? 'empty' : 'loaded',
       source: 'system',
       ...(block.provenance ? { provenance: block.provenance } : {}),
@@ -236,7 +256,7 @@ export class SystemPromptComposer {
       label: PROMPT_BLOCK_LABELS.tools ?? 'Tool descriptions',
       tier: toolsTier,
       chars: toolsChars,
-      estTokens: Math.ceil(toolsChars / EST_TOKENS_DIVISOR),
+      estTokens: Math.ceil(toolsChars / ratio),
       status: toolsChars === 0 ? 'empty' : 'loaded',
       provenance: 'tools',
       source: 'tools',
@@ -246,7 +266,7 @@ export class SystemPromptComposer {
       label: PROMPT_BLOCK_LABELS['mcp.tools'] ?? 'MCP tools',
       tier: 'volatile',
       chars: mcpToolsChars,
-      estTokens: Math.ceil(mcpToolsChars / EST_TOKENS_DIVISOR),
+      estTokens: Math.ceil(mcpToolsChars / ratio),
       status: mcpToolsChars === 0 ? 'empty' : 'loaded',
       provenance: 'mcp.tools',
       source: 'mcp.tools',
@@ -276,9 +296,11 @@ export class SystemPromptComposer {
     return {
       ...(generation != null ? { generation } : {}),
       totalChars,
-      estTokens: Math.ceil(totalChars / EST_TOKENS_DIVISOR),
+      estTokens: Math.ceil(totalChars / ratio),
       staticPrefixChars,
       toolsPolicy,
+      // AD-071 §2.6: применённый chars-per-token — признак оценочности.
+      ratio,
       entries,
     };
   }
@@ -379,16 +401,16 @@ export class SystemPromptComposer {
       });
     }
 
-    // AD-071 §2.3: в режиме `available` состав инструментов сужен до доступных,
-    // поэтому инструкция переписывается («доступны только перечисленные»).
-    // В `consistency` блок не добавляется — подсказки о недоступных даёт
-    // MODE_POLICY + state-сообщения (не дублируем).
-    if (mcpPolicy === 'available') {
+    // AD-071 §2.3/§2.6: блок добавляется в режиме `available` (состав сужен до
+    // доступных) и/или при наличии instance-wide отключений администратора
+    // (`tools.disabled`) — тогда модель предупреждена об административных
+    // ограничениях даже в `consistency`.
+    if (mcpPolicy === 'available' || hasAdminDisabled(ctx.adminDisabled)) {
       extraBlocks.push({
         key: 'tools.guide',
         tier: 'context',
         order: 25,
-        content: this._buildToolsGuideBlock(lang),
+        content: this._buildToolsGuideBlock(lang, mcpPolicy === 'available', ctx.adminDisabled),
         provenance: 'inline',
       });
     }
@@ -512,15 +534,40 @@ export class SystemPromptComposer {
   }
 
   /**
-   * AD-071 §2.3: инструкция к слою инструментов для режима `available` — в
-   * запрос переданы только доступные в текущем режиме/роли инструменты.
-   * В `consistency` блок не добавляется (не дублирует MODE_POLICY).
+   * AD-071 §2.3/§2.6: инструкция к слою инструментов. Для `available` —
+   * «доступны только перечисленные»; при административных отключениях —
+   * дополнительная строка про ограничения администратора.
    */
-  private _buildToolsGuideBlock(lang: string): string {
+  private _buildToolsGuideBlock(
+    lang: string,
+    restrictedByPolicy = false,
+    adminDisabled?: { capabilities: string[]; tools: string[] },
+  ): string {
+    const lines: string[] = [];
     if (lang === 'en') {
-      return '[TOOLS]\n\nOnly the tools listed in this request are available. If a tool you need is missing, it is unavailable in the current mode or to the current agent: do not try to call it or work around the restriction — complete the available part of the work and suggest that the user switch the mode (plan/act/yolo) or delegate the task via `@`.';
+      if (restrictedByPolicy) {
+        lines.push(
+          '[TOOLS]\n\nOnly the tools listed in this request are available. If a tool you need is missing, it is unavailable in the current mode or to the current agent: do not try to call it or work around the restriction — complete the available part of the work and suggest that the user switch the mode (plan/act/yolo) or delegate the task via `@`.',
+        );
+      }
+      if (hasAdminDisabled(adminDisabled)) {
+        lines.push(
+          'Some tools are disabled by the administrator and are not available to any agent; do not try to call them or work around this restriction.',
+        );
+      }
+    } else {
+      if (restrictedByPolicy) {
+        lines.push(
+          '[ИНСТРУМЕНТЫ]\n\nВ запросе переданы только инструменты, доступные в текущем режиме и текущему агенту. Если нужного инструмента нет — он недоступен в этом режиме или для этой роли: не пытайся вызвать его или обойти ограничение — выполни доступную часть работы и предложи пользователю переключить режим (plan/act/yolo) либо делегировать задачу через `@`.',
+        );
+      }
+      if (hasAdminDisabled(adminDisabled)) {
+        lines.push(
+          'Часть инструментов отключена администратором и недоступна ни одному агенту; не пытайся их вызвать или обойти это ограничение.',
+        );
+      }
     }
-    return '[ИНСТРУМЕНТЫ]\n\nВ запросе переданы только инструменты, доступные в текущем режиме и текущему агенту. Если нужного инструмента нет — он недоступен в этом режиме или для этой роли: не пытайся вызвать его или обойти ограничение — выполни доступную часть работы и предложи пользователю переключить режим (plan/act/yolo) либо делегировать задачу через `@`.';
+    return lines.join('\n\n');
   }
 
   /**

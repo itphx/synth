@@ -17,7 +17,7 @@ import { Readable } from 'node:stream';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition } from '@itphx/synth-shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, ToolsDisabledConfig } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator, FileProfileStore,
@@ -412,6 +412,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // AD-071 §2.3: runtime-политика инструментов (админка) приоритетнее config.yaml
     const runtimeToolsPolicy = await settingsStore.getToolsPolicy();
     const toolsPolicy = runtimeToolsPolicy ?? backendConfig.synth.tools.policy;
+    // AD-071 §2.6: runtime-отключение инструментов (админка) приоритетнее config.yaml
+    const runtimeToolsDisabled = await settingsStore.getToolsDisabled();
+    const toolsDisabled: ToolsDisabledConfig =
+      runtimeToolsDisabled ?? backendConfig.synth.tools.disabled ?? { capabilities: [], tools: [] };
     const protectedPathsStore = new ProtectedPathsStore({ dataDir });
 
     // Orchestrator
@@ -442,6 +446,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       gatewayPatternStore: patternStore,
       cachePolicy: backendConfig.synth.llm.cache,
       toolsPolicy,
+      toolsDisabled,
+      // AD-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
+      tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
+      onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
     });
 
     const processMessage = orchestrator.createProcessMessage();
@@ -558,6 +566,15 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       onToolsPolicyChange: async (policy) => {
         orchestrator.setToolsPolicy(policy);
       },
+      // AD-071 §2.6: live-применение instance-wide отключения инструментов.
+      fallbackToolsDisabled: backendConfig.synth.tools.disabled,
+      onToolsDisabledChange: async (disabled) => {
+        orchestrator.setToolsDisabled(disabled);
+      },
+      knownTools: () => toolRegistry.list().map((tool) => ({
+        name: tool.name,
+        capabilities: [...tool.capabilities],
+      })),
       // AD-071 §2.3.1: live-применение политики сетевого доступа MCP из админки.
       fallbackMcpNetworkPolicy: backendConfig.synth.mcp.networkPolicy,
       onMcpNetworkPolicyChange: async (policy) => {
