@@ -84,9 +84,17 @@ class ToolCaptureProvider extends BaseProvider {
 /** Мок McpManager: лениво регистрирует MCP-тулы активных серверов. */
 function makeMockMcpManager(): McpManager {
   const tools: Record<string, string[]> = { srvA: ['search'], srvB: ['fetch'] };
-  return {
+  const descriptions: Record<string, string> = { srvA: 'Сервер A', srvB: 'Сервер B' };
+  const connected = new Set<string>();
+  const manager = {
+    getConfig() {
+      return Object.fromEntries(
+        Object.keys(tools).map((name) => [name, { type: 'sse', url: `http://${name}/mcp` }]),
+      );
+    },
     async ensureToolsLoaded(serverNames: string[], registry: { register(tool: ToolDefinition): void }) {
       for (const server of serverNames) {
+        connected.add(server);
         for (const name of tools[server] ?? []) {
           const def: ToolDefinition = {
             name: `${server}_${name}`,
@@ -101,7 +109,25 @@ function makeMockMcpManager(): McpManager {
         }
       }
     },
-  } as unknown as McpManager;
+    getServerStatus(name: string) {
+      return connected.has(name) ? 'connected' : 'disconnected';
+    },
+    getServerTools(name: string) {
+      if (!connected.has(name)) return null;
+      return (tools[name] ?? []).map((tool) => ({
+        name: tool,
+        description: `${tool} tool`,
+        inputSchema: { type: 'object' },
+      }));
+    },
+    getServerDescription(name: string) {
+      return descriptions[name];
+    },
+    getServerInstructions() {
+      return undefined;
+    },
+  };
+  return manager as unknown as McpManager;
 }
 
 describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
@@ -215,6 +241,23 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
 
     // MCP не входит в stable-префикс: staticPrefixChars не больше totalChars.
     expect(info.manifest.staticPrefixChars).toBeLessThan(info.manifest.totalChars);
+  });
+
+  it('getPromptInfo: mcp.servers (stable) показывает все серверы, mcp.status (volatile) — статусы', async () => {
+    const session = await createSession(['srvA']);
+    await runTurn(session.id);
+
+    const info = await orchestrator.getPromptInfo(session);
+
+    const servers = info.manifest.entries.find((e) => e.key === 'mcp.servers');
+    expect(servers).toBeDefined();
+    expect(servers!.tier).toBe('stable');
+    expect(servers!.chars).toBeGreaterThan(0);
+
+    const status = info.manifest.entries.find((e) => e.key === 'mcp.status');
+    expect(status).toBeDefined();
+    expect(status!.tier).toBe('volatile');
+    expect(status!.chars).toBeGreaterThan(0);
   });
 
   it('сессия без активных MCP-серверов не видит MCP-тулы', async () => {

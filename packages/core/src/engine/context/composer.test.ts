@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { Project, Session, SessionSettings, TodoItem } from '@itphx/synth-shared';
 import { ContextConfig } from './config.js';
 import { ContextBuilder } from './builder.js';
-import { SystemPromptComposer, type ComposerContext } from './composer.js';
+import { SystemPromptComposer, type ComposerContext, type ComposerMcpServer } from './composer.js';
 import { sortPromptBlocks } from './prompt-blocks.js';
 import { DebugCollector } from '../../debug.js';
 
@@ -471,6 +471,120 @@ describe('SystemPromptComposer', () => {
       await composer.manifest(makeCtx(session, { debugCollector: debug }));
 
       expect(debug.getDebugInfo()?.system_prompt_parts).toBeUndefined();
+    });
+  });
+
+  describe('mcp.servers / mcp.status (AD-071 §2.2)', () => {
+    function makeMcpServers(): ComposerMcpServer[] {
+      return [
+        {
+          name: 'active-srv',
+          description: 'Активный сервер',
+          instructions: 'Используй инструменты бережно',
+          tools: [
+            { name: 'search', description: 'Поиск' },
+            { name: 'fetch' },
+          ],
+          status: 'connected',
+        },
+        {
+          name: 'disabled-srv',
+          description: 'Отключённый сервер',
+          tools: [],
+          status: 'disabled',
+          disabledReason: 'session',
+        },
+      ];
+    }
+
+    it('stable mcp.servers: description/instructions/тулы; volatile mcp.status', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const { system, stablePrefix } = await composer.compose(
+        makeCtx(session, { mcpServers: makeMcpServers() }),
+      );
+
+      // stable-часть: описания/instructions/тулы обоих серверов.
+      expect(system).toContain('[MCP-СЕРВЕРЫ]');
+      expect(system).toContain('## active-srv');
+      expect(system).toContain('Описание: Активный сервер');
+      expect(system).toContain('Инструкции: Используй инструменты бережно');
+      expect(system).toContain('- search: Поиск');
+      expect(system).toContain('- fetch');
+      // Отключённый сервер показан (имя + описание).
+      expect(system).toContain('## disabled-srv');
+      expect(system).toContain('Описание: Отключённый сервер');
+
+      // volatile-часть: статус с пометкой disabled и причиной.
+      expect(system).toContain('[СТАТУС MCP]');
+      expect(system).toContain('- active-srv: connected');
+      expect(system).toContain('- disabled-srv: disabled (не включён в сессии)');
+
+      // stablePrefix содержит mcp.servers, но не volatile-статус.
+      expect(stablePrefix).toContain('[MCP-СЕРВЕРЫ]');
+      expect(stablePrefix).not.toContain('[СТАТУС MCP]');
+    });
+
+    it('манифест: mcp.servers (stable) и mcp.status (volatile) с label/provenance', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+
+      const manifest = await composer.manifest(makeCtx(session, { mcpServers: makeMcpServers() }));
+
+      const servers = manifest.entries.find((e) => e.key === 'mcp.servers');
+      expect(servers).toBeDefined();
+      expect(servers!.tier).toBe('stable');
+      expect(servers!.source).toBe('system');
+      expect(servers!.label).toBe('MCP servers');
+      expect(servers!.provenance).toBe('mcp.servers');
+      expect(servers!.chars).toBeGreaterThan(0);
+
+      const status = manifest.entries.find((e) => e.key === 'mcp.status');
+      expect(status).toBeDefined();
+      expect(status!.tier).toBe('volatile');
+      expect(status!.source).toBe('system');
+      expect(status!.label).toBe('MCP status');
+      expect(status!.chars).toBeGreaterThan(0);
+
+      // stable mcp.servers входит в staticPrefix, volatile mcp.status — нет.
+      const withoutStatus = manifest.entries
+        .filter((e) => e.tier === 'stable' && e.status !== 'empty')
+        .reduce((sum, e) => sum + e.chars, 0);
+      expect(manifest.staticPrefixChars).toBe(withoutStatus);
+      expect(manifest.staticPrefixChars).toBeLessThan(manifest.totalChars);
+    });
+
+    it('пустой набор серверов → блоков mcp.servers/mcp.status нет', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+
+      const composed = await composer.compose(makeCtx(session, { mcpServers: [] }));
+      const manifest = await composer.manifest(makeCtx(session, { mcpServers: [] }));
+
+      expect(composed.system).not.toContain('[MCP-СЕРВЕРЫ]');
+      expect(composed.system).not.toContain('[СТАТУС MCP]');
+      expect(manifest.entries.find((e) => e.key === 'mcp.servers')).toBeUndefined();
+      expect(manifest.entries.find((e) => e.key === 'mcp.status')).toBeUndefined();
+    });
+
+    it('en: блоки формируются без description/instructions (имя + статус)', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+      const servers: ComposerMcpServer[] = [
+        { name: 'bare-srv', tools: [{ name: 'ping' }], status: 'error' },
+      ];
+
+      const { system } = await composer.compose(
+        makeCtx(session, { mcpServers: servers, language: 'en' }),
+      );
+
+      expect(system).toContain('[MCP SERVERS]');
+      expect(system).toContain('## bare-srv');
+      expect(system).toContain('- ping');
+      expect(system).toContain('[MCP STATUS]');
+      expect(system).toContain('- bare-srv: error');
+      expect(system).not.toContain('Description:');
+      expect(system).not.toContain('Instructions:');
     });
   });
 

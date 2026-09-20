@@ -44,7 +44,35 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   interview: 'Interview prompt',
   tools: 'Tool descriptions',
   'mcp.tools': 'MCP tools',
+  'mcp.servers': 'MCP servers',
+  'mcp.status': 'MCP status',
 };
+
+/** AD-071 §2.2: статус MCP-сервера в блоке `mcp.status`. */
+export type ComposerMcpServerStatus = 'connected' | 'error' | 'disabled' | 'circuit-open';
+
+/** AD-071 §2.2: инструмент MCP-сервера в блоке `mcp.servers` (без схемы параметров). */
+export interface ComposerMcpServerTool {
+  name: string;
+  description?: string;
+}
+
+/**
+ * AD-071 §2.2: данные MCP-сервера для промпта. Собираются вызывающей стороной
+ * (оркестратором) из `McpManager` + активного набора сессии; Composer не знает
+ * про MCP и работает только с этой моделью.
+ */
+export interface ComposerMcpServer {
+  name: string;
+  /** Описание из конфига (заполняется человеком). */
+  description?: string;
+  /** `instructions` из MCP initialize. */
+  instructions?: string;
+  tools: ComposerMcpServerTool[];
+  status: ComposerMcpServerStatus;
+  /** Причина `disabled`: выключен в конфиге или не включён в сессии. */
+  disabledReason?: 'config' | 'session';
+}
 
 export interface ComposerContext {
   session: Session;
@@ -77,6 +105,13 @@ export interface ComposerContext {
    * не в `staticPrefixChars` (MCP не кэшируется).
    */
   mcpTools?: Array<Record<string, unknown>>;
+  /**
+   * AD-071 §2.2: данные MCP-серверов (все настроенные, включая отключённые).
+   * Формируют блок `mcp.servers` (stable: имя/description/instructions/тулы) и
+   * `mcp.status` (volatile: статус подключения). Пустой/отсутствующий список —
+   * блоки не добавляются.
+   */
+  mcpServers?: ComposerMcpServer[];
   /**
    * AD-070 §2.5: per-message `DebugCollector`. Передаётся оркестратором на
    * каждый ход и имеет приоритет над `deps.debugCollector` (сборка промпта —
@@ -299,6 +334,26 @@ export class SystemPromptComposer {
       provenance: 'prompts/system/MODE_POLICY',
     });
 
+    // AD-071 §2.2 (consistency → split): описания/instructions/тулы серверов —
+    // stable (описания не меняются от хода к ходу), статус подключения — volatile.
+    // Показываем все настроенные серверы, включая отключённые (с пометкой).
+    if (ctx.mcpServers && ctx.mcpServers.length > 0) {
+      extraBlocks.push({
+        key: 'mcp.servers',
+        tier: 'stable',
+        order: 50,
+        content: this._buildMcpServersBlock(ctx.mcpServers, lang),
+        provenance: 'mcp.servers',
+      });
+      extraBlocks.push({
+        key: 'mcp.status',
+        tier: 'volatile',
+        order: 70,
+        content: this._buildMcpStatusBlock(ctx.mcpServers, lang),
+        provenance: 'mcp.status',
+      });
+    }
+
     // AD-034: инструкция classify_conversation — config-gate routingEnabled (volatile).
     if (ctx.routingEnabled) {
       extraBlocks.push({
@@ -342,6 +397,59 @@ export class SystemPromptComposer {
     return lang === 'ru'
       ? '[CLASSIFICATION]\n\nКогда определишь характер задачи, вызови инструмент `classify_conversation` с категорией: coding (написание/изменение кода), research (анализ/исследование), или chat (общий разговор). Это поможет выбрать оптимальную модель для последующих запросов.'
       : '[CLASSIFICATION]\n\nWhen you determine the nature of the task, call the `classify_conversation` tool with the category: coding (writing/modifying code), research (analysis/investigation), or chat (general conversation). This helps select the optimal model for subsequent requests.';
+  }
+
+  /**
+   * AD-071 §2.2: stable-блок `mcp.servers` — по каждому серверу имя, описание,
+   * `instructions` и список тулов (имена + краткие описания; полные схемы
+   * параметров остаются в `mcp.tools`). Сервер без описания/instructions всё
+   * равно присутствует (имя + тулы). Пустых блоков не бывает: метод вызывается
+   * только при непустом списке серверов.
+   */
+  private _buildMcpServersBlock(servers: ComposerMcpServer[], lang: string): string {
+    const en = lang === 'en';
+    const lines: string[] = [en ? '[MCP SERVERS]' : '[MCP-СЕРВЕРЫ]'];
+
+    for (const server of servers) {
+      lines.push('');
+      lines.push(`## ${server.name}`);
+      if (server.description) {
+        lines.push(`${en ? 'Description' : 'Описание'}: ${server.description}`);
+      }
+      if (server.instructions) {
+        lines.push(`${en ? 'Instructions' : 'Инструкции'}: ${server.instructions}`);
+      }
+      if (server.tools.length > 0) {
+        lines.push(en ? 'Tools:' : 'Инструменты:');
+        for (const tool of server.tools) {
+          lines.push(`- ${tool.name}${tool.description ? `: ${tool.description}` : ''}`);
+        }
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * AD-071 §2.2: volatile-блок `mcp.status` — статус подключения по каждому
+   * серверу (`connected`/`error`/`disabled`/`circuit-open`). Для `disabled`
+   * добавляется причина (выключен в конфиге / не включён в сессии).
+   */
+  private _buildMcpStatusBlock(servers: ComposerMcpServer[], lang: string): string {
+    const en = lang === 'en';
+    const reasonText = (reason: ComposerMcpServer['disabledReason']): string => {
+      if (reason === 'config') return en ? 'disabled in config' : 'отключён в конфиге';
+      if (reason === 'session') return en ? 'not enabled in session' : 'не включён в сессии';
+      return '';
+    };
+
+    const lines: string[] = [en ? '[MCP STATUS]' : '[СТАТУС MCP]'];
+    for (const server of servers) {
+      const reason = server.status === 'disabled' ? reasonText(server.disabledReason) : '';
+      lines.push(`- ${server.name}: ${server.status}${reason ? ` (${reason})` : ''}`);
+    }
+
+    return lines.join('\n');
   }
 
   /**

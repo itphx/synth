@@ -4,6 +4,7 @@ import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolContext, ToolResult } from '@itphx/synth-shared';
 import { McpClient } from './client.js';
+import type { McpServerInfo } from './client.js';
 import { info, warning } from '../../logger.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { ObfuscationMapStore } from '../gateway/obfuscation-map-store.js';
@@ -50,6 +51,37 @@ export class McpManager {
     const entry = this._servers.get(name);
     if (!entry) return null;
     return entry.client.tools;
+  }
+
+  /** AD-071 §2.2: `serverInfo` подключённого сервера (undefined, если не подключён/не отдал). */
+  getServerInfo(name: string): McpServerInfo | undefined {
+    return this._servers.get(name)?.client.serverInfo;
+  }
+
+  /** AD-071 §2.2: `instructions` подключённого сервера (undefined, если нет). */
+  getServerInstructions(name: string): string | undefined {
+    return this._servers.get(name)?.client.instructions;
+  }
+
+  /** AD-071 §2.2: описание сервера из конфига (заполняется человеком). */
+  getServerDescription(name: string): string | undefined {
+    return this._config[name]?.description;
+  }
+
+  /**
+   * AD-071 §2.2: статус подключения сервера для volatile-блока `mcp.status`.
+   * `disabled` (opt-out/конфиг) определяется вызывающей стороной — менеджер
+   * знает только транспортное состояние. Возвращает:
+   * - `circuit-open` — сервер заблокирован circuit breaker'ом;
+   * - `connected` — клиент подключён;
+   * - `error` — сервер известен, но не подключён (ошибка/отключён);
+   * - `disconnected` — сервер не создавался (ещё ни разу не подключался).
+   */
+  getServerStatus(name: string): 'connected' | 'error' | 'circuit-open' | 'disconnected' {
+    const entry = this._servers.get(name);
+    if (!entry) return 'disconnected';
+    if (this._isCircuitOpen(name)) return 'circuit-open';
+    return entry.client.isConnected ? 'connected' : 'error';
   }
 
   async connectServer(name: string): Promise<void> {
@@ -239,6 +271,13 @@ export class McpManager {
       entry.errorCount++;
       entry.lastErrorTime = Date.now();
     }
+  }
+
+  /** Чистая проверка «сервер сейчас заблокирован» (без сброса счётчика и логов). */
+  private _isCircuitOpen(serverName: string): boolean {
+    const entry = this._servers.get(serverName);
+    if (!entry || entry.errorCount < CIRCUIT_BREAKER_THRESHOLD) return false;
+    return Date.now() - entry.lastErrorTime < CIRCUIT_BREAKER_COOLDOWN_MS;
   }
 
   private _isCircuitBroken(serverName: string): boolean {

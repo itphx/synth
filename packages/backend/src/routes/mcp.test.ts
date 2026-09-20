@@ -159,6 +159,22 @@ describe('MCP API Routes', () => {
       expect(configStore.hasServer('new-server')).toBe(true);
     });
 
+    it('AD-071: сохраняет description сервера', async () => {
+      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const res = await app.request('/api/v2/mcp/servers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'described',
+          config: { type: 'sse', url: 'http://localhost/mcp', description: 'Мой MCP' },
+        }),
+      });
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      expect(body.config.description).toBe('Мой MCP');
+      expect(configStore.getServer('described')?.description).toBe('Мой MCP');
+    });
+
     it('возвращает 409 для дубликата', async () => {
       const app = createTestApp(configStore, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers', {

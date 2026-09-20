@@ -6,6 +6,8 @@ import type { McpServerConfig } from '@itphx/synth-shared';
 
 const mcpServerConfigSchema = z.object({
   type: z.enum(['stdio', 'sse']),
+  // AD-071 §2.2: описание сервера (используется в блоке промпта `mcp.servers`).
+  description: z.string().optional(),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),

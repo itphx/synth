@@ -9,6 +9,8 @@ const mockClientDisconnect = vi.fn<() => Promise<void>>();
 const mockClientCallTool = vi.fn<() => Promise<{ content: string; isError: boolean }>>();
 let mockClientTools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> = [];
 let mockClientConnected = false;
+let mockClientServerInfo: { name: string; version: string } | undefined;
+let mockClientInstructions: string | undefined;
 
 vi.mock('./client.js', () => ({
   McpClient: class {
@@ -21,6 +23,12 @@ vi.mock('./client.js', () => ({
     }
     get tools(): Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> {
       return mockClientTools;
+    }
+    get serverInfo(): { name: string; version: string } | undefined {
+      return mockClientServerInfo;
+    }
+    get instructions(): string | undefined {
+      return mockClientInstructions;
     }
     connect = mockClientConnect;
     disconnect = mockClientDisconnect;
@@ -95,6 +103,8 @@ describe('McpManager', () => {
       { name: 'tool2', description: 'Second tool', inputSchema: { type: 'object' } },
     ];
     mockClientConnected = false;
+    mockClientServerInfo = { name: 'test-server', version: '1.2.3' };
+    mockClientInstructions = 'Инструкции сервера';
 
     manager = new McpManager();
     registry = makeMockToolRegistry();
@@ -275,6 +285,36 @@ describe('McpManager', () => {
   it('getServerTools возвращает null для не подключённого сервера', () => {
     const tools = manager.getServerTools('test-server');
     expect(tools).toBeNull();
+  });
+
+  it('AD-071 §2.2: getServerDescription берёт описание из конфига', () => {
+    manager.setConfig({ 'test-server': { ...makeStdioConfig(), description: 'Мой сервер' } });
+    expect(manager.getServerDescription('test-server')).toBe('Мой сервер');
+    expect(manager.getServerDescription('unknown')).toBeUndefined();
+  });
+
+  it('AD-071 §2.2: getServerInfo/getServerInstructions после подключения', async () => {
+    mockClientConnected = true;
+    await manager.connectServer('test-server');
+
+    expect(manager.getServerInfo('test-server')).toEqual({ name: 'test-server', version: '1.2.3' });
+    expect(manager.getServerInstructions('test-server')).toBe('Инструкции сервера');
+    // До подключения — undefined.
+    expect(manager.getServerInfo('unknown')).toBeUndefined();
+    expect(manager.getServerInstructions('unknown')).toBeUndefined();
+  });
+
+  it('AD-071 §2.2: getServerStatus — disconnected/connected/error', async () => {
+    expect(manager.getServerStatus('test-server')).toBe('disconnected');
+    expect(manager.getServerStatus('unknown')).toBe('disconnected');
+
+    mockClientConnected = true;
+    await manager.connectServer('test-server');
+    expect(manager.getServerStatus('test-server')).toBe('connected');
+
+    // Сервер известен, но соединение потеряно.
+    mockClientConnected = false;
+    expect(manager.getServerStatus('test-server')).toBe('error');
   });
 
   it('callTool вызывает инструмент по полному имени', async () => {

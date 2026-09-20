@@ -414,6 +414,8 @@ export const dict = {
   'rightPanel.stats.promptBlock.interview': 'Опросник',
   'rightPanel.stats.promptBlock.tools': 'Описание инструментов',
   'rightPanel.stats.promptBlock.mcp.tools': 'MCP-инструменты',
+  'rightPanel.stats.promptBlock.mcp.servers': 'MCP-серверы',
+  'rightPanel.stats.promptBlock.mcp.status': 'Статус MCP',
   // AD-070 §2.5: слой истории (messages) — состав отправляемых сообщений
   'rightPanel.stats.history': 'История',
   'rightPanel.stats.historyMessages': 'Сообщений',
@@ -1185,6 +1187,8 @@ export const dict = {
   'mcp.editServer': 'Редактирование сервера',
   'mcp.noServers': 'Нет настроенных MCP-серверов. Добавьте сервер для расширения возможностей моделей.',
   'mcp.serverName': 'Имя сервера',
+  'mcp.serverDescription': 'Описание',
+  'mcp.serverDescriptionPlaceholder': 'Для чего этот сервер (попадёт в промпт модели)',
   'mcp.type': 'Тип подключения',
   'mcp.type.stdio': 'stdio (процесс)',
   'mcp.type.sse': 'Streamable HTTP',

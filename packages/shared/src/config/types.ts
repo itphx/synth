@@ -111,6 +111,8 @@ export const summarizationConfigSchema = z.object({
 
 export const mcpServerConfigSchema = z.object({
   type: z.enum(['stdio', 'sse']),
+  /** AD-071 §2.2: человекочитаемое описание сервера (попадает в блок `mcp.servers`). */
+  description: z.string().optional(),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),

@@ -415,6 +415,8 @@ export const dict = {
   'rightPanel.stats.promptBlock.interview': 'Interview prompt',
   'rightPanel.stats.promptBlock.tools': 'Tool descriptions',
   'rightPanel.stats.promptBlock.mcp.tools': 'MCP tools',
+  'rightPanel.stats.promptBlock.mcp.servers': 'MCP servers',
+  'rightPanel.stats.promptBlock.mcp.status': 'MCP status',
   // AD-070 §2.5: history layer (messages) — composition of sent messages
   'rightPanel.stats.history': 'History',
   'rightPanel.stats.historyMessages': 'Messages',
@@ -1188,6 +1190,8 @@ export const dict = {
   'mcp.editServer': 'Edit Server',
   'mcp.noServers': 'No MCP servers configured. Add a server to extend model capabilities.',
   'mcp.serverName': 'Server Name',
+  'mcp.serverDescription': 'Description',
+  'mcp.serverDescriptionPlaceholder': 'What this server is for (goes into the model prompt)',
   'mcp.type': 'Connection Type',
   'mcp.type.stdio': 'stdio (process)',
   'mcp.type.sse': 'Streamable HTTP',

@@ -6,6 +6,8 @@ const mockConnect = vi.fn<() => Promise<void>>();
 const mockListTools = vi.fn<() => Promise<{ tools: Array<{ name: string; description?: string; inputSchema: Record<string, unknown> }> }>>();
 const mockCallTool = vi.fn<() => Promise<{ content: Array<{ type: string; text?: string }>; isError: boolean }>>();
 const mockClose = vi.fn<() => Promise<void>>();
+let mockServerVersion: { name: string; version: string } | undefined;
+let mockInstructions: string | undefined;
 
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   Client: class {
@@ -13,6 +15,12 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
     listTools = mockListTools;
     callTool = mockCallTool;
     close = mockClose;
+    getServerVersion() {
+      return mockServerVersion;
+    }
+    getInstructions() {
+      return mockInstructions;
+    }
   },
 }));
 
@@ -62,6 +70,8 @@ describe('McpClient (stdio)', () => {
       isError: false,
     });
     mockClose.mockResolvedValue(undefined);
+    mockServerVersion = { name: 'test-stdio', version: '2.0.0' };
+    mockInstructions = 'Инструкции тестового сервера';
   });
 
   afterEach(async () => {
@@ -88,6 +98,19 @@ describe('McpClient (stdio)', () => {
     expect(client.tools).toHaveLength(2);
     expect(client.tools[0]!.name).toBe('search');
     expect(client.tools[1]!.name).toBe('fetch');
+  });
+
+  it('AD-071 §2.2: connect сохраняет serverInfo и instructions', async () => {
+    expect(client.serverInfo).toBeUndefined();
+    expect(client.instructions).toBeUndefined();
+
+    await client.connect();
+    expect(client.serverInfo).toEqual({ name: 'test-stdio', version: '2.0.0' });
+    expect(client.instructions).toBe('Инструкции тестового сервера');
+
+    await client.disconnect();
+    expect(client.serverInfo).toBeUndefined();
+    expect(client.instructions).toBeUndefined();
   });
 
   it('повторный connect не переподключается', async () => {

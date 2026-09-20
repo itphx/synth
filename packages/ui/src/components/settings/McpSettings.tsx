@@ -215,6 +215,17 @@ export const McpSettings = () => {
               </div>
 
               <div>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">{t('mcp.serverDescription')}</label>
+                <textarea
+                  value={formConfig.description || ''}
+                  onChange={(e) => updateConfig({ description: e.target.value || undefined })}
+                  rows={2}
+                  className="w-full px-3 py-2 rounded-lg bg-interactive-input border border-border text-sm focus:outline-none focus:border-interactive-accent"
+                  placeholder={t('mcp.serverDescriptionPlaceholder')}
+                />
+              </div>
+
+              <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">{t('mcp.type')}</label>
                 <Select
                   value={formConfig.type}
@@ -407,6 +418,11 @@ export const McpSettings = () => {
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">{name}</div>
+                    {entry.config.description && (
+                      <div className="text-xs text-muted-foreground truncate" title={entry.config.description}>
+                        {entry.config.description}
+                      </div>
+                    )}
                     <div className="text-xs text-muted-foreground">
                       {entry.config.type === 'stdio'
                         ? `stdio: ${entry.config.command || '?'}`

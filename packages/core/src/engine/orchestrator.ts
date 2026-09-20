@@ -13,7 +13,7 @@ import type { LLMMessage, CancellationToken, ProviderConfig as CoreProviderConfi
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import { ContextConfig } from './context/config.js';
-import { SystemPromptComposer, type ComposerContext } from './context/composer.js';
+import { SystemPromptComposer, type ComposerContext, type ComposerMcpServer, type ComposerMcpServerStatus } from './context/composer.js';
 import {
   agentKeyOf,
   buildPromptState,
@@ -786,6 +786,55 @@ export class ChatOrchestrator {
   }
 
   /**
+   * AD-071 §2.2: данные MCP-серверов для промпта (`mcp.servers` — stable,
+   * `mcp.status` — volatile). Возвращает **все** настроенные серверы, включая
+   * отключённые (с причиной `config`/`session`), чтобы состав был наблюдаем.
+   * `undefined`, если менеджера нет или список серверов пуст (тогда блоков нет).
+   */
+  private _collectComposerMcpServers(activeMcpServers: string[]): ComposerMcpServer[] | undefined {
+    const manager = this._mcpManager;
+    if (!manager) return undefined;
+
+    const config = manager.getConfig();
+    const names = Object.keys(config);
+    if (names.length === 0) return undefined;
+
+    const active = new Set(activeMcpServers);
+    return names.map((name) => {
+      const serverConfig = config[name];
+      let status: ComposerMcpServerStatus;
+      let disabledReason: ComposerMcpServer['disabledReason'];
+
+      if (serverConfig?.enabled === false) {
+        status = 'disabled';
+        disabledReason = 'config';
+      } else if (!active.has(name)) {
+        status = 'disabled';
+        disabledReason = 'session';
+      } else {
+        const raw = manager.getServerStatus(name);
+        status = raw === 'circuit-open' ? 'circuit-open' : raw === 'connected' ? 'connected' : 'error';
+      }
+
+      const description = manager.getServerDescription(name);
+      const instructions = manager.getServerInstructions(name);
+      const tools = manager.getServerTools(name) ?? [];
+
+      return {
+        name,
+        ...(description ? { description } : {}),
+        ...(instructions ? { instructions } : {}),
+        tools: tools.map((tool) => ({
+          name: tool.name,
+          ...(tool.description ? { description: tool.description } : {}),
+        })),
+        status,
+        ...(disabledReason ? { disabledReason } : {}),
+      };
+    });
+  }
+
+  /**
    * AD-070 §2.8: смена режима в середине хода — добавляет durable
    * `mode_change` state-сообщение в историю и синтетическое user-сообщение с
    * обёрткой `<system-state>` в текущий LLM-диалог (для последующих итераций).
@@ -871,6 +920,8 @@ export class ChatOrchestrator {
       mcpTools: this._toolRegistry
         ? toolSelection.mcp as unknown as Array<Record<string, unknown>>
         : undefined,
+      // AD-071 §2.2: блоки `mcp.servers`/`mcp.status` — все настроенные серверы.
+      mcpServers: this._collectComposerMcpServers(activeMcpServers),
     };
 
     const manifest = await this._composer.manifest(ctx);
@@ -1175,6 +1226,15 @@ export class ChatOrchestrator {
         .map((m) => m.content)
         .join('\n\n');
 
+      // AD-071 §2.1: MCP-тулы активных серверов сессии. Регистрация ленивая и
+      // аддитивная (без deregister при смене набора): глобальный реестр держит
+      // MCP-тулы для executor'а, а per-session скоуп обеспечивает выборка ниже
+      // (`selectForSession`) — кросс-сессионной утечки нет. Загружаем до сборки
+      // промпта, чтобы блок `mcp.servers` видел тулы подключённых серверов.
+      if (this._mcpManager && this._toolRegistry && activeMcpServers.length > 0) {
+        await this._mcpManager.ensureToolsLoaded(activeMcpServers, this._toolRegistry);
+      }
+
       // AD-070 §2.1/§2.8: единая идемпотентная сборка системного промпта
       // Composer'ом. `session.settings.systemPrompt` override, classification/
       // gateway/plan-guide/mode-policy/session-context — внутри compose.
@@ -1193,6 +1253,8 @@ export class ChatOrchestrator {
         showInterview: session.settings.showInterview,
         stickyNotes: session.stickyNotes,
         summaryContent: summaryContent || undefined,
+        // AD-071 §2.2: блоки `mcp.servers`/`mcp.status` — все настроенные серверы.
+        mcpServers: this._collectComposerMcpServers(activeMcpServers),
         // AD-070 §2.5: per-message collector доходит до Composer через контекст
         // (Composer создаётся один раз, а коллектор живёт в рамках хода).
         debugCollector,
@@ -1247,14 +1309,6 @@ export class ChatOrchestrator {
       // 3. Convert messages for LLM (без summary — они уже в system prompt)
       const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
       const baseLlmMessages = ChatOrchestrator._sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author);
-
-      // 3.5. AD-071 §2.1: MCP-тулы активных серверов сессии. Регистрация ленивая
-      // и аддитивная (без deregister при смене набора): глобальный реестр держит
-      // MCP-тулы для executor'а, а per-session скоуп обеспечивает выборка ниже
-      // (`selectForSession`) — кросс-сессионной утечки нет.
-      if (this._mcpManager && this._toolRegistry && activeMcpServers.length > 0) {
-        await this._mcpManager.ensureToolsLoaded(activeMcpServers, this._toolRegistry);
-      }
 
       // 4. Get tools from registry. AD-070 §2.9 + AD-071 §2.1: встроенные —
       // постоянно, MCP — только активных серверов сессии. Порядок: builtin → MCP.

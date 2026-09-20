@@ -1232,6 +1232,8 @@ export interface McpSettingsPayload {
 
 export interface McpServerConfig {
   type: 'stdio' | 'sse'
+  /** AD-071 §2.2: человекочитаемое описание сервера (попадает в блок промпта `mcp.servers`). */
+  description?: string
   command?: string
   args?: string[]
   env?: Record<string, string>
