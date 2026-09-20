@@ -51,18 +51,22 @@ export class AgentRegistry {
   }
 
   /**
-   * AD-070 §2.9: тулы постоянны — найденный агент видит **все** тулы, без
-   * фильтра по capabilities. Definition остаётся в запросе; ролевые ограничения
-   * передаются permission-слоем как `unavailable(role)` (см. AD-070 §2.9.1), а
-   * не скрытием тула. Неизвестный агент (или отсутствующий ToolRegistry) →
-   * `undefined` — safety-fallback вызывающей стороны.
+   * AD-070 §2.9 + AD-071 §2.1: тулы постоянны — найденный агент видит **все
+   * встроенные** тулы, без фильтра по capabilities. Definition остаётся в
+   * запросе; ролевые ограничения передаются permission-слоем как
+   * `unavailable(role)` (см. AD-070 §2.9.1), а не скрытием тула.
+   *
+   * MCP-тулы — per-session: в выборку попадают только инструменты активных
+   * серверов (`mcpServers`), переданных вызывающей стороной. Без `mcpServers`
+   * MCP-слой пуст (нет кросс-сессионной утечки). Неизвестный агент (или
+   * отсутствующий ToolRegistry) → `undefined` — safety-fallback.
    */
-  getToolsForAgent(agentId: string) {
+  getToolsForAgent(agentId: string, mcpServers?: Iterable<string>) {
     if (!this._toolRegistry) return undefined;
 
     const agent = this._agents.get(agentId);
     if (!agent) return undefined;
 
-    return this._toolRegistry.toLLMFormat();
+    return this._toolRegistry.toLLMFormatForSession(mcpServers);
   }
 }

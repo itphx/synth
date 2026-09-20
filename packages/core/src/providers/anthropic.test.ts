@@ -99,6 +99,59 @@ describe('AnthropicProvider — prompt-cache (AD-070 §2.2)', () => {
     expect(countCacheControls(body)).toBe(4);
   });
 
+  it('AD-071: stableToolCount — брейкпоинт на последнем встроенном, MCP не кэшируется', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new AnthropicProvider(baseParams);
+    const payload: SystemPromptPayload = {
+      text: 'sys',
+      stablePrefix: 'sys',
+      cacheKey: 'sess-1',
+      cachePolicy: 'auto',
+      stableToolCount: 2,
+    };
+    const tools = [
+      ...makeTools(),
+      { type: 'function', function: { name: 'srv_search', description: '', parameters: {} } },
+    ];
+
+    await provider.chat([makeMessage()], payload, tools);
+    const body = readBody(fetchMock);
+
+    const sent = body.tools as Array<Record<string, unknown>>;
+    expect(sent).toHaveLength(3);
+    expect(sent[0]!.cache_control).toBeUndefined();
+    // Последний встроенный (индекс 1) — граница stable-слоя.
+    expect(sent[1]!.cache_control).toEqual({ type: 'ephemeral' });
+    // MCP после границы не кэшируется.
+    expect(sent[2]!.cache_control).toBeUndefined();
+  });
+
+  it('AD-071: stableToolCount=0 (только MCP) — tools-брейкпоинт не ставится', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new AnthropicProvider(baseParams);
+    const payload: SystemPromptPayload = {
+      text: 'sys',
+      stablePrefix: 'sys',
+      cacheKey: 'sess-1',
+      cachePolicy: 'auto',
+      stableToolCount: 0,
+    };
+    const tools = [
+      { type: 'function', function: { name: 'srv_search', description: '', parameters: {} } },
+    ];
+
+    await provider.chat([makeMessage()], payload, tools);
+    const body = readBody(fetchMock);
+
+    const sent = body.tools as Array<Record<string, unknown>>;
+    expect(sent[0]!.cache_control).toBeUndefined();
+    expect(countCacheControls(body)).toBe(2); // system.stable + system.end
+  });
+
   it('без stablePrefix (строка): один system-блок с cache_control при auto', async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse());
     vi.stubGlobal('fetch', fetchMock);

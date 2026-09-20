@@ -413,6 +413,7 @@ export const dict = {
   'rightPanel.stats.promptBlock.summary': 'Сжатый диалог',
   'rightPanel.stats.promptBlock.interview': 'Опросник',
   'rightPanel.stats.promptBlock.tools': 'Описание инструментов',
+  'rightPanel.stats.promptBlock.mcp.tools': 'MCP-инструменты',
   // AD-070 §2.5: слой истории (messages) — состав отправляемых сообщений
   'rightPanel.stats.history': 'История',
   'rightPanel.stats.historyMessages': 'Сообщений',

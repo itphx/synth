@@ -134,8 +134,15 @@ export class McpManager {
     for (const tool of client.tools) {
       const fullName = prefixedName(tool.name);
 
-      // Проверка на коллизию с built-in инструментами
-      if (toolRegistry.get(fullName)) {
+      const existing = toolRegistry.get(fullName);
+      if (existing) {
+        // AD-071 §2.1: инструмент этого же сервера уже зарегистрирован (ленивая
+        // регистрация при первой активации) — повторный вызов идемпотентен, не
+        // теряем имя для deregister. Коллизия с чужим тулом — пропускаем.
+        if ((existing.source ?? 'builtin') === 'mcp' && existing.mcpServer === serverName) {
+          registeredNames.push(fullName);
+          continue;
+        }
         warning(`MCP`, `Инструмент "${fullName}" конфликтует с существующим — пропускаем`);
         continue;
       }
@@ -145,6 +152,8 @@ export class McpManager {
         description: `[MCP:${serverName}] ${tool.description}`,
         parameters: z.object({}).passthrough(),
         capabilities: [ToolCapability.MCP],
+        source: 'mcp',
+        mcpServer: serverName,
         execute: async (params: unknown, ctx: ToolContext): Promise<ToolResult> => {
           const args = params as Record<string, unknown>;
           // AD-036: деобфускация в точке потребления — аргументы могут содержать ⟦SYNTH_SECRET_N⟧

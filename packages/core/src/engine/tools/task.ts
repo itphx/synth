@@ -35,6 +35,8 @@ export interface TaskExtra {
     maxTokens?: number;
   };
   parentSessionSettings?: SessionSettings;
+  /** AD-071 §2.1: активные MCP-серверы родительской сессии — скоуп тулов саб-агента. */
+  mcpServers?: string[];
   modelRouter?: ModelRouter;
   routerConfig?: RouterConfig;
   contextConfig?: ContextConfig;
@@ -228,7 +230,7 @@ export const taskTool: ToolDefinition = {
       extra.parentSessionSettings?.language,
       extra.contextConfig?.systemPromptsDir,
     );
-    const tools: ToolForLLM[] | undefined = extra.agentRegistry.getToolsForAgent(agentDef.id);
+    const tools: ToolForLLM[] | undefined = extra.agentRegistry.getToolsForAgent(agentDef.id, extra.mcpServers);
     const maxSteps = agentDef.maxSteps ?? DEFAULT_SUBAGENT_MAX_STEPS;
 
     // ─── Настройки роутинга для дочерней сессии (AD-034 Фаза 4) ──

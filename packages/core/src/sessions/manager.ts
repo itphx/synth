@@ -81,6 +81,9 @@ export class SessionManager {
         summarizationTailMessages: data.settings?.summarizationTailMessages ?? 3,
         showInterview: data.settings?.showInterview ?? true,
         websocketEnabled: data.settings?.websocketEnabled ?? true,
+        // AD-071 §2.1: активные MCP-серверы сессии. Раньше терялись при создании
+        // (`POST /sessions` с `settings.mcpServers`) — сессия теряла их.
+        mcpServers: data.settings?.mcpServers,
         provider: data.settings?.provider,
         model: data.settings?.model,
         systemPrompt: data.settings?.systemPrompt,

@@ -9,6 +9,22 @@ const ANTHROPIC_API_VERSION = '2023-06-01';
 /** AD-070 §2.2: бюджет cache_control breakpoint'ов на запрос. */
 const MAX_CACHE_BREAKPOINTS = 4;
 
+/**
+ * AD-071 §2.1: индекс инструмента для tools-брейкпоинта.
+ *  - `stableToolCount` не задан → последний инструмент (обратная совместимость);
+ *  - `stableToolCount <= 0` → -1 (встроенных нет, MCP не кэшируем);
+ *  - иначе → последний встроенный (`min(count, length) - 1`).
+ */
+function resolveToolsBreakpointIndex(
+  tools: Array<Record<string, unknown>> | undefined,
+  stableToolCount: number | undefined,
+): number {
+  if (!tools || tools.length === 0) return -1;
+  if (stableToolCount === undefined) return tools.length - 1;
+  if (stableToolCount <= 0) return -1;
+  return Math.min(stableToolCount, tools.length) - 1;
+}
+
 export class AnthropicProvider extends BaseProvider {
   getProviderName(): string {
     return this.name;
@@ -508,12 +524,17 @@ export class AnthropicProvider extends BaseProvider {
 
     const candidates: Array<{ label: string; apply: () => void }> = [];
 
-    // Приоритет 1: последний tool-дефинишн (самый ранний слой префикса).
-    if (tools && tools.length > 0) {
+    // Приоритет 1: граница stable-слоя инструментов. AD-071 §2.1: встроенные
+    // идут первыми, MCP — после границы (`stableToolCount`) и не кэшируются,
+    // поэтому брейкпоинт ставим на последний встроенный. Если граница не задана
+    // — прежнее поведение (последний tool). Если встроенных нет (0) — tools не
+    // кэшируем вовсе, бюджет уходит system/messages.
+    const toolsBreakpointIndex = resolveToolsBreakpointIndex(tools, payload?.stableToolCount);
+    if (toolsBreakpointIndex >= 0) {
       candidates.push({
         label: 'tools',
         apply: () => {
-          tools[tools.length - 1]!.cache_control = { type: 'ephemeral' };
+          tools![toolsBreakpointIndex]!.cache_control = { type: 'ephemeral' };
         },
       });
     }

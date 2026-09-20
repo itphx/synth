@@ -174,6 +174,25 @@ describe('McpManager', () => {
     expect(registry.get('test-server_tool1')?.capabilities).toContain(ToolCapability.MCP);
   });
 
+  it('AD-071: registerTools тегирует источник (source: mcp, mcpServer)', async () => {
+    mockClientConnected = true;
+    await manager.registerTools('test-server', registry);
+
+    const tool = registry.get('test-server_tool1')!;
+    expect(tool.source).toBe('mcp');
+    expect(tool.mcpServer).toBe('test-server');
+  });
+
+  it('AD-071: registerTools идемпотентен — повторный вызов не теряет имена для deregister', async () => {
+    mockClientConnected = true;
+    await manager.registerTools('test-server', registry);
+    const names = await manager.registerTools('test-server', registry);
+    expect(names).toEqual(['test-server_tool1', 'test-server_tool2']);
+
+    await manager.deregisterTools('test-server', registry);
+    expect(registry.list().length).toBe(0);
+  });
+
   it('registerTools для отключённого сервера пытается подключиться', async () => {
     mockClientConnected = true;
     const names = await manager.registerTools('test-server', registry);

@@ -204,7 +204,6 @@ export class ChatOrchestrator {
   private readonly _toolRegistry: ToolRegistry | null;
   private readonly _agentRegistry: AgentRegistry | null;
   private readonly _mcpManager: McpManager | null;
-  private readonly _loadedMcpServers = new Set<string>();
   private readonly _cancellationTokens = new Map<string, CancellationToken>();
   private readonly _router: ModelRouter | null;
   private readonly _routerConfig: RouterConfig | null;
@@ -760,10 +759,18 @@ export class ChatOrchestrator {
     planMode: PlanMode,
     planApproved: boolean,
     agentDef: AgentDefinition | undefined,
+    mcpServers: Iterable<string> = [],
   ): UnavailableTool[] {
     if (!this._toolRegistry) return [];
     const unavailable: UnavailableTool[] = [];
+    // AD-071 §2.1: MCP-тулы вне активных серверов сессии не подсказываем —
+    // глобальный реестр держит их постоянно, но скоуп сессии фильтруется.
+    const activeMcp = new Set(mcpServers);
     for (const tool of this._toolRegistry.list()) {
+      if ((tool.source ?? 'builtin') === 'mcp'
+        && (tool.mcpServer == null || !activeMcp.has(tool.mcpServer))) {
+        continue;
+      }
       const availability = computeToolAvailability(tool.name, tool.capabilities, {
         sessionMode,
         planMode,
@@ -835,6 +842,13 @@ export class ChatOrchestrator {
       .map((m) => m.content)
       .join('\n\n');
 
+    // AD-071 §2.1: тот же per-session список инструментов, что уходит в запрос
+    // (`_processMessage`) — встроенные + MCP активных серверов сессии.
+    const activeMcpServers = session.settings.mcpServers || [];
+    const toolSelection = this._toolRegistry && agentDef && effectiveAgentRole
+      ? this._toolRegistry.selectForSession(activeMcpServers)
+      : { builtin: [], mcp: [] };
+
     const ctx: ComposerContext = {
       session,
       agentDef,
@@ -849,12 +863,13 @@ export class ChatOrchestrator {
       showInterview: session.settings.showInterview,
       stickyNotes: session.stickyNotes,
       summaryContent: summaryContent || undefined,
-      // AD-070 §2.5: тот же список инструментов, что уходит в запрос
-      // (`_processMessage`), чтобы манифест отражал реальный `tools`-слой.
+      // AD-070 §2.5 + AD-071 §2.1: манифест отражает реальные слои запроса —
+      // `tools` (встроенные, stable) и `mcp.tools` (MCP сессии, volatile).
       tools: this._toolRegistry
-        ? (agentDef && effectiveAgentRole
-            ? this._agentRegistry!.getToolsForAgent(effectiveAgentRole) as Array<Record<string, unknown>> | undefined
-            : [])
+        ? toolSelection.builtin as unknown as Array<Record<string, unknown>>
+        : undefined,
+      mcpTools: this._toolRegistry
+        ? toolSelection.mcp as unknown as Array<Record<string, unknown>>
         : undefined,
     };
 
@@ -1120,6 +1135,10 @@ export class ChatOrchestrator {
       // истории (до сборки LLM-сообщений). Идемпотентно — при неизменном
       // состоянии ничего не добавляется; system prompt при этом не меняется.
       const language = session.settings.language || 'ru';
+      // AD-071 §2.1: активные MCP-серверы сессии — per-session скоуп. Определяем
+      // до state-сообщений (unavailable-подсказки) и до сборки tools.
+      const activeMcpServers = session.settings.mcpServers || [];
+      const activeMcpSet = new Set(activeMcpServers);
       let projectForState: Project | null = null;
       if (session.projectId && this._projectStore) {
         try {
@@ -1134,7 +1153,7 @@ export class ChatOrchestrator {
         plan: projectForState?.plan ?? null,
         agentRole: effectiveAgentRole,
         unavailableTools: this._collectUnavailableTools(
-          session, sessionMode, planMode, planApproved, agentDef,
+          session, sessionMode, planMode, planApproved, agentDef, activeMcpServers,
         ),
       });
       if (stateSync.changed) {
@@ -1229,43 +1248,27 @@ export class ChatOrchestrator {
       const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
       const baseLlmMessages = ChatOrchestrator._sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author);
 
-      // 3.5. Load MCP tools for the session (дифференциально — только изменившиеся серверы)
-      const activeMcpServers = session.settings.mcpServers || [];
-      const active = new Set(activeMcpServers);
-
-      if (this._mcpManager && this._toolRegistry) {
-        const toRemove = [...this._loadedMcpServers].filter((s) => !active.has(s));
-        const toAdd = activeMcpServers.filter((s) => !this._loadedMcpServers.has(s));
-
-        for (const name of toRemove) {
-          try {
-            await this._mcpManager.deregisterTools(name, this._toolRegistry);
-            this._loadedMcpServers.delete(name);
-          } catch (err) {
-            warning(`ORCHESTRATOR`, `Ошибка отключения MCP-сервера "${name}": ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }
-
-        for (const name of toAdd) {
-          try {
-            await this._mcpManager.connectServer(name);
-            await this._mcpManager.registerTools(name, this._toolRegistry);
-            this._loadedMcpServers.add(name);
-          } catch (err) {
-            warning(`ORCHESTRATOR`, `Ошибка загрузки MCP-сервера "${name}": ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }
+      // 3.5. AD-071 §2.1: MCP-тулы активных серверов сессии. Регистрация ленивая
+      // и аддитивная (без deregister при смене набора): глобальный реестр держит
+      // MCP-тулы для executor'а, а per-session скоуп обеспечивает выборка ниже
+      // (`selectForSession`) — кросс-сессионной утечки нет.
+      if (this._mcpManager && this._toolRegistry && activeMcpServers.length > 0) {
+        await this._mcpManager.ensureToolsLoaded(activeMcpServers, this._toolRegistry);
       }
 
-      // 4. Get tools from registry. AD-070 §2.9: список тулов постоянен — не
-      // фильтруется по режиму/ролям; ограничения обеспечивает permission-слой
-      // (unavailable(mode|role)). Если агент НЕ найден в реестре или role
-      // undefined — модель получает НИКАКИХ инструментов (safety-fallback).
+      // 4. Get tools from registry. AD-070 §2.9 + AD-071 §2.1: встроенные —
+      // постоянно, MCP — только активных серверов сессии. Порядок: builtin → MCP.
+      // Если агент НЕ найден в реестре или role undefined — модель получает
+      // НИКАКИХ инструментов (safety-fallback).
+      const toolSelection = this._toolRegistry && agentDef && effectiveAgentRole
+        ? this._toolRegistry.selectForSession(activeMcpServers)
+        : { builtin: [], mcp: [] };
       const tools = this._toolRegistry
-        ? (agentDef && effectiveAgentRole
-            ? this._agentRegistry!.getToolsForAgent(effectiveAgentRole)
-            : [])
+        ? [...toolSelection.builtin, ...toolSelection.mcp]
         : undefined;
+      // AD-071 §2.1: граница stable-слоя инструментов для кэш-брейкпоинта
+      // (Anthropic) — после встроенных, до MCP. MCP после границы не кэшируется.
+      finalSystemPrompt.stableToolCount = toolSelection.builtin.length;
 
       // 5. Create cancellation token
       // Внутренний AbortController: абортится и по cancelToken.cancel()
@@ -1615,7 +1618,14 @@ export class ChatOrchestrator {
             toolArgs = func.arguments || {};
           }
 
-          const toolDef = this._toolRegistry?.get(toolName);
+          const resolvedToolDef = this._toolRegistry?.get(toolName);
+          // AD-071 §2.1: MCP-тул вне активных серверов сессии недоступен —
+          // глобальный реестр держит тулы постоянно, но executor подчиняется
+          // per-session скоупу (иначе модель могла бы вызвать чужой MCP-тул).
+          const toolDef = resolvedToolDef?.source === 'mcp'
+            && (resolvedToolDef.mcpServer == null || !activeMcpSet.has(resolvedToolDef.mcpServer))
+            ? undefined
+            : resolvedToolDef;
           let toolResult: { content: string; isError?: boolean; metadata?: Record<string, unknown> };
 
           // AD-029: гранулярные permissions — проверяем ДО doom loop, чтобы
@@ -1773,6 +1783,8 @@ export class ChatOrchestrator {
                         maxTokens: session.settings.maxTokens,
                       },
                       parentSessionSettings: session.settings,
+                      // AD-071 §2.1: саб-агент наследует MCP-скоуп родителя.
+                      mcpServers: activeMcpServers,
                       modelRouter: this._router ?? undefined,
                       routerConfig: this._routerConfig ?? undefined,
                       contextConfig: this._contextConfig ?? undefined,

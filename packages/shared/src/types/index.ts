@@ -117,9 +117,11 @@ export interface PromptManifestEntry {
   provenance?: string;
   /**
    * Источник записи: `system` — блок системного промпта, `tools` — слой
-   * описаний инструментов (не входит в system-текст, AD-070 §2.5).
+   * встроенных инструментов (stable, AD-070 §2.5), `mcp.tools` — слой
+   * MCP-инструментов (volatile, AD-071 §2.1). Слои инструментов не входят в
+   * system-текст, но отражаются в манифесте и размерах.
    */
-  source?: 'system' | 'tools';
+  source?: 'system' | 'tools' | 'mcp.tools';
 }
 
 /** AD-070 §2.5: манифест состава системного промпта (для API/UI/тестов). */

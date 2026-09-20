@@ -265,7 +265,8 @@ describe('SystemPromptComposer', () => {
       const ctx = makeCtx(session, { routingEnabled: true, tools });
 
       const manifest = await composer.manifest(ctx);
-      const systemEntries = manifest.entries.filter((e) => e.source !== 'tools');
+      // AD-071 §2.1: слои инструментов (`tools`/`mcp.tools`) — не system-блоки.
+      const systemEntries = manifest.entries.filter((e) => e.source === 'system');
 
       // role — первый; tools — сразу после последнего stable-блока (mode.policy)
       // и перед первым context-блоком (profile). После tools идут context/volatile.
@@ -313,7 +314,8 @@ describe('SystemPromptComposer', () => {
       // system-подмножество манифеста с блоками compose() в реальном порядке
       // отправки (sortPromptBlocks: тир → order).
       const sortedBlocks = sortPromptBlocks(composed.blocks);
-      const systemEntries = manifest.entries.filter((e) => e.source !== 'tools');
+      // AD-071 §2.1: слои инструментов (`tools`/`mcp.tools`) — не system-блоки.
+      const systemEntries = manifest.entries.filter((e) => e.source === 'system');
       expect(systemEntries.map((e) => e.key)).toEqual(sortedBlocks.map((b) => b.key));
 
       systemEntries.forEach((entry, i) => {
@@ -387,6 +389,59 @@ describe('SystemPromptComposer', () => {
       expect(emptyEntry!.status).toBe('empty');
       expect(emptyEntry!.chars).toBe(0);
       expect(withoutTools.totalChars).toBe(systemChars);
+    });
+
+    it('AD-071 §2.1: mcp.tools — volatile, не в staticPrefix; порядок tools → mcp.tools', async () => {
+      const composer = makeComposer();
+      const session = makeSession({ projectId: 'p1' });
+      const tools = [
+        { type: 'function', function: { name: 'read_file', description: 'Read', parameters: {} } },
+      ];
+      const mcpTools = [
+        { type: 'function', function: { name: 'srv_search', description: 'MCP', parameters: {} } },
+        { type: 'function', function: { name: 'srv_fetch', description: 'MCP', parameters: {} } },
+      ];
+      const toolsChars = JSON.stringify(tools).length;
+      const mcpChars = JSON.stringify(mcpTools).length;
+
+      const manifest = await composer.manifest(makeCtx(session, { tools, mcpTools }));
+
+      const toolsEntry = manifest.entries.find((e) => e.key === 'tools');
+      expect(toolsEntry).toBeDefined();
+      expect(toolsEntry!.tier).toBe('stable');
+      expect(toolsEntry!.source).toBe('tools');
+
+      const mcpEntry = manifest.entries.find((e) => e.key === 'mcp.tools');
+      expect(mcpEntry).toBeDefined();
+      expect(mcpEntry!.tier).toBe('volatile');
+      expect(mcpEntry!.source).toBe('mcp.tools');
+      expect(mcpEntry!.status).toBe('loaded');
+      expect(mcpEntry!.chars).toBe(mcpChars);
+      expect(mcpEntry!.estTokens).toBe(Math.ceil(mcpChars / 4));
+
+      // Порядок: tools сразу после последнего stable-блока, mcp.tools — сразу за ним.
+      const iTools = manifest.entries.findIndex((e) => e.key === 'tools');
+      const iMcp = manifest.entries.findIndex((e) => e.key === 'mcp.tools');
+      expect(iMcp).toBe(iTools + 1);
+
+      // totalChars включает оба слоя; staticPrefixChars — только встроенные.
+      const systemChars = manifest.entries
+        .filter((e) => e.source === 'system' && e.status !== 'empty')
+        .reduce((sum, e) => sum + e.chars, 0);
+      const stableSystemChars = manifest.entries
+        .filter((e) => e.source === 'system' && e.status !== 'empty' && e.tier === 'stable')
+        .reduce((sum, e) => sum + e.chars, 0);
+      expect(manifest.totalChars).toBe(systemChars + toolsChars + mcpChars);
+      // MCP не входит в stable-префикс (staticPrefix учитывает только builtin).
+      expect(manifest.staticPrefixChars).toBe(stableSystemChars + toolsChars);
+
+      // Без MCP запись присутствует, но пустая и не влияет на staticPrefix.
+      const withoutMcp = await composer.manifest(makeCtx(session, { tools }));
+      const emptyMcp = withoutMcp.entries.find((e) => e.key === 'mcp.tools');
+      expect(emptyMcp).toBeDefined();
+      expect(emptyMcp!.status).toBe('empty');
+      expect(emptyMcp!.chars).toBe(0);
+      expect(withoutMcp.staticPrefixChars).toBe(stableSystemChars + toolsChars);
     });
 
     it('generation берётся из promptStates активного агента', async () => {

@@ -5,7 +5,10 @@ export class ToolRegistry {
   private readonly _tools = new Map<string, ToolDefinition>();
 
   register(tool: ToolDefinition): void {
-    this._tools.set(tool.name, tool);
+    // AD-071 §2.1: встроенные инструменты не тегируют источник явно — дефолт
+    // `builtin` проставляется централизованно здесь; MCP-регистрация передаёт
+    // `source: 'mcp'` + `mcpServer` и сохраняется как есть.
+    this._tools.set(tool.name, { source: 'builtin', ...tool });
   }
 
   registerAll(tools: ToolDefinition[]): void {
@@ -43,12 +46,52 @@ export class ToolRegistry {
     return [...this._tools.values()];
   }
 
+  /** AD-071 §2.1: встроенные инструменты (слой `tools`, stable). */
+  listBuiltin(): ToolDefinition[] {
+    return [...this._tools.values()].filter((tool) => (tool.source ?? 'builtin') === 'builtin');
+  }
+
+  /**
+   * AD-071 §2.1: MCP-инструменты. Без `serverNames` — все зарегистрированные;
+   * с набором — только инструменты указанных серверов (per-session выборка).
+   */
+  listMcp(serverNames?: Iterable<string>): ToolDefinition[] {
+    const allowed = serverNames ? new Set(serverNames) : null;
+    return [...this._tools.values()].filter((tool) => {
+      if ((tool.source ?? 'builtin') !== 'mcp') return false;
+      if (!allowed) return true;
+      return tool.mcpServer != null && allowed.has(tool.mcpServer);
+    });
+  }
+
+  /**
+   * AD-071 §2.1: per-session выборка инструментов — встроенные + MCP только
+   * активных серверов сессии. Порядок: сначала встроенные, затем MCP
+   * (кэш-брейкпоинт ставится после встроенных, см. `stableToolCount`).
+   */
+  selectForSession(mcpServers?: Iterable<string>): { builtin: ToolForLLM[]; mcp: ToolForLLM[] } {
+    return {
+      builtin: this.listBuiltin().map((tool) => this._toolToLLM(tool)),
+      // Без набора серверов MCP-слой пуст (не «все MCP»): safety против утечки.
+      mcp: this.listMcp(mcpServers ?? []).map((tool) => this._toolToLLM(tool)),
+    };
+  }
+
   toLLMFormat(): ToolForLLM[] {
     const result: ToolForLLM[] = [];
     for (const tool of this._tools.values()) {
       result.push(this._toolToLLM(tool));
     }
     return result;
+  }
+
+  /**
+   * AD-071 §2.1: инструменты для сессии — встроенные + MCP активных серверов.
+   * Без `mcpServers` MCP-слой пуст (safety: не отдавать чужие MCP-тулы).
+   */
+  toLLMFormatForSession(mcpServers?: Iterable<string>): ToolForLLM[] {
+    const selection = this.selectForSession(mcpServers);
+    return [...selection.builtin, ...selection.mcp];
   }
 
   filterByCapabilities(capabilities: ToolCapability[]): ToolForLLM[] {

@@ -414,6 +414,7 @@ export const dict = {
   'rightPanel.stats.promptBlock.summary': 'Compressed dialog',
   'rightPanel.stats.promptBlock.interview': 'Interview prompt',
   'rightPanel.stats.promptBlock.tools': 'Tool descriptions',
+  'rightPanel.stats.promptBlock.mcp.tools': 'MCP tools',
   // AD-070 §2.5: history layer (messages) — composition of sent messages
   'rightPanel.stats.history': 'History',
   'rightPanel.stats.historyMessages': 'Messages',

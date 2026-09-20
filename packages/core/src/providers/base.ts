@@ -63,6 +63,13 @@ export interface SystemPromptPayload {
   cacheKey?: string;
   /** Политика кэша: auto (по умолчанию) | none. */
   cachePolicy?: CachePolicy;
+  /**
+   * AD-071 §2.1: число встроенных инструментов в начале `tools`-массива
+   * (граница stable-слоя). Кэш-брейкпоинт ставится на последний встроенный
+   * инструмент; MCP-инструменты после границы не кэшируются. Если не задан —
+   * провайдер сохраняет прежнее поведение (брейкпоинт на последний инструмент).
+   */
+  stableToolCount?: number;
 }
 
 export type SystemPromptInput = string | SystemPromptPayload;

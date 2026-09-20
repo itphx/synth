@@ -43,6 +43,7 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   summary: 'Compressed dialog',
   interview: 'Interview prompt',
   tools: 'Tool descriptions',
+  'mcp.tools': 'MCP tools',
 };
 
 export interface ComposerContext {
@@ -65,11 +66,17 @@ export interface ComposerContext {
   stickyNotes?: StickyNote[];
   summaryContent?: string;
   /**
-   * AD-070 §2.5: описания инструментов, реально уходящие в запрос
-   * (`tools`). Учитываются только в манифесте (`tools → system → messages`),
-   * в system-текст `compose()` не входят.
+   * AD-070 §2.5 + AD-071 §2.1: описания **встроенных** инструментов, реально
+   * уходящие в запрос (слой `tools`, stable). Учитываются только в манифесте
+   * (`tools → system → messages`), в system-текст `compose()` не входят.
    */
   tools?: Array<Record<string, unknown>>;
+  /**
+   * AD-071 §2.1: описания MCP-инструментов активных серверов сессии (слой
+   * `mcp.tools`, volatile). В system-текст не входят; входят в `totalChars`, но
+   * не в `staticPrefixChars` (MCP не кэшируется).
+   */
+  mcpTools?: Array<Record<string, unknown>>;
   /**
    * AD-070 §2.5: per-message `DebugCollector`. Передаётся оркестратором на
    * каждый ход и имеет приоритет над `deps.debugCollector` (сборка промпта —
@@ -160,14 +167,16 @@ export class SystemPromptComposer {
       ...(block.provenance ? { provenance: block.provenance } : {}),
     }));
 
-    // AD-070 §2.5: слой описаний инструментов — отдельный кэшируемый слой
-    // (`tools → system → messages`). В system-текст (`compose`) не входит, но
-    // отражается в манифесте и учитывается в общих размерах и staticPrefix.
-    // Инструменты — `stable`, поэтому запись вставляется в конце тира `stable`
-    // (перед первой `context`-записью), а не после volatile: это самый ранний
-    // кэшируемый слой, и в реальном префиксе он идёт сразу за stable-блоками.
+    // AD-070 §2.5 + AD-071 §2.1: слои описаний инструментов — отдельные записи
+    // (`tools → mcp.tools → system → messages`). В system-текст (`compose`) не
+    // входят, но отражаются в манифесте и учитываются в общих размерах.
+    //  - `tools` (встроенные) — `stable`, входит в staticPrefix;
+    //  - `mcp.tools` (MCP активных серверов) — `volatile`, в staticPrefix НЕ входит.
+    // `tools` вставляется в конце тира `stable` (перед первой `context`-записью):
+    // это самый ранний кэшируемый слой. `mcp.tools` — сразу после `tools`.
     // `role` при этом остаётся первой записью.
     const toolsChars = ctx.tools && ctx.tools.length > 0 ? JSON.stringify(ctx.tools).length : 0;
+    const mcpToolsChars = ctx.mcpTools && ctx.mcpTools.length > 0 ? JSON.stringify(ctx.mcpTools).length : 0;
     const toolsEntry: PromptManifestEntry = {
       key: 'tools',
       label: PROMPT_BLOCK_LABELS.tools ?? 'Tool descriptions',
@@ -178,16 +187,28 @@ export class SystemPromptComposer {
       provenance: 'tools',
       source: 'tools',
     };
+    const mcpToolsEntry: PromptManifestEntry = {
+      key: 'mcp.tools',
+      label: PROMPT_BLOCK_LABELS['mcp.tools'] ?? 'MCP tools',
+      tier: 'volatile',
+      chars: mcpToolsChars,
+      estTokens: Math.ceil(mcpToolsChars / EST_TOKENS_DIVISOR),
+      status: mcpToolsChars === 0 ? 'empty' : 'loaded',
+      provenance: 'mcp.tools',
+      source: 'mcp.tools',
+    };
     // `entries` отсортированы `sortPromptBlocks` (tier → order), поэтому все
     // stable-записи занимают префикс [0, stableCount); вставка по индексу
-    // stableCount ставит `tools` сразу после последней stable-записи. При
-    // отсутствии stable-записей — в начало (индекс 0).
+    // stableCount ставит `tools` сразу после последней stable-записи, `mcp.tools`
+    // — следом. При отсутствии stable-записей — в начало (индекс 0).
     const stableCount = entries.filter((entry) => entry.tier === 'stable').length;
     entries.splice(stableCount, 0, toolsEntry);
+    entries.splice(stableCount + 1, 0, mcpToolsEntry);
 
     const nonEmpty = blocks.filter((block) => block.content !== '');
     const totalChars =
-      nonEmpty.reduce((sum, block) => sum + block.content.length, 0) + toolsChars;
+      nonEmpty.reduce((sum, block) => sum + block.content.length, 0) + toolsChars + mcpToolsChars;
+    // AD-071 §2.1: MCP-инструменты (volatile) не входят в кэшируемый stable-префикс.
     const staticPrefixChars =
       nonEmpty
         .filter((block) => block.tier === 'stable')
