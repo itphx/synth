@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   getProjectStats: vi.fn(),
   getSessionStats: vi.fn(),
   getSessionPrompt: vi.fn(),
+  getSessionMcpEffective: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
@@ -89,6 +90,13 @@ beforeEach(() => {
   mocks.getProjectStats.mockResolvedValue(null)
   mocks.getSessionStats.mockResolvedValue(null)
   mocks.getSessionPrompt.mockResolvedValue(promptInfo)
+  mocks.getSessionMcpEffective.mockResolvedValue({
+    servers: [],
+    enabled: [],
+    disabled: [],
+    mcpServers: [],
+    mcpDisabledServers: [],
+  })
 
   useUIStore.setState({
     activeCenterTabId: 'tab-1',
@@ -172,6 +180,116 @@ describe('StatsTab — секция «История» (AD-070 §2.5)', () => {
     expect(text).toContain('4 / 500')
     expect(text).toContain('Secrets')
     expect(text).toContain('5')
+  })
+})
+
+describe('StatsTab — таблицы инструментов и MCP (AD-071 §2.6)', () => {
+  const toolsDetail = [
+    { name: 'read_file', capabilities: ['file_read'], available: true, source: 'built-in' as const },
+    { name: 'write_file', capabilities: ['file_write'], available: false, reason: 'mode' as const, source: 'built-in' as const },
+    { name: 'git_commit', capabilities: ['git_write'], available: false, reason: 'role' as const, source: 'built-in' as const },
+  ]
+
+  function setPromptWithTools(toolsPolicy: 'consistency' | 'available'): void {
+    mocks.getSessionPrompt.mockResolvedValue({
+      ...promptInfo,
+      manifest: { ...promptInfo.manifest, toolsPolicy },
+      toolsDetail,
+    })
+  }
+
+  it('рендерит таблицу «Встроенные инструменты»: имя, capability, доступность, источник', async () => {
+    setPromptWithTools('consistency')
+    const container = await renderStats()
+    const section = findSection(container, 'Built-in tools')
+    expect(section).not.toBeNull()
+    const text = section!.textContent ?? ''
+    expect(text).toContain('read_file')
+    expect(text).toContain('file_read')
+    expect(text).toContain('write_file')
+    expect(text).toContain('available')
+    expect(text).toContain('unavailable (mode)')
+    expect(text).toContain('unavailable (role)')
+    expect(text).toContain('built-in')
+    expect(text).toContain('Source')
+  })
+
+  it('в режиме available недоступные инструменты помечены как скрытые', async () => {
+    setPromptWithTools('available')
+    const container = await renderStats()
+    const section = findSection(container, 'Built-in tools')!
+    const text = section.textContent ?? ''
+    expect(text).toContain('hidden')
+    expect(text).not.toContain('unavailable (mode)')
+  })
+
+  it('пустое состояние «Встроенные инструменты»', async () => {
+    const container = await renderStats()
+    const section = findSection(container, 'Built-in tools')!
+    expect(section.textContent).toContain('No data')
+  })
+
+  it('рендерит таблицу «MCP» со всеми серверами, включая отключённый с причиной', async () => {
+    mocks.getSessionMcpEffective.mockResolvedValue({
+      servers: [
+        {
+          name: 'sys', level: 'system', enabled: true, connected: true, status: 'connected',
+          origin: 'instance', trust: 'builtin', author: null, tools: ['echo', 'ping'],
+        },
+        {
+          name: 'proj', level: 'project', enabled: false, reason: 'project_disabled', connected: false,
+          status: 'disabled', origin: 'user', trust: 'community',
+          author: { userId: 'u1', username: 'alice' }, tools: [],
+        },
+      ],
+      enabled: ['sys'],
+      disabled: ['proj'],
+      mcpServers: [],
+      mcpDisabledServers: [],
+    })
+
+    const container = await renderStats()
+    const section = findSection(container, 'MCP')
+    expect(section).not.toBeNull()
+    const text = section!.textContent ?? ''
+    // Активный сервер: уровень, статус, тулы.
+    expect(text).toContain('sys')
+    expect(text).toContain('system')
+    expect(text).toContain('connected')
+    expect(text).toContain('available')
+    // Отключённый сервер не исчезает: причина и автор.
+    expect(text).toContain('proj')
+    expect(text).toContain('project')
+    expect(text).toContain('disabled')
+    expect(text).toContain('project disabled')
+    expect(text).toContain('alice')
+    // Список имён тулов в title.
+    const toolsCell = container.querySelector('[data-testid="stats-mcp-sys"] td[title="echo, ping"]')
+    expect(toolsCell).not.toBeNull()
+  })
+
+  it('пустое состояние «MCP»', async () => {
+    const container = await renderStats()
+    const section = findSection(container, 'MCP')!
+    expect(section.textContent).toContain('No data')
+  })
+
+  it('перезапрашивает MCP-скоуп при инкременте streamFinishTick', async () => {
+    await renderStats()
+    const calls = mocks.getSessionMcpEffective.mock.calls.length
+    expect(calls).toBeGreaterThanOrEqual(1)
+
+    await act(async () => {
+      useChatStore.setState((s) => ({
+        streamFinishTickBySession: {
+          ...s.streamFinishTickBySession,
+          s1: (s.streamFinishTickBySession['s1'] ?? 0) + 1,
+        },
+      }))
+    })
+    await act(async () => {})
+
+    expect(mocks.getSessionMcpEffective.mock.calls.length).toBe(calls + 1)
   })
 })
 

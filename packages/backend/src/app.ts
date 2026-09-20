@@ -228,6 +228,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     mcpManager.setConfig(await mcpRegistryStore.toServerConfigMap());
     mcpManager.setServerOrigins(await mcpRegistryStore.toOriginMap());
     mcpManager.setServerTrusts(await mcpRegistryStore.toTrustMap());
+    mcpManager.setServerAuthors(await mcpRegistryStore.toAuthorMap());
     mcpManager.setDefaultServers(await mcpRegistryStore.toDefaultServers());
     // AD-071 §2.3.1: политика сетевого доступа HTTP-серверов (SSRF/egress).
     mcpManager.setNetworkPolicy(backendConfig.synth.mcp.networkPolicy);

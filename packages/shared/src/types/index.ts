@@ -141,6 +141,21 @@ export interface PromptManifest {
   entries: PromptManifestEntry[];
 }
 
+/**
+ * AD-071 §2.6: строка таблицы «Встроенные инструменты» в панели статистики.
+ * Отдаётся `GET /sessions/:id/prompt` полем `toolsDetail` (аддитивно).
+ */
+export interface PromptToolDetail {
+  name: string;
+  capabilities: string[];
+  /** Доступен ли тул текущему режиму/роли (`computeToolAvailability`). */
+  available: boolean;
+  /** Причина недоступности: `mode` (переключить режим) или `role` (делегировать). */
+  reason?: 'mode' | 'role';
+  /** AD-071 §2.1: источник инструмента (`built-in` — слой `tools`). */
+  source: 'built-in';
+}
+
 // --- Prompt history (AD-070 §2.5, слой messages) ---
 /** AD-070 §2.5: state-сообщения истории, сгруппированные по типу. */
 export interface PromptHistoryStateMessage {
@@ -386,6 +401,16 @@ export interface McpServerEffective {
   connected?: boolean;
   origin: McpRegistryOrigin;
   trust: McpRegistryTrust;
+  /**
+   * AD-071 §2.2/§2.6: транспортный статус для таблицы «MCP» в статистике:
+   * `disabled` — выключен в эффективном наборе, `connected`/`error`/`circuit-open`
+   * — состояние подключения активного сервера.
+   */
+  status?: 'connected' | 'error' | 'disabled' | 'circuit-open';
+  /** AD-071 §2.5/§2.6: автор записи реестра (null для instance/config-серверов). */
+  author?: McpRegistryAuthor | null;
+  /** AD-071 §2.2/§2.6: имена инструментов сервера (пусто, если не подключён). */
+  tools?: string[];
 }
 
 export const TODO_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'] as const;

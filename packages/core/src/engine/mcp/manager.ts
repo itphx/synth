@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { McpServerConfig, McpNetworkPolicy, McpRegistryOrigin, McpRegistryTrust, ToolDefinition } from '@itphx/synth-shared';
+import type { McpServerConfig, McpNetworkPolicy, McpRegistryAuthor, McpRegistryOrigin, McpRegistryTrust, ToolDefinition } from '@itphx/synth-shared';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolContext, ToolResult } from '@itphx/synth-shared';
@@ -29,6 +29,8 @@ export class McpManager {
   private _serverOrigins = new Map<string, McpRegistryOrigin>();
   /** AD-071 §2.5: trust записей реестра (builtin|community) для отображения. */
   private _serverTrusts = new Map<string, McpRegistryTrust>();
+  /** AD-071 §2.5: авторы записей реестра (имя → автор) для отображения. */
+  private _serverAuthors = new Map<string, McpRegistryAuthor>();
   /**
    * AD-071 §2.4: instance-серверы, включённые по умолчанию (`enabledByDefault`).
    * `null` — явный набор не задан, берётся из `config.enabledByDefault`.
@@ -69,6 +71,16 @@ export class McpManager {
 
   getServerTrust(name: string): McpRegistryTrust {
     return this._serverTrusts.get(name) ?? 'builtin';
+  }
+
+  /** AD-071 §2.5: авторы записей реестра (для таблицы «MCP» в статистике). */
+  setServerAuthors(authors: Record<string, McpRegistryAuthor>): void {
+    this._serverAuthors = new Map(Object.entries(authors));
+  }
+
+  /** AD-071 §2.5: автор сервера (null — instance/config без автора). */
+  getServerAuthor(name: string): McpRegistryAuthor | null {
+    return this._serverAuthors.get(name) ?? null;
   }
 
   /**

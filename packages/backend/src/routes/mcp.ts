@@ -343,6 +343,7 @@ export function createMcpRoutes(
       mcpManager.setConfig(await registry.toServerConfigMap());
       mcpManager.setServerOrigins(await registry.toOriginMap());
       mcpManager.setServerTrusts(await registry.toTrustMap());
+      mcpManager.setServerAuthors(await registry.toAuthorMap());
       mcpManager.setDefaultServers(await registry.toDefaultServers());
     };
 

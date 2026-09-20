@@ -229,6 +229,16 @@ export class McpRegistryStore {
     return map;
   }
 
+  /** AD-071 §2.5: карта авторов для `McpManager.setServerAuthors` (имя → автор). */
+  async toAuthorMap(): Promise<Record<string, McpRegistryAuthor>> {
+    const entries = await this.list();
+    const map: Record<string, McpRegistryAuthor> = {};
+    for (const entry of entries) {
+      if (entry.author) map[entry.name] = entry.author;
+    }
+    return map;
+  }
+
   /**
    * AD-071 §2.4: instance-серверы, включённые по умолчанию (`enabledByDefault`)
    * для `McpManager.setDefaultServers`. Пользовательские записи не входят.

@@ -1,5 +1,5 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, SessionStats } from '@itphx/synth-shared'
+import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats } from '@itphx/synth-shared'
 import { normalizeModelInfo } from './modelNormalize'
 
 const BASE_URL = '/api/v2'
@@ -212,6 +212,17 @@ export interface PromptInfoResponse {
   history: PromptHistoryInfo
   promptState: PromptState | null
   lastPromptMeta: PromptMeta | null
+  /** AD-071 §2.6: per-tool данные встроенных инструментов (аддитивно). */
+  toolsDetail?: PromptToolDetail[]
+}
+
+/** AD-071 §2.4/§2.6: ответ GET /sessions/:id/mcp — эффективный MCP-скоуп сессии. */
+export interface SessionMcpEffectiveResponse {
+  servers: McpServerEffective[]
+  enabled: string[]
+  disabled: string[]
+  mcpServers: string[]
+  mcpDisabledServers: string[]
 }
 
 export interface ChatStatusResponse {
@@ -344,6 +355,11 @@ export const synthApi = {
   /** AD-070 §2.5: манифест промпта + состояние активного агента + последний promptMeta. */
   async getSessionPrompt(sessionId: string): Promise<PromptInfoResponse> {
     return fetchJSON<PromptInfoResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/prompt`)
+  },
+
+  /** AD-071 §2.4/§2.6: эффективный MCP-скоуп сессии (включая отключённые с причиной). */
+  async getSessionMcpEffective(sessionId: string): Promise<SessionMcpEffectiveResponse> {
+    return fetchJSON<SessionMcpEffectiveResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/mcp`)
   },
 
   /** AD-070 §2.6: статистика сессии по агентам и авторам сообщений. */

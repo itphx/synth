@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, ToolsPolicy, McpServerEffective } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, PromptToolDetail, ToolsPolicy, McpServerEffective } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
@@ -183,6 +183,8 @@ export interface PromptDiagnostics {
   promptState: PromptState | null;
   /** `promptMeta` последнего ответа активного агента (null, если нет). */
   lastPromptMeta: PromptMeta | null;
+  /** AD-071 §2.6: строки таблицы «Встроенные инструменты» (имя/capability/доступность). */
+  toolsDetail: PromptToolDetail[];
 }
 
 function toCoreProviderConfig(shared: SharedProviderConfig, model: string, reasoningLevel?: ReasoningLevel): CoreProviderConfig {
@@ -895,15 +897,29 @@ export class ChatOrchestrator {
     if (!manager) return [];
     const project = await this._loadProject(session);
     const decisions = this._resolveMcpDecisions(session, project);
-    return decisions.map((d) => ({
-      name: d.name,
-      level: d.level,
-      enabled: d.enabled,
-      ...(d.reason ? { reason: d.reason } : {}),
-      connected: d.enabled && manager.getServerStatus(d.name) === 'connected',
-      origin: d.origin,
-      trust: manager.getServerTrust(d.name),
-    }));
+    return decisions.map((d) => {
+      const rawStatus = manager.getServerStatus(d.name);
+      const status: NonNullable<McpServerEffective['status']> = !d.enabled
+        ? 'disabled'
+        : rawStatus === 'circuit-open'
+          ? 'circuit-open'
+          : rawStatus === 'connected'
+            ? 'connected'
+            : 'error';
+      const tools = manager.getServerTools(d.name)?.map((tool) => tool.name) ?? [];
+      return {
+        name: d.name,
+        level: d.level,
+        enabled: d.enabled,
+        ...(d.reason ? { reason: d.reason } : {}),
+        connected: d.enabled && rawStatus === 'connected',
+        status,
+        origin: d.origin,
+        trust: manager.getServerTrust(d.name),
+        author: manager.getServerAuthor(d.name),
+        tools,
+      };
+    });
   }
 
   /**
@@ -1052,7 +1068,25 @@ export class ChatOrchestrator {
     const promptState = session.promptStates?.[agentKeyOf(effectiveAgentRole)] ?? null;
     const lastPromptMeta = this._lastPromptMeta(session, effectiveAgentRole);
     const history = this._buildPromptHistoryInfo(session, effectiveAgentRole);
-    return { manifest, history, promptState, lastPromptMeta };
+    // AD-071 §2.6: per-tool данные встроенных инструментов для таблицы статистики.
+    // Доступность считается тем же `computeToolAvailability`, что и в запросе.
+    const toolsDetail: PromptToolDetail[] = (this._toolRegistry?.listBuiltin() ?? []).map((tool) => {
+      const availability = computeToolAvailability(tool.name, tool.capabilities, {
+        sessionMode,
+        planMode,
+        planApproved,
+        mcpToolSettings: session.settings.mcpToolSettings,
+        agentCapabilities: agentDef?.capabilities,
+      });
+      return {
+        name: tool.name,
+        capabilities: [...tool.capabilities],
+        available: availability.available,
+        ...(availability.reason ? { reason: availability.reason } : {}),
+        source: 'built-in' as const,
+      };
+    });
+    return { manifest, history, promptState, lastPromptMeta, toolsDetail };
   }
 
   /**

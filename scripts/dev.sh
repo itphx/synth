@@ -32,6 +32,14 @@ export SYNTH_AUTH_DEBUG=true
 # Каталог данных — вне репозитория
 export SYNTH_DATA_DIR="/home/eof/dev/Synth/data"
 
+# Конфиг backend. dev.sh запускает backend с cwd=synth/, а findConfigPath()
+# ищет config.yaml только в cwd (в dev-режиме → null), поэтому mcp.servers из
+# packages/backend/config.yaml не читается. Указываем путь явно, только если
+# файл существует (иначе не задаём — чтобы не сломать запуск).
+if [ -f "$SYNTH/packages/backend/config.yaml" ]; then
+    export SYNTH_CONFIG="$SYNTH/packages/backend/config.yaml"
+fi
+
 # Порты компонентов
 export SYNTH_PORT="${SYNTH_PORT:-5000}"
 export SYNTH_CORE_PORT="${SYNTH_CORE_PORT:-4300}"

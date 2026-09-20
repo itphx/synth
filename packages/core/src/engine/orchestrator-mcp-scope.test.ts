@@ -119,6 +119,9 @@ function makeMockMcpManager(opts: { defaultOn?: string[] } = {}): McpManager {
     getServerTrust() {
       return 'builtin';
     },
+    getServerAuthor() {
+      return null;
+    },
     isDefaultServer(name: string) {
       return (opts.defaultOn ?? []).includes(name);
     },
@@ -318,7 +321,10 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
     const srvA = servers.find((s) => s.name === 'srvA')!;
     const srvB = servers.find((s) => s.name === 'srvB')!;
 
-    expect(srvA).toMatchObject({ level: 'system', enabled: false, reason: 'session_optout' });
-    expect(srvB).toMatchObject({ level: 'session', enabled: true });
+    expect(srvA).toMatchObject({ level: 'system', enabled: false, reason: 'session_optout', status: 'disabled' });
+    expect(srvB).toMatchObject({ level: 'session', enabled: true, status: 'error' });
+    // AD-071 §2.6: поля для таблицы «MCP» в статистике (автор/тулы).
+    expect(srvA.author).toBeNull();
+    expect(srvA.tools).toEqual([]);
   });
 });

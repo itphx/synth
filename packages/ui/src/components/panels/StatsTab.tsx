@@ -11,7 +11,8 @@ import { Icon } from '@/components/icon/Icon'
 import { formatCost, formatDuration, formatTokens, formatTps } from '@/lib/formatStats'
 import { buildUsageSegments } from '@/lib/statsSegments'
 import { readMessageSubagents } from '@/lib/subagentStats'
-import type { ProjectStats, ModelGroup, PromptInfoResponse } from '@/lib/api/synthApi'
+import type { ProjectStats, ModelGroup, PromptInfoResponse, SessionMcpEffectiveResponse } from '@/lib/api/synthApi'
+import type { PromptToolDetail, McpServerEffective } from '@itphx/synth-shared'
 
 const fmt = (v: number): string => v.toLocaleString()
 
@@ -48,11 +49,37 @@ function promptCacheLabel(info: PromptInfoResponse, t: (key: string) => string):
   return `${verdict} · gen ${meta.generation}${cached}`
 }
 
+/**
+ * AD-071 §2.6: подпись доступности встроенного тула. В режиме `available`
+ * недоступные тулы не уходят в запрос — помечаем их как скрытые; в
+ * `consistency` показываем причину (переключить режим / делегировать роли).
+ */
+function toolAvailabilityLabel(
+  tool: PromptToolDetail,
+  toolsPolicy: string | undefined,
+  t: (key: string) => string,
+): string {
+  if (tool.available) return t('rightPanel.stats.toolAvailable')
+  if (toolsPolicy === 'available') return t('rightPanel.stats.toolHidden')
+  if (tool.reason === 'role') return t('rightPanel.stats.toolUnavailableRole')
+  if (tool.reason === 'mode') return t('rightPanel.stats.toolUnavailableMode')
+  return t('rightPanel.stats.toolUnavailable')
+}
+
+/** AD-071 §2.6: подпись доступности MCP-сервера (disabled + причина). */
+function mcpAvailabilityLabel(server: McpServerEffective, t: (key: string) => string): string {
+  if (server.enabled) return t('rightPanel.stats.toolAvailable')
+  if (!server.reason) return t('rightPanel.stats.mcpDisabled')
+  const reason = t(`rightPanel.stats.mcpReason.${server.reason}`)
+  return `${t('rightPanel.stats.mcpDisabled')} · ${reason}`
+}
+
 export const StatsTab: React.FC = () => {
   const { t } = useI18n()
   const [projectStats, setProjectStats] = useState<ProjectStats | null>(null)
   const [modelGroups, setModelGroups] = useState<ModelGroup[]>([])
   const [promptInfo, setPromptInfo] = useState<PromptInfoResponse | null>(null)
+  const [mcpEffective, setMcpEffective] = useState<SessionMcpEffectiveResponse | null>(null)
   const [sessionStats, setSessionStats] = useState<SessionStats | null>(null)
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [historyExpanded, setHistoryExpanded] = useState(false)
@@ -178,6 +205,20 @@ export const StatsTab: React.FC = () => {
     return () => { cancelled = true }
   }, [activeSessionId, lastAssistantMsg?.id, streamFinishTick])
 
+  // AD-071 §2.4/§2.6: эффективный MCP-скоуп сессии (включая отключённые с
+  // причиной) — для таблицы «MCP» рядом с «Составом промпта». Тот же триггер.
+  useEffect(() => {
+    if (!activeSessionId) {
+      setMcpEffective(null)
+      return
+    }
+    let cancelled = false
+    synthApi.getSessionMcpEffective(activeSessionId)
+      .then((info) => { if (!cancelled) setMcpEffective(info) })
+      .catch(() => { if (!cancelled) setMcpEffective(null) })
+    return () => { cancelled = true }
+  }, [activeSessionId, lastAssistantMsg?.id, streamFinishTick])
+
   // AD-070 §2.6: статистика по агентам/авторам. Тот же триггер, что и у промпта.
   useEffect(() => {
     if (!activeSessionId) {
@@ -194,6 +235,11 @@ export const StatsTab: React.FC = () => {
   // AD-070 §2.5: порядок записей задаёт бэкенд (реальный порядок отправки:
   // тир → order, tools — последним). UI не пересортировывает.
   const promptEntries = promptInfo?.manifest.entries ?? []
+
+  // AD-071 §2.6: данные таблиц «Встроенные инструменты» и «MCP».
+  const toolsDetail = promptInfo?.toolsDetail ?? []
+  const toolsPolicy = promptInfo?.manifest.toolsPolicy
+  const mcpServers = mcpEffective?.servers ?? []
 
   const hasLastMsgUsage = !!displayUsage && Object.keys(displayUsage).length > 0
   const hasSubagents = !!sessionStats?.agents.some((a) => a.subagent_sessions > 0)
@@ -476,6 +522,90 @@ export const StatsTab: React.FC = () => {
           <div className="text-xs text-muted-foreground italic">
             {t('rightPanel.stats.noData')}
           </div>
+        )}
+      </Section>
+
+      {/* AD-071 §2.6: встроенные инструменты — имя/capability/доступность/источник. */}
+      <Section title={t('rightPanel.stats.builtinTools')}>
+        {toolsDetail.length > 0 ? (
+          <div className="overflow-x-auto" data-testid="stats-builtin-tools">
+            <table className="w-full text-[0.6875rem]">
+              <thead>
+                <tr className="text-muted-foreground">
+                  <th className="px-2 py-0.5 text-left font-medium first:pl-0">{t('rightPanel.stats.colTool')}</th>
+                  <th className="px-2 py-0.5 text-left font-medium">{t('rightPanel.stats.colCapability')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colAvailable')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium last:pr-0">{t('rightPanel.stats.colSource')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {toolsDetail.map((tool) => (
+                  <tr
+                    key={tool.name}
+                    data-testid={`stats-tool-${tool.name}`}
+                    className={cn('border-t border-border/30', !tool.available && 'text-muted-foreground/60')}
+                  >
+                    <td className="px-2 py-0.5 text-left max-w-[8rem] truncate first:pl-0" title={tool.name}>{tool.name}</td>
+                    <td className="px-2 py-0.5 text-left max-w-[8rem] truncate" title={tool.capabilities.join(', ')}>
+                      {tool.capabilities.join(', ') || '\u2014'}
+                    </td>
+                    <td className="px-2 py-0.5 text-center">{toolAvailabilityLabel(tool, toolsPolicy, t)}</td>
+                    <td className="px-2 py-0.5 text-center last:pr-0">{tool.source}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground italic">{t('rightPanel.stats.noData')}</div>
+        )}
+      </Section>
+
+      {/* AD-071 §2.6: MCP — сервер/уровень/статус/доступность/тулы/автор.
+          Показываются все серверы, включая отключённые (disabled + причина). */}
+      <Section title={t('rightPanel.stats.mcpServers')}>
+        {mcpServers.length > 0 ? (
+          <div className="overflow-x-auto" data-testid="stats-mcp-servers">
+            <table className="w-full text-[0.6875rem]">
+              <thead>
+                <tr className="text-muted-foreground">
+                  <th className="px-2 py-0.5 text-left font-medium first:pl-0">{t('rightPanel.stats.colServer')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colLevel')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colStatus')}</th>
+                  <th className="px-2 py-0.5 text-left font-medium">{t('rightPanel.stats.colAvailable')}</th>
+                  <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colTools')}</th>
+                  <th className="px-2 py-0.5 text-left font-medium last:pr-0">{t('rightPanel.stats.colAuthor')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mcpServers.map((server) => {
+                  const status = server.status
+                    ?? (server.enabled ? (server.connected ? 'connected' : 'error') : 'disabled')
+                  return (
+                    <tr
+                      key={server.name}
+                      data-testid={`stats-mcp-${server.name}`}
+                      className={cn('border-t border-border/30', !server.enabled && 'text-muted-foreground/60')}
+                    >
+                      <td className="px-2 py-0.5 text-left max-w-[7rem] truncate first:pl-0" title={server.name}>{server.name}</td>
+                      <td className="px-2 py-0.5 text-center">{t(`rightPanel.stats.mcpLevel.${server.level}`)}</td>
+                      <td className="px-2 py-0.5 text-center">{t(`rightPanel.stats.mcpStatus.${status}`)}</td>
+                      <td className="px-2 py-0.5 text-left">{mcpAvailabilityLabel(server, t)}</td>
+                      <td
+                        className="px-2 py-0.5 text-center tabular-nums"
+                        title={server.tools && server.tools.length > 0 ? server.tools.join(', ') : undefined}
+                      >
+                        {server.tools?.length ?? 0}
+                      </td>
+                      <td className="px-2 py-0.5 text-left max-w-[7rem] truncate last:pr-0">{server.author?.username ?? '\u2014'}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground italic">{t('rightPanel.stats.noData')}</div>
         )}
       </Section>
 
