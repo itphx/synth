@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema } from './types.js';
+import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema } from './types.js';
+import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 describe('mcpServerConfigSchema (AD-071 §2.2)', () => {
   it('принимает optional description', () => {
@@ -14,6 +15,34 @@ describe('mcpServerConfigSchema (AD-071 §2.2)', () => {
   it('description необязателен', () => {
     const parsed = mcpServerConfigSchema.parse({ type: 'stdio', command: 'node' });
     expect(parsed.description).toBeUndefined();
+  });
+
+  it('принимает HTTP-транспорт', () => {
+    expect(mcpServerConfigSchema.parse({ type: 'http', url: 'https://x/mcp' }).type).toBe('http');
+  });
+});
+
+describe('mcpNetworkPolicySchema (AD-071 §2.3.1)', () => {
+  it('дефолт — deny приватных диапазонов', () => {
+    const policy = mcpNetworkPolicySchema.parse({});
+    expect(policy.mode).toBe('deny');
+    expect(policy.list).toEqual([...DEFAULT_MCP_PRIVATE_CIDRS]);
+  });
+
+  it('mcpConfigSchema подставляет networkPolicy', () => {
+    const parsed = mcpConfigSchema.parse({});
+    expect(parsed.networkPolicy.mode).toBe('deny');
+    expect(parsed.servers).toEqual({});
+  });
+
+  it('принимает настраиваемую allow-политику', () => {
+    const parsed = mcpNetworkPolicySchema.parse({ mode: 'allow', list: ['127.0.0.0/8'] });
+    expect(parsed.mode).toBe('allow');
+    expect(parsed.list).toEqual(['127.0.0.0/8']);
+  });
+
+  it('отклоняет неизвестный режим', () => {
+    expect(mcpNetworkPolicySchema.safeParse({ mode: 'block' }).success).toBe(false);
   });
 });
 

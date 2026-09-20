@@ -1,5 +1,8 @@
 import type { ToolCapability } from './tools.js';
 import type { PermissionConfig, McpServerToolSettings } from './permission.js';
+// Type-only импорт: конфиг-тип MCP нужен для записи реестра (AD-071 §2.5).
+// Runtime-цикла нет — импорт стирается при компиляции.
+import type { McpServerConfig } from '../config/types.js';
 
 // Core enums
 export enum MessageRole {
@@ -280,6 +283,75 @@ export type SessionMode = (typeof SESSION_MODES)[number];
  */
 export const TOOLS_POLICIES = ['consistency', 'available', 'auto'] as const;
 export type ToolsPolicy = (typeof TOOLS_POLICIES)[number];
+
+// --- MCP: реестр серверов и сетевой доступ (AD-071 §2.3.1/§2.5) ---
+
+/** Версия схемы записи реестра MCP — для будущей миграции (AD-032). */
+export const MCP_REGISTRY_SCHEMA_VERSION = 1;
+
+export const MCP_REGISTRY_ORIGINS = ['instance', 'user'] as const;
+export type McpRegistryOrigin = (typeof MCP_REGISTRY_ORIGINS)[number];
+
+export const MCP_REGISTRY_TRUST_LEVELS = ['builtin', 'community'] as const;
+export type McpRegistryTrust = (typeof MCP_REGISTRY_TRUST_LEVELS)[number];
+
+/** Автор записи реестра (кто добавил сервер). */
+export interface McpRegistryAuthor {
+  userId: string;
+  username: string;
+}
+
+/**
+ * AD-071 §2.5: плоская запись единого реестра MCP-серверов.
+ *
+ * Логическая модель сразу проектируется под PostgreSQL (AD-032): стабильный
+ * `id`, `schemaVersion`, timestamps; вложенность ограничена `config`/`author`
+ * (раскладываются в JSONB/отдельные колонки). Instance- и пользовательские
+ * записи различаются полем `origin`, не отдельными реестрами.
+ */
+export interface McpRegistryEntry {
+  schemaVersion: number;
+  id: string;
+  name: string;
+  config: McpServerConfig;
+  origin: McpRegistryOrigin;
+  author: McpRegistryAuthor | null;
+  trust: McpRegistryTrust;
+  enabledByDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const MCP_NETWORK_POLICY_MODES = ['allow', 'deny'] as const;
+export type McpNetworkPolicyMode = (typeof MCP_NETWORK_POLICY_MODES)[number];
+
+/**
+ * AD-071 §2.3.1: политика сетевого доступа пользовательских HTTP MCP-серверов.
+ * - `deny` — перечисленные адреса/CIDR запрещены (дефолт: приватные диапазоны);
+ * - `allow` — разрешены только перечисленные адреса/CIDR (всё прочее запрещено).
+ */
+export interface McpNetworkPolicy {
+  mode: McpNetworkPolicyMode;
+  list: string[];
+}
+
+/** Приватные/служебные диапазоны, запрещённые по умолчанию (SSRF/egress). */
+export const DEFAULT_MCP_PRIVATE_CIDRS = [
+  '10.0.0.0/8',
+  '172.16.0.0/12',
+  '192.168.0.0/16',
+  '127.0.0.0/8',
+  '169.254.0.0/16',
+  '::1/128',
+  'fc00::/7',
+  'fe80::/10',
+] as const;
+
+/** Дефолтная политика: deny приватных диапазонов (AD-071 §2.3.1). */
+export const DEFAULT_MCP_NETWORK_POLICY: McpNetworkPolicy = {
+  mode: 'deny',
+  list: [...DEFAULT_MCP_PRIVATE_CIDRS],
+};
 
 export const TODO_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'] as const;
 export type TodoStatus = (typeof TODO_STATUSES)[number];

@@ -22,6 +22,7 @@ import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator, FileProfileStore,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
+  McpRegistryStore,
   RuntimeSettingsStore, createSettingsRoutes, AuditLogger, mergeLlmGatewayConfig,
   mergeSecurityConfig, ProtectedPathsStore,
   SecretPatternStore,
@@ -219,7 +220,15 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const mcpConfigStore = new YamlMcpConfigStore(configPath);
     await mcpConfigStore.load();
     const mcpManager = new McpManager();
-    mcpManager.setConfig(mcpConfigStore.getServers());
+
+    // AD-071 §2.5: единый реестр MCP-серверов; instance-серверы из config.mcp.servers
+    // подтягиваются при старте (seed без дублирования по имени).
+    const mcpRegistryStore = new McpRegistryStore({ dataDir });
+    await mcpRegistryStore.seedFromConfig(backendConfig.synth.mcp.servers);
+    mcpManager.setConfig(await mcpRegistryStore.toServerConfigMap());
+    mcpManager.setServerOrigins(await mcpRegistryStore.toOriginMap());
+    // AD-071 §2.3.1: политика сетевого доступа HTTP-серверов (SSRF/egress).
+    mcpManager.setNetworkPolicy(backendConfig.synth.mcp.networkPolicy);
 
     // Auth routes (после profilesStore)
     app.route('/auth', createAuthRoutes(auth, backendConfig.auth, profilesStore, dataDir, defaultsStore));
@@ -480,7 +489,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/git', createGitRoutes(auth, projectStore, backendConfig.workspacesRoot));
 
     // MCP routes
-    app.route('/api/v2/mcp', createMcpRoutes(auth, mcpConfigStore, mcpManager, sessionManager));
+    app.route('/api/v2/mcp', createMcpRoutes(auth, mcpConfigStore, mcpManager, sessionManager, {
+      registry: mcpRegistryStore,
+      networkPolicy: backendConfig.synth.mcp.networkPolicy,
+    }));
 
     // LLM Gateway audit routes (AD-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные
     app.route('/api/v2/audit', createAuditRoutes(auth, {

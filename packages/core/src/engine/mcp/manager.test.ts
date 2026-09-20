@@ -365,4 +365,47 @@ describe('McpManager', () => {
     expect(servers).toHaveLength(1);
     expect(servers[0]!.name).toBe('new-srv');
   });
+
+  describe('сетевая политика (AD-071 §2.3.1)', () => {
+    it('connectServer блокирует пользовательский приватный HTTP при deny', async () => {
+      manager.setConfig({ 'http-srv': { type: 'sse', url: 'http://10.0.0.5/mcp' } });
+      manager.setServerOrigins({ 'http-srv': 'user' });
+      manager.setNetworkPolicy({ mode: 'deny', list: ['10.0.0.0/8'] });
+      await expect(manager.connectServer('http-srv')).rejects.toThrow('сетевой политикой');
+      expect(mockClientConnect).not.toHaveBeenCalled();
+    });
+
+    it('connectServer подключает пользовательский HTTP при allow-политике', async () => {
+      mockClientConnected = true;
+      manager.setConfig({ 'http-srv': { type: 'sse', url: 'http://10.0.0.5/mcp' } });
+      manager.setServerOrigins({ 'http-srv': 'user' });
+      manager.setNetworkPolicy({ mode: 'allow', list: ['10.0.0.0/8'] });
+      await manager.connectServer('http-srv');
+      expect(mockClientConnect).toHaveBeenCalled();
+    });
+
+    it('instance-сервер не проверяется сетевой политикой (приватные сети инстанса)', async () => {
+      mockClientConnected = true;
+      manager.setConfig({ 'http-srv': { type: 'sse', url: 'http://10.0.0.5/mcp' } });
+      manager.setServerOrigins({ 'http-srv': 'instance' });
+      manager.setNetworkPolicy({ mode: 'deny', list: ['10.0.0.0/8'] });
+      await manager.connectServer('http-srv');
+      expect(mockClientConnect).toHaveBeenCalled();
+    });
+
+    it('stdio не проверяется сетевой политикой', async () => {
+      mockClientConnected = true;
+      manager.setServerOrigins({ 'test-server': 'user' });
+      manager.setNetworkPolicy({ mode: 'deny', list: ['10.0.0.0/8'] });
+      await manager.connectServer('test-server');
+      expect(mockClientConnect).toHaveBeenCalled();
+    });
+
+    it('probeServer блокирует пользовательский приватный HTTP при deny', async () => {
+      manager.setConfig({ 'http-srv': { type: 'sse', url: 'http://10.0.0.5/mcp' } });
+      manager.setServerOrigins({ 'http-srv': 'user' });
+      manager.setNetworkPolicy({ mode: 'deny', list: ['10.0.0.0/8'] });
+      await expect(manager.probeServer('http-srv')).rejects.toThrow('сетевой политикой');
+    });
+  });
 });

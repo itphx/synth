@@ -59,6 +59,14 @@ export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
 export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions, normalizeAgentModes, isModeApplicable, DEFAULT_AGENT_ID } from './engine/agents/index.js';
 export { McpClient, McpManager } from './engine/mcp/index.js';
 export type { McpToolDef, McpToolResult } from './engine/mcp/index.js';
+export {
+  evaluateMcpNetworkAccess,
+  isIpInCidr,
+  parseCidr,
+  hostFromUrl,
+  isHttpMcpConfig,
+} from './engine/mcp/index.js';
+export type { McpNetworkCheckResult, HostResolver } from './engine/mcp/index.js';
 
 export {
   PermissionEvaluator,
@@ -88,6 +96,12 @@ export { JsonStore } from './storage/json-store.js';
 export type { JsonStoreConfig } from './storage/json-store.js';
 export { ProjectStore } from './storage/project-store.js';
 export type { ProjectStoreConfig } from './storage/project-store.js';
+export { McpRegistryStore } from './storage/mcp-registry-store.js';
+export type {
+  McpRegistryStoreConfig,
+  AddMcpRegistryEntryInput,
+  UpdateMcpRegistryEntryInput,
+} from './storage/mcp-registry-store.js';
 export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig } from './storage/runtime-settings.js';
 export type { RuntimeSettings, LlmGatewayRuntimeSettings } from './storage/runtime-settings.js';
 export { createLocalAuth } from './auth/local.js';

@@ -1,22 +1,10 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AuthKit } from '../auth/middleware.js';
-import type { SessionManager, McpManager } from '@itphx/synth-core';
-import type { McpServerConfig } from '@itphx/synth-shared';
-
-const mcpServerConfigSchema = z.object({
-  type: z.enum(['stdio', 'sse']),
-  // AD-071 §2.2: описание сервера (используется в блоке промпта `mcp.servers`).
-  description: z.string().optional(),
-  command: z.string().optional(),
-  args: z.array(z.string()).optional(),
-  env: z.record(z.string(), z.string()).optional(),
-  url: z.string().optional(),
-  enabled: z.boolean().optional(),
-  enabledByDefault: z.boolean().optional(),
-  timeout: z.number().int().min(1).optional(),
-  connectTimeout: z.number().int().min(1).optional(),
-});
+import type { SessionManager, McpManager, McpRegistryStore } from '@itphx/synth-core';
+import { evaluateMcpNetworkAccess } from '@itphx/synth-core';
+import type { McpServerConfig, McpNetworkPolicy, User } from '@itphx/synth-shared';
+import { mcpServerConfigSchema } from '@itphx/synth-shared/config';
 
 const addServerSchema = z.object({
   name: z.string().min(1),
@@ -29,6 +17,21 @@ const sessionMcpSchema = z.object({
   mcpServers: z.array(z.string()),
 });
 
+// AD-071 §2.5: единый реестр MCP-серверов.
+const registryAddSchema = z.object({
+  name: z.string().min(1).max(200),
+  config: mcpServerConfigSchema,
+  enabledByDefault: z.boolean().optional(),
+  /** Только admin может явно запросить instance-запись; иначе — user/community. */
+  origin: z.enum(['instance', 'user']).optional(),
+});
+
+const registryUpdateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  config: mcpServerConfigSchema.optional(),
+  enabledByDefault: z.boolean().optional(),
+});
+
 export interface McpConfigStore {
   getServers(): Record<string, McpServerConfig>;
   addServer(name: string, config: McpServerConfig): Promise<void>;
@@ -38,11 +41,19 @@ export interface McpConfigStore {
   getServer(name: string): McpServerConfig | undefined;
 }
 
+export interface McpRoutesOptions {
+  /** AD-071 §2.5: реестр MCP-серверов (если не задан — только legacy-роуты). */
+  registry?: McpRegistryStore;
+  /** AD-071 §2.3.1: политика сетевого доступа HTTP-серверов. */
+  networkPolicy?: McpNetworkPolicy;
+}
+
 export function createMcpRoutes(
   kit: AuthKit,
   configStore: McpConfigStore,
   mcpManager: McpManager | null,
   sessionManager: SessionManager | null,
+  options: McpRoutesOptions = {},
 ): Hono {
   const app = new Hono();
 
@@ -298,6 +309,154 @@ export function createMcpRoutes(
           active: mcpServers.includes(name),
         })),
       });
+    });
+  }
+
+  // --- Единый реестр MCP-серверов (AD-071 §2.5) ---
+  if (options.registry) {
+    const registry = options.registry;
+    const networkPolicy = options.networkPolicy;
+
+    const syncManagerConfig = async (): Promise<void> => {
+      if (!mcpManager) return;
+      mcpManager.setConfig(await registry.toServerConfigMap());
+      mcpManager.setServerOrigins(await registry.toOriginMap());
+    };
+
+    const currentUser = (c: { get(key: 'user'): unknown }): User | null =>
+      (c.get('user') as User | undefined) ?? null;
+
+    const checkNetwork = async (
+      config: McpServerConfig,
+      origin: 'instance' | 'user',
+    ): Promise<{ code: string; message: string } | null> => {
+      // AD-071 §2.3.1: политика — для пользовательских HTTP-серверов; instance
+      // (в т.ч. приватные сети инстанса) доверенные.
+      if (origin !== 'user' || config.type === 'stdio' || !config.url || !networkPolicy) return null;
+      const result = await evaluateMcpNetworkAccess(config.url, networkPolicy);
+      if (result.allowed) return null;
+      return { code: 'NETWORK_POLICY_VIOLATION', message: result.reason ?? 'Адрес запрещён сетевой политикой' };
+    };
+
+    // Список записей реестра (auth).
+    app.get('/registry', kit.requireAuth, async (c) => {
+      const entries = await registry.list();
+      return c.json({ entries });
+    });
+
+    // Добавить запись (auth): HTTP — любой пользователь, stdio — только ADMIN.
+    app.post('/registry', kit.requireAuth, async (c) => {
+      const body = await c.req.json().catch(() => null);
+      const parsed = registryAddSchema.safeParse(body);
+      if (!parsed.success) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
+      }
+
+      const { name, config, enabledByDefault, origin } = parsed.data;
+      const admin = kit.isAdmin(c);
+
+      let entryOrigin: 'instance' | 'user';
+      let trust: 'builtin' | 'community';
+      if (config.type === 'stdio') {
+        if (!admin) {
+          return c.json({
+            error: { code: 'FORBIDDEN', message: 'stdio-серверы может добавлять только ADMIN' },
+          }, 403);
+        }
+        entryOrigin = 'instance';
+        trust = 'builtin';
+      } else {
+        entryOrigin = admin && origin === 'instance' ? 'instance' : 'user';
+        trust = entryOrigin === 'instance' ? 'builtin' : 'community';
+      }
+
+      const networkError = await checkNetwork(config, entryOrigin);
+      if (networkError) {
+        return c.json({ error: networkError }, 400);
+      }
+
+      if (await registry.getByName(name)) {
+        return c.json({ error: { code: 'CONFLICT', message: `Сервер "${name}" уже существует в реестре` } }, 409);
+      }
+
+      const user = currentUser(c);
+      const author = user ? { userId: user.id, username: user.username } : null;
+
+      const entry = await registry.add({
+        name,
+        config,
+        origin: entryOrigin,
+        trust,
+        author,
+        enabledByDefault,
+      });
+      await syncManagerConfig();
+      return c.json(entry, 201);
+    });
+
+    // Обновить запись (автор или ADMIN).
+    app.put('/registry/:id', kit.requireAuth, async (c) => {
+      const id = c.req.param('id');
+      const existing = await registry.get(id);
+      if (!existing) {
+        return c.json({ error: { code: 'NOT_FOUND', message: `Запись "${id}" не найдена` } }, 404);
+      }
+
+      const admin = kit.isAdmin(c);
+      const user = currentUser(c);
+      if (!admin && existing.author?.userId !== user?.id) {
+        return c.json({ error: { code: 'FORBIDDEN', message: 'Обновлять запись может автор или ADMIN' } }, 403);
+      }
+
+      const body = await c.req.json().catch(() => null);
+      const parsed = registryUpdateSchema.safeParse(body);
+      if (!parsed.success) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
+      }
+
+      const nextConfig = parsed.data.config ?? existing.config;
+      if (nextConfig.type === 'stdio' && !admin) {
+        return c.json({ error: { code: 'FORBIDDEN', message: 'stdio-серверы может изменять только ADMIN' } }, 403);
+      }
+
+      const networkError = await checkNetwork(nextConfig, existing.origin);
+      if (networkError) {
+        return c.json({ error: networkError }, 400);
+      }
+
+      if (
+        parsed.data.name
+        && parsed.data.name !== existing.name
+        && await registry.getByName(parsed.data.name)
+      ) {
+        return c.json({
+          error: { code: 'CONFLICT', message: `Сервер "${parsed.data.name}" уже существует в реестре` },
+        }, 409);
+      }
+
+      const updated = await registry.update(id, parsed.data);
+      await syncManagerConfig();
+      return c.json(updated);
+    });
+
+    // Удалить запись (автор или ADMIN).
+    app.delete('/registry/:id', kit.requireAuth, async (c) => {
+      const id = c.req.param('id');
+      const existing = await registry.get(id);
+      if (!existing) {
+        return c.json({ error: { code: 'NOT_FOUND', message: `Запись "${id}" не найдена` } }, 404);
+      }
+
+      const admin = kit.isAdmin(c);
+      const user = currentUser(c);
+      if (!admin && existing.author?.userId !== user?.id) {
+        return c.json({ error: { code: 'FORBIDDEN', message: 'Удалять запись может автор или ADMIN' } }, 403);
+      }
+
+      if (mcpManager) await mcpManager.disconnectServer(existing.name);
+      await registry.remove(id);
+      await syncManagerConfig();
+      return c.json({ success: true });
     });
   }
 

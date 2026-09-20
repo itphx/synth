@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { permissionConfigSchema } from '../types/permission.js';
-import { TOOLS_POLICIES } from '../types/index.js';
+import {
+  TOOLS_POLICIES,
+  MCP_NETWORK_POLICY_MODES,
+  DEFAULT_MCP_PRIVATE_CIDRS,
+  DEFAULT_MCP_NETWORK_POLICY,
+} from '../types/index.js';
 
 // --- SynthConfig: единый конфиг для всех компонентов ---
 
@@ -111,7 +116,7 @@ export const summarizationConfigSchema = z.object({
 });
 
 export const mcpServerConfigSchema = z.object({
-  type: z.enum(['stdio', 'sse']),
+  type: z.enum(['stdio', 'sse', 'http']),
   /** AD-071 §2.2: человекочитаемое описание сервера (попадает в блок `mcp.servers`). */
   description: z.string().optional(),
   command: z.string().optional(),
@@ -125,8 +130,18 @@ export const mcpServerConfigSchema = z.object({
   connectTimeout: z.number().int().min(1).optional(),
 });
 
+/**
+ * AD-071 §2.3.1: политика сетевого доступа пользовательских HTTP MCP-серверов.
+ * Дефолт — `deny` приватных/служебных диапазонов (SSRF/egress).
+ */
+export const mcpNetworkPolicySchema = z.object({
+  mode: z.enum(MCP_NETWORK_POLICY_MODES).default(DEFAULT_MCP_NETWORK_POLICY.mode),
+  list: z.array(z.string()).default([...DEFAULT_MCP_PRIVATE_CIDRS]),
+});
+
 export const mcpConfigSchema = z.object({
   servers: z.record(z.string(), mcpServerConfigSchema).default({}),
+  networkPolicy: mcpNetworkPolicySchema.default({}),
 });
 
 // --- Инструменты (AD-071 §2.3) ---

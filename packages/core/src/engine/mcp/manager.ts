@@ -1,10 +1,11 @@
 import { z } from 'zod';
-import type { McpServerConfig, ToolDefinition } from '@itphx/synth-shared';
+import type { McpServerConfig, McpNetworkPolicy, McpRegistryOrigin, ToolDefinition } from '@itphx/synth-shared';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolContext, ToolResult } from '@itphx/synth-shared';
 import { McpClient } from './client.js';
 import type { McpServerInfo } from './client.js';
+import { evaluateMcpNetworkAccess, isHttpMcpConfig } from './network-policy.js';
 import { info, warning } from '../../logger.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { ObfuscationMapStore } from '../gateway/obfuscation-map-store.js';
@@ -22,6 +23,10 @@ interface ServerEntry {
 export class McpManager {
   private _servers = new Map<string, ServerEntry>();
   private _config: Record<string, McpServerConfig> = {};
+  /** AD-071 §2.3.1: политика сетевого доступа HTTP-серверов (если задана). */
+  private _networkPolicy: McpNetworkPolicy | undefined;
+  /** AD-071 §2.5: origin серверов; сетевая политика применяется только к `user`. */
+  private _serverOrigins = new Map<string, McpRegistryOrigin>();
 
   setConfig(servers: Record<string, McpServerConfig>): void {
     this._config = servers;
@@ -29,6 +34,37 @@ export class McpManager {
 
   getConfig(): Record<string, McpServerConfig> {
     return this._config;
+  }
+
+  /** AD-071 §2.3.1: задать политику сетевого доступа (undefined — не проверять). */
+  setNetworkPolicy(policy: McpNetworkPolicy | undefined): void {
+    this._networkPolicy = policy;
+  }
+
+  getNetworkPolicy(): McpNetworkPolicy | undefined {
+    return this._networkPolicy;
+  }
+
+  /** AD-071 §2.5: origin серверов (instance — доверенные, user — community). */
+  setServerOrigins(origins: Record<string, McpRegistryOrigin>): void {
+    this._serverOrigins = new Map(Object.entries(origins));
+  }
+
+  /**
+   * AD-071 §2.3.1: проверка пользовательского (`origin: 'user'`) HTTP-сервера по
+   * сетевой политике перед подключением. `stdio` и instance-серверы не
+   * проверяются (RCE-риск и приватные сети инстанса регулируются иначе).
+   */
+  private async _assertNetworkAllowed(name: string, config: McpServerConfig): Promise<void> {
+    if (!this._networkPolicy || !isHttpMcpConfig(config)) return;
+    if (this._serverOrigins.get(name) !== 'user') return;
+    if (!config.url) {
+      throw new Error(`MCP-сервер "${name}" (${config.type}) не содержит url`);
+    }
+    const result = await evaluateMcpNetworkAccess(config.url, this._networkPolicy);
+    if (!result.allowed) {
+      throw new Error(`MCP-сервер "${name}" заблокирован сетевой политикой: ${result.reason}`);
+    }
   }
 
   getConfiguredServers(): Array<{ name: string; config: McpServerConfig; connected: boolean }> {
@@ -95,6 +131,8 @@ export class McpManager {
       return;
     }
 
+    await this._assertNetworkAllowed(name, config);
+
     const client = new McpClient(name, config);
 
     try {
@@ -128,6 +166,8 @@ export class McpManager {
     if (!config) {
       throw new Error(`MCP-сервер "${name}" не настроен`);
     }
+
+    await this._assertNetworkAllowed(name, config);
 
     const client = new McpClient(name, config);
     try {
