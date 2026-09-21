@@ -387,4 +387,14 @@
 - **Секции:** убрано автосохранение в `Appearance`/`Notifications`/`Chat` → черновик + `SettingsActions` Save/Cancel/Reset; закрытие/размонтирование = отмена (Appearance с live-preview и откатом к снапшоту); `notificationStore.setAllCategories`; `UiScaleControl` — контролируемый режим. Счётчики перенесены из `description` в `meta` (Sessions/Projects/Providers/Models/Users/Agents/Context); текстовые описания остались сворачиваемыми. `DefaultsPanel` — добавлена Отмена.
 - **Проверки:** ui typecheck/lint, `66 файлов / 524 теста` PASS; в браузере (390px): Models — `meta` виден при скролле (header collapsed 51px), actions в строке с заголовком; Notifications/Chat/Appearance — Save/Cancel/Reset; Reset-класс `border border-primary text-primary hover:bg-primary/10` (без сплошной заливки).
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** `4b068e5` (код), `ec06abc` (журнал).
+
+## 2026-09-21 — AD-072: переключатель фильтра «Агентов» под шапку
+- **Задача:** «На вкладке Агенты кроме кнопки вверх переехал переключатель вкладок — он должен был остаться на месте». По решению: переключатель — отдельной строкой под шапкой, в шапке только «+ Добавить».
+- **Тип:** bug fix (UI)
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS.
+- **Сделано:** `AgentsPanel` — `actions` = только «+ Добавить»; фильтр «Все/Агенты/Сабагенты/Системные» вынесен в начало тела (над формой/списком) через Kit `Tabs`, гейт `hasSubOrSystem`, локальный `renderFilterTabs` удалён. `meta` (счётчик) и фильтрация не менялись. Новый `AgentsPanel.test.tsx` (3 кейса).
+- **Проверки:** ui typecheck/lint, `67 файлов / 527 тестов` PASS; визуально (desktop): шапка «Агенты + 14 агентов + Добавить», ниже — полноширинный сегмент-переключатель.
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** этот.
