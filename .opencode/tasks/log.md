@@ -282,4 +282,14 @@
 - **Проверки:** core 113 файлов / 1607 тестов (новый `runtime-settings.test.ts`); ui 51 / 393 (новый `synthApi.settings-reset.test.ts`); backend 286; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm build` PASS.
 - **Замечание:** один прогон `task-resume.test.ts` флакнул при параллели с тестами (тайминги), изолированно и повторно — зелёный; к изменениям не относится.
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** `7d8d7b9` (код+docs), `8a3a97b` (журнал).
+
+## 2026-09-21 — AD-072 Ф3a: миграция MCP + Built-in tools на Kit
+- **Задача:** перевести MCP user/admin, «Встроенные инструменты» и `PolicySettingsCard` на коллекцию `components/ui/settings/`.
+- **Тип:** refactor (UI)
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS.
+- **Сделано:** `PolicySettingsCard` → `SettingsSection`+`SelectField`+`SettingsActions` (+`onReset`/`isDefault`); `McpUserSettings`/`McpSettings`/`ToolsDisabledSettings` → `SettingsPanel`/`SettingsSection`/Kit-контролы/`useSettingsDraft`; `ServerAvailabilityCard` без `max-h`; сетевой доступ — `SelectField` + `ListField chips`; reset-ы через `synthApi.reset*`; `SettingsActions` получил `*TestId`; `Toggle` — `disabled`. Сохранены все `data-testid`; добавлены `*-reset`/`mcp-network-save`.
+- **Проверки:** ui typecheck/lint/build PASS; 51 файл / 402 теста (+9). Мобильная проверка (Playwright, 390px): тело MCP-админки `scrollWidth=clientWidth=356`, карточки 308 по центру — горизонтального переполнения нет (было 555).
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** этот.
