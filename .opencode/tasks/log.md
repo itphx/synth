@@ -157,6 +157,21 @@
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** да.
 
+## 2026-09-20 — AD-071: завершение (две политики, UI, калибровка, документация)
+- **Задача:** довести AD-071 до конца: разделить политику, привести UI настроек, расширить калибровку, обновить инструкции.
+- **Тип:** feature + UI + docs
+- **Исполнитель:** @orchestrator → @fixer ×5
+- **Результат:** PASS. Коммиты: `15c2fb4` (две политики), `23809dd`/`117132e` (UI), `ad23b6f` (AGENTS/README), `8db2183` (калибровка).
+- **Что сделано:**
+  - **Две независимые политики:** `tools.policy` (встроенные) и `mcp.policy` (MCP), дефолт `auto`; API `/settings/tools-policy` и `/settings/mcp-policy`; session override обеих; фильтрация слоёв независима; `tools.guide` при любой `available`.
+  - **MCP-блоки всегда `volatile`** (`mcp.servers`/`mcp.tools`/`mcp.status`), не в `staticPrefixChars`; порядок `tools → mcp.servers → mcp.tools → mcp.status`.
+  - **UI:** отдельная админ-категория «Встроенные инструменты» (политика встроенных + отключение инструментов, галочка = включено); обе MCP-категории названы «MCP-серверы»; политика MCP в админ-секции MCP; sticky-шапки; единая кнопка сохранения (`PolicySettingsCard`); per-session override обеих; полировка по `better-ui`/`better-accessibility`.
+  - **Калибровка:** диапазон `chars-per-token` расширен `2..8` → `1.5..16`; калибровка сохраняется для эффективных токенизаторов (`omn.qwen3.8:27b` ≈13.3).
+  - **Docs:** AD-071 (две политики, MCP volatile, порядок, дефолт auto, §2.8), AD-046 §4.5, AD-068 §8.1, API_V2.md, CONFIGURATION.md; AGENTS.md (AD-071 ✅, `SYNTH_CONFIG` в dev, runtime-API), README AD, backend/AGENTS.md.
+- **Проверки:** build/typecheck 6/6, lint 0 errors, тесты shared 91 / core 1589 / ui 331 / backend 286. E2E: независимость политик, volatile/порядок MCP, калибровка, UI-разделы.
+- **Ветка:** `feat/ad-071-mcp-tools-scope` (18 коммитов).
+- **Коммит:** да.
+
 ## 2026-09-20 — AD-071 Ф8: админ-группа «Встроенные инструменты» + UI-полировка
 - **Задача:** «Отдельная админ-группа инструментов; починить инверсию переключателей (галочка = включено); применить UI-скилл».
 - **Тип:** feature + UI polish
