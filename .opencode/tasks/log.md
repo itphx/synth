@@ -301,4 +301,14 @@
 - **Сделано:** `SecuritySettings` → `SettingsPanel` + три `SettingsSection`; `useSettingsDraft` для шлюза (`Save/Cancel/Reset` через `resetLlmGatewaySettings`); паттерны — `TextField`/`flex-wrap` + `SettingsActions`; защищённые пути — `ToggleField`/`NumberField`/4×`ListField` вместо `StringListEditor`; `DefaultsBadge`; удалены нативные `<select>`/`w-20`, `StringListEditor`, `grid` без `grid-cols-1`. Два Save защищённых путей объединены в один (последовательно `saveSecuritySettings` + `saveProtectedPaths`).
 - **Проверки:** ui typecheck/lint PASS; 51 файл / 406 тестов. Мобильно (390px): тело `scrollWidth=clientWidth=361`, номер-поля на всю ширину, действия внизу секции.
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** `c8987b4` (код), `098c286` (журнал).
+
+## 2026-09-21 — AD-072 Ф4a: пользовательские секции настроек на Kit
+- **Тип:** refactor (UI)
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS.
+- **Сделано:** `Profile`, `Appearance` (+`appearance-controls`), `Notifications`, `Chat`, `MicroFirst`, `Routing` → `SettingsPanel`/`SettingsSection`/Kit-контролы/`Button`; черновики через `useSettingsDraft`; Reset для Appearance (`resetPreferences`+ConfirmDialog), MicroFirst (локальные дефолты), Routing (редактор словаря). Убраны legacy `SettingsPage`/`SettingsCard`, `grid` без `grid-cols-1`, `pr-2`. Новые тесты: 6 файлов / 21 тест.
+- **Проверки:** ui typecheck/lint PASS; 57 файлов / 427 тестов.
+- **Замечания:** `SegmentedControl` оставлен из legacy (в Kit нет) — кандидат на Kit-контрол; `MicroFirst` confidence переведён со слайдера на `NumberField` (требование «числа → NumberField») — кандидат на отдельный `SliderField`; `RoutingSettings.handleReset` использует `window.confirm` (pre-existing).
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** этот.
