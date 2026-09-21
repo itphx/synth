@@ -89,6 +89,72 @@ describe('authStore: loginWithPassword (лёгкий runtime-вход)', () => {
   })
 })
 
+describe('authStore: reauthenticate (только /auth/status, без 401-шума)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubGlobal('localStorage', { removeItem: vi.fn() })
+    useAuthStore.setState(INITIAL_STATE)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('authenticated=true → user/isAuthenticated/deployment + профиль, getSession не вызывается', async () => {
+    vi.mocked(api.getStatus).mockResolvedValue({
+      authenticated: true,
+      debug_mode: false,
+      oidc_enabled: false,
+      deployment: 'managed',
+      user: { id: 'u1', username: 'dev', email: null, roles: ['USER'] },
+    })
+
+    await useAuthStore.getState().reauthenticate()
+
+    const s = useAuthStore.getState()
+    expect(s.isAuthenticated).toBe(true)
+    expect(s.user?.username).toBe('dev')
+    expect(s.deployment).toBe('managed')
+    expect(s.isInitialized).toBe(true)
+    expect(profileService.initialize).toHaveBeenCalledTimes(1)
+    expect(api.getSession).not.toHaveBeenCalled()
+  })
+
+  it('authenticated=false → гость, профиль не инициализируется, getSession не вызывается', async () => {
+    vi.mocked(api.getStatus).mockResolvedValue({
+      authenticated: false,
+      debug_mode: false,
+      oidc_enabled: false,
+      deployment: 'managed',
+      user: null,
+    })
+
+    await useAuthStore.getState().reauthenticate()
+
+    const s = useAuthStore.getState()
+    expect(s.isAuthenticated).toBe(false)
+    expect(s.user).toBeNull()
+    expect(s.isInitialized).toBe(true)
+    expect(s.isLoading).toBe(false)
+    expect(profileService.initialize).not.toHaveBeenCalled()
+    expect(api.getSession).not.toHaveBeenCalled()
+  })
+
+  it('getStatus reject → не бросает, инициализация завершается гостем', async () => {
+    vi.mocked(api.getStatus).mockRejectedValue(new Error('network'))
+
+    await expect(useAuthStore.getState().reauthenticate()).resolves.toBeUndefined()
+
+    const s = useAuthStore.getState()
+    expect(s.isAuthenticated).toBe(false)
+    expect(s.user).toBeNull()
+    expect(s.isInitialized).toBe(true)
+    expect(s.isLoading).toBe(false)
+    expect(s.deployment).toBeNull()
+    expect(profileService.initialize).not.toHaveBeenCalled()
+  })
+})
+
 describe('authStore: logout', () => {
   beforeEach(() => {
     vi.clearAllMocks()
