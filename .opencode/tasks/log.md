@@ -292,4 +292,13 @@
 - **Сделано:** `PolicySettingsCard` → `SettingsSection`+`SelectField`+`SettingsActions` (+`onReset`/`isDefault`); `McpUserSettings`/`McpSettings`/`ToolsDisabledSettings` → `SettingsPanel`/`SettingsSection`/Kit-контролы/`useSettingsDraft`; `ServerAvailabilityCard` без `max-h`; сетевой доступ — `SelectField` + `ListField chips`; reset-ы через `synthApi.reset*`; `SettingsActions` получил `*TestId`; `Toggle` — `disabled`. Сохранены все `data-testid`; добавлены `*-reset`/`mcp-network-save`.
 - **Проверки:** ui typecheck/lint/build PASS; 51 файл / 402 теста (+9). Мобильная проверка (Playwright, 390px): тело MCP-админки `scrollWidth=clientWidth=356`, карточки 308 по центру — горизонтального переполнения нет (было 555).
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** `2f5ca39` (код), `4a82c9d` (журнал).
+
+## 2026-09-21 — AD-072 Ф3b: миграция SecuritySettings на Kit
+- **Тип:** refactor (UI)
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS.
+- **Сделано:** `SecuritySettings` → `SettingsPanel` + три `SettingsSection`; `useSettingsDraft` для шлюза (`Save/Cancel/Reset` через `resetLlmGatewaySettings`); паттерны — `TextField`/`flex-wrap` + `SettingsActions`; защищённые пути — `ToggleField`/`NumberField`/4×`ListField` вместо `StringListEditor`; `DefaultsBadge`; удалены нативные `<select>`/`w-20`, `StringListEditor`, `grid` без `grid-cols-1`. Два Save защищённых путей объединены в один (последовательно `saveSecuritySettings` + `saveProtectedPaths`).
+- **Проверки:** ui typecheck/lint PASS; 51 файл / 406 тестов. Мобильно (390px): тело `scrollWidth=clientWidth=361`, номер-поля на всю ширину, действия внизу секции.
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** этот.
