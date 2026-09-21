@@ -266,4 +266,20 @@
 - **Документация:** `docs/arch_decisions/ad-072-settings-ui-kit.md` (⚠️ Частично — коллекция готова, миграция разделов впереди), `docs/arch_decisions/README.md`, корневой `AGENTS.md` (индекс + триггер), `packages/ui/AGENTS.md`.
 - **Проверки:** typecheck PASS; lint 0 errors (33 предсуществующих warning в `LeftPanel`); ui tests 50 файлов / 385 тестов (+25 новых).
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** `88b1a2e` (код+docs), `a877bde` (журнал).
+
+## 2026-09-21 — AD-072 Ф2: reset/defaults runtime-настроек (backend)
+- **Задача:** «Правим бэк где это необходимо» — честный «сброс к умолчанию» для настроек.
+- **Тип:** feature (API)
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS.
+- **Сделано:**
+  - `RuntimeSettingsStore`: `clearWorkspace/clearMcpSettings/clearLlmGatewaySettings/clearSecuritySettings/clearToolsPolicy/clearMcpPolicy/clearToolsDisabled/clearMcpNetworkPolicy` (удаляют только своё поле).
+  - Роуты `settings.ts`: единый контракт — GET `{ field, isOverridden, defaults }`, новые `DELETE` с `{ status:'restored', field, isOverridden:false, defaults }` и live-применением дефолта (`on*Change`) для: workspace, mcp, llm-gateway, security, tools-policy, mcp-policy, mcp-network-policy, tools-disabled. GET `/llm-gateway` и `/security` теперь отдают эффективное значение (runtime поверх config-дефолтов).
+  - `app.ts` (core и backend): переданы `fallbackLlmGateway`/`fallbackSecurity` из config.yaml.
+  - UI `synthApi`: 8 методов `reset*` (возвращают восстановленное значение); GET-обёртки не менялись.
+  - `docs/API_V2.md`: контракты GET/DELETE + отсутствовавший `mcp-network-policy`.
+- **Проверки:** core 113 файлов / 1607 тестов (новый `runtime-settings.test.ts`); ui 51 / 393 (новый `synthApi.settings-reset.test.ts`); backend 286; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm build` PASS.
+- **Замечание:** один прогон `task-resume.test.ts` флакнул при параллели с тестами (тайминги), изолированно и повторно — зелёный; к изменениям не относится.
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** этот.
