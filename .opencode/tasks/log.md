@@ -192,3 +192,27 @@
 - **Изменённые файлы:** `docs/arch_decisions/ad-071-mcp-servers-prompt.md` (новый), `docs/arch_decisions/README.md`, `AGENTS.md` (индекс + триггер).
 - **Ветка:** `feat/ad-070-system-prompt-composer`
 - **Коммит:** нет (ожидает явной просьбы пользователя).
+
+## 2026-09-21 — Разбор сообщений консоли браузера UI
+- **Задача:** «Полазил по UI. Разберись что за сообщения валятся в консоль браузера».
+- **Тип:** bug fix + research (perf)
+- **Исполнитель:** @orchestrator → @fixer, @explore
+- **Результат:** PASS. Вложенная кнопка исправлена; по тормозам — ранжированные гипотезы.
+- **Разбор консоли:** (1) Vite HMR + React DevTools — норма dev; (2) `GET /auth/session → 401` — by design: `authStore.reauthenticate()` (`authStore.ts:46`) сначала пробует cookie-сессию, при 401 падает на `api.getStatus()` (`:55-63`); (3) двойной старт транспорта (`Switching auto→auto` → повторный `connect('ws')` после применения сохранённого режима) → `connect()` (`transportStore.ts:722`) всегда пересоздаёт клиент, поэтому первый сокет закрывается до handshake → «WebSocket is closed before the connection is established» (косметика, финально `Backend ready: ws`); (4) `[Violation] Forced reflow` + `click handler 300–500ms` — производительность, см. исследование; (5) **реальный баг**: `SubagentPart.tsx:155 In HTML, <button> cannot be a descendant of <button>`.
+- **Фикс:** `packages/ui/src/components/chat/SubagentPart.tsx` — внешний `<button>`-заголовок заменён на `<div role="button" tabIndex={0} aria-expanded>` + `onKeyDown` (Enter/Space); внутренняя кнопка «Открыть сессию» осталась настоящим `<button type="button">` с `stopPropagation`; классы/иконки/i18n сохранены. В `SubagentPart.error.test.tsx` добавлены 4 регресс-теста (нет вложенных кнопок; «Открыть» открывает вкладку и не toggle; клик/Enter по заголовку toggle).
+- **Verification:** typecheck PASS, lint 0 errors (33 pre-existing warnings), ui tests 335/335 PASS.
+- **Perf-исследование (гипотезы, фикс не делался):** Г1 — массовые `useUIStore()`/`useChatStore()` без селекторов (`App.tsx:85`, `Header.tsx:33,53`, `ChatTab.tsx:53`, `StatsTab.tsx:137`) → любой клик ре-рендерит всё дерево; Г2 — `React.memo` ChatMessage сломан инлайн-колбэками `chatMsgProps` (`MessageList.tsx:156-189,218,227`) + новыми `{}`/`Set` (`ChatTab.tsx:56-57,85`); Г3 — `TitleTooltipBridge` (глобальные capture-слушатели + мутация `title` предков + измерение в layout-эффекте) даёт forced reflow. Минимальные безрисковые правки: точечные селекторы + стабильные пустые референсы; затем memo-контракт.
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** нет (ожидает явной просьбы пользователя).
+
+## 2026-09-21 — Perf-правки 1–2: селекторы + стабильные пустые референсы
+- **Задача:** «Поправь 1 и 2» (из perf-исследования: точечные zustand-селекторы и стабильные пустые ссылки).
+- **Тип:** refactor (производительность, без изменения поведения)
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS. Коммит не делался (инвариант 13).
+- **Что сделано:** (1) убраны whole-store подписки: `App.tsx:85-95` — 11 селекторов `useUIStore`; `Header.tsx:28-42,61-64` — 14 селекторов `useUIStore` + `useAuthStore(s=>s.user)` + `useChatStore(s=>s.messagesBySession)` + 2 `useProvidersStore` (была ещё whole-store подписка, не указанная в исследовании); `ChatTab.tsx:29-53` — 23 селектора `useChatStore`; `StatsTab.tsx:137,144` — селекторы `useChatStore`/`useSessionsStore`. (2) в `ChatTab.tsx` модульные константы `EMPTY_MESSAGES: MessageData[]`, `EMPTY_STREAMS: Record<string, StreamState>`, `EMPTY_PENDING: QueuedMessage[]`, `EMPTY_STICKY: StickyNoteData[]`, `EMPTY_INDICES: Set<number>` заменили `|| []`, `|| {}`, `?? new Set()` (семантика `||`/`??` сохранена).
+- **Проверки:** typecheck PASS, lint 0 errors (33 pre-existing warnings в LeftPanel, новых нет), ui tests 43 files / 335 tests PASS.
+- **Не в скоупе (найдено):** ещё whole-store подписки в `App.tsx:39` (DefaultsSync) и ~30 компонентах (LeftPanel, ProjectsTabToolbar, RightPanel, SettingsModal и др.) — кандидаты на отдельную задачу. Г2 (memo ChatMessage) и Г3 (TitleTooltipBridge) не трогались.
+- **Риск:** `EMPTY_*` — общие мутабельные референсы; мутаций нет, но в будущем их нельзя мутировать (иначе протечёт между сессиями).
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** нет (ожидает явной просьбы пользователя).
