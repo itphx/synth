@@ -82,7 +82,17 @@ function DefaultsSync() {
 }
 
 function App() {
-  const { leftPanel, rightPanel, setLeftPanelWidth, setRightPanelWidth, setSettingsDialogOpen, setSettingsPage, leftPanelTab, mobileLeftOpen, mobileRightOpen, setMobileLeftOpen, setMobileRightOpen } = useUIStore()
+  const leftPanel = useUIStore(s => s.leftPanel)
+  const rightPanel = useUIStore(s => s.rightPanel)
+  const setLeftPanelWidth = useUIStore(s => s.setLeftPanelWidth)
+  const setRightPanelWidth = useUIStore(s => s.setRightPanelWidth)
+  const setSettingsDialogOpen = useUIStore(s => s.setSettingsDialogOpen)
+  const setSettingsPage = useUIStore(s => s.setSettingsPage)
+  const leftPanelTab = useUIStore(s => s.leftPanelTab)
+  const mobileLeftOpen = useUIStore(s => s.mobileLeftOpen)
+  const mobileRightOpen = useUIStore(s => s.mobileRightOpen)
+  const setMobileLeftOpen = useUIStore(s => s.setMobileLeftOpen)
+  const setMobileRightOpen = useUIStore(s => s.setMobileRightOpen)
   const forwardMode = useUIStore(s => s.forwardMode)
   const { deviceType } = useDevice()
   useViewportHeight()

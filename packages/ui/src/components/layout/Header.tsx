@@ -25,13 +25,21 @@ interface HeaderProps {
 export const Header = ({ onSettingsClick }: HeaderProps) => {
   const { t } = useI18n()
   const { notify } = useNotification()
-  const {
-    leftPanel, rightPanel, toggleLeftPanel, toggleRightPanel,
-    setSettingsDialogOpen, setLogsDialogOpen, centerTabs, activeCenterTabId,
-    openTab, closeTab,
-    mobileLeftOpen, mobileRightOpen, setMobileLeftOpen, setMobileRightOpen,
-  } = useUIStore()
-  const { user } = useAuthStore()
+  const leftPanel = useUIStore((s) => s.leftPanel)
+  const rightPanel = useUIStore((s) => s.rightPanel)
+  const toggleLeftPanel = useUIStore((s) => s.toggleLeftPanel)
+  const toggleRightPanel = useUIStore((s) => s.toggleRightPanel)
+  const setSettingsDialogOpen = useUIStore((s) => s.setSettingsDialogOpen)
+  const setLogsDialogOpen = useUIStore((s) => s.setLogsDialogOpen)
+  const centerTabs = useUIStore((s) => s.centerTabs)
+  const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
+  const openTab = useUIStore((s) => s.openTab)
+  const closeTab = useUIStore((s) => s.closeTab)
+  const mobileLeftOpen = useUIStore((s) => s.mobileLeftOpen)
+  const mobileRightOpen = useUIStore((s) => s.mobileRightOpen)
+  const setMobileLeftOpen = useUIStore((s) => s.setMobileLeftOpen)
+  const setMobileRightOpen = useUIStore((s) => s.setMobileRightOpen)
+  const user = useAuthStore((s) => s.user)
   const { deviceType } = useDevice()
   const isMobile = deviceType !== 'desktop'
   const projects = useProjectsStore((s) => s.projects)
@@ -50,9 +58,10 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   const isCommitDetail = activeTab?.type === 'commit-detail'
 
   // Chat tab context window calculation
-  const { messagesBySession } = useChatStore()
+  const messagesBySession = useChatStore((s) => s.messagesBySession)
   const sessions = useSessionsStore((s) => s.sessions)
-  const { selectedModelName, models: providersModels } = useProvidersStore()
+  const selectedModelName = useProvidersStore((s) => s.selectedModelName)
+  const providersModels = useProvidersStore((s) => s.models)
   const sessionId = activeTab?.data?.sessionId
 
   const activeSession = sessionId ? sessions.find((s) => s.id === sessionId) : undefined

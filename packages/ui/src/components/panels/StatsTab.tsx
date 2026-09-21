@@ -134,14 +134,14 @@ export const StatsTab: React.FC = () => {
   const centerTabs = useUIStore((s) => s.centerTabs)
   const activeTab = centerTabs.find((tab) => tab.id === activeTabId)
   const activeSessionId = activeTab?.data?.sessionId
-  const { messagesBySession } = useChatStore()
+  const messagesBySession = useChatStore((s) => s.messagesBySession)
   // Сигнал завершения стрима (успех/отмена/ошибка): `finishStream` часто
   // обновляет существующее assistant-сообщение без смены id, поэтому
   // `lastAssistantMsg?.id` не гарантирует перезапрос статистики.
   const streamFinishTick = useChatStore((s) =>
     activeSessionId ? s.streamFinishTickBySession[activeSessionId] ?? 0 : 0,
   )
-  const { sessions } = useSessionsStore()
+  const sessions = useSessionsStore((s) => s.sessions)
   const agents = useAgentsStore((s) => s.agents)
 
   const activeSession = activeSessionId ? sessions.find((s) => s.id === activeSessionId) : undefined

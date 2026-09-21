@@ -2,10 +2,10 @@ import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useAgentsStore } from '@/stores/agentsStore'
-import { useChatStore, type MessageData } from '@/stores/chatStore'
+import { useChatStore, type MessageData, type QueuedMessage, type StreamState } from '@/stores/chatStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useTransportStore } from '@/stores/transportStore'
-import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
+import { synthApi, type AgentInfo, type StickyNoteData } from '@/lib/api/synthApi'
 import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
 import { MessageList } from './MessageList'
@@ -23,41 +23,47 @@ interface ChatTabProps {
   tab: CenterTab
 }
 
+// Стабильные пустые референсы: иначе каждый рендер создаёт новые []/{}/Set,
+// ломая мемоизацию memo-детей (MessageList и пр.).
+const EMPTY_MESSAGES: MessageData[] = []
+const EMPTY_STREAMS: Record<string, StreamState> = {}
+const EMPTY_PENDING: QueuedMessage[] = []
+const EMPTY_STICKY: StickyNoteData[] = []
+const EMPTY_INDICES: Set<number> = new Set()
+
 export function ChatTab({ tab }: ChatTabProps) {
   const { t } = useI18n()
   const { notify } = useNotification()
-  const {
-    messagesBySession,
-    streamingBySession,
-    queueBySession,
-    pendingBySession,
-    retryBySession,
-    finalErrorBySession,
-    stickyNotesBySession,
-    summarizationPendingBySession,
-    debugModalSessionId,
-    debugModalMessageIndex,
-    setMessages,
-    updateMessage,
-    clearQueueState,
-    resetQueueStalled,
-    updateQueueCount,
-    setPendingMessages,
-    setStickyNotes,
-    setSummarizationPending,
-    openDebugModal,
-    closeDebugModal,
-    setRetryInput,
-    setStreamRetry,
-    setStreamRetrying,
-  } = useChatStore()
+  const messagesBySession = useChatStore(s => s.messagesBySession)
+  const streamingBySession = useChatStore(s => s.streamingBySession)
+  const queueBySession = useChatStore(s => s.queueBySession)
+  const pendingBySession = useChatStore(s => s.pendingBySession)
+  const retryBySession = useChatStore(s => s.retryBySession)
+  const finalErrorBySession = useChatStore(s => s.finalErrorBySession)
+  const stickyNotesBySession = useChatStore(s => s.stickyNotesBySession)
+  const summarizationPendingBySession = useChatStore(s => s.summarizationPendingBySession)
+  const debugModalSessionId = useChatStore(s => s.debugModalSessionId)
+  const debugModalMessageIndex = useChatStore(s => s.debugModalMessageIndex)
+  const setMessages = useChatStore(s => s.setMessages)
+  const updateMessage = useChatStore(s => s.updateMessage)
+  const clearQueueState = useChatStore(s => s.clearQueueState)
+  const resetQueueStalled = useChatStore(s => s.resetQueueStalled)
+  const updateQueueCount = useChatStore(s => s.updateQueueCount)
+  const setPendingMessages = useChatStore(s => s.setPendingMessages)
+  const setStickyNotes = useChatStore(s => s.setStickyNotes)
+  const setSummarizationPending = useChatStore(s => s.setSummarizationPending)
+  const openDebugModal = useChatStore(s => s.openDebugModal)
+  const closeDebugModal = useChatStore(s => s.closeDebugModal)
+  const setRetryInput = useChatStore(s => s.setRetryInput)
+  const setStreamRetry = useChatStore(s => s.setStreamRetry)
+  const setStreamRetrying = useChatStore(s => s.setStreamRetrying)
 
   const sessionId = tab.data.sessionId || tab.id
-  const messages = messagesBySession[sessionId] || []
-  const streams = streamingBySession[sessionId] || {}
+  const messages = messagesBySession[sessionId] || EMPTY_MESSAGES
+  const streams = streamingBySession[sessionId] || EMPTY_STREAMS
   const queue = queueBySession[sessionId]
-  const pending = pendingBySession[sessionId] || []
-  const stickyNotes = stickyNotesBySession[sessionId] || []
+  const pending = pendingBySession[sessionId] || EMPTY_PENDING
+  const stickyNotes = stickyNotesBySession[sessionId] || EMPTY_STICKY
   const streamRetry = retryBySession[sessionId]
   const summarizationPending = summarizationPendingBySession[sessionId] || false
   const finalError = finalErrorBySession[sessionId] || null
@@ -82,7 +88,7 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   const selectionState = useChatStore(s => s.selectionBySession[sessionId])
   const selectionMode = selectionState?.mode ?? false
-  const selectedIndices = selectionState?.indices ?? new Set<number>()
+  const selectedIndices = selectionState?.indices ?? EMPTY_INDICES
 
   const [sessionOrigin, setSessionOrigin] = useState<string | null>(null)
   const isSubagent = sessionOrigin === 'subagent'
