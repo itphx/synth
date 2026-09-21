@@ -16,15 +16,13 @@ type PopoverType = null | 'session'
 
 export const ProjectsTabToolbar: React.FC = () => {
   const { t } = useI18n()
-  const {
-    sortMode,
-    toggleSortMode,
-    selectionMode,
-    toggleSelectionMode,
-  } = useSessionsTreeStore()
-  const { projects } = useProjectsStore()
-  const { createSession } = useSessionsStore()
-  const { collapsedProjects } = useUIStore()
+  const sortMode = useSessionsTreeStore(s => s.sortMode)
+  const toggleSortMode = useSessionsTreeStore(s => s.toggleSortMode)
+  const selectionMode = useSessionsTreeStore(s => s.selectionMode)
+  const toggleSelectionMode = useSessionsTreeStore(s => s.toggleSelectionMode)
+  const projects = useProjectsStore(s => s.projects)
+  const createSession = useSessionsStore(s => s.createSession)
+  const collapsedProjects = useUIStore(s => s.collapsedProjects)
   const hybridEnabled = useHybridStore((s) => s.enabled)
   const isOffline = useHybridStore(selectIsOffline)
   const openTab = useUIStore((s) => s.openTab)

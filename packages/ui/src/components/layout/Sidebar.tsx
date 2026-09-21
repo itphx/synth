@@ -23,7 +23,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const { t } = useI18n()
   const [isResizing, setIsResizing] = React.useState(false)
-  const { toggleLeftPanel, toggleRightPanel } = useUIStore()
+  const toggleLeftPanel = useUIStore(s => s.toggleLeftPanel)
+  const toggleRightPanel = useUIStore(s => s.toggleRightPanel)
   const togglePanel = side === 'left' ? toggleLeftPanel : toggleRightPanel
 
   const handleResize = React.useCallback(

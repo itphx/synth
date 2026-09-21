@@ -36,12 +36,25 @@ const TRUST_BADGE: Record<string, string> = {
 export const McpSettings = () => {
   const { t } = useI18n()
   const { notify } = useNotification()
-  const {
-    registry, loading, error, fetchRegistry, addRegistryEntry, updateRegistryEntry, deleteRegistryEntry,
-    toolSettings, toolSettingsLoading, toolSettingsError,
-    fetchToolSettings, updateToolAvailability, saveToolSettings, probeServer,
-    networkPolicy, networkPolicyLoading, networkPolicyError, fetchNetworkPolicy, saveNetworkPolicy,
-  } = useMcpStore()
+  const registry = useMcpStore(s => s.registry)
+  const loading = useMcpStore(s => s.loading)
+  const error = useMcpStore(s => s.error)
+  const fetchRegistry = useMcpStore(s => s.fetchRegistry)
+  const addRegistryEntry = useMcpStore(s => s.addRegistryEntry)
+  const updateRegistryEntry = useMcpStore(s => s.updateRegistryEntry)
+  const deleteRegistryEntry = useMcpStore(s => s.deleteRegistryEntry)
+  const toolSettings = useMcpStore(s => s.toolSettings)
+  const toolSettingsLoading = useMcpStore(s => s.toolSettingsLoading)
+  const toolSettingsError = useMcpStore(s => s.toolSettingsError)
+  const fetchToolSettings = useMcpStore(s => s.fetchToolSettings)
+  const updateToolAvailability = useMcpStore(s => s.updateToolAvailability)
+  const saveToolSettings = useMcpStore(s => s.saveToolSettings)
+  const probeServer = useMcpStore(s => s.probeServer)
+  const networkPolicy = useMcpStore(s => s.networkPolicy)
+  const networkPolicyLoading = useMcpStore(s => s.networkPolicyLoading)
+  const networkPolicyError = useMcpStore(s => s.networkPolicyError)
+  const fetchNetworkPolicy = useMcpStore(s => s.fetchNetworkPolicy)
+  const saveNetworkPolicy = useMcpStore(s => s.saveNetworkPolicy)
   const userId = useAuthStore((s) => s.user?.id)
   const roles = useAuthStore((s) => s.user?.roles ?? [])
   const isAdmin = roles.includes('ADMIN')

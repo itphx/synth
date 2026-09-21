@@ -11,7 +11,7 @@ const MAX_AVATAR_SIZE = 500 * 1024
 
 export const ProfileSettings = () => {
   const { t } = useI18n()
-  const { user } = useAuthStore()
+  const user = useAuthStore(s => s.user)
   const [form, setForm] = useState({
     username: '',
     display_name: '',

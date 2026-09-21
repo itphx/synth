@@ -21,7 +21,8 @@ function formatMcpTokens(estTokens: number | undefined, ratio: number | undefine
 export function ContextTab() {
   const { t } = useI18n()
   const { notify } = useNotification()
-  const { stickyNotesBySession, setStickyNotes } = useChatStore()
+  const stickyNotesBySession = useChatStore(s => s.stickyNotesBySession)
+  const setStickyNotes = useChatStore(s => s.setStickyNotes)
 
   const activeTabId = useUIStore((s) => s.activeCenterTabId)
   const centerTabs = useUIStore((s) => s.centerTabs)

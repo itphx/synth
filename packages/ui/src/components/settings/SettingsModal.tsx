@@ -60,8 +60,11 @@ export const CATEGORIES: CategoryItem[] = [
 
 export const SettingsModal = () => {
   const { t } = useI18n()
-  const { user } = useAuthStore()
-  const { isSettingsDialogOpen, setSettingsDialogOpen, settingsPage, setSettingsPage } = useUIStore()
+  const user = useAuthStore(s => s.user)
+  const isSettingsDialogOpen = useUIStore(s => s.isSettingsDialogOpen)
+  const setSettingsDialogOpen = useUIStore(s => s.setSettingsDialogOpen)
+  const settingsPage = useUIStore(s => s.settingsPage)
+  const setSettingsPage = useUIStore(s => s.setSettingsPage)
   const { deviceType } = useDevice()
   const isPhone = deviceType === 'phone'
 

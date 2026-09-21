@@ -11,7 +11,8 @@ import { UiScaleControl } from './UiScaleControl'
 import { SettingsCard, ThemeModeControl, ThemeControl, LanguageControl } from './appearance-controls'
 
 export const AppearanceSettings = () => {
-  const { setLocale: setUILocale, setThemeMode: setUIThemeMode } = useUIStore()
+  const setUILocale = useUIStore(s => s.setLocale)
+  const setUIThemeMode = useUIStore(s => s.setThemeMode)
   const { t, locale: i18nLocale, setLocale: setI18nLocale } = useI18n()
   const {
     themeMode,

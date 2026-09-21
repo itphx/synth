@@ -16,15 +16,13 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 export function SessionSettingsTab() {
   const { t } = useI18n()
   const { notify } = useNotification()
-  const { sessions } = useSessionsStore()
-  const {
-    selectedProviderName,
-    selectedModelName,
-    setSelectedProvider,
-    setSelectedModel,
-    loadProviders,
-    loadModels,
-  } = useProvidersStore()
+  const sessions = useSessionsStore(s => s.sessions)
+  const selectedProviderName = useProvidersStore(s => s.selectedProviderName)
+  const selectedModelName = useProvidersStore(s => s.selectedModelName)
+  const setSelectedProvider = useProvidersStore(s => s.setSelectedProvider)
+  const setSelectedModel = useProvidersStore(s => s.setSelectedModel)
+  const loadProviders = useProvidersStore(s => s.loadProviders)
+  const loadModels = useProvidersStore(s => s.loadModels)
 
   const providers = useProvidersStore((s) => s.providers)
   const models = useProvidersStore((s) => s.models)

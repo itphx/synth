@@ -36,7 +36,8 @@ import { useDevice } from '@/hooks/useDevice'
 import { useViewportHeight } from '@/hooks/useViewportHeight'
 
 function DefaultsSync() {
-  const { isAuthenticated, isInitialized } = useAuthStore()
+  const isAuthenticated = useAuthStore(s => s.isAuthenticated)
+  const isInitialized = useAuthStore(s => s.isInitialized)
 
   useEffect(() => {
     if (!isInitialized) {

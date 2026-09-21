@@ -27,8 +27,11 @@ const CATEGORIES: CategoryItem[] = [
 /** Модальное окно «Логи и аудит»: логи сервисов core/ui/backend + журнал аудита LLM Gateway. */
 export const LogsModal = () => {
   const { t } = useI18n()
-  const { user } = useAuthStore()
-  const { isLogsDialogOpen, setLogsDialogOpen, logsPage, setLogsPage } = useUIStore()
+  const user = useAuthStore(s => s.user)
+  const isLogsDialogOpen = useUIStore(s => s.isLogsDialogOpen)
+  const setLogsDialogOpen = useUIStore(s => s.setLogsDialogOpen)
+  const logsPage = useUIStore(s => s.logsPage)
+  const setLogsPage = useUIStore(s => s.setLogsPage)
   const { deviceType } = useDevice()
   const isPhone = deviceType === 'phone'
 

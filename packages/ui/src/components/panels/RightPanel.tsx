@@ -23,7 +23,10 @@ export const RIGHT_TABS = [
 
 export const RightPanel: React.FC = () => {
   const { t } = useI18n()
-  const { rightPanelTab, setRightPanelTab, centerTabs, activeCenterTabId } = useUIStore()
+  const rightPanelTab = useUIStore(s => s.rightPanelTab)
+  const setRightPanelTab = useUIStore(s => s.setRightPanelTab)
+  const centerTabs = useUIStore(s => s.centerTabs)
+  const activeCenterTabId = useUIStore(s => s.activeCenterTabId)
   const user = useAuthStore((s) => s.user)
   const activeTab = centerTabs.find((t) => t.id === activeCenterTabId)
   const sessionId = activeTab?.data?.sessionId

@@ -14,7 +14,10 @@ interface AgentModeSelectorProps {
 }
 
 export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
-  const { agents, activeAgentId, setActiveAgentId, loadAgents } = useAgentsStore()
+  const agents = useAgentsStore(s => s.agents)
+  const activeAgentId = useAgentsStore(s => s.activeAgentId)
+  const setActiveAgentId = useAgentsStore(s => s.setActiveAgentId)
+  const loadAgents = useAgentsStore(s => s.loadAgents)
   const { t } = useI18n()
   const { deviceType } = useDevice()
   const centralNarrow = useUIStore((s) => s.centralNarrow)

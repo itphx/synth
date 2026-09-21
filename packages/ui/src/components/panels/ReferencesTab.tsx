@@ -34,7 +34,7 @@ export function ReferencesTab({ sessionId }: ReferencesTabProps) {
   const [refs, setRefs] = useState<Reference[]>([])
   const [sessionNames, setSessionNames] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
-  const { setMessages } = useChatStore()
+  const setMessages = useChatStore(s => s.setMessages)
   const openTab = useUIStore((s) => s.openTab)
 
   const load = async () => {

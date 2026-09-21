@@ -17,8 +17,14 @@ interface QuickSettingsPopupProps {
 
 export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps) => {
   const { t, setLocale: setI18nLocale } = useI18n()
-  const { user, profile } = useAuthStore()
-  const { themeMode, setThemeMode, locale: uiLocale, setLocale: setUILocale, setSettingsDialogOpen, setSettingsPage } = useUIStore()
+  const user = useAuthStore(s => s.user)
+  const profile = useAuthStore(s => s.profile)
+  const themeMode = useUIStore(s => s.themeMode)
+  const setThemeMode = useUIStore(s => s.setThemeMode)
+  const uiLocale = useUIStore(s => s.locale)
+  const setUILocale = useUIStore(s => s.setLocale)
+  const setSettingsDialogOpen = useUIStore(s => s.setSettingsDialogOpen)
+  const setSettingsPage = useUIStore(s => s.setSettingsPage)
   const { setThemeMode: setThemeSystemMode } = useThemeSystem()
   const [isOpen, setIsOpen] = useState(false)
   const [locales, setLocales] = useState<Array<{ value: string; label: string }>>([])

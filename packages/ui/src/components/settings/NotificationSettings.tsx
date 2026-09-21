@@ -14,7 +14,8 @@ const CATEGORIES: { id: NotifyCategory; labelKey: string; descKey: string }[] = 
 
 export function NotificationSettings() {
   const { t } = useI18n()
-  const { prefs, setCategoryEnabled } = useNotificationStore()
+  const prefs = useNotificationStore(s => s.prefs)
+  const setCategoryEnabled = useNotificationStore(s => s.setCategoryEnabled)
 
   return (
     <SettingsPage title={t('notifications.title')} description={t('notifications.description')}>

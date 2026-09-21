@@ -6,12 +6,14 @@ import { useI18n } from '@/lib/i18n'
 
 export const FilesTabToolbar: React.FC = () => {
   const { t } = useI18n()
-  const { projects } = useProjectsStore()
-  const {
-    expandedProjects, toggleProjectExpand, collapseAll,
-    showHidden, toggleShowHidden,
-    selectionMode, toggleSelectionMode,
-  } = useFilesStore()
+  const projects = useProjectsStore(s => s.projects)
+  const expandedProjects = useFilesStore(s => s.expandedProjects)
+  const toggleProjectExpand = useFilesStore(s => s.toggleProjectExpand)
+  const collapseAll = useFilesStore(s => s.collapseAll)
+  const showHidden = useFilesStore(s => s.showHidden)
+  const toggleShowHidden = useFilesStore(s => s.toggleShowHidden)
+  const selectionMode = useFilesStore(s => s.selectionMode)
+  const toggleSelectionMode = useFilesStore(s => s.toggleSelectionMode)
 
   const workspacedProjects = projects.filter((p) => p.workspace)
   const allCollapsed = workspacedProjects.every((p) => !expandedProjects.has(p.id))

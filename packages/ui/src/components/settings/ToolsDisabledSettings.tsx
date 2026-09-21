@@ -33,13 +33,11 @@ const RUNTIME_CAPABILITY = 'runtime'
 export function ToolsDisabledSettings() {
   const { t } = useI18n()
   const { notify } = useNotification()
-  const {
-    toolsDisabled,
-    toolsDisabledLoading,
-    toolsDisabledError,
-    fetchToolsDisabled,
-    saveToolsDisabled,
-  } = useMcpStore()
+  const toolsDisabled = useMcpStore(s => s.toolsDisabled)
+  const toolsDisabledLoading = useMcpStore(s => s.toolsDisabledLoading)
+  const toolsDisabledError = useMcpStore(s => s.toolsDisabledError)
+  const fetchToolsDisabled = useMcpStore(s => s.fetchToolsDisabled)
+  const saveToolsDisabled = useMcpStore(s => s.saveToolsDisabled)
   const bumpToolsDisabledTick = useUIStore((s) => s.bumpToolsDisabledTick)
   const activeTabId = useUIStore((s) => s.activeCenterTabId)
   const centerTabs = useUIStore((s) => s.centerTabs)

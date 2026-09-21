@@ -21,15 +21,13 @@ const EMPTY_CONFIG: McpServerConfig = { type: 'http' }
 export function McpUserSettings() {
   const { t } = useI18n()
   const { notify } = useNotification()
-  const {
-    registry,
-    loading,
-    error,
-    fetchRegistry,
-    addRegistryEntry,
-    updateRegistryEntry,
-    deleteRegistryEntry,
-  } = useMcpStore()
+  const registry = useMcpStore(s => s.registry)
+  const loading = useMcpStore(s => s.loading)
+  const error = useMcpStore(s => s.error)
+  const fetchRegistry = useMcpStore(s => s.fetchRegistry)
+  const addRegistryEntry = useMcpStore(s => s.addRegistryEntry)
+  const updateRegistryEntry = useMcpStore(s => s.updateRegistryEntry)
+  const deleteRegistryEntry = useMcpStore(s => s.deleteRegistryEntry)
   const userId = useAuthStore((s) => s.user?.id)
 
   const [editing, setEditing] = useState<string | null>(null)
