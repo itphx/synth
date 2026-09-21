@@ -698,6 +698,10 @@ export function createDispatcher(): EventDispatcher {
 
 let transport: TransportClient | null = null
 let transportReady = false
+// Эффективный транспорт текущего клиента: 'ws' | 'sse' пока идёт подключение
+// или соединение живо; null — клиент сброшен (disconnect/разрыв). Вместе с
+// transport.getTransport() даёт идемпотентность connect() к тому же транспорту.
+let activeKind: 'ws' | 'sse' | null = null
 
 export function isTransportConnected(): boolean {
   return transportReady
@@ -709,6 +713,7 @@ if (import.meta.hot) {
     transport?.disconnect();
     transport = null;
     transportReady = false;
+    activeKind = null;
   });
 }
 
@@ -719,17 +724,28 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
   openSessions: new Set(),
 
   connect: (mode: TransportMode, override?: 'ws' | 'sse') => {
+    const actualMode = override || (mode === 'sse' ? 'sse' as const : 'ws' as const)
+
+    // Идемпотентность: к тому же эффективному транспорту уже подключаемся или
+    // подключены. Раньше это пересоздавало клиент и закрывало CONNECTING-сокет
+    // (auto→ws + сохранённый prefs ws = один и тот же транспорт — см. AD-024).
+    if (transport && transport.getTransport() === actualMode && activeKind === actualMode) {
+      console.debug('[TransportStore] connect skipped (already', actualMode, ')')
+      return
+    }
+
     transport?.disconnect()
     transport = null
     transportReady = false
+    activeKind = null
 
-    const actualMode = override || (mode === 'sse' ? 'sse' as const : 'ws' as const)
     console.debug('[TransportStore] Connecting:', actualMode, '(mode=', mode, ')')
     const dispatcher = createDispatcher()
 
     const client = new TransportClient({
       onEvent: dispatcher,
       onConnect: () => {
+        activeKind = actualMode
         if (actualMode === 'sse') {
           transportReady = true
           set({ connected: true, activeTransport: 'sse' })
@@ -741,11 +757,16 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
         }
       },
       onBackendReady: () => {
+        activeKind = actualMode
         transportReady = true
         set({ connected: true, activeTransport: 'ws' })
         console.debug('[TransportStore] Backend ready:', client.getTransport())
       },
       onDisconnect: (reason) => {
+        // Обрыв/ручное закрытие: клиент больше не считается «активным» —
+        // иначе форс-реконнект (ConnectionGuard) и auto-fallback WS→SSE
+        // блокировались бы guard'ом идемпотентности.
+        activeKind = null
         transportReady = false
         set({ connected: false })
         console.debug('[TransportStore] Disconnected:', reason)
@@ -770,6 +791,7 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
       onTransportSwitch: () => {},
     })
 
+    activeKind = actualMode
     client.connect(actualMode)
     transport = client
   },
@@ -778,6 +800,7 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     transport?.disconnect()
     transport = null
     transportReady = false
+    activeKind = null
     set({ connected: false, activeTransport: 'disconnected' })
   },
 
