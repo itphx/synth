@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils'
 
@@ -15,27 +15,32 @@ function Tooltip({ tip }: { tip: Tip }) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<Pos | null>(null)
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     const el = ref.current
     if (!el) return
-    const w = el.offsetWidth
-    const h = el.offsetHeight
-    const vw = window.innerWidth
-    const vh = window.innerHeight
-    let top: number
-    if (h <= tip.top - MARGIN) {
-      top = tip.top - GAP - h
-    } else if (h <= vh - tip.bottom - MARGIN) {
-      top = tip.bottom + GAP
-    } else {
-      top = Math.max(MARGIN, tip.top - GAP - h)
-    }
-    if (vw < w + MARGIN * 2) {
-      setPos({ left: MARGIN, top, maxWidth: vw - MARGIN * 2 })
-      return
-    }
-    const left = Math.min(Math.max(tip.x - w / 2, MARGIN), vw - w - MARGIN)
-    setPos({ left, top })
+    // Измеряем после кадра, а не в layout-эффекте: иначе чтение layout сразу после
+    // коммита DOM форсирует синхронный reflow (Forced reflow violation).
+    const frame = requestAnimationFrame(() => {
+      const w = el.offsetWidth
+      const h = el.offsetHeight
+      const vw = window.innerWidth
+      const vh = window.innerHeight
+      let top: number
+      if (h <= tip.top - MARGIN) {
+        top = tip.top - GAP - h
+      } else if (h <= vh - tip.bottom - MARGIN) {
+        top = tip.bottom + GAP
+      } else {
+        top = Math.max(MARGIN, tip.top - GAP - h)
+      }
+      if (vw < w + MARGIN * 2) {
+        setPos({ left: MARGIN, top, maxWidth: vw - MARGIN * 2 })
+        return
+      }
+      const left = Math.min(Math.max(tip.x - w / 2, MARGIN), vw - w - MARGIN)
+      setPos({ left, top })
+    })
+    return () => cancelAnimationFrame(frame)
   }, [tip])
 
   return createPortal(
@@ -62,8 +67,14 @@ export function TitleTooltipBridge() {
   const [tip, setTip] = useState<Tip | null>(null)
 
   useEffect(() => {
+    // На устройствах без hover (тач) нативные title-подсказки не работают —
+    // не вешаем глобальные capture-слушатели и не делаем лишнюю работу.
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) return
+
     let current: Element | null = null
     let timer: ReturnType<typeof setTimeout> | null = null
+    let frame: number | null = null
+    let shown = false
     let ancestors: Array<{ el: Element; title: string }> = []
 
     const restoreAncestors = () => {
@@ -80,8 +91,15 @@ export function TitleTooltipBridge() {
       }
     }
 
+    const cancelFrame = () => {
+      if (frame !== null) { cancelAnimationFrame(frame); frame = null }
+    }
+
     const hide = () => {
+      // Ничего не показано и не запланировано — не пишем в DOM и не ре-рендерим.
+      if (!timer && !current) return
       if (timer) { clearTimeout(timer); timer = null }
+      cancelFrame()
       if (current) {
         const text = current.getAttribute(ATTR)
         if (text) current.setAttribute('title', text)
@@ -89,7 +107,10 @@ export function TitleTooltipBridge() {
         current = null
       }
       restoreAncestors()
-      setTip(null)
+      if (shown) {
+        shown = false
+        setTip(null)
+      }
     }
 
     const show = (el: Element) => {
@@ -103,10 +124,15 @@ export function TitleTooltipBridge() {
       current = el
       timer = setTimeout(() => {
         timer = null
-        if (current !== el) return
-        if (!el.isConnected) return
-        const r = el.getBoundingClientRect()
-        setTip({ text, x: r.left + r.width / 2, top: r.top, bottom: r.bottom })
+        if (current !== el || !el.isConnected) return
+        // Координаты читаем после кадра, а не синхронно в обработчике события.
+        frame = requestAnimationFrame(() => {
+          frame = null
+          if (current !== el || !el.isConnected) return
+          const r = el.getBoundingClientRect()
+          shown = true
+          setTip({ text, x: r.left + r.width / 2, top: r.top, bottom: r.bottom })
+        })
       }, DELAY_MS)
     }
 
