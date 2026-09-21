@@ -361,3 +361,19 @@
 - **Проверки:** ui typecheck/lint/505 тестов PASS.
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** этот.
+
+## 2026-09-21 — AD-072: кнопки сброса/отмены + фикс схлопывания шапки
+- **Задача:** «Уведомления и Чат — кнопки сброса; Профиль — Отмена; в шапке текст пропадает, но место не уменьшается; Маршрутизация — не хватает кнопок».
+- **Тип:** feature/bug fix (UI)
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS.
+- **Сделано:**
+  - `SettingsPanel`: у `<p>` описания добавлены `min-h-0 overflow-hidden` — при сворачивании (`grid-rows-[0fr]`) высота реально становится 0. Проверено в браузере (390px): header `143px → 24px`, description `119px → 0`, тело списка `475 → 601` (+126px), наверх — `143px`.
+  - `NotificationSettings` — `SettingsActions` только с `onReset` (`notifications-reset`); в `notificationStore` добавлен `resetCategories()`.
+  - `ChatSettings` — reset (`chat-reset`) → `intermediateTextDisplay = 'inline'`.
+  - `ProfileSettings` — `Cancel` (`profile-cancel`) с откатом к снапшоту, disabled без изменений.
+  - `RoutingSettings` — переведён с автосохранения на `useSettingsDraft` + `SettingsActions` Save/Cancel/Reset (`routing-save/-cancel/-reset`), индикатор несохранённых изменений.
+  - i18n `settings.kit.unsavedChanges`; AD-072 (§2.9).
+- **Проверки:** ui typecheck/lint, `66 файлов / 511 тестов` PASS; в браузере подтверждены все новые кнопки.
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** этот.
