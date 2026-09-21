@@ -174,7 +174,7 @@ export const ContextPanel = () => {
       </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto min-h-0 overscroll-behavior-contain mt-4">
+      <div className="flex-1 overflow-y-auto min-h-0 overscroll-contain mt-4">
       {showCreate && (
         <div className="bg-background rounded-lg border p-4 space-y-3">
           <h4 className="font-medium text-sm">{t('admin.context.newFile')}</h4>

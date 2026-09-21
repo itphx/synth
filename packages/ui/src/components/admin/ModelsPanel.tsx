@@ -432,7 +432,7 @@ export const ModelsPanel = () => {
       </div>
 
       {/* Содержимое */}
-      <div className="flex-1 overflow-y-auto min-h-0 overscroll-behavior-contain mt-4">
+      <div className="flex-1 overflow-y-auto min-h-0 overscroll-contain mt-4">
       {loading ? (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (

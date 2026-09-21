@@ -159,7 +159,7 @@ export const ProvidersPanel = () => {
       </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto min-h-0 overscroll-behavior-contain mt-4">
+      <div className="flex-1 overflow-y-auto min-h-0 overscroll-contain mt-4">
       {showForm && (
         <div className="bg-background rounded-lg border p-4 space-y-4">
           <div className="flex items-center justify-between">

@@ -214,7 +214,7 @@ export const UsersPanel = () => {
       </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto min-h-0 overscroll-behavior-contain mt-4">
+      <div className="flex-1 overflow-y-auto min-h-0 overscroll-contain mt-4">
       {error && !creating && !expanded && (
         <div className="bg-status-warning/10 border border-status-warning/30 rounded-lg p-4 text-sm text-status-warning">
           {error}

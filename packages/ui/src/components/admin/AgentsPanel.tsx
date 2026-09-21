@@ -531,7 +531,7 @@ export const AgentsPanel = () => {
       </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto min-h-0 overscroll-behavior-contain mt-4 pr-2">
+      <div className="flex-1 overflow-y-auto min-h-0 overscroll-contain mt-4 pr-2">
       {(creating || expanded) && renderForm()}
 
       {loading ? (
