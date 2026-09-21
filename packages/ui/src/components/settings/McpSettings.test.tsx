@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   saveMcpToolSettings: vi.fn(),
   saveMcpNetworkPolicy: vi.fn(),
   saveMcpPolicy: vi.fn(),
+  resetMcpSettings: vi.fn(),
+  resetMcpNetworkPolicy: vi.fn(),
+  resetMcpPolicy: vi.fn(),
   probeMcpServer: vi.fn(),
   notify: vi.fn(),
 }))
@@ -88,6 +91,9 @@ beforeEach(() => {
   mocks.saveMcpNetworkPolicy.mockImplementation(async (p: unknown) => p)
   mocks.getMcpPolicy.mockResolvedValue('auto')
   mocks.saveMcpPolicy.mockImplementation(async (p: unknown) => p)
+  mocks.resetMcpSettings.mockResolvedValue({ servers: {} })
+  mocks.resetMcpNetworkPolicy.mockResolvedValue({ mode: 'deny', list: [] })
+  mocks.resetMcpPolicy.mockResolvedValue('auto')
   mocks.probeMcpServer.mockResolvedValue({ name: 'sys', tools: [] })
 
   useMcpStore.setState({
@@ -260,22 +266,23 @@ describe('McpSettings — политика MCP (AD-071 §2.3)', () => {
   })
 })
 
-describe('McpSettings — сетевая политика (AD-071 §2.3.1)', () => {
+describe('McpSettings — сетевая политика (AD-071 §2.3.1 / AD-072)', () => {
   it('ADMIN видит секцию и сохраняет allow-режим со списком', async () => {
+    mocks.getMcpNetworkPolicy.mockResolvedValue({ mode: 'allow', list: ['10.0.0.0/8'] })
     const container = await renderSettings()
     const section = container.querySelector('[data-testid="mcp-network-policy"]')
     expect(section).not.toBeNull()
 
-    const select = section!.querySelector('select') as HTMLSelectElement
-    await act(async () => {
-      select.value = 'allow'
-      select.dispatchEvent(new Event('change', { bubbles: true }))
-    })
+    // Нативный select заменён на Kit SelectField.
+    expect(section!.querySelector('select')).toBeNull()
+    expect(section!.querySelector('[aria-label="Mode"]')).not.toBeNull()
 
-    const saveButton = [...section!.querySelectorAll('button')].find((b) => b.textContent?.includes('Save'))!
+    const saveButton = section!.querySelector('[data-testid="mcp-network-save"]') as HTMLButtonElement
+    expect(saveButton).not.toBeNull()
     await act(async () => {
       saveButton.click()
     })
+    await act(async () => {})
 
     expect(mocks.saveMcpNetworkPolicy).toHaveBeenCalledWith({ mode: 'allow', list: ['10.0.0.0/8'] })
   })
@@ -284,5 +291,42 @@ describe('McpSettings — сетевая политика (AD-071 §2.3.1)', () 
     useAuthStore.setState({ user: { id: 'u1', username: 'alice', roles: ['USER'] } as never })
     const container = await renderSettings()
     expect(container.querySelector('[data-testid="mcp-network-policy"]')).toBeNull()
+  })
+})
+
+describe('McpSettings — reset через API (AD-072)', () => {
+  it('Reset в блоках доступности, политики и сети вызывает reset-API', async () => {
+    const container = await renderSettings()
+
+    const availabilityReset = container.querySelector('[data-testid="mcp-availability-reset"]') as HTMLButtonElement
+    const policyReset = container.querySelector('[data-testid="mcp-policy-reset"]') as HTMLButtonElement
+    const networkReset = container.querySelector('[data-testid="mcp-network-reset"]') as HTMLButtonElement
+    expect(availabilityReset).not.toBeNull()
+    expect(policyReset).not.toBeNull()
+    expect(networkReset).not.toBeNull()
+
+    await act(async () => { availabilityReset.click() })
+    await act(async () => {})
+    await act(async () => { policyReset.click() })
+    await act(async () => {})
+    await act(async () => { networkReset.click() })
+    await act(async () => {})
+
+    expect(mocks.resetMcpSettings).toHaveBeenCalledTimes(1)
+    expect(mocks.resetMcpPolicy).toHaveBeenCalledTimes(1)
+    expect(mocks.resetMcpNetworkPolicy).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('McpSettings — каркас SettingsPanel (AD-072)', () => {
+  it('один вертикальный скролл, центрирование, без pr-2 и grid без grid-cols-1', async () => {
+    const container = await renderSettings()
+    expect(container.querySelector('.overflow-y-auto')).not.toBeNull()
+    expect(container.querySelector('.max-w-3xl')).not.toBeNull()
+    expect(container.innerHTML).not.toContain('pr-2')
+
+    for (const el of container.querySelectorAll('[class*="grid"]')) {
+      expect(el.className).toContain('grid-cols-1')
+    }
   })
 })

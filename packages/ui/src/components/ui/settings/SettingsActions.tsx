@@ -18,6 +18,10 @@ export interface SettingsActionsProps {
   saveLabel?: string
   cancelLabel?: string
   resetLabel?: string
+  /** `data-testid` соответствующих кнопок. */
+  saveTestId?: string
+  cancelTestId?: string
+  resetTestId?: string
   align?: SettingsActionsAlign
   className?: string
 }
@@ -46,6 +50,9 @@ export function SettingsActions({
   saveLabel,
   cancelLabel,
   resetLabel,
+  saveTestId,
+  cancelTestId,
+  resetTestId,
   align = 'end',
   className,
 }: SettingsActionsProps) {
@@ -68,6 +75,7 @@ export function SettingsActions({
           className="mr-auto shrink-0"
           onClick={onReset}
           disabled={resetDisabledFinal}
+          data-testid={resetTestId}
         >
           {resetLabel ?? t('common.reset')}
         </Button>
@@ -79,6 +87,7 @@ export function SettingsActions({
           className="shrink-0"
           onClick={onSave}
           disabled={saveDisabledFinal}
+          data-testid={saveTestId}
         >
           {saving ? t('common.saving') : saveLabel ?? t('common.save')}
         </Button>
@@ -90,6 +99,7 @@ export function SettingsActions({
           className="shrink-0"
           onClick={onCancel}
           disabled={cancelDisabledFinal}
+          data-testid={cancelTestId}
         >
           {cancelLabel ?? t('common.cancel')}
         </Button>

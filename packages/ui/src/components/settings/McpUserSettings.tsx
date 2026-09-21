@@ -7,15 +7,22 @@ import { useNotification } from '@/hooks/useNotification'
 import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
 import { ConfirmDialog } from '../ui/confirm-dialog'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
-import { SettingsPage, SettingsCard } from './settings-layout'
+import { SelectContent, SelectItem } from '../ui/select'
+import {
+  SelectField,
+  SettingsActions,
+  SettingsPanel,
+  SettingsSection,
+  TextArea,
+  TextField,
+} from '../ui/settings'
 import { cn } from '@/lib/utils'
 import type { McpServerConfig } from '@/lib/api/synthApi'
 
 const EMPTY_CONFIG: McpServerConfig = { type: 'http' }
 
 /**
- * AD-071 §2.5: пользовательская часть MCP — собственные HTTP-серверы
+ * AD-071 §2.5 / AD-072: пользовательская часть MCP — собственные HTTP-серверы
  * (категория `mcp`). Реестр целиком, stdio, enabledByDefault, сетевой доступ,
  * permissions и tools.disabled — в админ-категории `mcpAdmin`.
  */
@@ -95,8 +102,7 @@ export function McpUserSettings() {
   }
 
   return (
-    <SettingsPage
-      stickyHeader
+    <SettingsPanel
       title={t('mcp.user.title')}
       description={t('mcp.user.description')}
       actions={
@@ -108,129 +114,116 @@ export function McpUserSettings() {
     >
       {error && <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{error}</div>}
 
-      <div className="grid gap-4">
-        {editing && (
-          <SettingsCard title={editing === '__new__' ? t('mcp.newServer') : t('mcp.editServer')}>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">{t('mcp.serverName')}</label>
-                <input
-                  type="text"
-                  value={formName}
-                  onChange={(e) => setFormName(e.target.value)}
-                  disabled={editing !== '__new__'}
-                  className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:border-primary disabled:opacity-50"
-                  placeholder="my-server"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">{t('mcp.serverDescription')}</label>
-                <textarea
-                  value={formConfig.description || ''}
-                  onChange={(e) => setFormConfig((prev) => ({ ...prev, description: e.target.value || undefined }))}
-                  rows={2}
-                  className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:border-primary"
-                  placeholder={t('mcp.serverDescriptionPlaceholder')}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">{t('mcp.type')}</label>
-                <Select
-                  value={formConfig.type}
-                  onValueChange={(value) => setFormConfig((prev) => ({ ...prev, type: value as McpServerConfig['type'] }))}
-                >
-                  <SelectTrigger className="w-full" aria-label={t('mcp.type')}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="http">{t('mcp.type.http')}</SelectItem>
-                    <SelectItem value="sse">{t('mcp.type.sse.legacy')}</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="mt-1 text-[0.625rem] text-muted-foreground/70">{t('mcp.user.httpOnly')}</p>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">{t('mcp.url')}</label>
-                <input
-                  type="text"
-                  value={formConfig.url || ''}
-                  onChange={(e) => setFormConfig((prev) => ({ ...prev, url: e.target.value }))}
-                  className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:border-primary"
-                  placeholder="http://localhost:8765/mcp"
-                />
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button onClick={handleSave} disabled={!formName.trim() || savingForm}>
-                {t('common.save')}
-              </Button>
-              <Button variant="ghost" onClick={closeForm} className="ml-auto">
-                {t('common.cancel')}
-              </Button>
-            </div>
-          </SettingsCard>
-        )}
+      {editing && (
+        <SettingsSection title={editing === '__new__' ? t('mcp.newServer') : t('mcp.editServer')}>
+          <TextField
+            label={t('mcp.serverName')}
+            value={formName}
+            onChange={(e) => setFormName(e.target.value)}
+            disabled={editing !== '__new__'}
+            placeholder="my-server"
+          />
+          <TextArea
+            label={t('mcp.serverDescription')}
+            value={formConfig.description || ''}
+            onChange={(e) => setFormConfig((prev) => ({ ...prev, description: e.target.value || undefined }))}
+            rows={2}
+            placeholder={t('mcp.serverDescriptionPlaceholder')}
+          />
+          <SelectField
+            label={t('mcp.type')}
+            description={t('mcp.user.httpOnly')}
+            value={formConfig.type}
+            onValueChange={(value) => setFormConfig((prev) => ({ ...prev, type: value as McpServerConfig['type'] }))}
+            ariaLabel={t('mcp.type')}
+          >
+            <SelectContent>
+              <SelectItem value="http">{t('mcp.type.http')}</SelectItem>
+              <SelectItem value="sse">{t('mcp.type.sse.legacy')}</SelectItem>
+            </SelectContent>
+          </SelectField>
+          <TextField
+            label={t('mcp.url')}
+            value={formConfig.url || ''}
+            onChange={(e) => setFormConfig((prev) => ({ ...prev, url: e.target.value }))}
+            placeholder="http://localhost:8765/mcp"
+          />
+          <SettingsActions
+            onSave={handleSave}
+            onCancel={closeForm}
+            saving={savingForm}
+            saveDisabled={!formName.trim()}
+          />
+        </SettingsSection>
+      )}
 
-        <SettingsCard>
-          {registry && (
-            <span className="block text-sm font-medium text-foreground">
+      <SettingsSection
+        actions={
+          registry ? (
+            <span className="text-sm font-medium text-foreground">
               {t('mcp.count', { count: ownEntries.length })}
             </span>
-          )}
+          ) : undefined
+        }
+      >
+        {loading && registry === null && (
+          <div className="text-center text-muted-foreground py-8">{t('common.loading')}</div>
+        )}
 
-          {loading && registry === null && (
-            <div className="text-center text-muted-foreground py-8">{t('common.loading')}</div>
-          )}
+        {registry && ownEntries.length === 0 && !editing && (
+          <div className="text-center text-muted-foreground py-8">
+            <Icon name="server" className="size-8 mx-auto mb-2 opacity-40" />
+            <p className="text-sm">{t('mcp.user.empty')}</p>
+          </div>
+        )}
 
-          {registry && ownEntries.length === 0 && !editing && (
-            <div className="text-center text-muted-foreground py-8">
-              <Icon name="server" className="size-8 mx-auto mb-2 opacity-40" />
-              <p className="text-sm">{t('mcp.user.empty')}</p>
-            </div>
-          )}
-
-          {ownEntries.length > 0 && (
-            <div className="space-y-2" data-testid="mcp-user-list">
-              {ownEntries.map((entry) => (
-                <div
-                  key={entry.id}
-                  data-testid={`mcp-user-${entry.name}`}
-                  className={cn(
-                    'flex items-center gap-3 p-3 rounded-lg border border-border hover:border-primary/50 transition-colors',
-                    entry.config.enabled === false && 'opacity-50',
-                  )}
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{entry.name}</div>
-                    {entry.config.description && (
-                      <div className="text-xs text-muted-foreground truncate" title={entry.config.description}>
-                        {entry.config.description}
-                      </div>
-                    )}
-                    <div className="text-xs text-muted-foreground">
-                      {entry.config.type}: {entry.config.url || '?'}
+        {ownEntries.length > 0 && (
+          <div className="space-y-2" data-testid="mcp-user-list">
+            {ownEntries.map((entry) => (
+              <div
+                key={entry.id}
+                data-testid={`mcp-user-${entry.name}`}
+                className={cn(
+                  'flex flex-wrap items-center gap-3 p-3 rounded-lg border border-border hover:border-primary/50 transition-colors',
+                  entry.config.enabled === false && 'opacity-50',
+                )}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium break-words">{entry.name}</div>
+                  {entry.config.description && (
+                    <div className="text-xs text-muted-foreground truncate" title={entry.config.description}>
+                      {entry.config.description}
                     </div>
+                  )}
+                  <div className="text-xs text-muted-foreground break-words">
+                    {entry.config.type}: {entry.config.url || '?'}
                   </div>
-                  <button
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="shrink-0"
                     onClick={() => openEdit(entry)}
-                    className="p-1.5 rounded-lg hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
                     aria-label={t('mcp.edit')}
                   >
                     <Icon name="edit-2" className="size-4" />
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="shrink-0 hover:text-destructive"
                     onClick={() => setDeleteTarget(entry)}
-                    className="p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
                     aria-label={t('mcp.delete')}
                   >
                     <Icon name="delete-bin" className="size-4" />
-                  </button>
+                  </Button>
                 </div>
-              ))}
-            </div>
-          )}
-        </SettingsCard>
-      </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </SettingsSection>
 
       <ConfirmDialog
         open={deleteTarget !== null}
@@ -242,6 +235,6 @@ export function McpUserSettings() {
         icon="delete-bin"
         onConfirm={handleDeleteConfirm}
       />
-    </SettingsPage>
+    </SettingsPanel>
   )
 }

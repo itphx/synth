@@ -6,8 +6,10 @@ import React from 'react'
 const mocks = vi.hoisted(() => ({
   getToolsDisabled: vi.fn(),
   saveToolsDisabled: vi.fn(),
+  resetToolsDisabled: vi.fn(),
   getToolsPolicy: vi.fn(),
   saveToolsPolicy: vi.fn(),
+  resetToolsPolicy: vi.fn(),
   getSessionPrompt: vi.fn(),
   notify: vi.fn(),
 }))
@@ -74,8 +76,10 @@ async function renderSettings(): Promise<HTMLElement> {
 beforeEach(() => {
   mocks.getToolsDisabled.mockResolvedValue({ capabilities: [], tools: [] })
   mocks.saveToolsDisabled.mockImplementation(async (config: unknown) => config)
+  mocks.resetToolsDisabled.mockResolvedValue({ capabilities: [], tools: [] })
   mocks.getToolsPolicy.mockResolvedValue('consistency')
   mocks.saveToolsPolicy.mockImplementation(async (policy: unknown) => policy)
+  mocks.resetToolsPolicy.mockResolvedValue('consistency')
   mocks.getSessionPrompt.mockResolvedValue({ manifest: {}, history: {}, toolsDetail: TOOLS_DETAIL })
 
   useMcpStore.setState({
@@ -276,5 +280,51 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
 
     expect(mocks.saveToolsDisabled).toHaveBeenCalledTimes(1)
     expect(mocks.saveToolsPolicy).not.toHaveBeenCalled()
+  })
+
+  it('Reset инструментов вызывает resetToolsDisabled и включает всё', async () => {
+    mocks.getToolsDisabled.mockResolvedValue({ capabilities: ['web'], tools: ['git_status'] })
+    const container = await renderSettings()
+
+    const webGroup = container.querySelector('[data-testid="tools-disabled-group-web"]') as HTMLInputElement
+    expect(webGroup.checked).toBe(false)
+
+    const reset = container.querySelector('[data-testid="tools-disabled-reset"]') as HTMLButtonElement
+    expect(reset).not.toBeNull()
+    await act(async () => {
+      reset.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.resetToolsDisabled).toHaveBeenCalledTimes(1)
+    expect(webGroup.checked).toBe(true)
+  })
+
+  it('Reset политики вызывает resetToolsPolicy', async () => {
+    const container = await renderSettings()
+    const reset = container.querySelector('[data-testid="tools-policy-reset"]') as HTMLButtonElement
+    expect(reset).not.toBeNull()
+    await act(async () => {
+      reset.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.resetToolsPolicy).toHaveBeenCalledTimes(1)
+  })
+
+  it('показывает бейдж «По умолчанию», когда отключений нет', async () => {
+    const container = await renderSettings()
+    expect(container.textContent).toContain('Default')
+  })
+
+  it('каркас SettingsPanel: один скролл, без pr-2, гриды с grid-cols-1', async () => {
+    const container = await renderSettings()
+    expect(container.querySelector('.overflow-y-auto')).not.toBeNull()
+    expect(container.querySelector('.max-w-3xl')).not.toBeNull()
+    expect(container.innerHTML).not.toContain('pr-2')
+
+    for (const el of container.querySelectorAll('[class*="grid"]')) {
+      expect(el.className).toContain('grid-cols-1')
+    }
   })
 })

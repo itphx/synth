@@ -141,6 +141,24 @@ describe('McpUserSettings — пользовательская часть MCP (A
     expect(addButton.className).toContain('bg-primary')
   })
 
+  it('форма собрана на SettingsActions (Save/Cancel), каркас — SettingsPanel без pr-2', async () => {
+    const container = await renderSettings()
+    expect(container.querySelector('.overflow-y-auto')).not.toBeNull()
+    expect(container.querySelector('.max-w-3xl')).not.toBeNull()
+    expect(container.innerHTML).not.toContain('pr-2')
+    // Строка списка и тестовый id сохранены.
+    expect(container.querySelector('[data-testid="mcp-user-mine"]')).not.toBeNull()
+
+    const addButton = container.querySelector('[data-testid="mcp-user-add"]') as HTMLButtonElement
+    await act(async () => {
+      addButton.click()
+    })
+
+    const buttons = [...container.querySelectorAll('button')]
+    expect(buttons.some((b) => b.textContent === 'Save')).toBe(true)
+    expect(buttons.some((b) => b.textContent === 'Cancel')).toBe(true)
+  })
+
   it('кнопка сохранения формы — единый вид', async () => {
     const container = await renderSettings()
     const addButton = container.querySelector('[data-testid="mcp-user-add"]') as HTMLButtonElement

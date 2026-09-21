@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
   saveMcpToolSettings: vi.fn(),
   saveMcpNetworkPolicy: vi.fn(),
   saveMcpPolicy: vi.fn(),
+  resetMcpSettings: vi.fn(),
+  resetMcpNetworkPolicy: vi.fn(),
+  resetMcpPolicy: vi.fn(),
   probeMcpServer: vi.fn(),
   notify: vi.fn(),
 }))
@@ -68,6 +71,9 @@ beforeEach(() => {
   mocks.saveMcpNetworkPolicy.mockImplementation(async (p: unknown) => p)
   mocks.getMcpPolicy.mockResolvedValue('auto')
   mocks.saveMcpPolicy.mockImplementation(async (p: unknown) => p)
+  mocks.resetMcpSettings.mockResolvedValue({ servers: {} })
+  mocks.resetMcpNetworkPolicy.mockResolvedValue({ mode: 'deny', list: [] })
+  mocks.resetMcpPolicy.mockResolvedValue('auto')
   mocks.probeMcpServer.mockResolvedValue({ name: 'sys', tools: [] })
 
   useMcpStore.setState({
@@ -110,5 +116,21 @@ describe('McpAdminSettings — только MCP (AD-071 §2.5/§2.6)', () => {
     const header = container.querySelector('header')
     expect(header).not.toBeNull()
     expect(header!.textContent).toContain('MCP Servers')
+  })
+
+  it('кнопка добавления вынесена в шапку (actions)', async () => {
+    const container = await renderSettings()
+    const header = container.querySelector('header')!
+    expect(header.querySelector('[data-testid="mcp-admin-add"]')).not.toBeNull()
+  })
+
+  it('каркас: SettingsActions для доступности и reset-кнопки, без pr-2', async () => {
+    const container = await renderSettings()
+    expect(container.querySelector('.max-w-3xl')).not.toBeNull()
+    expect(container.innerHTML).not.toContain('pr-2')
+    expect(container.querySelector('[data-testid="mcp-availability-save"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="mcp-availability-cancel"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="mcp-availability-reset"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="mcp-policy-reset"]')).not.toBeNull()
   })
 })
