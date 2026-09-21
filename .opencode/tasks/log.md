@@ -333,3 +333,21 @@
 - **Проверка (Playwright, viewport 390, admin):** прокликаны все 20 категорий настроек; у каждой тело панели `scrollWidth == clientWidth` (`over: 0`) — горизонтального переполнения нет ни в одной (было: MCP admin 555→356, Security 375→320).
 - **A/B футера:** «Оформление» (`footerVariant="fixed"`) — `Сбросить/Сохранить` прижаты к низу панели, отделены `border-t`, не уезжают при скролле; «Отладка»/MCP — без футера (Save в конце карточки). Решение по стандарту — за пользователем.
 - **Остаток:** решение по варианту футера (fixed/sticky/none) для односохранных панелей; прочие дефекты не зафиксированы.
+
+## 2026-09-21 — AD-072: доработки по фидбеку (Kit + секции + backend)
+- **Задача:** «футер — точно нет; в Debug нет Save/Cancel/Reset в каждой секции; вкладки в Context на теле; свернуть шапку наверх; единый слайдер; затенение скролла».
+- **Тип:** feature/refactor (UI) + backend-фикс
+- **Исполнитель:** @orchestrator → @fixer ×3
+- **Результат:** PASS.
+- **Kit:**
+  - `SliderField` переписан на `.ui-range` + `--ui-range-fill` (как в «Внешний вид»), с `onReset`/`stacked`; `UiScaleControl` теперь обёртка над Kit-слайдером — слайдер один.
+  - Новый `controls/Tabs.tsx` (`segmented`/`underline`), мобильно-устойчивый (`flex-1 min-w-0`, выравнивание, при переполнении X-скролл с затенением); реэкспорт из Kit.
+  - `SettingsPanel`: `collapsibleHeader` — на теле при скролле описание сворачивается (`grid-rows-[0fr]`/opacity), остаются заголовок и кнопка; тело получило класс `settings-scroll-container` и `data-scroll-shadow` (top/bottom/top-bottom) с CSS-mask (`--scroll-shadow-size: 1.5rem`).
+- **Секции:**
+  - `DefaultsPanel` — фиксированный футер убран, `SettingsActions` в конце тела.
+  - `DebugPanel` — `DebugCategorySection` на `useSettingsDraft`; Save/Cancel/Reset в каждой секции (`debug-save-<category>`), partial-save.
+  - `ContextPanel` — самописные вкладки → Kit `Tabs`.
+- **Backend:** `POST /admin/debug/config` переведён на `setGroups` (merge) вместо `setAllGroups` (replace) — per-section Save больше не затирает другие категории; `setGroups` добавлен в core logger и экспорт; `docs/API_V2.md`.
+- **Проверки:** `pnpm typecheck` 6/6; core 114/1613, ui 66/502, backend 24/291, shared 91; lint 0 errors. Мобильно (390px): слайдер MicroFirst = `.ui-range` (fill 60%), Context — `role=tablist` `flex-1 min-w-0`, шапка сворачивается (`opacity 0`), `data-scroll-shadow` bottom→top-bottom→top.
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** этот.
