@@ -158,6 +158,14 @@ export class RuntimeSettingsStore {
     await this._update((current) => ({ ...current, workspace }));
   }
 
+  async clearWorkspace(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.workspace;
+      return next;
+    });
+  }
+
   async getMcpSettings(): Promise<Record<string, McpServerToolSettings>> {
     const settings = await this.load();
     return settings.mcpServers ?? {};
@@ -165,6 +173,14 @@ export class RuntimeSettingsStore {
 
   async setMcpSettings(servers: Record<string, McpServerToolSettings>): Promise<void> {
     await this._update((current) => ({ ...current, mcpServers: servers }));
+  }
+
+  async clearMcpSettings(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.mcpServers;
+      return next;
+    });
   }
 
   async getLlmGatewaySettings(): Promise<Partial<LlmGatewayRuntimeSettings>> {
@@ -176,6 +192,14 @@ export class RuntimeSettingsStore {
     await this._update((current) => ({ ...current, llmGateway: config }));
   }
 
+  async clearLlmGatewaySettings(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.llmGateway;
+      return next;
+    });
+  }
+
   async getSecuritySettings(): Promise<Partial<SecurityRuntimeSettings>> {
     const settings = await this.load();
     return settings.security ?? {};
@@ -183,6 +207,14 @@ export class RuntimeSettingsStore {
 
   async setSecuritySettings(config: Partial<SecurityRuntimeSettings>): Promise<void> {
     await this._update((current) => ({ ...current, security: config }));
+  }
+
+  async clearSecuritySettings(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.security;
+      return next;
+    });
   }
 
   /** AD-071 §2.3: runtime-политика встроенных инструментов (админка), undefined — не задана. */
@@ -195,6 +227,14 @@ export class RuntimeSettingsStore {
     await this._update((current) => ({ ...current, toolsPolicy: policy }));
   }
 
+  async clearToolsPolicy(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.toolsPolicy;
+      return next;
+    });
+  }
+
   /** AD-071 §2.3: runtime-политика MCP-инструментов (админка), undefined — не задана. */
   async getMcpPolicy(): Promise<ToolsPolicy | undefined> {
     const settings = await this.load();
@@ -205,6 +245,14 @@ export class RuntimeSettingsStore {
     await this._update((current) => ({ ...current, mcpPolicy: policy }));
   }
 
+  async clearMcpPolicy(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.mcpPolicy;
+      return next;
+    });
+  }
+
   /** AD-071 §2.6: instance-wide отключение инструментов (админка), undefined — не задано. */
   async getToolsDisabled(): Promise<ToolsDisabledConfig | undefined> {
     const settings = await this.load();
@@ -213,6 +261,14 @@ export class RuntimeSettingsStore {
 
   async setToolsDisabled(config: ToolsDisabledConfig): Promise<void> {
     await this._update((current) => ({ ...current, toolsDisabled: config }));
+  }
+
+  async clearToolsDisabled(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.toolsDisabled;
+      return next;
+    });
   }
 
   /** AD-071 §2.6: chars-per-token модели (undefined — калибровки нет). */
@@ -242,6 +298,14 @@ export class RuntimeSettingsStore {
 
   async setMcpNetworkPolicy(policy: McpNetworkPolicy): Promise<void> {
     await this._update((current) => ({ ...current, mcpNetworkPolicy: policy }));
+  }
+
+  async clearMcpNetworkPolicy(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.mcpNetworkPolicy;
+      return next;
+    });
   }
 
   private async _update(mutate: (current: RuntimeSettings) => RuntimeSettings): Promise<void> {

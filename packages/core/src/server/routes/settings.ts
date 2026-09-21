@@ -5,12 +5,58 @@ import type { ProtectedPathsStore } from '../../engine/security/protected-paths-
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
 import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig } from '@itphx/synth-shared';
 import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, toolsDisabledSchema, ToolCapability } from '@itphx/synth-shared';
+import { DEFAULT_ASK_TIMEOUT_MS } from '../../engine/permission/derive.js';
+
+/** AD-072 Ф2: эффективные дефолты LLM Gateway (config.yaml без runtime). */
+const DEFAULT_LLM_GATEWAY: LlmGatewayRuntimeSettings = {
+  enabled: false,
+  inputMode: 'obfuscate',
+  logPayloads: false,
+  rateLimit: { userPerMinute: 60, providerPerMinute: 120 },
+};
+
+/** AD-072 Ф2: дефолты секции «Безопасность» (config.yaml без runtime). */
+function resolveSecurityDefaults(fallback?: Partial<SecurityRuntimeSettings>): {
+  protectedPaths: { enabled: boolean };
+  askTimeoutMs: number;
+} {
+  return {
+    protectedPaths: { enabled: fallback?.protectedPaths?.enabled ?? true },
+    askTimeoutMs: fallback?.askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS,
+  };
+}
+
+/** AD-072 Ф2: дефолты LLM Gateway (config.yaml без runtime), вложенный rateLimit мёржится по полям. */
+function resolveLlmGatewayDefaults(fallback?: Partial<LlmGatewayRuntimeSettings>): LlmGatewayRuntimeSettings {
+  return {
+    enabled: fallback?.enabled ?? DEFAULT_LLM_GATEWAY.enabled,
+    inputMode: fallback?.inputMode ?? DEFAULT_LLM_GATEWAY.inputMode,
+    logPayloads: fallback?.logPayloads ?? DEFAULT_LLM_GATEWAY.logPayloads,
+    rateLimit: {
+      userPerMinute: fallback?.rateLimit?.userPerMinute ?? DEFAULT_LLM_GATEWAY.rateLimit.userPerMinute,
+      providerPerMinute: fallback?.rateLimit?.providerPerMinute ?? DEFAULT_LLM_GATEWAY.rateLimit.providerPerMinute,
+    },
+  };
+}
+
+/** AD-072 Ф2: runtime-поле присутствует в settings.json (объект с хотя бы одним ключом / скаляр). */
+function hasOverride(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return Object.keys(value as Record<string, unknown>).length > 0;
+  }
+  return true;
+}
 
 export interface SettingsRoutesDeps {
   /** Store runtime-настроек ({dataDir}/settings.json). */
   settingsStore: RuntimeSettingsStore;
   /** Значение по умолчанию (env > config > {dataDir}/workspaces/default), если runtime-настройка не задана. */
   fallbackWorkspace: string;
+  /** AD-072 Ф2: дефолт LLM Gateway из config.yaml (без runtime) для GET/DELETE /llm-gateway. */
+  fallbackLlmGateway?: Partial<LlmGatewayRuntimeSettings>;
+  /** AD-072 Ф2: дефолт секции «Безопасность» из config.yaml для GET/DELETE /security. */
+  fallbackSecurity?: Partial<SecurityRuntimeSettings>;
   /** Вызывается после успешного PUT /llm-gateway (live-применение runtime-настройки). */
   onLlmGatewayChange?: (runtime: Partial<LlmGatewayRuntimeSettings>) => void | Promise<void>;
   /** Вызывается после успешного PUT /security (live-применение тумблера защищённых путей). */
@@ -195,7 +241,11 @@ export function createSettingsRoutes(
 
   app.get('/workspace', auth.requireAuth, async (c) => {
     const runtimeWorkspace = await deps.settingsStore.getWorkspace();
-    return c.json({ workspace: runtimeWorkspace ?? deps.fallbackWorkspace });
+    return c.json({
+      workspace: runtimeWorkspace ?? deps.fallbackWorkspace,
+      isOverridden: runtimeWorkspace !== undefined,
+      defaults: deps.fallbackWorkspace,
+    });
   });
 
   app.put('/workspace', auth.requireAuth, async (c) => {
@@ -212,9 +262,19 @@ export function createSettingsRoutes(
     return c.json({ workspace });
   });
 
+  app.delete('/workspace', auth.requireAuth, async (c) => {
+    await deps.settingsStore.clearWorkspace();
+    return c.json({
+      status: 'restored',
+      workspace: deps.fallbackWorkspace,
+      isOverridden: false,
+      defaults: deps.fallbackWorkspace,
+    });
+  });
+
   app.get('/mcp', auth.requireAuth, async (c) => {
     const servers = await deps.settingsStore.getMcpSettings();
-    return c.json({ servers });
+    return c.json({ servers, isOverridden: hasOverride(servers), defaults: {} });
   });
 
   app.put('/mcp', auth.requireAuth, async (c) => {
@@ -234,14 +294,29 @@ export function createSettingsRoutes(
     return c.json({ servers });
   });
 
+  app.delete('/mcp', auth.requireAuth, async (c) => {
+    await deps.settingsStore.clearMcpSettings();
+    return c.json({ status: 'restored', servers: {}, isOverridden: false, defaults: {} });
+  });
+
   /**
    * GET/PUT /api/v2/settings/llm-gateway — глобальные настройки LLM Gateway (AD-036).
    * Тумблер включается/выключается через UI (раздел «Шлюз безопасности», только ADMIN).
    * Значение сохраняется в {dataDir}/settings.json (AD-005) и переживает рестарт.
    */
   app.get('/llm-gateway', auth.requireAuth, async (c) => {
-    const llmGateway = await deps.settingsStore.getLlmGatewaySettings();
-    return c.json({ llmGateway });
+    const runtime = await deps.settingsStore.getLlmGatewaySettings();
+    const defaults = resolveLlmGatewayDefaults(deps.fallbackLlmGateway);
+    const llmGateway = {
+      enabled: runtime.enabled ?? defaults.enabled,
+      inputMode: runtime.inputMode ?? defaults.inputMode,
+      logPayloads: runtime.logPayloads ?? defaults.logPayloads,
+      rateLimit: {
+        userPerMinute: runtime.rateLimit?.userPerMinute ?? defaults.rateLimit.userPerMinute,
+        providerPerMinute: runtime.rateLimit?.providerPerMinute ?? defaults.rateLimit.providerPerMinute,
+      },
+    };
+    return c.json({ llmGateway, isOverridden: hasOverride(runtime), defaults });
   });
 
   app.put('/llm-gateway', auth.requireAuth, async (c) => {
@@ -263,6 +338,14 @@ export function createSettingsRoutes(
     return c.json({ llmGateway });
   });
 
+  app.delete('/llm-gateway', auth.requireAuth, async (c) => {
+    await deps.settingsStore.clearLlmGatewaySettings();
+    // Пустой runtime → mergeLlmGatewayConfig вернёт config.yaml (или undefined — шлюз выключен).
+    await deps.onLlmGatewayChange?.({});
+    const defaults = resolveLlmGatewayDefaults(deps.fallbackLlmGateway);
+    return c.json({ status: 'restored', llmGateway: defaults, isOverridden: false, defaults });
+  });
+
   /**
    * GET/PUT /api/v2/settings/security — глобальные настройки секции «Безопасность».
    * Тумблер защищённых путей + глобальный таймаут подтверждения (askTimeoutMs)
@@ -270,12 +353,15 @@ export function createSettingsRoutes(
    * {dataDir}/settings.json (AD-005) и переживает рестарт.
    */
   app.get('/security', auth.requireAuth, async (c) => {
-    const security = await deps.settingsStore.getSecuritySettings();
+    const runtime = await deps.settingsStore.getSecuritySettings();
+    const defaults = resolveSecurityDefaults(deps.fallbackSecurity);
     return c.json({
       security: {
-        protectedPaths: { enabled: security.protectedPaths?.enabled ?? true },
-        askTimeoutMs: security.askTimeoutMs ?? 30_000,
+        protectedPaths: { enabled: runtime.protectedPaths?.enabled ?? defaults.protectedPaths.enabled },
+        askTimeoutMs: runtime.askTimeoutMs ?? defaults.askTimeoutMs,
       },
+      isOverridden: hasOverride(runtime),
+      defaults,
     });
   });
 
@@ -304,6 +390,14 @@ export function createSettingsRoutes(
     });
   });
 
+  app.delete('/security', auth.requireAuth, async (c) => {
+    await deps.settingsStore.clearSecuritySettings();
+    // Пустой runtime → mergeSecurityConfig вернёт config.yaml.
+    await deps.onSecurityChange?.({});
+    const defaults = resolveSecurityDefaults(deps.fallbackSecurity);
+    return c.json({ status: 'restored', security: defaults, isOverridden: false, defaults });
+  });
+
   /**
    * GET/PUT /api/v2/settings/tools-policy — AD-071 §2.3: глобальная админская
    * политика включения инструментов (`consistency` | `available` | `auto`).
@@ -312,7 +406,8 @@ export function createSettingsRoutes(
    */
   app.get('/tools-policy', auth.requireAuth, async (c) => {
     const runtime = await deps.settingsStore.getToolsPolicy();
-    return c.json({ toolsPolicy: runtime ?? deps.fallbackToolsPolicy ?? 'auto' });
+    const defaults = deps.fallbackToolsPolicy ?? 'auto';
+    return c.json({ toolsPolicy: runtime ?? defaults, isOverridden: runtime !== undefined, defaults });
   });
 
   app.put('/tools-policy', auth.requireAuth, async (c) => {
@@ -335,6 +430,14 @@ export function createSettingsRoutes(
     return c.json({ toolsPolicy });
   });
 
+  app.delete('/tools-policy', auth.requireAuth, async (c) => {
+    const defaults = deps.fallbackToolsPolicy ?? 'auto';
+    await deps.settingsStore.clearToolsPolicy();
+    // Live-применение дефолта из config.yaml.
+    await deps.onToolsPolicyChange?.(defaults);
+    return c.json({ status: 'restored', toolsPolicy: defaults, isOverridden: false, defaults });
+  });
+
   /**
    * GET/PUT /api/v2/settings/mcp-policy — AD-071 §2.3: глобальная админская
    * политика включения **MCP**-инструментов (`consistency` | `available` |
@@ -344,7 +447,8 @@ export function createSettingsRoutes(
    */
   app.get('/mcp-policy', auth.requireAuth, async (c) => {
     const runtime = await deps.settingsStore.getMcpPolicy();
-    return c.json({ mcpPolicy: runtime ?? deps.fallbackMcpPolicy ?? 'auto' });
+    const defaults = deps.fallbackMcpPolicy ?? 'auto';
+    return c.json({ mcpPolicy: runtime ?? defaults, isOverridden: runtime !== undefined, defaults });
   });
 
   app.put('/mcp-policy', auth.requireAuth, async (c) => {
@@ -367,6 +471,13 @@ export function createSettingsRoutes(
     return c.json({ mcpPolicy });
   });
 
+  app.delete('/mcp-policy', auth.requireAuth, async (c) => {
+    const defaults = deps.fallbackMcpPolicy ?? 'auto';
+    await deps.settingsStore.clearMcpPolicy();
+    await deps.onMcpPolicyChange?.(defaults);
+    return c.json({ status: 'restored', mcpPolicy: defaults, isOverridden: false, defaults });
+  });
+
   /**
    * GET/PUT /api/v2/settings/mcp-network-policy — AD-071 §2.3.1: политика
    * сетевого доступа пользовательских HTTP MCP-серверов (`allow`/`deny` +
@@ -375,8 +486,8 @@ export function createSettingsRoutes(
    */
   app.get('/mcp-network-policy', auth.requireAuth, async (c) => {
     const runtime = await deps.settingsStore.getMcpNetworkPolicy();
-    const policy = runtime ?? deps.fallbackMcpNetworkPolicy ?? DEFAULT_MCP_NETWORK_POLICY;
-    return c.json({ policy });
+    const defaults = deps.fallbackMcpNetworkPolicy ?? DEFAULT_MCP_NETWORK_POLICY;
+    return c.json({ policy: runtime ?? defaults, isOverridden: runtime !== undefined, defaults });
   });
 
   app.put('/mcp-network-policy', auth.requireAuth, async (c) => {
@@ -399,6 +510,13 @@ export function createSettingsRoutes(
     return c.json({ policy });
   });
 
+  app.delete('/mcp-network-policy', auth.requireAuth, async (c) => {
+    const defaults = deps.fallbackMcpNetworkPolicy ?? DEFAULT_MCP_NETWORK_POLICY;
+    await deps.settingsStore.clearMcpNetworkPolicy();
+    await deps.onMcpNetworkPolicyChange?.(defaults);
+    return c.json({ status: 'restored', policy: defaults, isOverridden: false, defaults });
+  });
+
   /**
    * GET/PUT /api/v2/settings/tools-disabled — AD-071 §2.6: instance-wide
    * жёсткое отключение инструментов администратором (`capabilities` + `tools`).
@@ -408,8 +526,8 @@ export function createSettingsRoutes(
    */
   app.get('/tools-disabled', auth.requireAuth, async (c) => {
     const runtime = await deps.settingsStore.getToolsDisabled();
-    const config = runtime ?? deps.fallbackToolsDisabled ?? { capabilities: [], tools: [] };
-    return c.json({ toolsDisabled: config });
+    const defaults = deps.fallbackToolsDisabled ?? { capabilities: [], tools: [] };
+    return c.json({ toolsDisabled: runtime ?? defaults, isOverridden: runtime !== undefined, defaults });
   });
 
   app.put('/tools-disabled', auth.requireAuth, async (c) => {
@@ -426,6 +544,13 @@ export function createSettingsRoutes(
     // Live-применение — оркестратор переконфигурируется без рестарта.
     await deps.onToolsDisabledChange?.(result.config);
     return c.json({ toolsDisabled: result.config });
+  });
+
+  app.delete('/tools-disabled', auth.requireAuth, async (c) => {
+    const defaults = deps.fallbackToolsDisabled ?? { capabilities: [], tools: [] };
+    await deps.settingsStore.clearToolsDisabled();
+    await deps.onToolsDisabledChange?.(defaults);
+    return c.json({ status: 'restored', toolsDisabled: defaults, isOverridden: false, defaults });
   });
 
   /**

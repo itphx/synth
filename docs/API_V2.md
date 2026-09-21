@@ -413,20 +413,30 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 
 | Метод | Путь | RBAC | Назначение |
 |---|---|---|---|
-| GET | `/api/v2/settings/workspace` | auth | Рабочий каталог по умолчанию |
+| GET | `/api/v2/settings/workspace` | auth | Рабочий каталог по умолчанию: `{workspace, isOverridden, defaults}` (`defaults` — env/config) |
 | PUT | `/api/v2/settings/workspace` | auth | `{workspace}` |
-| GET | `/api/v2/settings/mcp` | auth | Доступность MCP по режимам |
+| DELETE | `/api/v2/settings/workspace` | auth | Сброс runtime-override к дефолту; `{status:"restored", workspace, isOverridden:false, defaults}` |
+| GET | `/api/v2/settings/mcp` | auth | Доступность MCP по режимам: `{servers, isOverridden, defaults:{}}` |
 | PUT | `/api/v2/settings/mcp` | auth | `{servers}` |
-| GET | `/api/v2/settings/tools-policy` | auth | Политика включения **встроенных** инструментов (AD-071 §2.3): `{toolsPolicy:"consistency"\|"available"\|"auto"}` (runtime из `settings.json`, иначе `tools.policy` из config.yaml; дефолт `auto`) |
+| DELETE | `/api/v2/settings/mcp` | auth | Сброс runtime-доступности MCP; `{status:"restored", servers:{}, isOverridden:false, defaults:{}}` |
+| GET | `/api/v2/settings/tools-policy` | auth | Политика включения **встроенных** инструментов (AD-071 §2.3): `{toolsPolicy:"consistency"\|"available"\|"auto", isOverridden, defaults}` (runtime из `settings.json`, иначе `tools.policy` из config.yaml; дефолт `auto`) |
 | PUT | `/api/v2/settings/tools-policy` | auth | `{toolsPolicy}` (live-применение, persist); неизвестное значение → 400 |
-| GET | `/api/v2/settings/mcp-policy` | auth | Политика включения **MCP**-инструментов (AD-071 §2.3): `{mcpPolicy:"consistency"\|"available"\|"auto"}` (runtime из `settings.json`, иначе `mcp.policy` из config.yaml; дефолт `auto`) |
+| DELETE | `/api/v2/settings/tools-policy` | auth | Сброс к config-дефолту; `{status:"restored", toolsPolicy, isOverridden:false, defaults}` + live-применение дефолта |
+| GET | `/api/v2/settings/mcp-policy` | auth | Политика включения **MCP**-инструментов (AD-071 §2.3): `{mcpPolicy:"consistency"\|"available"\|"auto", isOverridden, defaults}` (runtime из `settings.json`, иначе `mcp.policy` из config.yaml; дефолт `auto`) |
 | PUT | `/api/v2/settings/mcp-policy` | auth | `{mcpPolicy}` (live-применение, persist); независима от `tools-policy`; неизвестное значение → 400 |
-| GET | `/api/v2/settings/tools-disabled` | auth | Отключение встроенных инструментов (AD-071 §2.6): `{toolsDisabled:{capabilities,tools}}` (runtime-значение из `settings.json`, иначе `tools.disabled` из config.yaml) |
+| DELETE | `/api/v2/settings/mcp-policy` | auth | Сброс к config-дефолту; `{status:"restored", mcpPolicy, isOverridden:false, defaults}` + live-применение дефолта |
+| GET | `/api/v2/settings/mcp-network-policy` | auth | Политика сетевого доступа пользовательских HTTP MCP (AD-071 §2.3.1): `{policy, isOverridden, defaults}` (дефолт — deny приватных диапазонов) |
+| PUT | `/api/v2/settings/mcp-network-policy` | auth | `{policy:{mode:"allow"\|"deny",list:string[]}}` (live-применение, persist) |
+| DELETE | `/api/v2/settings/mcp-network-policy` | auth | Сброс к config-дефолту; `{status:"restored", policy, isOverridden:false, defaults}` + live-применение дефолта |
+| GET | `/api/v2/settings/tools-disabled` | auth | Отключение встроенных инструментов (AD-071 §2.6): `{toolsDisabled:{capabilities,tools}, isOverridden, defaults}` (runtime-значение из `settings.json`, иначе `tools.disabled` из config.yaml) |
 | PUT | `/api/v2/settings/tools-disabled` | auth | `{toolsDisabled:{capabilities:string[],tools:string[]}}` (live-применение, persist); неизвестная capability → 400, `runtime`-тулы неотключаемы. UI-раздел — ADMIN-категория |
-| GET | `/api/v2/settings/llm-gateway` | auth | Настройки LLM Gateway |
+| DELETE | `/api/v2/settings/tools-disabled` | auth | Сброс к config-дефолту (по умолчанию пусто); `{status:"restored", toolsDisabled, isOverridden:false, defaults}` + live-применение дефолта |
+| GET | `/api/v2/settings/llm-gateway` | auth | Эффективные настройки LLM Gateway: `{llmGateway:{enabled,inputMode,logPayloads,rateLimit}, isOverridden, defaults}` (runtime поверх config.yaml) |
 | PUT | `/api/v2/settings/llm-gateway` | auth | `{llmGateway}` (live-применение) |
-| GET | `/api/v2/settings/security` | auth | `{security:{protectedPaths, askTimeoutMs}}` |
+| DELETE | `/api/v2/settings/llm-gateway` | auth | Сброс к config-дефолту; `{status:"restored", llmGateway, isOverridden:false, defaults}` + live-применение `{}` (шлюз из config.yaml) |
+| GET | `/api/v2/settings/security` | auth | Эффективное `{protectedPaths, askTimeoutMs}` + `{isOverridden, defaults}` (runtime поверх config.yaml) |
 | PUT | `/api/v2/settings/security` | auth | `{security}` (live-применение) |
+| DELETE | `/api/v2/settings/security` | auth | Сброс к config-дефолту; `{status:"restored", security, isOverridden:false, defaults}` + live-применение `{}` |
 | GET | `/api/v2/settings/protected-paths` | auth | `{policy, base, is_overridden}` |
 | PUT | `/api/v2/settings/protected-paths` | auth | `{policy}` или `{version, add, remove}` |
 | DELETE | `/api/v2/settings/protected-paths` | auth | Сброс к системной политике |

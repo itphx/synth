@@ -555,6 +555,20 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/settings', createSettingsRoutes(auth as unknown as CoreAuthKit, {
       settingsStore,
       fallbackWorkspace: join(dataDir, 'workspaces', 'default'),
+      // AD-072 Ф2: дефолты из config.yaml (без runtime) — для GET/DELETE-сброса к умолчанию.
+      fallbackLlmGateway: {
+        enabled: backendConfig.synth.llmGateway.enabled,
+        inputMode: backendConfig.synth.llmGateway.inputMode,
+        logPayloads: backendConfig.synth.llmGateway.logPayloads,
+        rateLimit: {
+          userPerMinute: backendConfig.synth.llmGateway.rateLimit?.userPerMinute ?? 60,
+          providerPerMinute: backendConfig.synth.llmGateway.rateLimit?.providerPerMinute ?? 120,
+        },
+      },
+      fallbackSecurity: {
+        protectedPaths: { enabled: backendConfig.synth.security.protectedPaths?.enabled ?? true },
+        askTimeoutMs: (backendConfig.synth.security as unknown as { askTimeoutMs?: number }).askTimeoutMs,
+      },
       // AD-036: live-применение тумблера LLM Gateway из UI — без рестарта сервера.
       onLlmGatewayChange: async (runtime) => {
         const merged = mergeLlmGatewayConfig(backendConfig.synth.llmGateway, runtime);

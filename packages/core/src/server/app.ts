@@ -807,6 +807,20 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   app.route('/api/v2/settings', createSettingsRoutes(auth, {
     settingsStore,
     fallbackWorkspace: defaultWorkingDir,
+    // AD-072 Ф2: дефолты из config.yaml (без runtime) — для GET/DELETE-сброса к умолчанию.
+    fallbackLlmGateway: config.gatewayConfig ? {
+      enabled: config.gatewayConfig.enabled,
+      inputMode: config.gatewayConfig.inputMode,
+      logPayloads: config.gatewayConfig.logPayloads,
+      rateLimit: {
+        userPerMinute: config.gatewayConfig.rateLimit?.userPerMinute ?? 60,
+        providerPerMinute: config.gatewayConfig.rateLimit?.providerPerMinute ?? 120,
+      },
+    } : undefined,
+    fallbackSecurity: {
+      protectedPaths: { enabled: config.securityConfig?.protectedPaths?.enabled ?? true },
+      askTimeoutMs: (config.securityConfig as (SecurityConfig & { askTimeoutMs?: number }) | undefined)?.askTimeoutMs,
+    },
     // AD-036: live-применение тумблера LLM Gateway из UI — без рестарта сервера.
     onLlmGatewayChange: async (runtime) => {
       const merged = mergeLlmGatewayConfig(config.gatewayConfig, runtime);

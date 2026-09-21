@@ -736,6 +736,13 @@ export const synthApi = {
     })
   },
 
+  /** DELETE /settings/workspace — сброс runtime-override к дефолту (env/config); возвращает восстановленное значение. */
+  async resetWorkspaceSetting(): Promise<{ workspace: string }> {
+    return fetchJSON<{ workspace: string }>(`${BASE_URL}/settings/workspace`, {
+      method: 'DELETE',
+    }).then((r) => ({ workspace: r.workspace }))
+  },
+
   async moveEntry(
     projectId: string,
     sourcePath: string,
@@ -993,6 +1000,13 @@ export const synthApi = {
     })
   },
 
+  /** DELETE /settings/mcp — сброс runtime-настроек доступности MCP к дефолту (пусто). */
+  async resetMcpSettings(): Promise<McpSettingsPayload> {
+    return fetchJSON<McpSettingsPayload>(`${BASE_URL}/settings/mcp`, {
+      method: 'DELETE',
+    }).then((r) => ({ servers: r.servers }))
+  },
+
   async probeMcpServer(name: string): Promise<{ name: string; tools: McpProbedTool[] }> {
     return fetchJSON(`${BASE_URL}/mcp/probe`, {
       method: 'POST',
@@ -1037,6 +1051,13 @@ export const synthApi = {
     }).then((r) => r.policy)
   },
 
+  /** DELETE /settings/mcp-network-policy — сброс к дефолту (config или deny приватных диапазонов). */
+  async resetMcpNetworkPolicy(): Promise<McpNetworkPolicy> {
+    return fetchJSON<{ policy: McpNetworkPolicy }>(`${BASE_URL}/settings/mcp-network-policy`, {
+      method: 'DELETE',
+    }).then((r) => r.policy)
+  },
+
   // --- LLM Gateway (AD-036) ---
   async getLlmGatewaySettings(): Promise<LlmGatewaySettings> {
     return fetchJSON<{ llmGateway: LlmGatewaySettings }>(`${BASE_URL}/settings/llm-gateway`).then((r) => r.llmGateway)
@@ -1046,6 +1067,13 @@ export const synthApi = {
     return fetchJSON<{ llmGateway: LlmGatewaySettings }>(`${BASE_URL}/settings/llm-gateway`, {
       method: 'PUT',
       body: JSON.stringify({ llmGateway: config }),
+    }).then((r) => r.llmGateway)
+  },
+
+  /** DELETE /settings/llm-gateway — сброс runtime-настроек к config.yaml-дефолту (live). */
+  async resetLlmGatewaySettings(): Promise<LlmGatewaySettings> {
+    return fetchJSON<{ llmGateway: LlmGatewaySettings }>(`${BASE_URL}/settings/llm-gateway`, {
+      method: 'DELETE',
     }).then((r) => r.llmGateway)
   },
 
@@ -1087,6 +1115,13 @@ export const synthApi = {
     }).then((r) => r.security)
   },
 
+  /** DELETE /settings/security — сброс к дефолтам config.yaml (live-применение). */
+  async resetSecuritySettings(): Promise<SecuritySettings> {
+    return fetchJSON<{ security: SecuritySettings }>(`${BASE_URL}/settings/security`, {
+      method: 'DELETE',
+    }).then((r) => r.security)
+  },
+
   // --- Инструменты: политика включения (AD-071 §2.3) ---
   async getToolsPolicy(): Promise<ToolsPolicy> {
     return fetchJSON<{ toolsPolicy: ToolsPolicy }>(`${BASE_URL}/settings/tools-policy`).then((r) => r.toolsPolicy)
@@ -1096,6 +1131,13 @@ export const synthApi = {
     return fetchJSON<{ toolsPolicy: ToolsPolicy }>(`${BASE_URL}/settings/tools-policy`, {
       method: 'PUT',
       body: JSON.stringify({ toolsPolicy }),
+    }).then((r) => r.toolsPolicy)
+  },
+
+  /** DELETE /settings/tools-policy — сброс к config-дефолту (live-применение). */
+  async resetToolsPolicy(): Promise<ToolsPolicy> {
+    return fetchJSON<{ toolsPolicy: ToolsPolicy }>(`${BASE_URL}/settings/tools-policy`, {
+      method: 'DELETE',
     }).then((r) => r.toolsPolicy)
   },
 
@@ -1111,6 +1153,13 @@ export const synthApi = {
     }).then((r) => r.mcpPolicy)
   },
 
+  /** DELETE /settings/mcp-policy — сброс к config-дефолту (live-применение). */
+  async resetMcpPolicy(): Promise<ToolsPolicy> {
+    return fetchJSON<{ mcpPolicy: ToolsPolicy }>(`${BASE_URL}/settings/mcp-policy`, {
+      method: 'DELETE',
+    }).then((r) => r.mcpPolicy)
+  },
+
   // --- Инструменты: instance-wide отключение (AD-071 §2.6) ---
   /** GET /settings/tools-disabled — жёстко отключённые admin'ом capability и тулы. */
   async getToolsDisabled(): Promise<ToolsDisabledConfig> {
@@ -1122,6 +1171,13 @@ export const synthApi = {
     return fetchJSON<{ toolsDisabled: ToolsDisabledConfig }>(`${BASE_URL}/settings/tools-disabled`, {
       method: 'PUT',
       body: JSON.stringify({ toolsDisabled: config }),
+    }).then((r) => r.toolsDisabled)
+  },
+
+  /** DELETE /settings/tools-disabled — сброс к config-дефолту (пусто; live-применение). */
+  async resetToolsDisabled(): Promise<ToolsDisabledConfig> {
+    return fetchJSON<{ toolsDisabled: ToolsDisabledConfig }>(`${BASE_URL}/settings/tools-disabled`, {
+      method: 'DELETE',
     }).then((r) => r.toolsDisabled)
   },
 
