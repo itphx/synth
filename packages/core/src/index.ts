@@ -33,6 +33,7 @@ export {
   critical,
   setLevelForGroup,
   getAllGroups,
+  setGroups,
   setAllGroups,
   resetGroupOverrides,
   LOG_LEVEL_NAMES,

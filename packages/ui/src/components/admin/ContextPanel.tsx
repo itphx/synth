@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react'
 import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Button } from '../ui/button'
-import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { confirm } from '@/lib/confirm'
 import {
   SettingsActions,
   SettingsPanel,
   SettingsSection,
+  Tabs,
   TextArea,
   TextField,
 } from '../ui/settings'
@@ -163,22 +163,15 @@ export const ContextPanel = () => {
       }
     >
       <SettingsSection>
-        <div className="flex flex-wrap gap-1 bg-muted rounded-lg p-1 min-w-0">
-          {CATEGORIES.map((cat) => (
-            <button
-              key={cat.id}
-              onClick={() => switchTab(cat.id)}
-              className={cn(
-                'flex-1 min-w-0 px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
-                activeTab === cat.id
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {t(CATEGORY_LABEL_KEYS[cat.id])}
-            </button>
-          ))}
-        </div>
+        <Tabs
+          items={CATEGORIES.map((cat) => ({
+            value: cat.id,
+            label: t(CATEGORY_LABEL_KEYS[cat.id]),
+          }))}
+          value={activeTab}
+          onChange={switchTab}
+          ariaLabel={t('admin.context.title')}
+        />
       </SettingsSection>
 
       {showCreate && (

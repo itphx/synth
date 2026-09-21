@@ -468,7 +468,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | Метод | Путь | Назначение |
 |---|---|---|
 | GET | `/api/v2/admin/debug/config` | Группы логирования + уровни |
-| POST | `/api/v2/admin/debug/config` | `{groups}` → `{status:'saved'}` |
+| POST | `/api/v2/admin/debug/config` | `{groups}` → `{status:'saved'}`; merge — сохраняются только переданные группы, остальные overrides не сбрасываются |
 
 ### 5.25 Events — `оба`
 

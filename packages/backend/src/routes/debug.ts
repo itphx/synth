@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import { getAllGroups, setAllGroups, LOG_LEVEL_NAMES } from '@itphx/synth-core';
+import { getAllGroups, setGroups, LOG_LEVEL_NAMES } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 
 export function createDebugRoutes(kit: AuthKit): Hono {
@@ -22,7 +22,7 @@ export function createDebugRoutes(kit: AuthKit): Hono {
     }
 
     try {
-      setAllGroups(body.groups);
+      setGroups(body.groups);
       return c.json({ status: 'saved' });
     } catch (err) {
       return c.json({

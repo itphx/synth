@@ -113,18 +113,6 @@ export const DefaultsPanel = () => {
     <SettingsPanel
       title={t('admin.defaults.title')}
       description={t('admin.defaults.description')}
-      footerVariant="fixed"
-      footer={
-        <SettingsActions
-          onSave={() => void draft.save()}
-          onReset={handleReset}
-          saving={draft.saving}
-          saveDisabled={!draft.dirty}
-          resetDisabled={current == null}
-          saveTestId="defaults-save"
-          resetTestId="defaults-reset"
-        />
-      }
     >
       {current == null ? (
         <div className="bg-background rounded-xl border p-5 animate-pulse space-y-3">
@@ -132,45 +120,57 @@ export const DefaultsPanel = () => {
           <div className="h-4 bg-muted rounded w-32" />
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <SettingsSection className="sm:col-span-2" title={t('settings.appearance.themeMode.label')}>
-            <ThemeModeControl
-              value={current.themeMode}
-              onChange={(mode) => update({ themeMode: mode })}
-              ariaLabel={t('settings.appearance.themeMode.label')}
-            />
-            <ThemeControl
-              label={t('settings.appearance.theme.label')}
-              value={themeToPresetName(current.theme)}
-              onChange={(name) => update({ theme: presetNameToTheme(name) })}
-              ariaLabel={t('settings.appearance.theme.label')}
-            />
-          </SettingsSection>
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <SettingsSection className="sm:col-span-2" title={t('settings.appearance.themeMode.label')}>
+              <ThemeModeControl
+                value={current.themeMode}
+                onChange={(mode) => update({ themeMode: mode })}
+                ariaLabel={t('settings.appearance.themeMode.label')}
+              />
+              <ThemeControl
+                label={t('settings.appearance.theme.label')}
+                value={themeToPresetName(current.theme)}
+                onChange={(name) => update({ theme: presetNameToTheme(name) })}
+                ariaLabel={t('settings.appearance.theme.label')}
+              />
+            </SettingsSection>
 
-          <SettingsSection title={t('settings.appearance.uiScale.label')}>
-            <UiScaleSlider
-              label={t('settings.appearance.uiScale.mobile')}
-              value={current.uiScaleMobile}
-              onChange={handleMobileScaleChange}
-            />
-            <UiScaleSlider
-              label={t('settings.appearance.uiScale.desktop')}
-              value={current.uiScaleDesktop}
-              onChange={handleDesktopScaleChange}
-            />
-          </SettingsSection>
+            <SettingsSection title={t('settings.appearance.uiScale.label')}>
+              <UiScaleSlider
+                label={t('settings.appearance.uiScale.mobile')}
+                value={current.uiScaleMobile}
+                onChange={handleMobileScaleChange}
+              />
+              <UiScaleSlider
+                label={t('settings.appearance.uiScale.desktop')}
+                value={current.uiScaleDesktop}
+                onChange={handleDesktopScaleChange}
+              />
+            </SettingsSection>
 
-          <SettingsSection title={t('settings.appearance.language.label')}>
-            <LanguageControl
-              value={current.locale}
-              onChange={(locale) => update({ locale })}
-              labels={{
-                ru: t('admin.defaults.russian'),
-                en: t('admin.defaults.english'),
-              }}
-            />
-          </SettingsSection>
-        </div>
+            <SettingsSection title={t('settings.appearance.language.label')}>
+              <LanguageControl
+                value={current.locale}
+                onChange={(locale) => update({ locale })}
+                labels={{
+                  ru: t('admin.defaults.russian'),
+                  en: t('admin.defaults.english'),
+                }}
+              />
+            </SettingsSection>
+          </div>
+
+          <SettingsActions
+            onSave={() => void draft.save()}
+            onReset={handleReset}
+            saving={draft.saving}
+            saveDisabled={!draft.dirty}
+            resetDisabled={current == null}
+            saveTestId="defaults-save"
+            resetTestId="defaults-reset"
+          />
+        </>
       )}
     </SettingsPanel>
   )
