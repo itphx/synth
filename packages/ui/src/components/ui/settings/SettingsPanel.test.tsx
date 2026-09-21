@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
@@ -21,6 +21,24 @@ async function renderPanel(
   return host
 }
 
+/** Заглушка matchMedia: телефон + coarse pointer, иначе — всё false (десктоп). */
+function stubPhone() {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: query === '(max-width: 768px)' || query === '(pointer: coarse)',
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }))
+}
+
+function setScrollTop(el: HTMLElement, value: number) {
+  Object.defineProperty(el, 'scrollTop', { value, writable: true, configurable: true })
+}
+
 afterEach(async () => {
   while (mounted.length > 0) {
     const entry = mounted.pop()!
@@ -29,6 +47,7 @@ afterEach(async () => {
     })
     entry.host.remove()
   }
+  vi.unstubAllGlobals()
   document.body.innerHTML = ''
 })
 
@@ -86,5 +105,81 @@ describe('SettingsPanel', () => {
     expect(host.querySelector('.max-w-3xl')).not.toBeNull()
     expect(host.querySelector('.min-w-0')).not.toBeNull()
     expect(host.innerHTML).not.toContain('pr-2')
+  })
+
+  it('тело помечено settings-scroll-container', async () => {
+    const host = await renderPanel({ title: 'Network', children: <div>CONTENT</div> })
+    const body = host.querySelector('.settings-scroll-container')
+    expect(body).not.toBeNull()
+    expect(body!.classList.contains('overflow-y-auto')).toBe(true)
+  })
+
+  it('collapsibleHeader: на теле при скролле описание скрывается, наверх — разворачивается', async () => {
+    stubPhone()
+    const host = await renderPanel({
+      title: 'Network',
+      description: 'Configure networking',
+      children: <div>CONTENT</div>,
+    })
+    const body = host.querySelector('.settings-scroll-container') as HTMLElement
+    const desc = host.querySelector('[data-testid="settings-header-description"]') as HTMLElement
+    expect(desc).not.toBeNull()
+    expect(desc.classList.contains('grid-rows-[1fr]')).toBe(true)
+
+    setScrollTop(body, 20)
+    await act(async () => {
+      body.dispatchEvent(new Event('scroll'))
+    })
+
+    expect(desc.classList.contains('grid-rows-[0fr]')).toBe(true)
+    expect(desc.classList.contains('opacity-0')).toBe(true)
+    expect(body.getAttribute('data-scroll-shadow')).toBe('top')
+
+    setScrollTop(body, 0)
+    await act(async () => {
+      body.dispatchEvent(new Event('scroll'))
+    })
+
+    expect(desc.classList.contains('grid-rows-[1fr]')).toBe(true)
+    expect(desc.classList.contains('opacity-100')).toBe(true)
+    expect(body.hasAttribute('data-scroll-shadow')).toBe(false)
+  })
+
+  it('collapsibleHeader: на десктопе описание остаётся видимым', async () => {
+    const host = await renderPanel({
+      title: 'Network',
+      description: 'Configure networking',
+      children: <div>CONTENT</div>,
+    })
+    const body = host.querySelector('.settings-scroll-container') as HTMLElement
+    const desc = host.querySelector('[data-testid="settings-header-description"]') as HTMLElement
+
+    setScrollTop(body, 50)
+    await act(async () => {
+      body.dispatchEvent(new Event('scroll'))
+    })
+
+    expect(desc.classList.contains('grid-rows-[1fr]')).toBe(true)
+    // Затенение при этом работает и на десктопе.
+    expect(body.getAttribute('data-scroll-shadow')).toBe('top')
+  })
+
+  it('collapsibleHeader=false: на теле описание не сворачивается', async () => {
+    stubPhone()
+    const host = await renderPanel({
+      title: 'Network',
+      description: 'Configure networking',
+      collapsibleHeader: false,
+      children: <div>CONTENT</div>,
+    })
+    const body = host.querySelector('.settings-scroll-container') as HTMLElement
+    const desc = host.querySelector('[data-testid="settings-header-description"]') as HTMLElement
+
+    setScrollTop(body, 40)
+    await act(async () => {
+      body.dispatchEvent(new Event('scroll'))
+    })
+
+    expect(desc.classList.contains('grid-rows-[1fr]')).toBe(true)
   })
 })

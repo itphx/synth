@@ -2,7 +2,7 @@
 
 > **Статус:** ✅ Реализовано (коллекция `components/ui/settings/` — стандарт; все разделы настроек и админ-категории мигрированы, legacy-разметка удалена)
 > **Дата:** 2026-09-21
-> **Реализация:** Ф1 — коллекция `packages/ui/src/components/ui/settings/` (`SettingsPanel`/`Section`/`Field`/`Row`/`Actions`/`DefaultsBadge`, контролы, `useSettingsDraft`), тесты, barrel; мелкий фикс Tailwind (`overscroll-behavior-contain` → `overscroll-contain`). Ф4b — миграция админ-категорий и разделов, `SliderField` и `SegmentedControl` в Kit, удалён `components/settings/settings-layout.tsx` (`SettingsPage`/`SettingsCard`), `window.confirm` → `confirm()` в админ-панелях.
+> **Реализация:** Ф1 — коллекция `packages/ui/src/components/ui/settings/` (`SettingsPanel`/`Section`/`Field`/`Row`/`Actions`/`DefaultsBadge`, контролы, `useSettingsDraft`), тесты, barrel; мелкий фикс Tailwind (`overscroll-behavior-contain` → `overscroll-contain`). Ф4b — миграция админ-категорий и разделов, `SliderField` и `SegmentedControl` в Kit, удалён `components/settings/settings-layout.tsx` (`SettingsPage`/`SettingsCard`), `window.confirm` → `confirm()` в админ-панелях. Ф5 — доработка по фидбеку: единый слайдер на `.ui-range`, контрол `Tabs`, сворачивающаяся шапка и затенение скролла `SettingsPanel` на мобильных.
 > **Парные документы:**
 > - [AD-019](./ad-019-react-spa.md) «React 19 SPA с нуля» — базовые UI-примитивы (`components/ui/`);
 > - [AD-044](./ad-044-mobile-adaptive-ui-pwa.md) «Адаптивный мобильный UI + PWA» — зоны, touch-first, мобильные правила;
@@ -41,7 +41,7 @@
 | `SettingsRow` | Строка «лейбл слева — контрол справа» (на теле колонка) |
 | `SettingsActions` | Ряд `Reset`/`Save`/`Cancel` с disabled-состояниями |
 | `DefaultsBadge` | Пилюля «По умолчанию» |
-| `controls/TextField`, `NumberField`, `SliderField`, `TextArea`, `SelectField`, `ToggleField`, `ListField`, `SegmentedControl` | Управляемые контролы |
+| `controls/TextField`, `NumberField`, `SliderField`, `TextArea`, `SelectField`, `ToggleField`, `ListField`, `SegmentedControl`, `Tabs` | Управляемые контролы |
 | `useSettingsDraft` | Контракт черновика (см. §2.3) |
 | `index.ts` | Barrel **только** этой коллекции; общий `components/ui/index.ts` не трогается |
 
@@ -76,6 +76,15 @@
 ### 2.7. Мелкий фикс
 
 `overscroll-behavior-contain` → `overscroll-contain` во всех файлах `packages/ui/src` (settings, admin, logviewer) — недействительный класс не давал эффекта.
+
+### 2.8. Доработки по фидбеку (Ф5)
+
+- **Единый слайдер.** `controls/SliderField.tsx` — единственный слайдер в проекте; построен на CSS-классе `.ui-range` и CSS-переменной `--ui-range-fill` (заполнение трека вычисляется из `value`/`min`/`max`, зажимается в 0–100 %, без деления на ноль). Разметка: label слева, справа `input[type=range]` + значение (`font-mono tabular-nums min-w-[4ch] text-right`) + опциональная компактная кнопка сброса (`Icon name="refresh"`, `data-compact`). `aria-label` = `label`, `data-testid="slider-value"`. `stacked` (по умолчанию `true` на телефоне/планшете, `false` на десктопе) переключает колонку (`flex-1 min-w-0`) и строку (`w-24 sm:w-32`). `UiScaleSlider`/`UiScaleControl` — тонкие обёртки над Kit-слайдером (масштаб UI передаётся долей, подпись — проценты); `accent-primary` не используется.
+- **`Tabs`** (`controls/Tabs.tsx`) — мобильно-устойчивый переключатель вкладок: контейнер `flex w-full min-w-0 items-stretch gap-1 rounded-lg bg-muted p-1`, вкладки `flex-1 min-w-0` с `break-words` (или `truncate` при `title`), активная — `bg-background text-foreground shadow-sm`. `variant="underline"` — подчёркивание активной без фона. При переполнении контейнер скроллится по X с затенением (`tab-scroll-container` + `data-scroll-shadow`).
+- **Сворачивающаяся шапка `SettingsPanel`.** Проп `collapsibleHeader?: boolean` (по умолчанию `true`). Только на не-десктопе (`useDevice()`, `deviceType !== 'desktop'`) при `scrollTop > 8` описание скрывается (`grid-rows-[0fr]` + `opacity-0` + `overflow-hidden`, плавный `transition`, `motion-reduce:transition-none`), остаются заголовок и `actions`; при возврате наверх — разворачивается. На десктопе описание видно всегда. Шапка — `shrink-0` (не скроллится).
+- **Затенение скролла.** Тело панели — `settings-scroll-container` + `data-scroll-shadow` (`top`/`bottom`/`top-bottom`), как в `MessageList`. CSS — общие правила с `.chat-scroll-container` в `styles/design-system.css`, размер затенения переопределён (`--scroll-shadow-size: 1.5rem`); mask работает по alpha, поэтому темы не требуют отдельных правил. `ResizeObserver` подключается только при наличии (jsdom-safe).
+- **Футер.** `footerVariant` (`fixed`/`sticky`) — доступная возможность Kit, но **не стандарт**: в разделах используется `fixed` (по умолчанию), `sticky` не применяется.
+
 
 ## 3. Последствия
 

@@ -40,5 +40,8 @@ export type { ListFieldProps, ListFieldVariant } from './controls/ListField'
 export { SegmentedControl } from './controls/SegmentedControl'
 export type { SegmentedControlOption } from './controls/SegmentedControl'
 
+export { Tabs } from './controls/Tabs'
+export type { TabsProps, TabsItem } from './controls/Tabs'
+
 export { useSettingsDraft } from './useSettingsDraft'
 export type { UseSettingsDraftOptions, UseSettingsDraftResult } from './useSettingsDraft'
