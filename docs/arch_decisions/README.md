@@ -33,6 +33,7 @@
 | AD-044 | Адаптивный мобильный UI + PWA | ✅ | [ad-044-mobile-adaptive-ui-pwa.md](./ad-044-mobile-adaptive-ui-pwa.md) |
 | AD-045 | Профили серверов и лёгкий runtime-вход в гибриде: единый dataDir, мета-реестр profiles.json, logout = забыть токен + revoke | ✅ | [ad-045-hybrid-server-profiles.md](./ad-045-hybrid-server-profiles.md) |
 | AD-070 | SystemPromptComposer: консистентность промпта, prompt-cache, статистика и прозрачность | ✅ | [ad-070-system-prompt-composer.md](./ad-070-system-prompt-composer.md) |
+| AD-071 | MCP-серверы: уровни system/project/session, единый реестр, разделение `tools`/`mcp.tools`, блоки `mcp.servers`/`mcp.status`, политики `tools.policy`/`mcp.policy`, admin-отключение встроенных инструментов | ✅ | [ad-071-mcp-servers-prompt.md](./ad-071-mcp-servers-prompt.md) |
 
 ## Частично реализованные AD
 
@@ -59,4 +60,3 @@
 | AD-046 | [Скиллы и slash-команды](./ad-046-skills-and-slash-commands.md): формат SKILL.md, discovery, progressive disclosure, core-тул skill, bundles, capability-aware |
 | AD-068 | [Реестр и каталог скиллов и агентов](./ad-068-skills-agents-registry.md): свой репозиторий, индекс, trust/guard, install-policy, agent-packs |
 | AD-069 | [Проектные инструкции (AGENTS.md) и /init](./ad-069-project-instructions-agents-md.md): discovery, merged chain, lazy-догрузка, обрезка, threat-scan, install-tree guard |
-| AD-071 | [MCP-серверы — уровни, скоуп и представление в промпте](./ad-071-mcp-servers-prompt.md): разделение `tools`/`mcp.tools`, блок `mcp.servers`, политика `tools.policy`, уровни system/project/session, реестр MCP |
