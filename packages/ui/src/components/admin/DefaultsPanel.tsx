@@ -15,8 +15,8 @@ import {
 } from '@/lib/uiScale'
 import { UiScaleSlider } from '@/components/settings/UiScaleControl'
 import { Button } from '@/components/ui/button'
+import { SettingsCard } from '@/components/settings/settings-layout'
 import {
-  SettingsCard,
   ThemeModeControl,
   ThemeControl,
   LanguageControl,

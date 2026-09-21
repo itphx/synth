@@ -1,6 +1,7 @@
 import { useUIStore } from "../../stores/useUIStore"
 import { useI18n } from "@/lib/i18n"
-import { SettingsPage, SettingsCard, SegmentedControl, type SegmentedControlOption } from './settings-layout'
+import { SettingsPanel, SettingsSection } from '../ui/settings'
+import { SegmentedControl, type SegmentedControlOption } from './settings-layout'
 
 type IntermediateTextDisplay = 'inline' | 'bottom'
 
@@ -16,20 +17,18 @@ export const ChatSettings = () => {
   ]
 
   return (
-    <SettingsPage
+    <SettingsPanel
       title={t('settings.category.chat')}
       description={t('chatSettings.intermediateTextDescription')}
     >
-      <div className="grid gap-4 sm:grid-cols-2">
-        <SettingsCard title={t('chatSettings.intermediateTextDisplay')}>
-          <SegmentedControl<IntermediateTextDisplay>
-            value={display}
-            options={options}
-            onChange={setIntermediateTextDisplay}
-            ariaLabel={t('chatSettings.intermediateTextDisplay')}
-          />
-        </SettingsCard>
-      </div>
-    </SettingsPage>
+      <SettingsSection title={t('chatSettings.intermediateTextDisplay')}>
+        <SegmentedControl<IntermediateTextDisplay>
+          value={display}
+          options={options}
+          onChange={setIntermediateTextDisplay}
+          ariaLabel={t('chatSettings.intermediateTextDisplay')}
+        />
+      </SettingsSection>
+    </SettingsPanel>
   )
 }

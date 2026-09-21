@@ -1,9 +1,17 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useProvidersStore } from '@/stores/providersStore'
-import { Toggle } from '../ui/Toggle'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { SettingsPage, SettingsCard } from './settings-layout'
+import { SelectContent, SelectItem } from '@/components/ui/select'
+import {
+  DefaultsBadge,
+  NumberField,
+  SelectField,
+  SettingsActions,
+  SettingsPanel,
+  SettingsSection,
+  ToggleField,
+  useSettingsDraft,
+} from '../ui/settings'
 
 const STORAGE_KEY = 'synth-microfirst-defaults'
 
@@ -48,93 +56,105 @@ export function MicroFirstDefaults() {
   const providers = useProvidersStore((s) => s.providers)
   const models = useProvidersStore((s) => s.models)
 
-  const [settings, setSettings] = useState<MicroFirstDefaults>(loadDefaults)
+  const [stored, setStored] = useState<MicroFirstDefaults>(loadDefaults)
 
-  useEffect(() => {
-    saveDefaults(settings)
-  }, [settings])
+  const draft = useSettingsDraft<MicroFirstDefaults>({
+    value: stored,
+    defaultValue: DEFAULTS,
+    onSave: async (next) => {
+      saveDefaults(next)
+      setStored(next)
+      return next
+    },
+  })
+
+  const settings = draft.draft ?? DEFAULTS
 
   const update = (patch: Partial<MicroFirstDefaults>) => {
-    setSettings((s) => ({ ...s, ...patch }))
+    draft.update(patch)
   }
 
   const availableProviders = providers.filter((p) => p.enabled)
   const filteredModels = models.filter((m) => m.enabled && (!settings.embedProvider || m.provider === settings.embedProvider))
 
+  const stateLabel = (enabled: boolean) => (enabled ? t('common.enabled') : t('common.disabled'))
+
   return (
-    <SettingsPage
+    <SettingsPanel
       title={t('settings.microFirst.title')}
       description={t('settings.microFirst.description')}
+      footer={
+        <SettingsActions
+          onSave={() => void draft.save()}
+          onCancel={draft.revert}
+          onReset={draft.resetToDefault}
+          saving={draft.saving}
+          saveDisabled={!draft.dirty}
+          cancelDisabled={!draft.dirty}
+          saveTestId="microfirst-save"
+          cancelTestId="microfirst-cancel"
+          resetTestId="microfirst-reset"
+        />
+      }
     >
-      <div className="grid gap-4 sm:grid-cols-2">
-        <SettingsCard title={t('settings.microFirst.enabled')}>
-          <label className="flex items-center gap-3 cursor-pointer">
-            <Toggle enabled={settings.microFirst} onToggle={() => update({ microFirst: !settings.microFirst })} />
-            <span className="text-sm text-foreground">
-              {settings.microFirst ? t('common.enabled') : t('common.disabled')}
-            </span>
-          </label>
-        </SettingsCard>
+      <SettingsSection
+        actions={draft.isDefault ? <DefaultsBadge /> : undefined}
+      >
+        <ToggleField
+          label={t('settings.microFirst.enabled')}
+          description={stateLabel(settings.microFirst)}
+          enabled={settings.microFirst}
+          onToggle={() => update({ microFirst: !settings.microFirst })}
+        />
+      </SettingsSection>
 
-        <SettingsCard title={t('settings.microFirst.confidence')}>
-          <div className="flex items-center gap-3">
-            <input
-              type="range"
-              min="0.5" max="1.0" step="0.05"
-              value={settings.microConfidenceThreshold}
-              onChange={(e) => update({ microConfidenceThreshold: parseFloat(e.target.value) })}
-              className="ui-range w-full"
-              style={{
-                ['--ui-range-fill' as string]: `${Math.round(((settings.microConfidenceThreshold - 0.5) / (1.0 - 0.5)) * 100)}%`,
-              }}
-            />
-            <span className="text-sm text-foreground font-mono tabular-nums min-w-[3ch]">
-              {settings.microConfidenceThreshold.toFixed(2)}
-            </span>
-          </div>
-        </SettingsCard>
+      <SettingsSection title={t('settings.microFirst.confidence')}>
+        <NumberField
+          aria-label={t('settings.microFirst.confidence')}
+          min={0.5}
+          max={1}
+          step={0.05}
+          value={settings.microConfidenceThreshold}
+          onChange={(e) => update({ microConfidenceThreshold: parseFloat(e.target.value) })}
+        />
+      </SettingsSection>
 
-        <SettingsCard title={t('settings.microFirst.embedding')}>
-          <div className="flex items-center gap-2">
-            <Toggle enabled={settings.embeddingEnabled} onToggle={() => update({ embeddingEnabled: !settings.embeddingEnabled })} />
-            <span className="text-sm text-foreground">
-              {settings.embeddingEnabled ? t('common.enabled') : t('common.disabled')}
-            </span>
+      <SettingsSection>
+        <ToggleField
+          label={t('settings.microFirst.embedding')}
+          description={stateLabel(settings.embeddingEnabled)}
+          enabled={settings.embeddingEnabled}
+          onToggle={() => update({ embeddingEnabled: !settings.embeddingEnabled })}
+        />
+        {settings.embeddingEnabled && (
+          <div className="space-y-3 min-w-0">
+            <SelectField
+              value={settings.embedProvider}
+              onValueChange={(value) => update({ embedProvider: value, embedModel: '' })}
+              ariaLabel={t('settings.microFirst.provider')}
+            >
+              <SelectContent>
+                <SelectItem value="">{t('settings.microFirst.provider')}</SelectItem>
+                {availableProviders.map((p) => (
+                  <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </SelectField>
+            <SelectField
+              value={settings.embedModel}
+              onValueChange={(value) => update({ embedModel: value })}
+              ariaLabel={t('settings.microFirst.model')}
+            >
+              <SelectContent>
+                <SelectItem value="">{t('settings.microFirst.model')}</SelectItem>
+                {filteredModels.map((m) => (
+                  <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </SelectField>
           </div>
-          {settings.embeddingEnabled && (
-            <div className="space-y-2">
-              <Select
-                value={settings.embedProvider}
-                onValueChange={(value) => update({ embedProvider: value, embedModel: '' })}
-              >
-                <SelectTrigger className="w-full" aria-label={t('settings.microFirst.provider')}>
-                  <SelectValue>{settings.embedProvider || t('settings.microFirst.provider')}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="">{t('settings.microFirst.provider')}</SelectItem>
-                  {availableProviders.map((p) => (
-                    <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select
-                value={settings.embedModel}
-                onValueChange={(value) => update({ embedModel: value })}
-              >
-                <SelectTrigger className="w-full" aria-label={t('settings.microFirst.model')} disabled={!settings.embedProvider}>
-                  <SelectValue>{settings.embedModel || t('settings.microFirst.model')}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="">{t('settings.microFirst.model')}</SelectItem>
-                  {filteredModels.map((m) => (
-                    <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-        </SettingsCard>
-      </div>
-    </SettingsPage>
+        )}
+      </SettingsSection>
+    </SettingsPanel>
   )
 }

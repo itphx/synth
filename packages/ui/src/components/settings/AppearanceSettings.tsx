@@ -6,9 +6,9 @@ import { useThemeSystem } from "@/contexts/useThemeSystem"
 import { useI18n } from "@/lib/i18n"
 import { profileService } from '@/lib/api/profileService'
 import { ConfirmDialog } from '../ui/confirm-dialog'
-import { Button } from '../ui/button'
+import { SettingsActions, SettingsPanel, SettingsSection } from '../ui/settings'
 import { UiScaleControl } from './UiScaleControl'
-import { SettingsCard, ThemeModeControl, ThemeControl, LanguageControl } from './appearance-controls'
+import { ThemeModeControl, ThemeControl, LanguageControl } from './appearance-controls'
 
 export const AppearanceSettings = () => {
   const setUILocale = useUIStore(s => s.setLocale)
@@ -79,36 +79,39 @@ export const AppearanceSettings = () => {
   const currentPresetName = getCurrentPresetName()
 
   return (
-    <div className="space-y-6">
-      <header className="max-w-2xl">
-        <h2 className="text-lg font-semibold mb-1">{t('settings.appearance.title')}</h2>
-        <p className="text-sm text-muted-foreground">{t('settings.appearance.description')}</p>
-      </header>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <SettingsCard className="sm:col-span-2" title={t('settings.appearance.themeMode.label')}>
+    <>
+      <SettingsPanel
+        title={t('settings.appearance.title')}
+        description={t('settings.appearance.description')}
+        footer={
+          <SettingsActions
+            align="start"
+            onReset={() => setShowResetConfirm(true)}
+            resetLabel={t('auth.resetVisualSettings')}
+            resetDisabled={isResetting}
+            resetTestId="appearance-reset"
+          />
+        }
+      >
+        <SettingsSection title={t('settings.appearance.themeMode.label')}>
           <ThemeModeControl
             value={themeMode}
             onChange={handleThemeModeChange}
             ariaLabel={t('settings.appearance.themeMode.label')}
           />
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-muted-foreground">
-              {t('settings.appearance.theme.label')}
-            </label>
-            <ThemeControl
-              value={currentPresetName}
-              onChange={handleThemeChange}
-              ariaLabel={t('settings.appearance.theme.label')}
-            />
-          </div>
-        </SettingsCard>
+          <ThemeControl
+            value={currentPresetName}
+            onChange={handleThemeChange}
+            label={t('settings.appearance.theme.label')}
+            ariaLabel={t('settings.appearance.theme.label')}
+          />
+        </SettingsSection>
 
-        <SettingsCard title={t('settings.appearance.uiScale.label')}>
+        <SettingsSection title={t('settings.appearance.uiScale.label')}>
           <UiScaleControl />
-        </SettingsCard>
+        </SettingsSection>
 
-        <SettingsCard title={t('settings.appearance.language.label')}>
+        <SettingsSection title={t('settings.appearance.language.label')}>
           <LanguageControl
             value={i18nLocale}
             onChange={handleLocaleChange}
@@ -117,18 +120,8 @@ export const AppearanceSettings = () => {
               en: t('common.language.english'),
             }}
           />
-        </SettingsCard>
-      </div>
-
-      <div className="border-t border-border pt-4">
-        <Button
-          variant="ghost"
-          size="md"
-          onClick={() => setShowResetConfirm(true)}
-        >
-          {t('auth.resetVisualSettings')}
-        </Button>
-      </div>
+        </SettingsSection>
+      </SettingsPanel>
 
       <ConfirmDialog
         open={showResetConfirm}
@@ -140,6 +133,6 @@ export const AppearanceSettings = () => {
         icon="alert"
         onConfirm={handleResetToDefaults}
       />
-    </div>
+    </>
   )
 }
