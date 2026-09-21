@@ -119,6 +119,31 @@ describe('SettingsActions', () => {
     expect(buttonByText(host, 'Reset')!.disabled).toBe(false)
   })
 
+  it('Reset по умолчанию рендерится контурными primary-классами (без заливки)', async () => {
+    const host = await renderActions({ onReset: vi.fn() })
+    const reset = buttonByText(host, 'Reset')!
+    expect(reset.className).toContain('border-primary')
+    expect(reset.className).toContain('text-primary')
+    // Сплошной заливки нет: `hover:bg-primary/10` — это отдельный класс-токен.
+    expect(reset.classList.contains('bg-primary')).toBe(false)
+    expect(reset.className).not.toContain('text-destructive')
+  })
+
+  it('resetVariant="primary" возвращает сплошной вид Reset', async () => {
+    const host = await renderActions({ onReset: vi.fn(), resetVariant: 'primary' })
+    const reset = buttonByText(host, 'Reset')!
+    expect(reset.classList.contains('bg-primary')).toBe(true)
+    expect(reset.className).toContain('text-primary-foreground')
+  })
+
+  it('resetVariant="danger" возвращает danger-вид Reset', async () => {
+    const host = await renderActions({ onReset: vi.fn(), resetVariant: 'danger' })
+    const reset = buttonByText(host, 'Reset')!
+    expect(reset.className).toContain('text-destructive')
+    expect(reset.className).toContain('border-destructive/30')
+    expect(reset.className).not.toContain('bg-primary')
+  })
+
   it('пользовательские подписи переопределяют i18n-дефолты', async () => {
     const host = await renderActions({
       onSave: vi.fn(),

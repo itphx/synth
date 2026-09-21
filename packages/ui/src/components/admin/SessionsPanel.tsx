@@ -39,7 +39,7 @@ export const SessionsPanel = () => {
   return (
     <SettingsPanel
       title={t('admin.sessions.title')}
-      description={t('admin.sessions.count', { count: sessions.length })}
+      meta={t('admin.sessions.count', { count: sessions.length })}
       actions={
         <Button variant="ghost" onClick={load}>
           <Icon name="refresh" className="size-3.5" />

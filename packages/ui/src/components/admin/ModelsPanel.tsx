@@ -284,7 +284,7 @@ export const ModelsPanel = () => {
   return (
     <SettingsPanel
       title={t('admin.models.title')}
-      description={t('admin.models.count', { visible: visibleCount, total: totalModels, providers: enabledProviders.length })}
+      meta={t('admin.models.count', { visible: visibleCount, total: totalModels, providers: enabledProviders.length })}
       actions={
         <Button
           onClick={() => handleFetch()}

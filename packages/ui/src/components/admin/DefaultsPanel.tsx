@@ -163,11 +163,14 @@ export const DefaultsPanel = () => {
 
           <SettingsActions
             onSave={() => void draft.save()}
+            onCancel={() => draft.revert()}
             onReset={handleReset}
             saving={draft.saving}
             saveDisabled={!draft.dirty}
+            cancelDisabled={!draft.dirty}
             resetDisabled={current == null}
             saveTestId="defaults-save"
+            cancelTestId="defaults-cancel"
             resetTestId="defaults-reset"
           />
         </>

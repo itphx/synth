@@ -148,14 +148,13 @@ export const ContextPanel = () => {
 
   const filtered = files.filter(f => f.category === activeTab || !activeTab)
 
-  const description = status
-    ? `${t('admin.context.count', { count: filtered.length, status: '' })} — ${status}`
-    : t('admin.context.count', { count: filtered.length, status: '' })
+  const countText = t('admin.context.count', { count: filtered.length, status: '' })
+  const meta = status ? `${countText} — ${status}` : countText
 
   return (
     <SettingsPanel
       title={t('admin.context.title')}
-      description={description}
+      meta={meta}
       actions={
         <Button onClick={() => setShowCreate(!showCreate)}>
           <Icon name="add" className="size-3.5" />{t('admin.context.add')}

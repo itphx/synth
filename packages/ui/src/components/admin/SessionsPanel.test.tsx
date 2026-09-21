@@ -87,6 +87,11 @@ describe('SessionsPanel — миграция на Settings UI Kit (AD-072)', () 
     expect(container.textContent).toContain('Sessions')
     expect(container.textContent).toContain('2 sessions')
     expect(buttonByText(container, 'Refresh')).toBeTruthy()
+
+    // Счётчик — в `meta` (виден при сворачивании описания), не в `description`.
+    const meta = container.querySelector('[data-testid="settings-header-meta"]')
+    expect(meta?.textContent).toContain('2 sessions')
+    expect(container.querySelector('[data-testid="settings-header-description"]')).toBeNull()
   })
 
   it('раскрывает details и показывает поля сессии', async () => {

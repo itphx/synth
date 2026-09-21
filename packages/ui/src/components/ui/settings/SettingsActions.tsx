@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { Button } from '@/components/ui/button'
+import { Button, type ButtonVariant } from '@/components/ui/button'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 
@@ -23,6 +23,8 @@ export interface SettingsActionsProps {
   cancelTestId?: string
   resetTestId?: string
   align?: SettingsActionsAlign
+  /** Вариант кнопки Reset. По умолчанию `outline-primary` (контурная в цвете Save); `danger` — destructive-вид, `primary` — сплошная. */
+  resetVariant?: ButtonVariant
   className?: string
 }
 
@@ -35,8 +37,11 @@ const ALIGN_CLASSES: Record<SettingsActionsAlign, string> = {
 /**
  * AD-072: единый ряд действий формы настроек.
  *
- * Порядок визуально: `Reset` (destructive, слева) — `Save` — `Cancel`.
- * `mr-auto` на Reset отделяет destructive-действие от основных.
+ * Порядок визуально: `Reset` (слева) — `Save` — `Cancel`.
+ * `mr-auto` на Reset отделяет его от основных действий.
+ * По умолчанию Reset — контурная кнопка в цвете Save (`outline-primary`);
+ * `resetVariant="danger"` возвращает destructive-вид, `resetVariant="primary"`
+ * — сплошную заливку как у Save.
  */
 export function SettingsActions({
   onSave,
@@ -54,6 +59,7 @@ export function SettingsActions({
   cancelTestId,
   resetTestId,
   align = 'end',
+  resetVariant = 'outline-primary',
   className,
 }: SettingsActionsProps) {
   const { t } = useI18n()
@@ -70,7 +76,7 @@ export function SettingsActions({
     <div className={cn('flex flex-wrap items-center gap-2 min-w-0', ALIGN_CLASSES[align], className)}>
       {onReset && (
         <Button
-          variant="danger"
+          variant={resetVariant}
           size="sm"
           className="mr-auto shrink-0"
           onClick={onReset}

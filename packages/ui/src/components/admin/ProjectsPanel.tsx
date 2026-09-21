@@ -98,7 +98,7 @@ export const ProjectsPanel = () => {
   return (
     <SettingsPanel
       title={t('admin.projects.title')}
-      description={t('admin.projects.count', { count: projects.length })}
+      meta={t('admin.projects.count', { count: projects.length })}
       actions={
         <Button onClick={() => setShowCreate(!showCreate)}>
           <Icon name="add" className="size-3.5" />

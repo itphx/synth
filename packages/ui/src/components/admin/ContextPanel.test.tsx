@@ -73,6 +73,12 @@ describe('ContextPanel — вкладки на Kit Tabs (AD-072)', () => {
     expect(tabs[0]!.getAttribute('aria-selected')).toBe('true')
     expect(tabs[0]!.textContent).toBe('User')
     expect(container.textContent).toContain('ABOUT.md')
+
+    // Счётчик — в `meta`, а не в сворачиваемом `description`.
+    const meta = container.querySelector('[data-testid="settings-header-meta"]')
+    expect(meta).not.toBeNull()
+    expect(meta!.textContent).toContain('1')
+    expect(container.querySelector('[data-testid="settings-header-description"]')).toBeNull()
   })
 
   it('клик по вкладке Roles переключает activeTab и грузит свою категорию', async () => {

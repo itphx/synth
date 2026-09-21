@@ -2,7 +2,7 @@
 
 > **Статус:** ✅ Реализовано (коллекция `components/ui/settings/` — стандарт; все разделы настроек и админ-категории мигрированы, legacy-разметка удалена)
 > **Дата:** 2026-09-21
-> **Реализация:** Ф1 — коллекция `packages/ui/src/components/ui/settings/` (`SettingsPanel`/`Section`/`Field`/`Row`/`Actions`/`DefaultsBadge`, контролы, `useSettingsDraft`), тесты, barrel; мелкий фикс Tailwind (`overscroll-behavior-contain` → `overscroll-contain`). Ф4b — миграция админ-категорий и разделов, `SliderField` и `SegmentedControl` в Kit, удалён `components/settings/settings-layout.tsx` (`SettingsPage`/`SettingsCard`), `window.confirm` → `confirm()` в админ-панелях. Ф5 — доработка по фидбеку: единый слайдер на `.ui-range`, контрол `Tabs`, сворачивающаяся шапка и затенение скролла `SettingsPanel` на мобильных. Ф5b — фикс высоты сворачивания шапки (`min-h-0 overflow-hidden` у описания), сброс/отмена как часть контракта (Notifications/Chat/Profile/Routing), `RoutingSettings` на `useSettingsDraft`.
+> **Реализация:** Ф1 — коллекция `packages/ui/src/components/ui/settings/` (`SettingsPanel`/`Section`/`Field`/`Row`/`Actions`/`DefaultsBadge`, контролы, `useSettingsDraft`), тесты, barrel; мелкий фикс Tailwind (`overscroll-behavior-contain` → `overscroll-contain`). Ф4b — миграция админ-категорий и разделов, `SliderField` и `SegmentedControl` в Kit, удалён `components/settings/settings-layout.tsx` (`SettingsPage`/`SettingsCard`), `window.confirm` → `confirm()` в админ-панелях. Ф5 — доработка по фидбеку: единый слайдер на `.ui-range`, контрол `Tabs`, сворачивающаяся шапка и затенение скролла `SettingsPanel` на мобильных. Ф5b — фикс высоты сворачивания шапки (`min-h-0 overflow-hidden` у описания), сброс/отмена как часть контракта (Notifications/Chat/Profile/Routing), `RoutingSettings` на `useSettingsDraft`. Ф5c — слот `meta` в шапке `SettingsPanel` (подпись/счётчики, видны при сворачивании описания), `actions` всегда в одной строке с заголовком; Reset в `SettingsActions` — `primary` по умолчанию, `resetVariant` для возврата `danger`. Ф5d — no autosave: explicit Save/Cancel, закрытие окна = Cancel, счётчики админ-панелей перенесены из `description` в `meta`. Ф5e — Reset в `SettingsActions` по умолчанию — контурная кнопка в цвете primary (`ButtonVariant` `outline-primary`): без сплошной заливки, цвет контура/текста как у Save, hover — лёгкая primary-подсветка.
 > **Парные документы:**
 > - [AD-019](./ad-019-react-spa.md) «React 19 SPA с нуля» — базовые UI-примитивы (`components/ui/`);
 > - [AD-044](./ad-044-mobile-adaptive-ui-pwa.md) «Адаптивный мобильный UI + PWA» — зоны, touch-first, мобильные правила;
@@ -35,7 +35,7 @@
 
 | Элемент | Назначение |
 |---|---|
-| `SettingsPanel` | Каркас: `title`/`description`/`actions`/`footer`, `footerVariant`, `contentClassName` |
+| `SettingsPanel` | Каркас: `title`/`description`/`meta`/`actions`/`footer`, `footerVariant`, `contentClassName` |
 | `SettingsSection` | Карточка-секция (`title`/`description`/`actions`) |
 | `SettingsField` | Вертикальный лейбл + описание + контрол + ошибка |
 | `SettingsRow` | Строка «лейбл слева — контрол справа» (на теле колонка) |
@@ -63,14 +63,14 @@
 
 ### 2.5. Мобильные правила
 
-- На теле действия шапки уходят под заголовок (`flex-col` → `sm:flex-row`).
+- Действия шапки всегда в одной строке с заголовком (`flex items-start justify-between`), не переносятся под него; `meta` (подпись/счётчики) и `actions` остаются видимыми при сворачивании описания.
 - Ряды `SettingsRow` и пары «контрол + кнопка» в `ListField` переносятся (`flex-wrap`), кнопки — `shrink-0`, поля — `flex-1 min-w-0`.
 - `NumberField` на теле — `w-full`, с `sm` — `sm:w-24`.
 - Ряд действий (`SettingsActions`) с `flex-wrap`, чтобы кнопки не обрезались.
 
 ### 2.6. Связь с `Button` и AD-070
 
-- Действия собираются из `Button` (`@/components/ui/button`): `primary` — Save, `ghost` — Cancel, `danger` — Reset (destructive отделён `mr-auto`).
+- Действия собираются из `Button` (`@/components/ui/button`): `primary` — Save, `ghost` — Cancel; Reset по умолчанию — `outline-primary` (контурная кнопка в цвете primary, без сплошной заливки, hover — `bg-primary/10`), отделён `mr-auto`. `resetVariant="danger"` возвращает destructive-вид, `resetVariant="primary"` — сплошную заливку как у Save.
 - Как AD-070 задаёт единую точку сборки system prompt, AD-072 задаёт единую точку сборки панели настроек: один каркас, один контракт черновика, один набор контролов. Отклонения допустимы только через `className`/`contentClassName`, а не копированием разметки.
 
 ### 2.7. Мелкий фикс
@@ -81,17 +81,26 @@
 
 - **Единый слайдер.** `controls/SliderField.tsx` — единственный слайдер в проекте; построен на CSS-классе `.ui-range` и CSS-переменной `--ui-range-fill` (заполнение трека вычисляется из `value`/`min`/`max`, зажимается в 0–100 %, без деления на ноль). Разметка: label слева, справа `input[type=range]` + значение (`font-mono tabular-nums min-w-[4ch] text-right`) + опциональная компактная кнопка сброса (`Icon name="refresh"`, `data-compact`). `aria-label` = `label`, `data-testid="slider-value"`. `stacked` (по умолчанию `true` на телефоне/планшете, `false` на десктопе) переключает колонку (`flex-1 min-w-0`) и строку (`w-24 sm:w-32`). `UiScaleSlider`/`UiScaleControl` — тонкие обёртки над Kit-слайдером (масштаб UI передаётся долей, подпись — проценты); `accent-primary` не используется.
 - **`Tabs`** (`controls/Tabs.tsx`) — мобильно-устойчивый переключатель вкладок: контейнер `flex w-full min-w-0 items-stretch gap-1 rounded-lg bg-muted p-1`, вкладки `flex-1 min-w-0` с `break-words` (или `truncate` при `title`), активная — `bg-background text-foreground shadow-sm`. `variant="underline"` — подчёркивание активной без фона. При переполнении контейнер скроллится по X с затенением (`tab-scroll-container` + `data-scroll-shadow`).
-- **Сворачивающаяся шапка `SettingsPanel`.** Проп `collapsibleHeader?: boolean` (по умолчанию `true`). Только на не-десктопе (`useDevice()`, `deviceType !== 'desktop'`) при `scrollTop > 8` описание скрывается (`grid-rows-[0fr]` + `opacity-0` + `overflow-hidden`, плавный `transition`, `motion-reduce:transition-none`), остаются заголовок и `actions`; при возврате наверх — разворачивается. На десктопе описание видно всегда. Шапка — `shrink-0` (не скроллится). Дочерний `<p>` описания несёт `min-h-0 overflow-hidden` — без этого grid-строка `0fr` не схлопывается ниже `min-content` (описание визуально исчезало, но высота шапки не уменьшалась).
+- **Сворачивающаяся шапка `SettingsPanel`.** Проп `collapsibleHeader?: boolean` (по умолчанию `true`). Только на не-десктопе (`useDevice()`, `deviceType !== 'desktop'`) при `scrollTop > 8` описание скрывается (`grid-rows-[0fr]` + `opacity-0` + `overflow-hidden`, плавный `transition`, `motion-reduce:transition-none`), остаются заголовок, `meta` и `actions`; при возврате наверх — разворачивается. На десктопе описание видно всегда. Шапка — `shrink-0` (не скроллится). Дочерний `<p>` описания несёт `min-h-0 overflow-hidden` — без этого grid-строка `0fr` не схлопывается ниже `min-content` (описание визуально исчезало, но высота шапки не уменьшалась).
 - **Затенение скролла.** Тело панели — `settings-scroll-container` + `data-scroll-shadow` (`top`/`bottom`/`top-bottom`), как в `MessageList`. CSS — общие правила с `.chat-scroll-container` в `styles/design-system.css`, размер затенения переопределён (`--scroll-shadow-size: 1.5rem`); mask работает по alpha, поэтому темы не требуют отдельных правил. `ResizeObserver` подключается только при наличии (jsdom-safe).
 - **Футер.** `footer`/`footerVariant` (`fixed`/`sticky`) — доступная возможность Kit, но **нигде не применяется** (не стандарт): во всех разделах действия формы рендерятся в конце содержимого, внутри scroll-тела.
 
 ### 2.9. Действия формы: сброс и отмена — часть контракта (Ф5b)
 
-- **`SettingsActions`** — единственный ряд действий. Сброс (`onReset`, `variant="danger"`, отделён `mr-auto`) и отмена (`onCancel`, `variant="ghost"`) доступны и без Save: разделы с автосохранением (`NotificationSettings`, `ChatSettings`) используют только `onReset` с `align="start"`.
-- **Сброс к дефолтам.** `useSettingsDraft.resetToDefault()` — для черновиков; вне `useSettingsDraft` — явный store-экшен (`resetCategories()` в `notificationStore`, `setIntermediateTextDisplay('inline')` в `useUIStore`).
+- **`SettingsActions`** — единственный ряд действий. Сброс (`onReset`, `variant="outline-primary"` по умолчанию — контурная в цвете primary; `resetVariant="danger"` возвращает destructive-вид, `resetVariant="primary"` — сплошной; отделён `mr-auto`), сохранение (`onSave`) и отмена (`onCancel`, `variant="ghost"`) доступны одновременно; disabled-состояния — по `dirty` черновика.
+- **Сброс к дефолтам.** `useSettingsDraft.resetToDefault()` — для черновиков; вне `useSettingsDraft` — явный store-экшен. С `Ф5d` сброс возвращает **черновик** к дефолтам и применяется как preview, персист — только по Save.
 - **Отмена.** Для форм без черновика (`ProfileSettings`) хранится снапшот загруженного состояния (`savedForm`), `onCancel` откатывает форму к нему и сбрасывает `error`/`success`; кнопка Cancel `disabled`, пока значимые поля (включая `avatar`) не изменились. После успешного сохранения снапшот обновляется, и Cancel снова `disabled`.
 - **Routing.** Глобальные дефолты маршрутизации (`RoutingSettings`) переведены на `useSettingsDraft<RoutingDefaults>` (первичная загрузка — `loadRoutingDefaults()`, дефолт — `DEFAULT_ROUTING_DEFAULTS`, сохранение — `saveRoutingDefaults`); автосохранение в localStorage на каждое изменение убрано. `DictionarySection` сохраняет собственные Save/Cancel/Reset.
 - **Индикатор несохранённых изменений** — ненавязчивая плашка `settings.kit.unsavedChanges` при `draft.dirty` (как `mcp.permissions.unsaved` в `McpSettings`).
+
+### 2.10. Политика сохранения: no autosave, explicit Save/Cancel, close = Cancel (Ф5d)
+
+- **Никаких автосохранений.** Изменения настроек применяются и персистятся только по кнопке **Save**. Тумблер/сегмент/слайдер меняют локальный черновик `useSettingsDraft`; стор и профиль не трогаются до Save.
+- **Отмена** (`onCancel`) возвращает черновик к состоянию на момент открытия панели (`revert()`); **Reset** — к дефолтам (`resetToDefault()`), после чего пользователь может Save или Cancel.
+- **Закрытие окна настроек = Отмена.** Размонтирование панели без Save не должно персистить черновик. Для панелей без live-preview (`NotificationSettings`, `ChatSettings`) это обеспечивается локальностью черновика; `NotificationSettings` при Save атомарно пишет весь набор через `setAllCategories(record)` (заменил `resetCategories`).
+- **Live-preview + снапшот (`AppearanceSettings`).** Тема/режим/локаль/масштаб применяются к UI сразу (preview), но персистятся в профиль/`localStorage` только по Save (`syncThemeModeToProfile`/`syncThemeToProfile`/`syncLocaleToProfile` + `persistUiScale`). Cancel и unmount (cleanup-эффект) откатывают UI к снапшоту `saved`. Preview обновляет стор напрямую (`useUIStore.setState`), минуя экшены `setTheme*`/`setLocale`, которые сразу пишут в профиль. `ConfirmDialog` для сброса внешнего вида убран — сброс идёт в черновик и отменяем.
+- **Контроли — управляемые.** `UiScaleControl` поддерживает контролируемый режим (`value`/`onChange`, без записи в стор) для использования в черновике; без пропов работает со стором (как в `QuickSettingsPopup`).
+- **Счётчики → `meta`.** Числовые подписи админ-панелей (`admin.*.count`) перенесены из `description` в `meta`, поэтому остаются видимыми при сворачивании описания шапки. Текстовые описания (`dashboard.subtitle`, `debug.description`, `defaults.description`) остаются в `description`.
 
 
 ## 3. Последствия

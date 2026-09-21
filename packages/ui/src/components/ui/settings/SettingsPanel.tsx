@@ -6,6 +6,11 @@ import { cn } from '@/lib/utils'
 export interface SettingsPanelProps {
   title: string
   description?: string
+  /**
+   * Счётчики/подпись под заголовком. В отличие от `description`,
+   * остаётся видимым при сворачивании шапки.
+   */
+  meta?: React.ReactNode
   actions?: React.ReactNode
   footer?: React.ReactNode
   /**
@@ -15,7 +20,7 @@ export interface SettingsPanelProps {
   footerVariant?: 'fixed' | 'sticky'
   /**
    * На не-десктопе при прокрутке тела сворачивать описание шапки
-   * (заголовок и `actions` остаются). На десктопе описание видно всегда.
+   * (заголовок, `meta` и `actions` остаются). На десктопе описание видно всегда.
    */
   collapsibleHeader?: boolean
   className?: string
@@ -36,6 +41,7 @@ const CONTENT_WIDTH = 'mx-auto w-full max-w-3xl min-w-0'
 export function SettingsPanel({
   title,
   description,
+  meta,
   actions,
   footer,
   footerVariant = 'fixed',
@@ -85,23 +91,31 @@ export function SettingsPanel({
 
   return (
     <div className={cn('flex flex-col h-full min-h-0', className)}>
-      <header className="shrink-0 mx-auto w-full max-w-3xl flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
+      <header className="shrink-0 mx-auto w-full max-w-3xl flex flex-col gap-3">
+        <div className="flex items-start justify-between gap-3 min-w-0">
           <h2 className="text-lg font-semibold text-foreground min-w-0 break-words">{title}</h2>
-          {description && (
-            <div
-              className={cn(
-                'grid grid-cols-1 overflow-hidden transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none',
-                collapsed ? 'grid-rows-[0fr] opacity-0' : 'grid-rows-[1fr] opacity-100',
-              )}
-              data-testid="settings-header-description"
-              aria-hidden={collapsed || undefined}
-            >
-              <p className="text-sm text-muted-foreground min-w-0 min-h-0 overflow-hidden break-words">{description}</p>
-            </div>
-          )}
+          {actions && <div className="shrink-0 flex items-center gap-2">{actions}</div>}
         </div>
-        {actions && <div className="shrink-0 flex items-center gap-2">{actions}</div>}
+        {meta && (
+          <div
+            className="text-sm text-muted-foreground min-w-0 break-words"
+            data-testid="settings-header-meta"
+          >
+            {meta}
+          </div>
+        )}
+        {description && (
+          <div
+            className={cn(
+              'grid grid-cols-1 overflow-hidden transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none',
+              collapsed ? 'grid-rows-[0fr] opacity-0' : 'grid-rows-[1fr] opacity-100',
+            )}
+            data-testid="settings-header-description"
+            aria-hidden={collapsed || undefined}
+          >
+            <p className="text-sm text-muted-foreground min-w-0 min-h-0 overflow-hidden break-words">{description}</p>
+          </div>
+        )}
       </header>
 
       <div

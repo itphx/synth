@@ -210,7 +210,7 @@ export const UsersPanel = () => {
   return (
     <SettingsPanel
       title={t('admin.users.title')}
-      description={t('admin.users.count', { count: users.length })}
+      meta={t('admin.users.count', { count: users.length })}
       actions={
         <Button onClick={handleCreate}>
           <Icon name="add" className="size-3.5" />{t('admin.users.add')}

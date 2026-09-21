@@ -42,19 +42,39 @@ export const UiScaleSlider: React.FC<UiScaleSliderProps> = ({
   />
 )
 
-export const UiScaleControl = ({ stacked }: { stacked?: boolean }) => {
+export interface UiScaleControlProps {
+  /**
+   * Контролируемый режим: значение и обработчик из черновика (без записи в стор).
+   * Без них контрол работает с `useUIStore.uiScale`.
+   */
+  value?: number
+  onChange?: (value: number) => void
+  stacked?: boolean
+}
+
+export const UiScaleControl = ({ value, onChange, stacked }: UiScaleControlProps) => {
   const { t } = useI18n()
-  const uiScale = useUIStore((state) => state.uiScale)
-  const setUiScale = useUIStore((state) => state.setUiScale)
+  const storeScale = useUIStore((state) => state.uiScale)
+  const setStoreScale = useUIStore((state) => state.setUiScale)
+
+  const controlled = value !== undefined && onChange !== undefined
+  const uiScale = value !== undefined ? value : storeScale
+  const handleChange = (next: number) => {
+    if (controlled) {
+      onChange?.(next)
+    } else {
+      setStoreScale(next)
+    }
+  }
   const percent = Math.round(uiScale * 100)
   const isDefault = percent === Math.round(getDefaultUiScale() * 100)
 
   return (
     <UiScaleSlider
       value={uiScale}
-      onChange={setUiScale}
+      onChange={handleChange}
       label={t('settings.appearance.uiScale.label')}
-      onReset={() => setUiScale(getDefaultUiScale())}
+      onReset={() => handleChange(getDefaultUiScale())}
       resetDisabled={isDefault}
       resetTitle={t('settings.appearance.uiScale.reset')}
       stacked={stacked}

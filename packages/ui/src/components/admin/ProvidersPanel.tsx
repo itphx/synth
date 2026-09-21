@@ -158,7 +158,7 @@ export const ProvidersPanel = () => {
   return (
     <SettingsPanel
       title={t('admin.providers.title')}
-      description={t('admin.providers.count', { count: providers.length })}
+      meta={t('admin.providers.count', { count: providers.length })}
       actions={
         <Button onClick={handleCreate}>
           <Icon name="add" className="size-3.5" />{t('admin.providers.add')}

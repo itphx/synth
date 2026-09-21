@@ -1,6 +1,12 @@
 import { useI18n } from '@/lib/i18n'
-import { useNotificationStore, type NotifyCategory } from '@/stores/notificationStore'
-import { SettingsActions, SettingsPanel, SettingsSection, ToggleField } from '../ui/settings'
+import { DEFAULT_ENABLED, useNotificationStore, type NotifyCategory } from '@/stores/notificationStore'
+import {
+  SettingsActions,
+  SettingsPanel,
+  SettingsSection,
+  ToggleField,
+  useSettingsDraft,
+} from '../ui/settings'
 
 const CATEGORIES: { id: NotifyCategory; labelKey: string; descKey: string }[] = [
   { id: 'connection', labelKey: 'notifications.category.connection', descKey: 'notifications.category.connection.desc' },
@@ -14,8 +20,24 @@ const CATEGORIES: { id: NotifyCategory; labelKey: string; descKey: string }[] = 
 export function NotificationSettings() {
   const { t } = useI18n()
   const prefs = useNotificationStore(s => s.prefs)
-  const setCategoryEnabled = useNotificationStore(s => s.setCategoryEnabled)
-  const resetCategories = useNotificationStore(s => s.resetCategories)
+  const setAllCategories = useNotificationStore(s => s.setAllCategories)
+
+  // AD-072 (фидбек): без автосохранения. Тумблеры меняют только черновик;
+  // стор и persist обновляются по кнопке Save.
+  const draft = useSettingsDraft<Record<NotifyCategory, boolean>>({
+    value: prefs.enabledCategories,
+    defaultValue: DEFAULT_ENABLED,
+    onSave: async (next) => {
+      setAllCategories(next)
+      return next
+    },
+  })
+
+  const enabled = draft.draft ?? prefs.enabledCategories
+
+  const toggle = (category: NotifyCategory) => {
+    draft.setDraft({ ...enabled, [category]: !enabled[category] })
+  }
 
   return (
     <SettingsPanel title={t('notifications.title')} description={t('notifications.description')}>
@@ -25,15 +47,23 @@ export function NotificationSettings() {
             key={cat.id}
             label={t(cat.labelKey)}
             description={t(cat.descKey)}
-            enabled={prefs.enabledCategories[cat.id]}
-            onToggle={() => setCategoryEnabled(cat.id, !prefs.enabledCategories[cat.id])}
+            enabled={enabled[cat.id]}
+            onToggle={() => toggle(cat.id)}
           />
         ))}
       </SettingsSection>
 
       <SettingsActions
         align="start"
-        onReset={() => resetCategories()}
+        onSave={() => void draft.save()}
+        onCancel={() => draft.revert()}
+        onReset={() => draft.resetToDefault()}
+        saving={draft.saving}
+        saveDisabled={!draft.dirty}
+        cancelDisabled={!draft.dirty}
+        resetDisabled={draft.isDefault}
+        saveTestId="notifications-save"
+        cancelTestId="notifications-cancel"
         resetTestId="notifications-reset"
       />
     </SettingsPanel>

@@ -517,7 +517,7 @@ export const AgentsPanel = () => {
   return (
     <SettingsPanel
       title={t('admin.agents.title')}
-      description={filterMode === 'subagents'
+      meta={filterMode === 'subagents'
         ? t('admin.agents.filter.subagents_count', { count: filteredAgents.length })
         : t('admin.agents.count', { count: filteredAgents.length })}
       actions={

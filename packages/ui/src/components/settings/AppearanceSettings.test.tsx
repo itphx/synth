@@ -47,6 +47,7 @@ vi.mock('@/lib/api/profileService', () => ({ profileService: profileMock }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { useUIStore } from '@/stores/useUIStore'
 import { AppearanceSettings } from './AppearanceSettings'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -70,20 +71,28 @@ async function renderSettings(): Promise<HTMLElement> {
   return container
 }
 
-function dialogButtonByText(text: string): HTMLButtonElement | undefined {
-  const dialog = document.querySelector('[data-slot="dialog-content"]')
-  if (!dialog) return undefined
-  return Array.from(dialog.querySelectorAll('button')).find(
-    (b) => b.textContent?.trim() === text,
-  ) as HTMLButtonElement | undefined
+async function unmountOne(container: HTMLElement) {
+  const idx = roots.findIndex((r) => r.container === container)
+  if (idx < 0) return
+  const [{ root, container: c }] = roots.splice(idx, 1)
+  await act(async () => {
+    root.unmount()
+  })
+  c.remove()
 }
 
+const byTestId = (container: HTMLElement, id: string) =>
+  container.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null
+
+const radioByText = (container: HTMLElement, text: string) =>
+  Array.from(container.querySelectorAll('[role="radio"]')).find(
+    (r) => r.textContent?.trim() === text,
+  ) as HTMLButtonElement
+
 beforeEach(() => {
-  profileMock.resetPreferences.mockResolvedValue({
-    themeMode: 'system',
-    theme: 'flexoki',
-    locale: 'ru',
-  })
+  themeSystem.themeMode = 'system'
+  themeSystem.theme = 'flexoki'
+  useUIStore.setState({ theme: 'flexoki', themeMode: 'system', locale: 'en' })
 })
 
 afterEach(async () => {
@@ -115,30 +124,86 @@ describe('AppearanceSettings — миграция на Settings UI Kit (AD-072)'
     })
   })
 
-  it('сброс визуальных настроек оформлен SettingsActions и подтверждается', async () => {
-    const container = await renderSettings()
-
-    const reset = container.querySelector('[data-testid="appearance-reset"]') as HTMLButtonElement
-    expect(reset).not.toBeNull()
-
-    await act(async () => {
-      reset.click()
-    })
-
-    const confirm = dialogButtonByText('Reset to defaults')
-    expect(confirm).toBeDefined()
-    await act(async () => {
-      confirm!.click()
-    })
-
-    expect(profileMock.resetPreferences).toHaveBeenCalledTimes(1)
-  })
-
-  it('действия рендерятся внутри scroll-тела, а не fixed-футером', async () => {
+  it('действия Save/Cancel/Reset рендерятся внутри scroll-тела', async () => {
     const container = await renderSettings()
 
     const scroll = container.querySelector('.overflow-y-auto')!
-    const reset = container.querySelector('[data-testid="appearance-reset"]')!
-    expect(scroll.contains(reset)).toBe(true)
+    for (const id of ['appearance-save', 'appearance-cancel', 'appearance-reset']) {
+      const btn = byTestId(container, id)
+      expect(btn).not.toBeNull()
+      expect(scroll.contains(btn!)).toBe(true)
+    }
+  })
+
+  it('Save персистит выбранные тему/режим/локаль', async () => {
+    const container = await renderSettings()
+
+    await act(async () => {
+      radioByText(container, 'Dark').click()
+    })
+    // Preview: стор обновился сразу, профиль ещё нет.
+    expect(useUIStore.getState().themeMode).toBe('dark')
+    expect(themeSystem.setThemeMode).toHaveBeenCalledWith('dark')
+    expect(profileMock.syncThemeModeToProfile).not.toHaveBeenCalled()
+
+    await act(async () => {
+      byTestId(container, 'appearance-save')!.click()
+    })
+
+    expect(profileMock.syncThemeModeToProfile).toHaveBeenCalledWith('dark')
+    expect(profileMock.syncThemeToProfile).toHaveBeenCalledWith('flexoki')
+    expect(profileMock.syncLocaleToProfile).toHaveBeenCalledWith('en')
+  })
+
+  it('Cancel откатывает live-preview к снапшоту', async () => {
+    const container = await renderSettings()
+
+    await act(async () => {
+      radioByText(container, 'Dark').click()
+    })
+    expect(useUIStore.getState().themeMode).toBe('dark')
+
+    await act(async () => {
+      byTestId(container, 'appearance-cancel')!.click()
+    })
+
+    expect(useUIStore.getState().themeMode).toBe('system')
+    expect(radioByText(container, 'System').getAttribute('aria-checked')).toBe('true')
+    expect(profileMock.syncThemeModeToProfile).not.toHaveBeenCalled()
+  })
+
+  it('закрытие (unmount) без Save откатывает live-preview', async () => {
+    const container = await renderSettings()
+
+    await act(async () => {
+      radioByText(container, 'Dark').click()
+    })
+    expect(useUIStore.getState().themeMode).toBe('dark')
+
+    await unmountOne(container)
+
+    expect(useUIStore.getState().themeMode).toBe('system')
+    expect(profileMock.syncThemeModeToProfile).not.toHaveBeenCalled()
+  })
+
+  it('Reset сбрасывает черновик к дефолтам без подтверждения и без персиста', async () => {
+    const container = await renderSettings()
+
+    await act(async () => {
+      radioByText(container, 'Dark').click()
+    })
+    await act(async () => {
+      byTestId(container, 'appearance-reset')!.click()
+    })
+
+    // После сброса локаль становится ru, поэтому radio ищем по порядку
+    // (System / Light / Dark), а не по англоязычной подписи.
+    const themeModeRadios = container.querySelectorAll('[role="radio"]')
+    expect(themeModeRadios[0]!.getAttribute('aria-checked')).toBe('true')
+    expect(useI18nStore.getState().locale).toBe('ru')
+    // Сброс — только черновик: без ConfirmDialog и без персиста.
+    expect(profileMock.resetPreferences).not.toHaveBeenCalled()
+    expect(profileMock.syncLocaleToProfile).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-slot="dialog-content"]')).toBeNull()
   })
 })

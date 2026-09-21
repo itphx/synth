@@ -76,6 +76,7 @@ describe('DefaultsPanel — AD-072: без фиксированного футе
     expect(scroller).not.toBeNull()
     expect(save).not.toBeNull()
     expect(reset).not.toBeNull()
+    expect(byTestId(container, 'defaults-cancel')).not.toBeNull()
     expect(scroller!.contains(save!)).toBe(true)
     expect(scroller!.contains(reset!)).toBe(true)
     expect(save!.disabled).toBe(true)
@@ -102,6 +103,26 @@ describe('DefaultsPanel — AD-072: без фиксированного футе
     expect(apiMock.updateDefaults).toHaveBeenCalledWith(
       expect.objectContaining({ themeMode: 'light' }),
     )
+  })
+
+  it('Cancel откатывает черновик к загруженным дефолтам', async () => {
+    const container = await renderPanel()
+
+    const light = Array.from(container.querySelectorAll('[role="radio"]')).find(
+      (b) => b.textContent?.trim() === 'Light',
+    ) as HTMLButtonElement
+    await act(async () => {
+      light.click()
+    })
+
+    const cancel = byTestId(container, 'defaults-cancel')!
+    expect(cancel.disabled).toBe(false)
+    await act(async () => {
+      cancel.click()
+    })
+
+    expect(byTestId(container, 'defaults-save')!.disabled).toBe(true)
+    expect(apiMock.updateDefaults).not.toHaveBeenCalled()
   })
 
   it('Reset подтверждается и перечитывает серверные дефолты', async () => {

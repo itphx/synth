@@ -1,6 +1,13 @@
 import { useUIStore } from "../../stores/useUIStore"
 import { useI18n } from "@/lib/i18n"
-import { SegmentedControl, SettingsActions, SettingsPanel, SettingsSection, type SegmentedControlOption } from '../ui/settings'
+import {
+  SegmentedControl,
+  SettingsActions,
+  SettingsPanel,
+  SettingsSection,
+  useSettingsDraft,
+  type SegmentedControlOption,
+} from '../ui/settings'
 
 type IntermediateTextDisplay = 'inline' | 'bottom'
 
@@ -9,7 +16,18 @@ export const ChatSettings = () => {
   const intermediateTextDisplay = useUIStore((s) => s.intermediateTextDisplay)
   const setIntermediateTextDisplay = useUIStore((s) => s.setIntermediateTextDisplay)
 
-  const display: IntermediateTextDisplay = intermediateTextDisplay === 'bottom' ? 'bottom' : 'inline'
+  // AD-072 (фидбек): без автосохранения — выбор меняет черновик, стор
+  // обновляется и персистится только по кнопке Save.
+  const draft = useSettingsDraft<IntermediateTextDisplay>({
+    value: intermediateTextDisplay === 'bottom' ? 'bottom' : 'inline',
+    defaultValue: 'inline',
+    onSave: async (next) => {
+      setIntermediateTextDisplay(next)
+      return next
+    },
+  })
+
+  const display: IntermediateTextDisplay = draft.draft === 'bottom' ? 'bottom' : 'inline'
   const options: SegmentedControlOption<IntermediateTextDisplay>[] = [
     { value: 'inline', label: t('chatSettings.intermediateTextInline') },
     { value: 'bottom', label: t('chatSettings.intermediateTextBottom') },
@@ -24,14 +42,22 @@ export const ChatSettings = () => {
         <SegmentedControl<IntermediateTextDisplay>
           value={display}
           options={options}
-          onChange={setIntermediateTextDisplay}
+          onChange={(value) => draft.setDraft(value)}
           ariaLabel={t('chatSettings.intermediateTextDisplay')}
         />
       </SettingsSection>
 
       <SettingsActions
         align="start"
-        onReset={() => setIntermediateTextDisplay('inline')}
+        onSave={() => void draft.save()}
+        onCancel={() => draft.revert()}
+        onReset={() => draft.resetToDefault()}
+        saving={draft.saving}
+        saveDisabled={!draft.dirty}
+        cancelDisabled={!draft.dirty}
+        resetDisabled={draft.isDefault}
+        saveTestId="chat-save"
+        cancelTestId="chat-cancel"
         resetTestId="chat-reset"
       />
     </SettingsPanel>

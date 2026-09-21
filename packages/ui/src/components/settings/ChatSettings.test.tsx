@@ -50,6 +50,24 @@ async function renderSettings(): Promise<HTMLElement> {
   return container
 }
 
+async function unmountOne(container: HTMLElement) {
+  const idx = roots.findIndex((r) => r.container === container)
+  if (idx < 0) return
+  const [{ root, container: c }] = roots.splice(idx, 1)
+  await act(async () => {
+    root.unmount()
+  })
+  c.remove()
+}
+
+const byTestId = (container: HTMLElement, id: string) =>
+  container.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null
+
+const radioByText = (container: HTMLElement, text: string) =>
+  Array.from(container.querySelectorAll('[role="radio"]')).find(
+    (r) => r.textContent?.trim() === text,
+  ) as HTMLButtonElement
+
 beforeEach(() => {
   useUIStore.setState({ intermediateTextDisplay: 'inline' })
 })
@@ -82,36 +100,61 @@ describe('ChatSettings — миграция на Settings UI Kit (AD-072)', () =
     })
   })
 
-  it('сохраняет выбор способа отображения промежуточных ответов', async () => {
+  it('выбор меняет черновик, но не стор до Save', async () => {
     const container = await renderSettings()
 
     expect(container.textContent).toContain('Intermediate responses')
-    const radios = Array.from(container.querySelectorAll('[role="radio"]')) as HTMLButtonElement[]
-    expect(radios).toHaveLength(2)
-
-    const bottom = radios.find((r) => r.textContent === 'At bottom')!
     await act(async () => {
-      bottom.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      radioByText(container, 'At bottom').click()
     })
 
+    expect(radioByText(container, 'At bottom').getAttribute('aria-checked')).toBe('true')
+    expect(useUIStore.getState().intermediateTextDisplay).toBe('inline')
+
+    await act(async () => {
+      byTestId(container, 'chat-save')!.click()
+    })
     expect(useUIStore.getState().intermediateTextDisplay).toBe('bottom')
   })
 
-  it('кнопка сброса возвращает intermediateTextDisplay в inline', async () => {
+  it('Cancel возвращает сохранённый выбор', async () => {
     const container = await renderSettings()
 
-    const radios = Array.from(container.querySelectorAll('[role="radio"]')) as HTMLButtonElement[]
-    const bottom = radios.find((r) => r.textContent === 'At bottom')!
     await act(async () => {
-      bottom.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      radioByText(container, 'At bottom').click()
     })
+    await act(async () => {
+      byTestId(container, 'chat-cancel')!.click()
+    })
+
+    expect(radioByText(container, 'Between blocks').getAttribute('aria-checked')).toBe('true')
+    expect(useUIStore.getState().intermediateTextDisplay).toBe('inline')
+  })
+
+  it('Reset сбрасывает черновик к inline, персист — только по Save', async () => {
+    useUIStore.setState({ intermediateTextDisplay: 'bottom' })
+    const container = await renderSettings()
+
+    await act(async () => {
+      byTestId(container, 'chat-reset')!.click()
+    })
+
+    expect(radioByText(container, 'Between blocks').getAttribute('aria-checked')).toBe('true')
     expect(useUIStore.getState().intermediateTextDisplay).toBe('bottom')
 
-    const reset = container.querySelector('[data-testid="chat-reset"]') as HTMLButtonElement
-    expect(reset).not.toBeNull()
     await act(async () => {
-      reset.click()
+      byTestId(container, 'chat-save')!.click()
     })
+    expect(useUIStore.getState().intermediateTextDisplay).toBe('inline')
+  })
+
+  it('закрытие (unmount) не персистит черновик', async () => {
+    const container = await renderSettings()
+
+    await act(async () => {
+      radioByText(container, 'At bottom').click()
+    })
+    await unmountOne(container)
 
     expect(useUIStore.getState().intermediateTextDisplay).toBe('inline')
   })

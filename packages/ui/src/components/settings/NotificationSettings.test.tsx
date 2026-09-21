@@ -25,7 +25,7 @@ vi.hoisted(() => {
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
-import { useNotificationStore } from '@/stores/notificationStore'
+import { useNotificationStore, type NotifyCategory } from '@/stores/notificationStore'
 import { NotificationSettings } from './NotificationSettings'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -49,18 +49,28 @@ async function renderSettings(): Promise<HTMLElement> {
   return container
 }
 
+async function unmountOne(container: HTMLElement) {
+  const idx = roots.findIndex((r) => r.container === container)
+  if (idx < 0) return
+  const [{ root, container: c }] = roots.splice(idx, 1)
+  await act(async () => {
+    root.unmount()
+  })
+  c.remove()
+}
+
+const DEFAULTS: Record<NotifyCategory, boolean> = {
+  connection: true,
+  streaming: false,
+  queue: true,
+  message: false,
+  error: true,
+  system: true,
+}
+
 beforeEach(() => {
   useNotificationStore.setState({
-    prefs: {
-      enabledCategories: {
-        connection: true,
-        streaming: false,
-        queue: true,
-        message: false,
-        error: true,
-        system: true,
-      },
-    },
+    prefs: { enabledCategories: { ...DEFAULTS } },
   })
 })
 
@@ -74,6 +84,12 @@ afterEach(async () => {
   }
   document.body.innerHTML = ''
 })
+
+const switchByLabel = (container: HTMLElement, label: string) =>
+  container.querySelector(`[aria-label="${label}"]`) as HTMLButtonElement
+
+const byTestId = (container: HTMLElement, id: string) =>
+  container.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null
 
 describe('NotificationSettings — миграция на Settings UI Kit (AD-072)', () => {
   it('каркас — SettingsPanel с единственным scroll-контейнером и без pr-2', async () => {
@@ -92,52 +108,87 @@ describe('NotificationSettings — миграция на Settings UI Kit (AD-072
     })
   })
 
-  it('все категории — ToggleField-переключатели, тоггл меняет настройку', async () => {
+  it('все категории — ToggleField-переключатели', async () => {
     const container = await renderSettings()
-
     const switches = Array.from(container.querySelectorAll('[role="switch"]')) as HTMLButtonElement[]
     expect(switches).toHaveLength(6)
+    expect(switchByLabel(container, 'Streaming').getAttribute('aria-checked')).toBe('false')
+  })
 
-    const streaming = container.querySelector('[aria-label="Streaming"]') as HTMLButtonElement
-    expect(streaming.getAttribute('aria-checked')).toBe('false')
+  it('тумблер меняет черновик, но не пишет в стор до Save', async () => {
+    const container = await renderSettings()
 
+    const streaming = switchByLabel(container, 'Streaming')
     await act(async () => {
       streaming.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
+    // Черновик изменился, стор — нет.
+    expect(switchByLabel(container, 'Streaming').getAttribute('aria-checked')).toBe('true')
+    expect(useNotificationStore.getState().prefs.enabledCategories.streaming).toBe(false)
+
+    await act(async () => {
+      byTestId(container, 'notifications-save')!.click()
+    })
     expect(useNotificationStore.getState().prefs.enabledCategories.streaming).toBe(true)
   })
 
-  it('кнопка сброса возвращает все категории к дефолту', async () => {
+  it('Cancel возвращает черновик к сохранённому состоянию', async () => {
     const container = await renderSettings()
 
-    // Уводим категории от дефолта: system (true) → false, message (false) → true.
-    const system = container.querySelector('[aria-label="System"]') as HTMLButtonElement
-    const message = container.querySelector('[aria-label="Messages"]') as HTMLButtonElement
     await act(async () => {
-      system.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      switchByLabel(container, 'Streaming').click()
+      switchByLabel(container, 'Messages').click()
     })
     await act(async () => {
-      message.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
-    expect(useNotificationStore.getState().prefs.enabledCategories).toMatchObject({
-      system: false,
-      message: true,
+      byTestId(container, 'notifications-cancel')!.click()
     })
 
-    const reset = container.querySelector('[data-testid="notifications-reset"]') as HTMLButtonElement
-    expect(reset).not.toBeNull()
+    expect(switchByLabel(container, 'Streaming').getAttribute('aria-checked')).toBe('false')
+    expect(switchByLabel(container, 'Messages').getAttribute('aria-checked')).toBe('false')
+    expect(useNotificationStore.getState().prefs.enabledCategories).toEqual(DEFAULTS)
+  })
+
+  it('закрытие панели (unmount) не персистит черновик', async () => {
+    const container = await renderSettings()
+
     await act(async () => {
-      reset.click()
+      switchByLabel(container, 'Streaming').click()
+    })
+    expect(useNotificationStore.getState().prefs.enabledCategories.streaming).toBe(false)
+
+    await unmountOne(container)
+    expect(useNotificationStore.getState().prefs.enabledCategories.streaming).toBe(false)
+  })
+
+  it('Reset сбрасывает черновик к дефолтам, персист — только по Save', async () => {
+    // Сохранённое состояние уведено от дефолта.
+    useNotificationStore.setState({
+      prefs: {
+        enabledCategories: {
+          connection: false,
+          streaming: false,
+          queue: false,
+          message: false,
+          error: false,
+          system: false,
+        },
+      },
+    })
+    const container = await renderSettings()
+
+    await act(async () => {
+      byTestId(container, 'notifications-reset')!.click()
     })
 
-    expect(useNotificationStore.getState().prefs.enabledCategories).toEqual({
-      connection: true,
-      streaming: false,
-      queue: true,
-      message: false,
-      error: true,
-      system: true,
+    expect(switchByLabel(container, 'Connection (WS/SSE)').getAttribute('aria-checked')).toBe('true')
+    expect(switchByLabel(container, 'System').getAttribute('aria-checked')).toBe('true')
+    // Стор всё ещё у дефолта-дефолта (всё false) — Reset не персистит.
+    expect(useNotificationStore.getState().prefs.enabledCategories.connection).toBe(false)
+
+    await act(async () => {
+      byTestId(container, 'notifications-save')!.click()
     })
+    expect(useNotificationStore.getState().prefs.enabledCategories).toEqual(DEFAULTS)
   })
 })

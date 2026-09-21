@@ -1,137 +1,169 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useUIStore } from "../../stores/useUIStore"
 import { THEME_PRESETS } from "@/lib/theme/themes"
 import type { ThemeMode } from "@/types/theme"
 import { useThemeSystem } from "@/contexts/useThemeSystem"
 import { useI18n } from "@/lib/i18n"
 import { profileService } from '@/lib/api/profileService'
-import { ConfirmDialog } from '../ui/confirm-dialog'
-import { SettingsActions, SettingsPanel, SettingsSection } from '../ui/settings'
+import { applyUiScale, getDefaultUiScale, persistUiScale } from '@/lib/uiScale'
+import { SettingsActions, SettingsPanel, SettingsSection, useSettingsDraft } from '../ui/settings'
 import { UiScaleControl } from './UiScaleControl'
 import { ThemeModeControl, ThemeControl, LanguageControl } from './appearance-controls'
 
+interface AppearanceDraft {
+  themeMode: ThemeMode
+  themePresetName: string
+  locale: 'ru' | 'en'
+  uiScale: number
+}
+
+const toThemeName = (presetName: string): string => presetName.toLowerCase().replace(/\s+/g, '-')
+
+const presetNameFromTheme = (themeName: string): string => {
+  if (!themeName) return ''
+  return THEME_PRESETS.find((p) => toThemeName(p.name) === themeName)?.name ?? ''
+}
+
+const DEFAULT_THEME_PRESET_NAME =
+  presetNameFromTheme('flexoki') || 'Flexoki'
+
 export const AppearanceSettings = () => {
-  const setUILocale = useUIStore(s => s.setLocale)
-  const setUIThemeMode = useUIStore(s => s.setThemeMode)
-  const { t, locale: i18nLocale, setLocale: setI18nLocale } = useI18n()
+  const { locale: i18nLocale, setLocale: setI18nLocale, t } = useI18n()
   const {
     themeMode,
     setThemeMode,
     theme,
     setThemePreference,
   } = useThemeSystem()
-  const [showResetConfirm, setShowResetConfirm] = useState(false)
-  const [isResetting, setIsResetting] = useState(false)
+  const uiScale = useUIStore((s) => s.uiScale)
 
-  const handleLocaleChange = (locale: 'ru' | 'en') => {
-    setI18nLocale(locale)
-    setUILocale(locale)
-  }
+  const defaultAppearance = useMemo<AppearanceDraft>(() => ({
+    themeMode: 'system',
+    themePresetName: DEFAULT_THEME_PRESET_NAME,
+    locale: 'ru',
+    uiScale: getDefaultUiScale(),
+  }), [])
 
-  const handleThemeModeChange = (mode: ThemeMode) => {
-    if (mode === themeMode) return
-    setThemeMode(mode)
-    setUIThemeMode(mode)
-  }
+  // Снапшот на момент открытия панели — к нему откатывают Cancel и закрытие.
+  const [snapshot] = useState<AppearanceDraft>(() => ({
+    themeMode,
+    themePresetName: presetNameFromTheme(theme),
+    locale: i18nLocale === 'en' ? 'en' : 'ru',
+    uiScale,
+  }))
 
-  const handleThemeChange = (name: string) => {
-    const preset = THEME_PRESETS.find((p) => p.name === name)
-    if (!preset) return
-
-    const themeId = preset.lightId || preset.darkId
-    if (themeId) {
-      setThemePreference(themeId)
-      const normalized = preset.name.toLowerCase().replace(/\s+/g, '-')
-      useUIStore.getState().setTheme(normalized)
+  // AD-072 (фидбек): live-preview без персиста. Все визуальные настройки
+  // применяются к UI сразу, но в профиль/localStorage попадают только по Save.
+  const applyAppearance = (next: AppearanceDraft) => {
+    const preset = THEME_PRESETS.find((p) => p.name === next.themePresetName)
+    if (preset) {
+      const themeId = preset.lightId || preset.darkId
+      if (themeId) setThemePreference(themeId)
+      // Прямой setState вместо экшена стора: экшены `setTheme*`/`setLocale`
+      // сразу пишут в профиль, а preview не должен персистить.
+      useUIStore.setState({ theme: toThemeName(preset.name) })
     }
+    setThemeMode(next.themeMode)
+    useUIStore.setState({ themeMode: next.themeMode, locale: next.locale, uiScale: next.uiScale })
+    setI18nLocale(next.locale)
+    applyUiScale(next.uiScale)
   }
 
-  const handleResetToDefaults = async () => {
-    setIsResetting(true)
-    try {
-      const prefs = await profileService.resetPreferences()
-      if (prefs) {
-        if (prefs.themeMode) {
-          setThemeMode(prefs.themeMode)
-          setUIThemeMode(prefs.themeMode)
-        }
-        if (prefs.theme) {
-          setThemePreference(prefs.theme)
-        }
-        if (prefs.locale) {
-          setI18nLocale(prefs.locale)
-          setUILocale(prefs.locale)
-        }
+  const applyRef = useRef(applyAppearance)
+  applyRef.current = applyAppearance
+  const savedRef = useRef<AppearanceDraft>(snapshot)
+
+  const draft = useSettingsDraft<AppearanceDraft>({
+    value: snapshot,
+    defaultValue: defaultAppearance,
+    onSave: async (next) => {
+      const themeName = toThemeName(next.themePresetName)
+      await profileService.syncThemeModeToProfile(next.themeMode)
+      // Кастомная тема может не входить в пресеты — не затираем её пустым значением.
+      if (themeName) {
+        await profileService.syncThemeToProfile(themeName)
       }
-      setShowResetConfirm(false)
-    } finally {
-      setIsResetting(false)
-    }
+      await profileService.syncLocaleToProfile(next.locale)
+      persistUiScale(next.uiScale)
+      useUIStore.setState({ uiScale: next.uiScale })
+      savedRef.current = next
+      return next
+    },
+  })
+
+  // Размонтирование без Save (= закрытие окна) откатывает live-preview к снапшоту.
+  useEffect(() => () => {
+    applyRef.current(savedRef.current)
+  }, [])
+
+  const current = draft.draft ?? snapshot
+
+  const update = (patch: Partial<AppearanceDraft>) => {
+    const next = { ...current, ...patch }
+    draft.setDraft(next)
+    applyAppearance(next)
   }
 
-  const getCurrentPresetName = (): string => {
-    if (!theme) return ''
-    return THEME_PRESETS.find(
-      (p) => p.name.toLowerCase().replace(/\s+/g, '-') === theme
-    )?.name ?? ''
+  const handleCancel = () => {
+    draft.revert()
+    applyAppearance(savedRef.current)
   }
 
-  const currentPresetName = getCurrentPresetName()
+  const handleReset = () => {
+    draft.resetToDefault()
+    applyAppearance(defaultAppearance)
+  }
 
   return (
-    <>
-      <SettingsPanel
-        title={t('settings.appearance.title')}
-        description={t('settings.appearance.description')}
-      >
-        <SettingsSection title={t('settings.appearance.themeMode.label')}>
-          <ThemeModeControl
-            value={themeMode}
-            onChange={handleThemeModeChange}
-            ariaLabel={t('settings.appearance.themeMode.label')}
-          />
-          <ThemeControl
-            value={currentPresetName}
-            onChange={handleThemeChange}
-            label={t('settings.appearance.theme.label')}
-            ariaLabel={t('settings.appearance.theme.label')}
-          />
-        </SettingsSection>
-
-        <SettingsSection title={t('settings.appearance.uiScale.label')}>
-          <UiScaleControl />
-        </SettingsSection>
-
-        <SettingsSection title={t('settings.appearance.language.label')}>
-          <LanguageControl
-            value={i18nLocale}
-            onChange={handleLocaleChange}
-            labels={{
-              ru: t('common.language.russian'),
-              en: t('common.language.english'),
-            }}
-          />
-        </SettingsSection>
-
-        <SettingsActions
-          align="start"
-          onReset={() => setShowResetConfirm(true)}
-          resetLabel={t('auth.resetVisualSettings')}
-          resetDisabled={isResetting}
-          resetTestId="appearance-reset"
+    <SettingsPanel
+      title={t('settings.appearance.title')}
+      description={t('settings.appearance.description')}
+    >
+      <SettingsSection title={t('settings.appearance.themeMode.label')}>
+        <ThemeModeControl
+          value={current.themeMode}
+          onChange={(mode) => update({ themeMode: mode })}
+          ariaLabel={t('settings.appearance.themeMode.label')}
         />
-      </SettingsPanel>
+        <ThemeControl
+          value={current.themePresetName}
+          onChange={(name) => update({ themePresetName: name })}
+          label={t('settings.appearance.theme.label')}
+          ariaLabel={t('settings.appearance.theme.label')}
+        />
+      </SettingsSection>
 
-      <ConfirmDialog
-        open={showResetConfirm}
-        onOpenChange={setShowResetConfirm}
-        title={t('auth.resetVisualSettings')}
-        message={t('auth.resetConfirm')}
-        confirmLabel={isResetting ? t('common.loading') : t('auth.resetVisualSettings')}
-        variant="warning"
-        icon="alert"
-        onConfirm={handleResetToDefaults}
+      <SettingsSection title={t('settings.appearance.uiScale.label')}>
+        <UiScaleControl
+          value={current.uiScale}
+          onChange={(value) => update({ uiScale: value })}
+        />
+      </SettingsSection>
+
+      <SettingsSection title={t('settings.appearance.language.label')}>
+        <LanguageControl
+          value={current.locale}
+          onChange={(locale) => update({ locale })}
+          labels={{
+            ru: t('common.language.russian'),
+            en: t('common.language.english'),
+          }}
+        />
+      </SettingsSection>
+
+      <SettingsActions
+        align="start"
+        onSave={() => void draft.save()}
+        onCancel={handleCancel}
+        onReset={handleReset}
+        saving={draft.saving}
+        saveDisabled={!draft.dirty}
+        cancelDisabled={!draft.dirty}
+        resetDisabled={draft.isDefault}
+        saveTestId="appearance-save"
+        cancelTestId="appearance-cancel"
+        resetTestId="appearance-reset"
       />
-    </>
+    </SettingsPanel>
   )
 }

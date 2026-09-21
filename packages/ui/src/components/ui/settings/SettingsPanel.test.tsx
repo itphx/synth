@@ -172,6 +172,46 @@ describe('SettingsPanel', () => {
     expect(text.classList.contains('overflow-hidden')).toBe(true)
   })
 
+  it('meta виден при сворачивании шапки, actions — в одной строке с заголовком', async () => {
+    stubPhone()
+    const host = await renderPanel({
+      title: 'Network',
+      description: 'Configure networking',
+      meta: '2 servers',
+      actions: <button>ACTION</button>,
+      children: <div>CONTENT</div>,
+    })
+
+    const h2 = host.querySelector('h2') as HTMLElement
+    const meta = host.querySelector('[data-testid="settings-header-meta"]') as HTMLElement
+    const action = host.querySelector('button') as HTMLButtonElement
+    expect(meta.textContent).toBe('2 servers')
+
+    // actions — сосед h2 в flex-строке, а не под заголовком.
+    const row = h2.parentElement as HTMLElement
+    expect(row.classList.contains('flex')).toBe(true)
+    expect(row.classList.contains('items-start')).toBe(true)
+    expect(row.classList.contains('justify-between')).toBe(true)
+    expect(action.parentElement?.parentElement).toBe(row)
+    expect(row.contains(meta)).toBe(false)
+
+    const desc = host.querySelector('[data-testid="settings-header-description"]') as HTMLElement
+    const body = host.querySelector('.settings-scroll-container') as HTMLElement
+    setScrollTop(body, 20)
+    await act(async () => {
+      body.dispatchEvent(new Event('scroll'))
+    })
+
+    // Описание сворачивается…
+    expect(desc.classList.contains('grid-rows-[0fr]')).toBe(true)
+    expect(desc.classList.contains('opacity-0')).toBe(true)
+    // …а meta и actions остаются видимыми.
+    expect(host.querySelector('[data-testid="settings-header-meta"]')?.textContent).toBe('2 servers')
+    expect(meta.classList.contains('grid-rows-[0fr]')).toBe(false)
+    expect(meta.classList.contains('opacity-0')).toBe(false)
+    expect(host.textContent).toContain('ACTION')
+  })
+
   it('collapsibleHeader: на десктопе описание остаётся видимым', async () => {
     const host = await renderPanel({
       title: 'Network',
