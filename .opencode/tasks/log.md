@@ -254,4 +254,16 @@
 - **Проверки:** `pnpm typecheck` 6/6 PASS; `pnpm lint` 0 errors (предсуществующие warnings); `pnpm test` core 1589 / ui 360 / backend 286 PASS; `pnpm build` PASS. Визуально (Playwright, dev :5002, admin): все 4 раздела — шапка без границы, кнопка в шапке, скролл на всю область (panel body sh1670/ch454), порядок блоков и Save/Отмена на месте; регрессий в «Проектах» нет.
 - **Не в скоупе:** вкладки правой панели (`ContextTab`/`SessionSettingsTab`, w-full-кнопки) — отдельной задачей; обновление `packages/ui/AGENTS.md` (новый примитив `Button`) — согласовать.
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
-- **Коммит:** нет (ожидает явной просьбы пользователя).
+- **Коммит:** `d447482` (код), `93775e3` (журнал).
+
+## 2026-09-21 — AD-072: Settings UI Kit (Ф1 — коллекция)
+- **Задача:** «Зафиксировать стили/принципы панели настроек, выделить UI-элементы в коллекцию (save/restore/reset), исправить мобильные проблемы; сначала Kit, коммит, потом остальное».
+- **Тип:** feature (UI-кит) + исследование
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS. Коллекция создана, стандарт зафиксирован.
+- **Диагностика мобильных проблем (Playwright, viewport 390):** у MCP admin карточки 555px при теле 320 (`body.scrollWidth 555`), у Security 375; причина — `grid gap-4 sm:grid-cols-2` без базового `grid-cols-1` (неявный трек `auto` раздувается по max-content) + `min-width:auto` у flex/grid-детей + фиксированные контролы (native `<select>`, `w-20`, `shrink-0`); `overflow-y-auto` вычисляет `overflow-x:auto` → горизонтальный скролл. Плюс асимметричный `pr-2` («не по центру») и недействительный `overscroll-behavior-contain` (0 селекторов в dist).
+- **Сделано:** коллекция `components/ui/settings/` — `SettingsPanel` (один скролл, фиксированная шапка, центрирование `max-w-3xl`, `fixed`/`sticky` футер, `overflow-x-hidden`), `SettingsSection`, `SettingsField`, `SettingsRow`, `SettingsActions`, `DefaultsBadge`, контролы (`TextField`/`NumberField`/`TextArea`/`SelectField`/`ToggleField`/`ListField`), `useSettingsDraft` (dirty/saved/isDefault/save/revert/resetToDefault), barrel коллекции; `overscroll-behavior-contain` → `overscroll-contain` (10 файлов, вкл. `logviewer/LogsModal.tsx`); i18n `settings.kit.defaultsBadge`.
+- **Документация:** `docs/arch_decisions/ad-072-settings-ui-kit.md` (⚠️ Частично — коллекция готова, миграция разделов впереди), `docs/arch_decisions/README.md`, корневой `AGENTS.md` (индекс + триггер), `packages/ui/AGENTS.md`.
+- **Проверки:** typecheck PASS; lint 0 errors (33 предсуществующих warning в `LeftPanel`); ui tests 50 файлов / 385 тестов (+25 новых).
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** этот.
