@@ -351,3 +351,13 @@
 - **Проверки:** `pnpm typecheck` 6/6; core 114/1613, ui 66/502, backend 24/291, shared 91; lint 0 errors. Мобильно (390px): слайдер MicroFirst = `.ui-range` (fill 60%), Context — `role=tablist` `flex-1 min-w-0`, шапка сворачивается (`opacity 0`), `data-scroll-shadow` bottom→top-bottom→top.
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** этот.
+
+## 2026-09-21 — AD-072: убран футер в Profile/Appearance/MicroFirst
+- **Задача:** «Профиль, Внешний вид, Быстрые ответы — всё ещё есть футер».
+- **Тип:** bug fix (UI)
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS. `grep footer=` по settings/admin — пусто.
+- **Сделано:** в `ProfileSettings`, `AppearanceSettings`, `MicroFirstDefaults` убран проп `footer` у `SettingsPanel`; `SettingsActions` перенесены в конец тела (пропсы не менялись). Добавлены регресс-тесты «действия внутри скролл-тела, не fixed-футер». AD-072 и `packages/ui/AGENTS.md`: `footer`/`footerVariant` — доступны, но не используются.
+- **Проверки:** ui typecheck/lint/505 тестов PASS.
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** этот.
