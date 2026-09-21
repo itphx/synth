@@ -54,7 +54,7 @@
 
 ### Примитивы и иконки
 - UI-примитивы — в `components/ui/`. Barrel `components/ui/index.ts` намеренно частичный (только `SynthLogo`, `ContextMenu`, `Popover`); остальное импортируется прямыми путями — это норма, не «чинить» реэкспортами.
-- Коллекция настроек — `components/ui/settings/` (`SettingsPanel`/`Section`/`Field`/`Row`/`Actions`, контролы `TextField`/`NumberField`/`TextArea`/`SelectField`/`ToggleField`/`ListField`, хук `useSettingsDraft`) — стандарт (AD-072). Новые разделы настроек и админ-панели собираются только из неё; существующие мигрируются отдельными шагами.
+- Коллекция настроек — `components/ui/settings/` (`SettingsPanel`/`Section`/`Field`/`Row`/`Actions`, контролы `TextField`/`NumberField`/`SliderField`/`TextArea`/`SelectField`/`ToggleField`/`ListField`/`SegmentedControl`, хук `useSettingsDraft`) — обязательный стандарт (AD-072). Все разделы настроек и админ-категории мигрированы; legacy `components/settings/settings-layout.tsx` (`SettingsPage`/`SettingsCard`) удалён — новых импортов оттуда быть не должно.
 - Панель настроек: один вертикальный скролл (скроллится только тело, шапка и `fixed`-футер — `shrink-0`), `min-w-0`/`break-words` для текста, базовая сетка `grid-cols-1`, центрирование `max-w-3xl`, симметричные паддинги (без `pr-2`); футер — `fixed` (вне скролла) или `sticky`.
 - Иконки — только `<Icon name="..." />` из `components/icon/Icon.tsx` (реестр `icons.ts`). Не тащить svg/`@remixicon` напрямую (единственное исключение — `SynthLogo.tsx`); неизвестное имя не в `iconMap` → `Icon` вернёт `null`.
 - Иконки/подписи инструментов — `lib/toolIcons.ts` (`getToolIcon`, `getToolDisplayName`); новый тул добавлять в `TOOL_ICON_MAP`, а не маппинг inline в компоненте.

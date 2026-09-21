@@ -1,8 +1,8 @@
 # AD-072: Settings UI Kit — стандартная панель настроек
 
-> **Статус:** ⚠️ Частично (коллекция `components/ui/settings/` создана и является стандартом; существующие разделы настроек ещё не мигрированы — внедрение отдельными шагами)
+> **Статус:** ✅ Реализовано (коллекция `components/ui/settings/` — стандарт; все разделы настроек и админ-категории мигрированы, legacy-разметка удалена)
 > **Дата:** 2026-09-21
-> **Реализация:** Ф1 — коллекция `packages/ui/src/components/ui/settings/` (`SettingsPanel`/`Section`/`Field`/`Row`/`Actions`/`DefaultsBadge`, контролы, `useSettingsDraft`), тесты, barrel; мелкий фикс Tailwind (`overscroll-behavior-contain` → `overscroll-contain`).
+> **Реализация:** Ф1 — коллекция `packages/ui/src/components/ui/settings/` (`SettingsPanel`/`Section`/`Field`/`Row`/`Actions`/`DefaultsBadge`, контролы, `useSettingsDraft`), тесты, barrel; мелкий фикс Tailwind (`overscroll-behavior-contain` → `overscroll-contain`). Ф4b — миграция админ-категорий и разделов, `SliderField` и `SegmentedControl` в Kit, удалён `components/settings/settings-layout.tsx` (`SettingsPage`/`SettingsCard`), `window.confirm` → `confirm()` в админ-панелях.
 > **Парные документы:**
 > - [AD-019](./ad-019-react-spa.md) «React 19 SPA с нуля» — базовые UI-примитивы (`components/ui/`);
 > - [AD-044](./ad-044-mobile-adaptive-ui-pwa.md) «Адаптивный мобильный UI + PWA» — зоны, touch-first, мобильные правила;
@@ -41,7 +41,7 @@
 | `SettingsRow` | Строка «лейбл слева — контрол справа» (на теле колонка) |
 | `SettingsActions` | Ряд `Reset`/`Save`/`Cancel` с disabled-состояниями |
 | `DefaultsBadge` | Пилюля «По умолчанию» |
-| `controls/TextField`, `NumberField`, `TextArea`, `SelectField`, `ToggleField`, `ListField` | Управляемые контролы |
+| `controls/TextField`, `NumberField`, `SliderField`, `TextArea`, `SelectField`, `ToggleField`, `ListField`, `SegmentedControl` | Управляемые контролы |
 | `useSettingsDraft` | Контракт черновика (см. §2.3) |
 | `index.ts` | Barrel **только** этой коллекции; общий `components/ui/index.ts` не трогается |
 
@@ -80,5 +80,5 @@
 ## 3. Последствия
 
 - **Плюсы:** единообразие и центрирование, отсутствие горизонтального скролла, переиспользуемый контракт черновика и контролов, снижение дублирования.
-- **Минусы/риски:** миграция существующих разделов — отдельные шаги; до завершения в кодовой базе сосуществуют старый `SettingsPage`/`SettingsCard` (`components/settings/settings-layout.tsx`) и новая коллекция.
-- **Внедрение:** новые разделы — только на `components/ui/settings/`; старые мигрируются по одному, без массового рефакторинга «заодно».
+- **Итог миграции:** коллекция — единственная точка сборки раздела/админ-панели; legacy `components/settings/settings-layout.tsx` (`SettingsPage`/`SettingsCard`) удалён, `SegmentedControl` перенесён в `controls/SegmentedControl.tsx`; `window.confirm` в админ-панелях заменён на `confirm()` из `@/lib/confirm`.
+- **Внедрение:** новые разделы — только на `components/ui/settings/`; отклонения допустимы через `className`/`contentClassName`, а не копированием разметки.

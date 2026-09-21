@@ -3,7 +3,14 @@ import { synthApi, type ProjectData } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Button } from '../ui/button'
 import { useI18n } from '@/lib/i18n'
+import { confirm } from '@/lib/confirm'
 import { useNotification } from '@/hooks/useNotification'
+import {
+  SettingsActions,
+  SettingsPanel,
+  SettingsSection,
+  TextField,
+} from '../ui/settings'
 
 export const ProjectsPanel = () => {
   const { t } = useI18n()
@@ -79,7 +86,7 @@ export const ProjectsPanel = () => {
   }
 
   const handleDelete = async (id: string, projectName: string) => {
-    if (!confirm(t('admin.projects.confirmDelete', { name: projectName }))) return
+    if (!(await confirm({ title: t('admin.projects.confirmDelete', { name: projectName }), variant: 'danger' }))) return
     try {
       await synthApi.deleteProject(id)
       await load()
@@ -89,35 +96,31 @@ export const ProjectsPanel = () => {
   }
 
   return (
-    <div className="flex flex-col h-full min-h-0">
-      <div className="shrink-0 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-semibold">{t('admin.projects.title')}</h3>
-          <p className="text-muted-foreground text-sm">{t('admin.projects.count', { count: projects.length })}</p>
-        </div>
+    <SettingsPanel
+      title={t('admin.projects.title')}
+      description={t('admin.projects.count', { count: projects.length })}
+      actions={
         <Button onClick={() => setShowCreate(!showCreate)}>
           <Icon name="add" className="size-3.5" />
           {t('admin.projects.create')}
         </Button>
-      </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto min-h-0 overscroll-contain mt-4">
-      <div className="bg-background rounded-lg border p-4 space-y-2">
-        <h4 className="font-medium text-sm">{t('admin.projects.workspace.title')}</h4>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={workspaceDraft}
-            onChange={(e) => { setWorkspaceDraft(e.target.value); setError('') }}
-            placeholder={t('admin.projects.workspace.placeholder')}
-            className="flex-1 min-w-0 px-3 py-2 rounded-lg border bg-background text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring"
-            onKeyDown={(e) => e.key === 'Enter' && handleSaveWorkspace()}
-          />
+      }
+    >
+      <SettingsSection title={t('admin.projects.workspace.title')}>
+        <div className="flex flex-wrap gap-2 min-w-0">
+          <div className="flex-1 min-w-0">
+            <TextField
+              value={workspaceDraft}
+              onChange={(e) => { setWorkspaceDraft(e.target.value); setError('') }}
+              placeholder={t('admin.projects.workspace.placeholder')}
+              mono
+              aria-label={t('admin.projects.workspace.title')}
+              onKeyDown={(e) => e.key === 'Enter' && handleSaveWorkspace()}
+            />
+          </div>
           <Button
             size="sm"
-            className="shrink-0 py-2"
+            className="shrink-0"
             onClick={handleSaveWorkspace}
             disabled={workspaceSaving}
           >
@@ -125,40 +128,35 @@ export const ProjectsPanel = () => {
           </Button>
         </div>
         {workspace && (
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-muted-foreground min-w-0 break-words">
             {t('admin.projects.workspace.current', { path: workspace })}
           </p>
         )}
-        <p className="text-xs text-muted-foreground/70">
+        <p className="text-xs text-muted-foreground/70 min-w-0 break-words">
           {t('admin.projects.workspace.hint')}
         </p>
-        {error && <p className="text-xs text-status-error">{error}</p>}
-      </div>
+        {error && <p className="text-xs text-status-error min-w-0 break-words">{error}</p>}
+      </SettingsSection>
 
       {showCreate && (
-        <div className="bg-background rounded-lg border p-4 space-y-3">
-          <h4 className="font-medium text-sm">{t('admin.projects.new')}</h4>
-          <input
-            type="text"
+        <SettingsSection title={t('admin.projects.new')}>
+          <TextField
             value={name}
             onChange={(e) => { setName(e.target.value); setError('') }}
             placeholder={t('admin.projects.namePlaceholder')}
-            className="w-full px-3 py-2 rounded-lg border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            aria-label={t('admin.projects.new')}
             onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
           />
-          {error && <p className="text-xs text-status-error">{error}</p>}
-          <div className="flex gap-2">
-            <Button onClick={handleCreate}>
-              {t('admin.projects.create')}
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => { setShowCreate(false); setName(''); setError('') }}
-            >
-              {t('admin.projects.cancel')}
-            </Button>
-          </div>
-        </div>
+          {error && <p className="text-xs text-status-error min-w-0 break-words">{error}</p>}
+          <SettingsActions
+            onSave={handleCreate}
+            onCancel={() => { setShowCreate(false); setName(''); setError('') }}
+            saveLabel={t('admin.projects.create')}
+            cancelLabel={t('admin.projects.cancel')}
+            saveTestId="project-create-save"
+            cancelTestId="project-create-cancel"
+          />
+        </SettingsSection>
       )}
 
       {loading ? (
@@ -171,38 +169,38 @@ export const ProjectsPanel = () => {
           ))}
         </div>
       ) : projects.length === 0 ? (
-        <div className="bg-background rounded-xl border p-8 text-center text-muted-foreground">
-          {t('admin.projects.empty')}
-        </div>
+        <SettingsSection>
+          <p className="py-4 text-center text-muted-foreground">{t('admin.projects.empty')}</p>
+        </SettingsSection>
       ) : (
         <div className="space-y-2">
           {projects.map((p) => (
-            <div key={p.id} className="bg-background rounded-lg border p-4">
-              <div className="flex items-start justify-between">
+            <SettingsSection key={p.id}>
+              <div className="flex items-start justify-between gap-3 min-w-0">
                 <div className="min-w-0">
                   <h4 className="font-medium text-sm truncate">{p.name}</h4>
-                  <div className="flex gap-3 text-xs text-muted-foreground mt-1">
+                  <div className="flex flex-wrap gap-3 text-xs text-muted-foreground mt-1 min-w-0">
                     <code className="font-mono">{p.id.slice(0, 12)}...</code>
                     <span>{t('admin.projects.memberCount', { count: Object.keys(p.members || {}).length })}</span>
                     <span>{t('admin.projects.statusCount', { count: p.status_messages?.length || 0 })}</span>
                   </div>
                   {p.description && (
-                    <p className="text-xs text-muted-foreground mt-1">{p.description}</p>
+                    <p className="text-xs text-muted-foreground mt-1 min-w-0 break-words">{p.description}</p>
                   )}
                 </div>
                 <Button
                   variant="ghost"
                   onClick={() => handleDelete(p.id, p.name)}
-                  className="p-1 hover:bg-status-error/10 hover:text-status-error"
+                  className="shrink-0 p-1 hover:bg-status-error/10 hover:text-status-error"
+                  aria-label={t('common.delete')}
                 >
                   <Icon name="delete-bin" className="size-4" />
                 </Button>
               </div>
-            </div>
+            </SettingsSection>
           ))}
         </div>
       )}
-      </div>
-    </div>
+    </SettingsPanel>
   )
 }

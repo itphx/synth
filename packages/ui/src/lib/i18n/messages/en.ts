@@ -1231,6 +1231,7 @@ export const dict = {
   'admin.defaults.theme': 'Theme',
   'admin.defaults.saved': 'Saved',
   'admin.defaults.save': 'Save',
+  'admin.defaults.confirmReset': 'Reset system appearance to server defaults?',
 
   // Color picker
   'admin.colorPicker.default': 'Default',

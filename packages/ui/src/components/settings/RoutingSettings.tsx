@@ -2,12 +2,13 @@ import { useState, useEffect } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useProvidersStore } from '@/stores/providersStore'
 import { loadRoutingDefaults, saveRoutingDefaults, type RoutingDefaults } from '@/lib/routingDefaults'
+import { confirm } from '@/lib/confirm'
 import { synthApi, type DictionaryEntry } from '@/lib/api/synthApi'
 import { Button } from '../ui/button'
 import { SelectContent, SelectItem } from '@/components/ui/select'
-import { SegmentedControl } from './settings-layout'
 import {
   NumberField,
+  SegmentedControl,
   SelectField,
   SettingsActions,
   SettingsPanel,
@@ -294,7 +295,7 @@ function DictionarySection() {
 
   const handleReset = async (entry: DictionaryEntry) => {
     const name = t(DICTIONARY_CATEGORY_LABELS[entry.category] ?? entry.category)
-    if (!window.confirm(t('routing.dictionaries.confirmReset', { name }))) return
+    if (!(await confirm({ title: t('routing.dictionaries.confirmReset', { name }) }))) return
     setStatus(null)
     setSaveError(null)
     try {

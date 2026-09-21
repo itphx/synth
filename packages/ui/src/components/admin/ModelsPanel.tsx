@@ -3,9 +3,19 @@ import { synthApi, type ModelGroup, type ModelInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { confirm } from '@/lib/confirm'
+import { SelectContent, SelectItem } from '@/components/ui/select'
 import { Button } from '../ui/button'
 import { ProviderIcon } from './ProviderIcon'
+import {
+  NumberField,
+  SettingsActions,
+  SettingsPanel,
+  SettingsSection,
+  SelectField,
+  TextField,
+  ToggleField,
+} from '../ui/settings'
 
 type EditingPrices = Record<string, {
   inputPrice: string
@@ -198,7 +208,7 @@ export const ModelsPanel = () => {
   }
 
   const handleDelete = async (modelId: string) => {
-    if (!confirm(t('admin.models.confirmDelete', { id: modelId }))) return
+    if (!(await confirm({ title: t('admin.models.confirmDelete', { id: modelId }), variant: 'danger' }))) return
     try {
       await synthApi.fetchJSON(`/api/v2/models/${encodeURIComponent(modelId)}`, { method: 'DELETE' })
       await load()
@@ -264,7 +274,6 @@ export const ModelsPanel = () => {
     .filter((g) => g.models.length > 0)
   const visibleCount = filteredGroups.reduce((sum, g) => sum + g.models.length, 0)
 
-  // Проверяем, есть ли отключённые провайдеры
   const enabledProviders = groups.filter((g) => g.models.length > 0)
 
   const formatPrice = (price?: number) => {
@@ -273,60 +282,53 @@ export const ModelsPanel = () => {
   }
 
   return (
-    <div className="flex flex-col h-full min-h-0">
-      <div className="shrink-0 space-y-4">
-      {/* Заголовок */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-semibold">{t('admin.models.title')}</h3>
-          <p className="text-muted-foreground text-sm">
-            {t('admin.models.count', { visible: visibleCount, total: totalModels, providers: enabledProviders.length })}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button
-            onClick={() => handleFetch()}
-            disabled={fetching !== null}
-          >
-            <Icon name="refresh" className={cn("size-3.5", fetching === 'all' && "animate-spin")} />
-            {t('admin.models.syncAll')}
-          </Button>
-        </div>
-      </div>
-
+    <SettingsPanel
+      title={t('admin.models.title')}
+      description={t('admin.models.count', { visible: visibleCount, total: totalModels, providers: enabledProviders.length })}
+      actions={
+        <Button
+          onClick={() => handleFetch()}
+          disabled={fetching !== null}
+        >
+          <Icon name="refresh" className={cn('size-3.5', fetching === 'all' && 'animate-spin')} />
+          {t('admin.models.syncAll')}
+        </Button>
+      }
+    >
       {/* Сообщения */}
       {fetchMsg && (
-        <div className="bg-status-success/10 border border-status-success/30 rounded-lg p-3 text-sm text-status-success">
+        <div className="bg-status-success/10 border border-status-success/30 rounded-lg p-3 text-sm text-status-success min-w-0 break-words">
           {fetchMsg}
         </div>
       )}
       {fetchError && (
-        <div className="bg-status-error/10 border border-status-error/30 rounded-lg p-3 text-sm text-status-error">
+        <div className="bg-status-error/10 border border-status-error/30 rounded-lg p-3 text-sm text-status-error min-w-0 break-words">
           {fetchError}
         </div>
       )}
 
       {/* Фильтры */}
-      <div className="flex gap-3 items-center flex-wrap">
-        <Select value={filterProvider} onValueChange={setFilterProvider}>
-          <SelectTrigger className="min-w-40" aria-label={t('admin.models.allProviders')}>
-            <SelectValue>{filterProvider || t('admin.models.allProviders')}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="">{t('admin.models.allProviders')}</SelectItem>
-            {allProviders.map((p) => (
-              <SelectItem key={p} value={p}>{p}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={onlyEnabled}
-            onChange={(e) => setOnlyEnabled(e.target.checked)}
+      <SettingsSection>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <SelectField
+            label={t('admin.models.allProviders')}
+            value={filterProvider}
+            onValueChange={setFilterProvider}
+            ariaLabel={t('admin.models.allProviders')}
+          >
+            <SelectContent>
+              <SelectItem value="">{t('admin.models.allProviders')}</SelectItem>
+              {allProviders.map((p) => (
+                <SelectItem key={p} value={p}>{p}</SelectItem>
+              ))}
+            </SelectContent>
+          </SelectField>
+          <ToggleField
+            label={t('admin.models.onlyEnabled')}
+            enabled={onlyEnabled}
+            onToggle={() => setOnlyEnabled((v) => !v)}
           />
-          {t('admin.models.onlyEnabled')}
-        </label>
+        </div>
         <Button
           variant="outline"
           onClick={() => setShowAddForm(true)}
@@ -335,104 +337,80 @@ export const ModelsPanel = () => {
           <Icon name="add" className="size-3.5" />
           {t('admin.models.add')}
         </Button>
-      </div>
+      </SettingsSection>
 
       {/* Форма добавления */}
       {showAddForm && (
-        <div className="bg-background rounded-lg border p-4 space-y-3">
-          <div className="text-sm font-medium">{t('admin.models.addManual')}</div>
+        <SettingsSection title={t('admin.models.addManual')}>
           {addError && (
-            <div className="bg-status-error/10 border border-status-error/30 rounded p-2 text-xs text-status-error">
+            <div className="bg-status-error/10 border border-status-error/30 rounded p-2 text-xs text-status-error min-w-0 break-words">
               {addError}
             </div>
           )}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div>
-              <label className="text-[0.6875rem] text-muted-foreground block mb-1">{t('admin.models.provider')}</label>
-              <Select value={addProvider} onValueChange={setAddProvider}>
-                <SelectTrigger className="w-full" aria-label={t('admin.models.provider')}>
-                  <SelectValue>{addProvider || '—'}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="">—</SelectItem>
-                  {allProviders.map((p) => (
-                    <SelectItem key={p} value={p}>{p}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <label className="text-[0.6875rem] text-muted-foreground block mb-1">{t('admin.models.name')}</label>
-              <input
-                type="text"
-                value={addName}
-                onChange={(e) => setAddName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleAddModel()}
-                placeholder="gpt-4o"
-                className="w-full px-2 py-1.5 rounded border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <SelectField
+              label={t('admin.models.provider')}
+              value={addProvider}
+              onValueChange={setAddProvider}
+              ariaLabel={t('admin.models.provider')}
+            >
+              <SelectContent>
+                <SelectItem value="">—</SelectItem>
+                {allProviders.map((p) => (
+                  <SelectItem key={p} value={p}>{p}</SelectItem>
+                ))}
+              </SelectContent>
+            </SelectField>
+            <TextField
+              label={t('admin.models.name')}
+              value={addName}
+              onChange={(e) => setAddName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddModel()}
+              placeholder="gpt-4o"
+            />
+            <NumberField
+              label={t('admin.models.contextK')}
+              value={addCtx}
+              onChange={(e) => setAddCtx(e.target.value)}
+              placeholder="128"
+              step={1}
+              min={0}
+              className="sm:w-full"
+            />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+              <NumberField
+                label={t('admin.models.priceIn')}
+                value={addInPrice}
+                onChange={(e) => setAddInPrice(e.target.value)}
+                placeholder="0.15"
+                step={0.01}
+                min={0}
+                className="sm:w-full"
+              />
+              <NumberField
+                label={t('admin.models.priceOut')}
+                value={addOutPrice}
+                onChange={(e) => setAddOutPrice(e.target.value)}
+                placeholder="0.60"
+                step={0.01}
+                min={0}
+                className="sm:w-full"
               />
             </div>
-            <div>
-              <label className="text-[0.6875rem] text-muted-foreground block mb-1">{t('admin.models.contextK')}</label>
-              <input
-                type="number"
-                value={addCtx}
-                onChange={(e) => setAddCtx(e.target.value)}
-                placeholder="128"
-                step="1"
-                min="0"
-                className="w-full px-2 py-1.5 rounded border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-1">
-              <div>
-                <label className="text-[0.6875rem] text-muted-foreground block mb-1">{t('admin.models.priceIn')}</label>
-                <input
-                  type="number"
-                  value={addInPrice}
-                  onChange={(e) => setAddInPrice(e.target.value)}
-                  placeholder="0.15"
-                  step="0.01"
-                  min="0"
-                  className="w-full px-2 py-1.5 rounded border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                />
-              </div>
-              <div>
-                <label className="text-[0.6875rem] text-muted-foreground block mb-1">{t('admin.models.priceOut')}</label>
-                <input
-                  type="number"
-                  value={addOutPrice}
-                  onChange={(e) => setAddOutPrice(e.target.value)}
-                  placeholder="0.60"
-                  step="0.01"
-                  min="0"
-                  className="w-full px-2 py-1.5 rounded border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                />
-              </div>
-            </div>
           </div>
-          <div className="flex gap-2">
-            <Button
-              onClick={handleAddModel}
-              disabled={addSaving}
-            >
-              {addSaving ? '...' : t('admin.models.addButton')}
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => { setShowAddForm(false); setAddError('') }}
-              className="hover:bg-muted"
-            >
-              {t('admin.models.cancel')}
-            </Button>
-          </div>
-        </div>
+          <SettingsActions
+            onSave={handleAddModel}
+            onCancel={() => { setShowAddForm(false); setAddError('') }}
+            saving={addSaving}
+            saveLabel={t('admin.models.addButton')}
+            cancelLabel={t('admin.models.cancel')}
+            saveTestId="model-add-save"
+            cancelTestId="model-add-cancel"
+          />
+        </SettingsSection>
       )}
 
-      </div>
-
       {/* Содержимое */}
-      <div className="flex-1 overflow-y-auto min-h-0 overscroll-contain mt-4">
       {loading ? (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
@@ -447,223 +425,227 @@ export const ModelsPanel = () => {
           ))}
         </div>
       ) : filteredGroups.length === 0 ? (
-        <div className="bg-background rounded-xl border p-8 text-center text-muted-foreground">
-          {t('admin.models.empty')}
-        </div>
+        <SettingsSection>
+          <p className="py-4 text-center text-muted-foreground">{t('admin.models.empty')}</p>
+        </SettingsSection>
       ) : (
         <div className="space-y-2">
           {filteredGroups.map((group) => {
             const isCollapsed = collapsedGroups.has(group.provider.name)
             return (
-              <div key={group.provider.name} className="bg-background rounded-lg border">
-                {/* Заголовок группы */}
-                <div className="flex items-center gap-3 px-4 py-3 border-b">
-                  <button
-                    onClick={() => toggleGroup(group.provider.name)}
-                    className="p-0.5 hover:bg-muted rounded transition-colors"
-                  >
-                    <Icon
-                      name="arrow-right-s"
-                      className={cn("size-4 text-muted-foreground transition-transform", !isCollapsed && "rotate-90")}
+              <SettingsSection key={group.provider.name} className="p-0">
+                <div className="min-w-0">
+                  {/* Заголовок группы */}
+                  <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b min-w-0">
+                    <button
+                      onClick={() => toggleGroup(group.provider.name)}
+                      className="p-0.5 hover:bg-muted rounded transition-colors shrink-0"
+                      aria-label={group.provider.name}
+                    >
+                      <Icon
+                        name="arrow-right-s"
+                        className={cn('size-4 text-muted-foreground transition-transform', !isCollapsed && 'rotate-90')}
+                      />
+                    </button>
+                    <ProviderIcon
+                      icon={group.provider.icon}
+                      size={18}
+                      className="shrink-0"
                     />
-                  </button>
-                  <ProviderIcon
-                    icon={group.provider.icon}
-                    size={18}
-                    className="shrink-0"
-                  />
-                  <span className="font-medium text-sm">{group.provider.name}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {t('admin.models.modelsCount', { count: group.models.length })}
-                  </span>
-                  {group.provider.defaultModel && (
-                    <span className="text-xs text-muted-foreground ml-auto mr-2">
-                      {t('admin.models.defaultModel', { model: group.provider.defaultModel })}
+                    <span className="font-medium text-sm min-w-0 break-words">{group.provider.name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {t('admin.models.modelsCount', { count: group.models.length })}
                     </span>
-                  )}
-                  <button
-                    onClick={() => handleFetch(group.provider.name)}
-                    disabled={fetching !== null}
-                    className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-muted hover:bg-muted/70 disabled:opacity-50"
-                  >
-                    <Icon
-                      name="refresh"
-                      className={cn("size-3", fetching === group.provider.name && "animate-spin")}
-                    />
-                    {t('admin.models.refresh')}
-                  </button>
-                </div>
-
-                {/* Строки моделей */}
-                {!isCollapsed && (
-                  <div className="overflow-x-auto">
-                    {/* Шапка таблицы */}
-                    <div className="grid grid-cols-[1fr_5rem_8.75rem_4.375rem_2.5rem_2rem] min-w-[35rem] gap-2 px-4 py-2 text-[0.6875rem] font-medium text-muted-foreground border-b">
-                      <span className="pl-1">{t('admin.models.model')}</span>
-                      <span className="text-center">{t('admin.models.context')}</span>
-                      <span className="text-center">{t('admin.models.prices')}</span>
-                      <span className="text-center">{t('admin.models.enabledCol')}</span>
-                      <span className="text-center">{t('admin.models.defaultCol')}</span>
-                      <span />
-                    </div>
-
-                    {group.models.length === 0 ? (
-                      <div className="px-4 py-3 text-sm text-muted-foreground">
-                        {t('admin.models.filterEmpty')}
-                      </div>
-                    ) : (
-                      group.models.map((model) => {
-                        const editing = editingPrices[model.id]
-                        return (
-                          <div
-                            key={model.id}
-                            className="grid grid-cols-[1fr_5rem_8.75rem_4.375rem_2.5rem_2rem] min-w-[35rem] gap-2 px-4 py-2 items-center border-b border-dashed last:border-b-0 hover:bg-muted/30 text-sm"
-                          >
-                            {/* Название модели + иконка */}
-                            <div className="flex items-center gap-2 min-w-0">
-                              <ProviderIcon
-                                icon={group.provider.icon}
-                                size={14}
-                                className="shrink-0"
-                              />
-                              <div className="min-w-0">
-                                <span className={cn("font-medium truncate block", !model.enabled && "opacity-50")}>
-                                  {model.name}
-                                </span>
-                              </div>
-                            </div>
-
-                            {/* Контекстное окно */}
-                            <div className="text-center">
-                              <input
-                                type="number"
-                                min="0"
-                                step="1000"
-                                value={model.context_window ?? ''}
-                                onChange={(e) => handleContextEdit(model, e.target.value)}
-                                onFocus={(e) => e.target.select()}
-                                className={cn(
-                                  "w-full text-center bg-transparent border rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring tabular-nums",
-                                  model.context_source === 'reference' && "italic text-muted-foreground",
-                                )}
-                                title={model.context_window
-                                  ? t('admin.models.contextTitle', {
-                                      k: (model.context_window / 1000).toFixed(0),
-                                      source: model.context_source === 'reference'
-                                        ? t('admin.models.contextRef')
-                                        : model.context_source === 'api'
-                                          ? t('admin.models.contextApi')
-                                          : model.context_source === 'manual'
-                                            ? t('admin.models.contextManual')
-                                            : '',
-                                    })
-                                  : ''}
-                              />
-                            </div>
-
-                            {/* Цены */}
-                            <div className="grid grid-cols-2 gap-0.5 text-[0.625rem] tabular-nums">
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                placeholder="in"
-                                value={editing?.inputPrice ?? formatPrice(model.input_price)}
-                                onChange={(e) => updatePriceField(model.id, 'inputPrice', e.target.value)}
-                                onFocus={() => !editing && startEditPrice(model)}
-                                className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
-                                title={t('admin.models.priceInTitle')}
-                              />
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                placeholder="out"
-                                value={editing?.outputPrice ?? formatPrice(model.output_price)}
-                                onChange={(e) => updatePriceField(model.id, 'outputPrice', e.target.value)}
-                                onFocus={() => !editing && startEditPrice(model)}
-                                className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
-                                title={t('admin.models.priceOutTitle')}
-                              />
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                placeholder="cr"
-                                value={editing?.cacheReadPrice ?? formatPrice(model.cache_read_price)}
-                                onChange={(e) => updatePriceField(model.id, 'cacheReadPrice', e.target.value)}
-                                onFocus={() => !editing && startEditPrice(model)}
-                                className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
-                                title={t('admin.models.priceCrTitle')}
-                              />
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                placeholder="cw"
-                                value={editing?.cacheWritePrice ?? formatPrice(model.cache_write_price)}
-                                onChange={(e) => updatePriceField(model.id, 'cacheWritePrice', e.target.value)}
-                                onFocus={() => !editing && startEditPrice(model)}
-                                className="w-full text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
-                                title={t('admin.models.priceCwTitle')}
-                              />
-                            </div>
-
-                            {/* Включено / Выключено */}
-                            <div className="flex justify-center">
-                              <button
-                                onClick={() => toggleEnabled(model)}
-                                className={cn(
-                                  "px-2 py-0.5 rounded text-[0.625rem] font-medium transition-colors cursor-pointer",
-                                  model.enabled
-                                    ? 'bg-status-success/10 text-status-success hover:bg-status-success/20'
-                                    : 'bg-secondary text-muted-foreground hover:bg-secondary/80'
-                                )}
-                                title={model.enabled ? t('admin.models.disableModel') : t('admin.models.enableModel')}
-                              >
-                                {model.enabled ? t('common.on').toUpperCase() : t('common.off').toUpperCase()}
-                              </button>
-                            </div>
-
-                            {/* По умолчанию */}
-                            <div className="flex justify-center">
-                              <button
-                                onClick={() => setAsDefault(model)}
-                                className={cn(
-                                  "p-0.5 rounded transition-colors",
-                                  model.isDefault
-                                    ? 'text-status-warning hover:text-status-warning/80'
-                                    : 'text-muted-foreground/30 hover:text-status-warning/70'
-                                )}
-                                title={model.isDefault ? t('admin.models.defaultModelTitle') : t('admin.models.makeDefault')}
-                              >
-                                <Icon name={model.isDefault ? 'star-fill' : 'star'} className="size-3.5" />
-                              </button>
-                            </div>
-
-                            {/* Удалить */}
-                            <div className="flex justify-center">
-                              <Button
-                                variant="ghost"
-                                onClick={() => handleDelete(model.id)}
-                                className="p-0.5 text-muted-foreground/40 hover:bg-status-error/10 hover:text-status-error"
-                                title={t('admin.models.deleteModel')}
-                              >
-                                <Icon name="delete-bin" className="size-3.5" />
-                              </Button>
-                            </div>
-                          </div>
-                        )
-                      })
+                    {group.provider.defaultModel && (
+                      <span className="text-xs text-muted-foreground sm:ml-auto sm:mr-2 min-w-0 break-words">
+                        {t('admin.models.defaultModel', { model: group.provider.defaultModel })}
+                      </span>
                     )}
+                    <button
+                      onClick={() => handleFetch(group.provider.name)}
+                      disabled={fetching !== null}
+                      className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-muted hover:bg-muted/70 disabled:opacity-50 shrink-0"
+                    >
+                      <Icon
+                        name="refresh"
+                        className={cn('size-3', fetching === group.provider.name && 'animate-spin')}
+                      />
+                      {t('admin.models.refresh')}
+                    </button>
                   </div>
-                )}
-              </div>
+
+                  {/* Строки моделей */}
+                  {!isCollapsed && (
+                    <div className="overflow-x-auto">
+                      <div className="min-w-[35rem]">
+                        {/* Шапка таблицы */}
+                        <div className="flex gap-2 px-4 py-2 text-[0.6875rem] font-medium text-muted-foreground border-b">
+                          <span className="flex-1 min-w-0 pl-1">{t('admin.models.model')}</span>
+                          <span className="w-20 shrink-0 text-center">{t('admin.models.context')}</span>
+                          <span className="w-[8.75rem] shrink-0 text-center">{t('admin.models.prices')}</span>
+                          <span className="w-[4.375rem] shrink-0 text-center">{t('admin.models.enabledCol')}</span>
+                          <span className="w-10 shrink-0 text-center">{t('admin.models.defaultCol')}</span>
+                          <span className="w-8 shrink-0" />
+                        </div>
+
+                        {group.models.length === 0 ? (
+                          <div className="px-4 py-3 text-sm text-muted-foreground">
+                            {t('admin.models.filterEmpty')}
+                          </div>
+                        ) : (
+                          group.models.map((model) => {
+                            const editing = editingPrices[model.id]
+                            return (
+                              <div
+                                key={model.id}
+                                className="flex gap-2 px-4 py-2 items-center border-b border-dashed last:border-b-0 hover:bg-muted/30 text-sm"
+                              >
+                                {/* Название модели + иконка */}
+                                <div className="flex flex-1 min-w-0 items-center gap-2">
+                                  <ProviderIcon
+                                    icon={group.provider.icon}
+                                    size={14}
+                                    className="shrink-0"
+                                  />
+                                  <div className="min-w-0">
+                                    <span className={cn('font-medium truncate block', !model.enabled && 'opacity-50')}>
+                                      {model.name}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Контекстное окно */}
+                                <div className="w-20 shrink-0 text-center">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="1000"
+                                    value={model.context_window ?? ''}
+                                    onChange={(e) => handleContextEdit(model, e.target.value)}
+                                    onFocus={(e) => e.target.select()}
+                                    className={cn(
+                                      'w-full text-center bg-transparent border rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring tabular-nums',
+                                      model.context_source === 'reference' && 'italic text-muted-foreground',
+                                    )}
+                                    title={model.context_window
+                                      ? t('admin.models.contextTitle', {
+                                          k: (model.context_window / 1000).toFixed(0),
+                                          source: model.context_source === 'reference'
+                                            ? t('admin.models.contextRef')
+                                            : model.context_source === 'api'
+                                              ? t('admin.models.contextApi')
+                                              : model.context_source === 'manual'
+                                                ? t('admin.models.contextManual')
+                                                : '',
+                                        })
+                                      : ''}
+                                  />
+                                </div>
+
+                                {/* Цены */}
+                                <div className="w-[8.75rem] shrink-0 flex flex-wrap gap-0.5 text-[0.625rem] tabular-nums">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="in"
+                                    value={editing?.inputPrice ?? formatPrice(model.input_price)}
+                                    onChange={(e) => updatePriceField(model.id, 'inputPrice', e.target.value)}
+                                    onFocus={() => !editing && startEditPrice(model)}
+                                    className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
+                                    title={t('admin.models.priceInTitle')}
+                                  />
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="out"
+                                    value={editing?.outputPrice ?? formatPrice(model.output_price)}
+                                    onChange={(e) => updatePriceField(model.id, 'outputPrice', e.target.value)}
+                                    onFocus={() => !editing && startEditPrice(model)}
+                                    className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
+                                    title={t('admin.models.priceOutTitle')}
+                                  />
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="cr"
+                                    value={editing?.cacheReadPrice ?? formatPrice(model.cache_read_price)}
+                                    onChange={(e) => updatePriceField(model.id, 'cacheReadPrice', e.target.value)}
+                                    onFocus={() => !editing && startEditPrice(model)}
+                                    className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
+                                    title={t('admin.models.priceCrTitle')}
+                                  />
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="cw"
+                                    value={editing?.cacheWritePrice ?? formatPrice(model.cache_write_price)}
+                                    onChange={(e) => updatePriceField(model.id, 'cacheWritePrice', e.target.value)}
+                                    onFocus={() => !editing && startEditPrice(model)}
+                                    className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
+                                    title={t('admin.models.priceCwTitle')}
+                                  />
+                                </div>
+
+                                {/* Включено / Выключено */}
+                                <div className="w-[4.375rem] shrink-0 flex justify-center">
+                                  <button
+                                    onClick={() => toggleEnabled(model)}
+                                    className={cn(
+                                      'px-2 py-0.5 rounded text-[0.625rem] font-medium transition-colors cursor-pointer',
+                                      model.enabled
+                                        ? 'bg-status-success/10 text-status-success hover:bg-status-success/20'
+                                        : 'bg-secondary text-muted-foreground hover:bg-secondary/80'
+                                    )}
+                                    title={model.enabled ? t('admin.models.disableModel') : t('admin.models.enableModel')}
+                                  >
+                                    {model.enabled ? t('common.on').toUpperCase() : t('common.off').toUpperCase()}
+                                  </button>
+                                </div>
+
+                                {/* По умолчанию */}
+                                <div className="w-10 shrink-0 flex justify-center">
+                                  <button
+                                    onClick={() => setAsDefault(model)}
+                                    className={cn(
+                                      'p-0.5 rounded transition-colors',
+                                      model.isDefault
+                                        ? 'text-status-warning hover:text-status-warning/80'
+                                        : 'text-muted-foreground/30 hover:text-status-warning/70'
+                                    )}
+                                    title={model.isDefault ? t('admin.models.defaultModelTitle') : t('admin.models.makeDefault')}
+                                  >
+                                    <Icon name={model.isDefault ? 'star-fill' : 'star'} className="size-3.5" />
+                                  </button>
+                                </div>
+
+                                {/* Удалить */}
+                                <div className="w-8 shrink-0 flex justify-center">
+                                  <Button
+                                    variant="ghost"
+                                    onClick={() => handleDelete(model.id)}
+                                    className="p-0.5 text-muted-foreground/40 hover:bg-status-error/10 hover:text-status-error"
+                                    title={t('admin.models.deleteModel')}
+                                  >
+                                    <Icon name="delete-bin" className="size-3.5" />
+                                  </Button>
+                                </div>
+                              </div>
+                            )
+                          })
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </SettingsSection>
             )
           })}
         </div>
       )}
-      </div>
-    </div>
+    </SettingsPanel>
   )
 }

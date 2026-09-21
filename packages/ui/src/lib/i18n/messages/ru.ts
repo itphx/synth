@@ -1228,6 +1228,7 @@ export const dict = {
   'admin.defaults.theme': 'Тема',
   'admin.defaults.saved': 'Сохранено',
   'admin.defaults.save': 'Сохранить',
+  'admin.defaults.confirmReset': 'Сбросить оформление к серверным значениям по умолчанию?',
 
   // Color picker
   'admin.colorPicker.default': 'По умолчанию',

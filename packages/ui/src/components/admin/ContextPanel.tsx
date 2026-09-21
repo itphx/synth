@@ -4,6 +4,14 @@ import { Icon } from '@/components/icon/Icon'
 import { Button } from '../ui/button'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
+import { confirm } from '@/lib/confirm'
+import {
+  SettingsActions,
+  SettingsPanel,
+  SettingsSection,
+  TextArea,
+  TextField,
+} from '../ui/settings'
 
 interface ContextFileItem {
   name: string
@@ -115,7 +123,7 @@ export const ContextPanel = () => {
   }
 
   const handleDelete = async (name: string, category: string) => {
-    if (!confirm(t('admin.context.confirmDelete', { name }))) return
+    if (!(await confirm({ title: t('admin.context.confirmDelete', { name }), variant: 'danger' }))) return
     try {
       await synthApi.fetchJSON(
         `/api/v2/context/files/${encodeURIComponent(name)}?category=${encodeURIComponent(category)}`,
@@ -126,7 +134,7 @@ export const ContextPanel = () => {
   }
 
   const handleRestore = async (name: string, category: string) => {
-    if (!confirm(t('admin.context.confirmReset', { name }))) return
+    if (!(await confirm({ title: t('admin.context.confirmReset', { name }), variant: 'danger' }))) return
     try {
       await synthApi.fetchJSON(
         `/api/v2/context/files/${encodeURIComponent(name)}/restore_to_default?category=${encodeURIComponent(category)}`,
@@ -140,133 +148,149 @@ export const ContextPanel = () => {
 
   const filtered = files.filter(f => f.category === activeTab || !activeTab)
 
+  const description = status
+    ? `${t('admin.context.count', { count: filtered.length, status: '' })} — ${status}`
+    : t('admin.context.count', { count: filtered.length, status: '' })
+
   return (
-    <div className="flex flex-col h-full min-h-0">
-      <div className="shrink-0 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-semibold">{t('admin.context.title')}</h3>
-          <p className="text-muted-foreground text-sm">
-            {t('admin.context.count', { count: filtered.length, status: '' })}
-            {status && <span className="ml-2 text-primary">— {status}</span>}
-          </p>
-        </div>
+    <SettingsPanel
+      title={t('admin.context.title')}
+      description={description}
+      actions={
         <Button onClick={() => setShowCreate(!showCreate)}>
           <Icon name="add" className="size-3.5" />{t('admin.context.add')}
         </Button>
-      </div>
-
-      <div className="flex gap-1 bg-muted rounded-lg p-1">
-        {CATEGORIES.map((cat) => (
-          <button
-            key={cat.id}
-            onClick={() => switchTab(cat.id)}
-            className={cn(
-              "flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors",
-              activeTab === cat.id
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            {t(CATEGORY_LABEL_KEYS[cat.id])}
-          </button>
-        ))}
-      </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto min-h-0 overscroll-contain mt-4">
-      {showCreate && (
-        <div className="bg-background rounded-lg border p-4 space-y-3">
-          <h4 className="font-medium text-sm">{t('admin.context.newFile')}</h4>
-          <div>
-            <label className="text-xs text-muted-foreground">{t('admin.context.fileName')}</label>
-            <input type="text" value={newFile.name} onChange={e => setNewFile({ ...newFile, name: e.target.value })}
-              placeholder="ABOUT.md"
-              className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground">{t('admin.context.content')}</label>
-            <textarea value={newFile.content} onChange={e => setNewFile({ ...newFile, content: e.target.value })}
-              rows={4}
-              className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring font-mono" />
-          </div>
-          <div className="flex gap-2">
-            <Button onClick={handleCreate}>{t('admin.context.create')}</Button>
-            <Button variant="ghost" onClick={() => setShowCreate(false)}>{t('admin.context.cancel')}</Button>
-          </div>
+      }
+    >
+      <SettingsSection>
+        <div className="flex flex-wrap gap-1 bg-muted rounded-lg p-1 min-w-0">
+          {CATEGORIES.map((cat) => (
+            <button
+              key={cat.id}
+              onClick={() => switchTab(cat.id)}
+              className={cn(
+                'flex-1 min-w-0 px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
+                activeTab === cat.id
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {t(CATEGORY_LABEL_KEYS[cat.id])}
+            </button>
+          ))}
         </div>
+      </SettingsSection>
+
+      {showCreate && (
+        <SettingsSection title={t('admin.context.newFile')}>
+          <TextField
+            label={t('admin.context.fileName')}
+            value={newFile.name}
+            onChange={e => setNewFile({ ...newFile, name: e.target.value })}
+            placeholder="ABOUT.md"
+          />
+          <TextArea
+            label={t('admin.context.content')}
+            value={newFile.content}
+            onChange={e => setNewFile({ ...newFile, content: e.target.value })}
+            rows={4}
+            mono
+          />
+          <SettingsActions
+            onSave={handleCreate}
+            onCancel={() => setShowCreate(false)}
+            saveLabel={t('admin.context.create')}
+            cancelLabel={t('admin.context.cancel')}
+            saveTestId="context-create-save"
+            cancelTestId="context-create-cancel"
+          />
+        </SettingsSection>
       )}
 
       {editFile && (
-        <div className="bg-background rounded-lg border p-4 space-y-3">
-          <h4 className="font-medium text-sm">{t('admin.context.editing', { name: editFile.name })} <span className="text-xs text-muted-foreground">({t(CATEGORY_LABEL_KEYS[editFile.category] || editFile.category)})</span></h4>
-          <textarea value={editFile.content} onChange={e => setEditFile({ ...editFile, content: e.target.value })}
+        <SettingsSection title={t('admin.context.editing', { name: editFile.name })}>
+          <p className="text-xs text-muted-foreground min-w-0 break-words">
+            {t(CATEGORY_LABEL_KEYS[editFile.category] || editFile.category)}
+          </p>
+          <TextArea
+            value={editFile.content}
+            onChange={e => setEditFile({ ...editFile, content: e.target.value })}
             rows={8}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring font-mono" />
-          <div className="flex gap-2">
-            <Button onClick={handleSave}>{t('admin.context.save')}</Button>
-            <Button variant="ghost" onClick={() => setEditFile(null)}>{t('admin.context.cancel')}</Button>
-          </div>
-        </div>
+            mono
+            aria-label={t('admin.context.editing', { name: editFile.name })}
+          />
+          <SettingsActions
+            onSave={handleSave}
+            onCancel={() => setEditFile(null)}
+            saveLabel={t('admin.context.save')}
+            cancelLabel={t('admin.context.cancel')}
+            saveTestId="context-edit-save"
+            cancelTestId="context-edit-cancel"
+          />
+        </SettingsSection>
       )}
 
       {loading ? (
         <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="bg-background rounded-lg border p-3 animate-pulse"><div className="h-4 bg-muted rounded w-48" /></div>)}</div>
       ) : filtered.length === 0 ? (
-        <div className="bg-background rounded-xl border p-8 text-center text-muted-foreground">
-          {t('admin.context.empty', { category: t(CATEGORY_LABEL_KEYS[activeTab] || activeTab) })}
-        </div>
+        <SettingsSection>
+          <p className="py-4 text-center text-muted-foreground">
+            {t('admin.context.empty', { category: t(CATEGORY_LABEL_KEYS[activeTab] || activeTab) })}
+          </p>
+        </SettingsSection>
       ) : (
         <div className="space-y-1">
           {filtered.map((f) => (
-            <div key={f.name} className="flex items-center justify-between bg-background rounded-lg border px-4 py-2.5">
-              <div className="flex items-center gap-3">
-                {f.category === 'user' ? (
-                  <input type="checkbox" checked={f.enabled} onChange={() => handleToggle(f.name)}
-                    className="size-4 rounded accent-primary" />
-                ) : (
-                  <div className="size-4" />
-                )}
-                <Icon name="file-text" className="size-4 text-muted-foreground" />
-                <span className="text-sm font-medium">{f.name}</span>
-                {f.is_overridden && (
-                  <span className="text-xs px-1.5 py-0.5 rounded bg-status-warning/15 text-status-warning">
-                    {t('admin.context.modified')}
-                  </span>
-                )}
-                {f.is_system && (
-                  <span className="text-xs px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground">
-                    {t('admin.context.system')}
-                  </span>
-                )}
-                <span className="text-xs text-muted-foreground">{f.size} B</span>
+            <SettingsSection key={f.name} className="p-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  {f.category === 'user' ? (
+                    <input type="checkbox" checked={f.enabled} onChange={() => handleToggle(f.name)}
+                      className="size-4 rounded accent-primary shrink-0" />
+                  ) : (
+                    <div className="size-4 shrink-0" />
+                  )}
+                  <Icon name="file-text" className="size-4 text-muted-foreground shrink-0" />
+                  <span className="text-sm font-medium min-w-0 break-all">{f.name}</span>
+                  {f.is_overridden && (
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-status-warning/15 text-status-warning shrink-0">
+                      {t('admin.context.modified')}
+                    </span>
+                  )}
+                  {f.is_system && (
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground shrink-0">
+                      {t('admin.context.system')}
+                    </span>
+                  )}
+                  <span className="text-xs text-muted-foreground shrink-0">{f.size} B</span>
+                </div>
+                <div className="flex flex-wrap gap-1 shrink-0">
+                  <Button variant="ghost" onClick={() => handleEdit(f.name, f.category)}>{t('admin.context.edit')}</Button>
+                  {f.is_overridden && (
+                    <Button
+                      variant="ghost"
+                      onClick={() => handleRestore(f.name, f.category)}
+                      className="text-status-warning hover:bg-status-warning/10"
+                    >
+                      {t('admin.context.reset')}
+                    </Button>
+                  )}
+                  {f.category === 'user' && (
+                    <Button
+                      variant="ghost"
+                      onClick={() => handleDelete(f.name, f.category)}
+                      className="p-1 hover:bg-status-error/10 hover:text-status-error"
+                      aria-label={t('common.delete')}
+                    >
+                      <Icon name="delete-bin" className="size-3.5" />
+                    </Button>
+                  )}
+                </div>
               </div>
-              <div className="flex gap-1">
-                <Button variant="ghost" onClick={() => handleEdit(f.name, f.category)}>{t('admin.context.edit')}</Button>
-                {f.is_overridden && (
-                  <Button
-                    variant="ghost"
-                    onClick={() => handleRestore(f.name, f.category)}
-                    className="text-status-warning hover:bg-status-warning/10"
-                  >
-                    {t('admin.context.reset')}
-                  </Button>
-                )}
-                {f.category === 'user' && (
-                  <Button
-                    variant="ghost"
-                    onClick={() => handleDelete(f.name, f.category)}
-                    className="p-1 hover:bg-status-error/10 hover:text-status-error"
-                  >
-                    <Icon name="delete-bin" className="size-3.5" />
-                  </Button>
-                )}
-              </div>
-            </div>
+            </SettingsSection>
           ))}
         </div>
       )}
-      </div>
-    </div>
+    </SettingsPanel>
   )
 }

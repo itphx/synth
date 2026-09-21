@@ -34,13 +34,13 @@
 | AD-045 | Профили серверов и лёгкий runtime-вход в гибриде: единый dataDir, мета-реестр profiles.json, logout = забыть токен + revoke | ✅ | [ad-045-hybrid-server-profiles.md](./ad-045-hybrid-server-profiles.md) |
 | AD-070 | SystemPromptComposer: консистентность промпта, prompt-cache, статистика и прозрачность | ✅ | [ad-070-system-prompt-composer.md](./ad-070-system-prompt-composer.md) |
 | AD-071 | MCP-серверы: уровни system/project/session, единый реестр, разделение `tools`/`mcp.tools`, блоки `mcp.servers`/`mcp.status`, политики `tools.policy`/`mcp.policy`, admin-отключение встроенных инструментов | ✅ | [ad-071-mcp-servers-prompt.md](./ad-071-mcp-servers-prompt.md) |
+| AD-072 | Settings UI Kit: единая панель настроек (один скролл, центрирование `max-w-3xl`, контракт черновика, контролы); все разделы и админ-категории мигрированы | ✅ | [ad-072-settings-ui-kit.md](./ad-072-settings-ui-kit.md) |
 
 ## Частично реализованные AD
 
 | AD | Решение | Статус | Файл |
 |----|---------|--------|------|
 | AD-018 | Выбор AI-движка на уровне сессии (выбор движка персистится, механика — в работе) | ⚠️ | [ad-018-session-engine-selection.md](./ad-018-session-engine-selection.md) |
-| AD-072 | Settings UI Kit: единая панель настроек (один скролл, центрирование `max-w-3xl`, контракт черновика, контролы); существующие разделы ещё не мигрированы | ⚠️ | [ad-072-settings-ui-kit.md](./ad-072-settings-ui-kit.md) |
 
 ## Deprecated AD
 

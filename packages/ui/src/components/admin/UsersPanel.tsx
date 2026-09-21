@@ -5,6 +5,16 @@ import { Toggle } from '../ui/Toggle'
 import { Button } from '../ui/button'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
+import { confirm } from '@/lib/confirm'
+import {
+  SettingsActions,
+  SettingsField,
+  SettingsPanel,
+  SettingsSection,
+  TextArea,
+  TextField,
+  ToggleField,
+} from '../ui/settings'
 
 const ROLES = ['ADMIN', 'USER', 'LEAD', 'AUDITOR'] as const
 
@@ -117,7 +127,7 @@ export const UsersPanel = () => {
   }
 
   const handleDelete = async (u: UserInfo) => {
-    if (!confirm(t('admin.users.confirmDelete', { username: u.username }))) return
+    if (!(await confirm({ title: t('admin.users.confirmDelete', { username: u.username }), variant: 'danger' }))) return
     try {
       await synthApi.deleteUser(u.id)
       await load()
@@ -134,44 +144,33 @@ export const UsersPanel = () => {
   }
 
   const renderForm = () => (
-    <div className="bg-background rounded-lg border p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h4 className="font-medium text-sm">{expanded ? t('admin.users.editUser', { username: form.username }) : t('admin.users.newUser')}</h4>
-        <div className="flex gap-2">
-          <Button onClick={handleSave} disabled={saving}>
-            {saving ? t('admin.users.saving') : t('admin.users.save')}
-          </Button>
-          <Button variant="ghost" onClick={handleCancel}>{t('admin.users.cancel')}</Button>
-        </div>
-      </div>
+    <SettingsSection title={expanded ? t('admin.users.editUser', { username: form.username }) : t('admin.users.newUser')}>
+      {error && <p className="text-xs text-status-error min-w-0 break-words">{error}</p>}
 
-      {error && <p className="text-xs text-status-error">{error}</p>}
-
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="text-xs text-muted-foreground">{t('admin.users.username')}</label>
-          <input type="text" value={form.username}
-            onChange={(e) => setForm({ ...form, username: e.target.value })}
-            disabled={!!expanded}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" />
-        </div>
-        <div>
-          <label className="text-xs text-muted-foreground">{t('admin.users.displayName')}</label>
-          <input type="text" value={form.display_name}
-            onChange={(e) => setForm({ ...form, display_name: e.target.value })}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-        </div>
-        <div className="col-span-2">
-          <label className="text-xs text-muted-foreground">{t('admin.users.email')}</label>
-          <input type="email" value={form.email}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <TextField
+          label={t('admin.users.username')}
+          value={form.username}
+          onChange={(e) => setForm({ ...form, username: e.target.value })}
+          disabled={!!expanded}
+        />
+        <TextField
+          label={t('admin.users.displayName')}
+          value={form.display_name}
+          onChange={(e) => setForm({ ...form, display_name: e.target.value })}
+        />
+        <div className="sm:col-span-2">
+          <TextField
+            label={t('admin.users.email')}
+            type="email"
+            value={form.email}
             onChange={(e) => setForm({ ...form, email: e.target.value })}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+          />
         </div>
       </div>
 
-      <div>
-        <label className="text-xs text-muted-foreground mb-1 block">{t('admin.users.roles')}</label>
-        <div className="flex flex-wrap gap-1.5">
+      <SettingsField label={t('admin.users.roles')}>
+        <div className="flex flex-wrap gap-1.5 min-w-0">
           {ROLES.map((role) => (
             <button key={role} type="button" onClick={() => toggleRole(role)} className={cn(
               'px-2.5 py-1 rounded text-xs transition-colors',
@@ -181,42 +180,45 @@ export const UsersPanel = () => {
             )}>{role}</button>
           ))}
         </div>
-      </div>
+      </SettingsField>
 
-      <label className="flex items-center gap-2 cursor-pointer">
-        <input type="checkbox" checked={form.is_active}
-          onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
-          className="rounded" />
-        <span className="text-sm">{t('admin.users.active')}</span>
-      </label>
+      <ToggleField
+        label={t('admin.users.active')}
+        enabled={form.is_active}
+        onToggle={() => setForm({ ...form, is_active: !form.is_active })}
+      />
 
-      <div>
-        <label className="text-xs text-muted-foreground mb-1 block">{t('admin.users.notes')}</label>
-        <textarea value={form.notes}
-          onChange={(e) => setForm({ ...form, notes: e.target.value })}
-          rows={3}
-          className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-y" />
-      </div>
-    </div>
+      <TextArea
+        label={t('admin.users.notes')}
+        value={form.notes}
+        onChange={(e) => setForm({ ...form, notes: e.target.value })}
+        rows={3}
+      />
+
+      <SettingsActions
+        onSave={handleSave}
+        onCancel={handleCancel}
+        saving={saving}
+        saveLabel={t('admin.users.save')}
+        cancelLabel={t('admin.users.cancel')}
+        saveTestId="user-save"
+        cancelTestId="user-cancel"
+      />
+    </SettingsSection>
   )
 
   return (
-    <div className="flex flex-col h-full min-h-0">
-      <div className="shrink-0 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-semibold">{t('admin.users.title')}</h3>
-          <p className="text-muted-foreground text-sm">{t('admin.users.count', { count: users.length })}</p>
-        </div>
+    <SettingsPanel
+      title={t('admin.users.title')}
+      description={t('admin.users.count', { count: users.length })}
+      actions={
         <Button onClick={handleCreate}>
           <Icon name="add" className="size-3.5" />{t('admin.users.add')}
         </Button>
-      </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto min-h-0 overscroll-contain mt-4">
+      }
+    >
       {error && !creating && !expanded && (
-        <div className="bg-status-warning/10 border border-status-warning/30 rounded-lg p-4 text-sm text-status-warning">
+        <div className="bg-status-warning/10 border border-status-warning/30 rounded-lg p-4 text-sm text-status-warning min-w-0 break-words">
           {error}
         </div>
       )}
@@ -232,67 +234,61 @@ export const UsersPanel = () => {
           ))}
         </div>
       ) : users.length === 0 ? (
-        <div className="bg-background rounded-xl border p-8 text-center text-muted-foreground">
-          {t('admin.users.empty')}
-        </div>
+        <SettingsSection>
+          <p className="py-4 text-center text-muted-foreground">{t('admin.users.empty')}</p>
+        </SettingsSection>
       ) : (
         <div className="space-y-2">
           {users.map((u) => (
-            <div key={u.id}>
-              <div className={cn(
-                'bg-background rounded-lg border p-4',
-                !u.is_active && 'opacity-50',
-              )}>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="size-8 rounded-full bg-muted flex items-center justify-center text-sm font-medium shrink-0">
-                      {u.display_name?.charAt(0) || u.username.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-medium text-sm truncate">{u.display_name || u.username}</span>
-                        <code className="text-[0.625rem] text-muted-foreground shrink-0">{u.username}</code>
-                      </div>
-                      {u.email && (
-                        <p className="text-xs text-muted-foreground truncate">{u.email}</p>
-                      )}
-                    </div>
+            <SettingsSection key={u.id} className={cn(!u.is_active && 'opacity-50')}>
+              <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="size-8 rounded-full bg-muted flex items-center justify-center text-sm font-medium shrink-0">
+                    {u.display_name?.charAt(0) || u.username.charAt(0).toUpperCase()}
                   </div>
-                  <Toggle enabled={u.is_active} onToggle={() => handleToggleActive(u)} />
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                      <span className="font-medium text-sm truncate">{u.display_name || u.username}</span>
+                      <code className="text-[0.625rem] text-muted-foreground shrink-0">{u.username}</code>
+                    </div>
+                    {u.email && (
+                      <p className="text-xs text-muted-foreground truncate">{u.email}</p>
+                    )}
+                  </div>
                 </div>
-
-                <div className="flex flex-wrap gap-1 mb-2">
-                  {u.roles.length === 0 && (
-                    <span className="text-[0.625rem] text-muted-foreground">{t('admin.users.noRoles')}</span>
-                  )}
-                  {u.roles.map((r) => (
-                    <span key={r} className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-secondary text-secondary-foreground">
-                      {r}
-                    </span>
-                  ))}
-                  {u.last_login && (
-                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">
-                      {t('admin.users.wasLastLogin', { date: new Date(u.last_login).toLocaleDateString('ru') })}
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex gap-1">
-                  <Button variant="ghost" onClick={() => handleEdit(u)}>{t('admin.users.edit')}</Button>
-                  <Button
-                    variant="ghost"
-                    onClick={() => handleDelete(u)}
-                    className="text-muted-foreground hover:bg-status-error/10 hover:text-status-error"
-                  >
-                    {t('admin.users.delete')}
-                  </Button>
-                </div>
+                <Toggle enabled={u.is_active} onToggle={() => handleToggleActive(u)} />
               </div>
-            </div>
+
+              <div className="flex flex-wrap gap-1 min-w-0">
+                {u.roles.length === 0 && (
+                  <span className="text-[0.625rem] text-muted-foreground">{t('admin.users.noRoles')}</span>
+                )}
+                {u.roles.map((r) => (
+                  <span key={r} className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-secondary text-secondary-foreground">
+                    {r}
+                  </span>
+                ))}
+                {u.last_login && (
+                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">
+                    {t('admin.users.wasLastLogin', { date: new Date(u.last_login).toLocaleDateString('ru') })}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-1 min-w-0">
+                <Button variant="ghost" onClick={() => handleEdit(u)}>{t('admin.users.edit')}</Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => handleDelete(u)}
+                  className="text-muted-foreground hover:bg-status-error/10 hover:text-status-error"
+                >
+                  {t('admin.users.delete')}
+                </Button>
+              </div>
+            </SettingsSection>
           ))}
         </div>
       )}
-      </div>
-    </div>
+    </SettingsPanel>
   )
 }

@@ -3,8 +3,7 @@ import { THEME_PRESETS } from '@/lib/theme/themes'
 import type { ThemeMode } from '@/types/theme'
 import { useI18n } from '@/lib/i18n'
 import { SelectContent, SelectItem } from '@/components/ui/select'
-import { SelectField } from '@/components/ui/settings'
-import { SegmentedControl, type SegmentedControlOption } from './settings-layout'
+import { SegmentedControl, SelectField, type SegmentedControlOption } from '@/components/ui/settings'
 
 export const ThemeModeControl: React.FC<{
   value: ThemeMode

@@ -5,9 +5,21 @@ import { IconPicker } from './IconPicker'
 import { ColorPicker } from './ColorPicker'
 import { Toggle } from '../ui/Toggle'
 import { Button } from '../ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { SelectContent, SelectItem } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
+import { confirm } from '@/lib/confirm'
+import {
+  NumberField,
+  SettingsActions,
+  SettingsField,
+  SettingsPanel,
+  SettingsSection,
+  SelectField,
+  SliderField,
+  TextArea,
+  TextField,
+} from '../ui/settings'
 
 const CAP_KEYS = [
   'file_read', 'file_write', 'search', 'shell',
@@ -229,7 +241,7 @@ export const AgentsPanel = () => {
 
   const handleDelete = async (a: AgentInfo) => {
     const label = a.is_builtin ? t('admin.agents.confirmReset', { name: a.display_name }) : t('admin.agents.confirmDelete', { name: a.display_name })
-    if (!confirm(label)) return
+    if (!(await confirm({ title: label, variant: 'danger' }))) return
     try {
       await synthApi.fetchJSON(`/api/v2/agents/${encodeURIComponent(a.id)}`, { method: 'DELETE' })
       await load()
@@ -269,149 +281,135 @@ export const AgentsPanel = () => {
   const showSubagentFields = form.agent_mode.includes('subagent')
 
   const renderForm = () => (
-    <div ref={formRef} className="bg-background rounded-lg border p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h4 className="font-medium text-sm">{expanded ? t('admin.agents.edit', { id: form.id }) : t('admin.agents.new')}</h4>
-        <div className="flex gap-2">
-          <Button onClick={handleSave} disabled={saving}>
-            {saving ? t('admin.agents.saving') : t('admin.agents.save')}
-          </Button>
-          <Button variant="ghost" onClick={handleCancel}>{t('admin.agents.cancel')}</Button>
-        </div>
-      </div>
+    <div ref={formRef}>
+      <SettingsSection title={expanded ? t('admin.agents.edit', { id: form.id }) : t('admin.agents.new')}>
+        {error && <p className="text-xs text-status-error min-w-0 break-words">{error}</p>}
 
-      {error && <p className="text-xs text-status-error">{error}</p>}
-
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="text-xs text-muted-foreground">{t('admin.agents.id')}</label>
-          <input type="text" value={form.id}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <TextField
+            label={t('admin.agents.id')}
+            value={form.id}
             onChange={(e) => setForm({ ...form, id: normalizeAgentId(e.target.value) })}
             disabled={!!expanded}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" />
-        </div>
-        <div>
-          <label className="text-xs text-muted-foreground">{t('admin.agents.displayName')}</label>
-          <input type="text" value={form.display_name}
+          />
+          <TextField
+            label={t('admin.agents.displayName')}
+            value={form.display_name}
             onChange={(e) => setForm({ ...form, display_name: e.target.value })}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-        </div>
-        <div className="col-span-2">
-          <label className="text-xs text-muted-foreground">{t('admin.agents.description')}</label>
-          <input type="text" value={form.description}
-            onChange={(e) => setForm({ ...form, description: e.target.value })}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-        </div>
-
-        {/* Agent modes (мультиклассы) */}
-        <div>
-          <label className="text-xs text-muted-foreground block mb-1">{t('admin.agents.agentMode')}</label>
-          <div className="flex flex-wrap gap-2">
-            {AGENT_MODES.map((m) => {
-              const checked = form.agent_mode.includes(m)
-              return (
-                <label key={m} className={cn(
-                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs cursor-pointer select-none transition-colors",
-                  checked
-                    ? "bg-secondary text-secondary-foreground border-border"
-                    : "bg-muted text-muted-foreground border-transparent hover:bg-interactive-hover",
-                )}>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => {
-                      setForm((f) => ({
-                        ...f,
-                        agent_mode: checked
-                          ? f.agent_mode.filter((x) => x !== m)
-                          : [...f.agent_mode, m],
-                      }))
-                    }}
-                    className="accent-primary"
-                  />
-                  {t(`admin.agents.agentMode.${m}`)}
-                </label>
-              )
-            })}
+          />
+          <div className="sm:col-span-2">
+            <TextField
+              label={t('admin.agents.description')}
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+            />
           </div>
-        </div>
 
-        {/* Provider select */}
-        <div>
-          <label className="text-xs text-muted-foreground">{t('admin.agents.provider')}</label>
-          <Select
+          {/* Agent modes (мультиклассы) */}
+          <SettingsField label={t('admin.agents.agentMode')}>
+            <div className="flex flex-wrap gap-2 min-w-0">
+              {AGENT_MODES.map((m) => {
+                const checked = form.agent_mode.includes(m)
+                return (
+                  <label key={m} className={cn(
+                    'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs cursor-pointer select-none transition-colors',
+                    checked
+                      ? 'bg-secondary text-secondary-foreground border-border'
+                      : 'bg-muted text-muted-foreground border-transparent hover:bg-interactive-hover',
+                  )}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        setForm((f) => ({
+                          ...f,
+                          agent_mode: checked
+                            ? f.agent_mode.filter((x) => x !== m)
+                            : [...f.agent_mode, m],
+                        }))
+                      }}
+                      className="accent-primary"
+                    />
+                    {t(`admin.agents.agentMode.${m}`)}
+                  </label>
+                )
+              })}
+            </div>
+          </SettingsField>
+
+          <SelectField
+            label={t('admin.agents.provider')}
             value={form.provider}
             onValueChange={(value) => setForm({ ...form, provider: value, model: form.provider !== value ? '' : form.model })}
+            ariaLabel={t('admin.agents.provider')}
           >
-            <SelectTrigger className="w-full" aria-label={t('admin.agents.provider')}>
-              <SelectValue>{form.provider || t('admin.agents.default_2')}</SelectValue>
-            </SelectTrigger>
             <SelectContent>
               <SelectItem value="">{t('admin.agents.default_2')}</SelectItem>
               {providers.map((p) => <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>)}
             </SelectContent>
-          </Select>
-        </div>
+          </SelectField>
 
-        {/* Model select */}
-        <div>
-          <label className="text-xs text-muted-foreground">{t('admin.agents.model')}</label>
-          <Select value={form.model} onValueChange={(value) => setForm({ ...form, model: value })}>
-            <SelectTrigger className="w-full" aria-label={t('admin.agents.model')}>
-              <SelectValue>{form.model || t('admin.agents.default_2')}</SelectValue>
-            </SelectTrigger>
+          <SelectField
+            label={t('admin.agents.model')}
+            value={form.model}
+            onValueChange={(value) => setForm({ ...form, model: value })}
+            ariaLabel={t('admin.agents.model')}
+          >
             <SelectContent>
               <SelectItem value="">{t('admin.agents.default_2')}</SelectItem>
               {availableModels().map((m) => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
             </SelectContent>
-          </Select>
-        </div>
+          </SelectField>
 
-        {/* Context file select */}
-        <div>
-          <label className="text-xs text-muted-foreground">{t('admin.agents.contextFile')}</label>
-          <Select value={form.context_file} onValueChange={(value) => setForm({ ...form, context_file: value })}>
-            <SelectTrigger className="w-full" aria-label={t('admin.agents.contextFile')}>
-              <SelectValue>{form.context_file || t('admin.agents.autoById')}</SelectValue>
-            </SelectTrigger>
+          <SelectField
+            label={t('admin.agents.contextFile')}
+            value={form.context_file}
+            onValueChange={(value) => setForm({ ...form, context_file: value })}
+            ariaLabel={t('admin.agents.contextFile')}
+          >
             <SelectContent>
               <SelectItem value="">{t('admin.agents.autoById')}</SelectItem>
               {contextFiles.map((f) => <SelectItem key={f} value={f}>{f}</SelectItem>)}
             </SelectContent>
-          </Select>
-        </div>
+          </SelectField>
 
-        {/* Temperature */}
-        <div className="col-span-2">
-          <label className="text-xs text-muted-foreground">{t('admin.agents.temperature', { value: form.temperature.toFixed(2) })}</label>
-          <input type="range" min="0" max="2" step="0.05" value={form.temperature}
-            onChange={(e) => setForm({ ...form, temperature: parseFloat(e.target.value) })}
-            className="w-full accent-primary" />
-        </div>
+          {/* Temperature */}
+          <div className="sm:col-span-2">
+            <SliderField
+              label={t('common.temperature')}
+              min={0}
+              max={2}
+              step={0.05}
+              value={form.temperature}
+              onValueChange={(value) => setForm({ ...form, temperature: value })}
+              formatValue={(value) => value.toFixed(2)}
+            />
+          </div>
 
-        {/* Top P */}
-        <div>
-          <label className="text-xs text-muted-foreground">{t('admin.agents.topP')}</label>
-          <input type="number" min="0" max="1" step="0.01" value={form.top_p || ''}
+          <NumberField
+            label={t('admin.agents.topP')}
+            min={0}
+            max={1}
+            step={0.01}
+            value={form.top_p || ''}
             onChange={(e) => setForm({ ...form, top_p: e.target.value ? parseFloat(e.target.value) : 0 })}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-        </div>
+          />
 
-        {/* Top K */}
-        <div>
-          <label className="text-xs text-muted-foreground">{t('admin.agents.topK')}</label>
-          <input type="number" min="0" max="1000" step="1" value={form.top_k || ''}
+          <NumberField
+            label={t('admin.agents.topK')}
+            min={0}
+            max={1000}
+            step={1}
+            value={form.top_k || ''}
             onChange={(e) => setForm({ ...form, top_k: e.target.value ? parseInt(e.target.value) : 0 })}
-            className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-        </div>
+          />
 
-        {/* Reasoning level */}
-        <div>
-          <label className="text-xs text-muted-foreground">{t('admin.agents.reasoning')}</label>
-          <Select value={form.reasoning_level} onValueChange={(value) => setForm({ ...form, reasoning_level: value })}>
-            <SelectTrigger className="w-full" aria-label={t('admin.agents.reasoning')}>
-              <SelectValue>{reasoningLabel(form.reasoning_level)}</SelectValue>
-            </SelectTrigger>
+          <SelectField
+            label={t('admin.agents.reasoning')}
+            value={form.reasoning_level}
+            onValueChange={(value) => setForm({ ...form, reasoning_level: value })}
+            ariaLabel={t('admin.agents.reasoning')}
+          >
             <SelectContent>
               {reasoningOptions().map((level) => (
                 <SelectItem key={level} value={level}>
@@ -419,83 +417,89 @@ export const AgentsPanel = () => {
                 </SelectItem>
               ))}
             </SelectContent>
-          </Select>
-        </div>
+          </SelectField>
 
-        {/* Max steps — для всех режимов, 0 = без ограничений */}
-        <div>
-          <label className="text-xs text-muted-foreground">{t('admin.agents.maxSteps')}</label>
-          <div className="flex items-center gap-2">
-            <input type="number" min={0} step={1} value={form.max_steps}
-              onChange={(e) => {
-                const v = parseInt(e.target.value);
-                setForm({ ...form, max_steps: isNaN(v) ? 0 : v });
-              }}
-              className="w-24 px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-            {form.max_steps === 0 && (
-              <span className="text-xs text-muted-foreground">{t('admin.agents.unlimited')}</span>
-            )}
-          </div>
-        </div>
+          {/* Max steps — для всех режимов, 0 = без ограничений */}
+          <NumberField
+            label={t('admin.agents.maxSteps')}
+            min={0}
+            step={1}
+            value={form.max_steps}
+            suffix={form.max_steps === 0 ? t('admin.agents.unlimited') : undefined}
+            onChange={(e) => {
+              const v = parseInt(e.target.value)
+              setForm({ ...form, max_steps: isNaN(v) ? 0 : v })
+            }}
+          />
 
-        {/* Subagent-specific fields */}
-        {showSubagentFields && (
-          <div className="col-span-2">
-            <label className="text-xs text-muted-foreground">{t('admin.agents.subagentPrompt')}</label>
-            <textarea value={form.subagent_prompt}
-              onChange={(e) => setForm({ ...form, subagent_prompt: e.target.value })}
-              rows={6}
-              className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-y font-mono text-xs" />
-          </div>
-        )}
-      </div>
-
-      {/* Capabilities */}
-      <div>
-        <label className="text-xs text-muted-foreground mb-1 block">{t('admin.agents.capabilities')}</label>
-        <div className="flex flex-wrap gap-1">
-          {CAP_KEYS.map((k) => (
-            <button key={k} type="button" onClick={() => toggleCap(k)} className={cn(
-              "px-2 py-0.5 rounded text-[0.6875rem] transition-colors",
-              form.capabilities.includes(k)
-                ? "bg-secondary text-secondary-foreground"
-                : "bg-muted text-muted-foreground hover:bg-interactive-hover"
-            )}>{t(`admin.agents.cap.${k}`)}</button>
-          ))}
-        </div>
-      </div>
-
-      {/* Icons */}
-      <div>
-        <label className="text-xs text-muted-foreground mb-1 block">{t('admin.agents.icon')}</label>
-        <div className="flex items-center gap-2 mb-2">
-          {form.icon && <Icon name={form.icon as never} className="size-5" />}
-          <span className="text-xs text-muted-foreground">{form.icon || t('admin.agents.notSelected')}</span>
-          {form.icon && (
-            <Button
-              variant="ghost"
-              onClick={() => setForm({ ...form, icon: '' })}
-              className="text-muted-foreground hover:bg-status-error/10 hover:text-status-error"
-            >
-              {t('admin.agents.reset')}
-            </Button>
+          {/* Subagent-specific fields */}
+          {showSubagentFields && (
+            <div className="sm:col-span-2">
+              <TextArea
+                label={t('admin.agents.subagentPrompt')}
+                value={form.subagent_prompt}
+                onChange={(e) => setForm({ ...form, subagent_prompt: e.target.value })}
+                rows={6}
+                mono
+              />
+            </div>
           )}
         </div>
-        <IconPicker value={form.icon || null} onChange={(icon) => setForm({ ...form, icon })} />
-      </div>
 
-      {/* Colors */}
-      <div>
-        <label className="text-xs text-muted-foreground mb-1 block">{t('admin.agents.color')}</label>
-        <ColorPicker value={form.color || null} onChange={(color) => setForm({ ...form, color })} />
-      </div>
+        {/* Capabilities */}
+        <SettingsField label={t('admin.agents.capabilities')}>
+          <div className="flex flex-wrap gap-1 min-w-0">
+            {CAP_KEYS.map((k) => (
+              <button key={k} type="button" onClick={() => toggleCap(k)} className={cn(
+                'px-2 py-0.5 rounded text-[0.6875rem] transition-colors',
+                form.capabilities.includes(k)
+                  ? 'bg-secondary text-secondary-foreground'
+                  : 'bg-muted text-muted-foreground hover:bg-interactive-hover'
+              )}>{t(`admin.agents.cap.${k}`)}</button>
+            ))}
+          </div>
+        </SettingsField>
+
+        {/* Icons */}
+        <SettingsField label={t('admin.agents.icon')}>
+          <div className="flex flex-wrap items-center gap-2 mb-2 min-w-0">
+            {form.icon && <Icon name={form.icon as never} className="size-5 shrink-0" />}
+            <span className="text-xs text-muted-foreground min-w-0 break-all">{form.icon || t('admin.agents.notSelected')}</span>
+            {form.icon && (
+              <Button
+                variant="ghost"
+                onClick={() => setForm({ ...form, icon: '' })}
+                className="text-muted-foreground hover:bg-status-error/10 hover:text-status-error"
+              >
+                {t('admin.agents.reset')}
+              </Button>
+            )}
+          </div>
+          <IconPicker value={form.icon || null} onChange={(icon) => setForm({ ...form, icon })} />
+        </SettingsField>
+
+        {/* Colors */}
+        <SettingsField label={t('admin.agents.color')}>
+          <ColorPicker value={form.color || null} onChange={(color) => setForm({ ...form, color })} />
+        </SettingsField>
+
+        <SettingsActions
+          onSave={handleSave}
+          onCancel={handleCancel}
+          saving={saving}
+          saveLabel={t('admin.agents.save')}
+          cancelLabel={t('admin.agents.cancel')}
+          saveTestId="agent-save"
+          cancelTestId="agent-cancel"
+        />
+      </SettingsSection>
     </div>
   )
 
   const renderFilterTabs = () => {
     if (!hasSubOrSystem) return null
     return (
-      <div className="flex gap-1 bg-muted rounded-lg p-0.5">
+      <div className="flex flex-wrap gap-1 bg-muted rounded-lg p-0.5">
         {(['all', 'agents', 'subagents', 'system'] as const).map((m) => (
           <button key={m} onClick={() => setFilterMode(m)} className={cn(
             'px-3 py-1 rounded-md text-xs font-medium transition-colors',
@@ -511,130 +515,122 @@ export const AgentsPanel = () => {
   }
 
   return (
-    <div className="flex flex-col h-full min-h-0">
-      <div className="shrink-0 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-semibold">{t('admin.agents.title')}</h3>
-          <p className="text-muted-foreground text-sm">
-            {filterMode === 'subagents'
-              ? t('admin.agents.filter.subagents_count', { count: filteredAgents.length })
-              : t('admin.agents.count', { count: filteredAgents.length })}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <SettingsPanel
+      title={t('admin.agents.title')}
+      description={filterMode === 'subagents'
+        ? t('admin.agents.filter.subagents_count', { count: filteredAgents.length })
+        : t('admin.agents.count', { count: filteredAgents.length })}
+      actions={
+        <div className="flex flex-wrap items-center gap-2">
           {renderFilterTabs()}
           <Button onClick={handleCreate}>
             <Icon name="add" className="size-3.5" />{t('admin.agents.add')}
           </Button>
         </div>
-      </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto min-h-0 overscroll-contain mt-4 pr-2">
+      }
+    >
       {(creating || expanded) && renderForm()}
 
       {loading ? (
-        <div className="agents-grid grid grid-cols-2 gap-3">{[1,2,3,4].map((i) => <div key={i} className="bg-background rounded-lg border p-4 animate-pulse"><div className="h-4 bg-muted rounded w-24" /></div>)}</div>
-      ) : (
-        <div className="agents-grid grid grid-cols-2 gap-3">
-          {filteredAgents.map((a) => (
-            <div key={a.id}>
-              {/* Compact card */}
-              <div className={cn(
-                "bg-background rounded-lg border p-4",
-                !a.enabled && 'opacity-50',
-              )}>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Icon name={a.icon as never || 'robot-2'} className="size-4 shrink-0" style={a.color ? { color: `var(${a.color})` } : undefined} />
-                    <span className="font-medium text-sm truncate">{a.display_name}</span>
-                    <code className="text-[0.625rem] text-muted-foreground shrink-0">{a.id}</code>
-                  </div>
-                  <div className="ml-1">
-                    <Toggle enabled={a.enabled} onToggle={() => handleToggle(a)} />
-                  </div>
-                </div>
-
-                {/* Badges row */}
-                <div className="flex flex-wrap gap-1 mb-2">
-                  {(!a.agent_mode || a.agent_mode.includes('primary')) && (
-                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-secondary text-secondary-foreground">
-                      {t('admin.agents.agentMode.primary')}
-                    </span>
-                  )}
-                  {a.agent_mode?.includes('subagent') && (
-                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-status-success/10 text-status-success">
-                      {t('admin.agents.agentMode.subagent')}
-                    </span>
-                  )}
-                  {a.agent_mode?.includes('system') && (
-                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-status-info/10 text-status-info">
-                      {t('admin.agents.system')}
-                    </span>
-                  )}
-                  {a.provider && (
-                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">{a.provider}</span>
-                  )}
-                  {a.model && (
-                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">{a.model}</span>
-                  )}
-                  {a.context_file && (
-                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-status-warning/15 text-status-warning">{a.context_file}</span>
-                  )}
-                  {a.is_builtin && (
-                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-muted text-muted-foreground">{t('admin.agents.builtin')}</span>
-                  )}
-                  {a.is_builtin && a.is_overridden && (
-                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-status-warning/15 text-status-warning">{t('admin.agents.modified')}</span>
-                  )}
-                </div>
-
-                {/* Capabilities */}
-                <div className="flex flex-wrap gap-1 mb-2">
-                  {a.capabilities.slice(0, 6).map((c) => (
-                    <span key={c} className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">
-                      {t(`admin.agents.cap.${c}`)}
-                    </span>
-                  ))}
-                  {a.capabilities.length > 6 && (
-                    <span className="text-[0.625rem] text-muted-foreground">+{a.capabilities.length - 6}</span>
-                  )}
-                  {a.capabilities.length === 0 && (
-                    <span className="text-[0.625rem] text-muted-foreground">{t('admin.agents.noCapabilities')}</span>
-                  )}
-                </div>
-
-                {/* Agent steps info */}
-                <div className="flex gap-1 mb-2">
-                  {a.max_steps === 0 || a.max_steps == null ? (
-                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-status-success/10 text-status-success">
-                      {t('admin.agents.stepsCount')}: {t('admin.agents.unlimited')}
-                    </span>
-                  ) : (
-                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">
-                      {t('admin.agents.stepsCount')}: ≤{a.max_steps}
-                    </span>
-                  )}
-                </div>
-
-                {/* Actions */}
-                <div className="flex gap-1">
-                  <Button variant="ghost" onClick={() => handleEdit(a)}>{t('common.edit')}</Button>
-                  <Button
-                    variant="ghost"
-                    onClick={() => handleDelete(a)}
-                    className="text-muted-foreground hover:bg-status-error/10 hover:text-status-error"
-                  >
-                    {a.is_builtin ? t('admin.agents.reset') : t('common.delete')}
-                  </Button>
-                </div>
-              </div>
+        <div className="agents-grid grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="bg-background rounded-lg border p-4 animate-pulse">
+              <div className="h-4 bg-muted rounded w-24" />
             </div>
           ))}
         </div>
+      ) : (
+        <div className="agents-grid grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {filteredAgents.map((a) => (
+            <SettingsSection key={a.id} className={cn(!a.enabled && 'opacity-50')}>
+              <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Icon name={a.icon as never || 'robot-2'} className="size-4 shrink-0" style={a.color ? { color: `var(${a.color})` } : undefined} />
+                  <span className="font-medium text-sm truncate">{a.display_name}</span>
+                  <code className="text-[0.625rem] text-muted-foreground shrink-0">{a.id}</code>
+                </div>
+                <div className="ml-1 shrink-0">
+                  <Toggle enabled={a.enabled} onToggle={() => handleToggle(a)} />
+                </div>
+              </div>
+
+              {/* Badges row */}
+              <div className="flex flex-wrap gap-1 min-w-0">
+                {(!a.agent_mode || a.agent_mode.includes('primary')) && (
+                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-secondary text-secondary-foreground">
+                    {t('admin.agents.agentMode.primary')}
+                  </span>
+                )}
+                {a.agent_mode?.includes('subagent') && (
+                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-status-success/10 text-status-success">
+                    {t('admin.agents.agentMode.subagent')}
+                  </span>
+                )}
+                {a.agent_mode?.includes('system') && (
+                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-status-info/10 text-status-info">
+                    {t('admin.agents.system')}
+                  </span>
+                )}
+                {a.provider && (
+                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">{a.provider}</span>
+                )}
+                {a.model && (
+                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">{a.model}</span>
+                )}
+                {a.context_file && (
+                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-status-warning/15 text-status-warning">{a.context_file}</span>
+                )}
+                {a.is_builtin && (
+                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-muted text-muted-foreground">{t('admin.agents.builtin')}</span>
+                )}
+                {a.is_builtin && a.is_overridden && (
+                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-status-warning/15 text-status-warning">{t('admin.agents.modified')}</span>
+                )}
+              </div>
+
+              {/* Capabilities */}
+              <div className="flex flex-wrap gap-1 min-w-0">
+                {a.capabilities.slice(0, 6).map((c) => (
+                  <span key={c} className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">
+                    {t(`admin.agents.cap.${c}`)}
+                  </span>
+                ))}
+                {a.capabilities.length > 6 && (
+                  <span className="text-[0.625rem] text-muted-foreground">+{a.capabilities.length - 6}</span>
+                )}
+                {a.capabilities.length === 0 && (
+                  <span className="text-[0.625rem] text-muted-foreground">{t('admin.agents.noCapabilities')}</span>
+                )}
+              </div>
+
+              {/* Agent steps info */}
+              <div className="flex flex-wrap gap-1 min-w-0">
+                {a.max_steps === 0 || a.max_steps == null ? (
+                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-status-success/10 text-status-success">
+                    {t('admin.agents.stepsCount')}: {t('admin.agents.unlimited')}
+                  </span>
+                ) : (
+                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">
+                    {t('admin.agents.stepsCount')}: ≤{a.max_steps}
+                  </span>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div className="flex flex-wrap gap-1 min-w-0">
+                <Button variant="ghost" onClick={() => handleEdit(a)}>{t('common.edit')}</Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => handleDelete(a)}
+                  className="text-muted-foreground hover:bg-status-error/10 hover:text-status-error"
+                >
+                  {a.is_builtin ? t('admin.agents.reset') : t('common.delete')}
+                </Button>
+              </div>
+            </SettingsSection>
+          ))}
+        </div>
       )}
-      </div>
-    </div>
+    </SettingsPanel>
   )
 }

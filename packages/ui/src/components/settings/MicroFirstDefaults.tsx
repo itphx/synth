@@ -4,11 +4,11 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { SelectContent, SelectItem } from '@/components/ui/select'
 import {
   DefaultsBadge,
-  NumberField,
   SelectField,
   SettingsActions,
   SettingsPanel,
   SettingsSection,
+  SliderField,
   ToggleField,
   useSettingsDraft,
 } from '../ui/settings'
@@ -108,14 +108,15 @@ export function MicroFirstDefaults() {
         />
       </SettingsSection>
 
-      <SettingsSection title={t('settings.microFirst.confidence')}>
-        <NumberField
-          aria-label={t('settings.microFirst.confidence')}
+      <SettingsSection>
+        <SliderField
+          label={t('settings.microFirst.confidence')}
           min={0.5}
           max={1}
           step={0.05}
           value={settings.microConfidenceThreshold}
-          onChange={(e) => update({ microConfidenceThreshold: parseFloat(e.target.value) })}
+          onValueChange={(value) => update({ microConfidenceThreshold: value })}
+          formatValue={(value) => value.toFixed(2)}
         />
       </SettingsSection>
 

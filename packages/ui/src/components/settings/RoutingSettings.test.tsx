@@ -41,8 +41,11 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: apiMocks }))
 
+vi.mock('@/lib/confirm', () => ({ confirm: vi.fn(async () => true) }))
+
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { confirm } from '@/lib/confirm'
 import { RoutingSettings } from './RoutingSettings'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -84,7 +87,7 @@ beforeEach(() => {
   })
   apiMocks.saveDictionary.mockResolvedValue({ status: 'ok' })
   apiMocks.resetDictionary.mockResolvedValue({ status: 'ok' })
-  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  vi.mocked(confirm).mockResolvedValue(true)
 })
 
 afterEach(async () => {
@@ -130,6 +133,7 @@ describe('RoutingSettings — миграция на Settings UI Kit (AD-072)', (
       resetButtons[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
+    expect(confirm).toHaveBeenCalledTimes(1)
     expect(apiMocks.resetDictionary).toHaveBeenCalledWith('research', 'ru')
   })
 

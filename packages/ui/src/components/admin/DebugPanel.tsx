@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react'
 import { synthApi } from '@/lib/api/synthApi'
-import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Button } from '@/components/ui/button'
+import { SettingsActions, SettingsPanel, SettingsSection } from '../ui/settings'
 
 interface DebugConfig {
   groups: Record<string, string>
@@ -73,14 +72,7 @@ export const DebugPanel = () => {
     : {}
 
   return (
-    <div className="space-y-6 max-w-3xl">
-      <div>
-        <h3 className="text-lg font-semibold">{t('admin.debug.title')}</h3>
-        <p className="text-muted-foreground text-sm mt-1">
-          {t('admin.debug.description')}
-        </p>
-      </div>
-
+    <SettingsPanel title={t('admin.debug.title')} description={t('admin.debug.description')}>
       {loading ? (
         <div className="bg-background rounded-xl border p-5 animate-pulse space-y-3">
           <div className="h-4 bg-muted rounded w-48" />
@@ -89,13 +81,11 @@ export const DebugPanel = () => {
       ) : (
         <>
           {Object.entries(grouped).map(([category, items]) => (
-            <div key={category} className="bg-background rounded-xl border p-5 space-y-4">
-              <h4 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">{category}</h4>
-
+            <SettingsSection key={category} title={category}>
               {items.map(({ group, level: defaultLevel }) => (
-                <div key={group} className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium">{group}</span>
+                <div key={group} className="flex flex-wrap items-center justify-between gap-3 min-w-0">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-sm font-medium min-w-0 break-words">{group}</span>
                     <span className={cn('px-2 py-0.5 rounded text-[0.6875rem] font-medium', LEVEL_COLORS[levels[group] ?? defaultLevel] || 'bg-secondary text-muted-foreground')}>
                       {levels[group] ?? defaultLevel}
                     </span>
@@ -112,33 +102,17 @@ export const DebugPanel = () => {
                   </Select>
                 </div>
               ))}
-            </div>
+            </SettingsSection>
           ))}
 
-          <div className="flex items-center gap-4">
-            <Button
-              size="md"
-              onClick={handleSave}
-              disabled={saving}
-            >
-              {saving ? (
-                <>
-                  <Icon name="refresh-cw" className="w-4 h-4 animate-spin" /> {t('admin.debug.saving')}
-                </>
-              ) : (
-                <>
-                  <Icon name="save" className="w-4 h-4" /> {t('admin.debug.save')}
-                </>
-              )}
-            </Button>
-            {status && (
-              <span className={cn('text-sm', status === t('admin.debug.saved') ? 'text-status-success' : 'text-status-error')}>
-                {status}
-              </span>
-            )}
-          </div>
+          <SettingsActions onSave={handleSave} saving={saving} saveTestId="debug-save" />
+          {status && (
+            <span className={cn('text-sm', status === t('admin.debug.saved') ? 'text-status-success' : 'text-status-error')}>
+              {status}
+            </span>
+          )}
         </>
       )}
-    </div>
+    </SettingsPanel>
   )
 }

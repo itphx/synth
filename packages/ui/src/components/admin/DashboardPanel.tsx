@@ -4,6 +4,7 @@ import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
+import { SettingsPanel, SettingsSection } from '../ui/settings'
 
 interface Stats {
   totalSessions: number
@@ -44,34 +45,33 @@ export const DashboardPanel = () => {
   ]
 
   return (
-    <div className="space-y-6">
-      <h3 className="text-lg font-semibold">{t('admin.dashboard.title')}</h3>
-      <p className="text-muted-foreground text-sm">{t('admin.dashboard.subtitle')}</p>
-
-      {loading ? (
-        <div className="grid grid-cols-2 gap-4">
-          {cards.map((c) => (
-            <div key={c.label} className="bg-background rounded-xl border p-5 animate-pulse">
-              <div className="h-4 bg-muted rounded w-24 mb-3" />
-              <div className="h-8 bg-muted rounded w-16" />
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 gap-4">
-          {cards.map((c) => (
-            <div key={c.label} className="bg-background rounded-xl border p-5">
-              <div className="flex items-center gap-2 text-muted-foreground text-sm mb-2">
-                <Icon name={c.icon} className={cn("size-4", c.color)} />
-                {c.label}
+    <SettingsPanel title={t('admin.dashboard.title')} description={t('admin.dashboard.subtitle')}>
+      <SettingsSection>
+        {loading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {cards.map((c) => (
+              <div key={c.label} className="min-w-0 bg-background rounded-xl border p-5 animate-pulse">
+                <div className="h-4 bg-muted rounded w-24 mb-3" />
+                <div className="h-8 bg-muted rounded w-16" />
               </div>
-              <div className={cn("text-2xl font-bold", c.color)}>
-                {typeof c.value === 'number' ? c.value.toLocaleString() : c.value}
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {cards.map((c) => (
+              <div key={c.label} className="min-w-0 bg-background rounded-xl border p-5">
+                <div className="flex items-center gap-2 text-muted-foreground text-sm mb-2 min-w-0">
+                  <Icon name={c.icon} className={cn('size-4 shrink-0', c.color)} />
+                  <span className="min-w-0 break-words">{c.label}</span>
+                </div>
+                <div className={cn('text-2xl font-bold min-w-0 break-words', c.color)}>
+                  {typeof c.value === 'number' ? c.value.toLocaleString() : c.value}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+            ))}
+          </div>
+        )}
+      </SettingsSection>
+    </SettingsPanel>
   )
 }

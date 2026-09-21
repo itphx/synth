@@ -1,7 +1,6 @@
 import { useUIStore } from "../../stores/useUIStore"
 import { useI18n } from "@/lib/i18n"
-import { SettingsPanel, SettingsSection } from '../ui/settings'
-import { SegmentedControl, type SegmentedControlOption } from './settings-layout'
+import { SegmentedControl, SettingsPanel, SettingsSection, type SegmentedControlOption } from '../ui/settings'
 
 type IntermediateTextDisplay = 'inline' | 'bottom'
 
