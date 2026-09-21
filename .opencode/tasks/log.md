@@ -376,4 +376,15 @@
   - i18n `settings.kit.unsavedChanges`; AD-072 (§2.9).
 - **Проверки:** ui typecheck/lint, `66 файлов / 511 тестов` PASS; в браузере подтверждены все новые кнопки.
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** `bb61089` (код), `4e71a74` (журнал).
+
+## 2026-09-21 — AD-072: no autosave, meta-счётчики, контурный Reset
+- **Задача:** «Внешний вид/Уведомления/Чат — Save+Отмена; утвердить: никаких автосохранений, только кнопки; закрытие окна = Отмена; Reset — контур в цвет Save; кнопка в шапке на одной строке с заголовком на мобильном; счётчики не скрывать при скролле (отдельно от описания)».
+- **Тип:** feature/refactor (UI)
+- **Исполнитель:** @orchestrator → @fixer ×3
+- **Результат:** PASS.
+- **Kit:** `SettingsPanel` — слот `meta` (всегда виден) отдельно от `description` (сворачивается); шапка: title+actions в одной flex-строке (в т.ч. на теле); `Button` — вариант `outline-primary`; `SettingsActions` Reset по умолчанию `outline-primary` (контур/текст primary, без заливки), `resetVariant` настраиваемый.
+- **Секции:** убрано автосохранение в `Appearance`/`Notifications`/`Chat` → черновик + `SettingsActions` Save/Cancel/Reset; закрытие/размонтирование = отмена (Appearance с live-preview и откатом к снапшоту); `notificationStore.setAllCategories`; `UiScaleControl` — контролируемый режим. Счётчики перенесены из `description` в `meta` (Sessions/Projects/Providers/Models/Users/Agents/Context); текстовые описания остались сворачиваемыми. `DefaultsPanel` — добавлена Отмена.
+- **Проверки:** ui typecheck/lint, `66 файлов / 524 теста` PASS; в браузере (390px): Models — `meta` виден при скролле (header collapsed 51px), actions в строке с заголовком; Notifications/Chat/Appearance — Save/Cancel/Reset; Reset-класс `border border-primary text-primary hover:bg-primary/10` (без сплошной заливки).
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** этот.
