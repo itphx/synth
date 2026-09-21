@@ -311,4 +311,20 @@
 - **Проверки:** ui typecheck/lint PASS; 57 файлов / 427 тестов.
 - **Замечания:** `SegmentedControl` оставлен из legacy (в Kit нет) — кандидат на Kit-контрол; `MicroFirst` confidence переведён со слайдера на `NumberField` (требование «числа → NumberField») — кандидат на отдельный `SliderField`; `RoutingSettings.handleReset` использует `window.confirm` (pre-existing).
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** `98e1450` (код), `b1b57ba` (журнал).
+
+## 2026-09-21 — AD-072 Ф4b: админ-категории на Kit + финализация
+- **Тип:** refactor (UI) + cleanup
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS.
+- **Сделано:**
+  - Kit: добавлен `SliderField`; `MicroFirst` confidence возвращён на слайдер.
+  - Админ-категории (`Dashboard`, `Sessions`, `Debug`, `Defaults`, `Projects`, `Providers`, `Models`, `Agents`, `Context`, `Users`) → `SettingsPanel`/`SettingsSection`/Kit-контролы/`SettingsActions`.
+  - `DefaultsPanel` — `useSettingsDraft` + `SettingsActions` + `footerVariant="fixed"` (реальный пример фиксированного футера), Reset через `profileService.getDefaults()`+`ConfirmDialog`.
+  - `RoutingSettings.handleReset` → `confirm()` из `@/lib/confirm`; остальные админ-панели также переведены на `confirm()` (был bare `window.confirm`).
+  - Уборка: удалено временное A/B-демо `SettingsFooterDemo` (и его i18n), `SegmentedControl` перенесён в Kit, удалён legacy `components/settings/settings-layout.tsx` (`SettingsPage`/`SettingsCard` не использовались).
+  - Документация: AD-072 → ✅ Реализовано, индекс AD, `packages/ui/AGENTS.md`, `docs/arch_decisions/README.md`.
+- **A/B футера (Playwright, 390px):** «Оформление» (`footerVariant="fixed"`) — действия `Сбросить/Сохранить` прижаты к низу панели, отделены `border-t`, не уезжают при скролле; для сравнения — `Debug`/MCP без футера (Save в конце карточки). Решение по стандарту — за пользователем.
+- **Проверки:** ui typecheck/lint PASS; 62 файла / 476 тестов; `pnpm typecheck` 6/6; `pnpm build` PASS; ссылок на `settings-layout`/`SettingsFooterDemo`/`admin.debug.demo` не осталось.
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** этот.
