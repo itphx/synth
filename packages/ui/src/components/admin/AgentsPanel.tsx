@@ -17,6 +17,7 @@ import {
   SettingsSection,
   SelectField,
   SliderField,
+  Tabs,
   TextArea,
   TextField,
 } from '../ui/settings'
@@ -40,6 +41,7 @@ function normalizeAgentId(raw: string): string {
 
 const AGENT_MODES: AgentMode[] = ['primary', 'subagent', 'system']
 type FilterMode = 'all' | 'agents' | 'subagents' | 'system'
+const FILTER_MODES: FilterMode[] = ['all', 'agents', 'subagents', 'system']
 
 /** Нормализует agentMode из API (массив/null/строка для legacy) в массив классов */
 function toAgentModes(value: AgentMode[] | string | null | undefined): AgentMode[] {
@@ -496,24 +498,6 @@ export const AgentsPanel = () => {
     </div>
   )
 
-  const renderFilterTabs = () => {
-    if (!hasSubOrSystem) return null
-    return (
-      <div className="flex flex-wrap gap-1 bg-muted rounded-lg p-0.5">
-        {(['all', 'agents', 'subagents', 'system'] as const).map((m) => (
-          <button key={m} onClick={() => setFilterMode(m)} className={cn(
-            'px-3 py-1 rounded-md text-xs font-medium transition-colors',
-            filterMode === m
-              ? 'bg-background text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground',
-          )} suppressHydrationWarning>
-            {t(`admin.agents.filter.${m}`)}
-          </button>
-        ))}
-      </div>
-    )
-  }
-
   return (
     <SettingsPanel
       title={t('admin.agents.title')}
@@ -521,14 +505,22 @@ export const AgentsPanel = () => {
         ? t('admin.agents.filter.subagents_count', { count: filteredAgents.length })
         : t('admin.agents.count', { count: filteredAgents.length })}
       actions={
-        <div className="flex flex-wrap items-center gap-2">
-          {renderFilterTabs()}
-          <Button onClick={handleCreate}>
-            <Icon name="add" className="size-3.5" />{t('admin.agents.add')}
-          </Button>
-        </div>
+        <Button onClick={handleCreate}>
+          <Icon name="add" className="size-3.5" />{t('admin.agents.add')}
+        </Button>
       }
     >
+      {hasSubOrSystem && (
+        <SettingsSection>
+          <Tabs
+            items={FILTER_MODES.map((m) => ({ value: m, label: t(`admin.agents.filter.${m}`) }))}
+            value={filterMode}
+            onChange={(v) => setFilterMode(v as FilterMode)}
+            ariaLabel={t('admin.agents.title')}
+          />
+        </SettingsSection>
+      )}
+
       {(creating || expanded) && renderForm()}
 
       {loading ? (
