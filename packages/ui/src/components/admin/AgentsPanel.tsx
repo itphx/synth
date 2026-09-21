@@ -4,6 +4,7 @@ import { Icon } from '@/components/icon/Icon'
 import { IconPicker } from './IconPicker'
 import { ColorPicker } from './ColorPicker'
 import { Toggle } from '../ui/Toggle'
+import { Button } from '../ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
@@ -272,10 +273,10 @@ export const AgentsPanel = () => {
       <div className="flex items-center justify-between">
         <h4 className="font-medium text-sm">{expanded ? t('admin.agents.edit', { id: form.id }) : t('admin.agents.new')}</h4>
         <div className="flex gap-2">
-          <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+          <Button onClick={handleSave} disabled={saving}>
             {saving ? t('admin.agents.saving') : t('admin.agents.save')}
-          </button>
-          <button onClick={handleCancel} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.agents.cancel')}</button>
+          </Button>
+          <Button variant="ghost" onClick={handleCancel}>{t('admin.agents.cancel')}</Button>
         </div>
       </div>
 
@@ -471,7 +472,13 @@ export const AgentsPanel = () => {
           {form.icon && <Icon name={form.icon as never} className="size-5" />}
           <span className="text-xs text-muted-foreground">{form.icon || t('admin.agents.notSelected')}</span>
           {form.icon && (
-            <button onClick={() => setForm({ ...form, icon: '' })} className="text-[0.6875rem] text-muted-foreground hover:text-status-error">{t('admin.agents.reset')}</button>
+            <Button
+              variant="ghost"
+              onClick={() => setForm({ ...form, icon: '' })}
+              className="text-muted-foreground hover:bg-status-error/10 hover:text-status-error"
+            >
+              {t('admin.agents.reset')}
+            </Button>
           )}
         </div>
         <IconPicker value={form.icon || null} onChange={(icon) => setForm({ ...form, icon })} />
@@ -517,9 +524,9 @@ export const AgentsPanel = () => {
         </div>
         <div className="flex items-center gap-2">
           {renderFilterTabs()}
-          <button onClick={handleCreate} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">
+          <Button onClick={handleCreate}>
             <Icon name="add" className="size-3.5" />{t('admin.agents.add')}
-          </button>
+          </Button>
         </div>
       </div>
       </div>
@@ -613,10 +620,14 @@ export const AgentsPanel = () => {
 
                 {/* Actions */}
                 <div className="flex gap-1">
-                  <button onClick={() => handleEdit(a)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">{t('common.edit')}</button>
-                  <button onClick={() => handleDelete(a)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-status-error/10 hover:text-status-error">
+                  <Button variant="ghost" onClick={() => handleEdit(a)}>{t('common.edit')}</Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => handleDelete(a)}
+                    className="text-muted-foreground hover:bg-status-error/10 hover:text-status-error"
+                  >
                     {a.is_builtin ? t('admin.agents.reset') : t('common.delete')}
-                  </button>
+                  </Button>
                 </div>
               </div>
             </div>

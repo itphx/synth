@@ -6,6 +6,7 @@ import { useMcpStore } from '@/stores/mcpStore'
 import { useNotification } from '@/hooks/useNotification'
 import { synthApi, type ToolsPolicy } from '@/lib/api/synthApi'
 import { Icon } from '../icon/Icon'
+import { Button } from '../ui/button'
 import { SettingsCard, SettingsPage } from './settings-layout'
 import { PolicySettingsCard } from './PolicySettingsCard'
 import { cn } from '@/lib/utils'
@@ -52,6 +53,7 @@ export function ToolsDisabledSettings() {
   // Политика включения инструментов (AD-071 §2.3): глобальный режим отправки
   // определений в запрос к модели.
   const [toolsPolicy, setToolsPolicy] = useState<ToolsPolicy>('consistency')
+  const [savedToolsPolicy, setSavedToolsPolicy] = useState<ToolsPolicy>('consistency')
   const [toolsPolicyLoading, setToolsPolicyLoading] = useState(true)
   const [toolsPolicySaving, setToolsPolicySaving] = useState(false)
   const [toolsPolicyError, setToolsPolicyError] = useState<string | null>(null)
@@ -65,7 +67,10 @@ export function ToolsDisabledSettings() {
     synthApi
       .getToolsPolicy()
       .then((policy) => {
-        if (!cancelled) setToolsPolicy(policy)
+        if (!cancelled) {
+          setToolsPolicy(policy)
+          setSavedToolsPolicy(policy)
+        }
       })
       .catch((e) => {
         if (!cancelled) setToolsPolicyError(e instanceof Error ? e.message : 'HTTP')
@@ -130,6 +135,7 @@ export function ToolsDisabledSettings() {
     try {
       const saved = await synthApi.saveToolsPolicy(toolsPolicy)
       setToolsPolicy(saved)
+      setSavedToolsPolicy(saved)
       notify({ text: t('common.saved'), type: 'success', category: 'system' })
     } catch (e) {
       const message = e instanceof Error ? e.message : 'HTTP'
@@ -165,25 +171,19 @@ export function ToolsDisabledSettings() {
     }
   }
 
+  const handleCancel = () => {
+    if (!toolsDisabled) return
+    setDraftDisabledCapabilities(new Set(toolsDisabled.capabilities))
+    setDraftDisabledTools(new Set(toolsDisabled.tools))
+  }
+
   return (
     <SettingsPage
       stickyHeader
       title={t('mcpAdmin.tools.title')}
       description={t('mcpAdmin.tools.description')}
     >
-      {/* Политика встроенных инструментов (AD-071 §2.3): режим задаётся первым,
-          отключение ниже — исключения из него. MCP управляется отдельной политикой. */}
-      <PolicySettingsCard
-        scope="tools"
-        value={toolsPolicy}
-        loading={toolsPolicyLoading}
-        saving={toolsPolicySaving}
-        error={toolsPolicyError}
-        onChange={setToolsPolicy}
-        onSave={handleToolsPolicySave}
-      />
-
-      <SettingsCard>
+      <SettingsCard className="mb-4">
         {toolsDisabledError && (
           <div role="alert" className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{toolsDisabledError}</div>
         )}
@@ -256,7 +256,7 @@ export function ToolsDisabledSettings() {
           {tools.length === 0 ? (
             <div className="text-xs text-muted-foreground italic">{t('mcpAdmin.tools.noSession')}</div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-72 overflow-y-auto pr-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
               {builtinTools.map((tool) => {
                 const disabledByGroup = tool.capabilities.some((c) => draftDisabledCapabilities.has(c))
                 const enabled = !disabledByGroup && !draftDisabledTools.has(tool.name)
@@ -302,17 +302,33 @@ export function ToolsDisabledSettings() {
           )}
         </div>
 
-        <div className="flex justify-end">
-          <button
+        <div className="flex justify-end gap-2">
+          <Button
             data-testid="tools-disabled-save"
             onClick={handleSave}
             disabled={saving || toolsDisabledLoading}
-            className="shrink-0 px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-[transform,opacity] duration-150 ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {saving ? t('common.saving') : t('common.save')}
-          </button>
+          </Button>
+          <Button variant="ghost" data-testid="tools-disabled-cancel" onClick={handleCancel}>
+            {t('common.cancel')}
+          </Button>
         </div>
       </SettingsCard>
+
+      {/* Политика встроенных инструментов (AD-071 §2.3): режим отправки определений
+          в запрос к модели. Идёт после отключений — они исключения из него.
+          MCP управляется отдельной политикой. */}
+      <PolicySettingsCard
+        scope="tools"
+        value={toolsPolicy}
+        savedValue={savedToolsPolicy}
+        loading={toolsPolicyLoading}
+        saving={toolsPolicySaving}
+        error={toolsPolicyError}
+        onChange={setToolsPolicy}
+        onSave={handleToolsPolicySave}
+      />
     </SettingsPage>
   )
 }

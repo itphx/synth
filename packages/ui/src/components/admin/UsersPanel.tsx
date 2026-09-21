@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { synthApi, type UserInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
+import { Button } from '../ui/button'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 
@@ -137,10 +138,10 @@ export const UsersPanel = () => {
       <div className="flex items-center justify-between">
         <h4 className="font-medium text-sm">{expanded ? t('admin.users.editUser', { username: form.username }) : t('admin.users.newUser')}</h4>
         <div className="flex gap-2">
-          <button onClick={handleSave} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+          <Button onClick={handleSave} disabled={saving}>
             {saving ? t('admin.users.saving') : t('admin.users.save')}
-          </button>
-          <button onClick={handleCancel} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.users.cancel')}</button>
+          </Button>
+          <Button variant="ghost" onClick={handleCancel}>{t('admin.users.cancel')}</Button>
         </div>
       </div>
 
@@ -207,9 +208,9 @@ export const UsersPanel = () => {
           <h3 className="text-lg font-semibold">{t('admin.users.title')}</h3>
           <p className="text-muted-foreground text-sm">{t('admin.users.count', { count: users.length })}</p>
         </div>
-        <button onClick={handleCreate} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">
+        <Button onClick={handleCreate}>
           <Icon name="add" className="size-3.5" />{t('admin.users.add')}
-        </button>
+        </Button>
       </div>
       </div>
 
@@ -277,8 +278,14 @@ export const UsersPanel = () => {
                 </div>
 
                 <div className="flex gap-1">
-                  <button onClick={() => handleEdit(u)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.users.edit')}</button>
-                  <button onClick={() => handleDelete(u)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-status-error/10 hover:text-status-error">{t('admin.users.delete')}</button>
+                  <Button variant="ghost" onClick={() => handleEdit(u)}>{t('admin.users.edit')}</Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => handleDelete(u)}
+                    className="text-muted-foreground hover:bg-status-error/10 hover:text-status-error"
+                  >
+                    {t('admin.users.delete')}
+                  </Button>
                 </div>
               </div>
             </div>

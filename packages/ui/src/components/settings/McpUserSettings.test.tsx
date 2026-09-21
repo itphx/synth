@@ -126,11 +126,19 @@ describe('McpUserSettings — пользовательская часть MCP (A
     expect(mocks.addMcpRegistryEntry).toHaveBeenCalledWith({ name: 'new-one', config: { type: 'http' } })
   })
 
-  it('использует sticky-шапку SettingsPage с заголовком «MCP Servers»', async () => {
+  it('использует шапку SettingsPage с заголовком «MCP Servers»', async () => {
     const container = await renderSettings()
-    const header = container.querySelector('header.sticky')
+    const header = container.querySelector('header')
     expect(header).not.toBeNull()
     expect(header!.textContent).toContain('MCP Servers')
+  })
+
+  it('кнопка добавления вынесена в шапку (actions)', async () => {
+    const container = await renderSettings()
+    const header = container.querySelector('header')!
+    const addButton = header.querySelector('[data-testid="mcp-user-add"]') as HTMLButtonElement
+    expect(addButton).not.toBeNull()
+    expect(addButton.className).toContain('bg-primary')
   })
 
   it('кнопка сохранения формы — единый вид', async () => {
@@ -143,13 +151,13 @@ describe('McpUserSettings — пользовательская часть MCP (A
       (b) => b.textContent === 'Save',
     ) as HTMLButtonElement
     expect(saveButton).not.toBeNull()
-    expect(saveButton.className).toContain('bg-interactive-accent')
-    expect(saveButton.className).toContain('text-interactive-accent-foreground')
-    expect(saveButton.className).toContain('text-sm')
+    expect(saveButton.className).toContain('bg-primary')
+    expect(saveButton.className).toContain('text-primary-foreground')
+    expect(saveButton.className).toContain('text-xs')
     expect(saveButton.className).toContain('font-medium')
     expect(saveButton.className).toContain('rounded-lg')
-    expect(saveButton.className).toContain('active:scale-[0.96]')
-    expect(saveButton.className).toContain('transition-[transform,opacity]')
     expect(saveButton.className).toContain('focus-visible:ring-2')
+    expect(saveButton.className).not.toContain('active:scale-[0.96]')
+    expect(saveButton.className).not.toContain('transition-[transform,opacity]')
   })
 })

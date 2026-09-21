@@ -9,6 +9,7 @@ import {
   type SecuritySettings as SecuritySettingsType,
   type ProtectedPathsPolicy,
 } from '@/lib/api/synthApi'
+import { Button } from '../ui/button'
 import { Toggle } from '../ui/Toggle'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { SettingsPage, SettingsCard } from './settings-layout'
@@ -84,12 +85,9 @@ function StringListEditor({
                 onChange={(e) => onChange(values.map((x, i) => (i === idx ? e.target.value : x)))}
                 className="flex-1 min-w-0 rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-ring"
               />
-              <button
-                onClick={() => onChange(values.filter((_, i) => i !== idx))}
-                className="shrink-0 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-              >
+              <Button variant="ghost" size="sm" onClick={() => onChange(values.filter((_, i) => i !== idx))}>
                 {removeLabel}
-              </button>
+              </Button>
             </div>
           ))}
         </div>
@@ -108,12 +106,9 @@ function StringListEditor({
           placeholder="путь/значение"
           className="flex-1 min-w-0 rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-ring"
         />
-        <button
-          onClick={add}
-          className="shrink-0 rounded-lg border border-border px-2 py-1 text-xs hover:bg-interactive-hover transition-colors"
-        >
+        <Button variant="outline" size="sm" onClick={add} className="shrink-0">
           {addLabel}
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -458,13 +453,9 @@ export function SecuritySettings() {
             </div>
           </div>
 
-          <button
-            onClick={handleSave}
-            disabled={saving || loading}
-            className="w-full rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-          >
+          <Button onClick={handleSave} disabled={saving || loading} size="md" className="w-full">
             {saving ? t('sessionSettings.saving') : t('common.save')}
-          </button>
+          </Button>
         </SettingsCard>
 
         {/* Паттерны обфускации (llmGateway) */}
@@ -519,12 +510,9 @@ export function SecuritySettings() {
                     {regexInvalid && (
                       <span className="shrink-0 text-[0.6875rem] text-destructive">{t('gateway.patterns.invalidRegex')}</span>
                     )}
-                    <button
-                      onClick={() => removePattern(idx)}
-                      className="shrink-0 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-                    >
+                    <Button variant="ghost" size="sm" onClick={() => removePattern(idx)}>
                       {t('gateway.patterns.remove')}
-                    </button>
+                    </Button>
                   </div>
                 )
               })}
@@ -532,27 +520,19 @@ export function SecuritySettings() {
           )}
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
+            <Button
+              variant="outline"
               onClick={() => setPatterns((prev) => [...prev, { type: '', regex: '' }])}
               disabled={patternsLoading}
-              className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-interactive-hover transition-colors disabled:opacity-50"
             >
               {t('gateway.patterns.add')}
-            </button>
-            <button
-              onClick={handlePatternsSave}
-              disabled={patternsSaving || patternsLoading}
-              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-            >
+            </Button>
+            <Button onClick={handlePatternsSave} disabled={patternsSaving || patternsLoading}>
               {patternsSaving ? t('sessionSettings.saving') : t('gateway.patterns.save')}
-            </button>
-            <button
-              onClick={handlePatternsReset}
-              disabled={patternsResetting || patternsLoading}
-              className="rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
-            >
+            </Button>
+            <Button variant="ghost" onClick={handlePatternsReset} disabled={patternsResetting || patternsLoading}>
               {patternsResetting ? t('sessionSettings.saving') : t('gateway.patterns.reset')}
-            </button>
+            </Button>
           </div>
         </SettingsCard>
 
@@ -648,27 +628,15 @@ export function SecuritySettings() {
           )}
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={handleSecuritySave}
-              disabled={securitySaving || securityLoading}
-              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-            >
+            <Button onClick={handleSecuritySave} disabled={securitySaving || securityLoading}>
               {securitySaving ? t('sessionSettings.saving') : t('common.save')}
-            </button>
-            <button
-              onClick={handlePolicySave}
-              disabled={policySaving || policyLoading}
-              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-            >
+            </Button>
+            <Button onClick={handlePolicySave} disabled={policySaving || policyLoading}>
               {policySaving ? t('sessionSettings.saving') : t('security.protectedPaths.save')}
-            </button>
-            <button
-              onClick={handlePolicyReset}
-              disabled={policyResetting || policyLoading}
-              className="rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
-            >
+            </Button>
+            <Button variant="ghost" onClick={handlePolicyReset} disabled={policyResetting || policyLoading}>
               {policyResetting ? t('sessionSettings.saving') : t('security.protectedPaths.reset')}
-            </button>
+            </Button>
           </div>
 
           {!policyOverridden && (

@@ -6,23 +6,36 @@ export const SettingsPage: React.FC<{
   description?: string
   className?: string
   stickyHeader?: boolean
+  actions?: React.ReactNode
   children: React.ReactNode
-}> = ({ title, description, className, stickyHeader = false, children }) => (
-  <div className={cn('space-y-6', className)}>
-    {stickyHeader ? (
-      <header className="sticky -top-6 z-10 -mx-6 -mt-6 mb-6 border-b border-border bg-background/95 px-6 pt-6 pb-4 backdrop-blur">
-        <h2 className="text-lg font-semibold mb-1 text-foreground">{title}</h2>
-        {description && <p className="text-sm text-muted-foreground">{description}</p>}
-      </header>
-    ) : (
+}> = ({ title, description, className, stickyHeader = false, actions, children }) => {
+  if (stickyHeader) {
+    return (
+      <div className={cn('flex flex-col h-full min-h-0', className)}>
+        <header className="shrink-0">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-lg font-semibold mb-1 text-foreground">{title}</h2>
+              {description && <p className="text-sm text-muted-foreground">{description}</p>}
+            </div>
+            {actions && <div className="shrink-0 flex items-center gap-2">{actions}</div>}
+          </div>
+        </header>
+        <div className="flex-1 overflow-y-auto min-h-0 overscroll-behavior-contain mt-4 pr-2">{children}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className={cn('space-y-6', className)}>
       <header className="max-w-2xl">
         <h2 className="text-lg font-semibold mb-1 text-foreground">{title}</h2>
         {description && <p className="text-sm text-muted-foreground">{description}</p>}
       </header>
-    )}
-    {children}
-  </div>
-)
+      {children}
+    </div>
+  )
+}
 
 export const SettingsCard: React.FC<{
   title?: string

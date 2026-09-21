@@ -4,6 +4,7 @@ import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Button } from '../ui/button'
 import { ProviderIcon, PROVIDER_RI_ICONS, PROVIDER_BRAND_NAMES } from './ProviderIcon'
 
 interface FetchIconResult {
@@ -152,9 +153,9 @@ export const ProvidersPanel = () => {
           <h3 className="text-lg font-semibold">{t('admin.providers.title')}</h3>
           <p className="text-muted-foreground text-sm">{t('admin.providers.count', { count: providers.length })}</p>
         </div>
-        <button onClick={handleCreate} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">
+        <Button onClick={handleCreate}>
           <Icon name="add" className="size-3.5" />{t('admin.providers.add')}
-        </button>
+        </Button>
       </div>
       </div>
 
@@ -164,8 +165,8 @@ export const ProvidersPanel = () => {
           <div className="flex items-center justify-between">
             <h4 className="font-medium text-sm">{editName ? t('admin.providers.edit') : t('admin.providers.new')}</h4>
             <div className="flex gap-2">
-              <button onClick={handleSave} className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">{t('admin.providers.save')}</button>
-              <button onClick={() => setShowForm(false)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.providers.cancel')}</button>
+              <Button onClick={handleSave}>{t('admin.providers.save')}</Button>
+              <Button variant="ghost" onClick={() => setShowForm(false)}>{t('admin.providers.cancel')}</Button>
             </div>
           </div>
 
@@ -246,22 +247,25 @@ export const ProvidersPanel = () => {
               <div className="flex items-center gap-2">
                 <ProviderIcon icon={form.icon} baseUrl={form.base_url} size={20} />
                 {form.icon && (
-                    <button onClick={resetIcon} className="text-[0.6875rem] text-muted-foreground hover:text-status-error">
+                    <Button
+                      variant="ghost"
+                      onClick={resetIcon}
+                      className="text-muted-foreground hover:bg-status-error/10 hover:text-status-error"
+                    >
                       {t('admin.providers.reset')}
-                    </button>
+                    </Button>
                 )}
               </div>
             </div>
 
             <IconPickerSection title={t('admin.providers.autoDetectFavicon')}>
               <div className="flex items-center gap-2">
-                <button
+                <Button
                   onClick={handleFetchIcon}
                   disabled={fetchingIcon || !form.base_url}
-                  className="px-3 py-1 rounded-md text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 >
                   {fetchingIcon ? t('admin.providers.searchIcon') : t('admin.providers.detect')}
-                </button>
+                </Button>
                 {fetchedIcon?.icon && (
                   <>
                     <img src={fetchedIcon.icon} width={20} height={20} className="rounded" alt="" />
@@ -320,8 +324,8 @@ export const ProvidersPanel = () => {
 
           {error && <p className="text-xs text-status-error">{error}</p>}
           <div className="flex gap-2">
-            <button onClick={handleSave} className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">{t('admin.providers.save')}</button>
-            <button onClick={() => setShowForm(false)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.providers.cancel')}</button>
+            <Button onClick={handleSave}>{t('admin.providers.save')}</Button>
+            <Button variant="ghost" onClick={() => setShowForm(false)}>{t('admin.providers.cancel')}</Button>
           </div>
         </div>
       )}
@@ -377,9 +381,15 @@ export const ProvidersPanel = () => {
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  <button onClick={() => handleTest(p.name)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.providers.test')}</button>
-                  <button onClick={() => handleEdit(p)} className="p-1 rounded text-muted-foreground hover:bg-interactive-hover"><Icon name="edit-2" className="size-3.5" /></button>
-                  <button onClick={() => handleDelete(p.name)} className="p-1 rounded text-muted-foreground hover:bg-status-error/10 hover:text-status-error"><Icon name="delete-bin" className="size-3.5" /></button>
+                  <Button variant="ghost" onClick={() => handleTest(p.name)}>{t('admin.providers.test')}</Button>
+                  <Button variant="ghost" onClick={() => handleEdit(p)} className="p-1"><Icon name="edit-2" className="size-3.5" /></Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => handleDelete(p.name)}
+                    className="p-1 hover:bg-status-error/10 hover:text-status-error"
+                  >
+                    <Icon name="delete-bin" className="size-3.5" />
+                  </Button>
                 </div>
               </div>
             </div>

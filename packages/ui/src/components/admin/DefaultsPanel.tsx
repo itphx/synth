@@ -14,6 +14,7 @@ import {
   setServerScaleDefaults,
 } from '@/lib/uiScale'
 import { UiScaleSlider } from '@/components/settings/UiScaleControl'
+import { Button } from '@/components/ui/button'
 import {
   SettingsCard,
   ThemeModeControl,
@@ -149,13 +150,13 @@ export const DefaultsPanel = () => {
       </div>
 
       <div className="border-t border-border pt-4">
-        <button
+        <Button
+          size="md"
           onClick={handleSave}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
         >
           <Icon name="check" className="size-4" />
           {saved ? t('admin.defaults.saved') : t('admin.defaults.save')}
-        </button>
+        </Button>
       </div>
     </div>
   )

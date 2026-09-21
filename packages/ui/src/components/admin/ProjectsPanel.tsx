@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { synthApi, type ProjectData } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
+import { Button } from '../ui/button'
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
 
@@ -95,13 +96,10 @@ export const ProjectsPanel = () => {
           <h3 className="text-lg font-semibold">{t('admin.projects.title')}</h3>
           <p className="text-muted-foreground text-sm">{t('admin.projects.count', { count: projects.length })}</p>
         </div>
-        <button
-          onClick={() => setShowCreate(!showCreate)}
-          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90"
-        >
+        <Button onClick={() => setShowCreate(!showCreate)}>
           <Icon name="add" className="size-3.5" />
           {t('admin.projects.create')}
-        </button>
+        </Button>
       </div>
       </div>
 
@@ -117,13 +115,14 @@ export const ProjectsPanel = () => {
             className="flex-1 min-w-0 px-3 py-2 rounded-lg border bg-background text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring"
             onKeyDown={(e) => e.key === 'Enter' && handleSaveWorkspace()}
           />
-          <button
+          <Button
+            size="sm"
+            className="shrink-0 py-2"
             onClick={handleSaveWorkspace}
             disabled={workspaceSaving}
-            className="shrink-0 px-3 py-2 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
             {workspaceSaving ? t('admin.projects.workspace.saving') : t('admin.projects.workspace.save')}
-          </button>
+          </Button>
         </div>
         {workspace && (
           <p className="text-xs text-muted-foreground">
@@ -149,18 +148,15 @@ export const ProjectsPanel = () => {
           />
           {error && <p className="text-xs text-status-error">{error}</p>}
           <div className="flex gap-2">
-            <button
-              onClick={handleCreate}
-              className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90"
-            >
+            <Button onClick={handleCreate}>
               {t('admin.projects.create')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
               onClick={() => { setShowCreate(false); setName(''); setError('') }}
-              className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover"
             >
               {t('admin.projects.cancel')}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -194,12 +190,13 @@ export const ProjectsPanel = () => {
                     <p className="text-xs text-muted-foreground mt-1">{p.description}</p>
                   )}
                 </div>
-                <button
+                <Button
+                  variant="ghost"
                   onClick={() => handleDelete(p.id, p.name)}
-                  className="p-1 rounded text-muted-foreground hover:bg-status-error/10 hover:text-status-error"
+                  className="p-1 hover:bg-status-error/10 hover:text-status-error"
                 >
                   <Icon name="delete-bin" className="size-4" />
-                </button>
+                </Button>
               </div>
             </div>
           ))}

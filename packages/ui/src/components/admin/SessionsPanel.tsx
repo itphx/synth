@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { synthApi, type SessionData } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
+import { Button } from '../ui/button'
 import { cn } from '@/lib/utils'
 
 export const SessionsPanel = () => {
@@ -42,13 +43,13 @@ export const SessionsPanel = () => {
           <h3 className="text-lg font-semibold">{t('admin.sessions.title')}</h3>
           <p className="text-muted-foreground text-sm">{t('admin.sessions.count', { count: sessions.length })}</p>
         </div>
-        <button
+        <Button
+          variant="ghost"
           onClick={load}
-          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
         >
           <Icon name="refresh" className="size-3.5" />
           {t('admin.sessions.refresh')}
-        </button>
+        </Button>
       </div>
       </div>
 
@@ -103,19 +104,20 @@ export const SessionsPanel = () => {
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0">
-                    <button
+                    <Button
+                      variant="ghost"
                       onClick={() => setExpandedId(isExpanded ? null : s.id)}
-                      className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover"
                     >
                       {isExpanded ? t('admin.sessions.hide') : t('admin.sessions.details')}
-                    </button>
+                    </Button>
                     {isBlocked && (
-                      <button
+                      <Button
+                        variant="ghost"
                         onClick={() => handleUnlock(s.id)}
-                        className="px-2 py-1 rounded text-xs bg-status-warning/15 text-status-warning hover:bg-status-warning/25"
+                        className="bg-status-warning/15 text-status-warning hover:bg-status-warning/25"
                       >
                         {t('admin.sessions.unlock')}
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </div>

@@ -4,6 +4,7 @@ import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Button } from '../ui/button'
 import { ProviderIcon } from './ProviderIcon'
 
 type EditingPrices = Record<string, {
@@ -283,14 +284,13 @@ export const ModelsPanel = () => {
           </p>
         </div>
         <div className="flex gap-2">
-          <button
+          <Button
             onClick={() => handleFetch()}
             disabled={fetching !== null}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
             <Icon name="refresh" className={cn("size-3.5", fetching === 'all' && "animate-spin")} />
             {t('admin.models.syncAll')}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -327,13 +327,14 @@ export const ModelsPanel = () => {
           />
           {t('admin.models.onlyEnabled')}
         </label>
-        <button
+        <Button
+          variant="outline"
           onClick={() => setShowAddForm(true)}
-          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border border-dashed hover:border-solid hover:bg-muted transition-colors"
+          className="border-dashed hover:border-solid hover:bg-muted"
         >
           <Icon name="add" className="size-3.5" />
           {t('admin.models.add')}
-        </button>
+        </Button>
       </div>
 
       {/* Форма добавления */}
@@ -411,19 +412,19 @@ export const ModelsPanel = () => {
             </div>
           </div>
           <div className="flex gap-2">
-            <button
+            <Button
               onClick={handleAddModel}
               disabled={addSaving}
-              className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
               {addSaving ? '...' : t('admin.models.addButton')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
               onClick={() => { setShowAddForm(false); setAddError('') }}
-              className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-muted"
+              className="hover:bg-muted"
             >
               {t('admin.models.cancel')}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -642,13 +643,14 @@ export const ModelsPanel = () => {
 
                             {/* Удалить */}
                             <div className="flex justify-center">
-                              <button
+                              <Button
+                                variant="ghost"
                                 onClick={() => handleDelete(model.id)}
-                                className="p-0.5 rounded text-muted-foreground/40 hover:bg-status-error/10 hover:text-status-error"
+                                className="p-0.5 text-muted-foreground/40 hover:bg-status-error/10 hover:text-status-error"
                                 title={t('admin.models.deleteModel')}
                               >
                                 <Icon name="delete-bin" className="size-3.5" />
-                              </button>
+                              </Button>
                             </div>
                           </div>
                         )

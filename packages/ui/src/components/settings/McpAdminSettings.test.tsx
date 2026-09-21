@@ -103,11 +103,11 @@ describe('McpAdminSettings — только MCP (AD-071 §2.5/§2.6)', () => {
     expect(container.querySelector('[data-testid="tools-disabled-tools"]')).toBeNull()
   })
 
-  it('содержит политику MCP и sticky-шапку', async () => {
+  it('содержит политику MCP и шапку', async () => {
     const container = await renderSettings()
     expect(container.querySelector('[data-testid="mcp-policy-save"]')).not.toBeNull()
     expect(container.textContent).toContain('MCP policy')
-    const header = container.querySelector('header.sticky')
+    const header = container.querySelector('header')
     expect(header).not.toBeNull()
     expect(header!.textContent).toContain('MCP Servers')
   })

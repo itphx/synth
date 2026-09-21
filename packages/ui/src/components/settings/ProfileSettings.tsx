@@ -5,6 +5,7 @@ import { api } from '@/lib/api/client'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Button } from '../ui/button'
 import { SettingsPage, SettingsCard } from './settings-layout'
 
 const MAX_AVATAR_SIZE = 500 * 1024
@@ -134,24 +135,21 @@ export const ProfileSettings = () => {
               className="hidden"
             />
             <div className="min-w-0">
-              <button
+              <Button
+                size="sm"
                 onClick={() => fileInputRef.current?.click()}
-                className={cn(
-                  "px-3 py-1.5 rounded-lg text-sm font-medium",
-                  "bg-interactive-selection hover:bg-interactive-selection/90",
-                  "text-interactive-selection-foreground",
-                  "transition-colors"
-                )}
               >
                 {form.avatar ? t('auth.changeAvatar') : t('auth.uploadAvatar')}
-              </button>
+              </Button>
               {form.avatar && (
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-2"
                   onClick={() => setForm({ ...form, avatar: null })}
-                  className="ml-2 px-3 py-1.5 rounded-lg text-sm font-medium text-muted-foreground hover:bg-interactive-hover transition-colors"
                 >
                   {t('auth.removeAvatar')}
-                </button>
+                </Button>
               )}
             </div>
           </div>
@@ -273,18 +271,13 @@ export const ProfileSettings = () => {
       )}
 
       <div className="flex justify-end border-t border-border pt-4">
-        <button
+        <Button
+          size="md"
           onClick={handleSave}
           disabled={isLoading}
-          className={cn(
-            "px-4 py-2 rounded-lg text-sm font-medium",
-            "bg-interactive-selection hover:bg-interactive-selection/90",
-            "disabled:opacity-50",
-            "transition-colors"
-          )}
         >
           {isLoading ? t('common.loading') : t('common.save')}
-        </button>
+        </Button>
       </div>
     </SettingsPage>
   )

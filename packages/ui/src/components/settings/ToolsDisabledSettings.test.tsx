@@ -209,13 +209,44 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
     )
   })
 
-  it('использует sticky-шапку SettingsPage с заголовком «Встроенные инструменты»', async () => {
+  it('использует шапку SettingsPage с заголовком «Встроенные инструменты»', async () => {
     const container = await renderSettings()
-    const header = container.querySelector('header.sticky')
+    const header = container.querySelector('header')
     expect(header).not.toBeNull()
     expect(header!.textContent).toContain('Built-in tools')
     // Политика встроенных описывается как относящаяся только к встроенным тулам.
     expect(container.textContent).toContain('Applies to built-in tools only')
+  })
+
+  it('в блоках инструментов и политики есть Cancel', async () => {
+    const container = await renderSettings()
+    expect(container.querySelector('[data-testid="tools-disabled-cancel"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="tools-policy-cancel"]')).not.toBeNull()
+  })
+
+  it('порядок блоков: инструменты → политика', async () => {
+    const container = await renderSettings()
+    const tools = container.querySelector('[data-testid="tools-disabled-groups"]')!
+    const policy = container.querySelector('[data-testid="tools-policy-save"]')!
+    expect(tools.compareDocumentPosition(policy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('Cancel сбрасывает черновик к сохранённым значениям', async () => {
+    const container = await renderSettings()
+    const webGroup = container.querySelector('[data-testid="tools-disabled-group-web"]') as HTMLInputElement
+    expect(webGroup.checked).toBe(true)
+
+    await act(async () => {
+      webGroup.click()
+    })
+    expect(webGroup.checked).toBe(false)
+
+    const cancel = container.querySelector('[data-testid="tools-disabled-cancel"]') as HTMLButtonElement
+    expect(cancel).not.toBeNull()
+    await act(async () => {
+      cancel.click()
+    })
+    expect(webGroup.checked).toBe(true)
   })
 
   it('кнопки сохранения политики и инструментов — единый вид', async () => {
@@ -223,14 +254,14 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
     for (const testId of ['tools-policy-save', 'tools-disabled-save']) {
       const btn = container.querySelector(`[data-testid="${testId}"]`) as HTMLButtonElement
       expect(btn, testId).not.toBeNull()
-      expect(btn.className).toContain('bg-interactive-accent')
-      expect(btn.className).toContain('text-interactive-accent-foreground')
-      expect(btn.className).toContain('text-sm')
+      expect(btn.className).toContain('bg-primary')
+      expect(btn.className).toContain('text-primary-foreground')
+      expect(btn.className).toContain('text-xs')
       expect(btn.className).toContain('font-medium')
       expect(btn.className).toContain('rounded-lg')
-      expect(btn.className).toContain('active:scale-[0.96]')
-      expect(btn.className).toContain('transition-[transform,opacity]')
       expect(btn.className).toContain('focus-visible:ring-2')
+      expect(btn.className).not.toContain('active:scale-[0.96]')
+      expect(btn.className).not.toContain('transition-[transform,opacity]')
     }
   })
 

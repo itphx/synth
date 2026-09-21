@@ -5,6 +5,7 @@ import { useMcpStore } from '@/stores/mcpStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useNotification } from '@/hooks/useNotification'
 import { Icon } from '../icon/Icon'
+import { Button } from '../ui/button'
 import { ConfirmDialog } from '../ui/confirm-dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { SettingsPage, SettingsCard } from './settings-layout'
@@ -94,7 +95,17 @@ export function McpUserSettings() {
   }
 
   return (
-    <SettingsPage stickyHeader title={t('mcp.user.title')} description={t('mcp.user.description')}>
+    <SettingsPage
+      stickyHeader
+      title={t('mcp.user.title')}
+      description={t('mcp.user.description')}
+      actions={
+        <Button data-testid="mcp-user-add" onClick={openAdd}>
+          <Icon name="add" className="size-3.5" />
+          {t('common.add')}
+        </Button>
+      }
+    >
       {error && <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{error}</div>}
 
       <div className="grid gap-4">
@@ -108,7 +119,7 @@ export function McpUserSettings() {
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
                   disabled={editing !== '__new__'}
-                  className="w-full px-3 py-2 rounded-lg bg-interactive-input border border-border text-sm focus:outline-none focus:border-interactive-accent disabled:opacity-50"
+                  className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:border-primary disabled:opacity-50"
                   placeholder="my-server"
                 />
               </div>
@@ -118,7 +129,7 @@ export function McpUserSettings() {
                   value={formConfig.description || ''}
                   onChange={(e) => setFormConfig((prev) => ({ ...prev, description: e.target.value || undefined }))}
                   rows={2}
-                  className="w-full px-3 py-2 rounded-lg bg-interactive-input border border-border text-sm focus:outline-none focus:border-interactive-accent"
+                  className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:border-primary"
                   placeholder={t('mcp.serverDescriptionPlaceholder')}
                 />
               </div>
@@ -144,43 +155,28 @@ export function McpUserSettings() {
                   type="text"
                   value={formConfig.url || ''}
                   onChange={(e) => setFormConfig((prev) => ({ ...prev, url: e.target.value }))}
-                  className="w-full px-3 py-2 rounded-lg bg-interactive-input border border-border text-sm focus:outline-none focus:border-interactive-accent"
+                  className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:border-primary"
                   placeholder="http://localhost:8765/mcp"
                 />
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={handleSave}
-                disabled={!formName.trim() || savingForm}
-                className="px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-[transform,opacity] duration-150 ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
+              <Button onClick={handleSave} disabled={!formName.trim() || savingForm}>
                 {t('common.save')}
-              </button>
-              <button
-                onClick={closeForm}
-                className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground ml-auto"
-              >
+              </Button>
+              <Button variant="ghost" onClick={closeForm} className="ml-auto">
                 {t('common.cancel')}
-              </button>
+              </Button>
             </div>
           </SettingsCard>
         )}
 
         <SettingsCard>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-sm font-medium text-foreground">
-              {registry ? t('mcp.count', { count: ownEntries.length }) : ''}
+          {registry && (
+            <span className="block text-sm font-medium text-foreground">
+              {t('mcp.count', { count: ownEntries.length })}
             </span>
-            <button
-              data-testid="mcp-user-add"
-              onClick={openAdd}
-              className="shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-interactive-accent text-interactive-accent-foreground hover:opacity-90 transition-[transform,opacity] duration-150 ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <Icon name="add" className="size-3.5" />
-              {t('common.add')}
-            </button>
-          </div>
+          )}
 
           {loading && registry === null && (
             <div className="text-center text-muted-foreground py-8">{t('common.loading')}</div>
@@ -200,7 +196,7 @@ export function McpUserSettings() {
                   key={entry.id}
                   data-testid={`mcp-user-${entry.name}`}
                   className={cn(
-                    'flex items-center gap-3 p-3 rounded-lg border border-border hover:border-interactive-accent/50 transition-colors',
+                    'flex items-center gap-3 p-3 rounded-lg border border-border hover:border-primary/50 transition-colors',
                     entry.config.enabled === false && 'opacity-50',
                   )}
                 >

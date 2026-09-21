@@ -4,6 +4,7 @@ import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
 
 interface DebugConfig {
   groups: Record<string, string>
@@ -115,11 +116,10 @@ export const DebugPanel = () => {
           ))}
 
           <div className="flex items-center gap-4">
-            <button
-              type="button"
+            <Button
+              size="md"
               onClick={handleSave}
               disabled={saving}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
             >
               {saving ? (
                 <>
@@ -130,7 +130,7 @@ export const DebugPanel = () => {
                   <Icon name="save" className="w-4 h-4" /> {t('admin.debug.save')}
                 </>
               )}
-            </button>
+            </Button>
             {status && (
               <span className={cn('text-sm', status === t('admin.debug.saved') ? 'text-status-success' : 'text-status-error')}>
                 {status}

@@ -4,9 +4,9 @@ import { THEME_PRESETS } from "@/lib/theme/themes"
 import type { ThemeMode } from "@/types/theme"
 import { useThemeSystem } from "@/contexts/useThemeSystem"
 import { useI18n } from "@/lib/i18n"
-import { cn } from "@/lib/utils"
 import { profileService } from '@/lib/api/profileService'
 import { ConfirmDialog } from '../ui/confirm-dialog'
+import { Button } from '../ui/button'
 import { UiScaleControl } from './UiScaleControl'
 import { SettingsCard, ThemeModeControl, ThemeControl, LanguageControl } from './appearance-controls'
 
@@ -121,16 +121,13 @@ export const AppearanceSettings = () => {
       </div>
 
       <div className="border-t border-border pt-4">
-        <button
+        <Button
+          variant="ghost"
+          size="md"
           onClick={() => setShowResetConfirm(true)}
-          className={cn(
-            "px-4 py-2 rounded-lg text-sm font-medium",
-            "text-muted-foreground hover:bg-interactive-hover",
-            "transition-colors"
-          )}
         >
           {t('auth.resetVisualSettings')}
-        </button>
+        </Button>
       </div>
 
       <ConfirmDialog

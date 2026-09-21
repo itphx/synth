@@ -186,13 +186,21 @@ describe('McpSettings — политика MCP (AD-071 §2.3)', () => {
     )
   })
 
-  it('использует sticky-шапку SettingsPage с заголовком «MCP Servers»', async () => {
+  it('использует шапку SettingsPage с заголовком «MCP Servers»', async () => {
     const container = await renderSettings()
-    const header = container.querySelector('header.sticky')
+    const header = container.querySelector('header')
     expect(header).not.toBeNull()
     expect(header!.textContent).toContain('MCP Servers')
     // Политика MCP описывается как относящаяся только к MCP-инструментам.
     expect(container.textContent).toContain('Applies to MCP tools only')
+  })
+
+  it('кнопка добавления вынесена в шапку (actions)', async () => {
+    const container = await renderSettings()
+    const header = container.querySelector('header')!
+    const addButton = header.querySelector('[data-testid="mcp-admin-add"]') as HTMLButtonElement
+    expect(addButton).not.toBeNull()
+    expect(addButton.className).toContain('bg-primary')
   })
 
   it('все кнопки «Сохранить» — единый вид', async () => {
@@ -202,15 +210,53 @@ describe('McpSettings — политика MCP (AD-071 §2.3)', () => {
     )
     expect(saveButtons.length).toBeGreaterThanOrEqual(3)
     for (const btn of saveButtons) {
-      expect(btn.className).toContain('bg-interactive-accent')
-      expect(btn.className).toContain('text-interactive-accent-foreground')
-      expect(btn.className).toContain('text-sm')
+      expect(btn.className).toContain('bg-primary')
+      expect(btn.className).toContain('text-primary-foreground')
+      expect(btn.className).toContain('text-xs')
       expect(btn.className).toContain('font-medium')
       expect(btn.className).toContain('rounded-lg')
-      expect(btn.className).toContain('active:scale-[0.96]')
-      expect(btn.className).toContain('transition-[transform,opacity]')
       expect(btn.className).toContain('focus-visible:ring-2')
+      expect(btn.className).not.toContain('active:scale-[0.96]')
+      expect(btn.className).not.toContain('transition-[transform,opacity]')
     }
+  })
+
+  it('в блоках доступности, политики и сети есть Cancel', async () => {
+    const container = await renderSettings()
+    expect(container.querySelector('[data-testid="mcp-availability-cancel"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="mcp-policy-cancel"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="mcp-network-cancel"]')).not.toBeNull()
+  })
+
+  it('порядок блоков: реестр → доступность → политика → сеть', async () => {
+    const container = await renderSettings()
+    const registry = container.querySelector('[data-testid="mcp-registry-list"]')!
+    const availability = container.querySelector('[data-testid="mcp-availability-save"]')!
+    const policy = container.querySelector('[data-testid="mcp-policy-save"]')!
+    const network = container.querySelector('[data-testid="mcp-network-policy"]')!
+    expect(registry.compareDocumentPosition(availability) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(availability.compareDocumentPosition(policy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(policy.compareDocumentPosition(network) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('Cancel в блоке доступности откатывает черновик', async () => {
+    const container = await renderSettings()
+    const cancel = container.querySelector('[data-testid="mcp-availability-cancel"]') as HTMLButtonElement
+    expect(cancel).not.toBeNull()
+    const card = cancel.closest('section')!
+    const toggles = card.querySelectorAll('[role="switch"]')
+    expect(toggles.length).toBeGreaterThan(0)
+    const firstToggle = toggles[0] as HTMLButtonElement
+    const before = firstToggle.getAttribute('aria-checked')
+    await act(async () => {
+      firstToggle.click()
+    })
+    expect((toggles[0] as HTMLButtonElement).getAttribute('aria-checked')).not.toBe(before)
+
+    await act(async () => {
+      cancel.click()
+    })
+    expect((toggles[0] as HTMLButtonElement).getAttribute('aria-checked')).toBe(before)
   })
 })
 

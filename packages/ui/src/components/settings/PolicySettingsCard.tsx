@@ -1,5 +1,6 @@
 import { useI18n } from '@/lib/i18n'
 import type { ToolsPolicy } from '@/lib/api/synthApi'
+import { Button } from '../ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { SettingsCard } from './settings-layout'
 
@@ -12,6 +13,7 @@ import { SettingsCard } from './settings-layout'
 export function PolicySettingsCard({
   scope,
   value,
+  savedValue,
   loading,
   saving,
   error,
@@ -21,6 +23,7 @@ export function PolicySettingsCard({
 }: {
   scope: 'tools' | 'mcp'
   value: ToolsPolicy
+  savedValue: ToolsPolicy
   loading: boolean
   saving: boolean
   error?: string | null
@@ -67,16 +70,22 @@ export function PolicySettingsCard({
         <p className="text-xs text-muted-foreground">{t(`${prefix}.help`)}</p>
       </div>
 
-      <div className="flex justify-end">
-        <button
-          type="button"
+      <div className="flex justify-end gap-2">
+        <Button
           data-testid={`${scope}-policy-save`}
           onClick={onSave}
           disabled={saving || loading}
-          className="shrink-0 px-4 py-2 rounded-lg bg-interactive-accent text-interactive-accent-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-[transform,opacity] duration-150 ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {saving ? t('common.saving') : t('common.save')}
-        </button>
+        </Button>
+        <Button
+          variant="ghost"
+          data-testid={`${scope}-policy-cancel`}
+          disabled={value === savedValue}
+          onClick={() => onChange(savedValue)}
+        >
+          {t('common.cancel')}
+        </Button>
       </div>
     </SettingsCard>
   )

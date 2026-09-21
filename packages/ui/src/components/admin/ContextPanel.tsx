@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
+import { Button } from '../ui/button'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 
@@ -150,9 +151,9 @@ export const ContextPanel = () => {
             {status && <span className="ml-2 text-primary">— {status}</span>}
           </p>
         </div>
-        <button onClick={() => setShowCreate(!showCreate)} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">
+        <Button onClick={() => setShowCreate(!showCreate)}>
           <Icon name="add" className="size-3.5" />{t('admin.context.add')}
-        </button>
+        </Button>
       </div>
 
       <div className="flex gap-1 bg-muted rounded-lg p-1">
@@ -190,8 +191,8 @@ export const ContextPanel = () => {
               className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring font-mono" />
           </div>
           <div className="flex gap-2">
-            <button onClick={handleCreate} className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">{t('admin.context.create')}</button>
-            <button onClick={() => setShowCreate(false)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.context.cancel')}</button>
+            <Button onClick={handleCreate}>{t('admin.context.create')}</Button>
+            <Button variant="ghost" onClick={() => setShowCreate(false)}>{t('admin.context.cancel')}</Button>
           </div>
         </div>
       )}
@@ -203,8 +204,8 @@ export const ContextPanel = () => {
             rows={8}
             className="w-full px-3 py-1.5 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring font-mono" />
           <div className="flex gap-2">
-            <button onClick={handleSave} className="px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/90">{t('admin.context.save')}</button>
-            <button onClick={() => setEditFile(null)} className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.context.cancel')}</button>
+            <Button onClick={handleSave}>{t('admin.context.save')}</Button>
+            <Button variant="ghost" onClick={() => setEditFile(null)}>{t('admin.context.cancel')}</Button>
           </div>
         </div>
       )}
@@ -241,16 +242,24 @@ export const ContextPanel = () => {
                 <span className="text-xs text-muted-foreground">{f.size} B</span>
               </div>
               <div className="flex gap-1">
-                <button onClick={() => handleEdit(f.name, f.category)} className="px-2 py-1 rounded text-xs text-muted-foreground hover:bg-interactive-hover">{t('admin.context.edit')}</button>
+                <Button variant="ghost" onClick={() => handleEdit(f.name, f.category)}>{t('admin.context.edit')}</Button>
                 {f.is_overridden && (
-                  <button onClick={() => handleRestore(f.name, f.category)} className="px-2 py-1 rounded text-xs text-status-warning hover:bg-status-warning/10">
+                  <Button
+                    variant="ghost"
+                    onClick={() => handleRestore(f.name, f.category)}
+                    className="text-status-warning hover:bg-status-warning/10"
+                  >
                     {t('admin.context.reset')}
-                  </button>
+                  </Button>
                 )}
                 {f.category === 'user' && (
-                  <button onClick={() => handleDelete(f.name, f.category)} className="p-1 rounded text-muted-foreground hover:bg-status-error/10 hover:text-status-error">
+                  <Button
+                    variant="ghost"
+                    onClick={() => handleDelete(f.name, f.category)}
+                    className="p-1 hover:bg-status-error/10 hover:text-status-error"
+                  >
                     <Icon name="delete-bin" className="size-3.5" />
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>

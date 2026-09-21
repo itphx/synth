@@ -4,6 +4,7 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { loadRoutingDefaults, saveRoutingDefaults, type RoutingDefaults } from '@/lib/routingDefaults'
 import { synthApi, type DictionaryEntry } from '@/lib/api/synthApi'
 import { Toggle } from '../ui/Toggle'
+import { Button } from '../ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SettingsPage, SettingsCard, SegmentedControl } from './settings-layout'
 
@@ -397,21 +398,22 @@ function DictionarySection() {
                   <span className="text-xs text-muted-foreground">{entry.size} B</span>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => void handleEdit(entry)}
-                    className="rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-interactive-hover"
                   >
                     {t('routing.dictionaries.edit')}
-                  </button>
+                  </Button>
                   {entry.source === 'user' && (
-                    <button
-                      type="button"
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                       onClick={() => void handleReset(entry)}
-                      className="rounded px-2 py-1 text-xs text-status-warning transition-colors hover:bg-status-warning/10"
                     >
                       {t('routing.dictionaries.reset')}
-                    </button>
+                    </Button>
                   )}
                 </div>
               </div>
@@ -428,21 +430,20 @@ function DictionarySection() {
                     className="w-full rounded-md border border-border bg-background px-3 py-1.5 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   <div className="flex gap-2">
-                    <button
-                      type="button"
+                    <Button
+                      size="sm"
                       disabled={saving}
                       onClick={() => void handleSave()}
-                      className="rounded-lg bg-primary px-3 py-1.5 text-xs text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
                     >
                       {t('common.save')}
-                    </button>
-                    <button
-                      type="button"
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       onClick={() => setEditing(null)}
-                      className="rounded-lg px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-interactive-hover"
                     >
                       {t('routing.dictionaries.cancel')}
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}
