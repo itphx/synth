@@ -172,7 +172,7 @@ describe('ChatOrchestrator — калибровка chars-per-token (AD-071 §2.
     expect(RatioProvider.lastInputTokens).toBeGreaterThanOrEqual(500);
     const ratio = ratios.get('m');
     expect(ratio).toBeDefined();
-    // observed ≈ 6 (в пределах 2..8), первый семпл — как есть.
+    // observed ≈ 6 (в пределах 1.5..16), первый семпл — как есть.
     expect(ratio!).toBeGreaterThan(5);
     expect(ratio!).toBeLessThanOrEqual(8);
 

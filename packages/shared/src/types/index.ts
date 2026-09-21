@@ -157,10 +157,16 @@ export interface PromptManifest {
 
 /** Дефолтный chars-per-token, если калибровки для модели нет. */
 export const DEFAULT_CHARS_PER_TOKEN = 4;
-/** Нижняя граница разумного chars-per-token (аномальные семплы отбрасываются). */
-export const MIN_CHARS_PER_TOKEN = 2;
-/** Верхняя граница разумного chars-per-token. */
-export const MAX_CHARS_PER_TOKEN = 8;
+/**
+ * Нижняя граница разумного chars-per-token (аномальные семплы отбрасываются).
+ * CJK/эффективные BPE дают ~1–2 символа на токен, поэтому допускаем 1.5.
+ */
+export const MIN_CHARS_PER_TOKEN = 1.5;
+/**
+ * Верхняя граница разумного chars-per-token. Берётся с запасом: «эффективные»
+ * токенизаторы (например, `omn.qwen3.8:27b`) дают ratio ≈ 11.7.
+ */
+export const MAX_CHARS_PER_TOKEN = 16;
 /** Минимальный `usage.inputTokens` для калибровки — меньшие значения шумные. */
 export const MIN_CALIBRATION_INPUT_TOKENS = 500;
 

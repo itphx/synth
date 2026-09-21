@@ -48,14 +48,27 @@ describe('calibrateCharsPerToken', () => {
     expect(calibrateCharsPerToken(4000, 499)).toBeNull();
   });
 
-  it('аномально низкий/высокий ratio → null (границы 2..8)', () => {
-    // 100 chars / 1000 tokens = 0.1 < 2
+  it('аномально низкий/высокий ratio → null (границы 1.5..16)', () => {
+    // 100 chars / 1000 tokens = 0.1 < 1.5
     expect(calibrateCharsPerToken(100, 1000)).toBeNull();
-    // 10000 / 1000 = 10 > 8
-    expect(calibrateCharsPerToken(10_000, 1000)).toBeNull();
+    // 20000 / 1000 = 20 > 16
+    expect(calibrateCharsPerToken(20_000, 1000)).toBeNull();
     // ровно на границах — принимается
     expect(calibrateCharsPerToken(MIN_CHARS_PER_TOKEN * 1000, 1000)).toBeCloseTo(MIN_CHARS_PER_TOKEN);
     expect(calibrateCharsPerToken(MAX_CHARS_PER_TOKEN * 1000, 1000)).toBeCloseTo(MAX_CHARS_PER_TOKEN);
+  });
+
+  it('эффективный токенизатор (ratio ≈ 11.7) принимается и сохраняется', () => {
+    // 11700 chars / 1000 tokens = 11.7 — при прежней границе 8 отбрасывался.
+    const ratio = calibrateCharsPerToken(11_700, 1000);
+    expect(ratio).not.toBeNull();
+    expect(ratio).toBeCloseTo(11.7);
+  });
+
+  it('EWMA удерживает эффективный ratio (current ≈ 11.7) в новых границах', () => {
+    // current=11.7, observed=12 → 11.7*0.7 + 12*0.3 = 11.79
+    const next = calibrateCharsPerToken(12_000, 1000, 11.7);
+    expect(next).toBeCloseTo(11.7 * (1 - RATIO_EWMA_ALPHA) + 12 * RATIO_EWMA_ALPHA);
   });
 
   it('невалидные promptChars/inputTokens → null', () => {
@@ -72,7 +85,9 @@ describe('calibrateCharsPerToken', () => {
     expect(next).toBeCloseTo(5.2);
   });
 
-  it('результат клампится в границы 2..8', () => {
+  it('результат клампится в границы 1.5..16', () => {
+    // current вне границ (20), observed=16 → EWMA 18.8 зажимается в 16.
+    expect(calibrateCharsPerToken(16_000, 1000, 20)).toBe(MAX_CHARS_PER_TOKEN);
     const next = calibrateCharsPerToken(8000, 1000, 7.9);
     expect(next).toBeLessThanOrEqual(MAX_CHARS_PER_TOKEN);
     expect(next).toBeGreaterThanOrEqual(MIN_CHARS_PER_TOKEN);
