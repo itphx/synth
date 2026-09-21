@@ -88,6 +88,7 @@ export const dict = {
   // Settings modal
   'settings.title': 'Настройки',
   'settings.kit.defaultsBadge': 'По умолчанию',
+  'settings.kit.unsavedChanges': 'Есть несохранённые изменения',
   'settings.category.profile': 'Профиль',
   'settings.category.appearance': 'Внешний вид',
   'settings.category.chat': 'Чат',

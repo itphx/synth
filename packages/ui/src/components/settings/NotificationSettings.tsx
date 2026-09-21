@@ -1,6 +1,6 @@
 import { useI18n } from '@/lib/i18n'
 import { useNotificationStore, type NotifyCategory } from '@/stores/notificationStore'
-import { SettingsPanel, SettingsSection, ToggleField } from '../ui/settings'
+import { SettingsActions, SettingsPanel, SettingsSection, ToggleField } from '../ui/settings'
 
 const CATEGORIES: { id: NotifyCategory; labelKey: string; descKey: string }[] = [
   { id: 'connection', labelKey: 'notifications.category.connection', descKey: 'notifications.category.connection.desc' },
@@ -15,6 +15,7 @@ export function NotificationSettings() {
   const { t } = useI18n()
   const prefs = useNotificationStore(s => s.prefs)
   const setCategoryEnabled = useNotificationStore(s => s.setCategoryEnabled)
+  const resetCategories = useNotificationStore(s => s.resetCategories)
 
   return (
     <SettingsPanel title={t('notifications.title')} description={t('notifications.description')}>
@@ -29,6 +30,12 @@ export function NotificationSettings() {
           />
         ))}
       </SettingsSection>
+
+      <SettingsActions
+        align="start"
+        onReset={() => resetCategories()}
+        resetTestId="notifications-reset"
+      />
     </SettingsPanel>
   )
 }

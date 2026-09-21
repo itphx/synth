@@ -1,7 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useProvidersStore } from '@/stores/providersStore'
-import { loadRoutingDefaults, saveRoutingDefaults, type RoutingDefaults } from '@/lib/routingDefaults'
+import {
+  DEFAULT_ROUTING_DEFAULTS,
+  loadRoutingDefaults,
+  saveRoutingDefaults,
+  type RoutingDefaults,
+} from '@/lib/routingDefaults'
 import { confirm } from '@/lib/confirm'
 import { synthApi, type DictionaryEntry } from '@/lib/api/synthApi'
 import { Button } from '../ui/button'
@@ -43,39 +48,44 @@ export function RoutingSettings() {
   const providers = useProvidersStore((s) => s.providers)
   const models = useProvidersStore((s) => s.models)
 
-  const [settings, setSettings] = useState<RoutingDefaults>(loadRoutingDefaults)
+  const [initialSettings] = useState(loadRoutingDefaults)
+  const draft = useSettingsDraft<RoutingDefaults>({
+    value: initialSettings,
+    defaultValue: DEFAULT_ROUTING_DEFAULTS,
+    onSave: async (next) => {
+      saveRoutingDefaults(next)
+    },
+  })
 
-  useEffect(() => {
-    saveRoutingDefaults(settings)
-  }, [settings])
+  const settings = draft.draft ?? DEFAULT_ROUTING_DEFAULTS
 
   const update = (patch: Partial<RoutingDefaults>) => {
-    setSettings((s) => ({ ...s, ...patch }))
+    draft.setDraft((s) => ({ ...s, ...patch }))
   }
 
   const updateContent = (key: 'coding' | 'chat' | 'research', patch: Partial<{ provider: string; model: string }>) => {
-    setSettings((s) => ({
+    draft.setDraft((s) => ({
       ...s,
       routingContent: { ...s.routingContent, [key]: { ...s.routingContent[key], ...patch } },
     }))
   }
 
   const updateEscalation = (patch: Partial<RoutingDefaults['routingEscalation']>) => {
-    setSettings((s) => ({
+    draft.setDraft((s) => ({
       ...s,
       routingEscalation: { ...s.routingEscalation, ...patch },
     }))
   }
 
   const updateCost = (patch: Partial<RoutingDefaults['routingCost']>) => {
-    setSettings((s) => ({
+    draft.setDraft((s) => ({
       ...s,
       routingCost: { ...s.routingCost, ...patch },
     }))
   }
 
   const updateSubagent = (patch: Partial<RoutingDefaults['subagentRouting']>) => {
-    setSettings((s) => ({
+    draft.setDraft((s) => ({
       ...s,
       subagentRouting: { ...s.subagentRouting, ...patch },
     }))
@@ -246,6 +256,24 @@ export function RoutingSettings() {
 
       {/* Словари классификации */}
       <DictionarySection />
+
+      {draft.dirty && (
+        <div className="p-2 rounded-lg bg-interactive-hover text-muted-foreground text-xs">
+          {t('settings.kit.unsavedChanges')}
+        </div>
+      )}
+
+      <SettingsActions
+        onSave={() => void draft.save()}
+        onCancel={draft.revert}
+        onReset={draft.resetToDefault}
+        saving={draft.saving}
+        saveDisabled={!draft.dirty}
+        cancelDisabled={!draft.dirty}
+        saveTestId="routing-save"
+        cancelTestId="routing-cancel"
+        resetTestId="routing-reset"
+      />
     </SettingsPanel>
   )
 }

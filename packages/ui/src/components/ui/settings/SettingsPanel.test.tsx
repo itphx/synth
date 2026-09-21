@@ -145,6 +145,33 @@ describe('SettingsPanel', () => {
     expect(body.hasAttribute('data-scroll-shadow')).toBe(false)
   })
 
+  it('collapsibleHeader: сворачивание реально уменьшает высоту шапки (0fr + min-h-0/overflow-hidden)', async () => {
+    stubPhone()
+    const host = await renderPanel({
+      title: 'Network',
+      description: 'Configure networking',
+      children: <div>CONTENT</div>,
+    })
+    const body = host.querySelector('.settings-scroll-container') as HTMLElement
+    const desc = host.querySelector('[data-testid="settings-header-description"]') as HTMLElement
+    // Без min-h-0/overflow-hidden строка grid не схлопывается ниже min-content,
+    // поэтому визуально описание исчезает, а высота шапки не уменьшается.
+    const text = desc.querySelector('p') as HTMLElement
+    expect(text.classList.contains('min-h-0')).toBe(true)
+    expect(text.classList.contains('overflow-hidden')).toBe(true)
+    expect(desc.classList.contains('grid-rows-[1fr]')).toBe(true)
+
+    setScrollTop(body, 20)
+    await act(async () => {
+      body.dispatchEvent(new Event('scroll'))
+    })
+
+    // При схлопывании строка становится 0fr, а дочерний <p> — нулевой min-height.
+    expect(desc.classList.contains('grid-rows-[0fr]')).toBe(true)
+    expect(text.classList.contains('min-h-0')).toBe(true)
+    expect(text.classList.contains('overflow-hidden')).toBe(true)
+  })
+
   it('collapsibleHeader: на десктопе описание остаётся видимым', async () => {
     const host = await renderPanel({
       title: 'Network',

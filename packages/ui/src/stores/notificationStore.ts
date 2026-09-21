@@ -48,6 +48,7 @@ interface NotificationStore {
 
   prefs: NotificationPrefs
   setCategoryEnabled: (category: NotifyCategory, enabled: boolean) => void
+  resetCategories: () => void
   isCategoryEnabled: (category: NotifyCategory) => boolean
 
   sessionUnread: Record<string, number>
@@ -109,6 +110,13 @@ export const useNotificationStore = create<NotificationStore>()(
         })),
       isCategoryEnabled: (category) =>
         get().prefs.enabledCategories[category] ?? DEFAULT_ENABLED[category],
+      resetCategories: () =>
+        set((state) => ({
+          prefs: {
+            ...state.prefs,
+            enabledCategories: { ...DEFAULT_ENABLED },
+          },
+        })),
 
       sessionUnread: {},
       incSessionUnread: (sessionId) =>

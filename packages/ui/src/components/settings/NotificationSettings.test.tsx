@@ -107,4 +107,37 @@ describe('NotificationSettings — миграция на Settings UI Kit (AD-072
 
     expect(useNotificationStore.getState().prefs.enabledCategories.streaming).toBe(true)
   })
+
+  it('кнопка сброса возвращает все категории к дефолту', async () => {
+    const container = await renderSettings()
+
+    // Уводим категории от дефолта: system (true) → false, message (false) → true.
+    const system = container.querySelector('[aria-label="System"]') as HTMLButtonElement
+    const message = container.querySelector('[aria-label="Messages"]') as HTMLButtonElement
+    await act(async () => {
+      system.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {
+      message.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(useNotificationStore.getState().prefs.enabledCategories).toMatchObject({
+      system: false,
+      message: true,
+    })
+
+    const reset = container.querySelector('[data-testid="notifications-reset"]') as HTMLButtonElement
+    expect(reset).not.toBeNull()
+    await act(async () => {
+      reset.click()
+    })
+
+    expect(useNotificationStore.getState().prefs.enabledCategories).toEqual({
+      connection: true,
+      streaming: false,
+      queue: true,
+      message: false,
+      error: true,
+      system: true,
+    })
+  })
 })

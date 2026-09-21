@@ -1,6 +1,6 @@
 import { useUIStore } from "../../stores/useUIStore"
 import { useI18n } from "@/lib/i18n"
-import { SegmentedControl, SettingsPanel, SettingsSection, type SegmentedControlOption } from '../ui/settings'
+import { SegmentedControl, SettingsActions, SettingsPanel, SettingsSection, type SegmentedControlOption } from '../ui/settings'
 
 type IntermediateTextDisplay = 'inline' | 'bottom'
 
@@ -28,6 +28,12 @@ export const ChatSettings = () => {
           ariaLabel={t('chatSettings.intermediateTextDisplay')}
         />
       </SettingsSection>
+
+      <SettingsActions
+        align="start"
+        onReset={() => setIntermediateTextDisplay('inline')}
+        resetTestId="chat-reset"
+      />
     </SettingsPanel>
   )
 }

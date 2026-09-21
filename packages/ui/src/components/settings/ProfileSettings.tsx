@@ -16,28 +16,56 @@ import {
 
 const MAX_AVATAR_SIZE = 500 * 1024
 
+interface ProfileForm {
+  username: string
+  display_name: string
+  email: string
+  phone: string
+  team_roles: string[]
+  notes: string
+  avatar: string | null
+}
+
+const EMPTY_FORM: ProfileForm = {
+  username: '',
+  display_name: '',
+  email: '',
+  phone: '',
+  team_roles: [],
+  notes: '',
+  avatar: null,
+}
+
+/** Сравнение значимых полей формы (username — только для чтения, но тоже учитываем). */
+const formSnapshot = (f: ProfileForm) =>
+  JSON.stringify({
+    username: f.username,
+    display_name: f.display_name,
+    email: f.email,
+    phone: f.phone,
+    team_roles: f.team_roles,
+    notes: f.notes,
+    avatar: f.avatar,
+  })
+
 export const ProfileSettings = () => {
   const { t } = useI18n()
   const user = useAuthStore(s => s.user)
-  const [form, setForm] = useState({
-    username: '',
-    display_name: '',
-    email: '',
-    phone: '',
-    team_roles: [] as string[],
-    notes: '',
-    avatar: null as string | null,
-  })
+  const [form, setForm] = useState<ProfileForm>(EMPTY_FORM)
+  const [savedForm, setSavedForm] = useState<ProfileForm>(EMPTY_FORM)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const dirty = formSnapshot(form) !== formSnapshot(savedForm)
+
   useEffect(() => {
     const loadProfile = async () => {
+      let next: ProfileForm
       try {
         const profile = await api.getProfile()
-        setForm({
+        next = {
           username: profile.username || user?.username || '',
           display_name: profile.display_name || '',
           email: profile.email || user?.email || '',
@@ -45,9 +73,9 @@ export const ProfileSettings = () => {
           team_roles: profile.team_roles || [],
           notes: profile.notes || '',
           avatar: profile.preferences?.avatar || null,
-        })
+        }
       } catch {
-        setForm({
+        next = {
           username: user?.username || '',
           display_name: '',
           email: user?.email || '',
@@ -55,8 +83,10 @@ export const ProfileSettings = () => {
           team_roles: [],
           notes: '',
           avatar: null,
-        })
+        }
       }
+      setForm(next)
+      setSavedForm(next)
     }
     loadProfile()
   }, [user])
@@ -99,12 +129,19 @@ export const ProfileSettings = () => {
         })
       }
       setSuccess(true)
+      setSavedForm(form)
       setTimeout(() => setSuccess(false), 2000)
     } catch (err) {
       setError(err instanceof Error ? err.message : t('auth.saveError'))
     } finally {
       setIsLoading(false)
     }
+  }
+
+  const handleCancel = () => {
+    setForm(savedForm)
+    setError(null)
+    setSuccess(false)
   }
 
   const teamRoleOptions = [
@@ -235,8 +272,11 @@ export const ProfileSettings = () => {
 
       <SettingsActions
         onSave={handleSave}
+        onCancel={handleCancel}
+        cancelDisabled={!dirty}
         saving={isLoading}
         saveTestId="profile-save"
+        cancelTestId="profile-cancel"
       />
     </SettingsPanel>
   )

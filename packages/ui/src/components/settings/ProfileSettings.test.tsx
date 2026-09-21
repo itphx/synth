@@ -111,4 +111,48 @@ describe('ProfileSettings — миграция на Settings UI Kit (AD-072)', (
     const save = container.querySelector('[data-testid="profile-save"]')!
     expect(scroll.contains(save)).toBe(true)
   })
+
+  it('Cancel откатывает форму к загруженному состоянию и сбрасывает disabled', async () => {
+    const container = await renderSettings()
+
+    const cancel = container.querySelector('[data-testid="profile-cancel"]') as HTMLButtonElement
+    expect(cancel).not.toBeNull()
+    expect(cancel.disabled).toBe(true)
+
+    const displayName = container.querySelector('#profile-display-name') as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(displayName, 'Changed')
+      displayName.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    expect((container.querySelector('#profile-display-name') as HTMLInputElement).value).toBe('Changed')
+    expect(cancel.disabled).toBe(false)
+
+    await act(async () => {
+      cancel.click()
+    })
+
+    expect((container.querySelector('#profile-display-name') as HTMLInputElement).value).toBe('Dev')
+    expect(cancel.disabled).toBe(true)
+  })
+
+  it('после успешного Save Cancel снова disabled', async () => {
+    const container = await renderSettings()
+
+    const displayName = container.querySelector('#profile-display-name') as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(displayName, 'Saved name')
+      displayName.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    const save = container.querySelector('[data-testid="profile-save"]') as HTMLButtonElement
+    await act(async () => {
+      save.click()
+    })
+
+    const cancel = container.querySelector('[data-testid="profile-cancel"]') as HTMLButtonElement
+    expect(cancel.disabled).toBe(true)
+  })
 })

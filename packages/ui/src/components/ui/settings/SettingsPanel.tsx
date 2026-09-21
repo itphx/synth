@@ -97,7 +97,7 @@ export function SettingsPanel({
               data-testid="settings-header-description"
               aria-hidden={collapsed || undefined}
             >
-              <p className="text-sm text-muted-foreground min-w-0 break-words">{description}</p>
+              <p className="text-sm text-muted-foreground min-w-0 min-h-0 overflow-hidden break-words">{description}</p>
             </div>
           )}
         </div>

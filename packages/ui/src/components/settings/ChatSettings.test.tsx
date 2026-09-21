@@ -96,4 +96,23 @@ describe('ChatSettings — миграция на Settings UI Kit (AD-072)', () =
 
     expect(useUIStore.getState().intermediateTextDisplay).toBe('bottom')
   })
+
+  it('кнопка сброса возвращает intermediateTextDisplay в inline', async () => {
+    const container = await renderSettings()
+
+    const radios = Array.from(container.querySelectorAll('[role="radio"]')) as HTMLButtonElement[]
+    const bottom = radios.find((r) => r.textContent === 'At bottom')!
+    await act(async () => {
+      bottom.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(useUIStore.getState().intermediateTextDisplay).toBe('bottom')
+
+    const reset = container.querySelector('[data-testid="chat-reset"]') as HTMLButtonElement
+    expect(reset).not.toBeNull()
+    await act(async () => {
+      reset.click()
+    })
+
+    expect(useUIStore.getState().intermediateTextDisplay).toBe('inline')
+  })
 })
