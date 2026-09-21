@@ -34,6 +34,27 @@ interface MessageListProps {
 const VIRTUALIZE_THRESHOLD = 30
 const OVERSCAN = 30
 
+/**
+ * Статус активного стрима, связанного с user-сообщением (по metadata.stream_id),
+ * пока провайдер ещё не вернул ни одного чанка. null — статус не показываем.
+ * Вынесено на уровень модуля, чтобы рендер не создавал замыкание.
+ */
+function computePending(
+  msg: MessageData,
+  streams: Record<string, StreamState>,
+  retry: StreamRetry | null | undefined,
+  onRetryNow?: () => void,
+  onCancelRetry?: () => void
+): PendingStreamStatus | null {
+  if (msg.role !== 'user') return null
+  const streamId = msg.metadata?.stream_id as string | undefined
+  if (!streamId) return null
+  const s = streams[streamId]
+  if (!s || !s.isStreaming || s.hasContent) return null
+  const r = retry && retry.streamId === streamId ? retry : null
+  return r ? { status: 'retrying', retry: r, onRetryNow, onCancelRetry } : { status: 'processing' }
+}
+
 export function MessageList({
   messages,
   streams,
@@ -153,41 +174,6 @@ export function MessageList({
     lastClickedRef.current = index
   }, [onToggleSelect, onSelectRange])
 
-  const chatMsgProps = useCallback((msg: MessageData) => {
-    // Связываем user-сообщение с активным стримом через metadata.stream_id.
-    // Пока провайдер молчит (нет ни одного чанка) — показываем статус/кнопки в сообщении.
-    let pending: PendingStreamStatus | null = null
-    if (msg.role === 'user') {
-      const streamId = msg.metadata?.stream_id as string | undefined
-      if (streamId) {
-        const s = streams[streamId]
-        if (s && s.isStreaming && !s.hasContent) {
-          const r = retry && retry.streamId === streamId ? retry : null
-          pending = r
-            ? { status: 'retrying', retry: r, onRetryNow, onCancelRetry }
-            : { status: 'processing' }
-        }
-      }
-    }
-
-    return {
-      message: msg,
-      onCopy: () => onCopy(msg),
-      onToggle: () => onToggle(msg),
-      onPin: () => onPin(msg),
-      onDelete: () => onDelete(msg),
-      onRetry: () => onRetry(msg),
-      onDebug: () => onDebug(msg),
-      onFork: () => onFork(msg),
-      readOnly,
-      isSubagent,
-      selectionMode,
-      isSelected: selectedIndices?.has(msg.index) ?? false,
-      onToggleSelect: (shiftKey: boolean) => handleToggleSelect(msg.index, shiftKey),
-      pending,
-    }
-  }, [onCopy, onToggle, onPin, onDelete, onRetry, onDebug, onFork, readOnly, isSubagent, selectionMode, selectedIndices, handleToggleSelect, streams, retry, onRetryNow, onCancelRetry])
-
   return (
     <div ref={containerRef} className="relative flex-1 overflow-hidden">
       <ScrollableOverlay
@@ -215,7 +201,22 @@ export function MessageList({
                   if (!msg) return null
                   return (
                     <div key={msg.id || msg.index} data-index={vi.index} ref={virtualizer.measureElement}>
-                      <ChatMessage {...chatMsgProps(msg)} />
+                      <ChatMessage
+                        message={msg}
+                        onCopy={onCopy}
+                        onToggle={onToggle}
+                        onPin={onPin}
+                        onDelete={onDelete}
+                        onRetry={onRetry}
+                        onDebug={onDebug}
+                        onFork={onFork}
+                        readOnly={readOnly}
+                        isSubagent={isSubagent}
+                        selectionMode={selectionMode}
+                        isSelected={selectedIndices?.has(msg.index) ?? false}
+                        onToggleSelect={handleToggleSelect}
+                        pending={computePending(msg, streams, retry, onRetryNow, onCancelRetry)}
+                      />
                     </div>
                   )
                 })}
@@ -224,7 +225,20 @@ export function MessageList({
               visibleMessages.map((msg) => (
                 <ChatMessage
                   key={msg.id || `${msg.role}-${msg.index}-${msg.created_at}`}
-                  {...chatMsgProps(msg)}
+                  message={msg}
+                  onCopy={onCopy}
+                  onToggle={onToggle}
+                  onPin={onPin}
+                  onDelete={onDelete}
+                  onRetry={onRetry}
+                  onDebug={onDebug}
+                  onFork={onFork}
+                  readOnly={readOnly}
+                  isSubagent={isSubagent}
+                  selectionMode={selectionMode}
+                  isSelected={selectedIndices?.has(msg.index) ?? false}
+                  onToggleSelect={handleToggleSelect}
+                  pending={computePending(msg, streams, retry, onRetryNow, onCancelRetry)}
                 />
               ))
             )}
