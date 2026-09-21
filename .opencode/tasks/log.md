@@ -234,3 +234,24 @@
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммиты:** `918af7f`, `e0b103e`, `42075fa`, `d724850`, `35ce61b`, `75a7504`, `966d45f`, `ede5e96`, `d25acba`.
 - **Остаточное (не проблема консоли):** дублирующиеся `GET /auth/status` (3×) и `/auth/users` (2×) на старте — StrictMode/dev-эффекты, 200 OK, на консоль не влияют.
+
+## 2026-09-21 — UI-замечания к панели настроек: границы, скролл, порядок блоков, кнопки
+- **Задача:** «Замечания к разделам панели управления: MCP-серверы (user/admin), Безопасность, Встроенные инструменты — лишние границы, скролл не на всю область, порядок блоков, кнопки Добавить/Сохранить/Отмена».
+- **Тип:** feature + UI refactor (унификация)
+- **Исполнитель:** @orchestrator → @fixer ×3
+- **Результат:** PASS. Коммита нет (инвариант 13).
+- **Корневая причина «непокрашенных» кнопок:** классы `bg-interactive-accent`, `text-interactive-accent-foreground`, `bg-interactive-input`, `border-interactive-accent` нигде не определены (нет в `design-system.css`/`cssGenerator`); заведены коммитом `117132e` как «единые кнопки» — фактически мёртвые. Канон — `admin/AgentsPanel.tsx:275,278` (`bg-primary`).
+- **Сделано:**
+  1. Новый примитив `components/ui/button.tsx` (`Button`: `primary/ghost/outline/danger` × `sm/md`, `type="button"`, focus-visible ring).
+  2. `settings-layout.tsx`: sticky-вариант → панельный каркас `flex flex-col h-full min-h-0` + `shrink-0`-шапка **без `border-b`** + `flex-1 overflow-y-auto` тело + слот `actions`. Non-sticky не затронут.
+  3. `McpUserSettings`: «+ Добавить» → в шапку (primary).
+  4. `McpSettings` (админ): порядок `форма → Реестр → Доступность инструментов → Политика MCP → Сетевой доступ`; «Добавить» в шапку; Save/Cancel в каждом блоке; Save/Cancel «Доступности» — внизу; убран `max-h-64`; откат черновика.
+  5. `ToolsDisabledSettings`: убран `max-h-72`; Save/Cancel; политика **ниже** блока инструментов.
+  6. `PolicySettingsCard`: primary Save + Cancel от черновика (`savedValue`).
+  7. `SecuritySettings`: каркас + перевод кнопок на `Button` (Save уже оранжевый).
+  8. Унификация всей панели настроек: `Profile` (Save был не оранжевым), `Routing`, `Appearance`, `Defaults`, `Debug` + админ-категории `Agents/Projects/Providers/Models/Users/Context/Sessions`.
+  9. Мёртвые токены — 0 совпадений по `packages/ui/src`.
+- **Проверки:** `pnpm typecheck` 6/6 PASS; `pnpm lint` 0 errors (предсуществующие warnings); `pnpm test` core 1589 / ui 360 / backend 286 PASS; `pnpm build` PASS. Визуально (Playwright, dev :5002, admin): все 4 раздела — шапка без границы, кнопка в шапке, скролл на всю область (panel body sh1670/ch454), порядок блоков и Save/Отмена на месте; регрессий в «Проектах» нет.
+- **Не в скоупе:** вкладки правой панели (`ContextTab`/`SessionSettingsTab`, w-full-кнопки) — отдельной задачей; обновление `packages/ui/AGENTS.md` (новый примитив `Button`) — согласовать.
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** нет (ожидает явной просьбы пользователя).
