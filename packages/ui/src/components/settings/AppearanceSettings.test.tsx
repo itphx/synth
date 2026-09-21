@@ -133,4 +133,12 @@ describe('AppearanceSettings — миграция на Settings UI Kit (AD-072)'
 
     expect(profileMock.resetPreferences).toHaveBeenCalledTimes(1)
   })
+
+  it('действия рендерятся внутри scroll-тела, а не fixed-футером', async () => {
+    const container = await renderSettings()
+
+    const scroll = container.querySelector('.overflow-y-auto')!
+    const reset = container.querySelector('[data-testid="appearance-reset"]')!
+    expect(scroll.contains(reset)).toBe(true)
+  })
 })

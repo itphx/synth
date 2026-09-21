@@ -83,19 +83,6 @@ export function MicroFirstDefaults() {
     <SettingsPanel
       title={t('settings.microFirst.title')}
       description={t('settings.microFirst.description')}
-      footer={
-        <SettingsActions
-          onSave={() => void draft.save()}
-          onCancel={draft.revert}
-          onReset={draft.resetToDefault}
-          saving={draft.saving}
-          saveDisabled={!draft.dirty}
-          cancelDisabled={!draft.dirty}
-          saveTestId="microfirst-save"
-          cancelTestId="microfirst-cancel"
-          resetTestId="microfirst-reset"
-        />
-      }
     >
       <SettingsSection
         actions={draft.isDefault ? <DefaultsBadge /> : undefined}
@@ -156,6 +143,18 @@ export function MicroFirstDefaults() {
           </div>
         )}
       </SettingsSection>
+
+      <SettingsActions
+        onSave={() => void draft.save()}
+        onCancel={draft.revert}
+        onReset={draft.resetToDefault}
+        saving={draft.saving}
+        saveDisabled={!draft.dirty}
+        cancelDisabled={!draft.dirty}
+        saveTestId="microfirst-save"
+        cancelTestId="microfirst-cancel"
+        resetTestId="microfirst-reset"
+      />
     </SettingsPanel>
   )
 }

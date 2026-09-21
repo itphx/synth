@@ -83,15 +83,6 @@ export const AppearanceSettings = () => {
       <SettingsPanel
         title={t('settings.appearance.title')}
         description={t('settings.appearance.description')}
-        footer={
-          <SettingsActions
-            align="start"
-            onReset={() => setShowResetConfirm(true)}
-            resetLabel={t('auth.resetVisualSettings')}
-            resetDisabled={isResetting}
-            resetTestId="appearance-reset"
-          />
-        }
       >
         <SettingsSection title={t('settings.appearance.themeMode.label')}>
           <ThemeModeControl
@@ -121,6 +112,14 @@ export const AppearanceSettings = () => {
             }}
           />
         </SettingsSection>
+
+        <SettingsActions
+          align="start"
+          onReset={() => setShowResetConfirm(true)}
+          resetLabel={t('auth.resetVisualSettings')}
+          resetDisabled={isResetting}
+          resetTestId="appearance-reset"
+        />
       </SettingsPanel>
 
       <ConfirmDialog

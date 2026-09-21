@@ -103,4 +103,12 @@ describe('ProfileSettings — миграция на Settings UI Kit (AD-072)', (
 
     expect(mocks.updateProfile).toHaveBeenCalledTimes(1)
   })
+
+  it('действия рендерятся внутри scroll-тела, а не fixed-футером', async () => {
+    const container = await renderSettings()
+
+    const scroll = container.querySelector('.overflow-y-auto')!
+    const save = container.querySelector('[data-testid="profile-save"]')!
+    expect(scroll.contains(save)).toBe(true)
+  })
 })

@@ -24,7 +24,7 @@
 
 ### 2.1. Принципы вёрстки (инварианты панели)
 
-- **Один вертикальный скролл.** Скроллится только тело; шапка и `fixed`-футер — `shrink-0` вне scroll-контейнера.
+- **Один вертикальный скролл.** Скроллится только тело; шапка — `shrink-0` вне scroll-контейнера. Действия формы рендерятся в конце тела (внутри scroll-контейнера), фиксированный футер не используется.
 - **Фиксированная шапка.** `header` не участвует в прокрутке.
 - **Ноль горизонтального скролла.** Тело — `overflow-x-hidden`; все вложенные блоки несут `min-w-0`, текст — `break-words`.
 - **Центрирование `max-w-3xl`.** Шапка, тело и футер используют одну ширину (`mx-auto w-full max-w-3xl`), поэтому контент стоит по центру на широких экранах.
@@ -56,17 +56,17 @@
 - `save()` — no-op при `!dirty`/`saving`, вызывает `onSave(draft)`, при успехе обновляет `saved`/`draft` возвращённым значением (или текущим `draft`), при ошибке возвращает `false` и снимает `saving`;
 - `revert()` — `draft = saved`; `resetToDefault()` — `draft = defaultValue`.
 
-### 2.4. Футер: `fixed` vs `sticky`
+### 2.4. Футер: `footer` / `footerVariant` — возможность, а не стандарт
 
-- `fixed` (по умолчанию) — футер рендерится **вне** scroll-тела (`shrink-0 border-t bg-background mt-4`), всегда виден.
-- `sticky` — футер рендерится **в конце** scroll-тела внутри центрированной обёртки как `sticky bottom-0 bg-background/95 backdrop-blur border-t`.
+- Пропы `footer` и `footerVariant` (`fixed`/`sticky`) сохранены как возможность Kit, но **нигде не используются**: `fixed` (по умолчанию) рендерил бы футер **вне** scroll-тела (`shrink-0 border-t bg-background mt-4`), `sticky` — в конце scroll-тела (`sticky bottom-0 bg-background/95 backdrop-blur border-t`).
+- Стандарт: `SettingsActions` рендерятся **в конце содержимого** панели, последним элементом children внутри scroll-тела (после последней `SettingsSection`), как в `DefaultsPanel`/`ToolsDisabledSettings`/`RoutingSettings`. Разделов с `footer`/`footerVariant` нет.
 
 ### 2.5. Мобильные правила
 
 - На теле действия шапки уходят под заголовок (`flex-col` → `sm:flex-row`).
 - Ряды `SettingsRow` и пары «контрол + кнопка» в `ListField` переносятся (`flex-wrap`), кнопки — `shrink-0`, поля — `flex-1 min-w-0`.
 - `NumberField` на теле — `w-full`, с `sm` — `sm:w-24`.
-- Футер с `flex-wrap`, чтобы кнопки не обрезались.
+- Ряд действий (`SettingsActions`) с `flex-wrap`, чтобы кнопки не обрезались.
 
 ### 2.6. Связь с `Button` и AD-070
 
@@ -83,7 +83,7 @@
 - **`Tabs`** (`controls/Tabs.tsx`) — мобильно-устойчивый переключатель вкладок: контейнер `flex w-full min-w-0 items-stretch gap-1 rounded-lg bg-muted p-1`, вкладки `flex-1 min-w-0` с `break-words` (или `truncate` при `title`), активная — `bg-background text-foreground shadow-sm`. `variant="underline"` — подчёркивание активной без фона. При переполнении контейнер скроллится по X с затенением (`tab-scroll-container` + `data-scroll-shadow`).
 - **Сворачивающаяся шапка `SettingsPanel`.** Проп `collapsibleHeader?: boolean` (по умолчанию `true`). Только на не-десктопе (`useDevice()`, `deviceType !== 'desktop'`) при `scrollTop > 8` описание скрывается (`grid-rows-[0fr]` + `opacity-0` + `overflow-hidden`, плавный `transition`, `motion-reduce:transition-none`), остаются заголовок и `actions`; при возврате наверх — разворачивается. На десктопе описание видно всегда. Шапка — `shrink-0` (не скроллится).
 - **Затенение скролла.** Тело панели — `settings-scroll-container` + `data-scroll-shadow` (`top`/`bottom`/`top-bottom`), как в `MessageList`. CSS — общие правила с `.chat-scroll-container` в `styles/design-system.css`, размер затенения переопределён (`--scroll-shadow-size: 1.5rem`); mask работает по alpha, поэтому темы не требуют отдельных правил. `ResizeObserver` подключается только при наличии (jsdom-safe).
-- **Футер.** `footerVariant` (`fixed`/`sticky`) — доступная возможность Kit, но **не стандарт**: в разделах используется `fixed` (по умолчанию), `sticky` не применяется.
+- **Футер.** `footer`/`footerVariant` (`fixed`/`sticky`) — доступная возможность Kit, но **нигде не применяется** (не стандарт): во всех разделах действия формы рендерятся в конце содержимого, внутри scroll-тела.
 
 
 ## 3. Последствия

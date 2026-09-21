@@ -120,13 +120,6 @@ export const ProfileSettings = () => {
     <SettingsPanel
       title={t('auth.profile')}
       description={t('auth.profileDescription')}
-      footer={
-        <SettingsActions
-          onSave={handleSave}
-          saving={isLoading}
-          saveTestId="profile-save"
-        />
-      }
     >
       <SettingsSection>
         <div className="flex flex-wrap items-center gap-4 min-w-0">
@@ -239,6 +232,12 @@ export const ProfileSettings = () => {
           {t('common.saved')}
         </div>
       )}
+
+      <SettingsActions
+        onSave={handleSave}
+        saving={isLoading}
+        saveTestId="profile-save"
+      />
     </SettingsPanel>
   )
 }
