@@ -6,6 +6,7 @@ import React from 'react'
 const mocks = vi.hoisted(() => ({
   getLlmGatewaySettings: vi.fn(),
   saveLlmGatewaySettings: vi.fn(),
+  resetLlmGatewaySettings: vi.fn(),
   getGatewayPatterns: vi.fn(),
   saveGatewayPatterns: vi.fn(),
   resetGatewayPatterns: vi.fn(),
@@ -52,6 +53,12 @@ async function renderSettings(): Promise<HTMLElement> {
 
 beforeEach(() => {
   mocks.getLlmGatewaySettings.mockResolvedValue({ enabled: false, inputMode: 'obfuscate', logPayloads: false })
+  mocks.resetLlmGatewaySettings.mockResolvedValue({
+    enabled: false,
+    inputMode: 'obfuscate',
+    logPayloads: false,
+    rateLimit: { userPerMinute: 60, providerPerMinute: 120 },
+  })
   mocks.getGatewayPatterns.mockResolvedValue({ patterns: [], isOverridden: false })
   mocks.getSecuritySettings.mockResolvedValue({ protectedPaths: { enabled: true } })
   mocks.getProtectedPaths.mockResolvedValue({
@@ -86,5 +93,58 @@ describe('SecuritySettings — без политики инструментов 
 
     expect(container.textContent).toContain('Security gateway')
     expect(container.textContent).toContain('Protected paths')
+  })
+})
+
+describe('SecuritySettings — миграция на Settings UI Kit (AD-072)', () => {
+  it('каркас — SettingsPanel с единственным scroll-контейнером и без pr-2', async () => {
+    const container = await renderSettings()
+
+    const scrollers = container.querySelectorAll('.overflow-y-auto')
+    expect(scrollers).toHaveLength(1)
+    expect(scrollers[0]!.classList.contains('overflow-x-hidden')).toBe(true)
+    expect(container.innerHTML).not.toContain('pr-2')
+  })
+
+  it('числовые поля — NumberField (w-full sm:w-24), без legacy w-20', async () => {
+    const container = await renderSettings()
+
+    const numbers = container.querySelectorAll('input[type="number"]')
+    // rateLimit user/provider + askTimeoutSec
+    expect(numbers.length).toBeGreaterThanOrEqual(3)
+    numbers.forEach((input) => {
+      expect(input.classList.contains('sm:w-24')).toBe(true)
+      expect(input.classList.contains('w-20')).toBe(false)
+    })
+    expect(container.innerHTML).not.toContain('w-20')
+  })
+
+  it('Save/Reset шлюза через SettingsActions; Reset дёргает resetLlmGatewaySettings', async () => {
+    const container = await renderSettings()
+
+    expect(container.querySelector('[data-testid="security-gateway-save"]')).not.toBeNull()
+    const reset = container.querySelector('[data-testid="security-gateway-reset"]') as HTMLButtonElement
+    expect(reset).not.toBeNull()
+
+    await act(async () => {
+      reset.click()
+    })
+
+    expect(mocks.resetLlmGatewaySettings).toHaveBeenCalledTimes(1)
+  })
+
+  it('списки защищённых путей рендерятся через ListField', async () => {
+    const container = await renderSettings()
+
+    for (const label of [
+      'Denied paths (exact match)',
+      'Denied directory prefixes',
+      'Paths requiring confirmation (ask)',
+      'Denied command prefixes (shell only)',
+    ]) {
+      expect(container.textContent).toContain(label)
+    }
+    // Каждый ListField даёт минимум одно текстовое поле ввода.
+    expect(container.querySelectorAll('input[type="text"]').length).toBeGreaterThanOrEqual(4)
   })
 })
