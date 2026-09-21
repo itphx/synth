@@ -16,6 +16,7 @@ vi.mock('@/stores/useUIStore', () => {
   const state = {
     centerTabs: [{ id: 'chat-parent', type: 'chat', title: 'Родитель', data: { sessionId: 'parent' } }],
     activeCenterTabId: 'chat-parent',
+    openTab: vi.fn(),
   }
   const useUIStore = ((selector: (s: typeof state) => unknown) => selector(state)) as {
     (selector: (s: typeof state) => unknown): unknown
@@ -31,6 +32,7 @@ import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as ruDict } from '@/lib/i18n/messages/ru'
 import { SubagentPart, type SubagentPartData } from './SubagentPart'
 import { useChatStore } from '@/stores/chatStore'
+import { useUIStore } from '@/stores/useUIStore'
 import { synthApi } from '@/lib/api/synthApi'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -168,5 +170,54 @@ describe('SubagentPart: плашка ошибки внизу блока (B7)', (
     })
     const container = await renderSubagent(makeSubagent({ live: false }), 'parent')
     expect(container.textContent).not.toContain('Повторная попытка')
+  })
+
+  it('не содержит <button> внутри <button> (валидный DOM)', async () => {
+    const container = await renderSubagent(makeSubagent({}), 'parent')
+    const buttons = Array.from(container.querySelectorAll('button'))
+    expect(buttons.length).toBeGreaterThan(0)
+    for (const btn of buttons) {
+      expect(btn.parentElement?.closest('button')).toBeNull()
+    }
+  })
+
+  it('клик «Открыть» открывает вкладку и не переключает expanded', async () => {
+    const container = await renderSubagent(makeSubagent({}), 'parent')
+    const header = container.querySelector('[role="button"][aria-expanded]') as HTMLElement
+    expect(header).not.toBeNull()
+    expect(header.getAttribute('aria-expanded')).toBe('false')
+
+    const openBtn = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Открыть',
+    )
+    expect(openBtn).toBeDefined()
+
+    const openTab = useUIStore.getState().openTab as unknown as ReturnType<typeof vi.fn>
+    openTab.mockClear()
+    await act(async () => {
+      openBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(openTab).toHaveBeenCalledTimes(1)
+    expect(header.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('клик по заголовку переключает expanded', async () => {
+    const container = await renderSubagent(makeSubagent({}), 'parent')
+    const header = container.querySelector('[role="button"][aria-expanded]') as HTMLElement
+    expect(header.getAttribute('aria-expanded')).toBe('false')
+    await act(async () => {
+      header.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(header.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('Enter на заголовке переключает expanded', async () => {
+    const container = await renderSubagent(makeSubagent({}), 'parent')
+    const header = container.querySelector('[role="button"][aria-expanded]') as HTMLElement
+    await act(async () => {
+      header.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    expect(header.getAttribute('aria-expanded')).toBe('true')
   })
 })

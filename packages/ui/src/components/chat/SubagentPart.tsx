@@ -115,6 +115,14 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
 
   const shortSessionId = subagent.sessionId?.slice(0, 8)
 
+  // Enter/Space на заголовке-контейнере переключают раскрытие (role="button").
+  const handleHeaderKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      setExpanded((v) => !v)
+    }
+  }
+
   const handleOpenSession = (e: React.MouseEvent) => {
     e.stopPropagation()
     if (!subagent.sessionId) return
@@ -136,9 +144,13 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
 
   return (
     <div className="mb-2 rounded-md border border-border/50 overflow-hidden">
-      <button
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
         className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors bg-muted/30"
         onClick={() => setExpanded(!expanded)}
+        onKeyDown={handleHeaderKeyDown}
       >
         <Icon
           name={expanded ? 'arrow-down-s' : 'arrow-right-s'}
@@ -167,7 +179,7 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
             {subagent.steps} {t('chat.subagent.steps')}
           </span>
         )}
-      </button>
+      </div>
       {expanded && (
         <div className="p-3 border-t border-border/50 bg-muted/10 space-y-2">
           {subagent.prompt && (
