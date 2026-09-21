@@ -216,3 +216,21 @@
 - **Риск:** `EMPTY_*` — общие мутабельные референсы; мутаций нет, но в будущем их нельзя мутировать (иначе протечёт между сессиями).
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** нет (ожидает явной просьбы пользователя).
+
+## 2026-09-21 — Полное устранение проблем консоли (perf-продолжение)
+- **Задача:** «Закоммить и продолжай до полного устранения проблем».
+- **Тип:** bug fix + perf + refactor
+- **Исполнитель:** @orchestrator → @fixer ×5, @explore
+- **Результат:** PASS. Консоль браузера чистая (0 errors / 0 warnings), единственный WS-коннект.
+- **Сделано:**
+  1. **Г2 — memo ChatMessage** (`MessageList.tsx`, `ChatMessage.tsx`, новый `ChatMessage.memo.test.tsx`): `chatMsgProps` с per-render замыканиями удалён; колбэки `ChatMessage` принимают `msg`/`index`, локальные `useCallback`-биндинги внутри; `ChatMessage` снова байлаутится, при стриме перерисовывается только изменившееся сообщение. Коммит `d724850`.
+  2. **Г3 — TitleTooltipBridge** (`TitleTooltipBridge.tsx`, новый тест): измерение в `rAF`/`useEffect` вместо `useLayoutEffect`, отмена кадров, ранний выход `hide()`, skip на `(pointer: coarse)` — устранён `Forced reflow`. Коммит `35ce61b`.
+  3. **Транспорт** (`transportStore.ts`, новый `transportStore.connect.test.ts`): идемпотентный `connect()` по эффективному транспорту (`activeKind`), сброс на `onDisconnect`/`disconnect`/HMR; auto→ws больше не пересоздаёт CONNECTING-сокет → нет «closed before the connection is established». Коммит `75a7504`.
+  4. **Остальные whole-store подписки**: 45 call-site в 28 компонентах → 168 точечных селекторов (`App/DefaultsSync`, `LeftPanel`, `RightPanel`, `Sidebar`, `ProjectsTabToolbar`, `FilesTabToolbar`, `GitTabToolbar`, settings/auth/chat и др.). Финальный Grep `useXStore()` — 0 совпадений. Коммит `966d45f`.
+  5. **401 `/auth/session`**: `authStore.reauthenticate` переведён на `GET /auth/status` (200 всегда, те же user/deployment); `profileService.initialize()` — только при `authenticated`. 3 новых теста. Коммит `ede5e96`.
+  6. **meta warning**: добавлена `<meta name="mobile-web-app-capable">` в `packages/ui/index.html`. Коммит `d25acba`.
+- **Проверки:** `pnpm build` — PASS; `pnpm typecheck` — 6/6; `pnpm lint` — 0 errors (147 pre-existing warnings); `pnpm test` — shared/core 1589, ui 352, backend 286, runner 0 (нет тестов) — все PASS.
+- **Браузерная проверка (Playwright, dev :5002):** до фиксов `GET /auth/session 401`, `[TransportStore] Connecting auto` → `Disconnected: manual` → повторный connect, `<button> in <button>`, 1 deprecation warning. После: 0 errors / 0 warnings; `/auth/session` не вызывается; транспорт — один `Connecting ws` → `WS Connected` → `Backend ready`; открытие сессии с блоками саб-агента и раскрытие блока ошибок не дают.
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммиты:** `918af7f`, `e0b103e`, `42075fa`, `d724850`, `35ce61b`, `75a7504`, `966d45f`, `ede5e96`, `d25acba`.
+- **Остаточное (не проблема консоли):** дублирующиеся `GET /auth/status` (3×) и `/auth/users` (2×) на старте — StrictMode/dev-эффекты, 200 OK, на консоль не влияют.
