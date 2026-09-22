@@ -158,4 +158,18 @@ describe('ChatSettings — миграция на Settings UI Kit (AD-072)', () =
 
     expect(useUIStore.getState().intermediateTextDisplay).toBe('inline')
   })
+
+  it('Reset серый/неактивен на дефолте и активен при изменениях', async () => {
+    const container = await renderSettings()
+
+    expect(byTestId(container, 'chat-reset')!.disabled).toBe(true)
+    expect(byTestId(container, 'chat-reset')!.className).toContain('border-muted-foreground')
+
+    await act(async () => {
+      radioByText(container, 'At bottom').click()
+    })
+
+    expect(byTestId(container, 'chat-reset')!.disabled).toBe(false)
+    expect(byTestId(container, 'chat-reset')!.className).toContain('border-primary')
+  })
 })

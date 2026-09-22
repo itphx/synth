@@ -15,6 +15,8 @@ export interface SettingsActionsProps {
   saveDisabled?: boolean
   cancelDisabled?: boolean
   resetDisabled?: boolean
+  /** Текущие значения равны дефолтным: Reset становится серым (`outline-muted`) и неактивным. */
+  isDefault?: boolean
   saveLabel?: string
   cancelLabel?: string
   resetLabel?: string
@@ -42,6 +44,9 @@ const ALIGN_CLASSES: Record<SettingsActionsAlign, string> = {
  * По умолчанию Reset — контурная кнопка в цвете Save (`outline-primary`);
  * `resetVariant="danger"` возвращает destructive-вид, `resetVariant="primary"`
  * — сплошную заливку как у Save.
+ * Правило цвета Reset: цветная (`outline-primary`) — только когда текущие
+ * значения отличаются от дефолтных; при дефолтных (`isDefault`) — серая
+ * (`outline-muted`) и неактивна.
  * Cancel — контурная кнопка в цвете своего текста (`outline-muted`),
  * рядом с Reset (`outline-primary`) и Save (`primary`).
  */
@@ -54,6 +59,7 @@ export function SettingsActions({
   saveDisabled = false,
   cancelDisabled = false,
   resetDisabled = false,
+  isDefault = false,
   saveLabel,
   cancelLabel,
   resetLabel,
@@ -78,11 +84,11 @@ export function SettingsActions({
     <div className={cn('flex flex-wrap items-center gap-2 min-w-0', ALIGN_CLASSES[align], className)}>
       {onReset && (
         <Button
-          variant={resetVariant}
+          variant={isDefault ? 'outline-muted' : resetVariant}
           size="sm"
           className="mr-auto shrink-0"
           onClick={onReset}
-          disabled={resetDisabledFinal}
+          disabled={resetDisabledFinal || isDefault}
           data-testid={resetTestId}
         >
           {resetLabel ?? t('common.reset')}

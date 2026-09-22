@@ -83,11 +83,13 @@ export function SecuritySettings() {
 
   // --- Шлюз безопасности (llmGateway) ---
   const [settings, setSettings] = useState<LlmGatewaySettings>(DEFAULT_SETTINGS)
+  // Серверный дефолт; до загрузки — встроенный fallback (шейп совпадает).
+  const [gatewayDefaults, setGatewayDefaults] = useState<LlmGatewaySettings>(DEFAULT_SETTINGS)
   const [loading, setLoading] = useState(true)
 
   const gateway = useSettingsDraft<LlmGatewaySettings>({
     value: settings,
-    defaultValue: DEFAULT_SETTINGS,
+    defaultValue: gatewayDefaults,
     onSave: async (draftValue) => {
       try {
         const saved = await synthApi.saveLlmGatewaySettings(draftValue)
@@ -131,10 +133,11 @@ export function SecuritySettings() {
   useEffect(() => {
     let cancelled = false
     synthApi
-      .getLlmGatewaySettings()
-      .then((cfg) => {
+      .getLlmGatewaySettingsInfo()
+      .then(({ settings: cfg, defaults }) => {
         if (cancelled) return
         setSettings(normalizeGatewaySettings(cfg))
+        setGatewayDefaults(normalizeGatewaySettings(defaults))
       })
       .catch(() => {})
       .finally(() => {
@@ -398,8 +401,9 @@ export function SecuritySettings() {
           onCancel={() => gateway.revert()}
           onReset={handleGatewayReset}
           saving={gateway.saving}
-          saveDisabled={loading}
+          saveDisabled={loading || !gateway.dirty}
           cancelDisabled={!gateway.dirty}
+          isDefault={gateway.isDefault}
           saveTestId="security-gateway-save"
           cancelTestId="security-gateway-cancel"
           resetTestId="security-gateway-reset"
@@ -479,6 +483,7 @@ export function SecuritySettings() {
           saving={patternsSaving}
           saveDisabled={patternsLoading}
           resetDisabled={patternsResetting || patternsLoading}
+          isDefault={!isOverridden}
           saveLabel={t('gateway.patterns.save')}
           resetLabel={t('gateway.patterns.reset')}
           saveTestId="security-patterns-save"
@@ -569,6 +574,7 @@ export function SecuritySettings() {
           saving={securitySaving || policySaving}
           saveDisabled={securityLoading || policyLoading}
           resetDisabled={policyResetting || policyLoading}
+          isDefault={!policyOverridden}
           saveTestId="security-protected-save"
           resetTestId="security-protected-reset"
         />

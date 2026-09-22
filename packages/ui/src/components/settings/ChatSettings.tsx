@@ -55,7 +55,7 @@ export const ChatSettings = () => {
         saving={draft.saving}
         saveDisabled={!draft.dirty}
         cancelDisabled={!draft.dirty}
-        resetDisabled={draft.isDefault}
+        isDefault={draft.isDefault}
         saveTestId="chat-save"
         cancelTestId="chat-cancel"
         resetTestId="chat-reset"

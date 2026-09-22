@@ -4,10 +4,10 @@ import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
 
 const mocks = vi.hoisted(() => ({
-  getToolsDisabled: vi.fn(),
+  getToolsDisabledInfo: vi.fn(),
   saveToolsDisabled: vi.fn(),
   resetToolsDisabled: vi.fn(),
-  getToolsPolicy: vi.fn(),
+  getToolsPolicyInfo: vi.fn(),
   saveToolsPolicy: vi.fn(),
   resetToolsPolicy: vi.fn(),
   getSessionPrompt: vi.fn(),
@@ -73,17 +73,36 @@ async function renderSettings(): Promise<HTMLElement> {
   return container
 }
 
+/** Открывает Base UI select и кликает опцию по подписи (опции рендерятся в portal). */
+async function selectOption(trigger: HTMLElement, label: string): Promise<void> {
+  await act(async () => {
+    trigger.click()
+  })
+  const option = [...document.body.querySelectorAll('[role="option"]')].find(
+    (o) => o.textContent?.trim().startsWith(label),
+  ) as HTMLElement | undefined
+  expect(option, `option "${label}"`).toBeTruthy()
+  await act(async () => {
+    option!.click()
+  })
+}
+
 beforeEach(() => {
-  mocks.getToolsDisabled.mockResolvedValue({ capabilities: [], tools: [] })
+  mocks.getToolsDisabledInfo.mockResolvedValue({
+    config: { capabilities: [], tools: [] },
+    isOverridden: false,
+    defaults: { capabilities: [], tools: [] },
+  })
   mocks.saveToolsDisabled.mockImplementation(async (config: unknown) => config)
   mocks.resetToolsDisabled.mockResolvedValue({ capabilities: [], tools: [] })
-  mocks.getToolsPolicy.mockResolvedValue('consistency')
+  mocks.getToolsPolicyInfo.mockResolvedValue({ policy: 'consistency', isOverridden: false, defaults: 'consistency' })
   mocks.saveToolsPolicy.mockImplementation(async (policy: unknown) => policy)
   mocks.resetToolsPolicy.mockResolvedValue('consistency')
   mocks.getSessionPrompt.mockResolvedValue({ manifest: {}, history: {}, toolsDetail: TOOLS_DETAIL })
 
   useMcpStore.setState({
     toolsDisabled: null,
+    toolsDisabledDefaults: null,
     toolsDisabledLoading: false,
     toolsDisabledError: null,
   })
@@ -155,7 +174,11 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
   })
 
   it('ранее отключённые группы/тулы показаны без галочки', async () => {
-    mocks.getToolsDisabled.mockResolvedValue({ capabilities: ['web'], tools: ['git_status'] })
+    mocks.getToolsDisabledInfo.mockResolvedValue({
+      config: { capabilities: ['web'], tools: ['git_status'] },
+      isOverridden: true,
+      defaults: { capabilities: [], tools: [] },
+    })
     const container = await renderSettings()
 
     const webGroup = container.querySelector('[data-testid="tools-disabled-group-web"]') as HTMLInputElement
@@ -169,7 +192,11 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
   })
 
   it('установка галочки убирает группу и тул из disabled', async () => {
-    mocks.getToolsDisabled.mockResolvedValue({ capabilities: ['web'], tools: ['git_status'] })
+    mocks.getToolsDisabledInfo.mockResolvedValue({
+      config: { capabilities: ['web'], tools: ['git_status'] },
+      isOverridden: true,
+      defaults: { capabilities: [], tools: [] },
+    })
     const container = await renderSettings()
 
     const webGroup = container.querySelector('[data-testid="tools-disabled-group-web"]') as HTMLInputElement
@@ -192,16 +219,32 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
   })
 
   it('карточка «Политика встроенных инструментов» отображается и сохраняет выбранное значение', async () => {
-    mocks.getToolsPolicy.mockResolvedValue('available')
     const container = await renderSettings()
 
-    expect(mocks.getToolsPolicy).toHaveBeenCalledTimes(1)
+    expect(mocks.getToolsPolicyInfo).toHaveBeenCalledTimes(1)
     // Заголовок карточки политики встроенных (en-словарь).
     expect(container.textContent).toContain('Built-in tools policy')
     // Текущее значение подтянуто с сервера и видно в триггере селекта.
-    expect(container.textContent).toContain('available')
+    expect(container.textContent).toContain('consistency')
 
     const saveButton = container.querySelector('[data-testid="tools-policy-save"]') as HTMLButtonElement
+    expect(saveButton).not.toBeNull()
+    // Политика на дефолте: Save/Cancel disabled, Reset — серая и disabled.
+    expect(saveButton.disabled).toBe(true)
+    const resetButton = container.querySelector('[data-testid="tools-policy-reset"]') as HTMLButtonElement
+    expect(resetButton.disabled).toBe(true)
+    expect(resetButton.className).toContain('border-muted-foreground')
+
+    // Меняем значение — появляется dirty.
+    const card = saveButton.closest('section')!
+    const trigger = card.querySelector('[role="combobox"]') as HTMLElement
+    await selectOption(trigger, 'available')
+
+    // Изменённое значение: Save/Cancel активны, Reset — цветная.
+    expect(saveButton.disabled).toBe(false)
+    expect(resetButton.disabled).toBe(false)
+    expect(resetButton.className).toContain('border-primary')
+
     await act(async () => {
       saveButton.click()
     })
@@ -272,7 +315,14 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
   it('сохранение отключённых инструментов не трогает политику инструментов', async () => {
     const container = await renderSettings()
 
+    // Без изменений Save disabled — делаем черновик dirty.
+    const webGroup = container.querySelector('[data-testid="tools-disabled-group-web"]') as HTMLInputElement
+    await act(async () => {
+      webGroup.click()
+    })
+
     const saveButton = container.querySelector('[data-testid="tools-disabled-save"]') as HTMLButtonElement
+    expect(saveButton.disabled).toBe(false)
     await act(async () => {
       saveButton.click()
     })
@@ -283,7 +333,11 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
   })
 
   it('Reset инструментов вызывает resetToolsDisabled и включает всё', async () => {
-    mocks.getToolsDisabled.mockResolvedValue({ capabilities: ['web'], tools: ['git_status'] })
+    mocks.getToolsDisabledInfo.mockResolvedValue({
+      config: { capabilities: ['web'], tools: ['git_status'] },
+      isOverridden: true,
+      defaults: { capabilities: [], tools: [] },
+    })
     const container = await renderSettings()
 
     const webGroup = container.querySelector('[data-testid="tools-disabled-group-web"]') as HTMLInputElement
@@ -301,8 +355,11 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
   })
 
   it('Reset политики вызывает resetToolsPolicy', async () => {
+    // Политика отличается от дефолта — Reset цветная и активна.
+    mocks.getToolsPolicyInfo.mockResolvedValue({ policy: 'available', isOverridden: true, defaults: 'consistency' })
     const container = await renderSettings()
     const reset = container.querySelector('[data-testid="tools-policy-reset"]') as HTMLButtonElement
+    expect(reset.disabled).toBe(false)
     expect(reset).not.toBeNull()
     await act(async () => {
       reset.click()
@@ -315,6 +372,19 @@ describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §
   it('показывает бейдж «По умолчанию», когда отключений нет', async () => {
     const container = await renderSettings()
     expect(container.textContent).toContain('Default')
+  })
+
+  it('Reset инструментов серый/неактивен, когда конфиг равен серверному дефолту', async () => {
+    // Серверный дефолт содержит отключения (config.yaml) — Reset не должен быть цветным.
+    mocks.getToolsDisabledInfo.mockResolvedValue({
+      config: { capabilities: ['web'], tools: ['git_status'] },
+      isOverridden: false,
+      defaults: { capabilities: ['web'], tools: ['git_status'] },
+    })
+    const container = await renderSettings()
+    const reset = container.querySelector('[data-testid="tools-disabled-reset"]') as HTMLButtonElement
+    expect(reset.disabled).toBe(true)
+    expect(reset.className).toContain('border-muted-foreground')
   })
 
   it('каркас SettingsPanel: один скролл, без pr-2, гриды с grid-cols-1', async () => {

@@ -206,4 +206,22 @@ describe('AppearanceSettings — миграция на Settings UI Kit (AD-072)'
     expect(profileMock.syncLocaleToProfile).not.toHaveBeenCalled()
     expect(document.querySelector('[data-slot="dialog-content"]')).toBeNull()
   })
+
+  it('Reset активен при отличии от дефолта и серый/неактивен после сброса', async () => {
+    const container = await renderSettings()
+    const reset = () =>
+      container.querySelector('[data-testid="appearance-reset"]') as HTMLButtonElement
+
+    // Локаль en, а дефолт appearance — ru → Reset цветная и активна.
+    expect(reset().disabled).toBe(false)
+    expect(reset().className).toContain('border-primary')
+
+    await act(async () => {
+      reset().click()
+    })
+
+    // Значения стали дефолтными — Reset серая и disabled.
+    expect(reset().disabled).toBe(true)
+    expect(reset().className).toContain('border-muted-foreground')
+  })
 })

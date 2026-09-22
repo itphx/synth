@@ -41,6 +41,7 @@ export function ToolsDisabledSettings() {
   const { t } = useI18n()
   const { notify } = useNotification()
   const toolsDisabled = useMcpStore(s => s.toolsDisabled)
+  const toolsDisabledDefaults = useMcpStore(s => s.toolsDisabledDefaults)
   const toolsDisabledLoading = useMcpStore(s => s.toolsDisabledLoading)
   const toolsDisabledError = useMcpStore(s => s.toolsDisabledError)
   const fetchToolsDisabled = useMcpStore(s => s.fetchToolsDisabled)
@@ -54,15 +55,17 @@ export function ToolsDisabledSettings() {
   const [saving, setSaving] = useState(false)
 
   // Черновик отключений: галочка снята ⇔ элемент в наборе.
+  // Дефолт — серверный (config.yaml `tools.disabled`); до загрузки — пусто.
   const draft = useSettingsDraft<ToolsDisabledConfig>({
     value: toolsDisabled,
-    defaultValue: EMPTY_DISABLED,
+    defaultValue: toolsDisabledDefaults ?? EMPTY_DISABLED,
   })
 
   // Политика включения инструментов (AD-071 §2.3): глобальный режим отправки
   // определений в запрос к модели.
   const [toolsPolicy, setToolsPolicy] = useState<ToolsPolicy>('consistency')
   const [savedToolsPolicy, setSavedToolsPolicy] = useState<ToolsPolicy>('consistency')
+  const [toolsPolicyDefault, setToolsPolicyDefault] = useState<ToolsPolicy>('consistency')
   const [toolsPolicyLoading, setToolsPolicyLoading] = useState(true)
   const [toolsPolicySaving, setToolsPolicySaving] = useState(false)
   const [toolsPolicyError, setToolsPolicyError] = useState<string | null>(null)
@@ -74,11 +77,12 @@ export function ToolsDisabledSettings() {
   useEffect(() => {
     let cancelled = false
     synthApi
-      .getToolsPolicy()
-      .then((policy) => {
+      .getToolsPolicyInfo()
+      .then(({ policy, defaults }) => {
         if (!cancelled) {
           setToolsPolicy(policy)
           setSavedToolsPolicy(policy)
+          setToolsPolicyDefault(defaults)
         }
       })
       .catch((e) => {
@@ -341,7 +345,10 @@ export function ToolsDisabledSettings() {
           onCancel={() => draft.revert()}
           onReset={handleReset}
           saving={saving}
-          saveDisabled={toolsDisabledLoading}
+          saveDisabled={toolsDisabledLoading || !draft.dirty}
+          cancelDisabled={!draft.dirty}
+          resetDisabled={toolsDisabledLoading}
+          isDefault={draft.isDefault}
           saveTestId="tools-disabled-save"
           cancelTestId="tools-disabled-cancel"
           resetTestId="tools-disabled-reset"
@@ -361,6 +368,7 @@ export function ToolsDisabledSettings() {
         onChange={setToolsPolicy}
         onSave={handleToolsPolicySave}
         onReset={handleToolsPolicyReset}
+        isDefault={toolsPolicy === toolsPolicyDefault}
       />
     </SettingsPanel>
   )

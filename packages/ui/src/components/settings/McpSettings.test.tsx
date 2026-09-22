@@ -6,8 +6,8 @@ import React from 'react'
 const mocks = vi.hoisted(() => ({
   getMcpRegistry: vi.fn(),
   getMcpToolSettings: vi.fn(),
-  getMcpNetworkPolicy: vi.fn(),
-  getMcpPolicy: vi.fn(),
+  getMcpNetworkPolicyInfo: vi.fn(),
+  getMcpPolicyInfo: vi.fn(),
   addMcpRegistryEntry: vi.fn(),
   updateMcpRegistryEntry: vi.fn(),
   deleteMcpRegistryEntry: vi.fn(),
@@ -80,16 +80,35 @@ async function renderSettings(): Promise<HTMLElement> {
   return container
 }
 
+/** Открывает Base UI select и кликает опцию по подписи (опции рендерятся в portal). */
+async function selectOption(trigger: HTMLElement, label: string): Promise<void> {
+  await act(async () => {
+    trigger.click()
+  })
+  const allOptions = [...document.body.querySelectorAll('[role="option"]')]
+  const option = allOptions.find(
+    (o) => o.textContent?.trim().startsWith(label),
+  ) as HTMLElement | undefined
+  expect(option, `option "${label}"`).toBeTruthy()
+  await act(async () => {
+    option!.click()
+  })
+}
+
 beforeEach(() => {
   mocks.getMcpRegistry.mockResolvedValue({ entries: [ENTRY_SYS, ENTRY_COMMUNITY] })
   mocks.getMcpToolSettings.mockResolvedValue({ servers: {} })
-  mocks.getMcpNetworkPolicy.mockResolvedValue({ mode: 'deny', list: ['10.0.0.0/8'] })
+  mocks.getMcpNetworkPolicyInfo.mockResolvedValue({
+    policy: { mode: 'deny', list: ['10.0.0.0/8'] },
+    isOverridden: false,
+    defaults: { mode: 'deny', list: ['10.0.0.0/8'] },
+  })
   mocks.addMcpRegistryEntry.mockResolvedValue(ENTRY_COMMUNITY)
   mocks.updateMcpRegistryEntry.mockResolvedValue(ENTRY_COMMUNITY)
   mocks.deleteMcpRegistryEntry.mockResolvedValue({ success: true })
   mocks.saveMcpToolSettings.mockResolvedValue({ servers: {} })
   mocks.saveMcpNetworkPolicy.mockImplementation(async (p: unknown) => p)
-  mocks.getMcpPolicy.mockResolvedValue('auto')
+  mocks.getMcpPolicyInfo.mockResolvedValue({ policy: 'auto', isOverridden: false, defaults: 'auto' })
   mocks.saveMcpPolicy.mockImplementation(async (p: unknown) => p)
   mocks.resetMcpSettings.mockResolvedValue({ servers: {} })
   mocks.resetMcpNetworkPolicy.mockResolvedValue({ mode: 'deny', list: [] })
@@ -104,6 +123,7 @@ beforeEach(() => {
     toolSettingsLoading: false,
     toolSettingsError: null,
     networkPolicy: null,
+    networkPolicyDefaults: null,
     networkPolicyLoading: false,
     networkPolicyError: null,
   })
@@ -171,16 +191,31 @@ describe('McpSettings — реестр MCP (AD-071 §2.5)', () => {
 
 describe('McpSettings — политика MCP (AD-071 §2.3)', () => {
   it('ADMIN видит карточку «MCP policy» и сохраняет выбранное значение', async () => {
-    mocks.getMcpPolicy.mockResolvedValue('available')
     const container = await renderSettings()
 
-    expect(mocks.getMcpPolicy).toHaveBeenCalledTimes(1)
+    expect(mocks.getMcpPolicyInfo).toHaveBeenCalledTimes(1)
     expect(container.textContent).toContain('MCP policy')
     // Текущее значение подтянуто с сервера и видно в триггере селекта.
-    expect(container.textContent).toContain('available')
+    expect(container.textContent).toContain('auto')
 
     const saveButton = container.querySelector('[data-testid="mcp-policy-save"]') as HTMLButtonElement
     expect(saveButton).not.toBeNull()
+    // Политика на дефолте: Save/Cancel disabled, Reset — серая и disabled.
+    expect(saveButton.disabled).toBe(true)
+    const resetButton = container.querySelector('[data-testid="mcp-policy-reset"]') as HTMLButtonElement
+    expect(resetButton.disabled).toBe(true)
+    expect(resetButton.className).toContain('border-muted-foreground')
+
+    // Меняем значение — появляется dirty.
+    const card = saveButton.closest('section')!
+    const trigger = card.querySelector('[role="combobox"]') as HTMLElement
+    await selectOption(trigger, 'available')
+
+    // Изменённое значение: Save/Cancel активны, Reset — цветная.
+    expect(saveButton.disabled).toBe(false)
+    expect(resetButton.disabled).toBe(false)
+    expect(resetButton.className).toContain('border-primary')
+
     await act(async () => {
       saveButton.click()
     })
@@ -268,7 +303,11 @@ describe('McpSettings — политика MCP (AD-071 §2.3)', () => {
 
 describe('McpSettings — сетевая политика (AD-071 §2.3.1 / AD-072)', () => {
   it('ADMIN видит секцию и сохраняет allow-режим со списком', async () => {
-    mocks.getMcpNetworkPolicy.mockResolvedValue({ mode: 'allow', list: ['10.0.0.0/8'] })
+    mocks.getMcpNetworkPolicyInfo.mockResolvedValue({
+      policy: { mode: 'allow', list: ['10.0.0.0/8'] },
+      isOverridden: true,
+      defaults: { mode: 'deny', list: [] },
+    })
     const container = await renderSettings()
     const section = container.querySelector('[data-testid="mcp-network-policy"]')
     expect(section).not.toBeNull()
@@ -279,12 +318,33 @@ describe('McpSettings — сетевая политика (AD-071 §2.3.1 / AD-0
 
     const saveButton = section!.querySelector('[data-testid="mcp-network-save"]') as HTMLButtonElement
     expect(saveButton).not.toBeNull()
+    // Без изменений Save неактивен (dirty).
+    expect(saveButton.disabled).toBe(true)
+
+    // Добавляем адрес в список — появляется несохранённая правка.
+    const input = section!.querySelector('input[placeholder="10.0.0.0/8"]') as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(input, '192.168.0.0/16')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const addButton = [...section!.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Add',
+    ) as HTMLButtonElement
+    await act(async () => {
+      addButton.click()
+    })
+    expect(saveButton.disabled).toBe(false)
+
     await act(async () => {
       saveButton.click()
     })
     await act(async () => {})
 
-    expect(mocks.saveMcpNetworkPolicy).toHaveBeenCalledWith({ mode: 'allow', list: ['10.0.0.0/8'] })
+    expect(mocks.saveMcpNetworkPolicy).toHaveBeenCalledWith({
+      mode: 'allow',
+      list: ['10.0.0.0/8', '192.168.0.0/16'],
+    })
   })
 
   it('не-ADMIN не видит секцию сетевой политики', async () => {
@@ -292,10 +352,75 @@ describe('McpSettings — сетевая политика (AD-071 §2.3.1 / AD-0
     const container = await renderSettings()
     expect(container.querySelector('[data-testid="mcp-network-policy"]')).toBeNull()
   })
+
+  it('Reset сетевой политики серый/неактивен на серверном дефолте и активен при изменениях', async () => {
+    // Серверный дефолт — deny приватных диапазонов с непустым списком.
+    const serverDefault = {
+      mode: 'deny' as const,
+      list: ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'],
+    }
+    mocks.getMcpNetworkPolicyInfo.mockResolvedValue({
+      policy: { mode: serverDefault.mode, list: [...serverDefault.list] },
+      isOverridden: false,
+      defaults: serverDefault,
+    })
+    const container = await renderSettings()
+    const section = container.querySelector('[data-testid="mcp-network-policy"]')!
+    const resetButton = section.querySelector('[data-testid="mcp-network-reset"]') as HTMLButtonElement
+    const saveButton = section.querySelector('[data-testid="mcp-network-save"]') as HTMLButtonElement
+
+    // Текущее значение равно серверному дефолту (непустой список) → Reset серый.
+    expect(section.textContent).toContain('10.0.0.0/8')
+    expect(resetButton.disabled).toBe(true)
+    expect(resetButton.className).toContain('border-muted-foreground')
+    expect(saveButton.disabled).toBe(true)
+
+    const trigger = section.querySelector('[aria-label="Mode"]') as HTMLElement
+    await selectOption(trigger, 'allow')
+
+    expect(resetButton.disabled).toBe(false)
+    expect(resetButton.className).toContain('border-primary')
+    expect(saveButton.disabled).toBe(false)
+  })
 })
 
 describe('McpSettings — reset через API (AD-072)', () => {
+  it('Reset доступности серый/неактивен на серверном дефолте и активен при изменениях', async () => {
+    const container = await renderSettings()
+    const resetButton = () =>
+      container.querySelector('[data-testid="mcp-availability-reset"]') as HTMLButtonElement
+
+    expect(resetButton().disabled).toBe(true)
+    expect(resetButton().className).toContain('border-muted-foreground')
+
+    const card = container.querySelector('[data-testid="mcp-availability-save"]')!.closest('section')!
+    const firstToggle = () => card.querySelector('[role="switch"]') as HTMLButtonElement
+    await act(async () => {
+      firstToggle().click()
+    })
+
+    expect(resetButton().disabled).toBe(false)
+    expect(resetButton().className).toContain('border-primary')
+
+    // Возврат тумблера к дефолту гасит Reset: сравнение по эффективным значениям.
+    await act(async () => {
+      firstToggle().click()
+    })
+    expect(resetButton().disabled).toBe(true)
+    expect(resetButton().className).toContain('border-muted-foreground')
+  })
+
   it('Reset в блоках доступности, политики и сети вызывает reset-API', async () => {
+    // Доступность, политика и сеть отличаются от дефолта — Reset цветные и активны.
+    mocks.getMcpToolSettings.mockResolvedValue({
+      servers: { sys: { default: { plan: true, act: true }, tools: {} } },
+    })
+    mocks.getMcpPolicyInfo.mockResolvedValue({ policy: 'available', isOverridden: true, defaults: 'auto' })
+    mocks.getMcpNetworkPolicyInfo.mockResolvedValue({
+      policy: { mode: 'allow', list: ['10.0.0.0/8'] },
+      isOverridden: true,
+      defaults: { mode: 'deny', list: [] },
+    })
     const container = await renderSettings()
 
     const availabilityReset = container.querySelector('[data-testid="mcp-availability-reset"]') as HTMLButtonElement

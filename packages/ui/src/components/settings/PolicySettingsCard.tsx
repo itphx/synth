@@ -24,7 +24,6 @@ export function PolicySettingsCard({
   onChange,
   onSave,
   onReset,
-  resetDisabled,
   isDefault,
   className,
 }: {
@@ -37,12 +36,12 @@ export function PolicySettingsCard({
   onChange: (value: ToolsPolicy) => void
   onSave: () => void
   onReset?: () => void
-  resetDisabled?: boolean
   isDefault?: boolean
   className?: string
 }) {
   const { t } = useI18n()
   const prefix = scope === 'tools' ? 'toolsPolicy' : 'mcpPolicy'
+  const dirty = value !== savedValue
 
   return (
     <SettingsSection
@@ -81,10 +80,11 @@ export function PolicySettingsCard({
         onSave={onSave}
         onCancel={() => onChange(savedValue)}
         onReset={onReset}
-        saveDisabled={loading}
+        saveDisabled={loading || !dirty}
         saving={saving}
-        cancelDisabled={value === savedValue}
-        resetDisabled={resetDisabled}
+        cancelDisabled={loading || !dirty}
+        resetDisabled={loading}
+        isDefault={isDefault}
         saveTestId={`${scope}-policy-save`}
         cancelTestId={`${scope}-policy-cancel`}
         resetTestId={`${scope}-policy-reset`}

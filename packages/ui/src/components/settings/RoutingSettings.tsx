@@ -270,6 +270,7 @@ export function RoutingSettings() {
         saving={draft.saving}
         saveDisabled={!draft.dirty}
         cancelDisabled={!draft.dirty}
+        isDefault={draft.isDefault}
         saveTestId="routing-save"
         cancelTestId="routing-cancel"
         resetTestId="routing-reset"

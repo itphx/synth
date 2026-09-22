@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
 
 const mocks = vi.hoisted(() => ({
-  getLlmGatewaySettings: vi.fn(),
+  getLlmGatewaySettingsInfo: vi.fn(),
   saveLlmGatewaySettings: vi.fn(),
   resetLlmGatewaySettings: vi.fn(),
   getGatewayPatterns: vi.fn(),
@@ -52,7 +52,16 @@ async function renderSettings(): Promise<HTMLElement> {
 }
 
 beforeEach(() => {
-  mocks.getLlmGatewaySettings.mockResolvedValue({ enabled: false, inputMode: 'obfuscate', logPayloads: false })
+  mocks.getLlmGatewaySettingsInfo.mockResolvedValue({
+    settings: { enabled: false, inputMode: 'obfuscate', logPayloads: false },
+    isOverridden: false,
+    defaults: {
+      enabled: false,
+      inputMode: 'obfuscate',
+      logPayloads: false,
+      rateLimit: { userPerMinute: 60, providerPerMinute: 120 },
+    },
+  })
   mocks.resetLlmGatewaySettings.mockResolvedValue({
     enabled: false,
     inputMode: 'obfuscate',
@@ -119,18 +128,75 @@ describe('SecuritySettings — миграция на Settings UI Kit (AD-072)', 
     expect(container.innerHTML).not.toContain('w-20')
   })
 
-  it('Save/Reset шлюза через SettingsActions; Reset дёргает resetLlmGatewaySettings', async () => {
+  it('Save/Cancel/Reset шлюза гаснут на дефолте и активируются при изменениях; Reset дёргает API', async () => {
     const container = await renderSettings()
 
-    expect(container.querySelector('[data-testid="security-gateway-save"]')).not.toBeNull()
-    const reset = container.querySelector('[data-testid="security-gateway-reset"]') as HTMLButtonElement
-    expect(reset).not.toBeNull()
+    const save = () =>
+      container.querySelector('[data-testid="security-gateway-save"]') as HTMLButtonElement
+    const cancel = () =>
+      container.querySelector('[data-testid="security-gateway-cancel"]') as HTMLButtonElement
+    const reset = () =>
+      container.querySelector('[data-testid="security-gateway-reset"]') as HTMLButtonElement
+    expect(save()).not.toBeNull()
+
+    // Сервер вернул дефолтные настройки → Save/Cancel неактивны, Reset серый и disabled.
+    expect(save().disabled).toBe(true)
+    expect(cancel().disabled).toBe(true)
+    expect(reset().disabled).toBe(true)
+    expect(reset().className).toContain('border-muted-foreground')
+
+    // Меняем настройку шлюза — появляется dirty: Save/Cancel активны, Reset цветная.
+    const gatewayToggle = container.querySelector('[role="switch"]') as HTMLButtonElement
+    await act(async () => {
+      gatewayToggle.click()
+    })
+    expect(save().disabled).toBe(false)
+    expect(cancel().disabled).toBe(false)
+    expect(reset().disabled).toBe(false)
+    expect(reset().className).toContain('border-primary')
 
     await act(async () => {
-      reset.click()
+      reset().click()
     })
 
     expect(mocks.resetLlmGatewaySettings).toHaveBeenCalledTimes(1)
+    // Reset вернул дефолт в черновик → Save/Cancel снова неактивны.
+    expect(save().disabled).toBe(true)
+    expect(cancel().disabled).toBe(true)
+  })
+
+  it('Reset паттернов и защищённых путей серый на дефолте и цветной при override', async () => {
+    const container = await renderSettings()
+    const patternsReset = () =>
+      container.querySelector('[data-testid="security-patterns-reset"]') as HTMLButtonElement
+    const protectedReset = () =>
+      container.querySelector('[data-testid="security-protected-reset"]') as HTMLButtonElement
+
+    // isOverridden=false → настройки базовые → Reset серые и disabled.
+    expect(patternsReset().disabled).toBe(true)
+    expect(patternsReset().className).toContain('border-muted-foreground')
+    expect(protectedReset().disabled).toBe(true)
+    expect(protectedReset().className).toContain('border-muted-foreground')
+
+    // Сервер сообщает об override → Reset цветные и активные.
+    mocks.getGatewayPatterns.mockResolvedValue({
+      patterns: [{ type: 'api_key', regex: 'sk-\\w+' }],
+      isOverridden: true,
+    })
+    mocks.getProtectedPaths.mockResolvedValue({
+      policy: { deniedPaths: ['/etc'], deniedPrefixes: [], approvalPaths: [], deniedCommandPrefixes: [] },
+      isOverridden: true,
+    })
+    const overridden = await renderSettings()
+    const patternsReset2 =
+      overridden.querySelector('[data-testid="security-patterns-reset"]') as HTMLButtonElement
+    const protectedReset2 =
+      overridden.querySelector('[data-testid="security-protected-reset"]') as HTMLButtonElement
+
+    expect(patternsReset2.disabled).toBe(false)
+    expect(patternsReset2.className).toContain('border-primary')
+    expect(protectedReset2.disabled).toBe(false)
+    expect(protectedReset2.className).toContain('border-primary')
   })
 
   it('списки защищённых путей рендерятся через ListField', async () => {

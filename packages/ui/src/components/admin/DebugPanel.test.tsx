@@ -172,4 +172,20 @@ describe('DebugPanel — AD-072: действия в каждой секции',
     expect((container.querySelectorAll('select')[0] as HTMLSelectElement).value).toBe('INFO')
     expect(byTestId(container, 'debug-save-ai')!.disabled).toBe(true)
   })
+
+  it('Reset категории серый/неактивен на сохранённых значениях и активен при изменениях', async () => {
+    const container = await renderPanel()
+    const resetAi = () =>
+      container.querySelector('[data-testid="debug-reset-ai"]') as HTMLButtonElement
+
+    expect(resetAi().disabled).toBe(true)
+    expect(resetAi().className).toContain('border-muted-foreground')
+
+    await act(async () => {
+      setSelectValue(container.querySelectorAll('select')[0] as HTMLSelectElement, 'ERROR')
+    })
+
+    expect(resetAi().disabled).toBe(false)
+    expect(resetAi().className).toContain('border-primary')
+  })
 })

@@ -117,7 +117,7 @@ function DebugCategorySection({
         saving={draft.saving}
         saveDisabled={!draft.dirty}
         cancelDisabled={!draft.dirty}
-        resetDisabled={draft.isDefault}
+        isDefault={draft.isDefault}
         saveTestId={`debug-save-${categoryKey}`}
         cancelTestId={`debug-cancel-${categoryKey}`}
         resetTestId={`debug-reset-${categoryKey}`}

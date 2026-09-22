@@ -191,4 +191,18 @@ describe('NotificationSettings — миграция на Settings UI Kit (AD-072
     })
     expect(useNotificationStore.getState().prefs.enabledCategories).toEqual(DEFAULTS)
   })
+
+  it('Reset серый/неактивен на дефолте и активен при изменениях', async () => {
+    const container = await renderSettings()
+
+    expect(byTestId(container, 'notifications-reset')!.disabled).toBe(true)
+    expect(byTestId(container, 'notifications-reset')!.className).toContain('border-muted-foreground')
+
+    await act(async () => {
+      switchByLabel(container, 'Streaming').click()
+    })
+
+    expect(byTestId(container, 'notifications-reset')!.disabled).toBe(false)
+    expect(byTestId(container, 'notifications-reset')!.className).toContain('border-primary')
+  })
 })

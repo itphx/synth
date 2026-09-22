@@ -20,11 +20,15 @@ interface McpStore {
 
   // AD-071 §2.3.1: политика сетевого доступа пользовательских HTTP MCP
   networkPolicy: McpNetworkPolicy | null
+  /** Серверный дефолт сетевой политики (для `isDefault`/Reset в UI). */
+  networkPolicyDefaults: McpNetworkPolicy | null
   networkPolicyLoading: boolean
   networkPolicyError: string | null
 
   // AD-071 §2.6: instance-wide жёсткое отключение инструментов администратором
   toolsDisabled: ToolsDisabledConfig | null
+  /** Серверный дефолт tools.disabled (для `isDefault`/Reset в UI). */
+  toolsDisabledDefaults: ToolsDisabledConfig | null
   toolsDisabledLoading: boolean
   toolsDisabledError: string | null
 
@@ -57,10 +61,12 @@ export const useMcpStore = create<McpStore>((set, get) => ({
   toolSettingsError: null,
 
   networkPolicy: null,
+  networkPolicyDefaults: null,
   networkPolicyLoading: false,
   networkPolicyError: null,
 
   toolsDisabled: null,
+  toolsDisabledDefaults: null,
   toolsDisabledLoading: false,
   toolsDisabledError: null,
 
@@ -172,8 +178,8 @@ export const useMcpStore = create<McpStore>((set, get) => ({
   fetchNetworkPolicy: async () => {
     set({ networkPolicyLoading: true, networkPolicyError: null })
     try {
-      const policy = await synthApi.getMcpNetworkPolicy()
-      set({ networkPolicy: policy, networkPolicyLoading: false })
+      const { policy, defaults } = await synthApi.getMcpNetworkPolicyInfo()
+      set({ networkPolicy: policy, networkPolicyDefaults: defaults, networkPolicyLoading: false })
     } catch (err) {
       set({
         networkPolicyError: err instanceof Error ? err.message : 'Ошибка загрузки сетевой политики',
@@ -199,8 +205,8 @@ export const useMcpStore = create<McpStore>((set, get) => ({
   fetchToolsDisabled: async () => {
     set({ toolsDisabledLoading: true, toolsDisabledError: null })
     try {
-      const config = await synthApi.getToolsDisabled()
-      set({ toolsDisabled: config, toolsDisabledLoading: false })
+      const { config, defaults } = await synthApi.getToolsDisabledInfo()
+      set({ toolsDisabled: config, toolsDisabledDefaults: defaults, toolsDisabledLoading: false })
     } catch (err) {
       set({
         toolsDisabledError: err instanceof Error ? err.message : 'Ошибка загрузки отключённых инструментов',

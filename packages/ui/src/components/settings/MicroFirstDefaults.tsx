@@ -151,6 +151,7 @@ export function MicroFirstDefaults() {
         saving={draft.saving}
         saveDisabled={!draft.dirty}
         cancelDisabled={!draft.dirty}
+        isDefault={draft.isDefault}
         saveTestId="microfirst-save"
         cancelTestId="microfirst-cancel"
         resetTestId="microfirst-reset"

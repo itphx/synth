@@ -61,7 +61,7 @@ export function NotificationSettings() {
         saving={draft.saving}
         saveDisabled={!draft.dirty}
         cancelDisabled={!draft.dirty}
-        resetDisabled={draft.isDefault}
+        isDefault={draft.isDefault}
         saveTestId="notifications-save"
         cancelTestId="notifications-cancel"
         resetTestId="notifications-reset"

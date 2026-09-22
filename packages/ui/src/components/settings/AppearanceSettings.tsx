@@ -159,7 +159,7 @@ export const AppearanceSettings = () => {
         saving={draft.saving}
         saveDisabled={!draft.dirty}
         cancelDisabled={!draft.dirty}
-        resetDisabled={draft.isDefault}
+        isDefault={draft.isDefault}
         saveTestId="appearance-save"
         cancelTestId="appearance-cancel"
         resetTestId="appearance-reset"

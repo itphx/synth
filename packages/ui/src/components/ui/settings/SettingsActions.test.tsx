@@ -119,14 +119,29 @@ describe('SettingsActions', () => {
     expect(buttonByText(host, 'Reset')!.disabled).toBe(false)
   })
 
-  it('Reset по умолчанию рендерится контурными primary-классами (без заливки)', async () => {
+  it('Reset по умолчанию рендерится контурными primary-классами (без заливки) и активна', async () => {
     const host = await renderActions({ onReset: vi.fn() })
     const reset = buttonByText(host, 'Reset')!
+    expect(reset.disabled).toBe(false)
     expect(reset.className).toContain('border-primary')
     expect(reset.className).toContain('text-primary')
     // Сплошной заливки нет: `hover:bg-primary/10` — это отдельный класс-токен.
     expect(reset.classList.contains('bg-primary')).toBe(false)
     expect(reset.className).not.toContain('text-destructive')
+  })
+
+  it('isDefault: Reset серая (outline-muted) и disabled', async () => {
+    const onReset = vi.fn()
+    const host = await renderActions({ onReset, isDefault: true })
+    const reset = buttonByText(host, 'Reset')!
+    expect(reset.disabled).toBe(true)
+    expect(reset.className).toContain('border-muted-foreground')
+    expect(reset.className).toContain('text-muted-foreground')
+    expect(reset.className).not.toContain('border-primary')
+    await act(async () => {
+      reset.click()
+    })
+    expect(onReset).not.toHaveBeenCalled()
   })
 
   it('resetVariant="primary" возвращает сплошной вид Reset', async () => {

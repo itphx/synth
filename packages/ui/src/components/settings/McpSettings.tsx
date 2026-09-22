@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import type { McpNetworkPolicy, McpRegistryEntry } from '@itphx/synth-shared'
 import { Icon } from '../icon/Icon'
 import { useMcpStore } from '../../stores/mcpStore'
@@ -35,6 +35,29 @@ import type {
 const EMPTY_CONFIG: McpServerConfig = { type: 'http' }
 const DEFAULT_AVAILABILITY = { plan: false, act: true }
 
+/** Сервер (и все его инструменты) на дефолтной доступности — отдельная запись не нужна. */
+const isDefaultAvailabilityEntry = (entry: McpServerToolsSettings): boolean =>
+  entry.default.plan === DEFAULT_AVAILABILITY.plan &&
+  entry.default.act === DEFAULT_AVAILABILITY.act &&
+  Object.values(entry.tools ?? {}).every(
+    (t) => t.plan === DEFAULT_AVAILABILITY.plan && t.act === DEFAULT_AVAILABILITY.act,
+  )
+
+/**
+ * Сравнение по эффективным значениям: записи, совпадающие с серверным дефолтом,
+ * отбрасываются, поэтому `{ srv: default }` и `{}` считаются равными.
+ */
+const availabilityEquals = (
+  a: Record<string, McpServerToolsSettings>,
+  b: Record<string, McpServerToolsSettings>,
+): boolean => {
+  const normalize = (servers: Record<string, McpServerToolsSettings>) =>
+    JSON.stringify(
+      Object.entries(servers ?? {}).filter(([, entry]) => !isDefaultAvailabilityEntry(entry)),
+    )
+  return normalize(a) === normalize(b)
+}
+
 const ORIGIN_BADGE: Record<string, string> = {
   instance: 'bg-primary/15 text-primary',
   user: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
@@ -62,6 +85,7 @@ export const McpSettings = () => {
   const saveToolSettings = useMcpStore(s => s.saveToolSettings)
   const probeServer = useMcpStore(s => s.probeServer)
   const networkPolicy = useMcpStore(s => s.networkPolicy)
+  const networkPolicyDefaults = useMcpStore(s => s.networkPolicyDefaults)
   const networkPolicyLoading = useMcpStore(s => s.networkPolicyLoading)
   const networkPolicyError = useMcpStore(s => s.networkPolicyError)
   const fetchNetworkPolicy = useMcpStore(s => s.fetchNetworkPolicy)
@@ -82,6 +106,7 @@ export const McpSettings = () => {
   // AD-071 §2.3: глобальная политика MCP-инструментов (mcp.policy).
   const [mcpPolicy, setMcpPolicy] = useState<ToolsPolicy>('auto')
   const [savedMcpPolicy, setSavedMcpPolicy] = useState<ToolsPolicy>('auto')
+  const [mcpPolicyDefault, setMcpPolicyDefault] = useState<ToolsPolicy>('auto')
   const [mcpPolicyLoading, setMcpPolicyLoading] = useState(true)
   const [mcpPolicySaving, setMcpPolicySaving] = useState(false)
   const [mcpPolicyError, setMcpPolicyError] = useState<string | null>(null)
@@ -95,8 +120,22 @@ export const McpSettings = () => {
   const [probeError, setProbeError] = useState<Record<string, string | null>>({})
 
   // AD-072: единый контракт черновика поверх toolSettings стора.
+  // Дефолт доступности — серверный `{ plan: false, act: true }` на каждый сервер.
+  const availabilityDefault = useMemo<Record<string, McpServerToolsSettings>>(
+    () =>
+      Object.fromEntries(
+        Object.keys(toolSettings ?? {}).map((name) => [
+          name,
+          { default: { ...DEFAULT_AVAILABILITY }, tools: {} },
+        ]),
+      ),
+    [toolSettings],
+  )
+
   const availabilityDraft = useSettingsDraft<Record<string, McpServerToolsSettings>>({
     value: toolSettings,
+    defaultValue: availabilityDefault,
+    equals: availabilityEquals,
     onSave: async (next) => {
       useMcpStore.setState({ toolSettings: next })
       await saveToolSettings()
@@ -114,11 +153,12 @@ export const McpSettings = () => {
   useEffect(() => {
     let cancelled = false
     synthApi
-      .getMcpPolicy()
-      .then((policy) => {
+      .getMcpPolicyInfo()
+      .then(({ policy, defaults }) => {
         if (!cancelled) {
           setMcpPolicy(policy)
           setSavedMcpPolicy(policy)
+          setMcpPolicyDefault(defaults)
         }
       })
       .catch((e) => {
@@ -686,6 +726,8 @@ export const McpSettings = () => {
             onCancel={handleCancelSettings}
             onReset={handleResetAvailability}
             saveDisabled={!dirty || toolSettingsLoading}
+            cancelDisabled={!dirty}
+            isDefault={availabilityDraft.isDefault}
             saving={availabilityDraft.saving}
             saveTestId="mcp-availability-save"
             cancelTestId="mcp-availability-cancel"
@@ -705,12 +747,14 @@ export const McpSettings = () => {
         onChange={setMcpPolicy}
         onSave={handleMcpPolicySave}
         onReset={handleMcpPolicyReset}
+        isDefault={mcpPolicy === mcpPolicyDefault}
       />
 
       {/* AD-071 §2.3.1: сетевой доступ пользовательских HTTP MCP (только ADMIN) */}
       {isAdmin && (
         <NetworkPolicySection
           policy={networkPolicy}
+          defaultValue={networkPolicyDefaults}
           loading={networkPolicyLoading}
           error={networkPolicyError}
           onSave={handleSaveNetworkPolicy}
@@ -735,11 +779,13 @@ export const McpSettings = () => {
 /** AD-071 §2.3.1 / AD-072: редактор политики сетевого доступа (allow/deny + host/CIDR). */
 function NetworkPolicySection({
   policy,
+  defaultValue,
   loading,
   error,
   onSave,
 }: {
   policy: McpNetworkPolicy | null
+  defaultValue: McpNetworkPolicy | null
   loading: boolean
   error: string | null
   onSave: (policy: McpNetworkPolicy) => Promise<void> | void
@@ -749,7 +795,8 @@ function NetworkPolicySection({
   const [saving, setSaving] = useState(false)
   const draft = useSettingsDraft<McpNetworkPolicy>({
     value: policy,
-    defaultValue: { mode: 'deny', list: [] },
+    // Серверный дефолт; до загрузки — null (Reset серый и неактивен).
+    defaultValue,
   })
   const current = draft.draft
 
@@ -818,7 +865,9 @@ function NetworkPolicySection({
               onSave={() => { void handleSave() }}
               onCancel={() => draft.revert()}
               onReset={() => { void handleReset() }}
-              saveDisabled={loading}
+              saveDisabled={loading || !draft.dirty}
+              cancelDisabled={!draft.dirty}
+              isDefault={draft.isDefault}
               saving={saving}
               saveTestId="mcp-network-save"
               cancelTestId="mcp-network-cancel"

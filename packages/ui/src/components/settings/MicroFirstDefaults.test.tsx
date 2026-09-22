@@ -150,4 +150,21 @@ describe('MicroFirstDefaults — миграция на Settings UI Kit (AD-072)'
     const save = container.querySelector('[data-testid="microfirst-save"]')!
     expect(scroll.contains(save)).toBe(true)
   })
+
+  it('Reset серый/неактивен на дефолте и активен при изменениях', async () => {
+    const container = await renderSettings()
+    const reset = () =>
+      container.querySelector('[data-testid="microfirst-reset"]') as HTMLButtonElement
+
+    expect(reset().disabled).toBe(true)
+    expect(reset().className).toContain('border-muted-foreground')
+
+    const toggle = container.querySelector('[aria-label="Quick answers"]') as HTMLButtonElement
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(reset().disabled).toBe(false)
+    expect(reset().className).toContain('border-primary')
+  })
 })

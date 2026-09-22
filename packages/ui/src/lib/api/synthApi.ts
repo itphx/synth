@@ -1040,8 +1040,14 @@ export const synthApi = {
   },
 
   // --- MCP: политика сетевого доступа (AD-071 §2.3.1) ---
-  async getMcpNetworkPolicy(): Promise<McpNetworkPolicy> {
-    return fetchJSON<{ policy: McpNetworkPolicy }>(`${BASE_URL}/settings/mcp-network-policy`).then((r) => r.policy)
+  async getMcpNetworkPolicyInfo(): Promise<{
+    policy: McpNetworkPolicy
+    isOverridden: boolean
+    defaults: McpNetworkPolicy
+  }> {
+    return fetchJSON<{ policy: McpNetworkPolicy; isOverridden: boolean; defaults: McpNetworkPolicy }>(
+      `${BASE_URL}/settings/mcp-network-policy`,
+    ).then((r) => ({ policy: r.policy, isOverridden: r.isOverridden, defaults: r.defaults }))
   },
 
   async saveMcpNetworkPolicy(policy: McpNetworkPolicy): Promise<McpNetworkPolicy> {
@@ -1059,8 +1065,14 @@ export const synthApi = {
   },
 
   // --- LLM Gateway (AD-036) ---
-  async getLlmGatewaySettings(): Promise<LlmGatewaySettings> {
-    return fetchJSON<{ llmGateway: LlmGatewaySettings }>(`${BASE_URL}/settings/llm-gateway`).then((r) => r.llmGateway)
+  async getLlmGatewaySettingsInfo(): Promise<{
+    settings: LlmGatewaySettings
+    isOverridden: boolean
+    defaults: LlmGatewaySettings
+  }> {
+    return fetchJSON<{ llmGateway: LlmGatewaySettings; isOverridden: boolean; defaults: LlmGatewaySettings }>(
+      `${BASE_URL}/settings/llm-gateway`,
+    ).then((r) => ({ settings: r.llmGateway, isOverridden: r.isOverridden, defaults: r.defaults }))
   },
 
   async saveLlmGatewaySettings(config: LlmGatewaySettings): Promise<LlmGatewaySettings> {
@@ -1123,8 +1135,10 @@ export const synthApi = {
   },
 
   // --- Инструменты: политика включения (AD-071 §2.3) ---
-  async getToolsPolicy(): Promise<ToolsPolicy> {
-    return fetchJSON<{ toolsPolicy: ToolsPolicy }>(`${BASE_URL}/settings/tools-policy`).then((r) => r.toolsPolicy)
+  async getToolsPolicyInfo(): Promise<{ policy: ToolsPolicy; isOverridden: boolean; defaults: ToolsPolicy }> {
+    return fetchJSON<{ toolsPolicy: ToolsPolicy; isOverridden: boolean; defaults: ToolsPolicy }>(
+      `${BASE_URL}/settings/tools-policy`,
+    ).then((r) => ({ policy: r.toolsPolicy, isOverridden: r.isOverridden, defaults: r.defaults }))
   },
 
   async saveToolsPolicy(toolsPolicy: ToolsPolicy): Promise<ToolsPolicy> {
@@ -1142,8 +1156,10 @@ export const synthApi = {
   },
 
   // --- MCP: политика включения MCP-инструментов (AD-071 §2.3) ---
-  async getMcpPolicy(): Promise<ToolsPolicy> {
-    return fetchJSON<{ mcpPolicy: ToolsPolicy }>(`${BASE_URL}/settings/mcp-policy`).then((r) => r.mcpPolicy)
+  async getMcpPolicyInfo(): Promise<{ policy: ToolsPolicy; isOverridden: boolean; defaults: ToolsPolicy }> {
+    return fetchJSON<{ mcpPolicy: ToolsPolicy; isOverridden: boolean; defaults: ToolsPolicy }>(
+      `${BASE_URL}/settings/mcp-policy`,
+    ).then((r) => ({ policy: r.mcpPolicy, isOverridden: r.isOverridden, defaults: r.defaults }))
   },
 
   async saveMcpPolicy(mcpPolicy: ToolsPolicy): Promise<ToolsPolicy> {
@@ -1162,8 +1178,14 @@ export const synthApi = {
 
   // --- Инструменты: instance-wide отключение (AD-071 §2.6) ---
   /** GET /settings/tools-disabled — жёстко отключённые admin'ом capability и тулы. */
-  async getToolsDisabled(): Promise<ToolsDisabledConfig> {
-    return fetchJSON<{ toolsDisabled: ToolsDisabledConfig }>(`${BASE_URL}/settings/tools-disabled`).then((r) => r.toolsDisabled)
+  async getToolsDisabledInfo(): Promise<{
+    config: ToolsDisabledConfig
+    isOverridden: boolean
+    defaults: ToolsDisabledConfig
+  }> {
+    return fetchJSON<{ toolsDisabled: ToolsDisabledConfig; isOverridden: boolean; defaults: ToolsDisabledConfig }>(
+      `${BASE_URL}/settings/tools-disabled`,
+    ).then((r) => ({ config: r.toolsDisabled, isOverridden: r.isOverridden, defaults: r.defaults }))
   },
 
   /** PUT /settings/tools-disabled — сохранить и live-применить отключение инструментов. */

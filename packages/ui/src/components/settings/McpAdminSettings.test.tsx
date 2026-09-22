@@ -6,8 +6,8 @@ import React from 'react'
 const mocks = vi.hoisted(() => ({
   getMcpRegistry: vi.fn(),
   getMcpToolSettings: vi.fn(),
-  getMcpNetworkPolicy: vi.fn(),
-  getMcpPolicy: vi.fn(),
+  getMcpNetworkPolicyInfo: vi.fn(),
+  getMcpPolicyInfo: vi.fn(),
   saveMcpToolSettings: vi.fn(),
   saveMcpNetworkPolicy: vi.fn(),
   saveMcpPolicy: vi.fn(),
@@ -66,10 +66,14 @@ async function renderSettings(): Promise<HTMLElement> {
 beforeEach(() => {
   mocks.getMcpRegistry.mockResolvedValue({ entries: [ENTRY_SYS] })
   mocks.getMcpToolSettings.mockResolvedValue({ servers: {} })
-  mocks.getMcpNetworkPolicy.mockResolvedValue({ mode: 'deny', list: [] })
+  mocks.getMcpNetworkPolicyInfo.mockResolvedValue({
+    policy: { mode: 'deny', list: [] },
+    isOverridden: false,
+    defaults: { mode: 'deny', list: [] },
+  })
   mocks.saveMcpToolSettings.mockResolvedValue({ servers: {} })
   mocks.saveMcpNetworkPolicy.mockImplementation(async (p: unknown) => p)
-  mocks.getMcpPolicy.mockResolvedValue('auto')
+  mocks.getMcpPolicyInfo.mockResolvedValue({ policy: 'auto', isOverridden: false, defaults: 'auto' })
   mocks.saveMcpPolicy.mockImplementation(async (p: unknown) => p)
   mocks.resetMcpSettings.mockResolvedValue({ servers: {} })
   mocks.resetMcpNetworkPolicy.mockResolvedValue({ mode: 'deny', list: [] })
@@ -84,6 +88,7 @@ beforeEach(() => {
     toolSettingsLoading: false,
     toolSettingsError: null,
     networkPolicy: null,
+    networkPolicyDefaults: null,
     networkPolicyLoading: false,
     networkPolicyError: null,
   })
