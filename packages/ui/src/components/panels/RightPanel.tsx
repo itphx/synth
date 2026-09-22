@@ -11,11 +11,11 @@ import { ProjectTab } from './ProjectTab'
 import { ReferencesTab } from './ReferencesTab'
 import { SecretsTab } from './SecretsTab'
 
-// AD-071: «Контекст» — первая вкладка, «Статистика» — на её прежнем месте (индекс 3).
+// AD-071: верхний ряд правой панели — «Сессия», «Проект», «Контекст», «Статистика».
 export const RIGHT_TABS = [
-  { id: 'context', icon: 'file-text' as const, labelKey: 'rightPanel.tab.context' },
   { id: 'params', icon: 'settings-3' as const, labelKey: 'rightPanel.tab.session' },
   { id: 'project', icon: 'folder-3' as const, labelKey: 'rightPanel.tab.project' },
+  { id: 'context', icon: 'file-text' as const, labelKey: 'rightPanel.tab.context' },
   { id: 'stats', icon: 'bar-chart-2' as const, labelKey: 'rightPanel.tab.stats' },
   { id: 'references', icon: 'link' as const, labelKey: 'rightPanel.tab.references' },
   { id: 'scheduler', icon: 'calendar-schedule' as const, labelKey: 'rightPanel.tab.scheduler' },

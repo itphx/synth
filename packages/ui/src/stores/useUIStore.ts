@@ -212,7 +212,7 @@ export const useUIStore = create<UIStore>()(
 
       leftPanelTab: 'projects',
       setLeftPanelTab: (tab) => set({ leftPanelTab: tab }),
-      // AD-071: вкладка «Контекст» идёт первой в правой панели — дефолт совпадает.
+      // AD-071: дефолтная вкладка правой панели — «Контекст».
       rightPanelTab: 'context',
       setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
       collapsedProjects: new Set<string>(),

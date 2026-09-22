@@ -25,10 +25,12 @@ import { RIGHT_TABS } from './RightPanel'
 import { useUIStore } from '@/stores/useUIStore'
 
 describe('RightPanel — порядок вкладок (AD-071)', () => {
-  it('«Контекст» идёт первой, «Статистика» — на её прежнем месте (индекс 3)', () => {
+  it('первый ряд — «Сессия», «Проект», «Контекст», «Статистика»', () => {
     const ids = RIGHT_TABS.map((tab) => tab.id)
-    expect(ids).toEqual(['context', 'params', 'project', 'stats', 'references', 'scheduler'])
-    expect(ids.indexOf('context')).toBe(0)
+    expect(ids).toEqual(['params', 'project', 'context', 'stats', 'references', 'scheduler'])
+    expect(ids.indexOf('params')).toBe(0)
+    expect(ids.indexOf('project')).toBe(1)
+    expect(ids.indexOf('context')).toBe(2)
     expect(ids.indexOf('stats')).toBe(3)
   })
 
