@@ -7,8 +7,9 @@ export interface SettingsPanelProps {
   title: string
   description?: string
   /**
-   * Счётчики/подпись под заголовком. В отличие от `description`,
-   * остаётся видимым при сворачивании шапки.
+   * Счётчики/подпись. Рендерится под описанием (`description`), а не под
+   * заголовком. В отличие от `description`, остаётся видимым при сворачивании
+   * шапки (стандарт AD-072).
    */
   meta?: React.ReactNode
   actions?: React.ReactNode
@@ -96,14 +97,6 @@ export function SettingsPanel({
           <h2 className="text-lg font-semibold text-foreground min-w-0 break-words">{title}</h2>
           {actions && <div className="shrink-0 flex items-center gap-2">{actions}</div>}
         </div>
-        {meta && (
-          <div
-            className="text-sm text-muted-foreground min-w-0 break-words"
-            data-testid="settings-header-meta"
-          >
-            {meta}
-          </div>
-        )}
         {description && (
           <div
             className={cn(
@@ -114,6 +107,14 @@ export function SettingsPanel({
             aria-hidden={collapsed || undefined}
           >
             <p className="text-sm text-muted-foreground min-w-0 min-h-0 overflow-hidden break-words">{description}</p>
+          </div>
+        )}
+        {meta && (
+          <div
+            className="text-sm text-muted-foreground min-w-0 break-words"
+            data-testid="settings-header-meta"
+          >
+            {meta}
           </div>
         )}
       </header>

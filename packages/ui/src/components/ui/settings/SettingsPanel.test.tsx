@@ -212,6 +212,41 @@ describe('SettingsPanel', () => {
     expect(host.textContent).toContain('ACTION')
   })
 
+  it('стандарт шапки: счётчики (meta) идут после описания и не сворачиваются', async () => {
+    stubPhone()
+    const host = await renderPanel({
+      title: 'Network',
+      description: 'Configure networking',
+      meta: '2 servers',
+      actions: <button>ACTION</button>,
+      children: <div>CONTENT</div>,
+    })
+
+    const header = host.querySelector('header') as HTMLElement
+    const desc = host.querySelector('[data-testid="settings-header-description"]') as HTMLElement
+    const meta = host.querySelector('[data-testid="settings-header-meta"]') as HTMLElement
+    expect(desc).not.toBeNull()
+    expect(meta).not.toBeNull()
+
+    // Порядок в DOM: description → meta, счётчики ниже описания (стандарт AD-072).
+    expect(desc.compareDocumentPosition(meta) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const children = Array.from(header.children)
+    expect(children.indexOf(desc)).toBeLessThan(children.indexOf(meta))
+
+    // После скролла описание сворачивается, а meta остаётся видимым.
+    const body = host.querySelector('.settings-scroll-container') as HTMLElement
+    setScrollTop(body, 20)
+    await act(async () => {
+      body.dispatchEvent(new Event('scroll'))
+    })
+
+    expect(desc.classList.contains('grid-rows-[0fr]')).toBe(true)
+    expect(desc.classList.contains('opacity-0')).toBe(true)
+    expect(meta.textContent).toBe('2 servers')
+    expect(meta.classList.contains('grid-rows-[0fr]')).toBe(false)
+    expect(meta.classList.contains('opacity-0')).toBe(false)
+  })
+
   it('collapsibleHeader: на десктопе описание остаётся видимым', async () => {
     const host = await renderPanel({
       title: 'Network',
