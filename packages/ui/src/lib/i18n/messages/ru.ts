@@ -1030,6 +1030,7 @@ export const dict = {
   'admin.providers.defaultModel': 'Модель по умолчанию',
   'admin.providers.enabled': 'Провайдер включён',
   'admin.providers.icon': 'Иконка',
+  'admin.providers.iconImage': 'Изображение (base64)',
   'admin.providers.reset': 'Сбросить',
   'admin.providers.autoDetectFavicon': 'Авто-определение (favicon)',
   'admin.providers.detect': 'Определить',

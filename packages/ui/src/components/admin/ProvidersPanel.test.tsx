@@ -12,6 +12,7 @@ vi.mock('@/lib/api/synthApi', () => ({
   },
 }))
 
+import { synthApi, type ProviderInfo } from '@/lib/api/synthApi'
 import { ProvidersPanel } from './ProvidersPanel'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -33,6 +34,12 @@ async function renderPanel(): Promise<HTMLElement> {
 
 function findButton(host: HTMLElement, label: string): HTMLButtonElement {
   const button = Array.from(host.querySelectorAll('button')).find((b) => (b.textContent ?? '').includes(label))
+  expect(button).toBeTruthy()
+  return button as HTMLButtonElement
+}
+
+function findButtonByLabel(host: HTMLElement, label: string): HTMLButtonElement {
+  const button = host.querySelector(`button[aria-label="${label}"]`)
   expect(button).toBeTruthy()
   return button as HTMLButtonElement
 }
@@ -80,5 +87,57 @@ describe('ProvidersPanel: поле API-ключа провайдера не пр
     const label = host.querySelector('label[for="admin-provider-api-key"]')
     expect(label).toBeTruthy()
     expect((label as HTMLLabelElement).htmlFor).toBe(input!.id)
+  })
+})
+
+describe('ProvidersPanel: иконка провайдера в форме показывается человекочитаемо', () => {
+  const baseProvider: ProviderInfo = {
+    name: 'itphx',
+    type: 'openai',
+    icon: '',
+    url: 'https://api.example.com/v1',
+    model: 'model',
+    enabled: true,
+  }
+
+  function mockProviders(providers: ProviderInfo[]) {
+    vi.mocked(synthApi.getProviders).mockResolvedValueOnce({
+      providers,
+      default_provider: providers[0]?.name ?? '',
+    })
+  }
+
+  async function openEdit(host: HTMLElement) {
+    await act(async () => {
+      findButtonByLabel(host, 'admin.providers.edit').click()
+    })
+  }
+
+  it('data:image base64 — подпись ключом iconImage, сырой base64 в тексте отсутствует', async () => {
+    const longIcon = `data:image/png;base64,${'A'.repeat(600)}`
+    mockProviders([{ ...baseProvider, icon: longIcon }])
+    const host = await renderPanel()
+    await openEdit(host)
+
+    expect(host.textContent).toContain('admin.providers.iconImage')
+    expect(host.textContent).not.toContain('base64')
+    expect(host.textContent).not.toContain(longIcon)
+  })
+
+  it('brand — подпись равна исходному значению', async () => {
+    mockProviders([{ ...baseProvider, icon: 'brand:ollama' }])
+    const host = await renderPanel()
+    await openEdit(host)
+
+    expect(host.textContent).toContain('brand:ollama')
+  })
+
+  it('url — подпись host, полный URL в тексте не показывается', async () => {
+    mockProviders([{ ...baseProvider, icon: 'https://openrouter.ai/api/v1' }])
+    const host = await renderPanel()
+    await openEdit(host)
+
+    expect(host.textContent).toContain('openrouter.ai')
+    expect(host.textContent).not.toContain('/api/v1')
   })
 })

@@ -15,7 +15,7 @@ import {
   TextField,
   ToggleField,
 } from '../ui/settings'
-import { ProviderIcon, PROVIDER_RI_ICONS, PROVIDER_BRAND_NAMES } from './ProviderIcon'
+import { ProviderIcon, describeProviderIcon, PROVIDER_RI_ICONS, PROVIDER_BRAND_NAMES } from './ProviderIcon'
 
 interface FetchIconResult {
   icon?: string | null
@@ -155,6 +155,24 @@ export const ProvidersPanel = () => {
     setFetchedIcon(null)
   }
 
+  // Человекочитаемая подпись иконки: сырое значение (особенно data-URL на десятки КБ)
+  // в форме не показываем, полное — только в title там, где это осмысленно.
+  const iconInfo = describeProviderIcon(form.icon)
+  let iconLabel = form.icon
+  let iconTitle: string | undefined
+  if (iconInfo.kind === 'none') {
+    iconLabel = t('admin.providers.notSelected')
+  } else if (iconInfo.kind === 'image') {
+    iconLabel = t('admin.providers.iconImage')
+    iconTitle = iconInfo.value
+  } else if (iconInfo.kind === 'url') {
+    iconLabel = iconInfo.value
+    iconTitle = form.icon
+  } else if (iconInfo.kind === 'unknown') {
+    iconLabel = `${iconInfo.value.slice(0, 40)}${iconInfo.value.length > 40 ? '…' : ''}`
+    iconTitle = form.icon
+  }
+
   return (
     <SettingsPanel
       title={t('admin.providers.title')}
@@ -230,7 +248,7 @@ export const ProvidersPanel = () => {
               <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
                 <div className="flex items-center gap-2 min-w-0">
                   <ProviderIcon icon={form.icon} baseUrl={form.base_url} size={20} />
-                  <span className="text-xs text-muted-foreground min-w-0 break-all">{form.icon || t('admin.providers.notSelected')}</span>
+                  <span className="text-xs text-muted-foreground min-w-0 truncate" title={iconTitle}>{iconLabel}</span>
                 </div>
                 {form.icon && (
                   <Button

@@ -18,6 +18,31 @@ function getFaviconUrl(baseUrl?: string): string | undefined {
   }
 }
 
+export type ProviderIconKind = 'none' | 'remixicon' | 'brand' | 'image' | 'url' | 'unknown'
+
+/**
+ * Классифицирует значение иконки провайдера (единая точка знания о форматах).
+ * `value`: remixicon/brand — имя без префикса, url — host, image — MIME, иначе ''.
+ */
+export function describeProviderIcon(icon: string): { kind: ProviderIconKind; value: string } {
+  if (!icon) return { kind: 'none', value: '' }
+  if (icon.startsWith('ri:')) return { kind: 'remixicon', value: icon.slice(3) }
+  if (icon.startsWith('brand:')) return { kind: 'brand', value: icon.slice(6) }
+  if (icon.startsWith('data:image/')) {
+    const mime = icon.slice(5)
+    const semicolon = mime.indexOf(';')
+    return { kind: 'image', value: semicolon === -1 ? mime : mime.slice(0, semicolon) }
+  }
+  if (icon.startsWith('http')) {
+    try {
+      return { kind: 'url', value: new URL(icon).host }
+    } catch {
+      return { kind: 'url', value: icon }
+    }
+  }
+  return { kind: 'unknown', value: icon }
+}
+
 export function ProviderIcon({ icon, baseUrl, size = 20, className, title }: ProviderIconProps) {
   // Авто-определение (пустая строка) — favicon с домена
   if (!icon) {

@@ -1033,6 +1033,7 @@ export const dict = {
   'admin.providers.defaultModel': 'Default model',
   'admin.providers.enabled': 'Provider enabled',
   'admin.providers.icon': 'Icon',
+  'admin.providers.iconImage': 'Image (base64)',
   'admin.providers.reset': 'Reset',
   'admin.providers.autoDetectFavicon': 'Auto-detect (favicon)',
   'admin.providers.detect': 'Detect',
