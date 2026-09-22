@@ -456,3 +456,18 @@
 - **Отмечено:** Save у textarea-разделов Security (patterns/protected paths) остаётся активным всегда — там нет черновика/`dirty` (вне рамок задачи).
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** `bd48308` (код+тесты), `af6a32e` (доки), этот.
+
+## 2026-09-22 (продолжение 4) — иконка провайдера itphx в форме редактирования
+- **Задача:** «У провайдера itphx какая-то беда с иконкой: если открыть редактирование, там отображается какой-то base64 код. У других провайдеров такого нет.»
+- **Тип:** bug fix (UI)
+- **Исполнитель:** @orchestrator → @fixer → верификация @orchestrator
+- **Результат:** PASS.
+- **Диагноз:** `providers/itphx.json` → `"icon": "data:image/png;base64,…"`, длина **28 910** символов (у остальных — `brand:minimax`, `ri:flask`, `brand:ollama`, пусто). `ProviderIcon` такие data-URL рендерит корректно (в списке иконка выглядит нормально), но форма редактирования печатала значение сырым текстом: `ProvidersPanel.tsx:233` — `<span className="… break-all">{form.icon}</span>`. Замер в браузере: `<span>` содержал все 28 910 символов.
+- **Сделано:**
+  - `ProviderIcon`: `describeProviderIcon(icon)` → `{ kind: none|remixicon|brand|image|url|unknown, value }` (единая точка знания о форматах: `ri:`, `brand:`, `data:image/` → MIME, `http…` → host).
+  - `ProvidersPanel`: подпись вместо сырого значения — `image` → «Изображение (base64)» (MIME в `title`), `url` → host (полный URL в `title`), `remixicon`/`brand` → имя как раньше, `unknown` → обрезка до 40 символов + `…`; `break-all` → `truncate`. Превью и кнопка «Сбросить» не тронуты.
+  - i18n: `admin.providers.iconImage` (ru «Изображение (base64)» / en 'Image (base64)'); +3 теста (data-URL, `brand:ollama`, `https://openrouter.ai/api/v1`).
+- **Проверки:** корневые `pnpm typecheck` (0 ошибок) и `pnpm test` — shared 91, core 1613, ui **560** (69 файлов), backend 291, все PASS; ui lint 0 errors. В браузере: `itphx` → превью PNG + «Изображение (base64)» (`title=image/png`), сырого data-URL в разметке нет (длиннейшая строка 38 символов); `brand:minimax`/`brand:ollama` — как раньше.
+- **Отмечено (данные не менялись):** 29 КБ base64 в `providers/itphx.json` отдаются в каждом `GET /providers` — оверхед на ответ API/UI-списки. Разумно отдельной задачей перейти на короткую ссылку (`brand:*`/`ri:*` или `/api/v2/providers/:name/icon`) + миграция данных; UI к URL-иконкам уже готов.
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** `14b825d`, этот.
