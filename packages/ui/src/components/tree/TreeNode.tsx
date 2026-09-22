@@ -148,7 +148,7 @@ export function TreeNode({
     <div
       ref={rowRef}
       className={cn(
-        'group flex gap-1.5 rounded px-2 py-1 text-sm cursor-pointer transition-colors hover:bg-interactive-hover',
+        'group flex gap-1.5 rounded px-2 py-0.5 text-sm cursor-pointer transition-colors hover:bg-interactive-hover',
         hasSubtitle ? 'items-start' : 'items-center',
         isSelected && 'bg-primary/15',
         isActive && !isSelected && 'bg-primary/10',
