@@ -78,7 +78,7 @@ describe('MessageStats', () => {
     expect(text).not.toContain('Done in')
     expect(text).toContain('1.7M in')
     expect(text).toContain('33.3k out')
-    expect(text).toContain('~$0.03')
+    expect(text).toContain('~ 0.03 $')
     expect(text).toContain('93% cache')
     expect(text).toContain('48 tok/s')
     // 6 сегментов → 5 разделителей; completed не добавляет префикс.
@@ -97,7 +97,7 @@ describe('MessageStats', () => {
     expect(text).not.toContain('tok/s')
     expect(text).toContain('1k in')
     expect(text).toContain('500 out')
-    expect(text).toContain('~$0.01')
+    expect(text).toContain('~ 0.01 $')
   })
 
   it('нет данных вообще → null (ничего не рендерится)', async () => {
@@ -177,7 +177,7 @@ describe('MessageStats', () => {
     expect(text).not.toContain('Готово за')
     expect(text).toContain('1.5k вх')
     expect(text).toContain('300 исх')
-    expect(text).toContain('~$0.01')
+    expect(text).toContain('~ 0.01 $')
     expect(text).toContain('50% кэш')
     expect(text).toContain('5 tok/s')
   })
@@ -272,7 +272,7 @@ describe('MessageStats', () => {
     const segments = [...el.querySelectorAll('span:not([aria-hidden="true"])')].map(
       (s) => s.textContent,
     )
-    expect(segments).toEqual(['Stopped', '2s', '1k in', '100 out', '~$0.01', '0% cache', '50 tok/s'])
+    expect(segments).toEqual(['Stopped', '2s', '1k in', '100 out', '~ 0.01 $', '0% cache', '50 tok/s'])
   })
 })
 
@@ -298,7 +298,7 @@ describe('MessageStats — сабагенты (AD-070 §2.6)', () => {
     expect(text).toContain('Subagents: 2')
     expect(text).toContain('12.3k in')
     expect(text).toContain('1.1k out')
-    expect(text).toContain('~$0.03')
+    expect(text).toContain('~ 0.03 $')
 
     const el = container.querySelector('[data-testid="message-stats"]') as HTMLElement
     expect(el.className).toContain('flex-col')
@@ -347,8 +347,8 @@ describe('MessageStats — сабагенты (AD-070 §2.6)', () => {
         metadata: { cost_usd: 0.03, cost_currency: 'RUB' },
       }),
     )
-    expect(container.textContent).toContain('~₽0.03')
-    expect(container.textContent).not.toContain('~$0.03')
+    expect(container.textContent).toContain('~ 0.03 ₽')
+    expect(container.textContent).not.toContain('~ 0.03 $')
   })
 
   it('C2b: мультивалютная стоимость сабагентов — раздельно', async () => {
@@ -364,7 +364,7 @@ describe('MessageStats — сабагенты (AD-070 §2.6)', () => {
         },
       }),
     )
-    expect(container.textContent).toContain('~$0.001 · ~₽0.049')
+    expect(container.textContent).toContain('~ 0.001 $ · ~ 0.049 ₽')
   })
 
   it('старые данные без валюты — USD, как раньше', async () => {
@@ -374,7 +374,7 @@ describe('MessageStats — сабагенты (AD-070 §2.6)', () => {
         metadata: { subagents },
       }),
     )
-    expect(container.textContent).toContain('~$0.03')
+    expect(container.textContent).toContain('~ 0.03 $')
   })
 })
 

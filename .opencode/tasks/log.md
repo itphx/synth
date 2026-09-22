@@ -584,3 +584,13 @@
 - **Отмечено:** в `data/providers/routerai.json` в ходе проверки (на свежем инстансе) проставлена `currency: "RUB"` — корректно для RouterAI; при желании можно сменить в UI. Рекомендация на будущее: добавить `tsx watch` в `scripts/dev.sh` для бэкенда, чтобы правки не требовали ручного перезапуска (правка окружения — по согласованию).
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** этот.
+
+## 2026-09-22 (продолжение 12) — формат стоимости: символ после числа
+- **Задача:** «на вкладке Статистика везде где есть цены писать не `~₽0.0627`, а `~ 0.0627 ₽`».
+- **Тип:** UI-правка формата
+- **Исполнитель:** @fixer → верификация @orchestrator (браузер)
+- **Результат:** PASS.
+- **Сделано:** `formatCost` собирает `~ ` + число + ` ` + символ; `formatCostMap` — склейка `~ 0.03 $ · ~ 2.10 ₽`. Обновлены doc-примеры (`formatStats.ts`, `statsSegments.ts`, `MessageStats.tsx`) и ожидания тестов (`formatStats.test.ts`, `StatsTab.test.tsx`, `MessageStats.test.tsx`, `StreamingPlaceholder.test.tsx`). `formatMoney`/`formatTokens` не тронуты.
+- **Проверки:** `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 91, core 1643, ui 600, backend 306 — PASS. Браузер: в «Статистике» `~ 0.0343 $`, `~ 1.16 ₽`, `~ 0.2087 ₽` (мультивалютная разбивка работает).
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** этот.

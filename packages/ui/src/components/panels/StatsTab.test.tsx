@@ -681,7 +681,7 @@ describe('StatsTab — live-обновление (AD-070 §2.6)', () => {
     expect(text).toContain('Subagents')
     expect(text).toContain('500')
     expect(text).toContain('50')
-    expect(text).toContain('~$0.002')
+    expect(text).toContain('~ 0.002 $')
     // Итог включает live-сабагентов (серверных токенов нет).
     expect(text).toContain('500')
   })
@@ -777,15 +777,15 @@ describe('StatsTab — мультивалютная стоимость (C2b)', (
 
     const container = await renderStats()
     const sessionText = findSection(container, 'Session')!.textContent ?? ''
-    expect(sessionText).toContain('~$0.03 · ~₽2.10')
-    // Агрегат по валютам, а не арифметическая сумма 2.13 → нет ~$2.13.
-    expect(sessionText).not.toContain('~$2.13')
+    expect(sessionText).toContain('~ 0.03 $ · ~ 2.10 ₽')
+    // Агрегат по валютам, а не арифметическая сумма 2.13 → нет ~ 2.13 $.
+    expect(sessionText).not.toContain('~ 2.13 $')
 
     const agentsText = findSection(container, 'Agent stats')?.textContent ?? ''
-    expect(agentsText).toContain('~$0.03 · ~₽2.10')
+    expect(agentsText).toContain('~ 0.03 $ · ~ 2.10 ₽')
 
     const usersText = findSection(container, 'User stats')?.textContent ?? ''
-    expect(usersText).toContain('~$0.03 · ~₽2.10')
+    expect(usersText).toContain('~ 0.03 $ · ~ 2.10 ₽')
   })
 
   it('старые данные без cost_by_currency → USD, как раньше', async () => {
@@ -800,8 +800,8 @@ describe('StatsTab — мультивалютная стоимость (C2b)', (
     })
 
     const container = await renderStats()
-    expect(findSection(container, 'Session')!.textContent).toContain('~$0.03')
-    expect(findSection(container, 'Agent stats')!.textContent).toContain('~$0.03')
+    expect(findSection(container, 'Session')!.textContent).toContain('~ 0.03 $')
+    expect(findSection(container, 'Agent stats')!.textContent).toContain('~ 0.03 $')
   })
 
   it('live-дельта в своей валюте добавляется к серверной карте раздельно', async () => {
@@ -829,6 +829,6 @@ describe('StatsTab — мультивалютная стоимость (C2b)', (
     } as never)
 
     const container = await renderStats()
-    expect(findSection(container, 'Session')!.textContent).toContain('~$0.03 · ~₽2.10')
+    expect(findSection(container, 'Session')!.textContent).toContain('~ 0.03 $ · ~ 2.10 ₽')
   })
 })

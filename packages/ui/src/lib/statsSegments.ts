@@ -24,7 +24,7 @@ export interface UsageStatsData {
 /**
  * AD-070 §2.6: общие сегменты usage/cost/cache — используются и финальной
  * статистикой ответа (`MessageStats`), и live-строкой стрима
- * (`StreamingPlaceholder`): `1.7M вх · 33.3k исх · ~$0.03 · 93% кэш`.
+ * (`StreamingPlaceholder`): `1.7M вх · 33.3k исх · ~ 0.03 $ · 93% кэш`.
  * Порядок сегментов: вход, выход, стоимость, кэш.
  */
 export function buildUsageSegments(data: UsageStatsData, t: Translate): string[] {

@@ -80,7 +80,7 @@ describe('StreamingPlaceholder — live-статистика (AD-070 §2.6)', ()
     const text = el!.textContent ?? ''
     expect(text).toContain('1.7M in')
     expect(text).toContain('33.3k out')
-    expect(text).toContain('~$0.03')
+    expect(text).toContain('~ 0.03 $')
     expect(text).toContain('93% cache')
     // Сегменты разделены `·`.
     expect(el!.querySelectorAll('[aria-hidden="true"]').length).toBe(3)
@@ -114,7 +114,7 @@ describe('StreamingPlaceholder — live-статистика (AD-070 §2.6)', ()
     const text = container.querySelector('[data-testid="stream-live-stats"]')!.textContent ?? ''
     expect(text).toContain('1.5k вх')
     expect(text).toContain('300 исх')
-    expect(text).toContain('~$0.01')
+    expect(text).toContain('~ 0.01 $')
     expect(text).toContain('50% кэш')
   })
 
@@ -126,7 +126,7 @@ describe('StreamingPlaceholder — live-статистика (AD-070 §2.6)', ()
     }))
 
     const text = container.querySelector('[data-testid="stream-live-stats"]')!.textContent ?? ''
-    expect(text).toContain('~₽0.05')
-    expect(text).not.toContain('~$0.05')
+    expect(text).toContain('~ 0.05 ₽')
+    expect(text).not.toContain('~ 0.05 $')
   })
 })

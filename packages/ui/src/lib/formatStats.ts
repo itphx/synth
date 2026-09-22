@@ -39,29 +39,30 @@ export function formatTokens(n: number): string {
 }
 
 /**
- * 0 → `~$0`, 0.03 → `~$0.03`, 0.1 → `~$0.10`, 0.000123 → `~$0.000123`, 1.234 → `~$1.23`.
- * Символ валюты берётся из `currency` (RUB → `₽`, CNY → `¥`); отсутствует/неизвестна → `$` (USD).
+ * 0 → `~ 0 $`, 0.03 → `~ 0.03 $`, 0.1 → `~ 0.10 $`, 0.000123 → `~ 0.000123 $`, 1.234 → `~ 1.23 $`.
+ * Формат: `~` + число + символ валюты, разделённые пробелами. Символ валюты берётся
+ * из `currency` (RUB → `₽`, CNY → `¥`); отсутствует/неизвестна → `$` (USD).
  */
 export function formatCost(usd: number, currency?: string): string {
   const symbol = currencySymbol(currency)
-  if (!Number.isFinite(usd) || usd <= 0) return `~${symbol}0`
-  if (usd >= 1) return `~${symbol}${usd.toFixed(2)}`
+  if (!Number.isFinite(usd) || usd <= 0) return `~ 0 ${symbol}`
+  if (usd >= 1) return `~ ${usd.toFixed(2)} ${symbol}`
   if (usd >= 0.01) {
     // 2–4 знака: минимум 2, хвостовые нули сверх двух отбрасываем.
     const fixed = usd.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
     const decimals = fixed.includes('.') ? fixed.split('.')[1]!.length : 0
-    return `~${symbol}${decimals < 2 ? usd.toFixed(2) : fixed}`
+    return `~ ${decimals < 2 ? usd.toFixed(2) : fixed} ${symbol}`
   }
   // < 0.01: до 6 значимых цифр.
   const plain = trimTrailingZero(expandExponential(usd.toPrecision(6)).replace(/0+$/, '').replace(/\.$/, ''))
-  return `~${symbol}${plain}`
+  return `~ ${plain} ${symbol}`
 }
 
 /** C2b: приоритет валют в мультивалютной сумме: USD, RUB, CNY, затем прочие по алфавиту. */
 const CURRENCY_ORDER: Record<string, number> = { USD: 0, RUB: 1, CNY: 2 }
 
 /**
- * C2b: мультивалютная сумма. `{ USD: 0.03, RUB: 2.1 }` → `~$0.03 · ~₽2.10`.
+ * C2b: мультивалютная сумма. `{ USD: 0.03, RUB: 2.1 }` → `~ 0.03 $ · ~ 2.10 ₽`.
  * Нулевые/нечисловые значения отбрасываются; порядок валют стабильный
  * (USD, RUB, CNY, далее по алфавиту). Если положительных значений нет —
  * fallback на `fallbackUsd` как USD (старые данные без `cost_by_currency`),
