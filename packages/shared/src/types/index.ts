@@ -863,6 +863,11 @@ export interface AgentDefinition {
   description?: string;
 }
 
+// --- Currency ---
+/** Валюта цен моделей. Отсутствует у модели → валюта провайдера → USD. */
+export const CURRENCIES = ['RUB', 'USD', 'CNY'] as const;
+export type Currency = (typeof CURRENCIES)[number];
+
 // --- Provider ---
 export interface ProviderConfig {
   name: string;
@@ -873,6 +878,8 @@ export interface ProviderConfig {
   timeout?: number;
   enabled?: boolean;
   icon?: string;
+  /** Валюта по умолчанию для моделей провайдера. Отсутствует → USD. */
+  currency?: Currency;
 }
 
 export type ContextSource = 'api' | 'reference' | 'manual' | 'unknown';
@@ -941,6 +948,8 @@ export interface ModelConfig {
   outputPrice?: number;
   cacheReadPrice?: number;
   cacheWritePrice?: number;
+  /** Валюта цен модели; отсутствует → валюта провайдера → USD. */
+  currency?: Currency;
 }
 
 // --- LLM ---

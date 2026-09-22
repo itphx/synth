@@ -3,6 +3,14 @@
 // остальные не-OK → RemoteError('HTTP_<status>').
 
 import { RemoteError } from './types.js';
+import { CURRENCIES, type Currency } from '@itphx/synth-shared';
+
+/** Валидирует валюту по списку RUB/USD/CNY; иначе — undefined. */
+function asCurrency(value: unknown): Currency | undefined {
+  return typeof value === 'string' && (CURRENCIES as readonly string[]).includes(value)
+    ? (value as Currency)
+    : undefined;
+}
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 /** Короткий таймаут для быстрой проверки доступности. */
@@ -30,6 +38,8 @@ export interface RemoteProviderInfo {
   is_default: boolean;
   icon?: string;
   icon_url?: string;
+  /** Валюта по умолчанию для моделей провайдера. */
+  currency?: Currency;
 }
 
 /**
@@ -51,6 +61,8 @@ export interface RemoteModelInfo {
   outputPrice?: number;
   cacheReadPrice?: number;
   cacheWritePrice?: number;
+  /** Валюта цен модели. Отсутствует → валюта провайдера → USD. */
+  currency?: Currency;
 }
 
 export interface RequestOptions {
@@ -192,6 +204,7 @@ export class RemoteBackendClient {
         outputPrice: typeof m.outputPrice === 'number' ? m.outputPrice : undefined,
         cacheReadPrice: typeof m.cacheReadPrice === 'number' ? m.cacheReadPrice : undefined,
         cacheWritePrice: typeof m.cacheWritePrice === 'number' ? m.cacheWritePrice : undefined,
+        currency: asCurrency(m.currency),
       })).filter((m) => m.id !== ''),
     );
   }
@@ -211,6 +224,7 @@ export class RemoteBackendClient {
         model: String(p.model ?? ''),
         enabled: p.enabled !== false,
         is_default: p.is_default === true,
+        ...(p.currency ? { currency: asCurrency(p.currency) } : {}),
         ...(p.icon ? { icon: String(p.icon) } : {}),
         ...(p.icon_url ? { icon_url: String(p.icon_url) } : {}),
       })).filter((p) => p.name !== ''),

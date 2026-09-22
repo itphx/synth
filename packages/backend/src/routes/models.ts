@@ -1,11 +1,18 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
-import type { ModelConfig, ProviderConfig, ContextSource } from '@itphx/synth-shared';
-import { lookupContextWindow } from '@itphx/synth-shared';
+import type { Currency, ModelConfig, ProviderConfig, ContextSource } from '@itphx/synth-shared';
+import { CURRENCIES, lookupContextWindow } from '@itphx/synth-shared';
 import { ProviderFactory } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
+
+/** Валидирует валюту по списку RUB/USD/CNY; иначе — undefined. */
+function parseCurrency(value: unknown): Currency | undefined {
+  return typeof value === 'string' && (CURRENCIES as readonly string[]).includes(value)
+    ? (value as Currency)
+    : undefined;
+}
 
 interface ModelGroupResponse {
   provider: {
@@ -13,6 +20,7 @@ interface ModelGroupResponse {
     type: string;
     icon: string;
     defaultModel: string;
+    currency?: Currency;
   };
   models: Array<{
     id: string;
@@ -28,6 +36,7 @@ interface ModelGroupResponse {
     outputPrice?: number;
     cacheReadPrice?: number;
     cacheWritePrice?: number;
+    currency?: Currency;
   }>;
 }
 
@@ -88,6 +97,7 @@ export function createModelRoutes(
           type: provider?.type || 'openai',
           icon: provider?.icon || '',
           defaultModel: provider?.defaultModel || '',
+          currency: provider?.currency,
         },
         models: groupModels.map((m) => ({
           id: m.id,
@@ -103,6 +113,7 @@ export function createModelRoutes(
           outputPrice: m.outputPrice,
           cacheReadPrice: m.cacheReadPrice,
           cacheWritePrice: m.cacheWritePrice,
+          currency: m.currency,
         })),
       };
     });
@@ -120,6 +131,10 @@ export function createModelRoutes(
 
     const existing = await modelStore.load(modelId);
     const provider = body.provider || existing?.provider || '';
+    const rawCurrency = body.currency;
+    const currency = rawCurrency === null || rawCurrency === ''
+      ? undefined
+      : parseCurrency(rawCurrency) ?? existing?.currency;
 
     const model: ModelConfig = {
       id: modelId,
@@ -137,6 +152,7 @@ export function createModelRoutes(
       outputPrice: body.output_price ?? body.outputPrice ?? existing?.outputPrice,
       cacheReadPrice: body.cache_read_price ?? body.cacheReadPrice ?? existing?.cacheReadPrice,
       cacheWritePrice: body.cache_write_price ?? body.cacheWritePrice ?? existing?.cacheWritePrice,
+      currency,
     };
 
     await modelStore.save(modelId, model);

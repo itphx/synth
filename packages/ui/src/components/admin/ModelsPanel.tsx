@@ -7,6 +7,8 @@ import { confirm } from '@/lib/confirm'
 import { SelectContent, SelectItem } from '@/components/ui/select'
 import { Button } from '../ui/button'
 import { ProviderIcon } from './ProviderIcon'
+import { CurrencyPicker } from './CurrencyPicker'
+import { formatMoney, type Currency } from '@/lib/currency'
 import {
   NumberField,
   SettingsActions,
@@ -25,7 +27,7 @@ type EditingPrices = Record<string, {
 }>
 
 export const ModelsPanel = () => {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [groups, setGroups] = useState<ModelGroup[]>([])
   const [loading, setLoading] = useState(true)
   const [filterProvider, setFilterProvider] = useState('')
@@ -101,6 +103,17 @@ export const ModelsPanel = () => {
       }))
     )
     await saveModel(model.id, { enabled: !model.enabled } as ModelInfo)
+  }
+
+  const setCurrency = async (model: ModelInfo, currency: Currency) => {
+    // Оптимистичное обновление
+    setGroups((prev) =>
+      prev.map((g) => ({
+        ...g,
+        models: g.models.map((m) => (m.id === model.id ? { ...m, currency } : m)),
+      }))
+    )
+    await saveModel(model.id, { currency })
   }
 
   const setAsDefault = async (model: ModelInfo) => {
@@ -276,9 +289,9 @@ export const ModelsPanel = () => {
 
   const enabledProviders = groups.filter((g) => g.models.length > 0)
 
-  const formatPrice = (price?: number) => {
+  const formatPrice = (price?: number, currency?: string) => {
     if (price === undefined || price === null) return ''
-    return `$${price.toFixed(2)}`
+    return formatMoney(price, currency, locale)
   }
 
   return (
@@ -495,6 +508,8 @@ export const ModelsPanel = () => {
                         ) : (
                           group.models.map((model) => {
                             const editing = editingPrices[model.id]
+                            // Валюта цен: модель → провайдер → USD.
+                            const currency = model.currency ?? group.provider.currency
                             return (
                               <div
                                 key={model.id}
@@ -543,51 +558,57 @@ export const ModelsPanel = () => {
                                 </div>
 
                                 {/* Цены */}
-                                <div className="w-[8.75rem] shrink-0 flex flex-wrap gap-0.5 text-[0.625rem] tabular-nums">
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    step="0.01"
-                                    placeholder="in"
-                                    value={editing?.inputPrice ?? formatPrice(model.input_price)}
-                                    onChange={(e) => updatePriceField(model.id, 'inputPrice', e.target.value)}
-                                    onFocus={() => !editing && startEditPrice(model)}
-                                    className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
-                                    title={t('admin.models.priceInTitle')}
+                                <div className="w-[8.75rem] shrink-0 flex items-center gap-1 text-[0.625rem] tabular-nums">
+                                  <CurrencyPicker
+                                    value={currency}
+                                    onChange={(next) => setCurrency(model, next)}
                                   />
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    step="0.01"
-                                    placeholder="out"
-                                    value={editing?.outputPrice ?? formatPrice(model.output_price)}
-                                    onChange={(e) => updatePriceField(model.id, 'outputPrice', e.target.value)}
-                                    onFocus={() => !editing && startEditPrice(model)}
-                                    className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
-                                    title={t('admin.models.priceOutTitle')}
-                                  />
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    step="0.01"
-                                    placeholder="cr"
-                                    value={editing?.cacheReadPrice ?? formatPrice(model.cache_read_price)}
-                                    onChange={(e) => updatePriceField(model.id, 'cacheReadPrice', e.target.value)}
-                                    onFocus={() => !editing && startEditPrice(model)}
-                                    className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
-                                    title={t('admin.models.priceCrTitle')}
-                                  />
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    step="0.01"
-                                    placeholder="cw"
-                                    value={editing?.cacheWritePrice ?? formatPrice(model.cache_write_price)}
-                                    onChange={(e) => updatePriceField(model.id, 'cacheWritePrice', e.target.value)}
-                                    onFocus={() => !editing && startEditPrice(model)}
-                                    className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
-                                    title={t('admin.models.priceCwTitle')}
-                                  />
+                                  <div className="flex flex-1 flex-wrap gap-0.5">
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="0.01"
+                                      placeholder="in"
+                                      value={editing?.inputPrice ?? model.input_price ?? ''}
+                                      onChange={(e) => updatePriceField(model.id, 'inputPrice', e.target.value)}
+                                      onFocus={() => !editing && startEditPrice(model)}
+                                      className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
+                                      title={formatPrice(model.input_price, currency) || t('admin.models.priceInTitle')}
+                                    />
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="0.01"
+                                      placeholder="out"
+                                      value={editing?.outputPrice ?? model.output_price ?? ''}
+                                      onChange={(e) => updatePriceField(model.id, 'outputPrice', e.target.value)}
+                                      onFocus={() => !editing && startEditPrice(model)}
+                                      className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
+                                      title={formatPrice(model.output_price, currency) || t('admin.models.priceOutTitle')}
+                                    />
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="0.01"
+                                      placeholder="cr"
+                                      value={editing?.cacheReadPrice ?? model.cache_read_price ?? ''}
+                                      onChange={(e) => updatePriceField(model.id, 'cacheReadPrice', e.target.value)}
+                                      onFocus={() => !editing && startEditPrice(model)}
+                                      className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
+                                      title={formatPrice(model.cache_read_price, currency) || t('admin.models.priceCrTitle')}
+                                    />
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="0.01"
+                                      placeholder="cw"
+                                      value={editing?.cacheWritePrice ?? model.cache_write_price ?? ''}
+                                      onChange={(e) => updatePriceField(model.id, 'cacheWritePrice', e.target.value)}
+                                      onFocus={() => !editing && startEditPrice(model)}
+                                      className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
+                                      title={formatPrice(model.cache_write_price, currency) || t('admin.models.priceCwTitle')}
+                                    />
+                                  </div>
                                 </div>
 
                                 {/* Включено / Выключено */}

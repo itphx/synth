@@ -240,6 +240,8 @@ export interface ProviderInfo {
   model: string
   enabled: boolean
   is_default?: boolean
+  /** Валюта по умолчанию для моделей провайдера. */
+  currency?: string
 }
 
 export interface ModelInfo {
@@ -256,6 +258,8 @@ export interface ModelInfo {
   output_price?: number
   cache_read_price?: number
   cache_write_price?: number
+  /** Валюта цен модели; отсутствует → валюта провайдера → USD. */
+  currency?: string
 }
 
 export interface ProviderGroupInfo {
@@ -263,6 +267,7 @@ export interface ProviderGroupInfo {
   type: string
   icon: string
   defaultModel: string
+  currency?: string
 }
 
 export interface ModelGroup {

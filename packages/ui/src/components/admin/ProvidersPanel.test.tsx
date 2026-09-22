@@ -305,3 +305,53 @@ describe('ProvidersPanel: тяжёлая иконка сжимается пер�
     expect(host.textContent).toContain('admin.providers.notSelected')
   })
 })
+
+describe('ProvidersPanel: валюта провайдера сохраняется', () => {
+  it('выбранная валюта уходит в тело POST /providers', async () => {
+    vi.mocked(synthApi.getProviders).mockResolvedValueOnce({
+      providers: [
+        {
+          name: 'itphx',
+          type: 'openai',
+          icon: '',
+          url: 'https://api.example.com/v1',
+          model: 'model',
+          enabled: true,
+          currency: 'USD',
+        },
+      ],
+      default_provider: 'itphx',
+    })
+
+    const host = await renderPanel()
+    await act(async () => {
+      findButtonByLabel(host, 'admin.providers.edit').click()
+    })
+
+    // Селект валюты — Base UI combobox; опции рендерятся в portal.
+    const trigger = host.querySelector('[aria-label="admin.providers.currency"]') as HTMLElement | null
+    expect(trigger).toBeTruthy()
+    await act(async () => {
+      trigger!.click()
+    })
+    const option = [...document.body.querySelectorAll('[role="option"]')].find((o) =>
+      (o.textContent ?? '').includes('admin.providers.currency.RUB'),
+    ) as HTMLElement | undefined
+    expect(option).toBeTruthy()
+    await act(async () => {
+      option!.click()
+    })
+    await act(async () => {})
+
+    const save = host.querySelector('[data-testid="provider-save"]') as HTMLButtonElement | null
+    expect(save).toBeTruthy()
+    await act(async () => {
+      save!.click()
+    })
+    await act(async () => {})
+
+    const call = vi.mocked(synthApi.fetchJSON).mock.calls.find(([url]) => url === '/api/v2/providers')
+    expect(call).toBeTruthy()
+    expect(JSON.parse((call![1] as RequestInit).body as string).currency).toBe('RUB')
+  })
+})

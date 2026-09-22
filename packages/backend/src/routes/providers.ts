@@ -1,10 +1,18 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
-import type { ProviderConfig } from '@itphx/synth-shared';
+import type { Currency, ProviderConfig } from '@itphx/synth-shared';
+import { CURRENCIES } from '@itphx/synth-shared';
 import { ProviderFactory } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
+
+/** Валидирует валюту по списку RUB/USD/CNY; иначе — undefined. */
+function parseCurrency(value: unknown): Currency | undefined {
+  return typeof value === 'string' && (CURRENCIES as readonly string[]).includes(value)
+    ? (value as Currency)
+    : undefined;
+}
 
 function getFaviconUrl(baseUrl?: string): string | undefined {
   if (!baseUrl) return undefined;
@@ -71,6 +79,7 @@ export function createProviderRoutes(
         model: p.defaultModel || '',
         enabled: p.enabled !== false,
         is_default: p === defaultProvider,
+        currency: p.currency,
         ...renderIcon(p.icon, p.baseUrl),
       })),
       default_provider: defaultProvider?.name || '',
@@ -86,6 +95,10 @@ export function createProviderRoutes(
     }
 
     const existing = await store.load(name);
+    const rawCurrency = body.currency;
+    const currency = rawCurrency === null || rawCurrency === ''
+      ? undefined
+      : parseCurrency(rawCurrency) ?? existing?.currency;
     const provider: ProviderConfig = {
       name,
       type: body.type || existing?.type || 'openai',
@@ -95,6 +108,7 @@ export function createProviderRoutes(
       timeout: body.timeout ?? existing?.timeout ?? 120,
       enabled: body.enabled ?? existing?.enabled ?? true,
       icon: body.icon !== undefined ? body.icon : (existing?.icon ?? ''),
+      currency,
     };
     await store.save(name, provider);
     providerCache.set(name, provider);

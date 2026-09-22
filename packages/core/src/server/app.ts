@@ -409,6 +409,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
         outputPrice: m.outputPrice,
         cacheReadPrice: m.cacheReadPrice,
         cacheWritePrice: m.cacheWritePrice,
+        currency: m.currency,
       }))
       .filter((m) => m.id && m.provider);
 
@@ -449,6 +450,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
           apiKey: '',
           defaultModel: providerInfo.model || undefined,
           enabled: true,
+          currency: providerInfo.currency,
         },
         models: modelsToMirror.filter((m) => m.provider === name),
         getToken: getToken ?? (async () => null),

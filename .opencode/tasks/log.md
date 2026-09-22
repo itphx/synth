@@ -519,3 +519,21 @@
 - **Отмечено:** дефолтная активная вкладка осталась «Контекст» (пользователь просил поменять только порядок). Визуально в браузере не смотрели.
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** этот.
+
+## 2026-09-22 (продолжение 8) — валюта цены модели, этап A (данные + UI) + фикс warning «$3.28»
+- **Задача:** «Добавить фичу — выбор валюты для цен у каждой модели отдельно. Кнопка с единственным символом валюты, попап выбора. Базовые валюты: RUB, USD, CNY. И изучить получение цен/лимитов от провайдера (routerai).» Решения: агрегаты — раздельно по валютам; синхронизация — цены+лимиты, универсально (OpenAI/Anthropic/Ollama); валюта — полем у провайдера. Порядок — поэтапно A → B → C.
+- **Тип:** feature (multi-currency) + bug fix (console warning)
+- **Исполнитель:** @orchestrator (research ×4) → @fixer → верификация @orchestrator
+- **Результат:** PASS (этап A). Этапы B (синхронизация цен/лимитов) и C (мультивалютные агрегаты) — следующие.
+- **Причина warning:** `ModelsPanel.formatPrice` возвращал `"$3.28"`, и строка попадала в `value` четырёх `<input type="number">` (цены in/out/cache read/cache write) до фокуса — браузер отклонял значение (цена вообще не отображалась).
+- **Сделано:**
+  - **Shared:** `CURRENCIES = ['RUB','USD','CNY']` + `type Currency`; `ProviderConfig.currency?`, `ModelConfig.currency?` (приоритет модель → провайдер → USD).
+  - **Backend/Core:** `currency` в GET/POST провайдеров и моделей (+helper `parseCurrency` с валидацией; `null`/`''` очищает, невалидное игнорируется).
+  - **Гибрид:** `RemoteModelInfo`/`RemoteProviderInfo.currency`, `asCurrency()`, проброс в `remote/client.ts` и `server/app.ts` (extraModels + зеркалируемый провайдер).
+  - **UI:** новый `lib/currency.ts` (`formatMoney` через `Intl.NumberFormat`, символы `₽/$/¥`); новый `components/admin/CurrencyPicker.tsx` (кнопка-символ + Popover, активная помечена `<Icon name="check"/>`); `ModelsPanel` — `value` инпутов цен теперь сырое число (фикс warning), валюта резолвится `model → provider → USD`, `formatPrice` валюто/локаль-зависим (только title), `setCurrency` → `POST /models`; `ProvidersPanel` — селект валюты провайдера (+«не задано»).
+  - **i18n:** ключи `admin.providers.currency*`, `admin.models.currency*`; подписи `$/1M` сделаны валюто-нейтральными.
+  - **Тесты:** новый `ModelsPanel.test.tsx` (value инпутов без `$` — регрессия warning, переключение валюты, fallback от провайдера), `backend/routes/providers.test.ts` и `models.test.ts` (сохранение/очистка/игнор невалидной валюты), `ProvidersPanel.test.tsx` (сохранение валюты в body POST).
+- **Проверки:** `pnpm typecheck` — 6 пакетов Done; `pnpm lint` — exit 0, 0 errors; `pnpm test` — shared 91, core 1613, ui **576**, backend **297** — все PASS. Fixer подтвердил, что тест ловит регрессию: с баговым `value` падает, после фикса зелёный.
+- **Отмечено:** агрегаты стоимости (`cost_usd`, StatsTab/MessageStats/AuditLogPanel) намеренно НЕ тронуты — это этап C; отображение стоимости ходов/сессий пока остаётся с `$`. Функциональность этапа B (синк цен/лимитов: routerai `/models`+`/endpoints` → RUB; anthropic `max_input_tokens`/`max_tokens`; ollama контекст из `/api/show`; openai только id) ещё не реализована.
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** этот (этап A).

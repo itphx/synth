@@ -232,4 +232,55 @@ describe('routes/models', () => {
       expect(stores.modelCache.has('p1/m1')).toBe(false);
     });
   });
+
+  describe('валюта модели', () => {
+    interface CurrencyGroup {
+      provider: { name: string; currency?: string };
+      models: Array<Record<string, unknown>>;
+    }
+
+    async function listGroups(): Promise<CurrencyGroup[]> {
+      const res = await stores.app.request(BASE);
+      const body = await res.json() as { groups: CurrencyGroup[] };
+      return body.groups;
+    }
+
+    it('POST с currency=CNY сохраняет модель, GET возвращает model.currency и provider.currency', async () => {
+      await stores.providerStore.save('p-cur', {
+        name: 'p-cur', type: 'openai', baseUrl: 'http://p.local', enabled: true, currency: 'USD',
+      });
+
+      const res = await stores.app.request(BASE, postJSON({
+        id: 'p-cur/m-cur',
+        name: 'm-cur',
+        provider: 'p-cur',
+        currency: 'CNY',
+      }));
+      expect(res.status).toBe(201);
+
+      const saved = await stores.modelStore.load('p-cur/m-cur');
+      expect(saved?.currency).toBe('CNY');
+
+      const group = (await listGroups()).find((g) => g.provider.name === 'p-cur')!;
+      expect(group.provider.currency).toBe('USD');
+      expect(group.models[0]!.currency).toBe('CNY');
+    });
+
+    it('POST с невалидной currency (XXX) — значение игнорируется', async () => {
+      const res = await stores.app.request(BASE, postJSON({
+        id: 'p1/m-bad',
+        name: 'm-bad',
+        provider: 'p1',
+        currency: 'XXX',
+      }));
+      expect(res.status).toBe(201);
+
+      const saved = await stores.modelStore.load('p1/m-bad');
+      expect(saved?.currency).toBeUndefined();
+
+      const group = (await listGroups()).find((g) => g.provider.name === 'p1')!;
+      const model = group.models.find((m) => m.id === 'p1/m-bad')!;
+      expect(model.currency).toBeUndefined();
+    });
+  });
 });
