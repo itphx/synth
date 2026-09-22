@@ -105,6 +105,7 @@ export function McpUserSettings() {
     <SettingsPanel
       title={t('mcp.user.title')}
       description={t('mcp.user.description')}
+      meta={registry ? t('mcp.count', { count: ownEntries.length }) : undefined}
       actions={
         <Button data-testid="mcp-user-add" onClick={openAdd}>
           <Icon name="add" className="size-3.5" />
@@ -157,15 +158,7 @@ export function McpUserSettings() {
         </SettingsSection>
       )}
 
-      <SettingsSection
-        actions={
-          registry ? (
-            <span className="text-sm font-medium text-foreground">
-              {t('mcp.count', { count: ownEntries.length })}
-            </span>
-          ) : undefined
-        }
-      >
+      <SettingsSection>
         {loading && registry === null && (
           <div className="text-center text-muted-foreground py-8">{t('common.loading')}</div>
         )}

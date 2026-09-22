@@ -392,6 +392,7 @@ export const McpSettings = () => {
     <SettingsPanel
       title={t('mcp.title')}
       description={t('mcp.description')}
+      meta={registry ? t('mcp.count', { count: registry.length }) : undefined}
       actions={
         <Button data-testid="mcp-admin-add" onClick={openAdd}>
           <Icon name="add" className="size-3.5" />
@@ -542,15 +543,7 @@ export const McpSettings = () => {
       )}
 
       {/* Registry list */}
-      <SettingsSection
-        actions={
-          registry ? (
-            <span className="text-sm font-medium text-foreground">
-              {t('mcp.count', { count: registry.length })}
-            </span>
-          ) : undefined
-        }
-      >
+      <SettingsSection>
         {registry && registry.length === 0 && !editing && (
           <div className="text-center text-muted-foreground py-8">
             <Icon name="server" className="size-8 mx-auto mb-2 opacity-40" />

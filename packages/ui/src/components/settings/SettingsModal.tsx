@@ -1,4 +1,4 @@
-import { Fragment } from "react"
+import { Fragment, useEffect, useRef } from "react"
 import { Dialog, DialogClose, DialogContent } from "../ui/dialog"
 import { Icon } from "../icon/Icon"
 import { useUIStore } from "../../stores/useUIStore"
@@ -76,6 +76,30 @@ export const SettingsModal = () => {
 
   const adminBoundaryIndex = visibleCategories.findIndex((c) => c.roles !== undefined)
 
+  const navRef = useRef<HTMLElement>(null)
+  const activeRef = useRef<HTMLButtonElement>(null)
+
+  // На телефоне меню категорий — горизонтальная скролл-полоса.
+  // Прокручиваем её так, чтобы активная вкладка была видна (без scrollIntoView,
+  // который может спровоцировать вертикальный скролл страницы).
+  useEffect(() => {
+    if (!isPhone) return
+    const raf = requestAnimationFrame(() => {
+      const nav = navRef.current
+      const btn = activeRef.current
+      if (!nav || !btn) return
+      const navRect = nav.getBoundingClientRect()
+      const btnRect = btn.getBoundingClientRect()
+      const PAD = 8
+      if (btnRect.left < navRect.left) {
+        nav.scrollLeft -= navRect.left - btnRect.left + PAD
+      } else if (btnRect.right > navRect.right) {
+        nav.scrollLeft += btnRect.right - navRect.right + PAD
+      }
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [settingsPage, isPhone, isSettingsDialogOpen])
+
   return (
     <Dialog open={isSettingsDialogOpen} onOpenChange={setSettingsDialogOpen}>
       <DialogContent
@@ -98,6 +122,7 @@ export const SettingsModal = () => {
               </div>
             </div>
             <nav
+              ref={navRef}
               className={cn(
                 "p-2 gap-1",
                 isPhone ? "flex flex-row overflow-x-auto" : "flex-1 overflow-y-auto flex-col",
@@ -110,6 +135,7 @@ export const SettingsModal = () => {
                     <hr className="my-2 border-border hidden md:block" />
                   )}
                   <button
+                    ref={settingsPage === cat.id ? activeRef : undefined}
                     onClick={() => setSettingsPage(cat.id)}
                     aria-current={settingsPage === cat.id ? 'page' : undefined}
                     className={cn(

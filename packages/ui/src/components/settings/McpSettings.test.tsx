@@ -329,4 +329,17 @@ describe('McpSettings — каркас SettingsPanel (AD-072)', () => {
       expect(el.className).toContain('grid-cols-1')
     }
   })
+
+  it('счётчик серверов — в meta шапки панели, а не в шапке секции', async () => {
+    const container = await renderSettings()
+
+    const meta = container.querySelector('[data-testid="settings-header-meta"]')
+    expect(meta).not.toBeNull()
+    // Мок-реестр: sys + community → 2 сервера.
+    expect(meta!.textContent).toContain('2 servers')
+
+    // Счётчик встречается ровно один раз — только в meta панели, а не в шапке секции.
+    const matches = container.textContent?.match(/2 servers/g) ?? []
+    expect(matches).toHaveLength(1)
+  })
 })

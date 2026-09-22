@@ -178,4 +178,17 @@ describe('McpUserSettings — пользовательская часть MCP (A
     expect(saveButton.className).not.toContain('active:scale-[0.96]')
     expect(saveButton.className).not.toContain('transition-[transform,opacity]')
   })
+
+  it('счётчик собственных серверов — в meta шапки панели, а не в шапке секции', async () => {
+    const container = await renderSettings()
+
+    const meta = container.querySelector('[data-testid="settings-header-meta"]')
+    expect(meta).not.toBeNull()
+    // Мок-реестр: только ENTRY_OWN принадлежит alice → 1 сервер.
+    expect(meta!.textContent).toContain('1 servers')
+
+    // Счётчик встречается ровно один раз — только в meta панели, а не в шапке секции.
+    const matches = container.textContent?.match(/1 servers/g) ?? []
+    expect(matches).toHaveLength(1)
+  })
 })
