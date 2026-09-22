@@ -298,7 +298,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/providers/:name` | оба | ADMIN / auth | Один (apiKey маскирован) |
 | DELETE | `/api/v2/providers/:name` | оба | ADMIN / auth | Удалить |
 | POST | `/api/v2/providers/:name/test` | оба | ADMIN / auth | Тест подключения |
-| POST | `/api/v2/providers/fetch-icon` | backend | ADMIN | Favicon домена (data-URL) |
+| POST | `/api/v2/providers/fetch-icon` | backend | ADMIN | Favicon домена (сырой data-URL); UI сохраняет иконку уже сжатой (маленький PNG data-URL) |
 
 ### 5.10 Models — `/api/v2/models`
 

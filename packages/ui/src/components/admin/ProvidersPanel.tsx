@@ -16,6 +16,7 @@ import {
   ToggleField,
 } from '../ui/settings'
 import { ProviderIcon, describeProviderIcon, PROVIDER_RI_ICONS, PROVIDER_BRAND_NAMES } from './ProviderIcon'
+import { downscaleIconDataUrl, isOversizedIcon } from '@/lib/imageIcon'
 
 interface FetchIconResult {
   icon?: string | null
@@ -52,6 +53,7 @@ export const ProvidersPanel = () => {
   const [error, setError] = useState('')
   const [fetchingIcon, setFetchingIcon] = useState(false)
   const [fetchedIcon, setFetchedIcon] = useState<FetchIconResult | null>(null)
+  const [iconUncompressed, setIconUncompressed] = useState(false)
   const [testResult, setTestResult] = useState<{ id?: string; status?: string; error?: string; models?: string[] } | null>(null)
 
   const load = async () => {
@@ -66,13 +68,27 @@ export const ProvidersPanel = () => {
 
   useEffect(() => { load() }, [])
 
+  // Единая точка установки иконки в форме: значение и признак «сжать не удалось» всегда синхронны.
+  const setIcon = (value: string) => {
+    setForm((prev) => ({ ...prev, icon: value }))
+    setIconUncompressed(isOversizedIcon(value))
+  }
+
   const resetForm = (p?: ProviderInfo) => {
     if (p) {
+      const heavy = isOversizedIcon(p.icon)
       setEditName(p.name)
       setForm({ name: p.name, type: p.type, base_url: p.url, api_key: '', default_model: p.model, timeout: 120, enabled: p.enabled !== false, icon: p.icon || '' })
+      setIconUncompressed(false)
+      if (heavy && p.icon) {
+        // Сжимаем тяжёлую иконку сразу в форме — обычное «Сохранить» мигрирует запись.
+        // Флаг поднимем только если сжать не удалось (результат всё ещё тяжёлый).
+        void downscaleIconDataUrl(p.icon).then(setIcon)
+      }
     } else {
       setEditName('')
       setForm({ name: '', type: 'openai', base_url: '', api_key: '', default_model: '', timeout: 120, enabled: true, icon: '' })
+      setIconUncompressed(false)
     }
     setShowForm(true)
     setError('')
@@ -135,7 +151,9 @@ export const ProvidersPanel = () => {
         method: 'POST',
         body: JSON.stringify({ url: form.base_url }),
       })
-      setFetchedIcon(data)
+      // Сжимаем сразу — и превью, и применяемое значение будут уже лёгкими.
+      const icon = data?.icon ? await downscaleIconDataUrl(data.icon) : data?.icon
+      setFetchedIcon({ ...data, icon })
     } catch (err) {
       setFetchedIcon({ error: err instanceof Error ? err.message : 'Ошибка' })
     } finally {
@@ -143,15 +161,16 @@ export const ProvidersPanel = () => {
     }
   }
 
-  const applyFetchedIcon = () => {
+  const applyFetchedIcon = async () => {
     if (fetchedIcon?.icon) {
-      setForm({ ...form, icon: fetchedIcon.icon })
+      const icon = await downscaleIconDataUrl(fetchedIcon.icon)
+      setIcon(icon)
       setFetchedIcon(null)
     }
   }
 
   const resetIcon = () => {
-    setForm({ ...form, icon: '' })
+    setIcon('')
     setFetchedIcon(null)
   }
 
@@ -249,6 +268,9 @@ export const ProvidersPanel = () => {
                 <div className="flex items-center gap-2 min-w-0">
                   <ProviderIcon icon={form.icon} baseUrl={form.base_url} size={20} />
                   <span className="text-xs text-muted-foreground min-w-0 truncate" title={iconTitle}>{iconLabel}</span>
+                  {iconUncompressed && (
+                    <span className="text-xs text-status-info">{t('admin.providers.iconUncompressed')}</span>
+                  )}
                 </div>
                 {form.icon && (
                   <Button
@@ -289,7 +311,7 @@ export const ProvidersPanel = () => {
                   {PROVIDER_RI_ICONS.map((riName) => (
                     <button
                       key={riName}
-                      onClick={() => setForm({ ...form, icon: `ri:${riName}` })}
+                      onClick={() => setIcon(`ri:${riName}`)}
                       title={riName}
                       className={cn(
                         'p-1.5 rounded-md border',
@@ -309,7 +331,7 @@ export const ProvidersPanel = () => {
                   {PROVIDER_BRAND_NAMES.map((brand) => (
                     <button
                       key={brand}
-                      onClick={() => setForm({ ...form, icon: `brand:${brand}` })}
+                      onClick={() => setIcon(`brand:${brand}`)}
                       title={brand}
                       className={cn(
                         'p-1.5 rounded-md border',

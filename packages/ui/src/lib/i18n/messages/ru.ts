@@ -1031,6 +1031,7 @@ export const dict = {
   'admin.providers.enabled': 'Провайдер включён',
   'admin.providers.icon': 'Иконка',
   'admin.providers.iconImage': 'Изображение (base64)',
+  'admin.providers.iconUncompressed': 'Не удалось сжать иконку — сохранится как есть',
   'admin.providers.reset': 'Сбросить',
   'admin.providers.autoDetectFavicon': 'Авто-определение (favicon)',
   'admin.providers.detect': 'Определить',

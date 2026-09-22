@@ -1034,6 +1034,7 @@ export const dict = {
   'admin.providers.enabled': 'Provider enabled',
   'admin.providers.icon': 'Icon',
   'admin.providers.iconImage': 'Image (base64)',
+  'admin.providers.iconUncompressed': 'Could not compress the icon — it will be saved as is',
   'admin.providers.reset': 'Reset',
   'admin.providers.autoDetectFavicon': 'Auto-detect (favicon)',
   'admin.providers.detect': 'Detect',
