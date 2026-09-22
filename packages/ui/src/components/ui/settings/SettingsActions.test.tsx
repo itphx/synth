@@ -151,4 +151,18 @@ describe('SettingsActions', () => {
     })
     expect(buttonByText(host, 'Apply')).toBeDefined()
   })
+
+  it('Cancel рендерится контурной кнопкой в цвете своего текста (outline-muted)', async () => {
+    const host = await renderActions({
+      onCancel: vi.fn(),
+      cancelTestId: 'settings-cancel',
+    })
+    const cancel = host.querySelector<HTMLButtonElement>('[data-testid="settings-cancel"]')!
+    expect(cancel).not.toBeNull()
+    expect(cancel.classList.contains('border')).toBe(true)
+    expect(cancel.className).toContain('border-muted-foreground')
+    expect(cancel.className).toContain('text-muted-foreground')
+    // Сплошной заливки нет — это контурный вариант.
+    expect(cancel.classList.contains('bg-primary')).toBe(false)
+  })
 })

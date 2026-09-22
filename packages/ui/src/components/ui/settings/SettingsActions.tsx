@@ -42,6 +42,8 @@ const ALIGN_CLASSES: Record<SettingsActionsAlign, string> = {
  * По умолчанию Reset — контурная кнопка в цвете Save (`outline-primary`);
  * `resetVariant="danger"` возвращает destructive-вид, `resetVariant="primary"`
  * — сплошную заливку как у Save.
+ * Cancel — контурная кнопка в цвете своего текста (`outline-muted`),
+ * рядом с Reset (`outline-primary`) и Save (`primary`).
  */
 export function SettingsActions({
   onSave,
@@ -100,7 +102,7 @@ export function SettingsActions({
       )}
       {onCancel && (
         <Button
-          variant="ghost"
+          variant="outline-muted"
           size="sm"
           className="shrink-0"
           onClick={onCancel}
