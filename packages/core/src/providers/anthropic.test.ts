@@ -433,3 +433,86 @@ describe('AnthropicProvider — ошибки прокси (AD-041)', () => {
     await expect(collect()).rejects.toThrow('Can only get item pairs from a mapping.');
   });
 });
+
+describe('AnthropicProvider — listModelsDetailed', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonResponse(payload: unknown): Response {
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  it('официальный Anthropic: max_input_tokens/max_tokens/display_name', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: [{
+        type: 'model',
+        id: 'claude-sonnet-4',
+        display_name: 'Claude Sonnet 4',
+        max_input_tokens: 200000,
+        max_tokens: 8192,
+      }],
+    })));
+
+    const provider = new AnthropicProvider(baseParams);
+    const models = await provider.listModelsDetailed();
+
+    expect(models).toEqual([{
+      id: 'claude-sonnet-4',
+      name: 'Claude Sonnet 4',
+      contextWindow: 200000,
+      maxOutputTokens: 8192,
+    }]);
+  });
+
+  it('nullable-поля не попадают в результат', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: [{ id: 'claude-bare', display_name: null, max_input_tokens: null, max_tokens: null }],
+    })));
+
+    const provider = new AnthropicProvider(baseParams);
+    const models = await provider.listModelsDetailed();
+
+    expect(models).toEqual([{ id: 'claude-bare' }]);
+  });
+
+  it('RouterAI-каталог на /v1/models: context_length + pricing (в т.ч. cache)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: [{
+        id: 'anthropic/claude-sonnet-4',
+        name: 'Claude Sonnet 4',
+        context_length: 200000,
+        pricing: {
+          prompt: '0.000003',
+          completion: '0.000015',
+          input_cache_read: '0.0000003',
+          input_cache_write: '0.00000375',
+        },
+      }],
+    })));
+
+    const provider = new AnthropicProvider(baseParams);
+    const models = await provider.listModelsDetailed();
+
+    expect(models[0]).toEqual({
+      id: 'anthropic/claude-sonnet-4',
+      name: 'Claude Sonnet 4',
+      contextWindow: 200000,
+      priceUnit: 'token',
+      inputPrice: 3,
+      outputPrice: 15,
+      cacheReadPrice: 0.3,
+      cacheWritePrice: 3.75,
+    });
+  });
+
+  it('сетевой сбой → []', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network')));
+
+    const provider = new AnthropicProvider(baseParams);
+    await expect(provider.listModelsDetailed()).resolves.toEqual([]);
+  });
+});

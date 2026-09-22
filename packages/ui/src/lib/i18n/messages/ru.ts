@@ -1086,6 +1086,8 @@ export const dict = {
   'admin.models.syncResult': 'Синхронизировано {fetched} моделей',
   'admin.models.newModels': '{count} новых',
   'admin.models.enriched': '{count} обогащено',
+  'admin.models.priced': '{count, plural, one {# цена} few {# цены} many {# цен}} обновлено',
+  'admin.models.limited': '{count, plural, one {# лимит} few {# лимита} many {# лимитов}} обновлено',
   'admin.models.syncError': 'Ошибка синхронизации',
   'admin.models.contextTitle': '{k}K токенов{source}',
   'admin.models.contextRef': ' (справочник)',

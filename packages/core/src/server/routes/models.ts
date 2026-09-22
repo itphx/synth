@@ -11,6 +11,16 @@ function parseCurrency(value: unknown): Currency | undefined {
     : undefined;
 }
 
+/** Присутствуют ли в теле запроса ценовые поля (snake_case или camelCase). */
+function hasPriceInput(body: unknown): boolean {
+  return !!body && typeof body === 'object' && (
+    'input_price' in body || 'inputPrice' in body
+    || 'output_price' in body || 'outputPrice' in body
+    || 'cache_read_price' in body || 'cacheReadPrice' in body
+    || 'cache_write_price' in body || 'cacheWritePrice' in body
+  );
+}
+
 export interface ModelRoutesOptions {
   /** Виртуальные модели (например, remote-модели через LLM Proxy) — добавляются к store-моделям. */
   extraModels?: ModelConfig[] | (() => ModelConfig[]);
@@ -118,6 +128,7 @@ export function createModelRoutes(
           outputPrice: m.outputPrice,
           cacheReadPrice: m.cacheReadPrice,
           cacheWritePrice: m.cacheWritePrice,
+          priceSource: m.priceSource,
           currency: m.currency,
         })),
       };
@@ -156,6 +167,8 @@ export function createModelRoutes(
       outputPrice: body.output_price ?? body.outputPrice ?? existing?.outputPrice,
       cacheReadPrice: body.cache_read_price ?? body.cacheReadPrice ?? existing?.cacheReadPrice,
       cacheWritePrice: body.cache_write_price ?? body.cacheWritePrice ?? existing?.cacheWritePrice,
+      priceSource: body.price_source ?? body.priceSource
+        ?? (hasPriceInput(body) ? 'manual' : existing?.priceSource),
       currency,
     };
 

@@ -6,7 +6,7 @@
 
 import { nowISO, type LLMGatewayConfig, type LLMChunk, type LLMResponse, type TokenUsage } from '@itphx/synth-shared';
 
-import { BaseProvider, type LLMMessage, type SystemPromptInput, type CancellationToken } from '../../providers/base.js';
+import { BaseProvider, type DetailedModelInfo, type LLMMessage, type SystemPromptInput, type CancellationToken } from '../../providers/base.js';
 import type { DebugCollector } from '../../debug.js';
 import { warning } from '../../logger.js';
 import { t as sm } from '../system-messages.js';
@@ -178,7 +178,7 @@ export class GatewayProvider extends BaseProvider {
     return this._inner.listModels();
   }
 
-  async listModelsDetailed(): Promise<Array<{ id: string; contextWindow?: number }>> {
+  async listModelsDetailed(): Promise<DetailedModelInfo[]> {
     return this._inner.listModelsDetailed();
   }
 

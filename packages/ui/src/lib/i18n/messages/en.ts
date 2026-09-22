@@ -1089,6 +1089,8 @@ export const dict = {
   'admin.models.syncResult': 'Synced {fetched} models',
   'admin.models.newModels': '{count} new',
   'admin.models.enriched': '{count} enriched',
+  'admin.models.priced': '{count, plural, one {# price} other {# prices}} updated',
+  'admin.models.limited': '{count, plural, one {# limit} other {# limits}} updated',
   'admin.models.syncError': 'Sync error',
   'admin.models.contextTitle': '{k}K tokens{source}',
   'admin.models.contextRef': ' (reference)',

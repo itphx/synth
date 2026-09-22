@@ -1,5 +1,14 @@
 import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
-import { BaseProvider, resolveSystemPromptText, type LLMMessage, type SystemPromptInput, type CancellationToken } from './base.js';
+import {
+  BaseProvider,
+  resolveSystemPromptText,
+  parseTokenPricing,
+  toNonNegativeNumber,
+  type DetailedModelInfo,
+  type LLMMessage,
+  type SystemPromptInput,
+  type CancellationToken,
+} from './base.js';
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
 import { ContextLengthExceededError, RateLimitError } from './exceptions.js';
@@ -275,8 +284,7 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   async listModels(): Promise<string[]> {
-    const baseUrl = this.url.replace(/\/chat\/completions\/?$/, '').replace(/\/+$/, '');
-    const modelsUrl = `${baseUrl}/models`;
+    const modelsUrl = this._modelsUrl();
 
     try {
       const controller = new AbortController();
@@ -297,6 +305,60 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     return [];
+  }
+
+  /**
+   * Список моделей с метаданными (RouterAI/OpenRouter-совместимый каталог):
+   * `context_length` → contextWindow, `pricing`/`pricing_units` → цены за 1M
+   * токенов (только токенные тарифы). Официальный OpenAI каталог цен и окна
+   * не отдаёт — тогда вернётся только `{ id }`.
+   */
+  async listModelsDetailed(): Promise<DetailedModelInfo[]> {
+    const modelsUrl = this._modelsUrl();
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
+
+      const resp = await fetch(modelsUrl, {
+        headers: this._getHeaders(),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (resp.ok) {
+        const data = await resp.json() as { data?: Array<Record<string, unknown>> };
+        return (data.data || []).map((m) => this._parseModel(m)).filter((m) => m.id);
+      }
+    } catch {
+      // fall through
+    }
+
+    return [];
+  }
+
+  private _modelsUrl(): string {
+    const baseUrl = this.url.replace(/\/chat\/completions\/?$/, '').replace(/\/+$/, '');
+    return `${baseUrl}/models`;
+  }
+
+  private _parseModel(raw: Record<string, unknown>): DetailedModelInfo {
+    const id = typeof raw.id === 'string' ? raw.id : String(raw.id ?? '');
+    const result: DetailedModelInfo = { id };
+    if (!id) return result;
+
+    if (typeof raw.name === 'string' && raw.name) result.name = raw.name;
+
+    const contextWindow = toNonNegativeNumber(raw.context_length);
+    if (contextWindow !== undefined && contextWindow > 0) result.contextWindow = contextWindow;
+
+    const parsed = parseTokenPricing(
+      raw.pricing as Record<string, unknown> | undefined,
+      raw.pricing_units as Record<string, unknown> | undefined,
+    );
+    if (parsed) Object.assign(result, parsed);
+
+    return result;
   }
 
   private _formatMessages(

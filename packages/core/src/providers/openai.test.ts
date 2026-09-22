@@ -281,3 +281,86 @@ describe('OpenAIProvider — форматирование tool_use/tool_result',
     expect(fn.arguments).toBe(argsStr);
   });
 });
+
+describe('OpenAIProvider — listModelsDetailed', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonResponse(payload: unknown): Response {
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  it('RouterAI-подобный ответ: context_length + pricing (строки) → окно и цены за 1M', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: [
+        {
+          id: 'openai/gpt-4o',
+          name: 'GPT-4o',
+          context_length: '128000',
+          pricing: { prompt: '0.0000025', completion: '0.00001' },
+        },
+      ],
+    })));
+
+    const provider = new OpenAIProvider(baseParams);
+    const models = await provider.listModelsDetailed();
+
+    expect(models).toEqual([{
+      id: 'openai/gpt-4o',
+      name: 'GPT-4o',
+      contextWindow: 128000,
+      priceUnit: 'token',
+      inputPrice: 2.5,
+      outputPrice: 10,
+    }]);
+  });
+
+  it('pricing_units: non-token тариф не попадает в цены', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: [{
+        id: 'model-x',
+        context_length: 8192,
+        pricing: { prompt: '0.000001', completion: '0.000002', request: '0.02' },
+        pricing_units: { prompt: 'token', completion: 'request', request: 'request' },
+      }],
+    })));
+
+    const provider = new OpenAIProvider(baseParams);
+    const models = await provider.listModelsDetailed();
+
+    expect(models[0]).toEqual({
+      id: 'model-x',
+      contextWindow: 8192,
+      priceUnit: 'token',
+      inputPrice: 1,
+    });
+    expect(models[0]).not.toHaveProperty('outputPrice');
+  });
+
+  it('ответ без полей → только id', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: [{ id: 'plain-model' }] })));
+
+    const provider = new OpenAIProvider(baseParams);
+    const models = await provider.listModelsDetailed();
+
+    expect(models).toEqual([{ id: 'plain-model' }]);
+  });
+
+  it('не падает при отсутствии data[]', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({})));
+
+    const provider = new OpenAIProvider(baseParams);
+    await expect(provider.listModelsDetailed()).resolves.toEqual([]);
+  });
+
+  it('сетевой сбой → []', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network')));
+
+    const provider = new OpenAIProvider(baseParams);
+    await expect(provider.listModelsDetailed()).resolves.toEqual([]);
+  });
+});

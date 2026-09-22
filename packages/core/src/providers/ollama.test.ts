@@ -299,3 +299,92 @@ describe('OllamaProvider — форматирование tool_use/tool_result',
     expect(fn.arguments).toEqual({ query: 'x' });
   });
 });
+
+describe('OllamaProvider — listModelsDetailed (метаданные и fallback контекста)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function jsonResponse(payload: unknown): Response {
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  it('/api/tags: окно, размер, параметры, квантизация, capabilities', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: unknown) => {
+      if (String(url).endsWith('/api/tags')) {
+        return Promise.resolve(jsonResponse({
+          models: [{
+            name: 'qwen3:8b',
+            size: 5_000_000_000,
+            details: {
+              context_length: 32768,
+              parameter_size: '8.2B',
+              quantization_level: 'Q4_K_M',
+            },
+            capabilities: ['completion', 'tools'],
+          }],
+        }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${String(url)}`));
+    }));
+
+    const provider = new OllamaProvider(baseParams);
+    const models = await provider.listModelsDetailed();
+
+    expect(models).toEqual([{
+      id: 'qwen3:8b',
+      contextWindow: 32768,
+      parameterSize: '8.2B',
+      quantization: 'Q4_K_M',
+      sizeBytes: 5_000_000_000,
+      capabilities: ['completion', 'tools'],
+    }]);
+  });
+
+  it('fallback POST /api/show: model_info["<arch>.context_length"]', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: unknown) => {
+      if (String(url).endsWith('/api/tags')) {
+        return Promise.resolve(jsonResponse({
+          models: [{ name: 'llama3:8b', size: 4_000_000_000, details: { parameter_size: '8B' } }],
+        }));
+      }
+      if (String(url).endsWith('/api/show')) {
+        return Promise.resolve(jsonResponse({
+          model_info: { 'general.architecture': 'llama', 'llama.context_length': 8192 },
+        }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${String(url)}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new OllamaProvider(baseParams);
+    const models = await provider.listModelsDetailed();
+
+    expect(models[0]).toMatchObject({
+      id: 'llama3:8b',
+      contextWindow: 8192,
+      parameterSize: '8B',
+      sizeBytes: 4_000_000_000,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/show'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('ошибка /api/show не роняет синк: модель остаётся без окна', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: unknown) => {
+      if (String(url).endsWith('/api/tags')) {
+        return Promise.resolve(jsonResponse({ models: [{ name: 'broken:1b' }] }));
+      }
+      return Promise.resolve(new Response('boom', { status: 500 }));
+    }));
+
+    const provider = new OllamaProvider(baseParams);
+    const models = await provider.listModelsDetailed();
+    expect(models).toEqual([{ id: 'broken:1b' }]);
+  });
+});

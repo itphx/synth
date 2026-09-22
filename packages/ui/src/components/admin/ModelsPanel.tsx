@@ -67,12 +67,14 @@ export const ModelsPanel = () => {
       const url = providerName
         ? `/api/v2/models/fetch?provider=${encodeURIComponent(providerName)}`
         : '/api/v2/models/fetch'
-      const data = await synthApi.fetchJSON<{ fetched: number; new: number; enriched: number; errors?: string[] }>(
+      const data = await synthApi.fetchJSON<{ fetched: number; new: number; enriched: number; priced?: number; limited?: number; errors?: string[] }>(
         url, { method: 'POST' },
       )
-        const parts = [t('admin.models.syncResult', { fetched: data.fetched })]
-        if (data.new > 0) parts.push(t('admin.models.newModels', { count: data.new }))
-        if (data.enriched > 0) parts.push(t('admin.models.enriched', { count: data.enriched }))
+      const parts = [t('admin.models.syncResult', { fetched: data.fetched })]
+      if (data.new > 0) parts.push(t('admin.models.newModels', { count: data.new }))
+      if (data.enriched > 0) parts.push(t('admin.models.enriched', { count: data.enriched }))
+      if (data.priced) parts.push(t('admin.models.priced', { count: data.priced }))
+      if (data.limited) parts.push(t('admin.models.limited', { count: data.limited }))
       setFetchMsg(parts.join(', '))
       if (data.errors?.length) {
         setFetchError(data.errors.join('; '))

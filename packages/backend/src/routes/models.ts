@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
-import type { Currency, ModelConfig, ProviderConfig, ContextSource } from '@itphx/synth-shared';
+import type { Currency, ModelConfig, ProviderConfig, ContextSource, PriceSource } from '@itphx/synth-shared';
 import { CURRENCIES, lookupContextWindow } from '@itphx/synth-shared';
 import { ProviderFactory } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
@@ -12,6 +12,59 @@ function parseCurrency(value: unknown): Currency | undefined {
   return typeof value === 'string' && (CURRENCIES as readonly string[]).includes(value)
     ? (value as Currency)
     : undefined;
+}
+
+/** Ценовые поля, пришедшие от провайдера (B1 уже отфильтровал non-token тарифы). */
+interface ApiPriceFields {
+  inputPrice?: number;
+  outputPrice?: number;
+  cacheReadPrice?: number;
+  cacheWritePrice?: number;
+}
+
+/** Есть ли у модели хоть одна заданная цена. */
+function hasAnyPrice(model: ModelConfig): boolean {
+  return model.inputPrice !== undefined
+    || model.outputPrice !== undefined
+    || model.cacheReadPrice !== undefined
+    || model.cacheWritePrice !== undefined;
+}
+
+/**
+ * Считаются ли цены модели ручными. Явная пометка `priceSource === 'manual'`,
+ * либо старые записи без `priceSource`, но с ценами (введены вручную до
+ * появления поля) — их нельзя терять при синхронизации.
+ */
+function isManualPriceSource(model: ModelConfig): boolean {
+  return model.priceSource === 'manual' || (model.priceSource === undefined && hasAnyPrice(model));
+}
+
+/** Токенные цены от провайдера, если они есть; иначе undefined. */
+function collectApiPrices(model: ApiPriceFields): ApiPriceFields | undefined {
+  if (
+    model.inputPrice === undefined
+    && model.outputPrice === undefined
+    && model.cacheReadPrice === undefined
+    && model.cacheWritePrice === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    inputPrice: model.inputPrice,
+    outputPrice: model.outputPrice,
+    cacheReadPrice: model.cacheReadPrice,
+    cacheWritePrice: model.cacheWritePrice,
+  };
+}
+
+/** Присутствуют ли в теле запроса ценовые поля (snake_case или camelCase). */
+function hasPriceInput(body: unknown): boolean {
+  return !!body && typeof body === 'object' && (
+    'input_price' in body || 'inputPrice' in body
+    || 'output_price' in body || 'outputPrice' in body
+    || 'cache_read_price' in body || 'cacheReadPrice' in body
+    || 'cache_write_price' in body || 'cacheWritePrice' in body
+  );
 }
 
 interface ModelGroupResponse {
@@ -36,6 +89,7 @@ interface ModelGroupResponse {
     outputPrice?: number;
     cacheReadPrice?: number;
     cacheWritePrice?: number;
+    priceSource?: PriceSource;
     currency?: Currency;
   }>;
 }
@@ -113,6 +167,7 @@ export function createModelRoutes(
           outputPrice: m.outputPrice,
           cacheReadPrice: m.cacheReadPrice,
           cacheWritePrice: m.cacheWritePrice,
+          priceSource: m.priceSource,
           currency: m.currency,
         })),
       };
@@ -152,6 +207,8 @@ export function createModelRoutes(
       outputPrice: body.output_price ?? body.outputPrice ?? existing?.outputPrice,
       cacheReadPrice: body.cache_read_price ?? body.cacheReadPrice ?? existing?.cacheReadPrice,
       cacheWritePrice: body.cache_write_price ?? body.cacheWritePrice ?? existing?.cacheWritePrice,
+      priceSource: body.price_source ?? body.priceSource
+        ?? (hasPriceInput(body) ? 'manual' : existing?.priceSource),
       currency,
     };
 
@@ -192,6 +249,8 @@ export function createModelRoutes(
     let totalFetched = 0;
     let totalNew = 0;
     let totalEnriched = 0;
+    let totalPriced = 0;
+    let totalLimited = 0;
     const errors: string[] = [];
 
     for (const provider of enabledProviders) {
@@ -202,6 +261,7 @@ export function createModelRoutes(
         apiKey: provider.apiKey || '',
         model: provider.defaultModel || '',
         timeout: 30,
+        currency: provider.currency,
       };
 
       if (!providerConfig.url) continue;
@@ -225,6 +285,13 @@ export function createModelRoutes(
             ? 'api'
             : (source !== 'unknown' ? source : 'unknown');
 
+          // Лимит выходных токенов — только из API.
+          const apiMaxOutput = typeof model.maxOutputTokens === 'number' && model.maxOutputTokens > 0
+            ? model.maxOutputTokens
+            : undefined;
+          // Токенные цены от провайдера (B1 отфильтровал non-token тарифы).
+          const apiPrices = collectApiPrices(model);
+
           if (!existing) {
             // Новая модель
             const newModel: ModelConfig = {
@@ -237,11 +304,28 @@ export function createModelRoutes(
               contextWindow: resolvedWindow,
               contextSource: resolvedSource,
             };
+            if (apiMaxOutput !== undefined) {
+              newModel.maxOutputTokens = apiMaxOutput;
+              totalLimited++;
+            }
+            if (apiPrices) {
+              Object.assign(newModel, apiPrices);
+              newModel.priceSource = 'api';
+              totalPriced++;
+            }
+            if (provider.currency) {
+              newModel.currency = provider.currency;
+            }
             await modelStore.save(fullId, newModel);
             modelCache.set(fullId, newModel);
             totalNew++;
             totalFetched++;
-          } else if (apiWindow > 0 && existing.contextWindow !== apiWindow) {
+            continue;
+          }
+
+          let changed = false;
+
+          if (apiWindow > 0 && existing.contextWindow !== apiWindow) {
             // Провайдер сообщил реальное окно — оно приоритетнее справочника
             // и актуальнее ранее известного api/reference-значения, но НЕ
             // перезаписывает вручную заданное пользователем (source='manual').
@@ -249,21 +333,40 @@ export function createModelRoutes(
             if (!hasManualWindow) {
               existing.contextWindow = apiWindow;
               existing.contextSource = 'api';
-              await modelStore.save(fullId, existing);
-              modelCache.set(fullId, existing);
+              changed = true;
               totalEnriched++;
             }
-            totalFetched++;
           } else if ((existing.contextWindow ?? 0) === 0 && window > 0) {
             // Обогащаем существующую модель справочными данными
             existing.contextWindow = window;
             existing.contextSource = source;
+            changed = true;
+            totalEnriched++;
+          }
+
+          // maxOutputTokens: заполняем только если пришло из API и ещё не задано.
+          if (apiMaxOutput !== undefined && existing.maxOutputTokens == null) {
+            existing.maxOutputTokens = apiMaxOutput;
+            changed = true;
+            totalLimited++;
+          }
+
+          // Цены: пишем api-цены, только если модель не помечена ручной и нет
+          // старых цен без priceSource (их тоже считаем ручными).
+          if (apiPrices && !isManualPriceSource(existing)) {
+            Object.assign(existing, apiPrices);
+            existing.priceSource = 'api';
+            if (existing.currency === undefined && provider.currency) {
+              existing.currency = provider.currency;
+            }
+            changed = true;
+            totalPriced++;
+          }
+
+          totalFetched++;
+          if (changed) {
             await modelStore.save(fullId, existing);
             modelCache.set(fullId, existing);
-            totalEnriched++;
-            totalFetched++;
-          } else {
-            totalFetched++;
           }
         }
       } catch (err) {
@@ -275,6 +378,8 @@ export function createModelRoutes(
       fetched: totalFetched,
       new: totalNew,
       enriched: totalEnriched,
+      priced: totalPriced,
+      limited: totalLimited,
       errors: errors.length ? errors : undefined,
     });
   });

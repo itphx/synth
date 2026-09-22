@@ -884,6 +884,12 @@ export interface ProviderConfig {
 
 export type ContextSource = 'api' | 'reference' | 'manual' | 'unknown';
 
+/**
+ * Источник цен модели: `api` — получены синхронизацией с провайдером,
+ * `manual` — заданы пользователем вручную, `unknown` — не определены.
+ */
+export type PriceSource = 'api' | 'manual' | 'unknown';
+
 export type ContextCategory = 'user' | 'role' | 'system';
 
 export interface ContextFileInfo {
@@ -948,6 +954,8 @@ export interface ModelConfig {
   outputPrice?: number;
   cacheReadPrice?: number;
   cacheWritePrice?: number;
+  /** Откуда взяты цены: `api` — синхронизация, `manual` — ручной ввод. */
+  priceSource?: PriceSource;
   /** Валюта цен модели; отсутствует → валюта провайдера → USD. */
   currency?: Currency;
 }

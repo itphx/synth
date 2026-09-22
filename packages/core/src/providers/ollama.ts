@@ -1,8 +1,19 @@
 import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
-import { BaseProvider, resolveSystemPromptText, type LLMMessage, type SystemPromptInput, type CancellationToken } from './base.js';
+import {
+  BaseProvider,
+  resolveSystemPromptText,
+  toNonNegativeNumber,
+  type DetailedModelInfo,
+  type LLMMessage,
+  type SystemPromptInput,
+  type CancellationToken,
+} from './base.js';
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
 import { ContextLengthExceededError, RateLimitError } from './exceptions.js';
+
+/** Максимум best-effort POST /api/show за один синк (первые N моделей). */
+const MAX_CONTEXT_PROBES = 50;
 
 export class OllamaProvider extends BaseProvider {
   getProviderName(): string {
@@ -307,11 +318,14 @@ export class OllamaProvider extends BaseProvider {
   }
 
   /**
-   * Список моделей с контекстным окном из /api/tags.
-   * Ollama отдаёт context_length внутри details.context_length
-   * (а в некоторых версиях — в model_info.context_length).
+   * Список моделей из /api/tags: контекстное окно (details.context_length /
+   * model_info), а также метаданные (размер, параметры, квантизация,
+   * capabilities). Если окно из tags не определено — best-effort POST
+   * /api/show {model} и `model_info["<arch>.context_length"]`. Пробы
+   * последовательные, с таймаутом, ограничены первыми MAX_CONTEXT_PROBES
+   * моделями и не роняют синк при ошибках.
    */
-  async listModelsDetailed(): Promise<Array<{ id: string; contextWindow?: number }>> {
+  async listModelsDetailed(): Promise<DetailedModelInfo[]> {
     const baseUrl = this.url.replace('/api/chat', '').replace('/v1/chat/completions', '');
     const tagsUrl = `${baseUrl}/api/tags`;
 
@@ -326,22 +340,105 @@ export class OllamaProvider extends BaseProvider {
         const data = await resp.json() as {
           models?: Array<{
             name: string;
-            details?: { context_length?: number };
+            size?: number;
+            details?: {
+              context_length?: number;
+              parameter_size?: string;
+              quantization_level?: string;
+            };
             model_info?: Record<string, unknown>;
+            capabilities?: unknown;
           }>;
         };
-        return (data.models || [])
-          .map((m) => ({
-            id: m.name,
-            contextWindow: this._extractContextWindow(m),
-          }))
+
+        const models = (data.models || [])
+          .map((m) => this._parseTagModel(m))
           .filter((m) => m.id);
+
+        // Fallback-пробы контекста: только пока окно неизвестно и в пределах
+        // первых MAX_CONTEXT_PROBES моделей.
+        for (let i = 0; i < models.length && i < MAX_CONTEXT_PROBES; i++) {
+          const model = models[i]!;
+          if (model.contextWindow !== undefined) continue;
+          const contextWindow = await this._fetchContextFromShow(baseUrl, model.id);
+          if (contextWindow !== undefined) model.contextWindow = contextWindow;
+        }
+
+        return models;
       }
     } catch {
       // fall through
     }
 
     return [];
+  }
+
+  private _parseTagModel(model: {
+    name: string;
+    size?: number;
+    details?: {
+      context_length?: number;
+      parameter_size?: string;
+      quantization_level?: string;
+    };
+    model_info?: Record<string, unknown>;
+    capabilities?: unknown;
+  }): DetailedModelInfo {
+    const result: DetailedModelInfo = { id: model.name };
+
+    const contextWindow = this._extractContextWindow(model);
+    if (contextWindow !== undefined) result.contextWindow = contextWindow;
+
+    if (typeof model.details?.parameter_size === 'string' && model.details.parameter_size) {
+      result.parameterSize = model.details.parameter_size;
+    }
+    if (typeof model.details?.quantization_level === 'string' && model.details.quantization_level) {
+      result.quantization = model.details.quantization_level;
+    }
+
+    const sizeBytes = toNonNegativeNumber(model.size);
+    if (sizeBytes !== undefined && sizeBytes > 0) result.sizeBytes = sizeBytes;
+
+    if (Array.isArray(model.capabilities)) {
+      const capabilities = model.capabilities.filter((c): c is string => typeof c === 'string' && c.length > 0);
+      if (capabilities.length) result.capabilities = capabilities;
+    }
+
+    return result;
+  }
+
+  /**
+   * Best-effort контекст из POST /api/show: архитектура → ключ
+   * `"<arch>.context_length"` в model_info. Любая ошибка/таймаут → undefined.
+   */
+  private async _fetchContextFromShow(baseUrl: string, model: string): Promise<number | undefined> {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
+
+      const resp = await fetch(`${baseUrl}/api/show`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (!resp.ok) return undefined;
+
+      const data = await resp.json() as { model_info?: Record<string, unknown> };
+      const info = data.model_info ?? {};
+      const arch = typeof info['general.architecture'] === 'string'
+        ? info['general.architecture']
+        : undefined;
+      if (!arch) return undefined;
+
+      const raw = info[`${arch}.context_length`];
+      const num = toNonNegativeNumber(raw);
+      return num !== undefined && num > 0 ? num : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**

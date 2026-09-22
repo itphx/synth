@@ -537,3 +537,24 @@
 - **Отмечено:** агрегаты стоимости (`cost_usd`, StatsTab/MessageStats/AuditLogPanel) намеренно НЕ тронуты — это этап C; отображение стоимости ходов/сессий пока остаётся с `$`. Функциональность этапа B (синк цен/лимитов: routerai `/models`+`/endpoints` → RUB; anthropic `max_input_tokens`/`max_tokens`; ollama контекст из `/api/show`; openai только id) ещё не реализована.
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** этот (этап A).
+
+## 2026-09-22 (продолжение 9) — синхронизация цен/лимитов от провайдера, этап B
+- **Задача:** этап B фичи валюты: получать цены и лимиты моделей прямо от провайдера, универсально для типов OpenAI/Anthropic/Ollama (учитывая, что реально отдаёт только RouterAI/OpenRouter-совместимые).
+- **Тип:** feature (provider sync)
+- **Исполнитель:** @orchestrator (research) → @fixer ×2 (B1 парсеры, B2 запись) → верификация @orchestrator
+- **Результат:** PASS.
+- **B1 (парсеры, core):**
+  - `providers/base.ts`: новый `DetailedModelInfo` (`contextWindow?`, `maxOutputTokens?`, `input/output/cacheRead/cacheWritePrice?` уже за 1M, `priceUnit?`, `name?`, Ollama-метаданные), helper `parseTokenPricing` (строки/числа, только unit=`token`, ×1e6, иначе `undefined`).
+  - `openai.ts`: `listModelsDetailed()` — `context_length` + `pricing`/`pricing_units` (RouterAI/OpenRouter); официальный OpenAI → `{id}`.
+  - `anthropic.ts`: официальный Anthropic — `max_input_tokens`→context, `max_tokens`→max output, `display_name`→name (nullable); RouterAI-каталог (`pricing`/`context_length`) разбирается тем же парсером.
+  - `ollama.ts`: контекст из `/api/tags`, fallback `POST /api/show` (первые 50 моделей, 10с, best-effort), метаданные size/parameter_size/quantization/capabilities; цен и max output у Ollama нет.
+  - `gateway-provider.ts`: тип делегирования обновлён.
+- **B2 (запись при sync, backend/UI):**
+  - `ModelConfig.priceSource?: 'api'|'manual'|'unknown'` (shared).
+  - `POST /models/fetch`: пишет `maxOutputTokens` (только из API и если ещё не задано) и токенные цены (`priceSource:'api'`), `currency` из провайдера (существующую явную валюту модели не перезаписывает). **Защита ручных данных:** `priceSource==='manual'` и старые цены без `priceSource` не перезаписываются.
+  - Ответ расширен `priced`/`limited` (старые поля сохранены); UI `handleFetch` показывает цены/лимиты, ключи i18n в ru/en.
+  - `POST /models` (backend и core) ставит `priceSource:'manual'` при наличии ценовых полей в теле; GET отдаёт `priceSource` аддитивно.
+- **Проверки:** `pnpm typecheck` — 6/6 Done; `pnpm lint` — 0 errors; `pnpm build` — все пакеты + vite UI; `pnpm test` — shared 91, core **1636** (B1-тесты парсеров), backend **306** (+15 на fetch-мердж), ui 576 — все PASS.
+- **Отмечено (follow-up):** в core (standalone) роута `/models/fetch` нет — синхронизация доступна только в managed backend. `currency` пробрасывается в runtime-конфиг провайдера как forward-compat, фабрикой пока не потребляется. `priceSource:'unknown'` зарезервирован. Не-token тарифы RouterAI (`request`/`second`/`image`) намеренно не маппятся.
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** этот (этап B).

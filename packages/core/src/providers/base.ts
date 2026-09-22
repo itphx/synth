@@ -1,5 +1,115 @@
-import type { TokenUsage, LLMChunk, LLMResponse, ReasoningLevel } from '@itphx/synth-shared';
+import type { TokenUsage, LLMChunk, LLMResponse, ReasoningLevel, Currency } from '@itphx/synth-shared';
 import type { DebugCollector } from '../debug.js';
+
+/**
+ * Модель с расширенными метаданными, которые отдают каталоги провайдеров
+ * (контекст, лимиты, цены, размер и т.п.). Используется синхронизацией
+ * `POST /models/fetch`, чтобы записать цены/лимиты в конфиг модели.
+ */
+export interface DetailedModelInfo {
+  id: string;
+  name?: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  /** Цены за 1M токенов; заполняются только для тарифов priceUnit==='token'. */
+  inputPrice?: number;
+  outputPrice?: number;
+  cacheReadPrice?: number;
+  cacheWritePrice?: number;
+  priceUnit?: 'token' | 'request' | 'second' | 'image' | 'search_unit' | 'unknown';
+  /** Валюта цен, если провайдер её явно отдаёт (иначе определяет backend по конфигу провайдера). */
+  currency?: Currency;
+  /** Метаданные Ollama (необязательно). */
+  sizeBytes?: number;
+  parameterSize?: string;
+  quantization?: string;
+  capabilities?: string[];
+}
+
+/**
+ * Безопасное число: конечное и >= 0. Пустые/невалидные значения → undefined.
+ * Строки приводятся через Number(...) (каталоги отдают цены строками).
+ */
+export function toNonNegativeNumber(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+  const num = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(num) && num >= 0 ? num : undefined;
+}
+
+/**
+ * Ключ считается токенным, если `units` не задан, для ключа нет явной
+ * единицы, либо единица равна `token`. Явные non-token единицы
+ * (`request`, `second`, `image`, ...) исключаются.
+ */
+function _isTokenUnit(
+  units: Record<string, unknown> | undefined,
+  key: string,
+): boolean {
+  if (!units) return true;
+  const unit = units[key];
+  if (unit === undefined || unit === null) return true;
+  return unit === 'token';
+}
+
+/** Первое непустое токенное значение из списка альтернативных ключей. */
+function _findTokenPrice(
+  pricing: Record<string, unknown>,
+  units: Record<string, unknown> | undefined,
+  keys: string[],
+): number | undefined {
+  for (const key of keys) {
+    if (!(key in pricing)) continue;
+    if (!_isTokenUnit(units, key)) continue;
+    const value = toNonNegativeNumber(pricing[key]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Разбор OpenRouter/RouterAI-прайсинга. Цены отдаются за 1 токен —
+ * нормируем к 1M токенов (×1_000_000). Учитываются только токенные тарифы;
+ * `request`/`second`/`image`/`search_unit` игнорируются. Если токенных цен
+ * нет — возвращает `undefined`.
+ */
+export function parseTokenPricing(
+  pricing: Record<string, unknown> | undefined,
+  units: Record<string, unknown> | undefined,
+): {
+  inputPrice?: number;
+  outputPrice?: number;
+  cacheReadPrice?: number;
+  cacheWritePrice?: number;
+  priceUnit?: DetailedModelInfo['priceUnit'];
+} | undefined {
+  if (!pricing || typeof pricing !== 'object') return undefined;
+
+  const perMillion = (value: number): number => value * 1_000_000;
+
+  const input = _findTokenPrice(pricing, units, ['prompt', 'input']);
+  const output = _findTokenPrice(pricing, units, ['completion', 'output']);
+  const cacheRead = _findTokenPrice(pricing, units, ['input_cache_read', 'cache_read', 'cached_input']);
+  const cacheWrite = _findTokenPrice(pricing, units, ['input_cache_write', 'cache_write']);
+
+  if (input === undefined && output === undefined && cacheRead === undefined && cacheWrite === undefined) {
+    return undefined;
+  }
+
+  const result: {
+    inputPrice?: number;
+    outputPrice?: number;
+    cacheReadPrice?: number;
+    cacheWritePrice?: number;
+    priceUnit?: DetailedModelInfo['priceUnit'];
+  } = { priceUnit: 'token' };
+
+  if (input !== undefined) result.inputPrice = perMillion(input);
+  if (output !== undefined) result.outputPrice = perMillion(output);
+  if (cacheRead !== undefined) result.cacheReadPrice = perMillion(cacheRead);
+  if (cacheWrite !== undefined) result.cacheWritePrice = perMillion(cacheWrite);
+
+  return result;
+}
 
 export interface LLMMessage {
   id: string;
@@ -153,10 +263,10 @@ export abstract class BaseProvider {
   }
 
   /**
-   * Список моделей с известным контекстным окном (если провайдер его отдаёт).
-   * Базовая реализация не знает окон — возвращает только идентификаторы.
+   * Список моделей с расширенными метаданными (если провайдер их отдаёт).
+   * Базовая реализация не знает окон/цен — возвращает только идентификаторы.
    */
-  async listModelsDetailed(): Promise<Array<{ id: string; contextWindow?: number }>> {
+  async listModelsDetailed(): Promise<DetailedModelInfo[]> {
     const ids = await this.listModels();
     return ids.map((id) => ({ id }));
   }
