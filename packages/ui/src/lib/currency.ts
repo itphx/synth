@@ -1,4 +1,4 @@
-import { CURRENCIES, type Currency } from '@itphx/synth-shared'
+import { CURRENCIES, type Currency } from '@itphx/synth-shared/types'
 
 export type { Currency }
 
