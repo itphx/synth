@@ -84,20 +84,25 @@ export const SettingsModal = () => {
   // который может спровоцировать вертикальный скролл страницы).
   useEffect(() => {
     if (!isPhone) return
-    const raf = requestAnimationFrame(() => {
+    const align = () => {
       const nav = navRef.current
       const btn = activeRef.current
       if (!nav || !btn) return
       const navRect = nav.getBoundingClientRect()
       const btnRect = btn.getBoundingClientRect()
       const PAD = 8
-      if (btnRect.left < navRect.left) {
-        nav.scrollLeft -= navRect.left - btnRect.left + PAD
-      } else if (btnRect.right > navRect.right) {
-        nav.scrollLeft += btnRect.right - navRect.right + PAD
-      }
-    })
-    return () => cancelAnimationFrame(raf)
+      const delta = btnRect.left - navRect.left - PAD
+      const max = Math.max(0, nav.scrollWidth - nav.clientWidth)
+      nav.scrollLeft = Math.min(Math.max(nav.scrollLeft + delta, 0), max)
+    }
+    const raf = requestAnimationFrame(align)
+    // Второй проход после анимации входа DialogContent (~150ms): замер во время
+    // анимации оставлял смещение активной вкладки ~13px от левого края.
+    const timeout = window.setTimeout(align, 200)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.clearTimeout(timeout)
+    }
   }, [settingsPage, isPhone, isSettingsDialogOpen])
 
   return (
@@ -125,7 +130,7 @@ export const SettingsModal = () => {
               ref={navRef}
               className={cn(
                 "p-2 gap-1",
-                isPhone ? "flex flex-row overflow-x-auto" : "flex-1 overflow-y-auto flex-col",
+                isPhone ? "flex flex-row overflow-x-auto" : "flex flex-1 flex-col overflow-y-auto",
               )}
               aria-label={t('settings.title')}
             >
@@ -139,8 +144,7 @@ export const SettingsModal = () => {
                     onClick={() => setSettingsPage(cat.id)}
                     aria-current={settingsPage === cat.id ? 'page' : undefined}
                     className={cn(
-                      "flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition-[transform,color] duration-150 active:scale-[0.96]",
-                      isPhone && "shrink-0",
+                      "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-left transition-[transform,color] duration-150 active:scale-[0.96] shrink-0",
                       settingsPage === cat.id
                         ? "bg-interactive-selection text-interactive-selection-foreground"
                         : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
