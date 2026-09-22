@@ -112,7 +112,7 @@ export function TreeChildren({
 
   return (
     <div
-      className={cn('space-y-0.5', indentClass, borderClass, className)}
+      className={cn(indentClass, borderClass, className)}
       style={dynamicIndent ? { paddingLeft: `${dynamicIndent}px` } : undefined}
     >
       {useVirtual ? (
