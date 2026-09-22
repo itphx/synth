@@ -589,12 +589,6 @@ export const dict = {
   'rightPanel.context.notLoaded': 'Сессия не загружена',
   'rightPanel.context.noStickyNotes': 'Нет заметок',
   'rightPanel.context.hint.stickyNotes': 'Заметки добавляются в системный промпт и видны модели в каждом запросе.',
-  // AD-071 §2.4: MCP-серверы сессии (переключатели)
-  'rightPanel.context.mcp.title': 'MCP-серверы',
-  'rightPanel.context.mcp.empty': 'MCP-серверы недоступны',
-  'rightPanel.context.mcp.colEnabled': 'Вкл',
-  'rightPanel.context.mcp.toggleError': 'Не удалось изменить состояние MCP-сервера',
-  'rightPanel.context.mcp.hint': 'Включайте и выключайте серверы для этой сессии, в том числе системные. Выключение — явный opt-out; оставьте включённым, чтобы следовать настройкам проекта/администратора.',
   'rightPanel.scheduler.placeholder': 'Шедулер — в разработке',
 
   // Center panel (tabs)

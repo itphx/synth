@@ -5,8 +5,6 @@ import React from 'react'
 
 const mocks = vi.hoisted(() => ({
   getOptimization: vi.fn(),
-  getSessionMcpEffective: vi.fn(),
-  updateSessionMcp: vi.fn(),
   notify: vi.fn(),
 }))
 
@@ -58,13 +56,6 @@ const OPTIMIZATION = {
   summarization_tail_messages: 3,
 }
 
-const SYS_SERVER = {
-  name: 'sys', level: 'system' as const, enabled: true, connected: true, status: 'connected' as const,
-  origin: 'instance' as const, trust: 'builtin' as const, author: null, tools: ['echo'],
-  chars: 100, estTokens: 25, ratio: 4,
-  toolDetails: [{ name: 'echo', chars: 100, estTokens: 25, ratio: 4 }],
-}
-
 async function renderContext(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
@@ -84,20 +75,6 @@ async function renderContext(): Promise<HTMLElement> {
 
 beforeEach(() => {
   mocks.getOptimization.mockResolvedValue(OPTIMIZATION)
-  mocks.getSessionMcpEffective.mockResolvedValue({
-    servers: [SYS_SERVER],
-    enabled: ['sys'],
-    disabled: [],
-    mcpServers: [],
-    mcpDisabledServers: [],
-  })
-  mocks.updateSessionMcp.mockResolvedValue({
-    servers: [{ ...SYS_SERVER, enabled: false, connected: false, status: 'disabled', reason: 'session_optout' }],
-    enabled: [],
-    disabled: ['sys'],
-    mcpServers: [],
-    mcpDisabledServers: ['sys'],
-  })
 
   useUIStore.setState({
     activeCenterTabId: 'tab-1',
@@ -117,35 +94,12 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('ContextTab — MCP-серверы сессии (AD-071 §2.4/§2.6)', () => {
-  it('рендерит таблицу MCP: сервер, уровень, статус, тулы и оценку токенов', async () => {
+describe('ContextTab — базовая отрисовка', () => {
+  it('рендерит блоки оптимизации контекста и не содержит MCP-таблицы', async () => {
     const container = await renderContext()
-    const list = container.querySelector('[data-testid="context-mcp-list"]')
-    expect(list).not.toBeNull()
-
-    const row = container.querySelector('[data-testid="context-mcp-sys"]')!
-    expect(row.textContent).toContain('sys')
-    expect(row.textContent).toContain('system')
-    expect(row.textContent).toContain('connected')
-    expect(row.textContent).toContain('~25')
-
-    const toggle = row.querySelector('button[role="switch"]') as HTMLButtonElement
-    expect(toggle.getAttribute('aria-checked')).toBe('true')
-  })
-
-  it('переключатель вызывает PUT /sessions/:id/mcp и обновляет состояние', async () => {
-    const container = await renderContext()
-    const toggle = container.querySelector('[data-testid="context-mcp-sys"] button[role="switch"]') as HTMLButtonElement
-
-    await act(async () => {
-      toggle.click()
-    })
-    await act(async () => {})
-
-    expect(mocks.updateSessionMcp).toHaveBeenCalledWith('s1', { name: 'sys', enabled: false })
-    const row = container.querySelector('[data-testid="context-mcp-sys"]')!
-    expect(row.textContent).toContain('disabled')
-    expect(row.textContent).toContain('session opt-out')
-    expect((row.querySelector('button[role="switch"]') as HTMLButtonElement).getAttribute('aria-checked')).toBe('false')
+    expect(container.querySelector('[data-testid="context-mcp-list"]')).toBeNull()
+    expect(container.textContent).toContain(enDict['rightPanel.context.optimization.sticky_notes'])
+    expect(container.textContent).toContain(enDict['rightPanel.context.optimization.sliding_window'])
+    expect(container.textContent).toContain(enDict['rightPanel.context.optimization.summarization'])
   })
 })

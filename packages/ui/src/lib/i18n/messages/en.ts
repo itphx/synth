@@ -590,12 +590,6 @@ export const dict = {
   'rightPanel.context.notLoaded': 'Session not loaded',
   'rightPanel.context.noStickyNotes': 'No notes',
   'rightPanel.context.hint.stickyNotes': 'Notes are added to the system prompt and visible to the model in every request.',
-  // AD-071 §2.4: MCP servers of the session (toggles)
-  'rightPanel.context.mcp.title': 'MCP servers',
-  'rightPanel.context.mcp.empty': 'No MCP servers available',
-  'rightPanel.context.mcp.colEnabled': 'On',
-  'rightPanel.context.mcp.toggleError': 'Failed to change MCP server state',
-  'rightPanel.context.mcp.hint': 'Turn servers on/off for this session, including system ones. Off is an explicit opt-out; leave it on to follow the project/admin default.',
   'rightPanel.scheduler.placeholder': 'Scheduler — in development',
 
   // Center panel (tabs)
