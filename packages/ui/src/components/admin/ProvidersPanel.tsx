@@ -49,7 +49,7 @@ export const ProvidersPanel = () => {
   const [editName, setEditName] = useState('')
   const [form, setForm] = useState({
     name: '', type: 'generic', base_url: '', api_key: '', default_model: '', timeout: 120,
-    enabled: true, icon: '', currency: '',
+    enabled: true, icon: '', currency: 'USD',
   })
   const [error, setError] = useState('')
   const [fetchingIcon, setFetchingIcon] = useState(false)
@@ -79,7 +79,7 @@ export const ProvidersPanel = () => {
     if (p) {
       const heavy = isOversizedIcon(p.icon)
       setEditName(p.name)
-      setForm({ name: p.name, type: p.type, base_url: p.url, api_key: '', default_model: p.model, timeout: 120, enabled: p.enabled !== false, icon: p.icon || '', currency: p.currency || '' })
+      setForm({ name: p.name, type: p.type, base_url: p.url, api_key: '', default_model: p.model, timeout: 120, enabled: p.enabled !== false, icon: p.icon || '', currency: p.currency || 'USD' })
       setIconUncompressed(false)
       if (heavy && p.icon) {
         // Сжимаем тяжёлую иконку сразу в форме — обычное «Сохранить» мигрирует запись.
@@ -88,7 +88,7 @@ export const ProvidersPanel = () => {
       }
     } else {
       setEditName('')
-      setForm({ name: '', type: 'openai', base_url: '', api_key: '', default_model: '', timeout: 120, enabled: true, icon: '', currency: '' })
+      setForm({ name: '', type: 'openai', base_url: '', api_key: '', default_model: '', timeout: 120, enabled: true, icon: '', currency: 'USD' })
       setIconUncompressed(false)
     }
     setShowForm(true)
@@ -111,7 +111,7 @@ export const ProvidersPanel = () => {
         timeout: form.timeout,
         enabled: form.enabled,
         icon: form.icon,
-        currency: form.currency || null,
+        currency: form.currency,
       }
       await synthApi.fetchJSON('/api/v2/providers', { method: 'POST', body: JSON.stringify(body) })
       setShowForm(false)
@@ -262,10 +262,10 @@ export const ProvidersPanel = () => {
               ariaLabel={t('admin.providers.currency')}
             >
               <SelectContent>
-                <SelectItem value="">{t('admin.providers.currencyNone')}</SelectItem>
                 {CURRENCY_OPTIONS.map((currency) => (
                   <SelectItem key={currency} value={currency}>
                     {currencySymbol(currency)} — {t(`admin.providers.currency.${currency}`)}
+                    {currency === 'USD' ? ` (${t('admin.providers.currencyDefault')})` : ''}
                   </SelectItem>
                 ))}
               </SelectContent>

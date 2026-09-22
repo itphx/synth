@@ -1023,7 +1023,7 @@ export const dict = {
   'admin.providers.apiKey': 'API Key',
   'admin.providers.defaultModel': 'Модель по умолчанию',
   'admin.providers.currency': 'Валюта по умолчанию',
-  'admin.providers.currencyNone': 'Не задано (USD)',
+  'admin.providers.currencyDefault': 'по умолчанию',
   'admin.providers.currency.RUB': 'Рубль',
   'admin.providers.currency.USD': 'Доллар',
   'admin.providers.currency.CNY': 'Юань',

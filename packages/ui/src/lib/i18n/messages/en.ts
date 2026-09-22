@@ -1026,7 +1026,7 @@ export const dict = {
   'admin.providers.apiKey': 'API Key',
   'admin.providers.defaultModel': 'Default model',
   'admin.providers.currency': 'Default currency',
-  'admin.providers.currencyNone': 'Not set (USD)',
+  'admin.providers.currencyDefault': 'default',
   'admin.providers.currency.RUB': 'Ruble',
   'admin.providers.currency.USD': 'US Dollar',
   'admin.providers.currency.CNY': 'Yuan',

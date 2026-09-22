@@ -306,52 +306,134 @@ describe('ProvidersPanel: тяжёлая иконка сжимается пер�
   })
 })
 
-describe('ProvidersPanel: валюта провайдера сохраняется', () => {
-  it('выбранная валюта уходит в тело POST /providers', async () => {
+describe('ProvidersPanel: валюта провайдера', () => {
+  const baseProvider: ProviderInfo = {
+    name: 'itphx',
+    type: 'openai',
+    icon: '',
+    url: 'https://api.example.com/v1',
+    model: 'model',
+    enabled: true,
+  }
+
+  function mockProviders(providers: ProviderInfo[]) {
     vi.mocked(synthApi.getProviders).mockResolvedValueOnce({
-      providers: [
-        {
-          name: 'itphx',
-          type: 'openai',
-          icon: '',
-          url: 'https://api.example.com/v1',
-          model: 'model',
-          enabled: true,
-          currency: 'USD',
-        },
-      ],
-      default_provider: 'itphx',
+      providers,
+      default_provider: providers[0]?.name ?? '',
     })
+  }
 
-    const host = await renderPanel()
-    await act(async () => {
-      findButtonByLabel(host, 'admin.providers.edit').click()
-    })
+  function findInputByLabel(host: HTMLElement, label: string): HTMLInputElement {
+    const labelEl = Array.from(host.querySelectorAll('label')).find(
+      (l) => (l.textContent ?? '').trim() === label,
+    )
+    expect(labelEl).toBeTruthy()
+    const input = labelEl!.parentElement?.querySelector('input')
+    expect(input).toBeTruthy()
+    return input as HTMLInputElement
+  }
 
-    // Селект валюты — Base UI combobox; опции рендерятся в portal.
+  async function openCurrencySelect(host: HTMLElement): Promise<void> {
     const trigger = host.querySelector('[aria-label="admin.providers.currency"]') as HTMLElement | null
     expect(trigger).toBeTruthy()
     await act(async () => {
       trigger!.click()
     })
-    const option = [...document.body.querySelectorAll('[role="option"]')].find((o) =>
+  }
+
+  function currencyOptions(): HTMLElement[] {
+    return [...document.body.querySelectorAll('[role="option"]')] as HTMLElement[]
+  }
+
+  async function save(host: HTMLElement): Promise<void> {
+    const saveButton = host.querySelector('[data-testid="provider-save"]') as HTMLButtonElement | null
+    expect(saveButton).toBeTruthy()
+    await act(async () => {
+      saveButton!.click()
+    })
+    await act(async () => {})
+  }
+
+  function savedCurrency(): unknown {
+    const call = vi.mocked(synthApi.fetchJSON).mock.calls.find(([url]) => url === '/api/v2/providers')
+    expect(call).toBeTruthy()
+    return JSON.parse((call![1] as RequestInit).body as string).currency
+  }
+
+  it('создание отправляет currency: USD по умолчанию, валюту не трогаем', async () => {
+    mockProviders([])
+    const host = await renderPanel()
+    await act(async () => {
+      findButton(host, 'admin.providers.add').click()
+    })
+    await setInputValue(findInputByLabel(host, 'admin.providers.name'), 'new-provider')
+    await save(host)
+
+    expect(savedCurrency()).toBe('USD')
+  })
+
+  it('выбор RUB сохраняется в тело POST /providers', async () => {
+    mockProviders([{ ...baseProvider, currency: 'USD' }])
+    const host = await renderPanel()
+    await act(async () => {
+      findButtonByLabel(host, 'admin.providers.edit').click()
+    })
+
+    await openCurrencySelect(host)
+    const option = currencyOptions().find((o) =>
       (o.textContent ?? '').includes('admin.providers.currency.RUB'),
-    ) as HTMLElement | undefined
+    )
     expect(option).toBeTruthy()
     await act(async () => {
       option!.click()
     })
     await act(async () => {})
+    await save(host)
 
-    const save = host.querySelector('[data-testid="provider-save"]') as HTMLButtonElement | null
-    expect(save).toBeTruthy()
+    expect(savedCurrency()).toBe('RUB')
+  })
+
+  it('в списке нет опции «Не задано» (currencyNone), USD помечен как по умолчанию', async () => {
+    mockProviders([])
+    const host = await renderPanel()
     await act(async () => {
-      save!.click()
+      findButton(host, 'admin.providers.add').click()
     })
-    await act(async () => {})
+    await openCurrencySelect(host)
 
-    const call = vi.mocked(synthApi.fetchJSON).mock.calls.find(([url]) => url === '/api/v2/providers')
-    expect(call).toBeTruthy()
-    expect(JSON.parse((call![1] as RequestInit).body as string).currency).toBe('RUB')
+    const options = currencyOptions()
+    expect(options).toHaveLength(3)
+    expect(options.some((o) => (o.textContent ?? '').includes('currencyNone'))).toBe(false)
+    expect(options.some((o) => (o.textContent ?? '').includes('Не задано'))).toBe(false)
+
+    const usd = options.find((o) => (o.textContent ?? '').includes('admin.providers.currency.USD'))
+    expect(usd).toBeTruthy()
+    expect(usd!.textContent).toContain('admin.providers.currencyDefault')
+
+    const rub = options.find((o) => (o.textContent ?? '').includes('admin.providers.currency.RUB'))
+    expect(rub).toBeTruthy()
+    expect(rub!.textContent).not.toContain('admin.providers.currencyDefault')
+  })
+
+  it('редактирование с currency: RUB предзаполняет RUB', async () => {
+    mockProviders([{ ...baseProvider, currency: 'RUB' }])
+    const host = await renderPanel()
+    await act(async () => {
+      findButtonByLabel(host, 'admin.providers.edit').click()
+    })
+    await save(host)
+
+    expect(savedCurrency()).toBe('RUB')
+  })
+
+  it('редактирование без валюты предзаполняет USD', async () => {
+    mockProviders([{ ...baseProvider, currency: undefined }])
+    const host = await renderPanel()
+    await act(async () => {
+      findButtonByLabel(host, 'admin.providers.edit').click()
+    })
+    await save(host)
+
+    expect(savedCurrency()).toBe('USD')
   })
 })
