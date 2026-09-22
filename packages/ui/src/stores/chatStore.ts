@@ -99,6 +99,8 @@ export interface CostBreakdown {
 export interface LiveSubagentCallUsage {
   usage: UsageData
   costUsd?: number
+  /** C2a: валюта `costUsd` (из stream/subagent payload). */
+  costCurrency?: string
   estimated: boolean
   model?: string
   provider?: string
@@ -108,6 +110,8 @@ export interface LiveSubagentCallUsage {
 export interface LiveSubagentSessionUsage {
   usage: UsageData
   costUsd?: number
+  /** C2a: валюта агрегата; не задаётся, если вызовы в разных валютах. */
+  costCurrency?: string
   estimated: boolean
   byCall: Record<string, LiveSubagentCallUsage>
 }
@@ -127,6 +131,8 @@ export interface StreamState {
   usage?: { input_tokens: number; output_tokens: number; total_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number }
   /** AD-070 §2.6: live-стоимость ответа (из stream.usage/subagent.progress). */
   costUsd?: number
+  /** C2a: валюта `costUsd` (из stream.usage/subagent.progress). */
+  costCurrency?: string
   costBreakdown?: CostBreakdown
   /** AD-070 §2.6: usage — best-effort оценка, а не точные токены провайдера. */
   usageEstimated?: boolean
@@ -152,6 +158,8 @@ export interface StreamDoneMetadata {
   duration_ms?: number
   /** AD-070 §2.6: стоимость хода (stream.done.cost_usd). */
   cost_usd?: number
+  /** C2a: валюта `cost_usd` (stream.done.cost_currency). */
+  cost_currency?: string
   /** AD-070 §2.6: разбивка стоимости (stream.done.cost_breakdown). */
   cost_breakdown?: CostBreakdown
   /** AD-070 §2.6: usage — best-effort оценка (stream.done.usage_estimated). */
@@ -267,6 +275,7 @@ interface ChatStore {
   updateStreamUsage: (sessionId: string, streamId: string, data: {
     usage?: UsageData
     costUsd?: number
+    costCurrency?: string
     costBreakdown?: CostBreakdown
     usageEstimated?: boolean
     model?: string
@@ -279,6 +288,7 @@ interface ChatStore {
   updateLiveSubagentUsage: (sessionId: string, callId: string, data: {
     usage?: UsageData
     costUsd?: number
+    costCurrency?: string
     estimated?: boolean
     model?: string
     provider?: string
@@ -290,6 +300,7 @@ interface ChatStore {
   cancelStream: (sessionId: string, streamId: string, status?: MessageStatus, extra?: {
     usage?: UsageData
     costUsd?: number
+    costCurrency?: string
     costBreakdown?: CostBreakdown
     usageEstimated?: boolean
   }) => void
@@ -448,6 +459,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         ...base,
         ...(data.usage && !downgrade ? { usage: data.usage } : {}),
         ...(data.costUsd !== undefined && !downgrade ? { costUsd: data.costUsd } : {}),
+        ...(data.costCurrency !== undefined && !downgrade ? { costCurrency: data.costCurrency } : {}),
         ...(data.costBreakdown !== undefined && !downgrade ? { costBreakdown: data.costBreakdown } : {}),
         ...(data.usageEstimated !== undefined && !downgrade ? { usageEstimated: data.usageEstimated } : {}),
         ...(data.model ? { model: data.model } : {}),
@@ -492,6 +504,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       byCall[callId] = {
         usage: data.usage ?? prev?.usage ?? { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
         costUsd: data.costUsd ?? prev?.costUsd,
+        costCurrency: data.costCurrency ?? prev?.costCurrency,
         estimated: data.estimated ?? prev?.estimated ?? false,
         model: data.model ?? prev?.model,
         provider: data.provider ?? prev?.provider,
@@ -506,6 +519,8 @@ export const useChatStore = create<ChatStore>((set) => ({
       let cost = 0
       let anyCost = false
       let anyEstimated = false
+      let costCurrency: string | undefined
+      let currencyConflict = false
       for (const call of Object.values(byCall)) {
         input += call.usage.input_tokens || 0
         output += call.usage.output_tokens || 0
@@ -516,6 +531,10 @@ export const useChatStore = create<ChatStore>((set) => ({
         if (call.costUsd !== undefined) {
           cost += call.costUsd
           anyCost = true
+          if (call.costCurrency !== undefined) {
+            if (costCurrency === undefined) costCurrency = call.costCurrency
+            else if (costCurrency !== call.costCurrency) currencyConflict = true
+          }
         }
         if (call.estimated) anyEstimated = true
       }
@@ -533,6 +552,7 @@ export const useChatStore = create<ChatStore>((set) => ({
               reasoning_tokens: reasoning,
             },
             ...(anyCost ? { costUsd: cost } : {}),
+            ...(costCurrency !== undefined && !currencyConflict ? { costCurrency } : {}),
             estimated: anyEstimated,
             byCall,
           },
@@ -640,6 +660,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       if (metadata.status !== undefined) doneMetadata.status = metadata.status
       if (metadata.duration_ms !== undefined) doneMetadata.duration_ms = metadata.duration_ms
       if (metadata.cost_usd !== undefined) doneMetadata.cost_usd = metadata.cost_usd
+      if (metadata.cost_currency !== undefined) doneMetadata.cost_currency = metadata.cost_currency
       if (metadata.cost_breakdown !== undefined) doneMetadata.cost_breakdown = metadata.cost_breakdown
       if (metadata.usage_estimated !== undefined) doneMetadata.usage_estimated = metadata.usage_estimated
       const statusMetadata = Object.keys(doneMetadata).length > 0 ? doneMetadata : null
@@ -817,6 +838,7 @@ export const useChatStore = create<ChatStore>((set) => ({
                   ...(m.metadata || {}),
                   ...(status ? { status } : {}),
                   ...(extra?.costUsd !== undefined ? { cost_usd: extra.costUsd } : {}),
+                  ...(extra?.costCurrency !== undefined ? { cost_currency: extra.costCurrency } : {}),
                   ...(extra?.usageEstimated !== undefined ? { usage_estimated: extra.usageEstimated } : {}),
                 },
               }

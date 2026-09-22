@@ -245,7 +245,13 @@ export interface SessionAgentStats {
   cache_read_tokens: number;
   cache_write_tokens: number;
   reasoning_tokens: number;
+  /**
+   * Номинальная сумма всех валют (обратная совместимость). Мультивалютная
+   * разбивка — в `cost_by_currency`; здесь значение равно её сумме.
+   */
   cost_usd: number;
+  /** Разбивка стоимости по валютам (код валюты → сумма, напр. `{ USD: 0.5, RUB: 42 }`). */
+  cost_by_currency?: Record<string, number>;
   /** cache_read / input (0 при input = 0). */
   cache_hit_rate: number;
   duration_ms: number;
@@ -267,6 +273,8 @@ export interface SessionUserStats {
   cache_write_tokens: number;
   reasoning_tokens: number;
   cost_usd: number;
+  /** Разбивка стоимости по валютам (код валюты → сумма). */
+  cost_by_currency?: Record<string, number>;
   cache_hit_rate: number;
 }
 
@@ -284,6 +292,8 @@ export interface SessionSubagentStats {
   cache_write_tokens: number;
   reasoning_tokens: number;
   cost_usd: number;
+  /** Разбивка стоимости по валютам (код валюты → сумма). */
+  cost_by_currency?: Record<string, number>;
 }
 
 /** Ответ `GET /api/v2/sessions/:id/stats`. */
@@ -1072,6 +1082,8 @@ export interface StreamUsagePayload {
   provider?: string;
   usage: TokenUsage;
   cost_usd?: number;
+  /** Валюта `cost_usd`/`cost_breakdown` (по ценам модели; USD, если не задана). */
+  cost_currency?: string;
   cost_breakdown?: {
     input: number;
     output: number;

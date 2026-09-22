@@ -8,7 +8,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
-import { formatCost, formatDuration, formatTokens, formatTps, DEFAULT_CHARS_PER_TOKEN } from '@/lib/formatStats'
+import { formatCost, formatCostMap, formatDuration, formatTokens, formatTps, DEFAULT_CHARS_PER_TOKEN } from '@/lib/formatStats'
 import { buildUsageSegments } from '@/lib/statsSegments'
 import { readMessageSubagents } from '@/lib/subagentStats'
 import type { ProjectStats, ModelGroup, PromptInfoResponse, SessionMcpEffectiveResponse } from '@/lib/api/synthApi'
@@ -25,6 +25,27 @@ function dash(v: number | undefined): string {
 function sumDefined(a: number | undefined, b: number | undefined): number | undefined {
   if (a === undefined && b === undefined) return undefined
   return (a ?? 0) + (b ?? 0)
+}
+
+/** C2b: добавляет стоимость в валютную карту; отсутствующая валюта → USD. */
+function addCost(map: Record<string, number>, value: number | undefined, currency?: string): void {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return
+  const key = currency || 'USD'
+  map[key] = (map[key] ?? 0) + value
+}
+
+/**
+ * C2b: карта стоимости по валютам. Если `cost_by_currency` нет/пуста (старые
+ * данные) — fallback на `cost_usd` как USD.
+ */
+function costMapOrFallback(
+  map: Record<string, number> | undefined,
+  costUsd: number | undefined,
+): Record<string, number> | undefined {
+  const hasValue = !!map && Object.values(map).some((v) => Number.isFinite(v) && v > 0)
+  if (hasValue) return map
+  if (costUsd !== undefined) return { USD: costUsd }
+  return undefined
 }
 
 /** AD-070 §2.3: cache hit rate = cacheRead / input (0 при input = 0). */
@@ -190,6 +211,10 @@ export const StatsTab: React.FC = () => {
   const lastCostUsd = typeof lastAssistantMsg?.metadata?.cost_usd === 'number'
     ? lastAssistantMsg.metadata.cost_usd
     : undefined
+  // C2b: валюта стоимости последнего ответа (metadata.cost_currency; C2a).
+  const lastCostCurrency = typeof lastAssistantMsg?.metadata?.cost_currency === 'string'
+    ? lastAssistantMsg.metadata.cost_currency
+    : undefined
   const lastOutputTokens = lastAssistantMsg?.usage?.output_tokens
   const lastTps = lastDurationMs && lastDurationMs > 0 && typeof lastOutputTokens === 'number'
     ? lastOutputTokens / (lastDurationMs / 1000)
@@ -204,6 +229,7 @@ export const StatsTab: React.FC = () => {
   const hasLiveUsage = !!liveStreamUsage && Object.keys(liveStreamUsage).length > 0
   const displayUsage = hasLiveUsage ? liveStreamUsage : lastAssistantMsg?.usage
   const displayCostUsd = hasLiveUsage ? activeStream?.costUsd : lastCostUsd
+  const displayCostCurrency = hasLiveUsage ? activeStream?.costCurrency : lastCostCurrency
   const displayTokenPrefix = hasLiveUsage ? (activeStream?.usageEstimated ? '~' : '') : lastTokenPrefix
   const displayModel = activeStream?.model ?? lastAssistantMsg?.model
   // Пока стрим активен, длительность/скорость ответа ещё не финализированы.
@@ -223,6 +249,7 @@ export const StatsTab: React.FC = () => {
         {
           usage: activeStream.usage,
           costUsd: activeStream.costUsd,
+          costCurrency: activeStream.costCurrency,
           tokenPrefix: activeStream.usageEstimated ? '~' : '',
         },
         t,
@@ -312,7 +339,7 @@ export const StatsTab: React.FC = () => {
   const liveCacheRead = sumDefined(liveStreamUsage?.cache_read_tokens, liveSubUsage?.cache_read_tokens)
   const liveCacheWrite = sumDefined(liveStreamUsage?.cache_write_tokens, liveSubUsage?.cache_write_tokens)
   const liveReasoning = sumDefined(liveStreamUsage?.reasoning_tokens, liveSubUsage?.reasoning_tokens)
-  const liveCost = (activeStream?.costUsd || 0) + (liveSubagent?.costUsd || 0)
+  const hasLiveCost = (activeStream?.costUsd ?? 0) > 0 || (liveSubagent?.costUsd ?? 0) > 0
 
   const sessionInput = (activeSession?.input_tokens || 0) + (sessionSub?.input_tokens || 0) + liveInput
   const sessionOutput = (activeSession?.output_tokens || 0) + (sessionSub?.output_tokens || 0) + liveOutput
@@ -333,13 +360,23 @@ export const StatsTab: React.FC = () => {
     : (activeSession?.cache_hit_rate ?? hitRate(sessionCacheRead, sessionInput))
   const hasSessionSubagents = !!sessionSub && sessionSub.sessions > 0
 
-  // AD-070 §2.6: стоимость сессии — сумма по агентам (их итоги включают
-  // сабагентов) + live-дельта текущего стрима/сабагентов.
-  const serverSessionCost = sessionStats && sessionStats.agents.length > 0
-    ? sessionStats.agents.reduce((acc, a) => acc + (a.cost_usd || 0), 0)
-    : undefined
-  const hasSessionCost = serverSessionCost !== undefined || liveCost > 0
-  const sessionCost = (serverSessionCost ?? 0) + liveCost
+  // AD-070 §2.6 / C2b: стоимость сессии — раздельные суммы по валютам (не
+  // арифметика разных валют). Серверные агенты уже включают сабагентов; live-
+  // дельта текущего стрима/сабагентов добавляется в свою валюту.
+  const serverSessionCostMap = useMemo(() => {
+    if (!sessionStats || sessionStats.agents.length === 0) return undefined
+    const map: Record<string, number> = {}
+    for (const agent of sessionStats.agents) {
+      const src = costMapOrFallback(agent.cost_by_currency, agent.cost_usd)
+      if (!src) continue
+      for (const [currency, value] of Object.entries(src)) addCost(map, value, currency)
+    }
+    return map
+  }, [sessionStats])
+  const hasSessionCost = serverSessionCostMap !== undefined || hasLiveCost
+  const sessionCostMap: Record<string, number> = { ...(serverSessionCostMap ?? {}) }
+  addCost(sessionCostMap, activeStream?.costUsd, activeStream?.costCurrency)
+  addCost(sessionCostMap, liveSubagent?.costUsd, liveSubagent?.costCurrency)
 
   return (
     <div className="flex flex-col gap-4 p-3">
@@ -406,7 +443,7 @@ export const StatsTab: React.FC = () => {
             )}
             {displayCostUsd !== undefined && (
               <div className="col-span-2">
-                <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCost(displayCostUsd)} />
+                <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCost(displayCostUsd, displayCostCurrency)} />
               </div>
             )}
           </div>
@@ -423,7 +460,7 @@ export const StatsTab: React.FC = () => {
                 <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={formatTokens(lastSubagents!.output_tokens)} />
                 <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={formatTokens(lastSubagents!.cache_read_tokens)} />
                 <div className="col-span-2">
-                  <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCost(lastSubagents!.cost_usd)} />
+                  <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCostMap(lastSubagents!.cost_by_currency, lastSubagents!.cost_usd)} />
                 </div>
               </div>
               <div className="mt-1 text-[0.6875rem] text-muted-foreground">
@@ -459,7 +496,7 @@ export const StatsTab: React.FC = () => {
           </div>
           {hasSessionCost && (
             <div className="col-span-2">
-              <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCost(sessionCost)} />
+              <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCostMap(sessionCostMap, 0)} />
             </div>
           )}
           {hasSessionSubagents && (
@@ -484,7 +521,7 @@ export const StatsTab: React.FC = () => {
               {liveSubagent!.costUsd !== undefined && (
                 <>
                   <span aria-hidden="true">·</span>
-                  <span>{formatCost(liveSubagent!.costUsd)}</span>
+                  <span>{formatCost(liveSubagent!.costUsd, liveSubagent!.costCurrency)}</span>
                 </>
               )}
             </div>
@@ -831,7 +868,7 @@ export const StatsTab: React.FC = () => {
                       <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{formatTokens(a.output_tokens)}</td>
                       <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{formatTokens(a.cache_read_tokens)}</td>
                       <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{pct(a.cache_hit_rate)}</td>
-                      <td className={cn('px-2 py-0.5 tabular-nums first:pl-0 last:pr-0', hasSubagents ? 'text-center' : 'text-right')}>{formatCost(a.cost_usd)}</td>
+                      <td className={cn('px-2 py-0.5 tabular-nums first:pl-0 last:pr-0', hasSubagents ? 'text-center' : 'text-right')}>{formatCostMap(a.cost_by_currency, a.cost_usd)}</td>
                       {hasSubagents && (
                         <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">
                           {a.subagent_sessions > 0 ? a.subagent_sessions : '\u2014'}
@@ -911,7 +948,7 @@ export const StatsTab: React.FC = () => {
                       <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{formatTokens(u.output_tokens)}</td>
                       <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{formatTokens(u.cache_read_tokens)}</td>
                       <td className="px-2 py-0.5 text-center tabular-nums first:pl-0 last:pr-0">{pct(u.cache_hit_rate)}</td>
-                      <td className="px-2 py-0.5 text-right tabular-nums first:pl-0 last:pr-0">{formatCost(u.cost_usd)}</td>
+                      <td className="px-2 py-0.5 text-right tabular-nums first:pl-0 last:pr-0">{formatCostMap(u.cost_by_currency, u.cost_usd)}</td>
                     </tr>
                   )
                 })}

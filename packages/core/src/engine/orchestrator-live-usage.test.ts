@@ -225,9 +225,19 @@ describe('ChatOrchestrator — live stream.usage (AD-070)', () => {
     const exact = usageEvents(events).find((e) => e.data.estimated === false)!;
     // 100*1/1e6 + 10*2/1e6 = 0.00012
     expect(exact.data.cost_usd).toBeCloseTo(0.00012, 12);
+    expect(exact.data.cost_currency).toBe('USD');
     const breakdown = exact.data.cost_breakdown as Record<string, number>;
     expect(breakdown.input).toBeCloseTo(0.0001, 12);
     expect(breakdown.output).toBeCloseTo(0.00002, 12);
+  });
+
+  it('валюта pricing (RUB) прокидывается в stream.usage', async () => {
+    const { events } = await run(
+      [{ content: 'ok', isFinal: true, usage: EXACT_USAGE, model: 'm' }],
+      (model) => (model === 'm' ? { inputPrice: 1, outputPrice: 2, currency: 'RUB' } : null),
+    );
+    const exact = usageEvents(events).find((e) => e.data.estimated === false)!;
+    expect(exact.data.cost_currency).toBe('RUB');
   });
 
   it('live-оценки не попадают в сессию/агрегаты (только финальный usage)', async () => {

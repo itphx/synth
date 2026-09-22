@@ -232,6 +232,7 @@ export function createDispatcher(): EventDispatcher {
         updateStreamUsage(sid, streamId, {
           usage: mapUsage(payload.usage),
           costUsd: payload.cost_usd as number | undefined,
+          costCurrency: payload.cost_currency as string | undefined,
           costBreakdown: mapCostBreakdown(payload.cost_breakdown),
           usageEstimated: payload.estimated as boolean | undefined,
           model: payload.model as string | undefined,
@@ -269,6 +270,7 @@ export function createDispatcher(): EventDispatcher {
           provider: payload.provider as string | undefined,
           duration_ms: payload.duration_ms as number | undefined,
           cost_usd: payload.cost_usd as number | undefined,
+          cost_currency: payload.cost_currency as string | undefined,
           cost_breakdown: mapCostBreakdown(payload.cost_breakdown),
           usage_estimated: payload.usage_estimated as boolean | undefined,
         }
@@ -306,6 +308,7 @@ export function createDispatcher(): EventDispatcher {
           {
             usage: mapUsage(payload.usage),
             costUsd: payload.cost_usd as number | undefined,
+            costCurrency: payload.cost_currency as string | undefined,
             costBreakdown: mapCostBreakdown(payload.cost_breakdown),
             usageEstimated: payload.usage_estimated as boolean | undefined,
           },
@@ -572,6 +575,7 @@ export function createDispatcher(): EventDispatcher {
           updateLiveSubagentUsage(sid, parentCallId, {
             usage: mapUsage(payload.usage),
             costUsd: payload.cost_usd as number | undefined,
+            costCurrency: payload.cost_currency as string | undefined,
             estimated: payload.estimated as boolean | undefined,
             model: payload.model as string | undefined,
             provider: payload.provider as string | undefined,

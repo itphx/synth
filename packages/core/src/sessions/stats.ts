@@ -38,6 +38,7 @@ interface AgentAccumulator {
   messages: number;
   usage: UsageTotals;
   cost: number;
+  costByCurrency: Record<string, number>;
   durationMs: number;
   subagentSessions: number;
   subagentTokens: number;
@@ -48,6 +49,7 @@ interface UserAccumulator {
   messages: number;
   usage: UsageTotals;
   cost: number;
+  costByCurrency: Record<string, number>;
 }
 
 interface TaskChildRef {
@@ -68,14 +70,48 @@ function addUsage(totals: UsageTotals, usage: TokenUsage | undefined): void {
   totals.reasoning += usage.reasoningTokens || 0;
 }
 
-/** Стоимость сообщения: по цене модели, иначе — из `metadata.cost_usd` (AD-070 §2.6). */
-function messageCost(msg: Message, getModelPricing?: SessionStatsDeps['getModelPricing']): number {
+/** Стоимость сообщения и её валюта. */
+interface MessageCost {
+  cost: number;
+  currency: string;
+}
+
+/**
+ * Стоимость сообщения: по цене модели (в её валюте), иначе — из
+ * `metadata.cost_usd` (`metadata.cost_currency`, по умолчанию USD —
+ * обратная совместимость со старыми данными) (AD-070 §2.6).
+ */
+function messageCost(msg: Message, getModelPricing?: SessionStatsDeps['getModelPricing']): MessageCost {
   if (getModelPricing && msg.usage && msg.model) {
     const cost = computeUsageCost(msg.usage, getModelPricing(msg.model));
-    if (cost) return cost.costUsd;
+    if (cost) return { cost: cost.costUsd, currency: cost.currency };
   }
   const metaCost = msg.metadata?.cost_usd;
-  return typeof metaCost === 'number' ? metaCost : 0;
+  if (typeof metaCost === 'number') {
+    const metaCurrency = msg.metadata?.cost_currency;
+    return { cost: metaCost, currency: typeof metaCurrency === 'string' ? metaCurrency : 'USD' };
+  }
+  return { cost: 0, currency: 'USD' };
+}
+
+/** Добавить ненулевую стоимость в разбивку по валютам. */
+function addCostByCurrency(target: Record<string, number>, mc: MessageCost): void {
+  if (mc.cost === 0) return;
+  target[mc.currency] = (target[mc.currency] || 0) + mc.cost;
+}
+
+/** Смержить разбивку по валютам `src` в `target`. */
+function mergeCostByCurrency(target: Record<string, number>, src: Record<string, number>): void {
+  for (const [currency, value] of Object.entries(src)) {
+    target[currency] = (target[currency] || 0) + value;
+  }
+}
+
+/** Округлить значения разбивки по валютам. */
+function roundCostByCurrency(map: Record<string, number>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [currency, value] of Object.entries(map)) out[currency] = round(value, 6);
+  return out;
 }
 
 function messageDuration(msg: Message): number {
@@ -149,22 +185,25 @@ async function collectSubagentUsage(
   deps: SessionStatsDeps,
   visited: Set<string>,
   depth: number,
-): Promise<{ sessions: number; tokens: number; usage: UsageTotals; cost: number }> {
+): Promise<{ sessions: number; tokens: number; usage: UsageTotals; cost: number; costByCurrency: Record<string, number> }> {
   if (depth > MAX_SUBAGENT_DEPTH) {
-    return { sessions: 0, tokens: 0, usage: emptyUsage(), cost: 0 };
+    return { sessions: 0, tokens: 0, usage: emptyUsage(), cost: 0, costByCurrency: {} };
   }
   const session = await deps.getSession(sessionId);
-  if (!session) return { sessions: 0, tokens: 0, usage: emptyUsage(), cost: 0 };
+  if (!session) return { sessions: 0, tokens: 0, usage: emptyUsage(), cost: 0, costByCurrency: {} };
 
   let sessions = 1;
   let tokens = totalTokens(session);
   const usage = emptyUsage();
   let cost = 0;
+  const costByCurrency: Record<string, number> = {};
   // Разбивка по всем сообщениям дочерней сессии (та же семантика, что у
   // `totalTokens`, но с детализацией и стоимостью по ценам моделей).
   for (const msg of session.messages) {
     addUsage(usage, msg.usage);
-    cost += messageCost(msg, deps.getModelPricing);
+    const mc = messageCost(msg, deps.getModelPricing);
+    cost += mc.cost;
+    addCostByCurrency(costByCurrency, mc);
   }
 
   for (const child of extractTaskChildren(session)) {
@@ -179,8 +218,9 @@ async function collectSubagentUsage(
     usage.cacheWrite += sub.usage.cacheWrite;
     usage.reasoning += sub.usage.reasoning;
     cost += sub.cost;
+    mergeCostByCurrency(costByCurrency, sub.costByCurrency);
   }
-  return { sessions, tokens, usage, cost };
+  return { sessions, tokens, usage, cost, costByCurrency };
 }
 
 /** Агрегация по `agent_role` сообщений сессии + рекурсивный usage саб-агентов. */
@@ -199,6 +239,7 @@ function buildAgentStats(
         messages: 0,
         usage: emptyUsage(),
         cost: 0,
+        costByCurrency: {},
         durationMs: 0,
         subagentSessions: 0,
         subagentTokens: 0,
@@ -215,7 +256,9 @@ function buildAgentStats(
     // Скрытые промежуточные сообщения tool-chain не считаем за ответ агента.
     if (msg.metadata?.tool_chain !== true) acc.messages += 1;
     addUsage(acc.usage, msg.usage);
-    acc.cost += messageCost(msg, getModelPricing);
+    const mc = messageCost(msg, getModelPricing);
+    acc.cost += mc.cost;
+    addCostByCurrency(acc.costByCurrency, mc);
     acc.durationMs += messageDuration(msg);
   }
 
@@ -233,7 +276,7 @@ function buildUserStats(
   const get = (author: string): UserAccumulator => {
     let acc = users.get(author);
     if (!acc) {
-      acc = { author, messages: 0, usage: emptyUsage(), cost: 0 };
+      acc = { author, messages: 0, usage: emptyUsage(), cost: 0, costByCurrency: {} };
       users.set(author, acc);
     }
     return acc;
@@ -248,7 +291,9 @@ function buildUserStats(
     if (!currentAuthor) continue;
     const acc = get(currentAuthor);
     addUsage(acc.usage, msg.usage);
-    acc.cost += messageCost(msg, getModelPricing);
+    const mc = messageCost(msg, getModelPricing);
+    acc.cost += mc.cost;
+    addCostByCurrency(acc.costByCurrency, mc);
   }
 
   return users;
@@ -284,6 +329,7 @@ export async function computeSessionStats(
     cache_write_tokens: 0,
     reasoning_tokens: 0,
     cost_usd: 0,
+    cost_by_currency: {},
   };
   const visited = new Set<string>([session.id]);
   for (const ref of extractTaskChildren(session)) {
@@ -297,6 +343,7 @@ export async function computeSessionStats(
         messages: 0,
         usage: emptyUsage(),
         cost: 0,
+        costByCurrency: {},
         durationMs: 0,
         subagentSessions: 0,
         subagentTokens: 0,
@@ -313,6 +360,7 @@ export async function computeSessionStats(
     acc.usage.cacheWrite += sub.usage.cacheWrite;
     acc.usage.reasoning += sub.usage.reasoning;
     acc.cost += sub.cost;
+    mergeCostByCurrency(acc.costByCurrency, sub.costByCurrency);
     subagents.sessions += sub.sessions;
     subagents.input_tokens += sub.usage.input;
     subagents.output_tokens += sub.usage.output;
@@ -320,6 +368,7 @@ export async function computeSessionStats(
     subagents.cache_write_tokens += sub.usage.cacheWrite;
     subagents.reasoning_tokens += sub.usage.reasoning;
     subagents.cost_usd += sub.cost;
+    mergeCostByCurrency(subagents.cost_by_currency!, sub.costByCurrency);
   }
 
   const agentStats: SessionAgentStats[] = [...agents.values()]
@@ -332,6 +381,7 @@ export async function computeSessionStats(
       cache_write_tokens: acc.usage.cacheWrite,
       reasoning_tokens: acc.usage.reasoning,
       cost_usd: round(acc.cost, 6),
+      cost_by_currency: roundCostByCurrency(acc.costByCurrency),
       cache_hit_rate: computeCacheHitRate(acc.usage.cacheRead, acc.usage.input),
       duration_ms: acc.durationMs,
       output_tps: acc.durationMs > 0 ? round(acc.usage.output / (acc.durationMs / 1000), 2) : 0,
@@ -363,6 +413,7 @@ export async function computeSessionStats(
         cache_write_tokens: acc.usage.cacheWrite,
         reasoning_tokens: acc.usage.reasoning,
         cost_usd: round(acc.cost, 6),
+        cost_by_currency: roundCostByCurrency(acc.costByCurrency),
         cache_hit_rate: computeCacheHitRate(acc.usage.cacheRead, acc.usage.input),
       };
     }),
@@ -374,6 +425,10 @@ export async function computeSessionStats(
     session_id: session.id,
     agents: agentStats,
     users: userStats,
-    subagents: { ...subagents, cost_usd: round(subagents.cost_usd, 6) },
+    subagents: {
+      ...subagents,
+      cost_usd: round(subagents.cost_usd, 6),
+      cost_by_currency: roundCostByCurrency(subagents.cost_by_currency ?? {}),
+    },
   };
 }

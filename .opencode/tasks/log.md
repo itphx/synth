@@ -558,3 +558,17 @@
 - **Отмечено (follow-up):** в core (standalone) роута `/models/fetch` нет — синхронизация доступна только в managed backend. `currency` пробрасывается в runtime-конфиг провайдера как forward-compat, фабрикой пока не потребляется. `priceSource:'unknown'` зарезервирован. Не-token тарифы RouterAI (`request`/`second`/`image`) намеренно не маппятся.
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** этот (этап B).
+
+## 2026-09-22 (продолжение 10) — мультивалютные агрегаты стоимости, этап C + фикс падения UI
+- **Задача:** этап C фичи валюты — агрегаты стоимости раздельно по валютам (решение пользователя), плюс визуальная проверка.
+- **Тип:** feature (multi-currency) + bug fix (UI не монтировался)
+- **Исполнитель:** @orchestrator (research) → @fixer ×3 (C1 ядро, C2a проброс UI, C2b панели, + фикс импорта) → верификация @orchestrator (в т.ч. браузер)
+- **Результат:** PASS.
+- **C1 (ядро):** `UsagePricing.currency?`/`UsageCost.currency` (`pricing.currency ?? 'USD'`); `metadata.cost_currency` рядом с `cost_usd`; `cost_currency` в `stream.usage/done/cancelled`, `subagent.progress`; агрегаты `/sessions/:id/stats` отдают `cost_by_currency` (+ прежний `cost_usd`); загрузчики цен валюту резолвят `model.currency → provider.currency → USD`. `cost_usd` сохранён (номинальная сумма) для обратной совместимости.
+- **C2a (UI-проброс):** `formatCost(cost, currency?)`; `costCurrency`/`cost_by_currency` протянуты через `transportStore`/`chatStore`/`statsSegments`/`subagentStats`.
+- **C2b (отображение):** `formatCostMap(map, fallbackUsd)` — мультивалютный вывод `$0.03 · ₽2.10` (порядок USD → RUB → CNY → прочие); `StatsTab` (сессия/агенты/пользователи + live), `MessageStats` (ход и сабагенты), `StreamingPlaceholder`; `AuditLogPanel` больше не хардкодит `$`.
+- **Найденная и исправленная регрессия:** `packages/ui/src/lib/currency.ts` (этап A) делал **value-импорт из корня** `@itphx/synth-shared`, который через `config/loader` тянет `node:fs/promises` → Vite external → **UI не монтировался (пустой экран)**. Переключено на лёгкий сабпас `@itphx/synth-shared/types`; проверено — других value-импортов корня в UI нет, `grep node:fs/promises` по собранному бандлу = 0.
+- **Проверки:** `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 91, core **1643**, ui **596**, backend 306 — PASS. **Визуально в браузере** (`:5002`): страница монтируется, консоль без ошибок и без warning `"$3.28" cannot be parsed`; порядок вкладок правой панели — Сессия, Проект, Контекст, Статистика; в админке «Модели» кнопка валюты открывает поповер `₽ Рубль / $ Доллар / ¥ Юань`, инлайн-инпуты цен — числа без `$`; стоимость в «Статистике» отображается.
+- **Отмечено (follow-up):** `cost_usd` — номинальная сумма разных валют (для совместимости), для отображения использовать `cost_by_currency`; `AuditEntry` валюту не хранит (аудит всегда USD); `Session.inputCost/...` валюту не несут (вне рамок); у моделей routerai цены пока 0 и валюта `$`, пока у провайдера не задана валюта и не выполнен sync.
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** `bd84b7f` (фикс импорта), этот (этап C).

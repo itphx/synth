@@ -339,6 +339,43 @@ describe('MessageStats — сабагенты (AD-070 §2.6)', () => {
     expect(container.textContent).toContain('12.3k вх')
     expect(container.textContent).toContain('1.1k исх')
   })
+
+  it('C2b: стоимость хода — в валюте metadata.cost_currency', async () => {
+    const container = await renderStats(
+      makeMessage({
+        usage: { input_tokens: 1000, output_tokens: 100, total_tokens: 1100 },
+        metadata: { cost_usd: 0.03, cost_currency: 'RUB' },
+      }),
+    )
+    expect(container.textContent).toContain('~₽0.03')
+    expect(container.textContent).not.toContain('~$0.03')
+  })
+
+  it('C2b: мультивалютная стоимость сабагентов — раздельно', async () => {
+    const container = await renderStats(
+      makeMessage({
+        usage: null,
+        metadata: {
+          subagents: {
+            ...subagents,
+            cost_usd: 0.05,
+            cost_by_currency: { USD: 0.001, RUB: 0.049 },
+          },
+        },
+      }),
+    )
+    expect(container.textContent).toContain('~$0.001 · ~₽0.049')
+  })
+
+  it('старые данные без валюты — USD, как раньше', async () => {
+    const container = await renderStats(
+      makeMessage({
+        usage: null,
+        metadata: { subagents },
+      }),
+    )
+    expect(container.textContent).toContain('~$0.03')
+  })
 })
 
 describe('hasMessageStats', () => {

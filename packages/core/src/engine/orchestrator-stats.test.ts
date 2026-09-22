@@ -93,6 +93,7 @@ describe('ChatOrchestrator — per-message stats (AD-070 §2.6)', () => {
       outputPrice?: number;
       cacheReadPrice?: number;
       cacheWritePrice?: number;
+      currency?: 'RUB' | 'USD' | 'CNY';
     } | null,
   ): Promise<{ session: import('@itphx/synth-shared').Session; events: Array<{ type: string; data: Record<string, unknown> }> }> {
     const orchestrator = new ChatOrchestrator({
@@ -143,6 +144,7 @@ describe('ChatOrchestrator — per-message stats (AD-070 §2.6)', () => {
     const div = 1_000_000;
     const expected = (100 * 1 + 10 * 2 + 40 * 0.5 + 20 * 1.5) / div;
     expect(assistant.metadata?.cost_usd).toBeCloseTo(expected, 12);
+    expect(assistant.metadata?.cost_currency).toBe('USD');
     expect(assistant.metadata?.cost_breakdown).toEqual({
       input: (100 * 1) / div,
       output: (10 * 2) / div,
@@ -163,10 +165,24 @@ describe('ChatOrchestrator — per-message stats (AD-070 §2.6)', () => {
 
     const div = 1_000_000;
     expect(done!.data.cost_usd).toBeCloseTo((100 * 1 + 10 * 2 + 40 * 0.5 + 20 * 1.5) / div, 12);
+    expect(done!.data.cost_currency).toBe('USD');
     // usage сохранён для обратной совместимости.
     expect(done!.data.usage).toBeTruthy();
     // AD-070 §2.6: status доносится до UI в stream.done.
     expect(done!.data.status).toBe('completed');
+  });
+
+  it('RUB-модель: metadata.cost_currency и stream.done.cost_currency = RUB', async () => {
+    const { session, events } = await run(() =>
+      ({ inputPrice: 100, outputPrice: 100, currency: 'RUB' }),
+    );
+
+    const assistant = [...session.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(assistant.metadata?.cost_currency).toBe('RUB');
+    expect(assistant.metadata?.cost_usd as number).toBeCloseTo((100 * 100 + 10 * 100) / 1_000_000, 12);
+
+    const done = events.find((e) => e.type === 'stream.done');
+    expect(done!.data.cost_currency).toBe('RUB');
   });
 
   it('модель без цен — cost_usd/cost_breakdown не пишутся, агрегаты сессии нулевые', async () => {

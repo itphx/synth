@@ -76,4 +76,14 @@ describe('computeUsageCost (AD-070 §2.6)', () => {
     expect(cost).not.toBeNull();
     expect(cost!.costUsd).toBe(0);
   });
+
+  it('валюта по умолчанию — USD (обратная совместимость)', () => {
+    const cost = computeUsageCost(USAGE, { inputPrice: 1 });
+    expect(cost!.currency).toBe('USD');
+  });
+
+  it('валюта pricing прокидывается в UsageCost', () => {
+    const cost = computeUsageCost(USAGE, { inputPrice: 1, currency: 'RUB' });
+    expect(cost!.currency).toBe('RUB');
+  });
 });

@@ -117,4 +117,16 @@ describe('StreamingPlaceholder — live-статистика (AD-070 §2.6)', ()
     expect(text).toContain('~$0.01')
     expect(text).toContain('50% кэш')
   })
+
+  it('C2b: стоимость live-строки — в валюте costCurrency', async () => {
+    const container = await renderPlaceholder(makeStream({
+      usage: { input_tokens: 1000, output_tokens: 100, total_tokens: 1100 },
+      costUsd: 0.05,
+      costCurrency: 'RUB',
+    }))
+
+    const text = container.querySelector('[data-testid="stream-live-stats"]')!.textContent ?? ''
+    expect(text).toContain('~₽0.05')
+    expect(text).not.toContain('~$0.05')
+  })
 })

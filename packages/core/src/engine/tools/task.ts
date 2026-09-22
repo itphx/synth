@@ -826,6 +826,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       : null;
     if (cost) {
       metadata.cost_usd = cost.costUsd;
+      metadata.cost_currency = cost.currency;
       metadata.cost_breakdown = cost.breakdown;
     }
     return metadata;
@@ -1053,7 +1054,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
                   content: liveContent,
                   iteration,
                   usage: liveUsage.usage,
-                  ...(liveCost ? { cost_usd: liveCost.costUsd, cost_breakdown: liveCost.breakdown } : {}),
+                  ...(liveCost ? { cost_usd: liveCost.costUsd, cost_currency: liveCost.currency, cost_breakdown: liveCost.breakdown } : {}),
                   ...(liveModel ? { model: liveModel } : {}),
                   ...(liveProvider ? { provider: liveProvider } : {}),
                   estimated: liveUsage.estimated,
@@ -1071,7 +1072,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
                   ...(liveModel ? { model: liveModel } : {}),
                   ...(liveProvider ? { provider: liveProvider } : {}),
                   usage: liveUsage.usage,
-                  ...(liveCost ? { cost_usd: liveCost.costUsd, cost_breakdown: liveCost.breakdown } : {}),
+                  ...(liveCost ? { cost_usd: liveCost.costUsd, cost_currency: liveCost.currency, cost_breakdown: liveCost.breakdown } : {}),
                   estimated: liveUsage.estimated,
                 });
               }

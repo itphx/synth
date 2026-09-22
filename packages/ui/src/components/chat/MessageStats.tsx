@@ -2,7 +2,7 @@ import { Fragment } from 'react'
 import type { MessageData, MessageStatus } from '@/stores/chatStore'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
-import { formatCost, formatDuration, formatTokens, formatTps } from '@/lib/formatStats'
+import { formatCostMap, formatDuration, formatTokens, formatTps } from '@/lib/formatStats'
 import { buildUsageSegments } from '@/lib/statsSegments'
 import { readMessageSubagents } from '@/lib/subagentStats'
 
@@ -82,6 +82,10 @@ export function MessageStats({ message, className }: MessageStatsProps) {
   const usage = message.usage
   const durationMs = readNumber(message.metadata, 'duration_ms')
   const costUsd = readNumber(message.metadata, 'cost_usd')
+  // C2b: валюта `cost_usd` хода (ядро пишет `metadata.cost_currency`; C2a).
+  const costCurrency = typeof message.metadata?.cost_currency === 'string'
+    ? message.metadata.cost_currency
+    : undefined
   const status = readStatus(message.metadata)
   // Bug 4 (AD-070 §2.6): usage мог быть оценён (провайдер не успел отдать
   // финальный чанк при отмене/сбое) — помечаем токены `~`, чтобы не выдавать
@@ -105,7 +109,7 @@ export function MessageStats({ message, className }: MessageStatsProps) {
   }
 
   // AD-070 §2.6: общий с live-строкой стрима билдер сегментов usage/cost/cache.
-  segments.push(...buildUsageSegments({ usage, costUsd, tokenPrefix }, t))
+  segments.push(...buildUsageSegments({ usage, costUsd, costCurrency, tokenPrefix }, t))
 
   if (durationMs !== undefined && durationMs > 0 && usage) {
     const tps = (usage.output_tokens ?? 0) / (durationMs / 1000)
@@ -120,7 +124,11 @@ export function MessageStats({ message, className }: MessageStatsProps) {
     subagentSegments.push(`${formatTokens(subagents.input_tokens)} ${t('chat.messageStats.in')}`)
     subagentSegments.push(`${formatTokens(subagents.output_tokens)} ${t('chat.messageStats.out')}`)
     if (subagents.cost_usd > 0) {
-      subagentSegments.push(t('chat.messageStats.cost', { cost: formatCost(subagents.cost_usd) }))
+      subagentSegments.push(
+        t('chat.messageStats.cost', {
+          cost: formatCostMap(subagents.cost_by_currency, subagents.cost_usd),
+        }),
+      )
     }
   }
 

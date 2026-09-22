@@ -1,5 +1,7 @@
 /** Компактное форматирование статистики (AD-070 §2.6). */
 
+import { currencySymbol } from './currency'
+
 /**
  * AD-071 §2.6: дефолтный chars-per-token. Дублирует shared-константу
  * `DEFAULT_CHARS_PER_TOKEN` намеренно: value-импорт из корня
@@ -36,19 +38,52 @@ export function formatTokens(n: number): string {
   return String(n)
 }
 
-/** 0 → `~$0`, 0.03 → `~$0.03`, 0.1 → `~$0.10`, 0.000123 → `~$0.000123`, 1.234 → `~$1.23`. */
-export function formatCost(usd: number): string {
-  if (!Number.isFinite(usd) || usd <= 0) return '~$0'
-  if (usd >= 1) return `~$${usd.toFixed(2)}`
+/**
+ * 0 → `~$0`, 0.03 → `~$0.03`, 0.1 → `~$0.10`, 0.000123 → `~$0.000123`, 1.234 → `~$1.23`.
+ * Символ валюты берётся из `currency` (RUB → `₽`, CNY → `¥`); отсутствует/неизвестна → `$` (USD).
+ */
+export function formatCost(usd: number, currency?: string): string {
+  const symbol = currencySymbol(currency)
+  if (!Number.isFinite(usd) || usd <= 0) return `~${symbol}0`
+  if (usd >= 1) return `~${symbol}${usd.toFixed(2)}`
   if (usd >= 0.01) {
     // 2–4 знака: минимум 2, хвостовые нули сверх двух отбрасываем.
     const fixed = usd.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
     const decimals = fixed.includes('.') ? fixed.split('.')[1]!.length : 0
-    return `~$${decimals < 2 ? usd.toFixed(2) : fixed}`
+    return `~${symbol}${decimals < 2 ? usd.toFixed(2) : fixed}`
   }
   // < 0.01: до 6 значимых цифр.
   const plain = trimTrailingZero(expandExponential(usd.toPrecision(6)).replace(/0+$/, '').replace(/\.$/, ''))
-  return `~$${plain}`
+  return `~${symbol}${plain}`
+}
+
+/** C2b: приоритет валют в мультивалютной сумме: USD, RUB, CNY, затем прочие по алфавиту. */
+const CURRENCY_ORDER: Record<string, number> = { USD: 0, RUB: 1, CNY: 2 }
+
+/**
+ * C2b: мультивалютная сумма. `{ USD: 0.03, RUB: 2.1 }` → `~$0.03 · ~₽2.10`.
+ * Нулевые/нечисловые значения отбрасываются; порядок валют стабильный
+ * (USD, RUB, CNY, далее по алфавиту). Если положительных значений нет —
+ * fallback на `fallbackUsd` как USD (старые данные без `cost_by_currency`),
+ * иначе пустая строка.
+ */
+export function formatCostMap(
+  map?: Record<string, number> | null,
+  fallbackUsd?: number,
+): string {
+  const entries = map
+    ? Object.entries(map).filter(([, value]) => Number.isFinite(value) && value > 0)
+    : []
+  if (entries.length > 0) {
+    entries.sort(([a], [b]) => {
+      const rankA = CURRENCY_ORDER[a] ?? Number.MAX_SAFE_INTEGER
+      const rankB = CURRENCY_ORDER[b] ?? Number.MAX_SAFE_INTEGER
+      return rankA !== rankB ? rankA - rankB : a.localeCompare(b)
+    })
+    return entries.map(([currency, value]) => formatCost(value, currency)).join(' · ')
+  }
+  if (fallbackUsd !== undefined) return formatCost(fallbackUsd)
+  return ''
 }
 
 /** 450 → `450ms`, 12000 → `12s`, 65000 → `1m 5s`, 694000 → `11m 34s`. */

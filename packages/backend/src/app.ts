@@ -383,6 +383,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
             outputPrice: m.outputPrice,
             cacheReadPrice: m.cacheReadPrice,
             cacheWritePrice: m.cacheWritePrice,
+            // Валюта: модель → провайдер → USD (обратная совместимость).
+            currency: m.currency ?? providerCache.get(m.provider)?.currency ?? 'USD',
           };
         }
       }

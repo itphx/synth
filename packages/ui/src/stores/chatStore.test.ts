@@ -83,6 +83,7 @@ describe('chatStore: updateStreamUsage (AD-070 §2.6)', () => {
     store.updateStreamUsage('s1', 'st1', {
       usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15, cache_read_tokens: 4 },
       costUsd: 0.01,
+      costCurrency: 'RUB',
       costBreakdown: { input: 0.001, output: 0.009, cacheRead: 0, cacheWrite: 0 },
       usageEstimated: false,
       model: 'gpt-x',
@@ -92,6 +93,7 @@ describe('chatStore: updateStreamUsage (AD-070 §2.6)', () => {
     const st = useChatStore.getState().streamingBySession['s1']!['st1']!
     expect(st.usage).toEqual({ input_tokens: 10, output_tokens: 5, total_tokens: 15, cache_read_tokens: 4 })
     expect(st.costUsd).toBe(0.01)
+    expect(st.costCurrency).toBe('RUB')
     expect(st.costBreakdown).toEqual({ input: 0.001, output: 0.009, cacheRead: 0, cacheWrite: 0 })
     expect(st.usageEstimated).toBe(false)
     expect(st.model).toBe('gpt-x')
@@ -218,6 +220,7 @@ describe('chatStore: finishStream переносит финальную стат
       provider: 'itphx',
       duration_ms: 1234,
       cost_usd: 0.02,
+      cost_currency: 'RUB',
       cost_breakdown: { input: 0.01, output: 0.01, cacheRead: 0, cacheWrite: 0 },
       usage_estimated: true,
       metadata: { secrets: { TOKEN: 'secret' } },
@@ -229,6 +232,7 @@ describe('chatStore: finishStream переносит финальную стат
       status: 'completed',
       duration_ms: 1234,
       cost_usd: 0.02,
+      cost_currency: 'RUB',
       cost_breakdown: { input: 0.01, output: 0.01, cacheRead: 0, cacheWrite: 0 },
       usage_estimated: true,
       secrets: { TOKEN: 'secret' },
@@ -267,12 +271,13 @@ describe('chatStore: cancelStream сохраняет статистику (AD-07
     store.cancelStream('s1', 'st1', 'cancelled', {
       usage: { input_tokens: 1200, output_tokens: 300, total_tokens: 1500 },
       costUsd: 0.02,
+      costCurrency: 'RUB',
       usageEstimated: true,
     })
 
     const msg = useChatStore.getState().messagesBySession['s1']![0]!
     expect(msg.usage).toEqual({ input_tokens: 1200, output_tokens: 300, total_tokens: 1500 })
-    expect(msg.metadata).toMatchObject({ stream_id: 'st1', status: 'cancelled', cost_usd: 0.02, usage_estimated: true })
+    expect(msg.metadata).toMatchObject({ stream_id: 'st1', status: 'cancelled', cost_usd: 0.02, cost_currency: 'RUB', usage_estimated: true })
     // Стрим удалён.
     expect(useChatStore.getState().streamingBySession['s1']?.['st1']).toBeUndefined()
   })
@@ -296,6 +301,7 @@ describe('chatStore: liveSubagentUsageBySession (AD-070 §2.6)', () => {
     store.updateLiveSubagentUsage('parent', 'call-1', {
       usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
       costUsd: 0.001,
+      costCurrency: 'USD',
       estimated: false,
       model: 'm1',
     })
@@ -308,6 +314,7 @@ describe('chatStore: liveSubagentUsageBySession (AD-070 §2.6)', () => {
     expect(Object.keys(live.byCall)).toEqual(['call-1', 'call-2'])
     expect(live.byCall['call-1']!.usage.input_tokens).toBe(10)
     expect(live.byCall['call-1']!.model).toBe('m1')
+    expect(live.byCall['call-1']!.costCurrency).toBe('USD')
     expect(live.usage).toEqual({
       input_tokens: 15,
       output_tokens: 3,
@@ -317,7 +324,28 @@ describe('chatStore: liveSubagentUsageBySession (AD-070 §2.6)', () => {
       reasoning_tokens: 0,
     })
     expect(live.costUsd).toBeCloseTo(0.001)
+    expect(live.costCurrency).toBe('USD')
     expect(live.estimated).toBe(true)
+  })
+
+  it('агрегат не задаёт валюту, когда вызовы в разных валютах', () => {
+    const store = useChatStore.getState()
+    store.updateLiveSubagentUsage('parent', 'call-1', {
+      usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+      costUsd: 0.001,
+      costCurrency: 'USD',
+    })
+    store.updateLiveSubagentUsage('parent', 'call-2', {
+      usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 },
+      costUsd: 0.05,
+      costCurrency: 'RUB',
+    })
+
+    const live = useChatStore.getState().liveSubagentUsageBySession['parent']!
+    expect(live.costUsd).toBeCloseTo(0.051)
+    expect(live.byCall['call-1']!.costCurrency).toBe('USD')
+    expect(live.byCall['call-2']!.costCurrency).toBe('RUB')
+    expect(live.costCurrency).toBeUndefined()
   })
 
   it('событие несёт накопленный usage вызова — перезапись, а не суммирование', () => {

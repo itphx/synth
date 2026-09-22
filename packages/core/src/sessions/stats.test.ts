@@ -40,6 +40,13 @@ function usage(input: number, output: number, cacheRead = 0): TokenUsage {
 const pricing = (model: string) =>
   model === 'm' ? { inputPrice: 1, outputPrice: 2, cacheReadPrice: 0.5 } : null;
 
+/** Цены с явными валютами: `m` — USD, `r` — RUB. */
+const pricingByCurrency = (model: string) => {
+  if (model === 'm') return { inputPrice: 1, outputPrice: 2, currency: 'USD' as const };
+  if (model === 'r') return { inputPrice: 10, outputPrice: 20, currency: 'RUB' as const };
+  return null;
+};
+
 describe('computeSessionStats (AD-070 §2.6)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
@@ -94,6 +101,7 @@ describe('computeSessionStats (AD-070 §2.6)', () => {
     expect(dev.output_tps).toBeCloseTo(50, 12);
     // 1000*1/1e6 + 100*2/1e6 + 400*0.5/1e6 = 0.0014
     expect(dev.cost_usd).toBeCloseTo(0.0014, 12);
+    expect(dev.cost_by_currency).toEqual({ USD: 0.0014 });
 
     const rev = stats.agents.find((a) => a.agent_role === 'reviewer')!;
     expect(rev.messages).toBe(1);
@@ -191,6 +199,7 @@ describe('computeSessionStats (AD-070 §2.6)', () => {
     expect(dev.output_tokens).toBe(40);
     // own 0.00012 + child 0.00036 = 0.00048
     expect(dev.cost_usd).toBeCloseTo(0.00048, 12);
+    expect(dev.cost_by_currency).toEqual({ USD: 0.00048 });
     // Отдельная сводка по сабагентам: usage всех сообщений дочерних сессий.
     expect(stats.subagents.sessions).toBe(1);
     expect(stats.subagents.input_tokens).toBe(300);
@@ -200,6 +209,7 @@ describe('computeSessionStats (AD-070 §2.6)', () => {
     expect(stats.subagents.reasoning_tokens).toBe(0);
     // 300*1/1e6 + 30*2/1e6 = 0.00036
     expect(stats.subagents.cost_usd).toBeCloseTo(0.00036, 12);
+    expect(stats.subagents.cost_by_currency).toEqual({ USD: 0.00036 });
   });
 
   it('subagents: без дочерних сессий сводка нулевая', async () => {
@@ -217,6 +227,7 @@ describe('computeSessionStats (AD-070 §2.6)', () => {
       cache_write_tokens: 0,
       reasoning_tokens: 0,
       cost_usd: 0,
+      cost_by_currency: {},
     });
   });
 
@@ -308,6 +319,46 @@ describe('computeSessionStats (AD-070 §2.6)', () => {
       getSession: (id) => sessionManager.getSession(id),
     });
     expect(stats.agents.find((a) => a.agent_role === 'developer')!.cost_usd).toBe(0.25);
+  });
+
+  it('мультивалютность: USD + RUB в одной сессии → cost_by_currency и cost_usd = сумма', async () => {
+    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    await sessionManager.addMessage(session.id, msg({ role: MessageRole.USER, content: 'hi', author: 'local' }));
+    // USD-модель: 100*1/1e6 + 10*2/1e6 = 0.00012 USD
+    await sessionManager.addMessage(session.id, msg({
+      role: MessageRole.ASSISTANT, content: 'usd', agentRole: 'developer', model: 'm', usage: usage(100, 10),
+    }));
+    // RUB-модель: 100*10/1e6 + 10*20/1e6 = 0.0012 RUB
+    await sessionManager.addMessage(session.id, msg({
+      role: MessageRole.ASSISTANT, content: 'rub', agentRole: 'developer', model: 'r', usage: usage(100, 10),
+    }));
+
+    const stats = await computeSessionStats(await load(session), {
+      getSession: (id) => sessionManager.getSession(id),
+      getModelPricing: pricingByCurrency,
+    });
+    const dev = stats.agents.find((a) => a.agent_role === 'developer')!;
+
+    expect(dev.cost_by_currency).toEqual({ USD: 0.00012, RUB: 0.0012 });
+    // cost_usd — номинальная сумма всех валют (обратная совместимость).
+    expect(dev.cost_usd).toBeCloseTo(0.00132, 12);
+    const user = stats.users.find((u) => u.author === 'local')!;
+    expect(user.cost_by_currency).toEqual({ USD: 0.00012, RUB: 0.0012 });
+    expect(user.cost_usd).toBeCloseTo(0.00132, 12);
+  });
+
+  it('старые metadata без cost_currency читаются как USD', async () => {
+    const session = await sessionManager.createSession({ settings: { agentRole: 'developer' } });
+    await sessionManager.addMessage(session.id, msg({
+      role: MessageRole.ASSISTANT, content: 'legacy', agentRole: 'developer',
+      metadata: { cost_usd: 0.5 },
+    }));
+
+    const stats = await computeSessionStats(await load(session), {
+      getSession: (id) => sessionManager.getSession(id),
+    });
+    const dev = stats.agents.find((a) => a.agent_role === 'developer')!;
+    expect(dev.cost_by_currency).toEqual({ USD: 0.5 });
   });
 
   it('resolveAuthorName подставляет display_name автора', async () => {

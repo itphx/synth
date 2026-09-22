@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatCost, formatDuration, formatTokens, formatTps } from './formatStats'
+import { formatCost, formatCostMap, formatDuration, formatTokens, formatTps } from './formatStats'
 
 describe('formatTokens', () => {
   it('0 и значения < 1000 — как есть', () => {
@@ -52,6 +52,47 @@ describe('formatCost', () => {
     expect(formatCost(0.000123)).toBe('~$0.000123')
     expect(formatCost(0.0000012)).toBe('~$0.0000012')
     expect(formatCost(0.009)).toBe('~$0.009')
+  })
+
+  it('валюта задаёт символ; неизвестная/отсутствующая → USD', () => {
+    expect(formatCost(0.03, 'RUB')).toBe('~₽0.03')
+    expect(formatCost(1.5, 'RUB')).toBe('~₽1.50')
+    expect(formatCost(1.5, 'CNY')).toBe('~¥1.50')
+    expect(formatCost(0, 'RUB')).toBe('~₽0')
+    expect(formatCost(0.03, 'USD')).toBe('~$0.03')
+    expect(formatCost(0.03, 'EUR')).toBe('~$0.03')
+    expect(formatCost(0.03, undefined)).toBe('~$0.03')
+    // Разряды не добавляются — компактный вид сохраняется.
+    expect(formatCost(1234.5, 'RUB')).toBe('~₽1234.50')
+  })
+})
+
+describe('formatCostMap', () => {
+  it('несколько валют — раздельно, порядок USD → RUB → CNY', () => {
+    expect(formatCostMap({ RUB: 2.1, USD: 0.03 })).toBe('~$0.03 · ~₽2.10')
+    expect(formatCostMap({ CNY: 1.5, USD: 0.03, RUB: 2.1 })).toBe('~$0.03 · ~₽2.10 · ~¥1.50')
+  })
+
+  it('неизвестные валюты — после известных по алфавиту', () => {
+    // CHF < EUR по алфавиту; оба неизвестны → символ `$`.
+    expect(formatCostMap({ EUR: 1, CHF: 2 })).toBe('~$2.00 · ~$1.00')
+  })
+
+  it('нулевые и нечисловые значения отбрасываются', () => {
+    expect(formatCostMap({ USD: 0, RUB: 2 })).toBe('~₽2.00')
+    expect(formatCostMap({ USD: Number.NaN, RUB: 2 })).toBe('~₽2.00')
+  })
+
+  it('нет карты/пустая карта → fallback как USD (старые данные)', () => {
+    expect(formatCostMap(undefined, 0.03)).toBe('~$0.03')
+    expect(formatCostMap(null, 0.03)).toBe('~$0.03')
+    expect(formatCostMap({}, 0.03)).toBe('~$0.03')
+    expect(formatCostMap({ USD: 0 }, 0.5)).toBe('~$0.50')
+  })
+
+  it('пусто без fallback → пустая строка', () => {
+    expect(formatCostMap()).toBe('')
+    expect(formatCostMap({})).toBe('')
   })
 })
 

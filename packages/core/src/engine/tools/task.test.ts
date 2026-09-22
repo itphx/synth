@@ -1571,6 +1571,7 @@ describe('taskTool — live-статистика саб-агента (AD-070)', 
     expect(progressWithUsage!.provider).toBe('test-provider');
     // 123*1/1e6 + 45*2/1e6 = 0.000213
     expect(progressWithUsage!.cost_usd as number).toBeCloseTo(0.000213, 12);
+    expect(progressWithUsage!.cost_currency).toBe('USD');
 
     // live-событие уходит в дочернюю сессию
     const childUsage = published.find(
@@ -1582,6 +1583,7 @@ describe('taskTool — live-статистика саб-агента (AD-070)', 
     expect(childUsage!.data.estimated).toBe(false);
     expect(childUsage!.data.agent_role).toBe('explore');
     expect(childUsage!.data.cost_usd as number).toBeCloseTo(0.000213, 12);
+    expect(childUsage!.data.cost_currency).toBe('USD');
   });
 
   it('по завершении саб-агента в дочернюю сессию публикуется stream.ended', async () => {
@@ -1820,7 +1822,7 @@ describe('taskTool — metadata финального child-сообщения (A
     (m === 'test-model' ? { inputPrice: 1, outputPrice: 2 } : null);
 
   async function runSuccess(
-    modelPriceLoader?: (m: string) => { inputPrice: number; outputPrice: number } | null,
+    modelPriceLoader?: (m: string) => { inputPrice: number; outputPrice: number; currency?: 'RUB' | 'USD' | 'CNY' } | null,
     published?: Array<{ type: string; sessionId: string; data: Record<string, unknown> }>,
   ) {
     const parent = await sessionManager.createSession({ title: 'Parent' });
@@ -1859,9 +1861,27 @@ describe('taskTool — metadata финального child-сообщения (A
     expect(assistant.metadata?.status).toBe('completed');
     // 123*1/1e6 + 45*2/1e6 = 0.000213
     expect(assistant.metadata?.cost_usd as number).toBeCloseTo(0.000213, 12);
+    expect(assistant.metadata?.cost_currency).toBe('USD');
     expect(assistant.metadata?.cost_breakdown).toBeDefined();
     // usage из финальных чанков точен — оценка не помечается
     expect(assistant.metadata?.usage_estimated).toBeUndefined();
+  });
+
+  it('сабагент в RUB: cost_currency в child metadata и live-событии', async () => {
+    const published: Array<{ type: string; sessionId: string; data: Record<string, unknown> }> = [];
+    const result = await runSuccess(
+      (m) => (m === 'test-model' ? { inputPrice: 1, outputPrice: 2, currency: 'RUB' } : null),
+      published,
+    );
+    const childId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childId))!;
+    const assistant = [...child.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(assistant.metadata?.cost_currency).toBe('RUB');
+
+    const childUsage = published.find(
+      (e) => e.type === 'stream.usage' && e.sessionId === childId,
+    );
+    expect(childUsage?.data.cost_currency).toBe('RUB');
   });
 
   it('без modelPriceLoader: cost_usd отсутствует, status=completed', async () => {

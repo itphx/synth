@@ -379,6 +379,7 @@ describe('ChatOrchestrator — персистентность tool-chain (Вар
       expect(subagents.reasoning_tokens).toBe(0);
       // 300*1/1e6 + 30*2/1e6 + 10*0.5/1e6 = 0.000365
       expect(subagents.cost_usd).toBeCloseTo(0.000365, 12);
+      expect(subagents.cost_by_currency).toEqual({ USD: 0.000365 });
     } finally {
       ProviderFactory['_providers'].delete('subagentstats');
     }

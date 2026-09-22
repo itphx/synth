@@ -1,7 +1,7 @@
 /**
  * AD-070 §2.3: нормализация usage и статистика prompt-cache.
  */
-import type { TokenUsage } from '@itphx/synth-shared';
+import type { Currency, TokenUsage } from '@itphx/synth-shared';
 
 /**
  * Cache hit rate — доля кэшированных входных токенов:
@@ -23,9 +23,11 @@ export interface UsagePricing {
   outputPrice?: number;
   cacheReadPrice?: number;
   cacheWritePrice?: number;
+  /** Валюта цен модели; отсутствует → USD (обратная совместимость). */
+  currency?: Currency;
 }
 
-/** Разбивка стоимости сообщения по типам токенов (USD). */
+/** Разбивка стоимости сообщения по типам токенов (в валюте pricing). */
 export interface UsageCostBreakdown {
   input: number;
   output: number;
@@ -34,15 +36,19 @@ export interface UsageCostBreakdown {
 }
 
 export interface UsageCost {
+  /** Номинальная сумма (в валюте `currency`). Имя сохранено для совместимости. */
   costUsd: number;
   breakdown: UsageCostBreakdown;
+  /** Валюта стоимости: `pricing.currency ?? 'USD'`. */
+  currency: Currency;
 }
 
 /**
  * AD-070 §2.6: стоимость usage по ценам модели (`price / 1_000_000`).
  * Возвращает `null`, если usage или цены не заданы — вызывающий решает,
  * писать ли `metadata.cost_usd`. Единый расчёт для сессии, сообщения и
- * агрегированной статистики.
+ * агрегированной статистики. Стоимость считается в валюте `pricing.currency`
+ * (по умолчанию USD).
  */
 export function computeUsageCost(
   usage: TokenUsage | undefined,
@@ -73,5 +79,6 @@ export function computeUsageCost(
   return {
     costUsd: input + output + cacheRead + cacheWrite,
     breakdown: { input, output, cacheRead, cacheWrite },
+    currency: pricing.currency ?? 'USD',
   };
 }

@@ -737,3 +737,98 @@ describe('StatsTab — live-обновление (AD-070 §2.6)', () => {
     if (lastSection) expect(lastSection.textContent).not.toContain(`~${(2000).toLocaleString()}`)
   })
 })
+
+describe('StatsTab — мультивалютная стоимость (C2b)', () => {
+  function agentStats(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      agent_role: 'developer',
+      messages: 3,
+      input_tokens: 1000,
+      output_tokens: 100,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      reasoning_tokens: 0,
+      cost_usd: 2.13,
+      cache_hit_rate: 0,
+      duration_ms: 0,
+      output_tps: 0,
+      subagent_sessions: 0,
+      subagent_tokens: 0,
+      ...overrides,
+    }
+  }
+
+  it('агрегат сессии и ячейка агента по двум валютам — раздельно, без суммирования', async () => {
+    mocks.getSessionStats.mockResolvedValue({
+      session_id: 's1',
+      agents: [agentStats({ cost_usd: 2.13, cost_by_currency: { USD: 0.03, RUB: 2.1 } })],
+      users: [
+        {
+          author: 'u1', messages: 1, input_tokens: 10, output_tokens: 1,
+          cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0,
+          cost_usd: 2.13, cost_by_currency: { USD: 0.03, RUB: 2.1 }, cache_hit_rate: 0,
+        },
+      ],
+      subagents: {
+        sessions: 0, input_tokens: 0, output_tokens: 0,
+        cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, cost_usd: 0,
+      },
+    })
+
+    const container = await renderStats()
+    const sessionText = findSection(container, 'Session')!.textContent ?? ''
+    expect(sessionText).toContain('~$0.03 · ~₽2.10')
+    // Агрегат по валютам, а не арифметическая сумма 2.13 → нет ~$2.13.
+    expect(sessionText).not.toContain('~$2.13')
+
+    const agentsText = findSection(container, 'Agent stats')?.textContent ?? ''
+    expect(agentsText).toContain('~$0.03 · ~₽2.10')
+
+    const usersText = findSection(container, 'User stats')?.textContent ?? ''
+    expect(usersText).toContain('~$0.03 · ~₽2.10')
+  })
+
+  it('старые данные без cost_by_currency → USD, как раньше', async () => {
+    mocks.getSessionStats.mockResolvedValue({
+      session_id: 's1',
+      agents: [agentStats({ cost_usd: 0.03 })],
+      users: [],
+      subagents: {
+        sessions: 0, input_tokens: 0, output_tokens: 0,
+        cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, cost_usd: 0,
+      },
+    })
+
+    const container = await renderStats()
+    expect(findSection(container, 'Session')!.textContent).toContain('~$0.03')
+    expect(findSection(container, 'Agent stats')!.textContent).toContain('~$0.03')
+  })
+
+  it('live-дельта в своей валюте добавляется к серверной карте раздельно', async () => {
+    mocks.getSessionStats.mockResolvedValue({
+      session_id: 's1',
+      agents: [agentStats({ cost_usd: 0.03, cost_by_currency: { USD: 0.03 } })],
+      users: [],
+      subagents: {
+        sessions: 0, input_tokens: 0, output_tokens: 0,
+        cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, cost_usd: 0,
+      },
+    })
+    useChatStore.setState({
+      streamingBySession: {
+        s1: {
+          st1: {
+            streamId: 'st1', agentRole: 'coder', content: 'x', reasoningBlocks: [],
+            intermediateTextBlocks: [], isStreaming: true, hasContent: true,
+            usage: { input_tokens: 10, output_tokens: 1, total_tokens: 11 },
+            costUsd: 2.1, costCurrency: 'RUB', usageEstimated: false,
+            toolCalls: [], toolIteration: 0, _lastContentLen: 0,
+          },
+        },
+      },
+    } as never)
+
+    const container = await renderStats()
+    expect(findSection(container, 'Session')!.textContent).toContain('~$0.03 · ~₽2.10')
+  })
+})

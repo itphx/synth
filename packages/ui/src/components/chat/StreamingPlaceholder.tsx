@@ -190,6 +190,7 @@ export function StreamingPlaceholder({ stream, onStop, retry, onRetryNow, onCanc
     {
       usage: stream.usage,
       costUsd: stream.costUsd,
+      costCurrency: stream.costCurrency,
       tokenPrefix: stream.usageEstimated ? '~' : '',
     },
     t,

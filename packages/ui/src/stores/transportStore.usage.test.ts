@@ -71,6 +71,7 @@ describe('transportStore dispatcher: stream.usage (AD-070 §2.6)', () => {
         reasoningTokens: 120,
       },
       cost_usd: 0.03,
+      cost_currency: 'RUB',
       cost_breakdown: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0 },
       estimated: false,
       model: 'gpt-x',
@@ -87,6 +88,7 @@ describe('transportStore dispatcher: stream.usage (AD-070 §2.6)', () => {
       reasoning_tokens: 120,
     })
     expect(st.costUsd).toBe(0.03)
+    expect(st.costCurrency).toBe('RUB')
     expect(st.costBreakdown).toEqual({ input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0 })
     expect(st.usageEstimated).toBe(false)
     expect(st.model).toBe('gpt-x')
@@ -234,6 +236,7 @@ describe('transportStore dispatcher: stream.done с финальной стат�
       provider: 'itphx',
       duration_ms: 1500,
       cost_usd: 0.02,
+      cost_currency: 'RUB',
       cost_breakdown: { input: 0.01, output: 0.01, cacheRead: 0, cacheWrite: 0 },
       usage_estimated: true,
     }))
@@ -243,6 +246,7 @@ describe('transportStore dispatcher: stream.done с финальной стат�
       status: 'completed',
       duration_ms: 1500,
       cost_usd: 0.02,
+      cost_currency: 'RUB',
       cost_breakdown: { input: 0.01, output: 0.01, cacheRead: 0, cacheWrite: 0 },
       usage_estimated: true,
     })
@@ -261,6 +265,7 @@ describe('transportStore dispatcher: stream.cancelled с usage/cost (AD-070 §2.
       content: 'partial',
       usage: { inputTokens: 1200, outputTokens: 300, totalTokens: 1500 },
       cost_usd: 0.02,
+      cost_currency: 'RUB',
       usage_estimated: true,
     }))
 
@@ -270,6 +275,7 @@ describe('transportStore dispatcher: stream.cancelled с usage/cost (AD-070 §2.
       stream_id: 'st1',
       status: 'cancelled',
       cost_usd: 0.02,
+      cost_currency: 'RUB',
       usage_estimated: true,
     })
     expect(useChatStore.getState().streamingBySession['s1']?.['st1']).toBeUndefined()
@@ -286,6 +292,7 @@ describe('transportStore dispatcher: subagent.progress → live-вклад (AD-0
       iteration: 0,
       usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
       cost_usd: 0.004,
+      cost_currency: 'RUB',
       estimated: false,
       model: 'sub-model',
       provider: 'itphx',
@@ -295,6 +302,7 @@ describe('transportStore dispatcher: subagent.progress → live-вклад (AD-0
     expect(live).toBeDefined()
     expect(live.byCall['call-1']!.usage).toEqual({ input_tokens: 100, output_tokens: 20, total_tokens: 120 })
     expect(live.byCall['call-1']!.costUsd).toBe(0.004)
+    expect(live.byCall['call-1']!.costCurrency).toBe('RUB')
     expect(live.byCall['call-1']!.model).toBe('sub-model')
     expect(live.byCall['call-1']!.provider).toBe('itphx')
     expect(live.usage.input_tokens).toBe(100)

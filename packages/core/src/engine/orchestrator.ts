@@ -1,6 +1,6 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
-import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision } from '@itphx/synth-shared';
+import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
@@ -112,6 +112,8 @@ export interface ModelPricing {
   outputPrice?: number;
   cacheReadPrice?: number;
   cacheWritePrice?: number;
+  /** Валюта цен модели; отсутствует → USD (обратная совместимость). */
+  currency?: Currency;
 }
 
 /**
@@ -288,8 +290,8 @@ export class ChatOrchestrator {
   }
 
   /**
-   * Стоимость usage сообщения по цене модели (USD). `null` — цен нет
-   * (в этом случае `metadata.cost_usd` не пишется).
+   * Стоимость usage сообщения по цене модели (в валюте pricing). `null` — цен
+   * нет (в этом случае `metadata.cost_usd`/`cost_currency` не пишутся).
    */
   private _computeMessageCost(
     model: string | undefined,
@@ -437,7 +439,7 @@ export class ChatOrchestrator {
       // Копия: провайдеры мутируют объект running total in place — событие
       // должно нести снимок значений на момент публикации.
       usage: { ...params.usage },
-      ...(cost ? { cost_usd: cost.costUsd, cost_breakdown: cost.breakdown } : {}),
+      ...(cost ? { cost_usd: cost.costUsd, cost_currency: cost.currency, cost_breakdown: cost.breakdown } : {}),
       estimated: params.estimated,
     });
   }
@@ -445,7 +447,8 @@ export class ChatOrchestrator {
   /**
    * AD-070 §2.6: агрегация per-message статистики сабагентов из tool-результатов
    * `task` (`result.metadata.subagent_usage`/`subagent_model`). Возвращает
-   * breakdown для `metadata.subagents` финального assistant-сообщения; `undefined`,
+   * breakdown для `metadata.subagents` финального assistant-сообщения; `cost_usd`
+   * — номинальная сумма, `cost_by_currency` — разбивка по валютам. `undefined`,
    * если в сообщении нет ни одного task-результата с usage/child_session_id.
    */
   private _aggregateSubagentStats(
@@ -458,6 +461,7 @@ export class ChatOrchestrator {
     cache_write_tokens: number;
     reasoning_tokens: number;
     cost_usd: number;
+    cost_by_currency: Record<string, number>;
   } | undefined {
     let sessions = 0;
     let input = 0;
@@ -466,6 +470,7 @@ export class ChatOrchestrator {
     let cacheWrite = 0;
     let reasoning = 0;
     let cost = 0;
+    const costByCurrency: Record<string, number> = {};
     let found = false;
 
     for (const raw of toolResults) {
@@ -489,7 +494,10 @@ export class ChatOrchestrator {
         const model = (resultMeta.subagent_model as string | undefined)
           || (resultMeta.routing_model as string | undefined);
         const c = this._computeMessageCost(model, usage);
-        if (c) cost += c.costUsd;
+        if (c) {
+          cost += c.costUsd;
+          costByCurrency[c.currency] = (costByCurrency[c.currency] || 0) + c.costUsd;
+        }
       }
     }
 
@@ -502,6 +510,7 @@ export class ChatOrchestrator {
       cache_write_tokens: cacheWrite,
       reasoning_tokens: reasoning,
       cost_usd: cost,
+      cost_by_currency: costByCurrency,
     };
   }
 
@@ -2005,7 +2014,7 @@ export class ChatOrchestrator {
             provider: providerName,
             usage: cancelEstimated.usage,
             duration_ms: cancelDurationMs,
-            ...(cancelCost ? { cost_usd: cancelCost.costUsd } : {}),
+            ...(cancelCost ? { cost_usd: cancelCost.costUsd, cost_currency: cancelCost.currency } : {}),
             ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
           });
 
@@ -2514,7 +2523,7 @@ export class ChatOrchestrator {
           provider: providerName,
           usage: cancelEstimated.usage,
           duration_ms: cancelDurationMs,
-          ...(cancelCost ? { cost_usd: cancelCost.costUsd } : {}),
+          ...(cancelCost ? { cost_usd: cancelCost.costUsd, cost_currency: cancelCost.currency } : {}),
           ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
         });
 
@@ -2659,7 +2668,7 @@ export class ChatOrchestrator {
         usage: finalUsage,
         duration_ms: durationMs,
         status: this._resolveAssistantStatus(false, fallbackI18n ? { i18n: fallbackI18n } : undefined),
-        ...(messageCost ? { cost_usd: messageCost.costUsd } : {}),
+        ...(messageCost ? { cost_usd: messageCost.costUsd, cost_currency: messageCost.currency } : {}),
         reasoning_blocks: allReasoning.length > 0 ? allReasoning : undefined,
         intermediate_text_blocks: allIntermediateTexts.length > 0 ? allIntermediateTexts : undefined,
       };
@@ -3033,7 +3042,7 @@ export class ChatOrchestrator {
       usage: finalUsage,
       duration_ms: durationMs,
       status: 'completed',
-      ...(messageCost ? { cost_usd: messageCost.costUsd } : {}),
+      ...(messageCost ? { cost_usd: messageCost.costUsd, cost_currency: messageCost.currency } : {}),
       metadata: { type: 'debug_system_message' },
     });
 
@@ -3167,7 +3176,7 @@ export class ChatOrchestrator {
       usage: finalUsage,
       duration_ms: durationMs,
       status: 'completed',
-      ...(messageCost ? { cost_usd: messageCost.costUsd } : {}),
+      ...(messageCost ? { cost_usd: messageCost.costUsd, cost_currency: messageCost.currency } : {}),
       metadata: { type: 'summary', indices: prep.indices },
     };
 
@@ -3639,6 +3648,7 @@ export class ChatOrchestrator {
     const messageCost = this._computeMessageCost(model, usage);
     if (messageCost) {
       metadata.cost_usd = messageCost.costUsd;
+      metadata.cost_currency = messageCost.currency;
       metadata.cost_breakdown = messageCost.breakdown;
     }
 

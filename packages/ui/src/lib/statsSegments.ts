@@ -15,6 +15,8 @@ export interface UsageLike {
 export interface UsageStatsData {
   usage?: UsageLike | null
   costUsd?: number
+  /** Валюта `costUsd` (C2a); отсутствует/неизвестна → USD. */
+  costCurrency?: string
   /** `~`, если usage — best-effort оценка (AD-070 §2.6). */
   tokenPrefix?: string
 }
@@ -36,7 +38,7 @@ export function buildUsageSegments(data: UsageStatsData, t: Translate): string[]
   }
 
   if (data.costUsd !== undefined) {
-    segments.push(t('chat.messageStats.cost', { cost: formatCost(data.costUsd) }))
+    segments.push(t('chat.messageStats.cost', { cost: formatCost(data.costUsd, data.costCurrency) }))
   }
 
   const inputTokens = usage?.input_tokens ?? 0
