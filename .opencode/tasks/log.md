@@ -426,3 +426,17 @@
 - **Проверки:** корневые `pnpm typecheck` и `pnpm test` — shared 91, core 1613, ui **531** (+1 новый тест), backend 291, все PASS; ui lint 0 errors (33 предсуществующих warning). В браузере: desktop — зазор 4px между «Внешний вид» (выбран) и «Уведомления» (hover), пункты 32px; mobile 390×844 — «Панель управления» у левого края (8.4px), контент «Дашборд»; MCP-шапка — «MCP-серверы» → описание → «1 серверов».
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** `cf7d42e` (откат), `8a325d8` (меню/скролл), `2013d10` (стандарт шапки + доки), этот.
+
+## 2026-09-22 (продолжение 2) — плюрализация счётчиков + контур у кнопок отмены
+- **Задача:** 1) «Сделай плюрализацию» (счётчики давали «1 серверов»); 2) «добавь контур к кнопкам отмены, цвет такой же как сейчас у текста кнопки».
+- **Тип:** feature (i18n) + UI-правка
+- **Исполнитель:** @fixer ×2 (+док) → верификация @orchestrator
+- **Результат:** PASS.
+- **Сделано:**
+  - **Плюрализация (мини-ICU, без новых зависимостей).** Новый `lib/i18n/plural.ts`: `pluralCategory(locale, count)` по CLDR-лайт (ru: one/few/many с учётом 11–14 и 21/22/25; en: one/other; дробные → other, отрицательные — по модулю). `formatMessage(dictionary, key, params, locale)` получил 4-й параметр `locale` и поддержку `{count, plural, one {# сервер} few {# сервера} many {# серверов}}`: балансировка `{}` (свой парсер, не регулярка), `#` → число внутри формы, обычные `{param}` и вложенные plural-блоки, fallback форм `other → many → one → few → zero → two`. `locale` прокинут в `t()` (`context.tsx`), `resolveI18n`/`useResolveI18n`, `i18nText` в `sessionsStore`/`projectsStore`.
+  - **Словари:** 12 ключей переведены на plural в ru и en — `mcp.count`, `admin.sessions.count`, `admin.sessions.messageCount`, `admin.projects.count`, `admin.projects.memberCount`, `admin.projects.statusCount`, `admin.providers.count`, `admin.models.count` (два независимых plural-блока: модель по `total`, провайдер по `providers`), `admin.users.count`, `admin.agents.count`, `admin.agents.filter.subagents_count`, `admin.context.count`. Прочие `{count}`-строки (предложения, «показать ещё») намеренно не трогали — механизм поддержит их позже.
+  - **Контур у «Отмены».** `Button` — новый вариант `outline-muted` (`border border-muted-foreground text-muted-foreground` + прежний hover ghost); `SettingsActions` Cancel `ghost → outline-muted`; в `ConfirmDialog` сырой Cancel-`<button>` получил `border border-muted-foreground` (цвет = цвет текста). Прочие инлайн-отмены (`LeftPanel`, `ChatTab`, `Publish/ForkProjectDialog`) с залитым фоном и `text-foreground` не трогали.
+  - **Доки:** `packages/ui/AGENTS.md` (раздел «API и i18n») — зафиксирован plural-синтаксис, `#`, выбор формы по локали и fallback.
+- **Проверки:** корневые `pnpm typecheck` и `pnpm test` — shared 91, core 1613, ui **546** (69 файлов; +14 тестов `plural.test.ts`, +1 `SettingsActions`), backend 291, все PASS; ui lint 0 errors (33 предсуществующих warning). В браузере (ru): MCP-шапка — «1 сервер» (было «1 серверов»); Cancel в «Уведомлениях» — `border: 1px solid rgb(119,126,134)` = цвет текста; ConfirmDialog «Удалить провайдера?» — «Отмена» с контуром; провайдеры не пострадали (7, включая itphx).
+- **Ветка:** `feat/ad-071-mcp-tools-scope`
+- **Коммит:** `8b8860a` (i18n plural), `5a9e9d8` (контур отмены), этот (+ доки `AGENTS.md`).
