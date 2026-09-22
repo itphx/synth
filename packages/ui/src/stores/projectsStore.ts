@@ -38,7 +38,8 @@ interface ProjectsStore {
 
 /** Локализованная строка вне React (для confirm-диалога в сторах). */
 function i18nText(key: string): string {
-  return formatMessage(useI18nStore.getState().dictionary, key)
+  const { dictionary, locale } = useI18nStore.getState()
+  return formatMessage(dictionary, key, undefined, locale)
 }
 
 export const useProjectsStore = create<ProjectsStore>((set, get) => ({

@@ -974,11 +974,11 @@ export const dict = {
 
   // Sessions
   'admin.sessions.title': 'Сессии',
-  'admin.sessions.count': '{count} сессий',
+  'admin.sessions.count': '{count, plural, one {# сессия} few {# сессии} many {# сессий}}',
   'admin.sessions.refresh': 'Обновить',
   'admin.sessions.empty': 'Нет сессий',
   'admin.sessions.blocked': 'заблокирована',
-  'admin.sessions.messageCount': '{count} сообщений',
+  'admin.sessions.messageCount': '{count, plural, one {# сообщение} few {# сообщения} many {# сообщений}}',
   'admin.sessions.hide': 'Скрыть',
   'admin.sessions.details': 'Детали',
   'admin.sessions.unlock': 'Разблокировать',
@@ -992,7 +992,7 @@ export const dict = {
 
   // Projects
   'admin.projects.title': 'Проекты',
-  'admin.projects.count': '{count} проектов',
+  'admin.projects.count': '{count, plural, one {# проект} few {# проекта} many {# проектов}}',
   'admin.projects.create': 'Создать',
   'admin.projects.new': 'Новый проект',
   'admin.projects.namePlaceholder': 'Название проекта',
@@ -1000,8 +1000,8 @@ export const dict = {
   'admin.projects.createError': 'Ошибка создания',
   'admin.projects.cancel': 'Отмена',
   'admin.projects.empty': 'Нет проектов',
-  'admin.projects.memberCount': '{count} участников',
-  'admin.projects.statusCount': '{count} статусов',
+  'admin.projects.memberCount': '{count, plural, one {# участник} few {# участника} many {# участников}}',
+  'admin.projects.statusCount': '{count, plural, one {# статус} few {# статуса} many {# статусов}}',
   'admin.projects.confirmDelete': 'Удалить проект «{name}»?',
 
   // Рабочий каталог по умолчанию
@@ -1017,7 +1017,7 @@ export const dict = {
 
   // Providers
   'admin.providers.title': 'Провайдеры',
-  'admin.providers.count': '{count} провайдеров',
+  'admin.providers.count': '{count, plural, one {# провайдер} few {# провайдера} many {# провайдеров}}',
   'admin.providers.add': 'Добавить',
   'admin.providers.edit': 'Изменить провайдер',
   'admin.providers.new': 'Новый провайдер',
@@ -1051,7 +1051,7 @@ export const dict = {
 
   // Models
   'admin.models.title': 'Модели',
-  'admin.models.count': '{visible} / {total} моделей в {providers} провайдерах',
+  'admin.models.count': '{visible} / {total, plural, one {# модель} few {# модели} many {# моделей}} в {providers, plural, one {# провайдере} few {# провайдерах} many {# провайдерах}}',
   'admin.models.syncAll': 'Синхронизировать всё',
   'admin.models.allProviders': 'Все провайдеры',
   'admin.models.onlyEnabled': 'Только включённые',
@@ -1097,7 +1097,7 @@ export const dict = {
 
   // Users
   'admin.users.title': 'Пользователи',
-  'admin.users.count': '{count} пользователей',
+  'admin.users.count': '{count, plural, one {# пользователь} few {# пользователя} many {# пользователей}}',
   'admin.users.add': 'Добавить',
   'admin.users.newUser': 'Новый пользователь',
   'admin.users.editUser': 'Изменить: {username}',
@@ -1122,7 +1122,7 @@ export const dict = {
 
   // Agents
   'admin.agents.title': 'Агенты',
-  'admin.agents.count': '{count} агентов',
+  'admin.agents.count': '{count, plural, one {# агент} few {# агента} many {# агентов}}',
   'admin.agents.add': 'Добавить',
   'admin.agents.new': 'Новый агент',
   'admin.agents.edit': 'Изменить: {id}',
@@ -1179,11 +1179,11 @@ export const dict = {
   'admin.agents.filter.agents': 'Агенты',
   'admin.agents.filter.subagents': 'Сабагенты',
   'admin.agents.filter.system': 'Системные',
-  'admin.agents.filter.subagents_count': '{count} сабагентов',
+  'admin.agents.filter.subagents_count': '{count, plural, one {# сабагент} few {# сабагента} many {# сабагентов}}',
 
   // Context
   'admin.context.title': 'Контекст',
-  'admin.context.count': '{count} файлов{status}',
+  'admin.context.count': '{count, plural, one {# файл} few {# файла} many {# файлов}}{status}',
   'admin.context.add': 'Добавить',
   'admin.context.userFiles': 'Пользовательские',
   'admin.context.rolesFiles': 'Роли',
@@ -1255,7 +1255,7 @@ export const dict = {
   // MCP
   'mcp.title': 'MCP-серверы',
   'mcp.description': 'Управление внешними MCP-серверами. Инструменты серверов становятся доступны моделям ИИ как вызовы инструментов (tool calls).',
-  'mcp.count': '{count} серверов',
+  'mcp.count': '{count, plural, one {# сервер} few {# сервера} many {# серверов}}',
   'mcp.addServer': 'Добавить сервер',
   'mcp.newServer': 'Новый сервер',
   'mcp.editServer': 'Редактирование сервера',

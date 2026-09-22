@@ -185,10 +185,10 @@ describe('McpUserSettings — пользовательская часть MCP (A
     const meta = container.querySelector('[data-testid="settings-header-meta"]')
     expect(meta).not.toBeNull()
     // Мок-реестр: только ENTRY_OWN принадлежит alice → 1 сервер.
-    expect(meta!.textContent).toContain('1 servers')
+    expect(meta!.textContent).toContain('1 server')
 
     // Счётчик встречается ровно один раз — только в meta панели, а не в шапке секции.
-    const matches = container.textContent?.match(/1 servers/g) ?? []
+    const matches = container.textContent?.match(/1 server/g) ?? []
     expect(matches).toHaveLength(1)
   })
 })

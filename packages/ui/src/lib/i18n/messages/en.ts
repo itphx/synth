@@ -977,11 +977,11 @@ export const dict = {
 
   // Sessions
   'admin.sessions.title': 'Sessions',
-  'admin.sessions.count': '{count} sessions',
+  'admin.sessions.count': '{count, plural, one {# session} other {# sessions}}',
   'admin.sessions.refresh': 'Refresh',
   'admin.sessions.empty': 'No sessions',
   'admin.sessions.blocked': 'blocked',
-  'admin.sessions.messageCount': '{count} messages',
+  'admin.sessions.messageCount': '{count, plural, one {# message} other {# messages}}',
   'admin.sessions.hide': 'Hide',
   'admin.sessions.details': 'Details',
   'admin.sessions.unlock': 'Unlock',
@@ -995,7 +995,7 @@ export const dict = {
 
   // Projects
   'admin.projects.title': 'Projects',
-  'admin.projects.count': '{count} projects',
+  'admin.projects.count': '{count, plural, one {# project} other {# projects}}',
   'admin.projects.create': 'Create',
   'admin.projects.new': 'New project',
   'admin.projects.namePlaceholder': 'Project name',
@@ -1003,8 +1003,8 @@ export const dict = {
   'admin.projects.createError': 'Create error',
   'admin.projects.cancel': 'Cancel',
   'admin.projects.empty': 'No projects',
-  'admin.projects.memberCount': '{count} members',
-  'admin.projects.statusCount': '{count} statuses',
+  'admin.projects.memberCount': '{count, plural, one {# member} other {# members}}',
+  'admin.projects.statusCount': '{count, plural, one {# status} other {# statuses}}',
   'admin.projects.confirmDelete': 'Delete project «{name}»?',
 
   // Default workspace
@@ -1020,7 +1020,7 @@ export const dict = {
 
   // Providers
   'admin.providers.title': 'Providers',
-  'admin.providers.count': '{count} providers',
+  'admin.providers.count': '{count, plural, one {# provider} other {# providers}}',
   'admin.providers.add': 'Add',
   'admin.providers.edit': 'Edit provider',
   'admin.providers.new': 'New provider',
@@ -1054,7 +1054,7 @@ export const dict = {
 
   // Models
   'admin.models.title': 'Models',
-  'admin.models.count': '{visible} / {total} models in {providers} providers',
+  'admin.models.count': '{visible} / {total, plural, one {# model} other {# models}} in {providers, plural, one {# provider} other {# providers}}',
   'admin.models.syncAll': 'Sync all',
   'admin.models.allProviders': 'All providers',
   'admin.models.onlyEnabled': 'Only enabled',
@@ -1100,7 +1100,7 @@ export const dict = {
 
   // Users
   'admin.users.title': 'Users',
-  'admin.users.count': '{count} users',
+  'admin.users.count': '{count, plural, one {# user} other {# users}}',
   'admin.users.add': 'Add',
   'admin.users.newUser': 'New user',
   'admin.users.editUser': 'Edit: {username}',
@@ -1125,7 +1125,7 @@ export const dict = {
 
   // Agents
   'admin.agents.title': 'Agents',
-  'admin.agents.count': '{count} agents',
+  'admin.agents.count': '{count, plural, one {# agent} other {# agents}}',
   'admin.agents.add': 'Add',
   'admin.agents.new': 'New agent',
   'admin.agents.edit': 'Edit: {id}',
@@ -1182,11 +1182,11 @@ export const dict = {
   'admin.agents.filter.agents': 'Agents',
   'admin.agents.filter.subagents': 'Subagents',
   'admin.agents.filter.system': 'System',
-  'admin.agents.filter.subagents_count': '{count} subagents',
+  'admin.agents.filter.subagents_count': '{count, plural, one {# subagent} other {# subagents}}',
 
   // Context
   'admin.context.title': 'Context',
-  'admin.context.count': '{count} file(s){status}',
+  'admin.context.count': '{count, plural, one {# file} other {# files}}{status}',
   'admin.context.add': 'Add',
   'admin.context.userFiles': 'User',
   'admin.context.rolesFiles': 'Roles',
@@ -1258,7 +1258,7 @@ export const dict = {
   // MCP
   'mcp.title': 'MCP Servers',
   'mcp.description': 'Manage external MCP servers. Server tools become available to AI models as tool calls.',
-  'mcp.count': '{count} servers',
+  'mcp.count': '{count, plural, one {# server} other {# servers}}',
   'mcp.addServer': 'Add Server',
   'mcp.newServer': 'New Server',
   'mcp.editServer': 'Edit Server',
