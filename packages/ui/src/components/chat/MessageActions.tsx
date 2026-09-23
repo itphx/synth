@@ -1,6 +1,6 @@
-import { forwardRef, useState, type ReactNode } from 'react'
-import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
+import { forwardRef, type ReactNode } from 'react'
 import { Icon } from '../icon/Icon'
+import { StatsPopoverButton } from './StatsPopoverButton'
 import { useI18n } from '@/lib/i18n'
 
 interface MessageActionsProps {
@@ -47,7 +47,6 @@ export function MessageActions({
 }: MessageActionsProps) {
   const { t } = useI18n()
   const isUser = role === 'user'
-  const [statsOpen, setStatsOpen] = useState(false)
 
   return (
     <div className="message-actions flex items-center gap-0.5 mt-2 pt-1.5 -mb-1.5 border-t border-border/30 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -87,21 +86,7 @@ export function MessageActions({
 
       {/* AD-070 §2.6: статистика ответа — кнопка в ряду, содержимое в поповере.
           Единое поведение на всех платформах, инлайн не рендерится. */}
-      {!isUser && hasStats && statsContent && (
-        <Popover open={statsOpen} onOpenChange={setStatsOpen}>
-          <PopoverTrigger asChild>
-            <ActionBtn title={t('chat.messageStats.toggle')} icon="chart-line" active={statsOpen} />
-          </PopoverTrigger>
-          <PopoverContent
-            side="top"
-            sideOffset={12}
-            align="start"
-            className="min-h-[34px] w-max max-w-[calc(100vw-2rem)] overflow-x-auto px-2 py-0 flex items-center"
-          >
-            {statsContent}
-          </PopoverContent>
-        </Popover>
-      )}
+      {!isUser && hasStats && statsContent && <StatsPopoverButton>{statsContent}</StatsPopoverButton>}
     </div>
   )
 }

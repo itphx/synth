@@ -12,6 +12,7 @@ import { buildUsageSegments } from '@/lib/statsSegments'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { RetryStatus } from './RetryStatus'
+import { StatsPopoverButton } from './StatsPopoverButton'
 import type { StreamState, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
 
 interface ToolCallNode {
@@ -184,8 +185,9 @@ export function StreamingPlaceholder({ stream, onStop, retry, onRetryNow, onCanc
     stream.toolCalls || [],
   )
 
-  // AD-070 §2.6: live-строка статистики внизу плейсхолдера (токены/стоимость/
-  // кэш) — тот же билдер сегментов, что у MessageStats. Оценка помечается `~`.
+  // AD-070 §2.6: live-статистика стрима (токены/стоимость/кэш) — содержимое
+  // поповера кнопки «Статистика»; тот же билдер сегментов, что у MessageStats.
+  // Оценка помечается `~`.
   const liveSegments = buildUsageSegments(
     {
       usage: stream.usage,
@@ -277,20 +279,6 @@ export function StreamingPlaceholder({ stream, onStop, retry, onRetryNow, onCanc
 
         {displayContent && <MarkdownContent content={displayContent} />}
 
-        {liveSegments.length > 0 && (
-          <div
-            data-testid="stream-live-stats"
-            className="mt-2 flex flex-nowrap items-center gap-x-1.5 whitespace-nowrap text-[0.6875rem] text-muted-foreground tabular-nums"
-          >
-            {liveSegments.map((segment, i) => (
-              <Fragment key={i}>
-                {i > 0 && <span aria-hidden="true">·</span>}
-                <span>{segment}</span>
-              </Fragment>
-            ))}
-          </div>
-        )}
-
         {stream.isStreaming && (
           <div className="flex items-center gap-0.5 mt-2 pt-1.5 border-t border-border/30">
             {isRetrying && retry ? (
@@ -298,13 +286,30 @@ export function StreamingPlaceholder({ stream, onStop, retry, onRetryNow, onCanc
                 <RetryStatus retry={retry} onRetryNow={onRetryNow} onCancelRetry={onCancelRetry} />
               </div>
             ) : (
-              <button
-                onClick={onStop}
-                title={t('chat.input.stop')}
-                className="rounded p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-              >
-                <Icon name="stop" className="size-3.5" />
-              </button>
+              <>
+                {liveSegments.length > 0 && (
+                  <StatsPopoverButton>
+                    <div
+                      data-testid="stream-live-stats"
+                      className="flex flex-nowrap items-center gap-x-1.5 whitespace-nowrap text-[0.6875rem] text-foreground tabular-nums"
+                    >
+                      {liveSegments.map((segment, i) => (
+                        <Fragment key={i}>
+                          {i > 0 && <span aria-hidden="true">·</span>}
+                          <span>{segment}</span>
+                        </Fragment>
+                      ))}
+                    </div>
+                  </StatsPopoverButton>
+                )}
+                <button
+                  onClick={onStop}
+                  title={t('chat.input.stop')}
+                  className="rounded p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                >
+                  <Icon name="stop" className="size-3.5" />
+                </button>
+              </>
             )}
           </div>
         )}
