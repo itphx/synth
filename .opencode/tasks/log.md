@@ -760,3 +760,13 @@
 - **Проверки:** Fleet GitRepo `synth` (fleet-local) синхронизирован на `3649d6f` (~40с), bundle Ready 1/1; `synth-backend` и `synth-ui` раскатаны на 0.7.1, новые поды 1/1 Running, старые удалены; `https://synth.k3s.itphx.loc/` → HTTP 200, `/health` → `{"status":"healthy","version":"0.7.1"}`, `index.html` → `cache-control: no-cache`, отдаётся ассет `index-DmwzjNcL.js` свежей сборки; логи backend — штатные `GET /health 200`.
 - **Замечания:** push ветки/тега `synth` в gitverse origin и npm-публикация не выполнялись (не входили в задачу). `synth-backend` перезапущен — сессии на PVC сохранены.
 
+## 2026-09-23 (продолжение) — выкат 0.7.2 на test (гибрид: reasoning + попап)
+- **Задача:** «Выкати на test» — два незакоммиченных фикса (reasoning в LLM Proxy гибрида + «убегающий» попап создания сессии). Решение пользователя: 0.7.2, посторонние AD-073/074 не трогать.
+- **Тип:** build + deploy (release) · **Исполнитель:** @orchestrator (ops) · **Результат:** PASS.
+- **Коммиты (ветка feat/ad-071-mcp-tools-scope):** `a1a8408 fix(backend): reasoning стримится по чанкам в LLM Proxy гибрида` (3 файла); `f9a811c fix(ui): не терять якорь попапа создания сессии при наведении` (2 файла); `9ee2a88 chore: bump version to v0.7.2`.
+- **Сборка:** `./scripts/build.sh` — shared → core → ui (vite, `index-Ctzk1c2F.js`) → synth; версия 0.7.2.
+- **Docker:** запушены в Gitea `git.itphx.ru/itphx/synth-backend:0.7.2` (digest `sha256:3e01b666…`, 291 МБ) и `git.itphx.ru/itphx/synth-ui:0.7.2` (digest `sha256:a897879a…`, 116 МБ).
+- **Деплой:** `synth-deploy/values.yaml` теги 0.7.1→0.7.2; `helm lint` OK; коммит `578bfd2 release: bump synth-ui/backend images to v0.7.2`, push `main` (`3649d6f..578bfd2`) → Fleet.
+- **Проверки:** Fleet GitRepo синхронизирован на `578bfd2` (~30с), bundle Ready 1/1; оба деплоя на 0.7.2, новые поды 1/1 Running, старые удалены; `https://synth.k3s.itphx.loc/` → HTTP 200, `/health` → `{"status":"healthy","version":"0.7.2"}`, `index.html` → `cache-control: no-cache`, отдаётся `index-Ctzk1c2F.js` (совпадает с локальной сборкой).
+- **Замечания:** посторонние `AGENTS.md`, `docs/arch_decisions/README.md`, untracked `ad-073-*`/`ad-074-*` намеренно не коммитились. npm-публикация и push ветки/тега `synth` в gitverse origin не выполнялись. `synth-backend` перезапущен — сессии на PVC сохранены.
+
