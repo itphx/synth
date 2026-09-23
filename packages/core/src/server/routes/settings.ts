@@ -6,6 +6,7 @@ import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/
 import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig } from '@itphx/synth-shared';
 import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, ToolCapability } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../../engine/permission/derive.js';
+import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
 
 /** AD-072 Ф2: эффективные дефолты LLM Gateway (config.yaml без runtime). */
 const DEFAULT_LLM_GATEWAY: LlmGatewayRuntimeSettings = {
@@ -85,11 +86,23 @@ export interface SettingsRoutesDeps {
   knownTools?: () => Array<{ name: string; capabilities: string[] }>;
   /** Store override политики защищённых путей ({dataDir}/security/protected-paths.json). */
   protectedPathsStore?: ProtectedPathsStore;
+  /** Агент по умолчанию из config.yaml (если runtime не задан); иначе — `DEFAULT_AGENT_ID`. */
+  fallbackDefaultAgent?: string;
+  /** Вызывается после успешного PUT /default-agent (live-применение). */
+  onDefaultAgentChange?: (id: string) => void | Promise<void>;
 }
 
 /** AD-071 §2.3: валидна ли политика включения инструментов. */
 function isValidToolsPolicy(value: unknown): value is ToolsPolicy {
   return typeof value === 'string' && (TOOLS_POLICIES as readonly string[]).includes(value);
+}
+
+/** Формат id агента (совпадает с валидацией в роутах /agents). */
+const AGENT_ID_REGEX = /^[a-z0-9_-]+$/;
+
+/** Валиден ли id агента: непустая строка латиницы/цифр/дефиса/подчёркивания. */
+function isValidAgentId(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && AGENT_ID_REGEX.test(value.trim());
 }
 
 /** AD-071 §2.3.1: валидна ли политика сетевого доступа MCP ({ mode, list }). */
@@ -515,6 +528,49 @@ export function createSettingsRoutes(
     await deps.settingsStore.clearMcpNetworkPolicy();
     await deps.onMcpNetworkPolicyChange?.(defaults);
     return c.json({ status: 'restored', policy: defaults, isOverridden: false, defaults });
+  });
+
+  /**
+   * GET/PUT/DELETE /api/v2/settings/default-agent — агент по умолчанию
+   * (админка «Агенты»): используется при создании сессии без `settings.agentRole`
+   * и как `default_agent` в ответах `/api/v2/agents`. Runtime-значение
+   * ({dataDir}/settings.json) приоритетнее `fallbackDefaultAgent`
+   * (config.yaml), иначе — `DEFAULT_AGENT_ID` ('assistant' при первом развёртывании).
+   */
+  app.get('/default-agent', auth.requireAuth, async (c) => {
+    const runtime = await deps.settingsStore.getDefaultAgent();
+    const fallback = deps.fallbackDefaultAgent ?? DEFAULT_AGENT_ID;
+    return c.json({
+      defaultAgent: runtime ?? fallback,
+      isOverridden: runtime !== undefined,
+      defaults: fallback,
+    });
+  });
+
+  app.put('/default-agent', auth.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const raw = (body as { defaultAgent?: unknown }).defaultAgent;
+    const defaultAgent = typeof raw === 'string' ? raw.trim() : raw;
+
+    if (!isValidAgentId(defaultAgent)) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'defaultAgent: ожидается непустой id агента (латиница, цифры, дефис, подчёркивание)',
+        },
+      }, 400);
+    }
+
+    await deps.settingsStore.setDefaultAgent(defaultAgent);
+    await deps.onDefaultAgentChange?.(defaultAgent);
+    return c.json({ defaultAgent });
+  });
+
+  app.delete('/default-agent', auth.requireAuth, async (c) => {
+    const fallback = deps.fallbackDefaultAgent ?? DEFAULT_AGENT_ID;
+    await deps.settingsStore.clearDefaultAgent();
+    await deps.onDefaultAgentChange?.(fallback);
+    return c.json({ status: 'restored', defaultAgent: fallback, isOverridden: false, defaults: fallback });
   });
 
   /**

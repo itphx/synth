@@ -13,6 +13,7 @@ import type { ProviderConfig, ModelConfig, SummarizationConfig } from '@itphx/sy
 import type { Message } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
 import { mergeSecurityConfig, RuntimeSettingsStore } from '../storage/runtime-settings.js';
+import { DEFAULT_AGENT_ID } from '../engine/agents/index.js';
 
 export interface SingleChatOptions {
   message: string;
@@ -146,7 +147,8 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     settings: {
       provider: providerName,
       model: modelName,
-      agentRole: options.agent || 'developer',
+      // Эффективный дефолт: runtime-настройка («Агенты») ?? DEFAULT_AGENT_ID.
+      agentRole: options.agent || ((await settingsStore.getDefaultAgent()) ?? DEFAULT_AGENT_ID),
     },
   });
   session.userId = 'local';

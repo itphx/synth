@@ -28,6 +28,7 @@ import {
   SecretPatternStore,
   RateLimiter,
   DictionaryStore, createDictionaryRoutes,
+  DEFAULT_AGENT_ID,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
@@ -210,6 +211,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
 
     // Runtime-настройки (AD-005): workspace/mcp из {dataDir}/settings.json (переживают рестарт)
     const settingsStore = new RuntimeSettingsStore({ dataDir });
+    // Агент по умолчанию (админка «Агенты»): runtime-настройка поверх DEFAULT_AGENT_ID.
+    const getDefaultAgentId = async (): Promise<string> =>
+      (await settingsStore.getDefaultAgent()) ?? DEFAULT_AGENT_ID;
 
     // Умолчания оформления (AD-005): {dataDir}/defaults.json (переживают рестарт)
     const defaultsStore = new DefaultsStore({ dataDir });
@@ -482,7 +486,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, backendConfig.workspacesRoot, mcpManager));
 
     // Sessions routes
-    app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore, profilesStore));
+    app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore, profilesStore, getDefaultAgentId));
 
     // Messages routes
     app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager, contextOptimizer, eventBus));
@@ -500,7 +504,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, modelCache, providerCache));
 
     // Agents routes
-    app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, sessionManager, agentRegistry));
+    app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, sessionManager, agentRegistry, getDefaultAgentId));
 
     // Context routes
     app.route('/api/v2/context', createContextRoutes(auth, contextConfig));
@@ -560,6 +564,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/settings', createSettingsRoutes(auth as unknown as CoreAuthKit, {
       settingsStore,
       fallbackWorkspace: join(dataDir, 'workspaces', 'default'),
+      // Агент по умолчанию при первом развёртывании (config.yaml не задаёт — DEFAULT_AGENT_ID).
+      fallbackDefaultAgent: DEFAULT_AGENT_ID,
       // AD-072 Ф2: дефолты из config.yaml (без runtime) — для GET/DELETE-сброса к умолчанию.
       fallbackLlmGateway: {
         enabled: backendConfig.synth.llmGateway.enabled,

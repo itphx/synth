@@ -132,6 +132,43 @@ describe('RuntimeSettingsStore.clear* (AD-072 Ф2)', () => {
   });
 });
 
+describe('RuntimeSettingsStore.defaultAgent', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-runtime-settings-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('getDefaultAgent возвращает undefined, если не задан', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect(await store.getDefaultAgent()).toBeUndefined();
+  });
+
+  it('set/getDefaultAgent сохраняет и читает значение; переживает рестарт', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setDefaultAgent('assistant');
+    expect(await store.getDefaultAgent()).toBe('assistant');
+
+    const restarted = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect(await restarted.getDefaultAgent()).toBe('assistant');
+  });
+
+  it('clearDefaultAgent удаляет только defaultAgent', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setDefaultAgent('assistant');
+    await store.setToolsPolicy('available');
+    await store.clearDefaultAgent();
+
+    const settings = await store.load();
+    expect(settings.defaultAgent).toBeUndefined();
+    expect(settings.toolsPolicy).toBe('available');
+  });
+});
+
 describe('mergeMcpNetworkPolicy (AD-071 §2.3.1)', () => {
   const config = { mode: 'deny' as const, list: ['10.0.0.0/8'] };
   const runtime = { mode: 'allow' as const, list: ['192.168.0.0/16'] };

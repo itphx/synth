@@ -64,6 +64,8 @@ tmp/                   # Временные файлы. Использовать
 @itphx/synth   ←  тонкая CLI-обёртка: core + ui + shared (npm-потребители)
 ```
 
+**Переиспользуемые роуты.** Общая логика HTTP-роутов живёт в core-фабриках (`createSettingsRoutes`, `createDictionaryRoutes`, `createProviderRoutes`, `createModelRoutes`, `createSessionRoutes`); backend монтирует их и добавляет только RBAC/rate-limit/специфику через `opts` (guard'ы, `messages` для i18n, хуки). Дублировать хендлеры в backend нельзя.
+
 ## Команды
 
 Из корня `synth/`:
@@ -140,6 +142,7 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ aut
 | `GET/PUT /api/v2/settings/tools-policy` | Политика встроенных инструментов (`consistency`/`available`/`auto`) |
 | `GET/PUT /api/v2/settings/mcp-policy` | Политика MCP-инструментов (`consistency`/`available`/`auto`) |
 | `GET/PUT /api/v2/settings/tools-disabled` | Instance-wide отключение встроенных инструментов (группы/тулы; `runtime` неотключаем) |
+| `GET/PUT/DELETE /api/v2/settings/default-agent` | Агент по умолчанию для новых сессий (fallback `assistant`; UI — раздел «Агенты») |
 | `GET/PUT /api/v2/mcp/registry` | Реестр MCP-серверов (stdio — только ADMIN) |
 | `GET/PUT /api/v2/projects/:id/mcp` и `GET/PUT /api/v2/sessions/:id/mcp` | Уровни/скоуп MCP |
 | `POST /api/v2/mcp/probe` | Проверка MCP-сервера без регистрации инструментов |
@@ -177,15 +180,9 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ aut
 
 ### Тех. долг
 
-Известные архитектурные долги — не блокируют работу, закрываются отдельными задачами. Запись ведётся здесь; при закрытии пункт удаляется. Детали задач — `.opencode/tasks/log.md`.
+Известные архитектурные долги — не блокируют работу, закрываются отдельными задачами. Запись ведётся здесь; при закрытии пункт удаляется; детали задач и закрытые пункты — `.opencode/tasks/log.md`.
 
-**ТД-1. Дублирование роутеров backend ↔ core (`providers` / `models` / `sessions`).**
-- **Что:** `packages/backend/src/routes/{providers,models,sessions}.ts` во многом форки `packages/core/src/server/routes/*`: те же `GET/POST/DELETE` провайдеров и моделей, `GET /:id/status`, `GET /:id/prompt`, `GET /:id/stats`, `POST /:id/prompt`. `backend/routes/sessions.ts` (~930 стр.) и `core/server/routes/sessions.ts` (~680 стр.) расходятся в основном RBAC-гардами и backend-спецификой (export/import, hybrid, optimization, debug).
-- **Уже устранено (2026-09-23):** утилиты `isCurrency`/`parseCurrency`/`hasPriceInput`, `renderIcon`/`getFaviconUrl`, `createResolveAuthorName` вынесены в `@itphx/synth-shared`/core и переиспользуются; устаревшая копия `backend/lib/serialize.ts` удалена — обе стороны используют core-сериализатор (`todos`/`origin`/`parts`/`id` больше не теряются).
-- **Почему долг:** изменение контракта провайдеров/моделей/сессий приходится вносить дважды; уже был реальный дрейф (см. сериализацию).
-- **Риски:** RBAC (`requireAuth` vs `requireAdmin`), OIDC, backend-специфика, публичные контракты `docs/API_V2.md`.
-- **Предлагаемый подход:** общие хендлеры — в core фабриками с параметризацией гварда: `registerProvidersRoutes(app, deps, { writeGuard })`, `registerModelsRoutes(...)`, `registerSessionCoreRoutes(...)`. Backend монтирует их и оставляет только специфичные роуты. Образец — `createSettingsRoutes`/`createDictionaryRoutes`, уже переиспользуемые backend'ом.
-- **Критерий готовности:** backend-роуты — тонкие обёртки над core-фабриками; RBAC неизменен (тесты 401/403); `pnpm typecheck && pnpm lint && pnpm test && pnpm build` зелёные; контракты `docs/API_V2.md` не изменились.
+Актуальных задокументированных долгов нет.
 
 ### Unit-тесты
 

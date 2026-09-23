@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSessionRoutes } from './sessions.js';
-import { SessionManager, EventBus, FileStore, FileProfileStore } from '../../index.js';
+import { SessionManager, EventBus, FileStore, FileProfileStore, DEFAULT_AGENT_ID } from '../../index.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import type { AuthKit } from '../../auth/local.js';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
@@ -50,7 +50,11 @@ function createMockOrchestrator() {
   };
 }
 
-function createTestApp(tmpDir: string, profilesStore?: ProfileStore) {
+function createTestApp(
+  tmpDir: string,
+  profilesStore?: ProfileStore,
+  opts?: { resolveDefaultAgent?: () => string | Promise<string> },
+) {
   const app = new Hono();
   const fileStore = new FileStore({ dataDir: tmpDir });
   const sessionManager = new SessionManager(fileStore);
@@ -61,14 +65,16 @@ function createTestApp(tmpDir: string, profilesStore?: ProfileStore) {
 
   const sessionRoutes = createSessionRoutes(
     createMockAuth(),
-    sessionManager,
-    eventBus,
-    queueManager as any,
-    orchestrator.createProcessMessage(),
-    orchestrator as any,
-    undefined,
-    projectStore,
-    profilesStore,
+    {
+      sessionManager,
+      eventBus,
+      queueManager: queueManager as any,
+      processMessage: orchestrator.createProcessMessage(),
+      orchestrator: orchestrator as any,
+      projectStore,
+      profilesStore,
+    },
+    opts ?? {},
   );
 
   app.route('/api/v2/sessions', sessionRoutes);
@@ -341,6 +347,47 @@ describe('Session API Routes (PATCH mode)', () => {
       expect(res.status).toBe(404);
       const body: any = await res.json();
       expect(body.error.code).toBe('NOT_FOUND');
+    });
+  });
+
+  describe('POST /api/v2/sessions — агент по умолчанию', () => {
+    it('без settings.agentRole берёт значение из resolveDefaultAgent', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir, undefined, { resolveDefaultAgent: () => 'analyst' });
+      const res = await app.request('/api/v2/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'S' }),
+      });
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      const stored = await sessionManager.getSession(body.id);
+      expect(stored?.settings.agentRole).toBe('analyst');
+    });
+
+    it('явный settings.agentRole приоритетнее resolveDefaultAgent', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir, undefined, { resolveDefaultAgent: () => 'analyst' });
+      const res = await app.request('/api/v2/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'S', settings: { agentRole: 'developer' } }),
+      });
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      const stored = await sessionManager.getSession(body.id);
+      expect(stored?.settings.agentRole).toBe('developer');
+    });
+
+    it('без resolveDefaultAgent использует DEFAULT_AGENT_ID', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const res = await app.request('/api/v2/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'S' }),
+      });
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      const stored = await sessionManager.getSession(body.id);
+      expect(stored?.settings.agentRole).toBe(DEFAULT_AGENT_ID);
     });
   });
 

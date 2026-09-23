@@ -16,6 +16,7 @@ interface AgentModeSelectorProps {
 export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
   const agents = useAgentsStore(s => s.agents)
   const activeAgentId = useAgentsStore(s => s.activeAgentId)
+  const defaultAgentId = useAgentsStore(s => s.defaultAgentId)
   const setActiveAgentId = useAgentsStore(s => s.setActiveAgentId)
   const loadAgents = useAgentsStore(s => s.loadAgents)
   const { t } = useI18n()
@@ -30,7 +31,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
   }, [sessionId])
 
   const activeAgent = agents.find((a) => a.id === activeAgentId)
-  const defaultAgent = agents.find((a) => a.id === 'assistant')
+  const defaultAgent = agents.find((a) => a.id === defaultAgentId)
 
   const sortedAgents = useMemo(() => {
     const list = [...agents]
@@ -117,7 +118,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
                 <DropdownMenu.Item
                   onClick={() => {
                     setActiveAgentId(defaultAgent.id)
-                    synthApi.updateSession(sessionId, { settings: { agent_role: defaultAgent.id } }).catch(() => {})
+                    synthApi.updateSession(sessionId, { settings: { agentRole: defaultAgent.id } }).catch(() => {})
                     setOpen(false)
                     setSearchQuery('')
                   }}
@@ -145,7 +146,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
                   onClick={() => {
                     if (disabled) return
                     setActiveAgentId(agent.id)
-                    synthApi.updateSession(sessionId, { settings: { agent_role: agent.id } }).catch(() => {})
+                    synthApi.updateSession(sessionId, { settings: { agentRole: agent.id } }).catch(() => {})
                     setOpen(false)
                     setSearchQuery('')
                   }}

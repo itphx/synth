@@ -1146,6 +1146,8 @@ export const dict = {
 
   // Agents
   'admin.agents.title': 'Agents',
+  'admin.agents.defaultAgent.title': 'Default agent',
+  'admin.agents.defaultAgent.description': 'Used when a session is created without an explicitly selected agent.',
   'admin.agents.count': '{count, plural, one {# agent} other {# agents}}',
   'admin.agents.add': 'Add',
   'admin.agents.new': 'New agent',

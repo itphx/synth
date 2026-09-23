@@ -5,6 +5,7 @@ import React from 'react'
 
 const apiMock = vi.hoisted(() => ({
   getAllAgents: vi.fn(),
+  getAgents: vi.fn(),
   getProviders: vi.fn(async () => ({ providers: [], default_provider: '' })),
   getModels: vi.fn(async () => []),
   getContextFiles: vi.fn(async () => ({ files: [] })),
@@ -12,6 +13,9 @@ const apiMock = vi.hoisted(() => ({
   saveAgent: vi.fn(async () => ({})),
   toggleAgent: vi.fn(async () => undefined),
   deleteAgent: vi.fn(async () => undefined),
+  getDefaultAgentInfo: vi.fn(async () => ({ defaultAgent: 'assistant', isOverridden: false, defaults: 'assistant' })),
+  setDefaultAgent: vi.fn(async (id: string) => ({ defaultAgent: id })),
+  resetDefaultAgent: vi.fn(async () => ({ status: 'restored', defaultAgent: 'assistant', isOverridden: false, defaults: 'assistant' })),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: apiMock }))
@@ -61,6 +65,19 @@ async function renderPanel(): Promise<HTMLElement> {
   })
   await act(async () => {})
   return container
+}
+
+/** Открывает Base UI select и кликает опцию по подписи (опции рендерятся в portal). */
+async function selectOption(trigger: HTMLElement, label: string): Promise<void> {
+  await act(async () => {
+    trigger.click()
+  })
+  const allOptions = [...document.body.querySelectorAll('[role="option"]')]
+  const option = allOptions.find((o) => o.textContent?.trim().startsWith(label)) as HTMLElement | undefined
+  expect(option, `option "${label}"`).toBeTruthy()
+  await act(async () => {
+    option!.click()
+  })
 }
 
 afterEach(async () => {
@@ -122,5 +139,99 @@ describe('AgentsPanel — фильтр на Kit Tabs (AD-072)', () => {
     })
     const container = await renderPanel()
     expect(container.querySelector('[role="tablist"]')).toBeNull()
+  })
+})
+
+describe('AgentsPanel — агент по умолчанию (AD-072)', () => {
+  const AGENTS = [
+    agent('main', ['primary']),
+    agent('other', ['primary']),
+    agent('sub', ['subagent']),
+  ]
+
+  beforeEach(() => {
+    apiMock.getAllAgents.mockResolvedValue({ agents: AGENTS, default_agent: null })
+    apiMock.getAgents.mockResolvedValue({ agents: AGENTS, default_agent: 'main' })
+    apiMock.setDefaultAgent.mockResolvedValue({ defaultAgent: 'other' })
+    apiMock.resetDefaultAgent.mockResolvedValue({
+      status: 'restored', defaultAgent: 'assistant', isOverridden: false, defaults: 'assistant',
+    })
+    // Переопределено: текущий 'main', дефолт 'assistant' → Reset активен.
+    apiMock.getDefaultAgentInfo.mockResolvedValue({
+      defaultAgent: 'main', isOverridden: true, defaults: 'assistant',
+    })
+  })
+
+  it('рендерит контрол; без изменений Save/Cancel неактивны', async () => {
+    const container = await renderPanel()
+
+    expect(container.textContent).toContain('Default agent')
+    expect(container.querySelector('[role="combobox"]')).not.toBeNull()
+
+    const save = container.querySelector('[data-testid="default-agent-save"]') as HTMLButtonElement
+    const cancel = container.querySelector('[data-testid="default-agent-cancel"]') as HTMLButtonElement
+    expect(save).not.toBeNull()
+    expect(cancel).not.toBeNull()
+    expect(save.disabled).toBe(true)
+    expect(cancel.disabled).toBe(true)
+  })
+
+  it('выбор агента + Save вызывает setDefaultAgent(id) и обновляет список', async () => {
+    const container = await renderPanel()
+
+    const trigger = container.querySelector('[role="combobox"]') as HTMLElement
+    await selectOption(trigger, 'other')
+
+    const save = container.querySelector('[data-testid="default-agent-save"]') as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+
+    await act(async () => {
+      save.click()
+    })
+    await act(async () => {})
+
+    expect(apiMock.setDefaultAgent).toHaveBeenCalledWith('other')
+    expect(apiMock.getAgents).toHaveBeenCalled()
+  })
+
+  it('Reset вызывает resetDefaultAgent(), когда значение переопределено', async () => {
+    const container = await renderPanel()
+
+    const reset = container.querySelector('[data-testid="default-agent-reset"]') as HTMLButtonElement
+    expect(reset).not.toBeNull()
+    expect(reset.disabled).toBe(false)
+
+    await act(async () => {
+      reset.click()
+    })
+    await act(async () => {})
+
+    expect(apiMock.resetDefaultAgent).toHaveBeenCalledTimes(1)
+    expect(apiMock.getAgents).toHaveBeenCalled()
+  })
+
+  it('ошибка загрузки настройки не ломает панель', async () => {
+    apiMock.getDefaultAgentInfo.mockRejectedValueOnce(new Error('boom'))
+    const container = await renderPanel()
+
+    // Секция настройки не рендерится, но список агентов на месте.
+    expect(container.querySelector('[data-testid="default-agent-save"]')).toBeNull()
+    expect(container.textContent).toContain('main')
+  })
+
+  it('при дефолтном значении Reset неактивен и серый', async () => {
+    apiMock.getAllAgents.mockResolvedValue({
+      agents: [agent('assistant', ['primary'])],
+      default_agent: null,
+    })
+    apiMock.getDefaultAgentInfo.mockResolvedValue({
+      defaultAgent: 'assistant', isOverridden: false, defaults: 'assistant',
+    })
+    const container = await renderPanel()
+
+    const reset = container.querySelector('[data-testid="default-agent-reset"]') as HTMLButtonElement
+    expect(reset).not.toBeNull()
+    expect(reset.disabled).toBe(true)
+    expect(reset.className).toContain('border-muted-foreground')
   })
 })

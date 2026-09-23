@@ -126,7 +126,7 @@ export function ChatTab({ tab }: ChatTabProps) {
             const { setActiveAgentId } = useAgentsStore.getState()
             if (typeof s.provider === 'string') setSelectedProvider(s.provider)
             if (typeof s.model === 'string') setSelectedModel(s.model)
-            if (typeof s.agent_role === 'string') setActiveAgentId(s.agent_role)
+            if (typeof s.agentRole === 'string') setActiveAgentId(s.agentRole)
           }
           const sessData = session as unknown as Record<string, unknown>
           setSessionOrigin((sessData.session_origin as string) || null)

@@ -34,6 +34,29 @@ async function makeApp(tmpDir: string) {
   return { app, modelStore, providerStore, modelCache, providerCache };
 }
 
+/**
+ * Mock-AuthKit для RBAC-тестов: `requireAuth` пропускает, `requireAdmin`
+ * отклоняет 403. Фиксирует, что мутации и синхронизация закрыты admin-guard'ом
+ * (ТД-1, фаза A).
+ */
+function createRbacKit() {
+  return {
+    requireAuth: async (_c: Context, next: Next) => { await next(); },
+    requireAdmin: async (c: Context) =>
+      c.json({ error: { code: 'FORBIDDEN', message: 'Access denied' } }, 403),
+  };
+}
+
+async function makeRbacApp(tmpDir: string) {
+  const modelStore = new JsonStore<ModelConfig>({ dataDir: tmpDir, subdir: 'models' });
+  const providerStore = new JsonStore<ProviderConfig>({ dataDir: tmpDir, subdir: 'providers' });
+  const modelCache = new Map<string, ModelConfig>();
+  const providerCache = new Map<string, ProviderConfig>();
+  const app = new Hono();
+  app.route(BASE, createModelRoutes(createRbacKit() as never, modelStore, providerStore, modelCache, providerCache));
+  return { app, modelStore, providerStore, modelCache, providerCache };
+}
+
 function postJSON(body: unknown): RequestInit {
   return {
     method: 'POST',
@@ -467,5 +490,39 @@ describe('routes/models', () => {
       expect(saved?.priceSource).toBe('api');
       expect(saved?.enabled).toBe(false);
     });
+  });
+});
+
+describe('routes/models: RBAC (мутации/синхронизация — только ADMIN)', () => {
+  let tmpDir: string;
+  let stores: Awaited<ReturnType<typeof makeRbacApp>>;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-models-rbac-test-'));
+    stores = await makeRbacApp(tmpDir);
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('GET / — requireAuth пропускает, 200', async () => {
+    const res = await stores.app.request(BASE);
+    expect(res.status).toBe(200);
+  });
+
+  it('POST / — 403 (writeGuard = requireAdmin)', async () => {
+    const res = await stores.app.request(BASE, postJSON({ id: 'p1/m1', name: 'm1', provider: 'p1' }));
+    expect(res.status).toBe(403);
+  });
+
+  it('DELETE /:id — 403 (writeGuard = requireAdmin)', async () => {
+    const res = await stores.app.request(`${BASE}/p1%2Fm1`, { method: 'DELETE' });
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /fetch — 403 (requireAdmin)', async () => {
+    const res = await stores.app.request(`${BASE}/fetch?provider=p1`, { method: 'POST' });
+    expect(res.status).toBe(403);
   });
 });

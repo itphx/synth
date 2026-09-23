@@ -44,7 +44,7 @@ const AGENT_FIELDS = (a: AgentDefinition) => ({
   is_overridden: a.isOverridden,
 });
 
-export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefinition>, sessionManager?: SessionManager, agentRegistry?: AgentRegistry): Hono {
+export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefinition>, sessionManager?: SessionManager, agentRegistry?: AgentRegistry, getDefaultAgentId?: () => string | Promise<string>): Hono {
   const app = new Hono();
 
   async function resolveAgents(): Promise<AgentDefinition[]> {
@@ -66,7 +66,7 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
     const agents = await resolveAgents();
     return c.json({
       agents: agents.map(AGENT_FIELDS),
-      default_agent: DEFAULT_AGENT_ID,
+      default_agent: (await getDefaultAgentId?.()) ?? DEFAULT_AGENT_ID,
     });
   });
 
@@ -78,7 +78,7 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
       agents: agents
         .filter((a) => normalizeAgentModes(a.agentMode).includes('primary'))
         .map(AGENT_FIELDS),
-      default_agent: DEFAULT_AGENT_ID,
+      default_agent: (await getDefaultAgentId?.()) ?? DEFAULT_AGENT_ID,
     });
   });
 

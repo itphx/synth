@@ -48,6 +48,8 @@ export interface RuntimeSettings {
    * usage.inputTokens). Используется для `estTokens`; отсутствие — дефолт 4.
    */
   tokenRatios?: Record<string, number>;
+  /** Агент по умолчанию (админка «Агенты»); отсутствие — `DEFAULT_AGENT_ID`. */
+  defaultAgent?: string;
 }
 
 /**
@@ -305,6 +307,24 @@ export class RuntimeSettingsStore {
     await this._update((current) => {
       const next = { ...current };
       delete next.mcpNetworkPolicy;
+      return next;
+    });
+  }
+
+  /** Агент по умолчанию (админка «Агенты»), undefined — не задан. */
+  async getDefaultAgent(): Promise<string | undefined> {
+    const settings = await this.load();
+    return settings.defaultAgent;
+  }
+
+  async setDefaultAgent(id: string): Promise<void> {
+    await this._update((current) => ({ ...current, defaultAgent: id }));
+  }
+
+  async clearDefaultAgent(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.defaultAgent;
       return next;
     });
   }

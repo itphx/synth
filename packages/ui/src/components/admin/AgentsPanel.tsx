@@ -9,6 +9,7 @@ import { SelectContent, SelectItem } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { confirm } from '@/lib/confirm'
+import { useAgentsStore } from '@/stores/agentsStore'
 import {
   NumberField,
   SettingsActions,
@@ -20,6 +21,7 @@ import {
   Tabs,
   TextArea,
   TextField,
+  useSettingsDraft,
 } from '../ui/settings'
 
 const CAP_KEYS = [
@@ -112,7 +114,42 @@ export const AgentsPanel = () => {
   const [models, setModels] = useState<{ provider: string; models: { id: string; name: string }[] }[]>([])
   const [contextFiles, setContextFiles] = useState<string[]>([])
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
+  const [defaultAgentInfo, setDefaultAgentInfo] = useState<{
+    defaultAgent: string
+    isOverridden: boolean
+    defaults: string
+  } | null>(null)
   const formRef = useRef<HTMLDivElement>(null)
+
+  // Агент по умолчанию (AD-072): контрол в начале панели, сохранение через API.
+  const loadDefaultAgent = async () => {
+    try {
+      setDefaultAgentInfo(await synthApi.getDefaultAgentInfo())
+    } catch { /* тихо: панель не должна ломаться, если настройка недоступна */ }
+  }
+
+  const defaultAgentDraft = useSettingsDraft<string>({
+    value: defaultAgentInfo?.defaultAgent ?? null,
+    defaultValue: defaultAgentInfo?.defaults ?? null,
+    onSave: async (draft) => {
+      await synthApi.setDefaultAgent(draft)
+      await loadDefaultAgent()
+      // defaultAgentId в чате подхватывает новое значение с сервера.
+      await useAgentsStore.getState().loadAgents()
+      return draft
+    },
+  })
+
+  const handleResetDefaultAgent = async () => {
+    try {
+      const info = await synthApi.resetDefaultAgent()
+      setDefaultAgentInfo(info)
+      // Явно синхронизируем черновик: в dirty-состоянии хук сохраняет выбор
+      // пользователя, а Reset должен вернуть визуально дефолт.
+      defaultAgentDraft.setDraft(info.defaultAgent)
+      await useAgentsStore.getState().loadAgents()
+    } catch { /* ignore */ }
+  }
 
   const filteredAgents = useMemo(() => {
     if (filterMode === 'all') return agents
@@ -123,6 +160,12 @@ export const AgentsPanel = () => {
 
   const hasSubOrSystem = useMemo(
     () => agents.some((a) => a.agent_mode?.includes('subagent') || a.agent_mode?.includes('system')),
+    [agents],
+  )
+
+  // Primary-агенты — те же, что в фильтре чата (agent_mode == null || includes('primary')).
+  const primaryAgents = useMemo(
+    () => agents.filter((a) => a.agent_mode == null || a.agent_mode.includes('primary')),
     [agents],
   )
 
@@ -158,7 +201,7 @@ export const AgentsPanel = () => {
     } catch { /* ignore */ }
   }
 
-  useEffect(() => { load(); loadMeta() }, [])
+  useEffect(() => { load(); loadMeta(); loadDefaultAgent() }, [])
 
   const handleCreate = () => {
     setForm(emptyForm())
@@ -504,6 +547,38 @@ export const AgentsPanel = () => {
         </Button>
       }
     >
+      {defaultAgentInfo && (
+        <SettingsSection
+          title={t('admin.agents.defaultAgent.title')}
+          description={t('admin.agents.defaultAgent.description')}
+        >
+          <SelectField
+            value={defaultAgentDraft.draft ?? ''}
+            onValueChange={(value) => defaultAgentDraft.setDraft(value)}
+            ariaLabel={t('admin.agents.defaultAgent.title')}
+          >
+            <SelectContent>
+              {primaryAgents.map((a) => (
+                <SelectItem key={a.id} value={a.id}>{a.display_name}</SelectItem>
+              ))}
+            </SelectContent>
+          </SelectField>
+
+          <SettingsActions
+            onSave={defaultAgentDraft.save}
+            onCancel={defaultAgentDraft.revert}
+            onReset={handleResetDefaultAgent}
+            saving={defaultAgentDraft.saving}
+            saveDisabled={!defaultAgentDraft.dirty}
+            cancelDisabled={!defaultAgentDraft.dirty}
+            isDefault={defaultAgentDraft.isDefault}
+            saveTestId="default-agent-save"
+            cancelTestId="default-agent-cancel"
+            resetTestId="default-agent-reset"
+          />
+        </SettingsSection>
+      )}
+
       {hasSubOrSystem && (
         <SettingsSection>
           <Tabs

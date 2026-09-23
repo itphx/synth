@@ -72,15 +72,20 @@
 | Префикс | Источник |
 |---|---|
 | `/auth` | local `routes/auth.ts` (логин, сессии, профиль, avatar) |
-| `/api/v2/projects`, `/sessions`, `/messages`, `/queue`, `/fs`, `/providers`, `/models`, `/agents`, `/context`, `/users`, `/git`, `/mcp` | local `routes/*` |
-| `/api/v2/audit`, `/logs`, `/gateway` | local (LLM Gateway: аудит, логи, regex-паттерны) |
-| `/api/v2/llm` | local `routes/llm.ts` (LLM Proxy) |
+| `/api/v2/projects`, `/messages`, `/queue`, `/fs`, `/agents`, `/context`, `/users`, `/git`, `/mcp` | local `routes/*` |
+| `/api/v2/sessions` | `routes/sessions.ts` — обёртка над core `createSessionRoutes` + backend-only (MCP-скоуп, secrets, export/import, debug, optimization, notes) |
+| `/api/v2/providers` | `routes/providers.ts` — обёртка над core `createProviderRoutes` + `fetch-icon` |
+| `/api/v2/models` | `routes/models.ts` — обёртка над core `createModelRoutes` + `fetch` |
 | `/api/v2/settings` | core `createSettingsRoutes` |
 | `/api/v2/dictionaries` | core `createDictionaryRoutes` (writeGuard = `requireAdmin`) |
+| `/api/v2/audit`, `/logs`, `/gateway` | local (LLM Gateway: аудит, логи, regex-паттерны) |
+| `/api/v2/llm` | local `routes/llm.ts` (LLM Proxy) |
 | `/api/v2/admin/debug` | local `routes/debug.ts` |
 | `/api/v2/events` | inline SSE-хендлер |
 | `/health`, `/api/v2/health` | публичные, без auth |
 | `/api/v2/i18n/current`, `/api/v2/i18n/translations/ru\|en` | inline в `app.ts` |
+
+`/api/v2/{providers,models,sessions}` — тонкие обёртки над core-фабриками: общая логика в core, backend добавляет `requireAdmin`/`requirePermission`, rate limiter и backend-only роуты. Дублировать хендлеры core нельзя.
 
 ## Аутентификация
 
@@ -131,6 +136,7 @@
 - Не держать состояние сессий в памяти backend — источник истины на диске через core.
 - Не редактировать `packages/backend/config.yaml` ради настроек, кроме MCP: остальной конфиг идёт через `loadBackendConfig`.
 - Не добавлять роут в обход `createXxxRoutes` + `app.route(...)` — иначе он потеряется при переиспользовании core-фабрик.
+- Не дублировать хендлеры core-роутов в backend: `providers`/`models`/`sessions`/`settings`/`dictionaries` — тонкие обёртки над core-фабриками, здесь остаются только RBAC, rate limit и backend-only роуты.
 
 ## Куда смотреть
 

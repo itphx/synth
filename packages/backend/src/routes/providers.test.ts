@@ -25,6 +25,27 @@ async function makeApp(tmpDir: string) {
   return { app, providerStore, providerCache };
 }
 
+/**
+ * Mock-AuthKit для RBAC-тестов: `requireAuth` пропускает, `requireAdmin`
+ * отклоняет 403. Фиксирует, что мутации, детали и тест подключения закрыты
+ * admin-guard'ом (ТД-1, фаза A).
+ */
+function createRbacKit() {
+  return {
+    requireAuth: async (_c: Context, next: Next) => { await next(); },
+    requireAdmin: async (c: Context) =>
+      c.json({ error: { code: 'FORBIDDEN', message: 'Access denied' } }, 403),
+  };
+}
+
+async function makeRbacApp(tmpDir: string) {
+  const providerStore = new JsonStore<ProviderConfig>({ dataDir: tmpDir, subdir: 'providers' });
+  const providerCache = new Map<string, ProviderConfig>();
+  const app = new Hono();
+  app.route(BASE, createProviderRoutes(createRbacKit() as never, providerStore, providerCache));
+  return { app, providerStore, providerCache };
+}
+
 function postJSON(body: unknown): RequestInit {
   return {
     method: 'POST',
@@ -160,5 +181,78 @@ describe('routes/providers: валюта по умолчанию', () => {
     expect(saved?.currency).toBeUndefined();
     const provider = (await listProviders()).find((p) => p.name === 'p-clear')!;
     expect(provider.currency).toBeUndefined();
+  });
+});
+
+describe('routes/providers: RBAC (мутации/детали/тест — только ADMIN)', () => {
+  let tmpDir: string;
+  let stores: Awaited<ReturnType<typeof makeRbacApp>>;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-providers-rbac-test-'));
+    stores = await makeRbacApp(tmpDir);
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('GET / — requireAuth пропускает, 200', async () => {
+    const res = await stores.app.request(BASE);
+    expect(res.status).toBe(200);
+  });
+
+  it('POST / — 403 (writeGuard = requireAdmin)', async () => {
+    const res = await stores.app.request(BASE, postJSON({ name: 'p1', type: 'openai' }));
+    expect(res.status).toBe(403);
+  });
+
+  it('DELETE /:name — 403 (writeGuard = requireAdmin)', async () => {
+    const res = await stores.app.request(`${BASE}/p1`, { method: 'DELETE' });
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /:name — 403 (detailGuard = requireAdmin)', async () => {
+    const res = await stores.app.request(`${BASE}/p1`);
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /:name/test — 403 (testGuard = requireAdmin)', async () => {
+    const res = await stores.app.request(`${BASE}/p1/test`, { method: 'POST' });
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /fetch-icon — 403 (requireAdmin), guard раньше валидации тела', async () => {
+    const res = await stores.app.request(`${BASE}/fetch-icon`, postJSON({}));
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('routes/providers: rate limit на POST /:name/test (5/60с)', () => {
+  let tmpDir: string;
+  let stores: Awaited<ReturnType<typeof makeApp>>;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-providers-ratelimit-test-'));
+    stores = await makeApp(tmpDir);
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('6-й запрос → 429 RATE_LIMITED (guard и лимитер пропускают)', async () => {
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const res = await stores.app.request(`${BASE}/p1/test`, { method: 'POST' });
+      statuses.push(res.status);
+    }
+
+    expect(statuses.slice(0, 5)).not.toContain(429);
+    expect(statuses[5]).toBe(429);
+
+    const body = await stores.app.request(`${BASE}/p1/test`, { method: 'POST' });
+    expect(body.status).toBe(429);
+    expect((await body.json() as { error: { code: string } }).error.code).toBe('RATE_LIMITED');
   });
 });

@@ -32,6 +32,7 @@ export function createAgentRoutes(
   auth: AuthKit,
   agentStore: JsonStore<AgentDefinition>,
   agentRegistry?: AgentRegistry,
+  getDefaultAgentId?: () => string | Promise<string>,
 ): Hono {
   const app = new Hono();
   const BUILTIN_AGENTS = loadSystemAgentDefinitions();
@@ -55,7 +56,7 @@ export function createAgentRoutes(
   app.get('/all', auth.requireAuth, async (c) => {
     return c.json({
       agents: (await resolveAgents()).map(AGENT_FIELDS),
-      default_agent: DEFAULT_AGENT_ID,
+      default_agent: (await getDefaultAgentId?.()) ?? DEFAULT_AGENT_ID,
     });
   });
 
@@ -66,7 +67,7 @@ export function createAgentRoutes(
 
     return c.json({
       agents: agents.map(AGENT_FIELDS),
-      default_agent: DEFAULT_AGENT_ID,
+      default_agent: (await getDefaultAgentId?.()) ?? DEFAULT_AGENT_ID,
     });
   });
 

@@ -1255,6 +1255,30 @@ export const synthApi = {
     })
   },
 
+  // --- Агент по умолчанию (админка «Агенты») ---
+  /** GET /settings/default-agent — эффективный агент по умолчанию и источник значения. */
+  async getDefaultAgentInfo(): Promise<{ defaultAgent: string; isOverridden: boolean; defaults: string }> {
+    return fetchJSON<{ defaultAgent: string; isOverridden: boolean; defaults: string }>(
+      `${BASE_URL}/settings/default-agent`,
+    )
+  },
+
+  /** PUT /settings/default-agent — сохранить агента по умолчанию (live-применение). */
+  async setDefaultAgent(defaultAgent: string): Promise<{ defaultAgent: string }> {
+    return fetchJSON<{ defaultAgent: string }>(`${BASE_URL}/settings/default-agent`, {
+      method: 'PUT',
+      body: JSON.stringify({ defaultAgent }),
+    })
+  },
+
+  /** DELETE /settings/default-agent — сброс к дефолту (`DEFAULT_AGENT_ID`). */
+  async resetDefaultAgent(): Promise<{ status: string; defaultAgent: string; isOverridden: boolean; defaults: string }> {
+    return fetchJSON<{ status: string; defaultAgent: string; isOverridden: boolean; defaults: string }>(
+      `${BASE_URL}/settings/default-agent`,
+      { method: 'DELETE' },
+    )
+  },
+
   /** Полная карта обфускации сессии (AD-036): плейсхолдер → реальное значение. Доступ ADMIN/AUDITOR. */
   async getSessionSecrets(sessionId: string): Promise<SessionSecretsResponse> {
     return fetchJSON<SessionSecretsResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/secrets`)

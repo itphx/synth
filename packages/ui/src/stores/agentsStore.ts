@@ -20,7 +20,10 @@ export const useAgentsStore = create<AgentsStore>((set) => ({
     set({ loading: true })
     try {
       const { agents, default_agent } = await synthApi.getAgents(sessionId)
-      set({ agents, loading: false, activeAgentId: default_agent, defaultAgentId: default_agent })
+      // Не затираем уже выбранного агента: при перезагрузке списка (в т.ч. при
+      // перемонтировании ChatInput) сохраняем выбор; ChatTab выставляет агента
+      // из session.settings.agentRole при переключении сессии.
+      set((s) => ({ agents, loading: false, defaultAgentId: default_agent, activeAgentId: s.activeAgentId ?? default_agent }))
     } catch {
       set({ loading: false })
     }

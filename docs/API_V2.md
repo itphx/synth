@@ -419,6 +419,9 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/settings/mcp` | auth | Доступность MCP по режимам: `{servers, isOverridden, defaults:{}}` |
 | PUT | `/api/v2/settings/mcp` | auth | `{servers}` |
 | DELETE | `/api/v2/settings/mcp` | auth | Сброс runtime-доступности MCP; `{status:"restored", servers:{}, isOverridden:false, defaults:{}}` |
+| GET | `/api/v2/settings/default-agent` | auth | Агент по умолчанию (админка «Агенты»): `{defaultAgent, isOverridden, defaults}` (runtime из `settings.json`, иначе `DEFAULT_AGENT_ID` — `assistant` при первом развёртывании); используется при создании сессии без `settings.agentRole` и как `default_agent` в `/agents` |
+| PUT | `/api/v2/settings/default-agent` | auth | `{defaultAgent}` — id агента (`^[a-z0-9_-]+$`), persist; невалидный/пустой → 400 |
+| DELETE | `/api/v2/settings/default-agent` | auth | Сброс к дефолту; `{status:"restored", defaultAgent, isOverridden:false, defaults}` |
 | GET | `/api/v2/settings/tools-policy` | auth | Политика включения **встроенных** инструментов (AD-071 §2.3): `{toolsPolicy:"consistency"\|"available"\|"auto", isOverridden, defaults}` (runtime из `settings.json`, иначе `tools.policy` из config.yaml; дефолт `auto`) |
 | PUT | `/api/v2/settings/tools-policy` | auth | `{toolsPolicy}` (live-применение, persist); неизвестное значение → 400 |
 | DELETE | `/api/v2/settings/tools-policy` | auth | Сброс к config-дефолту; `{status:"restored", toolsPolicy, isOverridden:false, defaults}` + live-применение дефолта |

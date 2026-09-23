@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { createSettingsRoutes } from './settings.js';
 import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig } from '../../storage/runtime-settings.js';
 import type { LlmGatewayRuntimeSettings, SecurityRuntimeSettings } from '../../storage/runtime-settings.js';
+import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
 import type { AuthKit } from '../../auth/local.js';
 import type { LLMGatewayConfig } from '@itphx/synth-shared';
 
@@ -1067,6 +1068,138 @@ describe('Settings API Routes (workspace)', () => {
       expect(onToolsDisabledChange).toHaveBeenLastCalledWith(fallback);
       expect(await settingsStore.getToolsDisabled()).toBeUndefined();
     });
+  });
+});
+
+describe('Settings API Routes — default-agent (админка «Агенты»)', () => {
+  let tmpDir: string;
+  const FALLBACK = '/fallback/workspace';
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-settings-default-agent-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('GET возвращает DEFAULT_AGENT_ID, если ни runtime, ни config не заданы', async () => {
+    const { app } = createTestApp(tmpDir, FALLBACK);
+    const res = await app.request('/api/v2/settings/default-agent');
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body).toEqual({ defaultAgent: DEFAULT_AGENT_ID, isOverridden: false, defaults: DEFAULT_AGENT_ID });
+  });
+
+  it('GET возвращает fallback из deps, если runtime не задан', async () => {
+    const app = new Hono();
+    const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+      settingsStore,
+      fallbackWorkspace: FALLBACK,
+      fallbackDefaultAgent: 'analyst',
+    }));
+    const res = await app.request('/api/v2/settings/default-agent');
+    const body: any = await res.json();
+    expect(body).toEqual({ defaultAgent: 'analyst', isOverridden: false, defaults: 'analyst' });
+  });
+
+  it('PUT сохраняет и GET возвращает; переживает рестарт', async () => {
+    const { app } = createTestApp(tmpDir, FALLBACK);
+    const put = await app.request('/api/v2/settings/default-agent', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultAgent: 'developer' }),
+    });
+    expect(put.status).toBe(200);
+    const putBody: any = await put.json();
+    expect(putBody).toEqual({ defaultAgent: 'developer' });
+
+    const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect(await restartedStore.getDefaultAgent()).toBe('developer');
+
+    const getRes = await app.request('/api/v2/settings/default-agent');
+    const getBody: any = await getRes.json();
+    expect(getBody).toEqual({ defaultAgent: 'developer', isOverridden: true, defaults: DEFAULT_AGENT_ID });
+  });
+
+  it('PUT отклоняет пустой id', async () => {
+    const { app } = createTestApp(tmpDir, FALLBACK);
+    const res = await app.request('/api/v2/settings/default-agent', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultAgent: '   ' }),
+    });
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('PUT тримит id и сохраняет trimmed-значение', async () => {
+    const { app } = createTestApp(tmpDir, FALLBACK);
+    const res = await app.request('/api/v2/settings/default-agent', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultAgent: '  developer  ' }),
+    });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body).toEqual({ defaultAgent: 'developer' });
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect(await store.getDefaultAgent()).toBe('developer');
+  });
+
+  it('PUT отклоняет id с недопустимыми символами', async () => {
+    const { app } = createTestApp(tmpDir, FALLBACK);
+    const res = await app.request('/api/v2/settings/default-agent', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultAgent: 'Dev Agent!' }),
+    });
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('PUT вызывает onDefaultAgentChange (live-применение)', async () => {
+    const app = new Hono();
+    const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    const onDefaultAgentChange = vi.fn(async (_id: string) => {});
+    app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+      settingsStore,
+      fallbackWorkspace: FALLBACK,
+      onDefaultAgentChange,
+    }));
+
+    const res = await app.request('/api/v2/settings/default-agent', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultAgent: 'developer' }),
+    });
+    expect(res.status).toBe(200);
+    expect(onDefaultAgentChange).toHaveBeenCalledWith('developer');
+  });
+
+  it('DELETE сбрасывает к fallback и live-применяет его', async () => {
+    const app = new Hono();
+    const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    const onDefaultAgentChange = vi.fn(async (_id: string) => {});
+    app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+      settingsStore,
+      fallbackWorkspace: FALLBACK,
+      fallbackDefaultAgent: 'analyst',
+      onDefaultAgentChange,
+    }));
+    await app.request('/api/v2/settings/default-agent', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultAgent: 'developer' }),
+    });
+
+    const body: any = await (await app.request('/api/v2/settings/default-agent', { method: 'DELETE' })).json();
+    expect(body).toEqual({ status: 'restored', defaultAgent: 'analyst', isOverridden: false, defaults: 'analyst' });
+    expect(onDefaultAgentChange).toHaveBeenLastCalledWith('analyst');
+    expect(await settingsStore.getDefaultAgent()).toBeUndefined();
   });
 });
 

@@ -12,7 +12,7 @@ import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
-  SecretPatternStore, ProtectedPathsStore, DictionaryStore,
+  SecretPatternStore, ProtectedPathsStore, DictionaryStore, DEFAULT_AGENT_ID,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart, DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
@@ -604,6 +604,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   // Runtime-настройки (AD-005): workspace из {dataDir}/settings.json приоритетнее config/env
   const settingsStore = new RuntimeSettingsStore({ dataDir });
+  // Агент по умолчанию (админка «Агенты»): runtime-настройка поверх DEFAULT_AGENT_ID.
+  const getDefaultAgentId = async (): Promise<string> =>
+    (await settingsStore.getDefaultAgent()) ?? DEFAULT_AGENT_ID;
   const runtimeWorkspace = await settingsStore.getWorkspace();
   const defaultWorkingDir = runtimeWorkspace ?? config.defaultWorkingDir ?? join(dataDir, 'workspaces', 'default');
   await mkdir(defaultWorkingDir, { recursive: true });
@@ -766,9 +769,19 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   // Sessions
   app.route('/api/v2/sessions', createSessionRoutes(
-    auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore,
-    profilesStore,
-    () => connection.client,
+    auth,
+    {
+      sessionManager,
+      eventBus,
+      queueManager,
+      processMessage,
+      orchestrator,
+      contextOptimizer,
+      projectStore,
+      profilesStore,
+      getRemoteClient: () => connection.client,
+    },
+    { resolveDefaultAgent: getDefaultAgentId },
   ));
 
   // Projects
@@ -787,7 +800,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   ));
 
   // Providers
-  app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache, true));
+  app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache, { testEnabled: true }));
 
   // Models: remote-модели/провайдер читаются на каждый запрос (runtime-подключение).
   app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, modelCache, {
@@ -804,7 +817,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   }));
 
   // Agents
-  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry));
+  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId));
 
   // FS
   app.route('/api/v2/fs', createFsRoutes(auth, config.workspacesRoot, () => connection.client));
@@ -822,6 +835,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   app.route('/api/v2/settings', createSettingsRoutes(auth, {
     settingsStore,
     fallbackWorkspace: defaultWorkingDir,
+    // Агент по умолчанию при первом развёртывании (config.yaml не задаёт — DEFAULT_AGENT_ID).
+    fallbackDefaultAgent: DEFAULT_AGENT_ID,
     // AD-072 Ф2: дефолты из config.yaml (без runtime) — для GET/DELETE-сброса к умолчанию.
     fallbackLlmGateway: config.gatewayConfig ? {
       enabled: config.gatewayConfig.enabled,
