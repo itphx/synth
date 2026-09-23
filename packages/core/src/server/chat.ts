@@ -71,6 +71,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
       maxArgumentsLength: options.config.commands?.maxArgumentsLength ?? 10_000,
       maxRenderedBytes: options.config.commands?.maxRenderedBytes ?? 200_000,
       toolsets: options.config.skills?.toolsets ?? {},
+      trustedProjectDirs: options.config.skills?.trustedProjectDirs,
     },
     skillRuntime: skillService,
     skillSource: skillService,

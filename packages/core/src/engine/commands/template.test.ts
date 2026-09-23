@@ -15,6 +15,7 @@ function cmd(body: string): TemplateCommand {
     file: join(dir, 'test.md'),
     dir,
     origin: 'instance',
+    trusted: true,
     mtimeMs: 1,
   };
 }

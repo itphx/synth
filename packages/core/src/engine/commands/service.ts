@@ -64,6 +64,7 @@ export class CommandService implements CommandRuntime {
         dataDir: this._config.dataDir,
         projectWorkspace: o?.projectWorkspace,
         configPaths: this._config.commandsPaths,
+        trustedProjectDirs: this._config.trustedProjectDirs,
         home: this._config.home,
       }),
     });
@@ -280,17 +281,21 @@ export class CommandService implements CommandRuntime {
     const { commands: templates, diagnostics: templateDiags } = await this._registry.list({
       projectWorkspace: ctx.projectWorkspace,
     });
+    // AD-046 §4.4/§7.1: недоверенные проектные template-команды не входят в
+    // каталог — не резолвятся и не видны в `/`-автокомплите и GET /commands;
+    // диагностика `untrusted` сохраняется (эмитится в discovery/merge).
+    const trustedTemplates = templates.filter((t) => t.trusted);
     const skills = await this._skillEntries(ctx);
     const bundles = this._bundleStore ? await this._bundleStore.list() : [];
     const resolved = resolveCatalog({
-      templates,
+      templates: trustedTemplates,
       skills,
       bundles,
       conflict: this._config.conflict,
     });
     return {
       builtins: [],
-      templates,
+      templates: trustedTemplates,
       skills,
       bundles,
       diagnostics: [...templateDiags, ...resolved.diagnostics],

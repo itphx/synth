@@ -5,6 +5,7 @@ import { mergeCommandScans, scanCommandSource } from './discovery.js';
 
 interface CacheEntry {
   signature: string;
+  trusted: boolean;
   result: CommandScanResult;
 }
 
@@ -58,11 +59,12 @@ export class CommandRegistry {
   }
 
   private async _loadSource(source: CommandSource): Promise<CommandScanResult> {
+    const trusted = source.trusted ?? true;
     const signature = await snapshotDir(source.dir);
     const cached = this._cache.get(source.dir);
-    if (cached && cached.signature === signature) return cached.result;
+    if (cached && cached.signature === signature && cached.trusted === trusted) return cached.result;
     const result = await scanCommandSource(source);
-    this._cache.set(source.dir, { signature, result });
+    this._cache.set(source.dir, { signature, trusted, result });
     return result;
   }
 }

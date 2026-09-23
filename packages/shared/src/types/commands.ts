@@ -29,7 +29,9 @@ export type CommandIssueCode =
   | 'collision'
   | 'invalid-bundle'
   | 'missing-skill'
-  | 'read-error';
+  | 'read-error'
+  /** AD-046 §4.4/§7.1: проектный каталог недоверенный — команда не грузится. */
+  | 'untrusted';
 
 /** Диагностика реестра команд (видна в `GET /api/v2/commands?diagnostics=1`). */
 export interface CommandDiagnostic {

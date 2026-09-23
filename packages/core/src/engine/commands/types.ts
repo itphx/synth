@@ -21,6 +21,8 @@ export interface TemplateCommand {
   file: string;
   dir: string;
   origin: CommandOrigin;
+  /** `false` — команда видна в диагностике, но не резолвится (§4.4/§7.1). */
+  trusted: boolean;
   mtimeMs: number;
 }
 
@@ -34,6 +36,8 @@ export interface CommandScanResult {
 export interface CommandSource {
   origin: CommandOrigin;
   dir: string;
+  /** Доверен ли каталог (project-trust гейт, §4.4/§7.1). По умолчанию — да. */
+  trusted?: boolean;
 }
 
 /** Конфиг конфликтов имён (`config.commands.conflict`). */

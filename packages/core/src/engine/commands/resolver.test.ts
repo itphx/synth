@@ -4,7 +4,7 @@ import type { CommandSkillEntry, TemplateCommand } from './types.js';
 import type { SkillBundle } from '@itphx/synth-shared';
 
 function template(name: string): TemplateCommand {
-  return { name, description: `tmpl ${name}`, body: 'b', file: `/c/${name}.md`, dir: '/c', origin: 'instance', mtimeMs: 1 };
+  return { name, description: `tmpl ${name}`, body: 'b', file: `/c/${name}.md`, dir: '/c', origin: 'instance', trusted: true, mtimeMs: 1 };
 }
 function skill(commandName: string, skillName = commandName): CommandSkillEntry {
   return {

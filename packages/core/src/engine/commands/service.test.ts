@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { CommandService, isLocalCommandStatus } from './service.js';
 import type { CommandRuntimeConfig } from './types.js';
 import type { DiscoveredSkill, LoadedSkill, SkillRuntime } from '../skills/types.js';
@@ -177,5 +180,62 @@ describe('CommandService — скиллы и права', () => {
     expect(r?.status).toBe('bundle');
     expect(r?.skills).toEqual(['api-review', 'testing']);
     expect(r?.prompt).toContain('BODY-api-review');
+  });
+});
+
+async function writeTemplateCommand(dir: string, name: string) {
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, `${name}.md`),
+    ['---', `name: ${name}`, `description: ${name}`, '---', `body-${name}`].join('\n'),
+    'utf-8',
+  );
+}
+
+describe('CommandService — trust-гейт проектных шаблонов (AD-046 §4.4/§7.1)', () => {
+  let dataDir: string;
+  let ws: string;
+
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), 'synth-cmd-svc-data-'));
+    ws = await mkdtemp(join(tmpdir(), 'synth-cmd-svc-ws-'));
+    await writeTemplateCommand(join(ws, '.synth', 'commands'), 'deploy');
+    await writeTemplateCommand(join(dataDir, 'commands'), 'instance-cmd');
+  });
+  afterEach(async () => {
+    await rm(dataDir, { recursive: true, force: true });
+    await rm(ws, { recursive: true, force: true });
+  });
+
+  it('недоверенная проектная команда: untrusted-диагностика, не резолвится, не в list; instance не задет', async () => {
+    const { service } = makeService({ config: { dataDir, trustedProjectDirs: [] } });
+    const ctx = { projectWorkspace: ws };
+
+    const list = await service.list(ctx);
+    expect(list.commands.some((c) => c.name === 'deploy')).toBe(false);
+    expect(list.commands.some((c) => c.name === 'instance-cmd')).toBe(true);
+    expect(list.diagnostics.some((d) => d.code === 'untrusted' && d.command === 'deploy')).toBe(true);
+
+    expect((await service.resolve('/deploy', ctx))?.status).toBe('unknown');
+    // instance-команда по-прежнему резолвится.
+    expect((await service.resolve('/instance-cmd', ctx))?.status).toBe('template');
+  });
+
+  it('после добавления workspace в trustedProjectDirs — проектная команда резолвится', async () => {
+    const { service } = makeService({ config: { dataDir, trustedProjectDirs: [ws] } });
+    const ctx = { projectWorkspace: ws };
+
+    const r = await service.resolve('/deploy', ctx);
+    expect(r?.status).toBe('template');
+    expect(r?.prompt).toContain('body-deploy');
+
+    const list = await service.list(ctx);
+    expect(list.commands.some((c) => c.name === 'deploy')).toBe(true);
+    expect(list.diagnostics.some((d) => d.code === 'untrusted')).toBe(false);
+  });
+
+  it('без проекта недоверенных источников нет — команды доступны', async () => {
+    const { service } = makeService({ config: { dataDir, trustedProjectDirs: [] } });
+    expect((await service.resolve('/instance-cmd', {}) )?.status).toBe('template');
   });
 });

@@ -40,6 +40,30 @@ describe('discovery шаблонных команд (AD-046 §7.1)', () => {
     expect(sources[0]!.dir).toBe(join(workspace, PROJECT_COMMANDS_DIR));
   });
 
+  it('buildCommandSources (AD-046 §4.4/§7.1): project-trust из trustedProjectDirs, instance/config — доверены', () => {
+    const trusted = buildCommandSources({
+      dataDir, projectWorkspace: workspace, trustedProjectDirs: [workspace],
+    });
+    expect(trusted[0]!.trusted).toBe(true);
+    expect(trusted[1]!.trusted).toBe(true);
+
+    const untrusted = buildCommandSources({
+      dataDir, projectWorkspace: workspace, trustedProjectDirs: [],
+    });
+    expect(untrusted[0]!.trusted).toBe(false);
+    expect(untrusted[1]!.trusted).toBe(true);
+  });
+
+  it('scanCommandSource: trust источника проставляется в команду', async () => {
+    await writeCommand(join(dataDir, 'commands'), 'one', 'Первая');
+    const trusted = await scanCommandSource({ origin: 'instance', dir: join(dataDir, 'commands') });
+    expect(trusted.commands[0]!.trusted).toBe(true);
+    const untrusted = await scanCommandSource({
+      origin: 'project', dir: join(dataDir, 'commands'), trusted: false,
+    });
+    expect(untrusted.commands[0]!.trusted).toBe(false);
+  });
+
   it('scanCommandSource читает *.md и пропускает отсутствующий каталог', async () => {
     await writeCommand(join(dataDir, 'commands'), 'one', 'Первая');
     const res = await scanCommandSource({ origin: 'instance', dir: join(dataDir, 'commands') });
@@ -58,5 +82,14 @@ describe('discovery шаблонных команд (AD-046 §7.1)', () => {
     expect(merged.commands).toHaveLength(1);
     expect(merged.commands[0]!.description).toBe('из проекта');
     expect(merged.diagnostics.some((d) => d.code === 'shadowed')).toBe(true);
+  });
+
+  it('mergeCommandScans: недоверенная команда остаётся, но с диагностикой untrusted', async () => {
+    const proj: CommandSource = { origin: 'project', dir: join(workspace, 'proj'), trusted: false };
+    await writeCommand(proj.dir, 'p', 'из проекта');
+    const merged = mergeCommandScans([{ source: proj, result: await scanCommandSource(proj) }]);
+    expect(merged.commands).toHaveLength(1);
+    expect(merged.commands[0]!.trusted).toBe(false);
+    expect(merged.diagnostics.some((d) => d.code === 'untrusted' && d.command === 'p')).toBe(true);
   });
 });

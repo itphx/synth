@@ -78,6 +78,8 @@ export function parseCommandFile(
     file,
     dir,
     origin,
+    // Trust проставляет discovery-слой из источника (`scanCommandSource`).
+    trusted: true,
     mtimeMs,
   };
   return { command, diagnostics };

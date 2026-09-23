@@ -459,6 +459,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         maxArgumentsLength: backendConfig.synth.commands.maxArgumentsLength,
         maxRenderedBytes: backendConfig.synth.commands.maxRenderedBytes,
         toolsets: backendConfig.synth.skills.toolsets,
+        trustedProjectDirs: backendConfig.synth.skills.trustedProjectDirs,
       },
       skillRuntime: skillService,
       skillSource: skillService,

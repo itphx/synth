@@ -767,6 +767,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       maxArgumentsLength: config.commandsConfig?.maxArgumentsLength ?? 10_000,
       maxRenderedBytes: config.commandsConfig?.maxRenderedBytes ?? 200_000,
       toolsets: config.skillsConfig?.toolsets ?? {},
+      trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
     },
     skillRuntime: skillService,
     skillSource: skillService,
