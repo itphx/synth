@@ -72,6 +72,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
       maxRenderedBytes: options.config.commands?.maxRenderedBytes ?? 200_000,
       toolsets: options.config.skills?.toolsets ?? {},
       trustedProjectDirs: options.config.skills?.trustedProjectDirs,
+      inlineShell: options.config.skills?.inlineShell ?? false,
     },
     skillRuntime: skillService,
     skillSource: skillService,

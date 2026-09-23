@@ -32,6 +32,7 @@ function makeApp() {
       maxArgumentsLength: 1000,
       maxRenderedBytes: 100_000,
       toolsets: {},
+      inlineShell: false,
     },
     skillRuntime: {} as never,
     skillSource,

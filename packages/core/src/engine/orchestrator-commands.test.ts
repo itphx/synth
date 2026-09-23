@@ -10,7 +10,7 @@ import { ChatOrchestrator } from './orchestrator.js';
 import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { EventBus } from '../events/bus.js';
-import type { BusEvent, CommandRuntime, CommandResolveResult } from '@itphx/synth-shared';
+import type { BusEvent, CommandRuntime, CommandResolveResult, PermissionConfig } from '@itphx/synth-shared';
 import type { ContextBuilder } from './context/builder.js';
 import type { ContextConfig } from './context/config.js';
 import { generateId, MessageRole, nowISO, makeTextPart, type Message } from '@itphx/synth-shared';
@@ -37,7 +37,7 @@ const resolveResult: CommandResolveResult = {
 
 let tmpDir: string;
 
-async function run(content: string, opts?: { commandRuntime?: CommandRuntime }) {
+async function run(content: string, opts?: { commandRuntime?: CommandRuntime; permissionConfig?: PermissionConfig }) {
   tmpDir = await mkdtemp(join(tmpdir(), 'synth-orch-command-'));
   const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
   const eventBus = new EventBus();
@@ -57,6 +57,7 @@ async function run(content: string, opts?: { commandRuntime?: CommandRuntime }) 
     providerLoader: () => null,
     defaultWorkingDir: tmpDir,
     commandRuntime,
+    permissionConfig: opts?.permissionConfig,
   });
 
   const session = await sessionManager.createSession({ engine: 'synth' });
@@ -169,5 +170,59 @@ describe('ChatOrchestrator — slash-команды (AD-046 §7)', () => {
       commandRuntime: { list: async () => ({ commands: [], diagnostics: [] }), resolve: async () => undefined },
     });
     expect(events.some((e) => e.type === 'command.invoked')).toBe(false);
+  });
+
+  it('inline shell: allow → исполняет, публикует command.inline_shell', async () => {
+    const { after, msg, events } = await run('/run', {
+      commandRuntime: {
+        list: async () => ({ commands: [], diagnostics: [] }),
+        resolve: async (input, opts) => {
+          if (!input.startsWith('/run')) return undefined;
+          const r = await opts?.runShell?.('echo INLINE_OK');
+          return { status: 'template', name: 'run', args: '', kind: 'template', prompt: r?.output ?? '' };
+        },
+      },
+    });
+    const stored = after.messages.find((m) => m.id === msg.id)!;
+    expect(stored.content).toContain('INLINE_OK');
+    expect(
+      events.some((e) => e.type === 'command.inline_shell' && e.data.exitCode === 0 && e.data.denied !== true),
+    ).toBe(true);
+  });
+
+  it('inline shell: deny → отказ без исполнения, аудит denied', async () => {
+    const { after, msg, events } = await run('/run', {
+      permissionConfig: { rules: { execute_shell: 'deny' }, askTimeoutMs: 30_000 },
+      commandRuntime: {
+        list: async () => ({ commands: [], diagnostics: [] }),
+        resolve: async (input, opts) => {
+          if (!input.startsWith('/run')) return undefined;
+          const r = await opts?.runShell?.('echo hi');
+          return { status: 'template', name: 'run', args: '', kind: 'template', prompt: r?.output ?? '' };
+        },
+      },
+    });
+    const stored = after.messages.find((m) => m.id === msg.id)!;
+    expect(stored.content).toContain('denied');
+    expect(events.some((e) => e.type === 'command.inline_shell' && e.data.denied === true)).toBe(true);
+    // deny не порождает запись об исполнении (нет exitCode).
+    expect(events.some((e) => e.type === 'command.inline_shell' && 'exitCode' in e.data)).toBe(false);
+  });
+
+  it('inline shell: ask → отказ без интерактива (denied)', async () => {
+    const { after, msg, events } = await run('/run', {
+      permissionConfig: { rules: { execute_shell: 'ask' }, askTimeoutMs: 30_000 },
+      commandRuntime: {
+        list: async () => ({ commands: [], diagnostics: [] }),
+        resolve: async (input, opts) => {
+          if (!input.startsWith('/run')) return undefined;
+          const r = await opts?.runShell?.('echo hi');
+          return { status: 'template', name: 'run', args: '', kind: 'template', prompt: r?.output ?? '' };
+        },
+      },
+    });
+    const stored = after.messages.find((m) => m.id === msg.id)!;
+    expect(stored.content).toContain('denied');
+    expect(events.some((e) => e.type === 'command.inline_shell' && e.data.denied === true)).toBe(true);
   });
 });

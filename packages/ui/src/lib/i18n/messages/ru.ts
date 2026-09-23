@@ -1911,6 +1911,13 @@ export const dict = {
   'command.summary_enqueued': 'Суммаризация запущена',
   'command.summary_unavailable': 'Недостаточно активных сообщений для суммаризации',
 
+  // --- Inline shell (AD-046 §7.4) ---
+  'command.inline_shell_disabled': 'Inline shell отключён в этом окружении',
+  'command.inline_shell_denied': 'Inline shell-команда «!`{command}`» запрещена: {reason}',
+  'command.inline_shell_failed': 'Ошибка inline shell-команды: {output}',
+  'command.inline_shell_truncated': 'Вывод inline shell обрезан до {limit} байт',
+  'command.inline_shell_unavailable': 'Inline shell недоступен',
+
   // --- PWA ---
   'pwa.updateAvailable': 'Доступна новая версия приложения',
   'pwa.updateNow': 'Обновить',

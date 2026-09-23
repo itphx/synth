@@ -1,16 +1,24 @@
 import { readFile, stat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import type { CommandDiagnostic } from '@itphx/synth-shared';
+import { t as sm } from '../system-messages.js';
 import type { TemplateCommand } from './types.js';
 
 /** Лимит одного supporting-файла, подставляемого через `@file` (50 KB). */
 export const TEMPLATE_FILE_MAX_BYTES = 50 * 1024;
+
+/** AD-046 §7.4: лимит вывода одной inline shell-команды (50 KB). */
+export const TEMPLATE_SHELL_MAX_BYTES = 50 * 1024;
 
 export interface RenderTemplateOptions {
   workingDir: string;
   args: string;
   maxArgumentsLength: number;
   maxRenderedBytes: number;
+  /** AD-046 §7.4: включён ли inline shell (`` !`cmd` ``); по умолчанию выключено. */
+  inlineShell?: boolean;
+  /** AD-046 §7.4: раннер (уже прошёл permission в оркестраторе). */
+  runShell?: (cmd: string) => Promise<{ output: string; isError: boolean }>;
 }
 
 export interface RenderTemplateResult {
@@ -36,6 +44,19 @@ export function looksBinary(buf: Buffer): boolean {
   return false;
 }
 
+/** Обрезка строки до `maxBytes` по UTF-8 (не рвёт многобайтовые символы). */
+function truncateUtf8(s: string, maxBytes: number): string {
+  if (Buffer.byteLength(s, 'utf-8') <= maxBytes) return s;
+  let bytes = 0;
+  let end = s.length;
+  for (let i = 0; i < s.length; i++) {
+    const b = Buffer.byteLength(s[i]!, 'utf-8');
+    if (bytes + b > maxBytes) { end = i; break; }
+    bytes += b;
+  }
+  return s.slice(0, end);
+}
+
 /**
  * AD-046 §7.2: рендер шаблонной команды. Подстановки:
  * - `$ARGUMENTS` — аргументы после имени команды (лимит `maxArgumentsLength`);
@@ -56,6 +77,55 @@ export async function renderTemplate(
   let content = command.body;
   content = content.replace(/\$ARGUMENTS/g, args);
   content = content.replace(/\$([1-9])/g, (_m, d: string) => positional[Number(d) - 1] ?? '');
+
+  // AD-046 §7.4: inline shell `` !`cmd` ``. По умолчанию выключено — литерал
+  // остаётся нетронутым (диагностического шума не создаём). При включении
+  // команда исполняется ТОЛЬКО через переданный раннер: permission-проверку
+  // (AD-029) и аудит делает оркестратор, сервис команд их не дублирует.
+  if (opts.inlineShell === true) {
+    if (!opts.runShell) {
+      diagnostics.push({
+        level: 'warning',
+        code: 'read-error',
+        message: sm('command.inline_shell_unavailable'),
+        command: command.name,
+      });
+    } else {
+      // Токен в начале строки или после пробела; команда — без переносов строк.
+      const shellRefs = [...content.matchAll(/(^|\s)!`([^`\n]+)`/g)];
+      for (const match of shellRefs) {
+        const shellCmd = match[2]!;
+        let output: string;
+        let isError: boolean;
+        try {
+          const res = await opts.runShell(shellCmd);
+          output = res.output ?? '';
+          isError = res.isError;
+        } catch {
+          output = '';
+          isError = true;
+        }
+        if (Buffer.byteLength(output, 'utf-8') > TEMPLATE_SHELL_MAX_BYTES) {
+          output = truncateUtf8(output, TEMPLATE_SHELL_MAX_BYTES);
+          diagnostics.push({
+            level: 'warning',
+            code: 'read-error',
+            message: sm('command.inline_shell_truncated', { limit: String(TEMPLATE_SHELL_MAX_BYTES) }),
+            command: command.name,
+          });
+        }
+        if (isError) {
+          diagnostics.push({
+            level: 'warning',
+            code: 'read-error',
+            message: sm('command.inline_shell_failed', { output }),
+            command: command.name,
+          });
+        }
+        content = content.split(match[0]).join(`${match[1]}${output}`);
+      }
+    }
+  }
 
   // `@file` — только в начале токена (как у opencode). Не трогаем email-подобное.
   const refs = [...content.matchAll(/(^|\s)@([^\s@]+)/g)];
@@ -108,14 +178,7 @@ export async function renderTemplate(
   }
 
   if (Buffer.byteLength(content, 'utf-8') > opts.maxRenderedBytes) {
-    let bytes = 0;
-    let end = content.length;
-    for (let i = 0; i < content.length; i++) {
-      const b = Buffer.byteLength(content[i]!, 'utf-8');
-      if (bytes + b > opts.maxRenderedBytes) { end = i; break; }
-      bytes += b;
-    }
-    content = content.slice(0, end);
+    content = truncateUtf8(content, opts.maxRenderedBytes);
     diagnostics.push({
       level: 'warning',
       code: 'read-error',

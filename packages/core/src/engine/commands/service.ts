@@ -110,6 +110,8 @@ export class CommandService implements CommandRuntime {
       sessionEnabled?: string[];
       sessionDisabled?: string[];
       permissionConfig?: PermissionConfig;
+      /** AD-046 §7.4: раннер inline shell (готовое замыкание от оркестратора). */
+      runShell?: (cmd: string) => Promise<{ output: string; isError: boolean }>;
     },
   ): Promise<CommandResolveResult | undefined> {
     const parsed = parseCommandInput(input);
@@ -122,6 +124,7 @@ export class CommandService implements CommandRuntime {
       sessionEnabled: opts?.sessionEnabled,
       sessionDisabled: opts?.sessionDisabled,
       permissionConfig: opts?.permissionConfig,
+      runShell: opts?.runShell,
     };
     const catalog = await this._buildCatalog(ctx);
     const entry = catalog.entries.find((e) => e.summary.name === name);
@@ -143,6 +146,8 @@ export class CommandService implements CommandRuntime {
           args,
           maxArgumentsLength: this._config.maxArgumentsLength,
           maxRenderedBytes: this._config.maxRenderedBytes,
+          inlineShell: this._config.inlineShell,
+          runShell: ctx.runShell,
         });
         catalog.diagnostics.push(...rendered.diagnostics);
         return { status: 'template', name, args, kind: 'template', prompt: rendered.content, message: rendered.diagnostics.length > 0 ? rendered.diagnostics[0]!.message : undefined };

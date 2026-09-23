@@ -63,6 +63,8 @@ import { loadProtectedPaths } from './security/protected-paths.js';
 import type { ProtectedPathsPolicy } from './security/protected-paths.js';
 import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, PLACEHOLDER_PATTERN, type SecretPatternStore } from './gateway/index.js';
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
+import { runInlineShell } from './commands/inline-shell.js';
+import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
 
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
 /** AD-070: окно троттлинга live-события `stream.usage` (~300 мс). */
@@ -970,15 +972,60 @@ export class ChatOrchestrator {
     streamId: string;
     effectiveAgentRole: string | undefined;
     workingDir: string;
+    /** AD-046 §7.4: evaluator для inline shell — тот же, что в tool-loop. */
+    permissionEvaluator: PermissionEvaluator;
+    sessionMode: SessionMode;
+    planMode: PlanMode;
+    planApproved: boolean;
     attempt?: number;
   }): Promise<ProcessMessageResult | null> {
     if (!this._commandRuntime) return null;
-    const { session, message, signal, publishChunk, debugCollector, streamId, effectiveAgentRole, workingDir, attempt } = args;
+    const { session, message, signal, publishChunk, debugCollector, streamId, effectiveAgentRole, workingDir, permissionEvaluator, sessionMode, planMode, planApproved, attempt } = args;
     const input = (message.content ?? '').trim();
     if (!input.startsWith('/')) return null;
 
     const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
     const permissionConfig = session.settings.permission ?? this._permissionConfig;
+
+    // AD-046 §7.4: inline shell `` !`cmd` `` исполняется только через
+    // PermissionEvaluator (AD-029) — как обычный `execute_shell`. allow —
+    // исполняем; deny/ask — отказ БЕЗ интерактива: inline shell не поднимает
+    // диалог одобрения, а молчаливый auto-approve `ask` был бы обходом прав.
+    // Аудит — событие `command.inline_shell` (рядом с `command.invoked`).
+    const runShell = async (command: string): Promise<{ output: string; isError: boolean }> => {
+      const decision = permissionEvaluator.check({
+        toolName: 'execute_shell',
+        params: { command },
+        workingDir,
+        sessionMode,
+        planMode,
+        planApproved,
+        shellPolicy: this._getProtectedPaths() ?? undefined,
+        protectedPaths: this._getProtectedPaths() ?? undefined,
+        protectedPathsEnabled: this._getProtectedPathsEnabled(),
+      });
+      if (decision.action !== 'allow') {
+        this._eventBus.publish(session.id, 'command.inline_shell', {
+          session_id: session.id,
+          command,
+          denied: true,
+          reason: decision.reason,
+        });
+        return {
+          output: sm('command.inline_shell_denied', { command, reason: decision.reason }),
+          isError: true,
+        };
+      }
+      const exec = await runInlineShell({ command, workingDir, abortSignal: signal });
+      this._eventBus.publish(session.id, 'command.inline_shell', {
+        session_id: session.id,
+        command,
+        exitCode: exec.exitCode,
+        truncated: Buffer.byteLength(exec.output, 'utf-8') > TEMPLATE_SHELL_MAX_BYTES,
+        ...(exec.isError ? { failed: true } : {}),
+      });
+      return { output: exec.output, isError: exec.isError };
+    };
 
     let result;
     try {
@@ -989,6 +1036,7 @@ export class ChatOrchestrator {
         sessionEnabled: session.settings.skills,
         sessionDisabled: session.settings.skillsDisabled,
         permissionConfig,
+        runShell,
       });
     } catch {
       return null;
@@ -1857,6 +1905,7 @@ export class ChatOrchestrator {
       const commandResult = await this._handleCommand({
         session, message, signal, publishChunk, debugCollector, streamId,
         effectiveAgentRole, workingDir, attempt,
+        permissionEvaluator, sessionMode, planMode, planApproved,
       });
       if (commandResult) return commandResult;
       // prompt-команда (template/skill/bundle): сообщение заменено, идём в LLM.

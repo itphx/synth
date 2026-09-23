@@ -111,30 +111,38 @@ export interface CommandResolveResult {
   message?: string;
 }
 
+/** AD-046 §7.4: результат исполнения inline shell (`` !`cmd` ``). */
+export interface CommandShellResult {
+  output: string;
+  isError: boolean;
+}
+
+/**
+ * AD-046 §7.4: раннер inline shell. Оркестратор передаёт замыкание, которое
+ * само проходит `PermissionEvaluator` (AD-029) и исполняет команду; сервис
+ * команд только вызывает его для подстановки `` !`cmd` ``.
+ */
+export type CommandShellRunner = (command: string) => Promise<CommandShellResult>;
+
+/** Общие опции фильтрации/резолвинга команд. */
+export interface CommandRuntimeOpts {
+  projectWorkspace?: string;
+  capabilities?: readonly string[];
+  agent?: { id?: string; groups?: string[] };
+  sessionEnabled?: string[];
+  sessionDisabled?: string[];
+  permissionConfig?: PermissionConfig;
+  /** AD-046 §7.4: раннер inline shell (только при включённом `skills.inlineShell`). */
+  runShell?: CommandShellRunner;
+}
+
 /**
  * AD-046 §7.3: рантайм-контракт команд для оркестратора/CLI. Структурно
  * реализуется `CommandService`; прокидывается в `OrchestratorOptions`.
  */
 export interface CommandRuntime {
   /** Список команд (builtin + template + skills + bundles) с учётом фильтров. */
-  list(opts?: {
-    projectWorkspace?: string;
-    capabilities?: readonly string[];
-    agent?: { id?: string; groups?: string[] };
-    sessionEnabled?: string[];
-    sessionDisabled?: string[];
-    permissionConfig?: PermissionConfig;
-  }): Promise<{ commands: CommandSummary[]; diagnostics: CommandDiagnostic[] }>;
+  list(opts?: CommandRuntimeOpts): Promise<{ commands: CommandSummary[]; diagnostics: CommandDiagnostic[] }>;
   /** Резолвинг `/`-команды. `undefined` — сообщение не является командой. */
-  resolve(
-    input: string,
-    opts?: {
-      projectWorkspace?: string;
-      capabilities?: readonly string[];
-      agent?: { id?: string; groups?: string[] };
-      sessionEnabled?: string[];
-      sessionDisabled?: string[];
-      permissionConfig?: PermissionConfig;
-    },
-  ): Promise<CommandResolveResult | undefined>;
+  resolve(input: string, opts?: CommandRuntimeOpts): Promise<CommandResolveResult | undefined>;
 }

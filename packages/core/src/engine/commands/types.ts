@@ -1,4 +1,10 @@
-import type { CommandDiagnostic, CommandSummary, PermissionConfig, SkillBundle } from '@itphx/synth-shared';
+import type {
+  CommandDiagnostic,
+  CommandShellRunner,
+  CommandSummary,
+  PermissionConfig,
+  SkillBundle,
+} from '@itphx/synth-shared';
 
 /**
  * AD-046 §7: внутренние типы модуля slash-команд. Контракты (для оркестратора,
@@ -57,6 +63,8 @@ export interface CommandRuntimeConfig {
   /** `config.skills.toolsets` — экспансия `requires_toolsets` в capabilities. */
   toolsets: Record<string, readonly string[]>;
   trustedProjectDirs?: readonly string[];
+  /** AD-046 §7.4: `!`cmd`` в шаблонных командах (по умолчанию false). */
+  inlineShell: boolean;
   home?: string;
 }
 
@@ -68,6 +76,12 @@ export interface CommandContext {
   sessionEnabled?: string[];
   sessionDisabled?: string[];
   permissionConfig?: PermissionConfig;
+  /**
+   * AD-046 §7.4: раннер inline shell. Приходит готовым от оркестратора
+   * (замыкание уже прошло `PermissionEvaluator`); сервис команд не строит
+   * permission-проверки сам (AD-029).
+   */
+  runShell?: CommandShellRunner;
 }
 
 /** Запись скилла для резолвера команд (проекция `SkillSummary`). */

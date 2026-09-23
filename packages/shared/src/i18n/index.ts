@@ -228,6 +228,12 @@ export const ENGINE_MESSAGE_KEYS = [
   'command.skills_empty',
   'command.summary_enqueued',
   'command.summary_unavailable',
+  // --- Inline shell (AD-046 §7.4) ---
+  'command.inline_shell_disabled',
+  'command.inline_shell_denied',
+  'command.inline_shell_failed',
+  'command.inline_shell_truncated',
+  'command.inline_shell_unavailable',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -449,6 +455,12 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'command.skills_empty': [],
   'command.summary_enqueued': [],
   'command.summary_unavailable': [],
+  // --- Inline shell (AD-046 §7.4) ---
+  'command.inline_shell_disabled': [],
+  'command.inline_shell_denied': ["command","reason"],
+  'command.inline_shell_failed': ["output"],
+  'command.inline_shell_truncated': ["limit"],
+  'command.inline_shell_unavailable': [],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

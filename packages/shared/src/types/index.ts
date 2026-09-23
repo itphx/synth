@@ -1134,6 +1134,7 @@ export type EventType =
   | 'todos.updated'
   | 'skill.invoked'
   | 'command.invoked'
+  | 'command.inline_shell'
   | 'error';
 
 export interface BusEvent {

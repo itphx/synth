@@ -285,6 +285,13 @@ export const SYSTEM_MESSAGES = {
   'command.skills_empty': 'No skills available',
   'command.summary_enqueued': 'Summarization started',
   'command.summary_unavailable': 'Not enough active messages to summarize',
+
+  // --- Inline shell (AD-046 §7.4) ---
+  'command.inline_shell_disabled': 'Inline shell is disabled',
+  'command.inline_shell_denied': 'Inline shell command "!`{command}`" denied: {reason}',
+  'command.inline_shell_failed': 'Inline shell command failed: {output}',
+  'command.inline_shell_truncated': 'Inline shell output truncated to {limit} bytes',
+  'command.inline_shell_unavailable': 'Inline shell is unavailable',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

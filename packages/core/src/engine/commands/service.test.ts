@@ -71,6 +71,7 @@ function makeService(opts: {
     maxArgumentsLength: 1000,
     maxRenderedBytes: 100_000,
     toolsets: opts.config?.toolsets ?? {},
+    inlineShell: false,
     ...opts.config,
   };
   const service = new CommandService({ config, skillRuntime, skillSource, bundleStore });
@@ -237,5 +238,41 @@ describe('CommandService — trust-гейт проектных шаблонов 
   it('без проекта недоверенных источников нет — команды доступны', async () => {
     const { service } = makeService({ config: { dataDir, trustedProjectDirs: [] } });
     expect((await service.resolve('/instance-cmd', {}) )?.status).toBe('template');
+  });
+});
+
+describe('CommandService — inline shell (AD-046 §7.4)', () => {
+  let dataDir: string;
+
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), 'synth-cmd-shell-'));
+    await mkdir(join(dataDir, 'commands'), { recursive: true });
+    await writeFile(
+      join(dataDir, 'commands', 'run.md'),
+      ['---', 'name: run', 'description: run', '---', 'RESULT: !`echo hi`'].join('\n'),
+      'utf-8',
+    );
+  });
+  afterEach(async () => {
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  it('inlineShell=true: runShell прокинут в renderTemplate, вывод подставлен', async () => {
+    const { service } = makeService({ config: { dataDir, inlineShell: true } });
+    const r = await service.resolve('/run', {
+      runShell: async (c) => ({ output: `[${c}]`, isError: false }),
+    });
+    expect(r?.status).toBe('template');
+    expect(r?.prompt).toContain('RESULT: [echo hi]');
+  });
+
+  it('inlineShell=false (дефолт): литерал сохранён, раннер не вызван', async () => {
+    const { service } = makeService({ config: { dataDir, inlineShell: false } });
+    let called = false;
+    const r = await service.resolve('/run', {
+      runShell: async () => { called = true; return { output: 'X', isError: false }; },
+    });
+    expect(r?.prompt).toContain('RESULT: !`echo hi`');
+    expect(called).toBe(false);
   });
 });
