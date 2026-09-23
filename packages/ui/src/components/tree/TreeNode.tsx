@@ -15,13 +15,22 @@ const statusConfig: Record<TreeStatus, { className: string; title: string }> = {
 }
 
 function ActionButton({ action, alwaysVisible }: { action: TreeAction; alwaysVisible: boolean }) {
+  // Меню рендерится в портале: когда курсор уходит со строки в попап, строка
+  // теряет :hover. Держим открытое меню в состоянии, чтобы триггер не пропадал
+  // (иначе Radix Popper теряет якорь и попап «убегает» вверх/в угол).
+  const [menuOpen, setMenuOpen] = useState(false)
+
   const variantClass = action.variant === 'destructive'
     ? 'hover:bg-status-error/10 hover:text-status-error'
     : action.variant === 'primary'
       ? 'bg-primary/10 text-primary hover:bg-primary/20'
       : 'bg-interactive-hover/40 text-muted-foreground hover:bg-interactive-hover hover:text-foreground'
 
-  const visibilityClass = alwaysVisible ? '' : 'hidden group-hover:inline-flex'
+  const visibilityClass = alwaysVisible
+    ? ''
+    : menuOpen
+      ? 'inline-flex'
+      : 'hidden group-hover:inline-flex'
   const buttonClass = cn(
     'h-4 w-4 items-center justify-center rounded transition-colors',
     visibilityClass,
@@ -33,6 +42,8 @@ function ActionButton({ action, alwaysVisible }: { action: TreeAction; alwaysVis
   if (action.menuItems && action.menuItems.length > 0) {
     return (
       <ContextMenu
+        open={menuOpen}
+        onOpenChange={setMenuOpen}
         trigger={
           <button
             onClick={(e) => e.stopPropagation()}
