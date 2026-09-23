@@ -61,3 +61,5 @@
 | AD-046 | [Скиллы и slash-команды](./ad-046-skills-and-slash-commands.md): формат SKILL.md, discovery, progressive disclosure, core-тул skill, bundles, capability-aware |
 | AD-068 | [Реестр и каталог скиллов и агентов](./ad-068-skills-agents-registry.md): свой репозиторий, индекс, trust/guard, install-policy, agent-packs |
 | AD-069 | [Проектные инструкции (AGENTS.md) и /init](./ad-069-project-instructions-agents-md.md): discovery, merged chain, lazy-догрузка, обрезка, threat-scan, install-tree guard |
+| AD-073 | [Целостность клиента в гибриде](./ad-073-client-integrity-hybrid.md): клиент недоверенный, enforcement на сервере; сигналы (подписи, DPoP/mTLS) опционально |
+| AD-074 | [Скрытие вместо удаления](./ad-074-soft-delete-retention.md): soft-delete проектов/сессий/сообщений, исключение из LLM-контекста, read-only режим ADMIN/AUDITOR, restore/purge — ADMIN |
