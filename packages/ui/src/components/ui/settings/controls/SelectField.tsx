@@ -11,6 +11,8 @@ export interface SelectFieldProps {
   onValueChange: (value: string) => void
   children: React.ReactNode
   ariaLabel?: string
+  /** Пробрасывается в `Select` для резолва label выбранного значения в триггере. */
+  items?: ReadonlyArray<{ label: React.ReactNode; value: string }>
 }
 
 /** AD-072: управляемый select; триггер занимает всю ширину. */
@@ -22,10 +24,11 @@ export function SelectField({
   onValueChange,
   children,
   ariaLabel,
+  items,
 }: SelectFieldProps) {
   return (
     <SettingsField label={label} description={description} error={error}>
-      <Select value={value} onValueChange={onValueChange}>
+      <Select value={value} onValueChange={onValueChange} items={items}>
         <SelectTrigger className="w-full min-w-0" aria-label={ariaLabel}>
           <SelectValue />
         </SelectTrigger>

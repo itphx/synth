@@ -107,6 +107,25 @@ async function renderTab(): Promise<HTMLElement> {
   return container
 }
 
+/** Открывает Base UI select и кликает опцию по подписи (опции рендерятся в portal). */
+async function selectOption(trigger: HTMLElement, label: string): Promise<void> {
+  await act(async () => {
+    trigger.click()
+  })
+  // Закрытый popup может остаться в DOM до конца exit-анимации, поэтому ищем
+  // опции только в listbox, связанном с триггером через aria-controls.
+  const listId = trigger.getAttribute('aria-controls')
+  const scope = listId ? document.getElementById(listId) ?? document.body : document.body
+  const allOptions = [...scope.querySelectorAll('[role="option"]')]
+  const option = allOptions.find(
+    (o) => o.textContent?.trim().startsWith(label),
+  ) as HTMLElement | undefined
+  expect(option, `option "${label}"`).toBeTruthy()
+  await act(async () => {
+    option!.click()
+  })
+}
+
 beforeEach(() => {
   mocks.getAgents.mockResolvedValue({ agents: [] })
   mocks.getSessionMcpEffective.mockResolvedValue(effective())
@@ -233,28 +252,20 @@ describe('SessionSettingsTab — MCP-скоуп сессии (AD-071 §2.4)', ()
 describe('SessionSettingsTab — per-session политики инструментов (AD-071 §2.3)', () => {
   it('переопределяет обе политики (встроенные + MCP) и сохраняет их', async () => {
     const container = await renderTab()
-    const toolsGroup = container.querySelector(
-      '[role="radiogroup"][aria-label="Global built-in tools policy"]',
-    )
-    const mcpGroup = container.querySelector('[role="radiogroup"][aria-label="Global MCP policy"]')
-    expect(toolsGroup).not.toBeNull()
-    expect(mcpGroup).not.toBeNull()
+    const toolsTrigger = container.querySelector(
+      '[role="combobox"][aria-label="Global built-in tools policy"]',
+    ) as HTMLElement | null
+    const mcpTrigger = container.querySelector(
+      '[role="combobox"][aria-label="Global MCP policy"]',
+    ) as HTMLElement | null
+    expect(toolsTrigger).not.toBeNull()
+    expect(mcpTrigger).not.toBeNull()
     // «Follow global» — дефолт (пусто).
-    expect(toolsGroup!.querySelector('[role="radio"][aria-checked="true"]')!.textContent).toBe('Follow global')
-    expect(mcpGroup!.querySelector('[role="radio"][aria-checked="true"]')!.textContent).toBe('Follow global')
+    expect(toolsTrigger!.textContent).toContain('Follow global')
+    expect(mcpTrigger!.textContent).toContain('Follow global')
 
-    const clickOption = (group: Element, text: string) => {
-      const button = [...group.querySelectorAll('[role="radio"]')].find(
-        (b) => (b.textContent ?? '').startsWith(text),
-      ) as HTMLButtonElement
-      button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    }
-    await act(async () => {
-      clickOption(toolsGroup!, 'available')
-    })
-    await act(async () => {
-      clickOption(mcpGroup!, 'consistency')
-    })
+    await selectOption(toolsTrigger!, 'available')
+    await selectOption(mcpTrigger!, 'consistency')
 
     const saveButton = [...container.querySelectorAll('button')].find(
       (b) => b.textContent === 'Save',
@@ -284,15 +295,13 @@ describe('SessionSettingsTab — per-session политики инструмен
     } as never)
     const container = await renderTab()
 
-    expect(
-      container
-        .querySelector('[role="radiogroup"][aria-label="Global built-in tools policy"]')!
-        .querySelector('[role="radio"][aria-checked="true"]')!.textContent,
-    ).toContain('consistency')
-    expect(
-      container
-        .querySelector('[role="radiogroup"][aria-label="Global MCP policy"]')!
-        .querySelector('[role="radio"][aria-checked="true"]')!.textContent,
-    ).toContain('available')
+    const toolsTrigger = container.querySelector(
+      '[role="combobox"][aria-label="Global built-in tools policy"]',
+    ) as HTMLElement
+    const mcpTrigger = container.querySelector(
+      '[role="combobox"][aria-label="Global MCP policy"]',
+    ) as HTMLElement
+    expect(toolsTrigger.textContent).toContain('consistency')
+    expect(mcpTrigger.textContent).toContain('available')
   })
 })

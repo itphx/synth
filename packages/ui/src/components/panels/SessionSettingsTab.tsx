@@ -3,20 +3,22 @@ import type { TodoItem, TodoStatus, TodoPriority, McpServerEffective } from '@it
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
+import { useProjectsStore } from '@/stores/projectsStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
+import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type AgentInfo, type ToolsPolicy } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
 import { ModelSelector } from '../chat/ModelSelector'
 import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 import { SelectContent, SelectItem } from '../ui/select'
-import { InfoField as Field, InfoSection as Section, ModelPairSelect, SegmentedControl, SelectField, SliderField } from '../ui/settings'
+import { InfoField as Field, InfoSection as Section, ModelPairSelect, SelectField, SliderField } from '../ui/settings'
 
 export function SessionSettingsTab() {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const { notify } = useNotification()
   const sessions = useSessionsStore(s => s.sessions)
   const selectedProviderName = useProvidersStore(s => s.selectedProviderName)
@@ -86,6 +88,16 @@ export function SessionSettingsTab() {
   const sessionId = activeTab?.data?.sessionId
 
   const session = sessions.find((s) => s.id === sessionId)
+  const projects = useProjectsStore(s => s.projects)
+  const projectName = projects.find(p => p.id === session?.project_id)?.name
+
+  // Догружаем проект в стор, если его там нет (имя нужно для отображения).
+  useEffect(() => {
+    const projectId = session?.project_id
+    if (projectId && !useProjectsStore.getState().projects.some(p => p.id === projectId)) {
+      useProjectsStore.getState().getProject(projectId).catch(() => {})
+    }
+  }, [session?.project_id])
 
   useEffect(() => {
     loadProviders()
@@ -386,8 +398,10 @@ export function SessionSettingsTab() {
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         <Section title={t('rightPanel.params.session')}>
-          <Field label="ID" value={session.id.slice(0, 12) + '...'} mono />
-          <Field label={t('rightPanel.params.project')} value={session.project_id || t('rightPanel.params.none')} />
+          <Field label="ID" value={session.id} mono />
+          <Field label={t('rightPanel.params.project')} value={projectName || session.project_id || t('rightPanel.params.none')} />
+          <Field label={t('rightPanel.params.creator')} value={session.user_id || session.owner_id || t('rightPanel.params.none')} />
+          <Field label={t('rightPanel.params.created')} value={formatDateTime(session.created_at, locale)} />
           <Field label={t('rightPanel.params.engine')} value={session.engine} />
         </Section>
 
@@ -768,36 +782,48 @@ export function SessionSettingsTab() {
         {/* AD-071 §2.3: политики включения инструментов (per-session override) */}
         <Section title={t('toolsPolicy.title')}>
           <div className="flex flex-col gap-1">
-            <SegmentedControl
+            <SelectField
               value={toolsPolicy}
-              onChange={(value) => setToolsPolicy(value as ToolsPolicy | '')}
+              onValueChange={(v) => setToolsPolicy(v as ToolsPolicy | '')}
               ariaLabel={t('toolsPolicy.label')}
-              className="w-full"
-              options={[
+              items={[
                 { value: '', label: t('toolsPolicy.inherit') },
                 { value: 'consistency', label: t('toolsPolicy.consistency') },
                 { value: 'available', label: t('toolsPolicy.available') },
                 { value: 'auto', label: t('toolsPolicy.auto') },
               ]}
-            />
+            >
+              <SelectContent>
+                <SelectItem value="">{t('toolsPolicy.inherit')}</SelectItem>
+                <SelectItem value="consistency">{t('toolsPolicy.consistency')}</SelectItem>
+                <SelectItem value="available">{t('toolsPolicy.available')}</SelectItem>
+                <SelectItem value="auto">{t('toolsPolicy.auto')}</SelectItem>
+              </SelectContent>
+            </SelectField>
             <p className="text-[0.625rem] text-muted-foreground/60">{t('toolsPolicy.sessionHelp')}</p>
           </div>
         </Section>
 
         <Section title={t('mcpPolicy.title')}>
           <div className="flex flex-col gap-1">
-            <SegmentedControl
+            <SelectField
               value={mcpPolicy}
-              onChange={(value) => setMcpPolicy(value as ToolsPolicy | '')}
+              onValueChange={(v) => setMcpPolicy(v as ToolsPolicy | '')}
               ariaLabel={t('mcpPolicy.label')}
-              className="w-full"
-              options={[
+              items={[
                 { value: '', label: t('mcpPolicy.inherit') },
                 { value: 'consistency', label: t('mcpPolicy.consistency') },
                 { value: 'available', label: t('mcpPolicy.available') },
                 { value: 'auto', label: t('mcpPolicy.auto') },
               ]}
-            />
+            >
+              <SelectContent>
+                <SelectItem value="">{t('mcpPolicy.inherit')}</SelectItem>
+                <SelectItem value="consistency">{t('mcpPolicy.consistency')}</SelectItem>
+                <SelectItem value="available">{t('mcpPolicy.available')}</SelectItem>
+                <SelectItem value="auto">{t('mcpPolicy.auto')}</SelectItem>
+              </SelectContent>
+            </SelectField>
             <p className="text-[0.625rem] text-muted-foreground/60">{t('mcpPolicy.sessionHelp')}</p>
           </div>
         </Section>

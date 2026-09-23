@@ -5,6 +5,7 @@ import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useNotification } from '@/hooks/useNotification'
+import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type ProjectData, type ProjectMcpResponse } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '@/components/ui/Toggle'
@@ -13,7 +14,7 @@ import { CreateProjectPopover } from '@/components/panels/CreateProjectPopover'
 import type { ProjectPlan, McpRegistryEntry } from '@itphx/synth-shared'
 
 export function ProjectTab() {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const { notify } = useNotification()
 
   const activeTabId = useUIStore((s) => s.activeCenterTabId)
@@ -257,6 +258,8 @@ export function ProjectTab() {
         <div className="space-y-1.5">
           <Field label={t('projectTab.info.name')} value={project?.name || '—'} />
           <Field label={t('projectTab.info.id')} value={project?.id || '—'} mono />
+          <Field label={t('projectTab.info.creator')} value={project?.owner_id || '—'} />
+          <Field label={t('projectTab.info.created')} value={formatDateTime(project?.created_at, locale)} />
         </div>
       </Section>
 

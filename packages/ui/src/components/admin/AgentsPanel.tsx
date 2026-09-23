@@ -556,6 +556,7 @@ export const AgentsPanel = () => {
             value={defaultAgentDraft.draft ?? ''}
             onValueChange={(value) => defaultAgentDraft.setDraft(value)}
             ariaLabel={t('admin.agents.defaultAgent.title')}
+            items={primaryAgents.map((a) => ({ value: a.id, label: a.display_name }))}
           >
             <SelectContent>
               {primaryAgents.map((a) => (
@@ -604,11 +605,13 @@ export const AgentsPanel = () => {
         <div className="agents-grid grid grid-cols-1 sm:grid-cols-2 gap-3">
           {filteredAgents.map((a) => (
             <SettingsSection key={a.id} className={cn(!a.enabled && 'opacity-50')}>
-              <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Icon name={isIconName(a.icon) ? a.icon : 'robot-2'} className="size-4 shrink-0" style={a.color ? { color: `var(${a.color})` } : undefined} />
-                  <span className="font-medium text-sm truncate">{a.display_name}</span>
-                  <code className="text-[0.625rem] text-muted-foreground shrink-0">{a.id}</code>
+              <div className="flex items-start justify-between gap-2 min-w-0">
+                <div className="flex items-start gap-2 min-w-0 flex-1">
+                  <Icon name={isIconName(a.icon) ? a.icon : 'robot-2'} className="size-4 shrink-0 mt-0.5" style={a.color ? { color: `var(${a.color})` } : undefined} />
+                  <div className="min-w-0 flex-1">
+                    <span className="font-medium text-sm break-words">{a.display_name}</span>
+                    <code className="block text-[0.625rem] text-muted-foreground break-all">{a.id}</code>
+                  </div>
                 </div>
                 <div className="ml-1 shrink-0">
                   <Toggle enabled={a.enabled} onToggle={() => handleToggle(a)} />
