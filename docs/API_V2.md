@@ -404,6 +404,32 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 
 Источники discovery (Фаза 1): `{dataDir}/skills` (instance), `{project.workspace}/.synth/skills` (project, project-trust гейт), `config.skills.paths`. Внешние каталоги (`.opencode`, `.claude`, `.agents`) и `skills.urls` не подключаются.
 
+### 5.17.1 Команды и bundles — `/api/v2/commands`, `/api/v2/skill-bundles` (оба, AD-046 Фаза 2)
+
+| Метод | Путь | Сборка | RBAC (backend / core) | Назначение |
+|---|---|---|---|---|
+| GET | `/api/v2/commands` | оба | auth | Список команд (builtin + шаблонные `.md` + скиллы invocation user/both + bundles). `?project_id=` — project-скоуп, `?diagnostics=1` — `shadowed`/ошибки |
+| GET | `/api/v2/skill-bundles` | оба | auth | `{bundles}` — YAML-группы скиллов |
+| POST | `/api/v2/skill-bundles` | оба | backend ADMIN / core auth | Создать bundle `{name, description, skills[], instruction?}` → 201 (409 при дубле; 400 при ссылке на несуществующий скилл) |
+| GET | `/api/v2/skill-bundles/:name` | оба | auth | Деталь bundle |
+| PATCH | `/api/v2/skill-bundles/:name` | оба | backend ADMIN / core auth | Обновить bundle |
+| DELETE | `/api/v2/skill-bundles/:name` | оба | backend ADMIN / core auth | Удалить bundle |
+
+Резолвинг `/`-команд выполняется **в core** (единообразно для UI/CLI/гибрида, AD-046 §7.1): builtin-ответы (`/help`, `/skills`, `/commands`) не вызывают LLM, а события `command.invoked`/`skill.invoked` уходят в шину. Порядок имён зависит от `commands.conflict.mode`.
+
+### 5.17.2 Scope скиллов — `/api/v2/sessions|projects|settings/skills` (оба, AD-046 §4.5)
+
+| Метод | Путь | Сборка | RBAC (backend / core) | Назначение |
+|---|---|---|---|---|
+| GET | `/api/v2/sessions/:id/skills` | оба | owner/ADMIN | Эффективный скоуп сессии: `{skills:[{name, level, scope, trusted, available, unavailableReason?, enabled, disabled, disabledReason?}], enabled, disabled}` |
+| GET | `/api/v2/sessions/:id/skills/effective` | оба | owner/ADMIN | Алиас effective-списка |
+| PUT | `/api/v2/sessions/:id/skills` | оба | owner | `{name, enabled}` (точечный toggle) или `{skills?, skillsDisabled?}` |
+| GET | `/api/v2/projects/:id/skills` | оба | owner/LEAD/ADMIN | Проектный скоуп: `{enabled, defaultOn, skills}` |
+| PUT | `/api/v2/projects/:id/skills` | оба | backend ADMIN / core auth | Задать `{enabled?, defaultOn?}` |
+| GET | `/api/v2/settings/skills` | оба | auth | Instance-wide: `{disabled:{categories,groups,skills}, policy}` |
+| PUT | `/api/v2/settings/skills` | оба | backend ADMIN / core auth | Задать `{disabled?, policy?}` |
+| DELETE | `/api/v2/settings/skills` | оба | backend ADMIN / core auth | Сбросить instance-wide отключение/политику |
+
 ### 5.18 Audit — `/api/v2/audit` (backend)
 
 | Метод | Путь | RBAC | Назначение |

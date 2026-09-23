@@ -413,23 +413,23 @@ export function matchPathPattern(pattern: string, absolutePath: string, workingD
 }
 
 /**
- * AD-046 §8.1: per-skill permissions. Правило — `permission.rules.skill`:
- * строка (действие для всех скиллов) либо объект glob-паттернов по имени
- * скилла. `deny` скрывает скилл из каталога (в отличие от capability-unavailable,
- * где скилл виден); наследуется саб-агентами (derive.ts).
+ * AD-046 §8.1: именованные правила `permission.rules.<key>` — строка (действие
+ * для всех) либо объект glob-паттернов по имени. Общий резолвер для скиллов
+ * (`skill`) и команд (`command`).
  */
-export function resolveSkillRule(
+function resolveNamedRule(
   config: PermissionConfig | undefined,
-  skillName: string,
+  key: string,
+  name: string,
 ): PermissionDecision | undefined {
-  const rule = config?.rules['skill'];
+  const rule = config?.rules[key];
   if (rule === undefined) return undefined;
 
   if (typeof rule === 'string') {
     return {
       action: rule,
-      reason: sm('permission.rule_matched', { key: 'skill', action: rule }),
-      matchedRule: 'skill',
+      reason: sm('permission.rule_matched', { key, action: rule }),
+      matchedRule: key,
     };
   }
 
@@ -439,22 +439,47 @@ export function resolveSkillRule(
       starAction = action;
       continue;
     }
-    if (globMatch(pattern, skillName)) {
+    if (globMatch(pattern, name)) {
       return {
         action,
-        reason: sm('permission.rule_pattern_matched', { key: 'skill', pattern, action, path: skillName }),
-        matchedRule: `skill.${pattern}`,
+        reason: sm('permission.rule_pattern_matched', { key, pattern, action, path: name }),
+        matchedRule: `${key}.${pattern}`,
       };
     }
   }
   if (starAction) {
     return {
       action: starAction,
-      reason: sm('permission.rule_prefix_matched', { key: 'skill', action: starAction }),
-      matchedRule: 'skill.*',
+      reason: sm('permission.rule_prefix_matched', { key, action: starAction }),
+      matchedRule: `${key}.*`,
     };
   }
   return undefined;
+}
+
+/**
+ * AD-046 §8.1: per-skill permissions. Правило — `permission.rules.skill`:
+ * строка (действие для всех скиллов) либо объект glob-паттернов по имени
+ * скилла. `deny` скрывает скилл из каталога (в отличие от capability-unavailable,
+ * где скилл виден); наследуется саб-агентами (derive.ts).
+ */
+export function resolveSkillRule(
+  config: PermissionConfig | undefined,
+  skillName: string,
+): PermissionDecision | undefined {
+  return resolveNamedRule(config, 'skill', skillName);
+}
+
+/**
+ * AD-046 §8.1: per-command permissions. Правило — `permission.rules.command`:
+ * строка либо объект glob-паттернов по имени команды. `deny` скрывает команду
+ * из `/commands` и блокирует резолвинг; наследуется саб-агентами (derive.ts).
+ */
+export function resolveCommandRule(
+  config: PermissionConfig | undefined,
+  commandName: string,
+): PermissionDecision | undefined {
+  return resolveNamedRule(config, 'command', commandName);
 }
 
 export function isInsideWorkingDir(p: string, workingDir: string): boolean {

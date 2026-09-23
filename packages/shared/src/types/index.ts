@@ -320,6 +320,11 @@ export interface Message {
   disabled: boolean;
   pinned: boolean;
   hidden: boolean;
+  /**
+   * AD-046 §7.1: сообщение локальной `/`-команды (builtin-ответ) — видно в
+   * истории, но исключается из LLM-контекста.
+   */
+  ephemeral?: boolean;
   debugData?: Record<string, unknown>;
   model?: string;
   provider?: string;
@@ -757,6 +762,16 @@ export interface ProjectMcpSettings {
   defaultOn: string[];
 }
 
+/**
+ * AD-046 §4.5: проектный скоуп скиллов (owner/lead) — аналог `ProjectMcpSettings`.
+ * `enabled` — доступные проекту скиллы (гейт), `defaultOn` — включённые по
+ * умолчанию для всех сессий проекта.
+ */
+export interface ProjectSkillSettings {
+  enabled: string[];
+  defaultOn: string[];
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -771,6 +786,8 @@ export interface Project {
   repos?: GitRepoConfig[];
   /** AD-071 §2.4: проектный скоуп MCP (owner/lead). */
   mcp?: ProjectMcpSettings;
+  /** AD-046 §4.5: проектный скоуп скиллов (owner/lead). */
+  skills?: ProjectSkillSettings;
   statusMessages: StatusMessage[];
   /** Kanban-план проекта (AD-039). Владеет проектом, а не сессией. */
   plan?: ProjectPlan;
@@ -1182,3 +1199,5 @@ export * from './tools.js';
 export * from './permission.js';
 // Skill types (AD-046) — re-exported from skills.ts
 export * from './skills.js';
+// Slash-команды и bundles (AD-046 §7) — re-exported from commands.ts
+export * from './commands.js';

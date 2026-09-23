@@ -41,7 +41,19 @@ describe('defaultConfig', () => {
   });
 
   it('skills по умолчанию пусты, inlineShell выключен (AD-046)', () => {
-    expect(defaultConfig.skills).toEqual({ paths: [], trustedProjectDirs: [], inlineShell: false });
+    expect(defaultConfig.skills).toEqual({
+      paths: [], trustedProjectDirs: [], inlineShell: false, toolsets: {},
+    });
+  });
+
+  it('commands по умолчанию: bundle-wins, лимиты, пустые paths (AD-046 §7)', () => {
+    expect(defaultConfig.commands).toEqual({
+      paths: [],
+      bundlesPath: 'skill-bundles',
+      conflict: { mode: 'bundle-wins', namespacePrefix: false },
+      maxArgumentsLength: 10_000,
+      maxRenderedBytes: 200_000,
+    });
   });
 
   it('core.port == 4300', () => {

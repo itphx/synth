@@ -36,6 +36,8 @@ interface SerializedMessage {
   disabled: boolean;
   pinned: boolean;
   hidden: boolean;
+  /** AD-046 §7.1: локальные `/`-команды — вне LLM-контекста. */
+  ephemeral?: boolean;
   debug_data?: Record<string, unknown>;
   model?: string;
   provider?: string;
@@ -148,6 +150,7 @@ function serializeMessage(msg: Message): SerializedMessage {
     disabled: msg.disabled,
     pinned: msg.pinned,
     hidden: msg.hidden,
+    ephemeral: msg.ephemeral,
     debug_data: msg.debugData,
     model: msg.model,
     provider: msg.provider,
@@ -219,6 +222,7 @@ function deserializeMessage(data: SerializedMessage): Message {
     disabled: data.disabled,
     pinned: data.pinned,
     hidden: data.hidden,
+    ephemeral: data.ephemeral,
     debugData: data.debug_data,
     model: data.model,
     provider: data.provider,

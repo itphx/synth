@@ -275,6 +275,16 @@ export const SYSTEM_MESSAGES = {
   'skill.untrusted': 'Skill "{name}" belongs to an untrusted project and cannot be loaded',
   'skill.delegation': 'The skill "{name}" requires capabilities: {capabilities}; agent "{agent}" does not have them. Call `task` with an agent that supports these capabilities.',
   'skill.file_not_found': 'Supporting file "{path}" not found in the skill directory',
+
+  // --- Slash-команды (AD-046 §7) ---
+  'command.unknown': 'Unknown command: /{name}',
+  'command.denied': 'Command /{name} is denied by permission rules',
+  'command.unavailable': 'Command /{name} is unavailable: missing capabilities {capabilities}',
+  'command.help': 'Available commands: /help, /skills, /commands, /summary. Type /<skill-or-bundle> to load it. Any other text goes to the model.',
+  'command.list_empty': 'No commands available',
+  'command.skills_empty': 'No skills available',
+  'command.summary_enqueued': 'Summarization started',
+  'command.summary_unavailable': 'Not enough active messages to summarize',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

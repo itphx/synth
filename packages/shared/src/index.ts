@@ -42,6 +42,8 @@ export {
   toolsDisabledConfigSchema,
   type SkillsConfig,
   skillsConfigSchema,
+  type CommandsConfig,
+  commandsConfigSchema,
   type RouterConfig,
   type RouterContentConfig,
   type RouterEscalationConfig,

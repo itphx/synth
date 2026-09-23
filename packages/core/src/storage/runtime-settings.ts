@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig } from '@itphx/synth-shared';
+import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest } from '@itphx/synth-shared';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 
@@ -41,6 +41,10 @@ export interface RuntimeSettings {
   mcpPolicy?: ToolsPolicy;
   /** AD-071 §2.6: instance-wide отключение инструментов (админка). */
   toolsDisabled?: ToolsDisabledConfig;
+  /** AD-046 §4.5: instance-wide отключение скиллов группами/точечно (админка). */
+  skillsDisabled?: SkillsDisabledRequest;
+  /** AD-046 §4.5: глобальная политика включения скиллов (админка). */
+  skillsPolicy?: ToolsPolicy;
   /** AD-071 §2.3.1: runtime-политика сетевого доступа пользовательских HTTP MCP. */
   mcpNetworkPolicy?: McpNetworkPolicy;
   /**
@@ -270,6 +274,42 @@ export class RuntimeSettingsStore {
     await this._update((current) => {
       const next = { ...current };
       delete next.toolsDisabled;
+      return next;
+    });
+  }
+
+  /** AD-046 §4.5: instance-wide отключение скиллов (админка). */
+  async getSkillsDisabled(): Promise<SkillsDisabledRequest | undefined> {
+    const settings = await this.load();
+    return settings.skillsDisabled;
+  }
+
+  async setSkillsDisabled(config: SkillsDisabledRequest): Promise<void> {
+    await this._update((current) => ({ ...current, skillsDisabled: config }));
+  }
+
+  async clearSkillsDisabled(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.skillsDisabled;
+      return next;
+    });
+  }
+
+  /** AD-046 §4.5: глобальная политика включения скиллов (админка). */
+  async getSkillsPolicy(): Promise<ToolsPolicy | undefined> {
+    const settings = await this.load();
+    return settings.skillsPolicy;
+  }
+
+  async setSkillsPolicy(policy: ToolsPolicy): Promise<void> {
+    await this._update((current) => ({ ...current, skillsPolicy: policy }));
+  }
+
+  async clearSkillsPolicy(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.skillsPolicy;
       return next;
     });
   }

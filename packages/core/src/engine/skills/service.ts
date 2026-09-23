@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import type { SkillDetail, SkillDiagnostic, SkillSummary } from '@itphx/synth-shared';
+import type { SkillDetail, SkillDiagnostic, SkillMeta, SkillSummary } from '@itphx/synth-shared';
 import { SkillStore, type CreateSkillInput, type UpdateSkillMarkdownInput } from '../../storage/skill-store.js';
 import { buildSkillSources } from './discovery.js';
 import { SkillRegistry } from './registry.js';
@@ -10,6 +10,7 @@ import {
   readSupportingFile as readSkillSupportingFile,
 } from './loader.js';
 import { resolveSkillRule } from '../permission/evaluator.js';
+import { missingCapabilities } from './scope.js';
 import type { DiscoveredSkill, LoadedSkill, SkillCatalogOptions, SkillScanResult } from './types.js';
 
 export interface SkillServiceOptions {
@@ -18,6 +19,8 @@ export interface SkillServiceOptions {
   configPaths?: readonly string[];
   /** `config.skills.trustedProjectDirs`. */
   trustedProjectDirs?: readonly string[];
+  /** `config.skills.toolsets` — экспансия `requires_toolsets` (AD-046 §3.2). */
+  toolsets?: Record<string, readonly string[]>;
   home?: string;
   store?: SkillStore;
   registry?: SkillRegistry;
@@ -36,9 +39,11 @@ export interface SkillListOptions {
 export class SkillService {
   private readonly _store: SkillStore;
   private readonly _registry: SkillRegistry;
+  private readonly _toolsets: Record<string, readonly string[]>;
 
   constructor(opts: SkillServiceOptions) {
     this._store = opts.store ?? new SkillStore({ dataDir: opts.dataDir });
+    this._toolsets = opts.toolsets ?? {};
     this._registry = opts.registry ?? new SkillRegistry({
       sources: (o) => buildSkillSources({
         dataDir: opts.dataDir,
@@ -59,7 +64,7 @@ export class SkillService {
   async listSummaries(opts?: SkillListOptions): Promise<{ skills: SkillSummary[]; diagnostics: SkillDiagnostic[] }> {
     const { skills, diagnostics } = await this._registry.list({ projectWorkspace: opts?.projectWorkspace });
     return {
-      skills: skills.map((s) => toSkillSummary(s, { capabilities: opts?.capabilities })),
+      skills: skills.map((s) => toSkillSummary(s, { capabilities: opts?.capabilities, toolsets: this._toolsets })),
       diagnostics,
     };
   }
@@ -68,7 +73,7 @@ export class SkillService {
   async detail(name: string, opts?: SkillListOptions): Promise<SkillDetail | undefined> {
     const skill = await this._registry.get(name, { projectWorkspace: opts?.projectWorkspace });
     if (!skill) return undefined;
-    const summary = toSkillSummary(skill, { capabilities: opts?.capabilities });
+    const summary = toSkillSummary(skill, { capabilities: opts?.capabilities, toolsets: this._toolsets });
     const files = skill.trusted ? await collectSupportingFiles(skill.dir) : [];
     return { ...summary, meta: skill.meta, body: skill.trusted ? skill.body : '', files };
   }
@@ -82,8 +87,20 @@ export class SkillService {
     const { skills } = await this._registry.list({ projectWorkspace: opts.projectWorkspace });
     return buildSkillCatalog(skills, {
       ...opts,
+      toolsets: opts.toolsets ?? this._toolsets,
       isDenied: (name) => resolveSkillRule(opts.permissionConfig, name)?.action === 'deny',
     });
+  }
+
+  /**
+   * AD-046 §3.2: отсутствующие capabilities агента с экспансией
+   * `requires_toolsets` через config.skills.toolsets.
+   */
+  missingCapabilities(
+    meta: SkillMeta,
+    capabilities: readonly string[] | undefined,
+  ): string[] {
+    return missingCapabilities(meta, capabilities, this._toolsets);
   }
 
   /** Загружает тело + supporting-файлы (core-тул `skill`). */

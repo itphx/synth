@@ -126,6 +126,36 @@ export { SkillStore } from './storage/skill-store.js';
 export type { SkillStoreConfig, CreateSkillInput, UpdateSkillMarkdownInput } from './storage/skill-store.js';
 export { createSkillRoutes } from './server/routes/skills.js';
 export type { SkillRoutesDeps, SkillRoutesOptions, SkillRoutesMessages } from './server/routes/skills.js';
+// AD-046 §7: slash-команды и bundles.
+export { CommandService } from './engine/commands/service.js';
+export type { CommandServiceOptions, CommandSkillSource } from './engine/commands/service.js';
+export { CommandRegistry } from './engine/commands/registry.js';
+export { buildCommandSources, scanCommandSource, mergeCommandScans } from './engine/commands/discovery.js';
+export { parseCommandFile } from './engine/commands/parser.js';
+export { renderTemplate } from './engine/commands/template.js';
+export { parseBundleFile, loadBundle } from './engine/commands/bundles.js';
+export { parseCommandInput, resolveCatalog } from './engine/commands/resolver.js';
+export { BUILTIN_COMMANDS, isBuiltinCommand, renderHelp, renderSkillsList, renderCommandsList } from './engine/commands/builtin.js';
+export type {
+  TemplateCommand,
+  CommandSource,
+  CommandScanResult,
+  CommandConflictConfig,
+  CommandRuntimeConfig,
+  CommandContext,
+  CommandSkillEntry,
+  CommandCatalog,
+  CommandEntry,
+  LoadedBundle,
+} from './engine/commands/types.js';
+export { SkillBundleStore } from './storage/skill-bundle-store.js';
+export type { SkillBundleStoreConfig } from './storage/skill-bundle-store.js';
+export { createCommandRoutes } from './server/routes/commands.js';
+export type { CommandRoutesDeps, CommandRoutesOptions, CommandRoutesMessages } from './server/routes/commands.js';
+export { createSkillBundleRoutes } from './server/routes/skill-bundles.js';
+export type { SkillBundleRoutesDeps, SkillBundleRoutesOptions, SkillBundleRoutesMessages } from './server/routes/skill-bundles.js';
+export { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './server/routes/skill-scope.js';
+export type { SkillScopeRoutesDeps, SkillScopeRoutesOptions } from './server/routes/skill-scope.js';
 export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy } from './storage/runtime-settings.js';
 export type { RuntimeSettings, LlmGatewayRuntimeSettings } from './storage/runtime-settings.js';
 export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';

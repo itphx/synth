@@ -1,5 +1,6 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { SkillSummary } from '@itphx/synth-shared';
 import { t as sm } from '../system-messages.js';
 import type { DiscoveredSkill, LoadedSkill } from './types.js';
@@ -106,12 +107,12 @@ export function buildSkillContentBlock(
     '',
     body.trim(),
     '',
-    `Base directory for this skill: file://${dir}`,
+    `Base directory for this skill: ${pathToFileURL(dir).href}`,
     'Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.',
   ];
   if (shown.length > 0) {
     lines.push('<skill_files>');
-    for (const f of shown) lines.push(`<${f}>`);
+    for (const f of shown) lines.push(`<file>${f}</file>`);
     lines.push('</skill_files>');
   }
   lines.push('</skill_content>');

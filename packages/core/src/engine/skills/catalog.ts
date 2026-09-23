@@ -39,10 +39,10 @@ export interface BuildSkillCatalogOptions extends SkillCatalogOptions {
 /** Сводка найденного скилла (capability-aware, AD-046 §6.3). */
 export function toSkillSummary(
   skill: DiscoveredSkill,
-  opts?: { capabilities?: readonly string[] },
+  opts?: { capabilities?: readonly string[]; toolsets?: Record<string, readonly string[]> },
 ): SkillSummary {
   const meta = skill.meta;
-  const missing = missingCapabilities(meta, opts?.capabilities);
+  const missing = missingCapabilities(meta, opts?.capabilities, opts?.toolsets);
   return {
     name: skill.name,
     description: meta.description,
@@ -85,7 +85,7 @@ export function buildSkillCatalog(
     if (opts.isDenied?.(skill.name)) continue;
 
     const disabled = isDisabledBySession(meta, opts.sessionDisabled);
-    const missing = missingCapabilities(meta, opts.capabilities);
+    const missing = missingCapabilities(meta, opts.capabilities, opts.toolsets);
     const base: ComposerSkillEntry = {
       name: skill.name,
       description: meta.description,

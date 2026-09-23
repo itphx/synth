@@ -318,3 +318,51 @@ export type SkillCreateRequest = z.infer<typeof skillCreateSchema>;
 export type SkillUpdateRequest = z.infer<typeof skillUpdateSchema>;
 export type SkillFileWriteRequest = z.infer<typeof skillFileWriteSchema>;
 export type SkillSessionOverrideRequest = z.infer<typeof skillSessionOverrideSchema>;
+
+// --- Slash-команды и bundles (AD-046 §7) ---
+
+/** AD-046 §7.3: тело `POST/PATCH /api/v2/skill-bundles` (YAML-группа скиллов). */
+export const skillBundleSchema = z.object({
+  name: skillNameSchema,
+  description: z.string().min(SKILL_DESCRIPTION_MIN).max(SKILL_DESCRIPTION_MAX),
+  skills: z.array(skillNameSchema).min(1),
+  instruction: z.string().optional(),
+});
+
+export type SkillBundleRequest = z.infer<typeof skillBundleSchema>;
+
+/** AD-046 §7.4: тело `PUT /api/v2/settings/skills-disabled` (группы/имена). */
+export const skillsDisabledSchema = z.object({
+  categories: z.array(z.string()).default([]),
+  groups: z.array(z.string()).default([]),
+  skills: z.array(z.string()).default([]),
+});
+
+export type SkillsDisabledRequest = z.infer<typeof skillsDisabledSchema>;
+
+/**
+ * AD-046 §4.5: тело `PUT /api/v2/sessions/:id/skills`: точечный toggle
+ * (`{ name, enabled }`) или полная/частичная замена (`{ skills?, skillsDisabled? }`).
+ */
+export const sessionSkillUpdateSchema = z
+  .object({
+    name: z.string().min(1).optional(),
+    enabled: z.boolean().optional(),
+    skills: z.array(z.string()).optional(),
+    skillsDisabled: z.array(z.string()).optional(),
+  })
+  .refine(
+    (v) => v.name !== undefined
+      || v.skills !== undefined
+      || v.skillsDisabled !== undefined,
+    { message: 'Требуется name, skills или skillsDisabled' },
+  );
+
+/** AD-046 §4.5: тело `PUT /api/v2/projects/:id/skills`. */
+export const projectSkillUpdateSchema = z.object({
+  enabled: z.array(z.string()).optional(),
+  defaultOn: z.array(z.string()).optional(),
+});
+
+export type SessionSkillUpdateRequest = z.infer<typeof sessionSkillUpdateSchema>;
+export type ProjectSkillUpdateRequest = z.infer<typeof projectSkillUpdateSchema>;

@@ -71,7 +71,9 @@ export const skillTool: ToolDefinition = {
     const agentCapabilities = ctx.agentRole
       ? extra.agentRegistry?.get(ctx.agentRole)?.capabilities
       : undefined;
-    const missing = missingCapabilities(skill.meta, agentCapabilities);
+    const missing = runtime.missingCapabilities
+      ? runtime.missingCapabilities(skill.meta, agentCapabilities)
+      : missingCapabilities(skill.meta, agentCapabilities);
     if (missing.length > 0) {
       return {
         content: sm('skill.delegation', {

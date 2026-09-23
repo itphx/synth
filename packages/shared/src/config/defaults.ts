@@ -98,6 +98,17 @@ export const defaultConfig: SynthConfig = {
     paths: [],
     trustedProjectDirs: [],
     inlineShell: false,
+    toolsets: {},
+  },
+  commands: {
+    paths: [],
+    bundlesPath: 'skill-bundles',
+    conflict: {
+      mode: 'bundle-wins',
+      namespacePrefix: false,
+    },
+    maxArgumentsLength: 10_000,
+    maxRenderedBytes: 200_000,
   },
   router: {
     enabled: true,

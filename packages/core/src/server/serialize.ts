@@ -97,6 +97,8 @@ export function serializeMessage(msg: Message, index: number) {
     disabled: msg.disabled,
     pinned: msg.pinned,
     hidden: msg.hidden,
+    /** AD-046 §7.1: локальный ответ `/`-команды — вне LLM-контекста. */
+    ephemeral: msg.ephemeral ?? false,
     agent_role: msg.agentRole || null,
     model: msg.model || null,
     provider: msg.provider || null,

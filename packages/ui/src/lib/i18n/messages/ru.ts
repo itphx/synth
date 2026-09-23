@@ -1731,6 +1731,15 @@ export const dict = {
   'skill.untrusted': 'Скилл «{name}» принадлежит недоверенному проекту и не может быть загружен',
   'skill.delegation': 'Для скилла «{name}» нужны capabilities: {capabilities}; у агента «{agent}» их нет. Вызови `task` с агентом, который их поддерживает.',
   'skill.file_not_found': 'Supporting-файл «{path}» не найден в каталоге скилла',
+  // --- Slash-команды (AD-046 §7) ---
+  'command.unknown': 'Неизвестная команда: /{name}',
+  'command.denied': 'Команда /{name} запрещена правилами прав',
+  'command.unavailable': 'Команда /{name} недоступна: не хватает capabilities {capabilities}',
+  'command.help': 'Доступные команды: /help, /skills, /commands, /summary. Введите /<скилл-или-bundle>, чтобы загрузить его. Любой другой текст уходит модели.',
+  'command.list_empty': 'Нет доступных команд',
+  'command.skills_empty': 'Нет доступных скиллов',
+  'command.summary_enqueued': 'Суммаризация запущена',
+  'command.summary_unavailable': 'Недостаточно активных сообщений для суммаризации',
 
   // --- PWA ---
   'pwa.updateAvailable': 'Доступна новая версия приложения',

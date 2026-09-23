@@ -14,6 +14,9 @@ import type { Message } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
 import { mergeSecurityConfig, RuntimeSettingsStore } from '../storage/runtime-settings.js';
 import { DEFAULT_AGENT_ID } from '../engine/agents/index.js';
+import { SkillService } from '../engine/skills/service.js';
+import { CommandService, isLocalCommandStatus } from '../engine/commands/service.js';
+import { SkillBundleStore } from '../storage/skill-bundle-store.js';
 
 export interface SingleChatOptions {
   message: string;
@@ -47,6 +50,49 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   (await providerStore.list()).forEach((p) => providerCache.set(p.name, p));
   const modelCache = new Map<string, ModelConfig>();
   (await modelStore.list()).forEach((m) => modelCache.set(m.id, m));
+
+  // AD-046: сервис скиллов + slash-команд (резолвинг в core до LLM).
+  const skillService = new SkillService({
+    dataDir,
+    configPaths: options.config.skills?.paths,
+    trustedProjectDirs: options.config.skills?.trustedProjectDirs,
+    toolsets: options.config.skills?.toolsets,
+  });
+  const bundleStore = new SkillBundleStore({
+    dataDir,
+    bundlesPath: options.config.commands?.bundlesPath,
+  });
+  const commandService = new CommandService({
+    config: {
+      dataDir,
+      commandsPaths: options.config.commands?.paths ?? [],
+      bundlesPath: options.config.commands?.bundlesPath ?? 'skill-bundles',
+      conflict: options.config.commands?.conflict ?? { mode: 'bundle-wins', namespacePrefix: false },
+      maxArgumentsLength: options.config.commands?.maxArgumentsLength ?? 10_000,
+      maxRenderedBytes: options.config.commands?.maxRenderedBytes ?? 200_000,
+      toolsets: options.config.skills?.toolsets ?? {},
+    },
+    skillRuntime: skillService,
+    skillSource: skillService,
+    bundleStore,
+  });
+
+  // AD-046 §9.4: локальные `/`-команды (help/skills/commands/summary) не
+  // поднимают LLM и не требуют настроенного провайдера. `/summary` НЕ
+  // короткозамыкается здесь: оркестратор запускает реальную суммаризацию
+  // (как в SSE-пути), поэтому управление уходит в обычный поток.
+  const trimmedMessage = options.message.trimStart();
+  if (trimmedMessage.startsWith('/')) {
+    const resolved = await commandService.resolve(trimmedMessage, {
+      projectWorkspace: defaultWorkingDir,
+      permissionConfig: options.config.permission,
+    });
+    const localOnly = resolved && isLocalCommandStatus(resolved.status);
+    if (localOnly && resolved) {
+      console.log(resolved.output ?? '');
+      return;
+    }
+  }
 
   const providerName = options.provider || options.config.llm.defaultProvider;
   const modelName = options.model || options.config.llm.defaultModel;
@@ -120,6 +166,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   const runtimeSecurity = await settingsStore.getSecuritySettings();
   const effectiveSecurityConfig = mergeSecurityConfig(options.config.security, runtimeSecurity);
 
+  // AD-046: сервис скиллов + slash-команд (резолвинг в core до LLM).
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -138,6 +185,8 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     securityConfig: effectiveSecurityConfig,
     gatewayConfig: options.config.llmGateway,
     gatewayPatternStore: patternStore,
+    skillRuntime: skillService,
+    commandRuntime: commandService,
   });
 
   // Создаём временную сессию
@@ -167,6 +216,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     pinned: false,
     hidden: false,
     author: 'user',
+    source: 'cli',
     metadata: { stream_id: generateId() },
   };
 

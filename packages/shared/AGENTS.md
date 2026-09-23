@@ -30,6 +30,9 @@
 defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureDataDir`).
 - **Добавление поля = `types.ts` + `defaults.ts` + тест** (`defaults.test.ts`).
 - Читать только через `@itphx/synth-shared/config` (корневой инвариант 10).
+- AD-046: секции `skills` (`paths`/`trustedProjectDirs`/`inlineShell`/`toolsets`) и
+  `commands` (`paths`/`bundlesPath`/`conflict`/лимиты); типы команд/бандлов —
+  `src/types/commands.ts`, Zod — `schemas` (`skillBundleSchema`, session/project/settings-skills).
 
 ## i18n-контракт
 

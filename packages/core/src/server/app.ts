@@ -7,7 +7,7 @@ import { join, extname, isAbsolute, normalize, resolve } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig } from '@itphx/synth-shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -49,6 +49,11 @@ import { createDictionaryRoutes } from './routes/dictionaries.js';
 import { createMcpRoutes } from './routes/mcp.js';
 import { createSkillRoutes } from './routes/skills.js';
 import { SkillService } from '../engine/skills/service.js';
+import { createCommandRoutes } from './routes/commands.js';
+import { createSkillBundleRoutes } from './routes/skill-bundles.js';
+import { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './routes/skill-scope.js';
+import { CommandService } from '../engine/commands/service.js';
+import { SkillBundleStore } from '../storage/skill-bundle-store.js';
 import { createRemoteProxyMiddleware } from './proxy.js';
 
 export interface StandaloneConfig {
@@ -82,6 +87,8 @@ export interface StandaloneConfig {
   mcpNetworkPolicy?: McpNetworkPolicy;
   /** AD-046: конфигурация скиллов из config.yaml `skills` (paths/trustedProjectDirs/inlineShell). */
   skillsConfig?: SkillsConfig;
+  /** AD-046 §7: конфигурация slash-команд из config.yaml `commands`. */
+  commandsConfig?: CommandsConfig;
   /**
    * Дефолтный адрес удалённого backend (гибрид, `serve --connect`/env/конфиг).
    * Нужен для авто-логина (GET /auth/status) и POST /auth/login без поля server.
@@ -743,6 +750,27 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     dataDir,
     configPaths: config.skillsConfig?.paths,
     trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
+    toolsets: config.skillsConfig?.toolsets,
+  });
+
+  // AD-046 §7: slash-команды и bundles — единый резолвинг в core (UI/CLI/гибрид).
+  const bundleStore = new SkillBundleStore({
+    dataDir,
+    bundlesPath: config.commandsConfig?.bundlesPath,
+  });
+  const commandService = new CommandService({
+    config: {
+      dataDir,
+      commandsPaths: config.commandsConfig?.paths ?? [],
+      bundlesPath: config.commandsConfig?.bundlesPath ?? 'skill-bundles',
+      conflict: config.commandsConfig?.conflict ?? { mode: 'bundle-wins', namespacePrefix: false },
+      maxArgumentsLength: config.commandsConfig?.maxArgumentsLength ?? 10_000,
+      maxRenderedBytes: config.commandsConfig?.maxRenderedBytes ?? 200_000,
+      toolsets: config.skillsConfig?.toolsets ?? {},
+    },
+    skillRuntime: skillService,
+    skillSource: skillService,
+    bundleStore,
   });
 
   const orchestrator = new ChatOrchestrator({
@@ -774,6 +802,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
     // AD-046 §5: каталог скиллов в промпт + тул `skill`.
     skillRuntime: skillService,
+    // AD-046 §7: резолвинг `/`-команд до LLM.
+    commandRuntime: commandService,
   });
 
   const processMessage = orchestrator.createProcessMessage();
@@ -926,6 +956,48 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       return isAbsolute(project.workspace) ? normalize(project.workspace) : resolve(root, project.workspace);
     },
   }));
+
+  // AD-046 §9.1: список команд (встроенные + шаблонные + скиллы + bundles).
+  app.route('/api/v2/commands', createCommandRoutes(auth, {
+    commandService,
+    resolveProjectWorkspace: async (projectId) => {
+      const project = await projectStore.load(projectId);
+      if (!project?.workspace) return undefined;
+      const root = config.workspacesRoot ?? join(dataDir, 'workspaces');
+      return isAbsolute(project.workspace) ? normalize(project.workspace) : resolve(root, project.workspace);
+    },
+  }));
+
+  // AD-046 §9.1: bundles (instance-хранилище YAML-групп скиллов).
+  app.route('/api/v2/skill-bundles', createSkillBundleRoutes(auth, {
+    bundleStore,
+    validateSkills: async (names) => {
+      const missing: string[] = [];
+      for (const name of names) {
+        if (!(await skillService.get(name))) missing.push(name);
+      }
+      return missing;
+    },
+  }));
+
+  // AD-046 §4.5: scope-API скиллов (сессии/проекты/настройки, аналог MCP).
+  const resolveSkillWorkspace = async (projectId: string): Promise<string | undefined> => {
+    const project = await projectStore.load(projectId);
+    if (!project?.workspace) return undefined;
+    const root = config.workspacesRoot ?? join(dataDir, 'workspaces');
+    return isAbsolute(project.workspace) ? normalize(project.workspace) : resolve(root, project.workspace);
+  };
+  app.route('/api/v2/sessions', createSessionSkillScopeRoutes(auth, {
+    sessionManager, skillService, settingsStore, projectStore,
+    permissionConfig: config.permissionConfig,
+    resolveProjectWorkspace: resolveSkillWorkspace,
+  }));
+  app.route('/api/v2/projects', createProjectSkillScopeRoutes(auth, {
+    sessionManager, skillService, settingsStore, projectStore,
+    permissionConfig: config.permissionConfig,
+    resolveProjectWorkspace: resolveSkillWorkspace,
+  }));
+  app.route('/api/v2/settings', createSkillSettingsRoutes(auth, { settingsStore }));
 
   // Глобальный SSE-хаб
   app.get('/api/v2/events', async (c) => {

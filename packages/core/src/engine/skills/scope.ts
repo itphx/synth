@@ -42,14 +42,31 @@ export function matchesBinding(
 }
 
 /**
+ * AD-046 §3.2/§12: полный набор требуемых capabilities — `requires_capabilities`
+ * ∪ expand(`requires_toolsets` через `config.skills.toolsets`).
+ */
+export function expandRequiredCapabilities(
+  meta: Pick<SkillMeta, 'requiresCapabilities' | 'requiresToolsets'>,
+  toolsets?: Record<string, readonly string[]>,
+): string[] {
+  const set = new Set<string>(meta.requiresCapabilities ?? []);
+  for (const name of meta.requiresToolsets ?? []) {
+    for (const cap of toolsets?.[name] ?? []) set.add(cap);
+  }
+  return [...set];
+}
+
+/**
  * AD-046 §6.3: не хватает ли агенту требуемых capabilities. Возвращает список
- * отсутствующих (пусто — доступен).
+ * отсутствующих (пусто — доступен). `requires_toolsets` экспандится через
+ * `config.skills.toolsets` в capabilities перед проверкой.
  */
 export function missingCapabilities(
-  meta: Pick<SkillMeta, 'requiresCapabilities'>,
+  meta: Pick<SkillMeta, 'requiresCapabilities' | 'requiresToolsets'>,
   capabilities: readonly string[] | undefined,
+  toolsets?: Record<string, readonly string[]>,
 ): string[] {
-  const required = meta.requiresCapabilities ?? [];
+  const required = expandRequiredCapabilities(meta, toolsets);
   if (required.length === 0) return [];
   const have = new Set(capabilities ?? []);
   return required.filter((cap) => !have.has(cap));

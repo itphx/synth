@@ -29,11 +29,13 @@ import {
   RateLimiter,
   DictionaryStore, createDictionaryRoutes,
   SkillService, createSkillRoutes,
+  CommandService, createCommandRoutes, createSkillBundleRoutes, SkillBundleStore,
+  createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes,
   DEFAULT_AGENT_ID,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
-import { nowISO, ensureDataDir, MessageRole, generateStreamId, SYNTH_VERSION, DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId, SYNTH_VERSION, DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole } from '@itphx/synth-shared';
 import type { BusEvent } from '@itphx/synth-shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import type { BackendConfig } from './lib/app-config.js';
@@ -440,6 +442,27 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       dataDir,
       configPaths: backendConfig.synth.skills.paths,
       trustedProjectDirs: backendConfig.synth.skills.trustedProjectDirs,
+      toolsets: backendConfig.synth.skills.toolsets,
+    });
+
+    // AD-046 §7: slash-команды и bundles (mirror core).
+    const bundleStore = new SkillBundleStore({
+      dataDir,
+      bundlesPath: backendConfig.synth.commands.bundlesPath,
+    });
+    const commandService = new CommandService({
+      config: {
+        dataDir,
+        commandsPaths: backendConfig.synth.commands.paths,
+        bundlesPath: backendConfig.synth.commands.bundlesPath,
+        conflict: backendConfig.synth.commands.conflict,
+        maxArgumentsLength: backendConfig.synth.commands.maxArgumentsLength,
+        maxRenderedBytes: backendConfig.synth.commands.maxRenderedBytes,
+        toolsets: backendConfig.synth.skills.toolsets,
+      },
+      skillRuntime: skillService,
+      skillSource: skillService,
+      bundleStore,
     });
 
     const orchestrator = new ChatOrchestrator({
@@ -473,6 +496,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
       // AD-046 §5: каталог скиллов в промпт + тул `skill`.
       skillRuntime: skillService,
+      // AD-046 §7: резолвинг `/`-команд до LLM.
+      commandRuntime: commandService,
     });
 
     const processMessage = orchestrator.createProcessMessage();
@@ -543,6 +568,68 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
           : resolve(backendConfig.workspacesRoot, project.workspace);
       },
     }, { writeGuard: auth.requireAdmin }));
+
+    // AD-046 §7/§9.1: команды и bundles (mirror core, мутации — ADMIN).
+    app.route('/api/v2/commands', createCommandRoutes(auth as unknown as CoreAuthKit, {
+      commandService,
+      resolveProjectWorkspace: async (projectId) => {
+        const project = await projectStore.load(projectId);
+        if (!project?.workspace) return undefined;
+        return isAbsolute(project.workspace)
+          ? normalize(project.workspace)
+          : resolve(backendConfig.workspacesRoot, project.workspace);
+      },
+    }));
+    app.route('/api/v2/skill-bundles', createSkillBundleRoutes(auth as unknown as CoreAuthKit, {
+      bundleStore,
+      validateSkills: async (names) => {
+        const missing: string[] = [];
+        for (const name of names) {
+          if (!(await skillService.get(name))) missing.push(name);
+        }
+        return missing;
+      },
+    }, { writeGuard: auth.requireAdmin }));
+
+    // AD-046 §4.5: scope-API скиллов. Доступ к сессии — владелец|ADMIN
+    // (canAccess, как в session-роутах); проект — owner/LEAD/ADMIN.
+    const resolveSkillWorkspace = async (projectId: string): Promise<string | undefined> => {
+      const project = await projectStore.load(projectId);
+      if (!project?.workspace) return undefined;
+      return isAbsolute(project.workspace)
+        ? normalize(project.workspace)
+        : resolve(backendConfig.workspacesRoot, project.workspace);
+    };
+    app.route('/api/v2/sessions', createSessionSkillScopeRoutes(auth as unknown as CoreAuthKit, {
+      sessionManager, skillService, settingsStore, projectStore,
+      permissionConfig: backendConfig.synth.permission,
+      resolveProjectWorkspace: resolveSkillWorkspace,
+    }, {
+      writeGuard: auth.requireAuth,
+      resolveUserId: async (c) => (await auth.getCurrentUser(c as never))?.id ?? '',
+      canAccess: (session, c, userId) =>
+        (session.ownerId ?? session.userId) === userId
+        || auth.isAdmin(c as never),
+    }));
+    app.route('/api/v2/projects', createProjectSkillScopeRoutes(auth as unknown as CoreAuthKit, {
+      sessionManager, skillService, settingsStore, projectStore,
+      permissionConfig: backendConfig.synth.permission,
+      resolveProjectWorkspace: resolveSkillWorkspace,
+    }, {
+      // AD-046 §4.5: проектным уровнем управляют owner/LEAD/ADMIN — как в
+      // project-MCP (`canManageProjectMcp`), поэтому writeGuard не requireAdmin;
+      // владение проверяет canAccessProject (403 не-членам, 404 — нет проекта).
+      writeGuard: auth.requireAuth,
+      resolveUserId: async (c) => (await auth.getCurrentUser(c as never))?.id ?? '',
+      canAccessProject: (project, c, userId) =>
+        auth.isAdmin(c as never)
+        || auth.hasRole(c as never, 'LEAD')
+        || project.ownerId === userId
+        || project.members?.[userId] === ProjectRole.OWNER,
+    }));
+    app.route('/api/v2/settings', createSkillSettingsRoutes(auth as unknown as CoreAuthKit, { settingsStore }, {
+      writeGuard: auth.requireAdmin,
+    }));
 
     // LLM Gateway audit routes (AD-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные
     app.route('/api/v2/audit', createAuditRoutes(auth, {

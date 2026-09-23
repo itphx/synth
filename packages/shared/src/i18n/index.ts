@@ -219,6 +219,15 @@ export const ENGINE_MESSAGE_KEYS = [
   'skill.untrusted',
   'skill.delegation',
   'skill.file_not_found',
+  // --- Slash-команды (AD-046 §7) ---
+  'command.unknown',
+  'command.denied',
+  'command.unavailable',
+  'command.help',
+  'command.list_empty',
+  'command.skills_empty',
+  'command.summary_enqueued',
+  'command.summary_unavailable',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -431,6 +440,15 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'skill.untrusted': ["name"],
   'skill.delegation': ["name","capabilities","agent"],
   'skill.file_not_found': ["path"],
+  // --- Slash-команды (AD-046 §7) ---
+  'command.unknown': ["name"],
+  'command.denied': ["name"],
+  'command.unavailable': ["name","capabilities"],
+  'command.help': [],
+  'command.list_empty': [],
+  'command.skills_empty': [],
+  'command.summary_enqueued': [],
+  'command.summary_unavailable': [],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

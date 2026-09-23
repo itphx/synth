@@ -16,6 +16,7 @@ import { ContextConfig } from './context/config.js';
 import { SystemPromptComposer, type ComposerContext, type ComposerMcpServer, type ComposerMcpServerStatus } from './context/composer.js';
 import type { ComposerSkillsCatalog } from './skills/catalog.js';
 import type { SkillRuntime } from './skills/types.js';
+import type { CommandRuntime } from '@itphx/synth-shared';
 import { calibrateCharsPerToken, estimateTokens, estimatePromptChars, DEFAULT_CHARS_PER_TOKEN } from './context/token-ratio.js';
 import {
   agentKeyOf,
@@ -194,6 +195,11 @@ export interface OrchestratorOptions {
    * Не задан — скиллы не участвуют в промпте/тулах.
    */
   skillRuntime?: SkillRuntime;
+  /**
+   * AD-046 §7: рантайм `/`-команд (CommandService). Не задан — `/`-команды не
+   * резолвятся (сообщение уходит в LLM как есть).
+   */
+  commandRuntime?: CommandRuntime;
 }
 
 export interface ProcessMessageResult {
@@ -279,6 +285,8 @@ export class ChatOrchestrator {
   private readonly _onTokenRatioCalibrated: ((model: string, ratio: number) => void | Promise<void>) | undefined;
   /** AD-046 §5: рантайм скиллов (каталог промпта + тул `skill`). */
   private readonly _skillRuntime: SkillRuntime | null;
+  /** AD-046 §7: рантайм `/`-команд (резолвинг до LLM). */
+  private readonly _commandRuntime: CommandRuntime | null;
   private _providerPool: ProviderPool | null;
   /** Политика защищённых путей (СКВОЗНАЯ проверка файловых тулов + shell) — ленивая загрузка с кэшем. */
   private _protectedPaths: ProtectedPathsPolicy | null = null;
@@ -585,6 +593,7 @@ export class ChatOrchestrator {
     this._tokenRatioLoader = options.tokenRatioLoader;
     this._onTokenRatioCalibrated = options.onTokenRatioCalibrated;
     this._skillRuntime = options.skillRuntime ?? null;
+    this._commandRuntime = options.commandRuntime ?? null;
 
     // AD-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
     // ObfuscationMapStore живёт в сессии, RateLimiter и AuditLogger — общие.
@@ -941,6 +950,175 @@ export class ChatOrchestrator {
       debugCollector,
       skillsCatalog,
     };
+  }
+
+  /**
+   * AD-046 §7: раннее разрешение `/`-команды до micro-first/LLM.
+   *
+   * - builtin/unknown/denied/unavailable — локальный ответ (user+assistant
+   *   помечаются `ephemeral`, исключаются из LLM-контекста), ранний возврат;
+   * - template/skill/bundle — рендер подставляется в пользовательское сообщение
+   *   как явный контекст, управление возвращается обычному пути (LLM);
+   * - `/summary` — прямая ручная суммаризация; `null` — не команда.
+   */
+  private async _handleCommand(args: {
+    session: Session;
+    message: Message;
+    signal: AbortSignal;
+    publishChunk: (event: string, data: Record<string, unknown>) => void;
+    debugCollector: DebugCollector;
+    streamId: string;
+    effectiveAgentRole: string | undefined;
+    workingDir: string;
+    attempt?: number;
+  }): Promise<ProcessMessageResult | null> {
+    if (!this._commandRuntime) return null;
+    const { session, message, signal, publishChunk, debugCollector, streamId, effectiveAgentRole, workingDir, attempt } = args;
+    const input = (message.content ?? '').trim();
+    if (!input.startsWith('/')) return null;
+
+    const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
+    const permissionConfig = session.settings.permission ?? this._permissionConfig;
+
+    let result;
+    try {
+      result = await this._commandRuntime.resolve(input, {
+        projectWorkspace: workingDir,
+        capabilities: agentDef?.capabilities,
+        agent: { id: effectiveAgentRole, groups: agentDef?.groups },
+        sessionEnabled: session.settings.skills,
+        sessionDisabled: session.settings.skillsDisabled,
+        permissionConfig,
+      });
+    } catch {
+      return null;
+    }
+    if (!result) return null;
+
+    this._eventBus.publish(session.id, 'command.invoked', {
+      session_id: session.id,
+      command: result.name,
+      args: result.args,
+      actor: message.source === 'cli' ? 'cli' : 'user',
+    });
+
+    // `/summary` — ручная суммаризация (как routes/sessions.ts).
+    if (result.status === 'summarization') {
+      if (!this._optimizer || !this._optimizer.canSummarize(session)) {
+        return this._finishLocalCommand(session, message, publishChunk, sm('command.summary_unavailable'), streamId);
+      }
+      const sysMsg: Message = {
+        id: generateId(),
+        role: MessageRole.SYSTEM,
+        seq: 0,
+        origin: 'local',
+        parts: [{ id: generateId(), type: 'text', data: '' }],
+        content: '',
+        createdAt: nowISO(),
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        metadata: { type: 'summarization_request', reason: 'manual', stream_id: streamId },
+      };
+      return this._handleSummarization(session, sysMsg, signal, publishChunk, debugCollector, streamId, attempt);
+    }
+
+    // template/skill/bundle: инжектируем рендер в пользовательское сообщение.
+    if (result.prompt !== undefined) {
+      message.content = result.prompt;
+      message.parts = [makeTextPart(result.prompt)];
+      message.metadata = {
+        ...(message.metadata ?? {}),
+        command: { name: result.name, kind: result.kind, args: result.args },
+      };
+      const idx = session.messages.findIndex((m) => m.id === message.id);
+      if (idx >= 0) session.messages[idx] = { ...session.messages[idx]!, ...message };
+      await this._sessionManager.updateSession(session).catch(() => {});
+      for (const skillName of result.skills ?? []) {
+        this._eventBus.publish(session.id, 'skill.invoked', {
+          session_id: session.id,
+          name: skillName,
+          source: 'user',
+          ...(effectiveAgentRole ? { agent: effectiveAgentRole } : {}),
+          ...(result.kind === 'bundle' ? { bundle: result.name } : {}),
+        });
+      }
+      return null;
+    }
+
+    return this._finishLocalCommand(session, message, publishChunk, result.output ?? '', streamId);
+  }
+
+  /**
+   * AD-046 §7.1: завершение локального ответа (builtin/команда/micro-first) теми
+   * же событиями, что обычный стрим — `stream.chunk` + `stream.done`, иначе
+   * SSE-цикл `POST /sessions/:id/prompt` не закрывается (ждёт `stream.done`).
+   */
+  private _publishLocalCompletion(
+    publishChunk: (event: string, data: Record<string, unknown>) => void,
+    streamId: string,
+    content: string,
+    opts?: {
+      model?: string;
+      provider?: string;
+      usage?: TokenUsage;
+      durationMs?: number;
+      metadata?: Record<string, unknown>;
+    },
+  ): void {
+    publishChunk('stream.chunk', {
+      stream_id: streamId,
+      content,
+      is_final: true,
+      ...(opts?.model ? { model: opts.model } : {}),
+      ...(opts?.provider ? { provider: opts.provider } : {}),
+    });
+    publishChunk('stream.done', {
+      stream_id: streamId,
+      content,
+      pending_count: 0,
+      model: opts?.model ?? 'command',
+      provider: opts?.provider ?? 'command',
+      ...(opts?.usage ? { usage: opts.usage } : {}),
+      ...(opts?.durationMs !== undefined ? { duration_ms: opts.durationMs } : {}),
+      ...(opts?.metadata ? { metadata: opts.metadata } : {}),
+    });
+  }
+
+  /** Локальный ответ команды: user сообщение — `ephemeral`, ассистент — `ephemeral`. */
+  private async _finishLocalCommand(
+    session: Session,
+    userMessage: Message,
+    publishChunk: (event: string, data: Record<string, unknown>) => void,
+    output: string,
+    streamId: string,
+  ): Promise<ProcessMessageResult> {
+    this._publishLocalCompletion(publishChunk, streamId, output, { model: 'command', provider: 'command' });
+
+    const assistant: Message = {
+      id: generateId(),
+      role: MessageRole.ASSISTANT,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(output)],
+      content: output,
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      ephemeral: true,
+      agentRole: userMessage.agentRole || session.settings.agentRole,
+      metadata: { command: true },
+    };
+
+    // Помечаем пользовательское сообщение эфемерным и сохраняем ДО addMessage,
+    // иначе updateSession(session) перезапишет сессию без только что добавленного ответа.
+    userMessage.ephemeral = true;
+    const idx = session.messages.findIndex((m) => m.id === userMessage.id);
+    if (idx >= 0) session.messages[idx] = { ...session.messages[idx]!, ephemeral: true };
+    await this._sessionManager.updateSession(session).catch(() => {});
+    await this._sessionManager.addMessage(session.id, assistant);
+    return {};
   }
 
   /**
@@ -1600,6 +1778,16 @@ export class ChatOrchestrator {
       return this._handleDebugSystemMessage(session, message, signal, publishChunk, debugCollector, streamId, effectiveReasoningLevel, attempt);
     }
 
+    // --- AD-046 §7: резолвинг `/`-команд в core, до LLM ---
+    if (message.role === MessageRole.USER && (message.content ?? '').trimStart().startsWith('/')) {
+      const commandResult = await this._handleCommand({
+        session, message, signal, publishChunk, debugCollector, streamId,
+        effectiveAgentRole, workingDir, attempt,
+      });
+      if (commandResult) return commandResult;
+      // prompt-команда (template/skill/bundle): сообщение заменено, идём в LLM.
+    }
+
     // --- AD-035: Micro-first — пробуем ответить без LLM ---
     if (this._microPipeline && session.settings.microFirst) {
       const microResult = await this._microPipeline.handle({
@@ -1619,8 +1807,12 @@ export class ChatOrchestrator {
           totalTokens: (microResult.microResult.usage?.inputTokens ?? 0) + (microResult.microResult.usage?.outputTokens ?? 0),
         };
 
-        publishChunk('text', { content: finalContent });
-        publishChunk('done', { stopped: true });
+        this._publishLocalCompletion(publishChunk, streamId, finalContent, {
+          model: finalModel,
+          provider: 'micro',
+          usage: finalUsage,
+          durationMs: Date.now() - streamStartedAt,
+        });
 
         // Сохраняем сообщение ассистента
         const microMetadata: Record<string, unknown> = {
@@ -1664,7 +1856,7 @@ export class ChatOrchestrator {
         session.totalTokens += finalUsage.totalTokens;
 
         // Авто-тайтл если это первое сообщение
-        if (session.messages.filter((m) => m.role === MessageRole.USER).length <= 1) {
+        if (session.messages.filter((m) => m.role === MessageRole.USER && !m.ephemeral).length <= 1) {
           try {
             session.title = sm('session.dialog_title', { id: session.id.slice(0, 8) });
             await this._sessionManager.saveSession(session);
@@ -2815,7 +3007,7 @@ export class ChatOrchestrator {
       // 8.5. Auto-rename session on first exchange
       if (updatedSession) {
         const userMsgCount = updatedSession.messages.filter(
-          (m) => m.role === MessageRole.USER && !m.metadata?.synthetic,
+          (m) => m.role === MessageRole.USER && !m.metadata?.synthetic && !m.ephemeral,
         ).length;
         if (userMsgCount === 1) {
           const titleAgentDef = this._agentRegistry?.get('title');

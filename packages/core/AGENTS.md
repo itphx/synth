@@ -69,7 +69,7 @@
 - `server/app.ts` — `createStandaloneApp`: Hono, WS, статика UI, provisioning.
 - `server/routes/*` — `health`, `hybrid`, `auth`, `sessions`, `messages`, `projects`,
   `project-transfer`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
-  `settings`, `dictionaries`, `mcp`.
+  `settings`, `dictionaries`, `mcp`, `skills`, `commands`, `skill-bundles`, `skill-scope`.
 - `server/chat.ts`, `server/proxy.ts`, `server/serialize.ts`,
   `server/connection-watcher.ts` — одиночный чат, проксирование remote, сериализация,
   watcher подключения.
@@ -80,11 +80,16 @@
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью.
 - `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация.
 - `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP.
+- `engine/skills/*` — discovery/реестр/каталог/загрузка/CRUD скиллов (AD-046 Фаза 1).
+- `engine/commands/*` — slash-команды и bundles (AD-046 §7): `parser`/`template`/
+  `discovery`/`registry`/`bundles`/`builtin`/`resolver`/`service`; резолвинг в core
+  до LLM, событие `command.invoked`.
 - `engine/tools/*` — `ToolRegistry` + встроенные тулы (fs, shell, git, search, web,
-  plan, todo, project, task).
+  plan, todo, project, task, skill).
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
 - `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`,
-  `RuntimeSettingsStore`, `McpRegistryStore` (единый реестр MCP, AD-071).
+  `RuntimeSettingsStore`, `McpRegistryStore` (единый реестр MCP, AD-071),
+  `SkillStore`, `CommandStore`, `SkillBundleStore` (AD-046).
 - `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`.
 - `remote/*` — клиент, сессии, credentials, device-flow, transfer, aggregate, event-bridge.
 - `providers/*` — `ProviderFactory`, `BaseProvider`, OpenAI/Anthropic/Ollama/Remote.

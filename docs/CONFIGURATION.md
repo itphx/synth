@@ -221,6 +221,32 @@ Instance-wide настройка (AD-071 §2.6; UI-раздел — ADMIN-кат
 телом `{toolsDisabled:{capabilities,tools}}` (живое применение, persist в
 `settings.json`).
 
+### Slash-команды (`commands.*`, AD-046 §7)
+
+Резолвинг `/`-команд выполняется в core. Секция `commands`:
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `commands.paths` | Доп. каталоги шаблонных `.md`-команд (после project/instance) | `[]` |
+| `commands.bundlesPath` | Подкаталог `{dataDir}` для YAML-bundles | `skill-bundles` |
+| `commands.conflict.mode` | Режим конфликтов имён: `bundle-wins` \| `conservative` \| `namespace` | `bundle-wins` |
+| `commands.conflict.namespacePrefix` | В `namespace`: бандл-скиллы как `<bundle>:<skill>` при конфликте с builtin | `false` |
+| `commands.maxArgumentsLength` | Лимит `$ARGUMENTS` | `10000` |
+| `commands.maxRenderedBytes` | Лимит рендера шаблона/агрегата bundle | `200000` |
+
+Источники шаблонных команд (приоритет): `{project.workspace}/.synth/commands` > `{dataDir}/commands` > `commands.paths`. Встроенные команды Фазы 2 — `/help`, `/skills`, `/commands`, `/summary` (`/compact`, `/review` отложены). `allowed-tools` во frontmatter — advisory (в права не транслируется).
+
+### Группы тулов для скиллов (`skills.toolsets`)
+
+`skills.toolsets` — словарь `имя → ToolCapability[]`. Экспандит `metadata.synth.requires_toolsets` скилла: проверка доступности идёт по `requires_capabilities ∪ expand(requires_toolsets)`. Пример:
+
+```yaml
+skills:
+  toolsets:
+    git: [git_read, git_write]
+    web: [web]
+```
+
 ### Гибридный режим (remote)
 
 Секция `remote` включает гибридный режим: локальный `synth serve` подключается

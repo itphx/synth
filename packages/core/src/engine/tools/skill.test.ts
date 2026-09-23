@@ -59,8 +59,8 @@ describe('core-тул skill (AD-046 §5)', () => {
     expect(res.content).toContain('Body of api-review');
     expect(res.content).toContain('Base directory for this skill: file:///skills/api-review');
     expect(res.content).toContain('<skill_files>');
-    // не более 10 путей
-    expect((res.content.match(/<references\/f\d+\.md>/g) ?? []).length).toBe(10);
+    // не более 10 путей, формат <file>путь</file> (AD-046 §5)
+    expect((res.content.match(/<file>references\/f\d+\.md<\/file>/g) ?? []).length).toBe(10);
     expect(res.content).not.toContain('references/f10.md');
   });
 

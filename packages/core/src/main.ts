@@ -102,6 +102,8 @@ program
       mcpServers: synth.mcp?.servers ?? {},
       // AD-046: конфигурация скиллов (paths/trustedProjectDirs/inlineShell).
       skillsConfig: synth.skills,
+      // AD-046 §7: конфигурация slash-команд (paths/bundlesPath/conflict/лимиты).
+      commandsConfig: synth.commands,
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
         ? (synth.remote.auth.apiKey || undefined)

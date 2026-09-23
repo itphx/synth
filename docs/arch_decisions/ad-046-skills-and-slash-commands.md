@@ -1,6 +1,6 @@
 # AD-046: Скиллы и slash-команды
 
-> **Статус:** ⚠️ Фаза 1 реализована (ядро: `SKILL.md`, discovery/trust, каталог, core-тул `skill`, API `/api/v2/skills`); slash-команды и bundles — Фаза 2
+> **Статус:** ✅ Фаза 1 реализована; ✅ Фаза 2 commit 1 (core+API+CLI: команды/bundles/scope, без UI); ⏳ UI-слой скиллов/команд — остаток Фазы 2
 > **Дата:** 2026-09-17
 > **Реализация:** Фаза 1 — 2026-09-23 (механизм скиллов; отклонения от исходного проекта — в разделе «Реализовано в Фазе 1»)
 > **Парный документ:** [AD-068](./ad-068-skills-agents-registry.md) «Реестр и каталог скиллов и агентов» — контент-платформа, реестр, доверие и распространение
@@ -30,6 +30,32 @@
 - Событие `skill.invoked`; тип `command.invoked` зарезервирован (Фаза 2).
 - API: `GET/POST /api/v2/skills`, `GET/PATCH/DELETE /api/v2/skills/:name`, `GET/PUT/DELETE /api/v2/skills/:name/files/*`, `POST /api/v2/skills/reload`; instance-запись — через `SkillService`/`SkillStore` (атомарная запись tmp→rename).
 - i18n-ключи `skill.*` (AD-041): `shared/i18n`, core `system-messages.ts`, UI `ru.ts`.
+
+---
+
+## Реализовано в Фазе 2 — commit 1 (core + API + CLI, без UI)
+
+Реализованы slash-команды и bundles в `@itphx/synth-core` + контракты в `@itphx/synth-shared`. Отклонения/решения:
+
+| # | Решение | Фактически |
+|---|---|---|
+| 1 | `/compact`, `/review` | Отложены (не реализованы в Фазе 2) |
+| 2 | `allowed-tools` | Advisory: только метаданные frontmatter, в права не транслируется |
+| 3 | `/summary` | Ручной триггер суммаризации: оркестратор вызывает `_handleSummarization` напрямую (в оркестраторе нет queueManager для enqueue SYSTEM) |
+| 4 | `namespace` | bare — `builtin > skill`; бандл-скиллы как `<bundle>:<skill>` только при конфликте имени с builtin; префиксы `template:` не вводятся |
+| 5 | Локальные команды | user+assistant сообщения builtin-ответов помечаются `Message.ephemeral` и исключаются из LLM-контекста (оптимизатор) |
+| 6 | `requires_toolsets` | Экспансия через `config.skills.toolsets` (`scope.ts`), union с `requires_capabilities` |
+| 7 | Счётчики/метрики | Из событий `command.invoked`/`skill.invoked` (отдельного хранилища нет) |
+| 8 | Исправления Фазы 1 | `<skill_files>` → `<file>путь</file>`; base dir — `pathToFileURL(dir).href` |
+
+**Состав Фазы 2 (commit 1):**
+- `engine/commands/{parser,template,discovery,registry,bundles,builtin,resolver,service}.ts`, `storage/command-store.ts`, `storage/skill-bundle-store.ts`.
+- Ранний резолвинг в `orchestrator.ts` (до micro-first/LLM); `command.invoked`; `skill.invoked` для skill/bundle.
+- Permission `permission.rules.command` (allow/deny/ask + glob); наследование саб-агентами; `deny` скрывает из `/commands`.
+- Core API: `GET /api/v2/commands`, CRUD `/api/v2/skill-bundles`, scope `/sessions|projects|settings/skills`.
+- CLI: `/`-строки идут через единый путь `runSingleChat` → core-резолвер; локальные команды не требуют настроенного провайдера.
+- Конфиг: `commands.*`, `skills.toolsets`. Bundles — YAML `{dataDir}/{commands.bundlesPath}/<name>.yaml`.
+- UI (настройки/автокомплит/панели) — **не входит** в commit 1.
 
 ---
 

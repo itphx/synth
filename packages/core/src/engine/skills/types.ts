@@ -50,6 +50,8 @@ export interface SkillCatalogOptions {
   agent?: { id?: string; groups?: string[] };
   /** Capabilities агента для capability-aware (§6.3). */
   capabilities?: readonly string[];
+  /** `config.skills.toolsets` — экспансия `requires_toolsets` (§3.2). */
+  toolsets?: Record<string, readonly string[]>;
   /** Permission-конфиг сессии (deny скрывает скилл, §8.1). */
   permissionConfig?: PermissionConfig;
   /** Per-session явное включение имён (§4.5). */
@@ -80,6 +82,15 @@ export interface SkillRuntime {
     name: string,
     opts?: { projectWorkspace?: string; capabilities?: readonly string[] },
   ): Promise<LoadedSkill | undefined>;
+  /**
+   * AD-046 §3.2: отсутствующие capabilities с учётом экспансии
+   * `requires_toolsets` (config.skills.toolsets). Необязателен — вызывающие
+   * без конфига используют `requires_capabilities` напрямую.
+   */
+  missingCapabilities?(
+    meta: SkillMeta,
+    capabilities: readonly string[] | undefined,
+  ): string[];
   readSupportingFile(
     name: string,
     relPath: string,

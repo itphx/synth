@@ -4,10 +4,14 @@ import { createToolsDisabledSchema } from '../schemas/index.js';
 import {
   TOOLS_POLICIES,
   MCP_NETWORK_POLICY_MODES,
+  COMMAND_CONFLICT_MODES,
   DEFAULT_MCP_PRIVATE_CIDRS,
   DEFAULT_MCP_NETWORK_POLICY,
   DEFAULT_LLM_GATEWAY_RATE_LIMIT,
+  ToolCapability,
 } from '../types/index.js';
+
+const toolCapabilityValues = Object.values(ToolCapability) as [ToolCapability, ...ToolCapability[]];
 
 // --- SynthConfig: единый конфиг для всех компонентов ---
 
@@ -187,6 +191,32 @@ export const skillsConfigSchema = z.object({
   paths: z.array(z.string()).default([]),
   trustedProjectDirs: z.array(z.string()).default([]),
   inlineShell: z.boolean().default(false),
+  /**
+   * AD-046 §3.2/§12: именованные группы тулов → capabilities. Используется
+   * для экспансии `metadata.synth.requires_toolsets` в проверку доступности
+   * скилла (union с `requires_capabilities`).
+   */
+  toolsets: z.record(z.string(), z.array(z.enum(toolCapabilityValues))).default({}),
+});
+
+// --- Slash-команды (AD-046 §7) ---
+
+/**
+ * AD-046 §7/§9.4: конфигурация slash-команд. `paths` — дополнительные каталоги
+ * шаблонных `.md`-команд; `bundlesPath` — подкаталог `{dataDir}` для YAML-бандлов;
+ * `conflict` — режим разрешения конфликтов имён (см. resolver).
+ */
+export const commandsConfigSchema = z.object({
+  paths: z.array(z.string()).default([]),
+  bundlesPath: z.string().default('skill-bundles'),
+  conflict: z
+    .object({
+      mode: z.enum(COMMAND_CONFLICT_MODES).default('bundle-wins'),
+      namespacePrefix: z.boolean().default(false),
+    })
+    .default({}),
+  maxArgumentsLength: z.number().int().min(1).default(10_000),
+  maxRenderedBytes: z.number().int().min(1).default(200_000),
 });
 
 // --- Security (IPI protection) ---
@@ -346,6 +376,7 @@ export const synthConfigSchema = z.object({
   mcp: mcpConfigSchema.default({}),
   tools: toolsConfigSchema.default({}),
   skills: skillsConfigSchema.default({}),
+  commands: commandsConfigSchema.default({}),
   router: routerConfigSchema.default({}),
   remote: remoteConfigSchema.default({}),
   microFirst: microFirstConfigSchema.default({}),
@@ -372,6 +403,7 @@ export type McpConfig = z.infer<typeof mcpConfigSchema>;
 export type ToolsConfig = z.infer<typeof toolsConfigSchema>;
 export type ToolsDisabledConfig = z.infer<typeof toolsDisabledConfigSchema>;
 export type SkillsConfig = z.infer<typeof skillsConfigSchema>;
+export type CommandsConfig = z.infer<typeof commandsConfigSchema>;
 export type RouterContentConfig = z.infer<typeof routerContentConfigSchema>;
 export type RouterEscalationConfig = z.infer<typeof routerEscalationConfigSchema>;
 export type RouterCostConfig = z.infer<typeof routerCostConfigSchema>;
