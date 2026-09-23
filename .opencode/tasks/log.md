@@ -725,3 +725,20 @@
 - **Проверки (оркестратор):** `pnpm --filter @itphx/synth-ui typecheck` — OK; `lint` — 0 errors (warning предсуществующие `any` в `LeftPanel.tsx`); `test` — **76 файлов / 616 тестов PASS**. **UI (Playwright, :5002, admin):** политики — combobox «Как в глобальной»; селект агента по умолчанию показывает «Ассистент»; у всех 14 карточек toggle в одной строке с именем и внутри карточки (в т.ч. «Банковский ассистент (Adv)»); мобильный 390px — одна колонка, toggle в строке, без горизонтального overflow; вкладка «Сессия» — полный ID, «Проект: Тестовый проект», «Создатель: admin», «Создан: 06.08.2026, 07:14»; вкладка «Проект» — «Имя: Тестовый проект», полный ID, «Создатель: admin», «Создан: 21.05.2026, 15:11».
 - **Замечания:** коммит не делался (нет явной просьбы пользователя). `SegmentedControl` оставлен (используется в других местах).
 
+## 2026-09-23 (продолжение) — Имя сессии над ID в правой панели
+- **Задача:** в правой панели на вкладке «Сессия» не отображалось имя сессии; по аналогии с проектами показывать имя над ID.
+- **Тип:** feature (UI) · **Исполнитель:** @fixer → верификация @orchestrator · **Результат:** PASS.
+- **Правки (`packages/ui`):** `SessionSettingsTab.tsx` — первым полем секции «Сессия» добавлено `Field label={t('rightPanel.params.name')} value={session.name || '—'}` перед ID; i18n ru/en — ключ `rightPanel.params.name` («Имя»/«Name»); `SessionSettingsTab.test.tsx` — +2 теста (имя над ID через `compareDocumentPosition`; `name: null` → «—»).
+- **Проверки:** typecheck OK; lint 0 errors; test 618/618. Playwright: `Имя: llm-gw-2` → `ID: msgvufwl-37d-llddm7h1` → Проект → Создатель → Создан → Движок.
+
+## 2026-09-23 (продолжение) — Live-статистика стрима: инлайн → кнопка с попапом
+- **Задача:** пока стримится ответ, в области ответа появлялась инлайн-строка статистики — убрать её и добавить кнопку, открывающую попап со статистикой, аналогичную кнопке в законченных ответах.
+- **Тип:** feature (UI) · **Исполнитель:** @fixer → верификация @orchestrator · **Результат:** PASS.
+- **Правки (`packages/ui`):**
+  - новый `components/chat/StatsPopoverButton.tsx` — поповер с кнопкой-иконкой `chart-line` (title `chat.messageStats.toggle`) и `PopoverContent` с эталонными классами (`side="top" sideOffset={12} align="start" min-h-[34px] …`);
+  - `MessageActions.tsx` — инлайн-поповер статистики заменён на `StatsPopoverButton` (убраны `useState`/импорты `Popover*`), поведение готовых ответов не изменилось;
+  - `StreamingPlaceholder.tsx` — удалён инлайн-ряд `stream-live-stats`; в футере стрима перед Stop добавлена кнопка `StatsPopoverButton` (при `liveSegments.length > 0`), содержимое попапа — те же сегменты (`buildUsageSegments`) с `data-testid="stream-live-stats"`; retry-ветка не тронута;
+  - `StreamingPlaceholder.test.tsx` — тесты: инлайна нет, есть кнопка `button[title="Response stats"]`, контент ищется в `document.body` после клика; без usage/cost — кнопки нет.
+- **Проверки (оркестратор):** `typecheck` OK; `lint` 0 errors (33 предсуществующих warning); `test` **76 файлов / 618 тестов PASS**. **UI (Playwright, :5002):** 0 console errors; регресс-проверка общего поповера на готовых сообщениях — клик по 13 кнопкам `Статистика ответа` рендерит `message-stats` («2.6k вх·213 исх·0% кэш») в portal (`data-align=start`, `data-side=top`). Живой стрим LLM не гоняли (политика Verify — без явной просьбы); поведение стрима покрыто компонентными тестами `StreamingPlaceholder`.
+- **Замечания:** коммит не делался (нет явной просьбы). В рабочем дереве также незакоммиченное изменение «Имя сессии над ID» (см. выше).
+
