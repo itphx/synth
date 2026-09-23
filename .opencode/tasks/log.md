@@ -750,3 +750,13 @@
 - **Проверки:** `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` shared 91, core 1683, ui 622, backend 312 — зелёные. Доказательство: со stash правки источника 4 новых теста падают, после возврата — проходят; дерево восстановлено (sha256 diff совпал). usage-only StreamState, дедупликация по callId, `finishStream`/`cancelStream` не сломаны.
 - **Замечания:** коммит не делался (нет явной просьбы).
 
+## 2026-09-23 (продолжение) — bump 0.7.1 + сборка + деплой на test (K3s)
+- **Задача:** «Бампни версию до 0.7.1, собери все и залей на test оба образа».
+- **Тип:** build + deploy (release) · **Исполнитель:** @orchestrator (ops) · **Результат:** PASS.
+- **Bump:** `./scripts/version-bump.sh 0.7.1` 0.7.0→0.7.1 (`version.ts` + 6 `package.json` + `charts/synth/Chart.yaml`); коммит `27827a8 chore: bump version to v0.7.1`.
+- **Сборка:** `./scripts/build.sh` — shared → core → ui (vite, `index-DmwzjNcL.js` / `index-9mOsvnNb.css`) → synth; версия бандла 0.7.1.
+- **Docker:** собраны из исходников и запушены в Gitea `git.itphx.ru/itphx/synth-backend:0.7.1` (digest `sha256:0c8be594…`, 290 МБ) и `git.itphx.ru/itphx/synth-ui:0.7.1` (digest `sha256:8a6a11f5…`, 116 МБ) через `docker/Dockerfile.backend` / `docker/Dockerfile.ui`.
+- **Деплой:** `synth-deploy/values.yaml` теги 0.7.0→0.7.1; `helm lint` OK; коммит `3649d6f release: bump synth-ui/backend images to v0.7.1`, push `main` (`77f11e1..3649d6f`) → Fleet.
+- **Проверки:** Fleet GitRepo `synth` (fleet-local) синхронизирован на `3649d6f` (~40с), bundle Ready 1/1; `synth-backend` и `synth-ui` раскатаны на 0.7.1, новые поды 1/1 Running, старые удалены; `https://synth.k3s.itphx.loc/` → HTTP 200, `/health` → `{"status":"healthy","version":"0.7.1"}`, `index.html` → `cache-control: no-cache`, отдаётся ассет `index-DmwzjNcL.js` свежей сборки; логи backend — штатные `GET /health 200`.
+- **Замечания:** push ветки/тега `synth` в gitverse origin и npm-публикация не выполнялись (не входили в задачу). `synth-backend` перезапущен — сессии на PVC сохранены.
+
