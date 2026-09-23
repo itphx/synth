@@ -16,6 +16,15 @@ export type { SettingsActionsProps, SettingsActionsAlign } from './SettingsActio
 export { DefaultsBadge } from './DefaultsBadge'
 export type { DefaultsBadgeProps } from './DefaultsBadge'
 
+export { InfoSection } from './InfoSection'
+export type { InfoSectionProps } from './InfoSection'
+
+export { InfoField } from './InfoField'
+export type { InfoFieldProps } from './InfoField'
+
+export { ModelPairSelect } from './ModelPairSelect'
+export type { ModelPairSelectProps, ModelPairOption } from './ModelPairSelect'
+
 export { TextField } from './controls/TextField'
 export type { TextFieldProps } from './controls/TextField'
 

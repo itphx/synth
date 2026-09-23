@@ -150,15 +150,6 @@ export class ContextBuilder {
   }
 
   /**
-   * AD-070 §2.1: тонкая обёртка — блоки → сортировка по тирам → склейка.
-   * Поведение (содержимое) сохраняется; меняется только порядок на tier-порядок.
-   */
-  async buildSystemPrompt(params: BuildSystemPromptParams): Promise<string> {
-    const blocks = await this.buildBaseBlocks(params);
-    return joinPromptBlocks(sortPromptBlocks(blocks));
-  }
-
-  /**
    * AD-036: инструкция по работе с обфусцированными секретами (⟦SYNTH_SECRET_N⟧).
    * Делегирует ContextConfig.getGatewayInstructions (prompts/system/GATEWAY.{lang}.md).
    */

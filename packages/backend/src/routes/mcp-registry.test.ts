@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { McpRegistryStore } from '@itphx/synth-core';
-import { createMcpRoutes, type McpConfigStore } from './mcp.js';
+import { createMcpRoutes } from './mcp.js';
 import type { McpServerConfig, McpNetworkPolicy } from '@itphx/synth-shared';
 
 interface MockUser {
@@ -45,17 +45,6 @@ function createMockKit() {
   };
 }
 
-function createMockConfigStore(): McpConfigStore {
-  return {
-    getServers: () => ({}),
-    addServer: async () => {},
-    updateServer: async () => {},
-    deleteServer: async () => {},
-    hasServer: () => false,
-    getServer: () => undefined,
-  };
-}
-
 function createMockMcpManager() {
   return {
     setConfig: vi.fn(),
@@ -83,7 +72,6 @@ describe('MCP registry API (AD-071 §2.5)', () => {
     const kit = createMockKit();
     const routes = createMcpRoutes(
       kit as never,
-      createMockConfigStore(),
       mcpManager as never,
       null,
       { registry, networkPolicy: policyOverride ?? policy },

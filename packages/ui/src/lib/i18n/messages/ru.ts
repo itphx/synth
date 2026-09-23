@@ -32,6 +32,7 @@ export const dict = {
   'common.name': 'Название',
   'common.nameRequired': 'Название обязательно',
   'common.saveError': 'Ошибка сохранения',
+  'common.error': 'Ошибка',
   'common.url': 'URL',
   'common.apiKey': 'API Key',
   'common.type': 'Тип',
@@ -100,7 +101,7 @@ export const dict = {
   'settings.category.builtinTools': 'Встроенные инструменты',
   'settings.category.notifications': 'Уведомления',
   'settings.category.routing': 'Маршрутизация',
-  'settings.category.microFirst': 'Быстрые ответы',
+
   'settings.category.security': 'Безопасность',
   'gateway.title': 'Шлюз безопасности',
   'gateway.description': 'Независимый слой защиты LLM-трафика: секреты (API-ключи, токены, email) обфусцируются до плейсхолдеров ⟦SYNTH_SECRET_N⟧ перед отправкой в модель и раскрываются только в точках потребления. Раскрытие значений в интерфейсе логируется в аудит.',
@@ -149,6 +150,7 @@ export const dict = {
   'security.protectedPaths.add': 'Добавить',
   'security.protectedPaths.remove': 'Удалить',
   'security.protectedPaths.deniedPaths': 'Запрещённые пути (точное совпадение)',
+  'security.protectedPaths.placeholder': 'путь/значение',
   'security.protectedPaths.deniedPrefixes': 'Запрещённые префиксы директорий',
   'security.protectedPaths.approvalPaths': 'Пути, требующие подтверждения (ask)',
   'security.protectedPaths.deniedCommandPrefixes': 'Запрещённые префиксы команд (только shell)',
@@ -219,8 +221,6 @@ export const dict = {
   'settings.appearance.uiScale.mobile': 'Мобильный',
   'settings.appearance.uiScale.desktop': 'Десктопный',
   'settings.appearance.uiScale.reset': 'Сбросить',
-  'settings.microFirst.title': 'Быстрые ответы',
-  'settings.microFirst.description': 'Простые запросы — приветствия, да/нет, классификация задач — обрабатываются мгновенно по правилам или embedding, без вызова большой модели. Это ускоряет ответ и экономит токены. Если запрос сложный или уверенность низкая — автоматически вызывается LLM. Порог уверенности настраивается ниже.',
   'settings.microFirst.enabled': 'Быстрые ответы',
   'settings.microFirst.confidence': 'Порог уверенности',
   'settings.microFirst.embedding': 'Embedding',
@@ -383,6 +383,7 @@ export const dict = {
   'rightPanel.stats.project': 'Проект',
   'rightPanel.stats.noProject': 'Нет проекта',
   'rightPanel.stats.contextWindow': 'Контекстное окно',
+  'rightPanel.stats.contextNearLimit': 'Лимит контекста близко',
   // AD-070 §2.6: статистика агентов и авторов
   'rightPanel.stats.agentsStats': 'Статистика агентов',
   'rightPanel.stats.usersStats': 'Статистика пользователей',
@@ -783,6 +784,7 @@ export const dict = {
   'chat.error.deleteMessage': 'Ошибка удаления сообщения',
   'chat.error.retryMessage': 'Ошибка повтора сообщения',
   'chat.error.clearSession': 'Ошибка очистки сессии',
+  'chat.error.contextLength': 'Контекстное окно модели превышено. Начните новую сессию или сократите историю',
 
   'chat.error.forkFailed': 'Ошибка создания ветки:',
 
@@ -886,6 +888,19 @@ export const dict = {
   'sessionSettings.askTimeoutSeconds': 'Таймаут подтверждения (сек)',
   'sessionSettings.askTimeoutEnabled': 'Включено',
   'sessionSettings.askTimeoutDisabled': 'Выключено',
+  // AD-029: сессионные одобрения
+  'sessionSettings.allow.title': 'Сессионные одобрения',
+  'sessionSettings.allow.empty': 'Нет одобренных инструментов',
+  'sessionSettings.allow.hint': 'Allow-правила появляются после «Разрешить в сессии» в панели подтверждения',
+  'sessionSettings.allow.remove': 'Удалить',
+  // Микро-слой (быстрые ответы) per-session
+  'sessionSettings.micro.title': 'Быстрые ответы',
+  'sessionSettings.micro.tooltip': 'Простые запросы — приветствия, да/нет, классификация задач — обрабатываются мгновенно по правилам или embedding, без вызова большой модели. Это ускоряет ответ и экономит токены. Если запрос сложный или уверенность низкая — автоматически вызывается LLM. Порог уверенности настраивается ниже.',
+  'sessionSettings.micro.confidence': 'Порог уверенности',
+  'sessionSettings.micro.embedding': 'Embedding',
+  'sessionSettings.micro.embeddingHint': 'Эмбеддинг-модель для семантической классификации в микро-слое',
+  'sessionSettings.micro.embeddingModel': 'Embedding модель',
+  'sessionSettings.routing.tooltip': 'Запросы, которые не обработали Быстрые ответы, распределяются между моделями автоматически: стратегия выбирает модель по типу задачи (кодинг/чат/анализ), по стоимости или сочетанием. Дополнительно работает контроль качества: если ответ неуверенный или слишком короткий — запрос пересылается на fallback-модель. Если маршрутизация выключена — используется модель, выбранная в сессии.',
   // AD-071 §2.4: MCP-скоуп в сессии
   'sessionSettings.mcp.title': 'MCP-серверы',
   'sessionSettings.mcp.hint': 'Включайте/выключайте серверы для этой сессии, включая системные и проектные. Выключено — явный opt-out; не трогайте, чтобы следовать дефолту проекта/админа.',
@@ -976,6 +991,7 @@ export const dict = {
   'admin.sessions.hide': 'Скрыть',
   'admin.sessions.details': 'Детали',
   'admin.sessions.unlock': 'Разблокировать',
+  'admin.sessions.unlockError': 'Не удалось разблокировать сессию',
   'admin.sessions.id': 'ID:',
   'admin.sessions.engine': 'Движок:',
   'admin.sessions.project': 'Project:',
@@ -1344,6 +1360,18 @@ export const dict = {
   'mcp.user.empty': 'У вас пока нет серверов. Добавьте HTTP-сервер, чтобы расширить возможности моделей.',
   'mcp.user.httpOnly': 'Здесь можно добавлять только HTTP/SSE-серверы; stdio-серверы настраивает администратор.',
   'mcp.user.saveError': 'Не удалось сохранить MCP-сервер: {error}',
+  // Ошибки стора MCP (вне React)
+  'mcp.error.loadRegistry': 'Ошибка загрузки реестра MCP',
+  'mcp.error.addServer': 'Ошибка добавления сервера',
+  'mcp.error.updateServer': 'Ошибка обновления сервера',
+  'mcp.error.deleteServer': 'Ошибка удаления сервера',
+  'mcp.error.loadToolSettings': 'Ошибка загрузки настроек MCP',
+  'mcp.error.saveToolSettings': 'Ошибка сохранения настроек MCP',
+  'mcp.error.probe': 'Ошибка проверки подключения',
+  'mcp.error.loadNetworkPolicy': 'Ошибка загрузки сетевой политики',
+  'mcp.error.saveNetworkPolicy': 'Ошибка сохранения сетевой политики',
+  'mcp.error.loadToolsDisabled': 'Ошибка загрузки отключённых инструментов',
+  'mcp.error.saveToolsDisabled': 'Ошибка сохранения отключённых инструментов',
 
   // MCP: админское управление встроенными инструментами (AD-071 §2.6)
   'mcpAdmin.tools.title': 'Встроенные инструменты',

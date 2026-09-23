@@ -503,4 +503,53 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     // Частичный ответ саб-агента в контексте
     expect(captured.some((m) => m.role === 'assistant' && m.content === 'начал анализ...')).toBe(true);
   });
+
+  it('AD-071 §2.1 + AD-070: resume наследует MCP-скоуп и modelPriceLoader', async () => {
+    const { parent, child } = await createInterruptedChild();
+    let capturedMcp: string[] | undefined;
+    const registry = {
+      get: (id: string) => (id === 'explore'
+        ? { id, agentMode: ['subagent'], subagentPrompt: 'p', maxSteps: 1 }
+        : undefined),
+      getSubagents: () => [{ id: 'explore' }],
+      getToolsForAgent: (_id: string, mcp?: string[]) => {
+        capturedMcp = mcp;
+        return [];
+      },
+    } as unknown as AgentRegistry;
+
+    const provider = {
+      model: 'm',
+      name: 'mockres',
+      chatAsync: vi.fn().mockImplementation(async function* () {
+        yield { isFinal: false, content: 'x', usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
+        yield { isFinal: true, content: 'ok', toolCalls: [] };
+      }),
+    };
+    const loadedModels: string[] = [];
+
+    await runSubagentResume(
+      {
+        sessionManager,
+        eventBus,
+        agentRegistry: registry,
+        mcpServers: ['srvA'],
+        modelPriceLoader: (m: string) => {
+          loadedModels.push(m);
+          return null;
+        },
+        getProvider: () => provider as never,
+        getWorkingDir: async () => tmpDir,
+      },
+      {
+        child: (await sessionManager.getSession(child))!,
+        parent: (await sessionManager.getSession(parent))!,
+        streamId: 'st-3',
+        abortSignal: new AbortController().signal,
+      },
+    );
+
+    expect(capturedMcp).toEqual(['srvA']);
+    expect(loadedModels.length).toBeGreaterThan(0);
+  });
 });

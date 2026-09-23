@@ -32,6 +32,7 @@ export const dict = {
   'common.name': 'Name',
   'common.nameRequired': 'Name is required',
   'common.saveError': 'Save error',
+  'common.error': 'Error',
   'common.url': 'URL',
   'common.apiKey': 'API Key',
   'common.type': 'Type',
@@ -101,7 +102,7 @@ export const dict = {
   'settings.category.builtinTools': 'Built-in tools',
   'settings.category.notifications': 'Notifications',
   'settings.category.routing': 'Routing',
-  'settings.category.microFirst': 'Quick answers',
+
   'settings.category.security': 'Security',
   'gateway.title': 'Security gateway',
   'gateway.description': 'Independent protection layer for LLM traffic: secrets (API keys, tokens, emails) are obfuscated to ⟦SYNTH_SECRET_N⟧ placeholders before sending to the model and revealed only at consumption points. Value reveal in the UI is audit-logged.',
@@ -150,6 +151,7 @@ export const dict = {
   'security.protectedPaths.add': 'Add',
   'security.protectedPaths.remove': 'Remove',
   'security.protectedPaths.deniedPaths': 'Denied paths (exact match)',
+  'security.protectedPaths.placeholder': 'path/value',
   'security.protectedPaths.deniedPrefixes': 'Denied directory prefixes',
   'security.protectedPaths.approvalPaths': 'Paths requiring confirmation (ask)',
   'security.protectedPaths.deniedCommandPrefixes': 'Denied command prefixes (shell only)',
@@ -220,8 +222,6 @@ export const dict = {
   'settings.appearance.uiScale.mobile': 'Mobile',
   'settings.appearance.uiScale.desktop': 'Desktop',
   'settings.appearance.uiScale.reset': 'Reset',
-  'settings.microFirst.title': 'Quick answers',
-  'settings.microFirst.description': 'Simple requests — greetings, yes/no, task classification — are handled instantly by rules or embeddings, without calling the large model. This speeds up responses and saves tokens. If a request is complex or confidence is low, the LLM is called automatically. The confidence threshold is configured below.',
   'settings.microFirst.enabled': 'Quick answers',
   'settings.microFirst.confidence': 'Confidence threshold',
   'settings.microFirst.embedding': 'Embedding',
@@ -384,6 +384,7 @@ export const dict = {
   'rightPanel.stats.project': 'Project',
   'rightPanel.stats.noProject': 'No project',
   'rightPanel.stats.contextWindow': 'Context window',
+  'rightPanel.stats.contextNearLimit': 'Context limit is near',
   // AD-070 §2.6: agent and author stats
   'rightPanel.stats.agentsStats': 'Agent stats',
   'rightPanel.stats.usersStats': 'User stats',
@@ -702,8 +703,6 @@ export const dict = {
   'chat.reasoning.show': 'Reasoning',
   'chat.reasoning.hide': 'Hide',
 
-  'chat.stream.working': 'Working...',
-  'chat.stream.cancelled': 'Cancelled',
   'chat.stream.error': 'Error',
 
   'chat.toolCall.title': 'Tool call',
@@ -787,6 +786,7 @@ export const dict = {
   'chat.error.deleteMessage': 'Failed to delete message',
   'chat.error.retryMessage': 'Failed to retry message',
   'chat.error.clearSession': 'Failed to clear session',
+  'chat.error.contextLength': 'Model context window exceeded. Start a new session or shorten the history',
 
   'chat.error.forkFailed': 'Failed to create branch:',
 
@@ -889,6 +889,19 @@ export const dict = {
   'sessionSettings.askTimeoutSeconds': 'Approval timeout (sec)',
   'sessionSettings.askTimeoutEnabled': 'Enabled',
   'sessionSettings.askTimeoutDisabled': 'Disabled',
+  // AD-029: session approvals
+  'sessionSettings.allow.title': 'Session approvals',
+  'sessionSettings.allow.empty': 'No approved tools',
+  'sessionSettings.allow.hint': 'Allow-rules appear after "Allow in session" in the approval panel',
+  'sessionSettings.allow.remove': 'Remove',
+  // Micro-layer (quick answers) per session
+  'sessionSettings.micro.title': 'Quick answers',
+  'sessionSettings.micro.tooltip': 'Simple requests — greetings, yes/no, task classification — are handled instantly by rules or embeddings, without calling the large model. This speeds up responses and saves tokens. If a request is complex or confidence is low, the LLM is called automatically. The confidence threshold is configured below.',
+  'sessionSettings.micro.confidence': 'Confidence threshold',
+  'sessionSettings.micro.embedding': 'Embedding',
+  'sessionSettings.micro.embeddingHint': 'Embedding model for semantic classification in the micro-layer',
+  'sessionSettings.micro.embeddingModel': 'Embedding model',
+  'sessionSettings.routing.tooltip': 'Requests not handled by Quick answers are distributed across models automatically: the strategy picks a model by task type (coding/chat/research), by cost, or a combination. Additionally, quality control applies: if the answer is uncertain or too short, the request is forwarded to a fallback model. If routing is off, the model selected in the session is used.',
   // AD-071 §2.4: MCP scope in session
   'sessionSettings.mcp.title': 'MCP servers',
   'sessionSettings.mcp.hint': 'Turn servers on/off for this session, including system and project ones. Off means an explicit opt-out; leave untouched to follow the project/admin default.',
@@ -979,6 +992,7 @@ export const dict = {
   'admin.sessions.hide': 'Hide',
   'admin.sessions.details': 'Details',
   'admin.sessions.unlock': 'Unlock',
+  'admin.sessions.unlockError': 'Failed to unblock session',
   'admin.sessions.id': 'ID:',
   'admin.sessions.engine': 'Engine:',
   'admin.sessions.project': 'Project:',
@@ -1347,6 +1361,18 @@ export const dict = {
   'mcp.user.empty': 'You have no servers yet. Add an HTTP server to extend model capabilities.',
   'mcp.user.httpOnly': 'Only HTTP/SSE servers can be added here; stdio servers are configured by an administrator.',
   'mcp.user.saveError': 'Failed to save MCP server: {error}',
+  // Store-level MCP errors (вне React)
+  'mcp.error.loadRegistry': 'Failed to load MCP registry',
+  'mcp.error.addServer': 'Failed to add MCP server',
+  'mcp.error.updateServer': 'Failed to update MCP server',
+  'mcp.error.deleteServer': 'Failed to delete MCP server',
+  'mcp.error.loadToolSettings': 'Failed to load MCP tool settings',
+  'mcp.error.saveToolSettings': 'Failed to save MCP tool settings',
+  'mcp.error.probe': 'Failed to test the connection',
+  'mcp.error.loadNetworkPolicy': 'Failed to load MCP network policy',
+  'mcp.error.saveNetworkPolicy': 'Failed to save MCP network policy',
+  'mcp.error.loadToolsDisabled': 'Failed to load disabled tools',
+  'mcp.error.saveToolsDisabled': 'Failed to save disabled tools',
 
   // MCP: admin tools.disabled (AD-071 §2.6)
   'mcpAdmin.tools.title': 'Built-in tools',

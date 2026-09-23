@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { formatCost, formatCostMap, formatDuration, formatTokens, formatTps } from './formatStats'
+import { cacheHitPct, cacheHitRate, tokensPerSecond } from './formatStats'
+import { formatMoney } from './currency'
 
 describe('formatTokens', () => {
   it('0 и значения < 1000 — как есть', () => {
@@ -54,7 +56,7 @@ describe('formatCost', () => {
     expect(formatCost(0.009)).toBe('~ 0.009 $')
   })
 
-  it('валюта задаёт символ; неизвестная/отсутствующая → USD', () => {
+  it('валюта задаёт символ', () => {
     expect(formatCost(0.0627, 'RUB')).toBe('~ 0.0627 ₽')
     expect(formatCost(0.0343, 'USD')).toBe('~ 0.0343 $')
     expect(formatCost(0.03, 'RUB')).toBe('~ 0.03 ₽')
@@ -62,10 +64,59 @@ describe('formatCost', () => {
     expect(formatCost(1.5, 'CNY')).toBe('~ 1.50 ¥')
     expect(formatCost(0, 'RUB')).toBe('~ 0 ₽')
     expect(formatCost(0.03, 'USD')).toBe('~ 0.03 $')
-    expect(formatCost(0.03, 'EUR')).toBe('~ 0.03 $')
-    expect(formatCost(0.03, undefined)).toBe('~ 0.03 $')
     // Разряды не добавляются — компактный вид сохраняется.
     expect(formatCost(1234.5, 'RUB')).toBe('~ 1234.50 ₽')
+  })
+
+  it('неизвестный код валюты показывается как есть, не маскируется под $', () => {
+    expect(formatCost(0.03, 'EUR')).toBe('~ 0.03 EUR')
+    expect(formatCost(1.5, 'GBP')).toBe('~ 1.50 GBP')
+  })
+
+  it('отсутствующая/пустая валюта → USD', () => {
+    expect(formatCost(0.03, undefined)).toBe('~ 0.03 $')
+    expect(formatCost(0.03, null)).toBe('~ 0.03 $')
+    expect(formatCost(0.03, '')).toBe('~ 0.03 $')
+  })
+})
+
+describe('formatMoney', () => {
+  it('локализованный Intl для известной валюты', () => {
+    expect(formatMoney(1234.5, 'USD', { locale: 'en' })).toBe('$1,234.50')
+    expect(formatMoney(1234.5, 'RUB', { locale: 'ru' })).toMatch(/1\s?234,50\s?₽/)
+  })
+
+  it('неизвестная валюта — код после числа, не $', () => {
+    expect(formatMoney(0.03, 'EUR')).toBe('0.03 EUR')
+    expect(formatMoney(12, null)).toBe('12.00 USD')
+  })
+
+  it('compact-режим использует компактный формат', () => {
+    expect(formatMoney(0.03, 'USD', { compact: true })).toBe('~ 0.03 $')
+    expect(formatMoney(0.03, 'EUR', { compact: true })).toBe('~ 0.03 EUR')
+  })
+})
+
+describe('cacheHitRate / cacheHitPct / tokensPerSecond', () => {
+  it('cacheHitRate: read / input, 0 при input = 0', () => {
+    expect(cacheHitRate(93, 100)).toBeCloseTo(0.93)
+    expect(cacheHitRate(0, 100)).toBe(0)
+    expect(cacheHitRate(5, 0)).toBe(0)
+    expect(cacheHitRate(undefined, undefined)).toBe(0)
+  })
+
+  it('cacheHitPct: округлённый процент', () => {
+    expect(cacheHitPct(93, 100)).toBe(93)
+    expect(cacheHitPct(2, 3)).toBe(67)
+    expect(cacheHitPct(1, 0)).toBe(0)
+  })
+
+  it('tokensPerSecond: output / (ms / 1000)', () => {
+    expect(tokensPerSecond(100, 1000)).toBe(100)
+    expect(tokensPerSecond(50, 2000)).toBe(25)
+    expect(tokensPerSecond(100, 0)).toBeUndefined()
+    expect(tokensPerSecond(undefined, 1000)).toBeUndefined()
+    expect(tokensPerSecond(100, undefined)).toBeUndefined()
   })
 })
 
@@ -75,9 +126,13 @@ describe('formatCostMap', () => {
     expect(formatCostMap({ CNY: 1.5, USD: 0.03, RUB: 2.1 })).toBe('~ 0.03 $ · ~ 2.10 ₽ · ~ 1.50 ¥')
   })
 
-  it('неизвестные валюты — после известных по алфавиту', () => {
-    // CHF < EUR по алфавиту; оба неизвестны → символ `$`.
-    expect(formatCostMap({ EUR: 1, CHF: 2 })).toBe('~ 2.00 $ · ~ 1.00 $')
+  it('неизвестные валюты — после известных по алфавиту, показываются кодом', () => {
+    // CHF < EUR по алфавиту; оба неизвестны → код как есть.
+    expect(formatCostMap({ EUR: 1, CHF: 2 })).toBe('~ 2.00 CHF · ~ 1.00 EUR')
+  })
+
+  it('смешанные известные и неизвестные валюты', () => {
+    expect(formatCostMap({ EUR: 1, USD: 0.03 })).toBe('~ 0.03 $ · ~ 1.00 EUR')
   })
 
   it('нулевые и нечисловые значения отбрасываются', () => {

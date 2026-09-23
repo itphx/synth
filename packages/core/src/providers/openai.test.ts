@@ -285,6 +285,7 @@ describe('OpenAIProvider — форматирование tool_use/tool_result',
 describe('OpenAIProvider — listModelsDetailed', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   function jsonResponse(payload: unknown): Response {
@@ -362,5 +363,23 @@ describe('OpenAIProvider — listModelsDetailed', () => {
 
     const provider = new OpenAIProvider(baseParams);
     await expect(provider.listModelsDetailed()).resolves.toEqual([]);
+  });
+
+  it('сетевой сбой не оставляет активный таймер (try/finally)', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network')));
+
+    const provider = new OpenAIProvider(baseParams);
+    await expect(provider.listModelsDetailed()).resolves.toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('невалидный JSON не оставляет активный таймер (try/finally)', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('not-json', { status: 200 })));
+
+    const provider = new OpenAIProvider(baseParams);
+    await expect(provider.listModelsDetailed()).resolves.toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

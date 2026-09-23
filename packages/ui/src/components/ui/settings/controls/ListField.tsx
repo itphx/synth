@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
+import { useStableItemKeys } from '@/hooks/useStableItemKeys'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 
@@ -43,6 +44,7 @@ export function ListField({
 }: ListFieldProps) {
   const { t } = useI18n()
   const [draft, setDraft] = useState('')
+  const itemKeys = useStableItemKeys(values.length)
 
   const resolvedAdd = addLabel ?? t('common.add')
   const resolvedRemove = removeLabel ?? t('common.delete')
@@ -73,7 +75,7 @@ export function ListField({
         {variant === 'list' ? (
           <div className="flex flex-col gap-1.5 min-w-0">
             {values.map((value, index) => (
-              <div key={index} className="flex flex-wrap items-center gap-2 min-w-0">
+              <div key={itemKeys[index]} className="flex flex-wrap items-center gap-2 min-w-0">
                 <input
                   type="text"
                   value={value}
@@ -95,7 +97,7 @@ export function ListField({
           <div className="flex flex-wrap gap-1.5 min-w-0">
             {values.map((value, index) => (
               <span
-                key={index}
+                key={itemKeys[index]}
                 className="inline-flex max-w-full items-center gap-1 rounded-full bg-interactive-hover px-2 py-0.5 text-xs text-foreground"
               >
                 <span className="min-w-0 truncate">{value}</span>

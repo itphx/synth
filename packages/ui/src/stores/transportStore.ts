@@ -9,6 +9,7 @@ import type { StreamDoneMetadata, MessageData, MessageStatus, CostBreakdown } fr
 import { synthApi } from '@/lib/api/synthApi'
 import type { SessionData } from '@/lib/api/synthApi'
 import { notifyMessage } from '@/hooks/useNotification'
+import { i18nText } from '@/lib/i18n/text'
 
 type EventDispatcher = (event: WSEvent) => void
 
@@ -85,7 +86,6 @@ export function createDispatcher(): EventDispatcher {
       updateLiveSubagentUsage,
       finishStream,
       cancelStream,
-      clearStreamError,
       setStreamRetry,
       setStreamRetrying,
       setQueueStalled,
@@ -247,16 +247,7 @@ export function createDispatcher(): EventDispatcher {
         const metadata: StreamDoneMetadata = {
           model: payload.model as string | undefined,
           content: payload.content as string | undefined,
-          usage: payload.usage
-            ? {
-                input_tokens: (payload.usage as Record<string, number>).inputTokens || 0,
-                output_tokens: (payload.usage as Record<string, number>).outputTokens || 0,
-                total_tokens: (payload.usage as Record<string, number>).totalTokens || 0,
-                cache_read_tokens: (payload.usage as Record<string, number>).cacheReadTokens,
-                cache_write_tokens: (payload.usage as Record<string, number>).cacheWriteTokens,
-                reasoning_tokens: (payload.usage as Record<string, number>).reasoningTokens,
-              }
-            : undefined,
+          usage: mapUsage(payload.usage),
           debug_info: payload.debug_info as Record<string, unknown> | undefined,
           message_index: payload.message_index as number | undefined,
           cancelled: payload.cancelled as boolean | undefined,
@@ -276,7 +267,6 @@ export function createDispatcher(): EventDispatcher {
         }
         finishStream(sid, payload.stream_id as string, metadata)
         setStreamRetry(sid, null)
-        clearStreamError(sid)
         setFinalStreamError(sid, null)
 
         const pendingCount = payload.pending_count as number | undefined
@@ -334,7 +324,7 @@ export function createDispatcher(): EventDispatcher {
         // Ошибка переполнения контекстного окна — показываем дружелюбный текст
         // вместо сырого сообщения провайдера.
         const error = errorType === 'context_length'
-          ? 'Контекстное окно модели превышено. Начните новую сессию или сократите историю'
+          ? i18nText('chat.error.contextLength')
           : rawError
 
         // Финальная ошибка (неrecoverable / исчерпаны попытки / отменено):
@@ -792,7 +782,6 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
           get().connect('auto', 'sse')
         }
       },
-      onTransportSwitch: () => {},
     })
 
     activeKind = actualMode

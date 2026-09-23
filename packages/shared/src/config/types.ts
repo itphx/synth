@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import { permissionConfigSchema } from '../types/permission.js';
+import { createToolsDisabledSchema } from '../schemas/index.js';
 import {
   TOOLS_POLICIES,
   MCP_NETWORK_POLICY_MODES,
   DEFAULT_MCP_PRIVATE_CIDRS,
   DEFAULT_MCP_NETWORK_POLICY,
+  DEFAULT_LLM_GATEWAY_RATE_LIMIT,
 } from '../types/index.js';
 
 // --- SynthConfig: единый конфиг для всех компонентов ---
@@ -157,12 +159,7 @@ export const mcpConfigSchema = z.object({
  * Отключённые тулы не попадают в запрос независимо от `tools.policy`.
  * `runtime`-capability неотключаема (ядро сессии).
  */
-export const toolsDisabledConfigSchema = z.object({
-  /** Отключённые capability (например `git_read`, `web`). */
-  capabilities: z.array(z.string()).default([]),
-  /** Отключённые инструменты по имени. */
-  tools: z.array(z.string()).default([]),
-});
+export const toolsDisabledConfigSchema = createToolsDisabledSchema(false);
 
 /**
  * AD-071 §2.3: глобальная админская политика включения **встроенных**
@@ -199,8 +196,8 @@ export const securityConfigSchema = z.object({
 // --- LLM Gateway (AD-036) ---
 
 export const llmGatewayRateLimitConfigSchema = z.object({
-  userPerMinute: z.number().int().min(1).default(60),
-  providerPerMinute: z.number().int().min(1).default(120),
+  userPerMinute: z.number().int().min(1).default(DEFAULT_LLM_GATEWAY_RATE_LIMIT.userPerMinute),
+  providerPerMinute: z.number().int().min(1).default(DEFAULT_LLM_GATEWAY_RATE_LIMIT.providerPerMinute),
 });
 
 export const llmGatewayAuditConfigSchema = z.object({

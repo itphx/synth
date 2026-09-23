@@ -1,7 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
-import { createMcpRoutes, type McpConfigStore } from './mcp.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { McpRegistryStore } from '@itphx/synth-core';
+import { createMcpRoutes } from './mcp.js';
 import type { McpServerConfig, SessionSettings } from '@itphx/synth-shared';
 
 function createMockKit() {
@@ -12,30 +16,7 @@ function createMockKit() {
     requireAdmin: async (_c: Context, next: Next) => {
       await next();
     },
-  };
-}
-
-function createMockConfigStore(servers: Record<string, McpServerConfig> = {}): McpConfigStore {
-  const store = new Map(Object.entries(servers));
-  return {
-    getServers() {
-      return Object.fromEntries(store);
-    },
-    async addServer(name: string, config: McpServerConfig) {
-      store.set(name, config);
-    },
-    async updateServer(name: string, config: McpServerConfig) {
-      store.set(name, config);
-    },
-    async deleteServer(name: string) {
-      store.delete(name);
-    },
-    hasServer(name: string) {
-      return store.has(name);
-    },
-    getServer(name: string) {
-      return store.get(name);
-    },
+    isAdmin: () => true,
   };
 }
 
@@ -82,6 +63,10 @@ function createMockMcpManager(connected: boolean = false) {
     }),
     refreshServer: vi.fn(),
     setConfig: vi.fn(),
+    setServerOrigins: vi.fn(),
+    setServerTrusts: vi.fn(),
+    setServerAuthors: vi.fn(),
+    setDefaultServers: vi.fn(),
     getConfig: vi.fn(() => ({ 'test-server': makeStdioConfig() })),
   };
 }
@@ -101,29 +86,40 @@ function createMockSessionManager() {
   };
 }
 
-function createTestApp(configStore: McpConfigStore, mcpManager: ReturnType<typeof createMockMcpManager>, sessionManager: ReturnType<typeof createMockSessionManager>) {
+function createTestApp(
+  registry: McpRegistryStore,
+  mcpManager: ReturnType<typeof createMockMcpManager>,
+  sessionManager: ReturnType<typeof createMockSessionManager>,
+) {
   const app = new Hono();
   const kit = createMockKit();
-  const mcpRoutes = createMcpRoutes(kit as any, configStore, mcpManager as any, sessionManager as any);
+  const mcpRoutes = createMcpRoutes(kit as never, mcpManager as never, sessionManager as never, { registry });
   app.route('/api/v2/mcp', mcpRoutes);
   return app;
 }
 
-describe('MCP API Routes', () => {
-  let configStore: McpConfigStore;
+describe('MCP API Routes (legacy /servers — адаптеры над реестром)', () => {
+  let registry: McpRegistryStore;
+  let tmpDir: string;
   let mcpManager: ReturnType<typeof createMockMcpManager>;
   let sessionManager: ReturnType<typeof createMockSessionManager>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    configStore = createMockConfigStore({ 'test-server': makeStdioConfig() });
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-mcp-routes-'));
+    registry = new McpRegistryStore({ dataDir: tmpDir });
+    await registry.add({ name: 'test-server', config: makeStdioConfig(), origin: 'instance', trust: 'builtin' });
     mcpManager = createMockMcpManager(true);
     sessionManager = createMockSessionManager();
   });
 
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
   describe('GET /api/v2/mcp/servers', () => {
     it('возвращает список серверов со статусом подключения', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers');
       expect(res.status).toBe(200);
       const body: any = await res.json();
@@ -133,10 +129,9 @@ describe('MCP API Routes', () => {
     });
 
     it('возвращает empty объект когда серверов нет', async () => {
-      configStore = createMockConfigStore({});
-      mcpManager = createMockMcpManager(false);
+      const emptyRegistry = new McpRegistryStore({ dataDir: join(tmpDir, 'empty') });
       mcpManager.getConfiguredServers.mockReturnValue([]);
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(emptyRegistry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers');
       expect(res.status).toBe(200);
       const body: any = await res.json();
@@ -146,7 +141,7 @@ describe('MCP API Routes', () => {
 
   describe('POST /api/v2/mcp/servers', () => {
     it('добавляет новый сервер', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -156,11 +151,11 @@ describe('MCP API Routes', () => {
         }),
       });
       expect(res.status).toBe(201);
-      expect(configStore.hasServer('new-server')).toBe(true);
+      expect(await registry.getByName('new-server')).not.toBeNull();
     });
 
     it('AD-071: сохраняет description сервера', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -172,11 +167,12 @@ describe('MCP API Routes', () => {
       expect(res.status).toBe(201);
       const body: any = await res.json();
       expect(body.config.description).toBe('Мой MCP');
-      expect(configStore.getServer('described')?.description).toBe('Мой MCP');
+      const entry = await registry.getByName('described');
+      expect(entry?.config.description).toBe('Мой MCP');
     });
 
     it('возвращает 409 для дубликата', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -191,7 +187,7 @@ describe('MCP API Routes', () => {
     });
 
     it('возвращает 400 для невалидного тела', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -205,7 +201,7 @@ describe('MCP API Routes', () => {
 
   describe('GET /api/v2/mcp/servers/:name', () => {
     it('возвращает конфигурацию сервера', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/test-server');
       expect(res.status).toBe(200);
       const body: any = await res.json();
@@ -214,7 +210,7 @@ describe('MCP API Routes', () => {
     });
 
     it('возвращает 404 для неизвестного сервера', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/unknown');
       expect(res.status).toBe(404);
     });
@@ -222,19 +218,20 @@ describe('MCP API Routes', () => {
 
   describe('PUT /api/v2/mcp/servers/:name', () => {
     it('обновляет существующий сервер', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/test-server', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(makeSseConfig()),
       });
       expect(res.status).toBe(200);
-      expect(configStore.getServer('test-server')?.type).toBe('sse');
+      const entry = await registry.getByName('test-server');
+      expect(entry?.config.type).toBe('sse');
       expect(mcpManager.setConfig).toHaveBeenCalled();
     });
 
     it('возвращает 404 для неизвестного сервера', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/unknown', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -246,15 +243,15 @@ describe('MCP API Routes', () => {
 
   describe('DELETE /api/v2/mcp/servers/:name', () => {
     it('удаляет сервер', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/test-server', { method: 'DELETE' });
       expect(res.status).toBe(200);
-      expect(configStore.hasServer('test-server')).toBe(false);
+      expect(await registry.getByName('test-server')).toBeNull();
       expect(mcpManager.disconnectServer).toHaveBeenCalledWith('test-server');
     });
 
     it('возвращает 404 для неизвестного сервера', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/unknown', { method: 'DELETE' });
       expect(res.status).toBe(404);
     });
@@ -262,7 +259,7 @@ describe('MCP API Routes', () => {
 
   describe('POST /api/v2/mcp/servers/:name/test', () => {
     it('успешно тестирует подключение', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/test-server/test', { method: 'POST' });
       expect(res.status).toBe(200);
       const body: any = await res.json();
@@ -271,14 +268,14 @@ describe('MCP API Routes', () => {
     });
 
     it('возвращает ошибку для неизвестного сервера', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/unknown/test', { method: 'POST' });
       expect(res.status).toBe(404);
     });
 
     it('возвращает ошибку при сбое probe', async () => {
       mcpManager.probeServer.mockRejectedValueOnce(new Error('Connection timeout'));
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/test-server/test', { method: 'POST' });
       expect(res.status).toBe(200);
       const body: any = await res.json();
@@ -289,7 +286,7 @@ describe('MCP API Routes', () => {
 
   describe('POST /api/v2/mcp/probe', () => {
     it('успешно пробует сервер и возвращает инструменты', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/probe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -303,7 +300,7 @@ describe('MCP API Routes', () => {
     });
 
     it('возвращает 400 для пустого name', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/probe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -316,7 +313,7 @@ describe('MCP API Routes', () => {
 
     it('возвращает 400 для ненастроенного сервера', async () => {
       mcpManager.isServerConfigured.mockReturnValue(false);
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/probe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -329,7 +326,7 @@ describe('MCP API Routes', () => {
 
     it('возвращает 500 при сбое probe', async () => {
       mcpManager.probeServer.mockRejectedValueOnce(new Error('Connection timeout'));
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/probe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -344,7 +341,7 @@ describe('MCP API Routes', () => {
 
   describe('GET /api/v2/mcp/servers/:name/tools', () => {
     it('возвращает инструменты подключённого сервера', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/test-server/tools');
       expect(res.status).toBe(200);
       const body: any = await res.json();
@@ -356,7 +353,7 @@ describe('MCP API Routes', () => {
 
     it('пробует получить инструменты отключённого сервера', async () => {
       mcpManager = createMockMcpManager(false);
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/test-server/tools');
       expect(res.status).toBe(200);
       const body: any = await res.json();
@@ -366,7 +363,7 @@ describe('MCP API Routes', () => {
     });
 
     it('возвращает 404 для неизвестного сервера', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/unknown/tools');
       expect(res.status).toBe(404);
     });
@@ -375,7 +372,7 @@ describe('MCP API Routes', () => {
   describe('GET /api/v2/mcp/session/:sessionId', () => {
     it('возвращает активные MCP-серверы сессии', async () => {
       sessionManager._setSession('s1', { mcpServers: ['test-server', 'other'] });
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/session/s1');
       expect(res.status).toBe(200);
       const body: any = await res.json();
@@ -386,7 +383,7 @@ describe('MCP API Routes', () => {
     });
 
     it('возвращает 404 для несуществующей сессии', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/session/nonexistent');
       expect(res.status).toBe(404);
     });
@@ -395,7 +392,7 @@ describe('MCP API Routes', () => {
   describe('PUT /api/v2/mcp/session/:sessionId', () => {
     it('устанавливает активные MCP-серверы для сессии', async () => {
       sessionManager._setSession('s1', { mcpServers: [] });
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/session/s1', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -408,7 +405,7 @@ describe('MCP API Routes', () => {
 
     it('возвращает 400 для невалидного тела', async () => {
       sessionManager._setSession('s1', { mcpServers: [] });
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/session/s1', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -418,7 +415,7 @@ describe('MCP API Routes', () => {
     });
 
     it('возвращает 404 для несуществующей сессии', async () => {
-      const app = createTestApp(configStore, mcpManager, sessionManager);
+      const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/session/nonexistent', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },

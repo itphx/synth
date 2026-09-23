@@ -1,6 +1,7 @@
 export { I18nProvider } from './context'
 export { useI18n } from './useI18n'
 export { useI18nStore, initializeLocale, formatMessage } from './store'
+export { i18nText } from './text'
 export type { I18nKey, I18nParams, I18nDictionary } from './store'
 export { resolveI18n, isValidI18nMeta } from './resolveI18n'
 export { useResolveI18n } from './useResolveI18n'

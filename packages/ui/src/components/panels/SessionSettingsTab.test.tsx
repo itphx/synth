@@ -233,23 +233,27 @@ describe('SessionSettingsTab — MCP-скоуп сессии (AD-071 §2.4)', ()
 describe('SessionSettingsTab — per-session политики инструментов (AD-071 §2.3)', () => {
   it('переопределяет обе политики (встроенные + MCP) и сохраняет их', async () => {
     const container = await renderTab()
-    const toolsSelect = container.querySelector(
-      'select[aria-label="Global built-in tools policy"]',
-    ) as HTMLSelectElement
-    const mcpSelect = container.querySelector('select[aria-label="Global MCP policy"]') as HTMLSelectElement
-    expect(toolsSelect).not.toBeNull()
-    expect(mcpSelect).not.toBeNull()
-    // «Как в глобальной» — дефолт (пусто).
-    expect(toolsSelect.value).toBe('')
-    expect(mcpSelect.value).toBe('')
+    const toolsGroup = container.querySelector(
+      '[role="radiogroup"][aria-label="Global built-in tools policy"]',
+    )
+    const mcpGroup = container.querySelector('[role="radiogroup"][aria-label="Global MCP policy"]')
+    expect(toolsGroup).not.toBeNull()
+    expect(mcpGroup).not.toBeNull()
+    // «Follow global» — дефолт (пусто).
+    expect(toolsGroup!.querySelector('[role="radio"][aria-checked="true"]')!.textContent).toBe('Follow global')
+    expect(mcpGroup!.querySelector('[role="radio"][aria-checked="true"]')!.textContent).toBe('Follow global')
 
+    const clickOption = (group: Element, text: string) => {
+      const button = [...group.querySelectorAll('[role="radio"]')].find(
+        (b) => (b.textContent ?? '').startsWith(text),
+      ) as HTMLButtonElement
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    }
     await act(async () => {
-      toolsSelect.value = 'available'
-      toolsSelect.dispatchEvent(new Event('change', { bubbles: true }))
+      clickOption(toolsGroup!, 'available')
     })
     await act(async () => {
-      mcpSelect.value = 'consistency'
-      mcpSelect.dispatchEvent(new Event('change', { bubbles: true }))
+      clickOption(mcpGroup!, 'consistency')
     })
 
     const saveButton = [...container.querySelectorAll('button')].find(
@@ -281,10 +285,14 @@ describe('SessionSettingsTab — per-session политики инструмен
     const container = await renderTab()
 
     expect(
-      (container.querySelector('select[aria-label="Global built-in tools policy"]') as HTMLSelectElement).value,
-    ).toBe('consistency')
+      container
+        .querySelector('[role="radiogroup"][aria-label="Global built-in tools policy"]')!
+        .querySelector('[role="radio"][aria-checked="true"]')!.textContent,
+    ).toContain('consistency')
     expect(
-      (container.querySelector('select[aria-label="Global MCP policy"]') as HTMLSelectElement).value,
-    ).toBe('available')
+      container
+        .querySelector('[role="radiogroup"][aria-label="Global MCP policy"]')!
+        .querySelector('[role="radio"][aria-checked="true"]')!.textContent,
+    ).toContain('available')
   })
 })

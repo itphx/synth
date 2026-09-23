@@ -84,7 +84,7 @@
   plan, todo, project, task).
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
 - `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`,
-  `RuntimeSettingsStore`.
+  `RuntimeSettingsStore`, `McpRegistryStore` (единый реестр MCP, AD-071).
 - `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`.
 - `remote/*` — клиент, сессии, credentials, device-flow, transfer, aggregate, event-bridge.
 - `providers/*` — `ProviderFactory`, `BaseProvider`, OpenAI/Anthropic/Ollama/Remote.
@@ -115,6 +115,9 @@
   `ToolCapability.MCP`; деобфускация аргументов — в `execute` через `ObfuscationMapStore`.
 - HTTP: `POST /api/v2/mcp/probe` (`server/routes/mcp.ts`); доступность MCP по
   режимам — `GET/PUT /api/v2/settings/mcp`. Отдельного `/mcp/session/:id` в core нет.
+- Единый реестр серверов — `McpRegistryStore` (AD-071): уровни system/project/session,
+  скоуп — `engine/mcp/scope.ts`, сетевой доступ — `engine/mcp/network-policy.ts`
+  (на старте применяется `mergeMcpNetworkPolicy(config, runtime)`).
 
 ## Тесты и запуск
 

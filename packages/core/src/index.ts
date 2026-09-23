@@ -65,8 +65,6 @@ export type { McpScopeServer, McpScopeSession, McpScopeDecision } from './engine
 export {
   evaluateMcpNetworkAccess,
   isIpInCidr,
-  parseCidr,
-  hostFromUrl,
   isHttpMcpConfig,
 } from './engine/mcp/index.js';
 export type { McpNetworkCheckResult, HostResolver } from './engine/mcp/index.js';
@@ -105,7 +103,7 @@ export type {
   AddMcpRegistryEntryInput,
   UpdateMcpRegistryEntryInput,
 } from './storage/mcp-registry-store.js';
-export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig } from './storage/runtime-settings.js';
+export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy } from './storage/runtime-settings.js';
 export type { RuntimeSettings, LlmGatewayRuntimeSettings } from './storage/runtime-settings.js';
 export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';
 export { createLocalAuth } from './auth/local.js';
@@ -134,7 +132,6 @@ export {
   restoreSecrets,
   PLACEHOLDER_PATTERN,
   readAuditLog,
-  PayloadLogger,
   writePayloadLog,
   readPayloadLog,
 } from './engine/gateway/index.js';

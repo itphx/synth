@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { synthApi } from '@/lib/api/synthApi'
+import { useTransientMessage } from '@/hooks/useTransientMessage'
 import { Icon } from '@/components/icon/Icon'
 import { Button } from '../ui/button'
 import { useI18n } from '@/lib/i18n'
@@ -48,14 +49,12 @@ export const ContextPanel = () => {
   const [editFile, setEditFile] = useState<EditFileState | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [newFile, setNewFile] = useState({ name: '', content: '', category: 'user' })
-  const [status, setStatus] = useState<string | null>(null)
+  const [status, showStatus] = useTransientMessage()
 
   const load = async () => {
     setLoading(true)
     try {
-      const data = await synthApi.fetchJSON<{ files: ContextFileItem[] }>(
-        `/api/v2/context/files?category=${activeTab}`,
-      )
+      const data = await synthApi.getContextFiles(activeTab)
       setFiles(data.files || [])
     } catch { setFiles([]) }
     finally { setLoading(false) }
@@ -71,13 +70,7 @@ export const ContextPanel = () => {
 
   const handleToggle = async (name: string) => {
     try {
-      const result = await synthApi.fetchJSON<{ name: string; enabled: boolean }>(
-        `/api/v2/context/files/${encodeURIComponent(name)}`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ action: 'toggle' }),
-        },
-      )
+      const result = await synthApi.toggleContextFile(name)
       setFiles(prev => prev.map(f =>
         f.name === name && f.category === 'user' ? { ...f, enabled: result.enabled } : f,
       ))
@@ -86,9 +79,7 @@ export const ContextPanel = () => {
 
   const handleEdit = async (name: string, category: string) => {
     try {
-      const data = await synthApi.fetchJSON<{ name: string; content: string }>(
-        `/api/v2/context/files/${encodeURIComponent(name)}?category=${encodeURIComponent(category)}`,
-      )
+      const data = await synthApi.getContextFile(name, category)
       setEditFile({ name: data.name, content: data.content, category })
     } catch { /* ignore */ }
   }
@@ -96,13 +87,9 @@ export const ContextPanel = () => {
   const handleSave = async () => {
     if (!editFile) return
     try {
-      await synthApi.fetchJSON(`/api/v2/context/files/${encodeURIComponent(editFile.name)}`, {
-        method: 'POST',
-        body: JSON.stringify({ content: editFile.content, category: editFile.category }),
-      })
+      await synthApi.saveContextFile(editFile.name, editFile.content, editFile.category)
       setEditFile(null)
-      setStatus(t('admin.context.saved'))
-      setTimeout(() => setStatus(null), 1500)
+      showStatus(t('admin.context.saved'))
       await load()
     } catch { /* ignore */ }
   }
@@ -110,25 +97,18 @@ export const ContextPanel = () => {
   const handleCreate = async () => {
     if (!newFile.name.trim()) return
     try {
-      await synthApi.fetchJSON(`/api/v2/context/files/${encodeURIComponent(newFile.name)}`, {
-        method: 'POST',
-        body: JSON.stringify({ content: newFile.content, category: newFile.category }),
-      })
+      await synthApi.saveContextFile(newFile.name, newFile.content, newFile.category)
       setShowCreate(false)
       setNewFile({ name: '', content: '', category: 'user' })
       if (newFile.category === activeTab) await load()
-      setStatus(t('admin.context.fileCreated'))
-      setTimeout(() => setStatus(null), 1500)
+      showStatus(t('admin.context.fileCreated'))
     } catch { /* ignore */ }
   }
 
   const handleDelete = async (name: string, category: string) => {
     if (!(await confirm({ title: t('admin.context.confirmDelete', { name }), variant: 'danger' }))) return
     try {
-      await synthApi.fetchJSON(
-        `/api/v2/context/files/${encodeURIComponent(name)}?category=${encodeURIComponent(category)}`,
-        { method: 'DELETE' },
-      )
+      await synthApi.deleteContextFile(name, category)
       await load()
     } catch { /* ignore */ }
   }
@@ -136,17 +116,13 @@ export const ContextPanel = () => {
   const handleRestore = async (name: string, category: string) => {
     if (!(await confirm({ title: t('admin.context.confirmReset', { name }), variant: 'danger' }))) return
     try {
-      await synthApi.fetchJSON(
-        `/api/v2/context/files/${encodeURIComponent(name)}/restore_to_default?category=${encodeURIComponent(category)}`,
-        { method: 'POST' },
-      )
+      await synthApi.resetContextFile(name, category)
       await load()
-      setStatus(t('admin.context.restoredSystem'))
-      setTimeout(() => setStatus(null), 1500)
+      showStatus(t('admin.context.restoredSystem'))
     } catch { /* ignore */ }
   }
 
-  const filtered = files.filter(f => f.category === activeTab || !activeTab)
+  const filtered = files.filter(f => f.category === activeTab)
 
   const countText = t('admin.context.count', { count: filtered.length, status: '' })
   const meta = status ? `${countText} — ${status}` : countText

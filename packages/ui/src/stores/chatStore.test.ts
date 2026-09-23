@@ -1,25 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useChatStore, selectLiveSubagentUsage } from './chatStore'
+import { resetChatStore } from './testUtils'
 import type { MessageData } from './chatStore'
 
-const EMPTY_STORE = {
-  messagesBySession: {},
-  streamFinishTickBySession: {},
-  streamingBySession: {},
-  queueBySession: {},
-  pendingBySession: {},
-  errorBySession: {},
-  retryBySession: {},
-  subagentRetryBySession: {},
-  subagentResumingBySession: {},
-  finalErrorBySession: {},
-  stickyNotesBySession: {},
-  summarizationPendingBySession: {},
-  liveSubagentUsageBySession: {},
-}
-
 beforeEach(() => {
-  useChatStore.setState(EMPTY_STORE as Partial<ReturnType<typeof useChatStore.getState>>)
+  resetChatStore()
 })
 
 describe('chatStore: streamFinishTickBySession', () => {
@@ -346,6 +331,46 @@ describe('chatStore: liveSubagentUsageBySession (AD-070 §2.6)', () => {
     expect(live.byCall['call-1']!.costCurrency).toBe('USD')
     expect(live.byCall['call-2']!.costCurrency).toBe('RUB')
     expect(live.costCurrency).toBeUndefined()
+  })
+
+  it('C2b: агрегат хранит разбивку по валютам, не смешивая их', () => {
+    const store = useChatStore.getState()
+    store.updateLiveSubagentUsage('parent', 'call-1', {
+      usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+      costUsd: 0.03,
+      costCurrency: 'USD',
+    })
+    store.updateLiveSubagentUsage('parent', 'call-2', {
+      usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 },
+      costUsd: 2.1,
+      costCurrency: 'RUB',
+    })
+
+    const live = useChatStore.getState().liveSubagentUsageBySession['parent']!
+    expect(live.costByCurrency).toEqual({ USD: 0.03, RUB: 2.1 })
+    // Номинальная сумма сохранена для обратной совместимости.
+    expect(live.costUsd).toBeCloseTo(2.13)
+    // Одиночная валюта агрегата не выставляется при конфликте.
+    expect(live.costCurrency).toBeUndefined()
+  })
+
+  it('C2b: одинаковая валюта → costByCurrency и costCurrency совпадают', () => {
+    const store = useChatStore.getState()
+    store.updateLiveSubagentUsage('parent', 'call-1', { costUsd: 0.5, costCurrency: 'RUB' })
+    store.updateLiveSubagentUsage('parent', 'call-2', { costUsd: 1.5, costCurrency: 'RUB' })
+
+    const live = useChatStore.getState().liveSubagentUsageBySession['parent']!
+    expect(live.costByCurrency).toEqual({ RUB: 2 })
+    expect(live.costCurrency).toBe('RUB')
+  })
+
+  it('C2b: отсутствующая валюта относится к USD', () => {
+    const store = useChatStore.getState()
+    store.updateLiveSubagentUsage('parent', 'call-1', { costUsd: 0.02 })
+
+    const live = useChatStore.getState().liveSubagentUsageBySession['parent']!
+    expect(live.costByCurrency).toEqual({ USD: 0.02 })
+    expect(live.costCurrency).toBe('USD')
   })
 
   it('событие несёт накопленный usage вызова — перезапись, а не суммирование', () => {

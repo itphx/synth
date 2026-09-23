@@ -31,38 +31,6 @@ export interface LlmPayloadEntry {
   response: LlmPayloadResponse;
 }
 
-export class PayloadLogger {
-  private _dirReady: Promise<void> | null = null;
-
-  constructor(private _logPath: string) {}
-
-  get logPath(): string {
-    return this._logPath;
-  }
-
-  /** Атомарный append: open 'a', write JSON + '\n'. Не бросает при ошибке записи. */
-  async append(entry: LlmPayloadEntry): Promise<void> {
-    try {
-      await this._ensureDir();
-      await appendFile(this._logPath, `${JSON.stringify(entry)}\n`, { encoding: 'utf8' });
-    } catch (e) {
-      warning('GATEWAY', `Ошибка записи полного лога: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
-  private _ensureDir(): Promise<void> {
-    if (!this._dirReady) {
-      this._dirReady = mkdir(dirname(this._logPath), { recursive: true })
-        .then(() => undefined)
-        .catch((e) => {
-          this._dirReady = null;
-          throw e;
-        });
-    }
-    return this._dirReady!;
-  }
-}
-
 /** Функциональная обёртка записи одной записи полного лога в JSONL-файл. */
 export async function writePayloadLog(logPath: string, entry: LlmPayloadEntry): Promise<void> {
   try {

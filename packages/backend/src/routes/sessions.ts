@@ -1,39 +1,34 @@
 import { Hono } from 'hono';
-import { z } from 'zod';
 import type { AuthKit } from '../auth/middleware.js';
 import type { SessionManager } from '@itphx/synth-core';
 import type { EventBus } from '@itphx/synth-core';
 import type { QueueProcessorManager } from '@itphx/synth-core';
 import type { ChatOrchestrator } from '@itphx/synth-core';
 import type { ContextOptimizer } from '@itphx/synth-core';
-import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema } from '@itphx/synth-shared';
+import {
+  MessageRole,
+  SESSION_MODES,
+  generateStreamId,
+  nowISO,
+  sessionUpdateSchema,
+  sessionMcpUpdateSchema,
+  createResolveAuthorName,
+} from '@itphx/synth-shared';
 import type { Message, Session, SessionSettings } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
-import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '@itphx/synth-core';
-import { serializeSession } from '../lib/serialize.js';
+import {
+  enqueueUserMessage,
+  sseEventStream,
+  DEFAULT_AGENT_ID,
+  SubagentResumeError,
+  computeSessionStats,
+  serializeSession,
+  serializeMessage,
+} from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import type { EventHub } from '../events/hub.js';
 import type { ProjectStore } from '../storage/project-store.js';
-
-/**
- * AD-071 §2.4: тело переключения MCP в сессии. Поддерживаются:
- * - точечный toggle `{ name, enabled }` (в т.ч. opt-out системного сервера);
- * - полная замена `{ mcpServers?, mcpDisabledServers? }`.
- */
-const sessionMcpUpdateSchema = z
-  .object({
-    name: z.string().min(1).optional(),
-    enabled: z.boolean().optional(),
-    mcpServers: z.array(z.string()).optional(),
-    mcpDisabledServers: z.array(z.string()).optional(),
-  })
-  .refine(
-    (v) => v.name !== undefined
-      || v.mcpServers !== undefined
-      || v.mcpDisabledServers !== undefined,
-    { message: 'Требуется name, mcpServers или mcpDisabledServers' },
-  );
 
 export function createSessionRoutes(
   kit: AuthKit,
@@ -55,6 +50,17 @@ export function createSessionRoutes(
   const isSessionOwner = (session: Session, userId: string): boolean =>
     (session.ownerId ?? session.userId) === userId;
 
+  /**
+   * Единый guard доступа к `/:id/*`: владелец сессии или глобальный ADMIN.
+   * Применяется к `/prompt`, `/stats`, `/status`, `/mcp` (эндпоинты, читающие
+   * содержимое/состояние сессии).
+   */
+  const canAccessSession = (
+    session: Session,
+    c: Parameters<typeof kit.isAdmin>[0],
+    userId: string,
+  ): boolean => isSessionOwner(session, userId) || kit.isAdmin(c);
+
   /** AD-071 §2.4: эффективный MCP-скоуп сессии (включая отключённые с причиной). */
   const buildSessionMcpPayload = async (session: Session) => {
     const servers = await orchestrator.resolveMcpServers(session);
@@ -66,12 +72,7 @@ export function createSessionRoutes(
       mcpDisabledServers: session.settings.mcpDisabledServers ?? [],
     };
   };
-  const resolveAuthorName = profilesStore
-    ? async (author: string): Promise<string | null> => {
-        const profile = await profilesStore.getProfileByUsername(author);
-        return profile ? profile.displayName || profile.username : null;
-      }
-    : undefined;
+  const resolveAuthorName = createResolveAuthorName(profilesStore);
 
   // GET /api/v2/sessions — список сессий
   app.get('/', kit.requireAuth, async (c) => {
@@ -423,6 +424,10 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
+    const user = (await kit.getCurrentUser(c))!;
+    if (!canAccessSession(session, c, user.id)) {
+      return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
+    }
     return c.json({
       blocked: !!session.status.blocked,
       pending_count: session.pendingMessages.length,
@@ -437,6 +442,10 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
+    const user = (await kit.getCurrentUser(c))!;
+    if (!canAccessSession(session, c, user.id)) {
+      return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
+    }
     const info = await orchestrator.getPromptInfo(session);
     return c.json(info);
   });
@@ -447,6 +456,10 @@ export function createSessionRoutes(
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+    const user = (await kit.getCurrentUser(c))!;
+    if (!canAccessSession(session, c, user.id)) {
+      return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
     }
     const stats = await computeSessionStats(session, {
       getSession: (id) => sessionManager.getSession(id),
@@ -470,6 +483,9 @@ export function createSessionRoutes(
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+    if (!canAccessSession(session, c, user.id)) {
+      return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
     }
 
     const streamId = body.messageId || generateStreamId();
@@ -553,7 +569,6 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
-    const { serializeMessage } = await import('../lib/serialize.js');
     return c.json({
       messages: session.messages.map((m, i) => serializeMessage(m, i)),
       session_id: session.id,
@@ -842,7 +857,6 @@ export function createSessionRoutes(
       summarize,
     });
 
-    const { serializeMessage } = await import('../lib/serialize.js');
     eventBus.publish(c.req.param('id'), 'session.messages.merged', {
       messages: merged.map((m, i) => serializeMessage(m, i)),
       source_session_id: sourceSessionId,

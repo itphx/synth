@@ -40,7 +40,6 @@ export interface McpScopeDecision {
   enabled: boolean;
   reason?: McpDisabledReason;
   origin: McpRegistryOrigin;
-  enabledByDefault: boolean;
 }
 
 export function resolveMcpScope(
@@ -78,7 +77,6 @@ export function resolveMcpScope(
       enabled,
       ...(reason ? { reason } : {}),
       origin: server.origin,
-      enabledByDefault: server.enabledByDefault,
     };
   });
 }

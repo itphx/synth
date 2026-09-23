@@ -407,21 +407,18 @@ describe('routes/models', () => {
       expect(group.models[0]!.currency).toBe('CNY');
     });
 
-    it('POST с невалидной currency (XXX) — значение игнорируется', async () => {
+    it('POST с невалидной currency (XXX) — 400 VALIDATION_ERROR', async () => {
       const res = await stores.app.request(BASE, postJSON({
         id: 'p1/m-bad',
         name: 'm-bad',
         provider: 'p1',
         currency: 'XXX',
       }));
-      expect(res.status).toBe(201);
+      expect(res.status).toBe(400);
 
-      const saved = await stores.modelStore.load('p1/m-bad');
-      expect(saved?.currency).toBeUndefined();
-
-      const group = (await listGroups()).find((g) => g.provider.name === 'p1')!;
-      const model = group.models.find((m) => m.id === 'p1/m-bad')!;
-      expect(model.currency).toBeUndefined();
+      const body = await res.json() as { error: { code: string } };
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(await stores.modelStore.load('p1/m-bad')).toBeNull();
     });
   });
 

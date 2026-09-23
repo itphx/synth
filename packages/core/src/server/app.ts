@@ -7,7 +7,7 @@ import { join, extname } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig } from '@itphx/synth-shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -15,7 +15,7 @@ import {
   SecretPatternStore, ProtectedPathsStore, DictionaryStore,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
-import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } from '@itphx/synth-shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart, DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
 import { createLocalAuth } from '../auth/local.js';
 import { ensureProfile, listProfiles, getLastProfile } from '../profiles.js';
 import { RemoteConnection } from '../remote/connection.js';
@@ -30,7 +30,7 @@ import { setRemoteTokenProvider, removeRemoteTokenProvider } from '../providers/
 import { JsonStore } from '../storage/json-store.js';
 import { FileProfileStore } from '../storage/profile-store.js';
 import { ProjectStore } from '../storage/project-store.js';
-import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig } from '../storage/runtime-settings.js';
+import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy } from '../storage/runtime-settings.js';
 import { createHealthRoutes } from './routes/health.js';
 import { createHybridRoutes } from './routes/hybrid.js';
 import { createAuthRoutes } from './routes/auth.js';
@@ -76,6 +76,8 @@ export interface StandaloneConfig {
   toolsDisabled?: ToolsDisabledConfig;
   /** Конфигурация MCP-серверов из config.yaml mcp.servers (для probe и загрузки тулов). */
   mcpServers?: Record<string, McpServerConfig>;
+  /** AD-071 §2.3.1: политика сетевого доступа HTTP MCP из config.yaml mcp.networkPolicy. */
+  mcpNetworkPolicy?: McpNetworkPolicy;
   /**
    * Дефолтный адрес удалённого backend (гибрид, `serve --connect`/env/конфиг).
    * Нужен для авто-логина (GET /auth/status) и POST /auth/login без поля server.
@@ -647,6 +649,15 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const mcpManager = new McpManager();
   mcpManager.setConfig(config.mcpServers ?? {});
 
+  // AD-071 §2.3.1: runtime-политика сетевого доступа пользовательских HTTP MCP
+  // (settings.json, админка) приоритетнее config.yaml и переживает рестарт —
+  // применяем её при старте, иначе сохранённое значение терялось бы. Слияние —
+  // единым helper'ом mergeMcpNetworkPolicy (тот же, что и в backend).
+  const runtimeMcpNetworkPolicy = await settingsStore.getMcpNetworkPolicy();
+  mcpManager.setNetworkPolicy(
+    mergeMcpNetworkPolicy(config.mcpNetworkPolicy, runtimeMcpNetworkPolicy),
+  );
+
   // Парсим провайдеров из переменных окружения
   await syncProvidersFromEnv(providerStore, modelStore);
 
@@ -817,8 +828,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       inputMode: config.gatewayConfig.inputMode,
       logPayloads: config.gatewayConfig.logPayloads,
       rateLimit: {
-        userPerMinute: config.gatewayConfig.rateLimit?.userPerMinute ?? 60,
-        providerPerMinute: config.gatewayConfig.rateLimit?.providerPerMinute ?? 120,
+        userPerMinute: config.gatewayConfig.rateLimit?.userPerMinute ?? DEFAULT_LLM_GATEWAY_RATE_LIMIT.userPerMinute,
+        providerPerMinute: config.gatewayConfig.rateLimit?.providerPerMinute ?? DEFAULT_LLM_GATEWAY_RATE_LIMIT.providerPerMinute,
       },
     } : undefined,
     fallbackSecurity: {
@@ -858,6 +869,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       name: tool.name,
       capabilities: [...tool.capabilities],
     })),
+    // AD-071 §2.3.1: дефолт config.yaml для GET/DELETE-сброса политики.
+    fallbackMcpNetworkPolicy: config.mcpNetworkPolicy,
     // AD-071 §2.3.1: live-применение политики сетевого доступа MCP из админки.
     onMcpNetworkPolicyChange: async (policy) => {
       mcpManager.setNetworkPolicy(policy);

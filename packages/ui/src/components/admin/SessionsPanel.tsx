@@ -5,9 +5,10 @@ import { Icon } from '@/components/icon/Icon'
 import { Button } from '../ui/button'
 import { cn } from '@/lib/utils'
 import { SettingsPanel, SettingsSection } from '../ui/settings'
+import { notifyMessage } from '@/hooks/useNotification'
 
 export const SessionsPanel = () => {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [sessions, setSessions] = useState<SessionData[]>([])
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -26,13 +27,15 @@ export const SessionsPanel = () => {
 
   const handleUnlock = async (id: string) => {
     try {
-      await fetch(`/api/v2/queue/${encodeURIComponent(id)}/resume`, {
-        method: 'POST',
-        credentials: 'include',
-      })
+      await synthApi.resumeQueue(id)
       await load()
-    } catch {
-      // ignore
+    } catch (err) {
+      notifyMessage({
+        text: `${t('admin.sessions.unlockError')}: ${err instanceof Error ? err.message : ''}`.trim(),
+        type: 'error',
+        category: 'error',
+        sessionId: id,
+      })
     }
   }
 
@@ -121,8 +124,8 @@ export const SessionsPanel = () => {
                       <div><span className="text-muted-foreground">{t('admin.sessions.id')}</span> <code>{s.id}</code></div>
                       <div><span className="text-muted-foreground">{t('admin.sessions.engine')}</span> {s.engine}</div>
                       <div><span className="text-muted-foreground">{t('admin.sessions.project')}</span> {s.project_id || '—'}</div>
-                      <div><span className="text-muted-foreground">{t('admin.sessions.created')}</span> {new Date(s.created_at).toLocaleString('ru')}</div>
-                      <div><span className="text-muted-foreground">{t('admin.sessions.updated')}</span> {new Date(s.updated_at).toLocaleString('ru')}</div>
+                      <div><span className="text-muted-foreground">{t('admin.sessions.created')}</span> {new Date(s.created_at).toLocaleString(locale)}</div>
+                      <div><span className="text-muted-foreground">{t('admin.sessions.updated')}</span> {new Date(s.updated_at).toLocaleString(locale)}</div>
                       <div><span className="text-muted-foreground">{t('admin.sessions.pending')}</span> {s.pending_messages?.length || 0}</div>
                       {isBlocked && (
                         <div className="text-status-error">

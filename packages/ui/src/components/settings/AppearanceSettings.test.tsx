@@ -92,7 +92,7 @@ const radioByText = (container: HTMLElement, text: string) =>
 beforeEach(() => {
   themeSystem.themeMode = 'system'
   themeSystem.theme = 'flexoki'
-  useUIStore.setState({ theme: 'flexoki', themeMode: 'system', locale: 'en' })
+  useUIStore.setState({ theme: 'flexoki', themeMode: 'system' })
 })
 
 afterEach(async () => {

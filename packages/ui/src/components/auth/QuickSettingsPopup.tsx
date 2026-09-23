@@ -4,6 +4,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useThemeSystem } from '@/contexts/useThemeSystem'
 import { useI18n } from '@/lib/i18n'
 import { api } from '@/lib/api/client'
+import { profileService } from '@/lib/api/profileService'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { isPwaStandalone } from '@/lib/pwa'
@@ -16,13 +17,11 @@ interface QuickSettingsPopupProps {
 }
 
 export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps) => {
-  const { t, setLocale: setI18nLocale } = useI18n()
+  const { t, locale: uiLocale, setLocale: setI18nLocale } = useI18n()
   const user = useAuthStore(s => s.user)
   const profile = useAuthStore(s => s.profile)
   const themeMode = useUIStore(s => s.themeMode)
   const setThemeMode = useUIStore(s => s.setThemeMode)
-  const uiLocale = useUIStore(s => s.locale)
-  const setUILocale = useUIStore(s => s.setLocale)
   const setSettingsDialogOpen = useUIStore(s => s.setSettingsDialogOpen)
   const setSettingsPage = useUIStore(s => s.setSettingsPage)
   const { setThemeMode: setThemeSystemMode } = useThemeSystem()
@@ -64,8 +63,9 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
   if (!user) return null
 
   const handleLocaleChange = (newLocale: string) => {
+    // Единственный источник истины — `useI18nStore`; профиль синхронизируем явно.
     setI18nLocale(newLocale as 'ru' | 'en')
-    setUILocale(newLocale as 'ru' | 'en')
+    void profileService.syncLocaleToProfile(newLocale as 'ru' | 'en')
   }
 
   const handleThemeModeChange = (mode: 'system' | 'light' | 'dark') => {

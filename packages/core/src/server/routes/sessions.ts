@@ -3,8 +3,8 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer } from '../../index.js';
-import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema } from '@itphx/synth-shared';
-import type { Message } from '@itphx/synth-shared';
+import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema, createResolveAuthorName } from '@itphx/synth-shared';
+import type { Message, Session } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
 import { serializeSession, serializeMessage } from '../serialize.js';
@@ -46,12 +46,17 @@ export function createSessionRoutes(
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
   const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
-  const resolveAuthorName = profilesStore
-    ? async (author: string): Promise<string | null> => {
-        const profile = await profilesStore.getProfileByUsername(author);
-        return profile ? profile.displayName || profile.username : null;
-      }
-    : undefined;
+  const resolveAuthorName = createResolveAuthorName(profilesStore);
+
+  /**
+   * AD-071/безопасность: доступ к локальной сессии. Standalone — однопользовательский
+   * режим (владелец `local`); легаси-сессии без владельца считаются доступными,
+   * чтобы не ломать существующие данные.
+   */
+  const canAccessSession = (session: Session): boolean => {
+    const owner = session.ownerId ?? session.userId;
+    return !owner || owner === LOCAL_USER_ID;
+  };
 
   app.get('/', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
@@ -275,6 +280,9 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
     }
+    if (!canAccessSession(session)) {
+      return c.json({ error: { code: 'FORBIDDEN', message: 'Доступ к сессии запрещён' } }, 403);
+    }
     return c.json({
       blocked: !!session.status.blocked,
       pending_count: session.pendingMessages.length,
@@ -289,6 +297,9 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
     }
+    if (!canAccessSession(session)) {
+      return c.json({ error: { code: 'FORBIDDEN', message: 'Доступ к сессии запрещён' } }, 403);
+    }
     const info = await orchestrator.getPromptInfo(session);
     return c.json(info);
   });
@@ -299,6 +310,9 @@ export function createSessionRoutes(
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+    }
+    if (!canAccessSession(session)) {
+      return c.json({ error: { code: 'FORBIDDEN', message: 'Доступ к сессии запрещён' } }, 403);
     }
     const stats = await computeSessionStats(session, {
       getSession: (id) => sessionManager.getSession(id),
@@ -338,6 +352,9 @@ export function createSessionRoutes(
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+    }
+    if (!canAccessSession(session)) {
+      return c.json({ error: { code: 'FORBIDDEN', message: 'Доступ к сессии запрещён' } }, 403);
     }
 
     const streamId = body.messageId || generateStreamId();

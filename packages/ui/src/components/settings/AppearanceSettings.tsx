@@ -61,10 +61,11 @@ export const AppearanceSettings = () => {
       if (themeId) setThemePreference(themeId)
       // Прямой setState вместо экшена стора: экшены `setTheme*`/`setLocale`
       // сразу пишут в профиль, а preview не должен персистить.
-      useUIStore.setState({ theme: toThemeName(preset.name) })
+      useUIStore.getState().setAppearancePreview({ theme: toThemeName(preset.name) })
     }
     setThemeMode(next.themeMode)
-    useUIStore.setState({ themeMode: next.themeMode, locale: next.locale, uiScale: next.uiScale })
+    // Язык применяется через `useI18nStore` (единственный источник истины).
+    useUIStore.getState().setAppearancePreview({ themeMode: next.themeMode, uiScale: next.uiScale })
     setI18nLocale(next.locale)
     applyUiScale(next.uiScale)
   }
@@ -85,7 +86,7 @@ export const AppearanceSettings = () => {
       }
       await profileService.syncLocaleToProfile(next.locale)
       persistUiScale(next.uiScale)
-      useUIStore.setState({ uiScale: next.uiScale })
+      useUIStore.getState().setAppearancePreview({ uiScale: next.uiScale })
       savedRef.current = next
       return next
     },

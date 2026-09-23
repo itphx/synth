@@ -8,10 +8,12 @@ import {
   type RoutingDefaults,
 } from '@/lib/routingDefaults'
 import { confirm } from '@/lib/confirm'
+import { useTransientMessage } from '@/hooks/useTransientMessage'
 import { synthApi, type DictionaryEntry } from '@/lib/api/synthApi'
 import { Button } from '../ui/button'
 import { SelectContent, SelectItem } from '@/components/ui/select'
 import {
+  ModelPairSelect,
   NumberField,
   SegmentedControl,
   SelectField,
@@ -133,30 +135,36 @@ export function RoutingSettings() {
 
       {/* Контентная */}
       <SettingsSection title={t('routing.content')}>
-        <ModelPairRow
+        <ModelPairSelect
           label={t('routing.content.coding')}
           provider={settings.routingContent.coding.provider}
           model={settings.routingContent.coding.model}
           providers={availableProviders}
           models={filteredModels(settings.routingContent.coding.provider)}
+          providerLabel={t('common.provider')}
+          modelLabel={t('common.model')}
           onProviderChange={(v) => updateContent('coding', { provider: v, model: '' })}
           onModelChange={(v) => updateContent('coding', { model: v })}
         />
-        <ModelPairRow
+        <ModelPairSelect
           label={t('routing.content.chat')}
           provider={settings.routingContent.chat.provider}
           model={settings.routingContent.chat.model}
           providers={availableProviders}
           models={filteredModels(settings.routingContent.chat.provider)}
+          providerLabel={t('common.provider')}
+          modelLabel={t('common.model')}
           onProviderChange={(v) => updateContent('chat', { provider: v, model: '' })}
           onModelChange={(v) => updateContent('chat', { model: v })}
         />
-        <ModelPairRow
+        <ModelPairSelect
           label={t('routing.content.research')}
           provider={settings.routingContent.research.provider}
           model={settings.routingContent.research.model}
           providers={availableProviders}
           models={filteredModels(settings.routingContent.research.provider)}
+          providerLabel={t('common.provider')}
+          modelLabel={t('common.model')}
           onProviderChange={(v) => updateContent('research', { provider: v, model: '' })}
           onModelChange={(v) => updateContent('research', { model: v })}
         />
@@ -172,12 +180,14 @@ export function RoutingSettings() {
         />
         {settings.routingEscalation.enabled && (
           <>
-            <ModelPairRow
+            <ModelPairSelect
               label={t('routing.escalation.fallback')}
               provider={settings.routingEscalation.fallbackProvider}
               model={settings.routingEscalation.fallbackModel}
               providers={availableProviders}
               models={filteredModels(settings.routingEscalation.fallbackProvider)}
+              providerLabel={t('common.provider')}
+              modelLabel={t('common.model')}
               onProviderChange={(v) => updateEscalation({ fallbackProvider: v, fallbackModel: '' })}
               onModelChange={(v) => updateEscalation({ fallbackModel: v })}
             />
@@ -201,12 +211,14 @@ export function RoutingSettings() {
         />
         {settings.routingCost.enabled && (
           <>
-            <ModelPairRow
+            <ModelPairSelect
               label={t('routing.cost.cheap')}
               provider={settings.routingCost.cheapProvider}
               model={settings.routingCost.cheapModel}
               providers={availableProviders}
               models={filteredModels(settings.routingCost.cheapProvider)}
+              providerLabel={t('common.provider')}
+              modelLabel={t('common.model')}
               onProviderChange={(v) => updateCost({ cheapProvider: v, cheapModel: '' })}
               onModelChange={(v) => updateCost({ cheapModel: v })}
             />
@@ -286,7 +298,7 @@ function DictionarySection() {
   const [unavailable, setUnavailable] = useState(false)
   const [loadError, setLoadError] = useState(false)
   const [editing, setEditing] = useState<{ category: string; language: string; content: string } | null>(null)
-  const [status, setStatus] = useState<string | null>(null)
+  const [status, flashStatus] = useTransientMessage()
   const [saveError, setSaveError] = useState<string | null>(null)
 
   const load = async () => {
@@ -305,13 +317,8 @@ function DictionarySection() {
     void load()
   }, [])
 
-  const flashStatus = (message: string) => {
-    setStatus(message)
-    setTimeout(() => setStatus(null), 1500)
-  }
-
   const handleEdit = async (entry: DictionaryEntry) => {
-    setStatus(null)
+    flashStatus(null)
     setSaveError(null)
     try {
       const res = await synthApi.getDictionary(entry.category, entry.language)
@@ -325,7 +332,7 @@ function DictionarySection() {
   const handleReset = async (entry: DictionaryEntry) => {
     const name = t(DICTIONARY_CATEGORY_LABELS[entry.category] ?? entry.category)
     if (!(await confirm({ title: t('routing.dictionaries.confirmReset', { name }) }))) return
-    setStatus(null)
+    flashStatus(null)
     setSaveError(null)
     try {
       await synthApi.resetDictionary(entry.category, entry.language)
@@ -495,60 +502,4 @@ function DictionaryEditor({
   )
 }
 
-function ModelPairRow({
-  label,
-  provider,
-  model,
-  providers,
-  models,
-  onProviderChange,
-  onModelChange,
-}: {
-  label: string
-  provider: string
-  model: string
-  providers: { name: string }[]
-  models: { name: string }[]
-  onProviderChange: (v: string) => void
-  onModelChange: (v: string) => void
-}) {
-  const { t } = useI18n()
-  return (
-    <div className="space-y-2 min-w-0">
-      <span className="text-sm text-muted-foreground min-w-0 break-words">{label}</span>
-      <div className="flex flex-col gap-2 sm:flex-row min-w-0">
-        <div className="flex-1 min-w-0">
-          <SelectField
-            value={provider}
-            onValueChange={(value) => {
-              onProviderChange(value)
-              onModelChange('')
-            }}
-            ariaLabel={t('common.provider')}
-          >
-            <SelectContent>
-              <SelectItem value="">{t('common.provider')}</SelectItem>
-              {providers.map((p) => (
-                <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </SelectField>
-        </div>
-        <div className="flex-1 min-w-0">
-          <SelectField
-            value={model}
-            onValueChange={onModelChange}
-            ariaLabel={t('common.model')}
-          >
-            <SelectContent>
-              <SelectItem value="">{t('common.model')}</SelectItem>
-              {models.map((m) => (
-                <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </SelectField>
-        </div>
-      </div>
-    </div>
-  )
-}
+

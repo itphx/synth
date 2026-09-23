@@ -14,7 +14,7 @@ import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import { ContextConfig } from './context/config.js';
 import { SystemPromptComposer, type ComposerContext, type ComposerMcpServer, type ComposerMcpServerStatus } from './context/composer.js';
-import { calibrateCharsPerToken, estimateTokens, DEFAULT_CHARS_PER_TOKEN } from './context/token-ratio.js';
+import { calibrateCharsPerToken, estimateTokens, estimatePromptChars, DEFAULT_CHARS_PER_TOKEN } from './context/token-ratio.js';
 import {
   agentKeyOf,
   buildPromptState,
@@ -51,8 +51,9 @@ import { PermissionEvaluator, extractPaths } from './permission/evaluator.js';
 import { computeToolAvailability } from './permission/availability.js';
 import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
-import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS } from './llm-error.js';
+import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, MAX_DOOM_LOOP_COUNT } from './llm-error.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
+import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
 import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
@@ -60,7 +61,6 @@ import type { ProtectedPathsPolicy } from './security/protected-paths.js';
 import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, PLACEHOLDER_PATTERN, type SecretPatternStore } from './gateway/index.js';
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
 
-const MAX_DOOM_LOOP_COUNT = 3;
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
 /** AD-070: окно троттлинга live-события `stream.usage` (~300 мс). */
 const STREAM_USAGE_THROTTLE_MS = 300;
@@ -367,16 +367,8 @@ export class ChatOrchestrator {
     systemPrompt: SystemPromptPayload | string | undefined,
     tools?: Record<string, unknown>[],
   ): number {
-    let chars = 0;
-    for (const msg of messages) {
-      chars += msg.content?.length ?? 0;
-      if (msg.toolUse) chars += JSON.stringify(msg.toolUse).length;
-      if (msg.reasoning) chars += msg.reasoning.length;
-    }
     const systemText = typeof systemPrompt === 'string' ? systemPrompt : (systemPrompt?.text ?? '');
-    chars += systemText.length;
-    if (tools && tools.length > 0) chars += JSON.stringify(tools).length;
-    return chars;
+    return estimatePromptChars(messages, systemText, tools);
   }
 
   /**
@@ -623,21 +615,10 @@ export class ChatOrchestrator {
     this._dictionaryStore = dictionaryStore;
     // Фабрика обёртки для пула: у пула нет сессии, поэтому оборачиваем с пустой
     // картой обфускации (защита от утечки секретов работает, карта не персистится).
-    // Для вызовов с сессией оркестратор дополнительно оборачивает через _wrapWithGateway.
     const pool = new ProviderPool(
       options.providerLoader,
       gatewayConfig ?? undefined,
-      gatewayConfig
-        ? (inner) => new GatewayProvider(inner, gatewayConfig, {
-            getMap: async () => ({}),
-            saveMap: async () => {},
-            getAudit: () => this._gatewayAudit!,
-            getRateLimiter: () => this._gatewayRateLimiter!,
-            payloadLogPath: this._gatewayPayloadLogPath,
-            sessionId: '',
-            userId: '',
-          })
-        : undefined,
+      gatewayConfig ? this._poolGatewayFactory(gatewayConfig) : undefined,
     );
     this._providerPool = pool;
 
@@ -658,6 +639,23 @@ export class ChatOrchestrator {
     } else {
       this._router = null;
     }
+  }
+
+  /**
+   * AD-036: фабрика gateway-обёртки для ProviderPool — единая точка (конструктор
+   * и live-переключение). У пула нет сессии, поэтому карта обфускации пустая:
+   * защита от утечки секретов работает, карта не персистится.
+   */
+  private _poolGatewayFactory(gatewayConfig: LLMGatewayConfig): (inner: BaseProvider) => BaseProvider {
+    return (inner) => new GatewayProvider(inner, gatewayConfig, {
+      getMap: async () => ({}),
+      saveMap: async () => {},
+      getAudit: () => this._gatewayAudit!,
+      getRateLimiter: () => this._gatewayRateLimiter!,
+      payloadLogPath: this._gatewayPayloadLogPath,
+      sessionId: '',
+      userId: '',
+    });
   }
 
   /**
@@ -703,17 +701,7 @@ export class ChatOrchestrator {
     // и обновляем фабрику (по образцу конструктора, с пустой картой обфускации).
     this._providerPool?.setGateway(
       gatewayConfig,
-      gatewayConfig
-        ? (inner) => new GatewayProvider(inner, gatewayConfig, {
-            getMap: async () => ({}),
-            saveMap: async () => {},
-            getAudit: () => this._gatewayAudit!,
-            getRateLimiter: () => this._gatewayRateLimiter!,
-            payloadLogPath: this._gatewayPayloadLogPath,
-            sessionId: '',
-            userId: '',
-          })
-        : null,
+      gatewayConfig ? this._poolGatewayFactory(gatewayConfig) : null,
     );
   }
 
@@ -784,32 +772,44 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.6: chars-per-token модели. Нет калибровки — дефолт 4.
+   * AD-071 §2.6: сохранённый chars-per-token модели (без дефолта).
+   * `undefined` — калибровки нет (первый семпл EWMA берётся как есть).
    */
-  private async _resolveTokenRatio(model: string | undefined): Promise<number> {
-    if (!model || !this._tokenRatioLoader) return DEFAULT_CHARS_PER_TOKEN;
+  private async _loadTokenRatio(model: string | undefined): Promise<number | undefined> {
+    if (!model || !this._tokenRatioLoader) return undefined;
     try {
       const ratio = await this._tokenRatioLoader(model);
       if (typeof ratio === 'number' && Number.isFinite(ratio) && ratio > 0) return ratio;
     } catch {
       // ошибка чтения runtime-настроек не должна ломать сборку промпта
     }
-    return DEFAULT_CHARS_PER_TOKEN;
+    return undefined;
+  }
+
+  /**
+   * AD-071 §2.6: chars-per-token модели. Нет калибровки — дефолт 4.
+   */
+  private async _resolveTokenRatio(model: string | undefined): Promise<number> {
+    return (await this._loadTokenRatio(model)) ?? DEFAULT_CHARS_PER_TOKEN;
   }
 
   /**
    * AD-071 §2.6: калибровка chars-per-token после успешного ответа
    * (`promptChars / usage.inputTokens`). EWMA + границы/порог — в
    * `calibrateCharsPerToken`. Ошибка сохранения не влияет на ход.
+   *
+   * `currentRatio` — уже загруженное в этом ходе значение (без дефолта):
+   * повторно `_tokenRatioLoader` не читаем, а пустое значение корректно даёт
+   * первый семпл EWMA «как есть».
    */
   private async _calibrateTokenRatio(
     model: string | undefined,
     promptChars: number,
     usage: TokenUsage | undefined,
+    currentRatio: number | undefined,
   ): Promise<void> {
     if (!model || !usage || !this._onTokenRatioCalibrated) return;
-    const current = this._tokenRatioLoader ? await this._tokenRatioLoader(model).catch(() => undefined) : undefined;
-    const next = calibrateCharsPerToken(promptChars, usage.inputTokens, current);
+    const next = calibrateCharsPerToken(promptChars, usage.inputTokens, currentRatio);
     if (next == null) return;
     try {
       await this._onTokenRatioCalibrated(model, next);
@@ -830,6 +830,102 @@ export class ChatOrchestrator {
       if (this._isAdminDisabled(tool)) return false;
       if (availability && !availability(tool)) return false;
       return true;
+    };
+  }
+
+  /**
+   * AD-071 §2.3/§2.6: единый резолвинг политик и выборки инструментов сессии.
+   * Используется и при сборке запроса (`_processMessage`), и в диагностике
+   * (`getPromptInfo`) — состав tools/mcp.tools не должен расходиться.
+   */
+  private _buildToolSelection(args: {
+    session: Session;
+    agentDef: AgentDefinition | undefined;
+    effectiveAgentRole: string | undefined;
+    activeMcpServers: Iterable<string>;
+    providerType?: string;
+    sessionMode: SessionMode;
+    planMode: PlanMode;
+    planApproved: boolean;
+  }): {
+    toolsPolicy: Exclude<ToolsPolicy, 'auto'>;
+    mcpPolicy: Exclude<ToolsPolicy, 'auto'>;
+    /** Ленивая выборка — вызывается, когда реестр уже содержит MCP-тулы сессии. */
+    select: () => ReturnType<ToolRegistry['selectForSession']>;
+  } {
+    const {
+      session, agentDef, effectiveAgentRole, activeMcpServers,
+      providerType, sessionMode, planMode, planApproved,
+    } = args;
+    const toolsPolicy = this._resolveToolsPolicy(session, providerType);
+    const mcpPolicy = this._resolveMcpPolicy(session, providerType);
+    // AD-071 §2.3: встроенные и MCP фильтруются независимо — своя политика на слой.
+    const availabilityPredicate = (toolsPolicy === 'available' || mcpPolicy === 'available')
+      ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef)
+      : undefined;
+    // AD-071 §2.6: admin-disabled исключаются всегда, независимо от политики.
+    const toolPredicates = {
+      builtin: this._toolPredicate(toolsPolicy === 'available' ? availabilityPredicate : undefined),
+      mcp: this._toolPredicate(mcpPolicy === 'available' ? availabilityPredicate : undefined),
+    };
+    const select = (): ReturnType<ToolRegistry['selectForSession']> =>
+      (this._toolRegistry && agentDef && effectiveAgentRole
+        ? this._toolRegistry.selectForSession(activeMcpServers, toolPredicates)
+        : { builtin: [], mcp: [] });
+    return { toolsPolicy, mcpPolicy, select };
+  }
+
+  /**
+   * AD-070 §2.1/§2.5: единая сборка `ComposerContext` для `compose`/`manifest`.
+   * `toolSelection` (для манифеста `tools`/`mcp.tools`) передаётся только
+   * диагностикой; `project` — уже загруженный проект (AD-071 §2.4).
+   */
+  private _buildComposerContext(args: {
+    session: Session;
+    agentDef: AgentDefinition | undefined;
+    effectiveAgentRole: string | undefined;
+    workingDir: string;
+    language: string;
+    summaryContent?: string;
+    toolsPolicy: Exclude<ToolsPolicy, 'auto'>;
+    mcpPolicy: Exclude<ToolsPolicy, 'auto'>;
+    tokenRatio: number;
+    mcpServers?: ComposerMcpServer[];
+    project?: Project | null;
+    toolSelection?: ReturnType<ToolRegistry['selectForSession']>;
+    debugCollector?: DebugCollector;
+  }): ComposerContext {
+    const {
+      session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
+      toolsPolicy, mcpPolicy, tokenRatio, mcpServers, project, toolSelection, debugCollector,
+    } = args;
+    return {
+      session,
+      agentDef,
+      agentRole: effectiveAgentRole,
+      agentContextFile: agentDef?.contextFile,
+      workingDir,
+      language,
+      routingEnabled: !!this._router && session.settings.routingEnabled !== false,
+      gatewayEnabled: !!this._gatewayConfig,
+      historyMessages: session.messages,
+      userId: session.userId,
+      showInterview: session.settings.showInterview,
+      stickyNotes: session.stickyNotes,
+      summaryContent: summaryContent || undefined,
+      tools: toolSelection
+        ? toolSelection.builtin as unknown as Array<Record<string, unknown>>
+        : undefined,
+      mcpTools: toolSelection
+        ? toolSelection.mcp as unknown as Array<Record<string, unknown>>
+        : undefined,
+      toolsPolicy,
+      mcpPolicy,
+      adminDisabled: this._toolsDisabled,
+      tokenRatio,
+      mcpServers,
+      project,
+      debugCollector,
     };
   }
 
@@ -946,20 +1042,31 @@ export class ChatOrchestrator {
     }
   }
 
-  private async _resolveWorkingDir(session: Session): Promise<string> {
-    if (session.projectId && this._projectStore) {
-      try {
-        const project = await this._projectStore.load(session.projectId);
-        if (project?.workspace) {
-          // Абсолютный workspace — как есть (normalize); относительный —
-          // резолвим относительно workspacesRoot (AD-014).
-          return isAbsolute(project.workspace)
-            ? normalize(project.workspace)
-            : resolve(this._workspacesRoot, project.workspace);
+  /**
+   * Рабочий каталог сессии: `project.workspace` → `defaultWorkingDir`.
+   * `project` можно передать уже загруженным (AD-071 §2.4) — тогда повторного
+   * чтения `projectStore` не происходит; `undefined` — загрузить, `null` — проекта нет.
+   */
+  private async _resolveWorkingDir(session: Session, project?: Project | null): Promise<string> {
+    let resolved: Project | null;
+    if (project !== undefined) {
+      resolved = project;
+    } else {
+      resolved = null;
+      if (session.projectId && this._projectStore) {
+        try {
+          resolved = await this._projectStore.load(session.projectId);
+        } catch {
+          // проект не загрузился — используем fallback
         }
-      } catch {
-        // проект не загрузился — используем fallback
       }
+    }
+    if (resolved?.workspace) {
+      // Абсолютный workspace — как есть (normalize); относительный —
+      // резолвим относительно workspacesRoot (AD-014).
+      return isAbsolute(resolved.workspace)
+        ? normalize(resolved.workspace)
+        : resolve(this._workspacesRoot, resolved.workspace);
     }
     const dir = this._defaultWorkingDir;
     await mkdir(dir, { recursive: true }).catch(() => {});
@@ -1049,6 +1156,26 @@ export class ChatOrchestrator {
   }
 
   /**
+   * AD-071 §2.2: статус MCP-сервера для API/промпта. Отключённый сервер —
+   * `disabled`; иначе — состояние менеджера (`circuit-open`/`connected`/`error`).
+   */
+  private _resolveMcpServerStatus(name: string, enabled: boolean): ComposerMcpServerStatus {
+    if (!enabled) return 'disabled';
+    const raw = this._mcpManager?.getServerStatus(name);
+    return raw === 'circuit-open' ? 'circuit-open' : raw === 'connected' ? 'connected' : 'error';
+  }
+
+  /**
+   * AD-071 §2.1: имена активных MCP-серверов сессии (эффективный скоуп).
+   * Используется для наследования MCP-скоупа resumed-саб-агентом от родителя.
+   */
+  private async _resolveActiveMcpServers(session: Session): Promise<string[]> {
+    if (!this._mcpManager) return [];
+    const project = await this._loadProject(session);
+    return this._resolveMcpDecisions(session, project).filter((d) => d.enabled).map((d) => d.name);
+  }
+
+  /**
    * AD-071 §2.4: эффективный список MCP-серверов сессии (включая отключённые с
    * причиной) — единый источник для API `GET /sessions/:id/mcp` и промпта.
    */
@@ -1060,14 +1187,7 @@ export class ChatOrchestrator {
     // AD-071 §2.6: единый ratio для оценок токенов (калибровка модели сессии).
     const tokenRatio = await this._resolveTokenRatio(session.settings.model);
     return decisions.map((d) => {
-      const rawStatus = manager.getServerStatus(d.name);
-      const status: NonNullable<McpServerEffective['status']> = !d.enabled
-        ? 'disabled'
-        : rawStatus === 'circuit-open'
-          ? 'circuit-open'
-          : rawStatus === 'connected'
-            ? 'connected'
-            : 'error';
+      const status = this._resolveMcpServerStatus(d.name, d.enabled);
       const rawTools = manager.getServerTools(d.name) ?? [];
       // AD-071 §2.6: пер-тульные chars/estTokens — по тому же JSON-определению,
       // что уходит в слой `mcp.tools` (имя с префиксом сервера + [MCP:...]).
@@ -1096,7 +1216,7 @@ export class ChatOrchestrator {
         level: d.level,
         enabled: d.enabled,
         ...(d.reason ? { reason: d.reason } : {}),
-        connected: d.enabled && rawStatus === 'connected',
+        connected: status === 'connected',
         status,
         origin: d.origin,
         trust: manager.getServerTrust(d.name),
@@ -1123,13 +1243,7 @@ export class ChatOrchestrator {
 
     return decisions.map((decision) => {
       const name = decision.name;
-      let status: ComposerMcpServerStatus;
-      if (!decision.enabled) {
-        status = 'disabled';
-      } else {
-        const raw = manager.getServerStatus(name);
-        status = raw === 'circuit-open' ? 'circuit-open' : raw === 'connected' ? 'connected' : 'error';
-      }
+      const status = this._resolveMcpServerStatus(name, decision.enabled);
 
       const description = manager.getServerDescription(name);
       const instructions = manager.getServerInstructions(name);
@@ -1196,7 +1310,9 @@ export class ChatOrchestrator {
   async getPromptInfo(session: Session): Promise<PromptDiagnostics> {
     const effectiveAgentRole = session.settings.agentRole;
     const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
-    const workingDir = await this._resolveWorkingDir(session);
+    // AD-071 §2.4: проект загружаем один раз — для рабочего каталога и Composer.
+    const project = await this._loadProject(session);
+    const workingDir = await this._resolveWorkingDir(session, project);
     const language = session.settings.language || 'ru';
 
     const optimizedMessages = this._optimizer
@@ -1211,66 +1327,36 @@ export class ChatOrchestrator {
     // запрос (`_processMessage`) — встроенные + MCP эффективного набора сессии
     // (instance defaultOn ∪ project defaultOn ∪ session enabled − opt-out);
     // в режиме `available` — только доступные (mode/role/mcpToolSettings).
-    const project = await this._loadProject(session);
     const mcpDecisions = this._resolveMcpDecisions(session, project);
     const activeMcpServers = mcpDecisions.filter((d) => d.enabled).map((d) => d.name);
     const planMode: PlanMode = session.settings.planMode ?? this._defaultPlanMode ?? 'auto';
     const sessionMode: SessionMode = session.mode ?? 'act';
     const planApproved = Boolean(session.planApproved);
     const providerType = this._sessionProviderType(session);
-    const toolsPolicy = this._resolveToolsPolicy(session, providerType);
-    const mcpPolicy = this._resolveMcpPolicy(session, providerType);
-    // AD-071 §2.3: встроенные и MCP фильтруются независимо — своя политика на слой.
-    const availabilityPredicate = (toolsPolicy === 'available' || mcpPolicy === 'available')
-      ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef)
-      : undefined;
-    // AD-071 §2.6: admin-disabled исключаются всегда, независимо от политики.
-    const toolPredicates = {
-      builtin: this._toolPredicate(toolsPolicy === 'available' ? availabilityPredicate : undefined),
-      mcp: this._toolPredicate(mcpPolicy === 'available' ? availabilityPredicate : undefined),
-    };
-    const toolSelection = this._toolRegistry && agentDef && effectiveAgentRole
-      ? this._toolRegistry.selectForSession(activeMcpServers, toolPredicates)
-      : { builtin: [], mcp: [] };
+    const { toolsPolicy, mcpPolicy, select } = this._buildToolSelection({
+      session, agentDef, effectiveAgentRole, activeMcpServers, providerType,
+      sessionMode, planMode, planApproved,
+    });
+    const toolSelection = select();
     // AD-071 §2.6: chars-per-token модели (калибровка) для оценок токенов.
     const tokenRatio = await this._resolveTokenRatio(session.settings.model);
 
-    const ctx: ComposerContext = {
-      session,
-      agentDef,
-      agentRole: effectiveAgentRole,
-      agentContextFile: agentDef?.contextFile,
-      workingDir,
-      language,
-      routingEnabled: !!this._router && session.settings.routingEnabled !== false,
-      gatewayEnabled: !!this._gatewayConfig,
-      historyMessages: session.messages,
-      userId: session.userId,
-      showInterview: session.settings.showInterview,
-      stickyNotes: session.stickyNotes,
-      summaryContent: summaryContent || undefined,
-      // AD-070 §2.5 + AD-071 §2.1/§2.3: манифест отражает реальные слои запроса —
-      // `tools` (встроенные) и `mcp.tools` (MCP сессии); тир `tools` зависит от
-      // `tools.policy`, MCP-блоки всегда volatile.
-      tools: this._toolRegistry
-        ? toolSelection.builtin as unknown as Array<Record<string, unknown>>
-        : undefined,
-      mcpTools: this._toolRegistry
-        ? toolSelection.mcp as unknown as Array<Record<string, unknown>>
-        : undefined,
-      toolsPolicy,
-      mcpPolicy,
-      // AD-071 §2.6: admin-disabled — строка про ограничения в `tools.guide`.
-      adminDisabled: this._toolsDisabled,
-      tokenRatio,
+    // AD-070 §2.5 + AD-071 §2.1/§2.3: манифест отражает реальные слои запроса —
+    // `tools` (встроенные) и `mcp.tools` (MCP сессии); тир `tools` зависит от
+    // `tools.policy`, MCP-блоки всегда volatile.
+    const ctx: ComposerContext = this._buildComposerContext({
+      session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
+      toolsPolicy, mcpPolicy, tokenRatio,
       // AD-071 §2.2: блоки `mcp.servers`/`mcp.status` — все серверы эффективного набора.
       mcpServers: this._collectComposerMcpServers(mcpDecisions),
-    };
+      project,
+      toolSelection,
+    });
 
     const manifest = await this._composer.manifest(ctx);
     const promptState = session.promptStates?.[agentKeyOf(effectiveAgentRole)] ?? null;
     const lastPromptMeta = this._lastPromptMeta(session, effectiveAgentRole);
-    const history = this._buildPromptHistoryInfo(session, effectiveAgentRole);
+    const history = this._buildPromptHistoryInfo(session, effectiveAgentRole, tokenRatio);
     // AD-071 §2.6: per-tool данные встроенных инструментов для таблицы статистики.
     // Доступность считается тем же `computeToolAvailability`, что и в запросе;
     // admin-disabled помечается отдельной причиной и имеет приоритет.
@@ -1308,10 +1394,15 @@ export class ChatOrchestrator {
    * реальную отправку через тот же `_sessionMessagesToLlm`, что и
    * `_processMessage`, чтобы статистика не расходилась с запросом.
    */
-  private _buildPromptHistoryInfo(session: Session, agentRole?: string): PromptHistoryInfo {
+  private _buildPromptHistoryInfo(
+    session: Session,
+    agentRole?: string,
+    tokenRatio: number = DEFAULT_CHARS_PER_TOKEN,
+  ): PromptHistoryInfo {
     const sent = ChatOrchestrator._sessionMessagesToLlm(session.messages, agentRole, session.userId);
 
-    // Сообщения: chars = content + JSON(toolUse) + reasoning, estTokens = ceil(chars/4).
+    // Сообщения: chars = content + JSON(toolUse) + reasoning, estTokens — по
+    // калиброванному chars-per-token (как в манифесте промпта).
     let chars = 0;
     let secretPlaceholders = 0;
     const placeholderRe = new RegExp(PLACEHOLDER_PATTERN.source, 'g');
@@ -1339,7 +1430,7 @@ export class ChatOrchestrator {
         type,
         count: v.count,
         chars: v.chars,
-        estTokens: Math.ceil(v.chars / 4),
+        estTokens: estimateTokens(v.chars, tokenRatio),
       }))
       .sort((a, b) => b.chars - a.chars || a.type.localeCompare(b.type));
 
@@ -1367,7 +1458,7 @@ export class ChatOrchestrator {
     }
 
     return {
-      messages: { count: sent.length, chars, estTokens: Math.ceil(chars / 4) },
+      messages: { count: sent.length, chars, estTokens: estimateTokens(chars, tokenRatio) },
       stateMessages,
       excluded,
       attachments: { count: attachmentCount, chars: attachmentChars },
@@ -1412,7 +1503,17 @@ export class ChatOrchestrator {
     const streamId = (message.metadata?.stream_id as string) || 'unknown';
     const effectiveAgentRole = message.agentRole || session.settings.agentRole;
     const author = message.author || 'unknown';
-    const workingDir = await this._resolveWorkingDir(session);
+    // AD-071 §2.4: проект сессии — носитель project-скоупа MCP; загружаем один
+    // раз: нужен рабочему каталогу, state-сообщениям, резолвингу MCP и Composer.
+    let projectForState: Project | null = null;
+    if (session.projectId && this._projectStore) {
+      try {
+        projectForState = await this._projectStore.load(session.projectId);
+      } catch {
+        projectForState = null;
+      }
+    }
+    const workingDir = await this._resolveWorkingDir(session, projectForState);
     // AD-070 §2.6: старт прогона — для per-message duration_ms (полная
     // длительность у финального сообщения потока, включая tool-chain).
     const streamStartedAt = Date.now();
@@ -1558,16 +1659,8 @@ export class ChatOrchestrator {
       // истории (до сборки LLM-сообщений). Идемпотентно — при неизменном
       // состоянии ничего не добавляется; system prompt при этом не меняется.
       const language = session.settings.language || 'ru';
-      // AD-071 §2.4: проект сессии — носитель project-скоупа MCP (загружаем один
-      // раз: нужен и state-сообщениям, и резолвингу MCP).
-      let projectForState: Project | null = null;
-      if (session.projectId && this._projectStore) {
-        try {
-          projectForState = await this._projectStore.load(session.projectId);
-        } catch {
-          projectForState = null;
-        }
-      }
+      // AD-071 §2.4: проект сессии уже загружен выше (projectForState) —
+      // повторно хранилище не читаем.
       // AD-071 §2.1/§2.4: эффективный набор MCP сессии — per-session скоуп:
       // (instance defaultOn ∪ project defaultOn ∪ session enabled) − opt-out.
       // Определяем до state-сообщений (unavailable-подсказки) и до сборки tools.
@@ -1577,17 +1670,12 @@ export class ChatOrchestrator {
       // AD-071 §2.3: эффективные политики инструментов для этого хода (per-session
       // override → глобальная; `auto` → по типу провайдера). Встроенные и MCP —
       // независимо; в `available` слой фильтруется по доступности, а подсказки
-      // `unavailable` для него не нужны.
-      const toolsPolicy = this._resolveToolsPolicy(session, provider.type);
-      const mcpPolicy = this._resolveMcpPolicy(session, provider.type);
-      const availabilityPredicate = (toolsPolicy === 'available' || mcpPolicy === 'available')
-        ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef)
-        : undefined;
-      // AD-071 §2.6: admin-disabled исключаются из запроса всегда.
-      const toolPredicates = {
-        builtin: this._toolPredicate(toolsPolicy === 'available' ? availabilityPredicate : undefined),
-        mcp: this._toolPredicate(mcpPolicy === 'available' ? availabilityPredicate : undefined),
-      };
+      // `unavailable` для него не нужны. `select()` вызывается позже — после
+      // ленивой регистрации MCP-тулов сессии.
+      const { toolsPolicy, mcpPolicy, select } = this._buildToolSelection({
+        session, agentDef, effectiveAgentRole, activeMcpServers, providerType: provider.type,
+        sessionMode, planMode, planApproved,
+      });
       const stateSync = syncStateMessages(session, {
         contextConfig: this._contextConfig,
         language,
@@ -1630,39 +1718,27 @@ export class ChatOrchestrator {
       }
 
       // AD-071 §2.6: chars-per-token модели хода (калибровка) для оценок токенов.
-      const tokenRatio = await this._resolveTokenRatio(provider.model || session.settings.model);
+      // `loadedTokenRatio` (без дефолта) переиспользуется при калибровке после
+      // ответа — повторного чтения runtime-настроек нет.
+      const loadedTokenRatio = await this._loadTokenRatio(provider.model || session.settings.model);
+      const tokenRatio = loadedTokenRatio ?? DEFAULT_CHARS_PER_TOKEN;
 
       // AD-070 §2.1/§2.8: единая идемпотентная сборка системного промпта
       // Composer'ом. `session.settings.systemPrompt` override, classification/
       // gateway/plan-guide/mode-policy/session-context — внутри compose.
       // Режим/план/todo — уже в state-сообщениях истории (выше), не в system.
-      const composerCtx: ComposerContext = {
-        session,
-        agentDef,
-        agentRole: effectiveAgentRole,
-        agentContextFile: agentDef?.contextFile,
-        workingDir,
-        language,
-        routingEnabled: !!this._router && session.settings.routingEnabled !== false,
-        gatewayEnabled: !!this._gatewayConfig,
-        historyMessages: session.messages,
-        userId: session.userId,
-        showInterview: session.settings.showInterview,
-        stickyNotes: session.stickyNotes,
-        summaryContent: summaryContent || undefined,
+      const composerCtx: ComposerContext = this._buildComposerContext({
+        session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
         // AD-071 §2.3: `toolsPolicy` влияет на тир `tools`, `mcpPolicy` — на
         // инструкцию `tools.guide`; MCP-блоки всегда volatile.
-        toolsPolicy,
-        mcpPolicy,
-        // AD-071 §2.6: admin-disabled + ratio для оценок/инструкции.
-        adminDisabled: this._toolsDisabled,
-        tokenRatio,
+        toolsPolicy, mcpPolicy, tokenRatio,
         // AD-071 §2.2: блоки `mcp.servers`/`mcp.status` — все серверы эффективного набора.
         mcpServers: this._collectComposerMcpServers(mcpDecisions),
-        // AD-070 §2.5: per-message collector доходит до Composer через контекст
-        // (Composer создаётся один раз, а коллектор живёт в рамках хода).
+        // AD-071 §2.4: уже загруженный проект — Composer не читает хранилище.
+        project: projectForState,
+        // AD-070 §2.5: per-message collector доходит до Composer через контекст.
         debugCollector,
-      };
+      });
       const composed = await this._composer.compose(composerCtx);
       // AD-070 §2.2: в провайдер уходит payload с границей stable-префикса и
       // ключом кэша (стабильный id сессии). При override
@@ -1719,9 +1795,8 @@ export class ChatOrchestrator {
       // `available` — только доступные (mode/role/mcpToolSettings). Порядок:
       // builtin → MCP. Если агент НЕ найден в реестре или role undefined —
       // модель получает НИКАКИХ инструментов (safety-fallback).
-      const toolSelection = this._toolRegistry && agentDef && effectiveAgentRole
-        ? this._toolRegistry.selectForSession(activeMcpServers, toolPredicates)
-        : { builtin: [], mcp: [] };
+      // `select()` — после ensureToolsLoaded (реестр уже содержит MCP-тулы).
+      const toolSelection = select();
       const tools = this._toolRegistry
         ? [...toolSelection.builtin, ...toolSelection.mcp]
         : undefined;
@@ -1787,6 +1862,11 @@ export class ChatOrchestrator {
 
       // Стартовая оценка input сразу после сборки сообщений — чтобы панель
       // статистики не пустовала до первого чанка провайдера.
+      // AD-071 §2.6: размер промпта считаем один раз при старте и на входе
+      // каждой итерации; переиспользуем в live-оценке и путях отмены.
+      let lastIterationPromptChars = this._estimatePromptChars(
+        currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
+      );
       this._publishLiveUsage({
         publishChunk,
         state: liveUsageState,
@@ -1798,9 +1878,7 @@ export class ChatOrchestrator {
         provider: providerName,
         usage: this._estimateUsage(
           undefined,
-          this._estimatePromptChars(
-            currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
-          ),
+          lastIterationPromptChars,
           0,
         ).usage,
         estimated: true,
@@ -1828,9 +1906,13 @@ export class ChatOrchestrator {
 
         // Размер промпта этой итерации (символы) — считаем один раз и
         // переиспользуем для best-effort оценки input, пока нет точных токенов.
-        const iterationPromptChars = this._estimatePromptChars(
-          currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
-        );
+        // Для первой итерации берём стартовое значение (сообщения не менялись).
+        const iterationPromptChars = toolIteration === 0
+          ? lastIterationPromptChars
+          : this._estimatePromptChars(
+            currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
+          );
+        lastIterationPromptChars = iterationPromptChars;
 
         try {
           for await (const chunk of provider.chatAsync(
@@ -1908,35 +1990,23 @@ export class ChatOrchestrator {
             }
 
             // Stream UI chunks (content from all iterations; reasoning always)
-            if (toolIteration === 0) {
-                publishChunk('stream.chunk', {
-                  stream_id: streamId,
-                  content: chunk.isFinal ? '' : chunk.content,
-                  reasoning: chunk.reasoning,
-                  iteration: toolIteration,
-                  is_final: chunk.isFinal,
-                  agent_role: effectiveAgentRole,
-                  model: chunkModel,
-                  provider: providerName,
-                });
-              } else {
-                publishChunk('stream.chunk', {
-                  stream_id: streamId,
-                  content: chunk.isFinal ? '' : chunk.content,
-                reasoning: chunk.reasoning,
-                iteration: toolIteration,
-                agent_role: effectiveAgentRole,
-                model: chunkModel,
-                provider: providerName,
-              });
-            }
+            publishChunk('stream.chunk', {
+              stream_id: streamId,
+              content: chunk.isFinal ? '' : chunk.content,
+              reasoning: chunk.reasoning,
+              iteration: toolIteration,
+              is_final: chunk.isFinal,
+              agent_role: effectiveAgentRole,
+              model: chunkModel,
+              provider: providerName,
+            });
           }
         } catch (e) {
           const errMsg = String(e);
           warning('ORCHESTRATOR', `LLM stream error: ${errMsg}`);
 
           this._cancellationTokens.delete(streamId);
-          return this._handleLlmFailure(session.id, streamId, e, publishChunk, attempt, {
+          return this._handleLlmFailure(session.id, streamId, e, attempt, {
             debugCollector,
             durationMs: Date.now() - streamStartedAt,
             usage: finalUsage,
@@ -1944,9 +2014,7 @@ export class ChatOrchestrator {
             providerName,
             agentRole: effectiveAgentRole,
             content: accumulatedContent,
-            promptChars: this._estimatePromptChars(
-              currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
-            ),
+            promptChars: iterationPromptChars,
             toolResults: allToolCalls.length > 0 ? allToolCalls : undefined,
             promptMeta,
           });
@@ -1982,9 +2050,7 @@ export class ChatOrchestrator {
           const cancelDurationMs = Date.now() - streamStartedAt;
           const cancelEstimated = this._estimateUsage(
             finalUsage,
-            this._estimatePromptChars(
-              currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
-            ),
+            iterationPromptChars,
             partialContent.length,
           );
           const cancelCost = this._computeMessageCost(cancelModel, cancelEstimated.usage);
@@ -2004,6 +2070,7 @@ export class ChatOrchestrator {
               ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
             },
             promptMeta,
+            cancelCost,
           );
 
           publishChunk('stream.cancelled', {
@@ -2192,87 +2259,58 @@ export class ChatOrchestrator {
               reason: deniedReason,
               matched_rule: permissionDecision.matchedRule,
             });
-            toolResult = {
+            toolResult = buildDenyResult({
+              reason: deniedReason ?? '',
               content: deniedReason ?? sm('tool.permission_denied_default'),
-              isError: true,
-              metadata: {
-                ...(permissionDecision.messageId
-                  ? { i18n: i18nMeta(`security.${permissionDecision.messageId.replaceAll('-', '_')}`, permissionDecision.params as Record<string, string> | undefined) }
-                  : { i18n: i18nMeta('tool.permission_denied_default') }),
-                permission: {
-                  action: 'deny',
-                  reason: deniedReason ?? '',
-                  matched_rule: permissionDecision.matchedRule,
-                },
-              },
-            };
+              matchedRule: permissionDecision.matchedRule,
+              messageId: permissionDecision.messageId,
+              params: permissionDecision.params as Record<string, string> | undefined,
+            });
             hadDeny = true;
           } else {
-              if (toolDef) {
-              const parsed = toolDef.parameters.safeParse(toolArgs);
-              if (!parsed.success) {
-                toolResult = {
-                  content: sm('tool.args_error', { tool: toolName, issues: parsed.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }),
-                  isError: true,
-                  metadata: { i18n: i18nMeta('tool.args_error', { tool: toolName }) },
-                };
-              } else {
-                try {
-                  toolResult = await toolDef.execute(parsed.data, {
-                    sessionId: session.id,
-                    messageId: (message.metadata?.stream_id as string) || streamId,
-                    // Живой сигнал отмены: абортится как по /abort (cancel()),
-                    // так и по cancelRetry (внешний signal). Без этого тулы
-                    // (task/сабагент) не узнают о «Стоп» до своего завершения.
-                    abortSignal: toolAbortController.signal,
-                    agentRole: effectiveAgentRole,
-                    workingDir,
-                    dataDir: this._modelPriceLoader ? undefined : undefined,
-                    extra: {
-                      provider,
-                      agentRegistry: this._agentRegistry,
-                      sessionManager: this._sessionManager,
-                      projectStore: this._projectStore ?? undefined,
-                      workspacesRoot: this._workspacesRoot,
-                      eventBus: this._eventBus,
-                      contextOptimizer: this._optimizer ?? undefined,
-                      callerAgentRole: effectiveAgentRole,
-                      sessionSettings: {
-                        temperature: session.settings.temperature,
-                        maxTokens: session.settings.maxTokens,
-                      },
-                      parentSessionSettings: session.settings,
-                      // AD-071 §2.1: саб-агент наследует MCP-скоуп родителя.
-                      mcpServers: activeMcpServers,
-                      modelRouter: this._router ?? undefined,
-                      routerConfig: this._routerConfig ?? undefined,
-                      contextConfig: this._contextConfig ?? undefined,
-                      securityConfig: this._securityConfig,
-                      language: session.settings.language || 'ru',
-                      publish: (type: string, data: Record<string, unknown>) =>
-                        publishChunk(type as never, data),
-                      streamId,
-                      sessionId: session.id,
-                      // ID собственного tool-вызова — для вложенности вызовов
-                      // саб-агента под блоком `task` в родительском стриме.
-                      callId: tcId,
-                      toolRegistry: this._toolRegistry,
-                      permissionConfig: effectivePermissionConfig,
-                      shellPolicy: this._getProtectedPaths() ?? undefined,
-                      protectedPaths: this._getProtectedPaths() ?? undefined,
-                      protectedPathsEnabled: this._getProtectedPathsEnabled(),
-                      // AD-070: live-стоимость саб-агента тем же загрузчиком цен.
-                      modelPriceLoader: this._modelPriceLoader ?? undefined,
-                    },
-                  });
-                } catch (execError) {
-                  toolResult = {
-                    content: sm('tool.exec_error', { tool: toolName, error: String(execError) }),
-                    isError: true,
-                    metadata: { i18n: i18nMeta('tool.exec_error', { tool: toolName }) },
-                  };
-                }
-              }
+            if (toolDef) {
+              toolResult = await executeToolDef(toolDef, toolArgs, {
+                sessionId: session.id,
+                messageId: (message.metadata?.stream_id as string) || streamId,
+                // Живой сигнал отмены: абортится как по /abort (cancel()),
+                // так и по cancelRetry (внешний signal). Без этого тулы
+                // (task/сабагент) не узнают о «Стоп» до своего завершения.
+                abortSignal: toolAbortController.signal,
+                agentRole: effectiveAgentRole,
+                workingDir,
+                extra: {
+                  provider,
+                  agentRegistry: this._agentRegistry,
+                  sessionManager: this._sessionManager,
+                  projectStore: this._projectStore ?? undefined,
+                  workspacesRoot: this._workspacesRoot,
+                  eventBus: this._eventBus,
+                  contextOptimizer: this._optimizer ?? undefined,
+                  callerAgentRole: effectiveAgentRole,
+                  parentSessionSettings: session.settings,
+                  // AD-071 §2.1: саб-агент наследует MCP-скоуп родителя.
+                  mcpServers: activeMcpServers,
+                  modelRouter: this._router ?? undefined,
+                  routerConfig: this._routerConfig ?? undefined,
+                  contextConfig: this._contextConfig ?? undefined,
+                  securityConfig: this._securityConfig,
+                  language: session.settings.language || 'ru',
+                  publish: (type: string, data: Record<string, unknown>) =>
+                    publishChunk(type as never, data),
+                  streamId,
+                  sessionId: session.id,
+                  // ID собственного tool-вызова — для вложенности вызовов
+                  // саб-агента под блоком `task` в родительском стриме.
+                  callId: tcId,
+                  toolRegistry: this._toolRegistry,
+                  permissionConfig: effectivePermissionConfig,
+                  shellPolicy: this._getProtectedPaths() ?? undefined,
+                  protectedPaths: this._getProtectedPaths() ?? undefined,
+                  protectedPathsEnabled: this._getProtectedPathsEnabled(),
+                  // AD-070: live-стоимость саб-агента тем же загрузчиком цен.
+                  modelPriceLoader: this._modelPriceLoader ?? undefined,
+                },
+              }, toolName);
             } else {
               toolResult = {
                 content: sm('tool.not_found', { tool: toolName }),
@@ -2492,9 +2530,7 @@ export class ChatOrchestrator {
         const cancelDurationMs = Date.now() - streamStartedAt;
         const cancelEstimated = this._estimateUsage(
           finalUsage,
-          this._estimatePromptChars(
-            currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
-          ),
+          lastIterationPromptChars,
           partialContent.length,
         );
         const cancelCost = this._computeMessageCost(cancelModel, cancelEstimated.usage);
@@ -2513,6 +2549,7 @@ export class ChatOrchestrator {
             ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
           },
           promptMeta,
+          cancelCost,
         );
 
         publishChunk('stream.cancelled', {
@@ -2643,16 +2680,17 @@ export class ChatOrchestrator {
         qaPass, qaReason,
         { ...(fallbackI18n ? { i18n: fallbackI18n } : {}), duration_ms: durationMs },
         promptMeta,
+        messageCost,
       );
 
       // AD-071 §2.6: калибровка chars-per-token по факту (promptChars / inputTokens)
-      // после успешного хода. promptChars — тот же расчёт, что уходит в провайдер.
+      // после успешного хода. promptChars — тот же расчёт, что уходил в провайдер
+      // (последняя итерация), ratio — уже загруженный в этом ходе.
       await this._calibrateTokenRatio(
         finalModel,
-        this._estimatePromptChars(
-          currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
-        ),
+        lastIterationPromptChars,
         finalUsage,
+        loadedTokenRatio,
       );
 
       // Получаем актуальную сессию после сохранения
@@ -2793,7 +2831,7 @@ export class ChatOrchestrator {
       this._cancellationTokens.delete(streamId);
       // Внешний catch может сработать до инициализации локальных переменных
       // (usage/model/prompt) — сохраняем ошибку с безопасным минимумом.
-      return this._handleLlmFailure(session.id, streamId, e, publishChunk, attempt, {
+      return this._handleLlmFailure(session.id, streamId, e, attempt, {
         debugCollector,
         durationMs: Date.now() - streamStartedAt,
         model: session.settings.model,
@@ -2836,6 +2874,8 @@ export class ChatOrchestrator {
   }> {
     const deps = this._subagentResumeDeps();
     const { child, parent } = await validateSubagentResume(deps, childSessionId);
+    // AD-071 §2.1: resumed-саб-агент наследует MCP-скоуп родительской сессии.
+    deps.mcpServers = await this._resolveActiveMcpServers(parent);
 
     const streamId = generateStreamId();
     const processId = `resume:${streamId}`;
@@ -2923,6 +2963,8 @@ export class ChatOrchestrator {
       shellPolicy: this._getProtectedPaths() ?? undefined,
       protectedPaths: this._getProtectedPaths() ?? undefined,
       protectedPathsEnabled: this._getProtectedPathsEnabled(),
+      // AD-070: live-стоимость resumed-саб-агента тем же загрузчиком цен.
+      modelPriceLoader: this._modelPriceLoader ?? undefined,
       getProvider: (child) => this._getProvider(child.settings.provider || '', child, child.settings.reasoningLevel),
       getWorkingDir: (child) => this._resolveWorkingDir(child),
     };
@@ -3001,7 +3043,7 @@ export class ChatOrchestrator {
     } catch (e) {
       warning('ORCHESTRATOR', `Debug system message stream error: ${e}`);
       this._cancellationTokens.delete(streamId);
-      return this._handleLlmFailure(session.id, streamId, e, publishChunk, attempt, {
+      return this._handleLlmFailure(session.id, streamId, e, attempt, {
         debugCollector,
         durationMs: Date.now() - startedAt,
         usage: finalUsage,
@@ -3126,7 +3168,7 @@ export class ChatOrchestrator {
     } catch (e) {
       warning('ORCHESTRATOR', `Summarization stream error: ${e}`);
       this._cancellationTokens.delete(streamId);
-      return this._handleLlmFailure(session.id, streamId, e, publishChunk, attempt, {
+      return this._handleLlmFailure(session.id, streamId, e, attempt, {
         debugCollector,
         durationMs: Date.now() - startedAt,
         usage: finalUsage,
@@ -3323,7 +3365,11 @@ export class ChatOrchestrator {
         routedWindow > 0 ? routedWindow : undefined,
       );
       if (provider) {
-        provider = this._wrapWithGateway(provider, session);
+        // AD-036: ProviderPool уже оборачивает провайдера через gatewayFactory.
+        // Повторная обёртка дублировала бы guard/аудит/rate-limit — пропускаем.
+        if (!(provider instanceof GatewayProvider)) {
+          provider = this._wrapWithGateway(provider, session);
+        }
         return {
           provider,
           providerName: decision.providerName,
@@ -3600,6 +3646,11 @@ export class ChatOrchestrator {
     metadataExtra?: Record<string, unknown>,
     /** AD-070 §2.4: предсказание prompt-cache; cachedTokens/validated — из usage. */
     promptMeta?: PromptMeta,
+    /**
+     * AD-070 §2.6: уже посчитанная стоимость сообщения (если вызывающая сторона
+     * считала её для события) — избегаем повторного `_computeMessageCost`.
+     */
+    precomputedCost?: ReturnType<typeof computeUsageCost>,
   ): Promise<string> {
     const finalContent = content;
 
@@ -3645,7 +3696,9 @@ export class ChatOrchestrator {
     }
 
     // AD-070 §2.6: стоимость хода по цене модели (только если цены известны).
-    const messageCost = this._computeMessageCost(model, usage);
+    const messageCost = precomputedCost !== undefined
+      ? precomputedCost
+      : this._computeMessageCost(model, usage);
     if (messageCost) {
       metadata.cost_usd = messageCost.costUsd;
       metadata.cost_currency = messageCost.currency;
@@ -3738,11 +3791,6 @@ export class ChatOrchestrator {
     return finalContent;
   }
 
-  private _classifyError(errMsg: string): string {
-    // Общий хелпер (используется также retry-циклом саб-агента) — таксономия единая
-    return classifyLlmError(errMsg);
-  }
-
   /**
    * Человекочитаемое описание ошибки LLM (таймаут/обрыв соединения, сетевая
    * ошибка). Для остальных ошибок — исходный текст. `i18n` — ключ AD-041 для
@@ -3785,7 +3833,6 @@ export class ChatOrchestrator {
     sessionId: string,
     streamId: string,
     error: unknown,
-    _publishChunk: (event: string, data: Record<string, unknown>) => void,
     attempt?: number,
     ctx?: LlmFailureContext,
   ): Promise<ProcessMessageResult> {
@@ -3797,7 +3844,7 @@ export class ChatOrchestrator {
     // определяем по классу ошибки, чтобы UI показал дружелюбное сообщение.
     const errorType = error instanceof ContextLengthExceededError
       ? 'context_length'
-      : this._classifyError(rawError);
+      : classifyLlmError(rawError);
     const canRetry = isLlmErrorRecoverable(error, rawError, errorType);
 
     // AD-070 §2.6 (Bug 1): assistant-сообщение об ошибке пишем только тогда,

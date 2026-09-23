@@ -1,64 +1,22 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
-import type { Currency, ProviderConfig } from '@itphx/synth-shared';
-import { CURRENCIES } from '@itphx/synth-shared';
-import { ProviderFactory } from '@itphx/synth-core';
+import type { ProviderConfig } from '@itphx/synth-shared';
+import { DEFAULT_MCP_PRIVATE_CIDRS, parseCurrencyInput, renderIcon } from '@itphx/synth-shared';
+import { evaluateMcpNetworkAccess, ProviderFactory } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 
-/** Валидирует валюту по списку RUB/USD/CNY; иначе — undefined. */
-function parseCurrency(value: unknown): Currency | undefined {
-  return typeof value === 'string' && (CURRENCIES as readonly string[]).includes(value)
-    ? (value as Currency)
-    : undefined;
-}
-
-function getFaviconUrl(baseUrl?: string): string | undefined {
-  if (!baseUrl) return undefined;
-  try {
-    const origin = new URL(baseUrl).origin;
-    return `${origin}/favicon.ico`;
-  } catch {
-    return undefined;
-  }
-}
-
-function renderIcon(icon?: string, baseUrl?: string): { icon: string; icon_url?: string } {
-  if (icon) return { icon };
-  const fav = getFaviconUrl(baseUrl);
-  return { icon: '', icon_url: fav };
-}
-
-const INTERNAL_HOSTS = new Set([
-  'localhost',
-  '127.0.0.1',
-  '0.0.0.0',
-  '::1',
-]);
-
-const INTERNAL_CIDR_PATTERNS = [
-  /^10\.\d+\.\d+\.\d+$/,
-  /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/,
-  /^192\.168\.\d+\.\d+$/,
-  /^169\.254\.\d+\.\d+$/,
-  /^fe80:/i,
-];
-
-function isInternalOrigin(origin: string): boolean {
-  try {
-    const u = new URL(origin);
-    const hostname = u.hostname.toLowerCase();
-    if (INTERNAL_HOSTS.has(hostname)) return true;
-    if (hostname === '[::1]') return true;
-    for (const pattern of INTERNAL_CIDR_PATTERNS) {
-      if (pattern.test(hostname)) return true;
-    }
-    return false;
-  } catch {
-    return true;
-  }
-}
+/**
+ * Политика проверки URL провайдера для `/fetch-icon`: блокируем внутренние и
+ * приватные адреса, включая DNS-резолв (переиспользуем MCP network-policy, а не
+ * собственный regex-список). Помимо дефолтных приватных диапазонов исключаем
+ * `0.0.0.0/8` — сохраняем прежнюю блокировку hostname `0.0.0.0`.
+ */
+const PROVIDER_URL_NETWORK_POLICY = {
+  mode: 'deny' as const,
+  list: [...DEFAULT_MCP_PRIVATE_CIDRS, '0.0.0.0/8'],
+};
 
 export function createProviderRoutes(
   kit: AuthKit,
@@ -95,10 +53,13 @@ export function createProviderRoutes(
     }
 
     const existing = await store.load(name);
-    const rawCurrency = body.currency;
-    const currency = rawCurrency === null || rawCurrency === ''
-      ? undefined
-      : parseCurrency(rawCurrency) ?? existing?.currency;
+    const resolvedCurrency = parseCurrencyInput(body.currency, existing?.currency);
+    if (!resolvedCurrency.ok) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'currency должен быть одним из: RUB, USD, CNY' },
+      }, 400);
+    }
+    const currency = resolvedCurrency.currency;
     const provider: ProviderConfig = {
       name,
       type: body.type || existing?.type || 'openai',
@@ -197,7 +158,9 @@ export function createProviderRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidUrl', undefined, c) } }, 400);
     }
 
-    if (isInternalOrigin(origin)) {
+    // SSRF-защита: внутренние/приватные адреса запрещены (включая DNS-резолв).
+    const networkCheck = await evaluateMcpNetworkAccess(origin, PROVIDER_URL_NETWORK_POLICY);
+    if (!networkCheck.allowed) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidUrl', undefined, c) } }, 400);
     }
 

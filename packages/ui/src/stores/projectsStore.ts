@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { ProjectData, GitRepoConfigData, EntityOrigin, PublishProjectResult } from '@/lib/api/synthApi'
 import { synthApi } from '@/lib/api/synthApi'
 import { useSessionsStore } from './sessionsStore'
-import { useI18nStore, formatMessage } from '@/lib/i18n/store'
+import { i18nText } from '@/lib/i18n/text'
 import { confirm } from '@/lib/confirm'
 
 interface ProjectsStore {
@@ -30,16 +30,12 @@ interface ProjectsStore {
     repos?: GitRepoConfigData[]
   }) => Promise<ProjectData | null>
   deleteProject: (id: string) => Promise<boolean>
+  /** Заменяет проект в списке сохранённым объектом (после PATCH /projects/:id). */
+  updateProjectInList: (project: ProjectData) => void
   // Перенос проектов между мирами (гибрид, UI publish/fork). Бросают ошибку при
   // неудаче — вызывающий код решает, что показать (паттерн setSessionMode).
   publishProject: (id: string, opts?: { remote_project_id?: string }) => Promise<PublishProjectResult>
   forkRemoteProject: (id: string, opts?: { local_name?: string }) => Promise<ProjectData>
-}
-
-/** Локализованная строка вне React (для confirm-диалога в сторах). */
-function i18nText(key: string): string {
-  const { dictionary, locale } = useI18nStore.getState()
-  return formatMessage(dictionary, key, undefined, locale)
 }
 
 export const useProjectsStore = create<ProjectsStore>((set, get) => ({
@@ -114,6 +110,10 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       set({ error: (e as Error).message })
       return false
     }
+  },
+
+  updateProjectInList: (project) => {
+    set((s) => ({ projects: s.projects.map((p) => (p.id === project.id ? project : p)) }))
   },
 
   // Гибрид: локальный проект → сервер (проект + сессии + файлы). После успеха

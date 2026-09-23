@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
 
-const apiMock = vi.hoisted(() => ({ fetchJSON: vi.fn() }))
+const apiMock = vi.hoisted(() => ({ getDebugConfig: vi.fn(), saveDebugConfig: vi.fn() }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: apiMock }))
 
@@ -77,17 +77,13 @@ function setSelectValue(select: HTMLSelectElement, value: string) {
   select.dispatchEvent(new Event('change', { bubbles: true }))
 }
 
-function findPostCall() {
-  return apiMock.fetchJSON.mock.calls.find(
-    (call) => (call[1] as { method?: string } | undefined)?.method === 'POST',
-  ) as [string, { method: string; body: string }] | undefined
+function findSavedGroups(): Record<string, string> | undefined {
+  return apiMock.saveDebugConfig.mock.calls.at(-1)?.[0] as Record<string, string> | undefined
 }
 
 beforeEach(() => {
-  apiMock.fetchJSON.mockImplementation(async (_url: string, init?: { method?: string }) => {
-    if (init?.method === 'POST') return { status: 'saved' }
-    return { ...CONFIG, groups: { ...CONFIG.groups } }
-  })
+  apiMock.getDebugConfig.mockResolvedValue({ ...CONFIG, groups: { ...CONFIG.groups } })
+  apiMock.saveDebugConfig.mockResolvedValue(undefined)
 })
 
 afterEach(async () => {
@@ -130,12 +126,11 @@ describe('DebugPanel — AD-072: действия в каждой секции',
     })
     await act(async () => {})
 
-    const post = findPostCall()
-    expect(post).toBeDefined()
-    expect(post![0]).toBe('/api/v2/admin/debug/config')
-    expect(JSON.parse(post![1].body)).toEqual({
-      groups: { OPENAI: 'ERROR', ANTHROPIC: 'INFO' },
+    expect(apiMock.saveDebugConfig).toHaveBeenCalledWith({
+      OPENAI: 'ERROR',
+      ANTHROPIC: 'INFO',
     })
+    expect(findSavedGroups()).toEqual({ OPENAI: 'ERROR', ANTHROPIC: 'INFO' })
     expect(container.textContent).toContain('Saved')
   })
 

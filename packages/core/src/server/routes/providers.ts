@@ -1,32 +1,9 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import { JsonStore } from '../../storage/json-store.js';
-import type { Currency, ProviderConfig } from '@itphx/synth-shared';
-import { CURRENCIES } from '@itphx/synth-shared';
+import type { ProviderConfig } from '@itphx/synth-shared';
+import { parseCurrencyInput, renderIcon } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../index.js';
-
-/** Валидирует валюту по списку RUB/USD/CNY; иначе — undefined. */
-function parseCurrency(value: unknown): Currency | undefined {
-  return typeof value === 'string' && (CURRENCIES as readonly string[]).includes(value)
-    ? (value as Currency)
-    : undefined;
-}
-
-function getFaviconUrl(baseUrl?: string): string | undefined {
-  if (!baseUrl) return undefined;
-  try {
-    const origin = new URL(baseUrl).origin;
-    return `${origin}/favicon.ico`;
-  } catch {
-    return undefined;
-  }
-}
-
-function renderIcon(icon?: string, baseUrl?: string): { icon: string; icon_url?: string } {
-  if (icon) return { icon };
-  const fav = getFaviconUrl(baseUrl);
-  return { icon: '', icon_url: fav };
-}
 
 export function createProviderRoutes(
   auth: AuthKit,
@@ -62,10 +39,13 @@ export function createProviderRoutes(
     }
 
     const existing = await store.load(name);
-    const rawCurrency = body.currency;
-    const currency = rawCurrency === null || rawCurrency === ''
-      ? undefined
-      : parseCurrency(rawCurrency) ?? existing?.currency;
+    const resolvedCurrency = parseCurrencyInput(body.currency, existing?.currency);
+    if (!resolvedCurrency.ok) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'currency должен быть одним из: RUB, USD, CNY' },
+      }, 400);
+    }
+    const currency = resolvedCurrency.currency;
     const provider: ProviderConfig = {
       name,
       type: body.type || existing?.type || 'openai',

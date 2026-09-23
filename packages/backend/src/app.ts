@@ -24,14 +24,14 @@ import {
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
   McpRegistryStore,
   RuntimeSettingsStore, createSettingsRoutes, AuditLogger, mergeLlmGatewayConfig,
-  mergeSecurityConfig, ProtectedPathsStore,
+  mergeSecurityConfig, mergeMcpNetworkPolicy, ProtectedPathsStore,
   SecretPatternStore,
   RateLimiter,
   DictionaryStore, createDictionaryRoutes,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
-import { nowISO, ensureDataDir, MessageRole, generateStreamId, findConfigPath, SYNTH_VERSION } from '@itphx/synth-shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId, SYNTH_VERSION, DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
 import type { BusEvent } from '@itphx/synth-shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import type { BackendConfig } from './lib/app-config.js';
@@ -56,7 +56,6 @@ import { createLogsRoutes, resolveLogDir } from './routes/logs.js';
 import { createGatewayPatternsRoutes } from './routes/gateway-patterns.js';
 import { createLlmRoutes } from './routes/llm.js';
 import { createRateLimiter } from './middleware/rate-limiter.js';
-import { YamlMcpConfigStore } from './lib/mcp-config-store.js';
 import { DefaultsStore } from './lib/defaults-store.js';
 import { t, getTranslations } from './lib/i18n.js';
 import { ProjectStore } from './storage/project-store.js';
@@ -215,25 +214,29 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Умолчания оформления (AD-005): {dataDir}/defaults.json (переживают рестарт)
     const defaultsStore = new DefaultsStore({ dataDir });
 
-    // MCP
-    const configPath = findConfigPath() || './config.yaml';
-    const mcpConfigStore = new YamlMcpConfigStore(configPath);
-    await mcpConfigStore.load();
+    // MCP: единый источник истины — реестр `McpRegistryStore` (AD-071 §2.5).
+    // Legacy `YamlMcpConfigStore` удалён: instance-серверы из config.mcp.servers
+    // сидируются в реестр при старте (seed без дублирования по имени).
     const mcpManager = new McpManager();
-
-    // AD-071 §2.5: единый реестр MCP-серверов; instance-серверы из config.mcp.servers
-    // подтягиваются при старте (seed без дублирования по имени).
     const mcpRegistryStore = new McpRegistryStore({ dataDir });
     await mcpRegistryStore.seedFromConfig(backendConfig.synth.mcp.servers);
-    mcpManager.setConfig(await mcpRegistryStore.toServerConfigMap());
-    mcpManager.setServerOrigins(await mcpRegistryStore.toOriginMap());
-    mcpManager.setServerTrusts(await mcpRegistryStore.toTrustMap());
-    mcpManager.setServerAuthors(await mcpRegistryStore.toAuthorMap());
-    mcpManager.setDefaultServers(await mcpRegistryStore.toDefaultServers());
+    // Одно чтение реестра на все карты менеджера (вместо пяти).
+    const mcpMaps = await mcpRegistryStore.toManagerMaps();
+    mcpManager.setConfig(mcpMaps.servers);
+    mcpManager.setServerOrigins(mcpMaps.origins);
+    mcpManager.setServerTrusts(mcpMaps.trusts);
+    mcpManager.setServerAuthors(mcpMaps.authors);
+    mcpManager.setDefaultServers(mcpMaps.defaults);
     // AD-071 §2.3.1: политика сетевого доступа HTTP-серверов (SSRF/egress).
-    // Runtime-настройка из админки приоритетнее config.yaml; храним в изменяемой
-    // переменной, чтобы registry-роуты видели свежее значение без рестарта.
-    let effectiveNetworkPolicy = backendConfig.synth.mcp.networkPolicy;
+    // Runtime-настройка из админки (settings.json) приоритетнее config.yaml и
+    // переживает рестарт; храним в изменяемой переменной, чтобы registry-роуты
+    // видели свежее значение без рестарта. Слияние — единым helper'ом
+    // mergeMcpNetworkPolicy (тот же, что и в core).
+    const runtimeMcpNetworkPolicy = await settingsStore.getMcpNetworkPolicy();
+    let effectiveNetworkPolicy = mergeMcpNetworkPolicy(
+      backendConfig.synth.mcp.networkPolicy,
+      runtimeMcpNetworkPolicy,
+    );
     mcpManager.setNetworkPolicy(effectiveNetworkPolicy);
 
     // Auth routes (после profilesStore)
@@ -508,10 +511,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Git routes
     app.route('/api/v2/git', createGitRoutes(auth, projectStore, backendConfig.workspacesRoot));
 
-    // MCP routes
-    app.route('/api/v2/mcp', createMcpRoutes(auth, mcpConfigStore, mcpManager, sessionManager, {
+    // MCP routes (единый реестр; legacy /servers — адаптеры над ним)
+    app.route('/api/v2/mcp', createMcpRoutes(auth, mcpManager, sessionManager, {
       registry: mcpRegistryStore,
-      networkPolicy: backendConfig.synth.mcp.networkPolicy,
+      networkPolicy: effectiveNetworkPolicy,
       getNetworkPolicy: () => effectiveNetworkPolicy,
     }));
 
@@ -563,13 +566,14 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         inputMode: backendConfig.synth.llmGateway.inputMode,
         logPayloads: backendConfig.synth.llmGateway.logPayloads,
         rateLimit: {
-          userPerMinute: backendConfig.synth.llmGateway.rateLimit?.userPerMinute ?? 60,
-          providerPerMinute: backendConfig.synth.llmGateway.rateLimit?.providerPerMinute ?? 120,
+          userPerMinute: backendConfig.synth.llmGateway.rateLimit?.userPerMinute ?? DEFAULT_LLM_GATEWAY_RATE_LIMIT.userPerMinute,
+          providerPerMinute: backendConfig.synth.llmGateway.rateLimit?.providerPerMinute ?? DEFAULT_LLM_GATEWAY_RATE_LIMIT.providerPerMinute,
         },
       },
       fallbackSecurity: {
         protectedPaths: { enabled: backendConfig.synth.security.protectedPaths?.enabled ?? true },
-        askTimeoutMs: (backendConfig.synth.security as unknown as { askTimeoutMs?: number }).askTimeoutMs,
+        // AD-029: askTimeoutMs живёт в permission-секции конфига (не в security).
+        askTimeoutMs: backendConfig.synth.permission?.askTimeoutMs,
       },
       // AD-036: live-применение тумблера LLM Gateway из UI — без рестарта сервера.
       onLlmGatewayChange: async (runtime) => {

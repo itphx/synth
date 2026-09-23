@@ -91,6 +91,19 @@ export const ProfileSettings = () => {
     loadProfile()
   }, [user])
 
+  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const flashSuccess = () => {
+    setSuccess(true)
+    if (successTimerRef.current !== null) clearTimeout(successTimerRef.current)
+    successTimerRef.current = setTimeout(() => {
+      successTimerRef.current = null
+      setSuccess(false)
+    }, 2000)
+  }
+  useEffect(() => () => {
+    if (successTimerRef.current !== null) clearTimeout(successTimerRef.current)
+  }, [])
+
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -104,8 +117,7 @@ export const ProfileSettings = () => {
     reader.onload = () => {
       const base64 = reader.result as string
       setForm({ ...form, avatar: base64 })
-      setSuccess(true)
-      setTimeout(() => setSuccess(false), 2000)
+      flashSuccess()
     }
     reader.readAsDataURL(file)
   }
@@ -124,13 +136,13 @@ export const ProfileSettings = () => {
       })
       const currentProfile = useAuthStore.getState().profile
       if (currentProfile) {
-        useAuthStore.setState({
-          profile: { ...currentProfile, preferences: updated.preferences },
+        useAuthStore.getState().setProfile({
+          ...currentProfile,
+          preferences: updated.preferences,
         })
       }
-      setSuccess(true)
+      flashSuccess()
       setSavedForm(form)
-      setTimeout(() => setSuccess(false), 2000)
     } catch (err) {
       setError(err instanceof Error ? err.message : t('auth.saveError'))
     } finally {
@@ -273,6 +285,7 @@ export const ProfileSettings = () => {
       <SettingsActions
         onSave={handleSave}
         onCancel={handleCancel}
+        saveDisabled={!dirty}
         cancelDisabled={!dirty}
         saving={isLoading}
         saveTestId="profile-save"

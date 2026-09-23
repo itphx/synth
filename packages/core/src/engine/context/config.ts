@@ -560,4 +560,27 @@ export class ContextConfig {
     // 2. Встроенный prompts/system/MODE_POLICY.{lang}.md
     return this._readPrompt(stem, 'system', language);
   }
+
+  /**
+   * AD-034: инструкция классификации задачи (вызов `classify_conversation`).
+   * Файлы: prompts/system/CLASSIFICATION.{lang}.md — только локализованные.
+   * Override через {userDataDir}/user/system/ — стандартный механизм
+   * system-категории, проверяется первым. Возвращает пустую строку, если файла нет.
+   */
+  getClassificationInstructions(language = 'ru'): string {
+    const stem = 'CLASSIFICATION';
+
+    // 1. Пользовательский override system-категории
+    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
+    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
+    if (overrideLocalized) {
+      const content = this._readFile(overrideLocalized);
+      if (content) return content;
+    }
+    const overrideContent = this._readFile(overridePath);
+    if (overrideContent) return overrideContent;
+
+    // 2. Встроенный prompts/system/CLASSIFICATION.{lang}.md
+    return this._readPrompt(stem, 'system', language) ?? '';
+  }
 }

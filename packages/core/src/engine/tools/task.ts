@@ -5,12 +5,13 @@ import type { AgentRegistry } from '../agents/registry.js';
 import { normalizeAgentModes } from '../agents/normalize.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ToolRegistry } from './registry.js';
+import { buildDenyResult, executeToolDef } from './tool-execution.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { EventBus } from '../../events/bus.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import type { ContextConfig } from '../context/config.js';
 import type { ModelRouter } from '../router/router.js';
-import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from '../llm-error.js';
+import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS, MAX_DOOM_LOOP_COUNT } from '../llm-error.js';
 import type { AssistantMessageStatus } from '../orchestrator.js';
 import { computeCacheHitRate, computeUsageCost, type UsagePricing } from '../../providers/usage.js';
 import { deriveSubagentPermission } from '../permission/derive.js';
@@ -21,6 +22,7 @@ import type { ShellPolicy } from '../security/shell-guard.js';
 import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { estimatePromptChars } from '../context/token-ratio.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 export interface TaskExtra {
@@ -30,10 +32,6 @@ export interface TaskExtra {
   sessionManager?: SessionManager;
   eventBus?: EventBus;
   contextOptimizer?: ContextOptimizer;
-  sessionSettings?: {
-    temperature?: number;
-    maxTokens?: number;
-  };
   parentSessionSettings?: SessionSettings;
   /** AD-071 §2.1: активные MCP-серверы родительской сессии — скоуп тулов саб-агента. */
   mcpServers?: string[];
@@ -657,17 +655,8 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   });
 
   /** Оценка размера промпта саб-агента (символы) — best-effort input-токены. */
-  const estimateSubagentPromptChars = (): number => {
-    let chars = 0;
-    for (const m of messages) {
-      chars += m.content?.length ?? 0;
-      if (m.toolUse) chars += JSON.stringify(m.toolUse).length;
-      if (m.reasoning) chars += m.reasoning.length;
-    }
-    if (llmSystemPrompt) chars += llmSystemPrompt.length;
-    if (tools && tools.length > 0) chars += JSON.stringify(tools).length;
-    return chars;
-  };
+  const estimateSubagentPromptChars = (): number =>
+    estimatePromptChars(messages, llmSystemPrompt || undefined, tools);
 
   /**
    * Live-usage саб-агента: накопленный `subagentUsage` (завершённые итерации)
@@ -998,10 +987,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             if (isAborted()) break;
             if (chunk.isFinal) {
               accumulatedContent = chunk.content;
-              reasoning = (chunk as unknown as Record<string, unknown>).reasoning as string || reasoning;
+              reasoning = chunk.reasoning || reasoning;
             } else {
               accumulatedContent += chunk.content;
-              const chunkReasoning = (chunk as unknown as Record<string, unknown>).reasoning as string | undefined;
+              const chunkReasoning = chunk.reasoning;
               if (chunkReasoning) reasoning = chunkReasoning;
             }
             if (chunk.toolCalls && chunk.toolCalls.length > 0) {
@@ -1318,7 +1307,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         const doomCount = (doomTracker.get(doomKey) || 0) + 1;
         doomTracker.set(doomKey, doomCount);
 
-        if (doomCount >= 3) {
+        if (doomCount >= MAX_DOOM_LOOP_COUNT) {
           const doomMsg: LLMMessage = {
             id: '', role: 'tool',
             content: sm('tool.doom_loop', { tool: toolName, count: String(doomCount) }),
@@ -1374,6 +1363,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         });
 
         const toolDef = extra.toolRegistry?.get(toolName);
+        // Контекст исполнения тула — общий для веток ask(approved) и allow.
+        const toolExecContext: ToolContext = {
+          ...ctx,
+          abortSignal: ctx.abortSignal,
+          extra: extra as unknown as Record<string, unknown>,
+        };
         let toolResult: ToolResult;
         let subagentUserDenied = false;
 
@@ -1395,23 +1390,13 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         });
 
         if (permissionDecision.action === 'deny') {
-          toolResult = {
-            content: extra.contextConfig && permissionDecision.messageId
-              ? (extra.contextConfig.getSecurityMessage(permissionDecision.messageId, 'en', permissionDecision.params)
-                ?? `Permission denied: ${permissionDecision.reason}`)
-              : `Permission denied: ${permissionDecision.reason}`,
-            isError: true,
-            metadata: {
-              ...(permissionDecision.messageId
-                ? { i18n: i18nMeta(`security.${permissionDecision.messageId.replaceAll('-', '_')}`, permissionDecision.params as Record<string, string> | undefined) }
-                : { i18n: i18nMeta('tool.permission_denied_default') }),
-              permission: {
-                action: 'deny',
-                reason: permissionDecision.reason,
-                matched_rule: permissionDecision.matchedRule,
-              },
-            },
-          };
+          toolResult = buildDenyResult({
+            reason: permissionDecision.reason,
+            matchedRule: permissionDecision.matchedRule,
+            messageId: permissionDecision.messageId,
+            params: permissionDecision.params as Record<string, string> | undefined,
+            contextConfig: extra.contextConfig,
+          });
         } else if (permissionDecision.action === 'ask') {
           // ask публикуется в родительскую сессию (extra.sessionId) —
           // пользователь основной сессии видит запрос и отвечает.
@@ -1447,28 +1432,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               }
             }
             if (toolDef) {
-              const parsed2 = toolDef.parameters.safeParse(toolArgs);
-              if (!parsed2.success) {
-                toolResult = {
-                  content: sm('tool.args_error', { tool: toolName, issues: parsed2.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }),
-                  isError: true,
-                  metadata: { i18n: i18nMeta('tool.args_error', { tool: toolName }) },
-                };
-              } else {
-                try {
-                  toolResult = await toolDef.execute(parsed2.data, {
-                    ...ctx,
-                    abortSignal: ctx.abortSignal,
-                    extra: extra as unknown as Record<string, unknown>,
-                  });
-                } catch (execError) {
-                  toolResult = {
-                    content: sm('tool.exec_error', { tool: toolName, error: String(execError) }),
-                    isError: true,
-                    metadata: { i18n: i18nMeta('tool.exec_error', { tool: toolName }) },
-                  };
-                }
-              }
+              toolResult = await executeToolDef(toolDef, toolArgs, toolExecContext, toolName);
             } else {
               toolResult = {
                 content: sm('tool.not_found', { tool: toolName }),
@@ -1482,50 +1446,21 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               : approval.noSubscribers
                 ? sm('permission.ask_no_subscribers')
                 : sm('permission.ask_denied');
-            const baseDeny = extra.contextConfig && permissionDecision.messageId
-              ? (extra.contextConfig.getSecurityMessage(permissionDecision.messageId, 'en', permissionDecision.params)
-                ?? `Permission denied: ${permissionDecision.reason}`)
-              : `Permission denied: ${permissionDecision.reason}`;
-            toolResult = {
-              content: `${baseDeny} (${why})`,
-              isError: true,
-              metadata: {
-                ...(permissionDecision.messageId
-                  ? { i18n: i18nMeta(`security.${permissionDecision.messageId.replaceAll('-', '_')}`, permissionDecision.params as Record<string, string> | undefined) }
-                  : {}),
-                permission: {
-                  action: 'deny',
-                  reason: permissionDecision.reason,
-                  matched_rule: permissionDecision.matchedRule,
-                },
-              },
-            };
+            toolResult = buildDenyResult({
+              reason: permissionDecision.reason,
+              matchedRule: permissionDecision.matchedRule,
+              messageId: permissionDecision.messageId,
+              params: permissionDecision.params as Record<string, string> | undefined,
+              contextConfig: extra.contextConfig,
+              contentSuffix: ` (${why})`,
+              defaultI18n: false,
+            });
             subagentUserDenied = !approval.timeout && !approval.noSubscribers;
           }
         } else {
           // allow — обычное выполнение
           if (toolDef) {
-            const parsed2 = toolDef.parameters.safeParse(toolArgs);
-            if (!parsed2.success) {
-              toolResult = {
-                content: sm('tool.args_error', { tool: toolName, issues: parsed2.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }),
-                isError: true,
-              };
-            } else {
-              try {
-                toolResult = await toolDef.execute(parsed2.data, {
-                  ...ctx,
-                  abortSignal: ctx.abortSignal,
-                  extra: extra as unknown as Record<string, unknown>,
-                });
-              } catch (execError) {
-                toolResult = {
-                  content: sm('tool.exec_error', { tool: toolName, error: String(execError) }),
-                  isError: true,
-                  metadata: { i18n: i18nMeta('tool.exec_error', { tool: toolName }) },
-                };
-              }
-            }
+            toolResult = await executeToolDef(toolDef, toolArgs, toolExecContext, toolName);
           } else {
             toolResult = {
               content: sm('tool.not_found', { tool: toolName }),

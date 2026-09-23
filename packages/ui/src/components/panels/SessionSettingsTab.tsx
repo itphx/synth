@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { TodoItem, TodoStatus, TodoPriority, McpServerEffective } from '@itphx/synth-shared'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
@@ -12,6 +12,8 @@ import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
 import { ModelSelector } from '../chat/ModelSelector'
 import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
+import { SelectContent, SelectItem } from '../ui/select'
+import { InfoField as Field, InfoSection as Section, ModelPairSelect, SegmentedControl, SelectField, SliderField } from '../ui/settings'
 
 export function SessionSettingsTab() {
   const { t } = useI18n()
@@ -88,7 +90,7 @@ export function SessionSettingsTab() {
   useEffect(() => {
     loadProviders()
     loadModels()
-  }, [])
+  }, [loadProviders, loadModels])
 
   const loadMcpEffective = useCallback(async (id: string) => {
     setMcpLoading(true)
@@ -129,8 +131,21 @@ export function SessionSettingsTab() {
       .catch(() => {})
   }, [])
 
+  // Синхронизируем локальную форму с сессией только при смене сессии или
+  // глобального дефолта таймаута — иначе любое обновление объекта сессии
+  // (WS-события, сохранение) затирало бы несохранённые правки.
+  const lastSyncedRef = useRef<{ id: string | undefined; defaultMs: number } | null>(null)
+
   useEffect(() => {
     if (session && session.settings) {
+      if (
+        lastSyncedRef.current?.id === session.id
+        && lastSyncedRef.current?.defaultMs === defaultAskTimeoutMs
+      ) {
+        return
+      }
+      lastSyncedRef.current = { id: session.id, defaultMs: defaultAskTimeoutMs }
+
       const sp = session.settings.provider as string | undefined
       const sm = session.settings.model as string | undefined
       const de = session.settings.debugEnabled as boolean | undefined
@@ -407,12 +422,12 @@ export function SessionSettingsTab() {
         </Section>
 
         {/* Сессионные одобрения (AD-029) */}
-        <Section title="Сессионные одобрения">
+        <Section title={t('sessionSettings.allow.title')}>
           {sessionAllowRules.length === 0 ? (
             <div className="rounded-lg border border-dashed border-border px-3 py-2">
-              <div className="text-xs text-muted-foreground">Нет одобренных инструментов</div>
+              <div className="text-xs text-muted-foreground">{t('sessionSettings.allow.empty')}</div>
               <div className="mt-0.5 text-[0.625rem] text-muted-foreground/60">
-                Allow-правила появляются после «Разрешить в сессии» в панели подтверждения
+                {t('sessionSettings.allow.hint')}
               </div>
             </div>
           ) : (
@@ -424,7 +439,7 @@ export function SessionSettingsTab() {
                     onClick={() => handleRemoveAllowRule(rule)}
                     className="shrink-0 rounded px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
                   >
-                    Удалить
+                    {t('sessionSettings.allow.remove')}
                   </button>
                 </div>
               ))}
@@ -436,7 +451,7 @@ export function SessionSettingsTab() {
         <Section
           title={
             <span className="inline-flex items-center gap-1">
-              Быстрые ответы
+              {t('sessionSettings.micro.title')}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className="cursor-help">
@@ -444,7 +459,7 @@ export function SessionSettingsTab() {
                   </span>
                 </TooltipTrigger>
                 <TooltipContent>
-                  Простые запросы — приветствия, да/нет, классификация задач — обрабатываются мгновенно по правилам или embedding, без вызова большой модели. Это ускоряет ответ и экономит токены. Если запрос сложный или уверенность низкая — автоматически вызывается LLM. Порог уверенности настраивается ниже.
+                  {t('sessionSettings.micro.tooltip')}
                 </TooltipContent>
               </Tooltip>
             </span>
@@ -453,48 +468,46 @@ export function SessionSettingsTab() {
           <label className="flex items-center gap-3 cursor-pointer">
             <Toggle enabled={microFirst} onToggle={() => setMicroFirst(!microFirst)} />
             <span className="text-xs text-foreground">
-              {microFirst ? 'Включено' : 'Выключено'}
+              {microFirst ? t('common.enabled') : t('common.disabled')}
             </span>
           </label>
           {microFirst && (
-            <div className="mt-2 flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Confidence Threshold</span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min="0.5" max="1.0" step="0.05"
-                  value={microConfidenceThreshold}
-                  onChange={(e) => setMicroConfidenceThreshold(parseFloat(e.target.value))}
-                  className="w-20 h-1 accent-primary"
-                />
-                <span className="text-foreground font-mono tabular-nums min-w-[3ch]">
-                  {microConfidenceThreshold.toFixed(2)}
-                </span>
-              </div>
-            </div>
+            <SliderField
+              label={t('sessionSettings.micro.confidence')}
+              min={0.5}
+              max={1}
+              step={0.05}
+              value={microConfidenceThreshold}
+              onValueChange={setMicroConfidenceThreshold}
+              formatValue={(value) => value.toFixed(2)}
+            />
           )}
         </Section>
 
         {/* Embedding */}
         {microFirst && (
-          <Section title="Embedding">
+          <Section title={t('sessionSettings.micro.embedding')}>
             <div className="text-[0.625rem] text-muted-foreground/60 mb-2">
-              Эмбеддинг-модель для семантической классификации в микро-слое
+              {t('sessionSettings.micro.embeddingHint')}
             </div>
             <label className="flex items-center gap-3 cursor-pointer">
               <Toggle enabled={embeddingEnabled} onToggle={() => setEmbeddingEnabled(!embeddingEnabled)} />
               <span className="text-xs text-foreground">
-                {embeddingEnabled ? 'Включено' : 'Выключено'}
+                {embeddingEnabled ? t('common.enabled') : t('common.disabled')}
               </span>
             </label>
             {embeddingEnabled && (
               <div className="mt-2">
-                <RoutingModelPair
-                  label="Embedding модель"
+                <ModelPairSelect
+                  variant="compact"
+                  filterOptions
+                  label={t('sessionSettings.micro.embeddingModel')}
                   provider={embedProvider}
                   model={embedModel}
                   providers={providers}
                   models={models}
+                  providerLabel={t('settings.microFirst.provider')}
+                  modelLabel={t('settings.microFirst.model')}
                   onProviderChange={setEmbedProvider}
                   onModelChange={setEmbedModel}
                 />
@@ -515,7 +528,7 @@ export function SessionSettingsTab() {
                   </span>
                 </TooltipTrigger>
                 <TooltipContent>
-                  Запросы, которые не обработали Быстрые ответы, распределяются между моделями автоматически: стратегия выбирает модель по типу задачи (кодинг/чат/анализ), по стоимости или сочетанием. Дополнительно работает контроль качества: если ответ неуверенный или слишком короткий — запрос пересылается на fallback-модель. Если маршрутизация выключена — используется модель, выбранная в сессии.
+                  {t('sessionSettings.routing.tooltip')}
                 </TooltipContent>
               </Tooltip>
             </span>
@@ -533,51 +546,61 @@ export function SessionSettingsTab() {
             {routingEnabled && (
               <>
                 {/* Стратегия */}
-                <div className="flex flex-col gap-1">
-                  <label className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
-                    {t('routing.strategy')}
-                  </label>
-                  <select
-                    value={routingStrategy}
-                    onChange={(e) => setRoutingStrategy(e.target.value as typeof routingStrategy)}
-                    className="w-full rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                  >
-                    <option value="auto">{t('routing.strategy.auto')}</option>
-                    <option value="content">{t('routing.strategy.content')}</option>
-                    <option value="cost">{t('routing.strategy.cost')}</option>
-                    <option value="content+cost">{t('routing.strategy.contentCost')}</option>
-                  </select>
-                </div>
+                <SelectField
+                  label={t('routing.strategy')}
+                  value={routingStrategy}
+                  onValueChange={(value) => setRoutingStrategy(value as typeof routingStrategy)}
+                  ariaLabel={t('routing.strategy')}
+                >
+                  <SelectContent>
+                    <SelectItem value="auto">{t('routing.strategy.auto')}</SelectItem>
+                    <SelectItem value="content">{t('routing.strategy.content')}</SelectItem>
+                    <SelectItem value="cost">{t('routing.strategy.cost')}</SelectItem>
+                    <SelectItem value="content+cost">{t('routing.strategy.contentCost')}</SelectItem>
+                  </SelectContent>
+                </SelectField>
 
                 {/* Контентная */}
                 <div className="space-y-2 pl-2 border-l-2 border-border/30">
                   <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
-                    📝 {t('routing.content')}
+                    {t('routing.content')}
                   </span>
-                  <RoutingModelPair
+                  <ModelPairSelect
+                    variant="compact"
+                    filterOptions
                     label={t('routing.content.coding')}
                     provider={routingContentCodingProvider}
                     model={routingContentCodingModel}
                     providers={providers}
                     models={models}
+                    providerLabel={t('settings.microFirst.provider')}
+                    modelLabel={t('settings.microFirst.model')}
                     onProviderChange={setRoutingContentCodingProvider}
                     onModelChange={setRoutingContentCodingModel}
                   />
-                  <RoutingModelPair
+                  <ModelPairSelect
+                    variant="compact"
+                    filterOptions
                     label={t('routing.content.chat')}
                     provider={routingContentChatProvider}
                     model={routingContentChatModel}
                     providers={providers}
                     models={models}
+                    providerLabel={t('settings.microFirst.provider')}
+                    modelLabel={t('settings.microFirst.model')}
                     onProviderChange={setRoutingContentChatProvider}
                     onModelChange={setRoutingContentChatModel}
                   />
-                  <RoutingModelPair
+                  <ModelPairSelect
+                    variant="compact"
+                    filterOptions
                     label={t('routing.content.research')}
                     provider={routingContentResearchProvider}
                     model={routingContentResearchModel}
                     providers={providers}
                     models={models}
+                    providerLabel={t('settings.microFirst.provider')}
+                    modelLabel={t('settings.microFirst.model')}
                     onProviderChange={setRoutingContentResearchProvider}
                     onModelChange={setRoutingContentResearchModel}
                   />
@@ -587,18 +610,22 @@ export function SessionSettingsTab() {
                 <div className="space-y-2 pl-2 border-l-2 border-border/30">
                   <div className="flex items-center gap-2">
                     <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
-                      ⚠️ {t('routing.escalation')}
+                      {t('routing.escalation')}
                     </span>
                     <Toggle enabled={routingEscalationEnabled} onToggle={() => setRoutingEscalationEnabled(!routingEscalationEnabled)} />
                   </div>
                   {routingEscalationEnabled && (
                     <>
-                      <RoutingModelPair
+                      <ModelPairSelect
+                        variant="compact"
+                        filterOptions
                         label={t('routing.escalation.fallback')}
                         provider={routingEscalationFallbackProvider}
                         model={routingEscalationFallbackModel}
                         providers={providers}
                         models={models}
+                        providerLabel={t('settings.microFirst.provider')}
+                        modelLabel={t('settings.microFirst.model')}
                         onProviderChange={setRoutingEscalationFallbackProvider}
                         onModelChange={setRoutingEscalationFallbackModel}
                       />
@@ -620,18 +647,22 @@ export function SessionSettingsTab() {
                 <div className="space-y-2 pl-2 border-l-2 border-border/30">
                   <div className="flex items-center gap-2">
                     <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
-                      💰 {t('routing.cost')}
+                      {t('routing.cost')}
                     </span>
                     <Toggle enabled={routingCostEnabled} onToggle={() => setRoutingCostEnabled(!routingCostEnabled)} />
                   </div>
                   {routingCostEnabled && (
                     <>
-                      <RoutingModelPair
+                      <ModelPairSelect
+                        variant="compact"
+                        filterOptions
                         label={t('routing.cost.cheap')}
                         provider={routingCostCheapProvider}
                         model={routingCostCheapModel}
                         providers={providers}
                         models={models}
+                        providerLabel={t('settings.microFirst.provider')}
+                        modelLabel={t('settings.microFirst.model')}
                         onProviderChange={setRoutingCostCheapProvider}
                         onModelChange={setRoutingCostCheapModel}
                       />
@@ -653,35 +684,35 @@ export function SessionSettingsTab() {
                 <div className="space-y-2 pl-2 border-l-2 border-border/30">
                   <div className="flex items-center gap-2">
                     <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
-                      🤖 {t('routing.subagent')}
+                      {t('routing.subagent')}
                     </span>
                     <Toggle enabled={routingSubagentEnabled} onToggle={() => setRoutingSubagentEnabled(!routingSubagentEnabled)} />
                   </div>
                   {routingSubagentEnabled && (
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[0.625rem] text-muted-foreground/60">{t('routing.subagent.model')}</label>
-                      <select
-                        value={routingSubagentProvider ? `${routingSubagentProvider}:${routingSubagentModel}` : 'auto'}
-                        onChange={(e) => {
-                          if (e.target.value === 'auto') {
-                            setRoutingSubagentProvider('')
-                            setRoutingSubagentModel('')
-                          } else {
-                            const [p, ...rest] = e.target.value.split(':')
-                            setRoutingSubagentProvider(p!)
-                            setRoutingSubagentModel(rest.join(':'))
-                          }
-                        }}
-                        className="w-full rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                      >
-                        <option value="auto">{t('routing.subagent.modelAuto')}</option>
+                    <SelectField
+                      label={t('routing.subagent.model')}
+                      value={routingSubagentProvider ? `${routingSubagentProvider}:${routingSubagentModel}` : 'auto'}
+                      onValueChange={(value) => {
+                        if (value === 'auto') {
+                          setRoutingSubagentProvider('')
+                          setRoutingSubagentModel('')
+                        } else {
+                          const [provider, ...rest] = value.split(':')
+                          setRoutingSubagentProvider(provider!)
+                          setRoutingSubagentModel(rest.join(':'))
+                        }
+                      }}
+                      ariaLabel={t('routing.subagent.model')}
+                    >
+                      <SelectContent>
+                        <SelectItem value="auto">{t('routing.subagent.modelAuto')}</SelectItem>
                         {models.filter((m) => m.enabled).map((m) => (
-                          <option key={`${m.provider}:${m.name}`} value={`${m.provider}:${m.name}`}>
+                          <SelectItem key={`${m.provider}:${m.name}`} value={`${m.provider}:${m.name}`}>
                             {m.provider}/{m.name}
-                          </option>
+                          </SelectItem>
                         ))}
-                      </select>
-                    </div>
+                      </SelectContent>
+                    </SelectField>
                   )}
                 </div>
               </>
@@ -737,34 +768,36 @@ export function SessionSettingsTab() {
         {/* AD-071 §2.3: политики включения инструментов (per-session override) */}
         <Section title={t('toolsPolicy.title')}>
           <div className="flex flex-col gap-1">
-            <select
+            <SegmentedControl
               value={toolsPolicy}
-              onChange={(e) => setToolsPolicy(e.target.value as ToolsPolicy | '')}
-              aria-label={t('toolsPolicy.label')}
-              className="w-full min-h-10 rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="">{t('toolsPolicy.inherit')}</option>
-              <option value="consistency">{t('toolsPolicy.consistency')}</option>
-              <option value="available">{t('toolsPolicy.available')}</option>
-              <option value="auto">{t('toolsPolicy.auto')}</option>
-            </select>
+              onChange={(value) => setToolsPolicy(value as ToolsPolicy | '')}
+              ariaLabel={t('toolsPolicy.label')}
+              className="w-full"
+              options={[
+                { value: '', label: t('toolsPolicy.inherit') },
+                { value: 'consistency', label: t('toolsPolicy.consistency') },
+                { value: 'available', label: t('toolsPolicy.available') },
+                { value: 'auto', label: t('toolsPolicy.auto') },
+              ]}
+            />
             <p className="text-[0.625rem] text-muted-foreground/60">{t('toolsPolicy.sessionHelp')}</p>
           </div>
         </Section>
 
         <Section title={t('mcpPolicy.title')}>
           <div className="flex flex-col gap-1">
-            <select
+            <SegmentedControl
               value={mcpPolicy}
-              onChange={(e) => setMcpPolicy(e.target.value as ToolsPolicy | '')}
-              aria-label={t('mcpPolicy.label')}
-              className="w-full min-h-10 rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="">{t('mcpPolicy.inherit')}</option>
-              <option value="consistency">{t('mcpPolicy.consistency')}</option>
-              <option value="available">{t('mcpPolicy.available')}</option>
-              <option value="auto">{t('mcpPolicy.auto')}</option>
-            </select>
+              onChange={(value) => setMcpPolicy(value as ToolsPolicy | '')}
+              ariaLabel={t('mcpPolicy.label')}
+              className="w-full"
+              options={[
+                { value: '', label: t('mcpPolicy.inherit') },
+                { value: 'consistency', label: t('mcpPolicy.consistency') },
+                { value: 'available', label: t('mcpPolicy.available') },
+                { value: 'auto', label: t('mcpPolicy.auto') },
+              ]}
+            />
             <p className="text-[0.625rem] text-muted-foreground/60">{t('mcpPolicy.sessionHelp')}</p>
           </div>
         </Section>
@@ -798,24 +831,6 @@ export function SessionSettingsTab() {
           {t('leftPanel.clearSession')}
         </button>
       </div>
-    </div>
-  )
-}
-
-function Section({ title, children }: { title: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <div>
-      <div className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide mb-2">{title}</div>
-      <div className="space-y-2">{children}</div>
-    </div>
-  )
-}
-
-function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="flex items-center justify-between text-xs">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={mono ? 'font-mono text-[0.6875rem]' : ''}>{value}</span>
     </div>
   )
 }
@@ -870,58 +885,3 @@ function SessionTodosBlock({ todos }: { todos?: TodoItem[] | null }) {
   )
 }
 
-interface ProviderLike { name: string; enabled: boolean }
-interface ModelLike { name: string; provider: string; enabled: boolean }
-
-function RoutingModelPair({
-  label,
-  provider,
-  model,
-  providers,
-  models,
-  onProviderChange,
-  onModelChange,
-}: {
-  label: string
-  provider: string
-  model: string
-  providers: ProviderLike[]
-  models: ModelLike[]
-  onProviderChange: (v: string) => void
-  onModelChange: (v: string) => void
-}) {
-  const availableProviders = providers.filter((p) => p.enabled)
-  const filteredModels = models.filter((m) => m.enabled && (!provider || m.provider === provider))
-
-  return (
-    <div className="space-y-1">
-      <span className="text-[0.625rem] text-muted-foreground/60">{label}</span>
-      <div className="flex gap-1">
-        <select
-          value={provider}
-          onChange={(e) => {
-            onProviderChange(e.target.value)
-            onModelChange('')
-          }}
-          className="flex-1 min-w-0 rounded-md bg-input border border-border px-1.5 py-0.5 text-[0.625rem] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-        >
-          <option value="">Провайдер</option>
-          {availableProviders.map((p) => (
-            <option key={p.name} value={p.name}>{p.name}</option>
-          ))}
-        </select>
-        <select
-          value={model}
-          onChange={(e) => onModelChange(e.target.value)}
-          className="flex-1 min-w-0 rounded-md bg-input border border-border px-1.5 py-0.5 text-[0.625rem] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-          disabled={!provider}
-        >
-          <option value="">Модель</option>
-          {filteredModels.map((m) => (
-            <option key={m.name} value={m.name}>{m.name}</option>
-          ))}
-        </select>
-      </div>
-    </div>
-  )
-}

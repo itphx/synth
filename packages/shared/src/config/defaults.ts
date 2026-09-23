@@ -1,4 +1,5 @@
 import type { SynthConfig } from './types.js';
+import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 export const defaultConfig: SynthConfig = {
   server: {
@@ -83,16 +84,7 @@ export const defaultConfig: SynthConfig = {
     policy: 'auto',
     networkPolicy: {
       mode: 'deny',
-      list: [
-        '10.0.0.0/8',
-        '172.16.0.0/12',
-        '192.168.0.0/16',
-        '127.0.0.0/8',
-        '169.254.0.0/16',
-        '::1/128',
-        'fc00::/7',
-        'fe80::/10',
-      ],
+      list: [...DEFAULT_MCP_PRIVATE_CIDRS],
     },
   },
   tools: {

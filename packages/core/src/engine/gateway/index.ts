@@ -16,7 +16,7 @@ export type { OutputGuardResult } from './output-guard.js';
 export { RateLimiter } from './rate-limiter.js';
 export { AuditLogger, readAuditLog } from './audit-logger.js';
 export type { AuditEventType, AuditEntry, AuditLogQuery } from './audit-logger.js';
-export { PayloadLogger, writePayloadLog, readPayloadLog } from './payload-logger.js';
+export { writePayloadLog, readPayloadLog } from './payload-logger.js';
 export type { LlmPayloadEntry, LlmPayloadRequest, LlmPayloadResponse, PayloadLogQuery } from './payload-logger.js';
 export { GatewayProvider } from './gateway-provider.js';
 export type { GatewayProviderOptions } from './gateway-provider.js';

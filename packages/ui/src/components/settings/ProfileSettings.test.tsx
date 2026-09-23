@@ -91,11 +91,21 @@ describe('ProfileSettings — миграция на Settings UI Kit (AD-072)', (
     expect(container.querySelector('#profile-notes')).not.toBeNull()
   })
 
-  it('сохранение профиля идёт через SettingsActions', async () => {
+  it('сохранение профиля идёт через SettingsActions (активен только при изменениях)', async () => {
     const container = await renderSettings()
 
     const save = container.querySelector('[data-testid="profile-save"]') as HTMLButtonElement
     expect(save).not.toBeNull()
+    // AD-072: без несохранённых изменений Save неактивен.
+    expect(save.disabled).toBe(true)
+
+    const displayName = container.querySelector('#profile-display-name') as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(displayName, 'Changed')
+      displayName.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(save.disabled).toBe(false)
 
     await act(async () => {
       save.click()

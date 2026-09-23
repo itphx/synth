@@ -7,7 +7,11 @@ const apiMock = vi.hoisted(() => ({
   getAllAgents: vi.fn(),
   getProviders: vi.fn(async () => ({ providers: [], default_provider: '' })),
   getModels: vi.fn(async () => []),
-  fetchJSON: vi.fn(async () => ({ files: [] })),
+  getContextFiles: vi.fn(async () => ({ files: [] })),
+  getAgentDetail: vi.fn(async () => ({})),
+  saveAgent: vi.fn(async () => ({})),
+  toggleAgent: vi.fn(async () => undefined),
+  deleteAgent: vi.fn(async () => undefined),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: apiMock }))

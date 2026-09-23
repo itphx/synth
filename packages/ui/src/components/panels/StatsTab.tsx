@@ -8,17 +8,20 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
-import { formatCost, formatCostMap, formatDuration, formatTokens, formatTps, DEFAULT_CHARS_PER_TOKEN } from '@/lib/formatStats'
+import { cacheHitPct, cacheHitRate, formatCost, formatCostMap, formatDuration, formatTokens, formatTps, DEFAULT_CHARS_PER_TOKEN } from '@/lib/formatStats'
 import { buildUsageSegments } from '@/lib/statsSegments'
 import { readMessageSubagents } from '@/lib/subagentStats'
 import type { ProjectStats, ModelGroup, PromptInfoResponse, SessionMcpEffectiveResponse } from '@/lib/api/synthApi'
 import type { PromptToolDetail, McpServerEffective } from '@itphx/synth-shared'
 
-const fmt = (v: number): string => v.toLocaleString()
+/** Фолбэк контекстного окна, если у модели не задано своё. */
+const DEFAULT_CONTEXT_WINDOW = 200_000
+/** Порог предупреждения «контекст близко к лимиту», %. */
+const CONTEXT_NEAR_LIMIT_PCT = 90
 
-function dash(v: number | undefined): string {
+function dash(v: number | undefined, format: (v: number) => string): string {
   if (v === undefined) return '\u2014'
-  return fmt(v)
+  return format(v)
 }
 
 /** Сумма двух возможно-undefined значений: undefined, только если оба не заданы. */
@@ -32,6 +35,12 @@ function addCost(map: Record<string, number>, value: number | undefined, currenc
   if (value === undefined || !Number.isFinite(value) || value <= 0) return
   const key = currency || 'USD'
   map[key] = (map[key] ?? 0) + value
+}
+
+/** C2b: сливает мультивалютную карту в целевую (без смешивания валют). */
+function addCostMap(target: Record<string, number>, map?: Record<string, number>): void {
+  if (!map) return
+  for (const [currency, value] of Object.entries(map)) addCost(target, value, currency)
 }
 
 /**
@@ -48,25 +57,23 @@ function costMapOrFallback(
   return undefined
 }
 
-/** AD-070 §2.3: cache hit rate = cacheRead / input (0 при input = 0). */
-function hitRate(read: number | undefined, input: number | undefined): number {
-  const inp = input || 0
-  if (inp <= 0) return 0
-  return (read || 0) / inp
-}
-
+/** Округлённый процент из доли 0..1 (для серверных `cache_hit_rate`). */
 function pct(rate: number): string {
   return `${Math.round(rate * 100)}%`
 }
 
 /** AD-070 §2.5: подпись hit/miss последнего хода (из `promptMeta`). */
-function promptCacheLabel(info: PromptInfoResponse, t: (key: string) => string): string {
+function promptCacheLabel(
+  info: PromptInfoResponse,
+  t: (key: string) => string,
+  format: (v: number) => string,
+): string {
   const meta = info.lastPromptMeta
   if (!meta) return '\u2014'
   const verdict = meta.expected === 'hit'
     ? t('rightPanel.stats.promptHit')
     : t('rightPanel.stats.promptMiss')
-  const cached = meta.cachedTokens > 0 ? ` · ${meta.cachedTokens.toLocaleString()}` : ''
+  const cached = meta.cachedTokens > 0 ? ` · ${format(meta.cachedTokens)}` : ''
   return `${verdict} · gen ${meta.generation}${cached}`
 }
 
@@ -99,10 +106,14 @@ function mcpAvailabilityLabel(server: McpServerEffective, t: (key: string) => st
  * AD-071 §2.6: оценка токенов. `~` — оценка без калибровки (`ratio` = дефолт
  * chars-per-token), без `~` — калиброванный ratio модели. Пусто → прочерк.
  */
-function tokenEstimate(estTokens: number | undefined, ratio: number | undefined): string {
+function tokenEstimate(
+  estTokens: number | undefined,
+  ratio: number | undefined,
+  format: (v: number) => string,
+): string {
   if (estTokens === undefined) return '\u2014'
   const calibrated = ratio !== undefined && ratio !== DEFAULT_CHARS_PER_TOKEN
-  return `${calibrated ? '' : '~'}${fmt(estTokens)}`
+  return `${calibrated ? '' : '~'}${format(estTokens)}`
 }
 
 /** Тултип-пояснение к оценке токенов: символы и применённый ratio. */
@@ -137,7 +148,8 @@ function ExpandToggle({ expanded, onToggle }: { expanded: boolean; onToggle: () 
 }
 
 export const StatsTab: React.FC = () => {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
+  const fmt = (v: number): string => v.toLocaleString(locale)
   const [projectStats, setProjectStats] = useState<ProjectStats | null>(null)
   const [modelGroups, setModelGroups] = useState<ModelGroup[]>([])
   const [promptInfo, setPromptInfo] = useState<PromptInfoResponse | null>(null)
@@ -200,7 +212,7 @@ export const StatsTab: React.FC = () => {
     return all.find((m) => m.id === sessionModelId)
   }, [modelGroups, sessionModelId])
 
-  const contextWindowMax = contextWindowModel?.context_window ?? 200_000
+  const contextWindowMax = contextWindowModel?.context_window ?? DEFAULT_CONTEXT_WINDOW
 
   const sessionProjectId = activeSession?.project_id
 
@@ -240,7 +252,7 @@ export const StatsTab: React.FC = () => {
   const windowPercent = contextWindowMax > 0 ? (displayInputTokens / contextWindowMax) * 100 : 0
   // Предупреждение только при реальном окне модели (не фолбэк 200_000)
   const hasRealContextWindow = !!contextWindowModel?.context_window && contextWindowModel.context_window > 0
-  const isContextNearLimit = hasRealContextWindow && windowPercent >= 90
+  const isContextNearLimit = hasRealContextWindow && windowPercent >= CONTEXT_NEAR_LIMIT_PCT
 
   // AD-070 §2.6 (live): компактная live-строка стрима — тот же билдер сегментов,
   // что у StreamingPlaceholder/MessageStats.
@@ -355,9 +367,9 @@ export const StatsTab: React.FC = () => {
     sumDefined(activeSession?.reasoning_tokens, sessionSub?.reasoning_tokens),
     liveReasoning,
   )
-  const sessionHitRate = sessionStats
-    ? hitRate(sessionCacheRead, sessionInput)
-    : (activeSession?.cache_hit_rate ?? hitRate(sessionCacheRead, sessionInput))
+  const sessionHitPct = sessionStats
+    ? cacheHitPct(sessionCacheRead, sessionInput)
+    : Math.round((activeSession?.cache_hit_rate ?? cacheHitRate(sessionCacheRead, sessionInput)) * 100)
   const hasSessionSubagents = !!sessionSub && sessionSub.sessions > 0
 
   // AD-070 §2.6 / C2b: стоимость сессии — раздельные суммы по валютам (не
@@ -376,7 +388,10 @@ export const StatsTab: React.FC = () => {
   const hasSessionCost = serverSessionCostMap !== undefined || hasLiveCost
   const sessionCostMap: Record<string, number> = { ...(serverSessionCostMap ?? {}) }
   addCost(sessionCostMap, activeStream?.costUsd, activeStream?.costCurrency)
-  addCost(sessionCostMap, liveSubagent?.costUsd, liveSubagent?.costCurrency)
+  // C2b: live-сабагенты — разбивка по валютам; при её отсутствии (старые
+  // данные) — одиночный costUsd/costCurrency.
+  if (liveSubagent?.costByCurrency) addCostMap(sessionCostMap, liveSubagent.costByCurrency)
+  else addCost(sessionCostMap, liveSubagent?.costUsd, liveSubagent?.costCurrency)
 
   return (
     <div className="flex flex-col gap-4 p-3">
@@ -415,24 +430,24 @@ export const StatsTab: React.FC = () => {
             </div>
             {isContextNearLimit && (
               <div className="mt-1 text-[0.6875rem] text-destructive">
-                Лимит контекста близко
+                {t('rightPanel.stats.contextNearLimit')}
               </div>
             )}
           </div>
           <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
             <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={`${displayTokenPrefix}${fmt(displayInputTokens)}`} />
             <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={`${displayTokenPrefix}${fmt(displayUsage!.output_tokens)}`} />
-            <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={dash(displayUsage!.cache_read_tokens)} />
-            <StatCell icon="server" color="text-purple-400" label={t('rightPanel.stats.cacheWriteTokens')} value={dash(displayUsage!.cache_write_tokens)} />
+            <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={dash(displayUsage!.cache_read_tokens, fmt)} />
+            <StatCell icon="server" color="text-purple-400" label={t('rightPanel.stats.cacheWriteTokens')} value={dash(displayUsage!.cache_write_tokens, fmt)} />
             <div className="col-span-2">
-              <StatCell icon="brain" color="text-pink-400" label={t('rightPanel.stats.reasoningTokens')} value={dash(displayUsage!.reasoning_tokens)} />
+              <StatCell icon="brain" color="text-pink-400" label={t('rightPanel.stats.reasoningTokens')} value={dash(displayUsage!.reasoning_tokens, fmt)} />
             </div>
             <div className="col-span-2">
               <StatCell
                 icon="line-chart"
                 color="text-teal-400"
                 label={t('rightPanel.stats.cacheHitRate')}
-                value={pct(hitRate(displayUsage!.cache_read_tokens, displayInputTokens))}
+                value={`${cacheHitPct(displayUsage!.cache_read_tokens, displayInputTokens)}%`}
               />
             </div>
             {displayTps !== undefined && (
@@ -481,17 +496,17 @@ export const StatsTab: React.FC = () => {
         <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
           <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={fmt(sessionInput)} />
           <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={fmt(sessionOutput)} />
-          <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={dash(sessionCacheRead)} />
-          <StatCell icon="server" color="text-purple-400" label={t('rightPanel.stats.cacheWriteTokens')} value={dash(sessionCacheWrite)} />
+          <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={dash(sessionCacheRead, fmt)} />
+          <StatCell icon="server" color="text-purple-400" label={t('rightPanel.stats.cacheWriteTokens')} value={dash(sessionCacheWrite, fmt)} />
           <div className="col-span-2">
-            <StatCell icon="brain" color="text-pink-400" label={t('rightPanel.stats.reasoningTokens')} value={dash(sessionReasoning)} />
+            <StatCell icon="brain" color="text-pink-400" label={t('rightPanel.stats.reasoningTokens')} value={dash(sessionReasoning, fmt)} />
           </div>
           <div className="col-span-2">
             <StatCell
               icon="line-chart"
               color="text-teal-400"
               label={t('rightPanel.stats.cacheHitRate')}
-              value={pct(sessionHitRate)}
+              value={`${sessionHitPct}%`}
             />
           </div>
           {hasSessionCost && (
@@ -521,7 +536,7 @@ export const StatsTab: React.FC = () => {
               {liveSubagent!.costUsd !== undefined && (
                 <>
                   <span aria-hidden="true">·</span>
-                  <span>{formatCost(liveSubagent!.costUsd, liveSubagent!.costCurrency)}</span>
+                  <span>{formatCostMap(liveSubagent!.costByCurrency, liveSubagent!.costUsd)}</span>
                 </>
               )}
             </div>
@@ -550,19 +565,11 @@ export const StatsTab: React.FC = () => {
                   icon="line-chart"
                   color="text-teal-400"
                   label={t('rightPanel.stats.promptCache')}
-                  value={promptCacheLabel(promptInfo, t)}
+                  value={promptCacheLabel(promptInfo, t, fmt)}
                 />
               </div>
             </div>
-            <button
-              type="button"
-              aria-expanded={promptExpanded}
-              onClick={() => setPromptExpanded((v) => !v)}
-              className="flex w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <Icon name={promptExpanded ? 'arrow-down-s' : 'arrow-right-s'} className="size-3.5" />
-              <span>{promptExpanded ? t('rightPanel.stats.collapse') : t('rightPanel.stats.expand')}</span>
-            </button>
+            <ExpandToggle expanded={promptExpanded} onToggle={() => setPromptExpanded((v) => !v)} />
             {promptExpanded && (
               <div className="mt-2 overflow-x-auto">
                 <table className="w-full text-[0.6875rem]">
@@ -645,7 +652,7 @@ export const StatsTab: React.FC = () => {
                             className="px-2 py-0.5 text-center tabular-nums"
                             title={tokenEstimateTitle(tool.estTokens, tool.ratio, tool.chars, t)}
                           >
-                            {tokenEstimate(tool.estTokens, tool.ratio)}
+                            {tokenEstimate(tool.estTokens, tool.ratio, fmt)}
                           </td>
                           <td className="px-2 py-0.5 text-center last:pr-0">{tool.source}</td>
                         </tr>
@@ -708,7 +715,7 @@ export const StatsTab: React.FC = () => {
                               className="px-2 py-0.5 text-center tabular-nums"
                               title={tokenEstimateTitle(server.estTokens, server.ratio, server.chars, t)}
                             >
-                              {tokenEstimate(server.estTokens, server.ratio)}
+                              {tokenEstimate(server.estTokens, server.ratio, fmt)}
                             </td>
                             <td className="px-2 py-0.5 text-left max-w-[7rem] truncate last:pr-0">{server.author?.username ?? '\u2014'}</td>
                           </tr>
@@ -727,7 +734,7 @@ export const StatsTab: React.FC = () => {
                                 className="px-2 py-0.5 text-center tabular-nums"
                                 title={tokenEstimateTitle(tool.estTokens, tool.ratio, tool.chars, t)}
                               >
-                                {tokenEstimate(tool.estTokens, tool.ratio)}
+                                {tokenEstimate(tool.estTokens, tool.ratio, fmt)}
                               </td>
                               <td className="px-2 py-0.5 last:pr-0" />
                             </tr>
@@ -769,15 +776,7 @@ export const StatsTab: React.FC = () => {
               />
             </div>
           </div>
-          <button
-            type="button"
-            aria-expanded={historyExpanded}
-            onClick={() => setHistoryExpanded((v) => !v)}
-            className="flex w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <Icon name={historyExpanded ? 'arrow-down-s' : 'arrow-right-s'} className="size-3.5" />
-            <span>{historyExpanded ? t('rightPanel.stats.collapse') : t('rightPanel.stats.expand')}</span>
-          </button>
+          <ExpandToggle expanded={historyExpanded} onToggle={() => setHistoryExpanded((v) => !v)} />
           {historyExpanded && (
             <div className="mt-2 overflow-x-auto">
               <table className="w-full text-[0.6875rem]">
@@ -963,10 +962,10 @@ export const StatsTab: React.FC = () => {
           <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
             <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={fmt(projectStats.total_input_tokens)} />
             <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={fmt(projectStats.total_output_tokens)} />
-            <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={dash(projectStats.total_cache_read_tokens)} />
-            <StatCell icon="server" color="text-purple-400" label={t('rightPanel.stats.cacheWriteTokens')} value={dash(projectStats.total_cache_write_tokens)} />
+            <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={dash(projectStats.total_cache_read_tokens, fmt)} />
+            <StatCell icon="server" color="text-purple-400" label={t('rightPanel.stats.cacheWriteTokens')} value={dash(projectStats.total_cache_write_tokens, fmt)} />
             <div className="col-span-2">
-              <StatCell icon="brain" color="text-pink-400" label={t('rightPanel.stats.reasoningTokens')} value={dash(projectStats.total_reasoning_tokens)} />
+              <StatCell icon="brain" color="text-pink-400" label={t('rightPanel.stats.reasoningTokens')} value={dash(projectStats.total_reasoning_tokens, fmt)} />
             </div>
           </div>
         ) : (

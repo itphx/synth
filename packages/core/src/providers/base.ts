@@ -1,6 +1,9 @@
 import type { TokenUsage, LLMChunk, LLMResponse, ReasoningLevel, Currency } from '@itphx/synth-shared';
 import type { DebugCollector } from '../debug.js';
 
+/** Таймаут best-effort загрузки каталога моделей, мс. */
+const MODELS_CATALOG_TIMEOUT_MS = 10_000;
+
 /**
  * Модель с расширенными метаданными, которые отдают каталоги провайдеров
  * (контекст, лимиты, цены, размер и т.п.). Используется синхронизацией
@@ -109,6 +112,36 @@ export function parseTokenPricing(
   if (cacheWrite !== undefined) result.cacheWritePrice = perMillion(cacheWrite);
 
   return result;
+}
+
+/**
+ * Загружает каталог моделей с таймаутом и разбирает общий конверт
+ * `{ data: [...] }`, который отдают OpenAI- и Anthropic-совместимые
+ * эндпоинты `/models`.
+ *
+ * Возвращает «сырые» записи каталога — маппинг полей остаётся за провайдером
+ * (форматы ответов и заголовки у провайдеров различаются). Загрузка
+ * best-effort: сеть/таймаут/не-OK статус/невалидный JSON → пустой массив,
+ * каталог не должен ронять синхронизацию. Таймер abort'а всегда очищается
+ * (try/finally), в том числе при исключении fetch/`resp.json()`.
+ */
+export async function fetchModelsCatalog(
+  url: string,
+  headers: Record<string, string>,
+  timeoutMs: number = MODELS_CATALOG_TIMEOUT_MS,
+): Promise<Array<Record<string, unknown>>> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, { headers, signal: controller.signal });
+    if (!resp.ok) return [];
+    const data = await resp.json() as { data?: Array<Record<string, unknown>> };
+    return Array.isArray(data.data) ? data.data : [];
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export interface LLMMessage {

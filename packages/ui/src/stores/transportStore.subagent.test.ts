@@ -14,6 +14,7 @@ vi.mock('@/hooks/useNotification', () => ({
 
 import { createDispatcher } from './transportStore'
 import { useChatStore } from './chatStore'
+import { resetChatStore } from './testUtils'
 import { useSessionsStore } from './sessionsStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { notifyMessage } from '@/hooks/useNotification'
@@ -25,23 +26,9 @@ function makeEvent(type: string, sessionId: string, data: Record<string, unknown
   return { type, session_id: sessionId, data }
 }
 
-const EMPTY_STORE = {
-  messagesBySession: {},
-  streamingBySession: {},
-  queueBySession: {},
-  pendingBySession: {},
-  errorBySession: {},
-  retryBySession: {},
-  subagentRetryBySession: {},
-  subagentResumingBySession: {},
-  finalErrorBySession: {},
-  stickyNotesBySession: {},
-  summarizationPendingBySession: {},
-}
-
 beforeEach(() => {
   vi.clearAllMocks()
-  useChatStore.setState(EMPTY_STORE as Partial<ReturnType<typeof useChatStore.getState>>)
+  resetChatStore()
 })
 
 describe('transportStore dispatcher: subagent.retry (B5)', () => {

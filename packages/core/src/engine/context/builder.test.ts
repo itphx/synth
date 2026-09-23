@@ -8,6 +8,14 @@ import { ContextConfig } from './config.js';
 import { ContextBuilder } from './builder.js';
 import { joinPromptBlocks, sortPromptBlocks, type PromptBlock } from './prompt-blocks.js';
 
+/** AD-070: обёртка удалена из класса — тесты собирают промпт через buildBaseBlocks. */
+async function buildSystemPrompt(
+  builder: ContextBuilder,
+  params: Parameters<ContextBuilder['buildBaseBlocks']>[0],
+): Promise<string> {
+  return joinPromptBlocks(sortPromptBlocks(await builder.buildBaseBlocks(params)));
+}
+
 describe('ContextBuilder.buildSystemPrompt', () => {
   let userDataDir: string;
 
@@ -25,7 +33,7 @@ describe('ContextBuilder.buildSystemPrompt', () => {
 
     const config = new ContextConfig({ userDataDir });
     const builder = new ContextBuilder(config);
-    const prompt = await builder.buildSystemPrompt({
+    const prompt = await buildSystemPrompt(builder, {
       agentRole: '@bankassist',
       agentContextFile: 'BANKASSIST.md',
       language: 'ru',
@@ -37,7 +45,7 @@ describe('ContextBuilder.buildSystemPrompt', () => {
   it('системные агенты продолжают получать ролевой промпт без agentContextFile', async () => {
     const config = new ContextConfig({ userDataDir });
     const builder = new ContextBuilder(config);
-    const prompt = await builder.buildSystemPrompt({
+    const prompt = await buildSystemPrompt(builder, {
       agentRole: 'assistant',
       language: 'ru',
     });
@@ -48,7 +56,7 @@ describe('ContextBuilder.buildSystemPrompt', () => {
   it('системные агенты получают ролевой промпт при передаче их contextFile (как из реестра)', async () => {
     const config = new ContextConfig({ userDataDir });
     const builder = new ContextBuilder(config);
-    const prompt = await builder.buildSystemPrompt({
+    const prompt = await buildSystemPrompt(builder, {
       agentRole: 'assistant',
       agentContextFile: 'ASSISTANT.md',
       language: 'ru',
@@ -63,7 +71,7 @@ describe('ContextBuilder.buildSystemPrompt', () => {
 
     const config = new ContextConfig({ userDataDir });
     const builder = new ContextBuilder(config);
-    const prompt = await builder.buildSystemPrompt({
+    const prompt = await buildSystemPrompt(builder, {
       agentRole: 'assistant',
       agentContextFile: 'ASSISTANT.md',
       language: 'ru',
@@ -75,7 +83,7 @@ describe('ContextBuilder.buildSystemPrompt', () => {
   it('пустой agentContextFile не ломает загрузку (fallback на дефолтный файл роли)', async () => {
     const config = new ContextConfig({ userDataDir });
     const builder = new ContextBuilder(config);
-    const prompt = await builder.buildSystemPrompt({
+    const prompt = await buildSystemPrompt(builder, {
       agentRole: 'assistant',
       agentContextFile: '',
       language: 'ru',
@@ -95,7 +103,7 @@ describe('ContextBuilder.buildSystemPrompt', () => {
 
     const config = new ContextConfig({ userDataDir });
     const builder = new ContextBuilder(config, { projectDataDir });
-    const prompt = await builder.buildSystemPrompt({
+    const prompt = await buildSystemPrompt(builder, {
       agentRole: 'assistant',
       agentContextFile: 'ASSISTANT.md',
       projectName: 'demo',
@@ -120,7 +128,7 @@ describe('ContextBuilder.buildSystemPrompt', () => {
 
     const config = new ContextConfig({ userDataDir });
     const builder = new ContextBuilder(config, { projectDataDir });
-    const prompt = await builder.buildSystemPrompt({
+    const prompt = await buildSystemPrompt(builder, {
       agentRole: 'assistant',
       agentContextFile: 'ASSISTANT.md',
       projectName: 'demo',
@@ -136,7 +144,7 @@ describe('ContextBuilder.buildSystemPrompt', () => {
     expect(iProject).toBeGreaterThan(iAdditional);
   });
 
-  it('buildSystemPrompt = join(sort(buildBaseBlocks)) — паритет обёртки', async () => {
+  it('buildBaseBlocks: порядок и содержимое блоков согласованы', async () => {
     await mkdir(join(userDataDir, 'roles'), { recursive: true });
     await writeFile(join(userDataDir, 'roles', 'ASSISTANT.md'), 'РОЛЬ-МАРКЕР', 'utf-8');
     await writeFile(join(userDataDir, 'user', 'SOUL.md'), 'SOUL-МАРКЕР', 'utf-8');
@@ -146,9 +154,10 @@ describe('ContextBuilder.buildSystemPrompt', () => {
     const params = { agentRole: 'assistant', agentContextFile: 'ASSISTANT.md', language: 'ru' };
 
     const blocks = await builder.buildBaseBlocks(params);
-    const prompt = await builder.buildSystemPrompt(params);
+    const prompt = joinPromptBlocks(sortPromptBlocks(blocks));
 
-    expect(prompt).toBe(joinPromptBlocks(sortPromptBlocks(blocks)));
+    expect(prompt).toContain('РОЛЬ-МАРКЕР');
+    expect(prompt).toContain('SOUL-МАРКЕР');
   });
 });
 

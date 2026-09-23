@@ -113,7 +113,7 @@ export const ProvidersPanel = () => {
         icon: form.icon,
         currency: form.currency,
       }
-      await synthApi.fetchJSON('/api/v2/providers', { method: 'POST', body: JSON.stringify(body) })
+      await synthApi.createProvider(body)
       setShowForm(false)
       await load()
     } catch (err) {
@@ -124,7 +124,7 @@ export const ProvidersPanel = () => {
   const handleDelete = async (name: string) => {
     if (!(await confirm({ title: t('admin.providers.confirmDelete', { name }), variant: 'danger' }))) return
     try {
-      await synthApi.fetchJSON(`/api/v2/providers/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      await synthApi.deleteProvider(name)
       await load()
     } catch {
       // ignore
@@ -134,13 +134,10 @@ export const ProvidersPanel = () => {
   const handleTest = async (name: string) => {
     setTestResult({ id: name, status: 'testing' })
     try {
-      const data = await synthApi.fetchJSON<{ status: string; error?: string; models?: string[]; message?: string }>(
-        `/api/v2/providers/${encodeURIComponent(name)}/test`,
-        { method: 'POST' },
-      )
+      const data = await synthApi.testProvider(name)
       setTestResult(data)
     } catch (err) {
-      setTestResult({ status: 'error', error: err instanceof Error ? err.message : 'Ошибка' })
+      setTestResult({ status: 'error', error: err instanceof Error ? err.message : t('common.error') })
     }
   }
 
@@ -149,15 +146,12 @@ export const ProvidersPanel = () => {
     setFetchingIcon(true)
     setFetchedIcon(null)
     try {
-      const data = await synthApi.fetchJSON<FetchIconResult>('/api/v2/providers/fetch-icon', {
-        method: 'POST',
-        body: JSON.stringify({ url: form.base_url }),
-      })
+      const data = await synthApi.fetchProviderIcon(form.base_url)
       // Сжимаем сразу — и превью, и применяемое значение будут уже лёгкими.
       const icon = data?.icon ? await downscaleIconDataUrl(data.icon) : data?.icon
       setFetchedIcon({ ...data, icon })
     } catch (err) {
-      setFetchedIcon({ error: err instanceof Error ? err.message : 'Ошибка' })
+      setFetchedIcon({ error: err instanceof Error ? err.message : t('common.error') })
     } finally {
       setFetchingIcon(false)
     }

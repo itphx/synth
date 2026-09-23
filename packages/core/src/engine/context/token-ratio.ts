@@ -38,6 +38,27 @@ export function estimateTokens(chars: number, ratio: number = DEFAULT_CHARS_PER_
 }
 
 /**
+ * Оценка размера промпта в символах — единый util для оркестратора и
+ * саб-агента (`task.ts`): сообщения (`content` + JSON(`toolUse`) + `reasoning`)
+ * + system prompt + JSON-описания тулов.
+ */
+export function estimatePromptChars(
+  messages: ReadonlyArray<{ content?: string; toolUse?: unknown; reasoning?: string }>,
+  systemPrompt?: string,
+  tools?: ReadonlyArray<unknown>,
+): number {
+  let chars = 0;
+  for (const msg of messages) {
+    chars += msg.content?.length ?? 0;
+    if (msg.toolUse) chars += JSON.stringify(msg.toolUse).length;
+    if (msg.reasoning) chars += msg.reasoning.length;
+  }
+  if (systemPrompt) chars += systemPrompt.length;
+  if (tools && tools.length > 0) chars += JSON.stringify(tools).length;
+  return chars;
+}
+
+/**
  * Калибрует chars-per-token по факту: `promptChars / inputTokens`.
  *
  * @param promptChars размер промпта в символах (сообщения + system + tools)

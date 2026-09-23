@@ -8,6 +8,7 @@ import { useNotification } from '@/hooks/useNotification'
 import { synthApi, type ProjectData, type ProjectMcpResponse } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '@/components/ui/Toggle'
+import { InfoField as Field, InfoSection as Section } from '@/components/ui/settings'
 import { CreateProjectPopover } from '@/components/panels/CreateProjectPopover'
 import type { ProjectPlan, McpRegistryEntry } from '@itphx/synth-shared'
 
@@ -223,9 +224,7 @@ export function ProjectTab() {
       const updated = await synthApi.updateProject(project.id, { workspace: path })
       setProject(updated)
       setWorkspaceDraft(updated.workspace || '')
-      useProjectsStore.setState((s) => ({
-        projects: s.projects.map((p) => (p.id === updated.id ? updated : p)),
-      }))
+      useProjectsStore.getState().updateProjectInList(updated)
       notify({ text: t('projectTab.workspace.saved'), type: 'success', category: 'system', sessionId: sessionId || undefined })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -242,9 +241,7 @@ export function ProjectTab() {
       const updated = await synthApi.updateProject(project.id, { invariants: invariantsDraft })
       setProject(updated)
       setInvariantsDraft(updated.invariants || '')
-      useProjectsStore.setState((s) => ({
-        projects: s.projects.map((p) => (p.id === updated.id ? updated : p)),
-      }))
+      useProjectsStore.getState().updateProjectInList(updated)
       notify({ text: t('projectTab.invariants.saved'), type: 'success', category: 'system', sessionId: sessionId || undefined })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -433,24 +430,6 @@ function ProjectLogBlock({ project }: { project: ProjectData | null }) {
           <div className="text-xs">{entry.text}</div>
         </div>
       ))}
-    </div>
-  )
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <div className="mb-2 text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">{title}</div>
-      <div className="space-y-2">{children}</div>
-    </div>
-  )
-}
-
-function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="flex items-center justify-between text-xs">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={mono ? 'font-mono text-[0.6875rem]' : ''}>{value}</span>
     </div>
   )
 }

@@ -26,15 +26,6 @@ describe('synthApi.reset* — сброс runtime-настроек (AD-072 Ф2)',
     vi.unstubAllGlobals()
   })
 
-  it('resetWorkspaceSetting: DELETE /settings/workspace, возвращает workspace', async () => {
-    fetchMock.mockResolvedValue(jsonResponse({
-      status: 'restored', workspace: '/default/ws', isOverridden: false, defaults: '/default/ws',
-    }))
-    const result = await synthApi.resetWorkspaceSetting()
-    expectDelete('/api/v2/settings/workspace')
-    expect(result).toEqual({ workspace: '/default/ws' })
-  })
-
   it('resetMcpSettings: DELETE /settings/mcp, возвращает пустой servers', async () => {
     fetchMock.mockResolvedValue(jsonResponse({
       status: 'restored', servers: {}, isOverridden: false, defaults: {},
@@ -55,18 +46,6 @@ describe('synthApi.reset* — сброс runtime-настроек (AD-072 Ф2)',
     expectDelete('/api/v2/settings/llm-gateway')
     expect(result.enabled).toBe(false)
     expect(result.rateLimit).toEqual({ userPerMinute: 60, providerPerMinute: 120 })
-  })
-
-  it('resetSecuritySettings: DELETE /settings/security, возвращает security', async () => {
-    fetchMock.mockResolvedValue(jsonResponse({
-      status: 'restored',
-      security: { protectedPaths: { enabled: true }, askTimeoutMs: 30000 },
-      isOverridden: false,
-      defaults: { protectedPaths: { enabled: true }, askTimeoutMs: 30000 },
-    }))
-    const result = await synthApi.resetSecuritySettings()
-    expectDelete('/api/v2/settings/security')
-    expect(result).toEqual({ protectedPaths: { enabled: true }, askTimeoutMs: 30000 })
   })
 
   it('resetToolsPolicy: DELETE /settings/tools-policy, возвращает toolsPolicy', async () => {

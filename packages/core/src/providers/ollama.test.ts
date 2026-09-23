@@ -303,6 +303,7 @@ describe('OllamaProvider — форматирование tool_use/tool_result',
 describe('OllamaProvider — listModelsDetailed (метаданные и fallback контекста)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   function jsonResponse(payload: unknown): Response {
@@ -386,5 +387,97 @@ describe('OllamaProvider — listModelsDetailed (метаданные и fallbac
     const provider = new OllamaProvider(baseParams);
     const models = await provider.listModelsDetailed();
     expect(models).toEqual([{ id: 'broken:1b' }]);
+  });
+
+  it('fallback /api/show: пробы идут параллельно батчами, порядок моделей сохранён', async () => {
+    const modelCount = 8;
+    let inFlight = 0;
+    let maxInFlight = 0;
+
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: unknown) => {
+      if (String(url).endsWith('/api/tags')) {
+        return Promise.resolve(jsonResponse({
+          models: Array.from({ length: modelCount }, (_, i) => ({ name: `qwen3:${i}b` })),
+        }));
+      }
+      if (String(url).endsWith('/api/show')) {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        return new Promise<Response>((resolve) => {
+          setTimeout(() => {
+            inFlight -= 1;
+            resolve(jsonResponse({
+              model_info: { 'general.architecture': 'qwen3', 'qwen3.context_length': 4096 },
+            }));
+          }, 5);
+        });
+      }
+      return Promise.reject(new Error(`unexpected request: ${String(url)}`));
+    }));
+
+    const provider = new OllamaProvider(baseParams);
+    const models = await provider.listModelsDetailed();
+
+    // Порядок моделей сохранён, окна проставлены всем (индексы не перепутаны).
+    expect(models.map((m) => m.id)).toEqual(
+      Array.from({ length: modelCount }, (_, i) => `qwen3:${i}b`),
+    );
+    expect(models.map((m) => m.contextWindow)).toEqual(
+      Array.from({ length: modelCount }, () => 4096),
+    );
+    // Больше одного запроса одновременно, но не больше размера батча.
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(maxInFlight).toBeLessThanOrEqual(6);
+  });
+
+  it('fallback /api/show: не более MAX_CONTEXT_PROBES (50) проб', async () => {
+    const total = 60;
+    let showCalls = 0;
+
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: unknown) => {
+      if (String(url).endsWith('/api/tags')) {
+        return Promise.resolve(jsonResponse({
+          models: Array.from({ length: total }, (_, i) => ({ name: `m${i}` })),
+        }));
+      }
+      if (String(url).endsWith('/api/show')) {
+        showCalls += 1;
+        return Promise.resolve(jsonResponse({
+          model_info: { 'general.architecture': 'llama', 'llama.context_length': 2048 },
+        }));
+      }
+      return Promise.reject(new Error(`unexpected request: ${String(url)}`));
+    }));
+
+    const provider = new OllamaProvider(baseParams);
+    const models = await provider.listModelsDetailed();
+
+    expect(showCalls).toBe(50);
+    expect(models).toHaveLength(total);
+    expect(models[49]!.contextWindow).toBe(2048);
+    expect(models[50]!.contextWindow).toBeUndefined();
+  });
+
+  it('сетевой сбой fetch не оставляет активный таймер (try/finally)', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network')));
+
+    const provider = new OllamaProvider(baseParams);
+    await expect(provider.listModelsDetailed()).resolves.toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('ошибка /api/show не оставляет активный таймер (try/finally)', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: unknown) => {
+      if (String(url).endsWith('/api/tags')) {
+        return Promise.resolve(jsonResponse({ models: [{ name: 'm1' }] }));
+      }
+      return Promise.reject(new Error('network'));
+    }));
+
+    const provider = new OllamaProvider(baseParams);
+    await expect(provider.listModelsDetailed()).resolves.toEqual([{ id: 'm1' }]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

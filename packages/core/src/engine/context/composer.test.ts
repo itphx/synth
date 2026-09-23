@@ -42,6 +42,7 @@ function makeContextConfig(): ContextConfig {
     getGatewayInstructions: () => '[GATEWAY]',
     getPlanGuide: () => '[PLAN GUIDE]',
     getModePolicy: () => '[MODE POLICY]',
+    getClassificationInstructions: () => '[CLASSIFICATION]',
   } as unknown as ContextConfig;
 }
 

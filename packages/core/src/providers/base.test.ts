@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { parseTokenPricing, toNonNegativeNumber } from './base.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { fetchModelsCatalog, parseTokenPricing, toNonNegativeNumber } from './base.js';
 
 describe('toNonNegativeNumber', () => {
   it('принимает числа и числовые строки', () => {
@@ -95,5 +95,56 @@ describe('parseTokenPricing — фильтр non-token тарифов', () => {
 
   it('отрицательные значения отбрасываются', () => {
     expect(parseTokenPricing({ prompt: -1 }, undefined)).toBeUndefined();
+  });
+});
+
+describe('fetchModelsCatalog — конверт { data: [...] } и очистка таймера', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  function jsonResponse(payload: unknown): Response {
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  it('разбирает data[] и передаёт заголовки', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: [{ id: 'a' }, { id: 'b' }] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const models = await fetchModelsCatalog('http://example.test/models', { Authorization: 'Bearer k' });
+
+    expect(models).toEqual([{ id: 'a' }, { id: 'b' }]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://example.test/models',
+      expect.objectContaining({ headers: { Authorization: 'Bearer k' } }),
+    );
+  });
+
+  it('отсутствие data / не-OK статус → []', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({})));
+    await expect(fetchModelsCatalog('http://example.test/models', {})).resolves.toEqual([]);
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('nope', { status: 500 })));
+    await expect(fetchModelsCatalog('http://example.test/models', {})).resolves.toEqual([]);
+  });
+
+  it('сетевой сбой → [], таймер очищен', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network')));
+
+    await expect(fetchModelsCatalog('http://example.test/models', {})).resolves.toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('невалидный JSON → [], таймер очищен (finally)', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('not-json', { status: 200 })));
+
+    await expect(fetchModelsCatalog('http://example.test/models', {})).resolves.toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

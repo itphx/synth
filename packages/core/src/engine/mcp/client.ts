@@ -17,12 +17,6 @@ export interface McpToolResult {
   isError: boolean;
 }
 
-/** AD-071 §2.2: `serverInfo` из MCP initialize (имя/версия сервера). */
-export interface McpServerInfo {
-  name: string;
-  version: string;
-}
-
 const MAX_TOOL_RESULT = 30_000;
 
 export class McpClient {
@@ -33,8 +27,6 @@ export class McpClient {
   private _tools: McpToolDef[] = [];
   private _connected = false;
   private _toolTimeout: number;
-  /** AD-071 §2.2: `serverInfo` из MCP initialize (getServerVersion()). */
-  private _serverInfo: McpServerInfo | undefined;
   /** AD-071 §2.2: `instructions` из MCP initialize (getInstructions()). */
   private _instructions: string | undefined;
 
@@ -56,11 +48,6 @@ export class McpClient {
     return this._tools;
   }
 
-  /** AD-071 §2.2: информация о сервере из MCP initialize (если сервер отдал). */
-  get serverInfo(): McpServerInfo | undefined {
-    return this._serverInfo;
-  }
-
   /** AD-071 §2.2: инструкции сервера из MCP initialize (если сервер отдал). */
   get instructions(): string | undefined {
     return this._instructions;
@@ -78,12 +65,8 @@ export class McpClient {
         await this._connectStreamableHttp();
       }
 
-      // AD-071 §2.2: `serverInfo`/`instructions` доступны сразу после initialize
-      // (connect); сохраняем до загрузки тулов, чтобы блок `mcp.servers` их видел.
-      const serverVersion = this._client?.getServerVersion();
-      this._serverInfo = serverVersion
-        ? { name: serverVersion.name, version: serverVersion.version }
-        : undefined;
+      // AD-071 §2.2: `instructions` доступны сразу после initialize (connect);
+      // сохраняем до загрузки тулов, чтобы блок `mcp.servers` их видел.
       this._instructions = this._client?.getInstructions();
 
       const timeoutPromise = new Promise<never>((_, reject) =>
@@ -220,7 +203,6 @@ export class McpClient {
     }
     this._client = null;
     this._transport = null;
-    this._serverInfo = undefined;
     this._instructions = undefined;
   }
 }

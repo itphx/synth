@@ -4,7 +4,7 @@ import type { RuntimeSettingsStore, LlmGatewayRuntimeSettings, SecurityRuntimeSe
 import type { ProtectedPathsStore } from '../../engine/security/protected-paths-store.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
 import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig } from '@itphx/synth-shared';
-import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, toolsDisabledSchema, ToolCapability } from '@itphx/synth-shared';
+import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, ToolCapability } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../../engine/permission/derive.js';
 
 /** AD-072 Ф2: эффективные дефолты LLM Gateway (config.yaml без runtime). */
@@ -12,7 +12,7 @@ const DEFAULT_LLM_GATEWAY: LlmGatewayRuntimeSettings = {
   enabled: false,
   inputMode: 'obfuscate',
   logPayloads: false,
-  rateLimit: { userPerMinute: 60, providerPerMinute: 120 },
+  rateLimit: { ...DEFAULT_LLM_GATEWAY_RATE_LIMIT },
 };
 
 /** AD-072 Ф2: дефолты секции «Безопасность» (config.yaml без runtime). */

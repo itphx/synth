@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
+import { useStableItemKeys } from '@/hooks/useStableItemKeys'
 import {
   synthApi,
   type LlmGatewaySettings,
@@ -108,6 +109,8 @@ export function SecuritySettings() {
   const gatewayDraft = gateway.draft ?? DEFAULT_SETTINGS
 
   const [patterns, setPatterns] = useState<SecretPattern[]>([])
+  // Стабильные ключи строк паттернов (не индексы).
+  const patternKeys = useStableItemKeys(patterns.length)
   const [isOverridden, setIsOverridden] = useState(false)
   const [patternsLoading, setPatternsLoading] = useState(true)
   const [patternsSaving, setPatternsSaving] = useState(false)
@@ -437,7 +440,7 @@ export function SecuritySettings() {
               {patterns.map((p, idx) => {
                 const regexInvalid = !isValidRegex(p.regex)
                 return (
-                  <div key={idx} className="flex flex-wrap items-start gap-2 min-w-0">
+                  <div key={patternKeys[idx]} className="flex flex-wrap items-start gap-2 min-w-0">
                     <TextField
                       value={p.type}
                       onChange={(e) => updatePattern(idx, { type: e.target.value })}
@@ -537,7 +540,7 @@ export function SecuritySettings() {
               label={t('security.protectedPaths.deniedPaths')}
               values={policy.deniedPaths}
               onChange={(v) => updatePolicyList('deniedPaths', v)}
-              placeholder="путь/значение"
+              placeholder={t('security.protectedPaths.placeholder')}
               addLabel={t('security.protectedPaths.add')}
               removeLabel={t('security.protectedPaths.remove')}
             />
@@ -545,7 +548,7 @@ export function SecuritySettings() {
               label={t('security.protectedPaths.deniedPrefixes')}
               values={policy.deniedPrefixes}
               onChange={(v) => updatePolicyList('deniedPrefixes', v)}
-              placeholder="путь/значение"
+              placeholder={t('security.protectedPaths.placeholder')}
               addLabel={t('security.protectedPaths.add')}
               removeLabel={t('security.protectedPaths.remove')}
             />
@@ -553,7 +556,7 @@ export function SecuritySettings() {
               label={t('security.protectedPaths.approvalPaths')}
               values={policy.approvalPaths}
               onChange={(v) => updatePolicyList('approvalPaths', v)}
-              placeholder="путь/значение"
+              placeholder={t('security.protectedPaths.placeholder')}
               addLabel={t('security.protectedPaths.add')}
               removeLabel={t('security.protectedPaths.remove')}
             />
@@ -561,7 +564,7 @@ export function SecuritySettings() {
               label={t('security.protectedPaths.deniedCommandPrefixes')}
               values={policy.deniedCommandPrefixes}
               onChange={(v) => updatePolicyList('deniedCommandPrefixes', v)}
-              placeholder="путь/значение"
+              placeholder={t('security.protectedPaths.placeholder')}
               addLabel={t('security.protectedPaths.add')}
               removeLabel={t('security.protectedPaths.remove')}
             />

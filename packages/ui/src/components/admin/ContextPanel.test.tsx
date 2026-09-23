@@ -3,7 +3,14 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
 
-const apiMock = vi.hoisted(() => ({ fetchJSON: vi.fn() }))
+const apiMock = vi.hoisted(() => ({
+  getContextFiles: vi.fn(),
+  getContextFile: vi.fn(),
+  saveContextFile: vi.fn(),
+  toggleContextFile: vi.fn(),
+  deleteContextFile: vi.fn(),
+  resetContextFile: vi.fn(),
+}))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: apiMock }))
 
@@ -42,9 +49,9 @@ async function renderPanel(): Promise<HTMLElement> {
 }
 
 beforeEach(() => {
-  apiMock.fetchJSON.mockImplementation(async (url: string) => {
-    if (url.includes('category=role')) return { files: [file('ROLE.md', 'role')] }
-    if (url.includes('category=system')) return { files: [file('SYSTEM.md', 'system')] }
+  apiMock.getContextFiles.mockImplementation(async (category: string) => {
+    if (category === 'role') return { files: [file('ROLE.md', 'role')] }
+    if (category === 'system') return { files: [file('SYSTEM.md', 'system')] }
     return { files: [file('ABOUT.md', 'user')] }
   })
 })
@@ -90,9 +97,7 @@ describe('ContextPanel — вкладки на Kit Tabs (AD-072)', () => {
     })
     await act(async () => {})
 
-    expect(
-      apiMock.fetchJSON.mock.calls.some((c) => c[0] === '/api/v2/context/files?category=role'),
-    ).toBe(true)
+    expect(apiMock.getContextFiles).toHaveBeenCalledWith('role')
 
     const tabs = container.querySelectorAll('[role="tab"]')
     expect(tabs[1]!.getAttribute('aria-selected')).toBe('true')

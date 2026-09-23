@@ -16,23 +16,21 @@ import {
   SettingsPanel,
   SettingsRow,
   SettingsSection,
-  TextArea,
-  TextField,
   ToggleField,
   useSettingsDraft,
 } from '../ui/settings'
 import { PolicySettingsCard } from './PolicySettingsCard'
+import { McpRegistryForm } from './McpRegistryForm'
+import { useMcpRegistryEditor } from './useMcpRegistryEditor'
 import { useNotification } from '@/hooks/useNotification'
 import { synthApi } from '../../lib/api/synthApi'
 import type {
   ToolsPolicy,
-  McpServerConfig,
   McpServerToolsSettings,
   McpModeAvailability,
   McpProbedTool,
 } from '../../lib/api/synthApi'
 
-const EMPTY_CONFIG: McpServerConfig = { type: 'http' }
 const DEFAULT_AVAILABILITY = { plan: false, act: true }
 
 /** Сервер (и все его инструменты) на дефолтной доступности — отдельная запись не нужна. */
@@ -94,14 +92,23 @@ export const McpSettings = () => {
   const roles = useAuthStore((s) => s.user?.roles ?? [])
   const isAdmin = roles.includes('ADMIN')
 
-  const [editing, setEditing] = useState<string | null>(null)
-  const [formName, setFormName] = useState('')
-  const [formConfig, setFormConfig] = useState<McpServerConfig>(EMPTY_CONFIG)
-  const [formDefault, setFormDefault] = useState(false)
   const [testResult, setTestResult] = useState<string | null>(null)
   const [testSucceeded, setTestSucceeded] = useState<boolean | null>(null)
   const [testing, setTesting] = useState(false)
-  const [savingForm, setSavingForm] = useState(false)
+
+  const editor = useMcpRegistryEditor({
+    addEntry: (input) => addRegistryEntry(input),
+    updateEntry: (id, input) => updateRegistryEntry(id, input),
+    deleteEntry: deleteRegistryEntry,
+    onOpen: () => {
+      setTestResult(null)
+      setTestSucceeded(null)
+    },
+    onClose: () => {
+      setTestResult(null)
+      setTestSucceeded(null)
+    },
+  })
 
   // AD-071 §2.3: глобальная политика MCP-инструментов (mcp.policy).
   const [mcpPolicy, setMcpPolicy] = useState<ToolsPolicy>('auto')
@@ -110,9 +117,6 @@ export const McpSettings = () => {
   const [mcpPolicyLoading, setMcpPolicyLoading] = useState(true)
   const [mcpPolicySaving, setMcpPolicySaving] = useState(false)
   const [mcpPolicyError, setMcpPolicyError] = useState<string | null>(null)
-
-  // Delete confirmation state
-  const [deleteTarget, setDeleteTarget] = useState<McpRegistryEntry | null>(null)
 
   // Доступность инструментов по режимам (W4c)
   const [probedTools, setProbedTools] = useState<Record<string, McpProbedTool[] | null>>({})
@@ -137,7 +141,7 @@ export const McpSettings = () => {
     defaultValue: availabilityDefault,
     equals: availabilityEquals,
     onSave: async (next) => {
-      useMcpStore.setState({ toolSettings: next })
+      useMcpStore.getState().setToolSettingsLocal(next)
       await saveToolSettings()
       return useMcpStore.getState().toolSettings ?? next
     },
@@ -191,55 +195,6 @@ export const McpSettings = () => {
   const canManageEntry = (entry: McpRegistryEntry): boolean =>
     isAdmin || (!!entry.author?.userId && entry.author.userId === userId)
 
-  const openAdd = () => {
-    setEditing('__new__')
-    setFormName('')
-    setFormConfig({ type: 'http' })
-    setFormDefault(false)
-    setTestResult(null)
-    setTestSucceeded(null)
-  }
-
-  const openEdit = (entry: McpRegistryEntry) => {
-    setEditing(entry.id)
-    setFormName(entry.name)
-    setFormConfig({ ...entry.config })
-    setFormDefault(entry.enabledByDefault)
-    setTestResult(null)
-    setTestSucceeded(null)
-  }
-
-  const closeForm = () => {
-    setEditing(null)
-    setTestResult(null)
-    setTestSucceeded(null)
-  }
-
-  const handleSave = async () => {
-    if (!formName.trim()) return
-    setSavingForm(true)
-    try {
-      if (editing === '__new__') {
-        await addRegistryEntry({
-          name: formName.trim(),
-          config: formConfig,
-          enabledByDefault: formDefault,
-        })
-      } else if (editing) {
-        await updateRegistryEntry(editing, {
-          name: formName.trim(),
-          config: formConfig,
-          enabledByDefault: formDefault,
-        })
-      }
-      closeForm()
-    } catch {
-      // ошибка уже в сторе
-    } finally {
-      setSavingForm(false)
-    }
-  }
-
   const handleMcpPolicySave = async () => {
     setMcpPolicySaving(true)
     setMcpPolicyError(null)
@@ -282,16 +237,6 @@ export const McpSettings = () => {
     }
   }
 
-  const handleDeleteConfirm = async () => {
-    if (!deleteTarget) return
-    try {
-      await deleteRegistryEntry(deleteTarget.id)
-    } catch {
-      // ошибка уже в сторе
-    }
-    setDeleteTarget(null)
-  }
-
   const handleToggleDefault = async (entry: McpRegistryEntry) => {
     if (!canManageEntry(entry)) return
     try {
@@ -302,19 +247,19 @@ export const McpSettings = () => {
   }
 
   const handleTest = async () => {
-    if (!formName.trim()) return
+    if (!editor.formName.trim()) return
     setTesting(true)
     setTestResult(null)
     setTestSucceeded(null)
     // Проверка до сохранения возможна только для уже зарегистрированного сервера
     // (probe идёт по имени из реестра); для нового — подсказка сохранить.
-    if (editing === '__new__') {
+    if (editor.editing === '__new__') {
       setTesting(false)
       setTestSucceeded(null)
       setTestResult(t('mcp.registry.testAfterSave'))
       return
     }
-    const result = await probeServer(formName.trim())
+    const result = await probeServer(editor.formName.trim())
     setTesting(false)
     if (result.success) {
       setTestResult(t('mcp.testSuccess', { count: result.tools?.length ?? 0 }))
@@ -383,7 +328,7 @@ export const McpSettings = () => {
   const handleResetAvailability = async () => {
     try {
       const payload = await synthApi.resetMcpSettings()
-      useMcpStore.setState({ toolSettings: payload.servers })
+      useMcpStore.getState().setToolSettingsLocal(payload.servers)
       availabilityDraft.setDraft(payload.servers)
       notify({ text: t('mcp.permissions.saved'), type: 'success', category: 'system' })
     } catch (err) {
@@ -408,33 +353,13 @@ export const McpSettings = () => {
     }
   }
 
-  const updateConfig = (patch: Partial<McpServerConfig>) => {
-    setFormConfig((prev) => ({ ...prev, ...patch }))
-  }
-
-  const formatArgs = (): string => {
-    const arr = formConfig.args
-    if (!arr || arr.length === 0) return ''
-    return arr.map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')
-  }
-
-  const formatEnv = (): string => {
-    const env = formConfig.env
-    if (!env) return ''
-    return Object.entries(env)
-      .map(([k, v]) => `${k}=${v}`)
-      .join('\n')
-  }
-
-  const isHttpType = formConfig.type === 'sse' || formConfig.type === 'http'
-
   return (
     <SettingsPanel
       title={t('mcp.title')}
       description={t('mcp.description')}
       meta={registry ? t('mcp.count', { count: registry.length }) : undefined}
       actions={
-        <Button data-testid="mcp-admin-add" onClick={openAdd}>
+        <Button data-testid="mcp-admin-add" onClick={editor.openAdd}>
           <Icon name="add" className="size-3.5" />
           {t('common.add')}
         </Button>
@@ -449,142 +374,58 @@ export const McpSettings = () => {
       )}
 
       {/* Form */}
-      {editing && (
-        <SettingsSection title={editing === '__new__' ? t('mcp.newServer') : t('mcp.editServer')}>
-          <TextField
-            label={t('mcp.serverName')}
-            value={formName}
-            onChange={(e) => setFormName(e.target.value)}
-            disabled={editing !== '__new__'}
-            placeholder="my-server"
-          />
-
-          <TextArea
-            label={t('mcp.serverDescription')}
-            value={formConfig.description || ''}
-            onChange={(e) => updateConfig({ description: e.target.value || undefined })}
-            rows={2}
-            placeholder={t('mcp.serverDescriptionPlaceholder')}
-          />
-
-          <SelectField
-            label={t('mcp.type')}
-            description={!isAdmin ? t('mcp.registry.stdioAdminOnly') : undefined}
-            value={formConfig.type}
-            onValueChange={(value) => updateConfig({ type: value as McpServerConfig['type'] })}
-            ariaLabel={t('mcp.type')}
-          >
-            <SelectContent>
-              {/* AD-071 §2.5: stdio (RCE) — только ADMIN. */}
-              {isAdmin && <SelectItem value="stdio">{t('mcp.type.stdio')}</SelectItem>}
-              <SelectItem value="http">{t('mcp.type.http')}</SelectItem>
-              <SelectItem value="sse">{t('mcp.type.sse.legacy')}</SelectItem>
-            </SelectContent>
-          </SelectField>
-
-          {formConfig.type === 'stdio' && (
+      {editor.editing && (
+        <McpRegistryForm
+          title={editor.editing === '__new__' ? t('mcp.newServer') : t('mcp.editServer')}
+          editing={editor.editing !== '__new__'}
+          name={editor.formName}
+          onNameChange={editor.setFormName}
+          config={editor.formConfig}
+          onConfigChange={editor.updateConfig}
+          allowStdio={isAdmin}
+          typeDescription={!isAdmin ? t('mcp.registry.stdioAdminOnly') : undefined}
+          saving={editor.savingForm}
+          onSave={editor.handleSave}
+          onCancel={editor.closeForm}
+          extraFields={
             <>
-              <TextField
-                label={t('mcp.command')}
-                value={formConfig.command || ''}
-                onChange={(e) => updateConfig({ command: e.target.value })}
-                placeholder="python или npx"
+              <ToggleField
+                label={t('mcp.enabledByDefault')}
+                enabled={editor.formDefault}
+                onToggle={() => editor.setFormDefault((prev) => !prev)}
               />
-              <TextField
-                label={t('mcp.args')}
-                value={formatArgs()}
-                onChange={(e) => {
-                  const vals = e.target.value.match(/(?:[^\s"]+|"[^"]*")+/g) || []
-                  updateConfig({ args: vals.map((v) => v.replace(/^"|"$/g, '')) })
-                }}
-                mono
-                placeholder="-y @modelcontextprotocol/server-filesystem /tmp"
-              />
-              <TextArea
-                id="mcp-server-env"
-                name="mcpServerEnv"
-                autoComplete="off"
-                data-1p-ignore=""
-                data-lpignore="true"
-                data-bwignore=""
-                data-form-type="other"
-                spellCheck={false}
-                autoCapitalize="none"
-                autoCorrect="off"
-                label={t('mcp.env')}
-                value={formatEnv()}
-                onChange={(e) => {
-                  const lines = e.target.value.split('\n').filter(Boolean)
-                  const env: Record<string, string> = {}
-                  for (const line of lines) {
-                    const eqIdx = line.indexOf('=')
-                    if (eqIdx > 0) {
-                      env[line.slice(0, eqIdx).trim()] = line.slice(eqIdx + 1).trim()
-                    }
-                  }
-                  updateConfig({ env: Object.keys(env).length ? env : undefined })
-                }}
-                rows={3}
-                mono
-                placeholder={'KEY1=value1\nKEY2=value2'}
-              />
-            </>
-          )}
-
-          {isHttpType && (
-            <TextField
-              label={t('mcp.url')}
-              value={formConfig.url || ''}
-              onChange={(e) => updateConfig({ url: e.target.value })}
-              placeholder="http://localhost:8765/mcp"
-            />
-          )}
-
-          <ToggleField
-            label={t('mcp.enabledByDefault')}
-            enabled={formDefault}
-            onToggle={() => setFormDefault((prev) => !prev)}
-          />
-
-          {/* Test result */}
-          {testResult && (
-            <div
-              className={cn(
-                "p-2 rounded text-sm",
-                testSucceeded
-                  ? "bg-success/10 text-success"
-                  : testSucceeded === false
-                    ? "bg-destructive/10 text-destructive"
-                    : "bg-interactive-hover text-muted-foreground"
+              {testResult && (
+                <div
+                  className={cn(
+                    'p-2 rounded text-sm',
+                    testSucceeded
+                      ? 'bg-success/10 text-success'
+                      : testSucceeded === false
+                        ? 'bg-destructive/10 text-destructive'
+                        : 'bg-interactive-hover text-muted-foreground',
+                  )}
+                >
+                  {testResult}
+                </div>
               )}
-            >
-              {testResult}
-            </div>
-          )}
-
-          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            </>
+          }
+          extraActions={
             <Button
               variant="outline"
               onClick={handleTest}
-              disabled={!formName.trim() || testing}
+              disabled={!editor.formName.trim() || testing}
               className="shrink-0"
             >
               {testing ? t('common.testing') : t('common.test')}
             </Button>
-            <SettingsActions
-              className="ml-auto"
-              onSave={handleSave}
-              onCancel={closeForm}
-              saveDisabled={!formName.trim()}
-              saving={savingForm}
-            />
-          </div>
-        </SettingsSection>
+          }
+        />
       )}
 
       {/* Registry list */}
       <SettingsSection>
-        {registry && registry.length === 0 && !editing && (
+        {registry && registry.length === 0 && !editor.editing && (
           <div className="text-center text-muted-foreground py-8">
             <Icon name="server" className="size-8 mx-auto mb-2 opacity-40" />
             <p className="text-sm">{t('mcp.noServers')}</p>
@@ -650,7 +491,7 @@ export const McpSettings = () => {
                       variant="ghost"
                       size="sm"
                       className="shrink-0"
-                      onClick={() => openEdit(entry)}
+                      onClick={() => editor.openEdit(entry)}
                       disabled={!manageable}
                       aria-label={t('mcp.edit')}
                     >
@@ -660,7 +501,7 @@ export const McpSettings = () => {
                       variant="ghost"
                       size="sm"
                       className="shrink-0 hover:text-destructive"
-                      onClick={() => setDeleteTarget(entry)}
+                      onClick={() => editor.setDeleteTarget(entry)}
                       disabled={!manageable}
                       aria-label={t('mcp.delete')}
                     >
@@ -763,14 +604,14 @@ export const McpSettings = () => {
 
       {/* Delete confirmation */}
       <ConfirmDialog
-        open={deleteTarget !== null}
-        onOpenChange={() => setDeleteTarget(null)}
+        open={editor.deleteTarget !== null}
+        onOpenChange={() => editor.setDeleteTarget(null)}
         title={t('mcp.deleteConfirm')}
-        message={deleteTarget ? t('mcp.deleteConfirmMessage', { name: deleteTarget.name }) : ''}
+        message={editor.deleteTarget ? t('mcp.deleteConfirmMessage', { name: editor.deleteTarget.name }) : ''}
         confirmLabel={t('common.delete')}
         variant="danger"
         icon="delete-bin"
-        onConfirm={handleDeleteConfirm}
+        onConfirm={editor.handleDeleteConfirm}
       />
     </SettingsPanel>
   )
@@ -813,7 +654,7 @@ function NetworkPolicySection({
   const handleReset = async () => {
     try {
       const next = await synthApi.resetMcpNetworkPolicy()
-      useMcpStore.setState({ networkPolicy: next })
+      useMcpStore.getState().setNetworkPolicyLocal(next)
       draft.setDraft(next)
       notify({ text: t('mcp.network.saved'), type: 'success', category: 'system' })
     } catch (err) {

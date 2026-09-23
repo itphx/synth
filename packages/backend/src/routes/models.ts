@@ -2,17 +2,10 @@ import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
 import type { Currency, ModelConfig, ProviderConfig, ContextSource, PriceSource } from '@itphx/synth-shared';
-import { CURRENCIES, lookupContextWindow } from '@itphx/synth-shared';
+import { hasPriceInput, lookupContextWindow, parseCurrencyInput } from '@itphx/synth-shared';
 import { ProviderFactory } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
-
-/** Валидирует валюту по списку RUB/USD/CNY; иначе — undefined. */
-function parseCurrency(value: unknown): Currency | undefined {
-  return typeof value === 'string' && (CURRENCIES as readonly string[]).includes(value)
-    ? (value as Currency)
-    : undefined;
-}
 
 /** Ценовые поля, пришедшие от провайдера (B1 уже отфильтровал non-token тарифы). */
 interface ApiPriceFields {
@@ -55,16 +48,6 @@ function collectApiPrices(model: ApiPriceFields): ApiPriceFields | undefined {
     cacheReadPrice: model.cacheReadPrice,
     cacheWritePrice: model.cacheWritePrice,
   };
-}
-
-/** Присутствуют ли в теле запроса ценовые поля (snake_case или camelCase). */
-function hasPriceInput(body: unknown): boolean {
-  return !!body && typeof body === 'object' && (
-    'input_price' in body || 'inputPrice' in body
-    || 'output_price' in body || 'outputPrice' in body
-    || 'cache_read_price' in body || 'cacheReadPrice' in body
-    || 'cache_write_price' in body || 'cacheWritePrice' in body
-  );
 }
 
 interface ModelGroupResponse {
@@ -186,10 +169,13 @@ export function createModelRoutes(
 
     const existing = await modelStore.load(modelId);
     const provider = body.provider || existing?.provider || '';
-    const rawCurrency = body.currency;
-    const currency = rawCurrency === null || rawCurrency === ''
-      ? undefined
-      : parseCurrency(rawCurrency) ?? existing?.currency;
+    const resolvedCurrency = parseCurrencyInput(body.currency, existing?.currency);
+    if (!resolvedCurrency.ok) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'currency должен быть одним из: RUB, USD, CNY' },
+      }, 400);
+    }
+    const currency = resolvedCurrency.currency;
 
     const model: ModelConfig = {
       id: modelId,

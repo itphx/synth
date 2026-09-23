@@ -249,4 +249,31 @@ export class McpRegistryStore {
       .filter((e) => e.origin === 'instance' && e.enabledByDefault)
       .map((e) => e.name);
   }
+
+  /**
+   * AD-071 §2.5: все карты для `McpManager` за одно чтение реестра (вместо
+   * пяти независимых `list()` — readFile+parse+sort на каждую мутацию).
+   */
+  async toManagerMaps(): Promise<{
+    servers: Record<string, McpServerConfig>;
+    origins: Record<string, McpRegistryOrigin>;
+    trusts: Record<string, McpRegistryTrust>;
+    authors: Record<string, McpRegistryAuthor>;
+    defaults: string[];
+  }> {
+    const entries = await this.list();
+    const servers: Record<string, McpServerConfig> = {};
+    const origins: Record<string, McpRegistryOrigin> = {};
+    const trusts: Record<string, McpRegistryTrust> = {};
+    const authors: Record<string, McpRegistryAuthor> = {};
+    const defaults: string[] = [];
+    for (const entry of entries) {
+      servers[entry.name] = entry.config;
+      origins[entry.name] = entry.origin;
+      trusts[entry.name] = entry.trust;
+      if (entry.author) authors[entry.name] = entry.author;
+      if (entry.origin === 'instance' && entry.enabledByDefault) defaults.push(entry.name);
+    }
+    return { servers, origins, trusts, authors, defaults };
+  }
 }

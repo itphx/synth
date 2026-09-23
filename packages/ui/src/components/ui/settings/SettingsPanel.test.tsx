@@ -66,35 +66,7 @@ describe('SettingsPanel', () => {
     expect(host.textContent).toContain('CONTENT')
   })
 
-  it('fixed: футер вне scroll-тела', async () => {
-    const host = await renderPanel({
-      title: 'Network',
-      footer: <button>FOOTER</button>,
-      children: <div>CONTENT</div>,
-    })
-
-    const scroll = host.querySelector('.overflow-y-auto')
-    const footer = host.querySelector('button')!
-    expect(scroll).not.toBeNull()
-    expect(scroll!.contains(footer)).toBe(false)
-  })
-
-  it('sticky: футер внутри scroll-тела', async () => {
-    const host = await renderPanel({
-      title: 'Network',
-      footerVariant: 'sticky',
-      footer: <button>FOOTER</button>,
-      children: <div>CONTENT</div>,
-    })
-
-    const scroll = host.querySelector('.overflow-y-auto')
-    const footer = host.querySelector('button')!
-    expect(scroll).not.toBeNull()
-    expect(scroll!.contains(footer)).toBe(true)
-    expect(host.querySelector('.sticky')).not.toBeNull()
-  })
-
-  it('не рендерит футер, если он не передан', async () => {
+  it('без actions не рендерит кнопок', async () => {
     const host = await renderPanel({ title: 'Network', children: <div>CONTENT</div> })
     expect(host.querySelector('button')).toBeNull()
   })

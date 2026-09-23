@@ -1,25 +1,8 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
 import { JsonStore } from '../../storage/json-store.js';
-import type { Currency, ModelConfig, ProviderConfig } from '@itphx/synth-shared';
-import { CURRENCIES } from '@itphx/synth-shared';
-
-/** Валидирует валюту по списку RUB/USD/CNY; иначе — undefined. */
-function parseCurrency(value: unknown): Currency | undefined {
-  return typeof value === 'string' && (CURRENCIES as readonly string[]).includes(value)
-    ? (value as Currency)
-    : undefined;
-}
-
-/** Присутствуют ли в теле запроса ценовые поля (snake_case или camelCase). */
-function hasPriceInput(body: unknown): boolean {
-  return !!body && typeof body === 'object' && (
-    'input_price' in body || 'inputPrice' in body
-    || 'output_price' in body || 'outputPrice' in body
-    || 'cache_read_price' in body || 'cacheReadPrice' in body
-    || 'cache_write_price' in body || 'cacheWritePrice' in body
-  );
-}
+import type { ModelConfig, ProviderConfig } from '@itphx/synth-shared';
+import { hasPriceInput, parseCurrencyInput } from '@itphx/synth-shared';
 
 export interface ModelRoutesOptions {
   /** Виртуальные модели (например, remote-модели через LLM Proxy) — добавляются к store-моделям. */
@@ -146,10 +129,13 @@ export function createModelRoutes(
 
     const existing = await modelStore.load(modelId);
     const provider = body.provider || existing?.provider || '';
-    const rawCurrency = body.currency;
-    const currency = rawCurrency === null || rawCurrency === ''
-      ? undefined
-      : parseCurrency(rawCurrency) ?? existing?.currency;
+    const resolvedCurrency = parseCurrencyInput(body.currency, existing?.currency);
+    if (!resolvedCurrency.ok) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'currency должен быть одним из: RUB, USD, CNY' },
+      }, 400);
+    }
+    const currency = resolvedCurrency.currency;
 
     const model: ModelConfig = {
       id: modelId,

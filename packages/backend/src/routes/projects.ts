@@ -5,9 +5,9 @@ import { stat } from 'node:fs/promises';
 import type { AuthKit } from '../auth/middleware.js';
 import type { ProjectStore } from '../storage/project-store.js';
 import type { SessionManager, McpManager } from '@itphx/synth-core';
+import { serializeProject } from '@itphx/synth-core';
 import type { Project } from '@itphx/synth-shared';
-import { ProjectRole } from '@itphx/synth-shared';
-import { serializeProject } from '../lib/serialize.js';
+import { ProjectRole, projectMcpUpdateSchema } from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
 import { WorkspaceResolver } from '../lib/workspace-resolver.js';
 
@@ -17,12 +17,6 @@ import { WorkspaceResolver } from '../lib/workspace-resolver.js';
  * объект (перенос между мирами), null очищает план.
  */
 const planFieldSchema = z.unknown().nullable().optional();
-
-/** AD-071 §2.4: тело проектного MCP-скоупа (ссылки на реестр по имени). */
-const projectMcpUpdateSchema = z.object({
-  enabled: z.array(z.string()).optional(),
-  defaultOn: z.array(z.string()).optional(),
-});
 
 export function createProjectRoutes(
   kit: AuthKit,

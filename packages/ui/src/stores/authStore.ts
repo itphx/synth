@@ -17,6 +17,8 @@ interface AuthState {
   login: (apiKey: string, username?: string) => Promise<void>
   loginWithPassword: (server: string, username: string, password: string) => Promise<void>
   setUser: (user: User) => Promise<void>
+  /** Локальное обновление профиля (после PATCH /profile) без повторной загрузки. */
+  setProfile: (profile: Profile | null) => void
   logout: () => Promise<void>
   sessionExpired: () => void
   clearError: () => void
@@ -122,6 +124,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     await profileService.initialize()
     set({ isInitialized: true })
   },
+
+  setProfile: (profile) => set({ profile }),
 
   logout: async () => {
     set({ isLoading: true })

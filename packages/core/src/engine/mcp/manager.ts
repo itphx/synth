@@ -4,7 +4,6 @@ import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolContext, ToolResult } from '@itphx/synth-shared';
 import { McpClient } from './client.js';
-import type { McpServerInfo } from './client.js';
 import { evaluateMcpNetworkAccess, isHttpMcpConfig } from './network-policy.js';
 import { info, warning } from '../../logger.js';
 import type { SessionManager } from '../../sessions/manager.js';
@@ -48,10 +47,6 @@ export class McpManager {
   /** AD-071 §2.3.1: задать политику сетевого доступа (undefined — не проверять). */
   setNetworkPolicy(policy: McpNetworkPolicy | undefined): void {
     this._networkPolicy = policy;
-  }
-
-  getNetworkPolicy(): McpNetworkPolicy | undefined {
-    return this._networkPolicy;
   }
 
   /** AD-071 §2.5: origin серверов (instance — доверенные, user — community). */
@@ -133,11 +128,6 @@ export class McpManager {
     const entry = this._servers.get(name);
     if (!entry) return null;
     return entry.client.tools;
-  }
-
-  /** AD-071 §2.2: `serverInfo` подключённого сервера (undefined, если не подключён/не отдал). */
-  getServerInfo(name: string): McpServerInfo | undefined {
-    return this._servers.get(name)?.client.serverInfo;
   }
 
   /** AD-071 §2.2: `instructions` подключённого сервера (undefined, если нет). */

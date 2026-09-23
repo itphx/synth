@@ -6,6 +6,7 @@ import {
   type McpRegistryUpdateInput,
   type McpServerToolsSettings,
 } from '../lib/api/synthApi'
+import { i18nText } from '@/lib/i18n/text'
 
 interface McpStore {
   /** AD-071 §2.5: единый реестр MCP-серверов (instance + пользовательские). */
@@ -39,10 +40,14 @@ interface McpStore {
 
   fetchToolSettings: () => Promise<void>
   updateToolAvailability: (name: string, toolName: string | 'default', mode: 'plan' | 'act', value: boolean) => void
+  /** Локальная установка настроек (без запроса) — для reset/черновика. */
+  setToolSettingsLocal: (servers: Record<string, McpServerToolsSettings>) => void
   saveToolSettings: () => Promise<void>
   probeServer: (name: string) => Promise<{ success: boolean; tools?: Array<{ name: string; description: string }>; error?: string }>
 
   fetchNetworkPolicy: () => Promise<void>
+  /** Локальная установка сетевой политики (без запроса) — для reset/черновика. */
+  setNetworkPolicyLocal: (policy: McpNetworkPolicy) => void
   saveNetworkPolicy: (policy: McpNetworkPolicy) => Promise<void>
 
   fetchToolsDisabled: () => Promise<void>
@@ -76,7 +81,7 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       const { entries } = await synthApi.getMcpRegistry()
       set({ registry: entries, loading: false })
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : 'Ошибка загрузки реестра MCP', loading: false })
+      set({ error: err instanceof Error ? err.message : i18nText('mcp.error.loadRegistry'), loading: false })
     }
   },
 
@@ -88,7 +93,7 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       set({ registry: [...current, entry].sort((a, b) => a.name.localeCompare(b.name)), loading: false })
       return entry
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : 'Ошибка добавления сервера', loading: false })
+      set({ error: err instanceof Error ? err.message : i18nText('mcp.error.addServer'), loading: false })
       throw err
     }
   },
@@ -106,7 +111,7 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       })
       return entry
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : 'Ошибка обновления сервера', loading: false })
+      set({ error: err instanceof Error ? err.message : i18nText('mcp.error.updateServer'), loading: false })
       throw err
     }
   },
@@ -117,7 +122,7 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       await synthApi.deleteMcpRegistryEntry(id)
       set({ registry: (get().registry || []).filter((e) => e.id !== id), loading: false })
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : 'Ошибка удаления сервера', loading: false })
+      set({ error: err instanceof Error ? err.message : i18nText('mcp.error.deleteServer'), loading: false })
       throw err
     }
   },
@@ -129,7 +134,7 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       set({ toolSettings: payload.servers, toolSettingsLoading: false })
     } catch (err) {
       set({
-        toolSettingsError: err instanceof Error ? err.message : 'Ошибка загрузки настроек MCP',
+        toolSettingsError: err instanceof Error ? err.message : i18nText('mcp.error.loadToolSettings'),
         toolSettingsLoading: false,
       })
     }
@@ -151,6 +156,10 @@ export const useMcpStore = create<McpStore>((set, get) => ({
     })
   },
 
+  setToolSettingsLocal: (servers) => {
+    set({ toolSettings: servers })
+  },
+
   saveToolSettings: async () => {
     set({ toolSettingsLoading: true, toolSettingsError: null })
     try {
@@ -159,7 +168,7 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       set({ toolSettings: payload.servers, toolSettingsLoading: false })
     } catch (err) {
       set({
-        toolSettingsError: err instanceof Error ? err.message : 'Ошибка сохранения настроек MCP',
+        toolSettingsError: err instanceof Error ? err.message : i18nText('mcp.error.saveToolSettings'),
         toolSettingsLoading: false,
       })
       throw err
@@ -171,7 +180,7 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       const result = await synthApi.probeMcpServer(name)
       return { success: true, tools: result.tools }
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : 'Ошибка проверки подключения' }
+      return { success: false, error: err instanceof Error ? err.message : i18nText('mcp.error.probe') }
     }
   },
 
@@ -182,10 +191,14 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       set({ networkPolicy: policy, networkPolicyDefaults: defaults, networkPolicyLoading: false })
     } catch (err) {
       set({
-        networkPolicyError: err instanceof Error ? err.message : 'Ошибка загрузки сетевой политики',
+        networkPolicyError: err instanceof Error ? err.message : i18nText('mcp.error.loadNetworkPolicy'),
         networkPolicyLoading: false,
       })
     }
+  },
+
+  setNetworkPolicyLocal: (policy) => {
+    set({ networkPolicy: policy })
   },
 
   saveNetworkPolicy: async (policy) => {
@@ -195,7 +208,7 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       set({ networkPolicy: saved, networkPolicyLoading: false })
     } catch (err) {
       set({
-        networkPolicyError: err instanceof Error ? err.message : 'Ошибка сохранения сетевой политики',
+        networkPolicyError: err instanceof Error ? err.message : i18nText('mcp.error.saveNetworkPolicy'),
         networkPolicyLoading: false,
       })
       throw err
@@ -209,7 +222,7 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       set({ toolsDisabled: config, toolsDisabledDefaults: defaults, toolsDisabledLoading: false })
     } catch (err) {
       set({
-        toolsDisabledError: err instanceof Error ? err.message : 'Ошибка загрузки отключённых инструментов',
+        toolsDisabledError: err instanceof Error ? err.message : i18nText('mcp.error.loadToolsDisabled'),
         toolsDisabledLoading: false,
       })
     }
@@ -222,7 +235,7 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       set({ toolsDisabled: saved, toolsDisabledLoading: false })
     } catch (err) {
       set({
-        toolsDisabledError: err instanceof Error ? err.message : 'Ошибка сохранения отключённых инструментов',
+        toolsDisabledError: err instanceof Error ? err.message : i18nText('mcp.error.saveToolsDisabled'),
         toolsDisabledLoading: false,
       })
       throw err

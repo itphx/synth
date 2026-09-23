@@ -1,6 +1,7 @@
 import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
 import {
   BaseProvider,
+  fetchModelsCatalog,
   resolveSystemPromptText,
   parseTokenPricing,
   toNonNegativeNumber,
@@ -41,26 +42,10 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   async listModels(): Promise<string[]> {
-    const modelsUrl = this._modelsUrl();
-
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 10_000);
-
-      const resp = await fetch(modelsUrl, {
-        headers: this._getHeaders(),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-
-      if (resp.ok) {
-        const data = await resp.json() as { data?: Array<{ id: string }> };
-        return (data.data || []).map((m) => m.id).filter(Boolean);
-      }
-    } catch {
-      // fall through
-    }
-    return [];
+    const models = await fetchModelsCatalog(this._modelsUrl(), this._getHeaders());
+    return models
+      .map((m) => (typeof m.id === 'string' ? m.id : String(m.id ?? '')))
+      .filter(Boolean);
   }
 
   /**
@@ -72,26 +57,8 @@ export class AnthropicProvider extends BaseProvider {
    *    токенов (только токенные тарифы).
    */
   async listModelsDetailed(): Promise<DetailedModelInfo[]> {
-    const modelsUrl = this._modelsUrl();
-
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 10_000);
-
-      const resp = await fetch(modelsUrl, {
-        headers: this._getHeaders(),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-
-      if (resp.ok) {
-        const data = await resp.json() as { data?: Array<Record<string, unknown>> };
-        return (data.data || []).map((m) => this._parseModel(m)).filter((m) => m.id);
-      }
-    } catch {
-      // fall through
-    }
-    return [];
+    const models = await fetchModelsCatalog(this._modelsUrl(), this._getHeaders());
+    return models.map((m) => this._parseModel(m)).filter((m) => m.id);
   }
 
   private _modelsUrl(): string {

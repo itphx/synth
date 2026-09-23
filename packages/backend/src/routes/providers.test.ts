@@ -134,19 +134,18 @@ describe('routes/providers: валюта по умолчанию', () => {
     expect(provider.currency).toBe('RUB');
   });
 
-  it('POST с невалидной currency (XXX) — значение игнорируется', async () => {
+  it('POST с невалидной currency (XXX) — 400 VALIDATION_ERROR', async () => {
     const res = await stores.app.request(BASE, postJSON({
       name: 'p-bad',
       type: 'openai',
       base_url: 'https://api.example.com/v1',
       currency: 'XXX',
     }));
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
 
-    const saved = await stores.providerStore.load('p-bad');
-    expect(saved?.currency).toBeUndefined();
-    const provider = (await listProviders()).find((p) => p.name === 'p-bad')!;
-    expect(provider.currency).toBeUndefined();
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(await stores.providerStore.load('p-bad')).toBeNull();
   });
 
   it.each([null, ''])('POST с currency=%p очищает ранее сохранённую валюту', async (cleared) => {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RuntimeSettingsStore } from './runtime-settings.js';
+import { RuntimeSettingsStore, mergeMcpNetworkPolicy } from './runtime-settings.js';
 
 describe('RuntimeSettingsStore.clear* (AD-072 Ф2)', () => {
   let tmpDir: string;
@@ -129,5 +129,22 @@ describe('RuntimeSettingsStore.clear* (AD-072 Ф2)', () => {
     await store.clearMcpNetworkPolicy();
 
     expect(await store.load()).toEqual({});
+  });
+});
+
+describe('mergeMcpNetworkPolicy (AD-071 §2.3.1)', () => {
+  const config = { mode: 'deny' as const, list: ['10.0.0.0/8'] };
+  const runtime = { mode: 'allow' as const, list: ['192.168.0.0/16'] };
+
+  it('полная runtime-политика приоритетнее config', () => {
+    expect(mergeMcpNetworkPolicy(config, runtime)).toEqual(runtime);
+  });
+
+  it('при отсутствии runtime берётся config', () => {
+    expect(mergeMcpNetworkPolicy(config, undefined)).toEqual(config);
+  });
+
+  it('при отсутствии обоих — undefined (дефолт подставляет вызывающий)', () => {
+    expect(mergeMcpNetworkPolicy(undefined, undefined)).toBeUndefined();
   });
 });

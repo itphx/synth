@@ -594,3 +594,69 @@
 - **Проверки:** `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 91, core 1643, ui 600, backend 306 — PASS. Браузер: в «Статистике» `~ 0.0343 $`, `~ 1.16 ₽`, `~ 0.2087 ₽` (мультивалютная разбивка работает).
 - **Ветка:** `feat/ad-071-mcp-tools-scope`
 - **Коммит:** этот.
+
+## 2026-09-23 — сборка и деплой 0.7.0 на K3s (test)
+- **Задача:** «Собери и задеплой на K3s». Решение пользователя: количество изменений тянет на **0.7.0** (minor), оба образа (backend + ui).
+- **Тип:** build + deploy (release)
+- **Исполнитель:** @orchestrator (ops)
+- **Результат:** PASS.
+- **Что сделано:**
+  - **Bump:** `./scripts/version-bump.sh minor` 0.6.1 → **0.7.0** (`version.ts` + 6 `package.json` + `charts/synth/Chart.yaml`); коммит `1a18020 chore: bump version to v0.7.0` в ветке, тег `v0.7.0` локально (в gitverse origin не пушили — K3s-деплой этого не требует).
+  - **Сборка:** `./scripts/build.sh` — shared → core → ui (vite, `index-C8j09cBO.js` / `index-ZHR84O4u.css`) → synth; всё успешно.
+  - **Docker:** собраны из исходников и запушены в Gitea-реестр `git.itphx.ru/itphx/synth-backend:0.7.0` (`sha256:f4310922…`) и `git.itphx.ru/itphx/synth-ui:0.7.0` (`sha256:da564809…`) через `docker/Dockerfile.backend` / `docker/Dockerfile.ui`.
+  - **Деплой:** теги в `synth-deploy/values.yaml` 0.6.1 → 0.7.0; `helm lint` OK; коммит `77f11e1 release: bump synth-ui/backend images to v0.7.0`, push `main` (`ee2e79f..77f11e1`) → Fleet.
+- **Проверки:** Fleet GitRepo `synth` (fleet-local) синхронизировался на `77f11e1`, bundle Ready 1/1; `synth-backend` и `synth-ui` раскатаны на 0.7.0, новые поды `1/1 Running`; `https://synth.k3s.itphx.loc/` → HTTP 200, `/health` → `{"status":"healthy","version":"0.7.0"}`, `index.html` → `cache-control: no-cache`, отдаются ассеты свежей сборки; логи backend без ошибок (штатный 401 на `/api/v2/events` без аутентификации).
+- **Замечания:** push ветки/тега `synth` в gitverse origin и npm-публикация не выполнялись (не входили в задачу). `synth-backend` перезапущен — сессии сохранены на PVC. Ветка: `feat/ad-071-mcp-tools-scope`.
+
+## 2026-09-23 (продолжение) — аудит кода master..HEAD: дубли, мёртвый код, костыли, антипаттерны
+- **Задача:** «Провести подробное исследование кода на предмет дублей, мёртвого/неоптимального кода, костылей и антипаттернов; особенно среди последних изменений относительно master».
+- **Тип:** research (code audit)
+- **Исполнитель:** @orchestrator → 5 параллельных исследовательских потоков (core A/B, backend+shared, ui/components, ui/stores+lib) + перепроверка находок высокой важности.
+- **Результат:** PASS (отчёт). Диапазон `origin/master..HEAD` — 102 коммита, 317 файлов, +38 820/−4 243 строк.
+- **Нарушений жёстких инвариантов не выявлено**; главная системная проблема — **дублирование backend↔core, которое уже расходится**.
+- **Высокая важность (подтверждено мной):**
+  1. **Дрейф сериализации** backend/lib/serialize.ts vs core/server/serialize.ts: backend теряет `session.todos`, `origin:'local'`, `message.id/seq/parts`, `project.origin` → на managed-backend UI не получает todos/мультимодальные parts/ids.
+  2. **Runtime-политика network MCP не применяется при старте**: `mergeMcpNetworkPolicy` (`core/storage/runtime-settings.ts:108`) не вызывается; `GET /settings/mcp-network-policy` отдаёт runtime, а менеджер исполняет config → рассинхрон безопасности после рестарта.
+  3. **Двойная обёртка GatewayProvider** на пути роутера: `ProviderPool.getProvider`→`_applyGateway` + `_routeProvider`→`_wrapWithGateway` (`orchestrator.ts:3326`) → двойной rate-limit/guard/аудит, внутренний аудит с пустыми sessionId/userId.
+  4. **`askTimeoutMs` читается из `synth.security`** через `as unknown as` (`backend/app.ts:572`), а поле — в `permission` (`shared/types/permission.ts:29`) → всегда `undefined`.
+  5. **`task-resume` теряет MCP-скоуп и `modelPriceLoader`**: `getToolsForAgent(agentDef.id)` без серверов, в `SubagentResumeDeps` нет полей (нарушение AD-071 §2.1).
+  6. **Legacy MCP `/servers`** пишет в `YamlMcpConfigStore` в обход реестра `McpRegistryStore`; `syncManagerConfig` затирает правки; UI legacy-методы не вызывает.
+  7. **UI: две расходящиеся реализации форматирования денег** (`formatMoney` vs `formatCost`), неизвестная валюта маскируется под `$`, `formatMoney` без тестов; live-агрегат сабагентов складывает разные валюты и показывает `$`.
+  8. **UI: двойной источник локали** (`useUIStore.locale` неперсистентный vs `useI18nStore` персистентный) + ручная синхронизация в 4 местах.
+  9. **UI: `MicroFirstDefaults` пишет в localStorage-ключ, который никто не читает** (write-only панель).
+ 10. **UI: прямой `fetch` в обход `synthApi`** (`SessionsPanel.tsx:29`) и 14 мест с литеральным `/api/v2` через `fetchJSON` в админке.
+- **Средняя/низкая (сводно):** 4 копии `parseCurrency`, дублирование роутеров sessions/providers/models backend↔core, `isInternalOrigin` дублирует и ослабляет core network-policy, N+1 в `McpRegistryStore` (5 чтений JSON на мутацию), последовательные 50× `POST /api/show` в Ollama, `clearTimeout` не в `finally`, ~60 строк дублей `getPromptInfo`↔`_processMessage`, двойной подсчёт `_getAssistantSecrets`, `key={index}` в редактируемых списках, debounce-таймеры без cleanup, дубли MCP-панелей, мёртвые экспорты/методы (`filterByCapabilities`, legacy `synthApi.getMcpServers*`, `addStreamError`/`errorBySession`, мёртвые пропсы Kit, `TaskExtra.sessionSettings`, `McpScopeDecision.enabledByDefault`, `getServerInfo`, `buildSystemPrompt`, `PayloadLogger`-класс и др.), хардкод `[CLASSIFICATION]`/`/4`/60-120/`toLocaleString('ru')`, `as unknown as`/`as never`/`!`.
+- **Признано НЕ проблемой:** `backend/events/hub.ts` vs core `EventBus` (разные роли), RBAC vs tool-permissions, `resolveMcpScope` переиспользуется из core, `McpRegistryStore` пишет атомарно (AD-005), обфускация/guard не обходятся, идемпотентность `compose()` корректна.
+- **Коммит:** нет (изменений кода не вносилось).
+
+## 2026-09-23 (продолжение) — исправление дефектов по итогам аудита (4 потока + верификация)
+- **Задача:** «Внести отчёт в лог и начать исправление всех проблем. Не ленись — не полумеры, делай как правильно. Не забудь протестировать».
+- **Тип:** bug fix + refactor + dead-code cleanup (по всему монорепо)
+- **Исполнитель:** @orchestrator → @fixer ×6 (зоны: ядро/движок; backend+shared+core-server/storage/remote; UI; core/providers; UI-остаток; network-policy helper) + оркестратор (верификация).
+- **Результат:** PASS. **125 файлов изменено, +2888/−3563** (нетто −675 строк), 14 новых файлов.
+- **Исправлено (ключевое):**
+  1. **Сериализация:** удалён устаревший `backend/src/lib/serialize.ts` (терял `todos`, `origin`, `message.id/seq/parts`) — backend импортирует core-сериализатор; устранён дрейф managed↔standalone.
+  2. **Runtime network-policy MCP:** на старте backend и core применяется `mergeMcpNetworkPolicy(config, runtime)` (helper экспортирован и стал единым источником; inline-дубль убран); добавлен интеграционный тест + unit-тесты helper.
+  3. **Двойная обёртка `GatewayProvider`:** `_routeProvider` не оборачивает повторно, если провайдер уже `GatewayProvider`; регрессионный тест.
+  4. **`askTimeoutMs`:** читается из `synth.permission` (был `security` через `as unknown as` → всегда `undefined`).
+  5. **`task-resume`:** прокинуты `mcpServers` и `modelPriceLoader` (наследование MCP-скоупа по AD-071 §2.1 + учёт стоимости).
+  6. **Legacy MCP `/servers*`:** переписаны как тонкие адаптеры над `McpRegistryStore`; удалены `McpConfigStore`/`YamlMcpConfigStore`-путь (второго источника истины нет).
+  7. **`McpRegistryStore` N+1:** добавлен `toManagerMaps()` (одно чтение на мутацию), переиспользован в backend app + syncManagerConfig.
+  8. **Дубли валидации/утилит:** `isCurrency/parseCurrency/hasPriceInput/renderIcon/getFaviconUrl/createResolveAuthorName` вынесены в shared и переиспользованы; невалидная валюта → `VALIDATION_ERROR` (вместо тихого игнора).
+  9. **`isInternalOrigin`:** заменён на core `evaluateMcpNetworkAccess`/CIDR (с DNS-резолвом и более полными диапазонами).
+  10. **Дубли констант/схем:** единый `[...DEFAULT_MCP_PRIVATE_CIDRS]`; `createToolsDisabledSchema`; канонические `projectMcpUpdateSchema`/`sessionMcp*` в shared; удалены мёртвые `projectMcpSettingsSchema`, `ToolsDisabledRequest`, `StreamUsagePayload`.
+  11. **RBAC/доступ:** `/prompt`, `/stats`, `/status` закрыты guard'ом владелец/ADMIN; `isAdmin` → `hasRole`.
+  12. **`events/hub`:** типизированные payload-интерфейсы вместо магических ключей `unknown`.
+  13. **Ядро/движок:** удалены мёртвые `filterByCapabilities`, `TaskExtra.sessionSettings`, `McpScopeDecision.enabledByDefault`, `getNetworkPolicy`/`getServerInfo`/`McpServerInfo`, `ContextBuilder.buildSystemPrompt`, класс `PayloadLogger`; сняты лишние публичные экспорты `network-policy`; вынесены `tool-execution.ts` (`buildDenyResult`/`executeToolDef`), `_poolGatewayFactory`, `_resolveMcpServerStatus`, `_buildToolSelection`/`_buildComposerContext`, общий `estimatePromptChars`; `dataDir`-заглушка, `_classifyError`, неиспользуемый `_publishChunk`, двойной каст `reasoning` убраны; `doomCount` → `MAX_DOOM_LOOP_COUNT`; кеширование `_estimatePromptChars`/`_computeMessageCost`/`_loadTokenRatio` за ход; `/4` → `estimateTokens(ratio)`; `[CLASSIFICATION]` вынесен в prompt-ассеты; проект читается один раз и передаётся в Composer.
+  14. **Провайдеры:** Ollama-пробы контекста — батчи по 6 с общим дедлайном 20 с (вместо 50 последовательных); `clearTimeout` в `finally` во всех местах; общий `fetchModelsCatalog` в `base.ts`.
+  15. **UI:** единый `formatMoney`/`formatCostMap` (неизвестная валюта — кодом, не `$`); live-сабагенты считаются `costByCurrency` (без смешивания валют); единый источник локали (`useI18nStore`); удалён write-only `MicroFirstDefaults`; весь API через `synthApi` (в т.ч. 14 мест `/api/v2` литералами); `SessionSettingsTab` — i18n + Kit-контролы; дедуп MCP-панелей (`McpRegistryForm`+`useMcpRegistryEditor`); `key={index}`→стабильные ключи; debounce/timer cleanup; `ProviderIcon`→`describeProviderIcon`; прямые мутации zustand→экшены; мёртвые методы `synthApi`, Kit-пропсы и экспорты удалены; i18n ошибок сторов; parity-тест en↔ru; общие `InfoSection`/`InfoField`/`ModelPairSelect`/`ExpandToggle`; `resetChatStore` тест-хелпер.
+- **Верификация (оркестратор, последовательно):**
+  - `pnpm typecheck` — 6/6 пакетов Done, 0 ошибок.
+  - `pnpm lint` — 0 ошибок (107/147/33 warning — предсуществующие `any` вcore/backend/ui).
+  - `pnpm test` — shared 91, **core 1659**, **ui 602**, **backend 294**, runner без тестов — все PASS.
+  - `pnpm build` — все 6 пакетов успешно (vite UI + tsup CLI).
+- **Осталось (сознательно не сделано в этой итерации):**
+  - **Полная дедупликация роутеров backend↔core** (`providers/models/sessions`) на уровне хендлеров — убраны утилиты/`resolveAuthorName`, но сами роуты остаются форками (риск для RBAC/контрактов; нужна отдельная задача с фабрикой `registerCore*Routes` и сохранением `requireAuth`/`requireAdmin`).
+  - Обновление `AGENTS.md` пакетов `backend`/`core` (устаревшие упоминания `lib/serialize`, `lib/mcp-config-store`) — по инварианту 15 правки инструкций согласовываются с пользователем.
+- **Коммит:** нет (правки в рабочем дереве, по требованию пользователя коммиты не делались). Ветка: `feat/ad-071-mcp-tools-scope`.
+

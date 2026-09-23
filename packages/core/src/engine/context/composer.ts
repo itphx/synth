@@ -112,6 +112,12 @@ export interface ComposerContext {
   stickyNotes?: StickyNote[];
   summaryContent?: string;
   /**
+   * AD-071 §2.4: уже загруженный проект сессии (носитель project-скоупа MCP
+   * и данных `session.info`). Если задан (в т.ч. `null`) — Composer не читает
+   * хранилище повторно; иначе — fallback на `projectStore.load`.
+   */
+  project?: Project | null;
+  /**
    * AD-070 §2.5 + AD-071 §2.1: описания **встроенных** инструментов, реально
    * уходящие в запрос (слой `tools`, stable). Учитываются только в манифесте
    * (`tools → system → messages`), в system-текст `compose()` не входят.
@@ -350,13 +356,19 @@ export class SystemPromptComposer {
           summaryContent: ctx.summaryContent,
         });
 
-    // Проект загружается один раз для session.info.
-    let project: Project | null = null;
-    if (session.projectId && this._projectStore) {
-      try {
-        project = await this._projectStore.load(session.projectId);
-      } catch {
-        project = null;
+    // Проект: используем уже загруженный вызывающей стороной (AD-071 §2.4);
+    // `projectStore` — fallback при отсутствии переданного значения.
+    let project: Project | null;
+    if (ctx.project !== undefined) {
+      project = ctx.project;
+    } else {
+      project = null;
+      if (session.projectId && this._projectStore) {
+        try {
+          project = await this._projectStore.load(session.projectId);
+        } catch {
+          project = null;
+        }
       }
     }
 
@@ -435,13 +447,14 @@ export class SystemPromptComposer {
     }
 
     // AD-034: инструкция classify_conversation — config-gate routingEnabled (volatile).
+    // Текст — prompt-ассет prompts/system/CLASSIFICATION.{lang}.md (переопределяемый).
     if (ctx.routingEnabled) {
       extraBlocks.push({
         key: 'classification',
         tier: 'volatile',
         order: 80,
-        content: this._classificationInstruction(lang),
-        provenance: 'inline',
+        content: this._contextConfig?.getClassificationInstructions(lang) ?? '',
+        provenance: 'prompts/system/CLASSIFICATION',
       });
     }
 
@@ -458,25 +471,11 @@ export class SystemPromptComposer {
   }
 
   /**
-   * AD-036: GATEWAY-инструкция. Приоритет — ContextConfig; если он не передан,
-   * используется делегирующий метод ContextBuilder (сохранение поведения).
+   * AD-036: GATEWAY-инструкция — делегирует ContextBuilder (тот читает
+   * prompts/system/GATEWAY.{lang}.md через ContextConfig).
    */
   private _getGatewayInstructions(lang: string): string {
-    const fromConfig = this._contextConfig?.getGatewayInstructions(lang);
-    if (fromConfig) return fromConfig;
-    const builder = this._contextBuilder as unknown as {
-      getGatewayInstructions?: (language: string) => string;
-    };
-    return typeof builder.getGatewayInstructions === 'function'
-      ? builder.getGatewayInstructions(lang)
-      : '';
-  }
-
-  /** AD-034: inline-инструкция классификации (ru/en), перенесена из оркестратора. */
-  private _classificationInstruction(lang: string): string {
-    return lang === 'ru'
-      ? '[CLASSIFICATION]\n\nКогда определишь характер задачи, вызови инструмент `classify_conversation` с категорией: coding (написание/изменение кода), research (анализ/исследование), или chat (общий разговор). Это поможет выбрать оптимальную модель для последующих запросов.'
-      : '[CLASSIFICATION]\n\nWhen you determine the nature of the task, call the `classify_conversation` tool with the category: coding (writing/modifying code), research (analysis/investigation), or chat (general conversation). This helps select the optimal model for subsequent requests.';
+    return this._contextBuilder.getGatewayInstructions(lang);
   }
 
   /**

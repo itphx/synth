@@ -23,7 +23,7 @@
 | `QueueProcessorManager`, `enqueueUserMessage` | очередь сообщений |
 | `ContextConfig`, `ContextBuilder`, `ContextOptimizer` | контекст и его оптимизация |
 | `ChatOrchestrator` | оркестрация LLM, tools, permissions |
-| `McpManager` | MCP-серверы |
+| `McpManager`, `McpRegistryStore` | MCP-серверы: менеджер + единый реестр (AD-071) |
 | `RuntimeSettingsStore`, `createSettingsRoutes` | эндпоинты `/api/v2/settings` (workspace/mcp) |
 | `DictionaryStore`, `createDictionaryRoutes` | эндпоинты `/api/v2/dictionaries` |
 | `FileProfileStore` | профили пользователей (seed test-users при debug) |
@@ -33,7 +33,7 @@
 
 - `src/app.ts` — фабрика `createBackendApp()`; `src/main.ts` — listen и graceful shutdown.
 - `src/routes/*` — Hono-роутеры; `src/auth/*` — middleware и OIDC; `src/events/hub.ts` — `EventHub`.
-- `src/lib/*` — конфиг, i18n, git-service, workspace-resolver, serialize, defaults/mcp stores.
+- `src/lib/*` — `app-config` (конфиг), `defaults-store` (умолчания оформления), `git-service`, `i18n`, `workspace-resolver`.
 - `src/storage/*` — `JsonStore` (providers/models/agents) и `ProjectStore`.
 - `src/middleware/rate-limiter.ts` — единственный middleware пакета.
 - `src/agents/definitions/*.json` — определения агентов (ассеты, копируются в `dist`).
@@ -110,6 +110,7 @@
 - `buildAuthConfig` читает `SYNTH_AUTH_DEBUG`, `SYNTH_API_KEY`, `SYNTH_OIDC_*`, `SYNTH_SESSION_MAX_AGE`, `SYNTH_TEST_*_KEY`; тестовые пользователи — только при debug.
 - `SYNTH_PROVIDER_*_API_KEY|URL|MODEL|TYPE` синхронизируются в `JsonStore` провайдеров/моделей при старте (`syncProvidersFromEnv`).
 - `packages/backend/config.yaml` содержит только `mcp.servers`; остальной конфиг ищется каскадно (`findConfigPath`). В dev `dev.sh` задаёт `SYNTH_CONFIG` на этот файл (если он существует), поэтому `mcp.servers` подхватываются; `loadConfig` учитывает `SYNTH_CONFIG` (AD-023).
+- При старте `mcp.servers` из config сидируются в `McpRegistryStore` — единственный источник истины MCP (AD-071). Legacy-роуты `/api/v2/mcp/servers*` и `/mcp/session/:id` — тонкие адаптеры над реестром; собственного хранилища MCP-конфига (`YamlMcpConfigStore`/`McpConfigStore`) в backend больше нет.
 - Сообщения ошибок — через `t()` из `src/lib/i18n.js`; язык `/api/v2/i18n/current` определяется по `Accept-Language` (inline в `app.ts`).
 
 ## Тесты и запуск

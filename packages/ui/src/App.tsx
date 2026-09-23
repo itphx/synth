@@ -48,7 +48,6 @@ function DefaultsSync() {
       useUIStore.setState({
         theme: DEFAULT_THEME,
         themeMode: DEFAULT_THEME_MODE,
-        locale: DEFAULT_LOCALE,
       })
       useI18nStore.getState().setLocale(DEFAULT_LOCALE)
       return
@@ -60,11 +59,9 @@ function DefaultsSync() {
         useUIStore.setState({
           theme: prefs.theme || DEFAULT_THEME,
           themeMode: prefs.themeMode || DEFAULT_THEME_MODE,
-          locale: prefs.locale || DEFAULT_LOCALE,
         })
-        if (prefs.locale) {
-          useI18nStore.getState().setLocale(prefs.locale)
-        }
+        // Язык — единственный источник истины `useI18nStore` (персистится).
+        useI18nStore.getState().setLocale(prefs.locale || DEFAULT_LOCALE)
       }
 
       const defaults = await profileService.getDefaults()

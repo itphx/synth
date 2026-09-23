@@ -13,20 +13,12 @@ export interface SettingsPanelProps {
    */
   meta?: React.ReactNode
   actions?: React.ReactNode
-  footer?: React.ReactNode
-  /**
-   * `fixed` — футер вне scroll-тела (остаётся видимым при прокрутке),
-   * `sticky` — футер в конце scroll-тела, «прилипает» к низу.
-   */
-  footerVariant?: 'fixed' | 'sticky'
   /**
    * На не-десктопе при прокрутке тела сворачивать описание шапки
    * (заголовок, `meta` и `actions` остаются). На десктопе описание видно всегда.
    */
   collapsibleHeader?: boolean
   className?: string
-  /** Дополнительные классы внутренней центрированной обёртки контента. */
-  contentClassName?: string
   children: React.ReactNode
 }
 
@@ -44,11 +36,8 @@ export function SettingsPanel({
   description,
   meta,
   actions,
-  footer,
-  footerVariant = 'fixed',
   collapsibleHeader = true,
   className,
-  contentClassName,
   children,
 }: SettingsPanelProps) {
   const { deviceType } = useDevice()
@@ -126,21 +115,10 @@ export function SettingsPanel({
           collapsed ? 'mt-2' : 'mt-4',
         )}
       >
-        <div className={cn('space-y-4', CONTENT_WIDTH, contentClassName)}>
+        <div className={cn('space-y-4', CONTENT_WIDTH)}>
           {children}
-          {footerVariant === 'sticky' && footer && (
-            <div className="sticky bottom-0 -mx-1 px-1 pt-3 pb-1 bg-background/95 backdrop-blur border-t border-border">
-              {footer}
-            </div>
-          )}
         </div>
       </div>
-
-      {footerVariant === 'fixed' && footer && (
-        <div className="shrink-0 border-t border-border bg-background pt-4 mt-4">
-          <div className={CONTENT_WIDTH}>{footer}</div>
-        </div>
-      )}
     </div>
   )
 }

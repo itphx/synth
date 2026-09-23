@@ -14,6 +14,7 @@ vi.mock('@/hooks/useNotification', () => ({
 
 import { createDispatcher } from './transportStore'
 import { useChatStore } from './chatStore'
+import { resetChatStore } from './testUtils'
 import type { MessageData } from './chatStore'
 import type { WSEvent } from '@/lib/api/transport'
 
@@ -21,21 +22,6 @@ const dispatch = createDispatcher()
 
 function makeEvent(type: string, sessionId: string, data: Record<string, unknown>): WSEvent {
   return { type, session_id: sessionId, data }
-}
-
-const EMPTY_STORE = {
-  messagesBySession: {},
-  streamingBySession: {},
-  queueBySession: {},
-  pendingBySession: {},
-  errorBySession: {},
-  retryBySession: {},
-  subagentRetryBySession: {},
-  subagentResumingBySession: {},
-  finalErrorBySession: {},
-  stickyNotesBySession: {},
-  summarizationPendingBySession: {},
-  liveSubagentUsageBySession: {},
 }
 
 function makeAssistantMessage(streamId: string): MessageData {
@@ -53,7 +39,7 @@ function makeAssistantMessage(streamId: string): MessageData {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  useChatStore.setState(EMPTY_STORE as Partial<ReturnType<typeof useChatStore.getState>>)
+  resetChatStore()
 })
 
 describe('transportStore dispatcher: stream.usage (AD-070 §2.6)', () => {

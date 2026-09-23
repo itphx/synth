@@ -9,7 +9,6 @@ const mockClientDisconnect = vi.fn<() => Promise<void>>();
 const mockClientCallTool = vi.fn<() => Promise<{ content: string; isError: boolean }>>();
 let mockClientTools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> = [];
 let mockClientConnected = false;
-let mockClientServerInfo: { name: string; version: string } | undefined;
 let mockClientInstructions: string | undefined;
 
 vi.mock('./client.js', () => ({
@@ -23,9 +22,6 @@ vi.mock('./client.js', () => ({
     }
     get tools(): Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> {
       return mockClientTools;
-    }
-    get serverInfo(): { name: string; version: string } | undefined {
-      return mockClientServerInfo;
     }
     get instructions(): string | undefined {
       return mockClientInstructions;
@@ -61,14 +57,6 @@ function makeMockToolRegistry(): ToolRegistry {
     list() {
       return [...tools.values()];
     },
-    filterByCapabilities(_caps: ToolCapability[]) {
-      return [...tools.values()].map((t) => ({
-        name: t.name,
-        description: t.description,
-        parameters: t.parameters,
-        capabilities: t.capabilities,
-      }));
-    },
     toLLMFormat() {
       return [];
     },
@@ -103,7 +91,6 @@ describe('McpManager', () => {
       { name: 'tool2', description: 'Second tool', inputSchema: { type: 'object' } },
     ];
     mockClientConnected = false;
-    mockClientServerInfo = { name: 'test-server', version: '1.2.3' };
     mockClientInstructions = 'Инструкции сервера';
 
     manager = new McpManager();
@@ -293,14 +280,12 @@ describe('McpManager', () => {
     expect(manager.getServerDescription('unknown')).toBeUndefined();
   });
 
-  it('AD-071 §2.2: getServerInfo/getServerInstructions после подключения', async () => {
+  it('AD-071 §2.2: getServerInstructions после подключения', async () => {
     mockClientConnected = true;
     await manager.connectServer('test-server');
 
-    expect(manager.getServerInfo('test-server')).toEqual({ name: 'test-server', version: '1.2.3' });
     expect(manager.getServerInstructions('test-server')).toBe('Инструкции сервера');
     // До подключения — undefined.
-    expect(manager.getServerInfo('unknown')).toBeUndefined();
     expect(manager.getServerInstructions('unknown')).toBeUndefined();
   });
 

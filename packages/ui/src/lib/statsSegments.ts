@@ -1,9 +1,9 @@
-import { formatCost, formatTokens } from './formatStats'
+import { cacheHitPct, formatCost, formatTokens } from './formatStats'
 import type { I18nKey, I18nParams } from './i18n/store'
 
 type Translate = (key: I18nKey, params?: I18nParams) => string
 
-export interface UsageLike {
+interface UsageLike {
   input_tokens: number
   output_tokens: number
   total_tokens: number
@@ -12,7 +12,7 @@ export interface UsageLike {
   reasoning_tokens?: number
 }
 
-export interface UsageStatsData {
+interface UsageStatsData {
   usage?: UsageLike | null
   costUsd?: number
   /** Валюта `costUsd` (C2a); отсутствует/неизвестна → USD. */
@@ -43,7 +43,7 @@ export function buildUsageSegments(data: UsageStatsData, t: Translate): string[]
 
   const inputTokens = usage?.input_tokens ?? 0
   if (inputTokens > 0) {
-    const pct = Math.round(((usage?.cache_read_tokens ?? 0) / inputTokens) * 100)
+    const pct = cacheHitPct(usage?.cache_read_tokens, inputTokens)
     segments.push(t('chat.messageStats.cache', { pct: `${pct}%` }))
   }
 

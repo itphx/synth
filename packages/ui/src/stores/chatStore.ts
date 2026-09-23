@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { StickyNoteData } from '@/lib/api/synthApi'
+import { costCurrencyKey } from '@/lib/currency'
 
 export type DebugData = Record<string, unknown>;
 
@@ -109,9 +110,12 @@ export interface LiveSubagentCallUsage {
 /** AD-070 §2.6: live-вклад саб-агентов сессии (агрегат + разбивка по вызовам). */
 export interface LiveSubagentSessionUsage {
   usage: UsageData
+  /** Номинальная сумма вкладов (обратная совместимость); валюты не смешиваются — см. `costByCurrency`. */
   costUsd?: number
   /** C2a: валюта агрегата; не задаётся, если вызовы в разных валютах. */
   costCurrency?: string
+  /** C2b: разбивка стоимости агрегата по валютам (код → сумма). */
+  costByCurrency?: Record<string, number>
   estimated: boolean
   byCall: Record<string, LiveSubagentCallUsage>
 }
@@ -166,17 +170,6 @@ export interface StreamDoneMetadata {
   usage_estimated?: boolean
   /** AD-070 §2.6: провайдер финального ответа (stream.done.provider). */
   provider?: string
-}
-
-export interface StreamError {
-  streamId: string
-  error: string
-  errorType: string
-  retryIn?: number
-  retryCount: number
-  maxRetries: number
-  canRetry: boolean
-  userCanRetry?: boolean
 }
 
 /** Статус повторной попытки (событие stream.retry): «Повторная попытка N/MAX через X сек». */
@@ -248,13 +241,60 @@ function isUsageOnlyStream(st: StreamState | undefined): boolean {
   return !!st && !st.hasContent && st.content.length === 0 && st.toolCalls.length === 0
 }
 
+/**
+ * AD-070 §2.6: накопление reasoning-блоков по итерациям. Внутри одной итерации
+ * более длинный текст заменяет предыдущий; новая итерация — отдельный блок.
+ */
+function appendReasoningBlock(
+  blocks: ReasoningBlockData[],
+  text: string,
+  iteration: number,
+): ReasoningBlockData[] {
+  if (!text || !text.trim()) return blocks
+  if (blocks.length === 0) return [{ text, iteration }]
+  const last = blocks[blocks.length - 1]!
+  if (last.iteration === iteration && text.length >= last.text.length) {
+    return [...blocks.slice(0, -1), { ...last, text }]
+  }
+  return [...blocks, { text, iteration }]
+}
+
+/** AD-070 §2.6: накопление промежуточного текста; в итерации текст перезаписывается. */
+function appendIntermediateBlock(
+  blocks: IntermediateTextBlockData[],
+  text: string,
+  iteration: number,
+): IntermediateTextBlockData[] {
+  if (!text || !text.trim()) return blocks
+  const last = blocks[blocks.length - 1]
+  if (last && last.iteration === iteration) {
+    return [...blocks.slice(0, -1), { ...last, text }]
+  }
+  return [...blocks, { text, iteration }]
+}
+
+type MessageToolCall = NonNullable<MessageData['tool_calls']>[number]
+
+/** Live-вызовы (`LiveToolCall`) → сохраняемая форма сообщения (`tool_calls`). */
+function mapLiveToolCalls(toolCalls: LiveToolCall[]): MessageToolCall[] | null {
+  if (toolCalls.length === 0) return null
+  return toolCalls.map((tc) => ({
+    name: tc.name,
+    args: tc.args,
+    id: tc.callId,
+    result: tc.result,
+    started_at: tc.startedAt,
+    completed_at: tc.completedAt,
+    iteration: tc.iteration,
+  }))
+}
+
 interface ChatStore {
   messagesBySession: Record<string, MessageData[]>
   streamFinishTickBySession: Record<string, number>
   streamingBySession: Record<string, Record<string, StreamState>>
   queueBySession: Record<string, QueueState>
   pendingBySession: Record<string, QueuedMessage[]>
-  errorBySession: Record<string, StreamError | null>
   retryBySession: Record<string, StreamRetry | null>
   subagentRetryBySession: Record<string, SubagentRetryState | null>
   subagentResumingBySession: Record<string, SubagentResumeState | null>
@@ -304,8 +344,6 @@ interface ChatStore {
     costBreakdown?: CostBreakdown
     usageEstimated?: boolean
   }) => void
-  addStreamError: (sessionId: string, error: StreamError) => void
-  clearStreamError: (sessionId: string) => void
   setStreamRetry: (sessionId: string, retry: StreamRetry | null) => void
   setStreamRetrying: (sessionId: string, streamId: string, isRetrying: boolean) => void
   setSubagentRetry: (sessionId: string, retry: SubagentRetryState | null) => void
@@ -345,7 +383,6 @@ export const useChatStore = create<ChatStore>((set) => ({
   streamingBySession: {},
   queueBySession: {},
   pendingBySession: {},
-  errorBySession: {},
   retryBySession: {},
   subagentRetryBySession: {},
   subagentResumingBySession: {},
@@ -397,20 +434,11 @@ export const useChatStore = create<ChatStore>((set) => ({
       const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
       const existing = sessionStreams[streamId]
       if (!existing) return s
-      let nextBlocks = existing.reasoningBlocks
-      if (reasoning && reasoning.trim()) {
-        const iter = iteration ?? existing.toolIteration
-        if (nextBlocks.length === 0) {
-          nextBlocks = [{ text: reasoning, iteration: iter }];
-        } else {
-          const last = nextBlocks[nextBlocks.length - 1]!;
-          if (last.iteration === iter && reasoning.length >= last.text.length) {
-            nextBlocks = [...nextBlocks.slice(0, -1), { ...last, text: reasoning }];
-          } else {
-            nextBlocks = [...nextBlocks, { text: reasoning, iteration: iter }];
-          }
-        }
-      }
+      const nextBlocks = appendReasoningBlock(
+        existing.reasoningBlocks,
+        reasoning,
+        iteration ?? existing.toolIteration,
+      )
       const nextHasContent = existing.hasContent
         || (typeof content === 'string' && content.length > 0)
         || (typeof reasoning === 'string' && reasoning.trim().length > 0)
@@ -519,8 +547,9 @@ export const useChatStore = create<ChatStore>((set) => ({
       let cost = 0
       let anyCost = false
       let anyEstimated = false
-      let costCurrency: string | undefined
-      let currencyConflict = false
+      // C2b: не смешиваем валюты — копим раздельно по кодам, номинальная сумма
+      // (`costUsd`) остаётся для обратной совместимости.
+      const costByCurrency: Record<string, number> = {}
       for (const call of Object.values(byCall)) {
         input += call.usage.input_tokens || 0
         output += call.usage.output_tokens || 0
@@ -531,13 +560,13 @@ export const useChatStore = create<ChatStore>((set) => ({
         if (call.costUsd !== undefined) {
           cost += call.costUsd
           anyCost = true
-          if (call.costCurrency !== undefined) {
-            if (costCurrency === undefined) costCurrency = call.costCurrency
-            else if (costCurrency !== call.costCurrency) currencyConflict = true
-          }
+          const key = costCurrencyKey(call.costCurrency)
+          costByCurrency[key] = (costByCurrency[key] ?? 0) + call.costUsd
         }
         if (call.estimated) anyEstimated = true
       }
+      const currencies = Object.keys(costByCurrency)
+      const costCurrency = currencies.length === 1 ? currencies[0] : undefined
 
       return {
         liveSubagentUsageBySession: {
@@ -552,7 +581,8 @@ export const useChatStore = create<ChatStore>((set) => ({
               reasoning_tokens: reasoning,
             },
             ...(anyCost ? { costUsd: cost } : {}),
-            ...(costCurrency !== undefined && !currencyConflict ? { costCurrency } : {}),
+            ...(costCurrency !== undefined ? { costCurrency } : {}),
+            ...(currencies.length > 0 ? { costByCurrency } : {}),
             estimated: anyEstimated,
             byCall,
           },
@@ -611,33 +641,19 @@ export const useChatStore = create<ChatStore>((set) => ({
       const tc = existing.toolCalls[idx]!
       const updated = [...existing.toolCalls]
 
+      const iter = patch.iteration ?? 0
       // Размышления саб-агента: накапливаем по итерациям (как reasoningBlocks основного стрима).
-      let reasoningBlocks = tc.subagentReasoningBlocks ? [...tc.subagentReasoningBlocks] : []
-      if (patch.reasoning && patch.reasoning.trim()) {
-        const iter = patch.iteration ?? 0
-        if (reasoningBlocks.length === 0) {
-          reasoningBlocks = [{ text: patch.reasoning, iteration: iter }]
-        } else {
-          const last = reasoningBlocks[reasoningBlocks.length - 1]!
-          if (last.iteration === iter && patch.reasoning.length >= last.text.length) {
-            reasoningBlocks = [...reasoningBlocks.slice(0, -1), { ...last, text: patch.reasoning }]
-          } else {
-            reasoningBlocks = [...reasoningBlocks, { text: patch.reasoning, iteration: iter }]
-          }
-        }
-      }
-
+      const reasoningBlocks = appendReasoningBlock(
+        tc.subagentReasoningBlocks ?? [],
+        patch.reasoning ?? '',
+        iter,
+      )
       // Промежуточный текст саб-агента.
-      let intermediateTextBlocks = tc.subagentIntermediateTextBlocks ? [...tc.subagentIntermediateTextBlocks] : []
-      if (patch.content && patch.content.trim()) {
-        const iter = patch.iteration ?? 0
-        const lastText = intermediateTextBlocks[intermediateTextBlocks.length - 1]
-        if (lastText && lastText.iteration === iter) {
-          intermediateTextBlocks = [...intermediateTextBlocks.slice(0, -1), { ...lastText, text: patch.content }]
-        } else {
-          intermediateTextBlocks = [...intermediateTextBlocks, { text: patch.content, iteration: iter }]
-        }
-      }
+      const intermediateTextBlocks = appendIntermediateBlock(
+        tc.subagentIntermediateTextBlocks ?? [],
+        patch.content ?? '',
+        iter,
+      )
 
       updated[idx] = { ...tc, subagentReasoningBlocks: reasoningBlocks, subagentIntermediateTextBlocks: intermediateTextBlocks }
       sessionStreams[streamId] = { ...existing, toolCalls: updated }
@@ -734,17 +750,7 @@ export const useChatStore = create<ChatStore>((set) => ({
           debug_data: metadata.debug_info || undefined,
           summary_of: metadata.metadata?.indices || null,
           metadata: statusMetadata,
-          tool_calls: streamState.toolCalls.length > 0
-            ? streamState.toolCalls.map((tc) => ({
-                name: tc.name,
-                args: tc.args,
-                id: tc.callId,
-                result: tc.result,
-                started_at: tc.startedAt,
-                completed_at: tc.completedAt,
-                iteration: tc.iteration,
-              }))
-            : null,
+          tool_calls: mapLiveToolCalls(streamState.toolCalls),
           disabled: false,
           pinned: false,
           hidden: false,
@@ -770,17 +776,7 @@ export const useChatStore = create<ChatStore>((set) => ({
             metadata: statusMetadata
               ? { ...(msgs[existingIdx]!.metadata || {}), ...statusMetadata }
               : msgs[existingIdx]!.metadata,
-            tool_calls: streamState.toolCalls.length > 0
-              ? streamState.toolCalls.map((tc) => ({
-                  name: tc.name,
-                  args: tc.args,
-                  id: tc.callId,
-                  result: tc.result,
-                  started_at: tc.startedAt,
-                  completed_at: tc.completedAt,
-                  iteration: tc.iteration,
-                }))
-              : msgs[existingIdx]!.tool_calls,
+            tool_calls: mapLiveToolCalls(streamState.toolCalls) ?? msgs[existingIdx]!.tool_calls,
           }
         } else {
           msgs.push(newMsg)
@@ -858,16 +854,6 @@ export const useChatStore = create<ChatStore>((set) => ({
         liveSubagentUsageBySession,
       }
     }),
-
-  addStreamError: (sessionId, error) =>
-    set((s) => ({
-      errorBySession: { ...s.errorBySession, [sessionId]: error },
-    })),
-
-  clearStreamError: (sessionId) =>
-    set((s) => ({
-      errorBySession: { ...s.errorBySession, [sessionId]: null },
-    })),
 
   setStreamRetry: (sessionId, retry) =>
     set((s) => ({
@@ -981,8 +967,6 @@ export const useChatStore = create<ChatStore>((set) => ({
       delete queueBySession[sessionId]
       const pendingBySession = { ...s.pendingBySession }
       delete pendingBySession[sessionId]
-      const errorBySession = { ...s.errorBySession }
-      delete errorBySession[sessionId]
       const retryBySession = { ...s.retryBySession }
       delete retryBySession[sessionId]
       const subagentRetryBySession = { ...s.subagentRetryBySession }
@@ -993,7 +977,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       delete finalErrorBySession[sessionId]
       const liveSubagentUsageBySession = { ...s.liveSubagentUsageBySession }
       delete liveSubagentUsageBySession[sessionId]
-      return { messagesBySession, streamingBySession, queueBySession, pendingBySession, errorBySession, retryBySession, subagentRetryBySession, subagentResumingBySession, finalErrorBySession, liveSubagentUsageBySession }
+      return { messagesBySession, streamingBySession, queueBySession, pendingBySession, retryBySession, subagentRetryBySession, subagentResumingBySession, finalErrorBySession, liveSubagentUsageBySession }
     }),
 
   setStickyNotes: (sessionId, notes) =>

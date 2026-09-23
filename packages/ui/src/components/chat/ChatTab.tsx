@@ -198,7 +198,6 @@ export function ChatTab({ tab }: ChatTabProps) {
 
       try {
         const { selectedModelName, selectedProviderName } = useProvidersStore.getState()
-        useChatStore.getState().clearStreamError(sessionId)
         useChatStore.getState().setStreamRetry(sessionId, null)
         await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined)
         notify({ text: t('chat.message.sent'), type: 'info', category: 'message', sessionId })

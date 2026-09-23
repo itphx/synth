@@ -6,14 +6,8 @@ import { loadRoutingDefaults, routingDefaultsToSettings } from '@/lib/routingDef
 import { useUIStore } from './useUIStore'
 import { useChatStore } from './chatStore'
 import { isTransportConnected } from './transportStore'
-import { useI18nStore, formatMessage } from '@/lib/i18n/store'
+import { i18nText } from '@/lib/i18n/text'
 import { confirm } from '@/lib/confirm'
-
-/** Локализованная строка вне React (для confirm-диалога в сторах). */
-function i18nText(key: string): string {
-  const { dictionary, locale } = useI18nStore.getState()
-  return formatMessage(dictionary, key, undefined, locale)
-}
 
 interface SessionsStore {
   sessions: SessionData[]

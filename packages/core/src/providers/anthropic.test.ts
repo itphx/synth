@@ -437,6 +437,7 @@ describe('AnthropicProvider — ошибки прокси (AD-041)', () => {
 describe('AnthropicProvider — listModelsDetailed', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   function jsonResponse(payload: unknown): Response {
@@ -514,5 +515,14 @@ describe('AnthropicProvider — listModelsDetailed', () => {
 
     const provider = new AnthropicProvider(baseParams);
     await expect(provider.listModelsDetailed()).resolves.toEqual([]);
+  });
+
+  it('сетевой сбой не оставляет активный таймер (try/finally)', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network')));
+
+    const provider = new AnthropicProvider(baseParams);
+    await expect(provider.listModelsDetailed()).resolves.toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -2,7 +2,7 @@ import { Fragment } from 'react'
 import type { MessageData, MessageStatus } from '@/stores/chatStore'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
-import { formatCostMap, formatDuration, formatTokens, formatTps } from '@/lib/formatStats'
+import { formatCostMap, formatDuration, formatTokens, formatTps, tokensPerSecond } from '@/lib/formatStats'
 import { buildUsageSegments } from '@/lib/statsSegments'
 import { readMessageSubagents } from '@/lib/subagentStats'
 
@@ -111,9 +111,9 @@ export function MessageStats({ message, className }: MessageStatsProps) {
   // AD-070 §2.6: общий с live-строкой стрима билдер сегментов usage/cost/cache.
   segments.push(...buildUsageSegments({ usage, costUsd, costCurrency, tokenPrefix }, t))
 
-  if (durationMs !== undefined && durationMs > 0 && usage) {
-    const tps = (usage.output_tokens ?? 0) / (durationMs / 1000)
-    segments.push(t('chat.messageStats.speed', { speed: formatTps(tps) }))
+  if (usage) {
+    const tps = tokensPerSecond(usage.output_tokens, durationMs)
+    if (tps !== undefined) segments.push(t('chat.messageStats.speed', { speed: formatTps(tps) }))
   }
 
   // AD-070 §2.6: отдельная (вторая) строка статистики сабагентов этого хода.

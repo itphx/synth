@@ -59,17 +59,22 @@ export const ModelsPanel = () => {
 
   useEffect(() => { load() }, [load])
 
+  // Debounce-таймеры сохранения цен: чистим при размонтировании, чтобы
+  // отложенный колбэк не дёрнул setState/API после ухода панели.
+  useEffect(() => {
+    const timers = debounceTimers.current
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer)
+      timers.clear()
+    }
+  }, [])
+
   const handleFetch = async (providerName?: string) => {
     setFetching(providerName || 'all')
     setFetchMsg('')
     setFetchError('')
     try {
-      const url = providerName
-        ? `/api/v2/models/fetch?provider=${encodeURIComponent(providerName)}`
-        : '/api/v2/models/fetch'
-      const data = await synthApi.fetchJSON<{ fetched: number; new: number; enriched: number; priced?: number; limited?: number; errors?: string[] }>(
-        url, { method: 'POST' },
-      )
+      const data = await synthApi.fetchModels(providerName)
       const parts = [t('admin.models.syncResult', { fetched: data.fetched })]
       if (data.new > 0) parts.push(t('admin.models.newModels', { count: data.new }))
       if (data.enriched > 0) parts.push(t('admin.models.enriched', { count: data.enriched }))
@@ -89,10 +94,7 @@ export const ModelsPanel = () => {
 
   const saveModel = async (modelId: string, updates: Partial<ModelInfo>) => {
     try {
-      await synthApi.fetchJSON('/api/v2/models', {
-        method: 'POST',
-        body: JSON.stringify({ id: modelId, ...updates }),
-      })
+      await synthApi.saveModel({ id: modelId, ...updates })
     } catch { /* ignore */ }
   }
 
@@ -131,10 +133,7 @@ export const ModelsPanel = () => {
       })
     )
     try {
-      await synthApi.fetchJSON('/api/v2/models', {
-        method: 'POST',
-        body: JSON.stringify({ id: model.id, provider: model.provider, set_as_default: true }),
-      })
+      await synthApi.saveModel({ id: model.id, provider: model.provider, set_as_default: true })
     } catch { /* ignore */ }
   }
 
@@ -172,10 +171,7 @@ export const ModelsPanel = () => {
           cacheReadPrice: 'cache_read_price',
           cacheWritePrice: 'cache_write_price',
         }
-        await synthApi.fetchJSON('/api/v2/models', {
-          method: 'POST',
-          body: JSON.stringify({ id: modelId, [fieldMap[field]]: num }),
-        })
+        await synthApi.saveModel({ id: modelId, [fieldMap[field]!]: num })
         // Refresh model data
         setGroups((prev) =>
           prev.map((g) => ({
@@ -211,13 +207,10 @@ export const ModelsPanel = () => {
     )
 
     try {
-      await synthApi.fetchJSON('/api/v2/models', {
-        method: 'POST',
-        body: JSON.stringify({
-          id: model.id,
-          context_window: contextWindow,
-          context_source: contextSource,
-        }),
+      await synthApi.saveModel({
+        id: model.id,
+        context_window: contextWindow,
+        context_source: contextSource,
       })
     } catch { /* ignore */ }
   }
@@ -225,7 +218,7 @@ export const ModelsPanel = () => {
   const handleDelete = async (modelId: string) => {
     if (!(await confirm({ title: t('admin.models.confirmDelete', { id: modelId }), variant: 'danger' }))) return
     try {
-      await synthApi.fetchJSON(`/api/v2/models/${encodeURIComponent(modelId)}`, { method: 'DELETE' })
+      await synthApi.deleteModel(modelId)
       await load()
     } catch { /* ignore */ }
   }
@@ -252,10 +245,7 @@ export const ModelsPanel = () => {
       if (addInPrice !== '') { const v = parseFloat(addInPrice); if (!isNaN(v)) body.input_price = v }
       if (addOutPrice !== '') { const v = parseFloat(addOutPrice); if (!isNaN(v)) body.output_price = v }
 
-      await synthApi.fetchJSON('/api/v2/models', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      })
+      await synthApi.saveModel(body)
       setShowAddForm(false)
       setAddName('')
       setAddCtx('')
@@ -293,7 +283,7 @@ export const ModelsPanel = () => {
 
   const formatPrice = (price?: number, currency?: string) => {
     if (price === undefined || price === null) return ''
-    return formatMoney(price, currency, locale)
+    return formatMoney(price, currency, { locale })
   }
 
   return (

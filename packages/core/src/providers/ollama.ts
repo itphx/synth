@@ -15,6 +15,12 @@ import { ContextLengthExceededError, RateLimitError } from './exceptions.js';
 /** Максимум best-effort POST /api/show за один синк (первые N моделей). */
 const MAX_CONTEXT_PROBES = 50;
 
+/** Размер батча параллельных проб контекста (чтобы не заваливать Ollama). */
+const CONTEXT_PROBE_BATCH_SIZE = 6;
+
+/** Общий дедлайн fallback-проб контекста, мс — ограничивает серию батчей. */
+const CONTEXT_PROBE_DEADLINE_MS = 20_000;
+
 export class OllamaProvider extends BaseProvider {
   getProviderName(): string {
     return this.name;
@@ -321,20 +327,20 @@ export class OllamaProvider extends BaseProvider {
    * Список моделей из /api/tags: контекстное окно (details.context_length /
    * model_info), а также метаданные (размер, параметры, квантизация,
    * capabilities). Если окно из tags не определено — best-effort POST
-   * /api/show {model} и `model_info["<arch>.context_length"]`. Пробы
-   * последовательные, с таймаутом, ограничены первыми MAX_CONTEXT_PROBES
-   * моделями и не роняют синк при ошибках.
+   * /api/show {model} и `model_info["<arch>.context_length"]`. Пробы идут
+   * батчами параллельно, ограничены первыми MAX_CONTEXT_PROBES моделями,
+   * имеют общий дедлайн и не роняют синк при ошибках.
    */
   async listModelsDetailed(): Promise<DetailedModelInfo[]> {
     const baseUrl = this.url.replace('/api/chat', '').replace('/v1/chat/completions', '');
     const tagsUrl = `${baseUrl}/api/tags`;
 
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 10_000);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
 
+    let models: DetailedModelInfo[] | undefined;
+    try {
       const resp = await fetch(tagsUrl, { signal: controller.signal });
-      clearTimeout(timer);
 
       if (resp.ok) {
         const data = await resp.json() as {
@@ -351,26 +357,61 @@ export class OllamaProvider extends BaseProvider {
           }>;
         };
 
-        const models = (data.models || [])
+        models = (data.models || [])
           .map((m) => this._parseTagModel(m))
           .filter((m) => m.id);
-
-        // Fallback-пробы контекста: только пока окно неизвестно и в пределах
-        // первых MAX_CONTEXT_PROBES моделей.
-        for (let i = 0; i < models.length && i < MAX_CONTEXT_PROBES; i++) {
-          const model = models[i]!;
-          if (model.contextWindow !== undefined) continue;
-          const contextWindow = await this._fetchContextFromShow(baseUrl, model.id);
-          if (contextWindow !== undefined) model.contextWindow = contextWindow;
-        }
-
-        return models;
       }
     } catch {
       // fall through
+    } finally {
+      clearTimeout(timer);
     }
 
-    return [];
+    if (!models) return [];
+
+    // Fallback-пробы контекста: только пока окно неизвестно и в пределах
+    // первых MAX_CONTEXT_PROBES моделей.
+    await this._probeContextWindows(models, baseUrl);
+
+    return models;
+  }
+
+  /**
+   * Best-effort дозапрос контекстных окон через POST /api/show.
+   *
+   * Пробы идут батчами по CONTEXT_PROBE_BATCH_SIZE параллельно
+   * (`Promise.allSettled`), только для моделей без уже известного окна и не
+   * более чем для первых MAX_CONTEXT_PROBES моделей. Результаты раскладываются
+   * по исходным индексам — порядок и детерминизм моделей сохраняются. Общий
+   * дедлайн ограничивает длительность всей серии проб.
+   */
+  private async _probeContextWindows(
+    models: DetailedModelInfo[],
+    baseUrl: string,
+  ): Promise<void> {
+    const candidates: number[] = [];
+    for (let i = 0; i < models.length && i < MAX_CONTEXT_PROBES; i++) {
+      if (models[i]!.contextWindow === undefined) candidates.push(i);
+    }
+
+    const deadline = Date.now() + CONTEXT_PROBE_DEADLINE_MS;
+    for (let start = 0; start < candidates.length; start += CONTEXT_PROBE_BATCH_SIZE) {
+      if (Date.now() >= deadline) break;
+
+      const batch = candidates.slice(start, start + CONTEXT_PROBE_BATCH_SIZE);
+      const results = await Promise.allSettled(
+        batch.map((index) => this._fetchContextFromShow(baseUrl, models[index]!.id)),
+      );
+
+      for (let j = 0; j < batch.length; j++) {
+        const result = results[j]!;
+        if (result.status !== 'fulfilled') continue;
+        const contextWindow = result.value;
+        if (contextWindow !== undefined) {
+          models[batch[j]!]!.contextWindow = contextWindow;
+        }
+      }
+    }
   }
 
   private _parseTagModel(model: {
@@ -412,17 +453,16 @@ export class OllamaProvider extends BaseProvider {
    * `"<arch>.context_length"` в model_info. Любая ошибка/таймаут → undefined.
    */
   private async _fetchContextFromShow(baseUrl: string, model: string): Promise<number | undefined> {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 10_000);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
 
+    try {
       const resp = await fetch(`${baseUrl}/api/show`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model }),
         signal: controller.signal,
       });
-      clearTimeout(timer);
 
       if (!resp.ok) return undefined;
 
@@ -438,6 +478,8 @@ export class OllamaProvider extends BaseProvider {
       return num !== undefined && num > 0 ? num : undefined;
     } catch {
       return undefined;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

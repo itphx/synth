@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
 import { synthApi, type AgentInfo, type AgentMode, type ProviderInfo, type ModelGroup } from '@/lib/api/synthApi'
-import { Icon } from '@/components/icon/Icon'
+import { Icon, isIconName } from '@/components/icon/Icon'
 import { IconPicker } from './IconPicker'
 import { ColorPicker } from './ColorPicker'
 import { Toggle } from '../ui/Toggle'
@@ -150,8 +150,8 @@ export const AgentsPanel = () => {
 
     try {
       const [roleCtx, userCtx] = await Promise.all([
-        synthApi.fetchJSON<{ files: { name: string; category: string }[] }>('/api/v2/context/files?category=role').catch(() => ({ files: [] })),
-        synthApi.fetchJSON<{ files: { name: string; category: string }[] }>('/api/v2/context/files?category=user').catch(() => ({ files: [] })),
+        synthApi.getContextFiles('role').catch(() => ({ files: [] })),
+        synthApi.getContextFiles('user').catch(() => ({ files: [] })),
       ])
       const files = [...(roleCtx.files || []), ...(userCtx.files || [])]
       setContextFiles(files.map((f) => f.name))
@@ -169,7 +169,7 @@ export const AgentsPanel = () => {
   const handleEdit = async (a: AgentInfo) => {
     setError('')
     try {
-      const detail = await synthApi.fetchJSON<Record<string, unknown>>(`/api/v2/agents/${encodeURIComponent(a.id)}`)
+      const detail = await synthApi.getAgentDetail(a.id)
       setForm(buildForm(a, detail))
     } catch {
       setForm(buildForm(a))
@@ -198,28 +198,25 @@ export const AgentsPanel = () => {
     setSaving(true)
     setError('')
     try {
-      await synthApi.fetchJSON('/api/v2/agents', {
-        method: 'POST',
-        body: JSON.stringify({
-          id: normalizeAgentId(form.id.trim()),
-          display_name: form.display_name,
-          description: form.description,
-          provider: form.provider || undefined,
-          model: form.model || undefined,
-          temperature: form.temperature,
-          top_p: form.top_p || undefined,
-          top_k: form.top_k || undefined,
-          reasoning_level: form.reasoning_level || undefined,
-          // legacy mode, kept for backward compat — always "simple"
-          mode: 'simple',
-          agent_mode: form.agent_mode,
-          context_file: form.context_file || undefined,
-          capabilities: form.capabilities,
-          subagent_prompt: form.agent_mode.includes('subagent') ? form.subagent_prompt : undefined,
-          max_steps: form.max_steps,
-          icon: form.icon || undefined,
-          color: form.color || undefined,
-        }),
+      await synthApi.saveAgent({
+        id: normalizeAgentId(form.id.trim()),
+        display_name: form.display_name,
+        description: form.description,
+        provider: form.provider || undefined,
+        model: form.model || undefined,
+        temperature: form.temperature,
+        top_p: form.top_p || undefined,
+        top_k: form.top_k || undefined,
+        reasoning_level: form.reasoning_level || undefined,
+        // legacy mode, kept for backward compat — always "simple"
+        mode: 'simple',
+        agent_mode: form.agent_mode,
+        context_file: form.context_file || undefined,
+        capabilities: form.capabilities,
+        subagent_prompt: form.agent_mode.includes('subagent') ? form.subagent_prompt : undefined,
+        max_steps: form.max_steps,
+        icon: form.icon || undefined,
+        color: form.color || undefined,
       })
       setExpanded(null)
       setCreating(false)
@@ -233,10 +230,7 @@ export const AgentsPanel = () => {
 
   const handleToggle = async (a: AgentInfo) => {
     try {
-      await synthApi.fetchJSON(`/api/v2/agents/${encodeURIComponent(a.id)}/enabled`, {
-        method: 'PATCH',
-        body: JSON.stringify({ enabled: !a.enabled }),
-      })
+      await synthApi.toggleAgent(a.id, !a.enabled)
       await load()
     } catch { /* ignore */ }
   }
@@ -245,7 +239,7 @@ export const AgentsPanel = () => {
     const label = a.is_builtin ? t('admin.agents.confirmReset', { name: a.display_name }) : t('admin.agents.confirmDelete', { name: a.display_name })
     if (!(await confirm({ title: label, variant: 'danger' }))) return
     try {
-      await synthApi.fetchJSON(`/api/v2/agents/${encodeURIComponent(a.id)}`, { method: 'DELETE' })
+      await synthApi.deleteAgent(a.id)
       await load()
     } catch { /* ignore */ }
   }
@@ -465,7 +459,7 @@ export const AgentsPanel = () => {
         {/* Icons */}
         <SettingsField label={t('admin.agents.icon')}>
           <div className="flex flex-wrap items-center gap-2 mb-2 min-w-0">
-            {form.icon && <Icon name={form.icon as never} className="size-5 shrink-0" />}
+            {isIconName(form.icon) && <Icon name={form.icon} className="size-5 shrink-0" />}
             <span className="text-xs text-muted-foreground min-w-0 break-all">{form.icon || t('admin.agents.notSelected')}</span>
             {form.icon && (
               <Button
@@ -537,7 +531,7 @@ export const AgentsPanel = () => {
             <SettingsSection key={a.id} className={cn(!a.enabled && 'opacity-50')}>
               <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
                 <div className="flex items-center gap-2 min-w-0">
-                  <Icon name={a.icon as never || 'robot-2'} className="size-4 shrink-0" style={a.color ? { color: `var(${a.color})` } : undefined} />
+                  <Icon name={isIconName(a.icon) ? a.icon : 'robot-2'} className="size-4 shrink-0" style={a.color ? { color: `var(${a.color})` } : undefined} />
                   <span className="font-medium text-sm truncate">{a.display_name}</span>
                   <code className="text-[0.625rem] text-muted-foreground shrink-0">{a.id}</code>
                 </div>

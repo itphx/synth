@@ -9,6 +9,7 @@ import { FileStore } from '../storage/file-store.js';
 import { ProjectStore } from '../storage/project-store.js';
 import { EventBus } from '../events/bus.js';
 import { ProviderFactory, BaseProvider, resolveSystemPromptText } from '../providers/base.js';
+import { GatewayProvider } from './gateway/gateway-provider.js';
 import type { LLMMessage, CancellationToken } from '../providers/base.js';
 import type { ContextBuilder } from './context/builder.js';
 import { ContextConfig } from './context/config.js';
@@ -1358,5 +1359,72 @@ describe('ChatOrchestrator — режим/план/todo как state-сообщ�
     );
     expect(stateMessages(second.session, 'agent_switch')).toHaveLength(1);
     expect(stateMessages(second.session, 'mode_change')).toHaveLength(1);
+  });
+});
+
+describe('ChatOrchestrator._routeProvider — AD-036 единая обёртка GatewayProvider', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-orch-gw-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('провайдер роутера уже GatewayProvider → повторно не оборачиваем', async () => {
+    const session = await sessionManager.createSession({ title: 'S' });
+    session.settings.routingEnabled = true;
+    const orch = new ChatOrchestrator({
+      sessionManager,
+      eventBus: new EventBus(),
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: () => null,
+      dataDir: tmpDir,
+      defaultWorkingDir: join(tmpDir, 'workspaces', 'default'),
+    });
+
+    // Gateway включён, но пул в этом сценарии не задействован — роутер отдаёт
+    // уже обёрнутый провайдер (как это делает ProviderPool через gatewayFactory).
+    (orch as unknown as { _gatewayConfig: unknown })._gatewayConfig = { enabled: true };
+
+    const raw = {
+      url: '',
+      apiKey: '',
+      model: 'm',
+      timeout: 0,
+      temperature: 0,
+      topP: 0,
+      topK: 0,
+      name: 'raw',
+      type: 'openai',
+      reasoningLevel: undefined,
+    } as unknown as BaseProvider;
+
+    const wrapped = new GatewayProvider(raw, { enabled: true } as never, {
+      getMap: async () => ({}),
+      saveMap: async () => {},
+      getAudit: () => ({}) as never,
+      getRateLimiter: () => ({}) as never,
+      sessionId: '',
+      userId: '',
+    });
+
+    (orch as unknown as { _router: unknown })._router = {
+      route: () => ({ providerName: 'p', modelName: 'm', reason: 'r', strategy: 'default' }),
+      getProvider: () => wrapped,
+    };
+
+    const res = (orch as unknown as {
+      _routeProvider(s: Session, m: Message): { provider: BaseProvider } | null;
+    })._routeProvider(session, makeUserMsg());
+
+    expect(res).not.toBeNull();
+    // Тот же экземпляр, без повторной обёртки: внутренний — исходный провайдер.
+    expect(res!.provider).toBe(wrapped);
+    expect((res!.provider as unknown as { _inner: unknown })._inner).toBe(raw);
   });
 });

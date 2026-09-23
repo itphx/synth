@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { synthApi } from '@/lib/api/synthApi'
+import { synthApi, type DebugConfigData } from '@/lib/api/synthApi'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -10,10 +10,7 @@ import {
   useSettingsDraft,
 } from '../ui/settings'
 
-interface DebugConfig {
-  groups: Record<string, string>
-  available_levels: string[]
-}
+type DebugConfig = DebugConfigData
 
 const LEVEL_COLORS: Record<string, string> = {
   NONE: 'bg-secondary text-muted-foreground',
@@ -139,7 +136,7 @@ export const DebugPanel = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const data = await synthApi.fetchJSON<DebugConfig>('/api/v2/admin/debug/config')
+        const data = await synthApi.getDebugConfig<DebugConfig>()
         setConfig(data)
       } finally {
         setLoading(false)
@@ -161,10 +158,7 @@ export const DebugPanel = () => {
 
   const handleSave = useCallback(
     async (groups: Record<string, string>) => {
-      await synthApi.fetchJSON('/api/v2/admin/debug/config', {
-        method: 'POST',
-        body: JSON.stringify({ groups }),
-      })
+      await synthApi.saveDebugConfig(groups)
       setConfig((prev) => (prev ? { ...prev, groups: { ...prev.groups, ...groups } } : prev))
     },
     [],

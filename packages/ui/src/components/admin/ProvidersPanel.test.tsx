@@ -9,7 +9,11 @@ vi.mock('@/lib/i18n', () => ({
 vi.mock('@/lib/api/synthApi', () => ({
   synthApi: {
     getProviders: vi.fn(async () => ({ providers: [] })),
-    fetchJSON: vi.fn(),
+    fetchProviderIcon: vi.fn(),
+    createProvider: vi.fn(async () => ({})),
+    updateProvider: vi.fn(async () => ({})),
+    deleteProvider: vi.fn(async () => undefined),
+    testProvider: vi.fn(async () => ({ status: 'ok' })),
   },
 }))
 
@@ -164,7 +168,7 @@ describe('ProvidersPanel: иконка провайдера в форме пок
 describe('ProvidersPanel: тяжёлая иконка сжимается перед сохранением', () => {
   it('fetch-icon с большим data-URL → применяется сжатая иконка, сырой строки в разметке нет', async () => {
     const bigIcon = `data:image/png;base64,${'B'.repeat(9000)}`
-    vi.mocked(synthApi.fetchJSON).mockResolvedValueOnce({
+    vi.mocked(synthApi.fetchProviderIcon).mockResolvedValueOnce({
       icon: bigIcon,
       source: 'https://api.example.com/favicon.ico',
     })
@@ -188,10 +192,7 @@ describe('ProvidersPanel: тяжёлая иконка сжимается пер�
     })
     await act(async () => {})
 
-    expect(synthApi.fetchJSON).toHaveBeenCalledWith(
-      '/api/v2/providers/fetch-icon',
-      expect.objectContaining({ method: 'POST' }),
-    )
+    expect(synthApi.fetchProviderIcon).toHaveBeenCalledWith('https://api.example.com/v1')
     // Превью уже сжато, сырой data-URL в разметку не попадает.
     expect(host.innerHTML).not.toContain(bigIcon)
 
@@ -355,9 +356,9 @@ describe('ProvidersPanel: валюта провайдера', () => {
   }
 
   function savedCurrency(): unknown {
-    const call = vi.mocked(synthApi.fetchJSON).mock.calls.find(([url]) => url === '/api/v2/providers')
+    const call = vi.mocked(synthApi.createProvider).mock.calls.at(-1)
     expect(call).toBeTruthy()
-    return JSON.parse((call![1] as RequestInit).body as string).currency
+    return (call![0] as { currency?: unknown }).currency
   }
 
   it('создание отправляет currency: USD по умолчанию, валюту не трогаем', async () => {

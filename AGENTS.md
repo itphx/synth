@@ -175,6 +175,18 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ aut
 5. Писать в JSON-хранилище вручную — только через API (исключения: баг самого хранилища, миграция схемы).
 6. Смешивать стадии — нельзя одновременно исследовать, кодить и тестировать.
 
+### Тех. долг
+
+Известные архитектурные долги — не блокируют работу, закрываются отдельными задачами. Запись ведётся здесь; при закрытии пункт удаляется. Детали задач — `.opencode/tasks/log.md`.
+
+**ТД-1. Дублирование роутеров backend ↔ core (`providers` / `models` / `sessions`).**
+- **Что:** `packages/backend/src/routes/{providers,models,sessions}.ts` во многом форки `packages/core/src/server/routes/*`: те же `GET/POST/DELETE` провайдеров и моделей, `GET /:id/status`, `GET /:id/prompt`, `GET /:id/stats`, `POST /:id/prompt`. `backend/routes/sessions.ts` (~930 стр.) и `core/server/routes/sessions.ts` (~680 стр.) расходятся в основном RBAC-гардами и backend-спецификой (export/import, hybrid, optimization, debug).
+- **Уже устранено (2026-09-23):** утилиты `isCurrency`/`parseCurrency`/`hasPriceInput`, `renderIcon`/`getFaviconUrl`, `createResolveAuthorName` вынесены в `@itphx/synth-shared`/core и переиспользуются; устаревшая копия `backend/lib/serialize.ts` удалена — обе стороны используют core-сериализатор (`todos`/`origin`/`parts`/`id` больше не теряются).
+- **Почему долг:** изменение контракта провайдеров/моделей/сессий приходится вносить дважды; уже был реальный дрейф (см. сериализацию).
+- **Риски:** RBAC (`requireAuth` vs `requireAdmin`), OIDC, backend-специфика, публичные контракты `docs/API_V2.md`.
+- **Предлагаемый подход:** общие хендлеры — в core фабриками с параметризацией гварда: `registerProvidersRoutes(app, deps, { writeGuard })`, `registerModelsRoutes(...)`, `registerSessionCoreRoutes(...)`. Backend монтирует их и оставляет только специфичные роуты. Образец — `createSettingsRoutes`/`createDictionaryRoutes`, уже переиспользуемые backend'ом.
+- **Критерий готовности:** backend-роуты — тонкие обёртки над core-фабриками; RBAC неизменен (тесты 401/403); `pnpm typecheck && pnpm lint && pnpm test && pnpm build` зелёные; контракты `docs/API_V2.md` не изменились.
+
 ### Unit-тесты
 
 Vitest:

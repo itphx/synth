@@ -5,7 +5,7 @@ import type { SessionSubagentStats } from '@itphx/synth-shared'
  * `cost_currency` приходит из metadata (ядро); если поле не задано, но в
  * `cost_by_currency` ровно одна валюта — берём её (однозначный случай).
  */
-export type MessageSubagentStats = SessionSubagentStats & { costCurrency?: string }
+type MessageSubagentStats = SessionSubagentStats & { costCurrency?: string }
 
 /** Значение из metadata приходит как unknown — читаем только конечные number. */
 function num(value: unknown): number {

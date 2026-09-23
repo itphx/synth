@@ -1,5 +1,9 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig } from '@itphx/synth-shared'
+import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig } from '@itphx/synth-shared'
+import type { ToolsPolicy } from '@itphx/synth-shared/types'
+
+// Реэкспорт общих контрактов (AD-071): без локальных дублей.
+export type { McpServerConfig, ToolsPolicy }
 import { normalizeModelInfo } from './modelNormalize'
 
 const BASE_URL = '/api/v2'
@@ -127,7 +131,7 @@ export interface StickyNoteData {
 
 export type { FileEntry, DirectoryListResult, FileReadResult } from '@itphx/synth-shared'
 
-import type { DirectoryListResult, FileReadResult, FileEntry, RepoStatus, CommitInfo, CommitDetail, SessionMode } from '@itphx/synth-shared'
+import type { DirectoryListResult, FileReadResult, RepoStatus, CommitInfo, CommitDetail, SessionMode } from '@itphx/synth-shared'
 
 export interface GitRepoConfigData {
   path: string
@@ -227,11 +231,6 @@ export interface SessionMcpEffectiveResponse {
   mcpDisabledServers: string[]
 }
 
-export interface ChatStatusResponse {
-  blocked: boolean
-  pending_count: number
-}
-
 export interface ProviderInfo {
   name: string
   type: string
@@ -242,6 +241,30 @@ export interface ProviderInfo {
   is_default?: boolean
   /** Валюта по умолчанию для моделей провайдера. */
   currency?: string
+}
+
+/** Результат `POST /providers/fetch-icon` (admin). */
+export interface ProviderFetchIconResult {
+  icon?: string | null
+  error?: string
+  source?: string
+}
+
+/** Элемент файла контекста (admin: `GET /context/files`). */
+export interface ContextFileEntry {
+  name: string
+  category: string
+  is_system: boolean
+  is_overridden: boolean
+  enabled: boolean
+  size: number
+  content?: string
+}
+
+/** Конфиг debug-логов (admin: `GET/POST /admin/debug/config`). */
+export interface DebugConfigData {
+  groups: Record<string, string>
+  available_levels: string[]
 }
 
 export interface ModelInfo {
@@ -451,10 +474,6 @@ export const synthApi = {
     })
   },
 
-  async getSessionChildren(sessionId: string): Promise<SessionData[]> {
-    return fetchJSON<SessionData[]>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/children`)
-  },
-
   async getSessionReferences(sessionId: string): Promise<{ references: Array<{ sessionId: string; label: string; messageRange: [number, number]; autoSummary?: string; createdAt: string }> }> {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/references`)
   },
@@ -526,45 +545,6 @@ export const synthApi = {
     })
   },
 
-  async getMessageDebug(sessionId: string, messageIndex: number): Promise<Record<string, unknown>> {
-    return fetchJSON(`${BASE_URL}/messages/${encodeURIComponent(sessionId)}/${messageIndex}/debug`)
-  },
-
-  // Чат (API v2 — POST /sessions/:id/prompt)
-  async streamMessage(sessionId: string, message: string, options?: {
-    agentRole?: string
-    streamId?: string
-    provider?: string
-    model?: string
-    author?: string
-    metadata?: Record<string, unknown>
-  }): Promise<ReadableStream<Uint8Array> | null> {
-    const streamId = options?.streamId || `stream-${Date.now()}`
-    const body: Record<string, unknown> = {
-      content: message,
-      stream: true,
-      agent: options?.agentRole,
-      provider: options?.provider,
-      model: options?.model,
-      messageId: streamId,
-      metadata: options?.metadata,
-    }
-
-    const response = await fetch(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/prompt`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Stream failed' }))
-      throw new Error(error.detail || `HTTP ${response.status}`)
-    }
-
-    return response.body
-  },
-
   // API v2: отправить сообщение без чтения SSE-стрима (для SSE-режима)
   async enqueueMessage(sessionId: string, message: string, options?: {
     agentRole?: string
@@ -611,11 +591,6 @@ export const synthApi = {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(childSessionId)}/resume-subagent`, {
       method: 'POST',
     })
-  },
-
-  // API v2: status
-  async getChatStatus(sessionId: string): Promise<ChatStatusResponse> {
-    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/status`)
   },
 
   // Очередь (API v2 — /queue/:sessionId)
@@ -709,26 +684,6 @@ export const synthApi = {
     })
   },
 
-  async getWorkspaceRoot(includeHidden = false): Promise<{ root: string; entries: FileEntry[] }> {
-    const params = new URLSearchParams({ includeHidden: String(includeHidden) })
-    return fetchJSON(`${BASE_URL}/fs/workspace-root?${params.toString()}`)
-  },
-
-  async browseWorkspaceRoot(
-    path: string,
-    includeHidden = false,
-  ): Promise<{ root: string; path: string; entries: FileEntry[] }> {
-    const params = new URLSearchParams({ path, includeHidden: String(includeHidden) })
-    return fetchJSON(`${BASE_URL}/fs/workspace-root/browse?${params.toString()}`)
-  },
-
-  async createWorkspaceDirectory(rePath: string): Promise<{ created: boolean; path: string }> {
-    return fetchJSON(`${BASE_URL}/fs/workspace-root/mkdir`, {
-      method: 'POST',
-      body: JSON.stringify({ path: rePath }),
-    })
-  },
-
   // Рабочий каталог по умолчанию (settings)
   async getWorkspaceSetting(): Promise<{ workspace: string }> {
     return fetchJSON<{ workspace: string }>(`${BASE_URL}/settings/workspace`)
@@ -739,13 +694,6 @@ export const synthApi = {
       method: 'PUT',
       body: JSON.stringify({ workspace }),
     })
-  },
-
-  /** DELETE /settings/workspace — сброс runtime-override к дефолту (env/config); возвращает восстановленное значение. */
-  async resetWorkspaceSetting(): Promise<{ workspace: string }> {
-    return fetchJSON<{ workspace: string }>(`${BASE_URL}/settings/workspace`, {
-      method: 'DELETE',
-    }).then((r) => ({ workspace: r.workspace }))
   },
 
   async moveEntry(
@@ -824,6 +772,147 @@ export const synthApi = {
     }))
   },
 
+  // Модели (admin)
+  async fetchModels(providerName?: string): Promise<{
+    fetched: number
+    new: number
+    enriched: number
+    priced?: number
+    limited?: number
+    errors?: string[]
+  }> {
+    const params = providerName ? `?provider=${encodeURIComponent(providerName)}` : ''
+    return fetchJSON(`${BASE_URL}/models/fetch${params}`, { method: 'POST' })
+  },
+
+  async saveModel(data: Record<string, unknown>): Promise<ModelInfo> {
+    return fetchJSON<ModelInfo>(`${BASE_URL}/models`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  },
+
+  async deleteModel(modelId: string): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/models/${encodeURIComponent(modelId)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  // Провайдеры (admin)
+  async createProvider(data: Record<string, unknown>): Promise<ProviderInfo> {
+    return fetchJSON<ProviderInfo>(`${BASE_URL}/providers`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  },
+
+  async updateProvider(name: string, data: Record<string, unknown>): Promise<ProviderInfo> {
+    return fetchJSON<ProviderInfo>(`${BASE_URL}/providers/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+  },
+
+  async deleteProvider(name: string): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/providers/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  async testProvider(name: string): Promise<{
+    status: string
+    error?: string
+    models?: string[]
+    message?: string
+  }> {
+    return fetchJSON(`${BASE_URL}/providers/${encodeURIComponent(name)}/test`, {
+      method: 'POST',
+    })
+  },
+
+  async fetchProviderIcon(url: string): Promise<ProviderFetchIconResult> {
+    return fetchJSON<ProviderFetchIconResult>(`${BASE_URL}/providers/fetch-icon`, {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    })
+  },
+
+  // Агенты (admin)
+  async getAgentDetail(id: string): Promise<Record<string, unknown>> {
+    return fetchJSON<Record<string, unknown>>(`${BASE_URL}/agents/${encodeURIComponent(id)}`)
+  },
+
+  async saveAgent(data: Record<string, unknown>): Promise<AgentInfo> {
+    return fetchJSON<AgentInfo>(`${BASE_URL}/agents`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  },
+
+  async toggleAgent(id: string, enabled: boolean): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/agents/${encodeURIComponent(id)}/enabled`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    })
+  },
+
+  async deleteAgent(id: string): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/agents/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  // Контекст (admin)
+  async getContextFiles(category: string): Promise<{ files: ContextFileEntry[] }> {
+    return fetchJSON(`${BASE_URL}/context/files?category=${encodeURIComponent(category)}`)
+  },
+
+  async getContextFile(name: string, category: string): Promise<{ name: string; content: string }> {
+    return fetchJSON(
+      `${BASE_URL}/context/files/${encodeURIComponent(name)}?category=${encodeURIComponent(category)}`,
+    )
+  },
+
+  async saveContextFile(name: string, content: string, category: string): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/context/files/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      body: JSON.stringify({ content, category }),
+    })
+  },
+
+  async toggleContextFile(name: string): Promise<{ name: string; enabled: boolean }> {
+    return fetchJSON(`${BASE_URL}/context/files/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'toggle' }),
+    })
+  },
+
+  async deleteContextFile(name: string, category: string): Promise<void> {
+    return fetchJSON<void>(
+      `${BASE_URL}/context/files/${encodeURIComponent(name)}?category=${encodeURIComponent(category)}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  async resetContextFile(name: string, category: string): Promise<void> {
+    return fetchJSON<void>(
+      `${BASE_URL}/context/files/${encodeURIComponent(name)}/restore_to_default?category=${encodeURIComponent(category)}`,
+      { method: 'POST' },
+    )
+  },
+
+  // Debug (admin)
+  async getDebugConfig<T = DebugConfigData>(): Promise<T> {
+    return fetchJSON<T>(`${BASE_URL}/admin/debug/config`)
+  },
+
+  async saveDebugConfig(groups: Record<string, string>): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/admin/debug/config`, {
+      method: 'POST',
+      body: JSON.stringify({ groups }),
+    })
+  },
+
   // Пользователи (admin)
   async getUsers(): Promise<UsersListResponse> {
     return fetchJSON<UsersListResponse>(`${BASE_URL}/users`)
@@ -899,16 +988,6 @@ export const synthApi = {
     })
   },
 
-  async checkOptimization(sessionId: string): Promise<{
-    sliding_window: { triggered: boolean; reason: string }
-    summarization: { triggered: boolean; reason: string }
-    summarization_pending: boolean
-  }> {
-    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/optimization/check`, {
-      method: 'POST',
-    })
-  },
-
   async cancelSummarization(sessionId: string): Promise<{ success: boolean }> {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/optimization/cancel-summarization`, {
       method: 'POST',
@@ -943,49 +1022,6 @@ export const synthApi = {
   async deleteStickyNote(sessionId: string, noteId: string): Promise<{ notes: StickyNoteData[] }> {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/notes/${encodeURIComponent(noteId)}`, {
       method: 'DELETE',
-    })
-  },
-
-  // --- MCP ---
-  async getMcpServers(): Promise<Record<string, McpServerEntry>> {
-    return fetchJSON(`${BASE_URL}/mcp/servers`)
-  },
-
-  async addMcpServer(name: string, config: McpServerConfig): Promise<McpServerEntry> {
-    return fetchJSON(`${BASE_URL}/mcp/servers`, {
-      method: 'POST',
-      body: JSON.stringify({ name, config }),
-    })
-  },
-
-  async updateMcpServer(name: string, config: McpServerConfig): Promise<McpServerEntry> {
-    return fetchJSON(`${BASE_URL}/mcp/servers/${encodeURIComponent(name)}`, {
-      method: 'PUT',
-      body: JSON.stringify(config),
-    })
-  },
-
-  async deleteMcpServer(name: string): Promise<{ success: boolean }> {
-    return fetchJSON(`${BASE_URL}/mcp/servers/${encodeURIComponent(name)}`, {
-      method: 'DELETE',
-    })
-  },
-
-  async testMcpServer(name: string, config?: McpServerConfig): Promise<{ success: boolean; toolCount?: number; tools?: Array<{ name: string; description: string }>; error?: string }> {
-    return fetchJSON(`${BASE_URL}/mcp/servers/${encodeURIComponent(name)}/test`, {
-      method: 'POST',
-      body: config ? JSON.stringify({ config }) : undefined,
-    })
-  },
-
-  async getSessionMcp(sessionId: string): Promise<{ mcpServers: string[]; allServers: Array<{ name: string; active: boolean }> }> {
-    return fetchJSON(`${BASE_URL}/mcp/session/${encodeURIComponent(sessionId)}`)
-  },
-
-  async setSessionMcp(sessionId: string, mcpServers: string[]): Promise<{ mcpServers: string[]; allServers: Array<{ name: string; active: boolean }> }> {
-    return fetchJSON(`${BASE_URL}/mcp/session/${encodeURIComponent(sessionId)}`, {
-      method: 'PUT',
-      body: JSON.stringify({ mcpServers }),
     })
   },
 
@@ -1129,13 +1165,6 @@ export const synthApi = {
     return fetchJSON<{ security: SecuritySettings }>(`${BASE_URL}/settings/security`, {
       method: 'PUT',
       body: JSON.stringify({ security: cfg }),
-    }).then((r) => r.security)
-  },
-
-  /** DELETE /settings/security — сброс к дефолтам config.yaml (live-применение). */
-  async resetSecuritySettings(): Promise<SecuritySettings> {
-    return fetchJSON<{ security: SecuritySettings }>(`${BASE_URL}/settings/security`, {
-      method: 'DELETE',
     }).then((r) => r.security)
   },
 
@@ -1333,13 +1362,8 @@ export interface SecuritySettings {
   askTimeoutMs?: number
 }
 
-/**
- * AD-071 §2.3: политика включения инструментов.
- * - `consistency` — все определения, недоступность через `unavailable`;
- * - `available` — только доступные тулы (экономия контекста);
- * - `auto` — по провайдеру: локальные (`ollama`) → `available`, облачные → `consistency`.
- */
-export type ToolsPolicy = 'consistency' | 'available' | 'auto'
+// AD-071 §2.3: `ToolsPolicy` — общий контракт `@itphx/synth-shared/types`
+// (импортирован и реэкспортирован выше).
 
 /** Эффективная политика защищённых путей (списки строк). */
 export interface ProtectedPathsPolicy {
@@ -1442,27 +1466,6 @@ export interface McpServerToolsSettings {
 
 export interface McpSettingsPayload {
   servers: Record<string, McpServerToolsSettings>
-}
-
-export interface McpServerConfig {
-  type: 'stdio' | 'sse' | 'http'
-  /** AD-071 §2.2: человекочитаемое описание сервера (попадает в блок промпта `mcp.servers`). */
-  description?: string
-  command?: string
-  args?: string[]
-  env?: Record<string, string>
-  url?: string
-  headers?: Record<string, string>
-  enabled?: boolean
-  enabledByDefault?: boolean
-  timeout?: number
-  connectTimeout?: number
-}
-
-export interface McpServerEntry {
-  name: string
-  config: McpServerConfig
-  connected: boolean
 }
 
 /** AD-071 §2.5: тело добавления записи реестра MCP. */

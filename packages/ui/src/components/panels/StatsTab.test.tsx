@@ -153,7 +153,7 @@ describe('StatsTab — секция «История» (AD-070 §2.5)', () => {
     expect(text).toContain('History')
     expect(text).toContain('Messages')
     expect(text).toContain('7')
-    expect(text).toContain((1234).toLocaleString())
+    expect(text).toContain((1234).toLocaleString('en'))
     expect(text).toContain('~309')
 
     // Таблица state-сообщений и детали скрыты.
@@ -558,7 +558,7 @@ describe('StatsTab — блок «Сабагенты» в «Последнем �
     const container = await renderStats()
     const section = findSection(container, 'Session')!
     const text = section.textContent ?? ''
-    expect(text).toContain((1300).toLocaleString()) // input 1000 + 300
+    expect(text).toContain((1300).toLocaleString('en')) // input 1000 + 300
     expect(text).toContain('130') // output 100 + 30
     expect(text).toContain('600') // cache read 500 + 100
     expect(text).toContain('55') // cache write 50 + 5
@@ -638,7 +638,7 @@ describe('StatsTab — live-обновление (AD-070 §2.6)', () => {
     const container = await renderStats()
     const section = findSection(container, 'Last answer')!
     const text = section.textContent ?? ''
-    expect(text).toContain(`~${(2000).toLocaleString()}`)
+    expect(text).toContain(`~${(2000).toLocaleString('en')}`)
     expect(text).toContain('~300')
     expect(text).toContain('live-model')
     expect(text).toContain('live')
@@ -651,8 +651,8 @@ describe('StatsTab — live-обновление (AD-070 §2.6)', () => {
     })
     const container = await renderStats()
     const section = findSection(container, 'Last answer')!
-    expect(section.textContent).toContain((2000).toLocaleString())
-    expect(section.textContent).not.toContain(`~${(2000).toLocaleString()}`)
+    expect(section.textContent).toContain((2000).toLocaleString('en'))
+    expect(section.textContent).not.toContain(`~${(2000).toLocaleString('en')}`)
   })
 
   it('секция «Сессия» = серверные значения + live активного стрима', async () => {
@@ -668,7 +668,7 @@ describe('StatsTab — live-обновление (AD-070 §2.6)', () => {
     const container = await renderStats()
     const section = findSection(container, 'Session')!
     const text = section.textContent ?? ''
-    expect(text).toContain((1200).toLocaleString()) // 1000 + 200
+    expect(text).toContain((1200).toLocaleString('en')) // 1000 + 200
     expect(text).toContain('120') // 100 + 20
   })
 
@@ -719,7 +719,7 @@ describe('StatsTab — live-обновление (AD-070 §2.6)', () => {
 
     const container = await renderStats()
     // 1000 (сервер) + 9999 (live-стрим) + 500 (live-сабагенты)
-    expect(findSection(container, 'Session')!.textContent).toContain((11499).toLocaleString())
+    expect(findSection(container, 'Session')!.textContent).toContain((11499).toLocaleString('en'))
 
     await act(async () => {
       useChatStore.getState().finishStream('s1', 'st1', {
@@ -730,11 +730,11 @@ describe('StatsTab — live-обновление (AD-070 §2.6)', () => {
     await act(async () => {})
 
     const sessionSection = findSection(container, 'Session')!
-    expect(sessionSection.textContent).not.toContain((11499).toLocaleString())
+    expect(sessionSection.textContent).not.toContain((11499).toLocaleString('en'))
     expect(sessionSection.textContent).not.toContain('Subagents')
-    expect(sessionSection.textContent).toContain((1000).toLocaleString())
+    expect(sessionSection.textContent).toContain((1000).toLocaleString('en'))
     const lastSection = findSection(container, 'Last answer')
-    if (lastSection) expect(lastSection.textContent).not.toContain(`~${(2000).toLocaleString()}`)
+    if (lastSection) expect(lastSection.textContent).not.toContain(`~${(2000).toLocaleString('en')}`)
   })
 })
 

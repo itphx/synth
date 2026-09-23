@@ -5,6 +5,7 @@ import React from 'react'
 
 const apiMock = vi.hoisted(() => ({
   getSessions: vi.fn(),
+  resumeQueue: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: apiMock }))
@@ -61,6 +62,7 @@ beforeEach(() => {
     makeSession({ id: 'regular-1234567890', messages: [{}, {}], input_tokens: 10, output_tokens: 20 }),
     makeSession({ id: 'blocked-1234567890', status: { blocked: 'resource-lock' }, pending_messages: [{}] }),
   ])
+  apiMock.resumeQueue.mockResolvedValue(undefined)
 })
 
 afterEach(async () => {
@@ -108,9 +110,7 @@ describe('SessionsPanel — миграция на Settings UI Kit (AD-072)', () 
     expect(buttonByText(container, 'Hide')).toBeTruthy()
   })
 
-  it('unlock заблокированной сессии шлёт POST и перезагружает список', async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true }))
-    vi.stubGlobal('fetch', fetchMock)
+  it('unlock заблокированной сессии идёт через synthApi.resumeQueue и перезагружает список', async () => {
     const container = await renderPanel()
 
     const unlock = buttonByText(container, 'Unlock')
@@ -119,10 +119,8 @@ describe('SessionsPanel — миграция на Settings UI Kit (AD-072)', () 
       unlock!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
-    expect(url).toContain('/api/v2/queue/blocked-1234567890/resume')
-    expect(init?.method).toBe('POST')
+    expect(apiMock.resumeQueue).toHaveBeenCalledTimes(1)
+    expect(apiMock.resumeQueue).toHaveBeenCalledWith('blocked-1234567890')
     expect(apiMock.getSessions).toHaveBeenCalledTimes(2)
   })
 })

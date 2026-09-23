@@ -5,7 +5,9 @@ import React from 'react'
 
 const apiMock = vi.hoisted(() => ({
   getModels: vi.fn(),
-  fetchJSON: vi.fn<(url: string, options?: RequestInit) => Promise<unknown>>(async () => ({})),
+  fetchModels: vi.fn(async () => ({ fetched: 0, new: 0, enriched: 0 })),
+  saveModel: vi.fn(async () => ({})),
+  deleteModel: vi.fn(async () => undefined),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: apiMock }))
@@ -112,9 +114,7 @@ describe('ModelsPanel: валюта цен и инлайн-инпуты', () => 
     })
     await act(async () => {})
 
-    const call = apiMock.fetchJSON.mock.calls.find(([url]) => url === '/api/v2/models')
-    expect(call).toBeTruthy()
-    expect(JSON.parse((call![1] as RequestInit).body as string)).toEqual({
+    expect(apiMock.saveModel).toHaveBeenCalledWith({
       id: 'itphx/m1',
       currency: 'RUB',
     })

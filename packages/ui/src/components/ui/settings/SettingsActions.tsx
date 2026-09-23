@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { Button, type ButtonVariant } from '@/components/ui/button'
+import { Button } from '@/components/ui/button'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 
@@ -11,7 +11,6 @@ export interface SettingsActionsProps {
   onCancel?: () => void
   onReset?: () => void
   saving?: boolean
-  disabled?: boolean
   saveDisabled?: boolean
   cancelDisabled?: boolean
   resetDisabled?: boolean
@@ -25,8 +24,6 @@ export interface SettingsActionsProps {
   cancelTestId?: string
   resetTestId?: string
   align?: SettingsActionsAlign
-  /** Вариант кнопки Reset. По умолчанию `outline-primary` (контурная в цвете Save); `danger` — destructive-вид, `primary` — сплошная. */
-  resetVariant?: ButtonVariant
   className?: string
 }
 
@@ -41,9 +38,6 @@ const ALIGN_CLASSES: Record<SettingsActionsAlign, string> = {
  *
  * Порядок визуально: `Reset` (слева) — `Save` — `Cancel`.
  * `mr-auto` на Reset отделяет его от основных действий.
- * По умолчанию Reset — контурная кнопка в цвете Save (`outline-primary`);
- * `resetVariant="danger"` возвращает destructive-вид, `resetVariant="primary"`
- * — сплошную заливку как у Save.
  * Правило цвета Reset: цветная (`outline-primary`) — только когда текущие
  * значения отличаются от дефолтных; при дефолтных (`isDefault`) — серая
  * (`outline-muted`) и неактивна.
@@ -55,7 +49,6 @@ export function SettingsActions({
   onCancel,
   onReset,
   saving = false,
-  disabled = false,
   saveDisabled = false,
   cancelDisabled = false,
   resetDisabled = false,
@@ -67,14 +60,9 @@ export function SettingsActions({
   cancelTestId,
   resetTestId,
   align = 'end',
-  resetVariant = 'outline-primary',
   className,
 }: SettingsActionsProps) {
   const { t } = useI18n()
-
-  const saveDisabledFinal = disabled || saveDisabled || saving
-  const cancelDisabledFinal = disabled || cancelDisabled
-  const resetDisabledFinal = disabled || resetDisabled
 
   if (!onSave && !onCancel && !onReset) {
     return null
@@ -84,11 +72,11 @@ export function SettingsActions({
     <div className={cn('flex flex-wrap items-center gap-2 min-w-0', ALIGN_CLASSES[align], className)}>
       {onReset && (
         <Button
-          variant={isDefault ? 'outline-muted' : resetVariant}
+          variant={isDefault ? 'outline-muted' : 'outline-primary'}
           size="sm"
           className="mr-auto shrink-0"
           onClick={onReset}
-          disabled={resetDisabledFinal || isDefault}
+          disabled={resetDisabled || isDefault}
           data-testid={resetTestId}
         >
           {resetLabel ?? t('common.reset')}
@@ -100,7 +88,7 @@ export function SettingsActions({
           size="sm"
           className="shrink-0"
           onClick={onSave}
-          disabled={saveDisabledFinal}
+          disabled={saveDisabled || saving}
           data-testid={saveTestId}
         >
           {saving ? t('common.saving') : saveLabel ?? t('common.save')}
@@ -112,7 +100,7 @@ export function SettingsActions({
           size="sm"
           className="shrink-0"
           onClick={onCancel}
-          disabled={cancelDisabledFinal}
+          disabled={cancelDisabled}
           data-testid={cancelTestId}
         >
           {cancelLabel ?? t('common.cancel')}

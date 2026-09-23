@@ -29,7 +29,7 @@ export interface SliderFieldProps {
 }
 
 /** Процент заполнения трека для `--ui-range-fill` (без деления на ноль). */
-export function computeSliderFill(value: number, min: number, max: number): string {
+function computeSliderFill(value: number, min: number, max: number): string {
   if (!Number.isFinite(value) || !Number.isFinite(min) || !Number.isFinite(max) || max <= min) {
     return '0%'
   }
