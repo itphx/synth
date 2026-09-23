@@ -388,6 +388,12 @@ jobs:
         with:
           name: changelog
 
+      - name: Скачать CLI-бандл
+        uses: actions/download-artifact@v4
+        with:
+          name: synth-bundle
+          path: packages/synth/dist
+
       - name: Собрать тело релиза
         id: release_body
         run: |
