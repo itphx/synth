@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { StickyNoteData } from '@/lib/api/synthApi'
+import { costCurrencyKey } from '@/lib/currency'
 
 export type DebugData = Record<string, unknown>;
 
@@ -12,6 +13,9 @@ export interface IntermediateTextBlockData {
   text: string
   iteration: number
 }
+
+/** AD-070 §2.6: статус ответа ассистента (metadata.status), определяет префикс статистики. */
+export type MessageStatus = 'completed' | 'cancelled' | 'stopped' | 'error' | 'limit'
 
 export interface MessageData {
   index: number
@@ -74,6 +78,48 @@ export interface LiveToolCall {
   subagentIntermediateTextBlocks?: IntermediateTextBlockData[]
 }
 
+/** AD-070 §2.6: usage в snake_case (как в MessageData/StreamState). */
+export interface UsageData {
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  cache_read_tokens?: number
+  cache_write_tokens?: number
+  reasoning_tokens?: number
+}
+
+/** AD-070 §2.6: разбивка стоимости live-события (camelCase из ядра). */
+export interface CostBreakdown {
+  input?: number
+  output?: number
+  cacheRead?: number
+  cacheWrite?: number
+}
+
+/** AD-070 §2.6: вклад одного вызова саб-агента (по parent_call_id) в родителе. */
+export interface LiveSubagentCallUsage {
+  usage: UsageData
+  costUsd?: number
+  /** C2a: валюта `costUsd` (из stream/subagent payload). */
+  costCurrency?: string
+  estimated: boolean
+  model?: string
+  provider?: string
+}
+
+/** AD-070 §2.6: live-вклад саб-агентов сессии (агрегат + разбивка по вызовам). */
+export interface LiveSubagentSessionUsage {
+  usage: UsageData
+  /** Номинальная сумма вкладов (обратная совместимость); валюты не смешиваются — см. `costByCurrency`. */
+  costUsd?: number
+  /** C2a: валюта агрегата; не задаётся, если вызовы в разных валютах. */
+  costCurrency?: string
+  /** C2b: разбивка стоимости агрегата по валютам (код → сумма). */
+  costByCurrency?: Record<string, number>
+  estimated: boolean
+  byCall: Record<string, LiveSubagentCallUsage>
+}
+
 export interface StreamState {
   streamId: string
   agentRole: string | null
@@ -81,12 +127,19 @@ export interface StreamState {
   reasoningBlocks: ReasoningBlockData[]
   intermediateTextBlocks: IntermediateTextBlockData[]
   isStreaming: boolean
-  /** true, когда пришёл первый непустой chunk (content или reasoning) — признак, что провайдер начал отвечать */
+  /** true, когда пришёл первый непустой chunk (content/reasoning) или начался вызов инструмента — признак, что провайдер начал отвечать */
   hasContent: boolean
   isRetrying?: boolean
   model?: string
   provider?: string
   usage?: { input_tokens: number; output_tokens: number; total_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number }
+  /** AD-070 §2.6: live-стоимость ответа (из stream.usage/subagent.progress). */
+  costUsd?: number
+  /** C2a: валюта `costUsd` (из stream.usage/subagent.progress). */
+  costCurrency?: string
+  costBreakdown?: CostBreakdown
+  /** AD-070 §2.6: usage — best-effort оценка, а не точные токены провайдера. */
+  usageEstimated?: boolean
   toolCalls: LiveToolCall[]
   toolIteration: number
   _lastContentLen: number
@@ -100,20 +153,23 @@ export interface StreamDoneMetadata {
   message_index?: number
   cancelled?: boolean
   pending_count?: number
+  /** AD-070 §2.6: статус завершения стрима (stream.done.status). */
+  status?: MessageStatus
   metadata?: { type?: string; indices?: number[]; [key: string]: unknown }
   reasoning_blocks?: ReasoningBlockData[]
   intermediate_text_blocks?: IntermediateTextBlockData[]
-}
-
-export interface StreamError {
-  streamId: string
-  error: string
-  errorType: string
-  retryIn?: number
-  retryCount: number
-  maxRetries: number
-  canRetry: boolean
-  userCanRetry?: boolean
+  /** AD-070 §2.6: длительность прогона (stream.done.duration_ms). */
+  duration_ms?: number
+  /** AD-070 §2.6: стоимость хода (stream.done.cost_usd). */
+  cost_usd?: number
+  /** C2a: валюта `cost_usd` (stream.done.cost_currency). */
+  cost_currency?: string
+  /** AD-070 §2.6: разбивка стоимости (stream.done.cost_breakdown). */
+  cost_breakdown?: CostBreakdown
+  /** AD-070 §2.6: usage — best-effort оценка (stream.done.usage_estimated). */
+  usage_estimated?: boolean
+  /** AD-070 §2.6: провайдер финального ответа (stream.done.provider). */
+  provider?: string
 }
 
 /** Статус повторной попытки (событие stream.retry): «Повторная попытка N/MAX через X сек». */
@@ -163,18 +219,90 @@ export interface QueuedMessage {
   agentRole?: string | null
 }
 
+/**
+ * Сигнал завершения стрима для сессии: инкрементируется в `finishStream`/`cancelStream`.
+ * Нужен панели «Статистика» — `finishStream` часто обновляет существующее
+ * assistant-сообщение на месте (id не меняется), поэтому `lastAssistantMsg?.id`
+ * не срабатывает как триггер перезапроса.
+ */
+function bumpStreamFinishTick(
+  ticks: Record<string, number>,
+  sessionId: string,
+): Record<string, number> {
+  return { ...ticks, [sessionId]: (ticks[sessionId] ?? 0) + 1 }
+}
+
+/**
+ * AD-070 §2.6: StreamState, созданный только live-usage дочерней сессии саб-агента
+ * (без stream.start/контента/тулов). Такой плейсхолдер удаляется терминальным
+ * событием `stream.ended`, чтобы не задевать настоящий стрим родителя.
+ */
+function isUsageOnlyStream(st: StreamState | undefined): boolean {
+  return !!st && !st.hasContent && st.content.length === 0 && st.toolCalls.length === 0
+}
+
+/**
+ * AD-070 §2.6: накопление reasoning-блоков по итерациям. Внутри одной итерации
+ * более длинный текст заменяет предыдущий; новая итерация — отдельный блок.
+ */
+function appendReasoningBlock(
+  blocks: ReasoningBlockData[],
+  text: string,
+  iteration: number,
+): ReasoningBlockData[] {
+  if (!text || !text.trim()) return blocks
+  if (blocks.length === 0) return [{ text, iteration }]
+  const last = blocks[blocks.length - 1]!
+  if (last.iteration === iteration && text.length >= last.text.length) {
+    return [...blocks.slice(0, -1), { ...last, text }]
+  }
+  return [...blocks, { text, iteration }]
+}
+
+/** AD-070 §2.6: накопление промежуточного текста; в итерации текст перезаписывается. */
+function appendIntermediateBlock(
+  blocks: IntermediateTextBlockData[],
+  text: string,
+  iteration: number,
+): IntermediateTextBlockData[] {
+  if (!text || !text.trim()) return blocks
+  const last = blocks[blocks.length - 1]
+  if (last && last.iteration === iteration) {
+    return [...blocks.slice(0, -1), { ...last, text }]
+  }
+  return [...blocks, { text, iteration }]
+}
+
+type MessageToolCall = NonNullable<MessageData['tool_calls']>[number]
+
+/** Live-вызовы (`LiveToolCall`) → сохраняемая форма сообщения (`tool_calls`). */
+function mapLiveToolCalls(toolCalls: LiveToolCall[]): MessageToolCall[] | null {
+  if (toolCalls.length === 0) return null
+  return toolCalls.map((tc) => ({
+    name: tc.name,
+    args: tc.args,
+    id: tc.callId,
+    result: tc.result,
+    started_at: tc.startedAt,
+    completed_at: tc.completedAt,
+    iteration: tc.iteration,
+  }))
+}
+
 interface ChatStore {
   messagesBySession: Record<string, MessageData[]>
+  streamFinishTickBySession: Record<string, number>
   streamingBySession: Record<string, Record<string, StreamState>>
   queueBySession: Record<string, QueueState>
   pendingBySession: Record<string, QueuedMessage[]>
-  errorBySession: Record<string, StreamError | null>
   retryBySession: Record<string, StreamRetry | null>
   subagentRetryBySession: Record<string, SubagentRetryState | null>
   subagentResumingBySession: Record<string, SubagentResumeState | null>
   finalErrorBySession: Record<string, FinalStreamError | null>
   stickyNotesBySession: Record<string, StickyNoteData[]>
   summarizationPendingBySession: Record<string, boolean>
+  /** AD-070 §2.6: live-вклад саб-агентов родительской сессии (для StatsTab). */
+  liveSubagentUsageBySession: Record<string, LiveSubagentSessionUsage>
   debugModalSessionId: string | null
   debugModalMessageIndex: number | null
 
@@ -184,13 +312,38 @@ interface ChatStore {
   updateMessage: (sessionId: string, index: number, changes: Partial<MessageData>) => void
   startStream: (sessionId: string, streamId: string, agentRole: string | null, model?: string, provider?: string) => void
   updateStreamChunk: (sessionId: string, streamId: string, content: string, reasoning: string, model?: string, provider?: string, iteration?: number) => void
+  updateStreamUsage: (sessionId: string, streamId: string, data: {
+    usage?: UsageData
+    costUsd?: number
+    costCurrency?: string
+    costBreakdown?: CostBreakdown
+    usageEstimated?: boolean
+    model?: string
+    provider?: string
+    /** AD-070 §2.6: роль агента (stream.usage.agent_role) — для дочерней сессии. */
+    agentRole?: string
+  }) => void
+  /** AD-070 §2.6: сброс live-плейсхолдера дочерней сессии (stream.ended). */
+  clearUsageStream: (sessionId: string, streamId?: string) => void
+  updateLiveSubagentUsage: (sessionId: string, callId: string, data: {
+    usage?: UsageData
+    costUsd?: number
+    costCurrency?: string
+    estimated?: boolean
+    model?: string
+    provider?: string
+  }) => void
   addToolCall: (sessionId: string, streamId: string, tc: LiveToolCall) => void
   updateToolCallResult: (sessionId: string, streamId: string, callId: string, result: { content: string; isError?: boolean; metadata?: Record<string, unknown> }) => void
   updateToolCallSubagentProgress: (sessionId: string, streamId: string, callId: string, patch: { reasoning?: string; content?: string; iteration?: number }) => void
   finishStream: (sessionId: string, streamId: string, metadata: StreamDoneMetadata) => void
-  cancelStream: (sessionId: string, streamId: string) => void
-  addStreamError: (sessionId: string, error: StreamError) => void
-  clearStreamError: (sessionId: string) => void
+  cancelStream: (sessionId: string, streamId: string, status?: MessageStatus, extra?: {
+    usage?: UsageData
+    costUsd?: number
+    costCurrency?: string
+    costBreakdown?: CostBreakdown
+    usageEstimated?: boolean
+  }) => void
   setStreamRetry: (sessionId: string, retry: StreamRetry | null) => void
   setStreamRetrying: (sessionId: string, streamId: string, isRetrying: boolean) => void
   setSubagentRetry: (sessionId: string, retry: SubagentRetryState | null) => void
@@ -226,16 +379,17 @@ interface ChatStore {
 
 export const useChatStore = create<ChatStore>((set) => ({
   messagesBySession: {},
+  streamFinishTickBySession: {},
   streamingBySession: {},
   queueBySession: {},
   pendingBySession: {},
-  errorBySession: {},
   retryBySession: {},
   subagentRetryBySession: {},
   subagentResumingBySession: {},
   finalErrorBySession: {},
   stickyNotesBySession: {},
   summarizationPendingBySession: {},
+  liveSubagentUsageBySession: {},
   debugModalSessionId: null,
   debugModalMessageIndex: null,
   retryInputBySession: {},
@@ -280,20 +434,11 @@ export const useChatStore = create<ChatStore>((set) => ({
       const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
       const existing = sessionStreams[streamId]
       if (!existing) return s
-      let nextBlocks = existing.reasoningBlocks
-      if (reasoning && reasoning.trim()) {
-        const iter = iteration ?? existing.toolIteration
-        if (nextBlocks.length === 0) {
-          nextBlocks = [{ text: reasoning, iteration: iter }];
-        } else {
-          const last = nextBlocks[nextBlocks.length - 1]!;
-          if (last.iteration === iter && reasoning.length >= last.text.length) {
-            nextBlocks = [...nextBlocks.slice(0, -1), { ...last, text: reasoning }];
-          } else {
-            nextBlocks = [...nextBlocks, { text: reasoning, iteration: iter }];
-          }
-        }
-      }
+      const nextBlocks = appendReasoningBlock(
+        existing.reasoningBlocks,
+        reasoning,
+        iteration ?? existing.toolIteration,
+      )
       const nextHasContent = existing.hasContent
         || (typeof content === 'string' && content.length > 0)
         || (typeof reasoning === 'string' && reasoning.trim().length > 0)
@@ -306,6 +451,143 @@ export const useChatStore = create<ChatStore>((set) => ({
         provider: provider || existing.provider,
       }
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
+    }),
+
+  // AD-070 §2.6: live-статистика стрима (событие stream.usage). Обновляет
+  // соответствующий StreamState; точный usage не понижается оценкой.
+  // Дочерняя сессия саб-агента не получает stream.start — при первом usage
+  // создаём минимальный StreamState (без контента, `hasContent: false`), чтобы
+  // открытая дочерняя сессия показывала live. MessageList рисует плейсхолдер
+  // только при `hasContent`, поэтому фантомного сообщения не появляется;
+  // терминальное `stream.ended` из task.ts удаляет такой StreamState.
+  updateStreamUsage: (sessionId, streamId, data) =>
+    set((s) => {
+      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
+      const existing = sessionStreams[streamId]
+      const base: StreamState = existing ?? {
+        streamId,
+        agentRole: data.agentRole ?? null,
+        content: '',
+        reasoningBlocks: [],
+        intermediateTextBlocks: [],
+        isStreaming: true,
+        hasContent: false,
+        model: data.model,
+        provider: data.provider,
+        toolCalls: [],
+        toolIteration: 0,
+        _lastContentLen: 0,
+      }
+      // Не понижаем точность: если уже есть точный usage, оценка его не перезаписывает
+      // (равно как и вычисленные по ней cost/usageEstimated).
+      const downgrade = base.usage !== undefined
+        && base.usageEstimated !== true
+        && data.usageEstimated === true
+      sessionStreams[streamId] = {
+        ...base,
+        ...(data.usage && !downgrade ? { usage: data.usage } : {}),
+        ...(data.costUsd !== undefined && !downgrade ? { costUsd: data.costUsd } : {}),
+        ...(data.costCurrency !== undefined && !downgrade ? { costCurrency: data.costCurrency } : {}),
+        ...(data.costBreakdown !== undefined && !downgrade ? { costBreakdown: data.costBreakdown } : {}),
+        ...(data.usageEstimated !== undefined && !downgrade ? { usageEstimated: data.usageEstimated } : {}),
+        ...(data.model ? { model: data.model } : {}),
+        ...(data.provider ? { provider: data.provider } : {}),
+        ...(data.agentRole ? { agentRole: data.agentRole } : {}),
+      }
+      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
+    }),
+
+  // AD-070 §2.6: терминальное событие дочерней сессии саб-агента. Удаляет
+  // usage-only StreamState (если streamId не задан — все такие в сессии), не
+  // трогая настоящий стрим с контентом/тулами.
+  clearUsageStream: (sessionId, streamId) =>
+    set((s) => {
+      const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
+      let changed = false
+      if (streamId) {
+        if (isUsageOnlyStream(sessionStreams[streamId])) {
+          delete sessionStreams[streamId]
+          changed = true
+        }
+      } else {
+        for (const key of Object.keys(sessionStreams)) {
+          if (isUsageOnlyStream(sessionStreams[key])) {
+            delete sessionStreams[key]
+            changed = true
+          }
+        }
+      }
+      if (!changed) return s
+      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
+    }),
+
+  // AD-070 §2.6: live-вклад саб-агентов (событие subagent.progress в родителе).
+  // Событие несёт НАКОПЛЕННЫЙ usage вызова, поэтому вклад вызова перезаписываем,
+  // а агрегат сессии пересчитываем суммой по вызовам.
+  updateLiveSubagentUsage: (sessionId, callId, data) =>
+    set((s) => {
+      const sessionUsage = s.liveSubagentUsageBySession[sessionId]
+      const byCall = { ...(sessionUsage?.byCall || {}) }
+      const prev = byCall[callId]
+      byCall[callId] = {
+        usage: data.usage ?? prev?.usage ?? { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+        costUsd: data.costUsd ?? prev?.costUsd,
+        costCurrency: data.costCurrency ?? prev?.costCurrency,
+        estimated: data.estimated ?? prev?.estimated ?? false,
+        model: data.model ?? prev?.model,
+        provider: data.provider ?? prev?.provider,
+      }
+
+      let input = 0
+      let output = 0
+      let total = 0
+      let cacheRead = 0
+      let cacheWrite = 0
+      let reasoning = 0
+      let cost = 0
+      let anyCost = false
+      let anyEstimated = false
+      // C2b: не смешиваем валюты — копим раздельно по кодам, номинальная сумма
+      // (`costUsd`) остаётся для обратной совместимости.
+      const costByCurrency: Record<string, number> = {}
+      for (const call of Object.values(byCall)) {
+        input += call.usage.input_tokens || 0
+        output += call.usage.output_tokens || 0
+        total += call.usage.total_tokens || 0
+        cacheRead += call.usage.cache_read_tokens || 0
+        cacheWrite += call.usage.cache_write_tokens || 0
+        reasoning += call.usage.reasoning_tokens || 0
+        if (call.costUsd !== undefined) {
+          cost += call.costUsd
+          anyCost = true
+          const key = costCurrencyKey(call.costCurrency)
+          costByCurrency[key] = (costByCurrency[key] ?? 0) + call.costUsd
+        }
+        if (call.estimated) anyEstimated = true
+      }
+      const currencies = Object.keys(costByCurrency)
+      const costCurrency = currencies.length === 1 ? currencies[0] : undefined
+
+      return {
+        liveSubagentUsageBySession: {
+          ...s.liveSubagentUsageBySession,
+          [sessionId]: {
+            usage: {
+              input_tokens: input,
+              output_tokens: output,
+              total_tokens: total,
+              cache_read_tokens: cacheRead,
+              cache_write_tokens: cacheWrite,
+              reasoning_tokens: reasoning,
+            },
+            ...(anyCost ? { costUsd: cost } : {}),
+            ...(costCurrency !== undefined ? { costCurrency } : {}),
+            ...(currencies.length > 0 ? { costByCurrency } : {}),
+            estimated: anyEstimated,
+            byCall,
+          },
+        },
+      }
     }),
 
   addToolCall: (sessionId, streamId, tc) =>
@@ -327,6 +609,11 @@ export const useChatStore = create<ChatStore>((set) => ({
       sessionStreams[streamId] = {
         ...existing,
         toolCalls,
+        // Вызов инструмента — тоже ответ провайдера (как текст/reasoning). Сразу
+        // помечаем стрим содержательным, чтобы плейсхолдер и снятие «processing» в
+        // MessageList срабатывали уже по `tool_call.started`, а не после завершения
+        // инструмента (регресс c11ece3f: фильтр `isStreaming && hasContent`).
+        hasContent: true,
       }
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
@@ -359,33 +646,19 @@ export const useChatStore = create<ChatStore>((set) => ({
       const tc = existing.toolCalls[idx]!
       const updated = [...existing.toolCalls]
 
+      const iter = patch.iteration ?? 0
       // Размышления саб-агента: накапливаем по итерациям (как reasoningBlocks основного стрима).
-      let reasoningBlocks = tc.subagentReasoningBlocks ? [...tc.subagentReasoningBlocks] : []
-      if (patch.reasoning && patch.reasoning.trim()) {
-        const iter = patch.iteration ?? 0
-        if (reasoningBlocks.length === 0) {
-          reasoningBlocks = [{ text: patch.reasoning, iteration: iter }]
-        } else {
-          const last = reasoningBlocks[reasoningBlocks.length - 1]!
-          if (last.iteration === iter && patch.reasoning.length >= last.text.length) {
-            reasoningBlocks = [...reasoningBlocks.slice(0, -1), { ...last, text: patch.reasoning }]
-          } else {
-            reasoningBlocks = [...reasoningBlocks, { text: patch.reasoning, iteration: iter }]
-          }
-        }
-      }
-
+      const reasoningBlocks = appendReasoningBlock(
+        tc.subagentReasoningBlocks ?? [],
+        patch.reasoning ?? '',
+        iter,
+      )
       // Промежуточный текст саб-агента.
-      let intermediateTextBlocks = tc.subagentIntermediateTextBlocks ? [...tc.subagentIntermediateTextBlocks] : []
-      if (patch.content && patch.content.trim()) {
-        const iter = patch.iteration ?? 0
-        const lastText = intermediateTextBlocks[intermediateTextBlocks.length - 1]
-        if (lastText && lastText.iteration === iter) {
-          intermediateTextBlocks = [...intermediateTextBlocks.slice(0, -1), { ...lastText, text: patch.content }]
-        } else {
-          intermediateTextBlocks = [...intermediateTextBlocks, { text: patch.content, iteration: iter }]
-        }
-      }
+      const intermediateTextBlocks = appendIntermediateBlock(
+        tc.subagentIntermediateTextBlocks ?? [],
+        patch.content ?? '',
+        iter,
+      )
 
       updated[idx] = { ...tc, subagentReasoningBlocks: reasoningBlocks, subagentIntermediateTextBlocks: intermediateTextBlocks }
       sessionStreams[streamId] = { ...existing, toolCalls: updated }
@@ -394,8 +667,24 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   finishStream: (sessionId, streamId, metadata) =>
     set((s) => {
+      const streamFinishTickBySession = bumpStreamFinishTick(s.streamFinishTickBySession, sessionId)
+      // AD-070 §2.6: стрим завершён — live-вклад саб-агентов сессии больше не
+      // актуален (итог приходит в metadata.subagents финального сообщения).
+      const liveSubagentUsageBySession = { ...s.liveSubagentUsageBySession }
+      delete liveSubagentUsageBySession[sessionId]
       const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
       const streamState = sessionStreams[streamId]
+      // AD-070 §2.6: status и top-level финальная статистика stream.done
+      // (duration_ms/cost_usd/cost_breakdown/usage_estimated) доносим до metadata
+      // сообщения — «Последний ответ» показывает финал сразу, без refetch.
+      const doneMetadata: Record<string, unknown> = { ...(metadata.metadata || {}) }
+      if (metadata.status !== undefined) doneMetadata.status = metadata.status
+      if (metadata.duration_ms !== undefined) doneMetadata.duration_ms = metadata.duration_ms
+      if (metadata.cost_usd !== undefined) doneMetadata.cost_usd = metadata.cost_usd
+      if (metadata.cost_currency !== undefined) doneMetadata.cost_currency = metadata.cost_currency
+      if (metadata.cost_breakdown !== undefined) doneMetadata.cost_breakdown = metadata.cost_breakdown
+      if (metadata.usage_estimated !== undefined) doneMetadata.usage_estimated = metadata.usage_estimated
+      const statusMetadata = Object.keys(doneMetadata).length > 0 ? doneMetadata : null
       if (!streamState) {
         console.warn(`[chatStore] finishStream: no stream state for ${streamId} in session ${sessionId}, adding message from metadata`)
         if (metadata.content && !metadata.cancelled) {
@@ -406,8 +695,9 @@ export const useChatStore = create<ChatStore>((set) => ({
             role: 'assistant',
             content: metadata.content,
             model: metadata.model || undefined,
+            provider: metadata.provider || undefined,
             usage: metadata.usage || undefined,
-            metadata: metadata.metadata || null,
+            metadata: statusMetadata,
             intermediate_text_blocks: metadata.intermediate_text_blocks || null,
             reasoning_blocks: metadata.reasoning_blocks || null,
             debug_data: metadata.debug_info || undefined,
@@ -428,9 +718,11 @@ export const useChatStore = create<ChatStore>((set) => ({
           return {
             messagesBySession: { ...s.messagesBySession, [sessionId]: msgs },
             streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
+            streamFinishTickBySession,
+            liveSubagentUsageBySession,
           }
         }
-        return s
+        return { streamFinishTickBySession, liveSubagentUsageBySession }
       }
 
       if (!metadata.cancelled && (streamState.content || metadata.content)) {
@@ -455,25 +747,15 @@ export const useChatStore = create<ChatStore>((set) => ({
           content: metadata.content || streamState.content,
           agent_role: streamState.agentRole || undefined,
           model: metadata.model,
-          provider: streamState.provider || undefined,
+          provider: metadata.provider || streamState.provider || undefined,
           usage: metadata.usage || undefined,
           reasoning: reasoningJoined,
           reasoning_blocks: reasoningBlocks || null,
           intermediate_text_blocks: intermediateTextBlocks || null,
           debug_data: metadata.debug_info || undefined,
           summary_of: metadata.metadata?.indices || null,
-          metadata: metadata.metadata || null,
-          tool_calls: streamState.toolCalls.length > 0
-            ? streamState.toolCalls.map((tc) => ({
-                name: tc.name,
-                args: tc.args,
-                id: tc.callId,
-                result: tc.result,
-                started_at: tc.startedAt,
-                completed_at: tc.completedAt,
-                iteration: tc.iteration,
-              }))
-            : null,
+          metadata: statusMetadata,
+          tool_calls: mapLiveToolCalls(streamState.toolCalls),
           disabled: false,
           pinned: false,
           hidden: false,
@@ -490,21 +772,16 @@ export const useChatStore = create<ChatStore>((set) => ({
             intermediate_text_blocks: intermediateTextBlocks || msgs[existingIdx]!.intermediate_text_blocks,
             debug_data: metadata.debug_info || undefined,
             model: metadata.model || msgs[existingIdx]!.model,
-            provider: streamState.provider || msgs[existingIdx]!.provider,
+            provider: metadata.provider || streamState.provider || msgs[existingIdx]!.provider,
             usage: metadata.usage || msgs[existingIdx]!.usage,
             summary_of: metadata.metadata?.indices || msgs[existingIdx]!.summary_of,
-            metadata: metadata.metadata || msgs[existingIdx]!.metadata,
-            tool_calls: streamState.toolCalls.length > 0
-              ? streamState.toolCalls.map((tc) => ({
-                  name: tc.name,
-                  args: tc.args,
-                  id: tc.callId,
-                  result: tc.result,
-                  started_at: tc.startedAt,
-                  completed_at: tc.completedAt,
-                  iteration: tc.iteration,
-                }))
-              : msgs[existingIdx]!.tool_calls,
+            // AD-070 §2.6: не затираем metadata, пришедшую с message.added
+            // (subagents/tool_results/secrets), — stream.done добавляет поверх
+            // только status и финальную статистику.
+            metadata: statusMetadata
+              ? { ...(msgs[existingIdx]!.metadata || {}), ...statusMetadata }
+              : msgs[existingIdx]!.metadata,
+            tool_calls: mapLiveToolCalls(streamState.toolCalls) ?? msgs[existingIdx]!.tool_calls,
           }
         } else {
           msgs.push(newMsg)
@@ -524,29 +801,64 @@ export const useChatStore = create<ChatStore>((set) => ({
         return {
           streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
           messagesBySession: { ...s.messagesBySession, [sessionId]: msgs },
+          streamFinishTickBySession,
+          liveSubagentUsageBySession,
         }
       }
 
       delete sessionStreams[streamId]
-      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
+      return {
+        streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
+        streamFinishTickBySession,
+        liveSubagentUsageBySession,
+      }
     }),
 
-  cancelStream: (sessionId, streamId) =>
+  cancelStream: (sessionId, streamId, status, extra) =>
     set((s) => {
       const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
       delete sessionStreams[streamId]
-      return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
+      // AD-070 §2.6: stream.cancelled несёт status + usage/cost/usage_estimated —
+      // если message.added уже добавил assistant-сообщение, сохраняем статистику
+      // в него (по stream_id), чтобы отменённый ответ показывал токены/стоимость.
+      const hasExtra = !!extra
+        && (extra.usage !== undefined || extra.costUsd !== undefined || extra.usageEstimated !== undefined)
+      let messagesBySession = s.messagesBySession
+      if (status || hasExtra) {
+        const msgs = s.messagesBySession[sessionId]
+        if (msgs) {
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            const m = msgs[i]!
+            const meta = m.metadata as Record<string, unknown> | null | undefined
+            if (m.role === 'assistant' && meta?.stream_id === streamId) {
+              const next = [...msgs]
+              next[i] = {
+                ...m,
+                ...(extra?.usage ? { usage: extra.usage } : {}),
+                metadata: {
+                  ...(m.metadata || {}),
+                  ...(status ? { status } : {}),
+                  ...(extra?.costUsd !== undefined ? { cost_usd: extra.costUsd } : {}),
+                  ...(extra?.costCurrency !== undefined ? { cost_currency: extra.costCurrency } : {}),
+                  ...(extra?.usageEstimated !== undefined ? { usage_estimated: extra.usageEstimated } : {}),
+                },
+              }
+              messagesBySession = { ...s.messagesBySession, [sessionId]: next }
+              break
+            }
+          }
+        }
+      }
+      // AD-070 §2.6: отмена завершает стрим — live-вклад саб-агентов сбрасываем.
+      const liveSubagentUsageBySession = { ...s.liveSubagentUsageBySession }
+      delete liveSubagentUsageBySession[sessionId]
+      return {
+        streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
+        ...(messagesBySession !== s.messagesBySession ? { messagesBySession } : {}),
+        streamFinishTickBySession: bumpStreamFinishTick(s.streamFinishTickBySession, sessionId),
+        liveSubagentUsageBySession,
+      }
     }),
-
-  addStreamError: (sessionId, error) =>
-    set((s) => ({
-      errorBySession: { ...s.errorBySession, [sessionId]: error },
-    })),
-
-  clearStreamError: (sessionId) =>
-    set((s) => ({
-      errorBySession: { ...s.errorBySession, [sessionId]: null },
-    })),
 
   setStreamRetry: (sessionId, retry) =>
     set((s) => ({
@@ -660,8 +972,6 @@ export const useChatStore = create<ChatStore>((set) => ({
       delete queueBySession[sessionId]
       const pendingBySession = { ...s.pendingBySession }
       delete pendingBySession[sessionId]
-      const errorBySession = { ...s.errorBySession }
-      delete errorBySession[sessionId]
       const retryBySession = { ...s.retryBySession }
       delete retryBySession[sessionId]
       const subagentRetryBySession = { ...s.subagentRetryBySession }
@@ -670,7 +980,9 @@ export const useChatStore = create<ChatStore>((set) => ({
       delete subagentResumingBySession[sessionId]
       const finalErrorBySession = { ...s.finalErrorBySession }
       delete finalErrorBySession[sessionId]
-      return { messagesBySession, streamingBySession, queueBySession, pendingBySession, errorBySession, retryBySession, subagentRetryBySession, subagentResumingBySession, finalErrorBySession }
+      const liveSubagentUsageBySession = { ...s.liveSubagentUsageBySession }
+      delete liveSubagentUsageBySession[sessionId]
+      return { messagesBySession, streamingBySession, queueBySession, pendingBySession, retryBySession, subagentRetryBySession, subagentResumingBySession, finalErrorBySession, liveSubagentUsageBySession }
     }),
 
   setStickyNotes: (sessionId, notes) =>
@@ -805,3 +1117,12 @@ export const useChatStore = create<ChatStore>((set) => ({
       }
     }),
 }))
+
+/**
+ * AD-070 §2.6: селектор live-вклада саб-агентов сессии (для StatsTab).
+ * Использование: `useChatStore(selectLiveSubagentUsage(sessionId))`.
+ */
+export function selectLiveSubagentUsage(sessionId: string) {
+  return (s: { liveSubagentUsageBySession: Record<string, LiveSubagentSessionUsage> }):
+    LiveSubagentSessionUsage | undefined => s.liveSubagentUsageBySession[sessionId]
+}

@@ -5,6 +5,20 @@ export function parseISODate(isoString: string): Date {
   return new Date(isoString + 'Z')
 }
 
+/** Дата и время в локали UI (дд.мм.гггг чч:мм). Пустое/невалидное значение → «—». */
+export function formatDateTime(isoString: string | null | undefined, locale: string): string {
+  if (!isoString) return '—'
+  const date = parseISODate(isoString)
+  if (Number.isNaN(date.getTime())) return '—'
+  return date.toLocaleString(locale === 'en' ? 'en-US' : 'ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 export function formatRelativeTime(isoString: string): string {
   const date = parseISODate(isoString)
   const now = new Date()

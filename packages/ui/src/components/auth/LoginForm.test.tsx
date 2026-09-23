@@ -6,15 +6,18 @@ vi.mock('@/lib/i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
 }))
 
-vi.mock('@/stores/authStore', () => ({
-  useAuthStore: () => ({
+vi.mock('@/stores/authStore', () => {
+  const state = {
     login: vi.fn(),
     loginWithPassword: vi.fn(),
     isLoading: false,
     error: null,
     clearError: vi.fn(),
-  }),
-}))
+  }
+  return {
+    useAuthStore: (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state),
+  }
+})
 
 vi.mock('@/lib/api/client', () => ({
   api: {

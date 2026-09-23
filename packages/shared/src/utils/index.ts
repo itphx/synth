@@ -119,6 +119,7 @@ export { globMatch } from './glob.js';
 // --- Part helpers ---
 
 import type { Part, PartType } from '../types/index.js';
+import type { ProfileStore } from '../interfaces/index.js';
 
 export function makePart(type: PartType, data: unknown): Part {
   return { id: generateId(), type, data };
@@ -150,4 +151,40 @@ export function buildContentFromParts(parts: Part[]): string {
       return '';
     })
     .join('\n');
+}
+
+// --- Provider icon helpers (общие для core/backend роутеров провайдеров) ---
+
+/** Favicon по origin базового URL провайдера; undefined — URL некорректен/пуст. */
+export function getFaviconUrl(baseUrl?: string): string | undefined {
+  if (!baseUrl) return undefined;
+  try {
+    const origin = new URL(baseUrl).origin;
+    return `${origin}/favicon.ico`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Представление иконки провайдера: заданная `icon` либо fallback на favicon. */
+export function renderIcon(icon?: string, baseUrl?: string): { icon: string; icon_url?: string } {
+  if (icon) return { icon };
+  const fav = getFaviconUrl(baseUrl);
+  return { icon: '', icon_url: fav };
+}
+
+// --- Author display name (статистика сессии) ---
+
+/**
+ * Резолвер отображаемого имени автора по профилю (displayName, fallback —
+ * username). Без профилей возвращает undefined — потребитель подставит username.
+ */
+export function createResolveAuthorName(
+  profilesStore?: ProfileStore,
+): ((author: string) => Promise<string | null>) | undefined {
+  if (!profilesStore) return undefined;
+  return async (author: string): Promise<string | null> => {
+    const profile = await profilesStore.getProfileByUsername(author);
+    return profile ? profile.displayName || profile.username : null;
+  };
 }

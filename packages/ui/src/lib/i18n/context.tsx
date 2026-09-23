@@ -17,7 +17,8 @@ export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [locale]);
 
   const value = React.useMemo<I18nContextValue>(() => {
-    const t = (key: I18nKey, params?: I18nParams) => formatMessage(dictionary, key, params);
+    const t = (key: I18nKey, params?: I18nParams) =>
+      formatMessage(dictionary, key, params, locale);
     return {
       locale,
       locales: LOCALES,

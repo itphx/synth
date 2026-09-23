@@ -6,7 +6,8 @@ const MODE_ORDER: Array<'auto' | 'ws' | 'sse'> = ['auto', 'ws', 'sse']
 
 export function GlobalTransportIndicator() {
   const { t } = useI18n()
-  const { transportMode, setTransportMode } = useUIStore()
+  const transportMode = useUIStore(s => s.transportMode)
+  const setTransportMode = useUIStore(s => s.setTransportMode)
   const connected = useTransportStore((s) => s.connected)
 
   const label = t(`transport.${transportMode}` as never)

@@ -17,6 +17,8 @@ interface AuthState {
   login: (apiKey: string, username?: string) => Promise<void>
   loginWithPassword: (server: string, username: string, password: string) => Promise<void>
   setUser: (user: User) => Promise<void>
+  /** Локальное обновление профиля (после PATCH /profile) без повторной загрузки. */
+  setProfile: (profile: Profile | null) => void
   logout: () => Promise<void>
   sessionExpired: () => void
   clearError: () => void
@@ -39,27 +41,32 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   /**
    * Принудительно перечитать сессию (без guard) — когда cookie уже поставлена
    * (например после server-логина), а состояние UI нужно обновить.
+   *
+   * Использует только GET /auth/status (200 всегда, в т.ч. для гостя), чтобы не
+   * провоцировать ожидаемый, но шумный 401 от GET /auth/session в консоли.
    */
   reauthenticate: async () => {
     set({ isLoading: true, error: null })
     try {
-      const session = await api.getSession()
-      set({
-        user: session.user,
-        isAuthenticated: true,
-        isLoading: false,
-        deployment: session.deployment ?? null,
-      })
-      await profileService.initialize()
-      set({ isInitialized: true })
-    } catch {
       const status = await api.getStatus()
       set({
         user: status.authenticated ? status.user : null,
         isAuthenticated: status.authenticated,
         isLoading: false,
-        isInitialized: true,
         deployment: status.deployment ?? null,
+      })
+      if (status.authenticated) {
+        await profileService.initialize()
+      }
+      set({ isInitialized: true })
+    } catch {
+      // Сеть/сервер недоступны — безопасно завершаем инициализацию гостем.
+      set({
+        user: null,
+        isAuthenticated: false,
+        isLoading: false,
+        isInitialized: true,
+        deployment: null,
       })
     }
   },
@@ -117,6 +124,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     await profileService.initialize()
     set({ isInitialized: true })
   },
+
+  setProfile: (profile) => set({ profile }),
 
   logout: async () => {
     set({ isLoading: true })

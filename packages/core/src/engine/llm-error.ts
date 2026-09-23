@@ -63,6 +63,13 @@ export const LLM_MAX_ATTEMPTS = 3;
 export const LLM_RETRY_DELAYS_MS = [5000, 15000, 30000];
 
 /**
+ * Порог одинаковых tool-вызовов подряд (doom loop) — единый для оркестратора
+ * (`_processMessage`) и саб-агента (`task.ts`): на N-м повторе повторный вызов
+ * не исполняется, а в историю уходит сообщение `tool.doom_loop`.
+ */
+export const MAX_DOOM_LOOP_COUNT = 3;
+
+/**
  * Восполняемая ли ошибка провайдера (можно ретраить): network/timeout/
  * rate_limit/server_error — да; auth/model_not_found/context_length —
  * нет. Приоритеты:

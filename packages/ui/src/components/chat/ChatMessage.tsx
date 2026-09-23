@@ -4,6 +4,7 @@ import { MarkdownContent } from './MarkdownContent'
 import { SecretMarkdown, SecretPlainText } from './SecretPlaceholder'
 import { MessageHeader } from './MessageHeader'
 import { MessageActions } from './MessageActions'
+import { MessageStats, hasMessageStats } from './MessageStats'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
 import { SubagentPart, type SubagentPartData } from './SubagentPart'
@@ -13,7 +14,7 @@ import { useChatStore } from '@/stores/chatStore'
 import { useResolveI18n } from '@/lib/i18n'
 import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
 import { synthApi } from '@/lib/api/synthApi'
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import { Icon } from '@/components/icon/Icon'
 
 function useToolCallData(toolCalls: MessageData['tool_calls']) {
@@ -56,19 +57,22 @@ function getIntermediateTextBlocks(message: MessageData): IntermediateTextBlockD
 
 interface ChatMessageProps {
   message: MessageData
-  onCopy: () => void
-  onToggle: () => void
-  onPin: () => void
-  onDelete: () => void
-  onRetry: () => void
-  onDebug: () => void
-  onFork: () => void
+  // Колбэки принимают сообщение/индекс: MessageList передаёт стабильные ссылки,
+  // а ChatMessage связывает их с конкретным сообщением внутри (см. useCallback ниже).
+  // Это нужно, чтобы React.memo(ChatMessage) сравнивал пропсы по ссылке.
+  onCopy: (msg: MessageData) => void
+  onToggle: (msg: MessageData) => void
+  onPin: (msg: MessageData) => void
+  onDelete: (msg: MessageData) => void
+  onRetry: (msg: MessageData) => void
+  onDebug: (msg: MessageData) => void
+  onFork: (msg: MessageData) => void
   readOnly?: boolean
   /** true если сессия — дочерняя (сабагент) */
   isSubagent?: boolean
   selectionMode?: boolean
   isSelected?: boolean
-  onToggleSelect?: (shiftKey: boolean) => void
+  onToggleSelect?: (index: number, shiftKey: boolean) => void
   /**
    * Статус активного стрима, связанного с этим user-сообщением (по metadata.stream_id),
    * пока провайдер ещё не вернул ни одного чанка. null — статус не показываем.
@@ -115,6 +119,12 @@ function ChatMessageInner({
   const i18nMeta = message.metadata?.i18n
   const activeTab = useUIStore((s) => s.centerTabs.find((t) => t.id === s.activeCenterTabId))
   const sessionId = (activeTab?.data?.sessionId as string) || undefined
+  // Отладка открыта глобально (chatStore) — подсветить кнопку только у того
+  // сообщения и сессии, для которых вызвано окно.
+  const debugModalSessionId = useChatStore((s) => s.debugModalSessionId)
+  const debugModalMessageIndex = useChatStore((s) => s.debugModalMessageIndex)
+  const debugActive =
+    !!sessionId && debugModalSessionId === sessionId && debugModalMessageIndex === message.index
 
   const containerClass = cn(
     'flex px-4 py-3 group',
@@ -139,6 +149,29 @@ function ChatMessageInner({
   )
 
   const showActions = isUser || isAssistant || isSummary || isDebug
+
+  // AD-070 §2.6: строка статистики — только для ответов ассистента с данными.
+  // Скрытые/выключенные и служебные tool-chain сообщения исключаем.
+  const showStats =
+    isAssistant &&
+    !message.disabled &&
+    !message.hidden &&
+    message.metadata?.tool_chain !== true &&
+    hasMessageStats(message)
+
+  // Локальные стабильные обработчики: зависят только от ссылки на колбэк и
+  // самого сообщения, поэтому пропсы дочерних компонентов не «дрожат» зря.
+  const handleCopy = useCallback(() => onCopy(message), [onCopy, message])
+  const handleToggle = useCallback(() => onToggle(message), [onToggle, message])
+  const handlePin = useCallback(() => onPin(message), [onPin, message])
+  const handleDelete = useCallback(() => onDelete(message), [onDelete, message])
+  const handleRetry = useCallback(() => onRetry(message), [onRetry, message])
+  const handleDebug = useCallback(() => onDebug(message), [onDebug, message])
+  const handleFork = useCallback(() => onFork(message), [onFork, message])
+  const handleToggleSelect = useCallback(
+    (shiftKey: boolean) => onToggleSelect?.(message.index, shiftKey),
+    [onToggleSelect, message.index]
+  )
 
   const handleOriginClick = () => {
     const parentSessionId = (message.metadata as Record<string, unknown>)?.source_session_id as string | undefined
@@ -192,7 +225,16 @@ function ChatMessageInner({
     ? [...intermediateTextBlocks.map((it) => it.text), message.content].filter(Boolean).join('\n\n')
     : null
   const displayContent = bottomContent ?? message.content
-  if (!displayContent && !message.reasoning && liveToolCalls.length === 0 && reasoningBlocks.length === 0 && intermediateTextBlocks.length === 0) return null
+  // AD-070 §2.6: пустой отменённый ответ (отмена до первого токена) всё равно
+  // показываем — статус «Остановлено» и статистика идут через metadata.
+  if (
+    !displayContent &&
+    !message.reasoning &&
+    liveToolCalls.length === 0 &&
+    reasoningBlocks.length === 0 &&
+    intermediateTextBlocks.length === 0 &&
+    !showStats
+  ) return null
 
   return (
     <div className={containerClass}>
@@ -203,7 +245,7 @@ function ChatMessageInner({
             checked={isSelected}
             onChange={(e) => {
               const ev = e.nativeEvent as MouseEvent
-              onToggleSelect?.(ev.shiftKey ?? false)
+              handleToggleSelect(ev.shiftKey ?? false)
             }}
             className="size-4 rounded border-border cursor-pointer accent-primary"
           />
@@ -332,14 +374,18 @@ function ChatMessageInner({
             pinned={message.pinned}
             canRetry={canRetry}
             hasDebug={hasDebug}
+            debugActive={debugActive}
             readOnly={readOnly}
-            onCopy={onCopy}
-            onToggle={onToggle}
-            onPin={onPin}
-            onDelete={onDelete}
-            onRetry={onRetry}
-            onDebug={onDebug}
-            onFork={onFork}
+            hasStats={showStats}
+            // AD-070 §2.6: статистика ответа — в поповере по кнопке (единый путь).
+            statsContent={<MessageStats message={message} />}
+            onCopy={handleCopy}
+            onToggle={handleToggle}
+            onPin={handlePin}
+            onDelete={handleDelete}
+            onRetry={handleRetry}
+            onDebug={handleDebug}
+            onFork={handleFork}
           />
         )}
       </div>

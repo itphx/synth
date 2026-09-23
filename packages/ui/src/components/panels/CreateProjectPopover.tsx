@@ -23,7 +23,7 @@ export function CreateProjectPopover({
   onError?: () => void
 }) {
   const { t } = useI18n()
-  const { createProject } = useProjectsStore()
+  const createProject = useProjectsStore(s => s.createProject)
   const hybridEnabled = useHybridStore((s) => s.enabled)
   const isOffline = useHybridStore(selectIsOffline)
 

@@ -2,56 +2,26 @@ import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '../storage/json-store.js';
 import type { ProviderConfig } from '@itphx/synth-shared';
-import { ProviderFactory } from '@itphx/synth-core';
+import { DEFAULT_MCP_PRIVATE_CIDRS } from '@itphx/synth-shared';
+import { createProviderRoutes as createCoreProviderRoutes, evaluateMcpNetworkAccess } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 
-function getFaviconUrl(baseUrl?: string): string | undefined {
-  if (!baseUrl) return undefined;
-  try {
-    const origin = new URL(baseUrl).origin;
-    return `${origin}/favicon.ico`;
-  } catch {
-    return undefined;
-  }
-}
+/**
+ * Политика проверки URL провайдера для `/fetch-icon`: блокируем внутренние и
+ * приватные адреса, включая DNS-резолв (переиспользуем MCP network-policy, а не
+ * собственный regex-список). Помимо дефолтных приватных диапазонов исключаем
+ * `0.0.0.0/8` — сохраняем прежнюю блокировку hostname `0.0.0.0`.
+ */
+const PROVIDER_URL_NETWORK_POLICY = {
+  mode: 'deny' as const,
+  list: [...DEFAULT_MCP_PRIVATE_CIDRS, '0.0.0.0/8'],
+};
 
-function renderIcon(icon?: string, baseUrl?: string): { icon: string; icon_url?: string } {
-  if (icon) return { icon };
-  const fav = getFaviconUrl(baseUrl);
-  return { icon: '', icon_url: fav };
-}
-
-const INTERNAL_HOSTS = new Set([
-  'localhost',
-  '127.0.0.1',
-  '0.0.0.0',
-  '::1',
-]);
-
-const INTERNAL_CIDR_PATTERNS = [
-  /^10\.\d+\.\d+\.\d+$/,
-  /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/,
-  /^192\.168\.\d+\.\d+$/,
-  /^169\.254\.\d+\.\d+$/,
-  /^fe80:/i,
-];
-
-function isInternalOrigin(origin: string): boolean {
-  try {
-    const u = new URL(origin);
-    const hostname = u.hostname.toLowerCase();
-    if (INTERNAL_HOSTS.has(hostname)) return true;
-    if (hostname === '[::1]') return true;
-    for (const pattern of INTERNAL_CIDR_PATTERNS) {
-      if (pattern.test(hostname)) return true;
-    }
-    return false;
-  } catch {
-    return true;
-  }
-}
-
+/**
+ * Backend-обёртка над core-фабрикой провайдеров: добавляет только RBAC
+ * (мутации — ADMIN), rate limit на тест подключения и backend-only `fetch-icon`.
+ */
 export function createProviderRoutes(
   kit: AuthKit,
   store: JsonStore<ProviderConfig>,
@@ -59,116 +29,8 @@ export function createProviderRoutes(
 ): Hono {
   const app = new Hono();
 
-  // GET /api/v2/providers — список провайдеров
-  app.get('/', kit.requireAuth, async (c) => {
-    const providers = await store.list();
-    const defaultProvider = providers.find((p) => !p.name.startsWith('__'));
-    return c.json({
-      providers: providers.map((p) => ({
-        name: p.name,
-        type: p.type,
-        url: p.baseUrl || '',
-        model: p.defaultModel || '',
-        enabled: p.enabled !== false,
-        is_default: p === defaultProvider,
-        ...renderIcon(p.icon, p.baseUrl),
-      })),
-      default_provider: defaultProvider?.name || '',
-    });
-  });
-
-  // POST /api/v2/providers — создать/обновить провайдера (admin)
-  app.post('/', kit.requireAdmin, async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const name = body.name?.trim();
-    if (!name) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.nameRequired', undefined, c) } }, 400);
-    }
-
-    const existing = await store.load(name);
-    const provider: ProviderConfig = {
-      name,
-      type: body.type || existing?.type || 'openai',
-      baseUrl: body.base_url ?? body.baseUrl ?? existing?.baseUrl,
-      apiKey: body.api_key ?? body.apiKey ?? existing?.apiKey,
-      defaultModel: body.default_model ?? body.defaultModel ?? existing?.defaultModel,
-      timeout: body.timeout ?? existing?.timeout ?? 120,
-      enabled: body.enabled ?? existing?.enabled ?? true,
-      icon: body.icon !== undefined ? body.icon : (existing?.icon ?? ''),
-    };
-    await store.save(name, provider);
-    providerCache.set(name, provider);
-    return c.json(provider, existing ? 200 : 201);
-  });
-
-  // DELETE /api/v2/providers/:name — удалить (admin)
-  app.delete('/:name', kit.requireAdmin, async (c) => {
-    const name = c.req.param('name');
-    if (!(await store.exists(name))) {
-      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.provider', undefined, c) } }, 404);
-    }
-    await store.delete(name);
-    providerCache.delete(name);
-    return c.body(null, 204);
-  });
-
-  // GET /api/v2/providers/:name — получить одного (apiKey маскирован)
-  app.get('/:name', kit.requireAdmin, async (c) => {
-    const provider = await store.load(c.req.param('name'));
-    if (!provider) {
-      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.provider', undefined, c) } }, 404);
-    }
-    return c.json({
-      ...provider,
-      apiKey: provider.apiKey ? `${provider.apiKey.slice(0, 3)}...${provider.apiKey.slice(-4)}` : '',
-    });
-  });
-
-  // POST /api/v2/providers/:name/test — тест подключения (admin)
-  app.post('/:name/test', kit.requireAdmin, createRateLimiter(5, 60_000), async (c) => {
-    const provider = await store.load(c.req.param('name'));
-    if (!provider) {
-      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.provider', undefined, c) } }, 404);
-    }
-
-    if (provider.enabled === false) {
-      return c.json({ status: 'disabled', message: t('errors.providerDisabled', undefined, c) });
-    }
-
-    if (!provider.baseUrl) {
-      return c.json({ status: 'error', error: t('errors.validation.urlRequired', undefined, c) }, 400);
-    }
-
-    try {
-      const instance = ProviderFactory.create(provider.name, {
-        type: provider.type,
-        name: provider.name,
-        url: provider.baseUrl,
-        apiKey: provider.apiKey || '',
-        model: provider.defaultModel || '',
-        timeout: 30,
-      });
-
-      const models = await instance.listModels();
-
-      return c.json({
-        status: 'ok',
-        provider: provider.name,
-        type: instance.type,
-        url: instance.url,
-        model: instance.model,
-        models_count: models.length,
-        models,
-      });
-    } catch (err) {
-      return c.json({
-        status: 'error',
-        error: err instanceof Error ? err.message : t('errors.connectionError', undefined, c),
-      });
-    }
-  });
-
-  // POST /api/v2/providers/fetch-icon — получить favicon с домена (admin)
+  // POST /api/v2/providers/fetch-icon — получить favicon с домена (admin).
+  // Статический сегмент регистрируем до core-роутов (в т.ч. /:name).
   app.post('/fetch-icon', kit.requireAdmin, createRateLimiter(10, 60_000), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const url = body.url?.trim();
@@ -183,7 +45,9 @@ export function createProviderRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidUrl', undefined, c) } }, 400);
     }
 
-    if (isInternalOrigin(origin)) {
+    // SSRF-защита: внутренние/приватные адреса запрещены (включая DNS-резолв).
+    const networkCheck = await evaluateMcpNetworkAccess(origin, PROVIDER_URL_NETWORK_POLICY);
+    if (!networkCheck.allowed) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidUrl', undefined, c) } }, 400);
     }
 
@@ -249,6 +113,27 @@ export function createProviderRoutes(
       });
     }
   });
+
+  // Общая логика (GET /, POST /, GET/DELETE /:name, POST /:name/test) — в core.
+  app.route('/', createCoreProviderRoutes(
+    { requireAuth: kit.requireAuth },
+    store,
+    providerCache,
+    {
+      writeGuard: kit.requireAdmin,
+      detailGuard: kit.requireAdmin,
+      testEnabled: true,
+      testGuard: kit.requireAdmin,
+      testMiddleware: [createRateLimiter(5, 60_000)],
+      messages: {
+        nameRequired: (c) => t('errors.validation.nameRequired', undefined, c),
+        providerNotFound: (c) => t('errors.notFound.provider', undefined, c),
+        providerDisabled: (c) => t('errors.providerDisabled', undefined, c),
+        urlRequired: (c) => t('errors.validation.urlRequired', undefined, c),
+        connectionError: (c) => t('errors.connectionError', undefined, c),
+      },
+    },
+  ));
 
   return app;
 }

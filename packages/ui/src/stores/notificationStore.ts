@@ -27,7 +27,8 @@ interface NotificationPrefs {
 }
 
 const MAX_HISTORY = 50
-const DEFAULT_ENABLED: Record<NotifyCategory, boolean> = {
+/** Дефолтная доступность категорий — используется как `defaultValue` черновика настроек. */
+export const DEFAULT_ENABLED: Record<NotifyCategory, boolean> = {
   connection: true,
   streaming: false,
   queue: true,
@@ -48,6 +49,8 @@ interface NotificationStore {
 
   prefs: NotificationPrefs
   setCategoryEnabled: (category: NotifyCategory, enabled: boolean) => void
+  /** Атомарно заменить весь набор категорий (persist через middleware). */
+  setAllCategories: (enabledCategories: Record<NotifyCategory, boolean>) => void
   isCategoryEnabled: (category: NotifyCategory) => boolean
 
   sessionUnread: Record<string, number>
@@ -105,6 +108,13 @@ export const useNotificationStore = create<NotificationStore>()(
               ...state.prefs.enabledCategories,
               [category]: enabled,
             },
+          },
+        })),
+      setAllCategories: (enabledCategories) =>
+        set((state) => ({
+          prefs: {
+            ...state.prefs,
+            enabledCategories: { ...enabledCategories },
           },
         })),
       isCategoryEnabled: (category) =>

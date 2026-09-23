@@ -17,20 +17,22 @@ import { Readable } from 'node:stream';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition } from '@itphx/synth-shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, ToolsDisabledConfig } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator, FileProfileStore,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
+  McpRegistryStore,
   RuntimeSettingsStore, createSettingsRoutes, AuditLogger, mergeLlmGatewayConfig,
-  mergeSecurityConfig, ProtectedPathsStore,
+  mergeSecurityConfig, mergeMcpNetworkPolicy, ProtectedPathsStore,
   SecretPatternStore,
   RateLimiter,
   DictionaryStore, createDictionaryRoutes,
+  DEFAULT_AGENT_ID,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
-import { nowISO, ensureDataDir, MessageRole, generateStreamId, findConfigPath, SYNTH_VERSION } from '@itphx/synth-shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId, SYNTH_VERSION, DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
 import type { BusEvent } from '@itphx/synth-shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import type { BackendConfig } from './lib/app-config.js';
@@ -55,7 +57,6 @@ import { createLogsRoutes, resolveLogDir } from './routes/logs.js';
 import { createGatewayPatternsRoutes } from './routes/gateway-patterns.js';
 import { createLlmRoutes } from './routes/llm.js';
 import { createRateLimiter } from './middleware/rate-limiter.js';
-import { YamlMcpConfigStore } from './lib/mcp-config-store.js';
 import { DefaultsStore } from './lib/defaults-store.js';
 import { t, getTranslations } from './lib/i18n.js';
 import { ProjectStore } from './storage/project-store.js';
@@ -210,16 +211,37 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
 
     // Runtime-настройки (AD-005): workspace/mcp из {dataDir}/settings.json (переживают рестарт)
     const settingsStore = new RuntimeSettingsStore({ dataDir });
+    // Агент по умолчанию (админка «Агенты»): runtime-настройка поверх DEFAULT_AGENT_ID.
+    const getDefaultAgentId = async (): Promise<string> =>
+      (await settingsStore.getDefaultAgent()) ?? DEFAULT_AGENT_ID;
 
     // Умолчания оформления (AD-005): {dataDir}/defaults.json (переживают рестарт)
     const defaultsStore = new DefaultsStore({ dataDir });
 
-    // MCP
-    const configPath = findConfigPath() || './config.yaml';
-    const mcpConfigStore = new YamlMcpConfigStore(configPath);
-    await mcpConfigStore.load();
+    // MCP: единый источник истины — реестр `McpRegistryStore` (AD-071 §2.5).
+    // Legacy `YamlMcpConfigStore` удалён: instance-серверы из config.mcp.servers
+    // сидируются в реестр при старте (seed без дублирования по имени).
     const mcpManager = new McpManager();
-    mcpManager.setConfig(mcpConfigStore.getServers());
+    const mcpRegistryStore = new McpRegistryStore({ dataDir });
+    await mcpRegistryStore.seedFromConfig(backendConfig.synth.mcp.servers);
+    // Одно чтение реестра на все карты менеджера (вместо пяти).
+    const mcpMaps = await mcpRegistryStore.toManagerMaps();
+    mcpManager.setConfig(mcpMaps.servers);
+    mcpManager.setServerOrigins(mcpMaps.origins);
+    mcpManager.setServerTrusts(mcpMaps.trusts);
+    mcpManager.setServerAuthors(mcpMaps.authors);
+    mcpManager.setDefaultServers(mcpMaps.defaults);
+    // AD-071 §2.3.1: политика сетевого доступа HTTP-серверов (SSRF/egress).
+    // Runtime-настройка из админки (settings.json) приоритетнее config.yaml и
+    // переживает рестарт; храним в изменяемой переменной, чтобы registry-роуты
+    // видели свежее значение без рестарта. Слияние — единым helper'ом
+    // mergeMcpNetworkPolicy (тот же, что и в core).
+    const runtimeMcpNetworkPolicy = await settingsStore.getMcpNetworkPolicy();
+    let effectiveNetworkPolicy = mergeMcpNetworkPolicy(
+      backendConfig.synth.mcp.networkPolicy,
+      runtimeMcpNetworkPolicy,
+    );
+    mcpManager.setNetworkPolicy(effectiveNetworkPolicy);
 
     // Auth routes (после profilesStore)
     app.route('/auth', createAuthRoutes(auth, backendConfig.auth, profilesStore, dataDir, defaultsStore));
@@ -368,6 +390,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
             outputPrice: m.outputPrice,
             cacheReadPrice: m.cacheReadPrice,
             cacheWritePrice: m.cacheWritePrice,
+            // Валюта: модель → провайдер → USD (обратная совместимость).
+            currency: m.currency ?? providerCache.get(m.provider)?.currency ?? 'USD',
           };
         }
       }
@@ -394,6 +418,16 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // приоритетнее config.yaml — мёржим при старте, чтобы защита применялась к оркестратору.
     const runtimeSecurity = await settingsStore.getSecuritySettings();
     const securityConfig = mergeSecurityConfig(backendConfig.synth.security, runtimeSecurity);
+    // AD-071 §2.3: runtime-политика встроенных инструментов (админка) приоритетнее config.yaml
+    const runtimeToolsPolicy = await settingsStore.getToolsPolicy();
+    const toolsPolicy = runtimeToolsPolicy ?? backendConfig.synth.tools.policy;
+    // AD-071 §2.3: runtime-политика MCP-инструментов (админка) приоритетнее config.yaml
+    const runtimeMcpPolicy = await settingsStore.getMcpPolicy();
+    const mcpPolicy = runtimeMcpPolicy ?? backendConfig.synth.mcp.policy;
+    // AD-071 §2.6: runtime-отключение инструментов (админка) приоритетнее config.yaml
+    const runtimeToolsDisabled = await settingsStore.getToolsDisabled();
+    const toolsDisabled: ToolsDisabledConfig =
+      runtimeToolsDisabled ?? backendConfig.synth.tools.disabled ?? { capabilities: [], tools: [] };
     const protectedPathsStore = new ProtectedPathsStore({ dataDir });
 
     // Orchestrator
@@ -422,6 +456,13 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       gatewayAuditLogger,
       gatewayPayloadLogPath,
       gatewayPatternStore: patternStore,
+      cachePolicy: backendConfig.synth.llm.cache,
+      toolsPolicy,
+      mcpPolicy,
+      toolsDisabled,
+      // AD-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
+      tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
+      onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
     });
 
     const processMessage = orchestrator.createProcessMessage();
@@ -442,10 +483,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.get('/api/v2/i18n/translations/en', (c) => c.json(getTranslations('en')));
 
     // Projects routes
-    app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, backendConfig.workspacesRoot));
+    app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, backendConfig.workspacesRoot, mcpManager));
 
     // Sessions routes
-    app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore));
+    app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore, profilesStore, getDefaultAgentId));
 
     // Messages routes
     app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager, contextOptimizer, eventBus));
@@ -463,7 +504,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, modelCache, providerCache));
 
     // Agents routes
-    app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, sessionManager, agentRegistry));
+    app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, sessionManager, agentRegistry, getDefaultAgentId));
 
     // Context routes
     app.route('/api/v2/context', createContextRoutes(auth, contextConfig));
@@ -474,8 +515,12 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Git routes
     app.route('/api/v2/git', createGitRoutes(auth, projectStore, backendConfig.workspacesRoot));
 
-    // MCP routes
-    app.route('/api/v2/mcp', createMcpRoutes(auth, mcpConfigStore, mcpManager, sessionManager));
+    // MCP routes (единый реестр; legacy /servers — адаптеры над ним)
+    app.route('/api/v2/mcp', createMcpRoutes(auth, mcpManager, sessionManager, {
+      registry: mcpRegistryStore,
+      networkPolicy: effectiveNetworkPolicy,
+      getNetworkPolicy: () => effectiveNetworkPolicy,
+    }));
 
     // LLM Gateway audit routes (AD-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные
     app.route('/api/v2/audit', createAuditRoutes(auth, {
@@ -519,6 +564,23 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/settings', createSettingsRoutes(auth as unknown as CoreAuthKit, {
       settingsStore,
       fallbackWorkspace: join(dataDir, 'workspaces', 'default'),
+      // Агент по умолчанию при первом развёртывании (config.yaml не задаёт — DEFAULT_AGENT_ID).
+      fallbackDefaultAgent: DEFAULT_AGENT_ID,
+      // AD-072 Ф2: дефолты из config.yaml (без runtime) — для GET/DELETE-сброса к умолчанию.
+      fallbackLlmGateway: {
+        enabled: backendConfig.synth.llmGateway.enabled,
+        inputMode: backendConfig.synth.llmGateway.inputMode,
+        logPayloads: backendConfig.synth.llmGateway.logPayloads,
+        rateLimit: {
+          userPerMinute: backendConfig.synth.llmGateway.rateLimit?.userPerMinute ?? DEFAULT_LLM_GATEWAY_RATE_LIMIT.userPerMinute,
+          providerPerMinute: backendConfig.synth.llmGateway.rateLimit?.providerPerMinute ?? DEFAULT_LLM_GATEWAY_RATE_LIMIT.providerPerMinute,
+        },
+      },
+      fallbackSecurity: {
+        protectedPaths: { enabled: backendConfig.synth.security.protectedPaths?.enabled ?? true },
+        // AD-029: askTimeoutMs живёт в permission-секции конфига (не в security).
+        askTimeoutMs: backendConfig.synth.permission?.askTimeoutMs,
+      },
       // AD-036: live-применение тумблера LLM Gateway из UI — без рестарта сервера.
       onLlmGatewayChange: async (runtime) => {
         const merged = mergeLlmGatewayConfig(backendConfig.synth.llmGateway, runtime);
@@ -528,6 +590,31 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       onSecurityChange: async (runtime) => {
         const merged = mergeSecurityConfig(backendConfig.synth.security, runtime);
         orchestrator.setSecurityConfig(merged);
+      },
+      // AD-071 §2.3: live-применение политики встроенных инструментов из админки.
+      fallbackToolsPolicy: backendConfig.synth.tools.policy,
+      onToolsPolicyChange: async (policy) => {
+        orchestrator.setToolsPolicy(policy);
+      },
+      // AD-071 §2.3: live-применение политики MCP-инструментов из админки.
+      fallbackMcpPolicy: backendConfig.synth.mcp.policy,
+      onMcpPolicyChange: async (policy) => {
+        orchestrator.setMcpPolicy(policy);
+      },
+      // AD-071 §2.6: live-применение instance-wide отключения инструментов.
+      fallbackToolsDisabled: backendConfig.synth.tools.disabled,
+      onToolsDisabledChange: async (disabled) => {
+        orchestrator.setToolsDisabled(disabled);
+      },
+      knownTools: () => toolRegistry.list().map((tool) => ({
+        name: tool.name,
+        capabilities: [...tool.capabilities],
+      })),
+      // AD-071 §2.3.1: live-применение политики сетевого доступа MCP из админки.
+      fallbackMcpNetworkPolicy: backendConfig.synth.mcp.networkPolicy,
+      onMcpNetworkPolicyChange: async (policy) => {
+        effectiveNetworkPolicy = policy;
+        mcpManager.setNetworkPolicy(policy);
       },
       protectedPathsStore,
     }));

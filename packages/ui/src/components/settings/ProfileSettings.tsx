@@ -3,34 +3,69 @@ import { useAuthStore } from '@/stores/authStore'
 import { useI18n } from '@/lib/i18n'
 import { api } from '@/lib/api/client'
 import { Icon } from '@/components/icon/Icon'
-import { cn } from '@/lib/utils'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { SettingsPage, SettingsCard } from './settings-layout'
+import { Button } from '@/components/ui/button'
+import { SelectContent, SelectItem } from '@/components/ui/select'
+import {
+  SelectField,
+  SettingsActions,
+  SettingsPanel,
+  SettingsSection,
+  TextArea,
+  TextField,
+} from '../ui/settings'
 
 const MAX_AVATAR_SIZE = 500 * 1024
 
+interface ProfileForm {
+  username: string
+  display_name: string
+  email: string
+  phone: string
+  team_roles: string[]
+  notes: string
+  avatar: string | null
+}
+
+const EMPTY_FORM: ProfileForm = {
+  username: '',
+  display_name: '',
+  email: '',
+  phone: '',
+  team_roles: [],
+  notes: '',
+  avatar: null,
+}
+
+/** Сравнение значимых полей формы (username — только для чтения, но тоже учитываем). */
+const formSnapshot = (f: ProfileForm) =>
+  JSON.stringify({
+    username: f.username,
+    display_name: f.display_name,
+    email: f.email,
+    phone: f.phone,
+    team_roles: f.team_roles,
+    notes: f.notes,
+    avatar: f.avatar,
+  })
+
 export const ProfileSettings = () => {
   const { t } = useI18n()
-  const { user } = useAuthStore()
-  const [form, setForm] = useState({
-    username: '',
-    display_name: '',
-    email: '',
-    phone: '',
-    team_roles: [] as string[],
-    notes: '',
-    avatar: null as string | null,
-  })
+  const user = useAuthStore(s => s.user)
+  const [form, setForm] = useState<ProfileForm>(EMPTY_FORM)
+  const [savedForm, setSavedForm] = useState<ProfileForm>(EMPTY_FORM)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const dirty = formSnapshot(form) !== formSnapshot(savedForm)
+
   useEffect(() => {
     const loadProfile = async () => {
+      let next: ProfileForm
       try {
         const profile = await api.getProfile()
-        setForm({
+        next = {
           username: profile.username || user?.username || '',
           display_name: profile.display_name || '',
           email: profile.email || user?.email || '',
@@ -38,9 +73,9 @@ export const ProfileSettings = () => {
           team_roles: profile.team_roles || [],
           notes: profile.notes || '',
           avatar: profile.preferences?.avatar || null,
-        })
+        }
       } catch {
-        setForm({
+        next = {
           username: user?.username || '',
           display_name: '',
           email: user?.email || '',
@@ -48,11 +83,26 @@ export const ProfileSettings = () => {
           team_roles: [],
           notes: '',
           avatar: null,
-        })
+        }
       }
+      setForm(next)
+      setSavedForm(next)
     }
     loadProfile()
   }, [user])
+
+  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const flashSuccess = () => {
+    setSuccess(true)
+    if (successTimerRef.current !== null) clearTimeout(successTimerRef.current)
+    successTimerRef.current = setTimeout(() => {
+      successTimerRef.current = null
+      setSuccess(false)
+    }, 2000)
+  }
+  useEffect(() => () => {
+    if (successTimerRef.current !== null) clearTimeout(successTimerRef.current)
+  }, [])
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -67,8 +117,7 @@ export const ProfileSettings = () => {
     reader.onload = () => {
       const base64 = reader.result as string
       setForm({ ...form, avatar: base64 })
-      setSuccess(true)
-      setTimeout(() => setSuccess(false), 2000)
+      flashSuccess()
     }
     reader.readAsDataURL(file)
   }
@@ -87,17 +136,24 @@ export const ProfileSettings = () => {
       })
       const currentProfile = useAuthStore.getState().profile
       if (currentProfile) {
-        useAuthStore.setState({
-          profile: { ...currentProfile, preferences: updated.preferences },
+        useAuthStore.getState().setProfile({
+          ...currentProfile,
+          preferences: updated.preferences,
         })
       }
-      setSuccess(true)
-      setTimeout(() => setSuccess(false), 2000)
+      flashSuccess()
+      setSavedForm(form)
     } catch (err) {
       setError(err instanceof Error ? err.message : t('auth.saveError'))
     } finally {
       setIsLoading(false)
     }
+  }
+
+  const handleCancel = () => {
+    setForm(savedForm)
+    setError(null)
+    setSuccess(false)
   }
 
   const teamRoleOptions = [
@@ -110,182 +166,131 @@ export const ProfileSettings = () => {
   const avatarInitial = form.display_name?.charAt(0).toUpperCase() || form.username?.charAt(0).toUpperCase() || '?'
 
   return (
-    <SettingsPage title={t('auth.profile')} description={t('auth.profileDescription')}>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <SettingsCard>
-          <div className="flex items-center gap-4">
-            <div
-              className="size-20 rounded-full bg-interactive-selection flex items-center justify-center overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
+    <SettingsPanel
+      title={t('auth.profile')}
+      description={t('auth.profileDescription')}
+    >
+      <SettingsSection>
+        <div className="flex flex-wrap items-center gap-4 min-w-0">
+          <div
+            className="size-20 shrink-0 rounded-full bg-interactive-selection flex items-center justify-center overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {form.avatar ? (
+              <img src={form.avatar} alt="Avatar" className="size-full object-cover" />
+            ) : (
+              <span className="text-2xl font-medium text-interactive-selection-foreground">
+                {avatarInitial}
+              </span>
+            )}
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleAvatarChange}
+            className="hidden"
+          />
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <Button
               onClick={() => fileInputRef.current?.click()}
             >
-              {form.avatar ? (
-                <img src={form.avatar} alt="Avatar" className="size-full object-cover" />
-              ) : (
-                <span className="text-2xl font-medium text-interactive-selection-foreground">
-                  {avatarInitial}
-                </span>
-              )}
-            </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              onChange={handleAvatarChange}
-              className="hidden"
-            />
-            <div className="min-w-0">
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className={cn(
-                  "px-3 py-1.5 rounded-lg text-sm font-medium",
-                  "bg-interactive-selection hover:bg-interactive-selection/90",
-                  "text-interactive-selection-foreground",
-                  "transition-colors"
-                )}
+              {form.avatar ? t('auth.changeAvatar') : t('auth.uploadAvatar')}
+            </Button>
+            {form.avatar && (
+              <Button
+                variant="ghost"
+                onClick={() => setForm({ ...form, avatar: null })}
               >
-                {form.avatar ? t('auth.changeAvatar') : t('auth.uploadAvatar')}
-              </button>
-              {form.avatar && (
-                <button
-                  onClick={() => setForm({ ...form, avatar: null })}
-                  className="ml-2 px-3 py-1.5 rounded-lg text-sm font-medium text-muted-foreground hover:bg-interactive-hover transition-colors"
-                >
-                  {t('auth.removeAvatar')}
-                </button>
-              )}
-            </div>
+                {t('auth.removeAvatar')}
+              </Button>
+            )}
           </div>
-        </SettingsCard>
+        </div>
+      </SettingsSection>
 
-        <SettingsCard>
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-foreground" htmlFor="profile-username">{t('auth.login')}</label>
-            <input
-              id="profile-username"
-              type="text"
-              value={form.username}
-              readOnly
-              disabled
-              className={cn(
-                "w-full px-3 py-2 rounded-lg border bg-muted text-muted-foreground",
-                "cursor-not-allowed"
-              )}
-            />
-          </div>
+      <SettingsSection>
+        <TextField
+          id="profile-username"
+          label={t('auth.login')}
+          value={form.username}
+          readOnly
+          disabled
+        />
+        <TextField
+          id="profile-display-name"
+          label={t('auth.displayName')}
+          value={form.display_name}
+          onChange={(e) => setForm({ ...form, display_name: e.target.value })}
+        />
+      </SettingsSection>
 
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-foreground" htmlFor="profile-display-name">{t('auth.displayName')}</label>
-            <input
-              id="profile-display-name"
-              type="text"
-              value={form.display_name}
-              onChange={(e) => setForm({ ...form, display_name: e.target.value })}
-              className={cn(
-                "w-full px-3 py-2 rounded-lg border bg-background text-foreground",
-                "focus:outline-none focus:ring-2 focus:ring-ring",
-                "transition-colors"
-              )}
-            />
-          </div>
-        </SettingsCard>
+      <SettingsSection>
+        <TextField
+          id="profile-email"
+          label={t('common.email')}
+          type="email"
+          value={form.email || ''}
+          onChange={(e) => setForm({ ...form, email: e.target.value })}
+        />
+        <TextField
+          id="profile-phone"
+          label={t('auth.phone')}
+          type="tel"
+          value={form.phone || ''}
+          onChange={(e) => setForm({ ...form, phone: e.target.value })}
+        />
+      </SettingsSection>
 
-        <SettingsCard>
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-foreground" htmlFor="profile-email">{t('common.email')}</label>
-            <input
-              id="profile-email"
-              type="email"
-              value={form.email || ''}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
-              className={cn(
-                "w-full px-3 py-2 rounded-lg border bg-background text-foreground",
-                "focus:outline-none focus:ring-2 focus:ring-ring",
-                "transition-colors"
-              )}
-            />
-          </div>
+      <SettingsSection>
+        <SelectField
+          label={t('auth.teamRole')}
+          value={form.team_roles[0] || 'developer'}
+          onValueChange={(value) => setForm({ ...form, team_roles: [value] })}
+          ariaLabel={t('auth.teamRole')}
+        >
+          <SelectContent>
+            {teamRoleOptions.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </SelectField>
+      </SettingsSection>
 
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-foreground" htmlFor="profile-phone">{t('auth.phone')}</label>
-            <input
-              id="profile-phone"
-              type="tel"
-              value={form.phone || ''}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              className={cn(
-                "w-full px-3 py-2 rounded-lg border bg-background text-foreground",
-                "focus:outline-none focus:ring-2 focus:ring-ring",
-                "transition-colors"
-              )}
-            />
-          </div>
-        </SettingsCard>
-
-        <SettingsCard>
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-foreground" htmlFor="profile-team-role">{t('auth.teamRole')}</label>
-            <Select
-              value={form.team_roles[0] || 'developer'}
-              onValueChange={(value) => setForm({ ...form, team_roles: [value] })}
-            >
-              <SelectTrigger id="profile-team-role" className="w-full" aria-label={t('auth.teamRole')}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {teamRoleOptions.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </SettingsCard>
-
-        <SettingsCard className="sm:col-span-2">
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-foreground" htmlFor="profile-notes">{t('auth.notes')}</label>
-            <textarea
-              id="profile-notes"
-              value={form.notes}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              rows={3}
-              className={cn(
-                "w-full px-3 py-2 rounded-lg border bg-background text-foreground",
-                "focus:outline-none focus:ring-2 focus:ring-ring",
-                "transition-colors resize-none"
-              )}
-            />
-          </div>
-        </SettingsCard>
-      </div>
+      <SettingsSection>
+        <TextArea
+          id="profile-notes"
+          label={t('auth.notes')}
+          value={form.notes}
+          onChange={(e) => setForm({ ...form, notes: e.target.value })}
+          rows={3}
+          className="resize-none"
+        />
+      </SettingsSection>
 
       {error && (
-        <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm min-w-0 break-words">
           <Icon name="error-warning" className="size-4 shrink-0" />
           {error}
         </div>
       )}
 
       {success && (
-        <div className="flex items-center gap-2 p-3 rounded-lg bg-status-success/10 text-status-success text-sm">
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-status-success/10 text-status-success text-sm min-w-0">
           <Icon name="check" className="size-4 shrink-0" />
           {t('common.saved')}
         </div>
       )}
 
-      <div className="flex justify-end border-t border-border pt-4">
-        <button
-          onClick={handleSave}
-          disabled={isLoading}
-          className={cn(
-            "px-4 py-2 rounded-lg text-sm font-medium",
-            "bg-interactive-selection hover:bg-interactive-selection/90",
-            "disabled:opacity-50",
-            "transition-colors"
-          )}
-        >
-          {isLoading ? t('common.loading') : t('common.save')}
-        </button>
-      </div>
-    </SettingsPage>
+      <SettingsActions
+        onSave={handleSave}
+        onCancel={handleCancel}
+        saveDisabled={!dirty}
+        cancelDisabled={!dirty}
+        saving={isLoading}
+        saveTestId="profile-save"
+        cancelTestId="profile-cancel"
+      />
+    </SettingsPanel>
   )
 }

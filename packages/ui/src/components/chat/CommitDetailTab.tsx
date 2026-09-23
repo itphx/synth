@@ -11,7 +11,7 @@ interface CommitDetailTabProps {
 
 export function CommitDetailTab({ tab }: CommitDetailTabProps) {
   const { t, locale } = useI18n()
-  const { loadCommitDetail } = useGitStore()
+  const loadCommitDetail = useGitStore(s => s.loadCommitDetail)
   const [commit, setCommit] = useState<CommitDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

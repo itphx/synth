@@ -9,7 +9,9 @@ interface AuthGateProps {
 
 export const AuthGate = ({ children }: AuthGateProps) => {
   const { t } = useI18n()
-  const { isAuthenticated, isInitialized, initialize } = useAuthStore()
+  const isAuthenticated = useAuthStore(s => s.isAuthenticated)
+  const isInitialized = useAuthStore(s => s.isInitialized)
+  const initialize = useAuthStore(s => s.initialize)
 
   useEffect(() => {
     initialize()

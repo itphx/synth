@@ -1,8 +1,25 @@
 import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
-import { BaseProvider, type LLMMessage, type CancellationToken } from './base.js';
+import {
+  BaseProvider,
+  resolveSystemPromptText,
+  toNonNegativeNumber,
+  type DetailedModelInfo,
+  type LLMMessage,
+  type SystemPromptInput,
+  type CancellationToken,
+} from './base.js';
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
 import { ContextLengthExceededError, RateLimitError } from './exceptions.js';
+
+/** Максимум best-effort POST /api/show за один синк (первые N моделей). */
+const MAX_CONTEXT_PROBES = 50;
+
+/** Размер батча параллельных проб контекста (чтобы не заваливать Ollama). */
+const CONTEXT_PROBE_BATCH_SIZE = 6;
+
+/** Общий дедлайн fallback-проб контекста, мс — ограничивает серию батчей. */
+const CONTEXT_PROBE_DEADLINE_MS = 20_000;
 
 export class OllamaProvider extends BaseProvider {
   getProviderName(): string {
@@ -11,7 +28,7 @@ export class OllamaProvider extends BaseProvider {
 
   async chat(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     stream?: boolean,
     debugCollector?: DebugCollector,
@@ -25,7 +42,8 @@ export class OllamaProvider extends BaseProvider {
     };
     if (this.reasoningLevel === 'low') body.think = true;
     else if (this.reasoningLevel === 'none') body.think = false;
-    if (systemPrompt) body.system = systemPrompt;
+    const systemText = resolveSystemPromptText(systemPrompt);
+    if (systemText) body.system = systemText;
     if (tools?.length) body.tools = this._formatTools(tools);
     if (this.numCtx && this.numCtx > 0) body.options = { num_ctx: this.numCtx };
 
@@ -61,7 +79,7 @@ export class OllamaProvider extends BaseProvider {
 
   async *chatAsync(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     debugCollector?: DebugCollector,
     cancellationToken?: CancellationToken,
@@ -75,7 +93,8 @@ export class OllamaProvider extends BaseProvider {
     };
     if (this.reasoningLevel === 'low') body.think = true;
     else if (this.reasoningLevel === 'none') body.think = false;
-    if (systemPrompt) body.system = systemPrompt;
+    const systemText = resolveSystemPromptText(systemPrompt);
+    if (systemText) body.system = systemText;
     if (tools?.length) body.tools = this._formatTools(tools);
     if (this.numCtx && this.numCtx > 0) body.options = { num_ctx: this.numCtx };
 
@@ -84,7 +103,14 @@ export class OllamaProvider extends BaseProvider {
 
     let accumulatedReasoning = '';
     let accumulatedContent = '';
-    const accumulatedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    // AD-070 §2.3: у Ollama cache-полей нет — cacheRead/cacheWrite = 0.
+    const accumulatedUsage: TokenUsage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
     const accumulatedToolCalls: Record<string, unknown>[] = [];
 
     const controller = new AbortController();
@@ -157,6 +183,18 @@ export class OllamaProvider extends BaseProvider {
 
               const msg = chunkData.message as Record<string, unknown> | undefined;
 
+              // AD-070: накапливаем usage ДО yield'ов, иначе чанк уносит
+              // предыдущее (устаревшее) значение, а актуальное попадёт только
+              // в следующий чанк/финал. Семантика — running total.
+              if (typeof chunkData.prompt_eval_count === 'number') {
+                accumulatedUsage.inputTokens += chunkData.prompt_eval_count;
+              }
+              if (typeof chunkData.eval_count === 'number') {
+                accumulatedUsage.outputTokens += chunkData.eval_count;
+              }
+              accumulatedUsage.totalTokens =
+                accumulatedUsage.inputTokens + accumulatedUsage.outputTokens;
+
               if (msg?.content && typeof msg.content === 'string') {
                 if (!firstChunkReceived) {
                   firstChunkReceived = true;
@@ -207,13 +245,6 @@ export class OllamaProvider extends BaseProvider {
                   usage: accumulatedUsage,
                   reasoning: accumulatedReasoning || undefined,
                 };
-              }
-
-              if (typeof chunkData.prompt_eval_count === 'number') {
-                accumulatedUsage.inputTokens += chunkData.prompt_eval_count;
-              }
-              if (typeof chunkData.eval_count === 'number') {
-                accumulatedUsage.outputTokens += chunkData.eval_count;
               }
             } catch {
               continue;
@@ -293,41 +324,163 @@ export class OllamaProvider extends BaseProvider {
   }
 
   /**
-   * Список моделей с контекстным окном из /api/tags.
-   * Ollama отдаёт context_length внутри details.context_length
-   * (а в некоторых версиях — в model_info.context_length).
+   * Список моделей из /api/tags: контекстное окно (details.context_length /
+   * model_info), а также метаданные (размер, параметры, квантизация,
+   * capabilities). Если окно из tags не определено — best-effort POST
+   * /api/show {model} и `model_info["<arch>.context_length"]`. Пробы идут
+   * батчами параллельно, ограничены первыми MAX_CONTEXT_PROBES моделями,
+   * имеют общий дедлайн и не роняют синк при ошибках.
    */
-  async listModelsDetailed(): Promise<Array<{ id: string; contextWindow?: number }>> {
+  async listModelsDetailed(): Promise<DetailedModelInfo[]> {
     const baseUrl = this.url.replace('/api/chat', '').replace('/v1/chat/completions', '');
     const tagsUrl = `${baseUrl}/api/tags`;
 
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 10_000);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
 
+    let models: DetailedModelInfo[] | undefined;
+    try {
       const resp = await fetch(tagsUrl, { signal: controller.signal });
-      clearTimeout(timer);
 
       if (resp.ok) {
         const data = await resp.json() as {
           models?: Array<{
             name: string;
-            details?: { context_length?: number };
+            size?: number;
+            details?: {
+              context_length?: number;
+              parameter_size?: string;
+              quantization_level?: string;
+            };
             model_info?: Record<string, unknown>;
+            capabilities?: unknown;
           }>;
         };
-        return (data.models || [])
-          .map((m) => ({
-            id: m.name,
-            contextWindow: this._extractContextWindow(m),
-          }))
+
+        models = (data.models || [])
+          .map((m) => this._parseTagModel(m))
           .filter((m) => m.id);
       }
     } catch {
       // fall through
+    } finally {
+      clearTimeout(timer);
     }
 
-    return [];
+    if (!models) return [];
+
+    // Fallback-пробы контекста: только пока окно неизвестно и в пределах
+    // первых MAX_CONTEXT_PROBES моделей.
+    await this._probeContextWindows(models, baseUrl);
+
+    return models;
+  }
+
+  /**
+   * Best-effort дозапрос контекстных окон через POST /api/show.
+   *
+   * Пробы идут батчами по CONTEXT_PROBE_BATCH_SIZE параллельно
+   * (`Promise.allSettled`), только для моделей без уже известного окна и не
+   * более чем для первых MAX_CONTEXT_PROBES моделей. Результаты раскладываются
+   * по исходным индексам — порядок и детерминизм моделей сохраняются. Общий
+   * дедлайн ограничивает длительность всей серии проб.
+   */
+  private async _probeContextWindows(
+    models: DetailedModelInfo[],
+    baseUrl: string,
+  ): Promise<void> {
+    const candidates: number[] = [];
+    for (let i = 0; i < models.length && i < MAX_CONTEXT_PROBES; i++) {
+      if (models[i]!.contextWindow === undefined) candidates.push(i);
+    }
+
+    const deadline = Date.now() + CONTEXT_PROBE_DEADLINE_MS;
+    for (let start = 0; start < candidates.length; start += CONTEXT_PROBE_BATCH_SIZE) {
+      if (Date.now() >= deadline) break;
+
+      const batch = candidates.slice(start, start + CONTEXT_PROBE_BATCH_SIZE);
+      const results = await Promise.allSettled(
+        batch.map((index) => this._fetchContextFromShow(baseUrl, models[index]!.id)),
+      );
+
+      for (let j = 0; j < batch.length; j++) {
+        const result = results[j]!;
+        if (result.status !== 'fulfilled') continue;
+        const contextWindow = result.value;
+        if (contextWindow !== undefined) {
+          models[batch[j]!]!.contextWindow = contextWindow;
+        }
+      }
+    }
+  }
+
+  private _parseTagModel(model: {
+    name: string;
+    size?: number;
+    details?: {
+      context_length?: number;
+      parameter_size?: string;
+      quantization_level?: string;
+    };
+    model_info?: Record<string, unknown>;
+    capabilities?: unknown;
+  }): DetailedModelInfo {
+    const result: DetailedModelInfo = { id: model.name };
+
+    const contextWindow = this._extractContextWindow(model);
+    if (contextWindow !== undefined) result.contextWindow = contextWindow;
+
+    if (typeof model.details?.parameter_size === 'string' && model.details.parameter_size) {
+      result.parameterSize = model.details.parameter_size;
+    }
+    if (typeof model.details?.quantization_level === 'string' && model.details.quantization_level) {
+      result.quantization = model.details.quantization_level;
+    }
+
+    const sizeBytes = toNonNegativeNumber(model.size);
+    if (sizeBytes !== undefined && sizeBytes > 0) result.sizeBytes = sizeBytes;
+
+    if (Array.isArray(model.capabilities)) {
+      const capabilities = model.capabilities.filter((c): c is string => typeof c === 'string' && c.length > 0);
+      if (capabilities.length) result.capabilities = capabilities;
+    }
+
+    return result;
+  }
+
+  /**
+   * Best-effort контекст из POST /api/show: архитектура → ключ
+   * `"<arch>.context_length"` в model_info. Любая ошибка/таймаут → undefined.
+   */
+  private async _fetchContextFromShow(baseUrl: string, model: string): Promise<number | undefined> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+
+    try {
+      const resp = await fetch(`${baseUrl}/api/show`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+        signal: controller.signal,
+      });
+
+      if (!resp.ok) return undefined;
+
+      const data = await resp.json() as { model_info?: Record<string, unknown> };
+      const info = data.model_info ?? {};
+      const arch = typeof info['general.architecture'] === 'string'
+        ? info['general.architecture']
+        : undefined;
+      if (!arch) return undefined;
+
+      const raw = info[`${arch}.context_length`];
+      const num = toNonNegativeNumber(raw);
+      return num !== undefined && num > 0 ? num : undefined;
+    } catch {
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -428,10 +581,15 @@ export class OllamaProvider extends BaseProvider {
       }));
     }
 
+    const inputTokens = (data.prompt_eval_count as number) || 0;
+    const outputTokens = (data.eval_count as number) || 0;
+    // AD-070 §2.3: у Ollama cache-полей нет — cacheRead/cacheWrite = 0.
     const parsedUsage: TokenUsage = {
-      inputTokens: (data.prompt_eval_count as number) || 0,
-      outputTokens: (data.eval_count as number) || 0,
-      totalTokens: 0,
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
     };
 
     return { content, model: this.model, usage: parsedUsage, toolCalls, reasoning };

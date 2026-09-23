@@ -1,11 +1,9 @@
 import React from 'react'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { THEME_PRESETS } from '@/lib/theme/themes'
 import type { ThemeMode } from '@/types/theme'
 import { useI18n } from '@/lib/i18n'
-import { SegmentedControl, type SegmentedControlOption } from './settings-layout'
-
-export { SettingsCard } from './settings-layout'
+import { SelectContent, SelectItem } from '@/components/ui/select'
+import { SegmentedControl, SelectField, type SegmentedControlOption } from '@/components/ui/settings'
 
 export const ThemeModeControl: React.FC<{
   value: ThemeMode
@@ -34,12 +32,15 @@ export const ThemeModeControl: React.FC<{
 export const ThemeControl: React.FC<{
   value: string
   onChange: (presetName: string) => void
+  label?: string
   ariaLabel?: string
-}> = ({ value, onChange, ariaLabel }) => (
-  <Select value={value} onValueChange={onChange}>
-    <SelectTrigger className="w-full" aria-label={ariaLabel}>
-      <SelectValue />
-    </SelectTrigger>
+}> = ({ value, onChange, label, ariaLabel }) => (
+  <SelectField
+    label={label}
+    value={value}
+    onValueChange={onChange}
+    ariaLabel={ariaLabel}
+  >
     <SelectContent>
       {THEME_PRESETS.map((preset) => (
         <SelectItem key={preset.name} value={preset.name}>
@@ -47,18 +48,16 @@ export const ThemeControl: React.FC<{
         </SelectItem>
       ))}
     </SelectContent>
-  </Select>
+  </SelectField>
 )
 
 export const LanguageControl: React.FC<{
   value: 'ru' | 'en'
   onChange: (locale: 'ru' | 'en') => void
   labels: Record<'ru' | 'en', string>
-}> = ({ value, onChange, labels }) => (
-  <Select value={value} onValueChange={(next) => onChange(next as 'ru' | 'en')}>
-    <SelectTrigger className="w-full">
-      <SelectValue>{labels[value]}</SelectValue>
-    </SelectTrigger>
+  label?: string
+}> = ({ value, onChange, labels, label }) => (
+  <SelectField label={label} value={value} onValueChange={(next) => onChange(next as 'ru' | 'en')}>
     <SelectContent>
       {(['ru', 'en'] as const).map((locale) => (
         <SelectItem key={locale} value={locale}>
@@ -66,5 +65,5 @@ export const LanguageControl: React.FC<{
         </SelectItem>
       ))}
     </SelectContent>
-  </Select>
+  </SelectField>
 )

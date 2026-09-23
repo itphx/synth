@@ -1,7 +1,12 @@
 import { useI18n } from '@/lib/i18n'
-import { useNotificationStore, type NotifyCategory } from '@/stores/notificationStore'
-import { Toggle } from '@/components/ui/Toggle'
-import { SettingsPage, SettingsCard } from './settings-layout'
+import { DEFAULT_ENABLED, useNotificationStore, type NotifyCategory } from '@/stores/notificationStore'
+import {
+  SettingsActions,
+  SettingsPanel,
+  SettingsSection,
+  ToggleField,
+  useSettingsDraft,
+} from '../ui/settings'
 
 const CATEGORIES: { id: NotifyCategory; labelKey: string; descKey: string }[] = [
   { id: 'connection', labelKey: 'notifications.category.connection', descKey: 'notifications.category.connection.desc' },
@@ -14,27 +19,53 @@ const CATEGORIES: { id: NotifyCategory; labelKey: string; descKey: string }[] = 
 
 export function NotificationSettings() {
   const { t } = useI18n()
-  const { prefs, setCategoryEnabled } = useNotificationStore()
+  const prefs = useNotificationStore(s => s.prefs)
+  const setAllCategories = useNotificationStore(s => s.setAllCategories)
+
+  // AD-072 (фидбек): без автосохранения. Тумблеры меняют только черновик;
+  // стор и persist обновляются по кнопке Save.
+  const draft = useSettingsDraft<Record<NotifyCategory, boolean>>({
+    value: prefs.enabledCategories,
+    defaultValue: DEFAULT_ENABLED,
+    onSave: async (next) => {
+      setAllCategories(next)
+      return next
+    },
+  })
+
+  const enabled = draft.draft ?? prefs.enabledCategories
+
+  const toggle = (category: NotifyCategory) => {
+    draft.setDraft({ ...enabled, [category]: !enabled[category] })
+  }
 
   return (
-    <SettingsPage title={t('notifications.title')} description={t('notifications.description')}>
-      <SettingsCard>
-        <div className="grid gap-4 sm:grid-cols-2">
-          {CATEGORIES.map((cat) => (
-            <div key={cat.id} className="flex items-start justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-foreground">{t(cat.labelKey)}</div>
-                <div className="text-xs text-muted-foreground">{t(cat.descKey)}</div>
-              </div>
-              <Toggle
-                enabled={prefs.enabledCategories[cat.id]}
-                onToggle={() => setCategoryEnabled(cat.id, !prefs.enabledCategories[cat.id])}
-                ariaLabel={t(cat.labelKey)}
-              />
-            </div>
-          ))}
-        </div>
-      </SettingsCard>
-    </SettingsPage>
+    <SettingsPanel title={t('notifications.title')} description={t('notifications.description')}>
+      <SettingsSection>
+        {CATEGORIES.map((cat) => (
+          <ToggleField
+            key={cat.id}
+            label={t(cat.labelKey)}
+            description={t(cat.descKey)}
+            enabled={enabled[cat.id]}
+            onToggle={() => toggle(cat.id)}
+          />
+        ))}
+      </SettingsSection>
+
+      <SettingsActions
+        align="start"
+        onSave={() => void draft.save()}
+        onCancel={() => draft.revert()}
+        onReset={() => draft.resetToDefault()}
+        saving={draft.saving}
+        saveDisabled={!draft.dirty}
+        cancelDisabled={!draft.dirty}
+        isDefault={draft.isDefault}
+        saveTestId="notifications-save"
+        cancelTestId="notifications-cancel"
+        resetTestId="notifications-reset"
+      />
+    </SettingsPanel>
   )
 }

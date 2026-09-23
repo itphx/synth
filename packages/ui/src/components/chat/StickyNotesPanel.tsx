@@ -116,14 +116,14 @@ function StickyNoteItem({
       <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={() => onToggle(note.id, !note.disabled)}
-          className="p-0.5 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground"
+          className="inline-flex items-center justify-center p-0.5 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground"
           title={note.disabled ? 'Включить' : 'Отключить'}
         >
           <Icon name={note.disabled ? 'eye-off' : 'eye'} className="size-3" />
         </button>
         <button
           onClick={() => onDelete(note.id)}
-          className="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+          className="inline-flex items-center justify-center p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
           title="Удалить"
         >
           <Icon name="close" className="size-3" />

@@ -1,5 +1,9 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem, ProjectPlan } from '@itphx/synth-shared'
+import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig } from '@itphx/synth-shared'
+import type { ToolsPolicy } from '@itphx/synth-shared/types'
+
+// Реэкспорт общих контрактов (AD-071): без локальных дублей.
+export type { McpServerConfig, ToolsPolicy }
 import { normalizeModelInfo } from './modelNormalize'
 
 const BASE_URL = '/api/v2'
@@ -46,6 +50,8 @@ export interface ProjectData {
   }>
   log?: { id: string; text: string; created_at: string; session_id?: string | null; author?: string | null }[] | null
   plan: ProjectPlan | null
+  /** AD-071 §2.4: проектный скоуп MCP (owner/lead). */
+  mcp?: ProjectMcpSettings | null
   created_at: string
   updated_at: string
 }
@@ -109,6 +115,7 @@ export interface SessionData {
   cache_read_tokens: number
   cache_write_tokens: number
   reasoning_tokens: number
+  cache_hit_rate?: number
   processor_running: boolean | null
   created_at: string
   updated_at: string
@@ -124,7 +131,7 @@ export interface StickyNoteData {
 
 export type { FileEntry, DirectoryListResult, FileReadResult } from '@itphx/synth-shared'
 
-import type { DirectoryListResult, FileReadResult, FileEntry, RepoStatus, CommitInfo, CommitDetail, SessionMode } from '@itphx/synth-shared'
+import type { DirectoryListResult, FileReadResult, RepoStatus, CommitInfo, CommitDetail, SessionMode } from '@itphx/synth-shared'
 
 export interface GitRepoConfigData {
   path: string
@@ -205,9 +212,23 @@ export interface MessageListResponse {
   engine: string
 }
 
-export interface ChatStatusResponse {
-  blocked: boolean
-  pending_count: number
+/** AD-070 §2.5: ответ GET /sessions/:id/prompt — состав системного промпта. */
+export interface PromptInfoResponse {
+  manifest: PromptManifest
+  history: PromptHistoryInfo
+  promptState: PromptState | null
+  lastPromptMeta: PromptMeta | null
+  /** AD-071 §2.6: per-tool данные встроенных инструментов (аддитивно). */
+  toolsDetail?: PromptToolDetail[]
+}
+
+/** AD-071 §2.4/§2.6: ответ GET /sessions/:id/mcp — эффективный MCP-скоуп сессии. */
+export interface SessionMcpEffectiveResponse {
+  servers: McpServerEffective[]
+  enabled: string[]
+  disabled: string[]
+  mcpServers: string[]
+  mcpDisabledServers: string[]
 }
 
 export interface ProviderInfo {
@@ -218,6 +239,32 @@ export interface ProviderInfo {
   model: string
   enabled: boolean
   is_default?: boolean
+  /** Валюта по умолчанию для моделей провайдера. */
+  currency?: string
+}
+
+/** Результат `POST /providers/fetch-icon` (admin). */
+export interface ProviderFetchIconResult {
+  icon?: string | null
+  error?: string
+  source?: string
+}
+
+/** Элемент файла контекста (admin: `GET /context/files`). */
+export interface ContextFileEntry {
+  name: string
+  category: string
+  is_system: boolean
+  is_overridden: boolean
+  enabled: boolean
+  size: number
+  content?: string
+}
+
+/** Конфиг debug-логов (admin: `GET/POST /admin/debug/config`). */
+export interface DebugConfigData {
+  groups: Record<string, string>
+  available_levels: string[]
 }
 
 export interface ModelInfo {
@@ -234,6 +281,8 @@ export interface ModelInfo {
   output_price?: number
   cache_read_price?: number
   cache_write_price?: number
+  /** Валюта цен модели; отсутствует → валюта провайдера → USD. */
+  currency?: string
 }
 
 export interface ProviderGroupInfo {
@@ -241,6 +290,7 @@ export interface ProviderGroupInfo {
   type: string
   icon: string
   defaultModel: string
+  currency?: string
 }
 
 export interface ModelGroup {
@@ -298,6 +348,22 @@ export const synthApi = {
     })
   },
 
+  /** AD-071 §2.4: проектный MCP-скоуп (owner/lead/admin). */
+  async getProjectMcp(projectId: string): Promise<ProjectMcpResponse> {
+    return fetchJSON<ProjectMcpResponse>(`${BASE_URL}/projects/${encodeURIComponent(projectId)}/mcp`)
+  },
+
+  /** AD-071 §2.4: задать проектный MCP-скоуп (owner/lead/admin). */
+  async updateProjectMcp(
+    projectId: string,
+    body: { enabled?: string[]; defaultOn?: string[] },
+  ): Promise<ProjectMcpResponse> {
+    return fetchJSON<ProjectMcpResponse>(`${BASE_URL}/projects/${encodeURIComponent(projectId)}/mcp`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+  },
+
   // Перенос проектов между мирами (гибрид): publish — локальный проект на сервер,
   // fork-local — удалённый проект в локальный мир. Сессии и файлы переносятся всегда.
   async publishProject(id: string, opts?: { remote_project_id?: string }): Promise<PublishProjectResult> {
@@ -330,6 +396,35 @@ export const synthApi = {
 
   async getSession(sessionId: string): Promise<SessionData> {
     return fetchJSON<SessionData>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}`)
+  },
+
+  /** AD-070 §2.5: манифест промпта + состояние активного агента + последний promptMeta. */
+  async getSessionPrompt(sessionId: string): Promise<PromptInfoResponse> {
+    return fetchJSON<PromptInfoResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/prompt`)
+  },
+
+  /** AD-071 §2.4/§2.6: эффективный MCP-скоуп сессии (включая отключённые с причиной). */
+  async getSessionMcpEffective(sessionId: string): Promise<SessionMcpEffectiveResponse> {
+    return fetchJSON<SessionMcpEffectiveResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/mcp`)
+  },
+
+  /**
+   * AD-071 §2.4: переключение MCP-сервера в сессии. Точечный toggle `{ name, enabled }`
+   * (в т.ч. opt-out системного) либо полная замена `{ mcpServers, mcpDisabledServers }`.
+   */
+  async updateSessionMcp(
+    sessionId: string,
+    body: { name?: string; enabled?: boolean; mcpServers?: string[]; mcpDisabledServers?: string[] },
+  ): Promise<SessionMcpEffectiveResponse> {
+    return fetchJSON<SessionMcpEffectiveResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/mcp`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+  },
+
+  /** AD-070 §2.6: статистика сессии по агентам и авторам сообщений. */
+  async getSessionStats(sessionId: string): Promise<SessionStats> {
+    return fetchJSON<SessionStats>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/stats`)
   },
 
   async createSession(data: {
@@ -377,10 +472,6 @@ export const synthApi = {
       method: 'POST',
       body: JSON.stringify(options || {}),
     })
-  },
-
-  async getSessionChildren(sessionId: string): Promise<SessionData[]> {
-    return fetchJSON<SessionData[]>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/children`)
   },
 
   async getSessionReferences(sessionId: string): Promise<{ references: Array<{ sessionId: string; label: string; messageRange: [number, number]; autoSummary?: string; createdAt: string }> }> {
@@ -454,45 +545,6 @@ export const synthApi = {
     })
   },
 
-  async getMessageDebug(sessionId: string, messageIndex: number): Promise<Record<string, unknown>> {
-    return fetchJSON(`${BASE_URL}/messages/${encodeURIComponent(sessionId)}/${messageIndex}/debug`)
-  },
-
-  // Чат (API v2 — POST /sessions/:id/prompt)
-  async streamMessage(sessionId: string, message: string, options?: {
-    agentRole?: string
-    streamId?: string
-    provider?: string
-    model?: string
-    author?: string
-    metadata?: Record<string, unknown>
-  }): Promise<ReadableStream<Uint8Array> | null> {
-    const streamId = options?.streamId || `stream-${Date.now()}`
-    const body: Record<string, unknown> = {
-      content: message,
-      stream: true,
-      agent: options?.agentRole,
-      provider: options?.provider,
-      model: options?.model,
-      messageId: streamId,
-      metadata: options?.metadata,
-    }
-
-    const response = await fetch(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/prompt`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Stream failed' }))
-      throw new Error(error.detail || `HTTP ${response.status}`)
-    }
-
-    return response.body
-  },
-
   // API v2: отправить сообщение без чтения SSE-стрима (для SSE-режима)
   async enqueueMessage(sessionId: string, message: string, options?: {
     agentRole?: string
@@ -539,11 +591,6 @@ export const synthApi = {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(childSessionId)}/resume-subagent`, {
       method: 'POST',
     })
-  },
-
-  // API v2: status
-  async getChatStatus(sessionId: string): Promise<ChatStatusResponse> {
-    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/status`)
   },
 
   // Очередь (API v2 — /queue/:sessionId)
@@ -637,26 +684,6 @@ export const synthApi = {
     })
   },
 
-  async getWorkspaceRoot(includeHidden = false): Promise<{ root: string; entries: FileEntry[] }> {
-    const params = new URLSearchParams({ includeHidden: String(includeHidden) })
-    return fetchJSON(`${BASE_URL}/fs/workspace-root?${params.toString()}`)
-  },
-
-  async browseWorkspaceRoot(
-    path: string,
-    includeHidden = false,
-  ): Promise<{ root: string; path: string; entries: FileEntry[] }> {
-    const params = new URLSearchParams({ path, includeHidden: String(includeHidden) })
-    return fetchJSON(`${BASE_URL}/fs/workspace-root/browse?${params.toString()}`)
-  },
-
-  async createWorkspaceDirectory(rePath: string): Promise<{ created: boolean; path: string }> {
-    return fetchJSON(`${BASE_URL}/fs/workspace-root/mkdir`, {
-      method: 'POST',
-      body: JSON.stringify({ path: rePath }),
-    })
-  },
-
   // Рабочий каталог по умолчанию (settings)
   async getWorkspaceSetting(): Promise<{ workspace: string }> {
     return fetchJSON<{ workspace: string }>(`${BASE_URL}/settings/workspace`)
@@ -745,6 +772,147 @@ export const synthApi = {
     }))
   },
 
+  // Модели (admin)
+  async fetchModels(providerName?: string): Promise<{
+    fetched: number
+    new: number
+    enriched: number
+    priced?: number
+    limited?: number
+    errors?: string[]
+  }> {
+    const params = providerName ? `?provider=${encodeURIComponent(providerName)}` : ''
+    return fetchJSON(`${BASE_URL}/models/fetch${params}`, { method: 'POST' })
+  },
+
+  async saveModel(data: Record<string, unknown>): Promise<ModelInfo> {
+    return fetchJSON<ModelInfo>(`${BASE_URL}/models`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  },
+
+  async deleteModel(modelId: string): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/models/${encodeURIComponent(modelId)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  // Провайдеры (admin)
+  async createProvider(data: Record<string, unknown>): Promise<ProviderInfo> {
+    return fetchJSON<ProviderInfo>(`${BASE_URL}/providers`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  },
+
+  async updateProvider(name: string, data: Record<string, unknown>): Promise<ProviderInfo> {
+    return fetchJSON<ProviderInfo>(`${BASE_URL}/providers/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+  },
+
+  async deleteProvider(name: string): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/providers/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  async testProvider(name: string): Promise<{
+    status: string
+    error?: string
+    models?: string[]
+    message?: string
+  }> {
+    return fetchJSON(`${BASE_URL}/providers/${encodeURIComponent(name)}/test`, {
+      method: 'POST',
+    })
+  },
+
+  async fetchProviderIcon(url: string): Promise<ProviderFetchIconResult> {
+    return fetchJSON<ProviderFetchIconResult>(`${BASE_URL}/providers/fetch-icon`, {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    })
+  },
+
+  // Агенты (admin)
+  async getAgentDetail(id: string): Promise<Record<string, unknown>> {
+    return fetchJSON<Record<string, unknown>>(`${BASE_URL}/agents/${encodeURIComponent(id)}`)
+  },
+
+  async saveAgent(data: Record<string, unknown>): Promise<AgentInfo> {
+    return fetchJSON<AgentInfo>(`${BASE_URL}/agents`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  },
+
+  async toggleAgent(id: string, enabled: boolean): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/agents/${encodeURIComponent(id)}/enabled`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    })
+  },
+
+  async deleteAgent(id: string): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/agents/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  // Контекст (admin)
+  async getContextFiles(category: string): Promise<{ files: ContextFileEntry[] }> {
+    return fetchJSON(`${BASE_URL}/context/files?category=${encodeURIComponent(category)}`)
+  },
+
+  async getContextFile(name: string, category: string): Promise<{ name: string; content: string }> {
+    return fetchJSON(
+      `${BASE_URL}/context/files/${encodeURIComponent(name)}?category=${encodeURIComponent(category)}`,
+    )
+  },
+
+  async saveContextFile(name: string, content: string, category: string): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/context/files/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      body: JSON.stringify({ content, category }),
+    })
+  },
+
+  async toggleContextFile(name: string): Promise<{ name: string; enabled: boolean }> {
+    return fetchJSON(`${BASE_URL}/context/files/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'toggle' }),
+    })
+  },
+
+  async deleteContextFile(name: string, category: string): Promise<void> {
+    return fetchJSON<void>(
+      `${BASE_URL}/context/files/${encodeURIComponent(name)}?category=${encodeURIComponent(category)}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  async resetContextFile(name: string, category: string): Promise<void> {
+    return fetchJSON<void>(
+      `${BASE_URL}/context/files/${encodeURIComponent(name)}/restore_to_default?category=${encodeURIComponent(category)}`,
+      { method: 'POST' },
+    )
+  },
+
+  // Debug (admin)
+  async getDebugConfig<T = DebugConfigData>(): Promise<T> {
+    return fetchJSON<T>(`${BASE_URL}/admin/debug/config`)
+  },
+
+  async saveDebugConfig(groups: Record<string, string>): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/admin/debug/config`, {
+      method: 'POST',
+      body: JSON.stringify({ groups }),
+    })
+  },
+
   // Пользователи (admin)
   async getUsers(): Promise<UsersListResponse> {
     return fetchJSON<UsersListResponse>(`${BASE_URL}/users`)
@@ -820,16 +988,6 @@ export const synthApi = {
     })
   },
 
-  async checkOptimization(sessionId: string): Promise<{
-    sliding_window: { triggered: boolean; reason: string }
-    summarization: { triggered: boolean; reason: string }
-    summarization_pending: boolean
-  }> {
-    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/optimization/check`, {
-      method: 'POST',
-    })
-  },
-
   async cancelSummarization(sessionId: string): Promise<{ success: boolean }> {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/optimization/cancel-summarization`, {
       method: 'POST',
@@ -867,49 +1025,6 @@ export const synthApi = {
     })
   },
 
-  // --- MCP ---
-  async getMcpServers(): Promise<Record<string, McpServerEntry>> {
-    return fetchJSON(`${BASE_URL}/mcp/servers`)
-  },
-
-  async addMcpServer(name: string, config: McpServerConfig): Promise<McpServerEntry> {
-    return fetchJSON(`${BASE_URL}/mcp/servers`, {
-      method: 'POST',
-      body: JSON.stringify({ name, config }),
-    })
-  },
-
-  async updateMcpServer(name: string, config: McpServerConfig): Promise<McpServerEntry> {
-    return fetchJSON(`${BASE_URL}/mcp/servers/${encodeURIComponent(name)}`, {
-      method: 'PUT',
-      body: JSON.stringify(config),
-    })
-  },
-
-  async deleteMcpServer(name: string): Promise<{ success: boolean }> {
-    return fetchJSON(`${BASE_URL}/mcp/servers/${encodeURIComponent(name)}`, {
-      method: 'DELETE',
-    })
-  },
-
-  async testMcpServer(name: string, config?: McpServerConfig): Promise<{ success: boolean; toolCount?: number; tools?: Array<{ name: string; description: string }>; error?: string }> {
-    return fetchJSON(`${BASE_URL}/mcp/servers/${encodeURIComponent(name)}/test`, {
-      method: 'POST',
-      body: config ? JSON.stringify({ config }) : undefined,
-    })
-  },
-
-  async getSessionMcp(sessionId: string): Promise<{ mcpServers: string[]; allServers: Array<{ name: string; active: boolean }> }> {
-    return fetchJSON(`${BASE_URL}/mcp/session/${encodeURIComponent(sessionId)}`)
-  },
-
-  async setSessionMcp(sessionId: string, mcpServers: string[]): Promise<{ mcpServers: string[]; allServers: Array<{ name: string; active: boolean }> }> {
-    return fetchJSON(`${BASE_URL}/mcp/session/${encodeURIComponent(sessionId)}`, {
-      method: 'PUT',
-      body: JSON.stringify({ mcpServers }),
-    })
-  },
-
   async checkUpdate(): Promise<{ currentVersion: string; latestVersion: string; hasUpdate: boolean; checkedAt: string }> {
     return fetchJSON(`${BASE_URL}/updates/check`)
   },
@@ -926,6 +1041,13 @@ export const synthApi = {
     })
   },
 
+  /** DELETE /settings/mcp — сброс runtime-настроек доступности MCP к дефолту (пусто). */
+  async resetMcpSettings(): Promise<McpSettingsPayload> {
+    return fetchJSON<McpSettingsPayload>(`${BASE_URL}/settings/mcp`, {
+      method: 'DELETE',
+    }).then((r) => ({ servers: r.servers }))
+  },
+
   async probeMcpServer(name: string): Promise<{ name: string; tools: McpProbedTool[] }> {
     return fetchJSON(`${BASE_URL}/mcp/probe`, {
       method: 'POST',
@@ -933,15 +1055,78 @@ export const synthApi = {
     })
   },
 
+  // --- MCP: единый реестр (AD-071 §2.5) ---
+  async getMcpRegistry(): Promise<{ entries: McpRegistryEntry[] }> {
+    return fetchJSON(`${BASE_URL}/mcp/registry`)
+  },
+
+  async addMcpRegistryEntry(input: McpRegistryAddInput): Promise<McpRegistryEntry> {
+    return fetchJSON(`${BASE_URL}/mcp/registry`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  async updateMcpRegistryEntry(id: string, patch: McpRegistryUpdateInput): Promise<McpRegistryEntry> {
+    return fetchJSON(`${BASE_URL}/mcp/registry/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    })
+  },
+
+  async deleteMcpRegistryEntry(id: string): Promise<{ success: boolean }> {
+    return fetchJSON(`${BASE_URL}/mcp/registry/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  // --- MCP: политика сетевого доступа (AD-071 §2.3.1) ---
+  async getMcpNetworkPolicyInfo(): Promise<{
+    policy: McpNetworkPolicy
+    isOverridden: boolean
+    defaults: McpNetworkPolicy
+  }> {
+    return fetchJSON<{ policy: McpNetworkPolicy; isOverridden: boolean; defaults: McpNetworkPolicy }>(
+      `${BASE_URL}/settings/mcp-network-policy`,
+    ).then((r) => ({ policy: r.policy, isOverridden: r.isOverridden, defaults: r.defaults }))
+  },
+
+  async saveMcpNetworkPolicy(policy: McpNetworkPolicy): Promise<McpNetworkPolicy> {
+    return fetchJSON<{ policy: McpNetworkPolicy }>(`${BASE_URL}/settings/mcp-network-policy`, {
+      method: 'PUT',
+      body: JSON.stringify({ policy }),
+    }).then((r) => r.policy)
+  },
+
+  /** DELETE /settings/mcp-network-policy — сброс к дефолту (config или deny приватных диапазонов). */
+  async resetMcpNetworkPolicy(): Promise<McpNetworkPolicy> {
+    return fetchJSON<{ policy: McpNetworkPolicy }>(`${BASE_URL}/settings/mcp-network-policy`, {
+      method: 'DELETE',
+    }).then((r) => r.policy)
+  },
+
   // --- LLM Gateway (AD-036) ---
-  async getLlmGatewaySettings(): Promise<LlmGatewaySettings> {
-    return fetchJSON<{ llmGateway: LlmGatewaySettings }>(`${BASE_URL}/settings/llm-gateway`).then((r) => r.llmGateway)
+  async getLlmGatewaySettingsInfo(): Promise<{
+    settings: LlmGatewaySettings
+    isOverridden: boolean
+    defaults: LlmGatewaySettings
+  }> {
+    return fetchJSON<{ llmGateway: LlmGatewaySettings; isOverridden: boolean; defaults: LlmGatewaySettings }>(
+      `${BASE_URL}/settings/llm-gateway`,
+    ).then((r) => ({ settings: r.llmGateway, isOverridden: r.isOverridden, defaults: r.defaults }))
   },
 
   async saveLlmGatewaySettings(config: LlmGatewaySettings): Promise<LlmGatewaySettings> {
     return fetchJSON<{ llmGateway: LlmGatewaySettings }>(`${BASE_URL}/settings/llm-gateway`, {
       method: 'PUT',
       body: JSON.stringify({ llmGateway: config }),
+    }).then((r) => r.llmGateway)
+  },
+
+  /** DELETE /settings/llm-gateway — сброс runtime-настроек к config.yaml-дефолту (live). */
+  async resetLlmGatewaySettings(): Promise<LlmGatewaySettings> {
+    return fetchJSON<{ llmGateway: LlmGatewaySettings }>(`${BASE_URL}/settings/llm-gateway`, {
+      method: 'DELETE',
     }).then((r) => r.llmGateway)
   },
 
@@ -983,6 +1168,75 @@ export const synthApi = {
     }).then((r) => r.security)
   },
 
+  // --- Инструменты: политика включения (AD-071 §2.3) ---
+  async getToolsPolicyInfo(): Promise<{ policy: ToolsPolicy; isOverridden: boolean; defaults: ToolsPolicy }> {
+    return fetchJSON<{ toolsPolicy: ToolsPolicy; isOverridden: boolean; defaults: ToolsPolicy }>(
+      `${BASE_URL}/settings/tools-policy`,
+    ).then((r) => ({ policy: r.toolsPolicy, isOverridden: r.isOverridden, defaults: r.defaults }))
+  },
+
+  async saveToolsPolicy(toolsPolicy: ToolsPolicy): Promise<ToolsPolicy> {
+    return fetchJSON<{ toolsPolicy: ToolsPolicy }>(`${BASE_URL}/settings/tools-policy`, {
+      method: 'PUT',
+      body: JSON.stringify({ toolsPolicy }),
+    }).then((r) => r.toolsPolicy)
+  },
+
+  /** DELETE /settings/tools-policy — сброс к config-дефолту (live-применение). */
+  async resetToolsPolicy(): Promise<ToolsPolicy> {
+    return fetchJSON<{ toolsPolicy: ToolsPolicy }>(`${BASE_URL}/settings/tools-policy`, {
+      method: 'DELETE',
+    }).then((r) => r.toolsPolicy)
+  },
+
+  // --- MCP: политика включения MCP-инструментов (AD-071 §2.3) ---
+  async getMcpPolicyInfo(): Promise<{ policy: ToolsPolicy; isOverridden: boolean; defaults: ToolsPolicy }> {
+    return fetchJSON<{ mcpPolicy: ToolsPolicy; isOverridden: boolean; defaults: ToolsPolicy }>(
+      `${BASE_URL}/settings/mcp-policy`,
+    ).then((r) => ({ policy: r.mcpPolicy, isOverridden: r.isOverridden, defaults: r.defaults }))
+  },
+
+  async saveMcpPolicy(mcpPolicy: ToolsPolicy): Promise<ToolsPolicy> {
+    return fetchJSON<{ mcpPolicy: ToolsPolicy }>(`${BASE_URL}/settings/mcp-policy`, {
+      method: 'PUT',
+      body: JSON.stringify({ mcpPolicy }),
+    }).then((r) => r.mcpPolicy)
+  },
+
+  /** DELETE /settings/mcp-policy — сброс к config-дефолту (live-применение). */
+  async resetMcpPolicy(): Promise<ToolsPolicy> {
+    return fetchJSON<{ mcpPolicy: ToolsPolicy }>(`${BASE_URL}/settings/mcp-policy`, {
+      method: 'DELETE',
+    }).then((r) => r.mcpPolicy)
+  },
+
+  // --- Инструменты: instance-wide отключение (AD-071 §2.6) ---
+  /** GET /settings/tools-disabled — жёстко отключённые admin'ом capability и тулы. */
+  async getToolsDisabledInfo(): Promise<{
+    config: ToolsDisabledConfig
+    isOverridden: boolean
+    defaults: ToolsDisabledConfig
+  }> {
+    return fetchJSON<{ toolsDisabled: ToolsDisabledConfig; isOverridden: boolean; defaults: ToolsDisabledConfig }>(
+      `${BASE_URL}/settings/tools-disabled`,
+    ).then((r) => ({ config: r.toolsDisabled, isOverridden: r.isOverridden, defaults: r.defaults }))
+  },
+
+  /** PUT /settings/tools-disabled — сохранить и live-применить отключение инструментов. */
+  async saveToolsDisabled(config: ToolsDisabledConfig): Promise<ToolsDisabledConfig> {
+    return fetchJSON<{ toolsDisabled: ToolsDisabledConfig }>(`${BASE_URL}/settings/tools-disabled`, {
+      method: 'PUT',
+      body: JSON.stringify({ toolsDisabled: config }),
+    }).then((r) => r.toolsDisabled)
+  },
+
+  /** DELETE /settings/tools-disabled — сброс к config-дефолту (пусто; live-применение). */
+  async resetToolsDisabled(): Promise<ToolsDisabledConfig> {
+    return fetchJSON<{ toolsDisabled: ToolsDisabledConfig }>(`${BASE_URL}/settings/tools-disabled`, {
+      method: 'DELETE',
+    }).then((r) => r.toolsDisabled)
+  },
+
   async getProtectedPaths(): Promise<ProtectedPathsRaw> {
     const r = await fetchJSON<{ policy: ProtectedPathsPolicy; base: ProtectedPathsPolicy; is_overridden: boolean }>(`${BASE_URL}/settings/protected-paths`)
     return { policy: r.policy, base: r.base, isOverridden: r.is_overridden }
@@ -999,6 +1253,30 @@ export const synthApi = {
     return fetchJSON<{ status: string }>(`${BASE_URL}/settings/protected-paths`, {
       method: 'DELETE',
     })
+  },
+
+  // --- Агент по умолчанию (админка «Агенты») ---
+  /** GET /settings/default-agent — эффективный агент по умолчанию и источник значения. */
+  async getDefaultAgentInfo(): Promise<{ defaultAgent: string; isOverridden: boolean; defaults: string }> {
+    return fetchJSON<{ defaultAgent: string; isOverridden: boolean; defaults: string }>(
+      `${BASE_URL}/settings/default-agent`,
+    )
+  },
+
+  /** PUT /settings/default-agent — сохранить агента по умолчанию (live-применение). */
+  async setDefaultAgent(defaultAgent: string): Promise<{ defaultAgent: string }> {
+    return fetchJSON<{ defaultAgent: string }>(`${BASE_URL}/settings/default-agent`, {
+      method: 'PUT',
+      body: JSON.stringify({ defaultAgent }),
+    })
+  },
+
+  /** DELETE /settings/default-agent — сброс к дефолту (`DEFAULT_AGENT_ID`). */
+  async resetDefaultAgent(): Promise<{ status: string; defaultAgent: string; isOverridden: boolean; defaults: string }> {
+    return fetchJSON<{ status: string; defaultAgent: string; isOverridden: boolean; defaults: string }>(
+      `${BASE_URL}/settings/default-agent`,
+      { method: 'DELETE' },
+    )
   },
 
   /** Полная карта обфускации сессии (AD-036): плейсхолдер → реальное значение. Доступ ADMIN/AUDITOR. */
@@ -1108,6 +1386,9 @@ export interface SecuritySettings {
   askTimeoutMs?: number
 }
 
+// AD-071 §2.3: `ToolsPolicy` — общий контракт `@itphx/synth-shared/types`
+// (импортирован и реэкспортирован выше).
+
 /** Эффективная политика защищённых путей (списки строк). */
 export interface ProtectedPathsPolicy {
   deniedPaths: string[]
@@ -1211,22 +1492,26 @@ export interface McpSettingsPayload {
   servers: Record<string, McpServerToolsSettings>
 }
 
-export interface McpServerConfig {
-  type: 'stdio' | 'sse'
-  command?: string
-  args?: string[]
-  env?: Record<string, string>
-  url?: string
-  enabled?: boolean
-  enabledByDefault?: boolean
-  timeout?: number
-  connectTimeout?: number
-}
-
-export interface McpServerEntry {
+/** AD-071 §2.5: тело добавления записи реестра MCP. */
+export interface McpRegistryAddInput {
   name: string
   config: McpServerConfig
-  connected: boolean
+  enabledByDefault?: boolean
+  origin?: 'instance' | 'user'
+}
+
+/** AD-071 §2.5: тело обновления записи реестра MCP. */
+export interface McpRegistryUpdateInput {
+  name?: string
+  config?: McpServerConfig
+  enabledByDefault?: boolean
+}
+
+/** AD-071 §2.4: ответ GET/PUT /projects/:id/mcp — проектный MCP-скоуп. */
+export interface ProjectMcpResponse {
+  enabled: string[]
+  defaultOn: string[]
+  knownServers: string[]
 }
 
 /** Ответ GET /api/v2/hybrid/status — статус гибридного режима (core ↔ удалённый backend). */

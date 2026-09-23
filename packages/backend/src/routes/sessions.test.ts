@@ -5,10 +5,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSessionRoutes } from './sessions.js';
-import { SessionManager, EventBus, FileStore } from '@itphx/synth-core';
+import { SessionManager, EventBus, FileStore, FileProfileStore } from '@itphx/synth-core';
 import { ProjectStore } from '../storage/project-store.js';
 import type { User } from '@itphx/synth-shared';
-import { MessageRole } from '@itphx/synth-shared';
+import type { ProfileStore } from '@itphx/synth-shared';
+import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 
 const testUser: User = {
   id: 'test-user',
@@ -45,6 +46,19 @@ function createMockOrchestrator() {
   return {
     createProcessMessage: () => processMessage,
     cancel: vi.fn(),
+    getPromptInfo: vi.fn().mockResolvedValue({
+      manifest: { totalChars: 10, estTokens: 3, staticPrefixChars: 5, entries: [] },
+      history: {
+        messages: { count: 2, chars: 20, estTokens: 5 },
+        stateMessages: [{ type: 'mode_change', count: 1, chars: 40, estTokens: 10 }],
+        excluded: { disabled: 0, hidden: 0, info: 1 },
+        attachments: { count: 0, chars: 0 },
+        secretPlaceholders: 0,
+      },
+      promptState: null,
+      lastPromptMeta: null,
+    }),
+    getModelPricing: vi.fn().mockReturnValue(null),
   };
 }
 
@@ -58,7 +72,7 @@ function createMockEventHub() {
   };
 }
 
-function createTestApp(tmpDir: string) {
+function createTestApp(tmpDir: string, profilesStore?: ProfileStore) {
   const app = new Hono();
   const kit = createMockKit();
   const fileStore = new FileStore({ dataDir: tmpDir });
@@ -79,6 +93,7 @@ function createTestApp(tmpDir: string) {
     eventHub as any,
     undefined,
     projectStore,
+    profilesStore,
   );
 
   app.route('/api/v2/sessions', sessionRoutes);
@@ -586,6 +601,79 @@ describe('Session API Routes', () => {
       expect(res.status).toBe(400);
       const body: any = await res.json();
       expect(body.error.code).toBe('PROJECT_NOT_FOUND');
+    });
+  });
+
+  describe('GET /api/v2/sessions/:id/prompt (AD-070 §2.5)', () => {
+    it('возвращает манифест для существующей сессии', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'S', userId: testUser.id });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/prompt`);
+
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.manifest).toBeTruthy();
+      expect(body.manifest.totalChars).toBe(10);
+      expect(body.history).toBeTruthy();
+      expect(body.history.messages.count).toBe(2);
+      expect(body.history.stateMessages[0].type).toBe('mode_change');
+      expect(body.history.excluded.info).toBe(1);
+      expect(body.promptState).toBeNull();
+      expect(body.lastPromptMeta).toBeNull();
+    });
+
+    it('возвращает 404 для отсутствующей сессии', async () => {
+      const { app } = createTestApp(tmpDir);
+      const res = await app.request('/api/v2/sessions/non-existent/prompt');
+      expect(res.status).toBe(404);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('NOT_FOUND');
+    });
+  });
+
+  describe('GET /api/v2/sessions/:id/stats (AD-070 §2.6)', () => {
+    it('возвращает агрегацию по агентам и пользователям', async () => {
+      const profilesStore = new FileProfileStore({ dataDir: tmpDir });
+      await profilesStore.getOrCreateProfile({ username: testUser.username });
+      const profile = (await profilesStore.getProfileByUsername(testUser.username))!;
+      await profilesStore.saveProfile({ ...profile, displayName: 'Test User' });
+
+      const { app, sessionManager } = createTestApp(tmpDir, profilesStore);
+      const session = await sessionManager.createSession({ title: 'S', userId: testUser.id });
+      await sessionManager.addMessage(session.id, {
+        id: generateId(), role: MessageRole.USER, seq: 0, origin: 'local',
+        parts: [makeTextPart('hi')], content: 'hi', createdAt: nowISO(),
+        disabled: false, pinned: false, hidden: false, author: testUser.username,
+      });
+      await sessionManager.addMessage(session.id, {
+        id: generateId(), role: MessageRole.ASSISTANT, seq: 0, origin: 'local',
+        parts: [makeTextPart('ok')], content: 'ok', createdAt: nowISO(),
+        disabled: false, pinned: false, hidden: false, agentRole: 'developer',
+        model: 'm', usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 },
+        metadata: { duration_ms: 1000 },
+      });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/stats`);
+
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.session_id).toBe(session.id);
+      const dev = body.agents.find((a: any) => a.agent_role === 'developer');
+      expect(dev).toBeTruthy();
+      expect(dev.input_tokens).toBe(100);
+      const user = body.users.find((u: any) => u.author === testUser.username);
+      expect(user).toBeTruthy();
+      expect(user.messages).toBe(1);
+      expect(user.display_name).toBe('Test User');
+    });
+
+    it('возвращает 404 для отсутствующей сессии', async () => {
+      const { app } = createTestApp(tmpDir);
+      const res = await app.request('/api/v2/sessions/non-existent/stats');
+      expect(res.status).toBe(404);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('NOT_FOUND');
     });
   });
 });

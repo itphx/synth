@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename, mkdir, unlink, access, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Session, Message, SessionStatus, SessionSettings, Part, SessionOrigin, SessionReference } from '@itphx/synth-shared';
+import type { Session, Message, SessionStatus, SessionSettings, Part, SessionOrigin, SessionReference, PromptState, PromptMeta } from '@itphx/synth-shared';
 import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts } from '@itphx/synth-shared';
 
 export interface StorageConfig {
@@ -46,6 +46,8 @@ interface SerializedMessage {
   author?: string;
   agent_role?: string;
   metadata?: Record<string, unknown>;
+  /** AD-070 §2.4: предсказание/валидация prompt-cache (camelCase внутри). */
+  prompt_meta?: PromptMeta;
   summary_of?: number[];
 }
 
@@ -65,6 +67,8 @@ interface SerializedSession {
   plan_approved?: boolean;
   mode?: string;
   todos?: unknown[];
+  /** AD-070 §2.4/§2.7: состояние промпта per-agent. */
+  prompt_states?: Record<string, PromptState>;
   /** Карта обфускации LLM Gateway (AD-036). */
   obfuscation_map?: Record<string, string>;
   session_origin?: string;
@@ -87,6 +91,7 @@ interface SerializedSession {
   output_cost: number;
   cache_read_cost: number;
   cache_write_cost: number;
+  cache_hit_rate?: number;
   created_at: string;
   updated_at: string;
   input_tokens: number;
@@ -160,6 +165,7 @@ function serializeMessage(msg: Message): SerializedMessage {
     author: msg.author,
     agent_role: msg.agentRole,
     metadata: msg.metadata,
+    prompt_meta: msg.promptMeta,
     summary_of: msg.summaryOf,
   };
 }
@@ -230,6 +236,7 @@ function deserializeMessage(data: SerializedMessage): Message {
     author: data.author,
     agentRole: data.agent_role,
     metadata: data.metadata,
+    promptMeta: data.prompt_meta,
     summaryOf: data.summary_of,
   };
 }
@@ -243,6 +250,7 @@ function serializeSession(session: Session): SerializedSession {
     plan_approved: session.planApproved,
     mode: session.mode,
     todos: session.todos,
+    prompt_states: session.promptStates,
     obfuscation_map: session.obfuscationMap,
     session_origin: session.sessionOrigin,
     user_id: session.userId,
@@ -289,6 +297,7 @@ function serializeSession(session: Session): SerializedSession {
     output_cost: session.outputCost,
     cache_read_cost: session.cacheReadCost,
     cache_write_cost: session.cacheWriteCost,
+    cache_hit_rate: session.cacheHitRate,
     created_at: session.createdAt,
     updated_at: session.updatedAt,
     input_tokens: session.inputTokens,
@@ -309,6 +318,7 @@ function deserializeSession(data: SerializedSession): Session {
     planApproved: data.plan_approved,
     mode: data.mode as Session['mode'],
     todos: data.todos as Session['todos'],
+    promptStates: data.prompt_states,
     obfuscationMap: data.obfuscation_map,
     sessionOrigin: (data.session_origin as SessionOrigin) || 'user',
     userId: data.user_id,
@@ -355,6 +365,7 @@ function deserializeSession(data: SerializedSession): Session {
     outputCost: data.output_cost ?? 0,
     cacheReadCost: data.cache_read_cost ?? 0,
     cacheWriteCost: data.cache_write_cost ?? 0,
+    cacheHitRate: data.cache_hit_rate,
     createdAt: data.created_at,
     updatedAt: data.updated_at,
     inputTokens: data.input_tokens,

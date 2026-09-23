@@ -8,10 +8,12 @@ import {
   createToolRegistry, createAgentRegistry, SecretPatternStore,
 } from '../index.js';
 import { JsonStore } from '../storage/json-store.js';
+import { FileProfileStore } from '../storage/profile-store.js';
 import type { ProviderConfig, ModelConfig, SummarizationConfig } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
 import { mergeSecurityConfig, RuntimeSettingsStore } from '../storage/runtime-settings.js';
+import { DEFAULT_AGENT_ID } from '../engine/agents/index.js';
 
 export interface SingleChatOptions {
   message: string;
@@ -65,6 +67,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   const eventBus = new EventBus();
   const contextConfig = new ContextConfig({ userDataDir: `${dataDir}/context` });
   const contextBuilder = new ContextBuilder(contextConfig, {
+    profilesStore: new FileProfileStore({ dataDir }),
     projectDataDir: `${dataDir}/projects`,
     defaultLanguage: 'ru',
   });
@@ -97,6 +100,8 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
           outputPrice: m.outputPrice,
           cacheReadPrice: m.cacheReadPrice,
           cacheWritePrice: m.cacheWritePrice,
+          // Валюта: модель → провайдер → USD (обратная совместимость).
+          currency: m.currency ?? providerCache.get(m.provider)?.currency ?? 'USD',
         };
       }
     }
@@ -142,7 +147,8 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     settings: {
       provider: providerName,
       model: modelName,
-      agentRole: options.agent || 'developer',
+      // Эффективный дефолт: runtime-настройка («Агенты») ?? DEFAULT_AGENT_ID.
+      agentRole: options.agent || ((await settingsStore.getDefaultAgent()) ?? DEFAULT_AGENT_ID),
     },
   });
   session.userId = 'local';

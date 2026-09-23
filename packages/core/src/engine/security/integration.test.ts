@@ -8,7 +8,7 @@ import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
 import { createToolRegistry } from '../tools/index.js';
-import { ProviderFactory, BaseProvider } from '../../providers/base.js';
+import { ProviderFactory, BaseProvider, resolveSystemPromptText } from '../../providers/base.js';
 import type { LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ContextBuilder } from '../context/builder.js';
 import { ContextConfig } from '../context/config.js';
@@ -45,7 +45,7 @@ class MockIPIProvider extends BaseProvider {
     _cancellationToken?: CancellationToken,
   ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
     MockIPIProvider.calls++;
-    MockIPIProvider.capturedSystemPrompt = systemPrompt ?? null;
+    MockIPIProvider.capturedSystemPrompt = resolveSystemPromptText(systemPrompt) ?? null;
     MockIPIProvider.capturedMessages = messages;
     if (MockIPIProvider.calls === 1 && MockIPIProvider.toolCalls) {
       yield { content: '', isFinal: true, toolCalls: MockIPIProvider.toolCalls, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
@@ -62,6 +62,9 @@ class MockIPIProvider extends BaseProvider {
 function makeCtxBuilder(): ContextBuilder {
   return {
     buildSystemPrompt: async () => 'system prompt',
+    buildBaseBlocks: async () => [
+      { key: 'role', tier: 'stable', order: 10, content: 'system prompt' },
+    ],
   } as unknown as ContextBuilder;
 }
 

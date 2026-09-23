@@ -1,14 +1,16 @@
-import { useEffect, useState } from 'react'
-import { synthApi } from '@/lib/api/synthApi'
-import { Icon } from '@/components/icon/Icon'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { synthApi, type DebugConfigData } from '@/lib/api/synthApi'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  SettingsActions,
+  SettingsPanel,
+  SettingsSection,
+  useSettingsDraft,
+} from '../ui/settings'
 
-interface DebugConfig {
-  groups: Record<string, string>
-  available_levels: string[]
-}
+type DebugConfig = DebugConfigData
 
 const LEVEL_COLORS: Record<string, string> = {
   NONE: 'bg-secondary text-muted-foreground',
@@ -18,20 +20,124 @@ const LEVEL_COLORS: Record<string, string> = {
   ERROR: 'bg-status-error/10 text-status-error',
 }
 
+const DEFAULT_LEVELS = ['NONE', 'DEBUG', 'INFO', 'WARNING', 'ERROR']
+
+type DebugCategoryKey = 'ai' | 'service'
+
+const CATEGORY_ORDER: DebugCategoryKey[] = ['ai', 'service']
+
+/** Группы сервисного уровня (всё остальное относится к AI). */
+const SERVICE_GROUPS = new Set(['DEBUG', 'ROUTES', 'STORAGE', 'WEBSOCKET'])
+
+const categoryOf = (group: string): DebugCategoryKey =>
+  SERVICE_GROUPS.has(group) ? 'service' : 'ai'
+
+interface DebugCategorySectionProps {
+  categoryKey: DebugCategoryKey
+  title: string
+  /** Сохранённые на сервере уровни групп только этой категории (они же — дефолт для Reset). */
+  groups: Record<string, string>
+  availableLevels: string[]
+  onSave: (groups: Record<string, string>) => Promise<void>
+}
+
+/**
+ * Секция одной категории логов: собственный черновик уровней и свои
+ * Save/Cancel/Reset (AD-072). Save отправляет только группы этой категории.
+ */
+function DebugCategorySection({
+  categoryKey,
+  title,
+  groups,
+  availableLevels,
+  onSave,
+}: DebugCategorySectionProps) {
+  const { t } = useI18n()
+  const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null)
+
+  const draft = useSettingsDraft<Record<string, string>>({
+    value: groups,
+    defaultValue: groups,
+    onSave: async (next) => {
+      setStatus(null)
+      try {
+        await onSave(next)
+        setStatus({ text: t('admin.debug.saved'), ok: true })
+        return next
+      } catch (err) {
+        setStatus({
+          text: err instanceof Error ? err.message : t('admin.debug.saveError'),
+          ok: false,
+        })
+        throw err
+      }
+    },
+  })
+
+  const current = draft.draft ?? groups
+
+  return (
+    <SettingsSection title={title}>
+      {Object.entries(groups).map(([group, savedLevel]) => {
+        const level = current[group] ?? savedLevel
+        return (
+          <div key={group} className="flex flex-wrap items-center justify-between gap-3 min-w-0">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="text-sm font-medium min-w-0 break-words">{group}</span>
+              <span
+                className={cn(
+                  'px-2 py-0.5 rounded text-[0.6875rem] font-medium',
+                  LEVEL_COLORS[level] || 'bg-secondary text-muted-foreground',
+                )}
+              >
+                {level}
+              </span>
+            </div>
+            <Select value={level} onValueChange={(value) => draft.update({ [group]: value })}>
+              <SelectTrigger aria-label={group}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {availableLevels.map((lvl) => (
+                  <SelectItem key={lvl} value={lvl}>{lvl}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )
+      })}
+
+      <SettingsActions
+        onSave={() => void draft.save()}
+        onCancel={() => draft.revert()}
+        onReset={() => draft.resetToDefault()}
+        saving={draft.saving}
+        saveDisabled={!draft.dirty}
+        cancelDisabled={!draft.dirty}
+        isDefault={draft.isDefault}
+        saveTestId={`debug-save-${categoryKey}`}
+        cancelTestId={`debug-cancel-${categoryKey}`}
+        resetTestId={`debug-reset-${categoryKey}`}
+      />
+      {status && (
+        <span className={cn('text-sm', status.ok ? 'text-status-success' : 'text-status-error')}>
+          {status.text}
+        </span>
+      )}
+    </SettingsSection>
+  )
+}
+
 export const DebugPanel = () => {
   const { t } = useI18n()
   const [config, setConfig] = useState<DebugConfig | null>(null)
-  const [levels, setLevels] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [status, setStatus] = useState('')
 
   useEffect(() => {
     const load = async () => {
       try {
-        const data = await synthApi.fetchJSON<DebugConfig>('/api/v2/admin/debug/config')
+        const data = await synthApi.getDebugConfig<DebugConfig>()
         setConfig(data)
-        setLevels({ ...data.groups })
       } finally {
         setLoading(false)
       }
@@ -39,106 +145,44 @@ export const DebugPanel = () => {
     load()
   }, [])
 
-  const handleLevelChange = (group: string, level: string) => {
-    setLevels((prev) => ({ ...prev, [group]: level }))
-  }
-
-  const handleSave = async () => {
-    setSaving(true)
-    setStatus('')
-    try {
-      await synthApi.fetchJSON('/api/v2/admin/debug/config', {
-        method: 'POST',
-        body: JSON.stringify({ groups: levels }),
-      })
-      setStatus(t('admin.debug.saved'))
-    } catch (err) {
-      setStatus(err instanceof Error ? err.message : t('admin.debug.saveError'))
-    } finally {
-      setSaving(false)
+  const categories = useMemo(() => {
+    const result: Record<DebugCategoryKey, Record<string, string>> = { ai: {}, service: {} }
+    for (const [group, level] of Object.entries(config?.groups ?? {})) {
+      result[categoryOf(group)][group] = level
     }
-  }
+    return result
+  }, [config])
 
-  const grouped = config?.groups
-    ? Object.entries(config.groups).reduce(
-        (acc, [key, value]) => {
-          const category = key === 'DEBUG' || key === 'ROUTES' || key === 'STORAGE' || key === 'WEBSOCKET' ? t('admin.debug.service') : t('admin.debug.ai')
-          if (!acc[category]) acc[category] = []
-          acc[category].push({ group: key, level: value })
-          return acc
-        },
-        {} as Record<string, Array<{ group: string; level: string }>>
-      )
-    : {}
+  const availableLevels =
+    config?.available_levels?.length ? config.available_levels : DEFAULT_LEVELS
+
+  const handleSave = useCallback(
+    async (groups: Record<string, string>) => {
+      await synthApi.saveDebugConfig(groups)
+      setConfig((prev) => (prev ? { ...prev, groups: { ...prev.groups, ...groups } } : prev))
+    },
+    [],
+  )
 
   return (
-    <div className="space-y-6 max-w-3xl">
-      <div>
-        <h3 className="text-lg font-semibold">{t('admin.debug.title')}</h3>
-        <p className="text-muted-foreground text-sm mt-1">
-          {t('admin.debug.description')}
-        </p>
-      </div>
-
+    <SettingsPanel title={t('admin.debug.title')} description={t('admin.debug.description')}>
       {loading ? (
         <div className="bg-background rounded-xl border p-5 animate-pulse space-y-3">
           <div className="h-4 bg-muted rounded w-48" />
           <div className="h-4 bg-muted rounded w-32" />
         </div>
       ) : (
-        <>
-          {Object.entries(grouped).map(([category, items]) => (
-            <div key={category} className="bg-background rounded-xl border p-5 space-y-4">
-              <h4 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">{category}</h4>
-
-              {items.map(({ group, level: defaultLevel }) => (
-                <div key={group} className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium">{group}</span>
-                    <span className={cn('px-2 py-0.5 rounded text-[0.6875rem] font-medium', LEVEL_COLORS[levels[group] ?? defaultLevel] || 'bg-secondary text-muted-foreground')}>
-                      {levels[group] ?? defaultLevel}
-                    </span>
-                  </div>
-                  <Select value={levels[group] ?? defaultLevel} onValueChange={(value) => handleLevelChange(group, value)}>
-                    <SelectTrigger aria-label={group}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(config?.available_levels || ['NONE', 'DEBUG', 'INFO', 'WARNING', 'ERROR']).map((lvl) => (
-                        <SelectItem key={lvl} value={lvl}>{lvl}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              ))}
-            </div>
-          ))}
-
-          <div className="flex items-center gap-4">
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
-            >
-              {saving ? (
-                <>
-                  <Icon name="refresh-cw" className="w-4 h-4 animate-spin" /> {t('admin.debug.saving')}
-                </>
-              ) : (
-                <>
-                  <Icon name="save" className="w-4 h-4" /> {t('admin.debug.save')}
-                </>
-              )}
-            </button>
-            {status && (
-              <span className={cn('text-sm', status === t('admin.debug.saved') ? 'text-status-success' : 'text-status-error')}>
-                {status}
-              </span>
-            )}
-          </div>
-        </>
+        CATEGORY_ORDER.filter((key) => Object.keys(categories[key]).length > 0).map((key) => (
+          <DebugCategorySection
+            key={key}
+            categoryKey={key}
+            title={t(`admin.debug.${key}`)}
+            groups={categories[key]}
+            availableLevels={availableLevels}
+            onSave={handleSave}
+          />
+        ))
       )}
-    </div>
+    </SettingsPanel>
   )
 }

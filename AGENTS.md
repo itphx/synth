@@ -64,6 +64,8 @@ tmp/                   # Временные файлы. Использовать
 @itphx/synth   ←  тонкая CLI-обёртка: core + ui + shared (npm-потребители)
 ```
 
+**Переиспользуемые роуты.** Общая логика HTTP-роутов живёт в core-фабриках (`createSettingsRoutes`, `createDictionaryRoutes`, `createProviderRoutes`, `createModelRoutes`, `createSessionRoutes`); backend монтирует их и добавляет только RBAC/rate-limit/специфику через `opts` (guard'ы, `messages` для i18n, хуки). Дублировать хендлеры в backend нельзя.
+
 ## Команды
 
 Из корня `synth/`:
@@ -98,7 +100,7 @@ pnpm clean                  # очистка dist/
 
 ### Запуск
 
-`./scripts/dev.sh [backend|ui|core|all]` из `synth/` (или `./synth/scripts/dev.sh` из корня проекта). Скрипт ставит: `SYNTH_AUTH_DEBUG=true` (debug-аутентификация), `SYNTH_DATA_DIR=/home/eof/dev/Synth/data`, `SYNTH_PORT`/`SYNTH_CORE_PORT`/`VITE_PORT`. Подробности — [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md).
+`./scripts/dev.sh [backend|ui|core|all]` из `synth/` (или `./synth/scripts/dev.sh` из корня проекта). Скрипт ставит: `SYNTH_AUTH_DEBUG=true` (debug-аутентификация), `SYNTH_DATA_DIR=/home/eof/dev/Synth/data`, `SYNTH_PORT`/`SYNTH_CORE_PORT`/`VITE_PORT`, а также `SYNTH_CONFIG=packages/backend/config.yaml` (только если файл существует) — поэтому `mcp.servers` из backend-конфига подхватываются в dev; `loadConfig` учитывает `SYNTH_CONFIG` (AD-023). Подробности — [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md).
 
 ### Данные
 
@@ -137,6 +139,12 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ aut
 | `PATCH /api/v2/sessions/:id` `{ mode }` | Режим сессии: `plan` / `act` / `yolo` |
 | `GET/PUT /api/v2/settings/workspace` | Рабочий каталог по умолчанию (runtime override, `settings.json`) |
 | `GET/PUT /api/v2/settings/mcp` | Доступность MCP-инструментов по режимам (plan/act) |
+| `GET/PUT /api/v2/settings/tools-policy` | Политика встроенных инструментов (`consistency`/`available`/`auto`) |
+| `GET/PUT /api/v2/settings/mcp-policy` | Политика MCP-инструментов (`consistency`/`available`/`auto`) |
+| `GET/PUT /api/v2/settings/tools-disabled` | Instance-wide отключение встроенных инструментов (группы/тулы; `runtime` неотключаем) |
+| `GET/PUT/DELETE /api/v2/settings/default-agent` | Агент по умолчанию для новых сессий (fallback `assistant`; UI — раздел «Агенты») |
+| `GET/PUT /api/v2/mcp/registry` | Реестр MCP-серверов (stdio — только ADMIN) |
+| `GET/PUT /api/v2/projects/:id/mcp` и `GET/PUT /api/v2/sessions/:id/mcp` | Уровни/скоуп MCP |
 | `POST /api/v2/mcp/probe` | Проверка MCP-сервера без регистрации инструментов |
 
 ## Процесс разработки
@@ -169,6 +177,12 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ aut
 4. Запускать сервер вне `dev.sh` — порты и env уже настроены, свой способ не изобретать.
 5. Писать в JSON-хранилище вручную — только через API (исключения: баг самого хранилища, миграция схемы).
 6. Смешивать стадии — нельзя одновременно исследовать, кодить и тестировать.
+
+### Тех. долг
+
+Известные архитектурные долги — не блокируют работу, закрываются отдельными задачами. Запись ведётся здесь; при закрытии пункт удаляется; детали задач и закрытые пункты — `.opencode/tasks/log.md`.
+
+Актуальных задокументированных долгов нет.
 
 ### Unit-тесты
 
@@ -243,7 +257,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | Веб | `web_fetch`, `web_search` (DuckDuckGo, при anti-bot — fallback на Bing) |
 | Задачи | `task`, `classify_conversation`, `read_session_reference` |
 
-Доступность групп — в `ToolCapability` (`@itphx/synth-shared`); MCP-тулы регистрируются как `{serverName}_{toolName}` и подчиняются режимам (AD-029).
+Доступность групп — в `ToolCapability` (`@itphx/synth-shared`); MCP-тулы регистрируются как `{serverName}_{toolName}`, подчиняются режимам (AD-029) и выбираются **per-session** — в промпт идут только тулы активных серверов сессии. Слои разделены: `tools` — встроенные, `mcp.tools`/`mcp.servers`/`mcp.status` — MCP (всегда `volatile`) (AD-071).
 
 ## UI-конвенции
 
@@ -328,6 +342,11 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-046 | Скиллы и slash-команды: формат SKILL.md, discovery, progressive disclosure, core-тул skill, bundles | ⏳ Не реализовано | [ad-046](./docs/arch_decisions/ad-046-skills-and-slash-commands.md) |
 | AD-068 | Реестр и каталог скиллов и агентов: индекс, trust/guard, install-policy, agent-packs | ⏳ Не реализовано | [ad-068](./docs/arch_decisions/ad-068-skills-agents-registry.md) |
 | AD-069 | Проектные инструкции (AGENTS.md) и /init: discovery, merged chain git root→cwd, lazy-догрузка, threat-scan, install-tree guard | ⏳ Не реализовано | [ad-069](./docs/arch_decisions/ad-069-project-instructions-agents-md.md) |
+| AD-070 | SystemPromptComposer: тиры stable/context/volatile, идемпотентная пересборка, CachePolicy, статистика usage, per-agent promptStates, манифест промпта | ✅ Реализовано | [ad-070](./docs/arch_decisions/ad-070-system-prompt-composer.md) |
+| AD-071 | MCP: уровни system/project/session, единый реестр, разделение слоёв tools/mcp.tools, блоки mcp.servers/mcp.status, политики tools.policy (встроенные) и mcp.policy (MCP), admin-отключение встроенных инструментов | ✅ Реализовано | [ad-071](./docs/arch_decisions/ad-071-mcp-servers-prompt.md) |
+| AD-072 | Settings UI Kit: стандартная панель настроек (один вертикальный скролл, фиксированная шапка, центрирование max-w-3xl, контракт черновика, контролы) | ✅ Реализовано | [ad-072](./docs/arch_decisions/ad-072-settings-ui-kit.md) |
+| AD-073 | Целостность клиента в гибридном режиме: клиент недоверенный, enforcement на сервере; сигналы целостности (подписи, DPoP/mTLS) — опционально | ⏳ Не реализовано | [ad-073](./docs/arch_decisions/ad-073-client-integrity-hybrid.md) |
+| AD-074 | Скрытие вместо удаления (soft-delete): проекты/сессии/сообщения скрываются, исключаются из LLM-контекста, read-only режим для ADMIN/AUDITOR, restore/purge — ADMIN | ⏳ Не реализовано | [ad-074](./docs/arch_decisions/ad-074-soft-delete-retention.md) |
 
 Правило: реализованные AD переносятся в `./docs/arch_decisions/` (в AGENTS.md остаётся строка таблицы + ссылка).
 
@@ -346,6 +365,8 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | конфиг | [AD-023](./docs/arch_decisions/ad-023-configuration.md), [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
 | routing / микро-слой | [AD-034](./docs/arch_decisions/ad-034-model-routing.md), [AD-035](./docs/arch_decisions/ad-035-micro-model-first.md), [docs/ROUTING.md](./docs/ROUTING.md) |
 | безопасность / gateway | [AD-036](./docs/arch_decisions/ad-036-llm-gateway.md) |
+| безопасность клиента / целостность / аттестация гибрида | [AD-073](./docs/arch_decisions/ad-073-client-integrity-hybrid.md) |
+| soft-delete / скрытие / retention / аудит-режим | [AD-074](./docs/arch_decisions/ad-074-soft-delete-retention.md) |
 | план / todo | [AD-039](./docs/arch_decisions/ad-039-plan-in-project.md) |
 | ошибки LLM / i18n | [AD-041](./docs/arch_decisions/ad-041-llm-error-taxonomy.md) |
 | гибрид | [AD-042](./docs/arch_decisions/ad-042-hybrid-mode.md), [AD-043](./docs/arch_decisions/ad-043-unified-identity-login.md), [AD-045](./docs/arch_decisions/ad-045-hybrid-server-profiles.md), [docs/HYBRID.md](./docs/HYBRID.md), скилл `synth-hybrid` |
@@ -359,6 +380,9 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | скиллы / команды | [AD-046](./docs/arch_decisions/ad-046-skills-and-slash-commands.md) |
 | реестр скиллов / агентов | [AD-068](./docs/arch_decisions/ad-068-skills-agents-registry.md) |
 | инструкции AGENTS.md | [AD-069](./docs/arch_decisions/ad-069-project-instructions-agents-md.md), скилл `synth-agents-md` |
+| промпт / prompt-cache / статистика токенов / debug промпта | [AD-070](./docs/arch_decisions/ad-070-system-prompt-composer.md), [AD-036](./docs/arch_decisions/ad-036-llm-gateway.md), [AD-041](./docs/arch_decisions/ad-041-llm-error-taxonomy.md) |
+| MCP / MCP-серверы / инструменты в промпте | [AD-071](./docs/arch_decisions/ad-071-mcp-servers-prompt.md), [AD-029](./docs/arch_decisions/ad-029-granular-permissions.md), [AD-068](./docs/arch_decisions/ad-068-skills-agents-registry.md) |
+| настройки / settings UI kit | [AD-072](./docs/arch_decisions/ad-072-settings-ui-kit.md), [packages/ui/AGENTS.md](./packages/ui/AGENTS.md) |
 
 ## Документация
 

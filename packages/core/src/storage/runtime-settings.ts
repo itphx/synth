@@ -1,7 +1,8 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { McpServerToolSettings, LLMGatewayConfig, SecurityConfig } from '@itphx/synth-shared';
+import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig } from '@itphx/synth-shared';
+import { DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 
 /** Runtime-настройки LLM Gateway, сохраняемые через UI (раздел «Шлюз безопасности»). */
@@ -34,6 +35,21 @@ export interface RuntimeSettings {
   llmGateway?: Partial<LlmGatewayRuntimeSettings>;
   /** Глобальные настройки секции «Безопасность» (защищённые пути). */
   security?: Partial<SecurityRuntimeSettings>;
+  /** AD-071 §2.3: глобальная политика включения встроенных инструментов (админка). */
+  toolsPolicy?: ToolsPolicy;
+  /** AD-071 §2.3: глобальная политика включения MCP-инструментов (админка). */
+  mcpPolicy?: ToolsPolicy;
+  /** AD-071 §2.6: instance-wide отключение инструментов (админка). */
+  toolsDisabled?: ToolsDisabledConfig;
+  /** AD-071 §2.3.1: runtime-политика сетевого доступа пользовательских HTTP MCP. */
+  mcpNetworkPolicy?: McpNetworkPolicy;
+  /**
+   * AD-071 §2.6: откалиброванный chars-per-token по модели (promptChars /
+   * usage.inputTokens). Используется для `estTokens`; отсутствие — дефолт 4.
+   */
+  tokenRatios?: Record<string, number>;
+  /** Агент по умолчанию (админка «Агенты»); отсутствие — `DEFAULT_AGENT_ID`. */
+  defaultAgent?: string;
 }
 
 /**
@@ -54,8 +70,8 @@ export function mergeLlmGatewayConfig(
     logPayloads: runtime.logPayloads ?? base?.logPayloads ?? false,
     payloadLogPath: base?.payloadLogPath ?? '',
     rateLimit: {
-      userPerMinute: runtime.rateLimit?.userPerMinute ?? base?.rateLimit?.userPerMinute ?? 60,
-      providerPerMinute: runtime.rateLimit?.providerPerMinute ?? base?.rateLimit?.providerPerMinute ?? 120,
+      userPerMinute: runtime.rateLimit?.userPerMinute ?? base?.rateLimit?.userPerMinute ?? DEFAULT_LLM_GATEWAY_RATE_LIMIT.userPerMinute,
+      providerPerMinute: runtime.rateLimit?.providerPerMinute ?? base?.rateLimit?.providerPerMinute ?? DEFAULT_LLM_GATEWAY_RATE_LIMIT.providerPerMinute,
     },
     audit: base?.audit ?? { enabled: true, logPath: '' },
   };
@@ -84,6 +100,22 @@ export function mergeSecurityConfig(
     askTimeoutMs: runtime.askTimeoutMs
       ?? (base as SecurityConfig & { askTimeoutMs?: number })?.askTimeoutMs
       ?? DEFAULT_ASK_TIMEOUT_MS,
+  };
+}
+
+/**
+ * AD-071 §2.3.1: мёржит runtime-политику сетевого доступа MCP поверх config.yaml.
+ * Runtime приоритетнее; при отсутствии обоих возвращает undefined (вызывающий
+ * подставляет дефолт `DEFAULT_MCP_NETWORK_POLICY`).
+ */
+export function mergeMcpNetworkPolicy(
+  base: McpNetworkPolicy | undefined,
+  runtime: McpNetworkPolicy | undefined,
+): McpNetworkPolicy | undefined {
+  if (!runtime && !base) return undefined;
+  return {
+    mode: runtime?.mode ?? base?.mode ?? 'deny',
+    list: runtime?.list ?? base?.list ?? [],
   };
 }
 
@@ -129,6 +161,14 @@ export class RuntimeSettingsStore {
     await this._update((current) => ({ ...current, workspace }));
   }
 
+  async clearWorkspace(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.workspace;
+      return next;
+    });
+  }
+
   async getMcpSettings(): Promise<Record<string, McpServerToolSettings>> {
     const settings = await this.load();
     return settings.mcpServers ?? {};
@@ -136,6 +176,14 @@ export class RuntimeSettingsStore {
 
   async setMcpSettings(servers: Record<string, McpServerToolSettings>): Promise<void> {
     await this._update((current) => ({ ...current, mcpServers: servers }));
+  }
+
+  async clearMcpSettings(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.mcpServers;
+      return next;
+    });
   }
 
   async getLlmGatewaySettings(): Promise<Partial<LlmGatewayRuntimeSettings>> {
@@ -147,6 +195,14 @@ export class RuntimeSettingsStore {
     await this._update((current) => ({ ...current, llmGateway: config }));
   }
 
+  async clearLlmGatewaySettings(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.llmGateway;
+      return next;
+    });
+  }
+
   async getSecuritySettings(): Promise<Partial<SecurityRuntimeSettings>> {
     const settings = await this.load();
     return settings.security ?? {};
@@ -154,6 +210,123 @@ export class RuntimeSettingsStore {
 
   async setSecuritySettings(config: Partial<SecurityRuntimeSettings>): Promise<void> {
     await this._update((current) => ({ ...current, security: config }));
+  }
+
+  async clearSecuritySettings(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.security;
+      return next;
+    });
+  }
+
+  /** AD-071 §2.3: runtime-политика встроенных инструментов (админка), undefined — не задана. */
+  async getToolsPolicy(): Promise<ToolsPolicy | undefined> {
+    const settings = await this.load();
+    return settings.toolsPolicy;
+  }
+
+  async setToolsPolicy(policy: ToolsPolicy): Promise<void> {
+    await this._update((current) => ({ ...current, toolsPolicy: policy }));
+  }
+
+  async clearToolsPolicy(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.toolsPolicy;
+      return next;
+    });
+  }
+
+  /** AD-071 §2.3: runtime-политика MCP-инструментов (админка), undefined — не задана. */
+  async getMcpPolicy(): Promise<ToolsPolicy | undefined> {
+    const settings = await this.load();
+    return settings.mcpPolicy;
+  }
+
+  async setMcpPolicy(policy: ToolsPolicy): Promise<void> {
+    await this._update((current) => ({ ...current, mcpPolicy: policy }));
+  }
+
+  async clearMcpPolicy(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.mcpPolicy;
+      return next;
+    });
+  }
+
+  /** AD-071 §2.6: instance-wide отключение инструментов (админка), undefined — не задано. */
+  async getToolsDisabled(): Promise<ToolsDisabledConfig | undefined> {
+    const settings = await this.load();
+    return settings.toolsDisabled;
+  }
+
+  async setToolsDisabled(config: ToolsDisabledConfig): Promise<void> {
+    await this._update((current) => ({ ...current, toolsDisabled: config }));
+  }
+
+  async clearToolsDisabled(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.toolsDisabled;
+      return next;
+    });
+  }
+
+  /** AD-071 §2.6: chars-per-token модели (undefined — калибровки нет). */
+  async getTokenRatio(model: string): Promise<number | undefined> {
+    const settings = await this.load();
+    return settings.tokenRatios?.[model];
+  }
+
+  async getTokenRatios(): Promise<Record<string, number>> {
+    const settings = await this.load();
+    return settings.tokenRatios ?? {};
+  }
+
+  /** AD-071 §2.6: сохранить откалиброванный chars-per-token модели. */
+  async setTokenRatio(model: string, ratio: number): Promise<void> {
+    await this._update((current) => ({
+      ...current,
+      tokenRatios: { ...(current.tokenRatios ?? {}), [model]: ratio },
+    }));
+  }
+
+  /** AD-071 §2.3.1: runtime-политика сетевого доступа MCP (админка). */
+  async getMcpNetworkPolicy(): Promise<McpNetworkPolicy | undefined> {
+    const settings = await this.load();
+    return settings.mcpNetworkPolicy;
+  }
+
+  async setMcpNetworkPolicy(policy: McpNetworkPolicy): Promise<void> {
+    await this._update((current) => ({ ...current, mcpNetworkPolicy: policy }));
+  }
+
+  async clearMcpNetworkPolicy(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.mcpNetworkPolicy;
+      return next;
+    });
+  }
+
+  /** Агент по умолчанию (админка «Агенты»), undefined — не задан. */
+  async getDefaultAgent(): Promise<string | undefined> {
+    const settings = await this.load();
+    return settings.defaultAgent;
+  }
+
+  async setDefaultAgent(id: string): Promise<void> {
+    await this._update((current) => ({ ...current, defaultAgent: id }));
+  }
+
+  async clearDefaultAgent(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.defaultAgent;
+      return next;
+    });
   }
 
   private async _update(mutate: (current: RuntimeSettings) => RuntimeSettings): Promise<void> {

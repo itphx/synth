@@ -4,10 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { taskTool } from './task.js';
 import { SessionManager } from '../../sessions/manager.js';
+import { computeSessionStats } from '../../sessions/stats.js';
 import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
 import { ToolCapability, MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { Message, Session } from '@itphx/synth-shared';
+import type { Message, Session, TokenUsage } from '@itphx/synth-shared';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import { createToolRegistry } from './index.js';
 
@@ -622,8 +623,9 @@ describe('taskTool — context modes', () => {
 
     let capturedSystemMsg = '';
     const capturingProvider = {
-      chatAsync: vi.fn().mockImplementation(async function* (messages: any[]) {
-        capturedSystemMsg = messages[0]?.content || '';
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: any[], systemPrompt: string) {
+        // AD-070 §1.5: system — только вторым аргументом, в messages его нет.
+        capturedSystemMsg = systemPrompt || '';
         yield { isFinal: true, content: 'OK', toolCalls: [] };
       }),
       model: 'test-model',
@@ -657,8 +659,9 @@ describe('taskTool — context modes', () => {
 
     let capturedSystemMsg = '';
     const capturingProvider = {
-      chatAsync: vi.fn().mockImplementation(async function* (messages: any[]) {
-        capturedSystemMsg = messages[0]?.content || '';
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: any[], systemPrompt: string) {
+        // AD-070 §1.5: system — только вторым аргументом, в messages его нет.
+        capturedSystemMsg = systemPrompt || '';
         yield { isFinal: true, content: 'OK', toolCalls: [] };
       }),
       model: 'test-model',
@@ -692,8 +695,9 @@ describe('taskTool — context modes', () => {
 
     let capturedSystemMsg = '';
     const capturingProvider = {
-      chatAsync: vi.fn().mockImplementation(async function* (messages: any[]) {
-        capturedSystemMsg = messages[0]?.content || '';
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: any[], systemPrompt: string) {
+        // AD-070 §1.5: system — только вторым аргументом, в messages его нет.
+        capturedSystemMsg = systemPrompt || '';
         yield { isFinal: true, content: 'OK', toolCalls: [] };
       }),
       model: 'test-model',
@@ -959,7 +963,7 @@ describe('taskTool × shellPolicy саб-агента (B3/B5)', () => {
     expect(toolMsg!.content).toContain('id_rsa');
   });
 
-  it('B5: саб-агент в plan-режиме не получает write/git-тулы (режимная фильтрация)', async () => {
+  it('B5: саб-агент в plan-режиме получает постоянный список тулов (без режимной фильтрации)', async () => {
     const parent = await sessionManager.createSession({ title: 'Parent' });
     parent.mode = 'plan';
     await sessionManager.updateSession(parent);
@@ -998,10 +1002,12 @@ describe('taskTool × shellPolicy саб-агента (B3/B5)', () => {
       },
     );
 
+    // AD-070 §2.9: definition остаётся в запросе; ограничения plan-режима
+    // обеспечивает permission-слой (unavailable(mode)), а не скрытие тулов.
     const names = (capturedTools as Array<{ function: { name: string } }>).map((t) => t.function.name);
-    expect(names).not.toContain('write_file');
-    expect(names).not.toContain('edit_file');
-    expect(names).not.toContain('git_commit');
+    expect(names).toContain('write_file');
+    expect(names).toContain('edit_file');
+    expect(names).toContain('git_commit');
     expect(names).toContain('read_file');
     expect(names).toContain('execute_shell');
   });
@@ -1296,5 +1302,690 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
     expect(match).not.toBeNull();
     // id из content совпадает с id из metadata
     expect(match![1]).toBe(result.metadata!.child_session_id);
+  });
+
+  it('AD-070 §2.6: usage саб-агента сохраняется и подтягивается rollup-статистикой', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const provider = {
+      chatAsync: vi.fn().mockReturnValue(
+        (async function* () {
+          yield {
+            isFinal: true,
+            content: 'sub answer',
+            toolCalls: [],
+            model: 'test-model',
+            usage: { inputTokens: 123, outputTokens: 45, totalTokens: 168, cacheReadTokens: 20 },
+          };
+        })(),
+      ),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+        },
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    const childSessionId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childSessionId))!;
+    const assistant = [...child.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(assistant.usage?.inputTokens).toBe(123);
+    expect(assistant.usage?.outputTokens).toBe(45);
+    expect(assistant.usage?.cacheReadTokens).toBe(20);
+    expect(typeof assistant.metadata?.duration_ms).toBe('number');
+
+    // Rollup: как _persistToolChain родителя — tool-сообщение с child_session_id.
+    await sessionManager.addMessage(parent.id, {
+      id: generateId(),
+      role: MessageRole.TOOL,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('task result')],
+      content: 'task result',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      agentRole: 'developer',
+      metadata: { tool_name: 'task', child_session_id: childSessionId },
+    });
+
+    const stats = await computeSessionStats((await sessionManager.getSession(parent.id))!, {
+      getSession: (id) => sessionManager.getSession(id),
+    });
+    const dev = stats.agents.find((a) => a.agent_role === 'developer')!;
+    expect(dev.subagent_sessions).toBe(1);
+    expect(dev.subagent_tokens).toBe(168);
+  });
+
+  it('usage накапливается только по финальным чанкам итераций, а не по всем чанкам', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    // Провайдеры отдают в каждом чанке НАКОПИТЕЛЬНЫЙ usage; суммировать нужно
+    // только финальный чанк каждой итерации (30 + 50), а не все (10+20+30+40+50).
+    let call = 0;
+    const provider = {
+      chatAsync: vi.fn().mockImplementation(async function* () {
+        call++;
+        if (call === 1) {
+          yield { isFinal: false, content: 'часть ', usage: { inputTokens: 10, outputTokens: 1, totalTokens: 11 } };
+          yield { isFinal: false, content: 'ответа ', usage: { inputTokens: 20, outputTokens: 2, totalTokens: 22 } };
+          yield {
+            isFinal: true,
+            content: 'ответ ',
+            model: 'test-model',
+            usage: { inputTokens: 30, outputTokens: 3, totalTokens: 33 },
+            toolCalls: [{ id: 'c1', function: { name: 'noop', arguments: '{}' } }],
+          };
+          return;
+        }
+        yield { isFinal: false, content: 'финал ', usage: { inputTokens: 40, outputTokens: 4, totalTokens: 44 } };
+        yield {
+          isFinal: true,
+          content: 'финал',
+          model: 'test-model',
+          usage: { inputTokens: 50, outputTokens: 5, totalTokens: 55 },
+          toolCalls: [],
+        };
+      }),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+    const registry = {
+      get: () => ({ id: 'explore', agentMode: ['subagent'], subagentPrompt: 'test', maxSteps: 3 }),
+      getSubagents: () => [{ id: 'explore' }],
+      getToolsForAgent: () => [],
+    };
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: registry,
+        },
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(provider.chatAsync).toHaveBeenCalledTimes(2);
+    const usage = result.metadata!.subagent_usage as { inputTokens: number; outputTokens: number };
+    expect(usage.inputTokens).toBe(80); // 30 + 50, а не 150
+    expect(usage.outputTokens).toBe(8); // 3 + 5
+
+    const childSessionId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childSessionId))!;
+    const assistant = [...child.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(assistant.usage?.inputTokens).toBe(80);
+  });
+
+  it('дочерняя сессия наследует projectId и её session-счётчики попадают в project stats', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent', projectId: 'proj-1' });
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: {
+            chatAsync: vi.fn().mockReturnValue(
+              (async function* () {
+                yield {
+                  isFinal: true,
+                  content: 'sub answer',
+                  toolCalls: [],
+                  model: 'test-model',
+                  usage: { inputTokens: 123, outputTokens: 45, totalTokens: 168, cacheReadTokens: 20 },
+                };
+              })(),
+            ),
+            model: 'test-model',
+            name: 'test-provider',
+          },
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+        },
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    const childSessionId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childSessionId))!;
+    // projectId проброшен → ребёнок попадает в listSessions({ projectId }).
+    expect(child.projectId).toBe('proj-1');
+    // session-счётчики обновлены вручную (task.ts пишет через addMessage).
+    expect(child.inputTokens).toBe(123);
+    expect(child.outputTokens).toBe(45);
+    expect(child.totalTokens).toBe(168);
+    expect(child.cacheReadTokens).toBe(20);
+
+    const projectSessions = await sessionManager.listSessions({ projectId: 'proj-1' });
+    expect(projectSessions.map((s) => s.id)).toContain(childSessionId);
+    const totalInput = projectSessions.reduce((sum, s) => sum + s.inputTokens, 0);
+    expect(totalInput).toBe(123);
+  });
+});
+
+describe('taskTool — live-статистика саб-агента (AD-070)', () => {
+  let store: FileStore;
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-task-live-'));
+    store = new FileStore({ dataDir: tmpDir });
+    sessionManager = new SessionManager(store);
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeUsageProvider() {
+    return {
+      chatAsync: vi.fn().mockReturnValue(
+        (async function* () {
+          yield {
+            isFinal: true,
+            content: 'sub answer',
+            toolCalls: [],
+            model: 'test-model',
+            usage: { inputTokens: 123, outputTokens: 45, totalTokens: 168 },
+          };
+        })(),
+      ),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+  }
+
+  it('subagent.progress несёт usage/cost; stream.usage публикуется в дочернюю сессию', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const progress: Array<Record<string, unknown>> = [];
+    const published: Array<{ type: string; sessionId: string; data: Record<string, unknown> }> = [];
+    const unsubscribe = eventBus.subscribeAll((e) => {
+      published.push({ type: e.type, sessionId: e.sessionId, data: e.data });
+    });
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: makeUsageProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          publish: (type: string, data: Record<string, unknown>) =>
+            progress.push({ type, ...data }),
+          streamId: 'stream-1',
+          callId: 'call-1',
+          modelPriceLoader: (m: string) =>
+            (m === 'test-model' ? { inputPrice: 1, outputPrice: 2 } : null),
+        },
+      },
+    );
+    unsubscribe();
+
+    expect(result.isError).toBeFalsy();
+    const childId = result.metadata!.child_session_id as string;
+
+    // parent-событие несёт usage/cost/model/provider/estimated
+    const progressWithUsage = progress.find(
+      (p) => p.type === 'subagent.progress' && p.usage,
+    );
+    expect(progressWithUsage).toBeDefined();
+    expect((progressWithUsage!.usage as TokenUsage).inputTokens).toBe(123);
+    expect(progressWithUsage!.estimated).toBe(false);
+    expect(progressWithUsage!.model).toBe('test-model');
+    expect(progressWithUsage!.provider).toBe('test-provider');
+    // 123*1/1e6 + 45*2/1e6 = 0.000213
+    expect(progressWithUsage!.cost_usd as number).toBeCloseTo(0.000213, 12);
+    expect(progressWithUsage!.cost_currency).toBe('USD');
+
+    // live-событие уходит в дочернюю сессию
+    const childUsage = published.find(
+      (e) => e.type === 'stream.usage' && e.sessionId === childId,
+    );
+    expect(childUsage).toBeDefined();
+    expect(childUsage!.data.session_id).toBe(childId);
+    expect((childUsage!.data.usage as TokenUsage).inputTokens).toBe(123);
+    expect(childUsage!.data.estimated).toBe(false);
+    expect(childUsage!.data.agent_role).toBe('explore');
+    expect(childUsage!.data.cost_usd as number).toBeCloseTo(0.000213, 12);
+    expect(childUsage!.data.cost_currency).toBe('USD');
+  });
+
+  it('по завершении саб-агента в дочернюю сессию публикуется stream.ended', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const published: Array<{ type: string; sessionId: string; data: Record<string, unknown> }> = [];
+    const unsubscribe = eventBus.subscribeAll((e) => {
+      published.push({ type: e.type, sessionId: e.sessionId, data: e.data });
+    });
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: makeUsageProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          publish: () => {},
+          streamId: 'stream-ended-1',
+          callId: 'call-ended-1',
+        },
+      },
+    );
+    unsubscribe();
+
+    const childId = result.metadata!.child_session_id as string;
+    const ended = published.filter(
+      (e) => e.type === 'stream.ended' && e.sessionId === childId,
+    );
+    // Ровно одно терминальное событие на прогон (finalizeChildSession).
+    expect(ended).toHaveLength(1);
+    expect(ended[0]!.data.stream_id).toBe('stream-ended-1');
+    // Терминальное событие не создаёт сообщений — только сбрасывает live.
+    const childSession = await sessionManager.getSession(childId);
+    const assistantCount = childSession!.messages.filter(
+      (m) => m.role === MessageRole.ASSISTANT,
+    ).length;
+    expect(assistantCount).toBe(1);
+  });
+
+  it('Anthropic: input>0/output=0 → live estimated с растущим output, финал output>0 → exact', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const published: Array<{ type: string; sessionId: string; data: Record<string, unknown> }> = [];
+    const unsubscribe = eventBus.subscribeAll((e) => {
+      published.push({ type: e.type, sessionId: e.sessionId, data: e.data });
+    });
+
+    const provider = {
+      chatAsync: vi.fn().mockReturnValue(
+        (async function* () {
+          // Anthropic-подобный стрим: input в message_start, output ещё 0.
+          yield {
+            isFinal: false,
+            content: 'Hello',
+            toolCalls: [],
+            usage: { inputTokens: 100, outputTokens: 0, totalTokens: 100 },
+          };
+          // Даём пройти окну троттлинга, чтобы финальный exact тоже опубликовался.
+          await new Promise((r) => setTimeout(r, 350));
+          yield {
+            isFinal: true,
+            content: 'Hello world',
+            toolCalls: [],
+            model: 'test-model',
+            usage: { inputTokens: 100, outputTokens: 5, totalTokens: 105 },
+          };
+        })(),
+      ),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          publish: () => {},
+          streamId: 'stream-live-1',
+          callId: 'call-live-1',
+        },
+      },
+    );
+    unsubscribe();
+
+    expect(result.isError).toBeFalsy();
+    const childId = result.metadata!.child_session_id as string;
+    const childUsage = published.filter(
+      (e) => e.type === 'stream.usage' && e.sessionId === childId,
+    );
+
+    // Промежуточная оценка: точный input сохранён, output оценён из контента.
+    const estimated = childUsage.find((e) => e.data.estimated === true);
+    expect(estimated).toBeDefined();
+    expect((estimated!.data.usage as TokenUsage).inputTokens).toBe(100);
+    expect((estimated!.data.usage as TokenUsage).outputTokens).toBeGreaterThan(0);
+
+    // Финал: точный output, estimated снят.
+    const exact = childUsage.find((e) => e.data.estimated === false);
+    expect(exact).toBeDefined();
+    expect((exact!.data.usage as TokenUsage).outputTokens).toBe(5);
+  });
+
+  it('без modelPriceLoader cost_usd не пишется', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const progress: Array<Record<string, unknown>> = [];
+
+    await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: makeUsageProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          publish: (type: string, data: Record<string, unknown>) =>
+            progress.push({ type, ...data }),
+          streamId: 'stream-2',
+          callId: 'call-2',
+        },
+      },
+    );
+
+    const progressWithUsage = progress.find(
+      (p) => p.type === 'subagent.progress' && p.usage,
+    );
+    expect(progressWithUsage).toBeDefined();
+    expect(progressWithUsage!.cost_usd).toBeUndefined();
+    expect(progressWithUsage!.cost_breakdown).toBeUndefined();
+  });
+});
+
+describe('taskTool — metadata финального child-сообщения (AD-070)', () => {
+  let store: FileStore;
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-task-child-meta-'));
+    store = new FileStore({ dataDir: tmpDir });
+    sessionManager = new SessionManager(store);
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeUsageProvider() {
+    return {
+      chatAsync: vi.fn().mockReturnValue(
+        (async function* () {
+          yield {
+            isFinal: true,
+            content: 'sub answer',
+            toolCalls: [],
+            model: 'test-model',
+            usage: { inputTokens: 123, outputTokens: 45, totalTokens: 168 },
+          };
+        })(),
+      ),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+  }
+
+  function makeMultiStepRegistry(): MockAgentRegistry {
+    return {
+      get: (id: string) => {
+        if (id === 'explore') {
+          return { id, agentMode: ['subagent'], subagentPrompt: 'You are a test subagent.', maxSteps: 5 };
+        }
+        return undefined;
+      },
+      getSubagents: () => [{ id: 'explore' }],
+      getToolsForAgent: () => [],
+    };
+  }
+
+  /** Провайдер: 1-я итерация с usage+tool, затем долгий стрим для abort. */
+  function makeAbortableUsageProvider(state: { calls: number }) {
+    return {
+      model: 'test-model',
+      name: 'test-provider',
+      chatAsync: vi.fn().mockImplementation(async function* (
+        _messages: unknown,
+        _systemPrompt: unknown,
+        _tools: unknown,
+        _debugCollector: unknown,
+        ct?: { cancelled: boolean },
+      ) {
+        const n = state.calls++;
+        if (n === 0) {
+          yield {
+            isFinal: true,
+            content: 'шаг 1',
+            toolCalls: [{
+              id: 'sub_call_1',
+              function: { name: 'read_file', arguments: JSON.stringify({ file_path: 'a.txt' }) },
+            }],
+            model: 'test-model',
+            usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 },
+          };
+          return;
+        }
+        yield { isFinal: false, content: 'Частичный ответ: начал работу. ' };
+        for (let i = 0; i < 300; i++) {
+          if (ct?.cancelled) return;
+          yield { isFinal: false, content: `фрагмент-${i} ` };
+          await new Promise((r) => setTimeout(r, 5));
+        }
+      }),
+    };
+  }
+
+  const priceLoader = (m: string) =>
+    (m === 'test-model' ? { inputPrice: 1, outputPrice: 2 } : null);
+
+  async function runSuccess(
+    modelPriceLoader?: (m: string) => { inputPrice: number; outputPrice: number; currency?: 'RUB' | 'USD' | 'CNY' } | null,
+    published?: Array<{ type: string; sessionId: string; data: Record<string, unknown> }>,
+  ) {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const unsubscribe = published
+      ? eventBus.subscribeAll((e) => published.push({ type: e.type, sessionId: e.sessionId, data: e.data }))
+      : undefined;
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: makeUsageProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          publish: () => {},
+          streamId: 'stream-meta',
+          callId: 'call-meta',
+          ...(modelPriceLoader ? { modelPriceLoader } : {}),
+        },
+      },
+    );
+    unsubscribe?.();
+    return result;
+  }
+
+  it('успешный ответ: status=completed и cost_usd/cost_breakdown при заданных ценах', async () => {
+    const result = await runSuccess(priceLoader);
+    const childId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childId))!;
+    const assistant = [...child.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(assistant.metadata?.status).toBe('completed');
+    // 123*1/1e6 + 45*2/1e6 = 0.000213
+    expect(assistant.metadata?.cost_usd as number).toBeCloseTo(0.000213, 12);
+    expect(assistant.metadata?.cost_currency).toBe('USD');
+    expect(assistant.metadata?.cost_breakdown).toBeDefined();
+    // usage из финальных чанков точен — оценка не помечается
+    expect(assistant.metadata?.usage_estimated).toBeUndefined();
+  });
+
+  it('сабагент в RUB: cost_currency в child metadata и live-событии', async () => {
+    const published: Array<{ type: string; sessionId: string; data: Record<string, unknown> }> = [];
+    const result = await runSuccess(
+      (m) => (m === 'test-model' ? { inputPrice: 1, outputPrice: 2, currency: 'RUB' } : null),
+      published,
+    );
+    const childId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childId))!;
+    const assistant = [...child.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(assistant.metadata?.cost_currency).toBe('RUB');
+
+    const childUsage = published.find(
+      (e) => e.type === 'stream.usage' && e.sessionId === childId,
+    );
+    expect(childUsage?.data.cost_currency).toBe('RUB');
+  });
+
+  it('без modelPriceLoader: cost_usd отсутствует, status=completed', async () => {
+    const result = await runSuccess();
+    const childId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childId))!;
+    const assistant = [...child.messages].reverse().find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(assistant.metadata?.status).toBe('completed');
+    expect(assistant.metadata?.cost_usd).toBeUndefined();
+    expect(assistant.metadata?.cost_breakdown).toBeUndefined();
+  });
+
+  it('metadata финального ответа попадает в message.added/child.message.added', async () => {
+    const published: Array<{ type: string; sessionId: string; data: Record<string, unknown> }> = [];
+    const result = await runSuccess(priceLoader, published);
+    const childId = result.metadata!.child_session_id as string;
+
+    const isFinalAssistant = (e: { data: Record<string, unknown> }) => {
+      const message = e.data.message as { role?: string; metadata?: Record<string, unknown> } | undefined;
+      return message?.role === MessageRole.ASSISTANT
+        && message.metadata?.status === 'completed'
+        && typeof message.metadata?.cost_usd === 'number';
+    };
+    expect(published.some((e) => e.type === 'message.added' && e.sessionId === childId && isFinalAssistant(e))).toBe(true);
+    expect(published.some((e) => e.type === 'child.message.added' && e.data.child_session_id === childId && isFinalAssistant(e))).toBe(true);
+  });
+
+  it('abort: partial-сообщение child несёт status=cancelled и cost', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const state = { calls: 0 };
+    const ac = new AbortController();
+    const promise = taskTool.execute(
+      { description: 'long task', prompt: 'hello', subagent_type: 'explore' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: ac.signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: makeAbortableUsageProvider(state),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMultiStepRegistry(),
+          toolRegistry: createToolRegistry(),
+          publish: () => {},
+          streamId: 'stream-abort-meta',
+          callId: 'call-abort-meta',
+          modelPriceLoader: priceLoader,
+        },
+      },
+    );
+    await vi.waitFor(() => expect(state.calls).toBe(2), { timeout: 3000 });
+    ac.abort();
+    const result = await promise;
+
+    const childId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childId))!;
+    const partialMsg = child.messages.find((m) => m.metadata?.partial === true);
+    expect(partialMsg).toBeDefined();
+    expect(partialMsg!.metadata?.status).toBe('cancelled');
+    // 100*1/1e6 + 10*2/1e6 = 0.00012 (usage первой итерации)
+    expect(partialMsg!.metadata?.cost_usd as number).toBeCloseTo(0.00012, 12);
+    expect(partialMsg!.metadata?.usage_estimated).toBeUndefined();
+  });
+
+  it('error: сообщение child несёт status=error', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const provider = {
+      model: 'test-model',
+      name: 'test-provider',
+      chatAsync: vi.fn().mockImplementation(async function* () {
+        yield { isFinal: false, content: '' };
+        throw new Error('provider down');
+      }),
+    };
+
+    const result = await taskTool.execute(
+      { description: 'broken task', prompt: 'hello', subagent_type: 'explore' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMultiStepRegistry(),
+          toolRegistry: createToolRegistry(),
+          retry: { maxRetries: 3, delaysMs: [10, 10, 10] },
+          streamId: 'stream-error-meta',
+          callId: 'call-error-meta',
+          modelPriceLoader: priceLoader,
+        },
+      },
+    );
+
+    expect(result.isError).toBe(true);
+    const childId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childId))!;
+    const errMsg = child.messages.find((m) => m.metadata?.error === true);
+    expect(errMsg).toBeDefined();
+    expect(errMsg!.metadata?.status).toBe('error');
   });
 });

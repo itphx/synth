@@ -14,7 +14,11 @@ interface DebugUser {
 
 export const LoginForm = () => {
   const { t } = useI18n()
-  const { login, loginWithPassword, isLoading, error, clearError } = useAuthStore()
+  const login = useAuthStore(s => s.login)
+  const loginWithPassword = useAuthStore(s => s.loginWithPassword)
+  const isLoading = useAuthStore(s => s.isLoading)
+  const error = useAuthStore(s => s.error)
+  const clearError = useAuthStore(s => s.clearError)
   const [keyboardReserve, setKeyboardReserve] = useState(false)
   const [apiKey, setApiKey] = useState('')
   const [server, setServer] = useState('')

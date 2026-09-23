@@ -12,8 +12,8 @@ interface FileEditorTabProps {
 
 export function FileEditorTab({ tab }: FileEditorTabProps) {
   const { t } = useI18n()
-  const { writeFile } = useFilesStore()
-  const { setTabEditingState } = useUIStore()
+  const writeFile = useFilesStore(s => s.writeFile)
+  const setTabEditingState = useUIStore(s => s.setTabEditingState)
   const [content, setContent] = useState('')
   const [originalContent, setOriginalContent] = useState('')
   const [loading, setLoading] = useState(true)

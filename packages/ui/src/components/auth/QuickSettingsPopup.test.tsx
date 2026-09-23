@@ -3,28 +3,29 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
 const pwaState = vi.hoisted(() => ({ standalone: false }))
-const i18n = vi.hoisted(() => ({ t: (key: string) => key, setLocale: () => {} }))
+const i18n = vi.hoisted(() => ({ t: (key: string) => key, locale: 'ru', setLocale: () => {} }))
 
 vi.mock('@/lib/i18n', () => ({
   useI18n: () => i18n,
 }))
 
-vi.mock('@/stores/authStore', () => ({
-  useAuthStore: Object.assign(
-    () => ({
-      user: { username: 'dev', email: 'dev@example.com', roles: [] },
-      profile: { display_name: 'Dev', preferences: {} },
-    }),
-    { getState: () => ({ logout: vi.fn() }) },
-  ),
-}))
+vi.mock('@/stores/authStore', () => {
+  const state = {
+    user: { username: 'dev', email: 'dev@example.com', roles: [] },
+    profile: { display_name: 'Dev', preferences: {} },
+  }
+  return {
+    useAuthStore: Object.assign(
+      (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state),
+      { getState: () => ({ logout: vi.fn() }) },
+    ),
+  }
+})
 
 vi.mock('@/stores/useUIStore', () => {
   const state = {
     themeMode: 'system',
     setThemeMode: vi.fn(),
-    locale: 'ru',
-    setLocale: vi.fn(),
     setSettingsDialogOpen: vi.fn(),
     setSettingsPage: vi.fn(),
     uiScale: 1,

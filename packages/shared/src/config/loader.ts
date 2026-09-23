@@ -48,7 +48,11 @@ async function tryReadYaml(path: string): Promise<Record<string, unknown> | null
 }
 
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<SynthConfig> {
-  const paths = searchPaths(options.configPath);
+  // AD-023/AD-071: явный путь — из опций, иначе из SYNTH_CONFIG (как в
+  // findConfigPath). Без этого dev-запуск backend с cwd=synth/ не читал
+  // packages/backend/config.yaml (mcp.servers) и seed реестра был пустым.
+  const explicitPath = options.configPath ?? process.env.SYNTH_CONFIG;
+  const paths = searchPaths(explicitPath);
 
   let fileConfig: Record<string, unknown> = {};
   for (const path of paths) {

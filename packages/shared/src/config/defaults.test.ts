@@ -24,6 +24,22 @@ describe('defaultConfig', () => {
     expect(defaultConfig.llm.defaultModel).toBe('');
   });
 
+  it('llm.cache по умолчанию auto (AD-070)', () => {
+    expect(defaultConfig.llm.cache).toBe('auto');
+  });
+
+  it('tools.policy по умолчанию auto (AD-071 §2.3)', () => {
+    expect(defaultConfig.tools.policy).toBe('auto');
+  });
+
+  it('mcp.policy по умолчанию auto (AD-071 §2.3)', () => {
+    expect(defaultConfig.mcp.policy).toBe('auto');
+  });
+
+  it('tools.disabled по умолчанию пусто (AD-071 §2.6)', () => {
+    expect(defaultConfig.tools.disabled).toEqual({ capabilities: [], tools: [] });
+  });
+
   it('core.port == 4300', () => {
     expect(defaultConfig.core.port).toBe(4300);
   });

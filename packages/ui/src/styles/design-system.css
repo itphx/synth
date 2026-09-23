@@ -516,8 +516,8 @@
 }
 
 /* --- Scroll Shadow (mask-image fade at edges) --- */
-.chat-scroll-container {
-  --scroll-shadow-size: 3rem;
+.chat-scroll-container,
+.settings-scroll-container {
   mask-mode: alpha;
   -webkit-mask-repeat: no-repeat;
   mask-repeat: no-repeat;
@@ -525,7 +525,17 @@
   mask-size: 100% 100%;
 }
 
-.chat-scroll-container[data-scroll-shadow="top-bottom"] {
+.chat-scroll-container {
+  --scroll-shadow-size: 3rem;
+}
+
+/* Тело панели настроек — меньшее затенение, чтобы не съедать контент. */
+.settings-scroll-container {
+  --scroll-shadow-size: 1.5rem;
+}
+
+.chat-scroll-container[data-scroll-shadow="top-bottom"],
+.settings-scroll-container[data-scroll-shadow="top-bottom"] {
   mask-image: linear-gradient(
     to bottom,
     transparent 0%,
@@ -542,7 +552,8 @@
   );
 }
 
-.chat-scroll-container[data-scroll-shadow="top"] {
+.chat-scroll-container[data-scroll-shadow="top"],
+.settings-scroll-container[data-scroll-shadow="top"] {
   mask-image: linear-gradient(
     to bottom,
     transparent 0%,
@@ -557,7 +568,8 @@
   );
 }
 
-.chat-scroll-container[data-scroll-shadow="bottom"] {
+.chat-scroll-container[data-scroll-shadow="bottom"],
+.settings-scroll-container[data-scroll-shadow="bottom"] {
   mask-image: linear-gradient(
     to bottom,
     #000 0%,

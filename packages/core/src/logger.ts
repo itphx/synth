@@ -47,6 +47,16 @@ export function getAllGroups(): Record<string, string> {
   return { ...DEFAULT_GROUPS, ..._groupOverrides };
 }
 
+/**
+ * Merge-сохранение уровней: обновляет только переданные группы,
+ * не очищая ранее установленные overrides (в отличие от setAllGroups).
+ */
+export function setGroups(groups: Record<string, string>): void {
+  for (const [group, level] of Object.entries(groups)) {
+    setLevelForGroup(group, level);
+  }
+}
+
 export function setAllGroups(groups: Record<string, string>): void {
   _groupOverrides = {};
   for (const [group, level] of Object.entries(groups)) {

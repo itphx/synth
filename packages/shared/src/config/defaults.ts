@@ -1,4 +1,5 @@
 import type { SynthConfig } from './types.js';
+import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 export const defaultConfig: SynthConfig = {
   server: {
@@ -21,6 +22,7 @@ export const defaultConfig: SynthConfig = {
     defaultModel: '',
     maxRetries: 3,
     timeout: 60,
+    cache: 'auto',
   },
   core: {
     port: 4300,
@@ -79,6 +81,18 @@ export const defaultConfig: SynthConfig = {
   },
   mcp: {
     servers: {},
+    policy: 'auto',
+    networkPolicy: {
+      mode: 'deny',
+      list: [...DEFAULT_MCP_PRIVATE_CIDRS],
+    },
+  },
+  tools: {
+    policy: 'auto',
+    disabled: {
+      capabilities: [],
+      tools: [],
+    },
   },
   router: {
     enabled: true,

@@ -11,18 +11,22 @@ import { ProjectTab } from './ProjectTab'
 import { ReferencesTab } from './ReferencesTab'
 import { SecretsTab } from './SecretsTab'
 
-const RIGHT_TABS = [
-  { id: 'stats', icon: 'bar-chart-2' as const, labelKey: 'rightPanel.tab.stats' },
+// AD-071: верхний ряд правой панели — «Сессия», «Проект», «Контекст», «Статистика».
+export const RIGHT_TABS = [
   { id: 'params', icon: 'settings-3' as const, labelKey: 'rightPanel.tab.session' },
   { id: 'project', icon: 'folder-3' as const, labelKey: 'rightPanel.tab.project' },
   { id: 'context', icon: 'file-text' as const, labelKey: 'rightPanel.tab.context' },
+  { id: 'stats', icon: 'bar-chart-2' as const, labelKey: 'rightPanel.tab.stats' },
   { id: 'references', icon: 'link' as const, labelKey: 'rightPanel.tab.references' },
   { id: 'scheduler', icon: 'calendar-schedule' as const, labelKey: 'rightPanel.tab.scheduler' },
 ] as const
 
 export const RightPanel: React.FC = () => {
   const { t } = useI18n()
-  const { rightPanelTab, setRightPanelTab, centerTabs, activeCenterTabId } = useUIStore()
+  const rightPanelTab = useUIStore(s => s.rightPanelTab)
+  const setRightPanelTab = useUIStore(s => s.setRightPanelTab)
+  const centerTabs = useUIStore(s => s.centerTabs)
+  const activeCenterTabId = useUIStore(s => s.activeCenterTabId)
   const user = useAuthStore((s) => s.user)
   const activeTab = centerTabs.find((t) => t.id === activeCenterTabId)
   const sessionId = activeTab?.data?.sessionId
@@ -36,7 +40,7 @@ export const RightPanel: React.FC = () => {
   // Нормализация: если вкладка secrets недоступна (роль без прав) — сбрасываем на дефолтную
   useEffect(() => {
     if (rightPanelTab === 'secrets' && !canViewSecrets) {
-      setRightPanelTab('stats')
+      setRightPanelTab('context')
     }
   }, [rightPanelTab, canViewSecrets, setRightPanelTab])
 

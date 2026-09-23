@@ -18,21 +18,19 @@ type DropdownItem =
   | { type: 'model'; model: ModelInfo; provider: ProviderInfo; isFavorite: boolean; id: string }
 
 export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = false }: { compact?: boolean; sessionId?: string; alwaysShowLabel?: boolean }) {
-  const {
-    providers,
-    models,
-    selectedProviderName,
-    selectedModelName,
-    setSelectedProvider,
-    setSelectedModel,
-    favorites,
-    recents,
-    toggleFavorite,
-    loadProviders,
-    loadModels,
-    loading,
-    error,
-  } = useProvidersStore()
+  const providers = useProvidersStore(s => s.providers)
+  const models = useProvidersStore(s => s.models)
+  const selectedProviderName = useProvidersStore(s => s.selectedProviderName)
+  const selectedModelName = useProvidersStore(s => s.selectedModelName)
+  const setSelectedProvider = useProvidersStore(s => s.setSelectedProvider)
+  const setSelectedModel = useProvidersStore(s => s.setSelectedModel)
+  const favorites = useProvidersStore(s => s.favorites)
+  const recents = useProvidersStore(s => s.recents)
+  const toggleFavorite = useProvidersStore(s => s.toggleFavorite)
+  const loadProviders = useProvidersStore(s => s.loadProviders)
+  const loadModels = useProvidersStore(s => s.loadModels)
+  const loading = useProvidersStore(s => s.loading)
+  const error = useProvidersStore(s => s.error)
   const { t } = useI18n()
   const { deviceType } = useDevice()
   const centralNarrow = useUIStore((s) => s.centralNarrow)

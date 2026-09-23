@@ -81,12 +81,21 @@ export class SessionManager {
         summarizationTailMessages: data.settings?.summarizationTailMessages ?? 3,
         showInterview: data.settings?.showInterview ?? true,
         websocketEnabled: data.settings?.websocketEnabled ?? true,
+        // AD-071 §2.1: активные MCP-серверы сессии. Раньше терялись при создании
+        // (`POST /sessions` с `settings.mcpServers`) — сессия теряла их.
+        mcpServers: data.settings?.mcpServers,
+        // AD-071 §2.4: явные opt-out сессии (включая системные) не теряются.
+        mcpDisabledServers: data.settings?.mcpDisabledServers,
         provider: data.settings?.provider,
         model: data.settings?.model,
         systemPrompt: data.settings?.systemPrompt,
         agentRole: data.settings?.agentRole,
         language: data.settings?.language,
         planMode: data.settings?.planMode,
+        // AD-071 §2.3: per-session override политик встроенных/MCP-инструментов
+        // не теряется при создании.
+        toolsPolicy: data.settings?.toolsPolicy,
+        mcpPolicy: data.settings?.mcpPolicy,
         routingEnabled: data.settings?.routingEnabled ?? false,
         routingStrategy: data.settings?.routingStrategy ?? 'auto',
         routingContent: data.settings?.routingContent ?? { coding: { provider: '', model: '' }, chat: { provider: '', model: '' }, research: { provider: '', model: '' } },
@@ -109,6 +118,7 @@ export class SessionManager {
       outputCost: 0,
       cacheReadCost: 0,
       cacheWriteCost: 0,
+      cacheHitRate: 0,
       createdAt: nowISO(),
       updatedAt: nowISO(),
       inputTokens: 0,

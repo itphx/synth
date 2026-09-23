@@ -7,15 +7,15 @@ import { join, extname } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig } from '@itphx/synth-shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
-  SecretPatternStore, ProtectedPathsStore, DictionaryStore,
+  SecretPatternStore, ProtectedPathsStore, DictionaryStore, DEFAULT_AGENT_ID,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
-import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart } from '@itphx/synth-shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart, DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
 import { createLocalAuth } from '../auth/local.js';
 import { ensureProfile, listProfiles, getLastProfile } from '../profiles.js';
 import { RemoteConnection } from '../remote/connection.js';
@@ -28,8 +28,9 @@ import { isRemoteRef, toLocalId } from '../remote/aggregate.js';
 import { ConnectionWatcher } from './connection-watcher.js';
 import { setRemoteTokenProvider, removeRemoteTokenProvider } from '../providers/remote.js';
 import { JsonStore } from '../storage/json-store.js';
+import { FileProfileStore } from '../storage/profile-store.js';
 import { ProjectStore } from '../storage/project-store.js';
-import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig } from '../storage/runtime-settings.js';
+import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy } from '../storage/runtime-settings.js';
 import { createHealthRoutes } from './routes/health.js';
 import { createHybridRoutes } from './routes/hybrid.js';
 import { createAuthRoutes } from './routes/auth.js';
@@ -65,8 +66,18 @@ export interface StandaloneConfig {
   securityConfig?: SecurityConfig;
   /** LLM Gateway (AD-036) из config.yaml — глобальный тумблер и конфиг. */
   gatewayConfig?: LLMGatewayConfig;
+  /** AD-070 §2.2: политика prompt-cache из config.yaml llm.cache (auto | none). */
+  llmCachePolicy?: 'auto' | 'none';
+  /** AD-071 §2.3: глобальная политика включения встроенных инструментов из config.yaml tools.policy. */
+  toolsPolicy?: ToolsPolicy;
+  /** AD-071 §2.3: глобальная политика включения MCP-инструментов из config.yaml mcp.policy. */
+  mcpPolicy?: ToolsPolicy;
+  /** AD-071 §2.6: instance-wide отключение инструментов из config.yaml tools.disabled. */
+  toolsDisabled?: ToolsDisabledConfig;
   /** Конфигурация MCP-серверов из config.yaml mcp.servers (для probe и загрузки тулов). */
   mcpServers?: Record<string, McpServerConfig>;
+  /** AD-071 §2.3.1: политика сетевого доступа HTTP MCP из config.yaml mcp.networkPolicy. */
+  mcpNetworkPolicy?: McpNetworkPolicy;
   /**
    * Дефолтный адрес удалённого backend (гибрид, `serve --connect`/env/конфиг).
    * Нужен для авто-логина (GET /auth/status) и POST /auth/login без поля server.
@@ -400,6 +411,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
         outputPrice: m.outputPrice,
         cacheReadPrice: m.cacheReadPrice,
         cacheWritePrice: m.cacheWritePrice,
+        currency: m.currency,
       }))
       .filter((m) => m.id && m.provider);
 
@@ -440,6 +452,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
           apiKey: '',
           defaultModel: providerInfo.model || undefined,
           enabled: true,
+          currency: providerInfo.currency,
         },
         models: modelsToMirror.filter((m) => m.provider === name),
         getToken: getToken ?? (async () => null),
@@ -591,6 +604,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   // Runtime-настройки (AD-005): workspace из {dataDir}/settings.json приоритетнее config/env
   const settingsStore = new RuntimeSettingsStore({ dataDir });
+  // Агент по умолчанию (админка «Агенты»): runtime-настройка поверх DEFAULT_AGENT_ID.
+  const getDefaultAgentId = async (): Promise<string> =>
+    (await settingsStore.getDefaultAgent()) ?? DEFAULT_AGENT_ID;
   const runtimeWorkspace = await settingsStore.getWorkspace();
   const defaultWorkingDir = runtimeWorkspace ?? config.defaultWorkingDir ?? join(dataDir, 'workspaces', 'default');
   await mkdir(defaultWorkingDir, { recursive: true });
@@ -602,6 +618,17 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // Защищённые пути: runtime-настройка protectedPaths.enabled (тумблер из UI) приоритетнее config.yaml
   const runtimeSecurity = await settingsStore.getSecuritySettings();
   const effectiveSecurityConfig = mergeSecurityConfig(config.securityConfig, runtimeSecurity);
+
+  // AD-071 §2.3: runtime-политика встроенных инструментов (админка) приоритетнее config.yaml tools.policy
+  const runtimeToolsPolicy = await settingsStore.getToolsPolicy();
+  const effectiveToolsPolicy: ToolsPolicy = runtimeToolsPolicy ?? config.toolsPolicy ?? 'auto';
+  // AD-071 §2.3: runtime-политика MCP-инструментов (админка) приоритетнее config.yaml mcp.policy
+  const runtimeMcpPolicy = await settingsStore.getMcpPolicy();
+  const effectiveMcpPolicy: ToolsPolicy = runtimeMcpPolicy ?? config.mcpPolicy ?? 'auto';
+  // AD-071 §2.6: runtime-отключение инструментов (админка) приоритетнее config.yaml tools.disabled
+  const runtimeToolsDisabled = await settingsStore.getToolsDisabled();
+  const effectiveToolsDisabled: ToolsDisabledConfig =
+    runtimeToolsDisabled ?? config.toolsDisabled ?? { capabilities: [], tools: [] };
 
   // AD-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
   const patternStore = new SecretPatternStore({ dataDir });
@@ -625,13 +652,24 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const mcpManager = new McpManager();
   mcpManager.setConfig(config.mcpServers ?? {});
 
+  // AD-071 §2.3.1: runtime-политика сетевого доступа пользовательских HTTP MCP
+  // (settings.json, админка) приоритетнее config.yaml и переживает рестарт —
+  // применяем её при старте, иначе сохранённое значение терялось бы. Слияние —
+  // единым helper'ом mergeMcpNetworkPolicy (тот же, что и в backend).
+  const runtimeMcpNetworkPolicy = await settingsStore.getMcpNetworkPolicy();
+  mcpManager.setNetworkPolicy(
+    mergeMcpNetworkPolicy(config.mcpNetworkPolicy, runtimeMcpNetworkPolicy),
+  );
+
   // Парсим провайдеров из переменных окружения
   await syncProvidersFromEnv(providerStore, modelStore);
 
   const eventBus = new EventBus();
   const queueManager = new QueueProcessorManager();
 
+  const profilesStore = new FileProfileStore({ dataDir });
   const contextBuilder = new ContextBuilder(contextConfig, {
+    profilesStore,
     projectDataDir: `${dataDir}/projects`,
     defaultLanguage: 'ru',
   });
@@ -684,6 +722,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
           outputPrice: m.outputPrice,
           cacheReadPrice: m.cacheReadPrice,
           cacheWritePrice: m.cacheWritePrice,
+          // Валюта: модель → провайдер → USD (обратная совместимость).
+          currency: m.currency ?? providerCache.get(m.provider)?.currency ?? 'USD',
         };
       }
     }
@@ -713,6 +753,13 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     gatewayConfig,
     gatewayPatternStore: patternStore,
     mcpManager,
+    cachePolicy: config.llmCachePolicy,
+    toolsPolicy: effectiveToolsPolicy,
+    mcpPolicy: effectiveMcpPolicy,
+    toolsDisabled: effectiveToolsDisabled,
+    // AD-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
+    tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
+    onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
   });
 
   const processMessage = orchestrator.createProcessMessage();
@@ -722,8 +769,19 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   // Sessions
   app.route('/api/v2/sessions', createSessionRoutes(
-    auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore,
-    () => connection.client,
+    auth,
+    {
+      sessionManager,
+      eventBus,
+      queueManager,
+      processMessage,
+      orchestrator,
+      contextOptimizer,
+      projectStore,
+      profilesStore,
+      getRemoteClient: () => connection.client,
+    },
+    { resolveDefaultAgent: getDefaultAgentId },
   ));
 
   // Projects
@@ -742,7 +800,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   ));
 
   // Providers
-  app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache, true));
+  app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache, { testEnabled: true }));
 
   // Models: remote-модели/провайдер читаются на каждый запрос (runtime-подключение).
   app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, modelCache, {
@@ -759,7 +817,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   }));
 
   // Agents
-  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry));
+  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId));
 
   // FS
   app.route('/api/v2/fs', createFsRoutes(auth, config.workspacesRoot, () => connection.client));
@@ -777,6 +835,22 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   app.route('/api/v2/settings', createSettingsRoutes(auth, {
     settingsStore,
     fallbackWorkspace: defaultWorkingDir,
+    // Агент по умолчанию при первом развёртывании (config.yaml не задаёт — DEFAULT_AGENT_ID).
+    fallbackDefaultAgent: DEFAULT_AGENT_ID,
+    // AD-072 Ф2: дефолты из config.yaml (без runtime) — для GET/DELETE-сброса к умолчанию.
+    fallbackLlmGateway: config.gatewayConfig ? {
+      enabled: config.gatewayConfig.enabled,
+      inputMode: config.gatewayConfig.inputMode,
+      logPayloads: config.gatewayConfig.logPayloads,
+      rateLimit: {
+        userPerMinute: config.gatewayConfig.rateLimit?.userPerMinute ?? DEFAULT_LLM_GATEWAY_RATE_LIMIT.userPerMinute,
+        providerPerMinute: config.gatewayConfig.rateLimit?.providerPerMinute ?? DEFAULT_LLM_GATEWAY_RATE_LIMIT.providerPerMinute,
+      },
+    } : undefined,
+    fallbackSecurity: {
+      protectedPaths: { enabled: config.securityConfig?.protectedPaths?.enabled ?? true },
+      askTimeoutMs: (config.securityConfig as (SecurityConfig & { askTimeoutMs?: number }) | undefined)?.askTimeoutMs,
+    },
     // AD-036: live-применение тумблера LLM Gateway из UI — без рестарта сервера.
     onLlmGatewayChange: async (runtime) => {
       const merged = mergeLlmGatewayConfig(config.gatewayConfig, runtime);
@@ -790,6 +864,31 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       if (merged?.askTimeoutMs !== undefined) {
         orchestrator.setDefaultPermissionTimeout(merged.askTimeoutMs);
       }
+    },
+    // AD-071 §2.3: live-применение политики встроенных инструментов из админки.
+    fallbackToolsPolicy: config.toolsPolicy ?? 'auto',
+    onToolsPolicyChange: async (policy) => {
+      orchestrator.setToolsPolicy(policy);
+    },
+    // AD-071 §2.3: live-применение политики MCP-инструментов из админки.
+    fallbackMcpPolicy: config.mcpPolicy ?? 'auto',
+    onMcpPolicyChange: async (policy) => {
+      orchestrator.setMcpPolicy(policy);
+    },
+    // AD-071 §2.6: live-применение instance-wide отключения инструментов.
+    fallbackToolsDisabled: config.toolsDisabled ?? { capabilities: [], tools: [] },
+    onToolsDisabledChange: async (disabled) => {
+      orchestrator.setToolsDisabled(disabled);
+    },
+    knownTools: () => toolRegistry.list().map((tool) => ({
+      name: tool.name,
+      capabilities: [...tool.capabilities],
+    })),
+    // AD-071 §2.3.1: дефолт config.yaml для GET/DELETE-сброса политики.
+    fallbackMcpNetworkPolicy: config.mcpNetworkPolicy,
+    // AD-071 §2.3.1: live-применение политики сетевого доступа MCP из админки.
+    onMcpNetworkPolicyChange: async (policy) => {
+      mcpManager.setNetworkPolicy(policy);
     },
     protectedPathsStore,
   }));

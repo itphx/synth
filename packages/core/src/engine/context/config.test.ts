@@ -301,3 +301,32 @@ describe('ContextConfig.getPlanModePrompt / getPlanGuide (AD-028/AD-039)', () =>
     }
   });
 });
+
+describe('ContextConfig.getModePolicy (AD-070 §3.1)', () => {
+  let userDataDir: string;
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'synth-mode-policy-'));
+  });
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true });
+  });
+
+  it('ru → [MODE POLICY], en → английский, fr → null', async () => {
+    const config = new ContextConfig({ userDataDir });
+    const ru = config.getModePolicy('ru');
+    expect(ru).toContain('[MODE POLICY]');
+    expect(ru).toContain('plan');
+    const en = config.getModePolicy('en');
+    expect(en).toContain('[MODE POLICY]');
+    expect(config.getModePolicy('fr')).toBeNull();
+  });
+
+  it('override из system-категории приоритетнее встроенного', async () => {
+    await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
+    await writeFile(join(userDataDir, 'user', 'system', 'MODE_POLICY.md'), 'ПОЛЬЗОВАТЕЛЬСКАЯ ПОЛИТИКА', 'utf-8');
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getModePolicy('ru')).toBe('ПОЛЬЗОВАТЕЛЬСКАЯ ПОЛИТИКА');
+  });
+});

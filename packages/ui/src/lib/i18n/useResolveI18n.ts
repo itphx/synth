@@ -8,5 +8,7 @@ import { resolveI18n } from './resolveI18n';
  */
 export function useResolveI18n(): (i18nMeta: unknown, content: string) => string {
   const dictionary = useI18nStore((state) => state.dictionary);
-  return (i18nMeta: unknown, content: string) => resolveI18n(i18nMeta, content, dictionary);
+  const locale = useI18nStore((state) => state.locale);
+  return (i18nMeta: unknown, content: string) =>
+    resolveI18n(i18nMeta, content, dictionary, locale);
 }

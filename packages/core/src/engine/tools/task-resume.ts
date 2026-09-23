@@ -31,6 +31,7 @@ import type { ContextConfig } from '../context/config.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
 import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
+import type { UsagePricing } from '../../providers/usage.js';
 import { serializeMessage, serializeSession } from '../../server/serialize.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import {
@@ -86,9 +87,13 @@ export interface SubagentResumeDeps {
   securityConfig?: SecurityConfig;
   /** Fallback permission (глобальный конфиг), если у дочерней сессии нет своей. */
   permissionConfig?: PermissionConfig;
+  /** AD-071 §2.1: активные MCP-серверы — дочерняя сессия наследует скоуп родителя. */
+  mcpServers?: string[];
   shellPolicy?: ShellPolicy | null;
   protectedPaths?: ProtectedPathsPolicy | null;
   protectedPathsEnabled?: boolean;
+  /** AD-070: цены моделей для live-стоимости resumed-саб-агента (как в `task`). */
+  modelPriceLoader?: (model: string) => UsagePricing | null;
   /** Резолв провайдера дочерней сессии (gateway/роутер оркестратора). */
   getProvider: (child: Session) => BaseProvider | null;
   /** Рабочий каталог дочерней сессии. */
@@ -231,6 +236,10 @@ export async function runSubagentResume(
       shellPolicy: deps.shellPolicy ?? undefined,
       protectedPaths: deps.protectedPaths ?? undefined,
       protectedPathsEnabled: deps.protectedPathsEnabled,
+      // AD-071 §2.1: дочерняя сессия наследует MCP-скоуп родителя.
+      mcpServers: deps.mcpServers,
+      // AD-070: live-стоимость resumed-саб-агента тем же загрузчиком цен.
+      modelPriceLoader: deps.modelPriceLoader,
       retry,
     };
 
@@ -239,11 +248,10 @@ export async function runSubagentResume(
       description: child.title ?? '',
       contextMode: 'none',
       maxSteps: agentDef.maxSteps,
-      systemPrompt,
       llmSystemPrompt: systemPrompt,
       initialMessages,
       provider,
-      tools: deps.agentRegistry.getToolsForAgent(agentDef.id),
+      tools: deps.agentRegistry.getToolsForAgent(agentDef.id, deps.mcpServers),
       childSessionId: child.id,
       parentSessionId: parent.id,
       extra,

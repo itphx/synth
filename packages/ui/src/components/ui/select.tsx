@@ -7,12 +7,14 @@ type SelectRootProps = {
   value?: string
   defaultValue?: string
   onValueChange?: (value: string) => void
+  /** Позволяет `Select.Value` резолвить label выбранного элемента вместо сырого value. */
+  items?: ReadonlyArray<{ label: React.ReactNode; value: string }>
   children: React.ReactNode
 }
 
-function Select({ value, defaultValue, onValueChange, children }: SelectRootProps) {
+function Select({ value, defaultValue, onValueChange, items, children }: SelectRootProps) {
   return (
-    <BaseSelect.Root value={value} defaultValue={defaultValue} onValueChange={onValueChange as (value: string | null) => void}>
+    <BaseSelect.Root value={value} defaultValue={defaultValue} onValueChange={onValueChange as (value: string | null) => void} items={items}>
       {children}
     </BaseSelect.Root>
   )

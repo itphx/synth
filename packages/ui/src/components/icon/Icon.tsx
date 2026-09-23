@@ -226,6 +226,11 @@ export interface IconProps extends React.ComponentPropsWithoutRef<'svg'> {
   name: IconName
 }
 
+/** Проверка, что строка — валидное имя иконки из реестра (без `as never`). */
+export function isIconName(name: string | null | undefined): name is IconName {
+  return typeof name === 'string' && name in iconMap
+}
+
 export const Icon = React.memo(({ name, ...rest }: IconProps) => {
   const Component = iconMap[name]
   if (!Component) return null

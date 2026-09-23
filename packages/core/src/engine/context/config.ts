@@ -534,4 +534,53 @@ export class ContextConfig {
     // 2. Встроенный prompts/system/PLAN_GUIDE.{lang}.md
     return this._readPrompt(stem, 'system', language);
   }
+
+  /**
+   * AD-070 §3.1: политика режимов сессии (plan/act/yolo) — константный
+   * stable-блок `mode.policy`. Что такое режимы, что переключение делает только
+   * пользователь, что часть тулов может быть недоступна в текущем режиме.
+   *
+   * Файлы: prompts/system/MODE_POLICY.{lang}.md — только локализованные.
+   * Override через {userDataDir}/user/system/ — стандартный механизм
+   * system-категории, проверяется первым. Возвращает null, если файл не найден.
+   */
+  getModePolicy(language = 'ru'): string | null {
+    const stem = 'MODE_POLICY';
+
+    // 1. Пользовательский override system-категории
+    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
+    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
+    if (overrideLocalized) {
+      const content = this._readFile(overrideLocalized);
+      if (content) return content;
+    }
+    const overrideContent = this._readFile(overridePath);
+    if (overrideContent) return overrideContent;
+
+    // 2. Встроенный prompts/system/MODE_POLICY.{lang}.md
+    return this._readPrompt(stem, 'system', language);
+  }
+
+  /**
+   * AD-034: инструкция классификации задачи (вызов `classify_conversation`).
+   * Файлы: prompts/system/CLASSIFICATION.{lang}.md — только локализованные.
+   * Override через {userDataDir}/user/system/ — стандартный механизм
+   * system-категории, проверяется первым. Возвращает пустую строку, если файла нет.
+   */
+  getClassificationInstructions(language = 'ru'): string {
+    const stem = 'CLASSIFICATION';
+
+    // 1. Пользовательский override system-категории
+    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
+    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
+    if (overrideLocalized) {
+      const content = this._readFile(overrideLocalized);
+      if (content) return content;
+    }
+    const overrideContent = this._readFile(overridePath);
+    if (overrideContent) return overrideContent;
+
+    // 2. Встроенный prompts/system/CLASSIFICATION.{lang}.md
+    return this._readPrompt(stem, 'system', language) ?? '';
+  }
 }

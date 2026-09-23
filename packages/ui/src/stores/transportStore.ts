@@ -5,10 +5,11 @@ import { useSessionsStore } from './sessionsStore'
 import { useUIStore } from './useUIStore'
 import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS } from './permissionStore'
 import type { TransportMode } from './useUIStore'
-import type { StreamDoneMetadata, MessageData } from './chatStore'
+import type { StreamDoneMetadata, MessageData, MessageStatus, CostBreakdown } from './chatStore'
 import { synthApi } from '@/lib/api/synthApi'
 import type { SessionData } from '@/lib/api/synthApi'
 import { notifyMessage } from '@/hooks/useNotification'
+import { i18nText } from '@/lib/i18n/text'
 
 type EventDispatcher = (event: WSEvent) => void
 
@@ -19,6 +20,33 @@ function refreshSessionFromApi(sid: string) {
   synthApi.getSession(sid)
     .then((sess) => useSessionsStore.getState().upsertSession(sess))
     .catch(() => {})
+}
+
+/** AD-070 §2.6: usage live-события (camelCase из ядра) → snake_case стора. */
+function mapUsage(raw: unknown): {
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  cache_read_tokens?: number
+  cache_write_tokens?: number
+  reasoning_tokens?: number
+} | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const u = raw as Record<string, number>
+  return {
+    input_tokens: u.inputTokens || 0,
+    output_tokens: u.outputTokens || 0,
+    total_tokens: u.totalTokens || 0,
+    cache_read_tokens: u.cacheReadTokens,
+    cache_write_tokens: u.cacheWriteTokens,
+    reasoning_tokens: u.reasoningTokens,
+  }
+}
+
+/** AD-070 §2.6: cost_breakdown live-события уже в camelCase — как в сторе. */
+function mapCostBreakdown(raw: unknown): CostBreakdown | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  return raw as CostBreakdown
 }
 
 interface TransportState {
@@ -53,9 +81,11 @@ export function createDispatcher(): EventDispatcher {
       addMessage,
       startStream,
       updateStreamChunk,
+      updateStreamUsage,
+      clearUsageStream,
+      updateLiveSubagentUsage,
       finishStream,
       cancelStream,
-      clearStreamError,
       setStreamRetry,
       setStreamRetrying,
       setQueueStalled,
@@ -84,24 +114,38 @@ export function createDispatcher(): EventDispatcher {
 
       case 'message_added':
       case 'message.added': {
+        // События родителя — плоские поля; события дочерней сессии
+        // (`publishMessageAdded` в task.ts) несут сериализованное сообщение во
+        // вложенном `message` (+ top-level `index`). Без разворачивания вложенный
+        // payload давал фантомное пустое сообщение с index: undefined.
+        const nested = payload.message && typeof payload.message === 'object'
+          ? payload.message as Record<string, unknown>
+          : undefined
+        const src = nested ?? payload
+        const usage = (src.usage as MessageData['usage']) ?? undefined
         const msg: MessageData = {
-          index: payload.message_index as number,
-          role: (payload.role as string) || 'assistant',
-          content: (payload.content as string) || '',
-          agent_role: payload.agent_role as string | undefined,
-          author: payload.author as string | undefined,
-          model: payload.model as string | undefined,
-          provider: payload.provider as string | undefined,
-          reasoning: (payload.reasoning as string) || undefined,
-          intermediate_text_blocks: payload.intermediate_text_blocks as Array<{ text: string; iteration: number }> | undefined,
-          tool_calls: (payload.tool_calls as MessageData['tool_calls']) ?? null,
-          metadata: payload.metadata as Record<string, unknown> | undefined,
+          index: (src.index as number) ?? (src.message_index as number) ?? (payload.index as number),
+          role: (src.role as string) || 'assistant',
+          content: (src.content as string) || '',
+          agent_role: (src.agent_role as string) || undefined,
+          author: (src.author as string) || undefined,
+          model: (src.model as string) || undefined,
+          provider: (src.provider as string) || undefined,
+          reasoning: (src.reasoning as string) || undefined,
+          intermediate_text_blocks: src.intermediate_text_blocks as Array<{ text: string; iteration: number }> | undefined,
+          tool_calls: (src.tool_calls as MessageData['tool_calls']) ?? null,
+          usage,
+          metadata: src.metadata as Record<string, unknown> | undefined,
           disabled: false,
           pinned: false,
           hidden: false,
           created_at: new Date().toISOString(),
         }
         addMessage(sid, msg)
+        // AD-070 §2.6: финальное сообщение дочернего саб-агента несёт usage —
+        // подстраховка к stream.ended: снимаем usage-only live-плейсхолдер, чтобы
+        // после сохранения сообщения панель показывала его итоговую статистику.
+        if (usage) clearUsageStream(sid)
         break
       }
 
@@ -178,32 +222,51 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
+      // AD-070 §2.6: live-статистика стрима (кумулятивный usage, cost, model).
+      // Публикуется в родительскую сессию основного стрима и в дочернюю сессию
+      // саб-агента (sid = childSessionId) — общий механизм streamingBySession.
+      case 'stream_usage':
+      case 'stream.usage': {
+        const streamId = payload.stream_id as string
+        if (!streamId) break
+        updateStreamUsage(sid, streamId, {
+          usage: mapUsage(payload.usage),
+          costUsd: payload.cost_usd as number | undefined,
+          costCurrency: payload.cost_currency as string | undefined,
+          costBreakdown: mapCostBreakdown(payload.cost_breakdown),
+          usageEstimated: payload.estimated as boolean | undefined,
+          model: payload.model as string | undefined,
+          provider: payload.provider as string | undefined,
+          agentRole: payload.agent_role as string | undefined,
+        })
+        break
+      }
+
       case 'stream_done':
       case 'stream.done': {
         const metadata: StreamDoneMetadata = {
           model: payload.model as string | undefined,
           content: payload.content as string | undefined,
-          usage: payload.usage
-            ? {
-                input_tokens: (payload.usage as Record<string, number>).inputTokens || 0,
-                output_tokens: (payload.usage as Record<string, number>).outputTokens || 0,
-                total_tokens: (payload.usage as Record<string, number>).totalTokens || 0,
-                cache_read_tokens: (payload.usage as Record<string, number>).cacheReadTokens,
-                cache_write_tokens: (payload.usage as Record<string, number>).cacheWriteTokens,
-                reasoning_tokens: (payload.usage as Record<string, number>).reasoningTokens,
-              }
-            : undefined,
+          usage: mapUsage(payload.usage),
           debug_info: payload.debug_info as Record<string, unknown> | undefined,
           message_index: payload.message_index as number | undefined,
           cancelled: payload.cancelled as boolean | undefined,
           pending_count: payload.pending_count as number | undefined,
+          status: payload.status as MessageStatus | undefined,
           metadata: payload.metadata as { type?: string; indices?: number[]; [key: string]: unknown } | undefined,
           reasoning_blocks: (payload.reasoning_blocks as Array<{ text: string; iteration: number }>) || undefined,
           intermediate_text_blocks: (payload.intermediate_text_blocks as Array<{ text: string; iteration: number }>) || undefined,
+          // AD-070 §2.6: top-level финальная статистика — в metadata оптимистичного
+          // сообщения, чтобы панель показала финал без перезагрузки.
+          provider: payload.provider as string | undefined,
+          duration_ms: payload.duration_ms as number | undefined,
+          cost_usd: payload.cost_usd as number | undefined,
+          cost_currency: payload.cost_currency as string | undefined,
+          cost_breakdown: mapCostBreakdown(payload.cost_breakdown),
+          usage_estimated: payload.usage_estimated as boolean | undefined,
         }
         finishStream(sid, payload.stream_id as string, metadata)
         setStreamRetry(sid, null)
-        clearStreamError(sid)
         setFinalStreamError(sid, null)
 
         const pendingCount = payload.pending_count as number | undefined
@@ -215,9 +278,31 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
+      // AD-070 §2.6: терминальное live-событие дочерней сессии саб-агента
+      // (task.ts). Сообщение ребёнка сохраняется отдельно, поэтому здесь только
+      // снимаем usage-only StreamState — без создания/дубля сообщений.
+      case 'stream_ended':
+      case 'stream.ended': {
+        clearUsageStream(sid, payload.stream_id as string | undefined)
+        break
+      }
+
       case 'stream_cancelled':
       case 'stream.cancelled': {
-        cancelStream(sid, payload.stream_id as string)
+        // AD-070 §2.6: событие отмены несёт usage/cost/usage_estimated —
+        // сохраняем их в финализируемом сообщении, а не игнорируем.
+        cancelStream(
+          sid,
+          payload.stream_id as string,
+          payload.status as MessageStatus | undefined,
+          {
+            usage: mapUsage(payload.usage),
+            costUsd: payload.cost_usd as number | undefined,
+            costCurrency: payload.cost_currency as string | undefined,
+            costBreakdown: mapCostBreakdown(payload.cost_breakdown),
+            usageEstimated: payload.usage_estimated as boolean | undefined,
+          },
+        )
         setStreamRetry(sid, null)
         break
       }
@@ -239,7 +324,7 @@ export function createDispatcher(): EventDispatcher {
         // Ошибка переполнения контекстного окна — показываем дружелюбный текст
         // вместо сырого сообщения провайдера.
         const error = errorType === 'context_length'
-          ? 'Контекстное окно модели превышено. Начните новую сессию или сократите историю'
+          ? i18nText('chat.error.contextLength')
           : rawError
 
         // Финальная ошибка (неrecoverable / исчерпаны попытки / отменено):
@@ -463,16 +548,29 @@ export function createDispatcher(): EventDispatcher {
         // вкладываются в блок `task` (по parent_call_id, т.е. call_id задачи).
         const streamId = payload.stream_id as string
         if (!streamId) break
+        const parentCallId = (payload.parent_call_id as string) || ''
         updateToolCallSubagentProgress(
           sid,
           streamId,
-          (payload.parent_call_id as string) || '',
+          parentCallId,
           {
             reasoning: (payload.reasoning as string) || '',
             content: (payload.content as string) || '',
             iteration: (payload.iteration as number) || 0,
           },
         )
+        // AD-070 §2.6: live-вклад саб-агента (для строки статистики в блоке
+        // `task` и секции StatsTab). Событие несёт накопленный usage вызова.
+        if (parentCallId) {
+          updateLiveSubagentUsage(sid, parentCallId, {
+            usage: mapUsage(payload.usage),
+            costUsd: payload.cost_usd as number | undefined,
+            costCurrency: payload.cost_currency as string | undefined,
+            estimated: payload.estimated as boolean | undefined,
+            model: payload.model as string | undefined,
+            provider: payload.provider as string | undefined,
+          })
+        }
         break
       }
 
@@ -594,6 +692,10 @@ export function createDispatcher(): EventDispatcher {
 
 let transport: TransportClient | null = null
 let transportReady = false
+// Эффективный транспорт текущего клиента: 'ws' | 'sse' пока идёт подключение
+// или соединение живо; null — клиент сброшен (disconnect/разрыв). Вместе с
+// transport.getTransport() даёт идемпотентность connect() к тому же транспорту.
+let activeKind: 'ws' | 'sse' | null = null
 
 export function isTransportConnected(): boolean {
   return transportReady
@@ -605,6 +707,7 @@ if (import.meta.hot) {
     transport?.disconnect();
     transport = null;
     transportReady = false;
+    activeKind = null;
   });
 }
 
@@ -615,17 +718,28 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
   openSessions: new Set(),
 
   connect: (mode: TransportMode, override?: 'ws' | 'sse') => {
+    const actualMode = override || (mode === 'sse' ? 'sse' as const : 'ws' as const)
+
+    // Идемпотентность: к тому же эффективному транспорту уже подключаемся или
+    // подключены. Раньше это пересоздавало клиент и закрывало CONNECTING-сокет
+    // (auto→ws + сохранённый prefs ws = один и тот же транспорт — см. AD-024).
+    if (transport && transport.getTransport() === actualMode && activeKind === actualMode) {
+      console.debug('[TransportStore] connect skipped (already', actualMode, ')')
+      return
+    }
+
     transport?.disconnect()
     transport = null
     transportReady = false
+    activeKind = null
 
-    const actualMode = override || (mode === 'sse' ? 'sse' as const : 'ws' as const)
     console.debug('[TransportStore] Connecting:', actualMode, '(mode=', mode, ')')
     const dispatcher = createDispatcher()
 
     const client = new TransportClient({
       onEvent: dispatcher,
       onConnect: () => {
+        activeKind = actualMode
         if (actualMode === 'sse') {
           transportReady = true
           set({ connected: true, activeTransport: 'sse' })
@@ -637,11 +751,16 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
         }
       },
       onBackendReady: () => {
+        activeKind = actualMode
         transportReady = true
         set({ connected: true, activeTransport: 'ws' })
         console.debug('[TransportStore] Backend ready:', client.getTransport())
       },
       onDisconnect: (reason) => {
+        // Обрыв/ручное закрытие: клиент больше не считается «активным» —
+        // иначе форс-реконнект (ConnectionGuard) и auto-fallback WS→SSE
+        // блокировались бы guard'ом идемпотентности.
+        activeKind = null
         transportReady = false
         set({ connected: false })
         console.debug('[TransportStore] Disconnected:', reason)
@@ -663,9 +782,9 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
           get().connect('auto', 'sse')
         }
       },
-      onTransportSwitch: () => {},
     })
 
+    activeKind = actualMode
     client.connect(actualMode)
     transport = client
   },
@@ -674,6 +793,7 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     transport?.disconnect()
     transport = null
     transportReady = false
+    activeKind = null
     set({ connected: false, activeTransport: 'disconnected' })
   },
 

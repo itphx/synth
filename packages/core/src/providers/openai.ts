@@ -1,5 +1,15 @@
 import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
-import { BaseProvider, type LLMMessage, type CancellationToken } from './base.js';
+import {
+  BaseProvider,
+  fetchModelsCatalog,
+  resolveSystemPromptText,
+  parseTokenPricing,
+  toNonNegativeNumber,
+  type DetailedModelInfo,
+  type LLMMessage,
+  type SystemPromptInput,
+  type CancellationToken,
+} from './base.js';
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
 import { ContextLengthExceededError, RateLimitError } from './exceptions.js';
@@ -11,7 +21,7 @@ export class OpenAIProvider extends BaseProvider {
 
   async chat(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     stream?: boolean,
     debugCollector?: DebugCollector,
@@ -30,6 +40,7 @@ export class OpenAIProvider extends BaseProvider {
     if (tools?.length) body.tools = tools;
     if (stream) body.stream = true;
     if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
+    this._applyPromptCacheKey(body, systemPrompt);
 
     const headers = this._getHeaders();
     debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
@@ -63,7 +74,7 @@ export class OpenAIProvider extends BaseProvider {
 
   async *chatAsync(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     debugCollector?: DebugCollector,
     cancellationToken?: CancellationToken,
@@ -76,12 +87,16 @@ export class OpenAIProvider extends BaseProvider {
       messages: formattedMessages,
       temperature: this.temperature,
       stream: true,
+      // AD-070 §2.3: просим провайдера прислать usage в стриме — иначе
+      // cached_tokens/reasoning_tokens в статистику не попадают.
+      stream_options: { include_usage: true },
     };
     if (this.reasoningLevel && this.reasoningLevel !== 'default') body.reasoning_effort = this.reasoningLevel;
     if (this.topP !== undefined) body.top_p = this.topP;
     if (this.topK !== undefined) body.top_k = this.topK;
     if (tools?.length) body.tools = tools;
     if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
+    this._applyPromptCacheKey(body, systemPrompt);
 
     const headers = this._getHeaders();
     debugCollector?.captureApiRequest(this.url, 'POST', headers, body);
@@ -166,13 +181,22 @@ export class OpenAIProvider extends BaseProvider {
               const delta = choices?.[0]?.delta as Record<string, unknown> | undefined;
 
               if (delta) {
-                if (delta.reasoning_content && typeof delta.reasoning_content === 'string') {
-                  if (delta.reasoning_content === '.' || delta.reasoning_content === '.\n') continue;
+                // Reasoning приходит в разных форматах: DeepSeek — `reasoning_content`,
+                // OpenRouter/RouterAI — `reasoning`. Приоритет у `reasoning_content`
+                // (текущее поведение DeepSeek/itphx), пустые строки пропускаем.
+                const rc = typeof delta.reasoning_content === 'string' ? delta.reasoning_content : undefined;
+                const r = typeof delta.reasoning === 'string' ? delta.reasoning : undefined;
+                const reasoningDelta = rc !== undefined && rc !== '' ? rc : r !== undefined && r !== '' ? r : undefined;
+                // DeepSeek-модели иногда шлют служебные '.'/'.\\n' как отдельные
+                // reasoning_content-чанки — пропускаем. У поля `reasoning`
+                // (OpenRouter/RouterAI) такого фильтра нет: точки там осмысленны.
+                const isDeepSeekQuirk = rc !== undefined && (rc === '.' || rc === '.\n');
+                if (reasoningDelta !== undefined && !isDeepSeekQuirk) {
                   if (!firstChunkReceived) {
                     firstChunkReceived = true;
                     clearTimeout(timer);
                   }
-                  accumulatedReasoning += delta.reasoning_content;
+                  accumulatedReasoning += reasoningDelta;
                   yield {
                     content: '',
                     isFinal: false,
@@ -227,14 +251,7 @@ export class OpenAIProvider extends BaseProvider {
               }
 
               if (chunkData.usage) {
-                const usage = chunkData.usage as Record<string, unknown>;
-                const details = usage.completion_tokens_details as Record<string, number> | undefined;
-                accumulatedUsage = {
-                  inputTokens: (usage.prompt_tokens as number) || 0,
-                  outputTokens: (usage.completion_tokens as number) || 0,
-                  totalTokens: (usage.total_tokens as number) || 0,
-                  reasoningTokens: details?.reasoning_tokens || 0,
-                };
+                accumulatedUsage = this._parseUsage(chunkData.usage as Record<string, unknown>);
               }
             } catch {
               continue;
@@ -277,40 +294,58 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   async listModels(): Promise<string[]> {
+    const models = await fetchModelsCatalog(this._modelsUrl(), this._getHeaders());
+    return models
+      .map((m) => (typeof m.id === 'string' ? m.id : String(m.id ?? '')))
+      .filter(Boolean);
+  }
+
+  /**
+   * Список моделей с метаданными (RouterAI/OpenRouter-совместимый каталог):
+   * `context_length` → contextWindow, `pricing`/`pricing_units` → цены за 1M
+   * токенов (только токенные тарифы). Официальный OpenAI каталог цен и окна
+   * не отдаёт — тогда вернётся только `{ id }`.
+   */
+  async listModelsDetailed(): Promise<DetailedModelInfo[]> {
+    const models = await fetchModelsCatalog(this._modelsUrl(), this._getHeaders());
+    return models.map((m) => this._parseModel(m)).filter((m) => m.id);
+  }
+
+  private _modelsUrl(): string {
     const baseUrl = this.url.replace(/\/chat\/completions\/?$/, '').replace(/\/+$/, '');
-    const modelsUrl = `${baseUrl}/models`;
+    return `${baseUrl}/models`;
+  }
 
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 10_000);
+  private _parseModel(raw: Record<string, unknown>): DetailedModelInfo {
+    const id = typeof raw.id === 'string' ? raw.id : String(raw.id ?? '');
+    const result: DetailedModelInfo = { id };
+    if (!id) return result;
 
-      const resp = await fetch(modelsUrl, {
-        headers: this._getHeaders(),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
+    if (typeof raw.name === 'string' && raw.name) result.name = raw.name;
 
-      if (resp.ok) {
-        const data = await resp.json() as { data?: Array<{ id: string }> };
-        return (data.data || []).map((m) => m.id).filter(Boolean);
-      }
-    } catch {
-      // fall trough
-    }
+    const contextWindow = toNonNegativeNumber(raw.context_length);
+    if (contextWindow !== undefined && contextWindow > 0) result.contextWindow = contextWindow;
 
-    return [];
+    const parsed = parseTokenPricing(
+      raw.pricing as Record<string, unknown> | undefined,
+      raw.pricing_units as Record<string, unknown> | undefined,
+    );
+    if (parsed) Object.assign(result, parsed);
+
+    return result;
   }
 
   private _formatMessages(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
   ): Array<Record<string, unknown>> {
     const formatted: Array<Record<string, unknown>> = [];
 
-    if (systemPrompt) {
+    const systemText = resolveSystemPromptText(systemPrompt);
+    if (systemText) {
       formatted.push({
         role: 'system',
-        content: [{ type: 'text', text: systemPrompt }],
+        content: [{ type: 'text', text: systemText }],
       });
     }
 
@@ -355,6 +390,17 @@ export class OpenAIProvider extends BaseProvider {
     return formatted;
   }
 
+  /**
+   * AD-070 §2.2: OpenAI не поддерживает явный cache_control — используется
+   * implicit prefix caching через `prompt_cache_key` (стабильный id сессии).
+   * При `cachePolicy: 'none'` ключ не отправляется.
+   */
+  private _applyPromptCacheKey(body: Record<string, unknown>, systemPrompt?: SystemPromptInput): void {
+    if (typeof systemPrompt !== 'object' || systemPrompt === null) return;
+    if (systemPrompt.cachePolicy === 'none') return;
+    if (systemPrompt.cacheKey) body.prompt_cache_key = systemPrompt.cacheKey;
+  }
+
   private _getHeaders(): Record<string, string> {
     return {
       Authorization: `Bearer ${this.apiKey}`,
@@ -367,23 +413,37 @@ export class OpenAIProvider extends BaseProvider {
     const message = choices?.[0]?.message as Record<string, unknown> | undefined;
     const content = String(message?.content ?? '');
     const toolCalls = message?.tool_calls as Record<string, unknown>[] | undefined;
-    const reasoning = message?.reasoning_content as string | undefined;
-
-    const usage = data.usage as Record<string, unknown> | undefined;
-    const details = usage?.completion_tokens_details as Record<string, number> | undefined;
-    const parsedUsage: TokenUsage = {
-      inputTokens: (usage?.prompt_tokens as number) || 0,
-      outputTokens: (usage?.completion_tokens as number) || 0,
-      totalTokens: (usage?.total_tokens as number) || 0,
-      reasoningTokens: details?.reasoning_tokens || 0,
-    };
+    // `reasoning_content` (DeepSeek) либо `reasoning` (OpenRouter/RouterAI).
+    const reasoning = (message?.reasoning_content ?? message?.reasoning) as string | undefined;
 
     return {
       content,
       model: this.model,
-      usage: parsedUsage,
+      usage: this._parseUsage(data.usage as Record<string, unknown> | undefined),
       toolCalls,
       reasoning: reasoning || undefined,
+    };
+  }
+
+  /**
+   * AD-070 §2.3: нормализация OpenAI usage. `prompt_tokens` уже включает
+   * кэшированные токены; `prompt_tokens_details.cached_tokens` → cacheRead,
+   * `nonCached = prompt_tokens − cached_tokens` вычисляется потребителем.
+   * Явных cache write у OpenAI нет — 0.
+   */
+  private _parseUsage(usage?: Record<string, unknown>): TokenUsage {
+    if (!usage) {
+      return { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    }
+    const completionDetails = usage.completion_tokens_details as Record<string, number> | undefined;
+    const promptDetails = usage.prompt_tokens_details as Record<string, number> | undefined;
+    return {
+      inputTokens: (usage.prompt_tokens as number) || 0,
+      outputTokens: (usage.completion_tokens as number) || 0,
+      totalTokens: (usage.total_tokens as number) || 0,
+      cacheReadTokens: promptDetails?.cached_tokens || 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: completionDetails?.reasoning_tokens || 0,
     };
   }
 

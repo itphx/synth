@@ -3,19 +3,158 @@ import type { AuthKit } from '../../auth/local.js';
 import type { RuntimeSettingsStore, LlmGatewayRuntimeSettings, SecurityRuntimeSettings } from '../../storage/runtime-settings.js';
 import type { ProtectedPathsStore } from '../../engine/security/protected-paths-store.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
-import type { McpServerToolSettings, McpToolAvailability } from '@itphx/synth-shared';
+import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig } from '@itphx/synth-shared';
+import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, ToolCapability } from '@itphx/synth-shared';
+import { DEFAULT_ASK_TIMEOUT_MS } from '../../engine/permission/derive.js';
+import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
+
+/** AD-072 Ф2: эффективные дефолты LLM Gateway (config.yaml без runtime). */
+const DEFAULT_LLM_GATEWAY: LlmGatewayRuntimeSettings = {
+  enabled: false,
+  inputMode: 'obfuscate',
+  logPayloads: false,
+  rateLimit: { ...DEFAULT_LLM_GATEWAY_RATE_LIMIT },
+};
+
+/** AD-072 Ф2: дефолты секции «Безопасность» (config.yaml без runtime). */
+function resolveSecurityDefaults(fallback?: Partial<SecurityRuntimeSettings>): {
+  protectedPaths: { enabled: boolean };
+  askTimeoutMs: number;
+} {
+  return {
+    protectedPaths: { enabled: fallback?.protectedPaths?.enabled ?? true },
+    askTimeoutMs: fallback?.askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS,
+  };
+}
+
+/** AD-072 Ф2: дефолты LLM Gateway (config.yaml без runtime), вложенный rateLimit мёржится по полям. */
+function resolveLlmGatewayDefaults(fallback?: Partial<LlmGatewayRuntimeSettings>): LlmGatewayRuntimeSettings {
+  return {
+    enabled: fallback?.enabled ?? DEFAULT_LLM_GATEWAY.enabled,
+    inputMode: fallback?.inputMode ?? DEFAULT_LLM_GATEWAY.inputMode,
+    logPayloads: fallback?.logPayloads ?? DEFAULT_LLM_GATEWAY.logPayloads,
+    rateLimit: {
+      userPerMinute: fallback?.rateLimit?.userPerMinute ?? DEFAULT_LLM_GATEWAY.rateLimit.userPerMinute,
+      providerPerMinute: fallback?.rateLimit?.providerPerMinute ?? DEFAULT_LLM_GATEWAY.rateLimit.providerPerMinute,
+    },
+  };
+}
+
+/** AD-072 Ф2: runtime-поле присутствует в settings.json (объект с хотя бы одним ключом / скаляр). */
+function hasOverride(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return Object.keys(value as Record<string, unknown>).length > 0;
+  }
+  return true;
+}
 
 export interface SettingsRoutesDeps {
   /** Store runtime-настроек ({dataDir}/settings.json). */
   settingsStore: RuntimeSettingsStore;
   /** Значение по умолчанию (env > config > {dataDir}/workspaces/default), если runtime-настройка не задана. */
   fallbackWorkspace: string;
+  /** AD-072 Ф2: дефолт LLM Gateway из config.yaml (без runtime) для GET/DELETE /llm-gateway. */
+  fallbackLlmGateway?: Partial<LlmGatewayRuntimeSettings>;
+  /** AD-072 Ф2: дефолт секции «Безопасность» из config.yaml для GET/DELETE /security. */
+  fallbackSecurity?: Partial<SecurityRuntimeSettings>;
   /** Вызывается после успешного PUT /llm-gateway (live-применение runtime-настройки). */
   onLlmGatewayChange?: (runtime: Partial<LlmGatewayRuntimeSettings>) => void | Promise<void>;
   /** Вызывается после успешного PUT /security (live-применение тумблера защищённых путей). */
   onSecurityChange?: (runtime: Partial<SecurityRuntimeSettings>) => void | Promise<void>;
+  /** AD-071 §2.3: значение tools.policy из config.yaml (если runtime не задан). */
+  fallbackToolsPolicy?: ToolsPolicy;
+  /** Вызывается после успешного PUT /tools-policy (live-применение политики встроенных инструментов). */
+  onToolsPolicyChange?: (policy: ToolsPolicy) => void | Promise<void>;
+  /** AD-071 §2.3: значение mcp.policy из config.yaml (если runtime не задан). */
+  fallbackMcpPolicy?: ToolsPolicy;
+  /** Вызывается после успешного PUT /mcp-policy (live-применение политики MCP-инструментов). */
+  onMcpPolicyChange?: (policy: ToolsPolicy) => void | Promise<void>;
+  /** AD-071 §2.3.1: значение mcp.networkPolicy из config.yaml (если runtime не задан). */
+  fallbackMcpNetworkPolicy?: McpNetworkPolicy;
+  /** Вызывается после успешного PUT /mcp-network-policy (live-применение). */
+  onMcpNetworkPolicyChange?: (policy: McpNetworkPolicy) => void | Promise<void>;
+  /** AD-071 §2.6: значение tools.disabled из config.yaml (если runtime не задан). */
+  fallbackToolsDisabled?: ToolsDisabledConfig;
+  /** Вызывается после успешного PUT /tools-disabled (live-применение). */
+  onToolsDisabledChange?: (config: ToolsDisabledConfig) => void | Promise<void>;
+  /**
+   * AD-071 §2.6: известные инструменты (имя → capabilities) для защиты
+   * `runtime`-тулов от отключения. Не задан — проверка по имени пропускается
+   * (capability `runtime` всё равно отклоняется).
+   */
+  knownTools?: () => Array<{ name: string; capabilities: string[] }>;
   /** Store override политики защищённых путей ({dataDir}/security/protected-paths.json). */
   protectedPathsStore?: ProtectedPathsStore;
+  /** Агент по умолчанию из config.yaml (если runtime не задан); иначе — `DEFAULT_AGENT_ID`. */
+  fallbackDefaultAgent?: string;
+  /** Вызывается после успешного PUT /default-agent (live-применение). */
+  onDefaultAgentChange?: (id: string) => void | Promise<void>;
+}
+
+/** AD-071 §2.3: валидна ли политика включения инструментов. */
+function isValidToolsPolicy(value: unknown): value is ToolsPolicy {
+  return typeof value === 'string' && (TOOLS_POLICIES as readonly string[]).includes(value);
+}
+
+/** Формат id агента (совпадает с валидацией в роутах /agents). */
+const AGENT_ID_REGEX = /^[a-z0-9_-]+$/;
+
+/** Валиден ли id агента: непустая строка латиницы/цифр/дефиса/подчёркивания. */
+function isValidAgentId(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && AGENT_ID_REGEX.test(value.trim());
+}
+
+/** AD-071 §2.3.1: валидна ли политика сетевого доступа MCP ({ mode, list }). */
+function isValidMcpNetworkPolicy(value: unknown): value is McpNetworkPolicy {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const p = value as Record<string, unknown>;
+  if (p.mode !== 'allow' && p.mode !== 'deny') return false;
+  if (!Array.isArray(p.list) || !p.list.every((x) => typeof x === 'string' && x.trim().length > 0)) return false;
+  return true;
+}
+
+/**
+ * AD-071 §2.6: валидация `tools.disabled`. Структура — Zod-схемой
+ * (`toolsDisabledSchema`), поэтому неизвестная capability отклоняется (закрытый
+ * набор: опечатка молча ничего бы не отключила). Имена инструментов — свободные
+ * строки (реестр динамический: MCP-тулы регистрируются лениво), но инструмент
+ * с capability `runtime` (ядро сессии) отключать нельзя — 400.
+ */
+function validateToolsDisabled(
+  value: unknown,
+  knownTools?: () => Array<{ name: string; capabilities: string[] }>,
+): { ok: true; config: ToolsDisabledConfig } | { ok: false; message: string } {
+  const parsed = toolsDisabledSchema.safeParse(value);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return {
+      ok: false,
+      message: `toolsDisabled: ожидается { capabilities: ToolCapability[], tools: string[] } (${issue?.message ?? 'невалидная структура'})`,
+    };
+  }
+  const config: ToolsDisabledConfig = {
+    capabilities: parsed.data.capabilities,
+    tools: parsed.data.tools,
+  };
+  if (config.capabilities.includes(ToolCapability.RUNTIME)) {
+    return {
+      ok: false,
+      message: `capability "${ToolCapability.RUNTIME}" неотключаема — это ядро сессии (plan/todo/project/reference/classify)`,
+    };
+  }
+  if (knownTools) {
+    const known = new Map(knownTools().map((tool) => [tool.name, tool.capabilities]));
+    for (const name of config.tools) {
+      if (known.get(name)?.includes(ToolCapability.RUNTIME)) {
+        return {
+          ok: false,
+          message: `инструмент "${name}" неотключаем — capability "${ToolCapability.RUNTIME}" (ядро сессии)`,
+        };
+      }
+    }
+  }
+  return { ok: true, config };
 }
 
 function isValidAvailability(value: unknown): value is McpToolAvailability {
@@ -115,7 +254,11 @@ export function createSettingsRoutes(
 
   app.get('/workspace', auth.requireAuth, async (c) => {
     const runtimeWorkspace = await deps.settingsStore.getWorkspace();
-    return c.json({ workspace: runtimeWorkspace ?? deps.fallbackWorkspace });
+    return c.json({
+      workspace: runtimeWorkspace ?? deps.fallbackWorkspace,
+      isOverridden: runtimeWorkspace !== undefined,
+      defaults: deps.fallbackWorkspace,
+    });
   });
 
   app.put('/workspace', auth.requireAuth, async (c) => {
@@ -132,9 +275,19 @@ export function createSettingsRoutes(
     return c.json({ workspace });
   });
 
+  app.delete('/workspace', auth.requireAuth, async (c) => {
+    await deps.settingsStore.clearWorkspace();
+    return c.json({
+      status: 'restored',
+      workspace: deps.fallbackWorkspace,
+      isOverridden: false,
+      defaults: deps.fallbackWorkspace,
+    });
+  });
+
   app.get('/mcp', auth.requireAuth, async (c) => {
     const servers = await deps.settingsStore.getMcpSettings();
-    return c.json({ servers });
+    return c.json({ servers, isOverridden: hasOverride(servers), defaults: {} });
   });
 
   app.put('/mcp', auth.requireAuth, async (c) => {
@@ -154,14 +307,29 @@ export function createSettingsRoutes(
     return c.json({ servers });
   });
 
+  app.delete('/mcp', auth.requireAuth, async (c) => {
+    await deps.settingsStore.clearMcpSettings();
+    return c.json({ status: 'restored', servers: {}, isOverridden: false, defaults: {} });
+  });
+
   /**
    * GET/PUT /api/v2/settings/llm-gateway — глобальные настройки LLM Gateway (AD-036).
    * Тумблер включается/выключается через UI (раздел «Шлюз безопасности», только ADMIN).
    * Значение сохраняется в {dataDir}/settings.json (AD-005) и переживает рестарт.
    */
   app.get('/llm-gateway', auth.requireAuth, async (c) => {
-    const llmGateway = await deps.settingsStore.getLlmGatewaySettings();
-    return c.json({ llmGateway });
+    const runtime = await deps.settingsStore.getLlmGatewaySettings();
+    const defaults = resolveLlmGatewayDefaults(deps.fallbackLlmGateway);
+    const llmGateway = {
+      enabled: runtime.enabled ?? defaults.enabled,
+      inputMode: runtime.inputMode ?? defaults.inputMode,
+      logPayloads: runtime.logPayloads ?? defaults.logPayloads,
+      rateLimit: {
+        userPerMinute: runtime.rateLimit?.userPerMinute ?? defaults.rateLimit.userPerMinute,
+        providerPerMinute: runtime.rateLimit?.providerPerMinute ?? defaults.rateLimit.providerPerMinute,
+      },
+    };
+    return c.json({ llmGateway, isOverridden: hasOverride(runtime), defaults });
   });
 
   app.put('/llm-gateway', auth.requireAuth, async (c) => {
@@ -183,6 +351,14 @@ export function createSettingsRoutes(
     return c.json({ llmGateway });
   });
 
+  app.delete('/llm-gateway', auth.requireAuth, async (c) => {
+    await deps.settingsStore.clearLlmGatewaySettings();
+    // Пустой runtime → mergeLlmGatewayConfig вернёт config.yaml (или undefined — шлюз выключен).
+    await deps.onLlmGatewayChange?.({});
+    const defaults = resolveLlmGatewayDefaults(deps.fallbackLlmGateway);
+    return c.json({ status: 'restored', llmGateway: defaults, isOverridden: false, defaults });
+  });
+
   /**
    * GET/PUT /api/v2/settings/security — глобальные настройки секции «Безопасность».
    * Тумблер защищённых путей + глобальный таймаут подтверждения (askTimeoutMs)
@@ -190,12 +366,15 @@ export function createSettingsRoutes(
    * {dataDir}/settings.json (AD-005) и переживает рестарт.
    */
   app.get('/security', auth.requireAuth, async (c) => {
-    const security = await deps.settingsStore.getSecuritySettings();
+    const runtime = await deps.settingsStore.getSecuritySettings();
+    const defaults = resolveSecurityDefaults(deps.fallbackSecurity);
     return c.json({
       security: {
-        protectedPaths: { enabled: security.protectedPaths?.enabled ?? true },
-        askTimeoutMs: security.askTimeoutMs ?? 30_000,
+        protectedPaths: { enabled: runtime.protectedPaths?.enabled ?? defaults.protectedPaths.enabled },
+        askTimeoutMs: runtime.askTimeoutMs ?? defaults.askTimeoutMs,
       },
+      isOverridden: hasOverride(runtime),
+      defaults,
     });
   });
 
@@ -222,6 +401,212 @@ export function createSettingsRoutes(
         askTimeoutMs: security.askTimeoutMs,
       },
     });
+  });
+
+  app.delete('/security', auth.requireAuth, async (c) => {
+    await deps.settingsStore.clearSecuritySettings();
+    // Пустой runtime → mergeSecurityConfig вернёт config.yaml.
+    await deps.onSecurityChange?.({});
+    const defaults = resolveSecurityDefaults(deps.fallbackSecurity);
+    return c.json({ status: 'restored', security: defaults, isOverridden: false, defaults });
+  });
+
+  /**
+   * GET/PUT /api/v2/settings/tools-policy — AD-071 §2.3: глобальная админская
+   * политика включения инструментов (`consistency` | `available` | `auto`).
+   * Runtime-значение ({dataDir}/settings.json) приоритетнее config.yaml;
+   * per-session override — `session.settings.toolsPolicy`.
+   */
+  app.get('/tools-policy', auth.requireAuth, async (c) => {
+    const runtime = await deps.settingsStore.getToolsPolicy();
+    const defaults = deps.fallbackToolsPolicy ?? 'auto';
+    return c.json({ toolsPolicy: runtime ?? defaults, isOverridden: runtime !== undefined, defaults });
+  });
+
+  app.put('/tools-policy', auth.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const toolsPolicy = (body as { toolsPolicy?: unknown }).toolsPolicy;
+
+    if (!isValidToolsPolicy(toolsPolicy)) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'toolsPolicy: ожидается "consistency" | "available" | "auto"',
+        },
+      }, 400);
+    }
+
+    await deps.settingsStore.setToolsPolicy(toolsPolicy);
+    // Live-применение политики встроенных инструментов — оркестратор
+    // переконфигурируется без рестарта сервера.
+    await deps.onToolsPolicyChange?.(toolsPolicy);
+    return c.json({ toolsPolicy });
+  });
+
+  app.delete('/tools-policy', auth.requireAuth, async (c) => {
+    const defaults = deps.fallbackToolsPolicy ?? 'auto';
+    await deps.settingsStore.clearToolsPolicy();
+    // Live-применение дефолта из config.yaml.
+    await deps.onToolsPolicyChange?.(defaults);
+    return c.json({ status: 'restored', toolsPolicy: defaults, isOverridden: false, defaults });
+  });
+
+  /**
+   * GET/PUT /api/v2/settings/mcp-policy — AD-071 §2.3: глобальная админская
+   * политика включения **MCP**-инструментов (`consistency` | `available` |
+   * `auto`). Независима от `tools.policy` (встроенные). Runtime-значение
+   * ({dataDir}/settings.json) приоритетнее config.yaml `mcp.policy`;
+   * per-session override — `session.settings.mcpPolicy`.
+   */
+  app.get('/mcp-policy', auth.requireAuth, async (c) => {
+    const runtime = await deps.settingsStore.getMcpPolicy();
+    const defaults = deps.fallbackMcpPolicy ?? 'auto';
+    return c.json({ mcpPolicy: runtime ?? defaults, isOverridden: runtime !== undefined, defaults });
+  });
+
+  app.put('/mcp-policy', auth.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const mcpPolicy = (body as { mcpPolicy?: unknown }).mcpPolicy;
+
+    if (!isValidToolsPolicy(mcpPolicy)) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'mcpPolicy: ожидается "consistency" | "available" | "auto"',
+        },
+      }, 400);
+    }
+
+    await deps.settingsStore.setMcpPolicy(mcpPolicy);
+    // Live-применение политики MCP-инструментов — оркестратор
+    // переконфигурируется без рестарта сервера.
+    await deps.onMcpPolicyChange?.(mcpPolicy);
+    return c.json({ mcpPolicy });
+  });
+
+  app.delete('/mcp-policy', auth.requireAuth, async (c) => {
+    const defaults = deps.fallbackMcpPolicy ?? 'auto';
+    await deps.settingsStore.clearMcpPolicy();
+    await deps.onMcpPolicyChange?.(defaults);
+    return c.json({ status: 'restored', mcpPolicy: defaults, isOverridden: false, defaults });
+  });
+
+  /**
+   * GET/PUT /api/v2/settings/mcp-network-policy — AD-071 §2.3.1: политика
+   * сетевого доступа пользовательских HTTP MCP-серверов (`allow`/`deny` +
+   * список host/CIDR). Runtime-значение ({dataDir}/settings.json) приоритетнее
+   * config.yaml `mcp.networkPolicy`; дефолт — deny приватных диапазонов.
+   */
+  app.get('/mcp-network-policy', auth.requireAuth, async (c) => {
+    const runtime = await deps.settingsStore.getMcpNetworkPolicy();
+    const defaults = deps.fallbackMcpNetworkPolicy ?? DEFAULT_MCP_NETWORK_POLICY;
+    return c.json({ policy: runtime ?? defaults, isOverridden: runtime !== undefined, defaults });
+  });
+
+  app.put('/mcp-network-policy', auth.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const policy = (body as { policy?: unknown }).policy;
+
+    if (!isValidMcpNetworkPolicy(policy)) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'policy: ожидается { mode: "allow" | "deny", list: string[] }',
+        },
+      }, 400);
+    }
+
+    await deps.settingsStore.setMcpNetworkPolicy(policy);
+    // Live-применение политики сетевого доступа — McpManager переконфигурируется
+    // без рестарта сервера.
+    await deps.onMcpNetworkPolicyChange?.(policy);
+    return c.json({ policy });
+  });
+
+  app.delete('/mcp-network-policy', auth.requireAuth, async (c) => {
+    const defaults = deps.fallbackMcpNetworkPolicy ?? DEFAULT_MCP_NETWORK_POLICY;
+    await deps.settingsStore.clearMcpNetworkPolicy();
+    await deps.onMcpNetworkPolicyChange?.(defaults);
+    return c.json({ status: 'restored', policy: defaults, isOverridden: false, defaults });
+  });
+
+  /**
+   * GET/PUT/DELETE /api/v2/settings/default-agent — агент по умолчанию
+   * (админка «Агенты»): используется при создании сессии без `settings.agentRole`
+   * и как `default_agent` в ответах `/api/v2/agents`. Runtime-значение
+   * ({dataDir}/settings.json) приоритетнее `fallbackDefaultAgent`
+   * (config.yaml), иначе — `DEFAULT_AGENT_ID` ('assistant' при первом развёртывании).
+   */
+  app.get('/default-agent', auth.requireAuth, async (c) => {
+    const runtime = await deps.settingsStore.getDefaultAgent();
+    const fallback = deps.fallbackDefaultAgent ?? DEFAULT_AGENT_ID;
+    return c.json({
+      defaultAgent: runtime ?? fallback,
+      isOverridden: runtime !== undefined,
+      defaults: fallback,
+    });
+  });
+
+  app.put('/default-agent', auth.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const raw = (body as { defaultAgent?: unknown }).defaultAgent;
+    const defaultAgent = typeof raw === 'string' ? raw.trim() : raw;
+
+    if (!isValidAgentId(defaultAgent)) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'defaultAgent: ожидается непустой id агента (латиница, цифры, дефис, подчёркивание)',
+        },
+      }, 400);
+    }
+
+    await deps.settingsStore.setDefaultAgent(defaultAgent);
+    await deps.onDefaultAgentChange?.(defaultAgent);
+    return c.json({ defaultAgent });
+  });
+
+  app.delete('/default-agent', auth.requireAuth, async (c) => {
+    const fallback = deps.fallbackDefaultAgent ?? DEFAULT_AGENT_ID;
+    await deps.settingsStore.clearDefaultAgent();
+    await deps.onDefaultAgentChange?.(fallback);
+    return c.json({ status: 'restored', defaultAgent: fallback, isOverridden: false, defaults: fallback });
+  });
+
+  /**
+   * GET/PUT /api/v2/settings/tools-disabled — AD-071 §2.6: instance-wide
+   * жёсткое отключение инструментов администратором (`capabilities` + `tools`).
+   * Отключённые тулы не попадают в запрос независимо от `tools.policy`;
+   * `runtime`-capability (ядро сессии) неотключаема. Runtime-значение
+   * ({dataDir}/settings.json) приоритетнее config.yaml `tools.disabled`.
+   */
+  app.get('/tools-disabled', auth.requireAuth, async (c) => {
+    const runtime = await deps.settingsStore.getToolsDisabled();
+    const defaults = deps.fallbackToolsDisabled ?? { capabilities: [], tools: [] };
+    return c.json({ toolsDisabled: runtime ?? defaults, isOverridden: runtime !== undefined, defaults });
+  });
+
+  app.put('/tools-disabled', auth.requireAuth, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const result = validateToolsDisabled(
+      (body as { toolsDisabled?: unknown }).toolsDisabled,
+      deps.knownTools,
+    );
+    if (!result.ok) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: result.message } }, 400);
+    }
+
+    await deps.settingsStore.setToolsDisabled(result.config);
+    // Live-применение — оркестратор переконфигурируется без рестарта.
+    await deps.onToolsDisabledChange?.(result.config);
+    return c.json({ toolsDisabled: result.config });
+  });
+
+  app.delete('/tools-disabled', auth.requireAuth, async (c) => {
+    const defaults = deps.fallbackToolsDisabled ?? { capabilities: [], tools: [] };
+    await deps.settingsStore.clearToolsDisabled();
+    await deps.onToolsDisabledChange?.(defaults);
+    return c.json({ status: 'restored', toolsDisabled: defaults, isOverridden: false, defaults });
   });
 
   /**

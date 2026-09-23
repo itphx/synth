@@ -1,24 +1,28 @@
 import { z } from 'zod';
 import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
-import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, ToolForLLM, ToolContext } from '@itphx/synth-shared';
+import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, ToolForLLM, ToolContext, TokenUsage } from '@itphx/synth-shared';
 import type { AgentRegistry } from '../agents/registry.js';
 import { normalizeAgentModes } from '../agents/normalize.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ToolRegistry } from './registry.js';
+import { buildDenyResult, executeToolDef } from './tool-execution.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { EventBus } from '../../events/bus.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import type { ContextConfig } from '../context/config.js';
 import type { ModelRouter } from '../router/router.js';
-import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from '../llm-error.js';
+import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS, MAX_DOOM_LOOP_COUNT } from '../llm-error.js';
+import type { AssistantMessageStatus } from '../orchestrator.js';
+import { computeCacheHitRate, computeUsageCost, type UsagePricing } from '../../providers/usage.js';
 import { deriveSubagentPermission } from '../permission/derive.js';
-import { PermissionEvaluator, isPlanRestricted, isPlanBlockedTool, getMcpToolAvailability } from '../permission/evaluator.js';
+import { PermissionEvaluator } from '../permission/evaluator.js';
 import { PermissionApprovalManager } from '../permission/approval.js';
 import { serializeSession, serializeMessage } from '../../server/serialize.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
 import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { estimatePromptChars } from '../context/token-ratio.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 export interface TaskExtra {
@@ -28,11 +32,9 @@ export interface TaskExtra {
   sessionManager?: SessionManager;
   eventBus?: EventBus;
   contextOptimizer?: ContextOptimizer;
-  sessionSettings?: {
-    temperature?: number;
-    maxTokens?: number;
-  };
   parentSessionSettings?: SessionSettings;
+  /** AD-071 §2.1: активные MCP-серверы родительской сессии — скоуп тулов саб-агента. */
+  mcpServers?: string[];
   modelRouter?: ModelRouter;
   routerConfig?: RouterConfig;
   contextConfig?: ContextConfig;
@@ -56,6 +58,8 @@ export interface TaskExtra {
   protectedPathsEnabled?: boolean;
   /** Override retry-параметров саб-агента (по умолчанию 3 попытки, backoff 5/15/30с). */
   retry?: SubagentRetryConfig;
+  /** AD-070: цены моделей для live-стоимости саб-агента (как в оркестраторе). */
+  modelPriceLoader?: (model: string) => UsagePricing | null;
 }
 
 type ContextMode = 'none' | 'inherit' | 'summary' | 'last_n';
@@ -224,7 +228,7 @@ export const taskTool: ToolDefinition = {
       extra.parentSessionSettings?.language,
       extra.contextConfig?.systemPromptsDir,
     );
-    const tools: ToolForLLM[] | undefined = extra.agentRegistry.getToolsForAgent(agentDef.id);
+    const tools: ToolForLLM[] | undefined = extra.agentRegistry.getToolsForAgent(agentDef.id, extra.mcpServers);
     const maxSteps = agentDef.maxSteps ?? DEFAULT_SUBAGENT_MAX_STEPS;
 
     // ─── Настройки роутинга для дочерней сессии (AD-034 Фаза 4) ──
@@ -454,17 +458,10 @@ export const taskTool: ToolDefinition = {
       }
     }
 
-    const messages: LLMMessage[] = [
-      {
-        id: '',
-        role: 'system' as const,
-        content: llmSystemPrompt,
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-        disabled: false,
-        pinned: false,
-        branchId: '',
-      },
-    ];
+    // AD-070 §2.1/§1.5: system prompt передаётся ТОЛЬКО вторым аргументом
+    // chatAsync (как в оркестраторе), в messages system-сообщения нет —
+    // иначе у OpenAI/Remote получаются два system-сообщения подряд.
+    const messages: LLMMessage[] = [];
 
     if ((contextMode === 'inherit' || contextMode === 'last_n') && childMessages.length > 0) {
       for (const msg of childMessages) {
@@ -520,9 +517,8 @@ export const taskTool: ToolDefinition = {
       description: params.description,
       contextMode,
       maxSteps,
-      systemPrompt,
       llmSystemPrompt,
-      initialMessages: messages.slice(1),
+      initialMessages: messages,
       provider: effectiveProvider,
       tools,
       childSessionId,
@@ -552,9 +548,11 @@ export interface SubagentRunConfig {
   contextMode: ContextMode;
   /** Лимит шагов агента (0/undefined — без ограничений). */
   maxSteps?: number;
-  /** Сырой системный промпт саб-агента (второй аргумент chatAsync). */
-  systemPrompt: string;
-  /** Расширенный системный промпт (заметки/роутинг) — messages[0]. */
+  /**
+   * Системный промпт саб-агента (role + parent notes/summary + routing).
+   * AD-070 §1.5: единственный путь — второй аргумент `chatAsync`; в `messages`
+   * system-сообщения нет.
+   */
   llmSystemPrompt: string;
   /** Начальные LLM-сообщения БЕЗ system: история дочерней сессии + user-промпт. */
   initialMessages: LLMMessage[];
@@ -588,13 +586,13 @@ async function sleepAbortable(ms: number, isAborted: () => boolean): Promise<boo
 export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult> {
   const {
     subagentType, description, contextMode, maxSteps,
-    systemPrompt, llmSystemPrompt, initialMessages,
+    llmSystemPrompt, initialMessages,
     provider: effectiveProvider,
     tools: toolsInput,
     childSessionId, parentSessionId,
     extra, ctx,
   } = config;
-  let tools = toolsInput;
+  const tools = toolsInput;
   let routingDecisionInfo = config.routingDecisionInfo;
   const publish = extra.publish;
 
@@ -611,21 +609,101 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   // ─── Permissions дочерней сессии (AD-029): родитель + deny-дополнения ──
   const derivedPermission = deriveSubagentPermission(extra.permissionConfig);
 
-  // ─── LLM-сообщения: system + начальные (история/промпт) ─────────
-  const messages: LLMMessage[] = [
-    {
-      id: '',
-      role: 'system' as const,
-      content: llmSystemPrompt,
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      disabled: false,
-      pinned: false,
-      branchId: '',
-    },
-    ...initialMessages,
-  ];
+  // ─── LLM-сообщения: только начальные (история/промпт); system — аргумент chatAsync ──
+  const messages: LLMMessage[] = [...initialMessages];
 
   const cancelToken: CancellationToken = { cancelled: false, cancel: () => { cancelToken.cancelled = true; } };
+
+  // AD-070 §2.6: usage саб-агента для rollup в статистике родителя. Собирается
+  // по всем итерациям LLM-стрима и пишется в финальное assistant-сообщение
+  // дочерней сессии (промежуточные tool-chain — без usage, чтобы не удваивать).
+  const subagentUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  let subagentModel: string | undefined;
+  const subagentStartedAt = Date.now();
+
+  /** Накопить usage одного LLM-ответа саб-агента (все итерации суммируются). */
+  const accumulateUsage = (usage: TokenUsage | undefined): void => {
+    if (!usage) return;
+    subagentUsage.inputTokens += usage.inputTokens || 0;
+    subagentUsage.outputTokens += usage.outputTokens || 0;
+    subagentUsage.totalTokens += usage.totalTokens || 0;
+    if (usage.cacheReadTokens) subagentUsage.cacheReadTokens = (subagentUsage.cacheReadTokens || 0) + usage.cacheReadTokens;
+    if (usage.cacheWriteTokens) subagentUsage.cacheWriteTokens = (subagentUsage.cacheWriteTokens || 0) + usage.cacheWriteTokens;
+    if (usage.reasoningTokens) subagentUsage.reasoningTokens = (subagentUsage.reasoningTokens || 0) + usage.reasoningTokens;
+  };
+
+  // ─── AD-070: live-статистика саб-агента (`stream.usage` + `subagent.progress`) ──
+  // Троттлинг ~300 мс; публикуем при изменении контента/размышлений или usage.
+  const SUBAGENT_USAGE_THROTTLE_MS = 300;
+  let liveUsageLastPublishedAt = 0;
+  let liveUsageLastSignature = '';
+
+  /** Сумма двух usage (running total саб-агента + точный/оценочный текущей итерации). */
+  const addUsage = (a: TokenUsage, b: TokenUsage): TokenUsage => ({
+    inputTokens: (a.inputTokens || 0) + (b.inputTokens || 0),
+    outputTokens: (a.outputTokens || 0) + (b.outputTokens || 0),
+    totalTokens: (a.totalTokens || 0) + (b.totalTokens || 0),
+    ...(a.cacheReadTokens || b.cacheReadTokens
+      ? { cacheReadTokens: (a.cacheReadTokens || 0) + (b.cacheReadTokens || 0) }
+      : {}),
+    ...(a.cacheWriteTokens || b.cacheWriteTokens
+      ? { cacheWriteTokens: (a.cacheWriteTokens || 0) + (b.cacheWriteTokens || 0) }
+      : {}),
+    ...(a.reasoningTokens || b.reasoningTokens
+      ? { reasoningTokens: (a.reasoningTokens || 0) + (b.reasoningTokens || 0) }
+      : {}),
+  });
+
+  /** Оценка размера промпта саб-агента (символы) — best-effort input-токены. */
+  const estimateSubagentPromptChars = (): number =>
+    estimatePromptChars(messages, llmSystemPrompt || undefined, tools);
+
+  /**
+   * Live-usage саб-агента: накопленный `subagentUsage` (завершённые итерации)
+   * + точный usage текущего чанка либо best-effort оценка текущей итерации.
+   * Финальный чанк уже включён в `subagentUsage` (accumulateUsage вызван до).
+   *
+   * Точным считаем usage с output>0/reasoning (AD-070 §2.6, как в оркестраторе).
+   * Anthropic отдаёт input/cache в `message_start` (output ещё 0): сохраняем
+   * точный input/cache, но output оцениваем из накопленного текста, пока не
+   * придёт `message_delta` с output. Полностью нулевой usage — оценка обоих.
+   */
+  const buildLiveSubagentUsage = (
+    chunk: { usage?: TokenUsage; isFinal: boolean },
+    accumulatedContent: string,
+    reasoning: string,
+  ): { usage: TokenUsage; estimated: boolean } => {
+    const usage = chunk.usage;
+    const hasExactOutput = !!usage
+      && (usage.outputTokens > 0 || (usage.reasoningTokens ?? 0) > 0);
+    if (hasExactOutput) {
+      if (chunk.isFinal) return { usage: { ...subagentUsage }, estimated: false };
+      return { usage: addUsage(subagentUsage, usage!), estimated: false };
+    }
+
+    const outputChars = accumulatedContent.length + reasoning.length;
+    const estOutput = Math.ceil(outputChars / 4);
+    if (usage && usage.inputTokens > 0) {
+      // Точный input/cache + оценка output текущей итерации.
+      const current: TokenUsage = {
+        ...usage,
+        outputTokens: estOutput,
+        totalTokens: (usage.inputTokens || 0) + estOutput,
+      };
+      return { usage: addUsage(subagentUsage, current), estimated: true };
+    }
+
+    const promptChars = estimateSubagentPromptChars();
+    const estInput = Math.ceil(promptChars / 4);
+    return {
+      usage: addUsage(subagentUsage, {
+        inputTokens: estInput,
+        outputTokens: estOutput,
+        totalTokens: estInput + estOutput,
+      }),
+      estimated: true,
+    };
+  };
 
   // Связка локального cancel-токена саб-агента с родительским сигналом отмены:
   // «Стоп» в родительской сессии (POST /sessions/:id/abort → orchestrator.cancel
@@ -644,6 +722,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   // видит пользователь основной сессии, approval_id связывает ответ.
   const childEvaluator = new PermissionEvaluator(derivedPermission);
   const childApprovalManager = new PermissionApprovalManager(extra.eventBus ?? new EventBus());
+  // AD-070 §2.9.1: ролевые ограничения саб-агента — через unavailable(role),
+  // а не скрытием тулов; capabilities нужны permission-слою.
+  const subagentDef = extra.agentRegistry?.get(subagentType);
   let childSessionMode: SessionMode = 'act';
   let childPlanApproved = false;
   let childPlanMode: PlanMode = 'auto';
@@ -662,26 +743,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     }
   }
 
-  // B5: режимная фильтрация списка тулов саб-агента (аналог
-  // orchestrator._filterToolsByMode). В plan-режиме (или strict без
-  // утверждённого плана) скрываем write/edit-тулы и git-запись — модель не
-  // видит инструменты, которые всё равно будут отклонены evaluator'ом.
-  if (isPlanRestricted(childSessionMode, childPlanMode, childPlanApproved) && tools) {
-    const filtered: ToolForLLM[] = [];
-    for (const tool of tools) {
-      const toolName = tool.function.name;
-      const toolDef = extra.toolRegistry?.get(toolName);
-      const capabilities = toolDef?.capabilities;
-      if (isPlanBlockedTool(toolName, capabilities)) continue;
-      // MCP-инструменты: в plan-режиме недоступный по настройкам тул убираем.
-      if (capabilities?.includes(ToolCapability.MCP) && childMcpToolSettings) {
-        const availability = getMcpToolAvailability(childMcpToolSettings, toolName);
-        if (availability && !availability.plan) continue;
-      }
-      filtered.push(tool);
-    }
-    tools = filtered;
-  }
+  // AD-070 §2.9: список тулов саб-агента постоянен (без режимной фильтрации).
+  // Ограничения plan/act/yolo и роли обеспечивает permission-слой ниже —
+  // `unavailable(mode|role)` с подсказкой, definition остаётся в запросе.
 
   // Финализация дочерней сессии: обновление updatedAt + события для UI.
   // Отдельного статусного поля «завершена/прервана» у сессии нет
@@ -697,6 +761,15 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         await extra.sessionManager.updateSession(childSession);
 
         if (extra.eventBus) {
+          // AD-070 §2.6: терминальное live-событие дочерней сессии. Дочерний
+          // саб-агент не публикует stream.start/stream.done, а его live-статистика
+          // идёт только stream.usage. Это событие гарантирует, что открытая
+          // дочерняя сессия сбросит live-плейсхолдер после завершения работы
+          // (сообщение ребёнка сохраняется отдельно, дубля не возникает).
+          extra.eventBus.publish(childSessionId, 'stream.ended', {
+            session_id: childSessionId,
+            stream_id: extra.streamId,
+          });
           extra.eventBus.publish(childSessionId, 'session.updated', {
             session_id: childSessionId,
           });
@@ -719,6 +792,58 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         const idx = updated.messages.length - 1;
         await publishMessageAdded(extra.eventBus, parentSessionId, childSessionId, updated.messages[idx]!, idx, updated);
       }
+    } catch {
+      // не фатально
+    }
+  };
+
+  /**
+   * AD-070 §2.6: metadata финального assistant-сообщения дочерней сессии.
+   * Единая точка простановки `status`/`cost_usd`/`cost_breakdown` — как
+   * `_saveAssistantMessage` оркестратора: стоимость считается по ценам модели
+   * (`extra.modelPriceLoader` + `subagentModel`), только если они заданы.
+   * `usage_estimated` здесь НЕ пишется: `subagentUsage` собран из финальных
+   * чанков провайдера и потому точен (оценка в live-событиях не персистится).
+   */
+  const buildChildAssistantMetadata = (
+    status: AssistantMessageStatus,
+    extraMeta: Record<string, unknown> = {},
+  ): Record<string, unknown> => {
+    const metadata: Record<string, unknown> = { ...extraMeta, status };
+    const cost = subagentModel && extra.modelPriceLoader
+      ? computeUsageCost(subagentUsage, extra.modelPriceLoader(subagentModel))
+      : null;
+    if (cost) {
+      metadata.cost_usd = cost.costUsd;
+      metadata.cost_currency = cost.currency;
+      metadata.cost_breakdown = cost.breakdown;
+    }
+    return metadata;
+  };
+
+  // AD-070 §2.6 / project stats: session-счётчики дочерней сессии обновляются
+  // вручную (как `_saveAssistantMessage` оркестратора), потому что task.ts
+  // пишет сообщения через `addMessage`, а тот не трогает агрегаты сессии.
+  // Иначе `GET /projects/:id/stats` (суммирует `session.inputTokens`) не видит
+  // токены саб-агентов. Ровно один раз на прогон саб-агента.
+  let childUsageCommitted = false;
+  const commitChildUsage = async (): Promise<void> => {
+    if (childUsageCommitted) return;
+    childUsageCommitted = true;
+    const sessionManager = extra.sessionManager;
+    if (!childSessionId || !sessionManager) return;
+    try {
+      await sessionManager.withLock(childSessionId, async (s) => {
+        s.inputTokens += subagentUsage.inputTokens || 0;
+        s.outputTokens += subagentUsage.outputTokens || 0;
+        s.totalTokens += subagentUsage.totalTokens || 0;
+        s.cacheReadTokens += subagentUsage.cacheReadTokens || 0;
+        s.cacheWriteTokens += subagentUsage.cacheWriteTokens || 0;
+        s.reasoningTokens += subagentUsage.reasoningTokens || 0;
+        s.cacheHitRate = computeCacheHitRate(s.cacheReadTokens, s.inputTokens);
+        s.updatedAt = nowISO();
+        await sessionManager.saveSession(s);
+      });
     } catch {
       // не фатально
     }
@@ -761,12 +886,16 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           pinned: false,
           hidden: false,
           agentRole: subagentType,
+          model: subagentModel,
+          // AD-070 §2.6: usage, накопленный до отмены, — чтобы rollup не терял токены.
+          usage: subagentUsage,
           ...(partialReasoning ? { reasoning: partialReasoning } : {}),
-          metadata: {
+          metadata: buildChildAssistantMetadata('cancelled', {
             stream_id: extra.streamId,
+            duration_ms: Date.now() - subagentStartedAt,
             partial: true,
             interrupted: true,
-          },
+          }),
         });
       }
 
@@ -793,6 +922,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       });
 
       // 3. Финализация дочерней сессии
+      await commitChildUsage();
       await finalizeChildSession();
 
       // 4. tool_result родителю: маркер отмены + частичный текст + шаги + id сессии
@@ -818,6 +948,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           child_session_id: childSessionId,
           stopped_by: 'user',
           interrupted: true,
+          // AD-070 §2.6: per-message статистика сабагентов (попап сообщения).
+          subagent_usage: subagentUsage,
+          subagent_model: subagentModel,
           tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
           partial_output: partialContent || undefined,
         },
@@ -846,7 +979,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         try {
           for await (const chunk of effectiveProvider.chatAsync(
             messages,
-            systemPrompt || undefined,
+            llmSystemPrompt || undefined,
             tools as Record<string, unknown>[] | undefined,
             undefined,
             cancelToken,
@@ -854,22 +987,54 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             if (isAborted()) break;
             if (chunk.isFinal) {
               accumulatedContent = chunk.content;
-              reasoning = (chunk as unknown as Record<string, unknown>).reasoning as string || reasoning;
+              reasoning = chunk.reasoning || reasoning;
             } else {
               accumulatedContent += chunk.content;
-              const chunkReasoning = (chunk as unknown as Record<string, unknown>).reasoning as string | undefined;
+              const chunkReasoning = chunk.reasoning;
               if (chunkReasoning) reasoning = chunkReasoning;
             }
             if (chunk.toolCalls && chunk.toolCalls.length > 0) {
               toolCalls = chunk.toolCalls;
             }
+            // AD-070 §2.6: usage и модель саб-агента для статистики родителя.
+            // Провайдеры отдают в каждом чанке НАКОПИТЕЛЬНЫЙ usage (running total),
+            // поэтому суммируем только финальный чанк итерации — иначе usage
+            // многократно раздувается. Каждый вызов chatAsync в финальном чанке
+            // несёт итог своей итерации.
+            if (chunk.isFinal) accumulateUsage(chunk.usage);
+            if (chunk.model) subagentModel = chunk.model;
 
-            // Стримим размышления/промежуточный текст саб-агента РОДИТЕЛЮ,
-            // чтобы в блоке `task` (по parent_call_id) они были видны во время работы.
-            if (publish) {
-              const liveReasoning = reasoning || '';
-              const liveContent = accumulatedContent || '';
-              if (liveReasoning !== lastPublishedReasoning || liveContent.length !== lastPublishedContentLen) {
+            // AD-070: live-usage = накопленное + точный/оценка текущей итерации;
+            // стоимость — по ценам модели, если загрузчик передан в extra.
+            const liveUsage = buildLiveSubagentUsage(chunk, accumulatedContent, reasoning);
+            const liveModel = subagentModel || effectiveProvider.model || undefined;
+            const liveProvider = effectiveProvider.name || undefined;
+            const liveCost = liveModel && extra.modelPriceLoader
+              ? computeUsageCost(liveUsage.usage, extra.modelPriceLoader(liveModel))
+              : null;
+            const liveReasoning = reasoning || '';
+            const liveContent = accumulatedContent || '';
+            const usageSignature = [
+              liveUsage.estimated ? 'e' : 'x',
+              liveUsage.usage.inputTokens,
+              liveUsage.usage.outputTokens,
+              liveUsage.usage.totalTokens,
+            ].join(':');
+
+            // Стримим размышления/промежуточный текст (и usage) саб-агента
+            // РОДИТЕЛЮ, чтобы в блоке `task` (по parent_call_id) всё было видно
+            // во время работы. Троттлинг ~300 мс, дедуп по подписи.
+            const changed = liveReasoning !== lastPublishedReasoning
+              || liveContent.length !== lastPublishedContentLen
+              || usageSignature !== liveUsageLastSignature;
+            const nowLive = Date.now();
+            if (changed && nowLive - liveUsageLastPublishedAt >= SUBAGENT_USAGE_THROTTLE_MS) {
+              liveUsageLastPublishedAt = nowLive;
+              liveUsageLastSignature = usageSignature;
+              lastPublishedReasoning = liveReasoning;
+              lastPublishedContentLen = liveContent.length;
+
+              if (publish) {
                 publish('subagent.progress', {
                   stream_id: extra.streamId,
                   session_id: extra.sessionId,
@@ -877,9 +1042,28 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
                   reasoning: liveReasoning,
                   content: liveContent,
                   iteration,
+                  usage: liveUsage.usage,
+                  ...(liveCost ? { cost_usd: liveCost.costUsd, cost_currency: liveCost.currency, cost_breakdown: liveCost.breakdown } : {}),
+                  ...(liveModel ? { model: liveModel } : {}),
+                  ...(liveProvider ? { provider: liveProvider } : {}),
+                  estimated: liveUsage.estimated,
                 });
-                lastPublishedReasoning = liveReasoning;
-                lastPublishedContentLen = liveContent.length;
+              }
+
+              // Live-статистика в дочернюю сессию (если она есть) — открытая
+              // дочерняя сессия показывает токены/стоимость по ходу работы.
+              if (childSessionId && extra.eventBus) {
+                extra.eventBus.publish(childSessionId, 'stream.usage', {
+                  session_id: childSessionId,
+                  stream_id: extra.streamId,
+                  iteration,
+                  agent_role: subagentType,
+                  ...(liveModel ? { model: liveModel } : {}),
+                  ...(liveProvider ? { provider: liveProvider } : {}),
+                  usage: liveUsage.usage,
+                  ...(liveCost ? { cost_usd: liveCost.costUsd, cost_currency: liveCost.currency, cost_breakdown: liveCost.breakdown } : {}),
+                  estimated: liveUsage.estimated,
+                });
               }
             }
           }
@@ -942,15 +1126,20 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           pinned: false,
           hidden: false,
           agentRole: subagentType,
-          metadata: {
+          model: subagentModel,
+          // AD-070 §2.6: usage, потраченный до ошибки, — чтобы rollup его учёл.
+          usage: subagentUsage,
+          metadata: buildChildAssistantMetadata('error', {
             stream_id: extra.streamId,
+            duration_ms: Date.now() - subagentStartedAt,
             error: true,
             attempts,
             max_retries: retryMaxAttempts,
             error_type: llmFailure.errorType,
             i18n: i18nMeta(errKey, attempts > 1 ? { ...errParams, attempts: String(attempts) } : errParams),
-          },
+          }),
         });
+        await commitChildUsage();
         await finalizeChildSession();
         return {
           content: [
@@ -973,6 +1162,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             attempts,
             max_retries: retryMaxAttempts,
             error_type: llmFailure.errorType,
+            // AD-070 §2.6: per-message статистика сабагентов (попап сообщения).
+            subagent_usage: subagentUsage,
+            subagent_model: subagentModel,
             tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
           },
         };
@@ -1014,6 +1206,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               pinned: false,
               hidden: false,
               agentRole: subagentType,
+              model: subagentModel,
+              // AD-070 §2.6: суммарный usage саб-агента — основа rollup в
+              // статистике родителя (subagent_tokens) и сессионной статистики.
+              usage: subagentUsage,
               // Все размышления сабагента (по итерациям), склеенные в поле
               // reasoning — UI дочерней сессии показывает их блоками
               // (ReasoningBlock разбивает по «\n\n---\n\n»). Без этого размышления
@@ -1024,11 +1220,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               // Как в _persistToolChain родителя: финальное сообщение несёт
               // свёрнутую цепочку тулов, чтобы UI дочерней сессии отрисовал её
               // так же аккуратно, как финал родительской.
-              metadata: {
+              metadata: buildChildAssistantMetadata('completed', {
                 stream_id: extra.streamId,
+                duration_ms: Date.now() - subagentStartedAt,
                 ...(allSubagentToolCalls.length > 0 ? { tool_results: allSubagentToolCalls } : {}),
                 ...(allSubagentIntermediateTexts.length > 0 ? { intermediate_text_blocks: allSubagentIntermediateTexts } : {}),
-              },
+              }),
             };
             const updated = await extra.sessionManager.addMessage(childSessionId, assistantMsg);
             if (updated && extra.eventBus) {
@@ -1110,7 +1307,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         const doomCount = (doomTracker.get(doomKey) || 0) + 1;
         doomTracker.set(doomKey, doomCount);
 
-        if (doomCount >= 3) {
+        if (doomCount >= MAX_DOOM_LOOP_COUNT) {
           const doomMsg: LLMMessage = {
             id: '', role: 'tool',
             content: sm('tool.doom_loop', { tool: toolName, count: String(doomCount) }),
@@ -1166,6 +1363,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         });
 
         const toolDef = extra.toolRegistry?.get(toolName);
+        // Контекст исполнения тула — общий для веток ask(approved) и allow.
+        const toolExecContext: ToolContext = {
+          ...ctx,
+          abortSignal: ctx.abortSignal,
+          extra: extra as unknown as Record<string, unknown>,
+        };
         let toolResult: ToolResult;
         let subagentUserDenied = false;
 
@@ -1176,6 +1379,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           params: toolArgs,
           workingDir: ctx.workingDir,
           capabilities: toolDef?.capabilities,
+          agentCapabilities: subagentDef?.capabilities,
           sessionMode: childSessionMode,
           planMode: childPlanMode,
           planApproved: childPlanApproved,
@@ -1186,23 +1390,13 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         });
 
         if (permissionDecision.action === 'deny') {
-          toolResult = {
-            content: extra.contextConfig && permissionDecision.messageId
-              ? (extra.contextConfig.getSecurityMessage(permissionDecision.messageId, 'en', permissionDecision.params)
-                ?? `Permission denied: ${permissionDecision.reason}`)
-              : `Permission denied: ${permissionDecision.reason}`,
-            isError: true,
-            metadata: {
-              ...(permissionDecision.messageId
-                ? { i18n: i18nMeta(`security.${permissionDecision.messageId.replaceAll('-', '_')}`, permissionDecision.params as Record<string, string> | undefined) }
-                : { i18n: i18nMeta('tool.permission_denied_default') }),
-              permission: {
-                action: 'deny',
-                reason: permissionDecision.reason,
-                matched_rule: permissionDecision.matchedRule,
-              },
-            },
-          };
+          toolResult = buildDenyResult({
+            reason: permissionDecision.reason,
+            matchedRule: permissionDecision.matchedRule,
+            messageId: permissionDecision.messageId,
+            params: permissionDecision.params as Record<string, string> | undefined,
+            contextConfig: extra.contextConfig,
+          });
         } else if (permissionDecision.action === 'ask') {
           // ask публикуется в родительскую сессию (extra.sessionId) —
           // пользователь основной сессии видит запрос и отвечает.
@@ -1238,28 +1432,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               }
             }
             if (toolDef) {
-              const parsed2 = toolDef.parameters.safeParse(toolArgs);
-              if (!parsed2.success) {
-                toolResult = {
-                  content: sm('tool.args_error', { tool: toolName, issues: parsed2.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }),
-                  isError: true,
-                  metadata: { i18n: i18nMeta('tool.args_error', { tool: toolName }) },
-                };
-              } else {
-                try {
-                  toolResult = await toolDef.execute(parsed2.data, {
-                    ...ctx,
-                    abortSignal: ctx.abortSignal,
-                    extra: extra as unknown as Record<string, unknown>,
-                  });
-                } catch (execError) {
-                  toolResult = {
-                    content: sm('tool.exec_error', { tool: toolName, error: String(execError) }),
-                    isError: true,
-                    metadata: { i18n: i18nMeta('tool.exec_error', { tool: toolName }) },
-                  };
-                }
-              }
+              toolResult = await executeToolDef(toolDef, toolArgs, toolExecContext, toolName);
             } else {
               toolResult = {
                 content: sm('tool.not_found', { tool: toolName }),
@@ -1273,50 +1446,21 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               : approval.noSubscribers
                 ? sm('permission.ask_no_subscribers')
                 : sm('permission.ask_denied');
-            const baseDeny = extra.contextConfig && permissionDecision.messageId
-              ? (extra.contextConfig.getSecurityMessage(permissionDecision.messageId, 'en', permissionDecision.params)
-                ?? `Permission denied: ${permissionDecision.reason}`)
-              : `Permission denied: ${permissionDecision.reason}`;
-            toolResult = {
-              content: `${baseDeny} (${why})`,
-              isError: true,
-              metadata: {
-                ...(permissionDecision.messageId
-                  ? { i18n: i18nMeta(`security.${permissionDecision.messageId.replaceAll('-', '_')}`, permissionDecision.params as Record<string, string> | undefined) }
-                  : {}),
-                permission: {
-                  action: 'deny',
-                  reason: permissionDecision.reason,
-                  matched_rule: permissionDecision.matchedRule,
-                },
-              },
-            };
+            toolResult = buildDenyResult({
+              reason: permissionDecision.reason,
+              matchedRule: permissionDecision.matchedRule,
+              messageId: permissionDecision.messageId,
+              params: permissionDecision.params as Record<string, string> | undefined,
+              contextConfig: extra.contextConfig,
+              contentSuffix: ` (${why})`,
+              defaultI18n: false,
+            });
             subagentUserDenied = !approval.timeout && !approval.noSubscribers;
           }
         } else {
           // allow — обычное выполнение
           if (toolDef) {
-            const parsed2 = toolDef.parameters.safeParse(toolArgs);
-            if (!parsed2.success) {
-              toolResult = {
-                content: sm('tool.args_error', { tool: toolName, issues: parsed2.error.issues.map(i => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') }),
-                isError: true,
-              };
-            } else {
-              try {
-                toolResult = await toolDef.execute(parsed2.data, {
-                  ...ctx,
-                  abortSignal: ctx.abortSignal,
-                  extra: extra as unknown as Record<string, unknown>,
-                });
-              } catch (execError) {
-                toolResult = {
-                  content: sm('tool.exec_error', { tool: toolName, error: String(execError) }),
-                  isError: true,
-                  metadata: { i18n: i18nMeta('tool.exec_error', { tool: toolName }) },
-                };
-              }
-            }
+            toolResult = await executeToolDef(toolDef, toolArgs, toolExecContext, toolName);
           } else {
             toolResult = {
               content: sm('tool.not_found', { tool: toolName }),
@@ -1468,14 +1612,14 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             const fbEffectiveProvider = extra.modelRouter.getProvider(fbDecision);
             if (fbEffectiveProvider) {
               try {
-                // Перевызываем с fallback-моделью (только последний user-запрос)
-                const fbMessages: LLMMessage[] = [messages[0]!];
-                // Добавляем только user-сообщение без tool-результатов
+                // Перевызываем с fallback-моделью (только последний user-запрос);
+                // system — вторым аргументом chat, в messages его нет (AD-070 §1.5).
+                const fbMessages: LLMMessage[] = [];
                 const userMsg = messages.find(m => m.role === 'user');
                 if (userMsg) fbMessages.push(userMsg);
                 const fbResponse = await fbEffectiveProvider.chat(
                   fbMessages,
-                  systemPrompt || undefined,
+                  llmSystemPrompt || undefined,
                   undefined,
                   false,
                 );
@@ -1502,6 +1646,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     }
 
     // Финализировать дочернюю сессию
+    await commitChildUsage();
     await finalizeChildSession();
 
     // ─── Формирование результата tool_result ──────────────────────
@@ -1538,9 +1683,20 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         routing_strategy: routingDecisionInfo?.strategy,
         routing_provider: routingDecisionInfo?.providerName,
         routing_model: routingDecisionInfo?.modelName,
+        // AD-070 §2.6: per-message статистика сабагентов (попап сообщения).
+        subagent_usage: subagentUsage,
+        subagent_model: subagentModel,
       },
     };
   } catch (err: unknown) {
+    // Жёсткий сбой вне штатных веток: дочерняя сессия не финализировалась, но
+    // live-плейсхолдер в UI нужно сбросить тем же терминальным событием.
+    if (childSessionId && extra.eventBus) {
+      extra.eventBus.publish(childSessionId, 'stream.ended', {
+        session_id: childSessionId,
+        stream_id: extra.streamId,
+      });
+    }
     return {
       content: sm('task.subagent_exec_error', { type: subagentType, error: String(err) }),
       isError: true,

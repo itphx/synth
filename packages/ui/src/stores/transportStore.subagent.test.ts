@@ -14,6 +14,7 @@ vi.mock('@/hooks/useNotification', () => ({
 
 import { createDispatcher } from './transportStore'
 import { useChatStore } from './chatStore'
+import { resetChatStore } from './testUtils'
 import { useSessionsStore } from './sessionsStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { notifyMessage } from '@/hooks/useNotification'
@@ -25,23 +26,9 @@ function makeEvent(type: string, sessionId: string, data: Record<string, unknown
   return { type, session_id: sessionId, data }
 }
 
-const EMPTY_STORE = {
-  messagesBySession: {},
-  streamingBySession: {},
-  queueBySession: {},
-  pendingBySession: {},
-  errorBySession: {},
-  retryBySession: {},
-  subagentRetryBySession: {},
-  subagentResumingBySession: {},
-  finalErrorBySession: {},
-  stickyNotesBySession: {},
-  summarizationPendingBySession: {},
-}
-
 beforeEach(() => {
   vi.clearAllMocks()
-  useChatStore.setState(EMPTY_STORE as Partial<ReturnType<typeof useChatStore.getState>>)
+  resetChatStore()
 })
 
 describe('transportStore dispatcher: subagent.retry (B5)', () => {
@@ -197,6 +184,28 @@ describe('transportStore dispatcher: stream.error → финальная оши�
 
     dispatch(makeEvent('stream.done', 's1', { stream_id: 'st2', content: '' }))
     expect(useChatStore.getState().finalErrorBySession['s1']).toBeNull()
+  })
+})
+
+describe('transportStore dispatcher: tool_call.started → стрим сразу виден (регресс c11ece3f)', () => {
+  it('startStream + tool_call.started → hasContent=true и live-вызов в стриме', () => {
+    dispatch(makeEvent('stream.start', 's1', { stream_id: 'st1', agent_role: 'developer' }))
+    expect(useChatStore.getState().streamingBySession['s1']!['st1']!.hasContent).toBe(false)
+
+    dispatch(makeEvent('tool_call.started', 's1', {
+      stream_id: 'st1',
+      call_id: 'call-1',
+      name: 'read_file',
+      arguments: { path: 'a.ts' },
+      iteration: 0,
+    }))
+
+    const st = useChatStore.getState().streamingBySession['s1']!['st1']!
+    expect(st.hasContent).toBe(true)
+    expect(st.toolCalls).toHaveLength(1)
+    expect(st.toolCalls[0]).toMatchObject({ callId: 'call-1', name: 'read_file', status: 'running' })
+    // Плейсхолдер монтируется фильтром MessageList `isStreaming && hasContent`.
+    expect(st.isStreaming && st.hasContent).toBe(true)
   })
 })
 

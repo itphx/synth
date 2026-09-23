@@ -1,5 +1,13 @@
 import { z } from 'zod';
 import { permissionConfigSchema } from '../types/permission.js';
+import { createToolsDisabledSchema } from '../schemas/index.js';
+import {
+  TOOLS_POLICIES,
+  MCP_NETWORK_POLICY_MODES,
+  DEFAULT_MCP_PRIVATE_CIDRS,
+  DEFAULT_MCP_NETWORK_POLICY,
+  DEFAULT_LLM_GATEWAY_RATE_LIMIT,
+} from '../types/index.js';
 
 // --- SynthConfig: единый конфиг для всех компонентов ---
 
@@ -49,6 +57,8 @@ export const llmConfigSchema = z.object({
   defaultModel: z.string().default(''),
   maxRetries: z.number().int().min(0).default(3),
   timeout: z.number().int().min(1).default(60),
+  /** AD-070 §2.2: политика prompt-cache — auto (ставить маркеры) | none (отключить). */
+  cache: z.enum(['auto', 'none']).default('auto'),
 });
 
 export const coreConfigSchema = z.object({
@@ -108,7 +118,9 @@ export const summarizationConfigSchema = z.object({
 });
 
 export const mcpServerConfigSchema = z.object({
-  type: z.enum(['stdio', 'sse']),
+  type: z.enum(['stdio', 'sse', 'http']),
+  /** AD-071 §2.2: человекочитаемое описание сервера (попадает в блок `mcp.servers`). */
+  description: z.string().optional(),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),
@@ -120,8 +132,44 @@ export const mcpServerConfigSchema = z.object({
   connectTimeout: z.number().int().min(1).optional(),
 });
 
+/**
+ * AD-071 §2.3.1: политика сетевого доступа пользовательских HTTP MCP-серверов.
+ * Дефолт — `deny` приватных/служебных диапазонов (SSRF/egress).
+ */
+export const mcpNetworkPolicySchema = z.object({
+  mode: z.enum(MCP_NETWORK_POLICY_MODES).default(DEFAULT_MCP_NETWORK_POLICY.mode),
+  list: z.array(z.string()).default([...DEFAULT_MCP_PRIVATE_CIDRS]),
+});
+
 export const mcpConfigSchema = z.object({
   servers: z.record(z.string(), mcpServerConfigSchema).default({}),
+  networkPolicy: mcpNetworkPolicySchema.default({}),
+  /**
+   * AD-071 §2.3: глобальная админская политика включения **MCP**-инструментов.
+   * Независима от `tools.policy` (только встроенные). Per-session override —
+   * `SessionSettings.mcpPolicy`.
+   */
+  policy: z.enum(TOOLS_POLICIES).default('auto'),
+});
+
+// --- Инструменты (AD-071 §2.3) ---
+
+/**
+ * AD-071 §2.6: instance-wide жёсткое отключение инструментов администратором.
+ * Отключённые тулы не попадают в запрос независимо от `tools.policy`.
+ * `runtime`-capability неотключаема (ядро сессии).
+ */
+export const toolsDisabledConfigSchema = createToolsDisabledSchema(false);
+
+/**
+ * AD-071 §2.3: глобальная админская политика включения **встроенных**
+ * инструментов (MCP — отдельная `mcp.policy`). Per-session override —
+ * `SessionSettings.toolsPolicy`.
+ */
+export const toolsConfigSchema = z.object({
+  policy: z.enum(TOOLS_POLICIES).default('auto'),
+  /** AD-071 §2.6: instance-wide отключение инструментов (admin). */
+  disabled: toolsDisabledConfigSchema.default({}),
 });
 
 // --- Security (IPI protection) ---
@@ -148,8 +196,8 @@ export const securityConfigSchema = z.object({
 // --- LLM Gateway (AD-036) ---
 
 export const llmGatewayRateLimitConfigSchema = z.object({
-  userPerMinute: z.number().int().min(1).default(60),
-  providerPerMinute: z.number().int().min(1).default(120),
+  userPerMinute: z.number().int().min(1).default(DEFAULT_LLM_GATEWAY_RATE_LIMIT.userPerMinute),
+  providerPerMinute: z.number().int().min(1).default(DEFAULT_LLM_GATEWAY_RATE_LIMIT.providerPerMinute),
 });
 
 export const llmGatewayAuditConfigSchema = z.object({
@@ -279,6 +327,7 @@ export const synthConfigSchema = z.object({
   context: contextConfigSchema.default({}),
   summarization: summarizationConfigSchema.default({}),
   mcp: mcpConfigSchema.default({}),
+  tools: toolsConfigSchema.default({}),
   router: routerConfigSchema.default({}),
   remote: remoteConfigSchema.default({}),
   microFirst: microFirstConfigSchema.default({}),
@@ -302,6 +351,8 @@ export type ContextConfigSchema = z.infer<typeof contextConfigSchema>;
 export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
 export type McpConfig = z.infer<typeof mcpConfigSchema>;
+export type ToolsConfig = z.infer<typeof toolsConfigSchema>;
+export type ToolsDisabledConfig = z.infer<typeof toolsDisabledConfigSchema>;
 export type RouterContentConfig = z.infer<typeof routerContentConfigSchema>;
 export type RouterEscalationConfig = z.infer<typeof routerEscalationConfigSchema>;
 export type RouterCostConfig = z.infer<typeof routerCostConfigSchema>;

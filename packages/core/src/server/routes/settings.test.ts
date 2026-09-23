@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { createSettingsRoutes } from './settings.js';
 import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig } from '../../storage/runtime-settings.js';
 import type { LlmGatewayRuntimeSettings, SecurityRuntimeSettings } from '../../storage/runtime-settings.js';
+import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
 import type { AuthKit } from '../../auth/local.js';
 import type { LLMGatewayConfig } from '@itphx/synth-shared';
 
@@ -45,7 +46,7 @@ describe('Settings API Routes (workspace)', () => {
       const res = await app.request('/api/v2/settings/workspace');
       expect(res.status).toBe(200);
       const body: any = await res.json();
-      expect(body).toEqual({ workspace: FALLBACK });
+      expect(body).toEqual({ workspace: FALLBACK, isOverridden: false, defaults: FALLBACK });
     });
 
     it('возвращает runtime-настройку после её сохранения', async () => {
@@ -57,7 +58,7 @@ describe('Settings API Routes (workspace)', () => {
       });
       const res = await app.request('/api/v2/settings/workspace');
       const body: any = await res.json();
-      expect(body).toEqual({ workspace: '/custom/ws' });
+      expect(body).toEqual({ workspace: '/custom/ws', isOverridden: true, defaults: FALLBACK });
     });
   });
 
@@ -134,7 +135,7 @@ describe('Settings API Routes (workspace)', () => {
       const res = await restartedApp.request('/api/v2/settings/workspace');
       expect(res.status).toBe(200);
       const body: any = await res.json();
-      expect(body).toEqual({ workspace: '/persisted/ws' });
+      expect(body).toEqual({ workspace: '/persisted/ws', isOverridden: true, defaults: FALLBACK });
     });
 
     it('значение записано в {dataDir}/settings.json атомарно (без tmp-хвостов)', async () => {
@@ -159,7 +160,7 @@ describe('Settings API Routes (workspace)', () => {
       const res = await app.request('/api/v2/settings/mcp');
       expect(res.status).toBe(200);
       const body: any = await res.json();
-      expect(body).toEqual({ servers: {} });
+      expect(body).toEqual({ servers: {}, isOverridden: false, defaults: {} });
     });
 
     it('возвращает сохранённые настройки', async () => {
@@ -462,6 +463,743 @@ describe('Settings API Routes (workspace)', () => {
       });
       expect(onLlmGatewayChange).not.toHaveBeenCalled();
     });
+  });
+
+  describe('tools-policy (AD-071 §2.3)', () => {
+    it('GET возвращает fallback (config), если runtime не задан', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        fallbackToolsPolicy: 'available',
+      }));
+      const res = await app.request('/api/v2/settings/tools-policy');
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body).toEqual({ toolsPolicy: 'available', isOverridden: false, defaults: 'available' });
+    });
+
+    it('GET по умолчанию auto (AD-071 §2.3)', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/tools-policy');
+      const body: any = await res.json();
+      expect(body).toEqual({ toolsPolicy: 'auto', isOverridden: false, defaults: 'auto' });
+    });
+
+    it('PUT сохраняет и GET возвращает; переживает рестарт', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const put = await app.request('/api/v2/settings/tools-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsPolicy: 'available' }),
+      });
+      expect(put.status).toBe(200);
+      const putBody: any = await put.json();
+      expect(putBody).toEqual({ toolsPolicy: 'available' });
+
+      const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      expect(await restartedStore.getToolsPolicy()).toBe('available');
+    });
+
+    it('PUT отклоняет неизвестную политику', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/tools-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsPolicy: 'all' }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('PUT вызывает onToolsPolicyChange (live-применение)', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const onToolsPolicyChange = vi.fn(async (_policy: string) => {});
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        onToolsPolicyChange,
+      }));
+
+      const res = await app.request('/api/v2/settings/tools-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsPolicy: 'auto' }),
+      });
+      expect(res.status).toBe(200);
+      expect(onToolsPolicyChange).toHaveBeenCalledTimes(1);
+      expect(onToolsPolicyChange).toHaveBeenCalledWith('auto');
+    });
+  });
+
+  describe('mcp-policy (AD-071 §2.3)', () => {
+    it('GET по умолчанию auto', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/mcp-policy');
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body).toEqual({ mcpPolicy: 'auto', isOverridden: false, defaults: 'auto' });
+    });
+
+    it('GET возвращает fallback (config), если runtime не задан', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        fallbackMcpPolicy: 'available',
+      }));
+      const res = await app.request('/api/v2/settings/mcp-policy');
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body).toEqual({ mcpPolicy: 'available', isOverridden: false, defaults: 'available' });
+    });
+
+    it('PUT сохраняет и GET возвращает; переживает рестарт', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const put = await app.request('/api/v2/settings/mcp-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mcpPolicy: 'available' }),
+      });
+      expect(put.status).toBe(200);
+      const putBody: any = await put.json();
+      expect(putBody).toEqual({ mcpPolicy: 'available' });
+
+      const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      expect(await restartedStore.getMcpPolicy()).toBe('available');
+    });
+
+    it('PUT не затирает tools-policy (независимые настройки)', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      await app.request('/api/v2/settings/tools-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsPolicy: 'consistency' }),
+      });
+      await app.request('/api/v2/settings/mcp-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mcpPolicy: 'available' }),
+      });
+      const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      expect(await restartedStore.getToolsPolicy()).toBe('consistency');
+      expect(await restartedStore.getMcpPolicy()).toBe('available');
+    });
+
+    it('PUT отклоняет неизвестную политику', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/mcp-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mcpPolicy: 'all' }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('PUT вызывает onMcpPolicyChange (live-применение)', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const onMcpPolicyChange = vi.fn(async (_policy: string) => {});
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        onMcpPolicyChange,
+      }));
+
+      const res = await app.request('/api/v2/settings/mcp-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mcpPolicy: 'available' }),
+      });
+      expect(res.status).toBe(200);
+      expect(onMcpPolicyChange).toHaveBeenCalledTimes(1);
+      expect(onMcpPolicyChange).toHaveBeenCalledWith('available');
+    });
+  });
+
+  describe('mcp-network-policy (AD-071 §2.3.1)', () => {
+    it('GET по умолчанию возвращает deny приватных диапазонов', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/mcp-network-policy');
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.policy.mode).toBe('deny');
+      expect(body.policy.list).toContain('10.0.0.0/8');
+      expect(body.policy.list).toContain('127.0.0.0/8');
+    });
+
+    it('GET возвращает fallback (config), если runtime не задан', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        fallbackMcpNetworkPolicy: { mode: 'allow', list: ['10.0.0.0/8'] },
+      }));
+      const res = await app.request('/api/v2/settings/mcp-network-policy');
+      const body: any = await res.json();
+      expect(body).toEqual({
+        policy: { mode: 'allow', list: ['10.0.0.0/8'] },
+        isOverridden: false,
+        defaults: { mode: 'allow', list: ['10.0.0.0/8'] },
+      });
+    });
+
+    it('PUT сохраняет, GET возвращает; переживает рестарт', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const put = await app.request('/api/v2/settings/mcp-network-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy: { mode: 'allow', list: ['example.com', '192.168.0.0/16'] } }),
+      });
+      expect(put.status).toBe(200);
+      const putBody: any = await put.json();
+      expect(putBody).toEqual({ policy: { mode: 'allow', list: ['example.com', '192.168.0.0/16'] } });
+
+      const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      expect(await restartedStore.getMcpNetworkPolicy()).toEqual({
+        mode: 'allow',
+        list: ['example.com', '192.168.0.0/16'],
+      });
+    });
+
+    it('PUT отклоняет неизвестный режим и не-массив списка', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const badMode = await app.request('/api/v2/settings/mcp-network-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy: { mode: 'block', list: [] } }),
+      });
+      expect(badMode.status).toBe(400);
+      const badModeBody: any = await badMode.json();
+      expect(badModeBody.error.code).toBe('VALIDATION_ERROR');
+
+      const badList = await app.request('/api/v2/settings/mcp-network-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy: { mode: 'deny', list: '10.0.0.0/8' } }),
+      });
+      expect(badList.status).toBe(400);
+    });
+
+    it('PUT вызывает onMcpNetworkPolicyChange (live-применение)', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const onMcpNetworkPolicyChange = vi.fn(async (_policy: unknown) => {});
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        onMcpNetworkPolicyChange,
+      }));
+
+      const res = await app.request('/api/v2/settings/mcp-network-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy: { mode: 'allow', list: ['example.com'] } }),
+      });
+      expect(res.status).toBe(200);
+      expect(onMcpNetworkPolicyChange).toHaveBeenCalledTimes(1);
+      expect(onMcpNetworkPolicyChange).toHaveBeenCalledWith({ mode: 'allow', list: ['example.com'] });
+    });
+  });
+
+  describe('tools-disabled (AD-071 §2.6)', () => {
+    it('GET по умолчанию возвращает пустой конфиг', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/tools-disabled');
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body).toEqual({
+        toolsDisabled: { capabilities: [], tools: [] },
+        isOverridden: false,
+        defaults: { capabilities: [], tools: [] },
+      });
+    });
+
+    it('GET возвращает fallback (config), если runtime не задан', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        fallbackToolsDisabled: { capabilities: ['web'], tools: ['git_read'] },
+      }));
+      const res = await app.request('/api/v2/settings/tools-disabled');
+      const body: any = await res.json();
+      expect(body).toEqual({
+        toolsDisabled: { capabilities: ['web'], tools: ['git_read'] },
+        isOverridden: false,
+        defaults: { capabilities: ['web'], tools: ['git_read'] },
+      });
+    });
+
+    it('PUT сохраняет, GET возвращает; переживает рестарт', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const put = await app.request('/api/v2/settings/tools-disabled', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsDisabled: { capabilities: ['git_read'], tools: ['web_search'] } }),
+      });
+      expect(put.status).toBe(200);
+      const putBody: any = await put.json();
+      expect(putBody).toEqual({ toolsDisabled: { capabilities: ['git_read'], tools: ['web_search'] } });
+
+      const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      expect(await restartedStore.getToolsDisabled()).toEqual({
+        capabilities: ['git_read'],
+        tools: ['web_search'],
+      });
+    });
+
+    it('PUT отклоняет неизвестную capability (Zod enum)', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/tools-disabled', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsDisabled: { capabilities: ['nope'], tools: [] } }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('PUT отклоняет capability runtime (ядро сессии)', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/tools-disabled', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsDisabled: { capabilities: ['runtime'], tools: [] } }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.message).toContain('runtime');
+    });
+
+    it('PUT отклоняет инструмент с capability runtime (knownTools)', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        knownTools: () => [
+          { name: 'plan_read', capabilities: ['runtime'] },
+          { name: 'git_read', capabilities: ['git_read'] },
+        ],
+      }));
+      const res = await app.request('/api/v2/settings/tools-disabled', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsDisabled: { capabilities: [], tools: ['plan_read'] } }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.message).toContain('plan_read');
+    });
+
+    it('PUT принимает неизвестное имя инструмента (динамический MCP-реестр)', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        knownTools: () => [{ name: 'git_read', capabilities: ['git_read'] }],
+      }));
+      const res = await app.request('/api/v2/settings/tools-disabled', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsDisabled: { capabilities: [], tools: ['srvA_search'] } }),
+      });
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.toolsDisabled.tools).toEqual(['srvA_search']);
+    });
+
+    it('PUT вызывает onToolsDisabledChange (live-применение)', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const onToolsDisabledChange = vi.fn(async (_config: unknown) => {});
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        onToolsDisabledChange,
+      }));
+      const res = await app.request('/api/v2/settings/tools-disabled', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsDisabled: { capabilities: ['git_read'], tools: [] } }),
+      });
+      expect(res.status).toBe(200);
+      expect(onToolsDisabledChange).toHaveBeenCalledTimes(1);
+      expect(onToolsDisabledChange).toHaveBeenCalledWith({ capabilities: ['git_read'], tools: [] });
+    });
+  });
+
+  describe('AD-072 Ф2: сброс runtime-настроек к умолчанию (GET meta + DELETE)', () => {
+    it('DELETE /workspace очищает override и возвращает fallback', async () => {
+      const { app, settingsStore } = createTestApp(tmpDir, FALLBACK);
+      await app.request('/api/v2/settings/workspace', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace: '/custom/ws' }),
+      });
+
+      const res = await app.request('/api/v2/settings/workspace', { method: 'DELETE' });
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body).toEqual({
+        status: 'restored',
+        workspace: FALLBACK,
+        isOverridden: false,
+        defaults: FALLBACK,
+      });
+      expect(await settingsStore.getWorkspace()).toBeUndefined();
+
+      const get = await app.request('/api/v2/settings/workspace');
+      const getBody: any = await get.json();
+      expect(getBody.workspace).toBe(FALLBACK);
+      expect(getBody.isOverridden).toBe(false);
+    });
+
+    it('DELETE /mcp очищает override и отдаёт пустой дефолт', async () => {
+      const { app, settingsStore } = createTestApp(tmpDir, FALLBACK);
+      await app.request('/api/v2/settings/mcp', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ servers: { github: { default: { plan: true, act: true } } } }),
+      });
+
+      const res = await app.request('/api/v2/settings/mcp', { method: 'DELETE' });
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body).toEqual({ status: 'restored', servers: {}, isOverridden: false, defaults: {} });
+      expect(await settingsStore.getMcpSettings()).toEqual({});
+
+      const getBody: any = await (await app.request('/api/v2/settings/mcp')).json();
+      expect(getBody.isOverridden).toBe(false);
+    });
+
+    it('GET /llm-gateway отдаёт эффективное значение (runtime поверх config-дефолта) + meta', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        fallbackLlmGateway: {
+          enabled: true,
+          inputMode: 'block',
+          rateLimit: { userPerMinute: 5, providerPerMinute: 7 },
+        },
+      }));
+      await app.request('/api/v2/settings/llm-gateway', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ llmGateway: { enabled: false } }),
+      });
+
+      const body: any = await (await app.request('/api/v2/settings/llm-gateway')).json();
+      expect(body.llmGateway).toEqual({
+        enabled: false,
+        inputMode: 'block',
+        logPayloads: false,
+        rateLimit: { userPerMinute: 5, providerPerMinute: 7 },
+      });
+      expect(body.isOverridden).toBe(true);
+      expect(body.defaults).toEqual({
+        enabled: true,
+        inputMode: 'block',
+        logPayloads: false,
+        rateLimit: { userPerMinute: 5, providerPerMinute: 7 },
+      });
+    });
+
+    it('DELETE /llm-gateway очищает override, live-применяет {} и отдаёт дефолт', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const onLlmGatewayChange = vi.fn(async (_runtime: Partial<LlmGatewayRuntimeSettings>) => {});
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        onLlmGatewayChange,
+        fallbackLlmGateway: { enabled: true, inputMode: 'block' },
+      }));
+      await app.request('/api/v2/settings/llm-gateway', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ llmGateway: { enabled: false } }),
+      });
+
+      const res = await app.request('/api/v2/settings/llm-gateway', { method: 'DELETE' });
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.status).toBe('restored');
+      expect(body.isOverridden).toBe(false);
+      expect(body.llmGateway).toEqual(body.defaults);
+      expect(body.defaults.rateLimit).toEqual({ userPerMinute: 60, providerPerMinute: 120 });
+      expect(onLlmGatewayChange).toHaveBeenLastCalledWith({});
+      expect(await settingsStore.getLlmGatewaySettings()).toEqual({});
+    });
+
+    it('GET /security отдаёт эффективное значение + meta, DELETE сбрасывает', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const onSecurityChange = vi.fn(async (_runtime: Partial<SecurityRuntimeSettings>) => {});
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        onSecurityChange,
+        fallbackSecurity: { protectedPaths: { enabled: false }, askTimeoutMs: 1234 },
+      }));
+
+      const defaults = { protectedPaths: { enabled: false }, askTimeoutMs: 1234 };
+      const initial: any = await (await app.request('/api/v2/settings/security')).json();
+      expect(initial.security).toEqual(defaults);
+      expect(initial.isOverridden).toBe(false);
+      expect(initial.defaults).toEqual(defaults);
+
+      await app.request('/api/v2/settings/security', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ security: { protectedPaths: { enabled: true }, askTimeoutMs: 999 } }),
+      });
+      const overridden: any = await (await app.request('/api/v2/settings/security')).json();
+      expect(overridden.security).toEqual({ protectedPaths: { enabled: true }, askTimeoutMs: 999 });
+      expect(overridden.isOverridden).toBe(true);
+
+      const res = await app.request('/api/v2/settings/security', { method: 'DELETE' });
+      const body: any = await res.json();
+      expect(body).toEqual({ status: 'restored', security: defaults, isOverridden: false, defaults });
+      expect(onSecurityChange).toHaveBeenLastCalledWith({});
+      expect(await settingsStore.getSecuritySettings()).toEqual({});
+    });
+
+    it('DELETE /tools-policy сбрасывает к fallback и live-применяет его', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const onToolsPolicyChange = vi.fn(async (_policy: string) => {});
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        fallbackToolsPolicy: 'available',
+        onToolsPolicyChange,
+      }));
+      await app.request('/api/v2/settings/tools-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsPolicy: 'consistency' }),
+      });
+
+      const body: any = await (await app.request('/api/v2/settings/tools-policy', { method: 'DELETE' })).json();
+      expect(body).toEqual({ status: 'restored', toolsPolicy: 'available', isOverridden: false, defaults: 'available' });
+      expect(onToolsPolicyChange).toHaveBeenLastCalledWith('available');
+      expect(await settingsStore.getToolsPolicy()).toBeUndefined();
+    });
+
+    it('DELETE /mcp-policy сбрасывает к fallback и live-применяет его', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const onMcpPolicyChange = vi.fn(async (_policy: string) => {});
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        fallbackMcpPolicy: 'available',
+        onMcpPolicyChange,
+      }));
+      await app.request('/api/v2/settings/mcp-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mcpPolicy: 'consistency' }),
+      });
+
+      const body: any = await (await app.request('/api/v2/settings/mcp-policy', { method: 'DELETE' })).json();
+      expect(body).toEqual({ status: 'restored', mcpPolicy: 'available', isOverridden: false, defaults: 'available' });
+      expect(onMcpPolicyChange).toHaveBeenLastCalledWith('available');
+      expect(await settingsStore.getMcpPolicy()).toBeUndefined();
+    });
+
+    it('DELETE /mcp-network-policy сбрасывает к fallback и live-применяет его', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const onMcpNetworkPolicyChange = vi.fn(async (_policy: unknown) => {});
+      const fallback = { mode: 'allow' as const, list: ['10.0.0.0/8'] };
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        fallbackMcpNetworkPolicy: fallback,
+        onMcpNetworkPolicyChange,
+      }));
+      await app.request('/api/v2/settings/mcp-network-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy: { mode: 'deny', list: [] } }),
+      });
+
+      const body: any = await (await app.request('/api/v2/settings/mcp-network-policy', { method: 'DELETE' })).json();
+      expect(body).toEqual({ status: 'restored', policy: fallback, isOverridden: false, defaults: fallback });
+      expect(onMcpNetworkPolicyChange).toHaveBeenLastCalledWith(fallback);
+      expect(await settingsStore.getMcpNetworkPolicy()).toBeUndefined();
+    });
+
+    it('DELETE /tools-disabled сбрасывает к fallback и live-применяет его', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const onToolsDisabledChange = vi.fn(async (_config: unknown) => {});
+      const fallback = { capabilities: ['web'], tools: ['git_read'] };
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+        fallbackToolsDisabled: fallback,
+        onToolsDisabledChange,
+      }));
+      await app.request('/api/v2/settings/tools-disabled', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsDisabled: { capabilities: [], tools: ['srvA_search'] } }),
+      });
+
+      const body: any = await (await app.request('/api/v2/settings/tools-disabled', { method: 'DELETE' })).json();
+      expect(body).toEqual({ status: 'restored', toolsDisabled: fallback, isOverridden: false, defaults: fallback });
+      expect(onToolsDisabledChange).toHaveBeenLastCalledWith(fallback);
+      expect(await settingsStore.getToolsDisabled()).toBeUndefined();
+    });
+  });
+});
+
+describe('Settings API Routes — default-agent (админка «Агенты»)', () => {
+  let tmpDir: string;
+  const FALLBACK = '/fallback/workspace';
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-settings-default-agent-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('GET возвращает DEFAULT_AGENT_ID, если ни runtime, ни config не заданы', async () => {
+    const { app } = createTestApp(tmpDir, FALLBACK);
+    const res = await app.request('/api/v2/settings/default-agent');
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body).toEqual({ defaultAgent: DEFAULT_AGENT_ID, isOverridden: false, defaults: DEFAULT_AGENT_ID });
+  });
+
+  it('GET возвращает fallback из deps, если runtime не задан', async () => {
+    const app = new Hono();
+    const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+      settingsStore,
+      fallbackWorkspace: FALLBACK,
+      fallbackDefaultAgent: 'analyst',
+    }));
+    const res = await app.request('/api/v2/settings/default-agent');
+    const body: any = await res.json();
+    expect(body).toEqual({ defaultAgent: 'analyst', isOverridden: false, defaults: 'analyst' });
+  });
+
+  it('PUT сохраняет и GET возвращает; переживает рестарт', async () => {
+    const { app } = createTestApp(tmpDir, FALLBACK);
+    const put = await app.request('/api/v2/settings/default-agent', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultAgent: 'developer' }),
+    });
+    expect(put.status).toBe(200);
+    const putBody: any = await put.json();
+    expect(putBody).toEqual({ defaultAgent: 'developer' });
+
+    const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect(await restartedStore.getDefaultAgent()).toBe('developer');
+
+    const getRes = await app.request('/api/v2/settings/default-agent');
+    const getBody: any = await getRes.json();
+    expect(getBody).toEqual({ defaultAgent: 'developer', isOverridden: true, defaults: DEFAULT_AGENT_ID });
+  });
+
+  it('PUT отклоняет пустой id', async () => {
+    const { app } = createTestApp(tmpDir, FALLBACK);
+    const res = await app.request('/api/v2/settings/default-agent', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultAgent: '   ' }),
+    });
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('PUT тримит id и сохраняет trimmed-значение', async () => {
+    const { app } = createTestApp(tmpDir, FALLBACK);
+    const res = await app.request('/api/v2/settings/default-agent', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultAgent: '  developer  ' }),
+    });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body).toEqual({ defaultAgent: 'developer' });
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect(await store.getDefaultAgent()).toBe('developer');
+  });
+
+  it('PUT отклоняет id с недопустимыми символами', async () => {
+    const { app } = createTestApp(tmpDir, FALLBACK);
+    const res = await app.request('/api/v2/settings/default-agent', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultAgent: 'Dev Agent!' }),
+    });
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('PUT вызывает onDefaultAgentChange (live-применение)', async () => {
+    const app = new Hono();
+    const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    const onDefaultAgentChange = vi.fn(async (_id: string) => {});
+    app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+      settingsStore,
+      fallbackWorkspace: FALLBACK,
+      onDefaultAgentChange,
+    }));
+
+    const res = await app.request('/api/v2/settings/default-agent', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultAgent: 'developer' }),
+    });
+    expect(res.status).toBe(200);
+    expect(onDefaultAgentChange).toHaveBeenCalledWith('developer');
+  });
+
+  it('DELETE сбрасывает к fallback и live-применяет его', async () => {
+    const app = new Hono();
+    const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    const onDefaultAgentChange = vi.fn(async (_id: string) => {});
+    app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+      settingsStore,
+      fallbackWorkspace: FALLBACK,
+      fallbackDefaultAgent: 'analyst',
+      onDefaultAgentChange,
+    }));
+    await app.request('/api/v2/settings/default-agent', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultAgent: 'developer' }),
+    });
+
+    const body: any = await (await app.request('/api/v2/settings/default-agent', { method: 'DELETE' })).json();
+    expect(body).toEqual({ status: 'restored', defaultAgent: 'analyst', isOverridden: false, defaults: 'analyst' });
+    expect(onDefaultAgentChange).toHaveBeenLastCalledWith('analyst');
+    expect(await settingsStore.getDefaultAgent()).toBeUndefined();
   });
 });
 

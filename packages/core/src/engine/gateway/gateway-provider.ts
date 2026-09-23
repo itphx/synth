@@ -6,7 +6,7 @@
 
 import { nowISO, type LLMGatewayConfig, type LLMChunk, type LLMResponse, type TokenUsage } from '@itphx/synth-shared';
 
-import { BaseProvider, type LLMMessage, type CancellationToken } from '../../providers/base.js';
+import { BaseProvider, type DetailedModelInfo, type LLMMessage, type SystemPromptInput, type CancellationToken } from '../../providers/base.js';
 import type { DebugCollector } from '../../debug.js';
 import { warning } from '../../logger.js';
 import { t as sm } from '../system-messages.js';
@@ -35,7 +35,7 @@ export interface GatewayProviderOptions {
 
 interface PreparedCall {
   messages: LLMMessage[];
-  systemPrompt?: string;
+  systemPrompt?: SystemPromptInput;
   tools?: Record<string, unknown>[];
   secretsFound: string[];
   placeholders: string[];
@@ -75,7 +75,7 @@ export class GatewayProvider extends BaseProvider {
 
   async chat(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     stream?: boolean,
     debugCollector?: DebugCollector,
@@ -116,7 +116,7 @@ export class GatewayProvider extends BaseProvider {
 
   async *chatAsync(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     debugCollector?: DebugCollector,
     cancellationToken?: CancellationToken,
@@ -178,13 +178,13 @@ export class GatewayProvider extends BaseProvider {
     return this._inner.listModels();
   }
 
-  async listModelsDetailed(): Promise<Array<{ id: string; contextWindow?: number }>> {
+  async listModelsDetailed(): Promise<DetailedModelInfo[]> {
     return this._inner.listModelsDetailed();
   }
 
   private async _prepare(
     messages: LLMMessage[],
-    systemPrompt: string | undefined,
+    systemPrompt: SystemPromptInput | undefined,
     tools: Record<string, unknown>[] | undefined,
   ): Promise<PreparedCall> {
     const originalMap = await this._opts.getMap();
@@ -301,7 +301,7 @@ export class GatewayProvider extends BaseProvider {
 
   private async _logPayload(
     messages: LLMMessage[],
-    systemPrompt: string | undefined,
+    systemPrompt: SystemPromptInput | undefined,
     content: string,
     usage: TokenUsage | undefined,
   ): Promise<void> {

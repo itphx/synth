@@ -1,5 +1,148 @@
-import type { TokenUsage, LLMChunk, LLMResponse, ReasoningLevel } from '@itphx/synth-shared';
+import type { TokenUsage, LLMChunk, LLMResponse, ReasoningLevel, Currency } from '@itphx/synth-shared';
 import type { DebugCollector } from '../debug.js';
+
+/** Таймаут best-effort загрузки каталога моделей, мс. */
+const MODELS_CATALOG_TIMEOUT_MS = 10_000;
+
+/**
+ * Модель с расширенными метаданными, которые отдают каталоги провайдеров
+ * (контекст, лимиты, цены, размер и т.п.). Используется синхронизацией
+ * `POST /models/fetch`, чтобы записать цены/лимиты в конфиг модели.
+ */
+export interface DetailedModelInfo {
+  id: string;
+  name?: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  /** Цены за 1M токенов; заполняются только для тарифов priceUnit==='token'. */
+  inputPrice?: number;
+  outputPrice?: number;
+  cacheReadPrice?: number;
+  cacheWritePrice?: number;
+  priceUnit?: 'token' | 'request' | 'second' | 'image' | 'search_unit' | 'unknown';
+  /** Валюта цен, если провайдер её явно отдаёт (иначе определяет backend по конфигу провайдера). */
+  currency?: Currency;
+  /** Метаданные Ollama (необязательно). */
+  sizeBytes?: number;
+  parameterSize?: string;
+  quantization?: string;
+  capabilities?: string[];
+}
+
+/**
+ * Безопасное число: конечное и >= 0. Пустые/невалидные значения → undefined.
+ * Строки приводятся через Number(...) (каталоги отдают цены строками).
+ */
+export function toNonNegativeNumber(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+  const num = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(num) && num >= 0 ? num : undefined;
+}
+
+/**
+ * Ключ считается токенным, если `units` не задан, для ключа нет явной
+ * единицы, либо единица равна `token`. Явные non-token единицы
+ * (`request`, `second`, `image`, ...) исключаются.
+ */
+function _isTokenUnit(
+  units: Record<string, unknown> | undefined,
+  key: string,
+): boolean {
+  if (!units) return true;
+  const unit = units[key];
+  if (unit === undefined || unit === null) return true;
+  return unit === 'token';
+}
+
+/** Первое непустое токенное значение из списка альтернативных ключей. */
+function _findTokenPrice(
+  pricing: Record<string, unknown>,
+  units: Record<string, unknown> | undefined,
+  keys: string[],
+): number | undefined {
+  for (const key of keys) {
+    if (!(key in pricing)) continue;
+    if (!_isTokenUnit(units, key)) continue;
+    const value = toNonNegativeNumber(pricing[key]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Разбор OpenRouter/RouterAI-прайсинга. Цены отдаются за 1 токен —
+ * нормируем к 1M токенов (×1_000_000). Учитываются только токенные тарифы;
+ * `request`/`second`/`image`/`search_unit` игнорируются. Если токенных цен
+ * нет — возвращает `undefined`.
+ */
+export function parseTokenPricing(
+  pricing: Record<string, unknown> | undefined,
+  units: Record<string, unknown> | undefined,
+): {
+  inputPrice?: number;
+  outputPrice?: number;
+  cacheReadPrice?: number;
+  cacheWritePrice?: number;
+  priceUnit?: DetailedModelInfo['priceUnit'];
+} | undefined {
+  if (!pricing || typeof pricing !== 'object') return undefined;
+
+  const perMillion = (value: number): number => value * 1_000_000;
+
+  const input = _findTokenPrice(pricing, units, ['prompt', 'input']);
+  const output = _findTokenPrice(pricing, units, ['completion', 'output']);
+  const cacheRead = _findTokenPrice(pricing, units, ['input_cache_read', 'cache_read', 'cached_input']);
+  const cacheWrite = _findTokenPrice(pricing, units, ['input_cache_write', 'cache_write']);
+
+  if (input === undefined && output === undefined && cacheRead === undefined && cacheWrite === undefined) {
+    return undefined;
+  }
+
+  const result: {
+    inputPrice?: number;
+    outputPrice?: number;
+    cacheReadPrice?: number;
+    cacheWritePrice?: number;
+    priceUnit?: DetailedModelInfo['priceUnit'];
+  } = { priceUnit: 'token' };
+
+  if (input !== undefined) result.inputPrice = perMillion(input);
+  if (output !== undefined) result.outputPrice = perMillion(output);
+  if (cacheRead !== undefined) result.cacheReadPrice = perMillion(cacheRead);
+  if (cacheWrite !== undefined) result.cacheWritePrice = perMillion(cacheWrite);
+
+  return result;
+}
+
+/**
+ * Загружает каталог моделей с таймаутом и разбирает общий конверт
+ * `{ data: [...] }`, который отдают OpenAI- и Anthropic-совместимые
+ * эндпоинты `/models`.
+ *
+ * Возвращает «сырые» записи каталога — маппинг полей остаётся за провайдером
+ * (форматы ответов и заголовки у провайдеров различаются). Загрузка
+ * best-effort: сеть/таймаут/не-OK статус/невалидный JSON → пустой массив,
+ * каталог не должен ронять синхронизацию. Таймер abort'а всегда очищается
+ * (try/finally), в том числе при исключении fetch/`resp.json()`.
+ */
+export async function fetchModelsCatalog(
+  url: string,
+  headers: Record<string, string>,
+  timeoutMs: number = MODELS_CATALOG_TIMEOUT_MS,
+): Promise<Array<Record<string, unknown>>> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, { headers, signal: controller.signal });
+    if (!resp.ok) return [];
+    const data = await resp.json() as { data?: Array<Record<string, unknown>> };
+    return Array.isArray(data.data) ? data.data : [];
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export interface LLMMessage {
   id: string;
@@ -41,6 +184,47 @@ export interface ProviderConfig {
   maxTokens?: number;
   /** Размер контекста модели (num_ctx у Ollama). */
   numCtx?: number;
+}
+
+/**
+ * AD-070 §2.2: политика prompt-cache. `auto` — ставить маркеры кэша,
+ * `none` — полностью отключить (для отладки/сравнений).
+ */
+export type CachePolicy = 'auto' | 'none';
+
+/**
+ * AD-070 §2.2: system prompt как payload для управления prompt-cache.
+ * Провайдеры принимают как строку (обратная совместимость, в т.ч. саб-агенты),
+ * так и этот объект.
+ */
+export interface SystemPromptPayload {
+  /** Полный текст системного промпта. */
+  text: string;
+  /** Кэшируемый префикс (если задан — граница stable-префикса). */
+  stablePrefix?: string;
+  /** Ключ кэша (OpenAI prompt_cache_key) — стабильный id сессии. */
+  cacheKey?: string;
+  /** Политика кэша: auto (по умолчанию) | none. */
+  cachePolicy?: CachePolicy;
+  /**
+   * AD-071 §2.1: число встроенных инструментов в начале `tools`-массива
+   * (граница stable-слоя). Кэш-брейкпоинт ставится на последний встроенный
+   * инструмент; MCP-инструменты после границы не кэшируются. Если не задан —
+   * провайдер сохраняет прежнее поведение (брейкпоинт на последний инструмент).
+   */
+  stableToolCount?: number;
+}
+
+export type SystemPromptInput = string | SystemPromptPayload;
+
+/**
+ * Возвращает текст системного промпта из строки или payload'а.
+ * `undefined`, если input не задан или текст пуст.
+ */
+export function resolveSystemPromptText(input: SystemPromptInput | undefined): string | undefined {
+  if (input === undefined) return undefined;
+  const text = typeof input === 'string' ? input : input.text;
+  return text || undefined;
 }
 
 export abstract class BaseProvider {
@@ -87,7 +271,7 @@ export abstract class BaseProvider {
 
   abstract chat(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     stream?: boolean,
     debugCollector?: DebugCollector,
@@ -95,7 +279,7 @@ export abstract class BaseProvider {
 
   abstract chatAsync(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     debugCollector?: DebugCollector,
     cancellationToken?: CancellationToken,
@@ -112,10 +296,10 @@ export abstract class BaseProvider {
   }
 
   /**
-   * Список моделей с известным контекстным окном (если провайдер его отдаёт).
-   * Базовая реализация не знает окон — возвращает только идентификаторы.
+   * Список моделей с расширенными метаданными (если провайдер их отдаёт).
+   * Базовая реализация не знает окон/цен — возвращает только идентификаторы.
    */
-  async listModelsDetailed(): Promise<Array<{ id: string; contextWindow?: number }>> {
+  async listModelsDetailed(): Promise<DetailedModelInfo[]> {
     const ids = await this.listModels();
     return ids.map((id) => ({ id }));
   }

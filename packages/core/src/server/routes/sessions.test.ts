@@ -5,9 +5,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSessionRoutes } from './sessions.js';
-import { SessionManager, EventBus, FileStore } from '../../index.js';
+import { SessionManager, EventBus, FileStore, FileProfileStore, DEFAULT_AGENT_ID } from '../../index.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import type { AuthKit } from '../../auth/local.js';
+import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
+import type { ProfileStore } from '@itphx/synth-shared';
 
 function createMockAuth(): AuthKit {
   return {
@@ -32,10 +34,27 @@ function createMockOrchestrator() {
   return {
     createProcessMessage: () => processMessage,
     cancel: vi.fn(),
+    getPromptInfo: vi.fn().mockResolvedValue({
+      manifest: { totalChars: 10, estTokens: 3, staticPrefixChars: 5, entries: [] },
+      history: {
+        messages: { count: 2, chars: 20, estTokens: 5 },
+        stateMessages: [{ type: 'mode_change', count: 1, chars: 40, estTokens: 10 }],
+        excluded: { disabled: 0, hidden: 0, info: 1 },
+        attachments: { count: 0, chars: 0 },
+        secretPlaceholders: 0,
+      },
+      promptState: null,
+      lastPromptMeta: null,
+    }),
+    getModelPricing: vi.fn().mockReturnValue(null),
   };
 }
 
-function createTestApp(tmpDir: string) {
+function createTestApp(
+  tmpDir: string,
+  profilesStore?: ProfileStore,
+  opts?: { resolveDefaultAgent?: () => string | Promise<string> },
+) {
   const app = new Hono();
   const fileStore = new FileStore({ dataDir: tmpDir });
   const sessionManager = new SessionManager(fileStore);
@@ -46,13 +65,16 @@ function createTestApp(tmpDir: string) {
 
   const sessionRoutes = createSessionRoutes(
     createMockAuth(),
-    sessionManager,
-    eventBus,
-    queueManager as any,
-    orchestrator.createProcessMessage(),
-    orchestrator as any,
-    undefined,
-    projectStore,
+    {
+      sessionManager,
+      eventBus,
+      queueManager: queueManager as any,
+      processMessage: orchestrator.createProcessMessage(),
+      orchestrator: orchestrator as any,
+      projectStore,
+      profilesStore,
+    },
+    opts ?? {},
   );
 
   app.route('/api/v2/sessions', sessionRoutes);
@@ -297,6 +319,143 @@ describe('Session API Routes (PATCH mode)', () => {
       expect(moved).toBeTruthy();
       expect(moved?.project_id).toBe(p2.id);
       expect(moved?.prev_project_id).toBe(p1.id);
+    });
+  });
+
+  describe('GET /api/v2/sessions/:id/prompt (AD-070 §2.5)', () => {
+    it('возвращает манифест и promptMeta для существующей сессии', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/prompt`);
+
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.manifest).toBeTruthy();
+      expect(body.manifest.totalChars).toBe(10);
+      expect(body.history).toBeTruthy();
+      expect(body.history.messages.count).toBe(2);
+      expect(body.history.stateMessages[0].type).toBe('mode_change');
+      expect(body.history.excluded.info).toBe(1);
+      expect(body.promptState).toBeNull();
+      expect(body.lastPromptMeta).toBeNull();
+    });
+
+    it('возвращает 404 для отсутствующей сессии', async () => {
+      const { app } = createTestApp(tmpDir);
+      const res = await app.request('/api/v2/sessions/non-existent/prompt');
+      expect(res.status).toBe(404);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('NOT_FOUND');
+    });
+  });
+
+  describe('POST /api/v2/sessions — агент по умолчанию', () => {
+    it('без settings.agentRole берёт значение из resolveDefaultAgent', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir, undefined, { resolveDefaultAgent: () => 'analyst' });
+      const res = await app.request('/api/v2/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'S' }),
+      });
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      const stored = await sessionManager.getSession(body.id);
+      expect(stored?.settings.agentRole).toBe('analyst');
+    });
+
+    it('явный settings.agentRole приоритетнее resolveDefaultAgent', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir, undefined, { resolveDefaultAgent: () => 'analyst' });
+      const res = await app.request('/api/v2/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'S', settings: { agentRole: 'developer' } }),
+      });
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      const stored = await sessionManager.getSession(body.id);
+      expect(stored?.settings.agentRole).toBe('developer');
+    });
+
+    it('без resolveDefaultAgent использует DEFAULT_AGENT_ID', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const res = await app.request('/api/v2/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'S' }),
+      });
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      const stored = await sessionManager.getSession(body.id);
+      expect(stored?.settings.agentRole).toBe(DEFAULT_AGENT_ID);
+    });
+  });
+
+  describe('GET /api/v2/sessions/:id/stats (AD-070 §2.6)', () => {
+    it('возвращает агрегацию по агентам и пользователям', async () => {
+      const profilesStore = new FileProfileStore({ dataDir: tmpDir });
+      await profilesStore.getOrCreateProfile({ username: 'local' });
+      const profile = (await profilesStore.getProfileByUsername('local'))!;
+      await profilesStore.saveProfile({ ...profile, displayName: 'Local Dev' });
+
+      const { app, sessionManager } = createTestApp(tmpDir, profilesStore);
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      await sessionManager.addMessage(session.id, {
+        id: generateId(), role: MessageRole.USER, seq: 0, origin: 'local',
+        parts: [makeTextPart('hi')], content: 'hi', createdAt: nowISO(),
+        disabled: false, pinned: false, hidden: false, author: 'local',
+      });
+      await sessionManager.addMessage(session.id, {
+        id: generateId(), role: MessageRole.ASSISTANT, seq: 0, origin: 'local',
+        parts: [makeTextPart('ok')], content: 'ok', createdAt: nowISO(),
+        disabled: false, pinned: false, hidden: false, agentRole: 'developer',
+        model: 'm', usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 },
+        metadata: { duration_ms: 1000 },
+      });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/stats`);
+
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.session_id).toBe(session.id);
+      expect(Array.isArray(body.agents)).toBe(true);
+      expect(Array.isArray(body.users)).toBe(true);
+      const dev = body.agents.find((a: any) => a.agent_role === 'developer');
+      expect(dev).toBeTruthy();
+      expect(dev.messages).toBe(1);
+      expect(dev.input_tokens).toBe(100);
+      expect(dev.output_tps).toBe(10);
+      const local = body.users.find((u: any) => u.author === 'local');
+      expect(local).toBeTruthy();
+      expect(local.messages).toBe(1);
+      expect(local.display_name).toBe('Local Dev');
+    });
+
+    it('возвращает 404 для отсутствующей сессии', async () => {
+      const { app } = createTestApp(tmpDir);
+      const res = await app.request('/api/v2/sessions/non-existent/stats');
+      expect(res.status).toBe(404);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('NOT_FOUND');
+    });
+
+    it('fallback на username при пустом displayName', async () => {
+      const profilesStore = new FileProfileStore({ dataDir: tmpDir });
+      await profilesStore.getOrCreateProfile({ username: 'local' });
+      const profile = (await profilesStore.getProfileByUsername('local'))!;
+      await profilesStore.saveProfile({ ...profile, displayName: '' });
+
+      const { app, sessionManager } = createTestApp(tmpDir, profilesStore);
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      await sessionManager.addMessage(session.id, {
+        id: generateId(), role: MessageRole.USER, seq: 0, origin: 'local',
+        parts: [makeTextPart('hi')], content: 'hi', createdAt: nowISO(),
+        disabled: false, pinned: false, hidden: false, author: 'local',
+      });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/stats`);
+      const body: any = await res.json();
+      expect(body.users.find((u: any) => u.author === 'local').display_name).toBe('local');
     });
   });
 });

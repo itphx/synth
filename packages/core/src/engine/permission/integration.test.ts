@@ -69,6 +69,9 @@ class MockWriteProvider extends BaseProvider {
 function makeCtxBuilder(): ContextBuilder {
   return {
     buildSystemPrompt: async () => 'system prompt',
+    buildBaseBlocks: async () => [
+      { key: 'role', tier: 'stable', order: 10, content: 'system prompt' },
+    ],
   } as unknown as ContextBuilder;
 }
 

@@ -1,7 +1,23 @@
 import { Hono } from 'hono';
-import type { AuthKit } from '../../auth/local.js';
-import { JsonStore } from '../../storage/json-store.js';
+import type { Context } from 'hono';
+import type { createMiddleware } from 'hono/factory';
+import type { JsonStoreLike } from '../../storage/json-store.js';
 import type { ModelConfig, ProviderConfig } from '@itphx/synth-shared';
+import { hasPriceInput, parseCurrencyInput } from '@itphx/synth-shared';
+
+/** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
+type Middleware = ReturnType<typeof createMiddleware>;
+
+/** Минимальный auth-контракт фабрики: в core и backend общий (структурно, как в dictionaries.ts). */
+export interface ModelRoutesAuth {
+  requireAuth: Middleware;
+}
+
+/** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
+export interface ModelRouteMessages {
+  idRequired: (c: Context) => string;
+  modelNotFound: (c: Context) => string;
+}
 
 export interface ModelRoutesOptions {
   /** Виртуальные модели (например, remote-модели через LLM Proxy) — добавляются к store-моделям. */
@@ -10,7 +26,20 @@ export interface ModelRoutesOptions {
   extraProviders?: ProviderConfig[] | (() => ProviderConfig[]);
   /** Показывать только extraModels (политика «все LLM — через remote»). */
   onlyRemoteModels?: boolean | (() => boolean);
+  /** Guard для POST / и DELETE /:id (backend — requireAdmin, core — requireAuth). */
+  writeGuard?: Middleware;
+  /** Кеш провайдеров: нужен для set_as_default (обновление provider.defaultModel). */
+  providerCache?: Map<string, ProviderConfig>;
+  /** Поддержать `set_as_default` в POST / (backend; в core выключено). */
+  supportSetAsDefault?: boolean;
+  /** Переопределение сообщений (backend — i18n). */
+  messages?: Partial<ModelRouteMessages>;
 }
+
+const DEFAULT_MESSAGES: ModelRouteMessages = {
+  idRequired: () => 'ID обязателен',
+  modelNotFound: () => 'Модель не найдена',
+};
 
 /** Гибрид подключается в рантайме — опции могут быть геттерами текущего состояния. */
 function resolveOpt<T>(value: T | (() => T) | undefined, fallback: T): T {
@@ -19,9 +48,9 @@ function resolveOpt<T>(value: T | (() => T) | undefined, fallback: T): T {
 }
 
 export function createModelRoutes(
-  auth: AuthKit,
-  modelStore: JsonStore<ModelConfig>,
-  providerStore: JsonStore<ProviderConfig>,
+  auth: ModelRoutesAuth,
+  modelStore: JsonStoreLike<ModelConfig>,
+  providerStore: JsonStoreLike<ProviderConfig>,
   modelCache: Map<string, ModelConfig>,
   opts?: ModelRoutesOptions,
 ): Hono {
@@ -29,6 +58,10 @@ export function createModelRoutes(
   const extraModels = opts?.extraModels ?? [];
   const extraProviders = opts?.extraProviders ?? [];
   const onlyRemoteModels = opts?.onlyRemoteModels ?? false;
+  const writeGuard = opts?.writeGuard ?? auth.requireAuth;
+  const providerCache = opts?.providerCache;
+  const supportSetAsDefault = opts?.supportSetAsDefault ?? false;
+  const messages: ModelRouteMessages = { ...DEFAULT_MESSAGES, ...opts?.messages };
 
   app.get('/', auth.requireAuth, async (c) => {
     const filterProvider = c.req.query('provider');
@@ -94,6 +127,7 @@ export function createModelRoutes(
           type: provider?.type || 'openai',
           icon: provider?.icon || '',
           defaultModel: provider?.defaultModel || '',
+          currency: provider?.currency,
         },
         models: groupModels.map((m) => ({
           id: m.id,
@@ -109,6 +143,8 @@ export function createModelRoutes(
           outputPrice: m.outputPrice,
           cacheReadPrice: m.cacheReadPrice,
           cacheWritePrice: m.cacheWritePrice,
+          priceSource: m.priceSource,
+          currency: m.currency,
         })),
       };
     });
@@ -116,15 +152,22 @@ export function createModelRoutes(
     return c.json({ groups: result });
   });
 
-  app.post('/', auth.requireAuth, async (c) => {
+  app.post('/', writeGuard, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const modelId = body.id?.trim() || body.name?.trim();
     if (!modelId) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'ID обязателен' } }, 400);
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.idRequired(c) } }, 400);
     }
 
     const existing = await modelStore.load(modelId);
     const provider = body.provider || existing?.provider || '';
+    const resolvedCurrency = parseCurrencyInput(body.currency, existing?.currency);
+    if (!resolvedCurrency.ok) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'currency должен быть одним из: RUB, USD, CNY' },
+      }, 400);
+    }
+    const currency = resolvedCurrency.currency;
 
     const model: ModelConfig = {
       id: modelId,
@@ -142,17 +185,41 @@ export function createModelRoutes(
       outputPrice: body.output_price ?? body.outputPrice ?? existing?.outputPrice,
       cacheReadPrice: body.cache_read_price ?? body.cacheReadPrice ?? existing?.cacheReadPrice,
       cacheWritePrice: body.cache_write_price ?? body.cacheWritePrice ?? existing?.cacheWritePrice,
+      priceSource: body.price_source ?? body.priceSource
+        ?? (hasPriceInput(body) ? 'manual' : existing?.priceSource),
+      currency,
     };
 
     await modelStore.save(modelId, model);
     modelCache.set(modelId, model);
+
+    // set_as_default (backend): обновить провайдера и снять isDefault с остальных моделей.
+    if (supportSetAsDefault && providerCache && body.set_as_default && provider) {
+      const prov = await providerStore.load(provider);
+      if (prov) {
+        prov.defaultModel = model.name;
+        await providerStore.save(provider, prov);
+        providerCache.set(provider, prov);
+
+        // Снять isDefault с других моделей того же провайдера
+        const allModels = await modelStore.list();
+        for (const m of allModels) {
+          if (m.provider === provider && m.id !== modelId && m.isDefault) {
+            m.isDefault = false;
+            await modelStore.save(m.id, m);
+            modelCache.set(m.id, m);
+          }
+        }
+      }
+    }
+
     return c.json(model, existing ? 200 : 201);
   });
 
-  app.delete('/:id', auth.requireAuth, async (c) => {
+  app.delete('/:id', writeGuard, async (c) => {
     const id = c.req.param('id');
     if (!(await modelStore.exists(id))) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Модель не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.modelNotFound(c) } }, 404);
     }
     await modelStore.delete(id);
     modelCache.delete(id);

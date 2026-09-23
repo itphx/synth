@@ -65,6 +65,17 @@ describe('SessionManager', () => {
     expect(session.settings.routingEscalation.minLength).toBe(5);
   });
 
+  it('AD-071: createSession сохраняет активные mcpServers из settings', async () => {
+    const session = await manager.createSession({
+      settings: { mcpServers: ['github', 'gitlab'] },
+    });
+    expect(session.settings.mcpServers).toEqual(['github', 'gitlab']);
+
+    // Переживает перезагрузку из хранилища.
+    const reloaded = await manager.getSession(session.id);
+    expect(reloaded!.settings.mcpServers).toEqual(['github', 'gitlab']);
+  });
+
   it('createSession копирует глобальные mcpToolSettings, если сессия их не задала', async () => {
     const global = {
       github: { default: { plan: false, act: true } },

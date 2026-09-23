@@ -84,7 +84,7 @@
   plan, todo, project, task).
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
 - `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`,
-  `RuntimeSettingsStore`.
+  `RuntimeSettingsStore`, `McpRegistryStore` (единый реестр MCP, AD-071).
 - `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`.
 - `remote/*` — клиент, сессии, credentials, device-flow, transfer, aggregate, event-bridge.
 - `providers/*` — `ProviderFactory`, `BaseProvider`, OpenAI/Anthropic/Ollama/Remote.
@@ -103,6 +103,15 @@
   (`engine/system-messages.ts`, ключи `shared/i18n`), не литералами (AD-041).
 - Публичный роут: фабрика в `server/routes/*`, монтирование в `server/app.ts`
   (`app.route('/api/v2/...', ...)`); типы/схемы — из `@itphx/synth-shared`.
+- Переиспользуемые фабрики — `createXxxRoutes(auth, deps, opts)` (общие для core и
+  backend): `auth` — структурный `{ requireAuth: Middleware }`, совместим с backend
+  `AuthKit` без каста (исключение — `createSettingsRoutes` принимает core-`AuthKit`);
+  `opts` — guard'ы (`writeGuard`/`detailGuard`/`testGuard`/`canAccess`), `messages`
+  (функции `(c) => string`: core — литералы, backend — `t()`), специфичные флаги и
+  хуки. Гибридные ветки активны только при переданном optional-dep
+  (`getRemoteClient`). Публичные типы — в `src/index.ts`. Существующие фабрики:
+  `createSettingsRoutes`, `createDictionaryRoutes`, `createProviderRoutes`,
+  `createModelRoutes`, `createSessionRoutes`.
 
 ## MCP
 
@@ -115,6 +124,9 @@
   `ToolCapability.MCP`; деобфускация аргументов — в `execute` через `ObfuscationMapStore`.
 - HTTP: `POST /api/v2/mcp/probe` (`server/routes/mcp.ts`); доступность MCP по
   режимам — `GET/PUT /api/v2/settings/mcp`. Отдельного `/mcp/session/:id` в core нет.
+- Единый реестр серверов — `McpRegistryStore` (AD-071): уровни system/project/session,
+  скоуп — `engine/mcp/scope.ts`, сетевой доступ — `engine/mcp/network-policy.ts`
+  (на старте применяется `mergeMcpNetworkPolicy(config, runtime)`).
 
 ## Тесты и запуск
 

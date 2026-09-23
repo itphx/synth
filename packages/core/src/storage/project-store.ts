@@ -7,6 +7,15 @@ export interface ProjectStoreConfig {
   dataDir: string;
 }
 
+/**
+ * Структурный контракт хранилища проектов. Нужен, чтобы core-фабрики роутов можно
+ * было переиспользовать в backend с его собственным `ProjectStore` (у классов есть
+ * приватные поля, поэтому напрямую типы не совместимы, а публичный API — общий).
+ */
+export interface ProjectStoreLike {
+  load(id: string): Promise<Project | null>;
+}
+
 export class ProjectStore {
   private _lock = new AsyncLock();
 

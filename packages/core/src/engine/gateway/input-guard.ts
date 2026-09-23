@@ -5,7 +5,7 @@
 
 import { nowISO, type LLMGatewayConfig } from '@itphx/synth-shared';
 
-import type { LLMMessage } from '../../providers/base.js';
+import { resolveSystemPromptText, type LLMMessage, type SystemPromptInput } from '../../providers/base.js';
 import { detectSecrets, maskSecret } from './secret-detector.js';
 import { t as sm } from '../system-messages.js';
 import { obfuscateSecrets } from './obfuscator.js';
@@ -17,7 +17,7 @@ export interface InputGuardResult {
   ok: boolean;
   /** Обфусцированные сообщения. */
   messages: LLMMessage[];
-  systemPrompt?: string;
+  systemPrompt?: SystemPromptInput;
   tools?: Record<string, unknown>[];
   /** Обновлённая карта обфускации. */
   map: Record<string, string>;
@@ -42,7 +42,7 @@ export interface InputGuardMeta {
 export async function runInputGuard(
   config: LLMGatewayConfig,
   messages: LLMMessage[],
-  systemPrompt: string | undefined,
+  systemPrompt: SystemPromptInput | undefined,
   tools: Record<string, unknown>[] | undefined,
   map: Record<string, string>,
   audit: AuditLogger,
@@ -61,7 +61,8 @@ export async function runInputGuard(
   };
 
   for (const message of messages) collect(message.content);
-  if (systemPrompt) collect(systemPrompt);
+  const systemText = resolveSystemPromptText(systemPrompt);
+  if (systemText) collect(systemText);
   if (tools?.length) collect(JSON.stringify(tools));
 
   if (allFound.length === 0) {
@@ -107,13 +108,31 @@ export async function runInputGuard(
   });
 
   let obfuscatedSystem = systemPrompt;
-  if (systemPrompt) {
+  if (typeof systemPrompt === 'string') {
     const result = obfuscateSecrets(systemPrompt, currentMap, patterns);
     currentMap = result.map;
     for (const key of Object.keys(currentMap)) {
       if (!(key in map) && !newPlaceholders.includes(key)) newPlaceholders.push(key);
     }
     obfuscatedSystem = result.text;
+  } else if (systemPrompt) {
+    // AD-070 §2.2: payload — обфусцируем и text, и stablePrefix одной картой,
+    // чтобы граница stable-префикса не поехала (обфускация детерминирована).
+    const textResult = obfuscateSecrets(systemPrompt.text, currentMap, patterns);
+    currentMap = textResult.map;
+    for (const key of Object.keys(currentMap)) {
+      if (!(key in map) && !newPlaceholders.includes(key)) newPlaceholders.push(key);
+    }
+    let stablePrefix = systemPrompt.stablePrefix;
+    if (stablePrefix) {
+      const prefixResult = obfuscateSecrets(stablePrefix, currentMap, patterns);
+      currentMap = prefixResult.map;
+      for (const key of Object.keys(currentMap)) {
+        if (!(key in map) && !newPlaceholders.includes(key)) newPlaceholders.push(key);
+      }
+      stablePrefix = prefixResult.text;
+    }
+    obfuscatedSystem = { ...systemPrompt, text: textResult.text, stablePrefix };
   }
 
   let obfuscatedTools = tools;

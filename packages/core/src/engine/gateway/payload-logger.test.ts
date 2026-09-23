@@ -1,6 +1,6 @@
 /**
- * Юнит-тесты PayloadLogger/writePayloadLog/readPayloadLog: append-only JSONL
- * полного лога запросов/ответов LLM. Запись не должна ронять запрос.
+ * Юнит-тесты writePayloadLog/readPayloadLog: append-only JSONL полного лога
+ * запросов/ответов LLM. Запись не должна ронять запрос.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -9,7 +9,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  PayloadLogger,
   writePayloadLog,
   readPayloadLog,
   type LlmPayloadEntry,
@@ -38,7 +37,7 @@ function makeEntry(ts: string, sessionId: string): LlmPayloadEntry {
   };
 }
 
-describe('PayloadLogger', () => {
+describe('payload-logger', () => {
   let dir: string;
 
   beforeEach(async () => {
@@ -51,10 +50,10 @@ describe('PayloadLogger', () => {
 
   it('append пишет JSON-строку в файл (создаёт директорию)', async () => {
     const logPath = join(dir, 'audit', 'llm-payloads.jsonl');
-    const logger = new PayloadLogger(logPath);
+    const append = (entry: LlmPayloadEntry) => writePayloadLog(logPath, entry);
     const entry = makeEntry('2026-01-01T00:00:00Z', 's1');
 
-    await logger.append(entry);
+    await append(entry);
 
     const content = await readFile(logPath, 'utf8');
     expect(content.trim()).toBe(JSON.stringify(entry));
@@ -62,11 +61,11 @@ describe('PayloadLogger', () => {
 
   it('каждая запись на новой строке (append-only)', async () => {
     const logPath = join(dir, 'payloads.jsonl');
-    const logger = new PayloadLogger(logPath);
+    const append = (entry: LlmPayloadEntry) => writePayloadLog(logPath, entry);
 
-    await logger.append(makeEntry('1', 's1'));
-    await logger.append(makeEntry('2', 's2'));
-    await logger.append(makeEntry('3', 's1'));
+    await append(makeEntry('1', 's1'));
+    await append(makeEntry('2', 's2'));
+    await append(makeEntry('3', 's1'));
 
     const content = await readFile(logPath, 'utf8');
     const lines = content.split('\n').filter((l) => l.trim().length > 0);
@@ -84,11 +83,11 @@ describe('PayloadLogger', () => {
 
   it('readPayloadLog читает записи и фильтрует по sessionId', async () => {
     const logPath = join(dir, 'payloads.jsonl');
-    const logger = new PayloadLogger(logPath);
+    const append = (entry: LlmPayloadEntry) => writePayloadLog(logPath, entry);
 
-    await logger.append(makeEntry('1', 's1'));
-    await logger.append(makeEntry('2', 's2'));
-    await logger.append(makeEntry('3', 's1'));
+    await append(makeEntry('1', 's1'));
+    await append(makeEntry('2', 's2'));
+    await append(makeEntry('3', 's1'));
 
     const all = await readPayloadLog(logPath);
     expect(all.total).toBe(3);
@@ -101,11 +100,11 @@ describe('PayloadLogger', () => {
 
   it('readPayloadLog поддерживает limit (последние N записей, total до лимита)', async () => {
     const logPath = join(dir, 'payloads.jsonl');
-    const logger = new PayloadLogger(logPath);
+    const append = (entry: LlmPayloadEntry) => writePayloadLog(logPath, entry);
 
-    await logger.append(makeEntry('1', 's1'));
-    await logger.append(makeEntry('2', 's2'));
-    await logger.append(makeEntry('3', 's3'));
+    await append(makeEntry('1', 's1'));
+    await append(makeEntry('2', 's2'));
+    await append(makeEntry('3', 's3'));
 
     const res = await readPayloadLog(logPath, { limit: 2 });
     expect(res.total).toBe(3);
@@ -116,10 +115,10 @@ describe('PayloadLogger', () => {
 
   it('readPayloadLog пропускает повреждённые строки', async () => {
     const logPath = join(dir, 'payloads.jsonl');
-    const logger = new PayloadLogger(logPath);
-    await logger.append(makeEntry('1', 's1'));
+    const append = (entry: LlmPayloadEntry) => writePayloadLog(logPath, entry);
+    await append(makeEntry('1', 's1'));
     await appendFile(logPath, 'not-json-garbage\n', 'utf8');
-    await logger.append(makeEntry('2', 's2'));
+    await append(makeEntry('2', 's2'));
 
     const res = await readPayloadLog(logPath);
     expect(res.total).toBe(2);

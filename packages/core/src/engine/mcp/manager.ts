@@ -1,9 +1,10 @@
 import { z } from 'zod';
-import type { McpServerConfig, ToolDefinition } from '@itphx/synth-shared';
+import type { McpServerConfig, McpNetworkPolicy, McpRegistryAuthor, McpRegistryOrigin, McpRegistryTrust, ToolDefinition } from '@itphx/synth-shared';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolContext, ToolResult } from '@itphx/synth-shared';
 import { McpClient } from './client.js';
+import { evaluateMcpNetworkAccess, isHttpMcpConfig } from './network-policy.js';
 import { info, warning } from '../../logger.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { ObfuscationMapStore } from '../gateway/obfuscation-map-store.js';
@@ -21,6 +22,19 @@ interface ServerEntry {
 export class McpManager {
   private _servers = new Map<string, ServerEntry>();
   private _config: Record<string, McpServerConfig> = {};
+  /** AD-071 §2.3.1: политика сетевого доступа HTTP-серверов (если задана). */
+  private _networkPolicy: McpNetworkPolicy | undefined;
+  /** AD-071 §2.5: origin серверов; сетевая политика применяется только к `user`. */
+  private _serverOrigins = new Map<string, McpRegistryOrigin>();
+  /** AD-071 §2.5: trust записей реестра (builtin|community) для отображения. */
+  private _serverTrusts = new Map<string, McpRegistryTrust>();
+  /** AD-071 §2.5: авторы записей реестра (имя → автор) для отображения. */
+  private _serverAuthors = new Map<string, McpRegistryAuthor>();
+  /**
+   * AD-071 §2.4: instance-серверы, включённые по умолчанию (`enabledByDefault`).
+   * `null` — явный набор не задан, берётся из `config.enabledByDefault`.
+   */
+  private _defaultServers: Set<string> | null = null;
 
   setConfig(servers: Record<string, McpServerConfig>): void {
     this._config = servers;
@@ -28,6 +42,70 @@ export class McpManager {
 
   getConfig(): Record<string, McpServerConfig> {
     return this._config;
+  }
+
+  /** AD-071 §2.3.1: задать политику сетевого доступа (undefined — не проверять). */
+  setNetworkPolicy(policy: McpNetworkPolicy | undefined): void {
+    this._networkPolicy = policy;
+  }
+
+  /** AD-071 §2.5: origin серверов (instance — доверенные, user — community). */
+  setServerOrigins(origins: Record<string, McpRegistryOrigin>): void {
+    this._serverOrigins = new Map(Object.entries(origins));
+  }
+
+  /** AD-071 §2.5: origin одного сервера (по умолчанию `instance` — config). */
+  getServerOrigin(name: string): McpRegistryOrigin {
+    return this._serverOrigins.get(name) ?? 'instance';
+  }
+
+  /** AD-071 §2.5: trust записей реестра (по умолчанию `builtin`). */
+  setServerTrusts(trusts: Record<string, McpRegistryTrust>): void {
+    this._serverTrusts = new Map(Object.entries(trusts));
+  }
+
+  getServerTrust(name: string): McpRegistryTrust {
+    return this._serverTrusts.get(name) ?? 'builtin';
+  }
+
+  /** AD-071 §2.5: авторы записей реестра (для таблицы «MCP» в статистике). */
+  setServerAuthors(authors: Record<string, McpRegistryAuthor>): void {
+    this._serverAuthors = new Map(Object.entries(authors));
+  }
+
+  /** AD-071 §2.5: автор сервера (null — instance/config без автора). */
+  getServerAuthor(name: string): McpRegistryAuthor | null {
+    return this._serverAuthors.get(name) ?? null;
+  }
+
+  /**
+   * AD-071 §2.4: instance default-on набор (`enabledByDefault` из реестра).
+   * Если не задан явно — деривируется из `config.enabledByDefault`.
+   */
+  setDefaultServers(names: string[]): void {
+    this._defaultServers = new Set(names);
+  }
+
+  isDefaultServer(name: string): boolean {
+    if (this._defaultServers) return this._defaultServers.has(name);
+    return this._config[name]?.enabledByDefault === true;
+  }
+
+  /**
+   * AD-071 §2.3.1: проверка пользовательского (`origin: 'user'`) HTTP-сервера по
+   * сетевой политике перед подключением. `stdio` и instance-серверы не
+   * проверяются (RCE-риск и приватные сети инстанса регулируются иначе).
+   */
+  private async _assertNetworkAllowed(name: string, config: McpServerConfig): Promise<void> {
+    if (!this._networkPolicy || !isHttpMcpConfig(config)) return;
+    if (this._serverOrigins.get(name) !== 'user') return;
+    if (!config.url) {
+      throw new Error(`MCP-сервер "${name}" (${config.type}) не содержит url`);
+    }
+    const result = await evaluateMcpNetworkAccess(config.url, this._networkPolicy);
+    if (!result.allowed) {
+      throw new Error(`MCP-сервер "${name}" заблокирован сетевой политикой: ${result.reason}`);
+    }
   }
 
   getConfiguredServers(): Array<{ name: string; config: McpServerConfig; connected: boolean }> {
@@ -52,6 +130,32 @@ export class McpManager {
     return entry.client.tools;
   }
 
+  /** AD-071 §2.2: `instructions` подключённого сервера (undefined, если нет). */
+  getServerInstructions(name: string): string | undefined {
+    return this._servers.get(name)?.client.instructions;
+  }
+
+  /** AD-071 §2.2: описание сервера из конфига (заполняется человеком). */
+  getServerDescription(name: string): string | undefined {
+    return this._config[name]?.description;
+  }
+
+  /**
+   * AD-071 §2.2: статус подключения сервера для volatile-блока `mcp.status`.
+   * `disabled` (opt-out/конфиг) определяется вызывающей стороной — менеджер
+   * знает только транспортное состояние. Возвращает:
+   * - `circuit-open` — сервер заблокирован circuit breaker'ом;
+   * - `connected` — клиент подключён;
+   * - `error` — сервер известен, но не подключён (ошибка/отключён);
+   * - `disconnected` — сервер не создавался (ещё ни разу не подключался).
+   */
+  getServerStatus(name: string): 'connected' | 'error' | 'circuit-open' | 'disconnected' {
+    const entry = this._servers.get(name);
+    if (!entry) return 'disconnected';
+    if (this._isCircuitOpen(name)) return 'circuit-open';
+    return entry.client.isConnected ? 'connected' : 'error';
+  }
+
   async connectServer(name: string): Promise<void> {
     const config = this._config[name];
     if (!config) {
@@ -62,6 +166,8 @@ export class McpManager {
     if (existing?.client.isConnected) {
       return;
     }
+
+    await this._assertNetworkAllowed(name, config);
 
     const client = new McpClient(name, config);
 
@@ -96,6 +202,8 @@ export class McpManager {
     if (!config) {
       throw new Error(`MCP-сервер "${name}" не настроен`);
     }
+
+    await this._assertNetworkAllowed(name, config);
 
     const client = new McpClient(name, config);
     try {
@@ -134,8 +242,15 @@ export class McpManager {
     for (const tool of client.tools) {
       const fullName = prefixedName(tool.name);
 
-      // Проверка на коллизию с built-in инструментами
-      if (toolRegistry.get(fullName)) {
+      const existing = toolRegistry.get(fullName);
+      if (existing) {
+        // AD-071 §2.1: инструмент этого же сервера уже зарегистрирован (ленивая
+        // регистрация при первой активации) — повторный вызов идемпотентен, не
+        // теряем имя для deregister. Коллизия с чужим тулом — пропускаем.
+        if ((existing.source ?? 'builtin') === 'mcp' && existing.mcpServer === serverName) {
+          registeredNames.push(fullName);
+          continue;
+        }
         warning(`MCP`, `Инструмент "${fullName}" конфликтует с существующим — пропускаем`);
         continue;
       }
@@ -145,6 +260,8 @@ export class McpManager {
         description: `[MCP:${serverName}] ${tool.description}`,
         parameters: z.object({}).passthrough(),
         capabilities: [ToolCapability.MCP],
+        source: 'mcp',
+        mcpServer: serverName,
         execute: async (params: unknown, ctx: ToolContext): Promise<ToolResult> => {
           const args = params as Record<string, unknown>;
           // AD-036: деобфускация в точке потребления — аргументы могут содержать ⟦SYNTH_SECRET_N⟧
@@ -230,6 +347,13 @@ export class McpManager {
       entry.errorCount++;
       entry.lastErrorTime = Date.now();
     }
+  }
+
+  /** Чистая проверка «сервер сейчас заблокирован» (без сброса счётчика и логов). */
+  private _isCircuitOpen(serverName: string): boolean {
+    const entry = this._servers.get(serverName);
+    if (!entry || entry.errorCount < CIRCUIT_BREAKER_THRESHOLD) return false;
+    return Date.now() - entry.lastErrorTime < CIRCUIT_BREAKER_COOLDOWN_MS;
   }
 
   private _isCircuitBroken(serverName: string): boolean {

@@ -1,5 +1,8 @@
 import type { ToolCapability } from './tools.js';
 import type { PermissionConfig, McpServerToolSettings } from './permission.js';
+// Type-only импорт: конфиг-тип MCP нужен для записи реестра (AD-071 §2.5).
+// Runtime-цикла нет — импорт стирается при компиляции.
+import type { McpServerConfig } from '../config/types.js';
 
 // Core enums
 export enum MessageRole {
@@ -58,6 +61,250 @@ export interface MessageI18n {
 // --- SessionOrigin ---
 export type SessionOrigin = 'user' | 'fork' | 'subagent';
 
+// --- Prompt state (AD-070 §2.4) ---
+/** Состояние одного блока системного промпта (хэш/размер для диагностики). */
+export interface PromptBlockState {
+  key: string;
+  hash: string;
+  chars: number;
+}
+
+/**
+ * AD-070 §2.4: состояние системного промпта per-agent. Хранится в сессии
+ * (`Session.promptStates`) и пишется только при смене generation.
+ */
+export interface PromptState {
+  generation: number;
+  /** sha256(stablePrefix). */
+  staticPrefixHash: string;
+  /** Закреплённые байты кэшируемого префикса. */
+  staticPrefix: string;
+  /** sha256(полного system). */
+  systemHash: string;
+  blocks: PromptBlockState[];
+  reason: 'init' | 'compaction' | 'generation-change' | 'override' | 'agent-change';
+  updatedAt: string;
+}
+
+/** AD-070 §2.4: компактная мета промпта, кладётся в assistant-сообщение. */
+export interface PromptMeta {
+  /** agentKey, к которому относится ход (agentRole или `__default__`). */
+  agentRole?: string;
+  generation: number;
+  /** Предсказание по staticPrefixHash. */
+  expected: 'hit' | 'miss';
+  /** Фактический cacheRead из usage. */
+  cachedTokens: number;
+  /** expected подтверждён/опровергнут фактом. */
+  validated: boolean;
+}
+
+// --- Prompt manifest (AD-070 §2.5) ---
+/** Тир консистентности блока системного промпта (AD-070 §2.1). */
+export type PromptTier = 'stable' | 'context' | 'volatile';
+
+/** Статус блока в манифесте промпта. */
+export type PromptManifestStatus = 'loaded' | 'truncated' | 'empty' | 'blocked' | 'suppressed';
+
+/** AD-070 §2.5: запись манифеста — источник системного промпта. */
+export interface PromptManifestEntry {
+  key: string;
+  label: string;
+  tier: PromptTier;
+  /** Порядок блока внутри тира (реальный порядок отправки, AD-070 §2.5). */
+  order?: number;
+  chars: number;
+  /** Эвристика: Math.ceil(chars / 4). */
+  estTokens: number;
+  status: PromptManifestStatus;
+  provenance?: string;
+  /**
+   * Источник записи: `system` — блок системного промпта, `tools` — слой
+   * встроенных инструментов (stable, AD-070 §2.5), `mcp.tools` — слой
+   * MCP-инструментов (volatile, AD-071 §2.1). Слои инструментов не входят в
+   * system-текст, но отражаются в манифесте и размерах.
+   */
+  source?: 'system' | 'tools' | 'mcp.tools';
+}
+
+/** AD-070 §2.5: манифест состава системного промпта (для API/UI/тестов). */
+export interface PromptManifest {
+  generation?: number;
+  totalChars: number;
+  estTokens: number;
+  staticPrefixChars: number;
+  /**
+   * AD-071 §2.3: фактически применённая политика **встроенных** инструментов
+   * (`auto` уже разрешён в `consistency`/`available`) — видно, какая политика
+   * сработала.
+   */
+  toolsPolicy?: Exclude<ToolsPolicy, 'auto'>;
+  /**
+   * AD-071 §2.3: фактически применённая политика **MCP**-инструментов
+   * (`auto` уже разрешён в `consistency`/`available`). Независима от
+   * `toolsPolicy`.
+   */
+  mcpPolicy?: Exclude<ToolsPolicy, 'auto'>;
+  /**
+   * AD-071 §2.6: chars-per-token, применённый к `estTokens` (калибровка по
+   * фактическому usage; 4 — без калибровки). `estTokens` — оценка, не факт.
+   */
+  ratio?: number;
+  entries: PromptManifestEntry[];
+}
+
+// --- Оценка токенов по символам (AD-071 §2.6) ---
+
+/** Дефолтный chars-per-token, если калибровки для модели нет. */
+export const DEFAULT_CHARS_PER_TOKEN = 4;
+/**
+ * Нижняя граница разумного chars-per-token (аномальные семплы отбрасываются).
+ * CJK/эффективные BPE дают ~1–2 символа на токен, поэтому допускаем 1.5.
+ */
+export const MIN_CHARS_PER_TOKEN = 1.5;
+/**
+ * Верхняя граница разумного chars-per-token. Берётся с запасом: «эффективные»
+ * токенизаторы (например, `omn.qwen3.8:27b`) дают ratio ≈ 11.7.
+ */
+export const MAX_CHARS_PER_TOKEN = 16;
+/** Минимальный `usage.inputTokens` для калибровки — меньшие значения шумные. */
+export const MIN_CALIBRATION_INPUT_TOKENS = 500;
+
+/**
+ * AD-071 §2.6: строка таблицы «Встроенные инструменты» в панели статистики.
+ * Отдаётся `GET /sessions/:id/prompt` полем `toolsDetail` (аддитивно).
+ */
+export interface PromptToolDetail {
+  name: string;
+  capabilities: string[];
+  /** Доступен ли тул текущему режиму/роли (`computeToolAvailability`). */
+  available: boolean;
+  /**
+   * Причина недоступности: `mode` (переключить режим), `role` (делегировать),
+   * `admin_disabled` (жёстко отключён администратором через `tools.disabled`).
+   */
+  reason?: 'mode' | 'role' | 'admin_disabled';
+  /** AD-071 §2.1: источник инструмента (`built-in` — слой `tools`). */
+  source: 'built-in';
+  /** AD-071 §2.6: длина `JSON.stringify` LLM-определения тула (как слой `tools`). */
+  chars?: number;
+  /** AD-071 §2.6: оценка токенов (`ceil(chars / ratio)`) — значение оценочное. */
+  estTokens?: number;
+  /** AD-071 §2.6: chars-per-token, применённый к оценке (4 — без калибровки). */
+  ratio?: number;
+  /** AD-071 §2.6: тул жёстко отключён администратором (`tools.disabled`). */
+  adminDisabled?: boolean;
+}
+
+/** AD-071 §2.6: строка тула MCP-сервера с оценкой токенов. */
+export interface McpToolDetail {
+  name: string;
+  /** Длина `JSON.stringify` LLM-определения тула (имя с префиксом сервера). */
+  chars: number;
+  estTokens: number;
+  ratio: number;
+  /** AD-071 §2.6: тул отключён администратором (`tools.disabled`). */
+  adminDisabled?: boolean;
+}
+
+// --- Prompt history (AD-070 §2.5, слой messages) ---
+/** AD-070 §2.5: state-сообщения истории, сгруппированные по типу. */
+export interface PromptHistoryStateMessage {
+  type: string;
+  count: number;
+  chars: number;
+  estTokens: number;
+}
+
+/** AD-070 §2.5: состав слоя истории (`messages`), зеркалит реальную отправку. */
+export interface PromptHistoryInfo {
+  /** Реально отправляемые сообщения (после фильтрации), суммарно. */
+  messages: { count: number; chars: number; estTokens: number };
+  /** Chronological state-сообщения (mode_change/agent_switch/plan_updated/todos_updated/…), сгруппированы по type. */
+  stateMessages: PromptHistoryStateMessage[];
+  /** Что НЕ уходит в LLM. */
+  excluded: { disabled: number; hidden: number; info: number };
+  /** Мультимодальные части (не text). */
+  attachments: { count: number; chars: number };
+  /** Число плейсхолдеров секретов ⟦SYNTH_SECRET_N⟧ в отправляемых сообщениях (AD-036). */
+  secretPlaceholders: number;
+}
+
+// --- Session statistics (AD-070 §2.6) ---
+/**
+ * Статистика по агенту в рамках сессии (`GET /sessions/:id/stats`).
+ * Итоги (`input_tokens`/`output_tokens`/`cache_*`/`reasoning_tokens`/`cost_usd`)
+ * включают usage/cost сабагентов (own + все потомки); `subagent_*` — детализация
+ * только по дочерним сессиям (tool `task`), инициированным агентом.
+ */
+export interface SessionAgentStats {
+  agent_role: string;
+  messages: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  /**
+   * Номинальная сумма всех валют (обратная совместимость). Мультивалютная
+   * разбивка — в `cost_by_currency`; здесь значение равно её сумме.
+   */
+  cost_usd: number;
+  /** Разбивка стоимости по валютам (код валюты → сумма, напр. `{ USD: 0.5, RUB: 42 }`). */
+  cost_by_currency?: Record<string, number>;
+  /** cache_read / input (0 при input = 0). */
+  cache_hit_rate: number;
+  duration_ms: number;
+  /** output_tokens / (duration_ms / 1000); 0 при отсутствии длительности. */
+  output_tps: number;
+  subagent_sessions: number;
+  subagent_tokens: number;
+}
+
+/** Статистика по автору user-сообщений (атрибуция usage последующего ответа). */
+export interface SessionUserStats {
+  author: string;
+  /** Display name профиля автора; при отсутствии профиля/имени — не задаётся. */
+  display_name?: string;
+  messages: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  cost_usd: number;
+  /** Разбивка стоимости по валютам (код валюты → сумма). */
+  cost_by_currency?: Record<string, number>;
+  cache_hit_rate: number;
+}
+
+/**
+ * Сводка по сабагентам сессии (рекурсивно, tool `task`). Отдельный блок:
+ * `SessionAgentStats` уже включает usage детей в свои итоги, а здесь — только
+ * суммарная детализация по всем дочерним сессиям (в контекстное окно родителя
+ * их usage не входит, AD-070 §2.6).
+ */
+export interface SessionSubagentStats {
+  sessions: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  cost_usd: number;
+  /** Разбивка стоимости по валютам (код валюты → сумма). */
+  cost_by_currency?: Record<string, number>;
+}
+
+/** Ответ `GET /api/v2/sessions/:id/stats`. */
+export interface SessionStats {
+  session_id: string;
+  agents: SessionAgentStats[];
+  users: SessionUserStats[];
+  /** Суммарная статистика дочерних сессий сабагентов (отдельно от ответа). */
+  subagents: SessionSubagentStats;
+}
+
 // --- Message ---
 export interface Message {
   id: string;
@@ -83,6 +330,8 @@ export interface Message {
   author?: string;
   agentRole?: string;
   metadata?: Record<string, unknown>;
+  /** AD-070 §2.4: предсказание/валидация prompt-cache для этого хода. */
+  promptMeta?: PromptMeta;
   summaryOf?: number[];
   qa_pass?: boolean;
   qa_reason?: string;
@@ -99,6 +348,139 @@ export type PlanMode = (typeof PLAN_MODES)[number];
 
 export const SESSION_MODES = ['plan', 'act', 'yolo'] as const;
 export type SessionMode = (typeof SESSION_MODES)[number];
+
+/**
+ * AD-071 §2.3: политика включения инструментов в запрос.
+ * - `consistency` — в запрос идут все определения, недоступность кодируется
+ *   permission-слоем (`unavailable(mode|role)`); приоритет — валидность кэша;
+ * - `available` — в запрос идут только доступные агенту/режиму/роли тулы;
+ *   приоритет — экономия контекстного окна;
+ * - `auto` — выбор по провайдеру/модели: локальные → `available`, облачные → `consistency`.
+ */
+export const TOOLS_POLICIES = ['consistency', 'available', 'auto'] as const;
+export type ToolsPolicy = (typeof TOOLS_POLICIES)[number];
+
+// --- MCP: реестр серверов и сетевой доступ (AD-071 §2.3.1/§2.5) ---
+
+/** Версия схемы записи реестра MCP — для будущей миграции (AD-032). */
+export const MCP_REGISTRY_SCHEMA_VERSION = 1;
+
+export const MCP_REGISTRY_ORIGINS = ['instance', 'user'] as const;
+export type McpRegistryOrigin = (typeof MCP_REGISTRY_ORIGINS)[number];
+
+export const MCP_REGISTRY_TRUST_LEVELS = ['builtin', 'community'] as const;
+export type McpRegistryTrust = (typeof MCP_REGISTRY_TRUST_LEVELS)[number];
+
+/** Автор записи реестра (кто добавил сервер). */
+export interface McpRegistryAuthor {
+  userId: string;
+  username: string;
+}
+
+/**
+ * AD-071 §2.5: плоская запись единого реестра MCP-серверов.
+ *
+ * Логическая модель сразу проектируется под PostgreSQL (AD-032): стабильный
+ * `id`, `schemaVersion`, timestamps; вложенность ограничена `config`/`author`
+ * (раскладываются в JSONB/отдельные колонки). Instance- и пользовательские
+ * записи различаются полем `origin`, не отдельными реестрами.
+ */
+export interface McpRegistryEntry {
+  schemaVersion: number;
+  id: string;
+  name: string;
+  config: McpServerConfig;
+  origin: McpRegistryOrigin;
+  author: McpRegistryAuthor | null;
+  trust: McpRegistryTrust;
+  enabledByDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const MCP_NETWORK_POLICY_MODES = ['allow', 'deny'] as const;
+export type McpNetworkPolicyMode = (typeof MCP_NETWORK_POLICY_MODES)[number];
+
+/**
+ * AD-071 §2.3.1: политика сетевого доступа пользовательских HTTP MCP-серверов.
+ * - `deny` — перечисленные адреса/CIDR запрещены (дефолт: приватные диапазоны);
+ * - `allow` — разрешены только перечисленные адреса/CIDR (всё прочее запрещено).
+ */
+export interface McpNetworkPolicy {
+  mode: McpNetworkPolicyMode;
+  list: string[];
+}
+
+/** Приватные/служебные диапазоны, запрещённые по умолчанию (SSRF/egress). */
+export const DEFAULT_MCP_PRIVATE_CIDRS = [
+  '10.0.0.0/8',
+  '172.16.0.0/12',
+  '192.168.0.0/16',
+  '127.0.0.0/8',
+  '169.254.0.0/16',
+  '::1/128',
+  'fc00::/7',
+  'fe80::/10',
+] as const;
+
+/** Дефолтная политика: deny приватных диапазонов (AD-071 §2.3.1). */
+export const DEFAULT_MCP_NETWORK_POLICY: McpNetworkPolicy = {
+  mode: 'deny',
+  list: [...DEFAULT_MCP_PRIVATE_CIDRS],
+};
+
+// --- MCP: уровни/скоуп и эффективный набор (AD-071 §2.2/§2.4) ---
+
+export const MCP_SERVER_LEVELS = ['system', 'project', 'session'] as const;
+export type McpServerLevel = (typeof MCP_SERVER_LEVELS)[number];
+
+/**
+ * AD-071 §2.2: почему сервер отключён в эффективном наборе сессии:
+ * - `config` — выключен в конфиге записи (`config.enabled === false`);
+ * - `session_optout` — явный opt-out в сессии (`mcpDisabledServers`);
+ * - `project_disabled` — проектный сервер не включён в проекте (`project.defaultOn`);
+ * - `not_default` — нет `enabledByDefault` и не включён явно.
+ */
+export const MCP_DISABLED_REASONS = [
+  'session_optout',
+  'project_disabled',
+  'not_default',
+  'config',
+] as const;
+export type McpDisabledReason = (typeof MCP_DISABLED_REASONS)[number];
+
+/**
+ * AD-071 §2.4: эффективное состояние MCP-сервера для сессии. Отдаётся API
+ * `GET /api/v2/sessions/:id/mcp`; отключённые серверы не исчезают из выдачи.
+ */
+export interface McpServerEffective {
+  name: string;
+  level: McpServerLevel;
+  enabled: boolean;
+  /** Причина отключения (только при `enabled === false`). */
+  reason?: McpDisabledReason;
+  connected?: boolean;
+  origin: McpRegistryOrigin;
+  trust: McpRegistryTrust;
+  /**
+   * AD-071 §2.2/§2.6: транспортный статус для таблицы «MCP» в статистике:
+   * `disabled` — выключен в эффективном наборе, `connected`/`error`/`circuit-open`
+   * — состояние подключения активного сервера.
+   */
+  status?: 'connected' | 'error' | 'disabled' | 'circuit-open';
+  /** AD-071 §2.5/§2.6: автор записи реестра (null для instance/config-серверов). */
+  author?: McpRegistryAuthor | null;
+  /** AD-071 §2.2/§2.6: имена инструментов сервера (пусто, если не подключён). */
+  tools?: string[];
+  /** AD-071 §2.6: суммарные символы JSON-определений тулов сервера. */
+  chars?: number;
+  /** AD-071 §2.6: оценка токенов сервера (`ceil(chars / ratio)`). */
+  estTokens?: number;
+  /** AD-071 §2.6: chars-per-token, применённый к оценке (4 — без калибровки). */
+  ratio?: number;
+  /** AD-071 §2.6: пер-тульные chars/estTokens/ratio + признак admin_disabled. */
+  toolDetails?: McpToolDetail[];
+}
 
 export const TODO_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'] as const;
 export type TodoStatus = (typeof TODO_STATUSES)[number];
@@ -128,7 +510,13 @@ export interface SessionSettings {
   debugEnabled: boolean;
   streamEnabled: boolean;
   agentRole?: string;
+  /** AD-071 §2.4: явно включённые в сессии серверы (session level). */
   mcpServers?: string[];
+  /**
+   * AD-071 §2.4: явные opt-out серверы сессии (включая системные). Вычитаются
+   * из эффективного набора (`(instance.defaultOn ∪ project.defaultOn ∪ enabled) − disabled`).
+   */
+  mcpDisabledServers?: string[];
   contextOptimization: 'none' | 'sliding_window' | 'summarization' | 'sticky_notes';
   slidingWindowMode: 'messages' | 'tokens';
   slidingWindowMessageLimit: number;
@@ -186,6 +574,19 @@ export interface SessionSettings {
   permission?: PermissionConfig;
   /** Доступность MCP-инструментов по режимам plan/act (serverName → настройки). */
   mcpToolSettings?: Record<string, McpServerToolSettings>;
+  // === Инструменты (AD-071 §2.3) ===
+  /**
+   * Per-session override политики включения **встроенных** инструментов. Если
+   * задан — перекрывает глобальную `tools.policy` из config.yaml. `auto`
+   * резолвится по провайдеру/модели текущего запроса.
+   */
+  toolsPolicy?: ToolsPolicy;
+  /**
+   * Per-session override политики включения **MCP**-инструментов. Если задан —
+   * перекрывает глобальную `mcp.policy` из config.yaml. Независима от
+   * `toolsPolicy`; `auto` резолвится по провайдеру/модели текущего запроса.
+   */
+  mcpPolicy?: ToolsPolicy;
   // === Plan/Act (AD-025, AD-028) ===
   /** Строгость цикла Plan→Build: auto — модель сама решает, strict — план обязателен, off — планирование отключено. */
   planMode?: PlanMode;
@@ -246,6 +647,11 @@ export interface Session {
   mode?: SessionMode;
   /** Todo-список сессии (тул todo_write), как в OpenCode. */
   todos?: TodoItem[];
+  /**
+   * AD-070 §2.4/§2.7: состояние промпта per-agent (ключ — agentRole или
+   * `__default__`). Пишется только при смене generation.
+   */
+  promptStates?: Record<string, PromptState>;
   /** Карта обфускации LLM Gateway (AD-036). Живёт всю сессию независимо от глобального тумблера. */
   obfuscationMap?: Record<string, string>;
   userId?: string;
@@ -275,6 +681,11 @@ export interface Session {
   outputCost: number;
   cacheReadCost: number;
   cacheWriteCost: number;
+  /**
+   * AD-070 §2.3: доля кэшированных входных токенов сессии —
+   * `cacheReadTokens / inputTokens` (0 при `inputTokens === 0`).
+   */
+  cacheHitRate?: number;
 }
 
 // --- Git ---
@@ -331,6 +742,16 @@ export interface ProjectLogEntry {
   author?: string;
 }
 
+/**
+ * AD-071 §2.4/§2.5: проектный скоуп MCP — ссылки на записи единого реестра по
+ * имени. `enabled` — доступные проекту серверы (гейт owner/lead),
+ * `defaultOn` — включённые по умолчанию для всех сессий проекта.
+ */
+export interface ProjectMcpSettings {
+  enabled: string[];
+  defaultOn: string[];
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -343,6 +764,8 @@ export interface Project {
   color?: string;
   workspace?: string;
   repos?: GitRepoConfig[];
+  /** AD-071 §2.4: проектный скоуп MCP (owner/lead). */
+  mcp?: ProjectMcpSettings;
   statusMessages: StatusMessage[];
   /** Kanban-план проекта (AD-039). Владеет проектом, а не сессией. */
   plan?: ProjectPlan;
@@ -450,6 +873,58 @@ export interface AgentDefinition {
   description?: string;
 }
 
+// --- Currency ---
+/** Валюта цен моделей. Отсутствует у модели → валюта провайдера → USD. */
+export const CURRENCIES = ['RUB', 'USD', 'CNY'] as const;
+export type Currency = (typeof CURRENCIES)[number];
+
+/** Проверка, что значение — допустимая валюта (RUB/USD/CNY). */
+export function isCurrency(value: unknown): value is Currency {
+  return typeof value === 'string' && (CURRENCIES as readonly string[]).includes(value);
+}
+
+/** Ленивый разбор валюты: неизвестное значение → undefined. */
+export function parseCurrency(value: unknown): Currency | undefined {
+  return isCurrency(value) ? value : undefined;
+}
+
+/** Результат строгого разбора поля `currency` из тела запроса. */
+export type CurrencyInputResult =
+  | { ok: true; currency: Currency | undefined }
+  | { ok: false };
+
+/**
+ * Строгий разбор поля `currency`:
+ * - `undefined` — поле не передано (сохранить existing);
+ * - `null`/`''` — явно очистить (undefined);
+ * - валидная валюта — принять;
+ * - иная непустая строка — ошибка (`ok: false`), чтобы не терять значение молча.
+ */
+export function parseCurrencyInput(raw: unknown, existing?: Currency): CurrencyInputResult {
+  if (raw === null || raw === '') return { ok: true, currency: undefined };
+  if (raw === undefined) return { ok: true, currency: existing };
+  return isCurrency(raw) ? { ok: true, currency: raw } : { ok: false };
+}
+
+/** Присутствуют ли в теле запроса ценовые поля (snake_case или camelCase). */
+export function hasPriceInput(body: unknown): boolean {
+  if (!body || typeof body !== 'object') return false;
+  const b = body as Record<string, unknown>;
+  return 'input_price' in b || 'inputPrice' in b
+    || 'output_price' in b || 'outputPrice' in b
+    || 'cache_read_price' in b || 'cacheReadPrice' in b
+    || 'cache_write_price' in b || 'cacheWritePrice' in b;
+}
+
+/**
+ * AD-036/AD-072: дефолт rate limit LLM Gateway. Единый источник для Zod-схемы
+ * конфига и runtime-дефолтов (settings-роуты, fallback'и backend/core).
+ */
+export const DEFAULT_LLM_GATEWAY_RATE_LIMIT = {
+  userPerMinute: 60,
+  providerPerMinute: 120,
+} as const;
+
 // --- Provider ---
 export interface ProviderConfig {
   name: string;
@@ -460,9 +935,17 @@ export interface ProviderConfig {
   timeout?: number;
   enabled?: boolean;
   icon?: string;
+  /** Валюта по умолчанию для моделей провайдера. Отсутствует → USD. */
+  currency?: Currency;
 }
 
 export type ContextSource = 'api' | 'reference' | 'manual' | 'unknown';
+
+/**
+ * Источник цен модели: `api` — получены синхронизацией с провайдером,
+ * `manual` — заданы пользователем вручную, `unknown` — не определены.
+ */
+export type PriceSource = 'api' | 'manual' | 'unknown';
 
 export type ContextCategory = 'user' | 'role' | 'system';
 
@@ -528,6 +1011,10 @@ export interface ModelConfig {
   outputPrice?: number;
   cacheReadPrice?: number;
   cacheWritePrice?: number;
+  /** Откуда взяты цены: `api` — синхронизация, `manual` — ручной ввод. */
+  priceSource?: PriceSource;
+  /** Валюта цен модели; отсутствует → валюта провайдера → USD. */
+  currency?: Currency;
 }
 
 // --- LLM ---
@@ -583,7 +1070,9 @@ export type EventType =
   | 'child.session.updated'
   | 'stream.start'
   | 'stream.chunk'
+  | 'stream.usage'
   | 'stream.done'
+  | 'stream.ended'
   | 'stream.cancelled'
   | 'stream.error'
   | 'stream.retry'

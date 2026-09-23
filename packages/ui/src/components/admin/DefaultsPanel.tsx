@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { api } from '@/lib/api/client'
-import { Icon } from '@/components/icon/Icon'
+import { api, type UserPreferences } from '@/lib/api/client'
 import { useI18n } from '@/lib/i18n'
 import { profileService } from '@/lib/api/profileService'
+import { confirm } from '@/lib/confirm'
 import { THEME_PRESETS } from '@/lib/theme/themes'
 import type { ThemeMode } from '@/types/theme'
 import {
@@ -15,7 +15,12 @@ import {
 } from '@/lib/uiScale'
 import { UiScaleSlider } from '@/components/settings/UiScaleControl'
 import {
-  SettingsCard,
+  SettingsActions,
+  SettingsPanel,
+  SettingsSection,
+  useSettingsDraft,
+} from '@/components/ui/settings'
+import {
   ThemeModeControl,
   ThemeControl,
   LanguageControl,
@@ -34,129 +39,142 @@ const themeToPresetName = (theme: string): string =>
 
 const presetNameToTheme = (name: string): string => name.toLowerCase().replace(/\s+/g, '-')
 
+const toDraft = (defaults: UserPreferences): DefaultsDraft => ({
+  locale: defaults.locale ?? 'ru',
+  themeMode: defaults.themeMode ?? 'system',
+  theme: defaults.theme ?? 'flexoki',
+  uiScaleMobile: normalizeUiScale(defaults.uiScaleMobile ?? UI_SCALE_MOBILE_DEFAULT),
+  uiScaleDesktop: normalizeUiScale(defaults.uiScaleDesktop ?? UI_SCALE_DESKTOP_DEFAULT),
+})
+
 export const DefaultsPanel = () => {
   const { t } = useI18n()
-  const [draft, setDraft] = useState<DefaultsDraft>({
-    locale: 'ru',
-    themeMode: 'system',
-    theme: 'flexoki',
-    uiScaleMobile: UI_SCALE_MOBILE_DEFAULT,
-    uiScaleDesktop: UI_SCALE_DESKTOP_DEFAULT,
+  const [serverDefaults, setServerDefaults] = useState<DefaultsDraft | null>(null)
+
+  const draft = useSettingsDraft<DefaultsDraft>({
+    value: serverDefaults,
+    onSave: async (next) => {
+      await api.updateDefaults({
+        locale: next.locale,
+        themeMode: next.themeMode,
+        theme: next.theme,
+        uiScaleMobile: next.uiScaleMobile,
+        uiScaleDesktop: next.uiScaleDesktop,
+      })
+      setServerScaleDefaults({
+        mobile: next.uiScaleMobile,
+        desktop: next.uiScaleDesktop,
+      })
+      setServerDefaults(next)
+      return next
+    },
   })
-  const [saved, setSaved] = useState(false)
 
   useEffect(() => {
     let alive = true
     void (async () => {
-      const defaults = await profileService.getDefaults()
-      if (!alive) return
-      setDraft({
-        locale: defaults.locale ?? 'ru',
-        themeMode: defaults.themeMode ?? 'system',
-        theme: defaults.theme ?? 'flexoki',
-        uiScaleMobile: normalizeUiScale(defaults.uiScaleMobile ?? UI_SCALE_MOBILE_DEFAULT),
-        uiScaleDesktop: normalizeUiScale(defaults.uiScaleDesktop ?? UI_SCALE_DESKTOP_DEFAULT),
-      })
+      const defaults = toDraft(await profileService.getDefaults())
+      if (alive) setServerDefaults(defaults)
     })()
     return () => {
       alive = false
     }
   }, [])
 
+  const current = draft.draft
+
+  const update = (patch: Partial<DefaultsDraft>) => {
+    draft.update(patch)
+  }
+
   const handleMobileScaleChange = (value: number) => {
-    setDraft((prev) => ({ ...prev, uiScaleMobile: value }))
+    update({ uiScaleMobile: value })
     if (isMobileScaleDevice()) {
       applyUiScale(value)
     }
   }
 
   const handleDesktopScaleChange = (value: number) => {
-    setDraft((prev) => ({ ...prev, uiScaleDesktop: value }))
+    update({ uiScaleDesktop: value })
     if (!isMobileScaleDevice()) {
       applyUiScale(value)
     }
   }
 
-  const handleSave = async () => {
-    try {
-      await api.updateDefaults({
-        locale: draft.locale,
-        themeMode: draft.themeMode,
-        theme: draft.theme,
-        uiScaleMobile: draft.uiScaleMobile,
-        uiScaleDesktop: draft.uiScaleDesktop,
-      })
-      setServerScaleDefaults({
-        mobile: draft.uiScaleMobile,
-        desktop: draft.uiScaleDesktop,
-      })
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
-    } catch {
-      // ignore
-    }
+  const handleReset = async () => {
+    if (!(await confirm({ title: t('admin.defaults.confirmReset'), variant: 'danger' }))) return
+    const defaults = toDraft(await profileService.getDefaults())
+    setServerDefaults(defaults)
+    draft.setDraft(defaults)
+    applyUiScale(isMobileScaleDevice() ? defaults.uiScaleMobile : defaults.uiScaleDesktop)
   }
 
   return (
-    <div className="space-y-6">
-      <header className="max-w-2xl">
-        <h2 className="text-lg font-semibold mb-1">{t('admin.defaults.title')}</h2>
-        <p className="text-sm text-muted-foreground">{t('admin.defaults.description')}</p>
-      </header>
+    <SettingsPanel
+      title={t('admin.defaults.title')}
+      description={t('admin.defaults.description')}
+    >
+      {current == null ? (
+        <div className="bg-background rounded-xl border p-5 animate-pulse space-y-3">
+          <div className="h-4 bg-muted rounded w-48" />
+          <div className="h-4 bg-muted rounded w-32" />
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <SettingsSection className="sm:col-span-2" title={t('settings.appearance.themeMode.label')}>
+              <ThemeModeControl
+                value={current.themeMode}
+                onChange={(mode) => update({ themeMode: mode })}
+                ariaLabel={t('settings.appearance.themeMode.label')}
+              />
+              <ThemeControl
+                label={t('settings.appearance.theme.label')}
+                value={themeToPresetName(current.theme)}
+                onChange={(name) => update({ theme: presetNameToTheme(name) })}
+                ariaLabel={t('settings.appearance.theme.label')}
+              />
+            </SettingsSection>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <SettingsCard className="sm:col-span-2" title={t('settings.appearance.themeMode.label')}>
-          <ThemeModeControl
-            value={draft.themeMode}
-            onChange={(mode) => setDraft((prev) => ({ ...prev, themeMode: mode }))}
-            ariaLabel={t('settings.appearance.themeMode.label')}
-          />
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-muted-foreground">
-              {t('settings.appearance.theme.label')}
-            </label>
-            <ThemeControl
-              value={themeToPresetName(draft.theme)}
-              onChange={(name) => setDraft((prev) => ({ ...prev, theme: presetNameToTheme(name) }))}
-              ariaLabel={t('settings.appearance.theme.label')}
-            />
+            <SettingsSection title={t('settings.appearance.uiScale.label')}>
+              <UiScaleSlider
+                label={t('settings.appearance.uiScale.mobile')}
+                value={current.uiScaleMobile}
+                onChange={handleMobileScaleChange}
+              />
+              <UiScaleSlider
+                label={t('settings.appearance.uiScale.desktop')}
+                value={current.uiScaleDesktop}
+                onChange={handleDesktopScaleChange}
+              />
+            </SettingsSection>
+
+            <SettingsSection title={t('settings.appearance.language.label')}>
+              <LanguageControl
+                value={current.locale}
+                onChange={(locale) => update({ locale })}
+                labels={{
+                  ru: t('admin.defaults.russian'),
+                  en: t('admin.defaults.english'),
+                }}
+              />
+            </SettingsSection>
           </div>
-        </SettingsCard>
 
-        <SettingsCard title={t('settings.appearance.uiScale.label')}>
-          <UiScaleSlider
-            label={t('settings.appearance.uiScale.mobile')}
-            value={draft.uiScaleMobile}
-            onChange={handleMobileScaleChange}
+          <SettingsActions
+            onSave={() => void draft.save()}
+            onCancel={() => draft.revert()}
+            onReset={handleReset}
+            saving={draft.saving}
+            saveDisabled={!draft.dirty}
+            cancelDisabled={!draft.dirty}
+            resetDisabled={current == null}
+            saveTestId="defaults-save"
+            cancelTestId="defaults-cancel"
+            resetTestId="defaults-reset"
           />
-          <UiScaleSlider
-            label={t('settings.appearance.uiScale.desktop')}
-            value={draft.uiScaleDesktop}
-            onChange={handleDesktopScaleChange}
-          />
-        </SettingsCard>
-
-        <SettingsCard title={t('settings.appearance.language.label')}>
-          <LanguageControl
-            value={draft.locale}
-            onChange={(locale) => setDraft((prev) => ({ ...prev, locale }))}
-            labels={{
-              ru: t('admin.defaults.russian'),
-              en: t('admin.defaults.english'),
-            }}
-          />
-        </SettingsCard>
-      </div>
-
-      <div className="border-t border-border pt-4">
-        <button
-          onClick={handleSave}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-        >
-          <Icon name="check" className="size-4" />
-          {saved ? t('admin.defaults.saved') : t('admin.defaults.save')}
-        </button>
-      </div>
-    </div>
+        </>
+      )}
+    </SettingsPanel>
   )
 }

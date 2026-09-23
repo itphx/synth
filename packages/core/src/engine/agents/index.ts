@@ -1,8 +1,13 @@
 export { AgentRegistry } from './registry.js';
 export { isModeApplicable } from './mode.js';
 
-/** Стартовый агент новой сессии (и `default_agent` в ответах /agents). */
-export const DEFAULT_AGENT_ID = 'developer';
+/**
+ * Агент по умолчанию при первом развёртывании: стартовый агент новой сессии
+ * (если `settings.agentRole` не задан) и fallback для `default_agent` в ответах
+ * /agents. Настраивается в рантайме через `/api/v2/settings/default-agent`
+ * (раздел админки «Агенты»); значение из `settings.json` приоритетнее.
+ */
+export const DEFAULT_AGENT_ID = 'assistant';
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';

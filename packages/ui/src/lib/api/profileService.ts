@@ -45,13 +45,9 @@ export const profileService = {
   },
 
   applyToUIStore(prefs: UserPreferences): void {
-    const i18nStore = useI18nStore.getState()
-
+    // Язык — только через `useI18nStore` (единственный источник истины).
     if (prefs.locale) {
-      useUIStore.setState({ locale: prefs.locale as Locale })
-      if (i18nStore.locale !== prefs.locale) {
-        i18nStore.setLocale(prefs.locale as Locale)
-      }
+      useI18nStore.getState().setLocale(prefs.locale as Locale)
     }
     if (prefs.themeMode) {
       useUIStore.setState({ themeMode: prefs.themeMode as ThemeMode })

@@ -1,147 +1,170 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useUIStore } from "../../stores/useUIStore"
 import { THEME_PRESETS } from "@/lib/theme/themes"
 import type { ThemeMode } from "@/types/theme"
 import { useThemeSystem } from "@/contexts/useThemeSystem"
 import { useI18n } from "@/lib/i18n"
-import { cn } from "@/lib/utils"
 import { profileService } from '@/lib/api/profileService'
-import { ConfirmDialog } from '../ui/confirm-dialog'
+import { applyUiScale, getDefaultUiScale, persistUiScale } from '@/lib/uiScale'
+import { SettingsActions, SettingsPanel, SettingsSection, useSettingsDraft } from '../ui/settings'
 import { UiScaleControl } from './UiScaleControl'
-import { SettingsCard, ThemeModeControl, ThemeControl, LanguageControl } from './appearance-controls'
+import { ThemeModeControl, ThemeControl, LanguageControl } from './appearance-controls'
+
+interface AppearanceDraft {
+  themeMode: ThemeMode
+  themePresetName: string
+  locale: 'ru' | 'en'
+  uiScale: number
+}
+
+const toThemeName = (presetName: string): string => presetName.toLowerCase().replace(/\s+/g, '-')
+
+const presetNameFromTheme = (themeName: string): string => {
+  if (!themeName) return ''
+  return THEME_PRESETS.find((p) => toThemeName(p.name) === themeName)?.name ?? ''
+}
+
+const DEFAULT_THEME_PRESET_NAME =
+  presetNameFromTheme('flexoki') || 'Flexoki'
 
 export const AppearanceSettings = () => {
-  const { setLocale: setUILocale, setThemeMode: setUIThemeMode } = useUIStore()
-  const { t, locale: i18nLocale, setLocale: setI18nLocale } = useI18n()
+  const { locale: i18nLocale, setLocale: setI18nLocale, t } = useI18n()
   const {
     themeMode,
     setThemeMode,
     theme,
     setThemePreference,
   } = useThemeSystem()
-  const [showResetConfirm, setShowResetConfirm] = useState(false)
-  const [isResetting, setIsResetting] = useState(false)
+  const uiScale = useUIStore((s) => s.uiScale)
 
-  const handleLocaleChange = (locale: 'ru' | 'en') => {
-    setI18nLocale(locale)
-    setUILocale(locale)
-  }
+  const defaultAppearance = useMemo<AppearanceDraft>(() => ({
+    themeMode: 'system',
+    themePresetName: DEFAULT_THEME_PRESET_NAME,
+    locale: 'ru',
+    uiScale: getDefaultUiScale(),
+  }), [])
 
-  const handleThemeModeChange = (mode: ThemeMode) => {
-    if (mode === themeMode) return
-    setThemeMode(mode)
-    setUIThemeMode(mode)
-  }
+  // Снапшот на момент открытия панели — к нему откатывают Cancel и закрытие.
+  const [snapshot] = useState<AppearanceDraft>(() => ({
+    themeMode,
+    themePresetName: presetNameFromTheme(theme),
+    locale: i18nLocale === 'en' ? 'en' : 'ru',
+    uiScale,
+  }))
 
-  const handleThemeChange = (name: string) => {
-    const preset = THEME_PRESETS.find((p) => p.name === name)
-    if (!preset) return
-
-    const themeId = preset.lightId || preset.darkId
-    if (themeId) {
-      setThemePreference(themeId)
-      const normalized = preset.name.toLowerCase().replace(/\s+/g, '-')
-      useUIStore.getState().setTheme(normalized)
+  // AD-072 (фидбек): live-preview без персиста. Все визуальные настройки
+  // применяются к UI сразу, но в профиль/localStorage попадают только по Save.
+  const applyAppearance = (next: AppearanceDraft) => {
+    const preset = THEME_PRESETS.find((p) => p.name === next.themePresetName)
+    if (preset) {
+      const themeId = preset.lightId || preset.darkId
+      if (themeId) setThemePreference(themeId)
+      // Прямой setState вместо экшена стора: экшены `setTheme*`/`setLocale`
+      // сразу пишут в профиль, а preview не должен персистить.
+      useUIStore.getState().setAppearancePreview({ theme: toThemeName(preset.name) })
     }
+    setThemeMode(next.themeMode)
+    // Язык применяется через `useI18nStore` (единственный источник истины).
+    useUIStore.getState().setAppearancePreview({ themeMode: next.themeMode, uiScale: next.uiScale })
+    setI18nLocale(next.locale)
+    applyUiScale(next.uiScale)
   }
 
-  const handleResetToDefaults = async () => {
-    setIsResetting(true)
-    try {
-      const prefs = await profileService.resetPreferences()
-      if (prefs) {
-        if (prefs.themeMode) {
-          setThemeMode(prefs.themeMode)
-          setUIThemeMode(prefs.themeMode)
-        }
-        if (prefs.theme) {
-          setThemePreference(prefs.theme)
-        }
-        if (prefs.locale) {
-          setI18nLocale(prefs.locale)
-          setUILocale(prefs.locale)
-        }
+  const applyRef = useRef(applyAppearance)
+  applyRef.current = applyAppearance
+  const savedRef = useRef<AppearanceDraft>(snapshot)
+
+  const draft = useSettingsDraft<AppearanceDraft>({
+    value: snapshot,
+    defaultValue: defaultAppearance,
+    onSave: async (next) => {
+      const themeName = toThemeName(next.themePresetName)
+      await profileService.syncThemeModeToProfile(next.themeMode)
+      // Кастомная тема может не входить в пресеты — не затираем её пустым значением.
+      if (themeName) {
+        await profileService.syncThemeToProfile(themeName)
       }
-      setShowResetConfirm(false)
-    } finally {
-      setIsResetting(false)
-    }
+      await profileService.syncLocaleToProfile(next.locale)
+      persistUiScale(next.uiScale)
+      useUIStore.getState().setAppearancePreview({ uiScale: next.uiScale })
+      savedRef.current = next
+      return next
+    },
+  })
+
+  // Размонтирование без Save (= закрытие окна) откатывает live-preview к снапшоту.
+  useEffect(() => () => {
+    applyRef.current(savedRef.current)
+  }, [])
+
+  const current = draft.draft ?? snapshot
+
+  const update = (patch: Partial<AppearanceDraft>) => {
+    const next = { ...current, ...patch }
+    draft.setDraft(next)
+    applyAppearance(next)
   }
 
-  const getCurrentPresetName = (): string => {
-    if (!theme) return ''
-    return THEME_PRESETS.find(
-      (p) => p.name.toLowerCase().replace(/\s+/g, '-') === theme
-    )?.name ?? ''
+  const handleCancel = () => {
+    draft.revert()
+    applyAppearance(savedRef.current)
   }
 
-  const currentPresetName = getCurrentPresetName()
+  const handleReset = () => {
+    draft.resetToDefault()
+    applyAppearance(defaultAppearance)
+  }
 
   return (
-    <div className="space-y-6">
-      <header className="max-w-2xl">
-        <h2 className="text-lg font-semibold mb-1">{t('settings.appearance.title')}</h2>
-        <p className="text-sm text-muted-foreground">{t('settings.appearance.description')}</p>
-      </header>
+    <SettingsPanel
+      title={t('settings.appearance.title')}
+      description={t('settings.appearance.description')}
+    >
+      <SettingsSection title={t('settings.appearance.themeMode.label')}>
+        <ThemeModeControl
+          value={current.themeMode}
+          onChange={(mode) => update({ themeMode: mode })}
+          ariaLabel={t('settings.appearance.themeMode.label')}
+        />
+        <ThemeControl
+          value={current.themePresetName}
+          onChange={(name) => update({ themePresetName: name })}
+          label={t('settings.appearance.theme.label')}
+          ariaLabel={t('settings.appearance.theme.label')}
+        />
+      </SettingsSection>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <SettingsCard className="sm:col-span-2" title={t('settings.appearance.themeMode.label')}>
-          <ThemeModeControl
-            value={themeMode}
-            onChange={handleThemeModeChange}
-            ariaLabel={t('settings.appearance.themeMode.label')}
-          />
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-muted-foreground">
-              {t('settings.appearance.theme.label')}
-            </label>
-            <ThemeControl
-              value={currentPresetName}
-              onChange={handleThemeChange}
-              ariaLabel={t('settings.appearance.theme.label')}
-            />
-          </div>
-        </SettingsCard>
+      <SettingsSection title={t('settings.appearance.uiScale.label')}>
+        <UiScaleControl
+          value={current.uiScale}
+          onChange={(value) => update({ uiScale: value })}
+        />
+      </SettingsSection>
 
-        <SettingsCard title={t('settings.appearance.uiScale.label')}>
-          <UiScaleControl />
-        </SettingsCard>
+      <SettingsSection title={t('settings.appearance.language.label')}>
+        <LanguageControl
+          value={current.locale}
+          onChange={(locale) => update({ locale })}
+          labels={{
+            ru: t('common.language.russian'),
+            en: t('common.language.english'),
+          }}
+        />
+      </SettingsSection>
 
-        <SettingsCard title={t('settings.appearance.language.label')}>
-          <LanguageControl
-            value={i18nLocale}
-            onChange={handleLocaleChange}
-            labels={{
-              ru: t('common.language.russian'),
-              en: t('common.language.english'),
-            }}
-          />
-        </SettingsCard>
-      </div>
-
-      <div className="border-t border-border pt-4">
-        <button
-          onClick={() => setShowResetConfirm(true)}
-          className={cn(
-            "px-4 py-2 rounded-lg text-sm font-medium",
-            "text-muted-foreground hover:bg-interactive-hover",
-            "transition-colors"
-          )}
-        >
-          {t('auth.resetVisualSettings')}
-        </button>
-      </div>
-
-      <ConfirmDialog
-        open={showResetConfirm}
-        onOpenChange={setShowResetConfirm}
-        title={t('auth.resetVisualSettings')}
-        message={t('auth.resetConfirm')}
-        confirmLabel={isResetting ? t('common.loading') : t('auth.resetVisualSettings')}
-        variant="warning"
-        icon="alert"
-        onConfirm={handleResetToDefaults}
+      <SettingsActions
+        align="start"
+        onSave={() => void draft.save()}
+        onCancel={handleCancel}
+        onReset={handleReset}
+        saving={draft.saving}
+        saveDisabled={!draft.dirty}
+        cancelDisabled={!draft.dirty}
+        isDefault={draft.isDefault}
+        saveTestId="appearance-save"
+        cancelTestId="appearance-cancel"
+        resetTestId="appearance-reset"
       />
-    </div>
+    </SettingsPanel>
   )
 }

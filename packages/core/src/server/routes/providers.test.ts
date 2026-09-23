@@ -18,7 +18,7 @@ function createMockAuth(): AuthKit {
 async function makeApp(tmpDir: string) {
   const providerStore = new JsonStore<ProviderConfig>({ dataDir: tmpDir, subdir: 'providers' });
   const providerCache = new Map<string, ProviderConfig>();
-  const app = createProviderRoutes(createMockAuth(), providerStore, providerCache, true);
+  const app = createProviderRoutes(createMockAuth(), providerStore, providerCache, { testEnabled: true });
   return { app, providerStore, providerCache };
 }
 

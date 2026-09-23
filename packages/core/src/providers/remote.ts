@@ -10,7 +10,7 @@
 // Если токена нет — ProviderError (оркестратор не ретраит бесконечно).
 
 import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
-import { BaseProvider, type LLMMessage, type CancellationToken } from './base.js';
+import { BaseProvider, resolveSystemPromptText, type LLMMessage, type SystemPromptInput, type CancellationToken } from './base.js';
 import { ProviderError, ContextLengthExceededError, RateLimitError } from './exceptions.js';
 import { info } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
@@ -91,7 +91,7 @@ export class RemoteProvider extends BaseProvider {
 
   async chat(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     _stream?: boolean,
     debugCollector?: DebugCollector,
@@ -108,7 +108,7 @@ export class RemoteProvider extends BaseProvider {
 
   async *chatAsync(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     debugCollector?: DebugCollector,
     cancellationToken?: CancellationToken,
@@ -317,7 +317,7 @@ export class RemoteProvider extends BaseProvider {
    */
   private async _request(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     stream?: boolean,
     signal?: AbortSignal,
@@ -378,7 +378,7 @@ export class RemoteProvider extends BaseProvider {
 
   private _buildBody(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
     tools?: Record<string, unknown>[],
     stream?: boolean,
   ): Record<string, unknown> {
@@ -388,8 +388,21 @@ export class RemoteProvider extends BaseProvider {
       temperature: this.temperature,
     };
     if (stream) body.stream = true;
+    // AD-070: просим backend-proxy отдать usage в стриме (как OpenAIProvider),
+    // иначе live-статистика remote-провайдера до финального чанка недоступна.
+    if (stream) body.stream_options = { include_usage: true };
     if (tools?.length) body.tools = tools;
     if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
+    // AD-070 §2.2: prompt_cache_key пробрасывается на backend LLM Proxy, который
+    // исполняет провайдера с этим именем; при cachePolicy:'none' — не отправляем.
+    if (
+      typeof systemPrompt === 'object'
+      && systemPrompt !== null
+      && systemPrompt.cachePolicy !== 'none'
+      && systemPrompt.cacheKey
+    ) {
+      body.prompt_cache_key = systemPrompt.cacheKey;
+    }
     // Явный провайдер: backend исполняет своего провайдера с этим именем
     // (см. chatCompletionsSchema.provider в routes/llm.ts backend).
     if (this._providerName) body.provider = this._providerName;
@@ -402,12 +415,13 @@ export class RemoteProvider extends BaseProvider {
    */
   private _formatMessages(
     messages: LLMMessage[],
-    systemPrompt?: string,
+    systemPrompt?: SystemPromptInput,
   ): Array<Record<string, unknown>> {
     const formatted: Array<Record<string, unknown>> = [];
 
-    if (systemPrompt) {
-      formatted.push({ role: 'system', content: systemPrompt });
+    const systemText = resolveSystemPromptText(systemPrompt);
+    if (systemText) {
+      formatted.push({ role: 'system', content: systemText });
     }
 
     for (const msg of messages) {
@@ -462,13 +476,24 @@ export class RemoteProvider extends BaseProvider {
   }
 
   private _parseUsage(usage?: Record<string, unknown>): TokenUsage {
-    if (!usage) return { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-    const details = usage.completion_tokens_details as Record<string, number> | undefined;
+    if (!usage) {
+      return { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    }
+    const completionDetails = usage.completion_tokens_details as Record<string, number> | undefined;
+    const promptDetails = usage.prompt_tokens_details as Record<string, number> | undefined;
+    // AD-070 §2.3: backend LLM Proxy отдаёт OpenAI-совместимый usage; cache read
+    // приходит в prompt_tokens_details.cached_tokens (fallback — Anthropic-поле).
+    const cacheReadTokens =
+      promptDetails?.cached_tokens
+      ?? (usage.cache_read_input_tokens as number)
+      ?? 0;
     return {
       inputTokens: (usage.prompt_tokens as number) || 0,
       outputTokens: (usage.completion_tokens as number) || 0,
       totalTokens: (usage.total_tokens as number) || 0,
-      reasoningTokens: details?.reasoning_tokens || 0,
+      cacheReadTokens,
+      cacheWriteTokens: (usage.cache_creation_input_tokens as number) || 0,
+      reasoningTokens: completionDetails?.reasoning_tokens || 0,
     };
   }
 }

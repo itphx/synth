@@ -27,8 +27,11 @@ const CATEGORIES: CategoryItem[] = [
 /** Модальное окно «Логи и аудит»: логи сервисов core/ui/backend + журнал аудита LLM Gateway. */
 export const LogsModal = () => {
   const { t } = useI18n()
-  const { user } = useAuthStore()
-  const { isLogsDialogOpen, setLogsDialogOpen, logsPage, setLogsPage } = useUIStore()
+  const user = useAuthStore(s => s.user)
+  const isLogsDialogOpen = useUIStore(s => s.isLogsDialogOpen)
+  const setLogsDialogOpen = useUIStore(s => s.setLogsDialogOpen)
+  const logsPage = useUIStore(s => s.logsPage)
+  const setLogsPage = useUIStore(s => s.setLogsPage)
   const { deviceType } = useDevice()
   const isPhone = deviceType === 'phone'
 
@@ -43,7 +46,7 @@ export const LogsModal = () => {
         className="p-0 gap-0 max-w-5xl w-[95vw] h-[90vh] max-h-[90vh] md:max-h-[85vh] shadow-xl"
         showCloseButton={false}
       >
-        <div className={cn("flex h-full overflow-hidden overscroll-behavior-contain", isPhone ? "flex-col" : "md:flex-row")}>
+        <div className={cn("flex h-full overflow-hidden overscroll-contain", isPhone ? "flex-col" : "md:flex-row")}>
           {/* Left sidebar (desktop) / mobile horizontal menu tabs */}
           <div className={cn("flex flex-col shrink-0", !isPhone && "w-48 md:w-52 border-r border-border")}>
             <div className="flex items-center gap-2 px-4 h-12 border-b border-border">
@@ -87,7 +90,7 @@ export const LogsModal = () => {
           </div>
 
           {/* Right content */}
-          <div className="flex-1 overflow-y-auto p-6 overscroll-behavior-contain">
+          <div className="flex-1 overflow-y-auto p-6 overscroll-contain">
             {logsPage === "core" && (
               <LogFilePanel
                 logName="core"

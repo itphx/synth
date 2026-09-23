@@ -23,7 +23,7 @@
 | `QueueProcessorManager`, `enqueueUserMessage` | очередь сообщений |
 | `ContextConfig`, `ContextBuilder`, `ContextOptimizer` | контекст и его оптимизация |
 | `ChatOrchestrator` | оркестрация LLM, tools, permissions |
-| `McpManager` | MCP-серверы |
+| `McpManager`, `McpRegistryStore` | MCP-серверы: менеджер + единый реестр (AD-071) |
 | `RuntimeSettingsStore`, `createSettingsRoutes` | эндпоинты `/api/v2/settings` (workspace/mcp) |
 | `DictionaryStore`, `createDictionaryRoutes` | эндпоинты `/api/v2/dictionaries` |
 | `FileProfileStore` | профили пользователей (seed test-users при debug) |
@@ -33,7 +33,7 @@
 
 - `src/app.ts` — фабрика `createBackendApp()`; `src/main.ts` — listen и graceful shutdown.
 - `src/routes/*` — Hono-роутеры; `src/auth/*` — middleware и OIDC; `src/events/hub.ts` — `EventHub`.
-- `src/lib/*` — конфиг, i18n, git-service, workspace-resolver, serialize, defaults/mcp stores.
+- `src/lib/*` — `app-config` (конфиг), `defaults-store` (умолчания оформления), `git-service`, `i18n`, `workspace-resolver`.
 - `src/storage/*` — `JsonStore` (providers/models/agents) и `ProjectStore`.
 - `src/middleware/rate-limiter.ts` — единственный middleware пакета.
 - `src/agents/definitions/*.json` — определения агентов (ассеты, копируются в `dist`).
@@ -72,15 +72,20 @@
 | Префикс | Источник |
 |---|---|
 | `/auth` | local `routes/auth.ts` (логин, сессии, профиль, avatar) |
-| `/api/v2/projects`, `/sessions`, `/messages`, `/queue`, `/fs`, `/providers`, `/models`, `/agents`, `/context`, `/users`, `/git`, `/mcp` | local `routes/*` |
-| `/api/v2/audit`, `/logs`, `/gateway` | local (LLM Gateway: аудит, логи, regex-паттерны) |
-| `/api/v2/llm` | local `routes/llm.ts` (LLM Proxy) |
+| `/api/v2/projects`, `/messages`, `/queue`, `/fs`, `/agents`, `/context`, `/users`, `/git`, `/mcp` | local `routes/*` |
+| `/api/v2/sessions` | `routes/sessions.ts` — обёртка над core `createSessionRoutes` + backend-only (MCP-скоуп, secrets, export/import, debug, optimization, notes) |
+| `/api/v2/providers` | `routes/providers.ts` — обёртка над core `createProviderRoutes` + `fetch-icon` |
+| `/api/v2/models` | `routes/models.ts` — обёртка над core `createModelRoutes` + `fetch` |
 | `/api/v2/settings` | core `createSettingsRoutes` |
 | `/api/v2/dictionaries` | core `createDictionaryRoutes` (writeGuard = `requireAdmin`) |
+| `/api/v2/audit`, `/logs`, `/gateway` | local (LLM Gateway: аудит, логи, regex-паттерны) |
+| `/api/v2/llm` | local `routes/llm.ts` (LLM Proxy) |
 | `/api/v2/admin/debug` | local `routes/debug.ts` |
 | `/api/v2/events` | inline SSE-хендлер |
 | `/health`, `/api/v2/health` | публичные, без auth |
 | `/api/v2/i18n/current`, `/api/v2/i18n/translations/ru\|en` | inline в `app.ts` |
+
+`/api/v2/{providers,models,sessions}` — тонкие обёртки над core-фабриками: общая логика в core, backend добавляет `requireAdmin`/`requirePermission`, rate limiter и backend-only роуты. Дублировать хендлеры core нельзя.
 
 ## Аутентификация
 
@@ -109,7 +114,8 @@
 - Единственная точка входа конфига — `loadBackendConfig()` (`src/lib/app-config.ts`) → shared `loadConfig`; возвращает `{ synth, dataDir, workspacesRoot, port, auth }`.
 - `buildAuthConfig` читает `SYNTH_AUTH_DEBUG`, `SYNTH_API_KEY`, `SYNTH_OIDC_*`, `SYNTH_SESSION_MAX_AGE`, `SYNTH_TEST_*_KEY`; тестовые пользователи — только при debug.
 - `SYNTH_PROVIDER_*_API_KEY|URL|MODEL|TYPE` синхронизируются в `JsonStore` провайдеров/моделей при старте (`syncProvidersFromEnv`).
-- `packages/backend/config.yaml` содержит только `mcp.servers`; остальной конфиг ищется каскадно (`findConfigPath`).
+- `packages/backend/config.yaml` содержит только `mcp.servers`; остальной конфиг ищется каскадно (`findConfigPath`). В dev `dev.sh` задаёт `SYNTH_CONFIG` на этот файл (если он существует), поэтому `mcp.servers` подхватываются; `loadConfig` учитывает `SYNTH_CONFIG` (AD-023).
+- При старте `mcp.servers` из config сидируются в `McpRegistryStore` — единственный источник истины MCP (AD-071). Legacy-роуты `/api/v2/mcp/servers*` и `/mcp/session/:id` — тонкие адаптеры над реестром; собственного хранилища MCP-конфига (`YamlMcpConfigStore`/`McpConfigStore`) в backend больше нет.
 - Сообщения ошибок — через `t()` из `src/lib/i18n.js`; язык `/api/v2/i18n/current` определяется по `Accept-Language` (inline в `app.ts`).
 
 ## Тесты и запуск
@@ -130,6 +136,7 @@
 - Не держать состояние сессий в памяти backend — источник истины на диске через core.
 - Не редактировать `packages/backend/config.yaml` ради настроек, кроме MCP: остальной конфиг идёт через `loadBackendConfig`.
 - Не добавлять роут в обход `createXxxRoutes` + `app.route(...)` — иначе он потеряется при переиспользовании core-фабрик.
+- Не дублировать хендлеры core-роутов в backend: `providers`/`models`/`sessions`/`settings`/`dictionaries` — тонкие обёртки над core-фабриками, здесь остаются только RBAC, rate limit и backend-only роуты.
 
 ## Куда смотреть
 

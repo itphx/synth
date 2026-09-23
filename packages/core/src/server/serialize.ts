@@ -44,6 +44,8 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
       blocked: session.status.blocked || null,
     },
     settings: session.settings,
+    /** AD-070 §2.4: состояние промпта per-agent (generation/hash/prefix). */
+    prompt_states: session.promptStates ?? null,
     sticky_notes: session.stickyNotes.map((n) => ({
       id: n.id,
       content: n.content,
@@ -70,6 +72,7 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
     output_cost: session.outputCost,
     cache_read_cost: session.cacheReadCost,
     cache_write_cost: session.cacheWriteCost,
+    cache_hit_rate: session.cacheHitRate ?? 0,
     processor_running: null,
     created_at: session.createdAt,
     updated_at: session.updatedAt,
@@ -100,6 +103,8 @@ export function serializeMessage(msg: Message, index: number) {
     provider_type: msg.providerType || null,
     reasoning: msg.reasoning || null,
     debug_data: msg.debugData || null,
+    /** AD-070 §2.4: предсказание/валидация prompt-cache для хода. */
+    prompt_meta: msg.promptMeta ?? null,
     summary_of: msg.summaryOf || null,
     usage: msg.usage
       ? {
@@ -133,6 +138,8 @@ export function serializeProject(project: Project) {
     color: project.color || null,
     workspace: project.workspace || null,
     repos: project.repos || null,
+    /** AD-071 §2.4: проектный скоуп MCP (owner/lead). */
+    mcp: project.mcp ?? null,
     status_messages: (project.statusMessages || []).map((sm: StatusMessage) => ({
       id: sm.id,
       text: sm.text,

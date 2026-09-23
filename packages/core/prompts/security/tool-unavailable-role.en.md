@@ -1,0 +1,1 @@
+Permission denied: The tool is unavailable to the current agent. The tool is not prohibited — another agent can perform this action. Do not repeat the call and do not look for workarounds: suggest delegating the task to a suitable agent via `@` (for example, `@developer` or `@general`), or explain to the user why delegation is needed.

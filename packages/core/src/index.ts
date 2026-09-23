@@ -4,6 +4,8 @@
 export { FileStore } from './storage/file-store.js';
 export type { StorageConfig } from './storage/file-store.js';
 export { SessionManager } from './sessions/manager.js';
+export { computeSessionStats, MAX_SUBAGENT_DEPTH } from './sessions/stats.js';
+export type { SessionStatsDeps } from './sessions/stats.js';
 export { EventBus, sseEventStream } from './events/bus.js';
 export { QueueProcessor, QueueProcessorManager, enqueueUserMessage } from './queue/processor.js';
 export type { ProcessMessageFn } from './queue/processor.js';
@@ -31,6 +33,7 @@ export {
   critical,
   setLevelForGroup,
   getAllGroups,
+  setGroups,
   setAllGroups,
   resetGroupOverrides,
   LOG_LEVEL_NAMES,
@@ -57,6 +60,14 @@ export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
 export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions, normalizeAgentModes, isModeApplicable, DEFAULT_AGENT_ID } from './engine/agents/index.js';
 export { McpClient, McpManager } from './engine/mcp/index.js';
 export type { McpToolDef, McpToolResult } from './engine/mcp/index.js';
+export { resolveMcpScope } from './engine/mcp/index.js';
+export type { McpScopeServer, McpScopeSession, McpScopeDecision } from './engine/mcp/index.js';
+export {
+  evaluateMcpNetworkAccess,
+  isIpInCidr,
+  isHttpMcpConfig,
+} from './engine/mcp/index.js';
+export type { McpNetworkCheckResult, HostResolver } from './engine/mcp/index.js';
 
 export {
   PermissionEvaluator,
@@ -83,17 +94,30 @@ export type {
 
 export { FileProfileStore } from './storage/profile-store.js';
 export { JsonStore } from './storage/json-store.js';
-export type { JsonStoreConfig } from './storage/json-store.js';
+export type { JsonStoreConfig, JsonStoreLike } from './storage/json-store.js';
 export { ProjectStore } from './storage/project-store.js';
-export type { ProjectStoreConfig } from './storage/project-store.js';
-export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig } from './storage/runtime-settings.js';
+export type { ProjectStoreConfig, ProjectStoreLike } from './storage/project-store.js';
+export { McpRegistryStore } from './storage/mcp-registry-store.js';
+export type {
+  McpRegistryStoreConfig,
+  AddMcpRegistryEntryInput,
+  UpdateMcpRegistryEntryInput,
+} from './storage/mcp-registry-store.js';
+export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy } from './storage/runtime-settings.js';
 export type { RuntimeSettings, LlmGatewayRuntimeSettings } from './storage/runtime-settings.js';
+export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';
 export { createLocalAuth } from './auth/local.js';
 export type { AuthKit, LocalAuthConfig } from './auth/local.js';
 export { createSettingsRoutes } from './server/routes/settings.js';
 export type { SettingsRoutesDeps } from './server/routes/settings.js';
 export { createDictionaryRoutes } from './server/routes/dictionaries.js';
 export type { DictionaryRoutesAuth, DictionaryRoutesOptions } from './server/routes/dictionaries.js';
+export { createProviderRoutes } from './server/routes/providers.js';
+export type { ProviderRoutesAuth, ProviderRoutesOptions, ProviderRouteMessages } from './server/routes/providers.js';
+export { createModelRoutes } from './server/routes/models.js';
+export type { ModelRoutesAuth, ModelRoutesOptions, ModelRouteMessages } from './server/routes/models.js';
+export { createSessionRoutes } from './server/routes/sessions.js';
+export type { SessionRoutesAuth, SessionRoutesDeps, SessionRoutesOptions, SessionRouteMessages } from './server/routes/sessions.js';
 export { createStandaloneApp } from './server/app.js';
 export type { StandaloneConfig } from './server/app.js';
 export { serializeSession, serializeMessage, serializeProject } from './server/serialize.js';
@@ -114,7 +138,6 @@ export {
   restoreSecrets,
   PLACEHOLDER_PATTERN,
   readAuditLog,
-  PayloadLogger,
   writePayloadLog,
   readPayloadLog,
 } from './engine/gateway/index.js';

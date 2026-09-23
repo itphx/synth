@@ -134,6 +134,23 @@ export function createAuthMiddleware(config: AuthConfig) {
     await next();
   });
 
+  /**
+   * Проверка любой из глобальных ролей без прерывания запроса (для условий,
+   * зависящих от тела/данных: project MCP — owner проекта или LEAD/ADMIN).
+   * Имена ролей централизованы здесь, в роутерах не хардкодятся.
+   */
+  const hasRole = (c: { get(key: 'user'): unknown }, ...roles: string[]): boolean => {
+    const user = c.get('user') as User | undefined;
+    return !!user && roles.some((r) => user.roles.includes(r));
+  };
+
+  /**
+   * Проверка роли ADMIN без прерывания запроса — для условий, зависящих от тела
+   * (например, `stdio`-MCP только admin, HTTP — любой пользователь). Делегирует
+   * `hasRole`, чтобы имя роли `ADMIN` было в одном месте.
+   */
+  const isAdmin = (c: { get(key: 'user'): unknown }): boolean => hasRole(c, 'ADMIN');
+
   // Middleware: требовать одну из указанных ролей (например, ADMIN/AUDITOR)
   const requirePermission = (...roles: string[]) => createMiddleware(async (c, next) => {
     const user = c.get('user') as User | undefined;
@@ -176,6 +193,8 @@ export function createAuthMiddleware(config: AuthConfig) {
     requireAuth,
     requireAdmin,
     requirePermission,
+    isAdmin,
+    hasRole,
     createSession,
     setSessionCookie,
     deleteSessionCookie,

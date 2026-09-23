@@ -36,7 +36,8 @@ import { useDevice } from '@/hooks/useDevice'
 import { useViewportHeight } from '@/hooks/useViewportHeight'
 
 function DefaultsSync() {
-  const { isAuthenticated, isInitialized } = useAuthStore()
+  const isAuthenticated = useAuthStore(s => s.isAuthenticated)
+  const isInitialized = useAuthStore(s => s.isInitialized)
 
   useEffect(() => {
     if (!isInitialized) {
@@ -47,7 +48,6 @@ function DefaultsSync() {
       useUIStore.setState({
         theme: DEFAULT_THEME,
         themeMode: DEFAULT_THEME_MODE,
-        locale: DEFAULT_LOCALE,
       })
       useI18nStore.getState().setLocale(DEFAULT_LOCALE)
       return
@@ -59,11 +59,9 @@ function DefaultsSync() {
         useUIStore.setState({
           theme: prefs.theme || DEFAULT_THEME,
           themeMode: prefs.themeMode || DEFAULT_THEME_MODE,
-          locale: prefs.locale || DEFAULT_LOCALE,
         })
-        if (prefs.locale) {
-          useI18nStore.getState().setLocale(prefs.locale)
-        }
+        // Язык — единственный источник истины `useI18nStore` (персистится).
+        useI18nStore.getState().setLocale(prefs.locale || DEFAULT_LOCALE)
       }
 
       const defaults = await profileService.getDefaults()
@@ -82,7 +80,17 @@ function DefaultsSync() {
 }
 
 function App() {
-  const { leftPanel, rightPanel, setLeftPanelWidth, setRightPanelWidth, setSettingsDialogOpen, setSettingsPage, leftPanelTab, mobileLeftOpen, mobileRightOpen, setMobileLeftOpen, setMobileRightOpen } = useUIStore()
+  const leftPanel = useUIStore(s => s.leftPanel)
+  const rightPanel = useUIStore(s => s.rightPanel)
+  const setLeftPanelWidth = useUIStore(s => s.setLeftPanelWidth)
+  const setRightPanelWidth = useUIStore(s => s.setRightPanelWidth)
+  const setSettingsDialogOpen = useUIStore(s => s.setSettingsDialogOpen)
+  const setSettingsPage = useUIStore(s => s.setSettingsPage)
+  const leftPanelTab = useUIStore(s => s.leftPanelTab)
+  const mobileLeftOpen = useUIStore(s => s.mobileLeftOpen)
+  const mobileRightOpen = useUIStore(s => s.mobileRightOpen)
+  const setMobileLeftOpen = useUIStore(s => s.setMobileLeftOpen)
+  const setMobileRightOpen = useUIStore(s => s.setMobileRightOpen)
   const forwardMode = useUIStore(s => s.forwardMode)
   const { deviceType } = useDevice()
   useViewportHeight()

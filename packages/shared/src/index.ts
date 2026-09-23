@@ -37,6 +37,8 @@ export {
   type SummarizationConfig,
   type McpServerConfig,
   type McpConfig,
+  type ToolsDisabledConfig,
+  toolsDisabledConfigSchema,
   type RouterConfig,
   type RouterContentConfig,
   type RouterEscalationConfig,

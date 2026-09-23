@@ -124,14 +124,15 @@ function createTestApp(remote?: RemoteBackendClient, tmpDir?: string): TestWorld
 
   app.route('/api/v2/sessions', createSessionRoutes(
     createMockAuth(),
-    sessionManager,
-    eventBus,
-    queueManager as any,
-    orchestrator.createProcessMessage(),
-    orchestrator as any,
-    undefined,
-    projectStore,
-    remote ? () => remote : undefined,
+    {
+      sessionManager,
+      eventBus,
+      queueManager: queueManager as any,
+      processMessage: orchestrator.createProcessMessage(),
+      orchestrator: orchestrator as any,
+      projectStore,
+      getRemoteClient: () => remote ?? null,
+    },
   ));
   app.route('/api/v2/projects', createProjectRoutes(createMockAuth(), projectStore, remote ? () => remote : undefined));
 

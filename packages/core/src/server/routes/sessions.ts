@@ -1,18 +1,114 @@
 import { ReadableStream } from 'node:stream/web';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import type { AuthKit } from '../../auth/local.js';
+import type { createMiddleware } from 'hono/factory';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer } from '../../index.js';
-import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema } from '@itphx/synth-shared';
-import type { Message } from '@itphx/synth-shared';
-import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError } from '../../index.js';
+import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema, createResolveAuthorName } from '@itphx/synth-shared';
+import type { Message, Session } from '@itphx/synth-shared';
+import type { ProfileStore } from '@itphx/synth-shared';
+import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
 import { serializeSession, serializeMessage } from '../serialize.js';
-import type { ProjectStore } from '../../storage/project-store.js';
+import type { ProjectStoreLike } from '../../storage/project-store.js';
 import { isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
 import { RemoteError } from '../../remote/types.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 
 const LOCAL_USER_ID = 'local';
+
+/** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
+type Middleware = ReturnType<typeof createMiddleware>;
+
+/** Минимальный auth-контракт фабрики: в core и backend общий (структурно, как в providers.ts). */
+export interface SessionRoutesAuth {
+  requireAuth: Middleware;
+}
+
+export interface SessionRoutesDeps {
+  sessionManager: SessionManager;
+  eventBus: EventBus;
+  queueManager: QueueProcessorManager;
+  processMessage: ReturnType<ChatOrchestrator['createProcessMessage']>;
+  orchestrator: ChatOrchestrator;
+  contextOptimizer?: ContextOptimizer;
+  projectStore?: ProjectStoreLike;
+  profilesStore?: ProfileStore;
+  /**
+   * Гибрид. ВАЖНО: если поле НЕ передано (undefined) — все remote/hybrid-ветки
+   * полностью отключены (managed backend). Если передано, но возвращает null —
+   * прежнее поведение core (502 REMOTE_UNAVAILABLE и т.п.).
+   */
+  getRemoteClient?: () => RemoteBackendClient | null;
+}
+
+/** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
+export interface SessionRouteMessages {
+  sessionNotFound: (c: Context) => string;
+  forbidden: (c: Context) => string;
+  contentRequired: (c: Context) => string;
+  queueFull: (c: Context, max: number) => string;
+}
+
+export interface SessionRoutesOptions {
+  /** userId запроса. Core — 'local'; backend — user.id. */
+  resolveUserId?: (c: Context) => string | Promise<string>;
+  /** Владелец при создании сессии. По умолчанию — resolveUserId(). */
+  resolveOwner?: (c: Context) => string | Promise<string>;
+  /** Передавать владельца в forkSession. Core — false; backend — true. */
+  forkWithOwner?: boolean;
+  /** Доступ к содержимому сессии (status/prompt/stats). Core — local-owner; backend — owner|ADMIN. */
+  canAccess?: (session: Session, c: Context, userId: string) => boolean | Promise<boolean>;
+  /** author пользовательских сообщений. Core — 'local'; backend — username. */
+  resolveAuthor?: (c: Context) => string | Promise<string>;
+  /** id пользовательского сообщения: 'generated' (core) | 'stream' (backend). */
+  promptMessageId?: 'generated' | 'stream';
+  /** Публиковать session.renamed при смене title. Core — true; backend — false. */
+  publishRenamed?: boolean;
+  /** Публиковать session.deleted ДО удаления. Core — true; backend — false. */
+  publishDeletedBefore?: boolean;
+  /** EventHub-хуки (backend): подписка/отписка. */
+  onSessionCreated?: (userId: string, sessionId: string) => void | Promise<void>;
+  onSessionDeleted?: (userId: string, sessionId: string) => void | Promise<void>;
+  onSessionForked?: (userId: string, sessionId: string) => void | Promise<void>;
+  /** Доп. middleware на POST /:id/prompt (rate limiter). */
+  promptMiddleware?: Middleware[];
+  /** Регистрировать core-only роут `GET /:id/events`. Core — true; backend — false. */
+  enableSessionEvents?: boolean;
+  messages?: Partial<SessionRouteMessages>;
+  /**
+   * Агент по умолчанию для новой сессии без `settings.agentRole` (runtime-настройка
+   * «Агенты»). По умолчанию — `DEFAULT_AGENT_ID` ('assistant' при первом развёртывании).
+   */
+  resolveDefaultAgent?: () => string | Promise<string>;
+}
+
+const DEFAULT_MESSAGES: SessionRouteMessages = {
+  sessionNotFound: () => 'Сессия не найдена',
+  forbidden: () => 'Доступ к сессии запрещён',
+  contentRequired: () => 'Контент обязателен',
+  queueFull: (_c: Context, max: number) => `Очередь сообщений заполнена (макс. ${max})`,
+};
+
+/**
+ * Hono не принимает spread массива middleware в app.post (перегрузки — фиксированные
+ * кортежи), поэтому guard + promptMiddleware собираются в один middleware.
+ * Порядок сохраняется: requireAuth → promptMiddleware → handler.
+ */
+function chainMiddleware(middlewares: Middleware[]): Middleware {
+  return async (c, next) => {
+    let lastIndex = -1;
+    const dispatch = async (index: number): Promise<void> => {
+      if (index <= lastIndex) throw new Error('next() called multiple times');
+      lastIndex = index;
+      const mw = middlewares[index];
+      if (!mw) {
+        await next();
+        return;
+      }
+      await mw(c, () => dispatch(index + 1));
+    };
+    await dispatch(0);
+  };
+}
 
 /** Преобразовать RemoteError в HTTP-ответ API v2; не-RemoteError → undefined (пробросить дальше). */
 function mapRemoteError(c: Context, err: unknown): Response | undefined {
@@ -24,32 +120,59 @@ function mapRemoteError(c: Context, err: unknown): Response | undefined {
   );
 }
 
+/**
+ * API сессий (AD-017/AD-033/AD-040/AD-042). Общая реализация для core (standalone)
+ * и backend (managed): core использует дефолты (один пользователь `local`, гибрид
+ * через getRemoteClient), backend параметризует RBAC, owner/author, EventHub-хуки
+ * и отключает remote-ветки (getRemoteClient не передаётся).
+ */
 export function createSessionRoutes(
-  auth: AuthKit,
-  sessionManager: SessionManager,
-  eventBus: EventBus,
-  queueManager: QueueProcessorManager,
-  processMessage: ReturnType<ChatOrchestrator['createProcessMessage']>,
-  orchestrator: ChatOrchestrator,
-  contextOptimizer?: ContextOptimizer,
-  projectStore?: ProjectStore,
-  /**
-   * Геттер текущего клиента к удалённому backend (runtime-подключение):
-   * возвращает null, когда гибрид не подключён. Роуты резолвят клиента
-   * в начале каждого хэндлера, а не при создании фабрики.
-   */
-  getRemoteClient?: () => RemoteBackendClient | null,
+  auth: SessionRoutesAuth,
+  deps: SessionRoutesDeps,
+  opts: SessionRoutesOptions = {},
 ): Hono {
   const app = new Hono();
+  const { sessionManager, eventBus, queueManager, processMessage, orchestrator } = deps;
   const agentRegistry = orchestrator.agentRegistry;
-  const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
+
+  const resolveClient = (): RemoteBackendClient | undefined => deps.getRemoteClient?.() ?? undefined;
+  /** Гибридные ветки активны только если геттер передан (в managed — нет). */
+  const hasRemoteGetter = deps.getRemoteClient !== undefined;
+
+  const resolveUserId = opts.resolveUserId ?? (() => LOCAL_USER_ID);
+  const resolveOwner = opts.resolveOwner ?? resolveUserId;
+  const forkWithOwner = opts.forkWithOwner ?? false;
+  const enableSessionEvents = opts.enableSessionEvents ?? true;
+  const resolveAuthor = opts.resolveAuthor ?? (() => LOCAL_USER_ID);
+  const resolveDefaultAgent = opts.resolveDefaultAgent ?? (() => DEFAULT_AGENT_ID);
+  const promptMessageId = opts.promptMessageId ?? 'generated';
+  const publishRenamed = opts.publishRenamed ?? true;
+  const publishDeletedBefore = opts.publishDeletedBefore ?? true;
+  const promptMiddleware = opts.promptMiddleware ?? [];
+  const messages: SessionRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
+  const resolveAuthorName = createResolveAuthorName(deps.profilesStore);
+
+  /**
+   * AD-071/безопасность: доступ к локальной сессии. Standalone — однопользовательский
+   * режим (владелец `local`); легаси-сессии без владельца считаются доступными,
+   * чтобы не ломать существующие данные. Backend переопределяет через opts.canAccess.
+   */
+  const canAccessSession = async (session: Session, c: Context, userId: string): Promise<boolean> => {
+    if (opts.canAccess) return opts.canAccess(session, c, userId);
+    const owner = session.ownerId ?? session.userId;
+    return !owner || owner === LOCAL_USER_ID;
+  };
 
   app.get('/', auth.requireAuth, async (c) => {
-    const remoteClient = resolveClient();
     const projectId = c.req.query('project_id') || undefined;
-    const sessions = await sessionManager.listSessions({
-      userId: LOCAL_USER_ID,
-    });
+    const userId = await resolveUserId(c);
+    const sessions = await sessionManager.listSessions({ userId });
+
+    if (!hasRemoteGetter) {
+      return c.json(sessions.map((s) => serializeSession(s, { agentRegistry })));
+    }
+
+    const remoteClient = resolveClient();
 
     // Запрос удалённого мира без настроенного гибрида — ошибка, а не локальный список.
     if (projectId && isRemoteRef(projectId) && !remoteClient) {
@@ -82,11 +205,11 @@ export function createSessionRoutes(
   });
 
   app.post('/', auth.requireAuth, async (c) => {
-    const remoteClient = resolveClient();
     const body = await c.req.json().catch(() => ({}));
 
-    // Гибрид: создание удалённой сессии на backend.
-    if (body.origin === 'remote') {
+    // Гибрид: создание удалённой сессии на backend (только при настроенном геттере).
+    if (hasRemoteGetter && body.origin === 'remote') {
+      const remoteClient = resolveClient();
       if (!remoteClient) {
         return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
       }
@@ -104,25 +227,31 @@ export function createSessionRoutes(
       }
     }
 
+    const owner = await resolveOwner(c);
     const session = await sessionManager.createSession({
       title: body.name || body.title || undefined,
       projectId: body.project_id || body.projectId || undefined,
       engine: body.engine || 'synth',
       parentId: body.parent_id || body.parentId || undefined,
       sessionOrigin: body.session_origin || body.sessionOrigin || undefined,
-      settings: { ...body.settings, agentRole: body.settings?.agentRole ?? DEFAULT_AGENT_ID },
+      settings: { ...body.settings, agentRole: body.settings?.agentRole ?? await resolveDefaultAgent() },
+      userId: owner,
     });
-    session.userId = LOCAL_USER_ID;
-    session.ownerId = LOCAL_USER_ID;
+    // SessionManager.createSession объявляет ownerId, но не проставляет его —
+    // выставляем явно, иначе serializeSession отдаёт owner_id: null (регресс core).
+    session.ownerId = owner;
     await sessionManager.updateSession(session);
+    // Хук подписки EventHub вызываем ДО publish: EventBus не буферизует события,
+    // и `session.created` с 0 подписчиков теряется (backend подписывал клиента раньше).
+    await opts.onSessionCreated?.(await resolveUserId(c), session.id);
     eventBus.publish(session.id, 'session.created', serializeSession(session, { agentRegistry }));
     return c.json(serializeSession(session, { agentRegistry }), 201);
   });
 
   app.get('/:id', auth.requireAuth, async (c) => {
-    const remoteClient = resolveClient();
     const id = c.req.param('id');
-    if (isRemoteRef(id)) {
+    if (hasRemoteGetter && isRemoteRef(id)) {
+      const remoteClient = resolveClient();
       if (!remoteClient) {
         return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
       }
@@ -137,15 +266,15 @@ export function createSessionRoutes(
     }
     const session = await sessionManager.getSession(id);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
     return c.json(serializeSession(session, { agentRegistry }));
   });
 
   app.patch('/:id', auth.requireAuth, async (c) => {
-    const remoteClient = resolveClient();
     const id = c.req.param('id');
-    if (isRemoteRef(id)) {
+    if (hasRemoteGetter && isRemoteRef(id)) {
+      const remoteClient = resolveClient();
       if (!remoteClient) {
         return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
       }
@@ -161,7 +290,7 @@ export function createSessionRoutes(
     }
     const session = await sessionManager.getSession(id);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
     const body = await c.req.json().catch(() => ({}));
 
@@ -184,12 +313,12 @@ export function createSessionRoutes(
     if (body.project_id !== undefined || body.projectId !== undefined) {
       const newProjectId: string | null | undefined = body.project_id ?? body.projectId;
       if (newProjectId) {
-        if (!projectStore) {
+        if (!deps.projectStore) {
           return c.json({
             error: { code: 'INTERNAL_ERROR', message: 'Хранилище проектов недоступно' },
           }, 500);
         }
-        const existing = await projectStore.load(newProjectId);
+        const existing = await deps.projectStore.load(newProjectId);
         if (!existing) {
           return c.json({
             error: { code: 'PROJECT_NOT_FOUND', message: 'Проект не найден' },
@@ -207,7 +336,7 @@ export function createSessionRoutes(
     if (body.title !== undefined) {
       const prevTitle = session.title;
       session.title = body.title;
-      if (prevTitle !== body.title) {
+      if (prevTitle !== body.title && publishRenamed) {
         eventBus.publish(session.id, 'session.renamed', { session_id: session.id, title: body.title, prev_title: prevTitle });
       }
     }
@@ -236,9 +365,9 @@ export function createSessionRoutes(
   });
 
   app.delete('/:id', auth.requireAuth, async (c) => {
-    const remoteClient = resolveClient();
     const id = c.req.param('id');
-    if (isRemoteRef(id)) {
+    if (hasRemoteGetter && isRemoteRef(id)) {
+      const remoteClient = resolveClient();
       if (!remoteClient) {
         return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
       }
@@ -253,18 +382,29 @@ export function createSessionRoutes(
     }
     const session = await sessionManager.getSession(id);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    eventBus.publish(session.id, 'session.deleted', { session_id: session.id });
+    const userId = await resolveUserId(c);
+    if (publishDeletedBefore) {
+      eventBus.publish(session.id, 'session.deleted', { session_id: session.id });
+    }
     await sessionManager.deleteSession(session.id);
     queueManager.stop(session.id);
+    if (!publishDeletedBefore) {
+      eventBus.publish(session.id, 'session.deleted', { session_id: session.id });
+    }
+    await opts.onSessionDeleted?.(userId, session.id);
     return c.body(null, 204);
   });
 
   app.get('/:id/status', auth.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    const userId = await resolveUserId(c);
+    if (!(await canAccessSession(session, c, userId))) {
+      return c.json({ error: { code: 'FORBIDDEN', message: messages.forbidden(c) } }, 403);
     }
     return c.json({
       blocked: !!session.status.blocked,
@@ -273,13 +413,47 @@ export function createSessionRoutes(
     });
   });
 
-  app.post('/:id/prompt', auth.requireAuth, async (c) => {
-    const remoteClient = resolveClient();
+  // GET /api/v2/sessions/:id/prompt — состав системного промпта (AD-070 §2.5):
+  // манифест источников + состояние промпта активного агента + последний promptMeta.
+  app.get('/:id/prompt', auth.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    const userId = await resolveUserId(c);
+    if (!(await canAccessSession(session, c, userId))) {
+      return c.json({ error: { code: 'FORBIDDEN', message: messages.forbidden(c) } }, 403);
+    }
+    const info = await orchestrator.getPromptInfo(session);
+    return c.json(info);
+  });
+
+  // GET /api/v2/sessions/:id/stats — статистика по агентам/пользователям
+  // (AD-070 §2.6): usage сообщений + рекурсивный usage саб-агентов (tool `task`).
+  app.get('/:id/stats', auth.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    const userId = await resolveUserId(c);
+    if (!(await canAccessSession(session, c, userId))) {
+      return c.json({ error: { code: 'FORBIDDEN', message: messages.forbidden(c) } }, 403);
+    }
+    const stats = await computeSessionStats(session, {
+      getSession: (id) => sessionManager.getSession(id),
+      getModelPricing: (model) => orchestrator.getModelPricing(model),
+      resolveAuthorName,
+    });
+    return c.json(stats);
+  });
+
+  app.post('/:id/prompt', chainMiddleware([auth.requireAuth, ...promptMiddleware]), async (c) => {
     const sessionId = c.req.param('id');
 
     // Гибрид: удалённая сессия исполняется backend — пробрасываем upstream Response
     // как есть (SSE-стрим), без локального оркестратора.
-    if (isRemoteRef(sessionId)) {
+    if (hasRemoteGetter && isRemoteRef(sessionId)) {
+      const remoteClient = resolveClient();
       if (!remoteClient) {
         return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
       }
@@ -297,18 +471,23 @@ export function createSessionRoutes(
     const content = body.content?.trim();
 
     if (!content) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Контент обязателен' } }, 400);
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.contentRequired(c) } }, 400);
     }
 
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    const userId = await resolveUserId(c);
+    if (!(await canAccessSession(session, c, userId))) {
+      return c.json({ error: { code: 'FORBIDDEN', message: messages.forbidden(c) } }, 403);
     }
 
     const streamId = body.messageId || generateStreamId();
+    const author = await resolveAuthor(c);
 
     const message: Message = {
-      id: generateStreamId(),
+      id: promptMessageId === 'stream' ? streamId : generateStreamId(),
       role: MessageRole.USER,
       seq: session.messages.length + 1,
       origin: 'local',
@@ -318,7 +497,7 @@ export function createSessionRoutes(
       disabled: false,
       pinned: false,
       hidden: false,
-      author: 'local',
+      author,
       agentRole: body.agent || session.settings.agentRole,
       provider: body.provider || session.settings.provider,
       model: body.model || session.settings.model,
@@ -332,7 +511,7 @@ export function createSessionRoutes(
 
     if (!result) {
       return c.json({
-        error: { code: 'QUEUE_FULL', message: 'Очередь сообщений заполнена (макс. 5)' },
+        error: { code: 'QUEUE_FULL', message: messages.queueFull(c, 5) },
       }, 429);
     }
 
@@ -374,9 +553,9 @@ export function createSessionRoutes(
   });
 
   app.get('/:id/messages', auth.requireAuth, async (c) => {
-    const remoteClient = resolveClient();
     const id = c.req.param('id');
-    if (isRemoteRef(id)) {
+    if (hasRemoteGetter && isRemoteRef(id)) {
+      const remoteClient = resolveClient();
       if (!remoteClient) {
         return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
       }
@@ -394,7 +573,7 @@ export function createSessionRoutes(
     }
     const session = await sessionManager.getSession(id);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
     return c.json({
       messages: session.messages.map((m, i) => serializeMessage(m, i)),
@@ -406,7 +585,7 @@ export function createSessionRoutes(
   app.post('/:id/clear', auth.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
     session.messages = session.messages.filter((m) => m.pinned);
     session.pendingMessages = [];
@@ -422,9 +601,9 @@ export function createSessionRoutes(
   });
 
   app.post('/:id/abort', auth.requireAuth, async (c) => {
-    const remoteClient = resolveClient();
     const id = c.req.param('id');
-    if (isRemoteRef(id)) {
+    if (hasRemoteGetter && isRemoteRef(id)) {
+      const remoteClient = resolveClient();
       if (!remoteClient) {
         return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
       }
@@ -439,7 +618,7 @@ export function createSessionRoutes(
     }
     const session = await sessionManager.getSession(id);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
     // Отмена стрима: прерываем fetch через cancelToken (orchestrator.cancel).
     // Очистку pendingMessages/blocked/currentStream выполняет сам QueueProcessor —
@@ -468,9 +647,9 @@ export function createSessionRoutes(
   });
 
   app.post('/:id/summarize', auth.requireAuth, async (c) => {
-    const remoteClient = resolveClient();
     const id = c.req.param('id');
-    if (isRemoteRef(id)) {
+    if (hasRemoteGetter && isRemoteRef(id)) {
+      const remoteClient = resolveClient();
       if (!remoteClient) {
         return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
       }
@@ -485,15 +664,15 @@ export function createSessionRoutes(
     }
     const session = await sessionManager.getSession(id);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    if (!contextOptimizer) {
+    if (!deps.contextOptimizer) {
       return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Context optimizer not configured' } }, 500);
     }
     if (!session.settings.provider || !session.settings.model) {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'No provider/model configured for session' } }, 400);
     }
-    if (!contextOptimizer.canSummarize(session)) {
+    if (!deps.contextOptimizer.canSummarize(session)) {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Need at least 3 active messages since last summary' } }, 400);
     }
 
@@ -509,7 +688,7 @@ export function createSessionRoutes(
       disabled: false,
       pinned: false,
       hidden: false,
-      author: 'local',
+      author: await resolveAuthor(c),
       metadata: { type: 'summarization_request', reason: 'manual', stream_id: streamId },
     };
 
@@ -520,37 +699,41 @@ export function createSessionRoutes(
     return c.json({ status: 'enqueued', stream_id: streamId });
   });
 
-  app.get('/:id/events', auth.requireAuth, async (c) => {
-    const sessionId = c.req.param('id');
-    const signal = c.req.raw.signal;
+  // Core-only: сессионный SSE-стрим. У managed backend есть только глобальный
+  // `/api/v2/events`, поэтому backend передаёт enableSessionEvents: false.
+  if (enableSessionEvents) {
+    app.get('/:id/events', auth.requireAuth, async (c) => {
+      const sessionId = c.req.param('id');
+      const signal = c.req.raw.signal;
 
-    return new Response(
-      new ReadableStream({
-        async start(controller) {
-          const encoder = new TextEncoder();
-          try {
-            for await (const event of sseEventStream(eventBus, sessionId, signal)) {
-              const line = `data: ${JSON.stringify(event)}\n\n`;
-              controller.enqueue(encoder.encode(line));
+      return new Response(
+        new ReadableStream({
+          async start(controller) {
+            const encoder = new TextEncoder();
+            try {
+              for await (const event of sseEventStream(eventBus, sessionId, signal)) {
+                const line = `data: ${JSON.stringify(event)}\n\n`;
+                controller.enqueue(encoder.encode(line));
+              }
+            } catch {
+              // disconnected
+            } finally {
+              try { controller.close(); } catch { /* already closed */ }
             }
-          } catch {
-            // disconnected
-          } finally {
-            try { controller.close(); } catch { /* already closed */ }
-          }
+          },
+        }),
+        {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+          },
         },
-      }),
-      {
-        status: 200,
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          'X-Accel-Buffering': 'no',
-        },
-      },
-    );
-  });
+      );
+    });
+  }
 
   app.get('/:id/children', auth.requireAuth, async (c) => {
     const children = await sessionManager.getChildren(c.req.param('id'));
@@ -564,11 +747,19 @@ export function createSessionRoutes(
 
   app.post('/:id/fork', auth.requireAuth, async (c) => {
     const body = await c.req.json().catch(() => ({}));
-    const fork = await sessionManager.forkSession(c.req.param('id'), {
+    const forkOptions: { messageId?: string; messageIndex?: number; title?: string; userId?: string; ownerId?: string } = {
       messageId: body.message_id ?? body.messageId,
       messageIndex: body.message_index ?? body.messageIndex,
       title: body.title,
-    });
+    };
+    if (forkWithOwner) {
+      const owner = await resolveOwner(c);
+      forkOptions.userId = owner;
+      forkOptions.ownerId = owner;
+    }
+    const fork = await sessionManager.forkSession(c.req.param('id'), forkOptions);
+    // См. POST /: подписка EventHub до publish (иначе session.fork.created теряется).
+    await opts.onSessionForked?.(await resolveUserId(c), fork.id);
     eventBus.publish(fork.id, 'session.fork.created', serializeSession(fork, { agentRegistry }));
     return c.json(serializeSession(fork, { agentRegistry }), 201);
   });
@@ -577,7 +768,7 @@ export function createSessionRoutes(
   app.get('/:id/references', auth.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
     const refs = await sessionManager.getReferences(c.req.param('id'));
     return c.json({ references: refs });

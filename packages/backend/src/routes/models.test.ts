@@ -34,6 +34,29 @@ async function makeApp(tmpDir: string) {
   return { app, modelStore, providerStore, modelCache, providerCache };
 }
 
+/**
+ * Mock-AuthKit для RBAC-тестов: `requireAuth` пропускает, `requireAdmin`
+ * отклоняет 403. Фиксирует, что мутации и синхронизация закрыты admin-guard'ом
+ * (ТД-1, фаза A).
+ */
+function createRbacKit() {
+  return {
+    requireAuth: async (_c: Context, next: Next) => { await next(); },
+    requireAdmin: async (c: Context) =>
+      c.json({ error: { code: 'FORBIDDEN', message: 'Access denied' } }, 403),
+  };
+}
+
+async function makeRbacApp(tmpDir: string) {
+  const modelStore = new JsonStore<ModelConfig>({ dataDir: tmpDir, subdir: 'models' });
+  const providerStore = new JsonStore<ProviderConfig>({ dataDir: tmpDir, subdir: 'providers' });
+  const modelCache = new Map<string, ModelConfig>();
+  const providerCache = new Map<string, ProviderConfig>();
+  const app = new Hono();
+  app.route(BASE, createModelRoutes(createRbacKit() as never, modelStore, providerStore, modelCache, providerCache));
+  return { app, modelStore, providerStore, modelCache, providerCache };
+}
+
 function postJSON(body: unknown): RequestInit {
   return {
     method: 'POST',
@@ -156,6 +179,147 @@ describe('routes/models', () => {
       expect(m2?.contextWindow).toBe(131072);
       expect(m2?.contextSource).toBe('api');
     });
+
+    it('новая модель получает токенные цены, maxOutputTokens и валюту провайдера; ответ содержит priced/limited', async () => {
+      await stores.providerStore.save('p-rub', {
+        name: 'p-rub', type: 'openai', baseUrl: 'http://provider.local', enabled: true, currency: 'RUB',
+      });
+      vi.spyOn(ProviderFactory, 'create').mockReturnValue({
+        listModelsDetailed: vi.fn().mockResolvedValue([{
+          id: 'm1',
+          contextWindow: 200000,
+          maxOutputTokens: 8000,
+          inputPrice: 1.5,
+          outputPrice: 2.5,
+          cacheReadPrice: 0.1,
+          cacheWritePrice: 0.2,
+          priceUnit: 'token',
+        }]),
+      } as never);
+
+      const res = await stores.app.request(`${BASE}/fetch?provider=p-rub`, { method: 'POST' });
+      const body = await res.json() as { new: number; priced: number; limited: number };
+      expect(body.new).toBe(1);
+      expect(body.priced).toBe(1);
+      expect(body.limited).toBe(1);
+
+      const saved = await stores.modelStore.load('p-rub/m1');
+      expect(saved).toMatchObject({
+        inputPrice: 1.5,
+        outputPrice: 2.5,
+        cacheReadPrice: 0.1,
+        cacheWritePrice: 0.2,
+        priceSource: 'api',
+        currency: 'RUB',
+        maxOutputTokens: 8000,
+        contextWindow: 200000,
+        contextSource: 'api',
+      });
+    });
+
+    it('не перезаписывает ручные цены (priceSource=manual) и валюту модели', async () => {
+      await stores.modelStore.save('p1/m1', {
+        id: 'p1/m1', name: 'm1', provider: 'p1', enabled: true,
+        inputPrice: 99, outputPrice: 98, priceSource: 'manual', currency: 'USD',
+      });
+      vi.spyOn(ProviderFactory, 'create').mockReturnValue({
+        listModelsDetailed: vi.fn().mockResolvedValue([
+          { id: 'm1', inputPrice: 1.5, outputPrice: 2.5, priceUnit: 'token' },
+        ]),
+      } as never);
+
+      const res = await stores.app.request(`${BASE}/fetch?provider=p1`, { method: 'POST' });
+      const body = await res.json() as { priced: number };
+      expect(body.priced).toBe(0);
+
+      const saved = await stores.modelStore.load('p1/m1');
+      expect(saved?.inputPrice).toBe(99);
+      expect(saved?.outputPrice).toBe(98);
+      expect(saved?.priceSource).toBe('manual');
+      expect(saved?.currency).toBe('USD');
+    });
+
+    it('не перезаписывает старые цены без priceSource (считаются ручными)', async () => {
+      await stores.modelStore.save('p1/m1', {
+        id: 'p1/m1', name: 'm1', provider: 'p1', enabled: true, inputPrice: 42,
+      });
+      vi.spyOn(ProviderFactory, 'create').mockReturnValue({
+        listModelsDetailed: vi.fn().mockResolvedValue([
+          { id: 'm1', inputPrice: 1.5, priceUnit: 'token' },
+        ]),
+      } as never);
+
+      const res = await stores.app.request(`${BASE}/fetch?provider=p1`, { method: 'POST' });
+      const body = await res.json() as { priced: number };
+      expect(body.priced).toBe(0);
+
+      const saved = await stores.modelStore.load('p1/m1');
+      expect(saved?.inputPrice).toBe(42);
+      expect(saved?.priceSource).toBeUndefined();
+    });
+
+    it('при записи api-цен существующая явная валюта модели сохраняется', async () => {
+      await stores.providerStore.save('p-rub2', {
+        name: 'p-rub2', type: 'openai', baseUrl: 'http://provider.local', enabled: true, currency: 'RUB',
+      });
+      await stores.modelStore.save('p-rub2/m1', {
+        id: 'p-rub2/m1', name: 'm1', provider: 'p-rub2', enabled: true,
+        inputPrice: 1, outputPrice: 1, priceSource: 'api', currency: 'USD',
+      });
+      vi.spyOn(ProviderFactory, 'create').mockReturnValue({
+        listModelsDetailed: vi.fn().mockResolvedValue([
+          { id: 'm1', inputPrice: 5, outputPrice: 6, priceUnit: 'token' },
+        ]),
+      } as never);
+
+      const res = await stores.app.request(`${BASE}/fetch?provider=p-rub2`, { method: 'POST' });
+      const body = await res.json() as { priced: number };
+      expect(body.priced).toBe(1);
+
+      const saved = await stores.modelStore.load('p-rub2/m1');
+      expect(saved?.inputPrice).toBe(5);
+      expect(saved?.outputPrice).toBe(6);
+      expect(saved?.priceSource).toBe('api');
+      expect(saved?.currency).toBe('USD');
+    });
+
+    it('non-token тарифы (B1 отдаёт без цен) не пишут цены, priced не растёт', async () => {
+      await stores.modelStore.save('p1/m1', {
+        id: 'p1/m1', name: 'm1', provider: 'p1', enabled: true,
+      });
+      vi.spyOn(ProviderFactory, 'create').mockReturnValue({
+        listModelsDetailed: vi.fn().mockResolvedValue([
+          { id: 'm1', contextWindow: 128000 },
+        ]),
+      } as never);
+
+      const res = await stores.app.request(`${BASE}/fetch?provider=p1`, { method: 'POST' });
+      const body = await res.json() as { priced: number; limited: number };
+      expect(body.priced).toBe(0);
+      expect(body.limited).toBe(0);
+
+      const saved = await stores.modelStore.load('p1/m1');
+      expect(saved?.inputPrice).toBeUndefined();
+      expect(saved?.priceSource).toBeUndefined();
+    });
+
+    it('не перезаписывает уже заданный maxOutputTokens', async () => {
+      await stores.modelStore.save('p1/m1', {
+        id: 'p1/m1', name: 'm1', provider: 'p1', enabled: true, maxOutputTokens: 4096,
+      });
+      vi.spyOn(ProviderFactory, 'create').mockReturnValue({
+        listModelsDetailed: vi.fn().mockResolvedValue([
+          { id: 'm1', maxOutputTokens: 8000 },
+        ]),
+      } as never);
+
+      const res = await stores.app.request(`${BASE}/fetch?provider=p1`, { method: 'POST' });
+      const body = await res.json() as { limited: number };
+      expect(body.limited).toBe(0);
+
+      const saved = await stores.modelStore.load('p1/m1');
+      expect(saved?.maxOutputTokens).toBe(4096);
+    });
   });
 
   describe('синхронизация in-memory кеша (LLM Proxy)', () => {
@@ -231,5 +395,134 @@ describe('routes/models', () => {
 
       expect(stores.modelCache.has('p1/m1')).toBe(false);
     });
+  });
+
+  describe('валюта модели', () => {
+    interface CurrencyGroup {
+      provider: { name: string; currency?: string };
+      models: Array<Record<string, unknown>>;
+    }
+
+    async function listGroups(): Promise<CurrencyGroup[]> {
+      const res = await stores.app.request(BASE);
+      const body = await res.json() as { groups: CurrencyGroup[] };
+      return body.groups;
+    }
+
+    it('POST с currency=CNY сохраняет модель, GET возвращает model.currency и provider.currency', async () => {
+      await stores.providerStore.save('p-cur', {
+        name: 'p-cur', type: 'openai', baseUrl: 'http://p.local', enabled: true, currency: 'USD',
+      });
+
+      const res = await stores.app.request(BASE, postJSON({
+        id: 'p-cur/m-cur',
+        name: 'm-cur',
+        provider: 'p-cur',
+        currency: 'CNY',
+      }));
+      expect(res.status).toBe(201);
+
+      const saved = await stores.modelStore.load('p-cur/m-cur');
+      expect(saved?.currency).toBe('CNY');
+
+      const group = (await listGroups()).find((g) => g.provider.name === 'p-cur')!;
+      expect(group.provider.currency).toBe('USD');
+      expect(group.models[0]!.currency).toBe('CNY');
+    });
+
+    it('POST с невалидной currency (XXX) — 400 VALIDATION_ERROR', async () => {
+      const res = await stores.app.request(BASE, postJSON({
+        id: 'p1/m-bad',
+        name: 'm-bad',
+        provider: 'p1',
+        currency: 'XXX',
+      }));
+      expect(res.status).toBe(400);
+
+      const body = await res.json() as { error: { code: string } };
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(await stores.modelStore.load('p1/m-bad')).toBeNull();
+    });
+  });
+
+  describe('priceSource при ручном вводе', () => {
+    it('POST /models с ценой в body помечает priceSource=manual', async () => {
+      const res = await stores.app.request(BASE, postJSON({
+        id: 'p1/m-price',
+        name: 'm-price',
+        provider: 'p1',
+        input_price: 3,
+      }));
+      expect(res.status).toBe(201);
+
+      const saved = await stores.modelStore.load('p1/m-price');
+      expect(saved?.inputPrice).toBe(3);
+      expect(saved?.priceSource).toBe('manual');
+    });
+
+    it('POST /models c camelCase-ценой тоже помечает priceSource=manual', async () => {
+      const res = await stores.app.request(BASE, postJSON({
+        id: 'p1/m-price-camel',
+        name: 'm-price-camel',
+        provider: 'p1',
+        outputPrice: 4,
+      }));
+      expect(res.status).toBe(201);
+
+      const saved = await stores.modelStore.load('p1/m-price-camel');
+      expect(saved?.outputPrice).toBe(4);
+      expect(saved?.priceSource).toBe('manual');
+    });
+
+    it('POST /models без цен сохраняет прежний priceSource', async () => {
+      await stores.modelStore.save('p1/m-keep', {
+        id: 'p1/m-keep', name: 'm-keep', provider: 'p1', enabled: true,
+        inputPrice: 2, priceSource: 'api',
+      });
+
+      const res = await stores.app.request(BASE, postJSON({
+        id: 'p1/m-keep', enabled: false,
+      }));
+      expect(res.status).toBe(200);
+
+      const saved = await stores.modelStore.load('p1/m-keep');
+      expect(saved?.inputPrice).toBe(2);
+      expect(saved?.priceSource).toBe('api');
+      expect(saved?.enabled).toBe(false);
+    });
+  });
+});
+
+describe('routes/models: RBAC (мутации/синхронизация — только ADMIN)', () => {
+  let tmpDir: string;
+  let stores: Awaited<ReturnType<typeof makeRbacApp>>;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-models-rbac-test-'));
+    stores = await makeRbacApp(tmpDir);
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('GET / — requireAuth пропускает, 200', async () => {
+    const res = await stores.app.request(BASE);
+    expect(res.status).toBe(200);
+  });
+
+  it('POST / — 403 (writeGuard = requireAdmin)', async () => {
+    const res = await stores.app.request(BASE, postJSON({ id: 'p1/m1', name: 'm1', provider: 'p1' }));
+    expect(res.status).toBe(403);
+  });
+
+  it('DELETE /:id — 403 (writeGuard = requireAdmin)', async () => {
+    const res = await stores.app.request(`${BASE}/p1%2Fm1`, { method: 'DELETE' });
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /fetch — 403 (requireAdmin)', async () => {
+    const res = await stores.app.request(`${BASE}/fetch?provider=p1`, { method: 'POST' });
+    expect(res.status).toBe(403);
   });
 });

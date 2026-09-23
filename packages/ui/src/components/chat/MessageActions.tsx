@@ -1,4 +1,6 @@
+import { forwardRef, type ReactNode } from 'react'
 import { Icon } from '../icon/Icon'
+import { StatsPopoverButton } from './StatsPopoverButton'
 import { useI18n } from '@/lib/i18n'
 
 interface MessageActionsProps {
@@ -8,7 +10,13 @@ interface MessageActionsProps {
   pinned: boolean
   canRetry: boolean
   hasDebug: boolean
+  /** Открыто окно отладки именно для этого сообщения — подсветить кнопку. */
+  debugActive?: boolean
   readOnly?: boolean
+  /** У сообщения есть статистика ответа — показать кнопку и поповер. */
+  hasStats?: boolean
+  /** Содержимое поповера со статистикой ответа. */
+  statsContent?: ReactNode
   onCopy: () => void
   onToggle: () => void
   onPin: () => void
@@ -25,7 +33,10 @@ export function MessageActions({
   pinned,
   canRetry,
   hasDebug,
+  debugActive,
   readOnly,
+  hasStats,
+  statsContent,
   onCopy,
   onToggle,
   onPin,
@@ -70,30 +81,32 @@ export function MessageActions({
       )}
 
       {!isUser && hasDebug && (
-        <ActionBtn onClick={onDebug} title={t('chat.actions.debug')} icon="bug" />
+        <ActionBtn onClick={onDebug} title={t('chat.actions.debug')} icon="bug" active={debugActive} />
       )}
+
+      {/* AD-070 §2.6: статистика ответа — кнопка в ряду, содержимое в поповере.
+          Единое поведение на всех платформах, инлайн не рендерится. */}
+      {!isUser && hasStats && statsContent && <StatsPopoverButton>{statsContent}</StatsPopoverButton>}
     </div>
   )
 }
 
-function ActionBtn({
-  onClick,
-  title,
-  icon,
-  active,
-  danger,
-}: {
-  onClick: () => void
-  title: string
-  icon: string
-  active?: boolean
-  danger?: boolean
-}) {
+const ActionBtn = forwardRef<
+  HTMLButtonElement,
+  {
+    onClick?: () => void
+    title: string
+    icon: string
+    active?: boolean
+    danger?: boolean
+  }
+>(function ActionBtn({ onClick, title, icon, active, danger }, ref) {
   return (
     <button
+      ref={ref}
       onClick={onClick}
       title={title}
-      className={`rounded p-1 transition-colors ${
+      className={`inline-flex items-center justify-center rounded p-1 transition-colors ${
         danger
           ? 'hover:bg-destructive/10 hover:text-destructive'
           : active
@@ -104,4 +117,4 @@ function ActionBtn({
       <Icon name={icon} className="size-3.5" />
     </button>
   )
-}
+})

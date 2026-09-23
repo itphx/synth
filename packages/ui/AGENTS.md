@@ -54,6 +54,8 @@
 
 ### Примитивы и иконки
 - UI-примитивы — в `components/ui/`. Barrel `components/ui/index.ts` намеренно частичный (только `SynthLogo`, `ContextMenu`, `Popover`); остальное импортируется прямыми путями — это норма, не «чинить» реэкспортами.
+- Коллекция настроек — `components/ui/settings/` (`SettingsPanel`/`Section`/`Field`/`Row`/`Actions`, контролы `TextField`/`NumberField`/`SliderField`/`TextArea`/`SelectField`/`ToggleField`/`ListField`/`SegmentedControl`/`Tabs`, хук `useSettingsDraft`) — обязательный стандарт (AD-072). Все разделы настроек и админ-категории мигрированы; legacy `components/settings/settings-layout.tsx` (`SettingsPage`/`SettingsCard`) удалён — новых импортов оттуда быть не должно.
+- Панель настроек: один вертикальный скролл (скроллится только тело, шапка — `shrink-0`), `min-w-0`/`break-words` для текста, базовая сетка `grid-cols-1`, центрирование `max-w-3xl`, симметричные паддинги (без `pr-2`); порядок в шапке — `title` (+ `actions`) → `description` → `meta` (счётчики идут **ниже** описания, AD-072); действия (`SettingsActions`) — **в конце содержимого**, не фиксированным футером (у `SettingsPanel` нет footer-пропов). В `SettingsActions` кнопка Reset цветная (`outline-primary`) только когда текущие значения отличаются от дефолтных; при дефолтных (`isDefault`) — серая (`outline-muted`) и неактивна; Save/Cancel активны только при несохранённых изменениях (`dirty`).
 - Иконки — только `<Icon name="..." />` из `components/icon/Icon.tsx` (реестр `icons.ts`). Не тащить svg/`@remixicon` напрямую (единственное исключение — `SynthLogo.tsx`); неизвестное имя не в `iconMap` → `Icon` вернёт `null`.
 - Иконки/подписи инструментов — `lib/toolIcons.ts` (`getToolIcon`, `getToolDisplayName`); новый тул добавлять в `TOOL_ICON_MAP`, а не маппинг inline в компоненте.
 
@@ -69,7 +71,7 @@
 
 ### API и i18n
 - API v2 — только через `synthApi` (`lib/api/synthApi.ts:5`); `/auth` — `lib/api/client.ts` (`BASE_URL = '/auth'`, `:75`). Ошибки бросаются как `Error` — ловить и показывать через i18n.
-- Строки — только `useI18n().t('ключ')`, не хардкодить. `messages/en.ts` — базовый словарь, `messages/ru.ts` — ленивая загрузка (`import()`); ключ добавлять в оба.
+- Строки — только `useI18n().t('ключ')`, не хардкодить. `messages/en.ts` — базовый словарь, `messages/ru.ts` — ленивая загрузка (`import()`); ключ добавлять в оба. Плюрализация — ICU-подобным синтаксисом прямо в значении словаря: `'{count, plural, one {# сервер} few {# сервера} many {# серверов}}'` (ru — формы `one`/`few`/`many`, en — `one`/`other`). `#` внутри формы — само число, также работают обычные `{param}`-плейсхолдеры. `t(key, { count })` сам выбирает форму по локали (правила — `lib/i18n/plural.ts`, `pluralCategory`); если формы нужной категории нет — fallback `other → many → one → few → zero → two`.
 - Движковые ключи синхронизируются с `@itphx/synth-shared/i18n` по контракту AD-041; проверка автоматическая — `messages/engine-keys.test.ts`.
 - Системные сообщения ядра несут `metadata.i18n = { key, params }`: для отображения использовать `resolveI18n`/`isValidI18nMeta`/`useResolveI18n` (`lib/i18n/`), а не собирать строку в UI.
 

@@ -7,6 +7,19 @@ export interface JsonStoreConfig {
   subdir: string;
 }
 
+/**
+ * Структурный контракт JSON-хранилища. Нужен, чтобы core-фабрики роутов можно
+ * было переиспользовать в backend с его собственным `JsonStore` (у классов есть
+ * приватные поля, поэтому напрямую типы не совместимы, а публичный API — общий).
+ */
+export interface JsonStoreLike<T> {
+  load(key: string): Promise<T | null>;
+  save(key: string, value: T): Promise<void>;
+  delete(key: string): Promise<void>;
+  exists(key: string): Promise<boolean>;
+  list(): Promise<T[]>;
+}
+
 export class JsonStore<T> {
   private _locks = new Map<string, AsyncLock>();
 

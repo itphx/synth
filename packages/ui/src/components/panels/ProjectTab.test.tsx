@@ -1,0 +1,172 @@
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import React from 'react'
+
+// persist (zustand) в useUIStore пишет в localStorage — в Node/vitest его нет.
+vi.hoisted(() => {
+  const data = new Map<string, string>()
+  const ls = {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      data.set(k, v)
+    },
+    removeItem: (k: string) => {
+      data.delete(k)
+    },
+    clear: () => {
+      data.clear()
+    },
+  }
+  Object.defineProperty(globalThis, 'localStorage', { value: ls, configurable: true })
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'localStorage', { value: ls, configurable: true })
+  }
+})
+
+const mocks = vi.hoisted(() => ({
+  getProject: vi.fn(),
+  getProjectMcp: vi.fn(),
+  updateProjectMcp: vi.fn(),
+  getMcpRegistry: vi.fn(),
+  updateProject: vi.fn(),
+  notify: vi.fn(),
+}))
+
+vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
+// Стабильный notify: попадает в deps эффекта ProjectTab, иначе бесконечный ререндер.
+vi.mock('@/hooks/useNotification', () => ({
+  useNotification: () => ({ notify: mocks.notify }),
+}))
+
+import { I18nProvider, useI18nStore } from '@/lib/i18n'
+import { dict as enDict } from '@/lib/i18n/messages/en'
+import { ProjectTab } from './ProjectTab'
+import { useSessionsStore } from '@/stores/sessionsStore'
+import { useProjectsStore } from '@/stores/projectsStore'
+import { useAuthStore } from '@/stores/authStore'
+import { useUIStore } from '@/stores/useUIStore'
+
+;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const roots: Array<{ root: Root; container: HTMLElement }> = []
+
+const PROJECT = {
+  id: 'p1',
+  name: 'P',
+  owner_id: 'u1',
+  members: { u1: 'owner' },
+  description: '',
+  current_task: '',
+  invariants: '',
+  icon: null,
+  color: null,
+  workspace: null,
+  repos: null,
+  status_messages: [],
+  log: [],
+  plan: null,
+  created_at: '',
+  updated_at: '',
+}
+
+const REGISTRY = [
+  { name: 'sys', origin: 'instance', trust: 'builtin', config: { type: 'http', url: 'http://x' } },
+  { name: 'srvB', origin: 'user', trust: 'community', config: { type: 'http', url: 'http://y' } },
+]
+
+async function renderTab(): Promise<HTMLElement> {
+  useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  roots.push({ root, container })
+  await act(async () => {
+    root.render(
+      <I18nProvider>
+        <ProjectTab />
+      </I18nProvider>,
+    )
+  })
+  await act(async () => {})
+  await act(async () => {})
+  return container
+}
+
+beforeEach(() => {
+  mocks.getProject.mockResolvedValue(PROJECT)
+  mocks.getProjectMcp.mockResolvedValue({ enabled: ['srvB'], defaultOn: [], knownServers: ['sys', 'srvB'] })
+  mocks.updateProjectMcp.mockResolvedValue({ enabled: ['srvB'], defaultOn: ['srvB'], knownServers: ['sys', 'srvB'] })
+  mocks.getMcpRegistry.mockResolvedValue({ entries: REGISTRY })
+  mocks.updateProject.mockResolvedValue(PROJECT)
+
+  useUIStore.setState({
+    activeCenterTabId: 'tab-1',
+    centerTabs: [{ id: 'tab-1', type: 'chat', title: 'Chat', data: { sessionId: 's1' } }],
+  })
+  useSessionsStore.setState({
+    sessions: [{ id: 's1', name: 'S', project_id: 'p1', engine: 'synth', settings: { model: 'm' } }],
+  } as never)
+  useProjectsStore.setState({ projects: [PROJECT] as never })
+  useAuthStore.setState({ user: { id: 'u1', username: 'owner', roles: [] } as never })
+})
+
+afterEach(async () => {
+  while (roots.length > 0) {
+    const { root, container } = roots.pop()!
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+  vi.clearAllMocks()
+})
+
+describe('ProjectTab — проектный MCP-скоуп (AD-071 §2.4)', () => {
+  it('owner видит управление, системный сервер помечен и не управляется', async () => {
+    const container = await renderTab()
+    expect(container.querySelector('[data-testid="project-mcp-list"]')).not.toBeNull()
+
+    const sysRow = container.querySelector('[data-testid="project-mcp-sys"]')!
+    expect(sysRow.textContent).toContain('system')
+    expect(sysRow.textContent).toContain('managed by the administrator')
+    expect(sysRow.querySelectorAll('button[role="switch"]')).toHaveLength(0)
+
+    const srvRow = container.querySelector('[data-testid="project-mcp-srvB"]')!
+    expect(srvRow.querySelectorAll('button[role="switch"]')).toHaveLength(2)
+  })
+
+  it('owner задаёт defaultOn → PUT /projects/:id/mcp', async () => {
+    const container = await renderTab()
+    const srvRow = container.querySelector('[data-testid="project-mcp-srvB"]')!
+    const toggles = srvRow.querySelectorAll('button[role="switch"]')
+    // Второй тумблер — «По умолчанию».
+    const defaultToggle = toggles[1] as HTMLButtonElement
+    expect(defaultToggle.getAttribute('aria-checked')).toBe('false')
+
+    await act(async () => {
+      defaultToggle.click()
+    })
+
+    expect(mocks.updateProjectMcp).toHaveBeenCalledWith('p1', {
+      enabled: ['srvB'],
+      defaultOn: ['srvB'],
+    })
+    const updated = container.querySelector('[data-testid="project-mcp-srvB"]')!
+    expect((updated.querySelectorAll('button[role="switch"]')[1] as HTMLButtonElement).getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('editor/viewer не видит секцию управления', async () => {
+    useAuthStore.setState({ user: { id: 'u2', username: 'viewer', roles: [] } as never })
+    mocks.getProject.mockResolvedValue({ ...PROJECT, members: { u1: 'owner', u2: 'viewer' } })
+    const container = await renderTab()
+    expect(container.querySelector('[data-testid="project-mcp-list"]')).toBeNull()
+    expect(mocks.getProjectMcp).not.toHaveBeenCalled()
+  })
+
+  it('LEAD видит управление независимо от владения проектом', async () => {
+    useAuthStore.setState({ user: { id: 'u3', username: 'lead', roles: ['LEAD'] } as never })
+    const container = await renderTab()
+    expect(container.querySelector('[data-testid="project-mcp-list"]')).not.toBeNull()
+  })
+})

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { ThemeMode, Locale } from '../lib/theme/themes'
+import type { ThemeMode } from '../lib/theme/themes'
 import { profileService } from '@/lib/api/profileService'
 import { applyUiScale, normalizeUiScale, persistUiScale, readUiScale } from '@/lib/uiScale'
 
@@ -105,11 +105,10 @@ interface UIStore {
   themeMode: ThemeMode
   setThemeMode: (mode: ThemeMode) => void
 
-  locale: Locale
-  setLocale: (locale: Locale) => void
-
   uiScale: number
   setUiScale: (scale: number) => void
+  /** Live-preview настроек внешнего вида из панели «Внешний вид» (без записи в профиль). */
+  setAppearancePreview: (patch: { theme?: string; themeMode?: ThemeMode; uiScale?: number }) => void
 
   centerTabs: CenterTab[]
   activeCenterTabId: string | null
@@ -125,6 +124,11 @@ interface UIStore {
 
   intermediateTextDisplay: 'inline' | 'bottom'
   setIntermediateTextDisplay: (mode: 'inline' | 'bottom') => void
+
+  /** AD-071 §2.6: сигнал изменения instance-wide `tools.disabled` — статистика
+   *  и таблицы MCP перезапрашиваются без рестарта. Runtime, не персистится. */
+  toolsDisabledTick: number
+  bumpToolsDisabledTick: () => void
 }
 
 export const useUIStore = create<UIStore>()(
@@ -207,7 +211,8 @@ export const useUIStore = create<UIStore>()(
 
       leftPanelTab: 'projects',
       setLeftPanelTab: (tab) => set({ leftPanelTab: tab }),
-      rightPanelTab: 'stats',
+      // AD-071: дефолтная вкладка правой панели — «Контекст».
+      rightPanelTab: 'context',
       setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
       collapsedProjects: new Set<string>(),
       toggleProjectCollapse: (projectId) =>
@@ -254,17 +259,14 @@ export const useUIStore = create<UIStore>()(
         profileService.syncThemeModeToProfile(mode)
       },
 
-      locale: 'ru',
-      setLocale: (locale) => {
-        set({ locale })
-        profileService.syncLocaleToProfile(locale)
-      },
-
       uiScale: readUiScale(),
       setUiScale: (scale) => {
         applyUiScale(scale)
         persistUiScale(scale)
         set({ uiScale: normalizeUiScale(scale) })
+      },
+      setAppearancePreview: (patch) => {
+        set(patch)
       },
 
       centerTabs: [],
@@ -336,6 +338,9 @@ export const useUIStore = create<UIStore>()(
         set({ intermediateTextDisplay: mode })
         profileService.syncIntermediateTextDisplayToProfile(mode)
       },
+
+      toolsDisabledTick: 0,
+      bumpToolsDisabledTick: () => set((state) => ({ toolsDisabledTick: state.toolsDisabledTick + 1 })),
     }),
     {
       name: 'synth-ui-settings',

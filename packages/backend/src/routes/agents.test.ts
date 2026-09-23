@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { createAgentRoutes } from './agents.js';
 import { JsonStore } from '../storage/json-store.js';
 import type { AgentDefinition } from '@itphx/synth-shared';
-import { AgentRegistry } from '@itphx/synth-core';
+import { AgentRegistry, DEFAULT_AGENT_ID } from '@itphx/synth-core';
 
 function createMockKit() {
   return {
@@ -23,10 +23,10 @@ function createMockKit() {
 let tmpDir: string;
 let store: JsonStore<AgentDefinition>;
 
-function createTestApp(agentRegistry?: AgentRegistry) {
+function createTestApp(agentRegistry?: AgentRegistry, getDefaultAgentId?: () => string | Promise<string>) {
   const app = new Hono();
   const kit = createMockKit();
-  const routes = createAgentRoutes(kit as any, store, undefined, agentRegistry);
+  const routes = createAgentRoutes(kit as any, store, undefined, agentRegistry, getDefaultAgentId);
   app.route('/api/v2/agents', routes);
   return app;
 }
@@ -202,5 +202,37 @@ describe('Agent API Routes — синхронизация с AgentRegistry', () 
     const res = await app.request('/api/v2/agents/assistant', { method: 'DELETE' });
     expect(res.status).toBe(200);
     expect(registry.get('assistant')?.contextFile).toBe('ASSISTANT.md');
+  });
+});
+
+describe('Agent API Routes — default_agent', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-agents-test-'));
+    store = new JsonStore<AgentDefinition>({ dataDir: tmpDir, subdir: 'agents' });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('GET /agents без геттера отдаёт DEFAULT_AGENT_ID', async () => {
+    const app = createTestApp();
+    const res = await app.request('/api/v2/agents');
+    const body: any = await res.json();
+    expect(body.default_agent).toBe(DEFAULT_AGENT_ID);
+  });
+
+  it('GET /agents отдаёт значение геттера', async () => {
+    const app = createTestApp(undefined, () => 'analyst');
+    const res = await app.request('/api/v2/agents');
+    const body: any = await res.json();
+    expect(body.default_agent).toBe('analyst');
+  });
+
+  it('GET /agents/all отдаёт значение геттера', async () => {
+    const app = createTestApp(undefined, async () => 'developer');
+    const res = await app.request('/api/v2/agents/all');
+    const body: any = await res.json();
+    expect(body.default_agent).toBe('developer');
   });
 });

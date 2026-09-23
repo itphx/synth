@@ -29,15 +29,21 @@ class ScriptedProvider extends BaseProvider {
   private static _script: ScriptStep[] = [];
   private static _step = 0;
   private static _systemPrompts: string[] = [];
+  private static _messages: LLMMessage[][] = [];
 
   static configure(script: ScriptStep[]): void {
     this._script = script;
     this._step = 0;
     this._systemPrompts = [];
+    this._messages = [];
   }
 
   static prompts(): string[] {
     return this._systemPrompts;
+  }
+
+  static messages(): LLMMessage[][] {
+    return this._messages;
   }
 
   private _currentStep(): ScriptStep {
@@ -61,7 +67,7 @@ class ScriptedProvider extends BaseProvider {
   }
 
   async *chatAsync(
-    _messages: LLMMessage[],
+    messages: LLMMessage[],
     systemPrompt?: string,
     _tools?: Record<string, unknown>[],
     _debugCollector?: unknown,
@@ -73,6 +79,7 @@ class ScriptedProvider extends BaseProvider {
       function: { name: t.name, arguments: JSON.stringify(t.args) },
     }));
     ScriptedProvider._systemPrompts.push(systemPrompt ?? '');
+    ScriptedProvider._messages.push(messages);
     ScriptedProvider._step++;
     yield {
       content: step.content ?? '',
@@ -91,6 +98,9 @@ class ScriptedProvider extends BaseProvider {
 function makeCtxBuilder(): ContextBuilder {
   return {
     buildSystemPrompt: async () => 'system prompt',
+    buildBaseBlocks: async () => [
+      { key: 'role', tier: 'stable', order: 10, content: 'system prompt' },
+    ],
   } as unknown as ContextBuilder;
 }
 
@@ -279,10 +289,13 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     expect(final?.planApproved).toBe(true);
     await expect(readFile(join(tmpDir, 'b.txt'), 'utf-8')).resolves.toBe('data');
 
-    // system prompt содержит план проекта (AD-039)
-    const prompts = ScriptedProvider.prompts();
-    expect(prompts[0]).toContain('[APPROVED PLAN]');
-    expect(prompts[0]).toContain('Найти причину');
+    // AD-070 §2.8: план проекта — не system prompt, а plan_updated state-сообщение.
+    expect(ScriptedProvider.prompts()[0]).not.toContain('[APPROVED PLAN]');
+    expect(final!.messages.some(
+      (m) => m.metadata?.state === true
+        && m.metadata?.type === 'plan_updated'
+        && m.content.includes('Найти причину'),
+    )).toBe(true);
   });
 
   it('strict: write заблокирован до утверждения плана, разрешён после', async () => {
@@ -382,7 +395,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     await expect(exists(join(wsDefault, 'x.txt'))).resolves.toBe(false);
   });
 
-  it('при возобновлении сессии план проекта встраивается в system prompt', async () => {
+  it('при возобновлении сессии план проекта уходит plan_updated state-сообщением', async () => {
     const projectStore = new ProjectStore({ dataDir: tmpDir });
     const project = projectStore.create('Proj', 'u1');
     project.plan = {
@@ -438,14 +451,24 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     const result = await processMessage(fresh, msg, new AbortController().signal, () => {});
     expect(result.error).toBeUndefined();
 
-    // strict + план уже утверждён → write разрешён, план в первом же промпте
-    expect(ScriptedProvider.prompts()[0]).toContain('[APPROVED PLAN]');
-    expect(ScriptedProvider.prompts()[0]).toContain('план из проекта');
-    expect(ScriptedProvider.prompts()[0]).toContain('[PLAN MODE: STRICT]');
-    expect(ScriptedProvider.prompts()[0]).toContain('План утверждён');
+    // AD-070 §2.8: план и строгость — не system prompt, а state-сообщения.
+    expect(ScriptedProvider.prompts()[0]).not.toContain('[APPROVED PLAN]');
+    expect(ScriptedProvider.prompts()[0]).not.toContain('[PLAN MODE:');
+    const final = await sessionManager.getSession(session.id);
+    expect(final!.messages.some(
+      (m) => m.metadata?.type === 'plan_updated' && m.content.includes('план из проекта'),
+    )).toBe(true);
+    expect(final!.messages.some(
+      (m) => m.metadata?.type === 'mode_change' && m.content.includes('[PLAN MODE: STRICT]') && m.content.includes('План утверждён'),
+    )).toBe(true);
+    // state-сообщения попадают в LLM как user с обёрткой.
+    const llm = ScriptedProvider.messages()[0]!;
+    expect(llm.some(
+      (m) => m.role === 'user' && m.content.includes('<system-state type="plan_updated">') && m.content.includes('план из проекта'),
+    )).toBe(true);
   });
 
-  it('mode prompt из системных контекстных файлов (prompts/system/MODE_PLAN.ru.md) встраивается в system prompt', async () => {
+  it('mode prompt (prompts/system/MODE_PLAN.ru.md) уходит mode_change state-сообщением, не в system', async () => {
     const contextConfig = new ContextConfig({ userDataDir: tmpDir });
     ScriptedProvider.configure([{ content: 'готово' }]);
 
@@ -478,11 +501,16 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
 
     const prompts = ScriptedProvider.prompts();
     expect(prompts.length).toBeGreaterThanOrEqual(1);
-    expect(prompts[0]).toContain('[MODE: PLAN]');
-    expect(prompts[0]).toContain('Не вноси никаких изменений');
+    expect(prompts[0]).not.toContain('[MODE: PLAN]');
+    const final = await sessionManager.getSession(session.id);
+    const modeChange = final!.messages.find((m) => m.metadata?.type === 'mode_change');
+    expect(modeChange?.content).toContain('[MODE: PLAN]');
+    expect(modeChange?.content).toContain('Не вноси никаких изменений');
+    const llm = ScriptedProvider.messages()[0]!;
+    expect(llm.some((m) => m.content.includes('<system-state type="mode_change">') && m.content.includes('[MODE: PLAN]'))).toBe(true);
   });
 
-  it.each(['act', 'yolo'] as const)('mode prompt из системных контекстных файлов (prompts/system/MODE_%s.ru.md) встраивается в system prompt', async (mode) => {
+  it.each(['act', 'yolo'] as const)('mode prompt (prompts/system/MODE_%s.ru.md) уходит mode_change state-сообщением', async (mode) => {
     const contextConfig = new ContextConfig({ userDataDir: tmpDir });
     ScriptedProvider.configure([{ content: 'готово' }]);
 
@@ -516,15 +544,18 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     const prompts = ScriptedProvider.prompts();
     expect(prompts.length).toBeGreaterThanOrEqual(1);
     const header = `[MODE: ${mode.toUpperCase()}]`;
-    expect(prompts[0]).toContain(header);
+    expect(prompts[0]).not.toContain(header);
+    const final = await sessionManager.getSession(session.id);
+    const modeChange = final!.messages.find((m) => m.metadata?.type === 'mode_change');
+    expect(modeChange?.content).toContain(header);
     if (mode === 'act') {
-      expect(prompts[0]).toContain('Ты работаешь в режиме **act** — полного доступа.');
+      expect(modeChange?.content).toContain('Ты работаешь в режиме **act** — полного доступа.');
     } else {
-      expect(prompts[0]).toContain('Ты работаешь в режиме **yolo** — полного доступа с автоматическим подтверждением запросов.');
+      expect(modeChange?.content).toContain('Ты работаешь в режиме **yolo** — полного доступа с автоматическим подтверждением запросов.');
     }
   });
 
-  it('без contextConfig блок [MODE: PLAN] не добавляется (fallback удалён)', async () => {
+  it('без contextConfig mode_change не добавляется (fallback удалён)', async () => {
     ScriptedProvider.configure([{ content: 'готово' }]);
 
     const toolRegistry = createToolRegistry();
@@ -555,5 +586,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
 
     const prompts = ScriptedProvider.prompts();
     expect(prompts[0]).not.toContain('[MODE: PLAN]');
+    const final = await sessionManager.getSession(session.id);
+    expect(final!.messages.some((m) => m.metadata?.type === 'mode_change')).toBe(false);
   });
 });

@@ -4,7 +4,7 @@ import type { Context, Next } from 'hono';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSettingsRoutes, RuntimeSettingsStore } from '@itphx/synth-core';
+import { createSettingsRoutes, RuntimeSettingsStore, DEFAULT_AGENT_ID } from '@itphx/synth-core';
 import type { SettingsRoutesDeps } from '@itphx/synth-core';
 
 function createMockKit() {
@@ -149,6 +149,59 @@ describe('Settings API Routes (workspace/mcp)', () => {
       expect(res.status).toBe(400);
       const body: any = await res.json();
       expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('/api/v2/settings/default-agent', () => {
+    it('GET возвращает DEFAULT_AGENT_ID, если runtime не задан', async () => {
+      const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const app = createTestApp(store, '/fallback/workspace');
+      const res = await app.request('/api/v2/settings/default-agent');
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body).toEqual({ defaultAgent: DEFAULT_AGENT_ID, isOverridden: false, defaults: DEFAULT_AGENT_ID });
+    });
+
+    it('PUT сохраняет, GET возвращает; переживает рестарт', async () => {
+      const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const app = createTestApp(store, '/fallback/workspace');
+      const put = await app.request('/api/v2/settings/default-agent', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ defaultAgent: 'developer' }),
+      });
+      expect(put.status).toBe(200);
+
+      const store2 = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const app2 = createTestApp(store2, '/fallback/workspace');
+      const body: any = await (await app2.request('/api/v2/settings/default-agent')).json();
+      expect(body).toEqual({ defaultAgent: 'developer', isOverridden: true, defaults: DEFAULT_AGENT_ID });
+    });
+
+    it('PUT отклоняет невалидный id', async () => {
+      const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const app = createTestApp(store, '/fallback/workspace');
+      const res = await app.request('/api/v2/settings/default-agent', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ defaultAgent: 'bad id' }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('DELETE сбрасывает к дефолту', async () => {
+      const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+      const app = createTestApp(store, '/fallback/workspace');
+      await app.request('/api/v2/settings/default-agent', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ defaultAgent: 'developer' }),
+      });
+      const body: any = await (await app.request('/api/v2/settings/default-agent', { method: 'DELETE' })).json();
+      expect(body).toEqual({ status: 'restored', defaultAgent: DEFAULT_AGENT_ID, isOverridden: false, defaults: DEFAULT_AGENT_ID });
+      expect(await store.getDefaultAgent()).toBeUndefined();
     });
   });
 });

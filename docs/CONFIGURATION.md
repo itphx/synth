@@ -109,6 +109,24 @@ i18n:
 session:
   planMode: "auto"                # строгость цикла Plan→Build: auto | strict | off
 
+mcp:
+  policy: "auto"                  # AD-071 §2.3: политика включения MCP-инструментов
+                                  # consistency | available | auto (дефолт auto)
+                                  # независима от tools.policy; per-session override: session.settings.mcpPolicy
+  # servers / networkPolicy — см. packages/shared/src/config/types.ts
+
+tools:
+  policy: "auto"                  # AD-071 §2.3: политика включения ВСТРОЕННЫХ инструментов
+                                  # consistency | available | auto (дефолт auto)
+                                  # consistency — все определения + подсказки unavailable(mode|role);
+                                  # available — только доступные тулы (экономия контекста);
+                                  # auto — по провайдеру: локальные (ollama) → available, облачные → consistency.
+                                  # Per-session override: session.settings.toolsPolicy.
+  disabled:                       # AD-071 §2.9: instance-wide отключение встроенных инструментов (ADMIN)
+    capabilities: []              # группы ToolCapability (git, web, file_read, file_write, shell, mcp, ...)
+    tools: []                     # отдельные тулы по имени (execute_shell, git_push, ...)
+                                  # runtime (plan/todo/project/reference/classify) неотключаем
+
 router:
   enabled: true
   strategy: "auto"                # content | cost | content+cost | auto
@@ -174,6 +192,34 @@ remote:                           # гибридный режим: локаль�
 ```
 
 Полный список полей (включая `logging`, `tsm`, `context`, `summarization`, `mcp`, `auth.oidc`) — в `packages/shared/src/config/types.ts`.
+
+### Политики инструментов (`tools.policy` / `mcp.policy`)
+
+Две **независимые** админские политики (AD-071 §2.3; UI-раздел — ADMIN-категория):
+`tools.policy` управляет только **встроенными** инструментами, `mcp.policy` —
+только **MCP**-инструментами. Обе: `consistency` | `available` | `auto`
+(дефолт `auto`). Per-session override — `session.settings.toolsPolicy` и
+`session.settings.mcpPolicy` соответственно. Runtime-правка:
+`GET/PUT /api/v2/settings/tools-policy` и `GET/PUT /api/v2/settings/mcp-policy`
+(живое применение, persist в `settings.json`). MCP-блоки промпта
+(`mcp.servers`/`mcp.tools`/`mcp.status`) всегда `volatile` и не входят в
+кэшируемый `staticPrefixChars`.
+
+### Отключение встроенных инструментов (`tools.disabled`)
+
+Instance-wide настройка (AD-071 §2.6; UI-раздел — ADMIN-категория `mcpAdmin`):
+жёстко исключает встроенные инструменты из запроса **независимо** от
+`tools.policy` — и по группам (`capabilities`, значения `ToolCapability`:
+`file_read`, `file_write`, `shell`, `search`, `web`, `git_read`, `git_write`,
+`task`, `mcp`), и по отдельным тулам (`tools`). Эффективный
+набор = доступные агенту/режиму тулы − (union отключённых групп и имён).
+
+`runtime`-инструменты (управление планом/todo, проект, reference, classify)
+неотключаемы — иначе ломается инвариант AD-039. Отключённые тулы не уходят в
+запрос и не показываются в таблице состава промпта (в админ-UI их можно
+включить/отключить). Runtime-правка: `GET/PUT /api/v2/settings/tools-disabled`
+телом `{toolsDisabled:{capabilities,tools}}` (живое применение, persist в
+`settings.json`).
 
 ### Гибридный режим (remote)
 

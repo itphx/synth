@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { z } from 'zod';
 import { createAgentRegistry } from './index.js';
-import type { AgentDefinition } from '@itphx/synth-shared';
+import { createToolRegistry } from '../tools/index.js';
+import { ToolCapability, type AgentDefinition, type ToolDefinition } from '@itphx/synth-shared';
 
 describe('createAgentRegistry', () => {
   let overridesDir: string;
@@ -124,5 +126,59 @@ describe('createAgentRegistry', () => {
     expect(allIds).toContain('title');
     expect(allIds).toContain('assistant');
     expect(allIds).toContain('general');
+  });
+});
+
+describe('AgentRegistry.getToolsForAgent (AD-070 §2.9)', () => {
+  it('найденный агент получает ВСЕ тулы, без фильтра по capabilities', () => {
+    const toolRegistry = createToolRegistry();
+    const registry = createAgentRegistry(toolRegistry);
+
+    const allNames = toolRegistry.toLLMFormat().map((t) => t.function.name).sort();
+    const agentTools = registry.getToolsForAgent('assistant');
+
+    expect(agentTools).toBeDefined();
+    expect(agentTools!.map((t) => t.function.name).sort()).toEqual(allNames);
+    // assistant без capability shell — но тул всё равно виден модели
+    // (недоступность обеспечивает permission-слой: unavailable(role)).
+    expect(allNames).toContain('execute_shell');
+  });
+
+  it('неизвестный агент → undefined', () => {
+    const registry = createAgentRegistry(createToolRegistry());
+    expect(registry.getToolsForAgent('no-such-agent')).toBeUndefined();
+  });
+
+  it('без ToolRegistry → undefined', () => {
+    const registry = createAgentRegistry();
+    expect(registry.getToolsForAgent('assistant')).toBeUndefined();
+  });
+
+  it('AD-071 §2.1: MCP-тулы — только активных серверов (per-session)', () => {
+    const toolRegistry = createToolRegistry();
+    const mcpTool = (server: string, name: string): ToolDefinition => ({
+      name: `${server}_${name}`,
+      description: 'mcp',
+      parameters: z.object({}),
+      capabilities: [ToolCapability.MCP],
+      source: 'mcp',
+      mcpServer: server,
+      execute: async () => ({ content: '' }),
+    });
+    toolRegistry.registerAll([mcpTool('srvA', 'search'), mcpTool('srvB', 'fetch')]);
+    const registry = createAgentRegistry(toolRegistry);
+
+    // Без активных серверов MCP-слой пуст (builtin-only).
+    const noMcp = registry.getToolsForAgent('assistant')!.map((t) => t.function.name);
+    expect(noMcp).not.toContain('srvA_search');
+    expect(noMcp).not.toContain('srvB_fetch');
+
+    const sessionA = registry.getToolsForAgent('assistant', ['srvA'])!.map((t) => t.function.name);
+    expect(sessionA).toContain('srvA_search');
+    expect(sessionA).not.toContain('srvB_fetch');
+
+    const sessionB = registry.getToolsForAgent('assistant', ['srvB'])!.map((t) => t.function.name);
+    expect(sessionB).toContain('srvB_fetch');
+    expect(sessionB).not.toContain('srvA_search');
   });
 });

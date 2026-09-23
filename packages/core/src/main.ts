@@ -95,6 +95,10 @@ program
       defaultPlanMode: synth.session?.planMode,
       securityConfig: synth.security,
       gatewayConfig: synth.llmGateway,
+      llmCachePolicy: synth.llm.cache,
+      toolsPolicy: synth.tools.policy,
+      mcpPolicy: synth.mcp?.policy,
+      toolsDisabled: synth.tools.disabled,
       mcpServers: synth.mcp?.servers ?? {},
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'

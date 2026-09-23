@@ -4,7 +4,9 @@ import { Icon } from '@/components/icon/Icon'
 
 export function GitTabToolbar() {
   const { t } = useI18n()
-  const { expandedProjects, expandedRepos, collapseAll } = useGitStore()
+  const expandedProjects = useGitStore(s => s.expandedProjects)
+  const expandedRepos = useGitStore(s => s.expandedRepos)
+  const collapseAll = useGitStore(s => s.collapseAll)
 
   const hasExpanded = expandedProjects.size > 0 || expandedRepos.size > 0
 

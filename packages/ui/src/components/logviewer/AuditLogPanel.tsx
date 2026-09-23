@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { synthApi, type AuditEntry, type SessionData, type UserInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
+import { formatCost } from '@/lib/formatStats'
 import { useI18n } from '@/lib/i18n'
 
 const AUDIT_TYPES = ['obfuscated', 'blocked', 'revealed', 'rate_limited', 'output_guard'] as const
@@ -50,9 +51,13 @@ function formatTime(ts: string): string {
   return Number.isNaN(date.getTime()) ? ts : date.toLocaleString()
 }
 
-function formatCost(costUsd?: number): string {
+/**
+ * Стоимость записи аудита. Валюта в AuditEntry не хранится — общий
+ * `formatCost` показывает как USD (символ `$`).
+ */
+function formatAuditCost(costUsd?: number): string {
   if (costUsd === undefined || costUsd === null) return '—'
-  return `$${costUsd.toFixed(6)}`
+  return formatCost(costUsd)
 }
 
 /** Панель «Журнал аудита»: события LLM Gateway с фильтрами. */
@@ -280,7 +285,7 @@ export const AuditLogPanel = () => {
                       ? `${e.tokensIn ?? 0}/${e.tokensOut ?? 0}`
                       : '—'}
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap tabular-nums">{formatCost(e.costUsd)}</td>
+                  <td className="px-3 py-2 whitespace-nowrap tabular-nums">{formatAuditCost(e.costUsd)}</td>
                   <td className="px-3 py-2 min-w-[8.75rem] text-muted-foreground">{e.reason ?? '—'}</td>
                 </tr>
               ))}

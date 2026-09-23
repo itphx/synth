@@ -89,8 +89,13 @@ function NotificationRow({ item, isRead, onDismiss, onRead }: RowProps) {
 
 export function NotificationPopup() {
   const { t } = useI18n()
-  const { history, dismiss, dismissAll, markRead, markAllRead } = useNotificationStore()
-  const { setSettingsDialogOpen, setSettingsPage } = useUIStore()
+  const history = useNotificationStore(s => s.history)
+  const dismiss = useNotificationStore(s => s.dismiss)
+  const dismissAll = useNotificationStore(s => s.dismissAll)
+  const markRead = useNotificationStore(s => s.markRead)
+  const markAllRead = useNotificationStore(s => s.markAllRead)
+  const setSettingsDialogOpen = useUIStore(s => s.setSettingsDialogOpen)
+  const setSettingsPage = useUIStore(s => s.setSettingsPage)
   const [isOpen, setIsOpen] = useState(false)
   const popupRef = useRef<HTMLDivElement>(null)
 
