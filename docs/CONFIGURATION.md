@@ -221,6 +221,39 @@ Instance-wide настройка (AD-071 §2.6; UI-раздел — ADMIN-кат
 телом `{toolsDisabled:{capabilities,tools}}` (живое применение, persist в
 `settings.json`).
 
+### Скиллы (`skills.*`, AD-046)
+
+Секция `skills` управляет discovery скиллов, доверием проектным каталогам,
+inline shell в шаблонных командах и удалёнными каталогами:
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `skills.paths` | Доп. пользовательские каталоги скиллов (после project/instance) | `[]` |
+| `skills.trustedProjectDirs` | Доверенные проектные каталоги (бинарный project-trust) | `[]` |
+| `skills.inlineShell` | Разрешить `` !`cmd` `` в шаблонных командах (RCE-вектор, только для доверенных источников) | `false` |
+| `skills.urls` | Удалённые каталоги (opencode-совместимый `index.json`) — **read-only индексация** в `{dataDir}/skills-cache` | `[]` |
+| `skills.toolsets` | Именованные группы тулов → capabilities (см. ниже) | `{}` |
+
+Порядок источников (приоритет, first-wins): `{project.workspace}/.synth/skills` >
+`{dataDir}/skills` > `skills.paths` > внешние read-only каталоги
+(`.opencode/skills`, `.opencode/skill`, `.claude/skills`, `.agents/skills`,
+`~/.config/opencode/skills`) > `skills.urls`.
+
+- **Project-trust:** недоверенный проектный каталог (нет в `trustedProjectDirs`)
+  виден в реестре/диагностике (`untrusted`), но его скиллы и шаблонные команды
+  не грузятся — не попадают в каталог для модели, `/`-автокомплит и core-тул
+  `skill`. Команды дополнительно не могут перекрыть доверенный skill/bundle.
+- **`skills.urls`** кэшируются, индексируются и видны в реестре, но помечены
+  **`trusted:false`** (в каталог для модели не попадают). Установка/обновление,
+  trust-уровни и подписи удалённых каталогов — задача [AD-068](./arch_decisions/ad-068-skills-agents-registry.md).
+- **`skills.inlineShell`** по умолчанию выключен; при включении исполнение идёт
+  только при `allow` от `PermissionEvaluator` (как `execute_shell`), с timeout,
+  лимитом вывода и аудит-событием `command.inline_shell`; `deny`/`ask` —
+  отказ без интерактива.
+- **Builtin-скилл `skill-creator`** (`instance`/`system`, `trusted`) — встроенная
+  инструкция по созданию проектного скилла в `{project.workspace}/.synth/skills`;
+  доступен как `/skill-creator` (требует `file_read`/`file_write`).
+
 ### Slash-команды (`commands.*`, AD-046 §7)
 
 Резолвинг `/`-команд выполняется в core. Секция `commands`:
