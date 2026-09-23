@@ -237,6 +237,37 @@ describe('RemoteProvider.chatAsync (SSE-стрим)', () => {
     expect(String(url)).toBe('https://backend.test/api/v2/llm/chat/completions');
   });
 
+  it('несколько reasoning_content дельт → отдельные reasoning-чанки с растущей cumulative-строкой', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: 'надо' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: ' по' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: 'искать' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: { content: 'ответ' } }] }),
+      JSON.stringify({
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }),
+      '[DONE]',
+    ]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = makeProvider();
+    const chunks: LLMChunk[] = [];
+    for await (const c of provider.chatAsync([makeMessage()])) chunks.push(c);
+
+    // Отдельные reasoning-чанки (content пустой, не финальные) с cumulative-строкой.
+    const reasoningOnly = chunks.filter(
+      (c) => c.content === '' && !c.isFinal && c.reasoning !== undefined,
+    );
+    expect(reasoningOnly.map((c) => c.reasoning)).toEqual(['надо', 'надо по', 'надо поискать']);
+
+    // Контент-чанк и финальный несут уже полную накопленную строку.
+    const contentChunk = chunks.find((c) => c.content === 'ответ' && !c.isFinal)!;
+    expect(contentChunk.reasoning).toBe('надо поискать');
+    const final = chunks.find((c) => c.isFinal)!;
+    expect(final.reasoning).toBe('надо поискать');
+  });
+
   it('отмена (cancellationToken) — генератор завершается без финального чанка', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
       JSON.stringify({ choices: [{ index: 0, delta: { content: 'ча' } }] }),

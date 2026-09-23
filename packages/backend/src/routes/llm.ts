@@ -328,18 +328,38 @@ function streamCompletions(
         const encoder = new TextEncoder();
         const send = (obj: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
         let finalUsage: TokenUsage | undefined;
-        // Накопленные tool_calls/reasoning: провайдер (OpenAIProvider) отдаёт полный
-        // массив в каждом content-чанке и в финальном чанке. Прокси шлёт их ОДИН раз
-        // отдельным дельта-чанком — иначе RemoteProvider при инкрементальном накоплении
+        // Накопленные tool_calls: провайдер (OpenAIProvider) отдаёт полный массив в
+        // каждом content-чанке и в финальном чанке. Прокси шлёт их ОДИН раз отдельным
+        // дельта-чанком — иначе RemoteProvider при инкрементальном накоплении
         // (merge по index + конкатенация arguments) продублирует аргументы.
         let accumulatedToolCalls: Record<string, unknown>[] | undefined;
-        let accumulatedReasoning: string | undefined;
+        // Reasoning провайдеры отдают НАКОПЛЕННОЙ строкой (LLMChunk.reasoning,
+        // cumulative). Шлём его инкрементально: считаем длину уже отправленного и
+        // отдаём дельту, чтобы клиент (RemoteProvider) накапливал как content.
+        let sentReasoningLen = 0;
 
         try {
           for await (const chunk of provider.chatAsync(messages, undefined, tools, undefined, cancellationToken)) {
             if (chunk.usage) finalUsage = chunk.usage;
             if (chunk.toolCalls && chunk.toolCalls.length > 0) accumulatedToolCalls = chunk.toolCalls;
-            if (chunk.reasoning) accumulatedReasoning = chunk.reasoning;
+
+            // Reasoning отправляем ДО `isFinal continue` (финальный чанк несёт
+            // накопленный reasoning) и до content того же чанка — порядок reasoning → content.
+            if (chunk.reasoning && chunk.reasoning.length > sentReasoningLen) {
+              const delta = chunk.reasoning.slice(sentReasoningLen);
+              sentReasoningLen = chunk.reasoning.length;
+              const reasoning = deobfuscateSecrets(delta, transientMap.get('proxy') ?? {});
+              if (reasoning) {
+                send({
+                  id,
+                  object: 'chat.completion.chunk',
+                  created,
+                  model,
+                  choices: [{ index: 0, delta: { reasoning_content: reasoning }, finish_reason: null }],
+                });
+              }
+            }
+
             if (chunk.isFinal) continue;
             if (!chunk.content) continue;
 
@@ -356,10 +376,10 @@ function streamCompletions(
             });
           }
 
-          // Дельта-чанк с tool_calls/reasoning (OpenAI-формат choices[0].delta.tool_calls).
+          // Дельта-чанк с tool_calls (OpenAI-формат choices[0].delta.tool_calls).
+          // Reasoning уже отправлен стрим-чанками выше — здесь его нет, иначе дубль.
           const delta: Record<string, unknown> = {};
           if (accumulatedToolCalls && accumulatedToolCalls.length > 0) delta.tool_calls = accumulatedToolCalls;
-          if (accumulatedReasoning) delta.reasoning_content = accumulatedReasoning;
           if (Object.keys(delta).length > 0) {
             send({
               id,

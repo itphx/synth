@@ -64,6 +64,12 @@ class FakeProvider extends BaseProvider {
   toolCalls: Record<string, unknown>[] | null = null;
   /** Если задан — chat/chatAsync возвращают reasoning_content. */
   reasoning: string | undefined;
+  /**
+   * Если задан — chatAsync отдаёт reasoning несколькими чанками с растущей
+   * cumulative-строкой (как OpenAIProvider/DeepSeek). Проверяет инкрементальный
+   * стрим reasoning через прокси.
+   */
+  reasoningChunks: string[] | undefined;
   lastMessages: LLMMessage[] = [];
 
   constructor(model = 'fake-model') {
@@ -106,19 +112,32 @@ class FakeProvider extends BaseProvider {
     const content = this.echoUserContent
       ? (messages.find((m) => m.role === 'user')?.content ?? '')
       : 'Привет';
+    // Cumulative-строка reasoning: для reasoningChunks — последний (полный) элемент,
+    // для reasoning — само значение. Провайдер прикладывает её к content и final чанкам.
+    const effectiveReasoning = this.reasoningChunks?.at(-1) ?? this.reasoning;
+    if (this.reasoningChunks) {
+      for (const r of this.reasoningChunks) {
+        yield {
+          content: '',
+          isFinal: false,
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          reasoning: r,
+        };
+      }
+    }
     yield {
       content,
       isFinal: false,
       usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       ...(this.toolCalls ? { toolCalls: this.toolCalls } : {}),
-      ...(this.reasoning ? { reasoning: this.reasoning } : {}),
+      ...(effectiveReasoning ? { reasoning: effectiveReasoning } : {}),
     };
     yield {
       content: '',
       isFinal: true,
       usage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 },
       ...(this.toolCalls ? { toolCalls: this.toolCalls } : {}),
-      ...(this.reasoning ? { reasoning: this.reasoning } : {}),
+      ...(effectiveReasoning ? { reasoning: effectiveReasoning } : {}),
     };
   }
 }
@@ -515,7 +534,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
       expect(text.trimEnd().endsWith('data: [DONE]')).toBe(true);
     });
 
-    it('stream: tool_calls/reasoning_content пробрасываются в choices[0].delta', async () => {
+    it('stream: tool_calls пробрасываются в choices[0].delta, reasoning — отдельным стрим-чанком', async () => {
       const fake = new FakeProvider();
       fake.toolCalls = [
         { index: 0, id: 'call_3', type: 'function', function: { name: 'grep_files', arguments: '{"pattern":"x"}' } },
@@ -535,17 +554,73 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         .filter((l) => !l.includes('[DONE]'))
         .map((l) => JSON.parse(l.slice(6)));
 
+      // Reasoning приходит отдельным(и) стрим-чанком(ами), а не в tool_calls-чанке.
+      const reasoningChunks = parsed.filter(
+        (c: any) => typeof c.choices?.[0]?.delta?.reasoning_content === 'string',
+      );
+      expect(reasoningChunks).toHaveLength(1);
+      expect(reasoningChunks[0].choices[0].delta.reasoning_content).toBe('надо поискать');
+
       // Контент-дельта как раньше.
       const contentChunk = parsed.find((c: any) => c.choices?.[0]?.delta?.content === 'Привет');
       expect(contentChunk).toBeDefined();
-      // Отдельный дельта-чанк с накопленными tool_calls/reasoning (один раз).
+
+      // Отдельный дельта-чанк с накопленными tool_calls (один раз), без reasoning.
       const toolChunk = parsed.find((c: any) => Array.isArray(c.choices?.[0]?.delta?.tool_calls));
       expect(toolChunk).toBeDefined();
       expect(toolChunk.choices[0].delta.tool_calls).toEqual(fake.toolCalls);
-      expect(toolChunk.choices[0].delta.reasoning_content).toBe('надо поискать');
+      expect(toolChunk.choices[0].delta.reasoning_content).toBeUndefined();
+
+      // Порядок: reasoning → content → tool_calls.
+      const reasoningIdx = parsed.indexOf(reasoningChunks[0]);
+      expect(reasoningIdx).toBeLessThan(parsed.indexOf(contentChunk));
+      expect(parsed.indexOf(contentChunk)).toBeLessThan(parsed.indexOf(toolChunk));
+
       // Финальный чанк — как раньше.
       const last = parsed[parsed.length - 1]!;
       expect(last.choices[0].finish_reason).toBe('stop');
+      expect(text.trimEnd().endsWith('data: [DONE]')).toBe(true);
+    });
+
+    it('stream: reasoning стримится инкрементально (не одним чанком в конце)', async () => {
+      const fake = new FakeProvider();
+      // Cumulative-строки с растущей длиной, как у OpenAIProvider/DeepSeek.
+      fake.reasoningChunks = ['надо', 'надо по', 'надо поискать'];
+      const { app } = createTestContext(userUser, { fakeProvider: fake });
+
+      const res = await app.request(BASE, postBody({
+        model: 'fake-model',
+        messages: [{ role: 'user', content: 'найди' }],
+        stream: true,
+      }));
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      const lines = text.split('\n').filter((l) => l.startsWith('data: '));
+      const parsed = lines
+        .filter((l) => !l.includes('[DONE]'))
+        .map((l) => JSON.parse(l.slice(6)));
+
+      const reasoningChunks = parsed.filter(
+        (c: any) => typeof c.choices?.[0]?.delta?.reasoning_content === 'string',
+      );
+      // Несколько чанков, а не один в конце.
+      expect(reasoningChunks).toHaveLength(3);
+      const deltas = reasoningChunks.map((c: any) => c.choices[0].delta.reasoning_content);
+      // Дельта-инкременты (не cumulative-повторы).
+      expect(deltas).toEqual(['надо', ' по', 'искать']);
+      // Конкатенация = полная строка, без дублей.
+      expect(deltas.join('')).toBe('надо поискать');
+
+      // Все reasoning-чанки идут до content-чанка (порядок reasoning → content).
+      const contentIdx = parsed.findIndex((c: any) => c.choices?.[0]?.delta?.content === 'Привет');
+      const lastReasoningIdx = parsed.reduce(
+        (acc: number, c: any, i: number) =>
+          typeof c.choices?.[0]?.delta?.reasoning_content === 'string' ? i : acc,
+        -1,
+      );
+      expect(contentIdx).toBeGreaterThan(lastReasoningIdx);
+      // Финальный чанк — finish_reason stop, затем [DONE].
+      expect(parsed[parsed.length - 1]!.choices[0].finish_reason).toBe('stop');
       expect(text.trimEnd().endsWith('data: [DONE]')).toBe(true);
     });
   });
