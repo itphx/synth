@@ -348,6 +348,9 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-072 | Settings UI Kit: стандартная панель настроек (один вертикальный скролл, фиксированная шапка, центрирование max-w-3xl, контракт черновика, контролы) | ✅ Реализовано | [ad-072](./docs/arch_decisions/ad-072-settings-ui-kit.md) |
 | AD-073 | Целостность клиента в гибридном режиме: клиент недоверенный, enforcement на сервере; сигналы целостности (подписи, DPoP/mTLS) — опционально | ⏳ Не реализовано | [ad-073](./docs/arch_decisions/ad-073-client-integrity-hybrid.md) |
 | AD-074 | Скрытие вместо удаления (soft-delete): проекты/сессии/сообщения скрываются, исключаются из LLM-контекста, read-only режим для ADMIN/AUDITOR, restore/purge — ADMIN | ⏳ Не реализовано | [ad-074](./docs/arch_decisions/ad-074-soft-delete-retention.md) |
+| AD-075 | Окружение проекта: рабочий каталог (автосоздание managed / выбор для standalone) | ⏳ Не реализовано | [ad-075](./docs/arch_decisions/ad-075-project-workspace-provisioning.md) |
+| AD-076 | Реестр git-репозиториев (несколько на проект) и SSH-ключи per-agent | ⏳ Не реализовано | [ad-076](./docs/arch_decisions/ad-076-git-repo-registry-ssh.md) |
+| AD-077 | Инструментальное окружение исполнения (git/python/rg): хостовые для dev/standalone, tools-образ + volume для managed | ⏳ Не реализовано | [ad-077](./docs/arch_decisions/ad-077-runtime-toolchain.md) |
 
 Правило: реализованные AD переносятся в `./docs/arch_decisions/` (в AGENTS.md остаётся строка таблицы + ссылка).
 
@@ -368,6 +371,9 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | безопасность / gateway | [AD-036](./docs/arch_decisions/ad-036-llm-gateway.md) |
 | безопасность клиента / целостность / аттестация гибрида | [AD-073](./docs/arch_decisions/ad-073-client-integrity-hybrid.md) |
 | soft-delete / скрытие / retention / аудит-режим | [AD-074](./docs/arch_decisions/ad-074-soft-delete-retention.md) |
+| workspace / рабочий каталог / окружение проекта | [AD-075](./docs/arch_decisions/ad-075-project-workspace-provisioning.md) |
+| git-репозитории / SSH-ключи | [AD-076](./docs/arch_decisions/ad-076-git-repo-registry-ssh.md) |
+| инструменты / образы / тулчейн | [AD-077](./docs/arch_decisions/ad-077-runtime-toolchain.md) |
 | план / todo | [AD-039](./docs/arch_decisions/ad-039-plan-in-project.md) |
 | ошибки LLM / i18n | [AD-041](./docs/arch_decisions/ad-041-llm-error-taxonomy.md) |
 | гибрид | [AD-042](./docs/arch_decisions/ad-042-hybrid-mode.md), [AD-043](./docs/arch_decisions/ad-043-unified-identity-login.md), [AD-045](./docs/arch_decisions/ad-045-hybrid-server-profiles.md), [docs/HYBRID.md](./docs/HYBRID.md), скилл `synth-hybrid` |
