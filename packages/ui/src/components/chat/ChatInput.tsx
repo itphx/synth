@@ -6,11 +6,13 @@ import { useDevice } from '@/hooks/useDevice'
 import { useChatStore } from '@/stores/chatStore'
 import { confirm } from '@/lib/confirm'
 import { MentionPopup } from './MentionPopup'
+import { CommandAutocomplete } from './CommandAutocomplete'
 import { ModelSelector } from './ModelSelector'
 import { AgentModeSelector } from './AgentModeSelector'
 import { PlanActModeToggle } from './PlanActModeToggle'
 import { ReasoningLevelSelector } from './ReasoningLevelSelector'
 import type { AgentInfo } from '@/lib/api/synthApi'
+import type { CommandSummary } from '@itphx/synth-shared'
 
 interface ChatInputProps {
   sessionId: string
@@ -138,6 +140,12 @@ export function ChatInput({
     end: number
     position: { top: number; left: number }
   } | null>(null)
+  // AD-046 §9.3: `/`-автокомплит команд (триггер — ввод начинается с `/`).
+  const [commandState, setCommandState] = useState<{
+    query: string
+    position: { top: number; left: number }
+  } | null>(null)
+  const [commandMatches, setCommandMatches] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const valueRef = useRef(value)
   valueRef.current = value
@@ -190,7 +198,30 @@ export function ChatInput({
     } else {
       setMentionState(null)
     }
+
+    // AD-046 §9.3: `/`-команда — ввод начинается с `/`, первый токен без пробелов.
+    const commandMatch = /^\/(\S*)$/.exec(newValue)
+    if (commandMatch) {
+      const rect = textareaRef.current?.getBoundingClientRect()
+      setCommandState({
+        query: commandMatch[1],
+        position: { top: (rect?.height ?? 0) + 8, left: 0 },
+      })
+    } else {
+      setCommandState(null)
+    }
   }
+
+  const handleSelectCommand = useCallback((command: CommandSummary) => {
+    setValue(`/${command.name} `)
+    setCommandState(null)
+    setCommandMatches(0)
+    textareaRef.current?.focus()
+  }, [])
+
+  const handleCommandMatches = useCallback((count: number) => {
+    setCommandMatches(count)
+  }, [])
 
   const handleSelectMention = (agentId: string) => {
     if (!mentionState || !textareaRef.current) return
@@ -242,6 +273,8 @@ export function ChatInput({
     }
 
     setValue('')
+    setCommandState(null)
+    setCommandMatches(0)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -271,6 +304,8 @@ export function ChatInput({
     }
 
     setValue('')
+    setCommandState(null)
+    setCommandMatches(0)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -289,6 +324,8 @@ export function ChatInput({
     if (!text) return
     onCreateNote(text)
     setValue('')
+    setCommandState(null)
+    setCommandMatches(0)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -305,6 +342,23 @@ export function ChatInput({
         return
       }
       return
+    }
+
+    // AD-046 §9.3: пока открыт непустой список команд — навигация/выбор у
+    // CommandAutocomplete, сообщение не отправляется.
+    if (commandState) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setCommandState(null)
+        return
+      }
+      if (
+        commandMatches > 0
+        && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === 'Tab')
+      ) {
+        e.preventDefault()
+        return
+      }
     }
 
     if (e.key === 'Escape') {
@@ -372,6 +426,16 @@ export function ChatInput({
               position={mentionState.position}
               onSelect={handleSelectMention}
               onClose={() => setMentionState(null)}
+            />
+          )}
+
+          {commandState && (
+            <CommandAutocomplete
+              query={commandState.query}
+              position={commandState.position}
+              onSelect={handleSelectCommand}
+              onClose={() => setCommandState(null)}
+              onMatchesChange={handleCommandMatches}
             />
           )}
         </div>

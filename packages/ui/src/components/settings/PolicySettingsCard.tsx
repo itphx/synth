@@ -12,7 +12,8 @@ import { SelectContent, SelectItem } from '../ui/select'
  * AD-071 §2.3 / AD-072: карточка глобальной политики включения инструментов.
  * `scope` задаёт пространство i18n и эндпоинт-семейство:
  * - `tools` — встроенные инструменты (`tools.policy`, `toolsPolicy.*`);
- * - `mcp` — MCP-инструменты (`mcp.policy`, `mcpPolicy.*`).
+ * - `mcp` — MCP-инструменты (`mcp.policy`, `mcpPolicy.*`);
+ * - `skills` — скиллы (`skills.policy`, `skillsPolicy.*`).
  */
 export function PolicySettingsCard({
   scope,
@@ -27,7 +28,7 @@ export function PolicySettingsCard({
   isDefault,
   className,
 }: {
-  scope: 'tools' | 'mcp'
+  scope: 'tools' | 'mcp' | 'skills'
   value: ToolsPolicy
   savedValue: ToolsPolicy
   loading: boolean
@@ -40,7 +41,7 @@ export function PolicySettingsCard({
   className?: string
 }) {
   const { t } = useI18n()
-  const prefix = scope === 'tools' ? 'toolsPolicy' : 'mcpPolicy'
+  const prefix = scope === 'tools' ? 'toolsPolicy' : scope === 'mcp' ? 'mcpPolicy' : 'skillsPolicy'
   const dirty = value !== savedValue
 
   return (

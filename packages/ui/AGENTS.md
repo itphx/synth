@@ -97,6 +97,15 @@
 - Плодить второй транспорт, API-клиент или «глобальный стор на всё».
 - Реэкспортировать в barrel `components/ui/index.ts` всё подряд — он намеренно частичный.
 
+## Скиллы и команды (AD-046)
+
+- **Store/API.** `stores/skillsStore.ts` — реестр скиллов + деталь, команды, bundles, instance-настройки (disabled/policy + дефолты), CRUD, загрузка/ошибки, счётчики вызовов. Методы `synthApi`: skills (`getSkills/getSkill/createSkill/updateSkill/deleteSkill/getSkillFiles/getSkillFile/putSkillFile/deleteSkillFile/reloadSkills`), `getCommands`, CRUD `/skill-bundles`, scope (`getSessionSkills/updateSessionSkills/getSessionSkillsEffective`, `getProjectSkills/updateProjectSkills`, `getSkillsSettings/updateSkillsSettings/resetSkillsSettings`).
+- **Настройки** (`components/settings/`): user-раздел «Скиллы» (`SkillsUserSettings`) — просмотр реестра/тела `SKILL.md`/supporting-файлов, недоверенные — только метаданные + бейдж, без CRUD; admin «Скиллы» (`SkillsAdminSettings` + `SkillEditorForm`) — CRUD `SKILL.md`+файлы, system enable/disable группами (`categories`/`groups`) и точечно (`name`), policy; admin «Команды» (`CommandsSettings`) — список команд (kind/scope/available + диагностика `shadowed`/`collision`) и CRUD bundles. Категории `skills` (user) и `skillsAdmin`, `commands` (ADMIN) — в `CATEGORIES` (`SettingsModal.tsx`).
+- **Правая панель.** Тумблеры скиллов по образцу MCP: `SessionSettingsTab` (`getSessionSkills`/`updateSessionSkills { name, enabled }`, system-disabled не включается) и `ProjectTab` (`ProjectSkillsBlock`, «Доступен»/«Включён по умолчанию», гейт owner/LEAD/admin, 403 — аккуратным уведомлением).
+- **Статистика.** `StatsTab` — секция «Скиллы» (scope/уровень, available, enabled сессии, unavailableReason, trusted, вклад токенов, source; размеры `skills.catalog`/`skills.catalog.session` из `manifest.entries`) и «Команды» — счётчики `skill.invoked`/`command.invoked` из `skillsStore`. События обрабатываются в `transportStore` (не открывать свой транспорт, AD-024).
+- **`/`-автокомплит.** `components/chat/CommandAutocomplete.tsx` + `ChatInput`: источник `GET /api/v2/commands`, навигация ArrowUp/Down/Enter/Tab/Escape, клик, подстановка `/name ` (не отправка), тач-таргеты (AD-044).
+- ⚠️ **Инвариант импортов shared.** Для runtime/value-импортов из `@itphx/synth-shared` использовать **только subpath**: `@itphx/synth-shared/types`, `/schemas`, `/i18n`, `/version`. Value-импорт из **корня** `@itphx/synth-shared` тянет `config/loader` → `node:fs` в браузерный бандл и роняет всё приложение (реальный инцидент commit 2; `import type` из корня безопасен — стирается компилятором). Проверять при добавлении любых констант/функций из shared в UI.
+
 ## Мобильный / PWA
 
 - Полные конвенции (зоны ≤768 / 769–1199 / ≥1200, дроверы, touch-first, PWA-шелл) — в корневом `AGENTS.md` и [AD-044](../../docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md); здесь не дублируются.

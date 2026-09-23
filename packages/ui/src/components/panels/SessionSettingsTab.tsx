@@ -9,7 +9,7 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
 import { formatDateTime } from '@/lib/formatDate'
-import { synthApi, type AgentInfo, type ToolsPolicy } from '@/lib/api/synthApi'
+import { synthApi, type AgentInfo, type EffectiveSkillEntry, type ToolsPolicy } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
 import { ModelSelector } from '../chat/ModelSelector'
@@ -38,6 +38,11 @@ export function SessionSettingsTab() {
   const [mcpEffective, setMcpEffective] = useState<McpServerEffective[]>([])
   const [mcpLoading, setMcpLoading] = useState(false)
   const [mcpToggling, setMcpToggling] = useState<string | null>(null)
+
+  // AD-046 §4.5: per-session скиллы (вкл/выкл), аналог MCP-скоупа
+  const [sessionSkills, setSessionSkills] = useState<EffectiveSkillEntry[]>([])
+  const [skillsLoading, setSkillsLoading] = useState(false)
+  const [skillToggling, setSkillToggling] = useState<string | null>(null)
 
   // AD-071 §2.3: per-session override политики инструментов ('' = следовать глобальной)
   const [toolsPolicy, setToolsPolicy] = useState<ToolsPolicy | ''>('')
@@ -128,14 +133,40 @@ export function SessionSettingsTab() {
     }
   }, [])
 
+  const loadSkillsEffective = useCallback(async (id: string) => {
+    setSkillsLoading(true)
+    try {
+      const r = await synthApi.getSessionSkills(id)
+      setSessionSkills(r.skills)
+      // Синхронизируем локальную сессию, чтобы общий Save не затёр свежие overrides.
+      const current = useSessionsStore.getState().sessions.find((s) => s.id === id)
+      if (current) {
+        useSessionsStore.getState().upsertSession({
+          ...current,
+          settings: {
+            ...(current.settings as Record<string, unknown>),
+            skills: r.enabled,
+            skillsDisabled: r.disabled,
+          },
+        } as typeof current)
+      }
+    } catch {
+      setSessionSkills([])
+    } finally {
+      setSkillsLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     if (sessionId) {
       synthApi.getAgents(sessionId).then((r) => setAgents(r.agents)).catch(() => {})
       void loadMcpEffective(sessionId)
+      void loadSkillsEffective(sessionId)
     } else {
       setMcpEffective([])
+      setSessionSkills([])
     }
-  }, [sessionId, loadMcpEffective])
+  }, [sessionId, loadMcpEffective, loadSkillsEffective])
 
   useEffect(() => {
     synthApi.getSecuritySettings()
@@ -361,6 +392,31 @@ export function SessionSettingsTab() {
       notify({ text: t('sessionSettings.mcp.toggleError'), type: 'error', category: 'error', sessionId })
     } finally {
       setMcpToggling(null)
+    }
+  }
+
+  /** AD-046 §4.5: точечный toggle скилла в сессии (`{ name, enabled }`). */
+  const handleToggleSkill = async (skill: EffectiveSkillEntry) => {
+    if (!sessionId || skillToggling) return
+    setSkillToggling(skill.name)
+    try {
+      const r = await synthApi.updateSessionSkills(sessionId, { name: skill.name, enabled: !skill.enabled })
+      setSessionSkills(r.skills)
+      const current = useSessionsStore.getState().sessions.find((s) => s.id === sessionId)
+      if (current) {
+        useSessionsStore.getState().upsertSession({
+          ...current,
+          settings: {
+            ...(current.settings as Record<string, unknown>),
+            skills: r.enabled,
+            skillsDisabled: r.disabled,
+          },
+        } as typeof current)
+      }
+    } catch {
+      notify({ text: t('sessionSettings.skills.toggleError'), type: 'error', category: 'error', sessionId })
+    } finally {
+      setSkillToggling(null)
     }
   }
 
@@ -777,6 +833,60 @@ export function SessionSettingsTab() {
               </div>
             )}
             <p className="text-[0.625rem] text-muted-foreground/60">{t('sessionSettings.mcp.hint')}</p>
+          </Section>
+        )}
+
+        {(sessionSkills.length > 0 || skillsLoading) && (
+          <Section title={t('sessionSettings.skills.title')}>
+            {skillsLoading && sessionSkills.length === 0 ? (
+              <div className="text-xs text-muted-foreground">{t('common.loading')}</div>
+            ) : (
+              <div className="flex flex-col gap-1.5" data-testid="session-skills-list">
+                {sessionSkills.map((skill) => (
+                  <div
+                    key={skill.name}
+                    data-testid={`session-skill-${skill.name}`}
+                    className="flex items-center gap-2 rounded-lg border border-border/60 bg-input px-2.5 py-1.5"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="truncate text-xs text-foreground">{skill.name}</span>
+                        <span className="rounded bg-muted px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-muted-foreground">
+                          {t(`skills.scope.${skill.scope}`)}
+                        </span>
+                        <span className="rounded bg-muted px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-muted-foreground">
+                          {t(`skills.level.${skill.level}`)}
+                        </span>
+                        {!skill.trusted && (
+                          <span className="rounded bg-destructive/15 px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-destructive">
+                            {t('skills.untrusted')}
+                          </span>
+                        )}
+                        {!skill.available && (
+                          <span className="rounded bg-muted px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-muted-foreground/70">
+                            {t('skills.unavailable')}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-0.5 text-[0.625rem] text-muted-foreground/70">
+                        {skill.disabled
+                          ? `${t('sessionSettings.skills.disabled')}${skill.disabledReason ? ` · ${t(`sessionSettings.skills.disabledReason.${skill.disabledReason}`)}` : ''}`
+                          : skill.enabled
+                            ? t('sessionSettings.skills.enabled')
+                            : t('sessionSettings.skills.notEnabled')}
+                      </div>
+                    </div>
+                    <Toggle
+                      enabled={skill.enabled}
+                      onToggle={() => handleToggleSkill(skill)}
+                      disabled={skillToggling === skill.name || skill.disabledReason === 'system'}
+                      ariaLabel={skill.enabled ? t('sessionSettings.skills.disable') : t('sessionSettings.skills.enable')}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-[0.625rem] text-muted-foreground/60">{t('sessionSettings.skills.hint')}</p>
           </Section>
         )}
 

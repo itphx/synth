@@ -4,6 +4,7 @@ import { useChatStore } from './chatStore'
 import { useSessionsStore } from './sessionsStore'
 import { useUIStore } from './useUIStore'
 import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS } from './permissionStore'
+import { useSkillsStore } from './skillsStore'
 import type { TransportMode } from './useUIStore'
 import type { StreamDoneMetadata, MessageData, MessageStatus, CostBreakdown } from './chatStore'
 import { synthApi } from '@/lib/api/synthApi'
@@ -681,6 +682,30 @@ export function createDispatcher(): EventDispatcher {
             qa_reason: payload.qa_reason as string | undefined,
           })
         }
+        break
+      }
+
+      // AD-046 §8.2: вызовы скиллов/команд — счётчики и последний вызов (часть b).
+      case 'skill.invoked': {
+        useSkillsStore.getState().recordSkillInvoked({
+          sessionId: sid,
+          name: String(payload.name ?? ''),
+          source: payload.source === 'model' ? 'model' : 'user',
+          scope: typeof payload.scope === 'string' ? payload.scope : undefined,
+          agent: typeof payload.agent === 'string' ? payload.agent : undefined,
+          timestamp: typeof payload.timestamp === 'string' ? payload.timestamp : undefined,
+        })
+        break
+      }
+
+      case 'command.invoked': {
+        useSkillsStore.getState().recordCommandInvoked({
+          sessionId: sid,
+          command: String(payload.command ?? ''),
+          args: typeof payload.args === 'string' ? payload.args : undefined,
+          actor: payload.actor === 'cli' ? 'cli' : 'user',
+          timestamp: typeof payload.timestamp === 'string' ? payload.timestamp : undefined,
+        })
         break
       }
     }

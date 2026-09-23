@@ -6,7 +6,7 @@ import { useProjectsStore } from '@/stores/projectsStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useNotification } from '@/hooks/useNotification'
 import { formatDateTime } from '@/lib/formatDate'
-import { synthApi, type ProjectData, type ProjectMcpResponse } from '@/lib/api/synthApi'
+import { synthApi, type ProjectData, type ProjectMcpResponse, type ProjectSkillsResponse, type EffectiveSkillEntry } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '@/components/ui/Toggle'
 import { InfoField as Field, InfoSection as Section } from '@/components/ui/settings'
@@ -35,6 +35,10 @@ export function ProjectTab() {
   const [projectMcp, setProjectMcp] = useState<ProjectMcpResponse | null>(null)
   const [mcpRegistry, setMcpRegistry] = useState<McpRegistryEntry[]>([])
   const [mcpSaving, setMcpSaving] = useState(false)
+
+  // AD-046 §4.5: проектный скоуп скиллов (owner/lead/admin)
+  const [projectSkills, setProjectSkills] = useState<ProjectSkillsResponse | null>(null)
+  const [skillsSaving, setSkillsSaving] = useState(false)
 
   const projectId = session?.project_id ?? null
   const projects = useProjectsStore((s) => s.projects)
@@ -68,6 +72,19 @@ export function ProjectTab() {
     return () => { cancelled = true }
   }, [projectId, canManageMcp])
 
+  useEffect(() => {
+    if (!projectId || !canManageMcp) {
+      setProjectSkills(null)
+      return
+    }
+    let cancelled = false
+    Promise.resolve()
+      .then(() => synthApi.getProjectSkills(projectId))
+      .then((skills) => { if (!cancelled) setProjectSkills(skills) })
+      .catch(() => { if (!cancelled) setProjectSkills(null) })
+    return () => { cancelled = true }
+  }, [projectId, canManageMcp])
+
   const handleToggleProjectMcp = async (name: string, kind: 'enabled' | 'defaultOn') => {
     if (!projectId || !projectMcp || mcpSaving) return
     const enabled = new Set(projectMcp.enabled)
@@ -96,6 +113,44 @@ export function ProjectTab() {
       notify({ text: t('projectTab.mcp.saveError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
     } finally {
       setMcpSaving(false)
+    }
+  }
+
+  /** AD-046 §4.5: проектный скоуп скиллов — «Доступен»/«Включён по умолчанию». */
+  const handleToggleProjectSkill = async (name: string, kind: 'enabled' | 'defaultOn') => {
+    if (!projectId || !projectSkills || skillsSaving) return
+    const enabled = new Set(projectSkills.enabled)
+    const defaultOn = new Set(projectSkills.defaultOn)
+    if (kind === 'enabled') {
+      if (enabled.has(name)) {
+        enabled.delete(name)
+        defaultOn.delete(name)
+      } else {
+        enabled.add(name)
+      }
+    } else if (defaultOn.has(name)) {
+      defaultOn.delete(name)
+    } else {
+      defaultOn.add(name)
+      enabled.add(name)
+    }
+    setSkillsSaving(true)
+    try {
+      const updated = await synthApi.updateProjectSkills(projectId, {
+        enabled: [...enabled],
+        defaultOn: [...defaultOn],
+      })
+      setProjectSkills(updated)
+    } catch (err) {
+      const status = (err as { status?: number })?.status
+      notify({
+        text: status === 403 ? t('projectTab.skills.forbidden') : t('projectTab.skills.saveError'),
+        type: 'error',
+        category: 'error',
+        sessionId: sessionId || undefined,
+      })
+    } finally {
+      setSkillsSaving(false)
     }
   }
 
@@ -316,6 +371,16 @@ export function ProjectTab() {
         </Section>
       )}
 
+      {canManageMcp && (
+        <Section title={t('projectTab.skills.title')}>
+          <ProjectSkillsBlock
+            skills={projectSkills}
+            saving={skillsSaving}
+            onToggle={handleToggleProjectSkill}
+          />
+        </Section>
+      )}
+
       <Section title={t('projectTab.log.title')}>
         <ProjectLogBlock project={project} />
       </Section>
@@ -400,6 +465,85 @@ function ProjectMcpBlock({
         )
       })}
       <p className="text-[0.625rem] text-muted-foreground/60">{t('projectTab.mcp.hint')}</p>
+    </div>
+  )
+}
+
+/** AD-046 §4.5: проектный скоуп скиллов — «Доступен» и «Включён по умолчанию». */
+function ProjectSkillsBlock({
+  skills,
+  saving,
+  onToggle,
+}: {
+  skills: ProjectSkillsResponse | null
+  saving: boolean
+  onToggle: (name: string, kind: 'enabled' | 'defaultOn') => void
+}) {
+  const { t } = useI18n()
+
+  if (!skills) {
+    return <div className="text-xs text-muted-foreground">{t('common.loading')}</div>
+  }
+
+  if (skills.skills.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-border px-3 py-2">
+        <div className="text-xs text-muted-foreground">{t('projectTab.skills.empty')}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="project-skills-list">
+      {skills.skills.map((skill: EffectiveSkillEntry) => {
+        const enabled = skills.enabled.includes(skill.name) || skills.defaultOn.includes(skill.name)
+        const defaultOn = skills.defaultOn.includes(skill.name)
+        return (
+          <div
+            key={skill.name}
+            data-testid={`project-skill-${skill.name}`}
+            className="flex items-center gap-2 rounded-lg border border-border/60 bg-input px-2.5 py-1.5"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="truncate text-xs text-foreground">{skill.name}</span>
+                <span className="rounded bg-muted px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-muted-foreground">
+                  {t(`skills.scope.${skill.scope}`)}
+                </span>
+                {!skill.trusted && (
+                  <span className="rounded bg-destructive/15 px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-destructive">
+                    {t('skills.untrusted')}
+                  </span>
+                )}
+              </div>
+              {skill.description && (
+                <div className="mt-0.5 text-[0.625rem] text-muted-foreground/70 break-words">{skill.description}</div>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <label className="flex items-center gap-1">
+                <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.skills.available')}</span>
+                <Toggle
+                  enabled={enabled}
+                  onToggle={() => onToggle(skill.name, 'enabled')}
+                  disabled={saving}
+                  ariaLabel={`${skill.name}: ${t('projectTab.skills.available')}`}
+                />
+              </label>
+              <label className="flex items-center gap-1">
+                <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.skills.defaultOn')}</span>
+                <Toggle
+                  enabled={defaultOn}
+                  onToggle={() => onToggle(skill.name, 'defaultOn')}
+                  disabled={saving}
+                  ariaLabel={`${skill.name}: ${t('projectTab.skills.defaultOn')}`}
+                />
+              </label>
+            </div>
+          </div>
+        )
+      })}
+      <p className="text-[0.625rem] text-muted-foreground/60">{t('projectTab.skills.hint')}</p>
     </div>
   )
 }

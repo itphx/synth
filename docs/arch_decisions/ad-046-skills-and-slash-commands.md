@@ -1,8 +1,8 @@
 # AD-046: Скиллы и slash-команды
 
-> **Статус:** ✅ Фаза 1 реализована; ✅ Фаза 2 commit 1 (core+API+CLI: команды/bundles/scope, без UI); ⏳ UI-слой скиллов/команд — остаток Фазы 2
+> **Статус:** ✅ Фаза 1 реализована; ✅ Фаза 2 реализована (commit 1 — core+API+CLI: команды/bundles/scope-API; commit 2 — UI: настройки/панели/статистика//-автокомплит); ⏳ остаток — Фаза 3 (inline shell, `skill-creator`, `skills.urls`/удалённые каталоги, backend-админка каталога — AD-068)
 > **Дата:** 2026-09-17
-> **Реализация:** Фаза 1 — 2026-09-23 (механизм скиллов; отклонения от исходного проекта — в разделе «Реализовано в Фазе 1»)
+> **Реализация:** Фаза 1 — 2026-09-23 (механизм скиллов; отклонения — в разделе «Реализовано в Фазе 1»); Фаза 2 — 2026-09-23 (commit 1 — core/API/CLI, commit 2 — UI; отклонения — в соответствующих разделах)
 > **Парный документ:** [AD-068](./ad-068-skills-agents-registry.md) «Реестр и каталог скиллов и агентов» — контент-платформа, реестр, доверие и распространение
 
 ---
@@ -56,6 +56,28 @@
 - CLI: `/`-строки идут через единый путь `runSingleChat` → core-резолвер; локальные команды не требуют настроенного провайдера.
 - Конфиг: `commands.*`, `skills.toolsets`. Bundles — YAML `{dataDir}/{commands.bundlesPath}/<name>.yaml`.
 - UI (настройки/автокомплит/панели) — **не входит** в commit 1.
+
+---
+
+## Реализовано в Фазе 2 — commit 2 (UI)
+
+UI-слой скиллов/команд поверх core-API Фазы 2 (commit 1). Пользователь свои скиллы не создаёт: user-раздел — просмотр; CRUD — только ADMIN.
+
+**Resolver (core, commit 1, для контекста UI):** `/`-команды резолвятся в core до LLM единообразно для UI/CLI/гибрида. Builtins `/help` (статика), `/skills`, `/commands`, `/summary`; шаблонные `.md` (`$ARGUMENTS`/`@file`); bundles; событие `command.invoked`; builtin-ответы — `Message.ephemeral`. Scope-API `/sessions|projects|settings/skills`; project-запись — owner/LEAD/admin (по аналогии с MCP, AD-071 §2.4).
+
+**Состав UI:**
+- **API-клиент** (`packages/ui/src/lib/api/synthApi.ts`): skills (`getSkills/getSkill/createSkill/updateSkill/deleteSkill/getSkillFiles/getSkillFile/putSkillFile/deleteSkillFile/reloadSkills`), commands (`getCommands`), bundles (CRUD `/skill-bundles`), scope (`getSessionSkills/updateSessionSkills/getSessionSkillsEffective`, `getProjectSkills/updateProjectSkills`, `getSkillsSettings/updateSkillsSettings/resetSkillsSettings`).
+- **Стор** `stores/skillsStore.ts`: реестр + деталь, commands, bundles, instance-настройки (disabled/policy + дефолты), CRUD-экшены, загрузка/ошибки; счётчики `skillInvocationCounts`/`commandInvocationCounts` и последний вызов.
+- **События**: `transportStore` слушает `skill.invoked`/`command.invoked` (AD-046 §8.2) и пишет в `skillsStore`.
+- **Настройки** (`components/settings/`): user «Скиллы» (`SkillsUserSettings` — просмотр реестра/тела/supporting-файлов; недоверенные — только метаданные + бейдж; reload); admin «Скиллы» (`SkillsAdminSettings` + `SkillEditorForm` — CRUD `SKILL.md`+файлы, system enable/disable группами и точечно, policy); admin «Команды» (`CommandsSettings` — список команд с kind/scope/available + диагностика `shadowed`/`collision`, CRUD bundles). Категории `skills` (user) и `skillsAdmin`, `commands` (ADMIN) в `SettingsModal`.
+- **Правая панель**: тумблеры скиллов в сессии (`SessionSettingsTab` — `getSessionSkills`/`updateSessionSkills { name, enabled }`) и проектный скоуп (`ProjectTab` — `ProjectSkillsBlock`, «Доступен»/«Включён по умолчанию») — по образцу MCP.
+- **Статистика** (`StatsTab`): секция «Скиллы» (имя, scope/уровень, available, enabled сессии с причиной, unavailableReason, trusted, вклад токенов/оценка, source stable/session; блочные размеры `skills.catalog`/`skills.catalog.session` из манифеста); секция «Команды» — счётчики и последние вызовы из `skillsStore`.
+- **`/`-автокомплит** (`components/chat/CommandAutocomplete.tsx` + интеграция в `ChatInput`): источник `GET /api/v2/commands`; kind/scope/description/`argument-hint`, бейдж `unavailable`; клавиатура ArrowUp/Down/Enter/Tab/Escape, клик, закрытие outside; подстановка `/name ` (не отправка); тач-таргеты по AD-044.
+
+**Отклонения/решения UI-слоя:**
+- Счётчики статистики — из live-событий `skill.invoked`/`command.invoked` в рамках жизни UI (персистентного хранилища нет; соответствует решению commit 1).
+- `/compact`/`/review` — по-прежнему отложены; `allowed-tools` — advisory (см. commit 1).
+- Runtime-импорты из `@itphx/synth-shared` в UI — только через subpath (`/types`, `/schemas`, `/i18n`, `/version`); value-импорт из корня тянет `config/loader` (`node:fs`) в браузерный бандл (инцидент commit 2, `import type` из корня безопасен).
 
 ---
 

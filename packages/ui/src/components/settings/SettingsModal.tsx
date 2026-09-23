@@ -15,6 +15,9 @@ import { SecuritySettings } from "./SecuritySettings"
 import { McpUserSettings } from "./McpUserSettings"
 import { McpAdminSettings } from "./McpAdminSettings"
 import { ToolsDisabledSettings } from "./ToolsDisabledSettings"
+import { SkillsUserSettings } from "./SkillsUserSettings"
+import { SkillsAdminSettings } from "./SkillsAdminSettings"
+import { CommandsSettings } from "./CommandsSettings"
 import { DashboardPanel } from "../admin/DashboardPanel"
 import { SessionsPanel } from "../admin/SessionsPanel"
 import { ProjectsPanel } from "../admin/ProjectsPanel"
@@ -39,11 +42,14 @@ export const CATEGORIES: CategoryItem[] = [
   { id: "notifications", labelKey: "settings.category.notifications", icon: "alert" },
   { id: "chat", labelKey: "settings.category.chat", icon: "chat-new" },
   { id: "mcp", labelKey: "settings.category.mcp", icon: "tools" },
+  { id: "skills", labelKey: "settings.category.skills", icon: "book-open" },
   // Admin sections below
   { id: "dashboard", labelKey: "settings.category.dashboard", icon: "home", roles: ["ADMIN", "LEAD"] },
   { id: "security", labelKey: "settings.category.security", icon: "shield-keyhole", roles: ["ADMIN"] },
   { id: "mcpAdmin", labelKey: "settings.category.mcpAdmin", icon: "tools", roles: ["ADMIN"] },
   { id: "builtinTools", labelKey: "settings.category.builtinTools", icon: "terminal-box", roles: ["ADMIN"] },
+  { id: "skillsAdmin", labelKey: "settings.category.skillsAdmin", icon: "book-open", roles: ["ADMIN"] },
+  { id: "commands", labelKey: "settings.category.commands", icon: "terminal-box", roles: ["ADMIN"] },
   { id: "sessions", labelKey: "settings.category.sessions", icon: "chat-new", roles: ["ADMIN", "LEAD"] },
   { id: "projects", labelKey: "settings.category.projects", icon: "briefcase", roles: ["ADMIN", "LEAD"] },
   { id: "providers", labelKey: "settings.category.providers", icon: "server", roles: ["ADMIN"] },
@@ -166,6 +172,9 @@ export const SettingsModal = () => {
             {settingsPage === "mcp" && <McpUserSettings />}
             {settingsPage === "mcpAdmin" && <McpAdminSettings />}
             {settingsPage === "builtinTools" && <ToolsDisabledSettings />}
+            {settingsPage === "skills" && <SkillsUserSettings />}
+            {settingsPage === "skillsAdmin" && <SkillsAdminSettings />}
+            {settingsPage === "commands" && <CommandsSettings />}
             {settingsPage === "security" && <SecuritySettings />}
             {settingsPage === "dashboard" && <DashboardPanel />}
             {settingsPage === "sessions" && <SessionsPanel />}

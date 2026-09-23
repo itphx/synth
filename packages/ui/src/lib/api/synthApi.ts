@@ -1,5 +1,5 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig } from '@itphx/synth-shared'
+import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig, SkillSummary, SkillDetail, SkillDiagnostic, SkillLevel, SkillScope, CommandSummary, CommandDiagnostic, SkillBundle, SkillsDisabledRequest } from '@itphx/synth-shared'
 import type { ToolsPolicy } from '@itphx/synth-shared/types'
 
 // Реэкспорт общих контрактов (AD-071): без локальных дублей.
@@ -24,6 +24,11 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   }
   if (response.status === 204) return undefined as T
   return response.json()
+}
+
+/** Кодирует относительный путь supporting-файла, сохраняя разделители `/`. */
+function encodeFilePath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/')
 }
 
 export type EntityOrigin = 'local' | 'remote'
@@ -1210,6 +1215,188 @@ export const synthApi = {
     }).then((r) => r.mcpPolicy)
   },
 
+  // --- Скиллы (AD-046 §9.1) ---
+  /** GET /skills — реестр скиллов; `diagnostics` добавляет discovery-диагностику. */
+  async getSkills(params?: { projectId?: string; diagnostics?: boolean }): Promise<SkillsListResponse> {
+    const q = new URLSearchParams()
+    if (params?.projectId) q.set('project_id', params.projectId)
+    if (params?.diagnostics) q.set('diagnostics', '1')
+    const qs = q.toString()
+    return fetchJSON<SkillsListResponse>(`${BASE_URL}/skills${qs ? `?${qs}` : ''}`)
+  },
+
+  /** GET /skills/:name — деталь скилла (тело + supporting-файлы; для недоверенных тело пустое). */
+  async getSkill(name: string, opts?: { projectId?: string }): Promise<SkillDetail> {
+    const q = opts?.projectId ? `?project_id=${encodeURIComponent(opts.projectId)}` : ''
+    return fetchJSON<SkillDetail>(`${BASE_URL}/skills/${encodeURIComponent(name)}${q}`)
+  },
+
+  /** POST /skills — создание instance-скилла. */
+  async createSkill(input: {
+    name: string
+    description: string
+    body?: string
+    files?: Record<string, string>
+  }): Promise<SkillDetail> {
+    return fetchJSON<SkillDetail>(`${BASE_URL}/skills`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  /** PATCH /skills/:name — правка description/body/metadata instance-скилла. */
+  async updateSkill(
+    name: string,
+    patch: { description?: string; body?: string; metadata?: Record<string, unknown> },
+  ): Promise<SkillDetail> {
+    return fetchJSON<SkillDetail>(`${BASE_URL}/skills/${encodeURIComponent(name)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    })
+  },
+
+  /** DELETE /skills/:name — удаление instance-скилла. */
+  async deleteSkill(name: string): Promise<void> {
+    await fetchJSON<{ status: string }>(`${BASE_URL}/skills/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  /** GET /skills/:name/files — список supporting-файлов. */
+  async getSkillFiles(name: string): Promise<SkillFilesResponse> {
+    return fetchJSON<SkillFilesResponse>(`${BASE_URL}/skills/${encodeURIComponent(name)}/files`)
+  },
+
+  /** GET /skills/:name/files/* — содержимое supporting-файла. */
+  async getSkillFile(name: string, path: string): Promise<SkillFileResponse> {
+    return fetchJSON<SkillFileResponse>(`${BASE_URL}/skills/${encodeURIComponent(name)}/files/${encodeFilePath(path)}`)
+  },
+
+  /** PUT /skills/:name/files/* — запись supporting-файла (instance). */
+  async putSkillFile(name: string, path: string, content: string): Promise<{ name: string; path: string }> {
+    return fetchJSON<{ name: string; path: string }>(
+      `${BASE_URL}/skills/${encodeURIComponent(name)}/files/${encodeFilePath(path)}`,
+      { method: 'PUT', body: JSON.stringify({ content }) },
+    )
+  },
+
+  /** DELETE /skills/:name/files/* — удаление supporting-файла (instance). */
+  async deleteSkillFile(name: string, path: string): Promise<void> {
+    await fetchJSON<{ status: string }>(
+      `${BASE_URL}/skills/${encodeURIComponent(name)}/files/${encodeFilePath(path)}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  /** POST /skills/reload — принудительный ре-скан реестра (AD-046 §8.3). */
+  async reloadSkills(): Promise<void> {
+    await fetchJSON<{ status: string }>(`${BASE_URL}/skills/reload`, { method: 'POST' })
+  },
+
+  // --- Slash-команды (AD-046 §7/§9.1) ---
+  /** GET /commands — встроенные + шаблонные + скиллы + bundles; `diagnostics` — shadowed/collision. */
+  async getCommands(params?: { projectId?: string; diagnostics?: boolean }): Promise<CommandsListResponse> {
+    const q = new URLSearchParams()
+    if (params?.projectId) q.set('project_id', params.projectId)
+    if (params?.diagnostics) q.set('diagnostics', '1')
+    const qs = q.toString()
+    return fetchJSON<CommandsListResponse>(`${BASE_URL}/commands${qs ? `?${qs}` : ''}`)
+  },
+
+  // --- Bundles (AD-046 §7.3) ---
+  /** GET /skill-bundles — список YAML-групп скиллов. */
+  async getSkillBundles(): Promise<SkillBundlesResponse> {
+    return fetchJSON<SkillBundlesResponse>(`${BASE_URL}/skill-bundles`)
+  },
+
+  /** GET /skill-bundles/:name — один bundle. */
+  async getSkillBundle(name: string): Promise<SkillBundle> {
+    return fetchJSON<SkillBundle>(`${BASE_URL}/skill-bundles/${encodeURIComponent(name)}`)
+  },
+
+  /** POST /skill-bundles — создание bundle. */
+  async createSkillBundle(input: SkillBundle): Promise<SkillBundle> {
+    return fetchJSON<SkillBundle>(`${BASE_URL}/skill-bundles`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  /** PATCH /skill-bundles/:name — правка bundle. */
+  async updateSkillBundle(name: string, input: Omit<SkillBundle, 'name'>): Promise<SkillBundle> {
+    return fetchJSON<SkillBundle>(`${BASE_URL}/skill-bundles/${encodeURIComponent(name)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ ...input, name }),
+    })
+  },
+
+  /** DELETE /skill-bundles/:name — удаление bundle. */
+  async deleteSkillBundle(name: string): Promise<void> {
+    await fetchJSON<{ status: string }>(`${BASE_URL}/skill-bundles/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  // --- Scope-API скиллов (AD-046 §4.5, аналог MCP) ---
+  /** GET /sessions/:id/skills — эффективный per-session набор (включая отключённые с причиной). */
+  async getSessionSkills(sessionId: string): Promise<SessionSkillsResponse> {
+    return fetchJSON<SessionSkillsResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/skills`)
+  },
+
+  /** GET /sessions/:id/skills/effective — синоним `getSessionSkills` (как у MCP). */
+  async getSessionSkillsEffective(sessionId: string): Promise<SessionSkillsResponse> {
+    return fetchJSON<SessionSkillsResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/skills/effective`)
+  },
+
+  /** PUT /sessions/:id/skills — точечный toggle `{ name, enabled }` либо замена списков. */
+  async updateSessionSkills(
+    sessionId: string,
+    body: { name?: string; enabled?: boolean; skills?: string[]; skillsDisabled?: string[] },
+  ): Promise<SessionSkillsResponse> {
+    return fetchJSON<SessionSkillsResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/skills`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+  },
+
+  /** GET /projects/:id/skills — проектный скоуп скиллов (owner/lead). */
+  async getProjectSkills(projectId: string): Promise<ProjectSkillsResponse> {
+    return fetchJSON<ProjectSkillsResponse>(`${BASE_URL}/projects/${encodeURIComponent(projectId)}/skills`)
+  },
+
+  /** PUT /projects/:id/skills — проектный скоуп (owner/lead). */
+  async updateProjectSkills(
+    projectId: string,
+    body: { enabled?: string[]; defaultOn?: string[] },
+  ): Promise<ProjectSkillsResponse> {
+    return fetchJSON<ProjectSkillsResponse>(`${BASE_URL}/projects/${encodeURIComponent(projectId)}/skills`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+  },
+
+  // --- Скиллы: instance-wide настройки (AD-046 §4.5) ---
+  /** GET /settings/skills — отключения (группы/категории/имена) и политика. */
+  async getSkillsSettings(): Promise<SkillsSettingsResponse> {
+    return fetchJSON<SkillsSettingsResponse>(`${BASE_URL}/settings/skills`)
+  },
+
+  /** PUT /settings/skills — сохранить отключения и (опционально) политику. */
+  async updateSkillsSettings(
+    disabled: SkillsDisabledRequest,
+    policy?: ToolsPolicy,
+  ): Promise<SkillsSettingsResponse> {
+    return fetchJSON<SkillsSettingsResponse>(`${BASE_URL}/settings/skills`, {
+      method: 'PUT',
+      body: JSON.stringify(policy ? { disabled, policy } : { disabled }),
+    })
+  },
+
+  /** DELETE /settings/skills — сброс к дефолту. */
+  async resetSkillsSettings(): Promise<void> {
+    await fetchJSON<{ status: string }>(`${BASE_URL}/settings/skills`, { method: 'DELETE' })
+  },
+
   // --- Инструменты: instance-wide отключение (AD-071 §2.6) ---
   /** GET /settings/tools-disabled — жёстко отключённые admin'ом capability и тулы. */
   async getToolsDisabledInfo(): Promise<{
@@ -1548,4 +1735,77 @@ export interface DictionaryEntry {
 /** Словарь классификации с действующим содержимым (YAML) — ответ GET/PUT/DELETE элемента. */
 export interface DictionaryDetail extends DictionaryEntry {
   content: string
+}
+
+// --- Скиллы и slash-команды (AD-046) ---
+
+/** AD-046 §9.1: ответ GET /api/v2/skills. */
+export interface SkillsListResponse {
+  skills: SkillSummary[]
+  workspace?: string
+  diagnostics?: SkillDiagnostic[]
+}
+
+/** AD-046 §9.1: список supporting-файлов скилла. */
+export interface SkillFilesResponse {
+  name: string
+  files: string[]
+}
+
+/** AD-046 §9.1: содержимое supporting-файла скилла. */
+export interface SkillFileResponse {
+  name: string
+  path: string
+  content: string
+}
+
+/** AD-046 §7/§9.1: ответ GET /api/v2/commands. */
+export interface CommandsListResponse {
+  commands: CommandSummary[]
+  workspace?: string
+  diagnostics?: CommandDiagnostic[]
+}
+
+/** AD-046 §7.3: ответ GET /api/v2/skill-bundles. */
+export interface SkillBundlesResponse {
+  bundles: SkillBundle[]
+}
+
+/**
+ * AD-046 §4.5: эффективная запись скилла в сессии/проекте (уровень, trust,
+ * доступность, включён/отключён с причиной).
+ */
+export interface EffectiveSkillEntry {
+  name: string
+  description: string
+  level: SkillLevel
+  scope: SkillScope
+  trusted: boolean
+  available: boolean
+  unavailableReason?: string
+  enabled: boolean
+  disabled: boolean
+  disabledReason?: 'session' | 'system'
+}
+
+/** AD-046 §4.5: ответ GET/PUT /api/v2/sessions/:id/skills. */
+export interface SessionSkillsResponse {
+  session_id: string
+  skills: EffectiveSkillEntry[]
+  enabled: string[]
+  disabled: string[]
+}
+
+/** AD-046 §4.5: ответ GET/PUT /api/v2/projects/:id/skills. */
+export interface ProjectSkillsResponse {
+  project_id: string
+  skills: EffectiveSkillEntry[]
+  enabled: string[]
+  defaultOn: string[]
+}
+
+/** AD-046 §4.5: ответ GET/PUT /api/v2/settings/skills. */
+export interface SkillsSettingsResponse {
+  disabled: SkillsDisabledRequest
+  policy: ToolsPolicy
 }
