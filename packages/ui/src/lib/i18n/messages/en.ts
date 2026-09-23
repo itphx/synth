@@ -803,6 +803,13 @@ export const dict = {
   'chat.command.title': 'Command',
   'chat.command.copy': 'Copy',
 
+  // AD-046 §7.1: единый Notice служебных сообщений
+  'chat.notice.summary': 'Summary',
+  'chat.notice.debug': 'Debug',
+  'chat.notice.error': 'Error',
+  'chat.notice.info': 'Info',
+  'chat.notice.copy': 'Copy',
+
   'chat.message.copied': 'Copied',
   'chat.message.disabled': 'Message disabled',
   'chat.message.enabled': 'Message enabled',

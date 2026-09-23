@@ -10,9 +10,10 @@ import { ToolCallPart } from './ToolCallPart'
 import { SubagentPart, type SubagentPartData } from './SubagentPart'
 import { RetryStatus } from './RetryStatus'
 import { CommandMessage } from './CommandMessage'
+import { Notice, type NoticeVariant } from './Notice'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/chatStore'
-import { useResolveI18n } from '@/lib/i18n'
+import { useI18n, useResolveI18n } from '@/lib/i18n'
 import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { useCallback, useMemo } from 'react'
@@ -117,6 +118,7 @@ function ChatMessageInner({
   const secrets = (message.metadata?.secrets as Record<string, string> | undefined) ?? undefined
   // i18n ядра: metadata.i18n → перевод по ключу (fallback — content).
   const resolveI18nText = useResolveI18n()
+  const { t } = useI18n()
   const i18nMeta = message.metadata?.i18n
   const activeTab = useUIStore((s) => s.centerTabs.find((t) => t.id === s.activeCenterTabId))
   const sessionId = (activeTab?.data?.sessionId as string) || undefined
@@ -131,20 +133,13 @@ function ChatMessageInner({
     'flex px-4 py-3 group',
     selectionMode ? 'flex-row items-start' : 'flex-col',
     isUser && 'items-end',
-    isAssistant && 'items-start',
-    isSummary && 'items-center',
-    isDebug && 'items-center',
-    (isError || isInfo) && 'items-center'
+    isAssistant && 'items-start'
   )
 
   const bubbleClass = cn(
     'max-w-[85%] rounded-lg px-4 py-3',
     isUser && 'bg-primary/10 text-foreground rounded-br-sm',
     isAssistant && 'bg-card border border-border/50 text-foreground rounded-bl-sm',
-    isSummary && 'bg-yellow-500/5 border border-yellow-500/20 text-foreground',
-    isDebug && 'bg-amber-500/5 border border-amber-500/30 text-amber-600 dark:text-amber-400 rounded-lg',
-    isError && 'bg-destructive/10 border border-destructive/30 text-destructive rounded-lg',
-    isInfo && 'bg-muted/30 border border-border/30 text-muted-foreground rounded-lg text-xs',
     message.disabled && 'opacity-50 line-through',
     message.pinned && 'ring-1 ring-primary/30',
   )
@@ -234,6 +229,76 @@ function ChatMessageInner({
     ? [...intermediateTextBlocks.map((it) => it.text), message.content].filter(Boolean).join('\n\n')
     : null
   const displayContent = bottomContent ?? message.content
+
+  // AD-046 §7.1: reasoning / intermediate / tool-call блоки. Для assistant
+  // рендерятся в пузыре напрямую, для summary/debug — внутри Notice-тела.
+  const partsContent = isAssistant || isSummary || isDebug
+    ? (() => {
+        const items: Array<
+          | { type: 'reasoning'; data: ReasoningBlockData }
+          | { type: 'intermediate_text'; data: IntermediateTextBlockData }
+          | { type: 'subagent'; data: SubagentPartData }
+          | { type: 'tool_calls'; calls: LiveToolCall[] }
+        > = []
+
+        const maxIter = Math.max(
+          0,
+          ...reasoningBlocks.map((r) => r.iteration),
+          ...intermediateTextBlocks.map((it) => it.iteration),
+          ...liveToolCalls.map((tc) => tc.iteration),
+        )
+
+        for (let iter = 0; iter <= maxIter; iter++) {
+          for (const r of reasoningBlocks) {
+            if (r.iteration === iter) items.push({ type: 'reasoning', data: r })
+          }
+          if (isInline) {
+            for (const it of intermediateTextBlocks) {
+              if (it.iteration === iter) items.push({ type: 'intermediate_text', data: it })
+            }
+          }
+          const iterCalls = liveToolCalls.filter((tc) => tc.iteration === iter)
+          const regularCalls: LiveToolCall[] = []
+          for (const tc of iterCalls) {
+            if (tc.name === 'task') {
+              const sa = getSubagentData(tc)
+              if (sa) {
+                items.push({ type: 'subagent', data: sa })
+                continue
+              }
+            }
+            if (tc.parentCallId) continue
+            regularCalls.push(tc)
+          }
+          if (regularCalls.length > 0) {
+            items.push({ type: 'tool_calls', calls: regularCalls })
+          }
+        }
+
+        return items.map((item, i) => {
+          if (item.type === 'reasoning') {
+            return <ReasoningBlock key={`r${i}`} reasoning={item.data.text} />
+          }
+          if (item.type === 'intermediate_text') {
+            return (
+              <div key={`it${i}`} className="my-2 text-sm">
+                <SecretMarkdown content={item.data.text} secrets={secrets} sessionId={sessionId} />
+              </div>
+            )
+          }
+          if (item.type === 'subagent') {
+            return <SubagentPart key={`sa${i}`} subagent={item.data} />
+          }
+          if (item.type === 'tool_calls') {
+            return item.calls.map((tc, j) => (
+              <ToolCallPart key={tc.callId || j} toolCall={tc} secrets={secrets} sessionId={sessionId} />
+            ))
+          }
+          return null
+        })
+      })()
+    : null
+
   // AD-070 §2.6: пустой отменённый ответ (отмена до первого токена) всё равно
   // показываем — статус «Остановлено» и статистика идут через metadata.
   if (
@@ -244,6 +309,95 @@ function ChatMessageInner({
     intermediateTextBlocks.length === 0 &&
     !showStats
   ) return null
+
+  // AD-046 §7.1: служебные сообщения (сводка/отладка/ошибка/инфо) — единый Notice.
+  const noticeVariant: NoticeVariant | null = isSummary
+    ? 'summary'
+    : isDebug
+      ? 'debug'
+      : isError
+        ? 'error'
+        : isInfo
+          ? 'info'
+          : null
+
+  if (noticeVariant) {
+    const label = t(`chat.notice.${noticeVariant}`)
+    const withMeta = noticeVariant === 'summary' || noticeVariant === 'debug'
+    const selectionCheckboxEl = selectionMode ? (
+      <div className="flex items-center self-stretch pr-1">
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={(e) => {
+            const ev = e.nativeEvent as MouseEvent
+            handleToggleSelect(ev.shiftKey ?? false)
+          }}
+          className="size-4 rounded border-border cursor-pointer accent-primary"
+        />
+      </div>
+    ) : null
+
+    const noticeEl = (
+      <Notice
+        variant={noticeVariant}
+        label={label}
+        ariaLabel={label}
+        meta={withMeta ? <MessageHeader message={message} metaOnly /> : undefined}
+        actions={
+          withMeta && showActions ? (
+            <MessageActions
+              embedded
+              showCopy={false}
+              messageIndex={message.index}
+              role={message.role}
+              disabled={message.disabled}
+              pinned={message.pinned}
+              canRetry={canRetry}
+              hasDebug={hasDebug}
+              debugActive={debugActive}
+              readOnly={readOnly}
+              hasStats={showStats}
+              statsContent={<MessageStats message={message} />}
+              onCopy={handleCopy}
+              onToggle={handleToggle}
+              onPin={handlePin}
+              onDelete={handleDelete}
+              onRetry={handleRetry}
+              onDebug={handleDebug}
+              onFork={handleFork}
+            />
+          ) : undefined
+        }
+        onCopy={handleCopy}
+        disabled={message.disabled}
+      >
+        {withMeta && partsContent}
+        {displayContent &&
+          (isInfo && (message.metadata as Record<string, unknown>)?.type === 'session_reference' ? (
+            <SessionReferenceCard
+              sessionId={String((message.metadata as Record<string, unknown>)?.session_id || '')}
+              content={displayContent}
+              metadata={message.metadata as Record<string, unknown> | undefined}
+            />
+          ) : (
+            <SecretMarkdown
+              content={resolveI18nText(i18nMeta, displayContent)}
+              secrets={secrets}
+              sessionId={sessionId}
+            />
+          ))}
+      </Notice>
+    )
+
+    if (!selectionMode) return noticeEl
+    return (
+      <div className="flex items-start">
+        {selectionCheckboxEl}
+        <div className="min-w-0 flex-1">{noticeEl}</div>
+      </div>
+    )
+  }
 
   return (
     <div className={containerClass}>
@@ -265,80 +419,7 @@ function ChatMessageInner({
           <MessageHeader message={message} isSubagent={isSubagent} onOriginClick={handleOriginClick} />
         )}
 
-        {isSummary && (
-          <MessageHeader message={message} isSubagent={isSubagent} onOriginClick={handleOriginClick} />
-        )}
-
-        {isDebug && (
-          <MessageHeader message={message} isSubagent={isSubagent} onOriginClick={handleOriginClick} />
-        )}
-
-        {(isAssistant || isSummary || isDebug) && (
-          (() => {
-            const items: Array<
-              | { type: 'reasoning'; data: ReasoningBlockData }
-              | { type: 'intermediate_text'; data: IntermediateTextBlockData }
-              | { type: 'subagent'; data: SubagentPartData }
-              | { type: 'tool_calls'; calls: LiveToolCall[] }
-            > = []
-
-            const maxIter = Math.max(
-              0,
-              ...reasoningBlocks.map((r) => r.iteration),
-              ...intermediateTextBlocks.map((it) => it.iteration),
-              ...liveToolCalls.map((tc) => tc.iteration),
-            )
-
-            for (let iter = 0; iter <= maxIter; iter++) {
-              for (const r of reasoningBlocks) {
-                if (r.iteration === iter) items.push({ type: 'reasoning', data: r })
-              }
-              if (isInline) {
-                for (const it of intermediateTextBlocks) {
-                  if (it.iteration === iter) items.push({ type: 'intermediate_text', data: it })
-                }
-              }
-              const iterCalls = liveToolCalls.filter((tc) => tc.iteration === iter)
-              const regularCalls: LiveToolCall[] = []
-              for (const tc of iterCalls) {
-                if (tc.name === 'task') {
-                  const sa = getSubagentData(tc)
-                  if (sa) {
-                    items.push({ type: 'subagent', data: sa })
-                    continue
-                  }
-                }
-                if (tc.parentCallId) continue
-                regularCalls.push(tc)
-              }
-              if (regularCalls.length > 0) {
-                items.push({ type: 'tool_calls', calls: regularCalls })
-              }
-            }
-
-            return items.map((item, i) => {
-              if (item.type === 'reasoning') {
-                return <ReasoningBlock key={`r${i}`} reasoning={item.data.text} />
-              }
-              if (item.type === 'intermediate_text') {
-                return (
-                  <div key={`it${i}`} className="my-2 text-sm">
-                    <SecretMarkdown content={item.data.text} secrets={secrets} sessionId={sessionId} />
-                  </div>
-                )
-              }
-              if (item.type === 'subagent') {
-                return <SubagentPart key={`sa${i}`} subagent={item.data} />
-              }
-              if (item.type === 'tool_calls') {
-                return item.calls.map((tc, j) => (
-                  <ToolCallPart key={tc.callId || j} toolCall={tc} secrets={secrets} sessionId={sessionId} />
-                ))
-              }
-              return null
-            })
-          })()
-        )}
+        {partsContent}
 
         {isUser && (
           <MessageHeader

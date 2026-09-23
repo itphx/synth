@@ -802,6 +802,13 @@ export const dict = {
   'chat.command.title': 'Команда',
   'chat.command.copy': 'Копировать',
 
+  // AD-046 §7.1: единый Notice служебных сообщений
+  'chat.notice.summary': 'Сводка',
+  'chat.notice.debug': 'Отладка',
+  'chat.notice.error': 'Ошибка',
+  'chat.notice.info': 'Инфо',
+  'chat.notice.copy': 'Копировать',
+
   'chat.message.copied': 'Скопировано',
   'chat.message.disabled': 'Сообщение выключено',
   'chat.message.enabled': 'Сообщение включено',
