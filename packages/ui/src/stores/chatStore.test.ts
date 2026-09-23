@@ -280,6 +280,71 @@ describe('chatStore: cancelStream сохраняет статистику (AD-07
   })
 })
 
+describe('chatStore: addToolCall помечает стрим содержательным (регресс c11ece3f)', () => {
+  it('startStream + addToolCall → hasContent=true (плейсхолдер виден сразу, без текста/reasoning)', () => {
+    const store = useChatStore.getState()
+    store.startStream('s1', 'st1', 'developer')
+    expect(useChatStore.getState().streamingBySession['s1']!['st1']!.hasContent).toBe(false)
+
+    store.addToolCall('s1', 'st1', {
+      callId: 'call-1',
+      name: 'read_file',
+      args: { path: 'a.ts' },
+      status: 'running',
+      startedAt: '2026-09-23T00:00:00Z',
+      iteration: 0,
+    })
+
+    const st = useChatStore.getState().streamingBySession['s1']!['st1']!
+    expect(st.hasContent).toBe(true)
+    expect(st.toolCalls).toHaveLength(1)
+    expect(st.toolCalls[0]!.status).toBe('running')
+    // Предикат отображения плейсхолдера в MessageList: isStreaming && hasContent.
+    expect(st.isStreaming && st.hasContent).toBe(true)
+  })
+
+  it('повторный (дедуплицированный) addToolCall тоже держит hasContent=true', () => {
+    const store = useChatStore.getState()
+    store.startStream('s1', 'st1', null)
+    const call = {
+      callId: 'call-1',
+      name: 'read_file',
+      args: {},
+      status: 'running' as const,
+      startedAt: '2026-09-23T00:00:00Z',
+      iteration: 0,
+    }
+    store.addToolCall('s1', 'st1', call)
+    store.addToolCall('s1', 'st1', { ...call, status: 'done' })
+
+    const st = useChatStore.getState().streamingBySession['s1']!['st1']!
+    expect(st.toolCalls).toHaveLength(1)
+    expect(st.hasContent).toBe(true)
+  })
+
+  it('стрим с tool-вызовом не считается usage-only и переживает clearUsageStream', () => {
+    const store = useChatStore.getState()
+    // Минимальный StreamState дочернего саб-агента (stream.usage без stream.start).
+    store.updateStreamUsage('child', 'st-child', {
+      usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+      agentRole: 'explore',
+    })
+    store.addToolCall('child', 'st-child', {
+      callId: 'call-1',
+      name: 'read_file',
+      args: {},
+      status: 'running',
+      startedAt: '2026-09-23T00:00:00Z',
+      iteration: 0,
+    })
+    expect(useChatStore.getState().streamingBySession['child']!['st-child']!.hasContent).toBe(true)
+
+    store.clearUsageStream('child', 'st-child')
+    // Вызов инструмента — полноценный стрим, а не live-usage дочерней сессии.
+    expect(useChatStore.getState().streamingBySession['child']?.['st-child']).toBeDefined()
+  })
+})
+
 describe('chatStore: liveSubagentUsageBySession (AD-070 §2.6)', () => {
   it('накапливает вклад по вызовам и агрегирует сессию', () => {
     const store = useChatStore.getState()

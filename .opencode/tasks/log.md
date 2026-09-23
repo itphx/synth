@@ -742,3 +742,11 @@
 - **Проверки (оркестратор):** `typecheck` OK; `lint` 0 errors (33 предсуществующих warning); `test` **76 файлов / 618 тестов PASS**. **UI (Playwright, :5002):** 0 console errors; регресс-проверка общего поповера на готовых сообщениях — клик по 13 кнопкам `Статистика ответа` рендерит `message-stats` («2.6k вх·213 исх·0% кэш») в portal (`data-align=start`, `data-side=top`). Живой стрим LLM не гоняли (политика Verify — без явной просьбы); поведение стрима покрыто компонентными тестами `StreamingPlaceholder`.
 - **Замечания:** коммит не делался (нет явной просьбы). В рабочем дереве также незакоммиченное изменение «Имя сессии над ID» (см. выше).
 
+## 2026-09-23 (продолжение) — Регресс отображения: tool-вызов появлялся только после завершения инструмента
+- **Задача:** во время стрима блок вызова инструмента появлялся лишь когда инструмент завершится; ожидалось — сразу по вызову модели.
+- **Тип:** bug fix (UI) · **Исполнитель:** @orchestrator (investigate) → @fixer → верификация @tester · **Результат:** PASS.
+- **Причина:** `StreamingPlaceholder` (рисует live `stream.toolCalls`) монтируется только для стримов из фильтра `isStreaming && hasContent` (`MessageList.tsx:108`), а `hasContent` выставлялся лишь в `chatStore.updateStreamChunk` при непустом тексте/reasoning. `tool_call.started` → `addToolCall` добавлял вызов, но `hasContent` не трогал → при вызове инструмента без предшествующего текста/reasoning плейсхолдер не монтировался, блок «всплывал» только с приходом следующего текста (уже после инструмента). Регресс внесён `c11ece3f` («крутилка только после первого chunk»).
+- **Правки (`packages/ui`):** `stores/chatStore.ts` — в `addToolCall` выставляется `hasContent: true` (+ обновлён JSDoc поля); `stores/chatStore.test.ts` — +3 теста; `stores/transportStore.subagent.test.ts` — +1 тест на диспетчер `tool_call.started`.
+- **Проверки:** `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` shared 91, core 1683, ui 622, backend 312 — зелёные. Доказательство: со stash правки источника 4 новых теста падают, после возврата — проходят; дерево восстановлено (sha256 diff совпал). usage-only StreamState, дедупликация по callId, `finishStream`/`cancelStream` не сломаны.
+- **Замечания:** коммит не делался (нет явной просьбы).
+

@@ -187,6 +187,28 @@ describe('transportStore dispatcher: stream.error → финальная оши�
   })
 })
 
+describe('transportStore dispatcher: tool_call.started → стрим сразу виден (регресс c11ece3f)', () => {
+  it('startStream + tool_call.started → hasContent=true и live-вызов в стриме', () => {
+    dispatch(makeEvent('stream.start', 's1', { stream_id: 'st1', agent_role: 'developer' }))
+    expect(useChatStore.getState().streamingBySession['s1']!['st1']!.hasContent).toBe(false)
+
+    dispatch(makeEvent('tool_call.started', 's1', {
+      stream_id: 'st1',
+      call_id: 'call-1',
+      name: 'read_file',
+      arguments: { path: 'a.ts' },
+      iteration: 0,
+    }))
+
+    const st = useChatStore.getState().streamingBySession['s1']!['st1']!
+    expect(st.hasContent).toBe(true)
+    expect(st.toolCalls).toHaveLength(1)
+    expect(st.toolCalls[0]).toMatchObject({ callId: 'call-1', name: 'read_file', status: 'running' })
+    // Плейсхолдер монтируется фильтром MessageList `isStreaming && hasContent`.
+    expect(st.isStreaming && st.hasContent).toBe(true)
+  })
+})
+
 describe('transportStore dispatcher: session.created origin (гибрид)', () => {
   beforeEach(() => {
     useSessionsStore.setState({ sessions: [] })

@@ -127,7 +127,7 @@ export interface StreamState {
   reasoningBlocks: ReasoningBlockData[]
   intermediateTextBlocks: IntermediateTextBlockData[]
   isStreaming: boolean
-  /** true, когда пришёл первый непустой chunk (content или reasoning) — признак, что провайдер начал отвечать */
+  /** true, когда пришёл первый непустой chunk (content/reasoning) или начался вызов инструмента — признак, что провайдер начал отвечать */
   hasContent: boolean
   isRetrying?: boolean
   model?: string
@@ -609,6 +609,11 @@ export const useChatStore = create<ChatStore>((set) => ({
       sessionStreams[streamId] = {
         ...existing,
         toolCalls,
+        // Вызов инструмента — тоже ответ провайдера (как текст/reasoning). Сразу
+        // помечаем стрим содержательным, чтобы плейсхолдер и снятие «processing» в
+        // MessageList срабатывали уже по `tool_call.started`, а не после завершения
+        // инструмента (регресс c11ece3f: фильтр `isStreaming && hasContent`).
+        hasContent: true,
       }
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
