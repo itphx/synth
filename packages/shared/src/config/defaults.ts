@@ -96,6 +96,7 @@ export const defaultConfig: SynthConfig = {
   },
   skills: {
     paths: [],
+    urls: [],
     trustedProjectDirs: [],
     inlineShell: false,
     toolsets: {},

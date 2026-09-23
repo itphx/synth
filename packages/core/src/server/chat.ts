@@ -55,6 +55,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   const skillService = new SkillService({
     dataDir,
     configPaths: options.config.skills?.paths,
+    urls: options.config.skills?.urls,
     trustedProjectDirs: options.config.skills?.trustedProjectDirs,
     toolsets: options.config.skills?.toolsets,
   });

@@ -1,7 +1,9 @@
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { SkillDetail, SkillDiagnostic, SkillMeta, SkillSummary } from '@itphx/synth-shared';
 import { SkillStore, type CreateSkillInput, type UpdateSkillMarkdownInput } from '../../storage/skill-store.js';
 import { buildSkillSources } from './discovery.js';
+import { refreshRemoteCatalogs } from './remote.js';
 import { SkillRegistry } from './registry.js';
 import { buildSkillCatalog, toSkillSummary, type ComposerSkillsCatalog } from './catalog.js';
 import {
@@ -17,6 +19,8 @@ export interface SkillServiceOptions {
   dataDir: string;
   /** `config.skills.paths`. */
   configPaths?: readonly string[];
+  /** AD-046 §4.2/§4.3: `config.skills.urls` — read-only индексация удалённых каталогов. */
+  urls?: readonly string[];
   /** `config.skills.trustedProjectDirs`. */
   trustedProjectDirs?: readonly string[];
   /** `config.skills.toolsets` — экспансия `requires_toolsets` (AD-046 §3.2). */
@@ -40,29 +44,69 @@ export class SkillService {
   private readonly _store: SkillStore;
   private readonly _registry: SkillRegistry;
   private readonly _toolsets: Record<string, readonly string[]>;
+  private readonly _urls: readonly string[];
+  private readonly _cacheDir: string;
+  private _remoteDiagnostics: SkillDiagnostic[] = [];
+  private _remoteRefresh: Promise<void> | null = null;
 
   constructor(opts: SkillServiceOptions) {
     this._store = opts.store ?? new SkillStore({ dataDir: opts.dataDir });
     this._toolsets = opts.toolsets ?? {};
+    this._urls = opts.urls ?? [];
+    this._cacheDir = join(opts.dataDir, 'skills-cache');
     this._registry = opts.registry ?? new SkillRegistry({
       sources: (o) => buildSkillSources({
         dataDir: opts.dataDir,
         projectWorkspace: o?.projectWorkspace,
         configPaths: opts.configPaths,
+        urls: opts.urls,
+        skillsCacheDir: this._cacheDir,
         trustedProjectDirs: opts.trustedProjectDirs,
         home: opts.home ?? homedir(),
       }),
     });
   }
 
-  /** Реестр скиллов (discovery + диагностика). */
+  /**
+   * Реестр скиллов (discovery + диагностика). Диагностика последней read-only
+   * индексации `skills.urls` (`refreshRemote`) добавляется к результату.
+   */
   async list(opts?: { projectWorkspace?: string }): Promise<SkillScanResult> {
-    return this._registry.list(opts);
+    const result = await this._registry.list(opts);
+    if (this._remoteDiagnostics.length === 0) return result;
+    return {
+      skills: result.skills,
+      diagnostics: [...this._remoteDiagnostics, ...result.diagnostics],
+    };
+  }
+
+  /**
+   * AD-046 §4.2/§4.3: read-only индексация `skills.urls` в кэш + `reload`.
+   * In-flight guard (параллельные вызовы разделяют одно обновление). Конструктор
+   * сеть не трогает — вызов явный (при старте — fire-and-forget).
+   */
+  async refreshRemote(): Promise<void> {
+    if (this._remoteRefresh) return this._remoteRefresh;
+    const task = this._doRefreshRemote().finally(() => {
+      this._remoteRefresh = null;
+    });
+    this._remoteRefresh = task;
+    return task;
+  }
+
+  private async _doRefreshRemote(): Promise<void> {
+    if (this._urls.length === 0) return;
+    const { diagnostics } = await refreshRemoteCatalogs({
+      urls: this._urls,
+      cacheDir: this._cacheDir,
+    });
+    this._remoteDiagnostics = diagnostics;
+    this.reload();
   }
 
   /** Сводки реестра (capability-aware). */
   async listSummaries(opts?: SkillListOptions): Promise<{ skills: SkillSummary[]; diagnostics: SkillDiagnostic[] }> {
-    const { skills, diagnostics } = await this._registry.list({ projectWorkspace: opts?.projectWorkspace });
+    const { skills, diagnostics } = await this.list({ projectWorkspace: opts?.projectWorkspace });
     return {
       skills: skills.map((s) => toSkillSummary(s, { capabilities: opts?.capabilities, toolsets: this._toolsets })),
       diagnostics,

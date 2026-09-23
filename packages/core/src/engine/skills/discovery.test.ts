@@ -2,7 +2,14 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildSkillSources, mergeSkillScans, scanSkillSource } from './discovery.js';
+import {
+  buildSkillSources,
+  buildUrlSource,
+  mergeSkillScans,
+  scanSkillSource,
+  urlCacheSlug,
+} from './discovery.js';
+import { buildSkillCatalog } from './catalog.js';
 import { SkillRegistry } from './registry.js';
 import type { SkillSource } from './types.js';
 
@@ -31,7 +38,8 @@ describe('buildSkillSources (AD-046 §4.2/§4.3)', () => {
       trustedProjectDirs: ['/work/proj'],
       home: '/home/u',
     });
-    expect(sources.map((s) => s.origin)).toEqual(['project', 'instance', 'config']);
+    // Первые три — заявленный приоритет; далее external (AD-046 §4.2).
+    expect(sources.slice(0, 3).map((s) => s.origin)).toEqual(['project', 'instance', 'config']);
     expect(sources[0]!.dir).toBe(join('/work/proj', '.synth', 'skills'));
     expect(sources[0]!.trusted).toBe(true);
     expect(sources[1]!.trusted).toBe(true);
@@ -60,9 +68,80 @@ describe('buildSkillSources (AD-046 §4.2/§4.3)', () => {
     expect(sources[0]!.trusted).toBe(true);
   });
 
-  it('без проекта — только instance и config', () => {
-    const sources = buildSkillSources({ dataDir: '/data', configPaths: ['/x'] });
-    expect(sources.map((s) => s.origin)).toEqual(['instance', 'config']);
+  it('без проекта — instance, config и внешний home-каталог', () => {
+    const sources = buildSkillSources({ dataDir: '/data', configPaths: ['/x'], home: '/home/u' });
+    expect(sources.map((s) => s.origin)).toEqual(['instance', 'config', 'external']);
+    expect(sources[2]!.dir).toBe(join('/home/u', '.config', 'opencode', 'skills'));
+  });
+
+  it('external-каталоги после config.paths, в порядке .opencode/skills > .opencode/skill > .claude/skills > .agents/skills > ~/.config/opencode/skills (AD-046 §4.2)', () => {
+    const sources = buildSkillSources({
+      dataDir: '/data',
+      projectWorkspace: '/work/proj',
+      configPaths: ['/extra/skills'],
+      trustedProjectDirs: ['/work/proj'],
+      home: '/home/u',
+    });
+    expect(sources.map((s) => s.origin)).toEqual([
+      'project', 'instance', 'config',
+      'external', 'external', 'external', 'external', 'external',
+    ]);
+    expect(sources[3]!.dir).toBe(join('/work/proj', '.opencode', 'skills'));
+    expect(sources[4]!.dir).toBe(join('/work/proj', '.opencode', 'skill'));
+    expect(sources[5]!.dir).toBe(join('/work/proj', '.claude', 'skills'));
+    expect(sources[6]!.dir).toBe(join('/work/proj', '.agents', 'skills'));
+    expect(sources[7]!.dir).toBe(join('/home/u', '.config', 'opencode', 'skills'));
+    // project-trust наследуется, home-каталог trusted
+    expect(sources[3]!.scope).toBe('project');
+    expect(sources[3]!.trusted).toBe(true);
+    expect(sources[7]!.scope).toBe('instance');
+    expect(sources[7]!.trusted).toBe(true);
+  });
+
+  it('external в недоверенном проекте — trusted=false', () => {
+    const sources = buildSkillSources({
+      dataDir: '/data',
+      projectWorkspace: '/work/proj',
+      trustedProjectDirs: [],
+    });
+    const projectExternal = sources.filter((s) => s.origin === 'external' && s.scope === 'project');
+    expect(projectExternal).toHaveLength(4);
+    expect(projectExternal.every((s) => s.trusted === false)).toBe(true);
+  });
+
+  it('skills.urls → url-кэш-источники trusted:false, пути детерминированы (AD-046 §4.3)', () => {
+    const urls = ['https://example.com/skills', 'https://example.org/catalog/index.json'];
+    const sources = buildSkillSources({
+      dataDir: '/data',
+      projectWorkspace: '/work/proj',
+      urls,
+      skillsCacheDir: '/cache/skills',
+      home: '/home/u',
+    });
+    const urlSources = sources.filter((s) => s.origin === 'url');
+    expect(urlSources).toHaveLength(2);
+    expect(urlSources.every((s) => s.trusted === false)).toBe(true);
+    expect(urlSources[0]!.dir).toBe(join('/cache/skills', 'urls', urlCacheSlug(urls[0]!)));
+    expect(urlSources[1]!.dir).toBe(join('/cache/skills', 'urls', urlCacheSlug(urls[1]!)));
+    // urls — последний (низший приоритет)
+    expect(sources[sources.length - 1]!.origin).toBe('url');
+  });
+
+  it('url-скиллы: trusted=false, видны в диагностике, но отсутствуют в каталоге для модели', async () => {
+    const cacheDir = join(root, 'cache');
+    const url = 'https://example.com/skills';
+    await writeSkill(join(cacheDir, 'urls', urlCacheSlug(url)), 'remote-skill');
+
+    const source = buildUrlSource(cacheDir, url);
+    const merged = mergeSkillScans([{ source, result: await scanSkillSource(source) }]);
+
+    expect(merged.skills.map((s) => s.name)).toEqual(['remote-skill']);
+    expect(merged.skills[0]!.trusted).toBe(false);
+    expect(merged.diagnostics.some((d) => d.code === 'untrusted')).toBe(true);
+
+    const catalog = buildSkillCatalog(merged.skills, {});
+    expect(catalog.stable).toHaveLength(0);
+    expect(catalog.session).toHaveLength(0);
   });
 });
 

@@ -7,8 +7,13 @@ import type {
   SkillSummary,
 } from '@itphx/synth-shared';
 
-/** Происхождение каталога-источника (AD-046 §4.2). */
-export type SkillOrigin = 'instance' | 'project' | 'config';
+/**
+ * Происхождение каталога-источника (AD-046 §4.2/§4.3).
+ * `external` — локальные каталоги совместимости (`.opencode`/`.claude`/`.agents`,
+ * `~/.config/opencode`); `url` — кэш удалённого каталога (`skills.urls`,
+ * read-only, `trusted: false`).
+ */
+export type SkillOrigin = 'instance' | 'project' | 'config' | 'external' | 'url';
 
 /** Каталог-источник скиллов (AD-046 §4.2/§4.4). */
 export interface SkillSource {

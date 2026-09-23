@@ -19,7 +19,8 @@ let tmpDir: string;
 
 function makeApp(opts?: { writeGuard?: MiddlewareHandler }) {
   const app = new Hono();
-  const skillService = new SkillService({ dataDir: tmpDir });
+  // home изолирован, чтобы внешний `~/.config/opencode/skills` хоста не влиял на реестр.
+  const skillService = new SkillService({ dataDir: tmpDir, home: join(tmpDir, 'home') });
   app.route('/api/v2/skills', createSkillRoutes(createMockAuth(), { skillService }, opts));
   return { app, skillService };
 }

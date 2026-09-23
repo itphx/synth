@@ -184,11 +184,18 @@ export const toolsConfigSchema = z.object({
  * доверенные проектные каталоги (бинарный trust); `inlineShell` — выключатель
  * `!`cmd`` в шаблонных командах (по умолчанию выключено).
  *
- * Внешние каталоги (`.opencode`, `.claude`, `.agents`, `~/.config/opencode`) и
- * `skills.urls` в Фазе 1 не подключаются.
+ * `urls` — внешние удалённые каталоги (opencode-совместимый `index.json`):
+ * **только read-only индексация** — скачиваются в `{dataDir}/skills-cache/urls`,
+ * видны в реестре/диагностике, но `trusted: false` (в каталог для модели не
+ * попадают, тело не грузится). Установка/доверие/подписи/`lock.json` — AD-068.
+ *
+ * Внешние локальные каталоги совместимости (`.opencode`, `.claude`, `.agents`,
+ * `~/.config/opencode`) подключаются как read-only discovery в core (AD-046 §4.2).
  */
 export const skillsConfigSchema = z.object({
   paths: z.array(z.string()).default([]),
+  /** AD-046 §4.2/§4.3: удалённые каталоги — read-only индексация (`trusted: false`). */
+  urls: z.array(z.string()).default([]),
   trustedProjectDirs: z.array(z.string()).default([]),
   inlineShell: z.boolean().default(false),
   /**

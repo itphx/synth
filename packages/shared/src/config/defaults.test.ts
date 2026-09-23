@@ -40,9 +40,9 @@ describe('defaultConfig', () => {
     expect(defaultConfig.tools.disabled).toEqual({ capabilities: [], tools: [] });
   });
 
-  it('skills по умолчанию пусты, inlineShell выключен (AD-046)', () => {
+  it('skills по умолчанию пусты (paths/urls), inlineShell выключен (AD-046)', () => {
     expect(defaultConfig.skills).toEqual({
-      paths: [], trustedProjectDirs: [], inlineShell: false, toolsets: {},
+      paths: [], urls: [], trustedProjectDirs: [], inlineShell: false, toolsets: {},
     });
   });
 

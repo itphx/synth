@@ -1,8 +1,8 @@
 # AD-046: Скиллы и slash-команды
 
-> **Статус:** ✅ Фаза 1 реализована; ✅ Фаза 2 реализована (commit 1 — core+API+CLI: команды/bundles/scope-API; commit 2 — UI: настройки/панели/статистика//-автокомплит); ⏳ остаток — Фаза 3 (inline shell, `skill-creator`, `skills.urls`/удалённые каталоги, backend-админка каталога — AD-068)
+> **Статус:** ✅ Фаза 1 реализована; ✅ Фаза 2 реализована (commit 1 — core+API+CLI: команды/bundles/scope-API; commit 2 — UI: настройки/панели/статистика//-автокомплит); ✅ Фаза 3 (часть) — внешние локальные каталоги (read-only discovery) и `skills.urls` (read-only индексация, `trusted: false`); ⏳ остаток Фазы 3 (inline shell, `skill-creator`, install/trust/подписи/`lock.json` и backend-админка каталога — AD-068)
 > **Дата:** 2026-09-17
-> **Реализация:** Фаза 1 — 2026-09-23 (механизм скиллов; отклонения — в разделе «Реализовано в Фазе 1»); Фаза 2 — 2026-09-23 (commit 1 — core/API/CLI, commit 2 — UI; отклонения — в соответствующих разделах)
+> **Реализация:** Фаза 1 — 2026-09-23 (механизм скиллов; отклонения — в разделе «Реализовано в Фазе 1»); Фаза 2 — 2026-09-23 (commit 1 — core/API/CLI, commit 2 — UI; отклонения — в соответствующих разделах); Фаза 3 (часть) — 2026-09-24 (внешние каталоги + `skills.urls` read-only)
 > **Парный документ:** [AD-068](./ad-068-skills-agents-registry.md) «Реестр и каталог скиллов и агентов» — контент-платформа, реестр, доверие и распространение
 
 ---
@@ -19,7 +19,7 @@
 | 3 | `tools.skill: false` (глобальный тумблер) | Отдельного `tools.skill` нет: тул `skill` (capability `file_read`) отключается существующим `tools.disabled` (AD-071 §2.9) + per-session контекстом | Не дублировать механизм; AD-071 уже даёт instance-wide отключение |
 | 4 | Каталог — один блок | Два блока AD-070: `skills.catalog` (**stable** — system/project, доступные) и `skills.catalog.session` (**volatile** — session enable/disable + маркеры `unavailable`) | Тиры AD-070 §2.1/§4.5: стабильная часть не инвалидирует prompt-cache |
 | 5 | Саб-агенты — через Composer | Каталог приклеивается к `llmSystemPrompt` в `engine/tools/task.ts`/`task-resume.ts`; binding — **родителя**, capabilities — саб-агента | Рефактор саб-агентов на Composer — вне Фазы 1 (см. §12/§13) |
-| 6 | Внешние каталоги `.opencode`/`.claude`/`.agents`/`~/.config/opencode`, `skills.urls` | Не подключаются | Зафиксированное решение Фазы 1: источники только instance/project/`config.skills.paths` |
+| 6 | Внешние каталоги `.opencode`/`.claude`/`.agents`/`~/.config/opencode`, `skills.urls` | Подключены в Фазе 3 (часть, 2026-09-24) как **read-only discovery/индексация**: внешние локальные каталоги в проекте наследуют project-trust, `~/.config/opencode` — trusted; `skills.urls` кэшируются в `{dataDir}/skills-cache/urls/<sha1(url)[:16]>` с `trusted: false` (в каталог для модели не попадают, тело не грузится) | Фаза 1 ограничивалась instance/project/`config.skills.paths`; установка/доверие/подписи/`lock.json` — AD-068 |
 
 **Состав Фазы 1:**
 - Формат `SKILL.md`: толерантный YAML-frontmatter (неизвестные ключи → `meta.extra`), валидация `name` (1–64, `^[a-z0-9]+(-[a-z0-9]+)*$`, совпадает с каталогом) и `description` (1–1024), поля §3.2 включая `metadata.synth.*`.
@@ -268,7 +268,9 @@ metadata:
 
 Внешние источники — **только discovery** (совместимость), изменять их через Synth API нельзя.
 
-Локальные каталоги агентов-совместимости (`.opencode/skills`, `.claude/skills`, `.agents/skills`, `~/.config/opencode/skills`) — read-only discovery **механизма** (AD-046). **Удалённые каталоги-реестры** (github/well-known/url/skills.sh и т.п.) — предмет [AD-068](./ad-068-skills-agents-registry.md): по умолчанию **выключены**, пользователю/админу лишь предлагается список проверенных источников, включение — явное действие.
+Локальные каталоги агентов-совместимости (`.opencode/skills`, `.opencode/skill`, `.claude/skills`, `.agents/skills`, `~/.config/opencode/skills`) — read-only discovery **механизма** (AD-046), реализовано. Каталоги в `project.workspace` наследуют project-trust (§4.4), `~/.config/opencode/skills` — trusted.
+
+`skills.urls` — **только read-only индексация**: opencode-совместимый `index.json` и `<base>/<path||name>/SKILL.md` скачиваются в `{dataDir}/skills-cache/urls/<sha1(url)[:16]>` (атомарная запись tmp→rename, AD-005), видны в реестре/диагностике, но `trusted: false`: в каталог для модели не попадают, тело не грузится. Сеть — только `http(s)`, SSRF-guard (loopback/private/link-local/ULA/`*.local`, проверка каждого редиректа). Ошибки — диагностикой (`remote`/`read-error`), старый кэш не затирается. **Установка/доверие/подписи/`lock.json` — AD-068** (здесь не реализуются); **удалённые каталоги-реестры** (github/well-known/skills.sh и т.п.) — тоже AD-068, по умолчанию включение явное.
 
 ### 4.3. Приоритет
 

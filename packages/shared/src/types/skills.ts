@@ -87,7 +87,9 @@ export type SkillIssueCode =
   | 'none-invocation'
   | 'shadowed'
   | 'untrusted'
-  | 'read-error';
+  | 'read-error'
+  /** AD-046 §4.2: ошибка удалённого каталога (`skills.urls`): URL/индекс/парсинг. */
+  | 'remote';
 
 /** Проблема парсинга/валидации одного скилла. */
 export interface SkillIssue {

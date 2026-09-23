@@ -441,6 +441,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const skillService = new SkillService({
       dataDir,
       configPaths: backendConfig.synth.skills.paths,
+      urls: backendConfig.synth.skills.urls,
       trustedProjectDirs: backendConfig.synth.skills.trustedProjectDirs,
       toolsets: backendConfig.synth.skills.toolsets,
     });

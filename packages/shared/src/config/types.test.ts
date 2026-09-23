@@ -78,18 +78,25 @@ describe('skillsConfigSchema (AD-046)', () => {
   it('дефолты: пустые списки, inlineShell=false', () => {
     const parsed = skillsConfigSchema.parse({});
     expect(parsed.paths).toEqual([]);
+    expect(parsed.urls).toEqual([]);
     expect(parsed.trustedProjectDirs).toEqual([]);
     expect(parsed.inlineShell).toBe(false);
   });
 
-  it('принимает paths/trustedProjectDirs/inlineShell', () => {
+  it('принимает paths/urls/trustedProjectDirs/inlineShell', () => {
     const parsed = skillsConfigSchema.parse({
       paths: ['~/my-skills'],
+      urls: ['https://example.com/skills'],
       trustedProjectDirs: ['/work/proj'],
       inlineShell: true,
     });
     expect(parsed.paths).toEqual(['~/my-skills']);
+    expect(parsed.urls).toEqual(['https://example.com/skills']);
     expect(parsed.trustedProjectDirs).toEqual(['/work/proj']);
     expect(parsed.inlineShell).toBe(true);
+  });
+
+  it('urls: не-строковые значения отклоняются', () => {
+    expect(skillsConfigSchema.safeParse({ urls: [42] }).success).toBe(false);
   });
 });

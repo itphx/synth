@@ -749,9 +749,13 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const skillService = new SkillService({
     dataDir,
     configPaths: config.skillsConfig?.paths,
+    urls: config.skillsConfig?.urls,
     trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
     toolsets: config.skillsConfig?.toolsets,
   });
+
+  // AD-046 §4.2/§4.3: read-only индексация skills.urls — фоном, старт не блокируем.
+  void skillService.refreshRemote().catch(() => {});
 
   // AD-046 §7: slash-команды и bundles — единый резолвинг в core (UI/CLI/гибрид).
   const bundleStore = new SkillBundleStore({
