@@ -1,8 +1,8 @@
 # AD-046: Скиллы и slash-команды
 
-> **Статус:** ✅ Фаза 1 реализована; ✅ Фаза 2 реализована (commit 1 — core+API+CLI: команды/bundles/scope-API; commit 2 — UI: настройки/панели/статистика//-автокомплит); ✅ Фаза 3 (часть) — внешние локальные каталоги (read-only discovery) и `skills.urls` (read-only индексация, `trusted: false`); ⏳ остаток Фазы 3 (inline shell, `skill-creator`, install/trust/подписи/`lock.json` и backend-админка каталога — AD-068)
+> **Статус:** ✅ Фаза 1 реализована; ✅ Фаза 2 реализована (commit 1 — core+API+CLI: команды/bundles/scope-API; commit 2 — UI: настройки/панели/статистика//-автокомплит); ✅ Фаза 3 (часть) — внешние локальные каталоги (read-only discovery), `skills.urls` (read-only индексация, `trusted: false`) и встроенный мета-скилл `skill-creator` (builtin-скилл-инструкция); ⏳ остаток Фазы 3 (inline shell, install/trust/подписи/`lock.json` и backend-админка каталога — AD-068)
 > **Дата:** 2026-09-17
-> **Реализация:** Фаза 1 — 2026-09-23 (механизм скиллов; отклонения — в разделе «Реализовано в Фазе 1»); Фаза 2 — 2026-09-23 (commit 1 — core/API/CLI, commit 2 — UI; отклонения — в соответствующих разделах); Фаза 3 (часть) — 2026-09-24 (внешние каталоги + `skills.urls` read-only)
+> **Реализация:** Фаза 1 — 2026-09-23 (механизм скиллов; отклонения — в разделе «Реализовано в Фазе 1»); Фаза 2 — 2026-09-23 (commit 1 — core/API/CLI, commit 2 — UI; отклонения — в соответствующих разделах); Фаза 3 (часть) — 2026-09-24 (внешние каталоги + `skills.urls` read-only; `skill-creator` как builtin-скилл)
 > **Парный документ:** [AD-068](./ad-068-skills-agents-registry.md) «Реестр и каталог скиллов и агентов» — контент-платформа, реестр, доверие и распространение
 
 ---
@@ -520,6 +520,13 @@ instruction: |
 
 Скаффолдер `SKILL.md`: генерирует frontmatter, **обязательно** запрашивает требуемые тулы/capabilities и создаёт структуру supporting-файлов. Референсы: `innokod/.opencode/skills/skill-creator`, `mattpocock/writing-great-skills`.
 
+**Реализация (builtin-скилл-инструкция, 2026-09-24).** В отличие от исходного проекта, `skill-creator` не является core-тулом записи и не сидится на ФС: это **builtin-скилл**, объявленный в коде (`packages/core/src/engine/skills/builtin.ts`) как TS-константа — без нового asset-каталога и дублирования ассетов (AD-038). Агент создаёт **проектные** скиллы существующими file-тулами в `{project.workspace}/.synth/skills/<name>/SKILL.md`; instance-скиллы — только через ADMIN API/UI (`POST /api/v2/skills`), в обход ФС.
+
+- `BUILTIN_SOURCE` — синтетический `SkillSource` (`scope: 'instance'`, `level: 'system'`, `origin: 'instance'`, `trusted: true`); `dir` — маркер `.builtin`, на ФС не читается.
+- `buildBuiltinSkills({ dataDir })` → `DiscoveredSkill[]` с `name: 'skill-creator'`, meta (`userInvocable: true`, `disableModelInvocation: false`, `command: 'skill-creator'`, `requiresCapabilities: [file_read, file_write]`), телом-инструкцией (EN), `trusted: true`, `mtimeMs: 0`.
+- `SkillRegistryOptions.builtin` подмешивает builtin **первым** entry в `list()` (до источников с ФС) → system-приоритет, не перекрывается project/instance (`shadowed`-диагностика для одноимённых). `reload()` builtin не трогает.
+- `SkillService` передаёт builtin в реестр; скилл виден в `GET /api/v2/skills`/каталоге, грузится core-тулом `skill` и резолвится как `/skill-creator` (skill-команда).
+
 ---
 
 ## 10. Точки интеграции в коде
@@ -546,7 +553,8 @@ instruction: |
 | ~~`engine/context/builder.ts` (`buildSystemPrompt`)~~ | Каталог теперь в `SystemPromptComposer` (AD-070), а не в builder | заменено |
 | `packages/core/src/engine/commands/` (resolver/builtin/template), `/skill-bundles` | Slash-команды и bundles | ⏳ Фаза 2 |
 | `packages/ui/src/` (сторы/автокомплит), `packages/synth/src/cli.ts` (`startRepl`) | UI-слой и перехват `/` в REPL | ⏳ Фаза 2 |
-| `engine/skills` — `skills.urls`, inline shell, skill-creator | Расширения | ⏳ Фаза 3 |
+| `engine/skills/builtin.ts` — builtin `skill-creator` (`BUILTIN_SOURCE`, `buildBuiltinSkills`) + `registry.ts` (`builtin`) | Встроенный мета-скилл-инструкция | ✅ Фаза 3 (часть) |
+| `engine/skills` — `skills.urls`, inline shell | Расширения | ⏳ Фаза 3 (inline shell) |
 
 **Новые модули core Фазы 1:** `engine/skills/` (discovery, parser, registry, catalog, loader, service, watcher, scope, trust), `storage/skill-store.ts`, `engine/tools/skill.ts`. Модуль `engine/commands/` (resolver, builtin, template, bundles) — Фаза 2 (не создан).
 
@@ -589,9 +597,9 @@ instruction: |
 
 ### Фаза 3 — расширения
 
-- `skills.paths`/`skills.urls` (удалённые каталоги).
+- `skills.paths`/`skills.urls` (удалённые каталоги) — ✅ (часть, read-only).
+- Встроенный `skill-creator` — ✅ (builtin-скилл-инструкция, §9.5).
 - Inline shell (opt-in, через `execute_shell` + AD-029).
-- Встроенный `skill-creator`.
 - Backend-админка (RBAC) и стык с каталогом AD-068.
 
 ### Тесты (Vitest)
@@ -607,6 +615,7 @@ instruction: |
 | Команды | встроенные, шаблонные `$ARGUMENTS`/`@file`, приоритет bundle > skill |
 | Bundles | парсинг YAML, `/bundle-name` грузит N скиллов |
 | Inline shell | выключено по умолчанию; при включении — только `execute_shell` + permissions |
+| Builtin `skill-creator` | виден в реестре/каталоге, trusted, `load()` отдаёт тело, `/skill-creator` резолвится, не перекрывается project/instance |
 | Права/события | `deny` скрывает, `ask` спрашивает, наследование; `skill.invoked`/`command.invoked` |
 
 ---

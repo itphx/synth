@@ -41,11 +41,15 @@ afterEach(async () => {
 });
 
 describe('/api/v2/skills (AD-046 §9.1)', () => {
-  it('GET / — пустой реестр', async () => {
+  it('GET / — реестр содержит builtin skill-creator (AD-046 §9.5)', async () => {
     const { app } = makeApp();
     const res = await app.request('/api/v2/skills');
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ skills: [] });
+    const body: any = await res.json();
+    expect(body.skills.map((s: any) => s.name)).toEqual(['skill-creator']);
+    expect(body.skills[0].trusted).toBe(true);
+    expect(body.skills[0].scope).toBe('instance');
+    expect(body.skills[0].level).toBe('system');
   });
 
   it('POST / создаёт instance-скилл; GET /:name отдаёт деталь', async () => {
@@ -63,8 +67,7 @@ describe('/api/v2/skills (AD-046 §9.1)', () => {
     expect(detail.files).toContain('references/checklist.md');
 
     const list: any = await (await app.request('/api/v2/skills')).json();
-    expect(list.skills).toHaveLength(1);
-    expect(list.skills[0].name).toBe('api-review');
+    expect(list.skills.map((s: any) => s.name)).toContain('api-review');
 
     const got = await app.request('/api/v2/skills/api-review');
     expect(got.status).toBe(200);
@@ -199,7 +202,8 @@ describe('/api/v2/skills/:name — невалидные и отсутствую�
     const res = await app.request('/api/v2/skills/Bad_Name', { method: 'DELETE' });
     expect(res.status).toBe(404);
     const list: any = await (await app.request('/api/v2/skills')).json();
-    expect(list.skills).toEqual([]);
+    // Только builtin; скилл с невалидным именем не создан.
+    expect(list.skills.map((s: any) => s.name)).toEqual(['skill-creator']);
     expect(await skillService.instanceExists('Bad_Name')).toBe(false);
   });
 });

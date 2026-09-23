@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { SkillDetail, SkillDiagnostic, SkillMeta, SkillSummary } from '@itphx/synth-shared';
 import { SkillStore, type CreateSkillInput, type UpdateSkillMarkdownInput } from '../../storage/skill-store.js';
+import { buildBuiltinSkills } from './builtin.js';
 import { buildSkillSources } from './discovery.js';
 import { refreshRemoteCatalogs } from './remote.js';
 import { SkillRegistry } from './registry.js';
@@ -55,6 +56,8 @@ export class SkillService {
     this._urls = opts.urls ?? [];
     this._cacheDir = join(opts.dataDir, 'skills-cache');
     this._registry = opts.registry ?? new SkillRegistry({
+      // AD-046 §9.5: встроенный skill-creator (объявлен в коде, без ассетов).
+      builtin: buildBuiltinSkills({ dataDir: opts.dataDir }),
       sources: (o) => buildSkillSources({
         dataDir: opts.dataDir,
         projectWorkspace: o?.projectWorkspace,

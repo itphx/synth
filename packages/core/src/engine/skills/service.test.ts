@@ -26,6 +26,60 @@ async function writeSkill(dir: string, name: string): Promise<void> {
   );
 }
 
+describe('SkillService — builtin skill-creator (AD-046 §9.5)', () => {
+  it('виден в list/listSummaries как trusted instance/system', async () => {
+    const service = new SkillService({ dataDir: join(root, 'data'), home: join(root, 'home') });
+    const { skills } = await service.list();
+    const builtin = skills.find((s) => s.name === 'skill-creator');
+    expect(builtin).toBeDefined();
+    expect(builtin!.trusted).toBe(true);
+    expect(builtin!.source.scope).toBe('instance');
+    expect(builtin!.source.level).toBe('system');
+
+    const { skills: summaries } = await service.listSummaries();
+    const summary = summaries.find((s) => s.name === 'skill-creator');
+    expect(summary?.trusted).toBe(true);
+    expect(summary?.userInvocable).toBe(true);
+    expect(summary?.requiresCapabilities).toEqual(['file_read', 'file_write']);
+  });
+
+  it('попадает в каталог для модели при наличии capabilities', async () => {
+    const service = new SkillService({ dataDir: join(root, 'data'), home: join(root, 'home') });
+    const catalog = await service.buildCatalog({ capabilities: ['file_read', 'file_write'] });
+    expect(catalog.stable.map((e) => e.name)).toContain('skill-creator');
+  });
+
+  it('load() возвращает тело, detail() — без supporting-файлов', async () => {
+    const service = new SkillService({ dataDir: join(root, 'data'), home: join(root, 'home') });
+    const loaded = await service.load('skill-creator', { capabilities: ['file_read', 'file_write'] });
+    expect(loaded?.body).toContain('.synth/skills');
+    expect(loaded?.files).toEqual([]);
+
+    const detail = await service.detail('skill-creator');
+    expect(detail?.body).toContain('.synth/skills');
+    expect(detail?.files).toEqual([]);
+  });
+
+  it('builtin не перекрывается одноимённым project-скиллом (builtin первым)', async () => {
+    const dataDir = join(root, 'data');
+    const ws = join(root, 'ws');
+    await writeSkill(join(ws, '.synth', 'skills'), 'skill-creator');
+
+    const service = new SkillService({
+      dataDir,
+      home: join(root, 'home'),
+      trustedProjectDirs: [ws],
+    });
+    const { skills, diagnostics } = await service.list({ projectWorkspace: ws });
+
+    const matches = skills.filter((s) => s.name === 'skill-creator');
+    expect(matches).toHaveLength(1);
+    expect(matches[0]!.source.scope).toBe('instance');
+    expect(matches[0]!.meta.description).toContain('Scaffold a new project skill');
+    expect(diagnostics.some((d) => d.code === 'shadowed')).toBe(true);
+  });
+});
+
 describe('SkillService — skills.urls (AD-046 §4.2/§4.3)', () => {
   it('urls прокинуты: url-скилл из кэша виден, trusted=false', async () => {
     const dataDir = join(root, 'data');
@@ -40,10 +94,10 @@ describe('SkillService — skills.urls (AD-046 §4.2/§4.3)', () => {
     expect(found!.trusted).toBe(false);
     expect(diagnostics.some((d) => d.code === 'untrusted')).toBe(true);
 
-    // В каталог для модели url-скиллы не попадают.
+    // В каталог для модели url-скиллы не попадают (builtin skill-creator — не url-скилл).
     const catalog = await service.buildCatalog({});
-    expect(catalog.stable).toHaveLength(0);
-    expect(catalog.session).toHaveLength(0);
+    expect(catalog.stable.some((e) => e.name === 'remote-skill')).toBe(false);
+    expect(catalog.session.some((e) => e.name === 'remote-skill')).toBe(false);
   });
 
   it('конструктор не ходит в сеть', () => {

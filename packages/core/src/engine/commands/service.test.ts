@@ -3,6 +3,7 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CommandService, isLocalCommandStatus } from './service.js';
+import { SkillService } from '../skills/service.js';
 import type { CommandRuntimeConfig } from './types.js';
 import type { DiscoveredSkill, LoadedSkill, SkillRuntime } from '../skills/types.js';
 import type { SkillMeta, SkillSummary, PermissionConfig } from '@itphx/synth-shared';
@@ -238,6 +239,40 @@ describe('CommandService — trust-гейт проектных шаблонов 
   it('без проекта недоверенных источников нет — команды доступны', async () => {
     const { service } = makeService({ config: { dataDir, trustedProjectDirs: [] } });
     expect((await service.resolve('/instance-cmd', {}) )?.status).toBe('template');
+  });
+});
+
+describe('CommandService — /skill-creator (builtin, AD-046 §9.5)', () => {
+  let dataDir: string;
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), 'synth-cmd-skill-creator-'));
+  });
+  afterEach(async () => {
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  it('/skill-creator резолвится в kind=skill с телом builtin', async () => {
+    const skillService = new SkillService({ dataDir, home: join(dataDir, 'home') });
+    const config: CommandRuntimeConfig = {
+      dataDir,
+      commandsPaths: [],
+      bundlesPath: 'skill-bundles',
+      conflict: { mode: 'bundle-wins', namespacePrefix: false },
+      maxArgumentsLength: 1000,
+      maxRenderedBytes: 100_000,
+      toolsets: {},
+      inlineShell: false,
+    };
+    const service = new CommandService({ config, skillRuntime: skillService, skillSource: skillService });
+
+    const r = await service.resolve('/skill-creator', { capabilities: ['file_read', 'file_write'] });
+    expect(r?.status).toBe('skill');
+    expect(r?.skills).toEqual(['skill-creator']);
+    expect(r?.prompt).toContain('.synth/skills');
+
+    // Без нужных capabilities — unavailable (capability-aware).
+    const unavailable = await service.resolve('/skill-creator', { capabilities: [] });
+    expect(unavailable?.status).toBe('unavailable');
   });
 });
 
