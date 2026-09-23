@@ -484,6 +484,7 @@ export const dict = {
   'rightPanel.stats.historyHidden': 'скрыто',
   'rightPanel.stats.historyInfo': 'info',
   'rightPanel.params.session': 'Сессия',
+  'rightPanel.params.name': 'Имя',
   'rightPanel.params.id': 'ID',
   'rightPanel.params.engine': 'Движок',
   'rightPanel.params.project': 'Проект',

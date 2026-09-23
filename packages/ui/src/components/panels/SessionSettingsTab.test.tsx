@@ -169,6 +169,44 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
+/** Находит секцию с заголовком (по тексту первого дочернего узла). */
+function findSection(container: HTMLElement, title: string): HTMLElement | undefined {
+  return [...container.querySelectorAll('div')].find(
+    (d) => d.firstElementChild?.textContent?.trim() === title,
+  ) as HTMLElement | undefined
+}
+
+describe('SessionSettingsTab — имя сессии в блоке «Сессия»', () => {
+  it('показывает имя над ID', async () => {
+    const container = await renderTab()
+    const section = findSection(container, 'Session')
+    expect(section).toBeTruthy()
+
+    const nameLabel = [...section!.querySelectorAll('span')].find((s) => s.textContent === 'Name')
+    const idLabel = [...section!.querySelectorAll('span')].find((s) => s.textContent === 'ID')
+    expect(nameLabel, 'поле Name').toBeTruthy()
+    expect(idLabel, 'поле ID').toBeTruthy()
+    // Значение имени — из фикстуры (name: 'S').
+    expect(nameLabel!.parentElement?.textContent).toContain('S')
+    // Имя идёт перед ID.
+    expect(
+      nameLabel!.compareDocumentPosition(idLabel!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('показывает прочерк, если имени нет', async () => {
+    useSessionsStore.setState({
+      sessions: [
+        { id: 's1', name: null, project_id: null, engine: 'synth', settings: { model: 'm' } },
+      ],
+    } as never)
+    const container = await renderTab()
+    const section = findSection(container, 'Session')
+    const nameLabel = [...section!.querySelectorAll('span')].find((s) => s.textContent === 'Name')
+    expect(nameLabel!.parentElement?.textContent).toContain('—')
+  })
+})
+
 describe('SessionSettingsTab — MCP-скоуп сессии (AD-071 §2.4)', () => {
   it('показывает уровень, статус и причину отключения', async () => {
     mocks.getSessionMcpEffective.mockResolvedValue(effective({

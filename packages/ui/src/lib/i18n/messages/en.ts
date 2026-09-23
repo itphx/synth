@@ -485,6 +485,7 @@ export const dict = {
   'rightPanel.stats.historyHidden': 'hidden',
   'rightPanel.stats.historyInfo': 'info',
   'rightPanel.params.session': 'Session',
+  'rightPanel.params.name': 'Name',
   'rightPanel.params.id': 'ID',
   'rightPanel.params.engine': 'Engine',
   'rightPanel.params.project': 'Project',

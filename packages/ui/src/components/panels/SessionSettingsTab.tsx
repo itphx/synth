@@ -398,6 +398,7 @@ export function SessionSettingsTab() {
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         <Section title={t('rightPanel.params.session')}>
+          <Field label={t('rightPanel.params.name')} value={session.name || t('rightPanel.params.none')} />
           <Field label="ID" value={session.id} mono />
           <Field label={t('rightPanel.params.project')} value={projectName || session.project_id || t('rightPanel.params.none')} />
           <Field label={t('rightPanel.params.creator')} value={session.user_id || session.owner_id || t('rightPanel.params.none')} />
