@@ -770,3 +770,52 @@
 - **Проверки:** Fleet GitRepo синхронизирован на `578bfd2` (~30с), bundle Ready 1/1; оба деплоя на 0.7.2, новые поды 1/1 Running, старые удалены; `https://synth.k3s.itphx.loc/` → HTTP 200, `/health` → `{"status":"healthy","version":"0.7.2"}`, `index.html` → `cache-control: no-cache`, отдаётся `index-Ctzk1c2F.js` (совпадает с локальной сборкой).
 - **Замечания:** посторонние `AGENTS.md`, `docs/arch_decisions/README.md`, untracked `ad-073-*`/`ad-074-*` намеренно не коммитились. npm-публикация и push ветки/тега `synth` в gitverse origin не выполнялись. `synth-backend` перезапущен — сессии на PVC сохранены.
 
+## 2026-09-23 (продолжение) — мерж в master с --no-ff и релиз v0.7.2 (npm + GitVerse Release)
+- **Задача:** «В dev и test всё выглядит неплохо. Сливай в master с `--no-ff` и выкатываем релиз. Собери информацию из журнала и описаний коммитов для Release note».
+- **Тип:** release/ops · **Исполнитель:** @orchestrator · **Результат:** частично PASS (npm/Helm/GitVerse Release — да; Docker-образы — FAIL).
+- **Проверка перед мержем:** `typecheck` 6/6; `lint` 0 errors (warnings предсуществующие); тесты shared 91 / core 1684 / backend 313 / ui 626 — PASS.
+- **Мерж:** `merge --no-ff feat/ad-071-mcp-tools-scope` → merge-commit `bb77f51f` (родители `b24e304f`, `06cd0743`); push `origin master` (`b24e304f..bb77f51f`); аннотированный тег `v0.7.2` на `bb77f51f`, push тега → Release run #85 (`1624569`).
+- **CI (run 1624569):** «CI проверки» ✅, «Сборка релизных артефактов» ✅, «Генерация CHANGELOG» ✅, «npmjs.org» ✅ (6 пакетов 0.7.2, `latest=0.7.2`), «GitVerse Package Registry» ✅, «Helm-чарт» ✅ (0.7.2).
+- **FAIL 1 — Docker образ:** шаг «Сборка и публикация Docker образа synth (kaniko)» упал: `PATCH https://gitverse.ru/v2/itphx/synth/blobs/uploads/... → 413 Request Entity Too Large` (QRATOR). backend/ui пропущены (skipped). Образ synth собирается из глобального `npm install -g @itphx/synth` (крупный слой).
+- **FAIL 2 — GitVerse Release:** шаг «Создать релиз» (`actions/create-release@v1`) упал: `403 Forbidden` при `get release by tag v0.7.2` (та же проблема была на v0.6.1). Обход: релиз создан/обновлён вручную через GitVerse API (MCP) — `Release v0.7.2`, id `548813190`, https://gitverse.ru/itphx/synth/releases/tag/v0.7.2; тело обновлено curated-заметками из журнала/коммитов. API отдаёт `draft: true` (снять draft через MCP не удалось — возможно, публикация через UI).
+- **Release note:** полная версия — `tmp/release-notes-v0.7.2.md`; в тело релиза вошла сокращённая (WAF блокирует крупные POST к MCP).
+- **Открытые вопросы:** Docker-образы 0.7.2 в gitverse отсутствуют; preprod-деплой (Helm + образы) без них неполон. Варианты: (а) перезапустить Docker-джобу в UI (413 может быть транзиентным); (б) уменьшить образ synth (multi-stage/prune); (в) публиковать только backend/ui (например, в `git.itphx.ru`).
+- **Замечания:** master запушен; ветка `feat/ad-071-mcp-tools-scope` не удалялась. Коммит журнала не делался (только правка файла).
+
+## 2026-09-23 (продолжение) — фикс Docker-слоя 413: multi-stage + чанкование зависимостей
+- **Задача:** «Ошибка та же (413 при перезапуске Docker-джобы). Давай разбивать слои на более мелкие».
+- **Тип:** fix (Docker/infra) · **Исполнитель:** @fixer → верификация @orchestrator (docker) · **Результат:** PASS (сборка/слои/рантайм), push не проверялся (нет кредов).
+- **Диагностика:** текущий `docker/Dockerfile` (single-stage) — `RUN npm install -g @itphx/synth@${SYNTH_VERSION}` даёт **один слой 280 МБ** (135.4 МБ `node_modules` + 129.2 МБ `/root/.npm`); kaniko пушит его одним blob'ом → `413 Request Entity Too Large` (QRATOR). `synth-backend`/`synth-ui` при этом skipped.
+- **Фикс (`docker/Dockerfile`, только он):** multi-stage. Builder ставит пакет (`npm install -g … && npm cache clean --force`) и раскладывает top-level `node_modules` по `/chunks/1..6` по глобам `[a-f]*`,`[g-p]*`,`[q-z]*`,`@[a-f]*`,`@[g-p]*`,`@[q-z]*`; runtime (`node:22-alpine`) получает `package.json` + `dist` + 6 отдельных `COPY --from=builder /chunks/N/` + симлинк `/usr/local/bin/synth`; `ENV/EXPOSE/VOLUME/ENTRYPOINT` без изменений.
+- **Проверки:** `docker build` успешно; max. новый слой **33.4 МБ** (было 280 МБ), все < 50 МБ; `synth --version` → `0.7.2`; состав `node_modules` идентичен старому образу (170 пакетов, 135.4 МБ); `synth --help` OK; smoke `ENTRYPOINT` → `GET /health 200 {"version":"0.7.2"}`; размер образа 579 → 401 МБ. Не копируются `.bin` (16K) и `.package-lock.json` — рантайм их не использует (проверено).
+- **Файл:** `docker/Dockerfile` (изменён, **не закоммичен** — по решению пользователя коммитить только по явной просьбе).
+- **Next:** для образа 0.7.3 нужен commit + bump 0.7.2→0.7.3 + tag/release (решение пользователя).
+
+## 2026-09-23 (продолжение) — релиз v0.7.3 (фикс Docker-слоёв) — PASS
+- **Задача:** «Да, выпускаем 0.7.3» (после подтверждённого 413 при перезапуске Docker-джобы).
+- **Тип:** release/ops · **Исполнитель:** @orchestrator · **Результат:** PASS.
+- **Коммиты (master):** `19b0a02 fix(docker): разбить слои образа synth (multi-stage + чанки) — устранён 413`; `c687cbf chore: bump version to v0.7.3`. Push `master` (`bb77f51..c687cbf`), аннотированный тег `v0.7.3`, push тега → Release run #87 (`1625474`).
+- **CI (run 1625474):** «CI проверки» ✅, «Сборка релизных артефактов» ✅, «Генерация CHANGELOG» ✅, «npmjs.org» ✅ (`@itphx/synth@0.7.3`, `latest=0.7.3`), «GitVerse Package Registry» ✅, **«Docker образ» ✅** — собраны и запушены `gitverse.ru/itphx/synth:0.7.3` + `:latest`, `synth-backend`, `synth-ui` (413 устранён), «Helm-чарт» ✅.
+- **Единственный FAIL:** «GitVerse Release» — `403 Forbidden` на `actions/create-release@v1` (`get release by tag v0.7.3`). Автосоздание релиза по-прежнему не работает (та же проблема, что на 0.6.1/0.7.2).
+- **Обход:** релизы созданы/обновлены через GitVerse API (MCP): `Release v0.7.3` (id `548813429`, **опубликован**, `draft:false`) с заметками о Docker-фиксе; `Release v0.7.2` (id `548813190`) — тело с заметками 0.7.x установлено, но API оставляет `draft:true` (снять через MCP не удалось; при необходимости — вручную в UI).
+- **Проверки:** локальный `docker build` нового Dockerfile — макс. слой 33.4 МБ (было 280 МБ), `synth --version` → 0.7.2, состав 170 пакетов/135.4 МБ, `/health` 200; CI-публикация Docker подтвердила на 0.7.3.
+- **Замечания:** журнал не коммитится (решение пользователя). Ветка `feat/ad-071-mcp-tools-scope` не удалялась.
+
+## 2026-09-23 (продолжение) — GV_TOKEN заменён: джоба GitVerse Release позеленела
+- **Задача:** «Сохранил значение в GV_TOKEN» (использовать рабочий токен MCP `opencode-v2`, 40 hex, префикс `4b21…`).
+- **Тип:** CI/ops · **Исполнитель:** пользователь (secret) + @orchestrator (проверка).
+- **Что выяснено:** токен из `~/.config/opencode/opencode.jsonc` (запись `opencode-v2` в `secrets/tokens`) имеет права: Releases ✅ (MCP), Docker registry ✅ (tags list 200), GitVerse npm ✅ (view 0.7.3), git HTTPS ✅. Значение сохранено в `secrets/gitverse-mcp-token` (вне репо, mode 600).
+- **Проверка:** полный re-run Release run #87 (`1625474`) → **status: success** (все джобы). В логе `GitVerse Release`: `✅ Release 'Release v0.7.3' (Title: 548813429) is ready` — 403 устранён, автосоздание/поиск релиза работает.
+- **Остаточный баг workflow (не токен):** шаг «Создать релиз» выполняется в checkout без сборки, `packages/synth/dist/cli.js` отсутствует (`dist/` в gitignore) → `⚠️ No files matched the given patterns. Skipping upload.` Ассет `cli.js` к релизу **не приложен** (`assets: []`). Бандл лежит в артефакте `synth-bundle` (кладёт билд-джоба), но release-джоба качает только `changelog`. Для обновления существующего релиза body тоже не перезаписывается (для v0.7.3 осталось тело, установленное вручную).
+- **Next (предложено):** в `create-release` добавить `actions/download-artifact@v4` (name: `synth-bundle`, path: `packages/synth/dist`) перед шагом релиза — тогда `files:` матчится и `cli.js` прикладывается.
+- **Замечания:** журнал не коммитится. `Release v0.7.2` остаётся draft (следствие тестового вызова автора); `Release v0.7.3` published.
+
+## 2026-09-23 (продолжение) — фикс: cli.js прикладывается к GitVerse Release (`release.yaml`)
+- **Задача:** «Да, поправить release.yaml» — отдельный баг workflow: ассет `cli.js` не прикладывался к релизу (не связано с токеном).
+- **Тип:** fix (CI) · **Исполнитель:** @fixer → верификация @orchestrator · **Результат:** PASS (YAML/конфиг), end-to-end не проверялся (тестовый релиз не делали по решению пользователя).
+- **Причина:** job `create-release` работает в checkout **без сборки**; `packages/synth/dist/cli.js` в `.gitignore`, поэтому `files:` не матчился (`⚠️ No files matched the given patterns. Skipping upload.`), у релиза `assets: []`. Собранный бандл лежит в артефакте `synth-bundle` (грузит job `build`), но release-джоба скачивала только `changelog`.
+- **Фикс:** `.gitverse/workflows/release.yaml`, job `create-release` — добавлен шаг `actions/download-artifact@v4` (`name: synth-bundle`, `path: packages/synth/dist`) перед «Собрать тело релиза». +6 строк, больше ничего не менялось.
+- **Проверка:** YAML парсится (js-yaml), 9 джоб; шаги `create-release` в порядке (checkout → версия → changelog → cli-бандл → тело → релиз); имя артефакта совпадает с `build`, итоговый путь `packages/synth/dist/cli.js` совпадает с `files`.
+- **Коммит (локально, без push):** `8e4b8da7` `ci(release): приложить cli.js к релизу (download-artifact synth-bundle)`.
+- **Осталось:** end-to-end проверить на следующем релизе (0.7.4 или штатном); body существующего релиза экшен не обновляет (для будущих тегов — проверить/при необходимости добавить шаг обновления тела).
+
