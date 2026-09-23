@@ -213,6 +213,12 @@ export const ENGINE_MESSAGE_KEYS = [
   'micro.intent.debug',
   'micro.intent.fix',
   'micro.intent.test',
+  // --- Скиллы (AD-046) ---
+  'skill.args_error',
+  'skill.not_found',
+  'skill.untrusted',
+  'skill.delegation',
+  'skill.file_not_found',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -419,6 +425,12 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'micro.intent.debug': [],
   'micro.intent.fix': [],
   'micro.intent.test': [],
+  // --- Скиллы (AD-046) ---
+  'skill.args_error': ["issues"],
+  'skill.not_found': ["name"],
+  'skill.untrusted': ["name"],
+  'skill.delegation': ["name","capabilities","agent"],
+  'skill.file_not_found': ["path"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

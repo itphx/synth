@@ -100,6 +100,8 @@ program
       mcpPolicy: synth.mcp?.policy,
       toolsDisabled: synth.tools.disabled,
       mcpServers: synth.mcp?.servers ?? {},
+      // AD-046: конфигурация скиллов (paths/trustedProjectDirs/inlineShell).
+      skillsConfig: synth.skills,
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
         ? (synth.remote.auth.apiKey || undefined)

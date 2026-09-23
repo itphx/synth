@@ -268,6 +268,13 @@ export const SYSTEM_MESSAGES = {
   'micro.intent.debug': "Looks like a debugging task. Describe the error or attach the log — we'll figure it out.",
   'micro.intent.fix': "Got it, a bug fix is needed. Show me the problematic code — we'll find the cause.",
   'micro.intent.test': "Got it, tests are needed. Specify the function or module — I'll write the tests.",
+
+  // --- Скиллы (AD-046) ---
+  'skill.args_error': 'Skill argument error: {issues}',
+  'skill.not_found': 'Skill "{name}" not found',
+  'skill.untrusted': 'Skill "{name}" belongs to an untrusted project and cannot be loaded',
+  'skill.delegation': 'The skill "{name}" requires capabilities: {capabilities}; agent "{agent}" does not have them. Call `task` with an agent that supports these capabilities.',
+  'skill.file_not_found': 'Supporting file "{path}" not found in the skill directory',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

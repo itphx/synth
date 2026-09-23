@@ -33,6 +33,7 @@ import type { ShellPolicy } from '../security/shell-guard.js';
 import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
 import type { UsagePricing } from '../../providers/usage.js';
 import { serializeMessage, serializeSession } from '../../server/serialize.js';
+import { formatSkillsCatalogBlock } from '../skills/catalog.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import {
   messageToLLMMessage, publishMessageAdded, resolveSubagentPrompt, runSubagent,
@@ -94,6 +95,8 @@ export interface SubagentResumeDeps {
   protectedPathsEnabled?: boolean;
   /** AD-070: цены моделей для live-стоимости resumed-саб-агента (как в `task`). */
   modelPriceLoader?: (model: string) => UsagePricing | null;
+  /** AD-046 §5: рантайм скиллов — каталог resumed-саб-агенту (binding родителя). */
+  skillRuntime?: import('../skills/types.js').SkillRuntime;
   /** Резолв провайдера дочерней сессии (gateway/роутер оркестратора). */
   getProvider: (child: Session) => BaseProvider | null;
   /** Рабочий каталог дочерней сессии. */
@@ -208,12 +211,37 @@ export async function runSubagentResume(
       .filter((m) => !m.hidden && !m.disabled)
       .map(messageToLLMMessage);
 
-    const systemPrompt = resolveSubagentPrompt(
+    let systemPrompt = resolveSubagentPrompt(
       agentDef,
       agentRole,
       child.settings.language,
       deps.contextConfig?.systemPromptsDir,
     );
+
+    // AD-046 §5/§6.2: каталог скиллов resumed-саб-агенту. Binding — родителя,
+    // capabilities — самого resumed-агента (executor).
+    if (deps.skillRuntime) {
+      try {
+        const parentAgentRole = parent.settings.agentRole;
+        const parentAgent = parentAgentRole ? deps.agentRegistry.get(parentAgentRole) : undefined;
+        const lang = child.settings.language || 'ru';
+        const catalog = await deps.skillRuntime.buildCatalog({
+          projectWorkspace: workingDir,
+          agent: { id: parentAgentRole, groups: parentAgent?.groups },
+          capabilities: agentDef.capabilities,
+          permissionConfig: child.settings.permission ?? deps.permissionConfig,
+          sessionEnabled: child.settings.skills,
+          sessionDisabled: child.settings.skillsDisabled,
+        });
+        const skillsBlock = [
+          formatSkillsCatalogBlock(catalog.stable, lang, 'stable'),
+          formatSkillsCatalogBlock(catalog.session, lang, 'session'),
+        ].filter((b) => b.length > 0).join('\n\n');
+        if (skillsBlock) systemPrompt += `\n\n${skillsBlock}`;
+      } catch {
+        // каталог скиллов не должен ломать resume
+      }
+    }
 
     const extra: TaskExtra = {
       provider,
@@ -240,6 +268,8 @@ export async function runSubagentResume(
       mcpServers: deps.mcpServers,
       // AD-070: live-стоимость resumed-саб-агента тем же загрузчиком цен.
       modelPriceLoader: deps.modelPriceLoader,
+      // AD-046 §5: тул `skill` у resumed-саб-агента (тот же рантайм).
+      skillRuntime: deps.skillRuntime,
       retry,
     };
 

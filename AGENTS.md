@@ -256,6 +256,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | Лог/Инварианты | `project_log_write`, `project_log_read`, `project_invariants_read`, `project_invariants_write` |
 | Веб | `web_fetch`, `web_search` (DuckDuckGo, при anti-bot — fallback на Bing) |
 | Задачи | `task`, `classify_conversation`, `read_session_reference` |
+| Скиллы | `skill` (AD-046: загрузка тела `SKILL.md` по имени + supporting-файлы; глобально отключается через `tools.disabled`) |
 
 Доступность групп — в `ToolCapability` (`@itphx/synth-shared`); MCP-тулы регистрируются как `{serverName}_{toolName}`, подчиняются режимам (AD-029) и выбираются **per-session** — в промпт идут только тулы активных серверов сессии. Слои разделены: `tools` — встроенные, `mcp.tools`/`mcp.servers`/`mcp.status` — MCP (всегда `volatile`) (AD-071).
 
@@ -339,7 +340,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-043 | Единая идентичность гибрида: вход в UI без Keycloak (runtime, ROPC, дискавери oidc-meta) | ✅ Реализовано | [ad-043](./docs/arch_decisions/ad-043-unified-identity-login.md) |
 | AD-044 | Адаптивный мобильный UI + PWA (три зоны, дроверы, touch-first, ручной app-shell) | ✅ Реализовано | [ad-044](./docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md) |
 | AD-045 | Профили серверов и лёгкий runtime-вход в гибриде (единый dataDir, profiles.json, logout = забыть токен + revoke, ConnectionWatcher) | ✅ Реализовано | [ad-045](./docs/arch_decisions/ad-045-hybrid-server-profiles.md) |
-| AD-046 | Скиллы и slash-команды: формат SKILL.md, discovery, progressive disclosure, core-тул skill, bundles | ⏳ Не реализовано | [ad-046](./docs/arch_decisions/ad-046-skills-and-slash-commands.md) |
+| AD-046 | Скиллы и slash-команды: формат SKILL.md, discovery, progressive disclosure, core-тул skill, bundles | ⚠️ Фаза 1 (ядро: SKILL.md, discovery/trust, каталог, тул `skill`, API `/api/v2/skills`); slash-команды/bundles — Фаза 2 | [ad-046](./docs/arch_decisions/ad-046-skills-and-slash-commands.md) |
 | AD-068 | Реестр и каталог скиллов и агентов: индекс, trust/guard, install-policy, agent-packs | ⏳ Не реализовано | [ad-068](./docs/arch_decisions/ad-068-skills-agents-registry.md) |
 | AD-069 | Проектные инструкции (AGENTS.md) и /init: discovery, merged chain git root→cwd, lazy-догрузка, threat-scan, install-tree guard | ⏳ Не реализовано | [ad-069](./docs/arch_decisions/ad-069-project-instructions-agents-md.md) |
 | AD-070 | SystemPromptComposer: тиры stable/context/volatile, идемпотентная пересборка, CachePolicy, статистика usage, per-agent promptStates, манифест промпта | ✅ Реализовано | [ad-070](./docs/arch_decisions/ad-070-system-prompt-composer.md) |

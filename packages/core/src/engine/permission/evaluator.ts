@@ -246,13 +246,19 @@ export class PermissionEvaluator {
       }
     }
 
+    // AD-046 §8.1: per-skill permissions — правило `skill` (строка или glob по
+    // имени скилла). `deny` скрывает скилл из каталога; `ask` спрашивает.
+    if (toolName === 'skill' && typeof params.name === 'string' && params.name.trim() !== '') {
+      const skillDecision = resolveSkillRule(this._config, params.name);
+      if (skillDecision) return skillDecision;
+    }
+
     // 1. Правило по конкретному имени тула
     const toolRule = this._config.rules[toolName];
     if (toolRule !== undefined) {
       const d = this._resolveRule(toolName, toolRule, paths, workingDir);
       if (d) return d;
     }
-
     // 2. external_directory — только пути вне workingDir
     if (isFile) {
       const extRule = this._config.rules['external_directory'];
@@ -404,6 +410,51 @@ export function matchPathPattern(pattern: string, absolutePath: string, workingD
     if (globMatch(pattern, rel)) return true;
   }
   return false;
+}
+
+/**
+ * AD-046 §8.1: per-skill permissions. Правило — `permission.rules.skill`:
+ * строка (действие для всех скиллов) либо объект glob-паттернов по имени
+ * скилла. `deny` скрывает скилл из каталога (в отличие от capability-unavailable,
+ * где скилл виден); наследуется саб-агентами (derive.ts).
+ */
+export function resolveSkillRule(
+  config: PermissionConfig | undefined,
+  skillName: string,
+): PermissionDecision | undefined {
+  const rule = config?.rules['skill'];
+  if (rule === undefined) return undefined;
+
+  if (typeof rule === 'string') {
+    return {
+      action: rule,
+      reason: sm('permission.rule_matched', { key: 'skill', action: rule }),
+      matchedRule: 'skill',
+    };
+  }
+
+  let starAction: PermissionAction | undefined;
+  for (const [pattern, action] of Object.entries(rule)) {
+    if (pattern === '*') {
+      starAction = action;
+      continue;
+    }
+    if (globMatch(pattern, skillName)) {
+      return {
+        action,
+        reason: sm('permission.rule_pattern_matched', { key: 'skill', pattern, action, path: skillName }),
+        matchedRule: `skill.${pattern}`,
+      };
+    }
+  }
+  if (starAction) {
+    return {
+      action: starAction,
+      reason: sm('permission.rule_prefix_matched', { key: 'skill', action: starAction }),
+      matchedRule: 'skill.*',
+    };
+  }
+  return undefined;
 }
 
 export function isInsideWorkingDir(p: string, workingDir: string): boolean {

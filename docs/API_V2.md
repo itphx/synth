@@ -387,21 +387,38 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | PUT | `/api/v2/mcp/registry/:id` | backend | автор/ADMIN | Обновить запись |
 | DELETE | `/api/v2/mcp/registry/:id` | backend | автор/ADMIN | Удалить запись |
 
-### 5.17 Audit — `/api/v2/audit` (backend)
+### 5.17 Skills — `/api/v2/skills` (оба, AD-046 Фаза 1)
+
+| Метод | Путь | Сборка | RBAC (backend / core) | Назначение |
+|---|---|---|---|---|
+| GET | `/api/v2/skills` | оба | auth | Реестр скиллов: `{skills, workspace?, diagnostics?}`; `?project_id=` — project-скоуп, `?diagnostics=1` — диагностика discovery/валидации |
+| POST | `/api/v2/skills` | оба | backend ADMIN / core auth | Создать instance-скилл: `{name, description, body?, files?}` → 201 (409 при дубле) |
+| GET | `/api/v2/skills/:name` | оба | auth | Деталь: мета, тело (недоверенного — пустое), supporting-файлы |
+| PATCH | `/api/v2/skills/:name` | оба | backend ADMIN / core auth | Обновить instance-скилл: `{description?, body?, metadata?}` |
+| DELETE | `/api/v2/skills/:name` | оба | backend ADMIN / core auth | Удалить instance-скилл |
+| GET | `/api/v2/skills/:name/files` | оба | auth | Список supporting-файлов `{files}` |
+| GET | `/api/v2/skills/:name/files/*` | оба | auth | Чтение supporting-файла `{path, content}` |
+| PUT | `/api/v2/skills/:name/files/*` | оба | backend ADMIN / core auth | Запись supporting-файла `{content}` |
+| DELETE | `/api/v2/skills/:name/files/*` | оба | backend ADMIN / core auth | Удаление supporting-файла |
+| POST | `/api/v2/skills/reload` | оба | backend ADMIN / core auth | Принудительный ре-скан реестра (ленивая инвалидация по mtime) |
+
+Источники discovery (Фаза 1): `{dataDir}/skills` (instance), `{project.workspace}/.synth/skills` (project, project-trust гейт), `config.skills.paths`. Внешние каталоги (`.opencode`, `.claude`, `.agents`) и `skills.urls` не подключаются.
+
+### 5.18 Audit — `/api/v2/audit` (backend)
 
 | Метод | Путь | RBAC | Назначение |
 |---|---|---|---|
 | GET | `/api/v2/audit` | ADMIN/AUDITOR | Аудит Gateway; `?userId=&sessionId=&since=&until=&limit=` (≤500) |
 | POST | `/api/v2/audit/revealed` | auth | `{sessionId, placeholder}` → `{ok:true}` |
 
-### 5.18 Logs — `/api/v2/logs` (backend)
+### 5.19 Logs — `/api/v2/logs` (backend)
 
 | Метод | Путь | RBAC | Назначение |
 |---|---|---|---|
 | GET | `/api/v2/logs/llm` | ADMIN/AUDITOR | Payload-лог LLM; `?sessionId=&limit=` (≤500) |
 | GET | `/api/v2/logs/:name` | ADMIN/AUDITOR | Хвост `core\|ui\|backend`; `?tail=` (1..2000), `?search=` |
 
-### 5.19 Gateway patterns — `/api/v2/gateway` (backend, ADMIN)
+### 5.20 Gateway patterns — `/api/v2/gateway` (backend, ADMIN)
 
 | Метод | Путь | Назначение |
 |---|---|---|
@@ -409,7 +426,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | PUT | `/api/v2/gateway/patterns` | Сохранить override |
 | DELETE | `/api/v2/gateway/patterns` | Сброс к дефолту |
 
-### 5.20 Settings — `/api/v2/settings` (оба)
+### 5.21 Settings — `/api/v2/settings` (оба)
 
 | Метод | Путь | RBAC | Назначение |
 |---|---|---|---|
@@ -444,7 +461,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | PUT | `/api/v2/settings/protected-paths` | auth | `{policy}` или `{version, add, remove}` |
 | DELETE | `/api/v2/settings/protected-paths` | auth | Сброс к системной политике |
 
-### 5.21 Dictionaries — `/api/v2/dictionaries` (оба)
+### 5.22 Dictionaries — `/api/v2/dictionaries` (оба)
 
 | Метод | Путь | RBAC (backend / core) | Назначение |
 |---|---|---|---|
@@ -453,27 +470,27 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | PUT | `/api/v2/dictionaries/:category/:lang` | ADMIN / auth | Сохранить |
 | DELETE | `/api/v2/dictionaries/:category/:lang` | ADMIN / auth | Удалить |
 
-### 5.22 LLM — `/api/v2/llm` (backend)
+### 5.23 LLM — `/api/v2/llm` (backend)
 
 | Метод | Путь | RBAC | Назначение |
 |---|---|---|---|
 | POST | `/api/v2/llm/chat/completions` | auth + rate limit | LLM Proxy (см. §4) |
 
-### 5.23 Updates — `/api/v2/updates` (core)
+### 5.24 Updates — `/api/v2/updates` (core)
 
 | Метод | Путь | RBAC | Назначение |
 |---|---|---|---|
 | GET | `/api/v2/updates/check` | auth | Проверка новой версии |
 | POST | `/api/v2/updates/apply` | auth | SSE-стрим `npm i -g @itphx/synth@latest` |
 
-### 5.24 Admin/debug — `/api/v2/admin/debug` (backend, ADMIN)
+### 5.25 Admin/debug — `/api/v2/admin/debug` (backend, ADMIN)
 
 | Метод | Путь | Назначение |
 |---|---|---|
 | GET | `/api/v2/admin/debug/config` | Группы логирования + уровни |
 | POST | `/api/v2/admin/debug/config` | `{groups}` → `{status:'saved'}`; merge — сохраняются только переданные группы, остальные overrides не сбрасываются |
 
-### 5.25 Events — `оба`
+### 5.26 Events — `оба`
 
 | Метод | Путь | RBAC | Назначение |
 |---|---|---|---|

@@ -24,6 +24,7 @@ import type {
 import type { ContextBuilder } from './builder.js';
 import type { ContextConfig } from './config.js';
 import { joinPromptBlocks, sortPromptBlocks, type PromptBlock } from './prompt-blocks.js';
+import { formatSkillsCatalogBlock, type ComposerSkillsCatalog } from '../skills/catalog.js';
 import { agentKeyOf } from './prompt-state.js';
 import type { DebugCollector } from '../../debug.js';
 
@@ -51,6 +52,8 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   'mcp.tools': 'MCP tools',
   'mcp.servers': 'MCP servers',
   'mcp.status': 'MCP status',
+  'skills.catalog': 'Skills catalog',
+  'skills.catalog.session': 'Session skills',
 };
 
 /** AD-071 §2.6: есть ли непустые административные отключения инструментов. */
@@ -148,6 +151,13 @@ export interface ComposerContext {
    * кэшируется). Пустой/отсутствующий список — блоки не добавляются.
    */
   mcpServers?: ComposerMcpServer[];
+  /**
+   * AD-046 §4.5/§5: каталог скиллов — `stable` (system/project, доступные) и
+   * `session` (session enable/disable + маркеры `unavailable`). Тело скиллов в
+   * промпт не попадает (progressive disclosure). При `systemPrompt`-override
+   * каталог не добавляется (§5).
+   */
+  skillsCatalog?: ComposerSkillsCatalog;
   /**
    * AD-071 §2.6: instance-wide отключение инструментов администратором
    * (`tools.disabled`). Непустой список добавляет в `tools.guide` строку про
@@ -404,6 +414,33 @@ export class SystemPromptComposer {
       content: this._contextConfig?.getModePolicy(lang) ?? '',
       provenance: 'prompts/system/MODE_POLICY',
     });
+
+    // AD-046 §5: каталог скиллов — только name + краткое description
+    // (progressive disclosure). `stable` — system/project-скиллы (константа
+    // сессии), `session` — session enable/disable и маркеры `unavailable`.
+    // При `session.settings.systemPrompt` override каталог не добавляется.
+    if (!override && ctx.skillsCatalog) {
+      const skillsStable = formatSkillsCatalogBlock(ctx.skillsCatalog.stable, lang, 'stable');
+      if (skillsStable) {
+        extraBlocks.push({
+          key: 'skills.catalog',
+          tier: 'stable',
+          order: 35,
+          content: skillsStable,
+          provenance: 'skills.catalog',
+        });
+      }
+      const skillsSession = formatSkillsCatalogBlock(ctx.skillsCatalog.session, lang, 'session');
+      if (skillsSession) {
+        extraBlocks.push({
+          key: 'skills.catalog.session',
+          tier: 'volatile',
+          order: 55,
+          content: skillsSession,
+          provenance: 'skills.catalog.session',
+        });
+      }
+    }
 
     // AD-071 §2.2/§2.3: MCP-блоки всегда volatile — MCP не участвует в
     // prompt-cache (состав динамичен: серверы включаются/выключаются, статус

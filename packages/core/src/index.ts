@@ -103,6 +103,29 @@ export type {
   AddMcpRegistryEntryInput,
   UpdateMcpRegistryEntryInput,
 } from './storage/mcp-registry-store.js';
+// AD-046: скиллы (реестр/discovery/каталог/instance-запись/роуты).
+export { SkillService } from './engine/skills/service.js';
+export type { SkillServiceOptions, SkillListOptions } from './engine/skills/service.js';
+export { SkillRegistry } from './engine/skills/registry.js';
+export type { SkillRegistryOptions } from './engine/skills/registry.js';
+export { buildSkillSources, scanSkillSource, mergeSkillScans } from './engine/skills/discovery.js';
+export { buildSkillCatalog, formatSkillsCatalogBlock, toSkillSummary } from './engine/skills/catalog.js';
+export type { ComposerSkillEntry, ComposerSkillsCatalog, BuildSkillCatalogOptions } from './engine/skills/catalog.js';
+export { parseSkillFile } from './engine/skills/parser.js';
+export { SkillWatcher } from './engine/skills/watcher.js';
+export type {
+  SkillSource,
+  DiscoveredSkill,
+  SkillScanResult,
+  SkillCatalogOptions,
+  LoadedSkill,
+  SkillRuntime,
+  SkillOrigin,
+} from './engine/skills/types.js';
+export { SkillStore } from './storage/skill-store.js';
+export type { SkillStoreConfig, CreateSkillInput, UpdateSkillMarkdownInput } from './storage/skill-store.js';
+export { createSkillRoutes } from './server/routes/skills.js';
+export type { SkillRoutesDeps, SkillRoutesOptions, SkillRoutesMessages } from './server/routes/skills.js';
 export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy } from './storage/runtime-settings.js';
 export type { RuntimeSettings, LlmGatewayRuntimeSettings } from './storage/runtime-settings.js';
 export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';

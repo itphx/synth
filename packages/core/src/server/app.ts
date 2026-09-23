@@ -3,11 +3,11 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { Readable } from 'node:stream';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
-import { join, extname } from 'node:path';
+import { join, extname, isAbsolute, normalize, resolve } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy } from '@itphx/synth-shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -47,6 +47,8 @@ import { createMessageRoutes } from './routes/messages.js';
 import { createSettingsRoutes } from './routes/settings.js';
 import { createDictionaryRoutes } from './routes/dictionaries.js';
 import { createMcpRoutes } from './routes/mcp.js';
+import { createSkillRoutes } from './routes/skills.js';
+import { SkillService } from '../engine/skills/service.js';
 import { createRemoteProxyMiddleware } from './proxy.js';
 
 export interface StandaloneConfig {
@@ -78,6 +80,8 @@ export interface StandaloneConfig {
   mcpServers?: Record<string, McpServerConfig>;
   /** AD-071 §2.3.1: политика сетевого доступа HTTP MCP из config.yaml mcp.networkPolicy. */
   mcpNetworkPolicy?: McpNetworkPolicy;
+  /** AD-046: конфигурация скиллов из config.yaml `skills` (paths/trustedProjectDirs/inlineShell). */
+  skillsConfig?: SkillsConfig;
   /**
    * Дефолтный адрес удалённого backend (гибрид, `serve --connect`/env/конфиг).
    * Нужен для авто-логина (GET /auth/status) и POST /auth/login без поля server.
@@ -733,6 +737,14 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const toolRegistry = createToolRegistry();
   const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
+  // AD-046: сервис скиллов — discovery (instance/project/config.paths) + запись
+  // instance-дерева + каталог в промпт и тул `skill`.
+  const skillService = new SkillService({
+    dataDir,
+    configPaths: config.skillsConfig?.paths,
+    trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
+  });
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -760,6 +772,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     // AD-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
     tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
     onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
+    // AD-046 §5: каталог скиллов в промпт + тул `skill`.
+    skillRuntime: skillService,
   });
 
   const processMessage = orchestrator.createProcessMessage();
@@ -901,6 +915,17 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   // MCP (probe подключения к серверу)
   app.route('/api/v2/mcp', createMcpRoutes(auth, { mcpManager }));
+
+  // Скиллы (AD-046 §9.1): реестр + instance CRUD + supporting-файлы + reload.
+  app.route('/api/v2/skills', createSkillRoutes(auth, {
+    skillService,
+    resolveProjectWorkspace: async (projectId) => {
+      const project = await projectStore.load(projectId);
+      if (!project?.workspace) return undefined;
+      const root = config.workspacesRoot ?? join(dataDir, 'workspaces');
+      return isAbsolute(project.workspace) ? normalize(project.workspace) : resolve(root, project.workspace);
+    },
+  }));
 
   // Глобальный SSE-хаб
   app.get('/api/v2/events', async (c) => {

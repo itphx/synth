@@ -17,6 +17,7 @@ export * from './interfaces/index.js';
 export * from './schemas/index.js';
 export * from './protocols/index.js';
 export * from './utils/index.js';
+export * from './skills/frontmatter.js';
 export { SYNTH_VERSION } from './version.js';
 export * from './model-metadata.js';
 
@@ -39,6 +40,8 @@ export {
   type McpConfig,
   type ToolsDisabledConfig,
   toolsDisabledConfigSchema,
+  type SkillsConfig,
+  skillsConfigSchema,
   type RouterConfig,
   type RouterContentConfig,
   type RouterEscalationConfig,

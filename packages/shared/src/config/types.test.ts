@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema } from './types.js';
+import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 describe('mcpServerConfigSchema (AD-071 §2.2)', () => {
@@ -71,5 +71,25 @@ describe('toolsConfigSchema (AD-071 §2.3)', () => {
 
   it('отклоняет неизвестную политику', () => {
     expect(toolsConfigSchema.safeParse({ policy: 'all' }).success).toBe(false);
+  });
+});
+
+describe('skillsConfigSchema (AD-046)', () => {
+  it('дефолты: пустые списки, inlineShell=false', () => {
+    const parsed = skillsConfigSchema.parse({});
+    expect(parsed.paths).toEqual([]);
+    expect(parsed.trustedProjectDirs).toEqual([]);
+    expect(parsed.inlineShell).toBe(false);
+  });
+
+  it('принимает paths/trustedProjectDirs/inlineShell', () => {
+    const parsed = skillsConfigSchema.parse({
+      paths: ['~/my-skills'],
+      trustedProjectDirs: ['/work/proj'],
+      inlineShell: true,
+    });
+    expect(parsed.paths).toEqual(['~/my-skills']);
+    expect(parsed.trustedProjectDirs).toEqual(['/work/proj']);
+    expect(parsed.inlineShell).toBe(true);
   });
 });

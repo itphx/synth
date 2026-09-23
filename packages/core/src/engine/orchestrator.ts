@@ -14,6 +14,8 @@ import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import { ContextConfig } from './context/config.js';
 import { SystemPromptComposer, type ComposerContext, type ComposerMcpServer, type ComposerMcpServerStatus } from './context/composer.js';
+import type { ComposerSkillsCatalog } from './skills/catalog.js';
+import type { SkillRuntime } from './skills/types.js';
 import { calibrateCharsPerToken, estimateTokens, estimatePromptChars, DEFAULT_CHARS_PER_TOKEN } from './context/token-ratio.js';
 import {
   agentKeyOf,
@@ -187,6 +189,11 @@ export interface OrchestratorOptions {
   tokenRatioLoader?: (model: string) => Promise<number | undefined>;
   /** AD-071 §2.6: сохранение откалиброванного chars-per-token после ответа. */
   onTokenRatioCalibrated?: (model: string, ratio: number) => void | Promise<void>;
+  /**
+   * AD-046 §5: рантайм скиллов (SkillService) — каталог в промпт и тул `skill`.
+   * Не задан — скиллы не участвуют в промпте/тулах.
+   */
+  skillRuntime?: SkillRuntime;
 }
 
 export interface ProcessMessageResult {
@@ -270,6 +277,8 @@ export class ChatOrchestrator {
   private readonly _tokenRatioLoader: ((model: string) => Promise<number | undefined>) | undefined;
   /** AD-071 §2.6: сохранение калибровки chars-per-token после ответа. */
   private readonly _onTokenRatioCalibrated: ((model: string, ratio: number) => void | Promise<void>) | undefined;
+  /** AD-046 §5: рантайм скиллов (каталог промпта + тул `skill`). */
+  private readonly _skillRuntime: SkillRuntime | null;
   private _providerPool: ProviderPool | null;
   /** Политика защищённых путей (СКВОЗНАЯ проверка файловых тулов + shell) — ленивая загрузка с кэшем. */
   private _protectedPaths: ProtectedPathsPolicy | null = null;
@@ -575,6 +584,7 @@ export class ChatOrchestrator {
     this._toolsDisabled = options.toolsDisabled ?? { capabilities: [], tools: [] };
     this._tokenRatioLoader = options.tokenRatioLoader;
     this._onTokenRatioCalibrated = options.onTokenRatioCalibrated;
+    this._skillRuntime = options.skillRuntime ?? null;
 
     // AD-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
     // ObfuscationMapStore живёт в сессии, RateLimiter и AuditLogger — общие.
@@ -894,10 +904,13 @@ export class ChatOrchestrator {
     project?: Project | null;
     toolSelection?: ReturnType<ToolRegistry['selectForSession']>;
     debugCollector?: DebugCollector;
+    /** AD-046 §5: каталог скиллов (stable/volatile-блоки). */
+    skillsCatalog?: ComposerSkillsCatalog;
   }): ComposerContext {
     const {
       session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
       toolsPolicy, mcpPolicy, tokenRatio, mcpServers, project, toolSelection, debugCollector,
+      skillsCatalog,
     } = args;
     return {
       session,
@@ -926,7 +939,37 @@ export class ChatOrchestrator {
       mcpServers,
       project,
       debugCollector,
+      skillsCatalog,
     };
+  }
+
+  /**
+   * AD-046 §5: каталог скиллов для промпта (аналог `_collectComposerMcpServers`).
+   * Учитывает project-trust, binding агента, capability-aware и permission-deny
+   * (`deny` скрывает). Ошибка discovery не должна ломать ход — возвращаем
+   * `undefined` (блоки не добавляются).
+   */
+  private async _collectSkillsCatalog(args: {
+    session: Session;
+    agentDef: AgentDefinition | undefined;
+    effectiveAgentRole: string | undefined;
+    workingDir: string;
+    permissionConfig: PermissionConfig;
+  }): Promise<ComposerSkillsCatalog | undefined> {
+    if (!this._skillRuntime) return undefined;
+    const { session, agentDef, effectiveAgentRole, workingDir, permissionConfig } = args;
+    try {
+      return await this._skillRuntime.buildCatalog({
+        projectWorkspace: workingDir,
+        agent: { id: effectiveAgentRole, groups: agentDef?.groups },
+        capabilities: agentDef?.capabilities,
+        permissionConfig,
+        sessionEnabled: session.settings.skills,
+        sessionDisabled: session.settings.skillsDisabled,
+      });
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -1344,6 +1387,14 @@ export class ChatOrchestrator {
     // AD-070 §2.5 + AD-071 §2.1/§2.3: манифест отражает реальные слои запроса —
     // `tools` (встроенные) и `mcp.tools` (MCP сессии); тир `tools` зависит от
     // `tools.policy`, MCP-блоки всегда volatile.
+    // AD-046 §5: каталог скиллов — тем же путём, что и в запросе.
+    const skillsCatalog = await this._collectSkillsCatalog({
+      session,
+      agentDef,
+      effectiveAgentRole,
+      workingDir,
+      permissionConfig: session.settings.permission ?? this._permissionConfig,
+    });
     const ctx: ComposerContext = this._buildComposerContext({
       session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
       toolsPolicy, mcpPolicy, tokenRatio,
@@ -1351,6 +1402,7 @@ export class ChatOrchestrator {
       mcpServers: this._collectComposerMcpServers(mcpDecisions),
       project,
       toolSelection,
+      skillsCatalog,
     });
 
     const manifest = await this._composer.manifest(ctx);
@@ -1727,6 +1779,14 @@ export class ChatOrchestrator {
       // Composer'ом. `session.settings.systemPrompt` override, classification/
       // gateway/plan-guide/mode-policy/session-context — внутри compose.
       // Режим/план/todo — уже в state-сообщениях истории (выше), не в system.
+      // AD-046 §5: каталог скиллов — stable/volatile-блоки (deny скрывает).
+      const skillsCatalog = await this._collectSkillsCatalog({
+        session,
+        agentDef,
+        effectiveAgentRole,
+        workingDir,
+        permissionConfig: session.settings.permission ?? this._permissionConfig,
+      });
       const composerCtx: ComposerContext = this._buildComposerContext({
         session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
         // AD-071 §2.3: `toolsPolicy` влияет на тир `tools`, `mcpPolicy` — на
@@ -1738,6 +1798,7 @@ export class ChatOrchestrator {
         project: projectForState,
         // AD-070 §2.5: per-message collector доходит до Composer через контекст.
         debugCollector,
+        skillsCatalog,
       });
       const composed = await this._composer.compose(composerCtx);
       // AD-070 §2.2: в провайдер уходит payload с границей stable-префикса и
@@ -2209,6 +2270,22 @@ export class ChatOrchestrator {
             iteration: toolIteration,
           });
 
+          // AD-046 §8.2: `skill.invoked` — рядом с `tool_call.started`
+          // (аудит/метрики/UI-подсветка).
+          if (toolName === 'skill' && typeof toolArgs.name === 'string') {
+            const skillName = toolArgs.name;
+            const skillEntry = skillsCatalog?.stable.find((e) => e.name === skillName)
+              ?? skillsCatalog?.session.find((e) => e.name === skillName);
+            this._eventBus.publish(session.id, 'skill.invoked', {
+              session_id: session.id,
+              name: skillName,
+              source: 'model',
+              ...(skillEntry?.scope ? { scope: skillEntry.scope } : {}),
+              ...(effectiveAgentRole ? { agent: effectiveAgentRole } : {}),
+              ...(typeof toolArgs.file_path === 'string' ? { file_path: toolArgs.file_path } : {}),
+            });
+          }
+
           let executeTool = permissionDecision.action === 'allow';
           let deniedReason: string | undefined;
           let userDenied = false;
@@ -2286,6 +2363,9 @@ export class ChatOrchestrator {
                   workspacesRoot: this._workspacesRoot,
                   eventBus: this._eventBus,
                   contextOptimizer: this._optimizer ?? undefined,
+                  // AD-046 §5: тул `skill` получает рантайм через ToolContext.extra
+                  // (в ToolContext нет dataDir); саб-агенты — тот же объект.
+                  skillRuntime: this._skillRuntime ?? undefined,
                   callerAgentRole: effectiveAgentRole,
                   parentSessionSettings: session.settings,
                   // AD-071 §2.1: саб-агент наследует MCP-скоуп родителя.
@@ -2965,6 +3045,8 @@ export class ChatOrchestrator {
       protectedPathsEnabled: this._getProtectedPathsEnabled(),
       // AD-070: live-стоимость resumed-саб-агента тем же загрузчиком цен.
       modelPriceLoader: this._modelPriceLoader ?? undefined,
+      // AD-046 §5: каталог скиллов resumed-саб-агенту + тул `skill`.
+      skillRuntime: this._skillRuntime ?? undefined,
       getProvider: (child) => this._getProvider(child.settings.provider || '', child, child.settings.reasoningLevel),
       getWorkingDir: (child) => this._resolveWorkingDir(child),
     };

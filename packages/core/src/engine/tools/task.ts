@@ -23,6 +23,8 @@ import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { estimatePromptChars } from '../context/token-ratio.js';
+import { formatSkillsCatalogBlock } from '../skills/catalog.js';
+import type { SkillRuntime } from '../skills/types.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 export interface TaskExtra {
@@ -60,6 +62,11 @@ export interface TaskExtra {
   retry?: SubagentRetryConfig;
   /** AD-070: цены моделей для live-стоимости саб-агента (как в оркестраторе). */
   modelPriceLoader?: (model: string) => UsagePricing | null;
+  /**
+   * AD-046 §5/§6.2: рантайм скиллов — каталог саб-агенту (binding родителя) и
+   * тул `skill` (тот же объект уходит в ToolContext.extra).
+   */
+  skillRuntime?: SkillRuntime;
 }
 
 type ContextMode = 'none' | 'inherit' | 'summary' | 'last_n';
@@ -376,7 +383,7 @@ export const taskTool: ToolDefinition = {
     }
 
     // ─── Сборка LLM-сообщений ────────────────────────────────────────
-    const llmSystemPrompt = (() => {
+    let llmSystemPrompt = (() => {
       let prompt = systemPrompt;
 
       // Заметки родительской сессии — передаём во всех режимах с контекстом
@@ -432,6 +439,32 @@ export const taskTool: ToolDefinition = {
 
       return prompt;
     })();
+
+    // AD-046 §5/§6.2: каталог скиллов саб-агенту. Binding — родителя
+    // (fixed decision Фазы 1), capabilities — самого саб-агента (executor).
+    if (extra.skillRuntime) {
+      try {
+        const parentAgent = extra.callerAgentRole
+          ? extra.agentRegistry.get(extra.callerAgentRole)
+          : undefined;
+        const lang = extra.parentSessionSettings?.language || 'ru';
+        const catalog = await extra.skillRuntime.buildCatalog({
+          projectWorkspace: ctx.workingDir,
+          agent: { id: extra.callerAgentRole, groups: parentAgent?.groups },
+          capabilities: agentDef.capabilities,
+          permissionConfig: extra.permissionConfig,
+          sessionEnabled: extra.parentSessionSettings?.skills,
+          sessionDisabled: extra.parentSessionSettings?.skillsDisabled,
+        });
+        const skillsBlock = [
+          formatSkillsCatalogBlock(catalog.stable, lang, 'stable'),
+          formatSkillsCatalogBlock(catalog.session, lang, 'session'),
+        ].filter((b) => b.length > 0).join('\n\n');
+        if (skillsBlock) llmSystemPrompt += `\n\n${skillsBlock}`;
+      } catch {
+        // каталог скиллов не должен ломать запуск саб-агента
+      }
+    }
 
     // ─── Выбор провайдера для саб-агента через роутер (AD-034 Фаза 4) ──
     let effectiveProvider = extra.provider;

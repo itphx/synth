@@ -172,6 +172,23 @@ export const toolsConfigSchema = z.object({
   disabled: toolsDisabledConfigSchema.default({}),
 });
 
+// --- Скиллы (AD-046) ---
+
+/**
+ * AD-046 §4.2/§4.4/§7.4: конфигурация механизма скиллов.
+ * `paths` — дополнительные пользовательские каталоги; `trustedProjectDirs` —
+ * доверенные проектные каталоги (бинарный trust); `inlineShell` — выключатель
+ * `!`cmd`` в шаблонных командах (по умолчанию выключено).
+ *
+ * Внешние каталоги (`.opencode`, `.claude`, `.agents`, `~/.config/opencode`) и
+ * `skills.urls` в Фазе 1 не подключаются.
+ */
+export const skillsConfigSchema = z.object({
+  paths: z.array(z.string()).default([]),
+  trustedProjectDirs: z.array(z.string()).default([]),
+  inlineShell: z.boolean().default(false),
+});
+
 // --- Security (IPI protection) ---
 
 export const promptInjectionConfigSchema = z.object({
@@ -328,6 +345,7 @@ export const synthConfigSchema = z.object({
   summarization: summarizationConfigSchema.default({}),
   mcp: mcpConfigSchema.default({}),
   tools: toolsConfigSchema.default({}),
+  skills: skillsConfigSchema.default({}),
   router: routerConfigSchema.default({}),
   remote: remoteConfigSchema.default({}),
   microFirst: microFirstConfigSchema.default({}),
@@ -353,6 +371,7 @@ export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
 export type McpConfig = z.infer<typeof mcpConfigSchema>;
 export type ToolsConfig = z.infer<typeof toolsConfigSchema>;
 export type ToolsDisabledConfig = z.infer<typeof toolsDisabledConfigSchema>;
+export type SkillsConfig = z.infer<typeof skillsConfigSchema>;
 export type RouterContentConfig = z.infer<typeof routerContentConfigSchema>;
 export type RouterEscalationConfig = z.infer<typeof routerEscalationConfigSchema>;
 export type RouterCostConfig = z.infer<typeof routerCostConfigSchema>;

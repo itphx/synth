@@ -11,7 +11,7 @@
 // фейковыми провайдерами без OIDC.
 
 import { createServer, IncomingMessage } from 'node:http';
-import { join } from 'node:path';
+import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { Readable } from 'node:stream';
 import { Hono } from 'hono';
@@ -28,6 +28,7 @@ import {
   SecretPatternStore,
   RateLimiter,
   DictionaryStore, createDictionaryRoutes,
+  SkillService, createSkillRoutes,
   DEFAULT_AGENT_ID,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
@@ -434,6 +435,13 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const toolRegistry = createToolRegistry();
     const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
+    // AD-046: сервис скиллов (discovery + instance-запись + каталог промпта).
+    const skillService = new SkillService({
+      dataDir,
+      configPaths: backendConfig.synth.skills.paths,
+      trustedProjectDirs: backendConfig.synth.skills.trustedProjectDirs,
+    });
+
     const orchestrator = new ChatOrchestrator({
       sessionManager,
       eventBus,
@@ -463,6 +471,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       // AD-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
       tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
       onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
+      // AD-046 §5: каталог скиллов в промпт + тул `skill`.
+      skillRuntime: skillService,
     });
 
     const processMessage = orchestrator.createProcessMessage();
@@ -521,6 +531,18 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       networkPolicy: effectiveNetworkPolicy,
       getNetworkPolicy: () => effectiveNetworkPolicy,
     }));
+
+    // Скиллы (AD-046 §9.1/§9.2): core-фабрика + RBAC ADMIN на запись.
+    app.route('/api/v2/skills', createSkillRoutes(auth as unknown as CoreAuthKit, {
+      skillService,
+      resolveProjectWorkspace: async (projectId) => {
+        const project = await projectStore.load(projectId);
+        if (!project?.workspace) return undefined;
+        return isAbsolute(project.workspace)
+          ? normalize(project.workspace)
+          : resolve(backendConfig.workspacesRoot, project.workspace);
+      },
+    }, { writeGuard: auth.requireAdmin }));
 
     // LLM Gateway audit routes (AD-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные
     app.route('/api/v2/audit', createAuditRoutes(auth, {

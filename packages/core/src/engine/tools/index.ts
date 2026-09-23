@@ -19,6 +19,7 @@ import {
   gitStashTool,
 } from './git.js';
 import { taskTool } from './task.js';
+import { skillTool } from './skill.js';
 import { classifyConversationTool } from './classify-conversation.js';
 import { readSessionReferenceTool } from './read-reference.js';
 import { getProjectInfoTool, listReposTool } from './project-context.js';
@@ -55,6 +56,7 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   getProjectInfoTool,
   listReposTool,
   taskTool,
+  skillTool,
   classifyConversationTool,
   readSessionReferenceTool,
   planEnterTool,

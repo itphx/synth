@@ -443,9 +443,14 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     const p = (await sessionManager.getSession(parent))!;
     const resumeResultMsg = p.messages.find((m) => m.metadata?.type === 'subagent_resumed_result')!;
     expect(resumeResultMsg.metadata!.resume_status).toBe('aborted');
+    // Очистка currentStream/блокировки выполняется в .finally() после записи
+    // итога в родителя — ждём её (не читаем синхронно: гонка под нагрузкой).
+    await vi.waitFor(async () => {
+      const s = await sessionManager.getSession(child);
+      expect(s!.currentStream).toBeUndefined();
+    }, { timeout: 5000 });
     const s = (await sessionManager.getSession(child))!;
     expect(s.status.blocked).toBeFalsy();
-    expect(s.currentStream).toBeUndefined();
   });
 
   it('runSubagentResume напрямую: провайдер недоступен → failed, ошибка записана в родителя', async () => {

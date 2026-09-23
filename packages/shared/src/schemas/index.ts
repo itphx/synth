@@ -41,6 +41,9 @@ export const sessionSettingsSchema = z.object({
   language: z.string().optional(),
   // === Plan/Act (AD-025) ===
   planMode: z.enum(['auto', 'strict', 'off']).optional(),
+  // === Скиллы (AD-046 §4.5) ===
+  skills: z.array(z.string()).optional(),
+  skillsDisabled: z.array(z.string()).optional(),
 });
 
 export const sessionCreateSchema = z.object({
@@ -243,7 +246,6 @@ export const sessionMcpUpdateSchema = z
 export type SessionMcpScopeRequest = z.infer<typeof sessionMcpScopeSchema>;
 export type SessionMcpUpdateRequest = z.infer<typeof sessionMcpUpdateSchema>;
 export type ProjectMcpUpdateRequest = z.infer<typeof projectMcpUpdateSchema>;
-
 export type SessionCreateRequest = z.infer<typeof sessionCreateSchema>;
 export type SessionUpdateRequest = z.infer<typeof sessionUpdateSchema>;
 export type ProjectCreateRequest = z.infer<typeof projectCreateSchema>;
@@ -261,3 +263,58 @@ export type GitInitBody = z.infer<typeof gitInitBodySchema>;
 export type GitCloneBody = z.infer<typeof gitCloneBodySchema>;
 export type GitLogQuery = z.infer<typeof gitLogQuerySchema>;
 export type GitCommitQuery = z.infer<typeof gitCommitQuerySchema>;
+
+// --- Скиллы (AD-046) ---
+
+/** AD-046 §3.2: имя скилла — 1–64, `^[a-z0-9]+(-[a-z0-9]+)*$`. */
+export const SKILL_NAME_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+export const SKILL_NAME_MIN = 1;
+export const SKILL_NAME_MAX = 64;
+/** AD-046 §3.2: длина `description`. */
+export const SKILL_DESCRIPTION_MIN = 1;
+export const SKILL_DESCRIPTION_MAX = 1024;
+
+export const skillNameSchema = z
+  .string()
+  .min(SKILL_NAME_MIN)
+  .max(SKILL_NAME_MAX)
+  .regex(SKILL_NAME_REGEX, 'имя скилла: строчные латинские буквы/цифры, разделитель — дефис');
+
+export const skillCreateSchema = z.object({
+  name: skillNameSchema,
+  description: z.string().min(SKILL_DESCRIPTION_MIN).max(SKILL_DESCRIPTION_MAX),
+  /** Тело Markdown (без frontmatter). */
+  body: z.string().optional(),
+  /** Дополнительные supporting-файлы (относительный путь → содержимое). */
+  files: z.record(z.string().min(1), z.string()).optional(),
+});
+
+export const skillUpdateSchema = z
+  .object({
+    description: z.string().min(SKILL_DESCRIPTION_MIN).max(SKILL_DESCRIPTION_MAX).optional(),
+    body: z.string().optional(),
+    /** Толерантный контейнер (неизвестные ключи сохраняются). */
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })
+  .refine(
+    (v) => v.description !== undefined || v.body !== undefined || v.metadata !== undefined,
+    { message: 'Требуется description, body или metadata' },
+  );
+
+export const skillFileWriteSchema = z.object({
+  content: z.string(),
+});
+
+/**
+ * AD-046 §4.5: per-session enable/disable скиллов (по образцу MCP-скоупа).
+ * `undefined` ≠ `[]`: отсутствующее поле сохраняет текущее значение.
+ */
+export const skillSessionOverrideSchema = z.object({
+  skills: z.array(z.string()).optional(),
+  skillsDisabled: z.array(z.string()).optional(),
+});
+
+export type SkillCreateRequest = z.infer<typeof skillCreateSchema>;
+export type SkillUpdateRequest = z.infer<typeof skillUpdateSchema>;
+export type SkillFileWriteRequest = z.infer<typeof skillFileWriteSchema>;
+export type SkillSessionOverrideRequest = z.infer<typeof skillSessionOverrideSchema>;

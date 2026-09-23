@@ -1725,6 +1725,13 @@ export const dict = {
   'micro.intent.fix': 'Понял, нужно исправить баг. Покажите проблемный код — найдём причину.',
   'micro.intent.test': 'Понял, нужны тесты. Укажите функцию или модуль — напишу тесты.',
 
+  // --- Скиллы (AD-046) ---
+  'skill.args_error': 'Ошибка аргументов скилла: {issues}',
+  'skill.not_found': 'Скилл «{name}» не найден',
+  'skill.untrusted': 'Скилл «{name}» принадлежит недоверенному проекту и не может быть загружен',
+  'skill.delegation': 'Для скилла «{name}» нужны capabilities: {capabilities}; у агента «{agent}» их нет. Вызови `task` с агентом, который их поддерживает.',
+  'skill.file_not_found': 'Supporting-файл «{path}» не найден в каталоге скилла',
+
   // --- PWA ---
   'pwa.updateAvailable': 'Доступна новая версия приложения',
   'pwa.updateNow': 'Обновить',

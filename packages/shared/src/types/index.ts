@@ -590,6 +590,11 @@ export interface SessionSettings {
   // === Plan/Act (AD-025, AD-028) ===
   /** Строгость цикла Plan→Build: auto — модель сама решает, strict — план обязателен, off — планирование отключено. */
   planMode?: PlanMode;
+  // === Скиллы (AD-046 §4.5) ===
+  /** AD-046: явно включённые в сессии имена скиллов (session level, volatile-каталог). */
+  skills?: string[];
+  /** AD-046: opt-out сессии — имена, категории или группы скиллов (volatile-каталог). */
+  skillsDisabled?: string[];
   // === LLM Gateway (AD-036) ===
   /** Per-session override LLM Gateway (AD-036). */
   llmGateway?: { enabled?: boolean };
@@ -871,6 +876,12 @@ export interface AgentDefinition {
   icon?: string;
   color?: string;
   description?: string;
+  /**
+   * AD-046 §6.2: группы агентов для привязки скиллов
+   * (`metadata.synth.groups`). Пусто/не задано — скилл с непустым `groups`
+   * не привязан к агенту.
+   */
+  groups?: string[];
 }
 
 // --- Currency ---
@@ -1104,6 +1115,8 @@ export type EventType =
   | 'session.routing_category'
   | 'plan.approved'
   | 'todos.updated'
+  | 'skill.invoked'
+  | 'command.invoked'
   | 'error';
 
 export interface BusEvent {
@@ -1167,3 +1180,5 @@ export interface FsError {
 export * from './tools.js';
 // Permission types (AD-029) — re-exported from permission.ts
 export * from './permission.js';
+// Skill types (AD-046) — re-exported from skills.ts
+export * from './skills.js';

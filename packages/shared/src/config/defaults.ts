@@ -94,6 +94,11 @@ export const defaultConfig: SynthConfig = {
       tools: [],
     },
   },
+  skills: {
+    paths: [],
+    trustedProjectDirs: [],
+    inlineShell: false,
+  },
   router: {
     enabled: true,
     strategy: 'auto',

@@ -40,6 +40,10 @@ describe('defaultConfig', () => {
     expect(defaultConfig.tools.disabled).toEqual({ capabilities: [], tools: [] });
   });
 
+  it('skills по умолчанию пусты, inlineShell выключен (AD-046)', () => {
+    expect(defaultConfig.skills).toEqual({ paths: [], trustedProjectDirs: [], inlineShell: false });
+  });
+
   it('core.port == 4300', () => {
     expect(defaultConfig.core.port).toBe(4300);
   });
