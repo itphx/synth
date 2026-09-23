@@ -251,6 +251,7 @@ export function createDispatcher(): EventDispatcher {
           usage: mapUsage(payload.usage),
           debug_info: payload.debug_info as Record<string, unknown> | undefined,
           message_index: payload.message_index as number | undefined,
+          message_id: payload.message_id as string | undefined,
           cancelled: payload.cancelled as boolean | undefined,
           pending_count: payload.pending_count as number | undefined,
           status: payload.status as MessageStatus | undefined,

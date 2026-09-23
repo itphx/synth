@@ -151,6 +151,8 @@ export interface StreamDoneMetadata {
   usage?: { input_tokens: number; output_tokens: number; total_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number }
   debug_info?: Record<string, unknown> | null
   message_index?: number
+  /** AD-046 §7.1: id сохранённого assistant-сообщения (stream.done.message_id). */
+  message_id?: string
   cancelled?: boolean
   pending_count?: number
   /** AD-070 §2.6: статус завершения стрима (stream.done.status). */
@@ -689,9 +691,18 @@ export const useChatStore = create<ChatStore>((set) => ({
         console.warn(`[chatStore] finishStream: no stream state for ${streamId} in session ${sessionId}, adding message from metadata`)
         if (metadata.content && !metadata.cancelled) {
           const msgs = [...(s.messagesBySession[sessionId] || [])]
-          const fallbackIndex = metadata.message_index ?? (msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 1 : 0)
-          msgs.push({
-            index: fallbackIndex,
+          const freeIndex = msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 1 : 0
+          // Не занимаем index, принадлежащий другому сообщению (user-команде):
+          // при коллизии уходим на следующий свободный.
+          let targetIndex = metadata.message_index ?? freeIndex
+          let existingIdx = msgs.findIndex((m) => m.index === targetIndex)
+          if (existingIdx >= 0 && msgs[existingIdx]!.role === 'user') {
+            existingIdx = -1
+            targetIndex = freeIndex
+          }
+          const patch: MessageData = {
+            index: targetIndex,
+            id: metadata.message_id || undefined,
             role: 'assistant',
             content: metadata.content,
             model: metadata.model || undefined,
@@ -714,7 +725,12 @@ export const useChatStore = create<ChatStore>((set) => ({
             pinned: false,
             hidden: false,
             created_at: new Date().toISOString(),
-          })
+          }
+          if (existingIdx >= 0) {
+            msgs[existingIdx] = { ...msgs[existingIdx]!, ...patch }
+          } else {
+            msgs.push(patch)
+          }
           return {
             messagesBySession: { ...s.messagesBySession, [sessionId]: msgs },
             streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams },
@@ -727,8 +743,16 @@ export const useChatStore = create<ChatStore>((set) => ({
 
       if (!metadata.cancelled && (streamState.content || metadata.content)) {
         const msgs = [...(s.messagesBySession[sessionId] || [])]
-        const nextIndex = metadata.message_index
-        const existingIdx = nextIndex != null ? msgs.findIndex((m) => m.index === nextIndex) : -1
+        const fallbackIndex = msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 1 : 0
+        // AD-046 §7.1: index ответа берём из stream.done; при отсутствии —
+        // следующий свободный. Раньше fallback был `+0` и совпадал с index
+        // последнего (user-команды) сообщения, сталкивая ключи списка.
+        let targetIndex = metadata.message_index ?? fallbackIndex
+        const occupant = msgs.find((m) => m.index === targetIndex)
+        // Сливать ответ можно только в assistant/summary/debug (message.added уже
+        // добавил его). Коллизия с user-сообщением — уводим на свободный index.
+        const existingIdx = occupant && occupant.role !== 'user' ? msgs.indexOf(occupant) : -1
+        if (occupant && occupant.role === 'user') targetIndex = fallbackIndex
 
         const reasoningBlocks = metadata.reasoning_blocks
           || (streamState.reasoningBlocks.length > 0 ? streamState.reasoningBlocks : undefined)
@@ -740,7 +764,8 @@ export const useChatStore = create<ChatStore>((set) => ({
           || (streamState.intermediateTextBlocks.length > 0 ? streamState.intermediateTextBlocks : undefined)
 
         const newMsg: MessageData = {
-          index: nextIndex ?? (msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 0 : 0),
+          index: existingIdx >= 0 ? msgs[existingIdx]!.index : targetIndex,
+          id: metadata.message_id || undefined,
           role: metadata.metadata?.type === 'summary' ? 'summary'
             : metadata.metadata?.type === 'debug_system_message' ? 'debug'
             : 'assistant',
@@ -766,6 +791,7 @@ export const useChatStore = create<ChatStore>((set) => ({
           // merge: update existing message with server content
           msgs[existingIdx] = {
             ...msgs[existingIdx]!,
+            ...(metadata.message_id ? { id: metadata.message_id } : {}),
             content: metadata.content || streamState.content,
             reasoning: reasoningJoined,
             reasoning_blocks: reasoningBlocks || msgs[existingIdx]!.reasoning_blocks,
@@ -898,10 +924,31 @@ export const useChatStore = create<ChatStore>((set) => ({
   addMessage: (sessionId, message) =>
     set((s) => {
       const msgs = [...(s.messagesBySession[sessionId] || [])]
-      if (msgs.find((m) => m.index === message.index)) return s
-      return {
-        messagesBySession: { ...s.messagesBySession, [sessionId]: [...msgs, message] },
+      // Upsert: повторный `message.added` (например, обновление metadata
+      // user-команды после `commandPrompt`) не плодит копии. Ищем по index,
+      // при отсутствии — по id (сообщения без index).
+      let at = message.index != null ? msgs.findIndex((m) => m.index === message.index) : -1
+      if (at === -1 && message.id) at = msgs.findIndex((m) => m.id === message.id)
+      if (at === -1) {
+        return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...msgs, message] } }
       }
+      const prev = msgs[at]!
+      msgs[at] = {
+        ...prev,
+        ...(message.id ? { id: message.id } : {}),
+        role: message.role || prev.role,
+        // Контент из message.added может быть усечён (500 симв.); не затираем
+        // уже известный полный контент (например, после stream.done).
+        content: prev.content || message.content,
+        agent_role: message.agent_role ?? prev.agent_role,
+        author: message.author ?? prev.author,
+        model: message.model ?? prev.model,
+        provider: message.provider ?? prev.provider,
+        // metadata объединяем: сохраняем ранее известные поля (subagents/
+        // tool_results/secrets) и добавляем пришедшие (commandPrompt и т.п.).
+        metadata: { ...(prev.metadata ?? {}), ...(message.metadata ?? {}) },
+      }
+      return { messagesBySession: { ...s.messagesBySession, [sessionId]: msgs } }
     }),
 
   setPendingMessages: (sessionId, pending) =>

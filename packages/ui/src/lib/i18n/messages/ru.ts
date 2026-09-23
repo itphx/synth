@@ -798,6 +798,10 @@ export const dict = {
   'chat.actions.fork': 'Создать ветку',
   'chat.actions.debug': 'Отладка',
 
+  // AD-046 §7.1: нейтральный system-блок системной (builtin) команды
+  'chat.command.title': 'Команда',
+  'chat.command.copy': 'Копировать',
+
   'chat.message.copied': 'Скопировано',
   'chat.message.disabled': 'Сообщение выключено',
   'chat.message.enabled': 'Сообщение включено',

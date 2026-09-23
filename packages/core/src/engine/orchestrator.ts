@@ -1005,7 +1005,14 @@ export class ChatOrchestrator {
     // `/summary` — ручная суммаризация (как routes/sessions.ts).
     if (result.status === 'summarization') {
       if (!this._optimizer || !this._optimizer.canSummarize(session)) {
-        return this._finishLocalCommand(session, message, publishChunk, sm('command.summary_unavailable'), streamId);
+        return this._finishLocalCommand(
+          session,
+          message,
+          publishChunk,
+          sm('command.summary_unavailable'),
+          streamId,
+          { name: result.name, args: result.args, i18nKey: 'command.summary_unavailable' },
+        );
       }
       const sysMsg: Message = {
         id: generateId(),
@@ -1046,7 +1053,10 @@ export class ChatOrchestrator {
       return null;
     }
 
-    return this._finishLocalCommand(session, message, publishChunk, result.output ?? '', streamId);
+    return this._finishLocalCommand(session, message, publishChunk, result.output ?? '', streamId, {
+      name: result.name,
+      args: result.args,
+    });
   }
 
   /**
@@ -1064,6 +1074,9 @@ export class ChatOrchestrator {
       usage?: TokenUsage;
       durationMs?: number;
       metadata?: Record<string, unknown>;
+      /** AD-046 §7.1: index/id сохранённого assistant-сообщения — UI не плодит копии. */
+      messageIndex?: number;
+      messageId?: string;
     },
   ): void {
     publishChunk('stream.chunk', {
@@ -1079,21 +1092,41 @@ export class ChatOrchestrator {
       pending_count: 0,
       model: opts?.model ?? 'command',
       provider: opts?.provider ?? 'command',
+      ...(opts?.messageIndex !== undefined ? { message_index: opts.messageIndex } : {}),
+      ...(opts?.messageId ? { message_id: opts.messageId } : {}),
       ...(opts?.usage ? { usage: opts.usage } : {}),
       ...(opts?.durationMs !== undefined ? { duration_ms: opts.durationMs } : {}),
       ...(opts?.metadata ? { metadata: opts.metadata } : {}),
     });
   }
 
-  /** Локальный ответ команды: user сообщение — `ephemeral`, ассистент — `ephemeral`. */
+  /**
+   * Локальный ответ команды: user сообщение — `ephemeral`, ассистент — `ephemeral`.
+   *
+   * `command` (AD-046 §7.1) — имя/аргументы системной (builtin) команды: уходят в
+   * `metadata` ассистента, чтобы UI отрисовал нейтральный system-блок, а не ответ
+   * агента (бейдж/статистику). `model`/`provider` = `command` — тот же признак для
+   * live-стрима. Для `/summary`-нотиса (недоступна суммаризация) передаётся
+   * `{ name: 'summary' }`.
+   */
   private async _finishLocalCommand(
     session: Session,
     userMessage: Message,
     publishChunk: (event: string, data: Record<string, unknown>) => void,
     output: string,
     streamId: string,
+    command?: { name: string; args?: string; i18nKey?: string },
   ): Promise<ProcessMessageResult> {
-    this._publishLocalCompletion(publishChunk, streamId, output, { model: 'command', provider: 'command' });
+    // Признак команды для UI — и в сохранённом assistant-сообщении, и в
+    // `stream.done.metadata`: локальный ответ приходит в UI через stream.done
+    // (без `message.added`), поэтому без metadata оптимистичное сообщение
+    // отрисовалось бы как ответ агента.
+    const commandMetadata: Record<string, unknown> = {
+      command: true,
+      ...(command ? { commandName: command.name, commandArgs: command.args ?? '' } : {}),
+      // AD-041: строки движка локализуются в UI по `metadata.i18n`.
+      ...(command?.i18nKey ? { i18n: i18nMeta(command.i18nKey) } : {}),
+    };
 
     const assistant: Message = {
       id: generateId(),
@@ -1107,17 +1140,58 @@ export class ChatOrchestrator {
       pinned: false,
       hidden: false,
       ephemeral: true,
+      model: 'command',
+      provider: 'command',
       agentRole: userMessage.agentRole || session.settings.agentRole,
-      metadata: { command: true },
+      metadata: commandMetadata,
     };
 
-    // Помечаем пользовательское сообщение эфемерным и сохраняем ДО addMessage,
-    // иначе updateSession(session) перезапишет сессию без только что добавленного ответа.
+    // Помечаем пользовательское сообщение эфемерным и командным (`commandPrompt` —
+    // UI не рисует отдельный user-пузырь: команда объединена с выводом) и сохраняем
+    // ДО addMessage, иначе updateSession(session) перезапишет сессию без только что
+    // добавленного ответа. Существующие metadata не затираем.
     userMessage.ephemeral = true;
+    userMessage.metadata = { ...(userMessage.metadata ?? {}), commandPrompt: true };
     const idx = session.messages.findIndex((m) => m.id === userMessage.id);
-    if (idx >= 0) session.messages[idx] = { ...session.messages[idx]!, ephemeral: true };
+    if (idx >= 0) {
+      session.messages[idx] = {
+        ...session.messages[idx]!,
+        ephemeral: true,
+        metadata: userMessage.metadata,
+      };
+    }
     await this._sessionManager.updateSession(session).catch(() => {});
-    await this._sessionManager.addMessage(session.id, assistant);
+
+    // Сохраняем ответ и только потом публикуем завершение: нужны реальные
+    // `message_index`/`message_id`, иначе UI в `finishStream` вычислит index
+    // fallback'ом и столкнётся с user-командой (дубли ключей в списке).
+    const updated = await this._sessionManager.addMessage(session.id, assistant);
+    const messageIndex = updated ? updated.messages.length - 1 : undefined;
+    const userIndex = updated
+      ? updated.messages.findIndex((m) => m.id === userMessage.id)
+      : -1;
+
+    // Обновляем user-команду в UI (upsert по index в `chatStore.addMessage`):
+    // live `message.added` из процессора нёс metadata без `commandPrompt`,
+    // поэтому без повторной публикации пузырь команды оставался видимым.
+    if (userIndex >= 0) {
+      this._eventBus.publish(session.id, 'message.added', {
+        message_index: userIndex,
+        role: userMessage.role,
+        content: userMessage.content ?? '',
+        author: userMessage.author,
+        agent_role: userMessage.agentRole,
+        metadata: userMessage.metadata,
+      });
+    }
+
+    this._publishLocalCompletion(publishChunk, streamId, output, {
+      model: 'command',
+      provider: 'command',
+      metadata: commandMetadata,
+      messageIndex,
+      messageId: assistant.id,
+    });
     return {};
   }
 

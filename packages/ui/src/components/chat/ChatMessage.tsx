@@ -9,6 +9,7 @@ import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallPart } from './ToolCallPart'
 import { SubagentPart, type SubagentPartData } from './SubagentPart'
 import { RetryStatus } from './RetryStatus'
+import { CommandMessage } from './CommandMessage'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useResolveI18n } from '@/lib/i18n'
@@ -191,6 +192,14 @@ function ChatMessageInner({
   const intermediateTextBlocks = getIntermediateTextBlocks(message)
   const intermediateTextMode = useUIStore((s) => s.intermediateTextDisplay)
   const isInline = intermediateTextMode !== 'bottom'
+
+  // AD-046 §7.1: локальный ответ системной (builtin) команды — нейтральный
+  // system-блок без шапки агента/статистики; команда и вывод объединены
+  // (`metadata.command === true` на assistant-сообщении). Шаблонные/skill/bundle
+  // команды сюда не попадают: у них `metadata.command` — объект, а не `true`.
+  if (isAssistant && message.metadata?.command === true) {
+    return <CommandMessage message={message} onCopy={handleCopy} sessionId={sessionId} />
+  }
 
   const getSubagentData = (tc: LiveToolCall) => {
     const meta = tc.result?.metadata as Record<string, unknown> | undefined

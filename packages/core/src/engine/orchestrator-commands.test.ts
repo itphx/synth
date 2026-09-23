@@ -84,14 +84,84 @@ describe('ChatOrchestrator — slash-команды (AD-046 §7)', () => {
     const done = chunks.find((c) => c.event === 'stream.done');
     expect(done?.data.content).toBe('HELP TEXT');
     expect(typeof done?.data.stream_id).toBe('string');
+    // UI создаёт оптимистичное сообщение из stream.done — команда должна быть
+    // помечена и здесь, иначе она отрисуется как ответ агента.
+    expect(done?.data.metadata).toMatchObject({ command: true, commandName: 'help', commandArgs: '' });
     expect(chunks.some((c) => c.event === 'text' || c.event === 'done')).toBe(false);
     expect(events.some((e) => e.type === 'command.invoked' && e.data.command === 'help')).toBe(true);
 
     const assistant = after.messages.find((m) => m.role === MessageRole.ASSISTANT);
+    // AD-046 §7.1: stream.done несёт index/id сохранённого ответа — UI не
+    // вычисляет index fallback'ом и не сталкивается с user-командой.
+    const assistantIndex = after.messages.findIndex((m) => m.role === MessageRole.ASSISTANT);
+    expect(done?.data.message_index).toBe(assistantIndex);
+    expect(typeof done?.data.message_index).toBe('number');
+    expect(done?.data.message_id).toBe(assistant?.id);
+    expect(typeof done?.data.message_id).toBe('string');
+    // user-команда обновляется в UI повторным message.added с commandPrompt (upsert).
+    const userIdx = after.messages.findIndex((m) => m.id === msg.id);
+    expect(assistantIndex).toBeGreaterThan(userIdx);
+    expect(
+      events.some(
+        (e) =>
+          e.type === 'message.added' &&
+          (e.data.metadata as Record<string, unknown> | undefined)?.commandPrompt === true,
+      ),
+    ).toBe(true);
+
     expect(assistant?.content).toBe('HELP TEXT');
     expect(assistant?.ephemeral).toBe(true);
+    // AD-046 §7.1: нейтральный system-блок в UI — признак команды + имя/аргументы.
+    expect(assistant?.model).toBe('command');
+    expect(assistant?.provider).toBe('command');
+    expect(assistant?.metadata?.command).toBe(true);
+    expect(assistant?.metadata?.commandName).toBe('help');
+    expect(assistant?.metadata?.commandArgs).toBe('');
     const storedUser = after.messages.find((m) => m.id === msg.id);
     expect(storedUser?.ephemeral).toBe(true);
+    // user-команда помечена `commandPrompt` (UI скрывает отдельный пузырь),
+    // существующие metadata не затёрты.
+    expect(storedUser?.metadata?.commandPrompt).toBe(true);
+    expect(typeof storedUser?.metadata?.stream_id).toBe('string');
+  });
+
+  it('/summary (недоступна) → нотис в стиле команды', async () => {
+    const { after } = await run('/summary', {
+      commandRuntime: {
+        list: async () => ({ commands: [], diagnostics: [] }),
+        resolve: async (input) =>
+          input.startsWith('/summary')
+            ? { status: 'summarization', name: 'summary', args: '', kind: 'builtin' }
+            : undefined,
+      },
+    });
+    const assistant = after.messages.find((m) => m.role === MessageRole.ASSISTANT);
+    expect(assistant?.metadata?.command).toBe(true);
+    expect(assistant?.metadata?.commandName).toBe('summary');
+    expect(assistant?.metadata?.i18n).toEqual({ key: 'command.summary_unavailable' });
+    expect(assistant?.model).toBe('command');
+    expect(assistant?.provider).toBe('command');
+    const storedUser = after.messages.find((m) => m.role === MessageRole.USER);
+    expect(storedUser?.metadata?.commandPrompt).toBe(true);
+  });
+
+  it('template/skill/bundle → metadata.command = {name,kind,args} (LLM-путь, без commandPrompt)', async () => {
+    const { after, msg } = await run('/plan x', {
+      commandRuntime: {
+        list: async () => ({ commands: [], diagnostics: [] }),
+        resolve: async (input) =>
+          input.startsWith('/plan')
+            ? { status: 'template', name: 'plan', args: 'x', kind: 'template', prompt: 'RENDERED PROMPT' }
+            : undefined,
+      },
+    });
+    const storedUser = after.messages.find((m) => m.id === msg.id)!;
+    expect(storedUser.content).toBe('RENDERED PROMPT');
+    expect(storedUser.metadata?.command).toEqual({ name: 'plan', kind: 'template', args: 'x' });
+    expect(storedUser.metadata?.commandPrompt).toBeUndefined();
+    expect(
+      after.messages.some((m) => m.role === MessageRole.ASSISTANT && m.metadata?.command === true),
+    ).toBe(false);
   });
 
   it('обычный текст не перехватывается командами', async () => {

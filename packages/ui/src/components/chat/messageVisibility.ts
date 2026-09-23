@@ -22,11 +22,14 @@ export function isStateMessage(m: Pick<MessageData, 'metadata'>): boolean {
 
 /**
  * Видимость сообщения в транскрипте: скрываем служебный tool-chain
- * (`metadata.tool_chain`) и state-сообщения (AD-070 §2.8). `hidden` здесь не
- * используется — он исключает сообщение и из LLM-запроса.
+ * (`metadata.tool_chain`), state-сообщения (AD-070 §2.8) и user-сообщение
+ * системной команды (`metadata.commandPrompt`, AD-046 §7.1 — команда
+ * объединена с локальным выводом в один блок и отдельным пузырём не нужна).
+ * `hidden` здесь не используется — он исключает сообщение и из LLM-запроса.
  */
 export function isVisibleMessage(m: Pick<MessageData, 'metadata'>): boolean {
   if (m.metadata?.tool_chain === true) return false
+  if (m.metadata?.commandPrompt === true) return false
   if (isStateMessage(m)) return false
   return true
 }
