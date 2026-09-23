@@ -710,3 +710,18 @@
 - **Замечание:** `DEFAULT_AGENT_ID` сменён `developer`→`assistant` (решение пользователя, отменяет дефолт из `82bfdbe2`). Настраиваемое значение — runtime-настройка, config.yaml-поля пока нет.
 - **Ветка:** `feat/ad-071-mcp-tools-scope`. **Коммит:** `349aab2d` (общий с ТД-1).
 
+## 2026-09-23 (продолжение) — Визуальные правки: панели «Сессия»/«Проект» и раздел «Агенты»
+- **Задача:** 5 визуальных правок: (1) правая панель, вкладка «Сессия» — выбор политик выпадающим списком; (2) настройки → «Агенты» — в селекте агента по умолчанию отображать имя; (3) там же — toggle не переносится на новую строку, текст (имя+id) может переноситься, мобильный не сломан; (4) правая панель, «Сессия» — добавить имя проекта, ID показывать полностью; (5) панели «Сессия»/«Проект» — добавить создателя и дату/время создания.
+- **Тип:** feature (UI)
+- **Исполнитель:** @orchestrator (investigate) → @fixer ×1 → верификация @orchestrator (typecheck/lint/test + Playwright).
+- **Результат:** PASS.
+- **Правки (`packages/ui`):**
+  - (1) `SessionSettingsTab.tsx` — per-session `toolsPolicy`/`mcpPolicy` переведены с `SegmentedControl` на `SelectField` + `SelectContent/SelectItem` (AD-072), `ariaLabel` сохранён.
+  - (2) `ui/select.tsx` + `ui/settings/controls/SelectField.tsx` — добавлен необязательный проп `items` (пробрасывается в Base UI `Select.Root`); `AgentsPanel.tsx` — селекту агента по умолчанию передан `items` primary-агентов → триггер показывает `display_name` («Ассистент»), а не id. Причина: без `items` Base UI `Select.Value` не резолвит label и рендерит сырое value.
+  - (3) `AgentsPanel.tsx` — шапка карточки: убран `flex-wrap`, `items-start`, левый блок `min-w-0 flex-1` (имя `break-words`, id `break-all`), блок Toggle `shrink-0` — переключатель не уезжает на новую строку.
+  - (4) `SessionSettingsTab.tsx` — ID без обрезки; имя проекта резолвится из `useProjectsStore` (с догрузкой `getProject` при отсутствии), fallback — `project_id`/«—». `ui/settings/InfoField.tsx` — длинные значения переносятся (`items-start gap-2 min-w-0 break-words text-right`).
+  - (5) `lib/formatDate.ts` — хелпер `formatDateTime(iso, locale)`; `SessionSettingsTab`/`ProjectTab` — поля «Создатель» (`user_id||owner_id` / `owner_id`) и «Создан» (дата+время). i18n ru/en: `rightPanel.params.creator/created`, `projectTab.info.creator/created`.
+- **Тесты:** переписан describe per-session политик в `SessionSettingsTab.test.tsx` (radiogroup → Base UI `selectOption` через `[role="option"]` в portal, образец `McpSettings.test.tsx`).
+- **Проверки (оркестратор):** `pnpm --filter @itphx/synth-ui typecheck` — OK; `lint` — 0 errors (warning предсуществующие `any` в `LeftPanel.tsx`); `test` — **76 файлов / 616 тестов PASS**. **UI (Playwright, :5002, admin):** политики — combobox «Как в глобальной»; селект агента по умолчанию показывает «Ассистент»; у всех 14 карточек toggle в одной строке с именем и внутри карточки (в т.ч. «Банковский ассистент (Adv)»); мобильный 390px — одна колонка, toggle в строке, без горизонтального overflow; вкладка «Сессия» — полный ID, «Проект: Тестовый проект», «Создатель: admin», «Создан: 06.08.2026, 07:14»; вкладка «Проект» — «Имя: Тестовый проект», полный ID, «Создатель: admin», «Создан: 21.05.2026, 15:11».
+- **Замечания:** коммит не делался (нет явной просьбы пользователя). `SegmentedControl` оставлен (используется в других местах).
+
