@@ -226,6 +226,129 @@ describe('OpenAIProvider — usage (AD-070 §2.3)', () => {
   });
 });
 
+describe('OpenAIProvider — reasoning (reasoning_content + reasoning)', () => {
+  function sseResponse(events: string[]): Response {
+    return new Response(events.map((e) => `data: ${e}\n\n`).join(''), {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('chatAsync: delta.reasoning (RouterAI/OpenRouter) → растущий reasoning, финал непустой', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ choices: [{ index: 0, delta: { content: '', role: 'assistant', reasoning: '' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: { content: '', reasoning: 'Thinking' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: { content: '', reasoning: ' Process' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: { content: 'Answer' } }] }),
+      '[DONE]',
+    ])));
+
+    const provider = new OpenAIProvider(baseParams);
+    const chunks: LLMChunk[] = [];
+    for await (const c of provider.chatAsync([makeMessage()])) chunks.push(c);
+
+    // Пустой reasoning:'' не создаёт reasoning-чанк (первый чанк пропущен).
+    const reasoningChunks = chunks.filter((c) => !c.isFinal && c.content === '');
+    expect(reasoningChunks.map((c) => c.reasoning)).toEqual(['Thinking', 'Thinking Process']);
+
+    const final = chunks.find((c) => c.isFinal)!;
+    expect(final.reasoning).toBe('Thinking Process');
+    expect(final.content).toBe('Answer');
+  });
+
+  it('chatAsync: delta.reasoning_content (DeepSeek) — регресс, фильтр . и .\\n работает', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: 'Step 1' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: '.' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: '.\n' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: 'Step 2' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: { content: 'Done' } }] }),
+      '[DONE]',
+    ])));
+
+    const provider = new OpenAIProvider(baseParams);
+    const chunks: LLMChunk[] = [];
+    for await (const c of provider.chatAsync([makeMessage()])) chunks.push(c);
+
+    const reasoningChunks = chunks.filter((c) => !c.isFinal && c.content === '');
+    expect(reasoningChunks.map((c) => c.reasoning)).toEqual(['Step 1', 'Step 1Step 2']);
+
+    const final = chunks.find((c) => c.isFinal)!;
+    expect(final.reasoning).toBe('Step 1Step 2');
+  });
+
+  it('chatAsync: пустой reasoning:"" не создаёт reasoning-чанк', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ choices: [{ index: 0, delta: { content: '', reasoning: '' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: { content: 'hi' } }] }),
+      '[DONE]',
+    ])));
+
+    const provider = new OpenAIProvider(baseParams);
+    const chunks: LLMChunk[] = [];
+    for await (const c of provider.chatAsync([makeMessage()])) chunks.push(c);
+
+    expect(chunks.some((c) => c.reasoning !== undefined)).toBe(false);
+    expect(chunks.find((c) => c.isFinal)!.reasoning).toBeUndefined();
+  });
+
+  it('chatAsync: приоритет reasoning_content над reasoning в одном delta', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: 'RC', reasoning: 'R' } }] }),
+      '[DONE]',
+    ])));
+
+    const provider = new OpenAIProvider(baseParams);
+    const chunks: LLMChunk[] = [];
+    for await (const c of provider.chatAsync([makeMessage()])) chunks.push(c);
+
+    expect(chunks.find((c) => c.isFinal)!.reasoning).toBe('RC');
+  });
+
+  it('chatAsync: точка в delta.reasoning (RouterAI) НЕ фильтруется (quirk только для reasoning_content)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ choices: [{ index: 0, delta: { reasoning: '.' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: { reasoning: ' next' } }] }),
+      '[DONE]',
+    ])));
+
+    const provider = new OpenAIProvider(baseParams);
+    const chunks: LLMChunk[] = [];
+    for await (const c of provider.chatAsync([makeMessage()])) chunks.push(c);
+
+    expect(chunks.find((c) => c.isFinal)!.reasoning).toBe('. next');
+  });
+
+  it('chat (non-stream): message.reasoning → response.reasoning', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: 'ok', reasoning: 'deep thought' } }],
+      usage: {},
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    const provider = new OpenAIProvider(baseParams);
+    const resp = await provider.chat([makeMessage()]);
+
+    expect(resp.reasoning).toBe('deep thought');
+    expect(resp.content).toBe('ok');
+  });
+
+  it('chat (non-stream): message.reasoning_content (DeepSeek) — регресс', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: 'ok', reasoning_content: 'step by step' } }],
+      usage: {},
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    const provider = new OpenAIProvider(baseParams);
+    const resp = await provider.chat([makeMessage()]);
+
+    expect(resp.reasoning).toBe('step by step');
+  });
+});
+
 describe('OpenAIProvider — форматирование tool_use/tool_result', () => {
   const provider = new OpenAIProvider(baseParams) as unknown as OpenAIPrivate;
 

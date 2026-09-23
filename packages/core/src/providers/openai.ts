@@ -181,13 +181,22 @@ export class OpenAIProvider extends BaseProvider {
               const delta = choices?.[0]?.delta as Record<string, unknown> | undefined;
 
               if (delta) {
-                if (delta.reasoning_content && typeof delta.reasoning_content === 'string') {
-                  if (delta.reasoning_content === '.' || delta.reasoning_content === '.\n') continue;
+                // Reasoning приходит в разных форматах: DeepSeek — `reasoning_content`,
+                // OpenRouter/RouterAI — `reasoning`. Приоритет у `reasoning_content`
+                // (текущее поведение DeepSeek/itphx), пустые строки пропускаем.
+                const rc = typeof delta.reasoning_content === 'string' ? delta.reasoning_content : undefined;
+                const r = typeof delta.reasoning === 'string' ? delta.reasoning : undefined;
+                const reasoningDelta = rc !== undefined && rc !== '' ? rc : r !== undefined && r !== '' ? r : undefined;
+                // DeepSeek-модели иногда шлют служебные '.'/'.\\n' как отдельные
+                // reasoning_content-чанки — пропускаем. У поля `reasoning`
+                // (OpenRouter/RouterAI) такого фильтра нет: точки там осмысленны.
+                const isDeepSeekQuirk = rc !== undefined && (rc === '.' || rc === '.\n');
+                if (reasoningDelta !== undefined && !isDeepSeekQuirk) {
                   if (!firstChunkReceived) {
                     firstChunkReceived = true;
                     clearTimeout(timer);
                   }
-                  accumulatedReasoning += delta.reasoning_content;
+                  accumulatedReasoning += reasoningDelta;
                   yield {
                     content: '',
                     isFinal: false,
@@ -404,7 +413,8 @@ export class OpenAIProvider extends BaseProvider {
     const message = choices?.[0]?.message as Record<string, unknown> | undefined;
     const content = String(message?.content ?? '');
     const toolCalls = message?.tool_calls as Record<string, unknown>[] | undefined;
-    const reasoning = message?.reasoning_content as string | undefined;
+    // `reasoning_content` (DeepSeek) либо `reasoning` (OpenRouter/RouterAI).
+    const reasoning = (message?.reasoning_content ?? message?.reasoning) as string | undefined;
 
     return {
       content,
