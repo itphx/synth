@@ -14,6 +14,7 @@ import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import type { ProjectStore } from '../../storage/project-store.js';
 import { isAborted, abortedResult } from './abort.js';
+import { canEditProject } from './project-access.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 export interface ProjectManageExtra {
@@ -268,6 +269,14 @@ export const projectLogWriteTool: ToolDefinition = {
     if (!project) {
       return { content: NO_PROJECT_LOG_ERROR, isError: true };
     }
+    // AD-075/D5: писать лог проекта вправе только владелец/редактор (до мутации).
+    if (!canEditProject(session, project)) {
+      return {
+        content: sm('project.write_forbidden'),
+        isError: true,
+        metadata: { i18n: i18nMeta('project.write_forbidden') },
+      };
+    }
 
     const entry: ProjectLogEntry = {
       id: randomUUID(),
@@ -386,9 +395,17 @@ export const projectInvariantsWriteTool: ToolDefinition = {
       return missingDepsError(this.name);
     }
 
-    const { project } = await loadSessionProject(ctx);
+    const { session, project } = await loadSessionProject(ctx);
     if (!project) {
       return { content: NO_PROJECT_INVARIANTS_ERROR, isError: true };
+    }
+    // AD-075/D5: менять инварианты вправе только владелец/редактор (до мутации).
+    if (!canEditProject(session, project)) {
+      return {
+        content: sm('project.write_forbidden'),
+        isError: true,
+        metadata: { i18n: i18nMeta('project.write_forbidden') },
+      };
     }
 
     project.invariants = params.invariants;

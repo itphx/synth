@@ -8,7 +8,7 @@ import { FileStore } from '../../storage/file-store.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import { EventBus } from '../../events/bus.js';
 import type { ToolContext } from '@itphx/synth-shared';
-import { generateId } from '@itphx/synth-shared';
+import { generateId, ProjectRole } from '@itphx/synth-shared';
 
 describe('project_create / project_attach', () => {
   let tmpDir: string;
@@ -241,5 +241,138 @@ describe('project_log / project_invariants', () => {
 
     const project = (await projectStore.load(projectId))!;
     expect(project.invariants).toBe('Правило 1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AD-075/D5: доступ к записи проектных данных (invariants/log) — owner/EDITOR
+// разрешены, VIEWER/посторонний — нет, неатрибутированный синтетический
+// контекст — back-compat.
+// ---------------------------------------------------------------------------
+describe('project_log / project_invariants: RBAC (AD-075/D5)', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+  let eventBus: EventBus;
+  let sessionId: string;
+  let projectId: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-project-rbac-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+    eventBus = new EventBus();
+
+    const project = projectStore.create('RBAC Project', 'owner');
+    project.members['editor'] = ProjectRole.EDITOR;
+    project.members['viewer'] = ProjectRole.VIEWER;
+    await projectStore.save(project);
+    projectId = project.id;
+
+    const session = await sessionManager.createSession({ title: 'RBAC' });
+    sessionId = session.id;
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Привязывает сессию к проекту с заданной атрибуцией (userId/ownerId). */
+  async function bindSession(userId?: string, ownerId?: string, targetProjectId = projectId): Promise<void> {
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.projectId = targetProjectId;
+      s.userId = userId;
+      s.ownerId = ownerId;
+      await sessionManager.saveSession(s);
+    });
+  }
+
+  function makeCtx(): ToolContext {
+    return {
+      sessionId,
+      messageId: generateId(),
+      abortSignal: new AbortController().signal,
+      workingDir: tmpDir,
+      extra: { sessionManager, projectStore, sessionId, eventBus },
+    };
+  }
+
+  it('owner (session.userId === project.ownerId) пишет log и invariants', async () => {
+    await bindSession('owner');
+
+    const log = await projectLogWriteTool.execute({ text: 'запись' }, makeCtx());
+    expect(log.isError).toBeUndefined();
+    const inv = await projectInvariantsWriteTool.execute({ invariants: 'правило' }, makeCtx());
+    expect(inv.isError).toBeUndefined();
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.log).toHaveLength(1);
+    expect(stored.invariants).toBe('правило');
+  });
+
+  it('session.ownerId используется как fallback к userId', async () => {
+    await bindSession(undefined, 'owner');
+
+    const log = await projectLogWriteTool.execute({ text: 'запись' }, makeCtx());
+    expect(log.isError).toBeUndefined();
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.log).toHaveLength(1);
+  });
+
+  it('EDITOR пишет log и invariants', async () => {
+    await bindSession('editor');
+
+    const log = await projectLogWriteTool.execute({ text: 'запись' }, makeCtx());
+    expect(log.isError).toBeUndefined();
+    const inv = await projectInvariantsWriteTool.execute({ invariants: 'правило' }, makeCtx());
+    expect(inv.isError).toBeUndefined();
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.log).toHaveLength(1);
+    expect(stored.invariants).toBe('правило');
+  });
+
+  it('VIEWER — отказ, проект не изменён', async () => {
+    await bindSession('viewer');
+
+    const log = await projectLogWriteTool.execute({ text: 'нельзя' }, makeCtx());
+    expect(log.isError).toBe(true);
+    expect(log.metadata?.i18n).toEqual({ key: 'project.write_forbidden' });
+
+    const inv = await projectInvariantsWriteTool.execute({ invariants: 'нельзя' }, makeCtx());
+    expect(inv.isError).toBe(true);
+    expect(inv.metadata?.i18n).toEqual({ key: 'project.write_forbidden' });
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.log).toHaveLength(0);
+    expect(stored.invariants).toBe('');
+  });
+
+  it('не-участник — отказ, проект не изменён', async () => {
+    await bindSession('outsider');
+
+    const log = await projectLogWriteTool.execute({ text: 'нельзя' }, makeCtx());
+    expect(log.isError).toBe(true);
+    const inv = await projectInvariantsWriteTool.execute({ invariants: 'нельзя' }, makeCtx());
+    expect(inv.isError).toBe(true);
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.log).toHaveLength(0);
+    expect(stored.invariants).toBe('');
+  });
+
+  it('неидентифицируемый контекст (нет userId, ownerId пуст) — разрешено', async () => {
+    const bare = projectStore.create('Bare', '');
+    await projectStore.save(bare);
+    await bindSession(undefined, undefined, bare.id);
+
+    const log = await projectLogWriteTool.execute({ text: 'можно' }, makeCtx());
+    expect(log.isError).toBeUndefined();
+    const inv = await projectInvariantsWriteTool.execute({ invariants: 'можно' }, makeCtx());
+    expect(inv.isError).toBeUndefined();
+
+    const stored = (await projectStore.load(bare.id))!;
+    expect(stored.log).toHaveLength(1);
+    expect(stored.invariants).toBe('можно');
   });
 });

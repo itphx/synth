@@ -1834,6 +1834,7 @@ export const dict = {
   'project.invariants_empty': 'Инварианты не заданы',
   'project.invariants_saved': 'Инварианты проекта сохранены.',
   'project.invariants_save_error': 'Ошибка сохранения инвариантов: {error}',
+  'project.write_forbidden': 'Ошибка: нет прав на изменение проекта (нужна роль владельца или редактора)',
 
   // --- Контекст проекта (get_project_info / list_repos) ---
   'projectctx.info_title': '# Проект: {name}',

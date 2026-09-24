@@ -415,6 +415,7 @@ export const dict = {
   'project.save': 'Save',
   // Engine key (AD-041/AD-075)
   'project.workspace_create_error': 'Error creating project workspace: {error}',
+  'project.write_forbidden': 'Error: you do not have permission to modify this project (owner or editor role required)',
   'leftPanel.name': 'Name',
   'leftPanel.icon': 'Icon',
   'leftPanel.color': 'Color',

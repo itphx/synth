@@ -366,6 +366,23 @@ function applyPlanWrite(plan: ProjectPlan, params: PlanWriteInput): { error?: st
   }
 }
 
+/**
+ * plan_write.
+ *
+ * AD-075/D5 decision: в отличие от `project_log_write`/`project_invariants_write`,
+ * здесь **не** применяется гейт `canEditProject` (владелец/редактор), хотя
+ * `project.plan` в HTTP-RBAC отнесён к контентным полям
+ * (`PUT /api/v2/projects/:id`). Причина: план-воркфлоу (plan_enter → plan_write →
+ * plan_exit) опирается на синтетические/внутренние сессии, у которых нет
+ * `session.userId`/`ownerId`, тогда как у проекта `ownerId` задан (например,
+ * тестовые и иные неатрибутированные контексты). Строгий гейт (`userId` пуст,
+ * `ownerId` не пуст → отказ) сломал бы их. Приоритет — не ломать план (AD-039).
+ *
+ * TODO(AD-075/D5): когда все пути создания сессий гарантируют атрибуцию
+ * (`userId`/`ownerId`), применить здесь тот же гейт, что и к логу/инвариантам,
+ * и добавить тесты ролей в `plan.test.ts`. До этого план защищён на уровне
+ * HTTP при изменении через UI/API.
+ */
 export const planWriteTool: ToolDefinition = {
   name: 'plan_write',
   description:

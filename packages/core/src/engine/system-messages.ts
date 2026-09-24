@@ -158,6 +158,7 @@ export const SYSTEM_MESSAGES = {
   'project.invariants_empty': 'Invariants are not set',
   'project.invariants_saved': 'Project invariants saved.',
   'project.invariants_save_error': 'Error saving the invariants: {error}',
+  'project.write_forbidden': 'Error: you do not have permission to modify this project (owner or editor role required)',
 
   // --- Контекст проекта (get_project_info / list_repos) ---
   'projectctx.info_title': '# Project: {name}',
