@@ -155,8 +155,33 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * Выбирает ровно одного кандидата на каталог по приоритету
+ * (`AGENTS.override.md` > `AGENTS.md` > `agents.md`; `CLAUDE.md` — opt-in
+ * fallback; `CONTEXT.md` — deprecated opt-in). Общий для merged chain и
+ * lazy-догрузки подкаталогов (AD-069 §3.1/§4.3).
+ */
+export async function selectInstructionFile(
+  dir: string,
+  claudeCompat: boolean,
+  contextCompat: boolean,
+): Promise<{ fileName: string; main: boolean; compat?: 'claude' | 'context' } | null> {
+  for (const name of PRIMARY_CANDIDATES) {
+    if (await fileExists(join(dir, name))) {
+      return { fileName: name, main: true };
+    }
+  }
+  if (claudeCompat && (await fileExists(join(dir, 'CLAUDE.md')))) {
+    return { fileName: 'CLAUDE.md', main: false, compat: 'claude' };
+  }
+  if (contextCompat && (await fileExists(join(dir, 'CONTEXT.md')))) {
+    return { fileName: 'CONTEXT.md', main: false, compat: 'context' };
+  }
+  return null;
+}
+
 /** `true`, если `child` лежит внутри `parent` (или равен ему). */
-function isInsideDir(parent: string, child: string): boolean {
+export function isInsideDir(parent: string, child: string): boolean {
   const rel = relative(parent, child);
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
@@ -353,7 +378,7 @@ export function buildProvenanceHeader(
 }
 
 /** Путь файла относительно workspace, с префиксом `./` для локальных. */
-function displayPathFor(workspace: string, absPath: string): string {
+export function displayPathFor(workspace: string, absPath: string): string {
   const rel = relative(workspace, absPath);
   if (!rel) return './';
   return rel.startsWith('..') || isAbsolute(rel) ? rel : `./${rel}`;
@@ -686,18 +711,7 @@ export class ProjectInstructionsResolver {
   private async _selectCandidate(
     dir: string,
   ): Promise<{ fileName: string; main: boolean; compat?: 'claude' | 'context' } | null> {
-    for (const name of PRIMARY_CANDIDATES) {
-      if (await fileExists(join(dir, name))) {
-        return { fileName: name, main: true };
-      }
-    }
-    if (this._config.claudeCompat && (await fileExists(join(dir, 'CLAUDE.md')))) {
-      return { fileName: 'CLAUDE.md', main: false, compat: 'claude' };
-    }
-    if (this._config.contextCompat && (await fileExists(join(dir, 'CONTEXT.md')))) {
-      return { fileName: 'CONTEXT.md', main: false, compat: 'context' };
-    }
-    return null;
+    return selectInstructionFile(dir, this._config.claudeCompat, this._config.contextCompat);
   }
 
   /** `config.sources` в порядке объявления (path/url). */

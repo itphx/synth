@@ -63,6 +63,12 @@ export interface TaskExtra {
   /** AD-070: цены моделей для live-стоимости саб-агента (как в оркестраторе). */
   modelPriceLoader?: (model: string) => UsagePricing | null;
   /**
+   * AD-069 §7: уже резолвленные оркестратором проектные инструкции
+   * (`[PROJECT INSTRUCTIONS] …`) — добавляются в конец базового промпта
+   * саб-агента. Не резолвятся повторно в ребёнке.
+   */
+  projectInstructions?: string;
+  /**
    * AD-046 §5/§6.2: рантайм скиллов — каталог саб-агенту (binding родителя) и
    * тул `skill` (тот же объект уходит в ToolContext.extra).
    */
@@ -169,6 +175,7 @@ export const taskTool: ToolDefinition = {
     'Launch a new agent to handle complex, multistep tasks autonomously. '
     + 'Available subagent types: "general" (full tool access), "explore" (read-only code exploration). '
     + 'Use for tasks that require multiple tool calls. '
+    + 'Set skip_context_files=true to omit project instruction files (AGENTS.md) from the subagent prompt. '
     + 'IMPORTANT: You must NOT ask the user to use the task tool — use it yourself proactively.',
   parameters: z.object({
     description: z.string().describe('A short (3-5 words) description of the task'),
@@ -185,6 +192,8 @@ export const taskTool: ToolDefinition = {
       .describe('Override provider for the subagent'),
     routing_strategy: z.enum(['auto', 'content', 'cost', 'none']).optional()
       .describe('Routing strategy for the subagent (default: inherit from parent)'),
+    skip_context_files: z.boolean().optional()
+      .describe('Do not include project instruction files (AGENTS.md) in the subagent prompt. Default: false'),
   }),
   capabilities: [ToolCapability.TASK],
   async execute(args, ctx) {
@@ -202,6 +211,7 @@ export const taskTool: ToolDefinition = {
       model?: string;
       provider?: string;
       routing_strategy?: 'auto' | 'content' | 'cost' | 'none';
+      skip_context_files?: boolean;
     };
     const extra = ctx.extra as TaskExtra | undefined;
 
@@ -439,6 +449,15 @@ export const taskTool: ToolDefinition = {
 
       return prompt;
     })();
+
+    // AD-069 §7/§9.2: уже резолвленные проектные инструкции — в конец базового
+    // промпта. Не добавляются при `skip_context_files=true` и при
+    // `session.settings.systemPrompt` override дочерней сессии (как основная).
+    const skipContextFiles = params.skip_context_files === true
+      || Boolean(extra.parentSessionSettings?.systemPrompt?.trim());
+    if (!skipContextFiles && extra.projectInstructions) {
+      llmSystemPrompt += `\n\n${extra.projectInstructions}`;
+    }
 
     // AD-046 §5/§6.2: каталог скиллов саб-агенту. Binding — родителя
     // (fixed decision Фазы 1), capabilities — самого саб-агента (executor).

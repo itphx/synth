@@ -97,6 +97,11 @@ export interface SubagentResumeDeps {
   modelPriceLoader?: (model: string) => UsagePricing | null;
   /** AD-046 §5: рантайм скиллов — каталог resumed-саб-агенту (binding родителя). */
   skillRuntime?: import('../skills/types.js').SkillRuntime;
+  /**
+   * AD-069 §7: уже резолвленные проектные инструкции resumed-саб-агента
+   * (резолвит оркестратор; в ребёнке повторного резолва нет).
+   */
+  getProjectInstructions?: (child: Session, parent: Session, workingDir: string) => Promise<string | undefined>;
   /** Резолв провайдера дочерней сессии (gateway/роутер оркестратора). */
   getProvider: (child: Session) => BaseProvider | null;
   /** Рабочий каталог дочерней сессии. */
@@ -240,6 +245,17 @@ export async function runSubagentResume(
         if (skillsBlock) systemPrompt += `\n\n${skillsBlock}`;
       } catch {
         // каталог скиллов не должен ломать resume
+      }
+    }
+
+    // AD-069 §7/§9.2: проектные инструкции resumed-саб-агента. Не добавляются
+    // при `session.settings.systemPrompt` override (как основная сессия).
+    if (deps.getProjectInstructions && !child.settings.systemPrompt?.trim()) {
+      try {
+        const instructions = await deps.getProjectInstructions(child, parent, workingDir);
+        if (instructions) systemPrompt += `\n\n${instructions}`;
+      } catch {
+        // резолв инструкций не должен ломать resume
       }
     }
 

@@ -509,8 +509,70 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     expect(captured.some((m) => m.role === 'assistant' && m.content === 'начал анализ...')).toBe(true);
   });
 
-  it('AD-071 §2.1 + AD-070: resume наследует MCP-скоуп и modelPriceLoader', async () => {
+  it('AD-069: getProjectInstructions добавляет проектные инструкции в system prompt resume', async () => {
     const { parent, child } = await createInterruptedChild();
+    let capturedSystem = '';
+    const provider = {
+      model: 'm',
+      name: 'mockres',
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: unknown, systemPrompt: string) {
+        capturedSystem = systemPrompt;
+        yield { isFinal: true, content: 'ok', toolCalls: [] };
+      }),
+    };
+
+    await runSubagentResume(
+      {
+        sessionManager,
+        eventBus,
+        agentRegistry: makeMockAgentRegistry(),
+        getProjectInstructions: async () => '[PROJECT INSTRUCTIONS]\nRESUME-RULES\n[END PROJECT INSTRUCTIONS]',
+        getProvider: () => provider as never,
+        getWorkingDir: async () => tmpDir,
+      },
+      { child: (await sessionManager.getSession(child))!, parent: (await sessionManager.getSession(parent))!, streamId: 'st-instr', abortSignal: new AbortController().signal },
+    );
+
+    expect(capturedSystem).toContain('RESUME-RULES');
+  });
+
+  it('AD-069: systemPrompt override ребёнка — getProjectInstructions не применяется', async () => {
+    const { parent, child } = await createInterruptedChild();
+    await sessionManager.withLock(child, async (s) => {
+      s.settings.systemPrompt = 'CHILD-OVERRIDE';
+      await sessionManager.saveSession(s);
+    });
+    let capturedSystem = '';
+    const provider = {
+      model: 'm',
+      name: 'mockres',
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: unknown, systemPrompt: string) {
+        capturedSystem = systemPrompt;
+        yield { isFinal: true, content: 'ok', toolCalls: [] };
+      }),
+    };
+    let resolverCalled = false;
+
+    await runSubagentResume(
+      {
+        sessionManager,
+        eventBus,
+        agentRegistry: makeMockAgentRegistry(),
+        getProjectInstructions: async () => {
+          resolverCalled = true;
+          return '[PROJECT INSTRUCTIONS]\nRESUME-RULES\n[END PROJECT INSTRUCTIONS]';
+        },
+        getProvider: () => provider as never,
+        getWorkingDir: async () => tmpDir,
+      },
+      { child: (await sessionManager.getSession(child))!, parent: (await sessionManager.getSession(parent))!, streamId: 'st-ovr', abortSignal: new AbortController().signal },
+    );
+
+    expect(resolverCalled).toBe(false);
+    expect(capturedSystem).not.toContain('RESUME-RULES');
+  });
+
+  it('AD-071 §2.1 + AD-070: resume наследует MCP-скоуп и modelPriceLoader', async () => {    const { parent, child } = await createInterruptedChild();
     let capturedMcp: string[] | undefined;
     const registry = {
       get: (id: string) => (id === 'explore'

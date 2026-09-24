@@ -14,7 +14,8 @@ import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import { ContextConfig } from './context/config.js';
 import { SystemPromptComposer, type ComposerContext, type ComposerInstructions, type ComposerMcpServer, type ComposerMcpServerStatus } from './context/composer.js';
-import { ProjectInstructionsResolver } from './context/instructions.js';
+import { ProjectInstructionsResolver, type InstructionsFileInfo } from './context/instructions.js';
+import { LazyInstructionsLoader } from './context/lazy-instructions.js';
 import type { ComposerSkillsCatalog } from './skills/catalog.js';
 import type { SkillRuntime } from './skills/types.js';
 import type { CommandRuntime } from '@itphx/synth-shared';
@@ -222,9 +223,19 @@ export interface ProcessMessageResult {
   canRetry?: boolean;
 }
 
+/**
+ * AD-069 §2.1/§7: результат резолва проектных инструкций для текущего хода —
+ * composer-блок, «сырой» контент (для саб-агентов) и провенанс файлов (для
+ * события `context.instructions_loaded` и seed lazy-реестра).
+ */
+interface ResolvedProjectInstructions {
+  instructions: ComposerInstructions;
+  content: string;
+  files: InstructionsFileInfo[];
+}
+
 /** AD-070 §2.5: read-only диагностика промпта для `GET /sessions/:id/prompt`. */
-export interface PromptDiagnostics {
-  manifest: PromptManifest;
+export interface PromptDiagnostics {  manifest: PromptManifest;
   /** AD-070 §2.5: состав слоя истории (`messages`), зеркалит реальную отправку. */
   history: PromptHistoryInfo;
   /** Состояние промпта активного агента (null, если ещё не собирался). */
@@ -305,6 +316,8 @@ export class ChatOrchestrator {
   private readonly _instructionsConfig: InstructionsConfig | null;
   /** AD-069 Фаза 1: резолвер merged chain `AGENTS.md` (null — выключено). */
   private readonly _instructionsResolver: ProjectInstructionsResolver | null;
+  /** AD-069 Фаза 2b: lazy-догрузка вложенных инструкций в tool result. */
+  private readonly _lazyInstructions: LazyInstructionsLoader | null;
   private _providerPool: ProviderPool | null;
   /** Политика защищённых путей (СКВОЗНАЯ проверка файловых тулов + shell) — ленивая загрузка с кэшем. */
   private _protectedPaths: ProtectedPathsPolicy | null = null;
@@ -662,6 +675,19 @@ export class ChatOrchestrator {
             trustedProjectDirs: options.instructionsTrustedProjectDirs,
           })
         : null;
+    // AD-069 Фаза 2b: lazy-загрузчик подкаталогов (те же словарь/политики, что
+    // у резолвера; состояние `loaded`/`claims` — per-session).
+    this._lazyInstructions =
+      this._instructionsConfig?.enabled
+        ? new LazyInstructionsLoader({
+            config: this._instructionsConfig.lazy,
+            claudeCompat: this._instructionsConfig.claudeCompat,
+            contextCompat: this._instructionsConfig.contextCompat,
+            headRatio: this._instructionsConfig.headRatio,
+            tailRatio: this._instructionsConfig.tailRatio,
+            dictionaryStore: this._dictionaryStore,
+          })
+        : null;
     // Фабрика обёртки для пула: у пула нет сессии, поэтому оборачиваем с пустой
     // картой обфускации (защита от утечки секретов работает, карта не персистится).
     const pool = new ProviderPool(
@@ -1012,7 +1038,7 @@ export class ChatOrchestrator {
     model?: string;
     language: string;
     signal?: AbortSignal;
-  }): Promise<ComposerInstructions | undefined> {
+  }): Promise<ResolvedProjectInstructions | undefined> {
     const resolver = this._instructionsResolver;
     if (!resolver) return undefined;
     // AD-040: без project.workspace проектный контекст недоступен.
@@ -1043,7 +1069,11 @@ export class ChatOrchestrator {
     const loaded = result.files.filter((file) => !file.blocked);
     const provenance = loaded.map((file) => file.path).join(', ') || undefined;
     const status = loaded.some((file) => file.truncated) ? 'truncated' : 'loaded';
-    return { content: result.content, provenance, status };
+    return {
+      instructions: { content: result.content, provenance, status },
+      content: result.content,
+      files: result.files,
+    };
   }
 
   /**
@@ -1803,7 +1833,7 @@ export class ChatOrchestrator {
       project,
       toolSelection,
       skillsCatalog,
-      instructions: projectInstructions,
+      instructions: projectInstructions?.instructions,
     });
 
     const manifest = await this._composer.manifest(ctx);
@@ -2213,6 +2243,28 @@ export class ChatOrchestrator {
         language,
         signal,
       });
+      // AD-069 §9.3: прозрачность — событие о загруженных проектных инструкциях.
+      // Публикуется только в реальном ходе (manifest/getPromptInfo — read-only).
+      if (projectInstructions && projectInstructions.files.length > 0) {
+        this._eventBus.publish(session.id, 'context.instructions_loaded', {
+          session_id: session.id,
+          source: 'initial',
+          agent: effectiveAgentRole,
+          files: projectInstructions.files.map((file) => ({
+            path: file.path,
+            chars: file.chars,
+            truncated: file.truncated,
+            scanned: file.scanned,
+            blocked: file.blocked,
+          })),
+        });
+        // AD-069 §4.3.5: merged-chain уже в system prompt — seed lazy-реестра,
+        // чтобы lazy не дублировал эти файлы в tool result.
+        this._lazyInstructions?.seed(
+          session.id,
+          projectInstructions.files.filter((file) => file.kind === 'chain').map((file) => file.path),
+        );
+      }
       const composerCtx: ComposerContext = this._buildComposerContext({
         session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
         // AD-071 §2.3: `toolsPolicy` влияет на тир `tools`, `mcpPolicy` — на
@@ -2225,7 +2277,7 @@ export class ChatOrchestrator {
         // AD-070 §2.5: per-message collector доходит до Composer через контекст.
         debugCollector,
         skillsCatalog,
-        instructions: projectInstructions,
+        instructions: projectInstructions?.instructions,
       });
       const composed = await this._composer.compose(composerCtx);
       // AD-070 §2.2: в провайдер уходит payload с границей stable-префикса и
@@ -2798,6 +2850,9 @@ export class ChatOrchestrator {
                   // AD-046 §5: тул `skill` получает рантайм через ToolContext.extra
                   // (в ToolContext нет dataDir); саб-агенты — тот же объект.
                   skillRuntime: this._skillRuntime ?? undefined,
+                  // AD-069 §7: уже резолвленные проектные инструкции — в extra,
+                  // чтобы `task`/`task-resume` не резолвили их повторно в ребёнке.
+                  projectInstructions: projectInstructions?.content,
                   callerAgentRole: effectiveAgentRole,
                   parentSessionSettings: session.settings,
                   // AD-071 §2.1: саб-агент наследует MCP-скоуп родителя.
@@ -2913,6 +2968,44 @@ export class ChatOrchestrator {
                   },
                 };
               }
+            }
+          }
+
+          // AD-069 §4: lazy-догрузка вложенных проектных инструкций в результат
+          // file/shell-тула. Контент инструкций сканируется внутри загрузчика
+          // (AD-036) и вставляется ПОСЛЕ IPI-обёртки базового tool-контента —
+          // сам базовый контент под обёрткой, скан не обходится.
+          if (!toolResult.isError && this._lazyInstructions) {
+            try {
+              const lazy = await this._lazyInstructions.resolve({
+                sessionId: session.id,
+                messageId: streamId,
+                toolName,
+                toolArgs,
+                toolResultMetadata: toolResult.metadata,
+                workspace: workingDir,
+                language,
+                injection: this._instructionsInjectionPolicy(),
+              });
+              if (lazy.block) {
+                toolResult = {
+                  ...toolResult,
+                  content: `${toolResult.content}\n\n${lazy.block}`,
+                  metadata: {
+                    ...toolResult.metadata,
+                    instructions_loaded: lazy.files.filter((f) => !f.blocked).map((f) => f.path),
+                  },
+                };
+                this._eventBus.publish(session.id, 'context.instructions_loaded', {
+                  session_id: session.id,
+                  source: 'lazy',
+                  tool: toolName,
+                  agent: effectiveAgentRole,
+                  files: lazy.files,
+                });
+              }
+            } catch (e) {
+              warning('ORCHESTRATOR', `Lazy-инструкции не загружены: ${e instanceof Error ? e.message : String(e)}`);
             }
           }
 
@@ -3479,6 +3572,27 @@ export class ChatOrchestrator {
       modelPriceLoader: this._modelPriceLoader ?? undefined,
       // AD-046 §5: каталог скиллов resumed-саб-агенту + тул `skill`.
       skillRuntime: this._skillRuntime ?? undefined,
+      // AD-069 §7: резолвим проектные инструкции для ребёнка в оркестраторе
+      // (в самом resume повторного резолва нет).
+      getProjectInstructions: async (child, parent, workingDir) => {
+        if (!parent.projectId) return undefined;
+        let project: Project | null = null;
+        if (this._projectStore) {
+          try {
+            project = await this._projectStore.load(parent.projectId);
+          } catch {
+            project = null;
+          }
+        }
+        const resolved = await this._resolveProjectInstructions({
+          session: child,
+          project,
+          workingDir,
+          model: child.settings.model,
+          language: child.settings.language || 'ru',
+        });
+        return resolved?.content;
+      },
       getProvider: (child) => this._getProvider(child.settings.provider || '', child, child.settings.reasoningLevel),
       getWorkingDir: (child) => this._resolveWorkingDir(child),
     };

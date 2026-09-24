@@ -721,6 +721,58 @@ describe('taskTool — context modes', () => {
     expect(capturedSystemMsg).not.toContain('[PARENT NOTES]');
     expect(capturedSystemMsg).not.toContain('Секретные заметки');
   });
+
+  // ─── AD-069 Фаза 2b: проектные инструкции в промпте саб-агента ──────
+
+  async function captureSubagentSystem(
+    params: Record<string, unknown>,
+    extraOverrides: Record<string, unknown> = {},
+  ): Promise<string> {
+    const parent = await createParentWithMessages();
+    let captured = '';
+    const provider = {
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: unknown, systemPrompt: string) {
+        captured = systemPrompt || '';
+        yield { isFinal: true, content: 'OK', toolCalls: [] };
+      }),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+    await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', ...params },
+      {
+        ...baseCtx,
+        extra: {
+          provider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          projectInstructions: '[PROJECT INSTRUCTIONS]\nCHAIN-RULES\n[END PROJECT INSTRUCTIONS]',
+          ...extraOverrides,
+        },
+      },
+    );
+    return captured;
+  }
+
+  it('AD-069: резолвнутые проектные инструкции попадают в system prompt саб-агента', async () => {
+    const system = await captureSubagentSystem({});
+    expect(system).toContain('[PROJECT INSTRUCTIONS]');
+    expect(system).toContain('CHAIN-RULES');
+  });
+
+  it('AD-069: skip_context_files=true — проектные инструкции не добавляются', async () => {
+    const system = await captureSubagentSystem({ skip_context_files: true });
+    expect(system).not.toContain('CHAIN-RULES');
+  });
+
+  it('AD-069: systemPrompt override родителя — проектные инструкции не добавляются', async () => {
+    const system = await captureSubagentSystem({}, {
+      parentSessionSettings: { systemPrompt: 'MY-OVERRIDE' },
+    });
+    expect(system).not.toContain('CHAIN-RULES');
+  });
 });
 
 /** Провайдер саб-агента: первый вызов — write_file, второй — текст. */

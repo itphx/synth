@@ -1118,6 +1118,7 @@ export type EventType =
   | 'context.sticky_note_added'
   | 'context.sticky_note_updated'
   | 'context.sticky_note_deleted'
+  | 'context.instructions_loaded'
   | 'tool_call.started'
   | 'tool_call.result'
   | 'tool_call.loop'
