@@ -2,9 +2,12 @@
 // Гибрид подключается в рантайме (RemoteConnection), поэтому middleware получает
 // ГЕТТЕР клиента: если подключения нет — getClient() возвращает null, middleware
 // делает next() и запрос обрабатывают локальные роуты (404 либо обычная логика).
-// Когда клиент есть, пути из REMOTE_PROXY_PREFIXES форвардятся
-// на {backendUrl}/api/v2/... с Bearer-токеном: сохраняются method/query/тело
-// (JSON) и статус/заголовки/тело ответа (включая SSE).
+// Когда клиент есть, пути из REMOTE_PROXY_PREFIXES (простые префиксы) и
+// REMOTE_PROXY_PATTERNS (точечные regex, напр. вложенный
+// /api/v2/agents/:agentId/ssh-keys) форвардятся на {backendUrl}/api/v2/... с
+// Bearer-токеном: сохраняются method/query/тело (JSON) и статус/заголовки/тело
+// ответа (включая SSE). Остальные пути /api/v2/agents/* остаются локальными
+// (агенты — per-instance).
 
 import type { Context, MiddlewareHandler } from 'hono';
 import type { RemoteBackendClient } from '../remote/client.js';
@@ -28,6 +31,16 @@ export const REMOTE_PROXY_PREFIXES = [
   '/api/v2/ssh-keys',
 ] as const;
 
+/**
+ * Точечные паттерны для путей, которые нельзя покрыть простым префиксом:
+ * вложенные SSH-ключи агента (`/api/v2/agents/:agentId/ssh-keys[/:keyId]`).
+ * Важно: `/api/v2/agents` и его прочие подпути (`/all`, `/:id/enabled`)
+ * остаются локальными — агенты per-instance.
+ */
+export const REMOTE_PROXY_PATTERNS: readonly RegExp[] = [
+  /^\/api\/v2\/agents\/[^/]+\/ssh-keys(?:\/|$)/,
+];
+
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
   'keep-alive',
@@ -39,8 +52,9 @@ const HOP_BY_HOP_HEADERS = new Set([
   'upgrade',
 ]);
 
-function matchesProxyPrefix(path: string): boolean {
-  return REMOTE_PROXY_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`));
+export function matchesProxyPrefix(path: string): boolean {
+  if (REMOTE_PROXY_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`))) return true;
+  return REMOTE_PROXY_PATTERNS.some((re) => re.test(path));
 }
 
 /**
