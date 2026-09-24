@@ -168,7 +168,7 @@ export function createGitRoutes(
     if (!allowed) throw { error: 'Доступ к проекту запрещён', code: 'FORBIDDEN' } satisfies RouteError;
   }
 
-  /** SSH-окружение по `sshKeyId`: без id — пусто; нет ключа — 404; passphrase — 400. */
+  /** SSH-окружение по `sshKeyId`: без id — пусто; нет ключа — 404; сбой env — 400. */
   async function resolveSshEnv(
     sshKeyId?: string,
   ): Promise<{ env?: Record<string, string>; cleanup?: () => Promise<void> }> {
@@ -182,7 +182,8 @@ export function createGitRoutes(
       return { env: ssh.env, cleanup: ssh.cleanup };
     } catch (err) {
       if (err instanceof SshEnvError) {
-        throw { error: err.message, code: 'VALIDATION_ERROR' } satisfies RouteError;
+        // AD-041: наружу — i18n-ключ, не сырой текст ошибки.
+        throw { error: 'sshkey.env_failed', code: 'VALIDATION_ERROR' } satisfies RouteError;
       }
       throw err;
     }

@@ -307,6 +307,7 @@ export const SYSTEM_MESSAGES = {
   'sshkey.name_exists': 'SSH key with name "{name}" already exists',
   'sshkey.encryption_unavailable': 'SSH key encryption is unavailable: secret key is not configured',
   'sshkey.decrypt_failed': 'Failed to decrypt SSH key {id}',
+  'sshkey.env_failed': 'Failed to prepare SSH environment (temporary key or askpass)',
   'git.ssh_key_required': 'SSH key is required for repository "{path}"',
   'git.repo_path_invalid': 'Invalid repository path "{path}" (must be inside the project workspace)',
   'git.repo_exists': 'Repository already exists at "{path}"',

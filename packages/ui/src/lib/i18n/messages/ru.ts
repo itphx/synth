@@ -1993,6 +1993,7 @@ export const dict = {
   'sshkey.name_exists': 'SSH-ключ с именем «{name}» уже существует',
   'sshkey.encryption_unavailable': 'Шифрование SSH-ключей недоступно: не задан секретный ключ',
   'sshkey.decrypt_failed': 'Не удалось расшифровать SSH-ключ {id}',
+  'sshkey.env_failed': 'Не удалось подготовить SSH-окружение (временный ключ или askpass)',
   'git.ssh_key_required': 'Для репозитория «{path}» требуется SSH-ключ',
   'git.repo_path_invalid': 'Недопустимый путь репозитория «{path}» (должен находиться внутри workspace проекта)',
   'git.repo_exists': 'Репозиторий уже существует по пути «{path}»',

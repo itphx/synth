@@ -12,8 +12,9 @@ import { createSshEnv, SshEnvError } from '../../git/ssh-env.js';
  *
  * По `cwd` находим запись реестра `project.repos` (по относительному пути к
  * корню workspace) и, если у неё задан `sshKeyId`, готовим `GIT_SSH_COMMAND`
- * через `createSshEnv`. Ключ не найден/не расшифрован → типизированная ошибка
- * (i18n-ключ), а не молчаливый фейл аутентификации.
+ * через `createSshEnv`. Ключ не найден/не расшифрован или не удалось
+ * подготовить SSH-окружение → типизированная ошибка (i18n-ключ), а не
+ * молчаливый фейл аутентификации.
  */
 
 interface GitSshExtra {
@@ -29,7 +30,7 @@ export interface RepoGitEnvResult {
   env?: Record<string, string>;
   /** Идемпотентная очистка временного ключа; no-op, если окружение не создавалось. */
   cleanup: () => Promise<void>;
-  /** i18n-ключ ошибки (`sshkey.not_found` / `sshkey.decrypt_failed` / ...). */
+  /** i18n-ключ ошибки (`sshkey.not_found` / `sshkey.decrypt_failed` / `sshkey.env_failed`). */
   error?: string;
   /** Параметры подстановки для `error`. */
   errorParams?: Record<string, string>;
@@ -104,7 +105,7 @@ export async function resolveRepoGitEnv(ctx: ToolContext, cwd: string): Promise<
     return { env: ssh.env, cleanup: ssh.cleanup };
   } catch (err) {
     if (err instanceof SshEnvError) {
-      return { cleanup: noopCleanup, error: 'sshkey.decrypt_failed', errorParams: { id: entry.sshKeyId } };
+      return { cleanup: noopCleanup, error: 'sshkey.env_failed' };
     }
     throw err;
   }
