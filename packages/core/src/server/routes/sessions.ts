@@ -237,8 +237,8 @@ export function createSessionRoutes(
       settings: { ...body.settings, agentRole: body.settings?.agentRole ?? await resolveDefaultAgent() },
       userId: owner,
     });
-    // SessionManager.createSession объявляет ownerId, но не проставляет его —
-    // выставляем явно, иначе serializeSession отдаёт owner_id: null (регресс core).
+    // AD-075/D5: createSession сам проставляет ownerId из userId; выставляем
+    // явно для совместимости и чтобы serializeSession отдавал owner_id.
     session.ownerId = owner;
     await sessionManager.updateSession(session);
     // Хук подписки EventHub вызываем ДО publish: EventBus не буферизует события,

@@ -73,7 +73,7 @@ const NO_PROJECT_LOG_ERROR = sm('project.log_no_project');
 const NO_PROJECT_INVARIANTS_ERROR = sm('project.invariants_no_project');
 
 /** Загружает сессию и её проект. project === null, если проекта нет (или сессия не найдена). */
-async function loadSessionProject(
+export async function loadSessionProject(
   ctx: ToolContext,
 ): Promise<{ session: Session | null; project: Project | null }> {
   const extra = getSessionExtra(ctx);

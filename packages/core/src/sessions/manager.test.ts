@@ -46,6 +46,17 @@ describe('SessionManager', () => {
     expect(session.settings.temperature).toBe(0.7);
   });
 
+  it('createSession сохраняет ownerId (fallback userId, иначе пусто)', async () => {
+    const withOwner = await manager.createSession({ ownerId: 'o1' });
+    expect(withOwner.ownerId).toBe('o1');
+
+    const withUser = await manager.createSession({ userId: 'u1' });
+    expect(withUser.ownerId).toBe('u1');
+
+    const bare = await manager.createSession({});
+    expect(bare.ownerId).toBe('');
+  });
+
   it('createSession по умолчанию выключает маршрутизацию (согласовано с UI-дефолтом)', async () => {
     const session = await manager.createSession({});
     expect(session.settings.routingEnabled).toBe(false);
@@ -280,6 +291,27 @@ describe('AD-033: Session forking and branching', () => {
     expect(fork.id).toBeDefined();
     expect(fork.parentId).toBe(parent.id);
     expect(fork.sessionOrigin).toBe('fork');
+  });
+
+  it('forkSession наследует атрибуцию источника при отсутствии опций', async () => {
+    const parent = await manager.createSession({ title: 'Parent', userId: 'alice' });
+    const fork = await manager.forkSession(parent.id, {});
+    expect(fork.userId).toBe('alice');
+    expect(fork.ownerId).toBe('alice');
+  });
+
+  it('forkSession наследует ownerId, отличный от userId', async () => {
+    const parent = await manager.createSession({ title: 'Parent', userId: 'alice', ownerId: 'carol' });
+    const fork = await manager.forkSession(parent.id, {});
+    expect(fork.userId).toBe('alice');
+    expect(fork.ownerId).toBe('carol');
+  });
+
+  it('forkSession переопределяет атрибуцию явными опциями', async () => {
+    const parent = await manager.createSession({ title: 'Parent', userId: 'alice' });
+    const fork = await manager.forkSession(parent.id, { userId: 'bob', ownerId: 'bob' });
+    expect(fork.userId).toBe('bob');
+    expect(fork.ownerId).toBe('bob');
   });
 
   it('forkSession копирует сообщения с origin=inherited и sourceMsgId', async () => {

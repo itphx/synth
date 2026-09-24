@@ -59,6 +59,9 @@ export class SessionManager {
       sessionOrigin: data.sessionOrigin || 'user',
       parentId: data.parentId,
       userId: data.userId || '',
+      // AD-075/D5: владелец сессии нужен для атрибуции при RBAC проектных данных
+      // (plan_write). Раньше поле объявлялось, но не проставлялось.
+      ownerId: data.ownerId || data.userId || '',
       projectId: data.projectId,
       engine: (data.engine || 'synth') as Session['engine'],
       messages: [],
@@ -513,8 +516,10 @@ export class SessionManager {
         sessionOrigin: 'fork' as SessionOrigin,
         parentId: sourceSessionId,
         settings: { ...source.settings },
-        userId: options.userId,
-        ownerId: options.ownerId,
+        // AD-075/D5: при отсутствии явной атрибуции наследуем владельца источника,
+        // иначе форк терял владельца и выпадал из RBAC проектных данных.
+        userId: options.userId ?? source.userId,
+        ownerId: options.ownerId ?? source.ownerId,
       });
 
       const cutoffIdx = options.messageIndex != null

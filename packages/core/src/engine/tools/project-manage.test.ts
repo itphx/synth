@@ -25,7 +25,7 @@ describe('project_create / project_attach', () => {
 
     const session = await sessionManager.createSession({ title: 'No project' });
     sessionId = session.id;
-    // createSession не проставляет ownerId — задаём явно, как это делает app.ts
+    // createSession без userId оставляет ownerId пустым — задаём явно, как это делает app.ts
     await sessionManager.withLock(sessionId, async (s) => {
       s.ownerId = 'u1';
       await sessionManager.saveSession(s);
