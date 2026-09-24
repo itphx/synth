@@ -121,7 +121,9 @@ export async function ensureConfigFile(targetPath: string): Promise<void> {
 export async function ensureFirstRun(dataDirOverride?: string, configPathOverride?: string): Promise<{ dataDir: string; configPath: string | null; mode: DeployMode }> {
   const mode = resolveDeployMode();
 
-  const dataDir = dataDirOverride ?? resolveDataDir(defaultConfig);
+  // AD-075: относительный --data-dir абсолютизируем на CLI-границе (иначе
+  // containment-проверки FS получают относительный root и абсолютный target).
+  const dataDir = resolve(dataDirOverride ?? resolveDataDir(defaultConfig));
   const configPath = configPathOverride ?? defaultConfigPath(mode);
 
   if (mode !== 'docker') {

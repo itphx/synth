@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { spawn } from 'node:child_process';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { checkForUpdatesBackground } from './update-checker.js';
 import { t as sm } from './engine/system-messages.js';
 
@@ -281,7 +281,7 @@ projectCmd
   .option('--token <key>', 'API-ключ для аутентификации')
   .action(async (projectId, options) => {
     const synth = await loadConfig({ configPath: options.config });
-    const dataDir = (options.dataDir as string | undefined) || resolveDataDir(synth);
+    const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
     const { ProjectStore } = await import('./storage/project-store.js');
@@ -348,7 +348,7 @@ projectCmd
   .option('--token <key>', 'API-ключ для аутентификации')
   .action(async (remoteProjectId, options) => {
     const synth = await loadConfig({ configPath: options.config });
-    const dataDir = (options.dataDir as string | undefined) || resolveDataDir(synth);
+    const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
     const { ProjectStore } = await import('./storage/project-store.js');
@@ -399,7 +399,7 @@ program
     }
 
     const synth = await loadConfig({ configPath: options.config });
-    const dataDir = options.dataDir || resolveDataDir(synth);
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
     checkForUpdatesBackground(dataDir, (info) => {
@@ -444,7 +444,7 @@ program
           .option('--data-dir <path>', 'каталог данных')
           .action(async (options) => {
             const synth = await loadConfig({});
-            const dataDir = options.dataDir || resolveDataDir(synth);
+            const dataDir = resolve(options.dataDir || resolveDataDir(synth));
             await ensureDataDir(dataDir);
 
             const { JsonStore } = await import('./storage/json-store.js');
@@ -471,7 +471,7 @@ program
           .option('--data-dir <path>', 'каталог данных')
           .action(async (options) => {
             const synth = await loadConfig({});
-            const dataDir = options.dataDir || resolveDataDir(synth);
+            const dataDir = resolve(options.dataDir || resolveDataDir(synth));
             await ensureDataDir(dataDir);
 
             const { JsonStore } = await import('./storage/json-store.js');
@@ -492,7 +492,7 @@ program
           .option('--data-dir <path>', 'каталог данных')
           .action(async (name, options) => {
             const synth = await loadConfig({});
-            const dataDir = options.dataDir || resolveDataDir(synth);
+            const dataDir = resolve(options.dataDir || resolveDataDir(synth));
             await ensureDataDir(dataDir);
 
             const { JsonStore } = await import('./storage/json-store.js');
@@ -516,7 +516,7 @@ async function startRepl(options: Record<string, unknown>) {
   });
 
   const synth = await loadConfig({ configPath: options.config as string });
-  const dataDir = (options['data-dir'] as string) || resolveDataDir(synth);
+  const dataDir = resolve((options['data-dir'] as string) || resolveDataDir(synth));
   await ensureDataDir(dataDir);
 
   const { runSingleChat } = await import('./server/chat.js');
@@ -559,7 +559,7 @@ program
   .action(async (options) => {
     const { checkForUpdates } = await import('./update-checker.js');
     const synth = await loadConfig({});
-    const dataDir = options.dataDir || resolveDataDir(synth);
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
     const info = await checkForUpdates(dataDir);
@@ -619,7 +619,7 @@ program
       .option('--data-dir <path>', 'каталог данных')
       .action(async (options) => {
         const synth = await loadConfig({ configPath: options.config });
-        const dataDir = options.dataDir || resolveDataDir(synth);
+        const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
         const { FileStore } = await import('./storage/file-store.js');
@@ -654,7 +654,7 @@ program
       .option('--data-dir <path>', 'каталог данных')
       .action(async (sessionId, title, options) => {
         const synth = await loadConfig({ configPath: options.config });
-        const dataDir = options.dataDir || resolveDataDir(synth);
+        const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
         const { FileStore } = await import('./storage/file-store.js');
@@ -677,7 +677,7 @@ program
       .option('--data-dir <path>', 'каталог данных')
       .action(async (sessionId, options) => {
         const synth = await loadConfig({ configPath: options.config });
-        const dataDir = options.dataDir || resolveDataDir(synth);
+        const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
         const { FileStore } = await import('./storage/file-store.js');
@@ -701,7 +701,7 @@ program
       .option('--data-dir <path>', 'каталог данных')
       .action(async (sessionId, options) => {
         const synth = await loadConfig({ configPath: options.config });
-        const dataDir = options.dataDir || resolveDataDir(synth);
+        const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
         const { FileStore } = await import('./storage/file-store.js');
@@ -737,7 +737,7 @@ program
       .option('--data-dir <path>', 'каталог данных')
       .action(async (arg, options) => {
         const synth = await loadConfig({ configPath: options.config });
-        const dataDir = options.dataDir || resolveDataDir(synth);
+        const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
         const { FileStore } = await import('./storage/file-store.js');
@@ -792,7 +792,7 @@ program
       .option('--data-dir <path>', 'каталог данных')
       .action(async (arg, options) => {
         const synth = await loadConfig({ configPath: options.config });
-        const dataDir = options.dataDir || resolveDataDir(synth);
+        const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
         const { FileStore } = await import('./storage/file-store.js');
@@ -858,7 +858,7 @@ program
   .option('--data-dir <path>', 'каталог данных')
   .action(async (options) => {
     const synth = await loadConfig({ configPath: options.config });
-    const dataDir = options.dataDir || resolveDataDir(synth);
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
     const logPath = synth.llmGateway.audit.logPath || join(dataDir, 'audit', 'llm-gateway.jsonl');

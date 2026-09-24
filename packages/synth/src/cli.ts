@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { createRequire } from 'node:module';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { createStandaloneApp } from '@itphx/synth-core/server/app.js';
@@ -313,7 +313,7 @@ projectCmd
   .option('--token <key>', 'API-ключ для аутентификации')
   .action(async (projectId, options) => {
     const synth = await loadConfig({ configPath: options.config });
-    const dataDir = (options.dataDir as string | undefined) || resolveDataDir(synth);
+    const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
     const { FileStore, SessionManager, ProjectStore } = await import('@itphx/synth-core');
@@ -378,7 +378,7 @@ projectCmd
   .option('--token <key>', 'API-ключ для аутентификации')
   .action(async (remoteProjectId, options) => {
     const synth = await loadConfig({ configPath: options.config });
-    const dataDir = (options.dataDir as string | undefined) || resolveDataDir(synth);
+    const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
     const { FileStore, SessionManager, ProjectStore } = await import('@itphx/synth-core');
@@ -463,7 +463,7 @@ providerCmd
   .option('--data-dir <path>', 'каталог данных')
   .action(async (options) => {
     const synth = await loadConfig({});
-    const dataDir = options.dataDir || resolveDataDir(synth);
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
     const store = new JsonStore<{
@@ -492,7 +492,7 @@ providerCmd
   .option('--data-dir <path>', 'каталог данных')
   .action(async (options) => {
     const synth = await loadConfig({});
-    const dataDir = options.dataDir || resolveDataDir(synth);
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
     const store = new JsonStore<{
@@ -515,7 +515,7 @@ providerCmd
   .option('--data-dir <path>', 'каталог данных')
   .action(async (name, options) => {
     const synth = await loadConfig({});
-    const dataDir = options.dataDir || resolveDataDir(synth);
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
     const store = new JsonStore<unknown>({ dataDir, subdir: 'providers' });
@@ -544,7 +544,7 @@ program
   .option('--data-dir <path>', 'каталог данных')
   .action(async (options) => {
     const synth = await loadConfig({ configPath: options.config });
-    const dataDir = options.dataDir || resolveDataDir(synth);
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
     const logPath = synth.llmGateway.audit.logPath || join(dataDir, 'audit', 'llm-gateway.jsonl');

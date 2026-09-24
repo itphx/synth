@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { isAbsolute, resolve as resolvePath } from 'node:path';
-import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy } from './resolve.js';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
+import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, ensureFirstRun } from './resolve.js';
 import { defaultConfig } from './defaults.js';
 import type { SynthConfig } from './types.js';
 
@@ -198,3 +201,36 @@ describe('resolveWorkspaceOutsideRootPolicy (AD-075)', () => {
 // Функциональные тесты для ensureDataDir и createDefaultConfig
 // require доступа к реальной ФС, поэтому используют настоящие mkdir/writeFile
 // или оставлены интеграционными (ручной запуск с tmp).
+
+describe('ensureFirstRun (AD-075: нормализация относительного --data-dir)', () => {
+  let dir: string | null = null;
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    if (dir) {
+      await rm(dir, { recursive: true, force: true });
+      dir = null;
+    }
+  });
+
+  it('относительный dataDirOverride → абсолютный dataDir (запись в tmp)', async () => {
+    vi.stubEnv('SYNTH_DEPLOY_MODE', 'dev');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    dir = await mkdtemp(join(tmpdir(), 'synth-firstrun-'));
+    // Относительный путь, лексически указывающий на временный каталог,
+    // чтобы ensureDataDir не создавал подкаталоги в рабочем/домашнем каталоге.
+    const dataDirOverride = relative(process.cwd(), dir);
+    const configPathOverride = join(dir, 'config.yaml');
+
+    const result = await ensureFirstRun(dataDirOverride, configPathOverride);
+
+    expect(isAbsolute(dataDirOverride)).toBe(false);
+    expect(isAbsolute(result.dataDir)).toBe(true);
+    expect(result.dataDir).toBe(resolvePath(dataDirOverride));
+    expect(result.dataDir).toBe(dir);
+    // ensureDataDir отработал по абсолютизированному пути — подкаталоги в tmp.
+    expect(existsSync(join(dir, 'sessions'))).toBe(true);
+  });
+});
