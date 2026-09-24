@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspaceOutsideRootPolicy } from './resolve.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { isAbsolute, resolve as resolvePath } from 'node:path';
+import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy } from './resolve.js';
 import { defaultConfig } from './defaults.js';
 import type { SynthConfig } from './types.js';
 
@@ -30,6 +31,20 @@ describe('resolveDataDir', () => {
   it('приоритет process.env.SYNTH_DATA_DIR если env не передан', () => {
     vi.stubEnv('SYNTH_DATA_DIR', '/from/process');
     expect(resolveDataDir(cfg)).toBe('/from/process');
+  });
+
+  it('регрессия (AD-075): относительный env.SYNTH_DATA_DIR → абсолютный', () => {
+    const env = { SYNTH_DATA_DIR: 'rel/data' };
+    const result = resolveDataDir(cfg, env);
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/data'));
+  });
+
+  it('регрессия (AD-075): относительный config.storage.dataDir → абсолютный', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, dataDir: 'rel/cfg-data' } };
+    const result = resolveDataDir(c, {});
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/cfg-data'));
   });
 });
 
@@ -92,6 +107,61 @@ describe('resolveDefaultWorkspace', () => {
   it('НЕ читает реальный process.env, если передан env', () => {
     vi.stubEnv('SYNTH_DEFAULT_WORKSPACE', '/should-not-be-used');
     expect(resolveDefaultWorkspace(cfg, {})).toBe('/test/data/workspaces/default');
+  });
+
+  it('регрессия (AD-075): относительный env.SYNTH_DEFAULT_WORKSPACE → абсолютный', () => {
+    const result = resolveDefaultWorkspace(cfg, { SYNTH_DEFAULT_WORKSPACE: 'rel/def' });
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/def'));
+  });
+
+  it('регрессия (AD-075): относительный config.storage.defaultWorkspace → абсолютный', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, defaultWorkspace: 'rel/cfg-def' } };
+    const result = resolveDefaultWorkspace(c, {});
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/cfg-def'));
+  });
+
+  it('регрессия (AD-075): относительный env.SYNTH_DATA_DIR → абсолютный default', () => {
+    const result = resolveDefaultWorkspace(cfg, { SYNTH_DATA_DIR: 'rel/data' });
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/data/workspaces/default'));
+  });
+});
+
+describe('resolveWorkspacesRoot (AD-075: регрессия относительных путей)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('абсолютный env.SYNTH_WORKSPACES_ROOT → как есть', () => {
+    expect(resolveWorkspacesRoot(cfg, { SYNTH_WORKSPACES_ROOT: '/abs/ws' })).toBe('/abs/ws');
+  });
+
+  it('относительный env.SYNTH_WORKSPACES_ROOT → абсолютный', () => {
+    const result = resolveWorkspacesRoot(cfg, { SYNTH_WORKSPACES_ROOT: 'rel/ws' });
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/ws'));
+  });
+
+  it('относительный config.storage.workspacesRoot → абсолютный', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, workspacesRoot: 'rel/cfg-ws' } };
+    const result = resolveWorkspacesRoot(c, {});
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/cfg-ws'));
+  });
+
+  it('относительный env.SYNTH_DATA_DIR → абсолютный fallback', () => {
+    const result = resolveWorkspacesRoot(cfg, { SYNTH_DATA_DIR: 'rel/data' });
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/data/workspaces'));
+  });
+
+  it('относительный config.storage.dataDir → абсолютный fallback', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, dataDir: 'rel/cfg-data' } };
+    const result = resolveWorkspacesRoot(c, {});
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/cfg-data/workspaces'));
   });
 });
 

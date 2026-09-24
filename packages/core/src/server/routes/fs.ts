@@ -115,10 +115,12 @@ export function createFsRoutes(
   const app = new Hono();
   // Legacy-корень: как раньше (fallback process.cwd()), чтобы не менять поведение
   // существующих эндпоинтов при вызове фабрики без root.
-  const root = workspacesRoot || process.cwd();
+  // AD-075: нормализуем к абсолютному — иначе containment не работает при
+  // относительном корне из конфига/env.
+  const root = resolve(workspacesRoot || process.cwd());
   // AD-075: новые `/workspace-root*` работают только с явно настроенным корнем —
   // process.cwd() как fallback здесь запрещён (см. workspacesRootOrError).
-  const configuredRoot = workspacesRoot && workspacesRoot.trim() ? workspacesRoot : undefined;
+  const configuredRoot = workspacesRoot && workspacesRoot.trim() ? resolve(workspacesRoot) : undefined;
   const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
   const outsideRootPolicy = (): WorkspaceOutsideRootPolicy => opts.getOutsideRootPolicy?.() ?? 'confirm';
   const protectedPaths = (): ProtectedPathsPolicy =>

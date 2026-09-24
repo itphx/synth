@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, stat } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import type { WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
@@ -142,6 +142,40 @@ describe('FS workspace-root routes (AD-075)', () => {
     });
     expect(res.status).toBe(201);
     expect((await stat(join(workspacesRoot, 'new-proj'))).isDirectory()).toBe(true);
+  });
+
+  it('регрессия (AD-075): mkdir внутри относительного root → 201, а не 409', async () => {
+    // Относительный root, как при SYNTH_DATA_DIR=tmp/... — до фикса containment
+    // сравнивал относительный root с абсолютным target и давал 409.
+    const relRoot = relative(process.cwd(), workspacesRoot);
+    expect(relRoot.startsWith('/')).toBe(false);
+
+    const res = await makeApp('confirm', NO_PROTECTED, relRoot).request('/api/v2/fs/workspace-root/mkdir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'rel-sub' }),
+    });
+    expect(res.status).toBe(201);
+    expect((await stat(join(workspacesRoot, 'rel-sub'))).isDirectory()).toBe(true);
+  });
+
+  it('регрессия (AD-075): относительный root + traversal `..` при deny → 403', async () => {
+    const relRoot = relative(process.cwd(), workspacesRoot);
+    const res = await makeApp('deny', NO_PROTECTED, relRoot)
+      .request('/api/v2/fs/workspace-root/browse?path=..');
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('WORKSPACE_OUTSIDE_ROOT_DENIED');
+  });
+
+  it('регрессия (AD-075): относительный root + абсолютный путь вне root при deny → 403', async () => {
+    const relRoot = relative(process.cwd(), workspacesRoot);
+    const res = await makeApp('deny', NO_PROTECTED, relRoot).request(
+      `/api/v2/fs/workspace-root/browse?path=${encodeURIComponent(outsideDir)}`,
+    );
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('WORKSPACE_OUTSIDE_ROOT_DENIED');
   });
 
   it('mkdir вне root (confirm без флага) → 409, каталог не создаётся', async () => {

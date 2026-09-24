@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { dump as dumpYaml } from 'js-yaml';
 import type { SynthConfig } from './types.js';
 import type { WorkspaceOutsideRootPolicy } from '../types/index.js';
@@ -51,11 +51,13 @@ export function resolveDataDir(
   config: SynthConfig,
   env?: NodeJS.ProcessEnv,
 ): string {
+  // AD-075: нормализуем к абсолютному пути — относительный dataDir ломает
+  // containment-проверки FS (root остаётся относительным, target — абсолютным).
   const envVar = (env ?? process.env).SYNTH_DATA_DIR;
-  if (envVar) return envVar;
+  if (envVar) return resolve(envVar);
 
   if (config.storage.dataDir && config.storage.dataDir !== defaultConfig.storage.dataDir) {
-    return config.storage.dataDir;
+    return resolve(config.storage.dataDir);
   }
 
   const mode = resolveDeployMode();
@@ -159,16 +161,16 @@ export function resolvePort(
 
 export function resolveWorkspacesRoot(config: SynthConfig, env?: NodeJS.ProcessEnv): string {
   const envVal = (env ?? process.env).SYNTH_WORKSPACES_ROOT;
-  if (envVal) return envVal;
-  if (config.storage.workspacesRoot) return config.storage.workspacesRoot;
+  if (envVal) return resolve(envVal);
+  if (config.storage.workspacesRoot) return resolve(config.storage.workspacesRoot);
   const dataDir = resolveDataDir(config, env);
   return `${dataDir}/workspaces`;
 }
 
 export function resolveDefaultWorkspace(config: SynthConfig, env?: NodeJS.ProcessEnv): string {
   const envVal = (env ?? process.env).SYNTH_DEFAULT_WORKSPACE;
-  if (envVal) return envVal;
-  if (config.storage.defaultWorkspace) return config.storage.defaultWorkspace;
+  if (envVal) return resolve(envVal);
+  if (config.storage.defaultWorkspace) return resolve(config.storage.defaultWorkspace);
   const dataDir = resolveDataDir(config, env);
   return join(dataDir, 'workspaces', 'default');
 }

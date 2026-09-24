@@ -13,10 +13,16 @@ export type WorkspacePathValidation =
   | { ok: false; status: 400 | 403; code: string; message: string };
 
 export class WorkspaceResolver {
+  private workspaceRoot: string;
+
   constructor(
-    private workspaceRoot: string,
+    workspaceRoot: string,
     private getProject: (projectId: string) => Promise<{ workspace?: string } | null>,
-  ) {}
+  ) {
+    // AD-075: нормализуем к абсолютному — относительный root ломает containment
+    // (`relative`/`startsWith` дают ложный «вне root» для абсолютного target).
+    this.workspaceRoot = resolve(workspaceRoot);
+  }
 
   getWorkspaceRoot(): string {
     return this.workspaceRoot;

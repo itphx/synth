@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { join, resolve } from 'node:path';
+import { join, isAbsolute, resolve } from 'node:path';
 import { WorkspaceResolver } from './workspace-resolver.js';
 
 const ROOT = resolve('/srv/synth/data/workspaces');
@@ -47,5 +47,28 @@ describe('WorkspaceResolver.validateWorkspacePath (AD-075)', () => {
   it('пустой путь → 400', () => {
     const res = makeResolver().validateWorkspacePath('   ');
     expect(res).toMatchObject({ ok: false, status: 400, code: 'VALIDATION_ERROR' });
+  });
+});
+
+describe('WorkspaceResolver: относительный root (регрессия AD-075)', () => {
+  it('конструктор нормализует относительный root → абсолютный', () => {
+    const r = new WorkspaceResolver('rel/ws', async () => null);
+    expect(isAbsolute(r.getWorkspaceRoot())).toBe(true);
+    expect(r.getWorkspaceRoot()).toBe(resolve('rel/ws'));
+  });
+
+  it('validateWorkspacePath: относительный путь внутри относительного root → ok', () => {
+    const r = new WorkspaceResolver('rel/ws', async () => null);
+    expect(r.validateWorkspacePath('proj')).toEqual({ ok: true, workspace: 'proj' });
+  });
+
+  it('resolveRootPath: относительный путь внутри root не бросает', () => {
+    const r = new WorkspaceResolver('rel/ws', async () => null);
+    expect(r.resolveRootPath('proj')).toBe(resolve('rel/ws', 'proj'));
+  });
+
+  it('resolveRootPath: абсолютный путь вне относительного root → PATH_TRAVERSAL/denied', () => {
+    const r = new WorkspaceResolver('rel/ws', async () => null);
+    expect(() => r.resolveRootPath('/etc')).toThrow();
   });
 });
