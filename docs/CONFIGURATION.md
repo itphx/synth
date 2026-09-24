@@ -254,6 +254,32 @@ inline shell в шаблонных командах и удалёнными ка
   инструкция по созданию проектного скилла в `{project.workspace}/.synth/skills`;
   доступен как `/skill-creator` (требует `file_read`/`file_write`).
 
+### Проектные инструкции (`instructions.*`, AD-069)
+
+Автозагрузка репозиторных `AGENTS.md` в системный промпт (блок `[PROJECT INSTRUCTIONS]`, тир `context`):
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `instructions.enabled` | Глобальный тумблер автозагрузки | `true` |
+| `instructions.claudeCompat` | Читать `CLAUDE.md`, если нет `AGENTS.md` | `true` |
+| `instructions.contextCompat` | Читать deprecated `CONTEXT.md` | `false` |
+| `instructions.windowRatio` / `minChars` / `maxCharsCeiling` | Динамический кап от окна модели (`clamp(ratio*window, min, ceiling)`) | `0.06` / `20000` / `500000` |
+| `instructions.maxChars` | Явный override капа (отключает динамику) | — |
+| `instructions.headRatio` / `tailRatio` | Доли head/tail при обрезке | `0.7` / `0.2` |
+| `instructions.lazy.{enabled,maxAncestors,maxChars,excludeDirs}` | Lazy-догрузка вложенных инструкций в tool-result | `true` / `5` / `8000` / `[node_modules,.git,…]` |
+| `instructions.fetch.{timeoutMs,cacheTtlSec,maxBytes}` | Политика fetch URL-источников | `5000` / `3600` / `262144` |
+| `instructions.sources` | Доп. источники `{ kind: path\|url, value, position: before\|after, label?, ttlSec? }` | `[]` |
+| `instructions.excludeProjects` | Проекты, где автозагрузка выключена | `[]` |
+| `instructions.allowInstallTreeFallback` | Грузить инструкции внутри дерева исходников Synth | `false` |
+
+- Discovery: цепочка `git root → … → workspace` (глубже = приоритетнее), на каталог `AGENTS.override.md` > `AGENTS.md` > `agents.md` > `CLAUDE.md` > `CONTEXT.md`; дедуп sha256.
+- Каждый блок проходит **threat-scan** (AD-036): `block` — не грузится, `flag` — с WARN-строкой.
+- **Project-trust:** инструкции недоверенного проекта (нет в `skills.trustedProjectDirs`) не грузятся (статус `untrusted`).
+- **Install-tree guard:** внутри дерева исходников Synth инструкции не грузятся (статус `skipped-install-tree`), кроме `allowInstallTreeFallback: true`.
+- Отключение: `instructions.enabled=false`, `excludeProjects`, CLI `--ignore-rules`/`--safe-mode`, а также `session.settings.systemPrompt` override.
+- Прозрачность: `GET /api/v2/context/instructions?session_id=…` и событие `context.instructions_loaded`; UI — секция «Проектные инструкции» в правой панели (вкладка «Сессия»).
+- `/init` — builtin-команда (статус `prompt`), генерирует/обновляет `AGENTS.md`; скилл `synth-agents-md` (`/agents-md`) — аудит/обновление инструкций.
+
 ### Slash-команды (`commands.*`, AD-046 §7)
 
 Резолвинг `/`-команд выполняется в core. Секция `commands`:
@@ -267,7 +293,7 @@ inline shell в шаблонных командах и удалёнными ка
 | `commands.maxArgumentsLength` | Лимит `$ARGUMENTS` | `10000` |
 | `commands.maxRenderedBytes` | Лимит рендера шаблона/агрегата bundle | `200000` |
 
-Источники шаблонных команд (приоритет): `{project.workspace}/.synth/commands` > `{dataDir}/commands` > `commands.paths`. Встроенные команды Фазы 2 — `/help`, `/skills`, `/commands`, `/summary` (`/compact`, `/review` отложены). `allowed-tools` во frontmatter — advisory (в права не транслируется).
+Источники шаблонных команд (приоритет): `{project.workspace}/.synth/commands` > `{dataDir}/commands` > `commands.paths`. Встроенные команды — `/help`, `/skills`, `/commands`, `/summary`, `/init` (AD-069; `/compact`, `/review` отложены). Скилловые команды — `/skill-creator`, `/agents-md` (builtin-скиллы). `allowed-tools` во frontmatter — advisory (в права не транслируется).
 
 ### Группы тулов для скиллов (`skills.toolsets`)
 
