@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { createRequire } from 'node:module';
 import { join, dirname, resolve } from 'node:path';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveSecretKey, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { createStandaloneApp } from '@itphx/synth-core/server/app.js';
 import { runSingleChat } from '@itphx/synth-core/server/chat.js';
@@ -588,6 +588,60 @@ program
       );
     }
   });
+
+program
+  .command('secrets')
+  .description('Управление секретами шифрования (AD-076)')
+  .addCommand(
+    new Command('rotate')
+      .description('Перешифровать SSH-ключи новым мастер-ключом (one-shot)')
+      .option('--data-dir <path>', 'каталог данных')
+      .option('--config <path>', 'путь к config.yaml')
+      .option('--old-key <key>', 'явный старый мастер-ключ (base64 32Б / hex 64)')
+      .option('--old-key-file <path>', 'файл со старым мастер-ключом')
+      .option('--new-key <key>', 'явный новый мастер-ключ (по умолчанию — сгенерировать)')
+      .option('--new-key-file <path>', 'файл с новым мастер-ключом')
+      .option('--dry-run', 'предпросмотр без записи')
+      .option('--yes', 'подтвердить необратимую операцию (обязательно без --dry-run)')
+      .action(async (options) => {
+        const synth = await loadConfig({ configPath: options.config });
+        const dataDir = resolve(options.dataDir || resolveDataDir(synth));
+        const dryRun = !!options.dryRun;
+
+        if (!dryRun && !options.yes) {
+          console.error(
+            'Ошибка: ротация мастер-ключа необратима. Повторите с --yes либо используйте --dry-run для предпросмотра.',
+          );
+          process.exit(1);
+        }
+
+        try {
+          const { rotateSecretsMasterKey } = await import('@itphx/synth-core');
+          const result = await rotateSecretsMasterKey({
+            dataDir,
+            oldKey: options.oldKey,
+            oldKeyFile: options.oldKeyFile,
+            newKey: options.newKey,
+            newKeyFile: options.newKeyFile,
+            secretKey: resolveSecretKey(synth, process.env),
+            env: process.env,
+            dryRun,
+          });
+
+          console.log(`${dryRun ? '[dry-run] ' : ''}Ротация мастер-ключа SSH-ключей (${dataDir})`);
+          console.log(`  всего записей: ${result.total}`);
+          console.log(`  перешифровано: ${result.rotated}`);
+          console.log(`  апгрейд plaintext: ${result.upgraded}`);
+          console.log(`  пропущено (уже новый ключ): ${result.skipped}`);
+          if (result.ids.length > 0) console.log(`  id: ${result.ids.join(', ')}`);
+          for (const warning of result.warnings) console.warn(`  Предупреждение: ${warning}`);
+          if (dryRun) console.log('  (dry-run: изменения не записаны)');
+        } catch (err) {
+          console.error(`Ошибка ротации: ${err instanceof Error ? err.message : String(err)}`);
+          process.exit(1);
+        }
+      }),
+  );
 
 program.action(async () => {
   await startRepl({});

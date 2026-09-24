@@ -111,7 +111,20 @@ export type {
   MasterKeyResult,
 } from './security/crypto.js';
 export { SSHKeyStore, SSHKeyStoreError } from './storage/ssh-key-store.js';
-export type { SSHKeyStoreConfig, SSHKeyStoreErrorCode } from './storage/ssh-key-store.js';
+export type {
+  SSHKeyStoreConfig,
+  SSHKeyStoreErrorCode,
+  RotateMasterKeyOptions,
+  RotateMasterKeyResult,
+} from './storage/ssh-key-store.js';
+// AD-076: one-shot ротация мастер-ключа секретов (SSH-ключи).
+export { rotateSecretsMasterKey, MasterKeyRotationError } from './security/rotate.js';
+export type {
+  RotateSecretsMasterKeyOptions,
+  RotateSecretsMasterKeyResult,
+  MasterKeyRotationErrorCode,
+  MasterKeySource,
+} from './security/rotate.js';
 // AD-076 §T3: git-сервис ядра, SSH-окружение и фабрика git-роутов.
 export { GitService, resolveRepoPath, deriveRepoName } from './git/git-service.js';
 export type { GitEnvOptions, GitFetchOptions } from './git/git-service.js';

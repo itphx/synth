@@ -4,8 +4,10 @@ import { AsyncLock, nowISO } from '@itphx/synth-shared';
 import { JsonStore } from './json-store.js';
 import {
   CryptoError,
+  MASTER_KEY_LENGTH,
   decryptSecret,
   encryptSecret,
+  isEncrypted,
   resolveMasterKey,
 } from '../security/crypto.js';
 
@@ -24,7 +26,28 @@ export type SSHKeyStoreErrorCode =
   | 'name_exists'
   | 'decrypt_failed'
   | 'encryption_unavailable'
-  | 'invalid';
+  | 'invalid'
+  | 'preflight_failed';
+
+/** Результат `rotateMasterKey`: счётчики записей и id изменённых. */
+export interface RotateMasterKeyResult {
+  /** Всего записей в хранилище. */
+  total: number;
+  /** Записей, где хотя бы одно поле перешифровано старым→новым ключом. */
+  rotated: number;
+  /** Записей, где plaintext-поле зашифровано новым ключом («апгрейд»). */
+  upgraded: number;
+  /** Записей, уже зашифрованных новым ключом (ничего не изменено). */
+  skipped: number;
+  /** id записей, которые были бы/были изменены (rotated + upgraded). */
+  ids: string[];
+}
+
+/** Опции `rotateMasterKey`. */
+export interface RotateMasterKeyOptions {
+  /** Предпросмотр: счётчики считаются, записи не сохраняются. */
+  dryRun?: boolean;
+}
 
 /**
  * Типизированная ошибка store, которую роуты маппят в i18n-ключи:
@@ -70,6 +93,85 @@ export class SSHKeyStore {
   async list(): Promise<SSHKeyMeta[]> {
     const records = await this._store.list();
     return records.map(toMeta).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Сырые записи, ВКЛЮЧАЯ зашифрованные `privateKey`/`passphrase`.
+   *
+   * ТОЛЬКО для админских операций хранилища (например, ротация мастер-ключа).
+   * НЕ отдавать через HTTP API и не использовать в обычных путях чтения —
+   * для внешнего доступа предназначены `list()`/`get()`/`reveal()`.
+   */
+  async listRaw(): Promise<SSHKey[]> {
+    return this._store.list();
+  }
+
+  /**
+   * Ротация мастер-ключа (AD-076, one-shot).
+   *
+   * Для каждой записи: preflight — каждое зашифрованное поле должно
+   * расшифровываться НОВЫМ либо СТАРЫМ ключом; иначе операция прерывается
+   * (`preflight_failed` со списком id) и ничего не записывается. Далее поля
+   * перешифровываются старым→новым (идемпотентно: уже новые — `skipped`),
+   * plaintext-поля «апгрейдятся» новым ключом. Запись — атомарно через
+   * `JsonStore.save`. `dryRun` — без сохранения.
+   */
+  async rotateMasterKey(
+    oldKey: Buffer,
+    newKey: Buffer,
+    opts: RotateMasterKeyOptions = {},
+  ): Promise<RotateMasterKeyResult> {
+    if (oldKey.length !== MASTER_KEY_LENGTH || newKey.length !== MASTER_KEY_LENGTH) {
+      throw new SSHKeyStoreError('invalid', 'Мастер-ключ должен быть 32 байта');
+    }
+
+    await this._writeLock.acquire();
+    try {
+      const records = await this._store.list();
+      const failures = new Set<string>();
+      const planned: Array<{
+        record: SSHKey;
+        changed: boolean;
+        kind: 'rotated' | 'upgraded' | 'skipped';
+      }> = [];
+
+      // Preflight: планируем все изменения в памяти, ничего не записывая.
+      for (const record of records) {
+        const item = planRecordRotation(record, oldKey, newKey, failures);
+        if (item) planned.push(item);
+      }
+
+      if (failures.size > 0) {
+        throw new SSHKeyStoreError(
+          'preflight_failed',
+          `Не удалось расшифровать SSH-ключи (ни старым, ни новым ключом): ${[...failures].sort().join(', ')}`,
+        );
+      }
+
+      let rotated = 0;
+      let upgraded = 0;
+      let skipped = 0;
+      const ids: string[] = [];
+
+      for (const item of planned) {
+        if (item.kind === 'rotated') {
+          rotated += 1;
+          ids.push(item.record.id);
+        } else if (item.kind === 'upgraded') {
+          upgraded += 1;
+          ids.push(item.record.id);
+        } else {
+          skipped += 1;
+        }
+        if (item.changed && !opts.dryRun) {
+          await this._store.save(item.record.id, item.record);
+        }
+      }
+
+      return { total: records.length, rotated, upgraded, skipped, ids };
+    } finally {
+      this._writeLock.release();
+    }
   }
 
   /** Публичные метаданные ключей, привязанных к агенту. */
@@ -251,4 +353,63 @@ function mapCryptoError(err: unknown): SSHKeyStoreError {
     );
   }
   return new SSHKeyStoreError('decrypt_failed', 'Не удалось расшифровать секрет');
+}
+
+type FieldRotation =
+  | { value: string; kind: 'rotated' | 'upgraded' | 'unchanged' }
+  | { invalid: true };
+
+/**
+ * Перешифровывает одно поле: plaintext → шифр новым ключом (upgraded);
+ * уже новый шифр → без изменений; старый шифр → расшифровать старым и
+ * зашифровать новым (rotated); иначе — invalid (preflight-failure).
+ */
+function rotateToken(token: string, oldKey: Buffer, newKey: Buffer): FieldRotation {
+  if (!isEncrypted(token)) {
+    return { value: encryptSecret(token, newKey), kind: 'upgraded' };
+  }
+  try {
+    decryptSecret(token, newKey);
+    return { value: token, kind: 'unchanged' };
+  } catch {
+    // Не расшифровывается новым — пробуем старым.
+  }
+  try {
+    const plaintext = decryptSecret(token, oldKey);
+    return { value: encryptSecret(plaintext, newKey), kind: 'rotated' };
+  } catch {
+    return { invalid: true };
+  }
+}
+
+/** Планирует ротацию одной записи; при нерасшифровываемом поле пишет id в `failures`. */
+function planRecordRotation(
+  record: SSHKey,
+  oldKey: Buffer,
+  newKey: Buffer,
+  failures: Set<string>,
+): { record: SSHKey; changed: boolean; kind: 'rotated' | 'upgraded' | 'skipped' } | null {
+  const next: SSHKey = { ...record };
+  let rotated = false;
+  let upgraded = false;
+
+  const fields: Array<'privateKey' | 'passphrase'> = ['privateKey', 'passphrase'];
+  for (const field of fields) {
+    const token = record[field];
+    if (token === undefined) continue;
+    const result = rotateToken(token, oldKey, newKey);
+    if ('invalid' in result) {
+      failures.add(record.id);
+      return null;
+    }
+    if (result.kind === 'unchanged') continue;
+    if (field === 'privateKey') next.privateKey = result.value;
+    else next.passphrase = result.value;
+    if (result.kind === 'rotated') rotated = true;
+    else upgraded = true;
+  }
+
+  if (rotated) return { record: next, changed: true, kind: 'rotated' };
+  if (upgraded) return { record: next, changed: true, kind: 'upgraded' };
+  return { record: next, changed: false, kind: 'skipped' };
 }

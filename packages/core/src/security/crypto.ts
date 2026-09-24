@@ -110,6 +110,23 @@ export function clearMasterKeyCache(): void {
   masterKeyCache.clear();
 }
 
+/** Путь к файлу мастер-ключа для `dataDir` (`{dataDir}/secrets/master.key`). */
+export function masterKeyFilePath(dataDir: string): string {
+  return join(dataDir, SECRETS_DIRNAME, MASTER_KEY_FILENAME);
+}
+
+/**
+ * Читает мастер-ключ из файла БЕЗ генерации: `null`, если файла нет или он пуст.
+ *
+ * Для ротации мастер-ключа (AD-076) это важно: `resolveMasterKey` при отсутствии
+ * файла создаёт новый ключ, что недопустимо при попытке прочитать *старый* ключ.
+ */
+export async function readMasterKeyFile(dataDir: string): Promise<Buffer | null> {
+  const raw = await readFile(masterKeyFilePath(dataDir), 'utf-8').catch(() => null);
+  if (!raw || !raw.trim()) return null;
+  return decodeMasterKey(raw);
+}
+
 /**
  * Резолвит мастер-ключ шифрования секретов.
  *
@@ -142,12 +159,12 @@ async function resolveMasterKeyUncached(
   }
 
   const dir = join(opts.dataDir, SECRETS_DIRNAME);
-  const filePath = join(dir, MASTER_KEY_FILENAME);
-  const existing = await readFile(filePath, 'utf-8').catch(() => null);
+  const filePath = masterKeyFilePath(opts.dataDir);
+  const existingKey = await readMasterKeyFile(opts.dataDir);
 
   let key: Buffer;
-  if (existing && existing.trim()) {
-    key = decodeMasterKey(existing);
+  if (existingKey) {
+    key = existingKey;
   } else {
     key = randomBytes(MASTER_KEY_LENGTH);
     await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -170,7 +187,8 @@ function assertMasterKey(key: Buffer): void {
   }
 }
 
-function decodeMasterKey(raw: string): Buffer {
+/** Декодирует материал мастер-ключа: base64 (ровно 32 Б) либо hex (64). */
+export function decodeMasterKey(raw: string): Buffer {
   const value = raw.trim();
   if (/^[0-9a-fA-F]{64}$/.test(value)) {
     return Buffer.from(value, 'hex');
