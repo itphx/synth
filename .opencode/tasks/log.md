@@ -915,3 +915,14 @@
 - **Ветка:** `feat/ad-075-workspace-provisioning` (D5 — `7cebeda`; остальное — в рабочем каталоге, не закоммичено).
 - **Docs:** `docs/DEVELOPMENT.md` — раздел `standalone.sh`; `AGENTS.md` — строка в блоке команд; `docs/arch_decisions/ad-075-*.md` — §8.
 - **Дальше:** AD-074/AD-076/AD-077.
+
+## 2026-09-24 (продолжение) — AD-075: закрытие хвостов (CLI data-dir, tool-level RBAC) — PASS
+- **Задача:** закрыть два остаточных хвоста AD-075: относительный `--data-dir` и отсутствие проверки прав при записи проектных данных из core-тулов.
+- **Тип:** bug fix (security/paths) · **Результат:** PASS.
+- **`58f6934` — нормализация `--data-dir` на CLI-границах:** `ensureFirstRun` (shared) и все обработчики `options.dataDir`/`options['data-dir']` в `packages/synth/src/cli.ts` и `packages/core/src/main.ts` оборачивают путь в `path.resolve` → относительный `--data-dir` больше не даёт относительный `dataDir`/`workspacesRoot`, containment AD-075 не ломается. Тест в `resolve.test.ts` (`ensureFirstRun` relative → absolute).
+- **`cae2f92` — RBAC на запись проектных данных из core-тулов:** новый `packages/core/src/engine/tools/project-access.ts` (`resolveSessionUserId`, `canEditProject`); `project_invariants_write`/`project_log_write` пишут только при owner/EDITOR (`project.ownerId` или `members[userId] ∈ {OWNER, EDITOR}`), иначе — `isError` `project.write_forbidden`, проект не меняется. Неидентифицируемый контекст (нет `userId` и пустой `ownerId`) — back-compat разрешён. `plan_write` намеренно не гейтится (комментарий/TODO в `plan.ts`) — строгий гейт ломает план-воркфлоу на неатрибутированных сессиях; остаточный риск зафиксирован.
+- **Ограничение:** глобальные LEAD/ADMIN в core недоступны (роли — backend) — их носители не изменят `invariants`/`log` через чат, но могут через UI/API.
+- **Тесты:** shared 133 · core 2052 · ui 754 · backend 361; typecheck/lint зелёные. Известный флейк — `task-resume`.
+- **Ветка:** `feat/ad-075-workspace-provisioning` (коммиты `58f6934`, `cae2f92`; документация — не закоммичена).
+- **Docs:** `docs/arch_decisions/ad-075-*.md` — §9 + остаточные риски; `docs/API_V2.md` — tool-level RBAC в §5.8.
+- **Дальше:** AD-074/AD-076/AD-077.

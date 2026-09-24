@@ -97,12 +97,19 @@
 
 - shared 122, core 2043, backend 350, ui 750; `typecheck` и `lint` (0 errors) — зелёные.
 - По завершении доработок (см. §8): shared 132, core 2046, ui 754, backend 361 — зелёные.
+- После закрытия хвостов (см. §9): shared 133, core 2052, ui 754, backend 361 — зелёные (известный флейк `task-resume`).
 
 ### 8. Standalone-скрипт и доработки
 
 - **`scripts/standalone.sh`** — запуск Synth «как у конечного пользователя» (сборка `shared → core → ui → synth`, `pnpm pack`, установка четырёх `.tgz` в изолированный prefix, `synth serve`), в т.ч. режим `--check` со smoke (`/health`, `POST /projects` + каталог workspace, `/fs/workspace-root`, `/settings/workspace-policy`). Используется для ручной проверки standalone-UI (AD-075).
 - **Навигация за корень в `DirectoryPickerDialog`**: при политике `confirm` (и не read-only) кнопка «Вверх» выходит за `workspacesRoot` с подсказкой «Вне рабочего корня»; выбор каталога вне корня — через отдельное подтверждение (ConfirmDialog), после чего workspace сохраняется как абсолютный.
 - **Фикс абсолютизации путей конфигурации**: `resolve.ts` нормализует `dataDir`/`workspacesRoot`/`defaultWorkspace` к абсолютным путям; core FS (`createFsRoutes`) и backend `WorkspaceResolver` дополнительно нормализуют root — относительный `dataDir` больше не ломает containment-проверки (root оставался относительным, target — абсолютным).
+
+### 9. CLI-пути и tool-level RBAC
+
+- **Нормализация `--data-dir` на CLI-границах**: `ensureFirstRun` (shared) и все обработчики `options.dataDir`/`options['data-dir']` в `packages/synth/src/cli.ts` и `packages/core/src/main.ts` оборачивают путь в `path.resolve` — относительный `--data-dir` больше не даёт относительный `dataDir`/`workspacesRoot`, containment AD-075 не ломается (тест в `resolve.test.ts`: `ensureFirstRun` relative → absolute).
+- **Tool-level RBAC на запись проектных данных**: новый `packages/core/src/engine/tools/project-access.ts` (`resolveSessionUserId`, `canEditProject`); `project_invariants_write` и `project_log_write` пишут, только если пользователь — `project.ownerId` или `members[userId] ∈ {OWNER, EDITOR}`; иначе — `isError` с ключом `project.write_forbidden`, проект не меняется. Неидентифицируемый контекст (нет `userId` и пустой `ownerId`) разрешён для обратной совместимости.
+- **Решение по `plan_write`**: гейт `canEditProject` намеренно **не** применён (комментарий/TODO в `plan.ts`) — строгая проверка ломает план-воркфлоу (`plan_enter → plan_write → plan_exit`) на синтетических/неатрибутированных сессиях; `project.plan` защищён на уровне HTTP (`PUT /api/v2/projects/:id`). Остаточный риск — в «Известных остатках».
 
 ## Решено (ранее открытые вопросы)
 
@@ -116,6 +123,8 @@
 - **D5 (горизонтальная авторизация projects) — ✅ реализовано 2026-09-24** (вне объёма AD-075, отдельной задачей; `packages/backend/src/routes/projects.ts`, хелперы `canManageProject`/`canEditProjectContent`; тесты `projects.test.ts`, +7 кейсов). Матрица прав (backend; проверки до мутаций, иначе `403 FORBIDDEN`):
   - `PUT /api/v2/projects/:id`: смена `workspace` — owner / LEAD / ADMIN; изменение контентных полей (`name`, `description`, `current_task`, `invariants`, `icon`, `color`, `repos`, `plan`) — owner / EDITOR / LEAD / ADMIN; VIEWER и посторонний → `403`.
   - `DELETE /api/v2/projects/:id`: только owner / LEAD / ADMIN; EDITOR / VIEWER / посторонний → `403`.
+- **Остаточный риск `plan_write` (TODO AD-075/D5):** изменение плана из чата не проверяет права редактора (см. «Реализация §9»); требуется гарантированная атрибуция сессий (`userId`/`ownerId`) и тесты ролей в `plan.test.ts`, после чего применить тот же гейт, что для `project_log_write`/`project_invariants_write`. До этого `project.plan` защищён только на уровне HTTP.
+- **Ограничение core-инструментов:** глобальные роли LEAD/ADMIN в core недоступны (роли — концерн backend), поэтому их носители не могут изменить `invariants`/`log` через чат (отказ `project.write_forbidden`), но могут через UI/API (backend RBAC).
 
 ## Зависимости
 
