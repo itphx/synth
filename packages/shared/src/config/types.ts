@@ -27,6 +27,12 @@ export const storageConfigSchema = z.object({
   workspacesRoot: z.string().default(''),
   /** Рабочий каталог по умолчанию для сессий без проекта. Резолвится от dataDir: {dataDir}/workspaces/default. */
   defaultWorkspace: z.string().default(''),
+  /**
+   * AD-075: политика для абсолютного `project.workspace` вне `workspacesRoot`
+   * (`confirm` — подтверждение, `deny` — запрет). `''` — не задано (эффективно
+   * `confirm`), читать через `resolveWorkspaceOutsideRootPolicy`.
+   */
+  workspaceOutsideRoot: z.enum(['confirm', 'deny']).or(z.literal('')).default(''),
 });
 
 export const authConfigSchema = z.object({

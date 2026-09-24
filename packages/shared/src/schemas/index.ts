@@ -99,6 +99,16 @@ export const projectMcpUpdateSchema = z.object({
   defaultOn: z.array(z.string()).optional(),
 });
 
+/**
+ * AD-075: тело `PUT /api/v2/settings/workspace-policy` — политика для
+ * абсолютного workspace вне `workspacesRoot`.
+ */
+export const workspacePolicySchema = z.object({
+  outsideRoot: z.enum(['confirm', 'deny']),
+});
+
+export type WorkspacePolicyRequest = z.infer<typeof workspacePolicySchema>;
+
 export const promptRequestSchema = z.object({
   messageId: z.string().optional(),
   content: z.string().min(1),
@@ -146,6 +156,25 @@ export const fsMkdirBodySchema = z.object({
 export const fsDownloadQuerySchema = z.object({
   project_id: z.string().min(1),
   path: z.string().min(1),
+});
+
+/**
+ * AD-075: запрос навигации по корню workspace (`GET /fs/workspace-root/browse`,
+ * `GET /fs/workspace-root`). `includeHidden` принимает строковые `true`/`false`
+ * (query-параметры) — `z.coerce.boolean()` не подходит, т.к. `'false'` → `true`.
+ */
+export const fsWorkspaceBrowseQuerySchema = z.object({
+  path: z.string().default(''),
+  includeHidden: z
+    .preprocess((v) => (v === 'true' ? true : v === 'false' ? false : v), z.boolean().optional())
+    .default(false),
+});
+
+/** AD-075: тело `POST /fs/workspace-root/mkdir` — создание каталога в корне workspace. */
+export const fsWorkspaceMkdirBodySchema = z.object({
+  path: z.string().min(1),
+  /** `confirm`-политика: явное подтверждение создания каталога вне `workspacesRoot`. */
+  confirmOutsideRoot: z.boolean().optional(),
 });
 
 // --- Git schemas ---
@@ -258,6 +287,8 @@ export type FsWriteBody = z.infer<typeof fsWriteBodySchema>;
 export type FsDeleteQuery = z.infer<typeof fsDeleteQuerySchema>;
 export type FsMkdirBody = z.infer<typeof fsMkdirBodySchema>;
 export type FsDownloadQuery = z.infer<typeof fsDownloadQuerySchema>;
+export type FsWorkspaceBrowseQuery = z.infer<typeof fsWorkspaceBrowseQuerySchema>;
+export type FsWorkspaceMkdirBody = z.infer<typeof fsWorkspaceMkdirBodySchema>;
 export type GitScanBody = z.infer<typeof gitScanBodySchema>;
 export type GitInitBody = z.infer<typeof gitInitBodySchema>;
 export type GitCloneBody = z.infer<typeof gitCloneBodySchema>;

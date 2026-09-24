@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest } from '@itphx/synth-shared';
+import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 
@@ -54,6 +54,11 @@ export interface RuntimeSettings {
   tokenRatios?: Record<string, number>;
   /** Агент по умолчанию (админка «Агенты»); отсутствие — `DEFAULT_AGENT_ID`. */
   defaultAgent?: string;
+  /**
+   * AD-075: политика для абсолютного workspace вне `workspacesRoot`
+   * (`confirm` | `deny`); отсутствие — значение из config.yaml/env.
+   */
+  workspacePolicy?: WorkspaceOutsideRootPolicy;
 }
 
 /**
@@ -365,6 +370,24 @@ export class RuntimeSettingsStore {
     await this._update((current) => {
       const next = { ...current };
       delete next.defaultAgent;
+      return next;
+    });
+  }
+
+  /** AD-075: runtime-политика workspace вне root (админка), undefined — не задана. */
+  async getWorkspacePolicy(): Promise<WorkspaceOutsideRootPolicy | undefined> {
+    const settings = await this.load();
+    return settings.workspacePolicy;
+  }
+
+  async setWorkspacePolicy(policy: WorkspaceOutsideRootPolicy): Promise<void> {
+    await this._update((current) => ({ ...current, workspacePolicy: policy }));
+  }
+
+  async clearWorkspacePolicy(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.workspacePolicy;
       return next;
     });
   }

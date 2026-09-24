@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
@@ -34,7 +34,7 @@ program
         port: parseInt(options.port, 10),
         apiKey: options.apiKey,
       },
-      storage: options.dataDir ? { dataDir: options.dataDir, workspacesRoot: '', defaultWorkspace: '' } : undefined,
+      storage: options.dataDir ? { dataDir: options.dataDir, workspacesRoot: '', defaultWorkspace: '', workspaceOutsideRoot: '' } : undefined,
     };
     if (options.connect) {
       // deepMerge на рантайме сольёт частичную секцию remote с defaultConfig; тип требует полный RemoteConfig.
@@ -99,6 +99,8 @@ program
       toolsPolicy: synth.tools.policy,
       mcpPolicy: synth.mcp?.policy,
       toolsDisabled: synth.tools.disabled,
+      // AD-075: политика для абсолютного workspace вне root (env > config > 'confirm').
+      workspaceOutsideRootPolicy: resolveWorkspaceOutsideRootPolicy(synth) || 'confirm',
       mcpServers: synth.mcp?.servers ?? {},
       // AD-046: конфигурация скиллов (paths/trustedProjectDirs/inlineShell).
       skillsConfig: synth.skills,

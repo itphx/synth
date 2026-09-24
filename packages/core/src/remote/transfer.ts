@@ -6,6 +6,7 @@
 
 import { readdir, readFile, stat, mkdir, writeFile } from 'node:fs/promises';
 import { join, dirname, basename, isAbsolute, normalize, resolve } from 'node:path';
+import { slugifyWorkspaceName } from '@itphx/synth-shared';
 import type { Project, Session, Message, SessionSettings } from '@itphx/synth-shared';
 import type { DirectoryListResult } from '@itphx/synth-shared';
 import type { ProjectStore } from '../storage/project-store.js';
@@ -15,16 +16,12 @@ import type { RemoteBackendClient } from './client.js';
 /** Каталоги, исключаемые из прямой синхронизации файлов. */
 export const EXCLUDED_DIRS = new Set(['node_modules', '.git', '.synth']);
 
-/** Преобразовать имя проекта в безопасное относительное имя workspace. */
-export function slugify(name: string): string {
-  const slug = (name || 'project')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/gi, '-')
-    .replace(/^-+|-+$/g, '')
-    .replace(/-+/g, '-');
-  return slug || 'project';
-}
+/**
+ * Преобразовать имя проекта в безопасное относительное имя workspace.
+ * AD-075: единая реализация — `slugifyWorkspaceName` (shared); имя сохранено
+ * для обратной совместимости публичного экспорта `remote/index.ts`.
+ */
+export const slugify = slugifyWorkspaceName;
 
 /** Резолв локального каталога workspace проекта (абсолютный — как есть, относительный — относительно workspacesRoot). */
 export function resolveLocalWorkspace(

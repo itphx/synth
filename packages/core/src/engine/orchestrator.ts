@@ -1529,9 +1529,13 @@ export class ChatOrchestrator {
     if (resolved?.workspace) {
       // Абсолютный workspace — как есть (normalize); относительный —
       // резолвим относительно workspacesRoot (AD-014).
-      return isAbsolute(resolved.workspace)
+      const dir = isAbsolute(resolved.workspace)
         ? normalize(resolved.workspace)
         : resolve(this._workspacesRoot, resolved.workspace);
+      // AD-075: каталог проектного workspace гарантированно создаётся к моменту
+      // работы инструмента (как и для дефолтного ниже).
+      await mkdir(dir, { recursive: true }).catch(() => {});
+      return dir;
     }
     const dir = this._defaultWorkingDir;
     await mkdir(dir, { recursive: true }).catch(() => {});

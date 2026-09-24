@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import { readdir, readFile, writeFile, unlink, rmdir, mkdir, stat } from 'node:fs/promises';
 import { join, relative, basename } from 'node:path';
 import { createReadStream } from 'node:fs';
@@ -13,8 +14,28 @@ import {
 import type { DirectoryListResult, FileEntry, FileReadResult, FsError } from '@itphx/synth-shared';
 import { FsErrorCode } from '@itphx/synth-shared';
 
+/**
+ * Тело POST /api/v2/fs/move. Shared-схемы для него нет, поэтому объявлена
+ * локально (общий `@itphx/synth-shared` в рамках AD-075 не трогаем).
+ */
+const fsMoveBodySchema = z.object({
+  projectId: z.string().min(1),
+  sourcePath: z.string().min(1),
+  targetPath: z.string().min(1),
+});
+
+/** Тело POST /api/v2/fs/workspace-root/mkdir (создание каталога в корне workspace). */
+const fsWorkspaceRootMkdirBodySchema = z.object({
+  path: z.string().min(1),
+});
+
 function makeFsError(code: FsErrorCode, message: string): { error: FsError } {
   return { error: { error: message, code } };
+}
+
+/** Ошибка валидации тела/параметров — общий FS-формат (`{ error: { error, code } }`), HTTP 400. */
+function makeFsValidationError(message: string): { error: FsError } {
+  return makeFsError(FsErrorCode.PERMISSION_DENIED, message);
 }
 
 async function listDirectoryRecursive(
@@ -338,7 +359,13 @@ export function createFsRoutes(kit: AuthKit, projectStore: ProjectStore, workspa
   // POST /api/v2/fs/mkdir — создание директории
   app.post('/mkdir', kit.requireAuth, async (c) => {
     try {
-      const body = fsMkdirBodySchema.parse(await c.req.json());
+      const parsed = fsMkdirBodySchema.safeParse(await c.req.json().catch(() => ({})));
+      if (!parsed.success) {
+        return c.json(makeFsValidationError(
+          `Некорректное тело запроса: projectId и path обязательны (${parsed.error.issues[0]?.message ?? 'невалидные данные'})`,
+        ), 400);
+      }
+      const body = parsed.data;
 
       const workspace = await wsResolver.resolve(body.projectId);
       const safePath = wsResolver.resolveSafePath(workspace, body.path);
@@ -367,12 +394,11 @@ export function createFsRoutes(kit: AuthKit, projectStore: ProjectStore, workspa
   // POST /api/v2/fs/move — переместить/переименовать файл или папку
   app.post('/move', kit.requireAuth, async (c) => {
     try {
-      const { projectId, sourcePath, targetPath } = await c.req.json() as {
-        projectId: string; sourcePath: string; targetPath: string;
-      };
-      if (!projectId || !sourcePath || !targetPath) {
-        return c.json(makeFsError(FsErrorCode.NOT_FOUND, 'projectId, sourcePath и targetPath обязательны'), 400);
+      const parsed = fsMoveBodySchema.safeParse(await c.req.json().catch(() => ({})));
+      if (!parsed.success) {
+        return c.json(makeFsValidationError('projectId, sourcePath и targetPath обязательны'), 400);
       }
+      const { projectId, sourcePath, targetPath } = parsed.data;
       await wsResolver.moveEntry(projectId, sourcePath, targetPath);
       return c.json({ moved: true, sourcePath, targetPath }, 200);
     } catch (err) {
@@ -401,7 +427,9 @@ export function createFsRoutes(kit: AuthKit, projectStore: ProjectStore, workspa
     }
   });
 
-  // GET /api/v2/fs/workspace-root/browse — список поддиректорий внутри корня
+  // GET /api/v2/fs/workspace-root/browse — список поддиректорий внутри корня.
+  // Абсолютный путь внутри root → 200 (относительный `path` в ответе);
+  // абсолютный вне root (managed deny) / traversal → 403.
   app.get('/workspace-root/browse', kit.requireAuth, async (c) => {
     try {
       const path = c.req.query('path') || '';
@@ -409,31 +437,46 @@ export function createFsRoutes(kit: AuthKit, projectStore: ProjectStore, workspa
       const entries = await wsResolver.listRootSubDirectory(path, includeHidden);
       return c.json({
         root: wsResolver.getWorkspaceRoot(),
-        path,
+        path: relative(wsResolver.getWorkspaceRoot(), wsResolver.resolveRootPath(path)),
         entries,
       });
     } catch (err) {
       if ((err as FsError)?.code) {
         const e = err as FsError;
-        return c.json({ error: e }, e.code === FsErrorCode.PATH_TRAVERSAL ? 403 : 404);
+        const status = e.code === FsErrorCode.NOT_FOUND ? 404
+          : e.code === FsErrorCode.NOT_A_DIRECTORY ? 400
+          : e.code === FsErrorCode.PATH_TRAVERSAL ? 403
+          : e.code === FsErrorCode.WORKSPACE_OUTSIDE_ROOT_DENIED ? 403
+          : 404;
+        return c.json({ error: e }, status);
       }
       return c.json(makeFsError(FsErrorCode.PERMISSION_DENIED, String(err)), 500);
     }
   });
 
-  // POST /api/v2/fs/workspace-root/mkdir — создать директорию в корне
+  // POST /api/v2/fs/workspace-root/mkdir — создать директорию в корне.
+  // Абсолютный путь внутри root → 201; вне root (managed deny) / traversal → 403;
+  // существующий путь → 409 ALREADY_EXISTS (паритет с core).
   app.post('/workspace-root/mkdir', kit.requireAuth, async (c) => {
     try {
-      const { path } = await c.req.json() as { path: string };
-      if (!path || !path.trim()) {
-        return c.json(makeFsError(FsErrorCode.NOT_FOUND, 'Путь обязателен'), 400);
+      const parsed = fsWorkspaceRootMkdirBodySchema.safeParse(await c.req.json().catch(() => ({})));
+      if (!parsed.success) {
+        return c.json(makeFsValidationError('Поле path обязательно'), 400);
       }
-      await wsResolver.createRootDirectory(path.trim());
-      return c.json({ created: true, path: path.trim() }, 201);
+      const path = parsed.data.path.trim();
+      if (!path) {
+        return c.json(makeFsValidationError('Поле path обязательно'), 400);
+      }
+      await wsResolver.createRootDirectory(path);
+      return c.json({ created: true, path }, 201);
     } catch (err) {
       if ((err as FsError)?.code) {
         const e = err as FsError;
-        return c.json({ error: e }, e.code === FsErrorCode.PATH_TRAVERSAL ? 403 : 500);
+        const status = e.code === FsErrorCode.PATH_TRAVERSAL ? 403
+          : e.code === FsErrorCode.WORKSPACE_OUTSIDE_ROOT_DENIED ? 403
+          : e.code === FsErrorCode.ALREADY_EXISTS ? 409
+          : 500;
+        return c.json({ error: e }, status);
       }
       return c.json(makeFsError(FsErrorCode.PERMISSION_DENIED, String(err)), 500);
     }

@@ -1,12 +1,35 @@
 import { createReadStream } from 'node:fs';
 import { mkdir, readdir, readFile, rename, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
-import { basename, join, relative, resolve, sep } from 'node:path';
+import { basename, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
+import type { FileEntry, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
+import { fsWorkspaceBrowseQuerySchema, fsWorkspaceMkdirBodySchema } from '@itphx/synth-shared';
 import type { AuthKit } from '../../auth/local.js';
+import { checkPath, loadProtectedPaths } from '../../engine/security/protected-paths.js';
+import type { ProtectedPathsPolicy } from '../../engine/security/protected-paths.js';
 import { isRemoteRef, toLocalId, remoteErrorToHttp } from '../../remote/aggregate.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
+
+/**
+ * AD-075: опции FS-роутов core (standalone) для паритета с backend.
+ * Позиционный `workspacesRoot` остаётся обратносовместимым; здесь — мягкая
+ * политика путей вне root и защищённые пути.
+ */
+export interface FsRoutesOptions {
+  /**
+   * Политика для путей вне `workspacesRoot`: `confirm` (standalone — browse
+   * разрешён, mkdir требует `confirmOutsideRoot`), `deny` (managed — 403).
+   * По умолчанию — `confirm`.
+   */
+  getOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy;
+  /**
+   * Политика защищённых путей (`ProtectedPathsStore.getPolicy`). Не задана —
+   * загружается системная политика + пользовательский override.
+   */
+  getProtectedPathsPolicy?: () => ProtectedPathsPolicy;
+}
 
 /** Преобразовать RemoteError в HTTP-ответ API v2; не-RemoteError → undefined (пробросить дальше). */
 function mapRemoteError(c: Context, err: unknown): Response | undefined {
@@ -31,14 +54,86 @@ function resolveSafe(root: string, p: string): string | null {
   return full;
 }
 
+/** true, если `abs` лежит внутри `root` (сам root включительно). */
+function isInsideRoot(root: string, abs: string): boolean {
+  return abs === root || abs.startsWith(root.endsWith(sep) ? root : root + sep);
+}
+
+/** Резолв запрошенного пути: абсолютный — как есть, относительный — от `root`. */
+function resolveAgainstRoot(root: string, p: string): string {
+  const trimmed = (p || '').trim();
+  if (!trimmed) return root;
+  return isAbsolute(trimmed) ? normalize(trimmed) : resolve(root, trimmed);
+}
+
+/** true, если путь запрещён политикой защищённых путей (`checkPath` → deny). */
+function isPathDenied(abs: string, cwd: string, policy: ProtectedPathsPolicy): boolean {
+  return checkPath(abs, cwd, policy).action === 'deny';
+}
+
+/**
+ * AD-075: подкаталоги директории (только `isDirectory`), отсортированные по имени.
+ * Запрещённые policy-пути пропускаются (не показываются). `relBase` — база
+ * относительного пути для элементов (относительно root или абсолютная для
+ * путей вне root).
+ */
+async function listChildDirectories(
+  absDir: string,
+  relBase: string,
+  includeHidden: boolean,
+  cwd: string,
+  policy: ProtectedPathsPolicy,
+): Promise<FileEntry[]> {
+  const entries = await readdir(absDir, { withFileTypes: true });
+  const result: FileEntry[] = [];
+  for (const entry of entries) {
+    if (!includeHidden && entry.name.startsWith('.')) continue;
+    if (!entry.isDirectory()) continue;
+    const abs = join(absDir, entry.name);
+    if (isPathDenied(abs, cwd, policy)) continue;
+    let modifiedAt = 0;
+    try {
+      modifiedAt = (await stat(abs)).mtimeMs;
+    } catch { /* ignore stat errors */ }
+    result.push({
+      name: entry.name,
+      path: relBase ? `${relBase}/${entry.name}` : entry.name,
+      isDirectory: true,
+      size: 0,
+      modifiedAt,
+    });
+  }
+  return result.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export function createFsRoutes(
   auth: AuthKit,
   workspacesRoot?: string,
   getRemoteClient?: () => RemoteBackendClient | null,
+  opts: FsRoutesOptions = {},
 ): Hono {
   const app = new Hono();
+  // Legacy-корень: как раньше (fallback process.cwd()), чтобы не менять поведение
+  // существующих эндпоинтов при вызове фабрики без root.
   const root = workspacesRoot || process.cwd();
+  // AD-075: новые `/workspace-root*` работают только с явно настроенным корнем —
+  // process.cwd() как fallback здесь запрещён (см. workspacesRootOrError).
+  const configuredRoot = workspacesRoot && workspacesRoot.trim() ? workspacesRoot : undefined;
   const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
+  const outsideRootPolicy = (): WorkspaceOutsideRootPolicy => opts.getOutsideRootPolicy?.() ?? 'confirm';
+  const protectedPaths = (): ProtectedPathsPolicy =>
+    opts.getProtectedPathsPolicy ? opts.getProtectedPathsPolicy() : loadProtectedPaths();
+
+  /** Корень для новых `/workspace-root*`; без настроенного root — 500. */
+  const workspacesRootOrError = (c: Context): string | Response => {
+    if (!configuredRoot) {
+      return c.json(
+        { error: { code: 'WORKSPACE_ROOT_NOT_CONFIGURED', message: 'Корневой каталог workspace не настроен' } },
+        500,
+      );
+    }
+    return configuredRoot;
+  };
 
   // GET / — список файлов в директории
   app.get('/', auth.requireAuth, async (c) => {
@@ -57,6 +152,7 @@ export function createFsRoutes(
     }
 
     const path = c.req.query('path') || '';
+    const includeHidden = c.req.query('includeHidden') === 'true';
     const fullPath = resolveSafe(root, path);
     if (!fullPath) {
       return c.json({ error: { code: 'FORBIDDEN', message: 'Доступ запрещён' } }, 403);
@@ -66,7 +162,7 @@ export function createFsRoutes(
       const entries = await readdir(fullPath, { withFileTypes: true });
       const result = [];
       for (const entry of entries) {
-        if (entry.name.startsWith('.')) continue;
+        if (!includeHidden && entry.name.startsWith('.')) continue;
         const entryPath = join(path, entry.name);
         let size = 0;
         let modifiedAt = 0;
@@ -414,6 +510,149 @@ export function createFsRoutes(
     }
 
     return c.json({ moved: true, sourcePath, targetPath }, 200);
+  });
+
+  // GET /workspace-root — список поддиректорий корня workspace (AD-075)
+  app.get('/workspace-root', auth.requireAuth, async (c) => {
+    const wsRoot = workspacesRootOrError(c);
+    if (wsRoot instanceof Response) return wsRoot;
+
+    const parsed = fsWorkspaceBrowseQuerySchema.safeParse({
+      includeHidden: c.req.query('includeHidden'),
+    });
+    if (!parsed.success) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Некорректный параметр includeHidden' } }, 400);
+    }
+
+    const policy = protectedPaths();
+    try {
+      await mkdir(wsRoot, { recursive: true });
+      const entries = await listChildDirectories(wsRoot, '', parsed.data.includeHidden, wsRoot, policy);
+      return c.json({ root: wsRoot, entries });
+    } catch (err) {
+      return c.json({
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: `Не удалось прочитать корень workspace: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      }, 500);
+    }
+  });
+
+  /**
+   * GET /workspace-root/browse — навигация по каталогам.
+   * Пути внутри `workspacesRoot` — свободно; вне root — по политике
+   * (`confirm` разрешает, `deny` → 403). Абсолютные пути принимаются как есть,
+   * относительные резолвятся от root; результат нормализуется, поэтому выход
+   * `..` за root классифицируется как «вне root», а не обходится.
+   */
+  app.get('/workspace-root/browse', auth.requireAuth, async (c) => {
+    const wsRoot = workspacesRootOrError(c);
+    if (wsRoot instanceof Response) return wsRoot;
+
+    const parsed = fsWorkspaceBrowseQuerySchema.safeParse({
+      path: c.req.query('path') ?? '',
+      includeHidden: c.req.query('includeHidden'),
+    });
+    if (!parsed.success) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Некорректные параметры навигации' } }, 400);
+    }
+
+    const policy = protectedPaths();
+    const target = resolveAgainstRoot(wsRoot, parsed.data.path);
+    if (isPathDenied(target, wsRoot, policy)) {
+      return c.json({ error: { code: 'PROTECTED_PATH_DENIED', message: 'Путь защищён политикой безопасности' } }, 403);
+    }
+
+    const inside = isInsideRoot(wsRoot, target);
+    if (!inside && outsideRootPolicy() === 'deny') {
+      return c.json({
+        error: { code: 'WORKSPACE_OUTSIDE_ROOT_DENIED', message: 'Путь вне корня workspace запрещён политикой' },
+      }, 403);
+    }
+
+    const s = await stat(target).catch(() => null);
+    if (!s) {
+      return c.json({ error: { code: 'NOT_FOUND', message: `Директория не найдена: ${parsed.data.path || '/'}` } }, 404);
+    }
+    if (!s.isDirectory()) {
+      return c.json({ error: { code: 'NOT_A_DIRECTORY', message: 'Путь не является директорией' } }, 400);
+    }
+
+    const relBase = inside ? relative(wsRoot, target) : target;
+    try {
+      const entries = await listChildDirectories(target, relBase, parsed.data.includeHidden, wsRoot, policy);
+      return c.json({ root: wsRoot, path: relBase, entries });
+    } catch (err) {
+      return c.json({
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: `Не удалось прочитать директорию: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      }, 500);
+    }
+  });
+
+  /**
+   * POST /workspace-root/mkdir — создание каталога.
+   * Внутри root — свободно; вне root: `deny` → 403, `confirm` без
+   * `confirmOutsideRoot` → 409 (`WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`),
+   * с флагом → создаётся. Запрещённые policy-пути — 403.
+   */
+  app.post('/workspace-root/mkdir', auth.requireAuth, async (c) => {
+    const wsRoot = workspacesRootOrError(c);
+    if (wsRoot instanceof Response) return wsRoot;
+
+    const body = await c.req.json().catch(() => null);
+    const parsed = fsWorkspaceMkdirBodySchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Ожидается поле path' } }, 400);
+    }
+
+    const policy = protectedPaths();
+    const target = resolveAgainstRoot(wsRoot, parsed.data.path);
+    if (isPathDenied(target, wsRoot, policy)) {
+      return c.json({ error: { code: 'PROTECTED_PATH_DENIED', message: 'Путь защищён политикой безопасности' } }, 403);
+    }
+
+    if (!isInsideRoot(wsRoot, target)) {
+      if (outsideRootPolicy() === 'deny') {
+        return c.json({
+          error: { code: 'WORKSPACE_OUTSIDE_ROOT_DENIED', message: 'Путь вне корня workspace запрещён политикой' },
+        }, 403);
+      }
+      if (parsed.data.confirmOutsideRoot !== true) {
+        return c.json({
+          error: {
+            code: 'WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED',
+            message: 'Создание каталога вне корня workspace требует подтверждения (confirmOutsideRoot: true)',
+          },
+        }, 409);
+      }
+    }
+
+    const existing = await stat(target).catch(() => null);
+    if (existing) {
+      return c.json({
+        error: {
+          code: 'ALREADY_EXISTS',
+          message: existing.isDirectory() ? 'Директория уже существует' : 'Файл с таким именем уже существует',
+        },
+      }, 409);
+    }
+
+    try {
+      await mkdir(target, { recursive: true });
+    } catch (err) {
+      return c.json({
+        error: {
+          code: 'WORKSPACE_CREATE_FAILED',
+          message: `Не удалось создать директорию: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      }, 422);
+    }
+
+    return c.json({ created: true, path: parsed.data.path }, 201);
   });
 
   return app;

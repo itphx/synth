@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dump as dumpYaml } from 'js-yaml';
 import type { SynthConfig } from './types.js';
+import type { WorkspaceOutsideRootPolicy } from '../types/index.js';
 import { defaultConfig } from './defaults.js';
 
 export type DeployMode = 'user' | 'docker' | 'server' | 'dev';
@@ -170,6 +171,22 @@ export function resolveDefaultWorkspace(config: SynthConfig, env?: NodeJS.Proces
   if (config.storage.defaultWorkspace) return config.storage.defaultWorkspace;
   const dataDir = resolveDataDir(config, env);
   return join(dataDir, 'workspaces', 'default');
+}
+
+/**
+ * AD-075: эффективная политика для абсолютного workspace вне `workspacesRoot`
+ * (приоритет: env `SYNTH_WORKSPACE_OUTSIDE_ROOT` > `config.storage.workspaceOutsideRoot` > `''`).
+ * `''` — политика не задана; потребитель подставляет `confirm`.
+ */
+export function resolveWorkspaceOutsideRootPolicy(
+  config: SynthConfig,
+  env?: NodeJS.ProcessEnv,
+): WorkspaceOutsideRootPolicy | '' {
+  const envVal = (env ?? process.env).SYNTH_WORKSPACE_OUTSIDE_ROOT;
+  if (envVal === 'confirm' || envVal === 'deny') return envVal;
+  const cfgVal = config.storage.workspaceOutsideRoot;
+  if (cfgVal === 'confirm' || cfgVal === 'deny') return cfgVal;
+  return '';
 }
 
 export async function ensureDataDir(dataDir: string): Promise<void> {

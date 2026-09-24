@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { resolveDataDir, resolvePort, resolveDefaultWorkspace } from './resolve.js';
+import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspaceOutsideRootPolicy } from './resolve.js';
 import { defaultConfig } from './defaults.js';
 import type { SynthConfig } from './types.js';
 
@@ -92,6 +92,36 @@ describe('resolveDefaultWorkspace', () => {
   it('НЕ читает реальный process.env, если передан env', () => {
     vi.stubEnv('SYNTH_DEFAULT_WORKSPACE', '/should-not-be-used');
     expect(resolveDefaultWorkspace(cfg, {})).toBe('/test/data/workspaces/default');
+  });
+});
+
+describe('resolveWorkspaceOutsideRootPolicy (AD-075)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('env.SYNTH_WORKSPACE_OUTSIDE_ROOT приоритетнее config', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, workspaceOutsideRoot: 'deny' } };
+    expect(resolveWorkspaceOutsideRootPolicy(c, { SYNTH_WORKSPACE_OUTSIDE_ROOT: 'confirm' })).toBe('confirm');
+  });
+
+  it('config.storage.workspaceOutsideRoot используется, если env не задан', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, workspaceOutsideRoot: 'deny' } };
+    expect(resolveWorkspaceOutsideRootPolicy(c, {})).toBe('deny');
+  });
+
+  it('невалидное env-значение игнорируется → config', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, workspaceOutsideRoot: 'deny' } };
+    expect(resolveWorkspaceOutsideRootPolicy(c, { SYNTH_WORKSPACE_OUTSIDE_ROOT: 'allow' })).toBe('deny');
+  });
+
+  it('дефолт — пустая строка', () => {
+    expect(resolveWorkspaceOutsideRootPolicy(cfg, {})).toBe('');
+  });
+
+  it('не читает реальный process.env, если передан env без переменной', () => {
+    vi.stubEnv('SYNTH_WORKSPACE_OUTSIDE_ROOT', 'deny');
+    expect(resolveWorkspaceOutsideRootPolicy(cfg, {})).toBe('');
   });
 });
 

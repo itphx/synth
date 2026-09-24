@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { mkdir } from 'node:fs/promises';
+import { isAbsolute, normalize, resolve } from 'node:path';
 import { z } from 'zod';
 import { nowISO, ToolCapability } from '@itphx/synth-shared';
 import type {
@@ -19,11 +21,23 @@ export interface ProjectManageExtra {
   projectStore?: ProjectStore;
   sessionId?: string;
   eventBus?: EventBus;
+  /** AD-075: корень managed-workspace для резолва относительного `workspace`. */
+  workspacesRoot?: string;
 }
 
 /** Извлекает зависимости для project_create / project_attach из ctx.extra. */
 export function getSessionExtra(ctx: ToolContext): ProjectManageExtra {
   return (ctx.extra ?? {}) as ProjectManageExtra;
+}
+
+/**
+ * AD-075: абсолютный каталог workspace проекта. Абсолютный путь — как есть
+ * (normalize), относительный — относительно `workspacesRoot`.
+ */
+function resolveWorkspaceDir(workspace: string, workspacesRoot?: string): string {
+  return isAbsolute(workspace)
+    ? normalize(workspace)
+    : resolve(workspacesRoot || process.cwd(), workspace);
 }
 
 /**
@@ -131,6 +145,19 @@ export const projectCreateTool: ToolDefinition = {
     }
 
     const ownerId = session.ownerId || session.userId || 'local';
+
+    // AD-075: каталог workspace создаётся до сохранения проекта.
+    if (params.workspace) {
+      try {
+        await mkdir(resolveWorkspaceDir(params.workspace, extra.workspacesRoot), { recursive: true });
+      } catch (err) {
+        return {
+          content: sm('project.workspace_create_error', { error: err instanceof Error ? err.message : String(err) }),
+          isError: true,
+        };
+      }
+    }
+
     const project = extra.projectStore.create(params.name, ownerId, {
       description: params.description,
       workspace: params.workspace,

@@ -12,6 +12,7 @@ export const defaultConfig: SynthConfig = {
     dataDir: '/var/synth/data',
     workspacesRoot: '',
     defaultWorkspace: '',
+    workspaceOutsideRoot: '',
   },
   auth: {
     debugMode: false,

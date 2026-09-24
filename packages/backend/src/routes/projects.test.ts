@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, stat, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createProjectRoutes } from './projects.js';
 import { ProjectStore } from '../storage/project-store.js';
 import type { User } from '@itphx/synth-shared';
@@ -271,5 +271,224 @@ describe('Project API Routes', () => {
       expect(body.total_messages).toBe(3);
       expect(sessionManager.listSessions).toHaveBeenCalledWith({ projectId: project.id });
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AD-075: provisioning workspace managed-проекта (автосоздание, авто-имя, пути, RBAC)
+// ---------------------------------------------------------------------------
+
+interface WsMockUser extends User {
+  roles: string[];
+}
+
+const WS_USERS: Record<string, WsMockUser> = {
+  owner: { id: 'owner', username: 'owner', roles: ['USER'] } as WsMockUser,
+  outsider: { id: 'outsider', username: 'outsider', roles: ['USER'] } as WsMockUser,
+  lead: { id: 'lead', username: 'lead', roles: ['LEAD'] } as WsMockUser,
+  admin: { id: 'admin', username: 'admin', roles: ['ADMIN'] } as WsMockUser,
+};
+
+function wsUserFromHeader(header: string | undefined): WsMockUser | null {
+  const m = /^Bearer (.+)$/.exec(header ?? '');
+  return m ? WS_USERS[m[1]!] ?? null : null;
+}
+
+function wsAuth(user: string) {
+  return { Authorization: `Bearer ${user}`, 'Content-Type': 'application/json' };
+}
+
+function makeWorkspaceApp() {
+  const app = new Hono();
+  const kit = {
+    requireAuth: async (c: Context, next: Next) => {
+      const user = wsUserFromHeader(c.req.header('Authorization'));
+      if (!user) return c.json({ error: { code: 'UNAUTHORIZED', message: 'no' } }, 401);
+      c.set('user', user);
+      await next();
+    },
+    getCurrentUser: async (c: Context) => wsUserFromHeader(c.req.header('Authorization')),
+    isAdmin: (c: { get(key: 'user'): unknown }): boolean => {
+      const u = c.get('user') as WsMockUser | undefined;
+      return !!u && u.roles.includes('ADMIN');
+    },
+    hasRole: (c: { get(key: 'user'): unknown }, ...roles: string[]): boolean => {
+      const u = c.get('user') as WsMockUser | undefined;
+      return !!u && roles.some((r) => u.roles.includes(r));
+    },
+  };
+  const store = new ProjectStore({ dataDir: tmpDir });
+  const routes = createProjectRoutes(
+    kit as never,
+    store,
+    { listSessions: vi.fn().mockResolvedValue([]) } as never,
+    tmpDir,
+  );
+  app.route('/api/v2/projects', routes);
+  return { app, store };
+}
+
+describe('Project workspace provisioning (AD-075, managed backend)', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-proj-ws-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('POST без workspace — авто-имя slug, каталог создан', async () => {
+    const { app } = makeWorkspaceApp();
+    const res = await app.request('/api/v2/projects', {
+      method: 'POST',
+      headers: wsAuth('owner'),
+      body: JSON.stringify({ name: 'My Project' }),
+    });
+    expect(res.status).toBe(201);
+    const body: any = await res.json();
+    expect(body.workspace).toBe('my-project');
+    expect((await stat(resolve(tmpDir, 'my-project'))).isDirectory()).toBe(true);
+  });
+
+  it('POST с явным относительным workspace — каталог создаётся (без 422 «не найден»)', async () => {
+    const { app } = makeWorkspaceApp();
+    const res = await app.request('/api/v2/projects', {
+      method: 'POST',
+      headers: wsAuth('owner'),
+      body: JSON.stringify({ name: 'X', workspace: 'nested/dir' }),
+    });
+    expect(res.status).toBe(201);
+    const body: any = await res.json();
+    expect(body.workspace).toBe('nested/dir');
+    expect((await stat(resolve(tmpDir, 'nested/dir'))).isDirectory()).toBe(true);
+  });
+
+  it('POST авто-имя при коллизии → base-2', async () => {
+    const { app, store } = makeWorkspaceApp();
+    const existing = store.create('Existing', 'owner', { workspace: 'my-project' });
+    await store.save(existing);
+
+    const res = await app.request('/api/v2/projects', {
+      method: 'POST',
+      headers: wsAuth('owner'),
+      body: JSON.stringify({ name: 'My Project' }),
+    });
+    expect(res.status).toBe(201);
+    const body: any = await res.json();
+    expect(body.workspace).toBe('my-project-2');
+    expect((await stat(resolve(tmpDir, 'my-project-2'))).isDirectory()).toBe(true);
+  });
+
+  it('POST авто-имя учитывает существующий каталог root → base-2', async () => {
+    const { app } = makeWorkspaceApp();
+    // Каталог есть, проекта с таким workspace нет — имя не должно «всмериться» в него.
+    await mkdir(resolve(tmpDir, 'my-project'), { recursive: true });
+
+    const res = await app.request('/api/v2/projects', {
+      method: 'POST',
+      headers: wsAuth('owner'),
+      body: JSON.stringify({ name: 'My Project' }),
+    });
+    expect(res.status).toBe(201);
+    const body: any = await res.json();
+    expect(body.workspace).toBe('my-project-2');
+    expect((await stat(resolve(tmpDir, 'my-project-2'))).isDirectory()).toBe(true);
+  });
+
+  it('параллельные POST с одним именем → разные авто-workspace (атомарный claim)', async () => {
+    const { app } = makeWorkspaceApp();
+    const [r1, r2] = await Promise.all([
+      app.request('/api/v2/projects', {
+        method: 'POST', headers: wsAuth('owner'), body: JSON.stringify({ name: 'Race' }),
+      }),
+      app.request('/api/v2/projects', {
+        method: 'POST', headers: wsAuth('owner'), body: JSON.stringify({ name: 'Race' }),
+      }),
+    ]);
+    expect(r1.status).toBe(201);
+    expect(r2.status).toBe(201);
+    const b1: any = await r1.json();
+    const b2: any = await r2.json();
+    expect(b1.workspace).not.toBe(b2.workspace);
+    expect(new Set([b1.workspace, b2.workspace])).toEqual(new Set(['race', 'race-2']));
+    expect((await stat(resolve(tmpDir, b1.workspace))).isDirectory()).toBe(true);
+    expect((await stat(resolve(tmpDir, b2.workspace))).isDirectory()).toBe(true);
+  });
+
+  it('POST абсолютный путь внутри root → нормализуется в относительный', async () => {
+    const { app } = makeWorkspaceApp();
+    const abs = resolve(tmpDir, 'abs-ws');
+    const res = await app.request('/api/v2/projects', {
+      method: 'POST',
+      headers: wsAuth('owner'),
+      body: JSON.stringify({ name: 'Abs', workspace: abs }),
+    });
+    expect(res.status).toBe(201);
+    const body: any = await res.json();
+    expect(body.workspace).toBe('abs-ws');
+    expect((await stat(abs)).isDirectory()).toBe(true);
+  });
+
+  it('POST абсолютный путь вне root → 403 WORKSPACE_OUTSIDE_ROOT_DENIED', async () => {
+    const { app } = makeWorkspaceApp();
+    const outside = resolve(tmpDir, '..', 'outside-ws');
+    const res = await app.request('/api/v2/projects', {
+      method: 'POST',
+      headers: wsAuth('owner'),
+      body: JSON.stringify({ name: 'Outside', workspace: outside }),
+    });
+    expect(res.status).toBe(403);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('WORKSPACE_OUTSIDE_ROOT_DENIED');
+  });
+
+  it('POST confirmOutsideRoot не разрешает путь вне root (managed — всегда deny)', async () => {
+    const { app } = makeWorkspaceApp();
+    const outside = resolve(tmpDir, '..', 'outside-ws');
+    const res = await app.request('/api/v2/projects', {
+      method: 'POST',
+      headers: wsAuth('owner'),
+      body: JSON.stringify({ name: 'Outside', workspace: outside, confirmOutsideRoot: true }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('PUT workspace: owner/LEAD/ADMIN → 200, чужой → 403 и workspace не меняется', async () => {
+    const { app, store } = makeWorkspaceApp();
+    const project = store.create('P', 'owner', { workspace: 'orig' });
+    await store.save(project);
+
+    const denied = await app.request(`/api/v2/projects/${project.id}`, {
+      method: 'PUT',
+      headers: wsAuth('outsider'),
+      body: JSON.stringify({ workspace: 'hacked' }),
+    });
+    expect(denied.status).toBe(403);
+    expect((await store.load(project.id))!.workspace).toBe('orig');
+
+    for (const user of ['owner', 'lead', 'admin']) {
+      const res = await app.request(`/api/v2/projects/${project.id}`, {
+        method: 'PUT',
+        headers: wsAuth(user),
+        body: JSON.stringify({ workspace: `ws-${user}` }),
+      });
+      expect(res.status, user).toBe(200);
+      const body: any = await res.json();
+      expect(body.workspace).toBe(`ws-${user}`);
+    }
+  });
+
+  it('PUT workspace вне root → 403, значение не меняется', async () => {
+    const { app, store } = makeWorkspaceApp();
+    const project = store.create('P', 'owner', { workspace: 'orig' });
+    await store.save(project);
+
+    const res = await app.request(`/api/v2/projects/${project.id}`, {
+      method: 'PUT',
+      headers: wsAuth('owner'),
+      body: JSON.stringify({ workspace: resolve(tmpDir, '..', 'outside-ws') }),
+    });
+    expect(res.status).toBe(403);
+    expect((await store.load(project.id))!.workspace).toBe('orig');
   });
 });

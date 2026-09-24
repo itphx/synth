@@ -6,6 +6,7 @@ import { ChatOrchestrator, SessionManager, EventBus, FileStore, createToolRegist
 import type { ContextBuilder } from '@itphx/synth-core';
 import type { ToolContext, Session } from '@itphx/synth-shared';
 import { ProjectStore } from '../storage/project-store.js';
+import { createBackendApp } from '../app.js';
 
 /**
  * Регрессионный тест: ChatOrchestrator в backend main.ts создаётся с projectStore.
@@ -96,5 +97,38 @@ describe('ChatOrchestrator workspace (backend main.ts сценарий)', () => 
     expect(result.content).toContain(`- ID: ${project.id}`);
     expect(result.content).toContain(`- Project working directory: ${resolve(wsRoot, 'WS1')}`);
     expect(result.metadata?.projectWorkspace).toBe(resolve(wsRoot, 'WS1'));
+  });
+
+  it('createBackendApp пробрасывает defaultWorkingDir в оркестратор (AD-075)', async () => {
+    const override = join(tmpDir, 'custom-default-ws');
+    const dataDir = join(tmpDir, 'backend-data');
+    const handle = await createBackendApp({
+      dataDir,
+      authDebug: true,
+      env: { SYNTH_DEFAULT_WORKSPACE: override },
+    });
+
+    const session = await handle.sessionManager.createSession({ title: 'S' });
+    const dir = await (handle.orchestrator as unknown as {
+      _resolveWorkingDir(s: Session): Promise<string>;
+    })._resolveWorkingDir(session);
+
+    expect(dir).toBe(override);
+
+    // GET /settings/workspace отдаёт тот же defaultWorkingDir как fallback.
+    const wsRes = await handle.app.request('/api/v2/settings/workspace', {
+      headers: { Authorization: 'Bearer admin-key-123' },
+    });
+    expect(wsRes.status).toBe(200);
+    expect((await wsRes.json() as { workspace: string }).workspace).toBe(override);
+
+    // AD-075: managed-backend зажимает политику вне root как deny.
+    const policyRes = await handle.app.request('/api/v2/settings/workspace-policy', {
+      headers: { Authorization: 'Bearer admin-key-123' },
+    });
+    expect(policyRes.status).toBe(200);
+    const policy = await policyRes.json() as { outsideRoot: string; defaults: string };
+    expect(policy.outsideRoot).toBe('deny');
+    expect(policy.defaults).toBe('deny');
   });
 });

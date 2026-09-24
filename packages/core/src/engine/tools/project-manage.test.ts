@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { projectCreateTool, projectAttachTool, projectLogWriteTool, projectLogReadTool, projectInvariantsReadTool, projectInvariantsWriteTool } from './project-manage.js';
@@ -42,7 +42,7 @@ describe('project_create / project_attach', () => {
       messageId: generateId(),
       abortSignal: new AbortController().signal,
       workingDir: tmpDir,
-      extra: { sessionManager, projectStore, sessionId, eventBus },
+      extra: { sessionManager, projectStore, sessionId, eventBus, workspacesRoot: join(tmpDir, 'workspaces') },
     };
   }
 
@@ -63,15 +63,29 @@ describe('project_create / project_attach', () => {
       if (e.type === 'session.moved') moved = e.data as Record<string, unknown>;
     });
 
-    const result = await projectCreateTool.execute({ name: 'P', workspace: '/tmp/ws' }, makeCtx());
+    const absWs = join(tmpDir, 'abs-ws');
+    const result = await projectCreateTool.execute({ name: 'P', workspace: absWs }, makeCtx());
     expect(result.isError).toBeUndefined();
     expect(result.metadata?.name).toBe('P');
-    expect(result.metadata?.workspace).toBe('/tmp/ws');
+    expect(result.metadata?.workspace).toBe(absWs);
     expect(result.metadata?.id).toBeTruthy();
 
     expect(moved).toBeTruthy();
     expect(moved?.session_id).toBe(sessionId);
     expect(moved?.project_id).toBe(result.metadata?.id);
+  });
+
+  it('project_create создаёт каталог workspace (AD-075)', async () => {
+    const ctx = makeCtx();
+    const result = await projectCreateTool.execute({ name: 'WS', workspace: 'rel-ws' }, ctx);
+    expect(result.isError).toBeUndefined();
+
+    const dir = join(tmpDir, 'workspaces', 'rel-ws');
+    expect((await stat(dir)).isDirectory()).toBe(true);
+
+    const session = (await sessionManager.getSession(sessionId))!;
+    const project = (await projectStore.load(session.projectId!))!;
+    expect(project.workspace).toBe('rel-ws');
   });
 
   it('project_create без projectStore — ошибка', async () => {
@@ -161,7 +175,7 @@ describe('project_log / project_invariants', () => {
       messageId: generateId(),
       abortSignal: new AbortController().signal,
       workingDir: tmpDir,
-      extra: { sessionManager, projectStore, sessionId, eventBus },
+      extra: { sessionManager, projectStore, sessionId, eventBus, workspacesRoot: join(tmpDir, 'workspaces') },
     };
   }
 

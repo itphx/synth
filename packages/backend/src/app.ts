@@ -11,6 +11,7 @@
 // фейковыми провайдерами без OIDC.
 
 import { createServer, IncomingMessage } from 'node:http';
+import { mkdir } from 'node:fs/promises';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { Readable } from 'node:stream';
@@ -37,7 +38,7 @@ import {
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
-import { nowISO, ensureDataDir, MessageRole, generateStreamId, SYNTH_VERSION, DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole } from '@itphx/synth-shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId, SYNTH_VERSION, DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole, resolveDefaultWorkspace } from '@itphx/synth-shared';
 import type { BusEvent } from '@itphx/synth-shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import type { BackendConfig } from './lib/app-config.js';
@@ -216,6 +217,12 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
 
     // Runtime-настройки (AD-005): workspace/mcp из {dataDir}/settings.json (переживают рестарт)
     const settingsStore = new RuntimeSettingsStore({ dataDir });
+    // AD-075: дефолтный рабочий каталог — runtime-override `settings/workspace`
+    // приоритетнее config/env (`resolveDefaultWorkspace`), каталог создаётся
+    // заранее (как в core `server/app.ts`), чтобы инструменты не падали.
+    const runtimeWorkspace = await settingsStore.getWorkspace();
+    const defaultWorkingDir = runtimeWorkspace ?? resolveDefaultWorkspace(backendConfig.synth);
+    await mkdir(defaultWorkingDir, { recursive: true });
     // Агент по умолчанию (админка «Агенты»): runtime-настройка поверх DEFAULT_AGENT_ID.
     const getDefaultAgentId = async (): Promise<string> =>
       (await settingsStore.getDefaultAgent()) ?? DEFAULT_AGENT_ID;
@@ -484,6 +491,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       mcpManager,
       projectStore,
       workspacesRoot: backendConfig.workspacesRoot,
+      // AD-075: без defaultWorkingDir сессия без проекта получала бы
+      // {dataDir}/workspaces/default мимо runtime-override settings/workspace.
+      defaultWorkingDir,
       routerConfig: backendConfig.synth.router,
       permissionConfig: backendConfig.synth.permission,
       defaultPlanMode: backendConfig.synth.session.planMode,
@@ -681,7 +691,12 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Settings routes (runtime-настройки для UI: workspace + mcp; переиспользуем core-реализацию)
     app.route('/api/v2/settings', createSettingsRoutes(auth as unknown as CoreAuthKit, {
       settingsStore,
-      fallbackWorkspace: join(dataDir, 'workspaces', 'default'),
+      fallbackWorkspace: defaultWorkingDir,
+      // AD-075: managed-развёртывание — политика вне `workspacesRoot` всегда `deny`
+      // (enforcement — в `routes/projects.ts`); строго read-only: GET отдаёт
+      // fallback + readOnly, PUT/DELETE → 403 WORKSPACE_POLICY_READ_ONLY.
+      fallbackWorkspaceOutsideRootPolicy: 'deny',
+      workspacePolicyReadOnly: true,
       // Агент по умолчанию при первом развёртывании (config.yaml не задаёт — DEFAULT_AGENT_ID).
       fallbackDefaultAgent: DEFAULT_AGENT_ID,
       // AD-072 Ф2: дефолты из config.yaml (без runtime) — для GET/DELETE-сброса к умолчанию.

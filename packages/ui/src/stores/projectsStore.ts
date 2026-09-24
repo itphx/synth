@@ -20,7 +20,9 @@ interface ProjectsStore {
     workspace?: string | null
     repos?: GitRepoConfigData[]
     origin?: EntityOrigin
-  }) => Promise<ProjectData | null>
+    /** AD-075: согласие на workspace вне `workspacesRoot` (повтор после 409). */
+    confirmOutsideRoot?: boolean
+  }) => Promise<ProjectData>
   updateProject: (id: string, data: {
     name?: string
     description?: string
@@ -71,6 +73,9 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     }
   },
 
+  // AD-075: ошибки пробрасываются (как в publishProject/forkRemoteProject) —
+  // вызывающий различает 409 `WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED` и повторяет
+  // запрос с `confirmOutsideRoot: true`.
   createProject: async (data) => {
     try {
       const project = await synthApi.createProject(data)
@@ -78,7 +83,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       return project
     } catch (e) {
       set({ error: (e as Error).message })
-      return null
+      throw e
     }
   },
 

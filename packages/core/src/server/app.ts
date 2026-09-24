@@ -7,7 +7,7 @@ import { join, extname, isAbsolute, normalize, resolve } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig } from '@itphx/synth-shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -83,6 +83,11 @@ export interface StandaloneConfig {
   mcpPolicy?: ToolsPolicy;
   /** AD-071 §2.6: instance-wide отключение инструментов из config.yaml tools.disabled. */
   toolsDisabled?: ToolsDisabledConfig;
+  /**
+   * AD-075: политика для абсолютного workspace вне `workspacesRoot` из
+   * config.yaml/env (`confirm` | `deny`). Runtime-override — settings/workspace-policy.
+   */
+  workspaceOutsideRootPolicy?: WorkspaceOutsideRootPolicy;
   /** Конфигурация MCP-серверов из config.yaml mcp.servers (для probe и загрузки тулов). */
   mcpServers?: Record<string, McpServerConfig>;
   /** AD-071 §2.3.1: политика сетевого доступа HTTP MCP из config.yaml mcp.networkPolicy. */
@@ -645,6 +650,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const effectiveToolsDisabled: ToolsDisabledConfig =
     runtimeToolsDisabled ?? config.toolsDisabled ?? { capabilities: [], tools: [] };
 
+  // AD-075: политика workspace вне root. config/env — дефолт; runtime-override
+  // (settings.json) применяется при старте и live через PUT /settings/workspace-policy.
+  let effectiveWorkspaceOutsideRootPolicy: WorkspaceOutsideRootPolicy =
+    (await settingsStore.getWorkspacePolicy()) ?? config.workspaceOutsideRootPolicy ?? 'confirm';
+
   // AD-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
   const patternStore = new SecretPatternStore({ dataDir });
 
@@ -843,7 +853,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   ));
 
   // Projects
-  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, () => connection.client));
+  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, () => connection.client, {
+    // AD-075: автосоздание/нормализация workspace локальных проектов.
+    getWorkspacesRoot: () => config.workspacesRoot ?? join(dataDir, 'workspaces'),
+    getOutsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
+  }));
 
   // Перенос проектов между мирами (гибрид, UI publish/fork): те же пути, что у
   // project-роутов (:id/publish, :id/fork-local — без конфликта с :id). Работает
@@ -877,8 +891,16 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // Agents
   app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId));
 
-  // FS
-  app.route('/api/v2/fs', createFsRoutes(auth, config.workspacesRoot, () => connection.client));
+  // FS (AD-075: гарантированный корень workspace + мягкая политика путей вне root)
+  app.route('/api/v2/fs', createFsRoutes(
+    auth,
+    config.workspacesRoot ?? join(dataDir, 'workspaces'),
+    () => connection.client,
+    {
+      getOutsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
+      getProtectedPathsPolicy: () => protectedPathsStore.getPolicy(),
+    },
+  ));
 
   // Queue
   app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage, () => connection.client));
@@ -893,6 +915,10 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   app.route('/api/v2/settings', createSettingsRoutes(auth, {
     settingsStore,
     fallbackWorkspace: defaultWorkingDir,
+    // AD-075: дефолт политики workspace вне root (config/env) для GET/DELETE-сброса.
+    fallbackWorkspaceOutsideRootPolicy: config.workspaceOutsideRootPolicy ?? 'confirm',
+    /** AD-075: live-применение политики без рестарта (роуты проектов читают её на каждом запросе). */
+    onWorkspacePolicyChange: (policy) => { effectiveWorkspaceOutsideRootPolicy = policy; },
     // Агент по умолчанию при первом развёртывании (config.yaml не задаёт — DEFAULT_AGENT_ID).
     fallbackDefaultAgent: DEFAULT_AGENT_ID,
     // AD-072 Ф2: дефолты из config.yaml (без runtime) — для GET/DELETE-сброса к умолчанию.

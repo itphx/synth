@@ -1,7 +1,16 @@
-import { resolve, normalize, relative, sep, join } from 'node:path';
+import { resolve, normalize, relative, isAbsolute, sep, join } from 'node:path';
 import { stat, readdir, open } from 'node:fs/promises';
 import { FsErrorCode } from '@itphx/synth-shared';
 import type { FsError, FileEntry } from '@itphx/synth-shared';
+
+/**
+ * AD-075: результат валидации/нормализации `project.workspace` для managed-режима.
+ * Успех возвращает относительный (внутри `workspacesRoot`) workspace; ошибка —
+ * HTTP-статус и код для ответа API (`VALIDATION_ERROR` / `WORKSPACE_OUTSIDE_ROOT_DENIED`).
+ */
+export type WorkspacePathValidation =
+  | { ok: true; workspace: string }
+  | { ok: false; status: 400 | 403; code: string; message: string };
 
 export class WorkspaceResolver {
   constructor(
@@ -13,13 +22,30 @@ export class WorkspaceResolver {
     return this.workspaceRoot;
   }
 
+  /**
+   * AD-075: резолв пути для `/fs/workspace-root*`.
+   * Абсолютный путь нормализуется как есть (ведущий `/` не срезается вслепую),
+   * относительный — от `workspaceRoot`. Containment — через `relative` с разделителем
+   * `sep` (соседний каталог `rootfoo` не считается внутри root).
+   * - внутри root → абсолютный путь;
+   * - абсолютный вне root (managed) → `WORKSPACE_OUTSIDE_ROOT_DENIED`;
+   * - относительный traversal `..` за root → `PATH_TRAVERSAL`.
+   */
   resolveRootPath(requestedPath: string): string {
-    const normalized = normalize(requestedPath).replace(/^[/\\]+/, '');
-    const fullPath = resolve(this.workspaceRoot, normalized);
+    const trimmed = (requestedPath ?? '').trim();
+    const absoluteRequest = isAbsolute(trimmed);
+    const fullPath = absoluteRequest
+      ? normalize(trimmed)
+      : resolve(this.workspaceRoot, trimmed || '.');
 
     const rel = relative(this.workspaceRoot, fullPath);
-    if (rel.startsWith('..') || rel.startsWith(`${sep}..`)) {
-      const err: FsError = { error: 'Попытка выхода за пределы корневого каталога', code: FsErrorCode.PATH_TRAVERSAL };
+    const outside = rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+    if (outside) {
+      const err: FsError = absoluteRequest
+        ? { error: 'Путь вне корня workspace запрещён политикой',
+          code: FsErrorCode.WORKSPACE_OUTSIDE_ROOT_DENIED }
+        : { error: 'Попытка выхода за пределы корневого каталога',
+          code: FsErrorCode.PATH_TRAVERSAL };
       throw err;
     }
 
@@ -54,16 +80,19 @@ export class WorkspaceResolver {
   }
 
   async listRootSubDirectory(
-    relPath: string,
+    requestedPath: string,
     includeHidden: boolean = false,
   ): Promise<FileEntry[]> {
-    const dirPath = this.resolveRootPath(relPath);
+    const dirPath = this.resolveRootPath(requestedPath);
+    // Внутри root всегда отдаём относительный базис (абсолютный вход тоже
+    // нормализуется в относительный — см. resolveRootPath).
+    const relBase = relative(this.workspaceRoot, dirPath);
 
     let s;
     try {
       s = await stat(dirPath);
     } catch {
-      const err: FsError = { error: `Директория не найдена: ${relPath}`, code: FsErrorCode.NOT_FOUND };
+      const err: FsError = { error: `Директория не найдена: ${requestedPath || '/'}`, code: FsErrorCode.NOT_FOUND };
       throw err;
     }
     if (!s.isDirectory()) {
@@ -86,7 +115,7 @@ export class WorkspaceResolver {
 
       result.push({
         name: entry.name,
-        path: relPath ? `${relPath}/${entry.name}` : entry.name,
+        path: relBase ? `${relBase}/${entry.name}` : entry.name,
         isDirectory: true,
         size: 0,
         modifiedAt,
@@ -96,9 +125,23 @@ export class WorkspaceResolver {
     return result.sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  async createRootDirectory(relPath: string): Promise<void> {
+  /**
+   * AD-075: создание каталога в корне workspace. Паритет с core — при уже
+   * существующем пути бросаем `ALREADY_EXISTS` (409), новый каталог → 201.
+   */
+  async createRootDirectory(requestedPath: string): Promise<void> {
     const { mkdir } = await import('node:fs/promises');
-    const dirPath = this.resolveRootPath(relPath);
+    const dirPath = this.resolveRootPath(requestedPath);
+
+    const existing = await stat(dirPath).catch(() => null);
+    if (existing) {
+      const err: FsError = {
+        error: existing.isDirectory() ? 'Директория уже существует' : 'Файл с таким именем уже существует',
+        code: FsErrorCode.ALREADY_EXISTS,
+      };
+      throw err;
+    }
+
     await mkdir(dirPath, { recursive: true });
   }
 
@@ -150,21 +193,59 @@ export class WorkspaceResolver {
     return fullPath;
   }
 
-  validateWorkspacePath(relativePath: string): string | null {
-    const normalized = normalize(relativePath).replace(/^[/\\]+/, '');
-    if (!normalized) return 'Путь не может быть пустым';
+  /**
+   * AD-075: валидация и нормализация `project.workspace` для managed-режима.
+   * - относительный путь внутри `workspacesRoot` → нормализуется, возвращается как есть;
+   * - абсолютный путь внутри `workspacesRoot` → нормализуется в относительный;
+   * - абсолютный путь вне `workspacesRoot` (или traversal) → жёсткий deny (403).
+   * Ведущий `/` больше не срезается вслепую: абсолютные пути проверяются на
+   * containment относительно корня (иначе `/etc` превращался в `etc` внутри root).
+   */
+  validateWorkspacePath(input: string): WorkspacePathValidation {
+    const trimmed = (input ?? '').trim();
+    if (!trimmed) {
+      return { ok: false, status: 400, code: 'VALIDATION_ERROR', message: 'Путь не может быть пустым' };
+    }
+
+    // Абсолютный путь: containment относительно корня, при попадании — в относительный.
+    if (isAbsolute(trimmed)) {
+      const abs = normalize(trimmed);
+      const rel = relative(this.workspaceRoot, abs);
+      if (rel === '') {
+        return { ok: false, status: 400, code: 'VALIDATION_ERROR', message: 'Нельзя выбрать корневой каталог' };
+      }
+      if (rel.startsWith('..') || rel.startsWith(`${sep}..`) || isAbsolute(rel)) {
+        return {
+          ok: false,
+          status: 403,
+          code: 'WORKSPACE_OUTSIDE_ROOT_DENIED',
+          message: 'Абсолютный workspace вне workspacesRoot запрещён политикой',
+        };
+      }
+      return { ok: true, workspace: rel };
+    }
+
+    const normalized = normalize(trimmed).replace(/^[/\\]+/, '');
+    if (!normalized || normalized === '.') {
+      return { ok: false, status: 400, code: 'VALIDATION_ERROR', message: 'Путь не может быть пустым' };
+    }
 
     const fullPath = resolve(this.workspaceRoot, normalized);
     const rel = relative(this.workspaceRoot, fullPath);
 
-    if (rel.startsWith('..') || rel.startsWith(`${sep}..`)) {
-      return 'Путь выходит за пределы разрешённого корневого каталога';
+    if (rel.startsWith('..') || rel.startsWith(`${sep}..`) || isAbsolute(rel)) {
+      return {
+        ok: false,
+        status: 403,
+        code: 'WORKSPACE_OUTSIDE_ROOT_DENIED',
+        message: 'Путь выходит за пределы разрешённого корневого каталога',
+      };
     }
     if (rel === '') {
-      return 'Нельзя выбрать корневой каталог';
+      return { ok: false, status: 400, code: 'VALIDATION_ERROR', message: 'Нельзя выбрать корневой каталог' };
     }
 
-    return null;
+    return { ok: true, workspace: rel };
   }
 
   /**

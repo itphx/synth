@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
@@ -108,6 +108,18 @@ describe('ChatOrchestrator._resolveWorkingDir', () => {
 
     const orch = makeOrchestrator({ workspacesRoot: join(tmpDir, 'other-root') });
     await expect(resolveDir(orch, session)).resolves.toBe(absWs);
+  });
+
+  it('создаёт каталог проектного workspace (AD-075)', async () => {
+    const wsRoot = join(tmpDir, 'ws-root-create');
+    const project = projectStore.create('P5', 'u1', { workspace: 'make-me' });
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({ projectId: project.id, title: 'S' });
+
+    const orch = makeOrchestrator({ workspacesRoot: wsRoot });
+    const dir = await resolveDir(orch, session);
+    expect(dir).toBe(resolve(wsRoot, 'make-me'));
+    expect((await stat(dir)).isDirectory()).toBe(true);
   });
 
   it('без проекта/workspace возвращает defaultWorkingDir', async () => {

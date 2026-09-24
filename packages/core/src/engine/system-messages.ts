@@ -144,6 +144,7 @@ export const SYSTEM_MESSAGES = {
   'project.session_read_error': 'Error: failed to read the session',
   'project.session_not_found': 'Error: session not found',
   'project.save_error': 'Error saving the project: {error}',
+  'project.workspace_create_error': 'Error creating project workspace: {error}',
   'project.created': 'Project "{name}" created and attached to the session.\n{json}',
   'project.read_error': 'Error: failed to read the project',
   'project.not_found': 'Project {id} not found',

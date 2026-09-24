@@ -772,6 +772,28 @@ export interface ProjectSkillSettings {
   defaultOn: string[];
 }
 
+/**
+ * AD-075: политика для абсолютного `project.workspace` вне `workspacesRoot`.
+ * - `confirm` — путь разрешён только с явным подтверждением (`confirmOutsideRoot`);
+ * - `deny` — путь запрещён (managed-развёртывание: жёстко).
+ *
+ * Значение `''` (пустая строка) в конфиге означает «не задано» — эффективной
+ * политикой тогда считается `confirm` (резолвер `resolveWorkspaceOutsideRootPolicy`).
+ */
+export type WorkspaceOutsideRootPolicy = 'confirm' | 'deny';
+
+/**
+ * AD-075: ответ `GET /api/v2/settings/workspace-policy`.
+ * `readOnly` (additive) — managed-развёртывание: политика задаётся развёртыванием,
+ * `PUT`/`DELETE` возвращают 403 `WORKSPACE_POLICY_READ_ONLY`.
+ */
+export interface WorkspacePolicyInfo {
+  outsideRoot: WorkspaceOutsideRootPolicy;
+  isOverridden: boolean;
+  defaults: WorkspaceOutsideRootPolicy;
+  readOnly?: boolean;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -1157,6 +1179,8 @@ export enum FsErrorCode {
   PERMISSION_DENIED = 'PERMISSION_DENIED',
   ALREADY_EXISTS = 'ALREADY_EXISTS',
   DIR_NOT_EMPTY = 'DIR_NOT_EMPTY',
+  /** AD-075: путь вне `workspacesRoot` запрещён политикой (managed). */
+  WORKSPACE_OUTSIDE_ROOT_DENIED = 'WORKSPACE_OUTSIDE_ROOT_DENIED',
 }
 
 export interface FileEntry {

@@ -1,15 +1,28 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { resolve } from 'node:path';
-import { stat } from 'node:fs/promises';
+import { mkdir, readdir } from 'node:fs/promises';
 import type { AuthKit } from '../auth/middleware.js';
 import type { ProjectStore } from '../storage/project-store.js';
 import type { SessionManager, McpManager } from '@itphx/synth-core';
 import { serializeProject } from '@itphx/synth-core';
 import type { Project } from '@itphx/synth-shared';
-import { ProjectRole, projectMcpUpdateSchema } from '@itphx/synth-shared';
+import {
+  ProjectRole,
+  projectMcpUpdateSchema,
+  slugifyWorkspaceName,
+  uniqueWorkspaceName,
+} from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
 import { WorkspaceResolver } from '../lib/workspace-resolver.js';
+
+/**
+ * AD-075: результат provisioning workspace managed-проекта.
+ * Успех возвращает нормализованный относительный workspace; ошибка — статус/код для API.
+ */
+type WorkspaceProvisionResult =
+  | { ok: true; workspace: string }
+  | { ok: false; status: 400 | 403 | 422; code: string; message: string };
 
 /**
  * План проекта (AD-039): структурированный объект ProjectPlan, создаётся/редактируется
@@ -32,39 +45,94 @@ export function createProjectRoutes(
   );
 
   /** AD-071 §2.4: owner проекта или глобальные LEAD/ADMIN (через AuthKit). */
-  const canManageProjectMcp = (
+  const canManageProject = (
     c: Parameters<typeof kit.isAdmin>[0],
     project: Project,
     userId: string,
   ): boolean =>
-    kit.isAdmin(c)
+    (typeof kit.isAdmin === 'function' && kit.isAdmin(c))
     || (typeof kit.hasRole === 'function' && kit.hasRole(c, 'LEAD'))
     || project.ownerId === userId
     || project.members?.[userId] === ProjectRole.OWNER;
 
   const knownMcpServers = (): string[] => Object.keys(mcpManager?.getConfig() ?? {});
 
-  async function validateWorkspaceValue(workspace: string | undefined | null): Promise<string | null> {
-    if (!workspace) {
-      return null;
-    }
-
-    const pathError = wsResolver.validateWorkspacePath(workspace);
-    if (pathError) return pathError;
-
-    return await _checkDirectoryExists(resolve(workspacesRoot, workspace));
+  /** Все `workspace` известных проектов (относительные — как есть) для авто-имени. */
+  async function collectExistingWorkspaces(): Promise<string[]> {
+    const projects = await store.list();
+    return projects
+      .map((p) => p.workspace)
+      .filter((w): w is string => typeof w === 'string' && w.length > 0);
   }
 
-  async function _checkDirectoryExists(wsPath: string): Promise<string | null> {
+  /** D8: имена существующих подкаталогов корня (чтобы авто-имя не «всмерилось» в чужой каталог). */
+  async function collectExistingRootDirs(): Promise<string[]> {
     try {
-      const s = await stat(wsPath);
-      if (!s.isDirectory()) {
-        return 'Workspace не является директорией';
-      }
-      return null;
+      const entries = await readdir(workspacesRoot, { withFileTypes: true });
+      return entries.filter((e) => e.isDirectory()).map((e) => e.name);
     } catch {
-      return `Директория workspace не найдена: ${wsPath}`;
+      return [];
     }
+  }
+
+  const createFailed = (err: unknown): WorkspaceProvisionResult => ({
+    ok: false,
+    status: 422,
+    code: 'WORKSPACE_CREATE_FAILED',
+    message: `Не удалось создать каталог workspace: ${err instanceof Error ? err.message : String(err)}`,
+  });
+
+  /**
+   * AD-075: нормализует и провижнит workspace managed-проекта.
+   * - явный путь: `validateWorkspacePath` (абсолютный внутри root → относительный,
+   *   вне root / traversal → 403), затем `mkdir -p` (вложенность разрешена);
+   * - пустой: авто-имя. `taken` = workspace проектов + существующие подкаталоги root;
+   *   имя занимается атомарно `mkdir` без `recursive` (top-level), при `EEXIST`
+   *   берётся следующий суффикс `-2`, `-3`, … — два параллельных POST не получат
+   *   один и тот же авто-workspace.
+   */
+  async function provisionWorkspace(name: string, rawWorkspace: unknown): Promise<WorkspaceProvisionResult> {
+    if (typeof rawWorkspace === 'string' && rawWorkspace.trim()) {
+      const validation = wsResolver.validateWorkspacePath(rawWorkspace);
+      if (!validation.ok) return validation;
+      try {
+        await mkdir(resolve(workspacesRoot, validation.workspace), { recursive: true });
+      } catch (err) {
+        return createFailed(err);
+      }
+      return { ok: true, workspace: validation.workspace };
+    }
+
+    // Авто-имя: корень создаём заранее (top-level `mkdir` без recursive требует родителя).
+    await mkdir(workspacesRoot, { recursive: true }).catch(() => {});
+    const base = slugifyWorkspaceName(name);
+    const taken = new Set<string>([
+      ...(await collectExistingWorkspaces()),
+      ...(await collectExistingRootDirs()),
+    ]);
+
+    for (let attempt = 0; attempt < 10_000; attempt++) {
+      const candidate = uniqueWorkspaceName(base, [...taken]);
+      try {
+        await mkdir(resolve(workspacesRoot, candidate), { recursive: false });
+        return { ok: true, workspace: candidate };
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException | undefined)?.code;
+        if (code === 'EEXIST' || code === 'ENOTEMPTY') {
+          // Каталог уже занят — следующий суффикс.
+          taken.add(candidate);
+          continue;
+        }
+        return createFailed(err);
+      }
+    }
+
+    return {
+      ok: false,
+      status: 422,
+      code: 'WORKSPACE_CREATE_FAILED',
+      message: 'Не удалось подобрать свободное имя каталога workspace',
+    };
   }
 
   // GET /api/v2/projects — список проектов
@@ -84,18 +152,18 @@ export function createProjectRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.nameRequired', undefined, c) } }, 400);
     }
 
-    if (body.workspace) {
-      const wsError = await validateWorkspaceValue(body.workspace);
-      if (wsError) {
-        return c.json({ error: { code: 'VALIDATION_ERROR', message: wsError } }, 422);
-      }
+    // AD-075: managed-провижнинг — нормализация пути и `mkdir -p` вместо проверки 422.
+    // Создатель становится владельцем проекта, поэтому RBAC для POST не ограничивает.
+    const provisioned = await provisionWorkspace(name, body.workspace);
+    if (!provisioned.ok) {
+      return c.json({ error: { code: provisioned.code, message: provisioned.message } }, provisioned.status);
     }
 
     const project = store.create(name, user.id, {
       description: body.description,
       icon: body.icon,
       color: body.color,
-      workspace: body.workspace || undefined,
+      workspace: provisioned.workspace,
       repos: body.repos || undefined,
     });
     const planResult = planFieldSchema.safeParse(body.plan);
@@ -124,7 +192,7 @@ export function createProjectRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.project', undefined, c) } }, 404);
     }
     const user = (await kit.getCurrentUser(c))!;
-    if (!canManageProjectMcp(c, project, user.id)) {
+    if (!canManageProject(c, project, user.id)) {
       return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
     }
     return c.json({
@@ -142,7 +210,7 @@ export function createProjectRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.project', undefined, c) } }, 404);
     }
     const user = (await kit.getCurrentUser(c))!;
-    if (!canManageProjectMcp(c, project, user.id)) {
+    if (!canManageProject(c, project, user.id)) {
       return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
     }
 
@@ -184,6 +252,15 @@ export function createProjectRoutes(
     }
     const body = await c.req.json().catch(() => ({}));
 
+    // AD-075: смена workspace — только владелец проекта / LEAD / ADMIN.
+    // Проверка до любых мутаций: при отказе проект не меняется вовсе.
+    if (body.workspace !== undefined) {
+      const user = (await kit.getCurrentUser(c))!;
+      if (!canManageProject(c, project, user.id)) {
+        return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
+      }
+    }
+
     if (body.name !== undefined) project.name = body.name;
     if (body.description !== undefined) project.description = body.description;
     if (body.current_task !== undefined) project.currentTask = body.current_task;
@@ -191,13 +268,17 @@ export function createProjectRoutes(
     if (body.icon !== undefined) project.icon = body.icon;
     if (body.color !== undefined) project.color = body.color;
     if (body.workspace !== undefined) {
-      if (body.workspace !== null && body.workspace !== '') {
-        const wsError = await validateWorkspaceValue(body.workspace);
-        if (wsError) {
-          return c.json({ error: { code: 'VALIDATION_ERROR', message: wsError } }, 422);
+      if (typeof body.workspace === 'string' && body.workspace.trim()) {
+        // AD-075: нормализация пути + `mkdir -p` (абсолютный внутри root → относительный).
+        const provisioned = await provisionWorkspace(body.name ?? project.name, body.workspace);
+        if (!provisioned.ok) {
+          return c.json({ error: { code: provisioned.code, message: provisioned.message } }, provisioned.status);
         }
+        project.workspace = provisioned.workspace;
+      } else {
+        // Явная очистка workspace — без авто-имени.
+        project.workspace = undefined;
       }
-      project.workspace = body.workspace || undefined;
     }
     if (body.repos !== undefined) project.repos = body.repos;
     const planResult = planFieldSchema.safeParse(body.plan);

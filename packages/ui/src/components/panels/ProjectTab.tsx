@@ -10,6 +10,8 @@ import { synthApi, type ProjectData, type ProjectMcpResponse, type ProjectSkills
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '@/components/ui/Toggle'
 import { InfoField as Field, InfoSection as Section } from '@/components/ui/settings'
+import { DirectoryPickerDialog } from '@/components/ui/DirectoryPickerDialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { CreateProjectPopover } from '@/components/panels/CreateProjectPopover'
 import type { ProjectPlan, McpRegistryEntry } from '@itphx/synth-shared'
 
@@ -27,11 +29,17 @@ export function ProjectTab() {
   const [loading, setLoading] = useState(false)
   const [workspaceDraft, setWorkspaceDraft] = useState('')
   const [saving, setSaving] = useState(false)
+  // AD-075: выбор каталога через FS-диалог + подтверждение пути вне workspacesRoot.
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [pendingWorkspace, setPendingWorkspace] = useState<string | null>(null)
   const [invariantsDraft, setInvariantsDraft] = useState('')
   const [invariantsSaving, setInvariantsSaving] = useState(false)
 
   // AD-071 §2.4: проектный MCP-скоуп (owner/lead/admin)
   const user = useAuthStore((s) => s.user)
+  // AD-075: managed-развёртывание владеет ФС проекта — путь не редактируется.
+  const deployment = useAuthStore((s) => s.deployment)
   const [projectMcp, setProjectMcp] = useState<ProjectMcpResponse | null>(null)
   const [mcpRegistry, setMcpRegistry] = useState<McpRegistryEntry[]>([])
   const [mcpSaving, setMcpSaving] = useState(false)
@@ -268,6 +276,43 @@ export function ProjectTab() {
     )
   }
 
+  // AD-075: managed-проект (ФС у backend) и remote-проект (локальный UI без доступа к ФС)
+  // — workspace задаётся сервером, поле только для чтения.
+  const isRemoteProject = project?.origin === 'remote' || (project?.id?.startsWith('remote:') ?? false)
+  const workspaceReadOnly = deployment === 'managed' || isRemoteProject
+
+  /**
+   * AD-075: сохранить workspace. При 409 `WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`
+   * (путь вне `workspacesRoot`, политика confirm) показывает ConfirmDialog и
+   * повторяет запрос с `confirmOutsideRoot: true`; 403 — понятная ошибка.
+   */
+  const performSaveWorkspace = async (path: string, confirmOutsideRoot = false) => {
+    if (!project) return
+    setSaving(true)
+    try {
+      const updated = await synthApi.updateProject(project.id, { workspace: path, confirmOutsideRoot })
+      setProject(updated)
+      setWorkspaceDraft(updated.workspace || '')
+      useProjectsStore.getState().updateProjectInList(updated)
+      notify({ text: t('projectTab.workspace.saved'), type: 'success', category: 'system', sessionId: sessionId || undefined })
+    } catch (err) {
+      const e = err as { status?: number; code?: string }
+      if (!confirmOutsideRoot && e?.code === 'WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED') {
+        setPendingWorkspace(path)
+        setConfirmOpen(true)
+        return
+      }
+      if (e?.status === 403 || e?.code === 'WORKSPACE_OUTSIDE_ROOT_DENIED') {
+        notify({ text: t('workspace.error.denied'), type: 'error', category: 'error', sessionId: sessionId || undefined })
+        return
+      }
+      const msg = err instanceof Error ? err.message : String(err)
+      notify({ text: `${t('projectTab.workspace.saveError')}: ${msg}`, type: 'error', category: 'error', sessionId: sessionId || undefined })
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const handleSaveWorkspace = async () => {
     if (!project) return
     const path = workspaceDraft.trim()
@@ -275,19 +320,13 @@ export function ProjectTab() {
       notify({ text: t('projectTab.workspace.pathRequired'), type: 'warning', category: 'error', sessionId: sessionId || undefined })
       return
     }
-    setSaving(true)
-    try {
-      const updated = await synthApi.updateProject(project.id, { workspace: path })
-      setProject(updated)
-      setWorkspaceDraft(updated.workspace || '')
-      useProjectsStore.getState().updateProjectInList(updated)
-      notify({ text: t('projectTab.workspace.saved'), type: 'success', category: 'system', sessionId: sessionId || undefined })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      notify({ text: `${t('projectTab.workspace.saveError')}: ${msg}`, type: 'error', category: 'error', sessionId: sessionId || undefined })
-    } finally {
-      setSaving(false)
-    }
+    await performSaveWorkspace(path)
+  }
+
+  const confirmOutsideSave = () => {
+    const target = pendingWorkspace
+    setPendingWorkspace(null)
+    if (target) void performSaveWorkspace(target, true)
   }
 
   const handleSaveInvariants = async () => {
@@ -325,19 +364,58 @@ export function ProjectTab() {
             value={workspaceDraft}
             onChange={(e) => setWorkspaceDraft(e.target.value)}
             placeholder={t('projectTab.workspace.placeholder')}
-            className="flex-1 min-w-0 rounded-md bg-input border border-border px-2 py-1.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-            onKeyDown={(e) => e.key === 'Enter' && handleSaveWorkspace()}
+            readOnly={workspaceReadOnly}
+            className={`flex-1 min-w-0 rounded-md bg-input border border-border px-2 py-1.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring${workspaceReadOnly ? ' opacity-70 cursor-default' : ''}`}
+            onKeyDown={(e) => !workspaceReadOnly && e.key === 'Enter' && handleSaveWorkspace()}
+            data-testid="project-workspace-input"
           />
-          <button
-            onClick={handleSaveWorkspace}
-            disabled={saving}
-            className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-          >
-            {saving ? t('projectTab.workspace.saving') : t('projectTab.workspace.save')}
-          </button>
+          {!workspaceReadOnly && (
+            <button
+              type="button"
+              onClick={() => setPickerOpen(true)}
+              className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-interactive-hover transition-colors"
+              data-testid="project-workspace-browse"
+            >
+              {t('workspace.select')}
+            </button>
+          )}
+          {!workspaceReadOnly && (
+            <button
+              onClick={handleSaveWorkspace}
+              disabled={saving}
+              className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
+              data-testid="project-workspace-save"
+            >
+              {saving ? t('projectTab.workspace.saving') : t('projectTab.workspace.save')}
+            </button>
+          )}
         </div>
+        {workspaceReadOnly && (
+          <div className="text-[0.625rem] text-muted-foreground/70" data-testid="project-workspace-readonly">
+            {t('workspace.managedReadOnly')}
+          </div>
+        )}
         <div className="text-[0.625rem] text-muted-foreground/60">{t('projectTab.workspace.hint')}</div>
       </Section>
+
+      <DirectoryPickerDialog
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        value={workspaceDraft}
+        onSelect={(path) => setWorkspaceDraft(path)}
+      />
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={(next) => {
+          setConfirmOpen(next)
+          if (!next) setPendingWorkspace(null)
+        }}
+        title={t('workspace.outsideRootConfirmTitle')}
+        message={t('workspace.outsideRootConfirmMessage', { path: pendingWorkspace ?? '' })}
+        variant="warning"
+        onConfirm={confirmOutsideSave}
+      />
 
       <Section title={t('projectTab.invariants.title')}>
         <div className="flex flex-col gap-2">

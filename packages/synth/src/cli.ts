@@ -70,7 +70,7 @@ program
         port: parseInt(options.port, 10),
         apiKey: options.apiKey,
       },
-      storage: { dataDir, workspacesRoot: '', defaultWorkspace: '' },
+      storage: { dataDir, workspacesRoot: '', defaultWorkspace: '', workspaceOutsideRoot: '' },
     };
     if (startupBackendUrl) {
       // deepMerge на рантайме сольёт частичную секцию remote с defaultConfig; тип требует полный RemoteConfig.
