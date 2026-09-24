@@ -93,6 +93,57 @@ export interface ProjectInstructionsResult {
   diagnostics: InstructionsDiagnostic[];
 }
 
+/** AD-069 §9.3: уровень диагностики прозрачности (аналогично `SkillDiagnostic`). */
+export type InstructionsReportLevel = 'info' | 'warning' | 'error';
+
+/** Файл инструкций в снимке прозрачности: резолвер-поля + сводный статус/scan. */
+export interface InstructionsReportFile {
+  path: string;
+  kind: InstructionsSourceKind;
+  label?: string;
+  url?: string;
+  chars: number;
+  truncated: boolean;
+  status: InstructionsDiagnosticStatus;
+  scan?: {
+    scanned: boolean;
+    blocked: boolean;
+    suspicious: boolean;
+    matches: string[];
+  };
+}
+
+/** Диагностика прозрачности: `level`/`code`/`message` + путь/источник. */
+export interface InstructionsReportDiagnostic {
+  level: InstructionsReportLevel;
+  code: string;
+  message: string;
+  path?: string;
+  kind?: InstructionsSourceKind;
+}
+
+/** Снимок проектных инструкций для `GET /api/v2/context/instructions` (AD-069 §9.3). */
+export interface InstructionsInfo {
+  enabled: boolean;
+  cap: { chars: number; source: 'dynamic' | 'override'; contextWindow: number };
+  files: InstructionsReportFile[];
+  diagnostics: InstructionsReportDiagnostic[];
+}
+
+/** Метаданные запроса снимка (окно модели и projectId для `excludeProjects`). */
+export interface InstructionsInfoQuery {
+  /** Абсолютный workspace; не задан — проектные инструкции недоступны (AD-040). */
+  workspace?: string;
+  contextWindow?: number;
+  language?: string;
+  projectId?: string;
+  signal?: AbortSignal;
+  injection?: { enabled: boolean; mode: InjectionPolicy };
+}
+
+/** Резолвер снимка прозрачности: `ProjectInstructionsResolver` + маппинг в API-форму. */
+export type InstructionsInfoResolver = (query: InstructionsInfoQuery) => Promise<InstructionsInfo>;
+
 export interface ProjectInstructionsResolveArgs {
   /** Абсолютный рабочий каталог (уже резолвнутый `project.workspace`). */
   workspace: string;
@@ -931,4 +982,134 @@ export class ProjectInstructionsResolver {
       diagnostics: diagnostic ? [diagnostic] : [],
     };
   }
+}
+
+/** Статус резолвера → уровень/сообщение диагностики прозрачности (AD-069 §9.3). */
+const DIAGNOSTIC_META: Record<InstructionsDiagnosticStatus, { level: InstructionsReportLevel; message: string }> = {
+  loaded: { level: 'info', message: 'Инструкции загружены' },
+  truncated: { level: 'warning', message: 'Инструкции обрезаны по капу' },
+  blocked: { level: 'error', message: 'Контент заблокирован threat-scan' },
+  dedup: { level: 'info', message: 'Пропущен дубликат контента' },
+  skipped: { level: 'info', message: 'Источник пропущен' },
+  untrusted: { level: 'warning', message: 'Недоверенный проект — инструкции не загружены' },
+  'skipped-install-tree': { level: 'warning', message: 'Каталог внутри дерева исходников Synth — инструкции не загружены' },
+  excluded: { level: 'info', message: 'Проект исключён из автозагрузки' },
+  'fetch-error': { level: 'warning', message: 'Ошибка загрузки источника' },
+};
+
+/** Человекочитаемые причины резолвера (для `diagnostics[].message`). */
+const REASON_MESSAGES: Record<string, string> = {
+  disabled: 'автозагрузка отключена (instructions.enabled=false)',
+  excludeProjects: 'проект в instructions.excludeProjects',
+  'untrusted-project': 'каталог не в skills.trustedProjectDirs',
+  'install-tree': 'install-tree guard',
+  injection: 'сработал threat-scan',
+  'injection-flagged': 'подозрительный контент помечен',
+  empty: 'пустой файл',
+  'read-error': 'ошибка чтения',
+  'not-found': 'файл не найден',
+  'deprecated-context-md': 'deprecated CONTEXT.md',
+};
+
+/** Статус per-file резолвера (в отличие от диагностик уровней проекта). */
+function isFileStatus(status: InstructionsDiagnosticStatus): boolean {
+  return status === 'loaded' || status === 'truncated' || status === 'blocked';
+}
+
+/**
+ * Строит снимок прозрачности (AD-069 §9.3) из результата резолвера Ф2a.
+ * Файлы и диагностики переиспользуются из резолвера без повторного discovery.
+ */
+export function buildInstructionsInfo(
+  result: ProjectInstructionsResult,
+  config: InstructionsConfig,
+  contextWindow?: number,
+): InstructionsInfo {
+  const window =
+    typeof contextWindow === 'number' && contextWindow > 0
+      ? contextWindow
+      : DEFAULT_INSTRUCTIONS_CONTEXT_WINDOW;
+
+  const files: InstructionsReportFile[] = result.files.map((file) => {
+    const diagnostic = result.diagnostics.find(
+      (d) => d.path === file.path && isFileStatus(d.status),
+    );
+    const status: InstructionsDiagnosticStatus =
+      diagnostic?.status ?? (file.blocked ? 'blocked' : file.truncated ? 'truncated' : 'loaded');
+    return {
+      path: file.path,
+      kind: file.kind,
+      ...(file.label ? { label: file.label } : {}),
+      ...(file.url ? { url: file.url } : {}),
+      chars: file.chars,
+      truncated: file.truncated,
+      status,
+      scan: {
+        scanned: file.scanned,
+        blocked: file.blocked,
+        suspicious: status === 'blocked' || diagnostic?.reason === 'injection-flagged',
+        matches: diagnostic?.matches ?? [],
+      },
+    };
+  });
+
+  const diagnostics: InstructionsReportDiagnostic[] = result.diagnostics.map((diagnostic) => {
+    const meta = DIAGNOSTIC_META[diagnostic.status];
+    const reason = diagnostic.reason ? REASON_MESSAGES[diagnostic.reason] ?? diagnostic.reason : '';
+    return {
+      level: meta.level,
+      code: diagnostic.status,
+      message: reason ? `${meta.message}: ${reason}` : meta.message,
+      ...(diagnostic.path ? { path: diagnostic.path } : {}),
+      ...(diagnostic.kind ? { kind: diagnostic.kind } : {}),
+    };
+  });
+
+  return {
+    enabled: config.enabled,
+    cap: {
+      chars: resolveInstructionsCap(config, contextWindow),
+      source: config.maxChars ? 'override' : 'dynamic',
+      contextWindow: window,
+    },
+    files,
+    diagnostics,
+  };
+}
+
+/**
+ * Оборачивает `ProjectInstructionsResolver` в резолвер снимка прозрачности.
+ *
+ * Сессия без проекта (`workspace` не задан, AD-040) → пустой снимок с причиной
+ * `no-project` в диагностике; иначе — резолвинг merged chain + `config.sources`.
+ */
+export function createInstructionsInfoResolver(
+  resolver: ProjectInstructionsResolver,
+  config: InstructionsConfig,
+): InstructionsInfoResolver {
+  return async (query: InstructionsInfoQuery): Promise<InstructionsInfo> => {
+    if (!query.workspace) {
+      const info = buildInstructionsInfo(
+        { content: '', files: [], diagnostics: [] },
+        config,
+        query.contextWindow,
+      );
+      info.diagnostics.push({
+        level: 'info',
+        code: 'no-project',
+        message: 'Проект не выбран — проектные инструкции недоступны',
+      });
+      return info;
+    }
+
+    const result = await resolver.resolve({
+      workspace: query.workspace,
+      contextWindow: query.contextWindow,
+      language: query.language,
+      projectId: query.projectId,
+      signal: query.signal,
+      injection: query.injection,
+    });
+    return buildInstructionsInfo(result, config, query.contextWindow);
+  };
 }

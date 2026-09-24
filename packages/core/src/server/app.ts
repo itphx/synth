@@ -48,6 +48,8 @@ import { createSettingsRoutes } from './routes/settings.js';
 import { createDictionaryRoutes } from './routes/dictionaries.js';
 import { createMcpRoutes } from './routes/mcp.js';
 import { createSkillRoutes } from './routes/skills.js';
+import { createContextRoutes } from './routes/context.js';
+import { ProjectInstructionsResolver, createInstructionsInfoResolver } from '../engine/context/instructions.js';
 import { SkillService } from '../engine/skills/service.js';
 import { createCommandRoutes } from './routes/commands.js';
 import { createSkillBundleRoutes } from './routes/skill-bundles.js';
@@ -1010,6 +1012,31 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     resolveProjectWorkspace: resolveSkillWorkspace,
   }));
   app.route('/api/v2/settings', createSkillSettingsRoutes(auth, { settingsStore }));
+
+  // AD-069 §9.3: read-only прозрачность проектных инструкций (session/project scope).
+  // Резолвер — тот же core-модуль, что у оркестратора (Фаза 1/2a); доступ —
+  // владелец|ADMIN по сессии, owner/LEAD/ADMIN по проекту.
+  if (config.instructionsConfig) {
+    const instructionsInfoResolver = createInstructionsInfoResolver(
+      new ProjectInstructionsResolver({
+        config: config.instructionsConfig,
+        dictionaryStore,
+        dataDir,
+        trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
+      }),
+      config.instructionsConfig,
+    );
+    app.route('/api/v2/context', createContextRoutes(auth, {
+      resolveInstructions: instructionsInfoResolver,
+      sessionManager,
+      projectStore,
+      resolveProjectWorkspace: resolveSkillWorkspace,
+      resolveContextWindow: (session) => {
+        const model = session?.settings.model;
+        return model ? modelWindowLoader(model) || undefined : undefined;
+      },
+    }));
+  }
 
   // Глобальный SSE-хаб
   app.get('/api/v2/events', async (c) => {

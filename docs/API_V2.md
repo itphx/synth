@@ -348,6 +348,18 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/context/enabled` | ADMIN | `{enabled:[]}` |
 | POST | `/api/v2/context/enabled` | ADMIN | `{files:[]}` |
 
+### 5.13.1 Проектные инструкции — `/api/v2/context/instructions` (core+backend, AD-069 §9.3)
+
+Read-only прозрачность загруженных проектных инструкций (`AGENTS.md` и совместимые).
+
+| Метод | Путь | RBAC | Назначение |
+|---|---|---|---|
+| GET | `/api/v2/context/instructions?session_id=<id>` | owner/ADMIN | Снимок для workspace проекта сессии; сессия без проекта → пустой результат, `diagnostics[].code='no-project'` |
+| GET | `/api/v2/context/instructions?project_id=<id>` | owner/LEAD/ADMIN | Снимок для проекта |
+
+Ответ: `{ session_id?\|project_id?, enabled, cap: { chars, source: 'dynamic'\|'override', contextWindow }, files: [{ path, kind, label?, url?, chars, truncated, status, scan? }], diagnostics: [{ level, code, message, path?, kind? }] }` — структура из резолвера
+AD-069 Ф2a (`engine/context/instructions.ts`); `status` — `loaded`/`truncated`/`blocked`/`dedup`/`skipped`/`untrusted`/`skipped-install-tree`/`excluded`/`fetch-error`. Без `session_id`/`project_id` → 400; неизвестный id → 404; чужой доступ → 403. Запись в хранилище не выполняется.
+
 ### 5.14 Users — `/api/v2/users` (backend, ADMIN)
 
 | Метод | Путь | Назначение |

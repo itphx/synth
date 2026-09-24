@@ -126,6 +126,26 @@ export { SkillStore } from './storage/skill-store.js';
 export type { SkillStoreConfig, CreateSkillInput, UpdateSkillMarkdownInput } from './storage/skill-store.js';
 export { createSkillRoutes } from './server/routes/skills.js';
 export type { SkillRoutesDeps, SkillRoutesOptions, SkillRoutesMessages } from './server/routes/skills.js';
+// AD-069 §9.3: прозрачность проектных инструкций (резолвер снимка + API-роут).
+export {
+  ProjectInstructionsResolver,
+  buildInstructionsInfo,
+  createInstructionsInfoResolver,
+} from './engine/context/instructions.js';
+export type {
+  InstructionsInfo,
+  InstructionsInfoQuery,
+  InstructionsInfoResolver,
+  InstructionsReportDiagnostic,
+  InstructionsReportFile,
+  InstructionsReportLevel,
+} from './engine/context/instructions.js';
+export { createContextRoutes } from './server/routes/context.js';
+export type {
+  ContextRoutesOptions,
+  ContextRoutesMessages,
+  ContextProjectStore,
+} from './server/routes/context.js';
 // AD-046 §7: slash-команды и bundles.
 export { CommandService } from './engine/commands/service.js';
 export type { CommandServiceOptions, CommandSkillSource } from './engine/commands/service.js';

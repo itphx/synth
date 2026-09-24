@@ -31,6 +31,8 @@ import {
   SkillService, createSkillRoutes,
   CommandService, createCommandRoutes, createSkillBundleRoutes, SkillBundleStore,
   createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes,
+  ProjectInstructionsResolver, createInstructionsInfoResolver,
+  createContextRoutes as createCoreContextRoutes,
   DEFAULT_AGENT_ID,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
@@ -50,7 +52,7 @@ import { createFsRoutes } from './routes/fs.js';
 import { createProviderRoutes } from './routes/providers.js';
 import { createModelRoutes } from './routes/models.js';
 import { createAgentRoutes } from './routes/agents.js';
-import { createContextRoutes } from './routes/context.js';
+import { createContextRoutes as createContextFileRoutes } from './routes/context.js';
 import { createDebugRoutes } from './routes/debug.js';
 import { createUserRoutes } from './routes/users.js';
 import { createGitRoutes } from './routes/git.js';
@@ -548,8 +550,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Agents routes
     app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, sessionManager, agentRegistry, getDefaultAgentId));
 
-    // Context routes
-    app.route('/api/v2/context', createContextRoutes(auth, contextConfig));
+    // Context routes (глобальные identity-файлы; админ-мутации)
+    app.route('/api/v2/context', createContextFileRoutes(auth, contextConfig));
 
     // User admin routes
     app.route('/api/v2/users', createUserRoutes(auth, profilesStore));
@@ -743,6 +745,38 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       dictionaryStore,
       { writeGuard: auth.requireAdmin },
     ));
+
+    // AD-069 §9.3: прозрачность проектных инструкций — core-фабрика (резолвер не
+    // дублируется). RBAC: сессия — владелец|ADMIN (canAccess, как в session-роутах);
+    // проект — owner/LEAD/ADMIN (canAccessProject, как в project-скиллах).
+    const instructionsInfoResolver = createInstructionsInfoResolver(
+      new ProjectInstructionsResolver({
+        config: backendConfig.synth.instructions,
+        dictionaryStore,
+        dataDir,
+        trustedProjectDirs: backendConfig.synth.skills.trustedProjectDirs,
+      }),
+      backendConfig.synth.instructions,
+    );
+    app.route('/api/v2/context', createCoreContextRoutes(auth as unknown as CoreAuthKit, {
+      resolveInstructions: instructionsInfoResolver,
+      sessionManager,
+      projectStore,
+      resolveProjectWorkspace: resolveSkillWorkspace,
+      resolveContextWindow: (session) => {
+        const model = session?.settings.model;
+        return model ? modelWindowLoader(model) || undefined : undefined;
+      },
+      resolveUserId: async (c) => (await auth.getCurrentUser(c as never))?.id ?? '',
+      canAccess: (session, c, userId) =>
+        (session.ownerId ?? session.userId) === userId
+        || auth.isAdmin(c as never),
+      canAccessProject: (project, c, userId) =>
+        auth.isAdmin(c as never)
+        || auth.hasRole(c as never, 'LEAD')
+        || project.ownerId === userId
+        || project.members?.[userId] === ProjectRole.OWNER,
+    }));
 
     // Глобальный SSE-хаб для всех сессий пользователя
     app.get('/api/v2/events', auth.requireAuth, async (c) => {
