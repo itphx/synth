@@ -17,6 +17,9 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 |-----------|------------|--------------|
 | `SYNTH_API_KEY` | Ключ для входа в API (backend → роль ADMIN; core standalone → роль USER) | — |
 | `SYNTH_DATA_DIR` | Каталог данных (сессии, проекты, провайдеры, модели) | по режиму: `~/.local/share/synth` (user), `./data` (dev), `/var/synth/data` (docker/server) |
+| `SYNTH_WORKSPACES_ROOT` | Корень каталогов workspace проектов (`storage.workspacesRoot`) | `{dataDir}/workspaces` |
+| `SYNTH_DEFAULT_WORKSPACE` | Рабочий каталог по умолчанию (`storage.defaultWorkspace`) | `{dataDir}/workspaces/default` |
+| `SYNTH_WORKSPACE_OUTSIDE_ROOT` | AD-075: политика абсолютного workspace вне `workspacesRoot` (`confirm`/`deny`) | по режиму (standalone — `confirm`, managed — `deny`) |
 | `SYNTH_CONFIG` | Путь к `config.yaml` (приоритетнее каскадного поиска) | каскадный поиск |
 | `SYNTH_HOST` | Адрес прослушивания HTTP-серверов (backend, core, CLI-обёртка) | `0.0.0.0` |
 | `SYNTH_PORT` | Порт бэкенда | `5000` |
@@ -71,8 +74,11 @@ server:
 
 storage:
   dataDir: "/var/synth/data"      # каталог данных вне репозитория
-  workspacesRoot: ""              # если пусто — {dataDir}/workspaces
-  defaultWorkspace: ""            # если пусто — {dataDir}/workspaces/default
+  workspacesRoot: ""              # если пусто — {dataDir}/workspaces; SYNTH_WORKSPACES_ROOT
+  defaultWorkspace: ""            # если пусто — {dataDir}/workspaces/default; SYNTH_DEFAULT_WORKSPACE
+  workspaceOutsideRoot: ""        # AD-075: политика для абсолютного workspace вне workspacesRoot
+                                  # confirm | deny; пусто — дефолт по режиму (standalone — confirm,
+                                  # managed — deny); SYNTH_WORKSPACE_OUTSIDE_ROOT
 
 auth:
   debugMode: false                # SYNTH_AUTH_DEBUG
@@ -192,6 +198,13 @@ remote:                           # гибридный режим: локаль�
 ```
 
 Полный список полей (включая `logging`, `tsm`, `context`, `summarization`, `mcp`, `auth.oidc`) — в `packages/shared/src/config/types.ts`.
+
+### Хранилище и рабочий каталог (`storage.*`, AD-075)
+
+- `storage.dataDir` — корень данных (`SYNTH_DATA_DIR`).
+- `storage.workspacesRoot` — корень каталогов workspace проектов; если не задан — `{dataDir}/workspaces` (`SYNTH_WORKSPACES_ROOT`). Managed-проекты создают workspace внутри него (авто-имя `slugify(name)` + суффикс `-2/-3…`); абсолютный путь внутри root нормализуется в относительный.
+- `storage.defaultWorkspace` — рабочий каталог сессий без проекта; если не задан — `{dataDir}/workspaces/default` (`SYNTH_DEFAULT_WORKSPACE`). Runtime-override — `PUT /api/v2/settings/workspace`.
+- `storage.workspaceOutsideRoot` — политика для абсолютного `project.workspace` вне `workspacesRoot` (`confirm` — подтверждение флагом `confirmOutsideRoot`, `deny` — запрет). Пусто (`''`) — не задано, эффективно `confirm` в standalone; managed-backend жёстко использует `deny`. Env `SYNTH_WORKSPACE_OUTSIDE_ROOT`, runtime — `GET/PUT/DELETE /api/v2/settings/workspace-policy` (managed — read-only).
 
 ### Политики инструментов (`tools.policy` / `mcp.policy`)
 

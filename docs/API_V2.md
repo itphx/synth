@@ -107,6 +107,7 @@ In-memory `createRateLimiter(maxRequests, windowMs)`, ключ — `Authorizatio
 | `NOT_FOUND` | отсутствие сессии/проекта/провайдера/модели/агента/файла/лога |
 | `CONFLICT` | дубли MCP-сервера, retry-состояние |
 | `ALREADY_EXISTS`, `IS_DIRECTORY`, `DIR_NOT_EMPTY`, `PATH_TRAVERSAL`, `PERMISSION_DENIED` | ФС |
+| `WORKSPACE_OUTSIDE_ROOT_DENIED`, `WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`, `WORKSPACE_CREATE_FAILED`, `WORKSPACE_POLICY_READ_ONLY`, `WORKSPACE_ROOT_NOT_CONFIGURED`, `PROTECTED_PATH_DENIED`, `WORKSPACE_NOT_FOUND`, `WORKSPACE_NOT_SET`, `NOT_A_DIRECTORY` | workspace/ФС (AD-075) |
 | `PROJECT_NOT_FOUND`, `NOT_AVAILABLE` | сессии/настройки |
 | `RATE_LIMITED`, `QUEUE_FULL` | лимиты и очередь |
 | `INVALID_ACTION`, `INVALID_INDICES` | batch-операции сообщений |
@@ -289,6 +290,12 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | POST | `/api/v2/projects/:id/publish` | core | auth | Локальный проект → сервер (гибрид) |
 | POST | `/api/v2/projects/:id/fork-local` | core | auth | Серверный проект → локальный мир (гибрид) |
 
+> `workspace` (AD-075): при `POST`/`PUT` каталог создаётся (`mkdir -p`). Managed: пустой `workspace` → авто-имя
+> `slugify(name)` + суффикс под `workspacesRoot`; абсолютный внутри root нормализуется в относительный; вне root →
+> `403 WORKSPACE_OUTSIDE_ROOT_DENIED`; смена `workspace` — владелец/LEAD/ADMIN, иначе `403 FORBIDDEN`. Core/standalone:
+> абсолютный вне root — `deny` → `403`, `confirm` без `confirmOutsideRoot` → `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
+> Ошибка создания каталога → `422 WORKSPACE_CREATE_FAILED`.
+
 ### 5.9 Providers — `/api/v2/providers`
 
 | Метод | Путь | Сборка | RBAC (backend / core) | Назначение |
@@ -332,9 +339,15 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | DELETE | `/api/v2/fs` | оба | auth | Удалить файл/пустой каталог; `?project_id=&path=` |
 | POST | `/api/v2/fs/mkdir` | оба | auth | `{projectId, path}` |
 | POST | `/api/v2/fs/move` | оба | auth | `{projectId, sourcePath, targetPath}` |
-| GET | `/api/v2/fs/workspace-root` | backend | auth | Подкаталоги корня workspace; `?includeHidden=` |
-| GET | `/api/v2/fs/workspace-root/browse` | backend | auth | Список внутри корня; `?path=&includeHidden=` |
-| POST | `/api/v2/fs/workspace-root/mkdir` | backend | auth | Создать каталог в корне |
+| GET | `/api/v2/fs/workspace-root` | оба | auth | Подкаталоги корня workspace (AD-075); `?includeHidden=` → `{root, entries}` |
+| GET | `/api/v2/fs/workspace-root/browse` | оба | auth | Список внутри корня (AD-075); `?path=&includeHidden=` → `{root, path, entries}` |
+| POST | `/api/v2/fs/workspace-root/mkdir` | оба | auth | Создать каталог в корне (AD-075); `{path, confirmOutsideRoot?}` → 201 `{created, path}` |
+
+> `workspace-root*` (AD-075): абсолютный путь внутри `workspacesRoot` работает; вне root — по политике.
+> `confirm`: browse разрешён, mkdir требует `confirmOutsideRoot: true`, иначе `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
+> `deny`: `403 WORKSPACE_OUTSIDE_ROOT_DENIED`. Traversal `..` → `403 PATH_TRAVERSAL`; protected-paths → `403 PROTECTED_PATH_DENIED`.
+> `mkdir` существующего пути → `409 ALREADY_EXISTS`; несуществующий каталог browse → `404 NOT_FOUND`, не каталог → `400 NOT_A_DIRECTORY`.
+> Backend: формат `FsError` и всегда `deny` (managed); core: стандартный формат, политика из `settings/workspace-policy`.
 
 ### 5.13 Context — `/api/v2/context` (backend)
 
@@ -471,6 +484,9 @@ AD-069 Ф2a (`engine/context/instructions.ts`); `status` — `loaded`/`truncated
 | GET | `/api/v2/settings/workspace` | auth | Рабочий каталог по умолчанию: `{workspace, isOverridden, defaults}` (`defaults` — env/config) |
 | PUT | `/api/v2/settings/workspace` | auth | `{workspace}` |
 | DELETE | `/api/v2/settings/workspace` | auth | Сброс runtime-override к дефолту; `{status:"restored", workspace, isOverridden:false, defaults}` |
+| GET | `/api/v2/settings/workspace-policy` | auth | Политика абсолютного workspace вне `workspacesRoot` (AD-075): `{outsideRoot:"confirm"\|"deny", isOverridden, defaults, readOnly?}` (managed — `readOnly:true`, эффективно `deny`) |
+| PUT | `/api/v2/settings/workspace-policy` | auth | `{outsideRoot}` (live-применение, persist); невалидное значение → `400`; managed → `403 WORKSPACE_POLICY_READ_ONLY` |
+| DELETE | `/api/v2/settings/workspace-policy` | auth | Сброс к config/env-дефолту; `{status:"restored", outsideRoot, isOverridden:false, defaults}`; managed → `403 WORKSPACE_POLICY_READ_ONLY` |
 | GET | `/api/v2/settings/mcp` | auth | Доступность MCP по режимам: `{servers, isOverridden, defaults:{}}` |
 | PUT | `/api/v2/settings/mcp` | auth | `{servers}` |
 | DELETE | `/api/v2/settings/mcp` | auth | Сброс runtime-доступности MCP; `{status:"restored", servers:{}, isOverridden:false, defaults:{}}` |

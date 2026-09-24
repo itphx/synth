@@ -1,7 +1,8 @@
 # AD-075: Окружение проекта: рабочий каталог (создание и выбор)
 
-> **Статус:** ⏳ Не реализовано
+> **Статус:** ✅ Реализовано (2026-09-24)
 > **Источник:** согласовано 2026-09-23 (обсуждение проблем эксплуатации managed-Synth)
+> **Реализация:** 2026-09-24; решения и фактическое поведение — в разделе «Реализация»; известный остаток — D5 (вне объёма).
 
 **Решение:** `project.workspace` остаётся настраиваемым параметром, но **семантика его инициализации и допустимый диапазон путей зависят от режима развёртывания**. Пользователь managed-инстанса не должен упираться в «каталог не найден»: рабочая директория проекта создаётся автоматически; там, где развёртывание локальное, доступен и ручной выбор по файловой системе.
 
@@ -9,7 +10,7 @@
 
 | Режим | Кто владеет ФС | Инициализация workspace | Диапазон путей |
 |---|---|---|---|
-| **Managed / remote-проект** | backend | Автосоздание в предопределённом месте под `workspacesRoot` (схема имени — открытый вопрос). Пользователь путь **не выбирает**, только видит | Строго внутри `workspacesRoot` |
+| **Managed / remote-проект** | backend | Автосоздание в предопределённом месте под `workspacesRoot` (схема имени — `slugify(name)` + суффикс `-2/-3…`, см. «Реализация»). Пользователь путь **не выбирает**, только видит | Строго внутри `workspacesRoot` |
 | **Standalone / локальный проект в гибриде** | локальный core | По умолчанию авто (`{dataDir}/workspaces/<…>`); доступен режим **ручного выбора/создания** через FS-диалог | Допускается произвольный абсолютный путь |
 | **Сессия без проекта** | — | Работает в default workspace (AD-040); диалог доступен при создании/привязке проекта | — |
 
@@ -44,12 +45,68 @@
 5. **I18n-ключи** диалога и ошибок (AD-041).
 6. **Remote-проекты получают workspace** — при создании и в UI; диалог против backend.
 
-## Открытые вопросы
+## Реализация (2026-09-24)
 
-- **Схема авто-имени** managed-workspace: `slug(name)` / имя / `id` / `id-slug`? Устойчивость при переименовании и коллизиях.
-- **Где настраивать auto/manual**: config `storage.*` vs runtime settings (`PUT /api/v2/settings/workspace`).
-- **Поведение диалога вне «безопасного» корня**: предупреждение, подтверждение, или полный запрет для некоторых ролей.
-- **Сессия без проекта**: доступ к FS-диалогу через меню проекта или отдельная точка входа.
+Реализовано в `@itphx/synth-shared`, `@itphx/synth-core`, `@itphx/synth-backend`, `@itphx/synth-ui`
+(ветка `feat/ad-075-workspace-provisioning`). Ниже — принятые решения и фактическое поведение.
+
+### 1. Managed (backend)
+
+- **Автосоздание**: `POST/PUT /api/v2/projects` создают каталог `workspace` (`mkdir -p`); ошибка 422 «каталог не найден» убрана.
+- **Нормализация пути** (`WorkspaceResolver.validateWorkspacePath`, `packages/backend/src/lib/workspace-resolver.ts`):
+  - относительный путь — внутри `workspacesRoot`, сохраняется как есть;
+  - абсолютный внутри `workspacesRoot` — нормализуется в относительный;
+  - абсолютный вне root (или traversal `..` за root) → `403 WORKSPACE_OUTSIDE_ROOT_DENIED`;
+  - пустой путь / сам корень → `400 VALIDATION_ERROR`.
+- **Авто-имя** (пустой `workspace`): `slugifyWorkspaceName(name)` (`packages/shared/src/utils/workspace.ts`) — строчная латиница/цифры, разделитель `-`, обрезка до 64 символов, пустой результат → `project`; уникализация `uniqueWorkspaceName` → `base`, при коллизии `base-2`, `base-3`, … Учитываются `workspace` существующих проектов и подкаталоги `workspacesRoot`; имя занимается атомарным `mkdir` без `recursive` (параллельные POST не получают общий каталог).
+- **RBAC смены workspace** (`PUT /api/v2/projects/:id`): владелец проекта, `LEAD` или `ADMIN`; иначе `403 FORBIDDEN`. Проверка выполняется до мутаций. *(Остальные поля проекта — см. D5.)*
+- Коды: `400 VALIDATION_ERROR`, `403 WORKSPACE_OUTSIDE_ROOT_DENIED`, `403 FORBIDDEN`, `422 WORKSPACE_CREATE_FAILED`.
+
+### 2. Политика путей вне `workspacesRoot`
+
+- **API**: `GET/PUT/DELETE /api/v2/settings/workspace-policy`, тело `{outsideRoot:'confirm'|'deny'}`, персист в `{dataDir}/settings.json`, live-применение без рестарта.
+- **Приоритет**: runtime (`settings.json`) > env `SYNTH_WORKSPACE_OUTSIDE_ROOT` > `config.storage.workspaceOutsideRoot` > дефолт по режиму (резолвер `resolveWorkspaceOutsideRootPolicy`).
+- **Дефолты**: standalone/core — `confirm`; managed (backend) — `deny`.
+- **Managed — read-only**: `GET` отдаёт `readOnly: true` с эффективным `deny`; `PUT`/`DELETE` → `403 WORKSPACE_POLICY_READ_ONLY`.
+
+### 3. Core / standalone
+
+- `_resolveWorkingDir` (`engine/orchestrator.ts`) и тул `project_create` (`engine/tools/project-manage.ts`) создают каталог проектного `workspace` (как и для дефолтного): относительный — от `workspacesRoot`, абсолютный — как есть.
+- `createProjectRoutes` (`core/src/server/routes/projects.ts`) нормализует, создаёт каталог и проверяет политику: абсолютный вне root — `deny` → `403 WORKSPACE_OUTSIDE_ROOT_DENIED`, `confirm` без флага `confirmOutsideRoot` → `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`, с флагом → сохраняется; относительный → `mkdir -p`. Ошибка создания каталога → `422 WORKSPACE_CREATE_FAILED`.
+- RBAC в standalone нет (`requireAuth`), как и для остальных core-роутов.
+
+### 4. FS-паритет core ↔ backend
+
+- В core добавлены `GET /api/v2/fs/workspace-root`, `GET /api/v2/fs/workspace-root/browse`, `POST /api/v2/fs/workspace-root/mkdir` (паритет с backend); параметр `includeHidden` поддержан.
+- Пути: абсолютный внутри root работает; вне root — по политике (`confirm`: browse разрешён, mkdir требует `confirmOutsideRoot`; `deny` → `403 WORKSPACE_OUTSIDE_ROOT_DENIED`); traversal `..` → `403 PATH_TRAVERSAL`; protected-paths учитываются (`403 PROTECTED_PATH_DENIED`).
+- `mkdir` существующего каталога/файла → `409 ALREADY_EXISTS` (паритет core ↔ backend).
+
+### 5. UI
+
+- `DirectoryPickerDialog` — выбор/создание каталога; источник данных (backend vs core) определяется режимом развёртывания.
+- Managed/remote — поле workspace read-only с пояснением; standalone — ручной выбор.
+- Обработка `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED` → подтверждение → повтор с `confirmOutsideRoot`; `403` — ошибка.
+- `WorkspacePolicySection` — контрол политики (в managed — read-only `deny`).
+- i18n-ключи `workspace.*` (en + ru, AD-041).
+
+### 6. Побочно исправлено
+
+- Backend стал применять runtime-override `settings/workspace` и `resolveDefaultWorkspace`, а также передавать `defaultWorkingDir` в оркестратор — иначе сессия без проекта получала бы `{dataDir}/workspaces/default` мимо override.
+
+### 7. Тесты
+
+- shared 122, core 2043, backend 350, ui 750; `typecheck` и `lint` (0 errors) — зелёные.
+
+## Решено (ранее открытые вопросы)
+
+- **Схема авто-имени** — `slugify(name)` + суффикс `-2/-3…` (см. «Реализация §1»); устойчивость к коллизиям — атомарный `mkdir` + учёт существующих каталогов и проектов.
+- **Где настраивать auto/manual** — по режиму развёртывания: managed — автоматически (явный путь валидируется); standalone — авто по умолчанию + ручной выбор через FS-диалог.
+- **Поведение вне «безопасного» корня** — настройка `storage.workspaceOutsideRoot` / `settings/workspace-policy` с дефолтами: standalone `confirm` (подтверждение), managed `deny` (жёсткий запрет, read-only).
+- **Сессия без проекта** — работает в default workspace (`{dataDir}/workspaces/default` или runtime `settings/workspace`); `project.workspace` при этом не участвует.
+
+## Известные остатки
+
+- **D5 (вне объёма AD-075, не чинится):** `PUT /api/v2/projects/:id` проверяет владение/роль только при изменении поля `workspace`; остальные поля (`name`, `description`, `current_task`, `invariants`, `icon`, `color`, `plan`, `repos`) мутируются без проверки владения. Предсуществовавшая дыра, вынесена отдельной задачей.
 
 ## Зависимости
 
@@ -67,10 +124,10 @@
 - [AD-077](./ad-077-runtime-toolchain.md) «Инструментальное окружение исполнения» — `mkdir`/`git`/`python` должны существовать в целевом окружении.
 - [AD-072](./ad-072-settings-ui-kit.md) — UI-конвенции диалога.
 
-## Порядок реализации
+## Порядок реализации (выполнено 2026-09-24)
 
-1. **Единый резолвер**: `mkdir` для проектного workspace; выравнивание core-роута проектов (резолв + сохранение).
-2. **FS-паритет**: `/workspace-root*` в core, guard и режимы managed/standalone.
-3. **Автосоздание**: create/PUT/`project_create`/transfer создают каталог; backend перестаёт отдавать 422 на отсутствующий.
-4. **UI-диалог** выбора/создания + i18n; передача workspace при создании проекта, в т.ч. remote.
-5. Тесты: unit (резолвер, guard), сквозной curl create/update, визуальная проверка диалога.
+1. ✅ **Единый резолвер**: `mkdir` для проектного workspace; выравнивание core-роута проектов (резолв + сохранение).
+2. ✅ **FS-паритет**: `/workspace-root*` в core, guard и режимы managed/standalone.
+3. ✅ **Автосоздание**: create/PUT/`project_create`/transfer создают каталог; backend перестаёт отдавать 422 на отсутствующий.
+4. ✅ **UI-диалог** выбора/создания + i18n; передача workspace при создании проекта, в т.ч. remote.
+5. ✅ Тесты: unit (резолвер, guard), сквозной curl create/update, визуальная проверка диалога.

@@ -138,6 +138,7 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ aut
 |---|---|
 | `PATCH /api/v2/sessions/:id` `{ mode }` | Режим сессии: `plan` / `act` / `yolo` |
 | `GET/PUT /api/v2/settings/workspace` | Рабочий каталог по умолчанию (runtime override, `settings.json`) |
+| `GET/PUT/DELETE /api/v2/settings/workspace-policy` | Политика абсолютного workspace вне `workspacesRoot` (`confirm`/`deny`; managed — read-only `deny`) |
 | `GET/PUT /api/v2/settings/mcp` | Доступность MCP-инструментов по режимам (plan/act) |
 | `GET/PUT /api/v2/settings/tools-policy` | Политика встроенных инструментов (`consistency`/`available`/`auto`) |
 | `GET/PUT /api/v2/settings/mcp-policy` | Политика MCP-инструментов (`consistency`/`available`/`auto`) |
@@ -241,7 +242,8 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 ```
 
 - Runtime override: `PUT /api/v2/settings/workspace` → `{dataDir}/settings.json` (атомарно, переживает рестарт).
-- Резолвинг `_resolveWorkingDir`: `project.workspace` → defaultWorkingDir.
+- Резолвинг `_resolveWorkingDir`: `project.workspace` → defaultWorkingDir; каталог проектного workspace создаётся автоматически (`mkdir -p`).
+- Каталог `project.workspace` (AD-075): managed — авто-имя `slugify(name)`+суффикс под `workspacesRoot`, смена workspace — владелец/LEAD/ADMIN; standalone — нормализация/создание + ручной выбор через FS-диалог. Путь вне `workspacesRoot` — по политике `storage.workspaceOutsideRoot` / `/api/v2/settings/workspace-policy` (`confirm` в standalone, `deny` в managed — read-only).
 - Тулы `plan_enter`, `plan_exit`, `get_project_info`, `list_repos` жёстко привязаны к `project.workspace`/сессии — path-параметры не принимают.
 
 | Группа | Тулы |
@@ -348,7 +350,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-072 | Settings UI Kit: стандартная панель настроек (один вертикальный скролл, фиксированная шапка, центрирование max-w-3xl, контракт черновика, контролы) | ✅ Реализовано | [ad-072](./docs/arch_decisions/ad-072-settings-ui-kit.md) |
 | AD-073 | Целостность клиента в гибридном режиме: клиент недоверенный, enforcement на сервере; сигналы целостности (подписи, DPoP/mTLS) — опционально | ⏳ Не реализовано | [ad-073](./docs/arch_decisions/ad-073-client-integrity-hybrid.md) |
 | AD-074 | Скрытие вместо удаления (soft-delete): проекты/сессии/сообщения скрываются, исключаются из LLM-контекста, read-only режим для ADMIN/AUDITOR, restore/purge — ADMIN | ⏳ Не реализовано | [ad-074](./docs/arch_decisions/ad-074-soft-delete-retention.md) |
-| AD-075 | Окружение проекта: рабочий каталог (автосоздание managed / выбор для standalone) | ⏳ Не реализовано | [ad-075](./docs/arch_decisions/ad-075-project-workspace-provisioning.md) |
+| AD-075 | Окружение проекта: рабочий каталог (автосоздание managed / выбор для standalone; политика `workspaceOutsideRoot`; FS-паритет core↔backend) | ✅ Реализовано | [ad-075](./docs/arch_decisions/ad-075-project-workspace-provisioning.md) |
 | AD-076 | Реестр git-репозиториев (несколько на проект) и SSH-ключи per-agent | ⏳ Не реализовано | [ad-076](./docs/arch_decisions/ad-076-git-repo-registry-ssh.md) |
 | AD-077 | Инструментальное окружение исполнения (git/python/rg): хостовые для dev/standalone, tools-образ + volume для managed | ⏳ Не реализовано | [ad-077](./docs/arch_decisions/ad-077-runtime-toolchain.md) |
 
