@@ -1927,7 +1927,7 @@ export const dict = {
   'command.unknown': 'Неизвестная команда: /{name}',
   'command.denied': 'Команда /{name} запрещена правилами прав',
   'command.unavailable': 'Команда /{name} недоступна: не хватает capabilities {capabilities}',
-  'command.help': 'Доступные команды: /help, /skills, /commands, /summary. Введите /<скилл-или-bundle>, чтобы загрузить его. Любой другой текст уходит модели.',
+  'command.help': 'Доступные команды: /help, /skills, /commands, /summary, /init. Введите /<скилл-или-bundle>, чтобы загрузить его. Любой другой текст уходит модели.',
   'command.list_empty': 'Нет доступных команд',
   'command.skills_empty': 'Нет доступных скиллов',
   'command.summary_enqueued': 'Суммаризация запущена',

@@ -80,6 +80,45 @@ describe('SkillService — builtin skill-creator (AD-046 §9.5)', () => {
   });
 });
 
+describe('SkillService — builtin synth-agents-md (AD-069 §8.2)', () => {
+  it('виден в реестре как trusted instance/system с requires_capabilities', async () => {
+    const service = new SkillService({ dataDir: join(root, 'data'), home: join(root, 'home') });
+    const { skills } = await service.list();
+    const builtin = skills.find((s) => s.name === 'synth-agents-md');
+    expect(builtin).toBeDefined();
+    expect(builtin!.trusted).toBe(true);
+    expect(builtin!.source.scope).toBe('instance');
+    expect(builtin!.source.level).toBe('system');
+    expect(builtin!.meta.command).toBe('agents-md');
+    expect(builtin!.meta.requiresCapabilities).toEqual(['file_read', 'search', 'file_write']);
+
+    const { skills: summaries } = await service.listSummaries();
+    const summary = summaries.find((s) => s.name === 'synth-agents-md');
+    expect(summary?.trusted).toBe(true);
+    expect(summary?.userInvocable).toBe(true);
+    expect(summary?.requiresCapabilities).toEqual(['file_read', 'search', 'file_write']);
+  });
+
+  it('capability-aware: стабилен при наличии capabilities, unavailable без search', async () => {
+    const service = new SkillService({ dataDir: join(root, 'data'), home: join(root, 'home') });
+
+    const full = await service.buildCatalog({ capabilities: ['file_read', 'search', 'file_write'] });
+    expect(full.stable.map((e) => e.name)).toContain('synth-agents-md');
+
+    const readOnly = await service.buildCatalog({ capabilities: ['file_read'] });
+    const entry = readOnly.session.find((e) => e.name === 'synth-agents-md');
+    expect(entry?.available).toBe(false);
+    expect(entry?.unavailableReason).toBe('capabilities');
+  });
+
+  it('load() возвращает тело про AGENTS.md, detail() — без supporting-файлов', async () => {
+    const service = new SkillService({ dataDir: join(root, 'data'), home: join(root, 'home') });
+    const loaded = await service.load('synth-agents-md', { capabilities: ['file_read', 'search', 'file_write'] });
+    expect(loaded?.body).toContain('AGENTS.md');
+    expect(loaded?.files).toEqual([]);
+  });
+});
+
 describe('SkillService — skills.urls (AD-046 §4.2/§4.3)', () => {
   it('urls прокинуты: url-скилл из кэша виден, trusted=false', async () => {
     const dataDir = join(root, 'data');

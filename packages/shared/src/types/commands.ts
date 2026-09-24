@@ -76,6 +76,7 @@ export interface CommandSummary {
 /** Статус результата резолвинга команды. */
 export type CommandResolveStatus =
   | 'builtin'
+  | 'prompt'
   | 'template'
   | 'skill'
   | 'bundle'
@@ -89,6 +90,9 @@ export type CommandResolveStatus =
  *
  * - `builtin` — локальный ответ (`output`), LLM не вызывается; user+assistant
  *   сообщения помечаются `ephemeral` и исключаются из LLM-контекста;
+ * - `prompt` — встроенная команда, генерирующая prompt (`/init`): текст в
+ *   `prompt` уходит в LLM как явный пользовательский контекст, локального
+ *   ответа нет и CLI не короткозамыкает;
  * - `template`/`skill`/`bundle` — текст в `prompt` уходит в LLM как явный
  *   пользовательский контекст;
  * - `summarization` — триггер ручной суммаризации (`/summary`);

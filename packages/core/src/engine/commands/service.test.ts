@@ -107,6 +107,36 @@ describe('CommandService — builtins (AD-046 §7.2)', () => {
     expect((await service.resolve('/summary', CTX))?.status).toBe('summarization');
   });
 
+  it('/init — status prompt (не локальный) с подставленным $ARGUMENTS', async () => {
+    const { service } = makeService();
+    const r = await service.resolve('/init фокус на тестах', CTX);
+    expect(r?.status).toBe('prompt');
+    expect(r?.kind).toBe('builtin');
+    expect(isLocalCommandStatus(r!.status)).toBe(false);
+    // Промпт содержит ключевые секции AD-069 §8.1 и пользовательский фокус.
+    expect(r?.prompt).toContain('## Investigate');
+    expect(r?.prompt).toContain('## Extract');
+    expect(r?.prompt).toContain('## Questions');
+    expect(r?.prompt).toContain('## Writing rules');
+    expect(r?.prompt).toContain('AGENTS.md');
+    expect(r?.prompt).toContain('фокус на тестах');
+    // Ссылки на несуществующий тул `question` нет.
+    expect(r?.prompt).not.toContain('`question`');
+  });
+
+  it('/init без аргументов — явная пометка об отсутствии фокуса', async () => {
+    const { service } = makeService();
+    const r = await service.resolve('/init', CTX);
+    expect(r?.status).toBe('prompt');
+    expect(r?.prompt).toContain('not provided');
+  });
+
+  it('/help и /commands содержат builtin init', async () => {
+    const { service } = makeService();
+    expect((await service.resolve('/help', CTX))?.output).toContain('/init');
+    expect((await service.resolve('/commands', CTX))?.output).toContain('/init');
+  });
+
   it('неизвестная команда', async () => {
     const { service } = makeService();
     const r = await service.resolve('/nope', CTX);
@@ -154,16 +184,18 @@ describe('CommandService — скиллы и права', () => {
     expect(r?.message).toContain('git_read');
   });
 
-  it('isLocalCommandStatus: summarization не локальный (CLI запускает суммаризацию)', () => {
+  it('isLocalCommandStatus: summarization и prompt не локальные', () => {
     expect(isLocalCommandStatus('builtin')).toBe(true);
     expect(isLocalCommandStatus('unknown')).toBe(true);
     expect(isLocalCommandStatus('denied')).toBe(true);
     expect(isLocalCommandStatus('unavailable')).toBe(true);
-    // template/skill/bundle — уходят в LLM; summarization — реальный запуск.
+    // template/skill/bundle — уходят в LLM; summarization — реальный запуск;
+    // prompt (/init) — генерируемый prompt уходит в LLM.
     expect(isLocalCommandStatus('template')).toBe(false);
     expect(isLocalCommandStatus('skill')).toBe(false);
     expect(isLocalCommandStatus('bundle')).toBe(false);
     expect(isLocalCommandStatus('summarization')).toBe(false);
+    expect(isLocalCommandStatus('prompt')).toBe(false);
   });
 
   it('bundle грузит N тел', async () => {
@@ -275,6 +307,57 @@ describe('CommandService — /skill-creator (builtin, AD-046 §9.5)', () => {
     expect(unavailable?.status).toBe('unavailable');
   });
 });
+
+describe('CommandService — /agents-md (builtin skill, AD-069 §8.2)', () => {
+  let dataDir: string;
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), 'synth-cmd-agents-md-'));
+  });
+  afterEach(async () => {
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  async function makeWithBuiltins() {
+    const skillService = new SkillService({ dataDir, home: join(dataDir, 'home') });
+    const config: CommandRuntimeConfig = {
+      dataDir,
+      commandsPaths: [],
+      bundlesPath: 'skill-bundles',
+      conflict: { mode: 'bundle-wins', namespacePrefix: false },
+      maxArgumentsLength: 1000,
+      maxRenderedBytes: 100_000,
+      toolsets: {},
+      inlineShell: false,
+    };
+    return new CommandService({ config, skillRuntime: skillService, skillSource: skillService });
+  }
+
+  it('/agents-md резолвится в kind=skill с телом builtin', async () => {
+    const service = await makeWithBuiltins();
+    const r = await service.resolve('/agents-md', { capabilities: ['file_read', 'search', 'file_write'] });
+    expect(r?.status).toBe('skill');
+    expect(r?.skills).toEqual(['synth-agents-md']);
+    expect(r?.prompt).toContain('AGENTS.md');
+  });
+
+  it('без capabilities → unavailable (capability-aware делегирование)', async () => {
+    const service = await makeWithBuiltins();
+    const r = await service.resolve('/agents-md', { capabilities: [] });
+    expect(r?.status).toBe('unavailable');
+    expect(r?.message).toContain('file_read');
+  });
+
+  it('команда скилла agents-md не конфликтует с builtin /init (нет shadowed-диагностики)', async () => {
+    const service = await makeWithBuiltins();
+    const { commands, diagnostics } = await service.list({ capabilities: ['file_read', 'search', 'file_write'] });
+    expect(commands.some((c) => c.name === 'init' && c.kind === 'builtin')).toBe(true);
+    expect(commands.some((c) => c.name === 'agents-md' && c.kind === 'skill')).toBe(true);
+    expect(diagnostics.some((d) => d.command === 'init' || d.command === 'agents-md')).toBe(false);
+    // builtin /init резолвится в prompt, а не перекрывается скиллом.
+    expect((await service.resolve('/init', { capabilities: [] }))?.status).toBe('prompt');
+  });
+});
+
 
 describe('CommandService — inline shell (AD-046 §7.4)', () => {
   let dataDir: string;

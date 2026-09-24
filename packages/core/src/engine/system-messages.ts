@@ -280,7 +280,7 @@ export const SYSTEM_MESSAGES = {
   'command.unknown': 'Unknown command: /{name}',
   'command.denied': 'Command /{name} is denied by permission rules',
   'command.unavailable': 'Command /{name} is unavailable: missing capabilities {capabilities}',
-  'command.help': 'Available commands: /help, /skills, /commands, /summary. Type /<skill-or-bundle> to load it. Any other text goes to the model.',
+  'command.help': 'Available commands: /help, /skills, /commands, /summary, /init. Type /<skill-or-bundle> to load it. Any other text goes to the model.',
   'command.list_empty': 'No commands available',
   'command.skills_empty': 'No skills available',
   'command.summary_enqueued': 'Summarization started',

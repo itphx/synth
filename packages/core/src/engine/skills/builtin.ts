@@ -14,6 +14,17 @@ export const BUILTIN_SKILLS_DIRNAME = '.builtin';
 export const SKILL_CREATOR_NAME = 'skill-creator';
 
 /**
+ * AD-069 §8.2: имя встроенного скилла генерации/аудита проектных инструкций.
+ * Slash-команда — `agents-md`, а не `init`: имя `init` занято встроенной
+ * командой `/init` (AD-069 §8.1), а `resolveCatalog` при коллизии эмитит
+ * диагностику `shadowed` и скилл был бы недостижим.
+ */
+export const SYNTH_AGENTS_MD_NAME = 'synth-agents-md';
+
+/** Slash-команда скилла `synth-agents-md` (без конфликта с builtin `/init`). */
+export const SYNTH_AGENTS_MD_COMMAND = 'agents-md';
+
+/**
  * Синтетический каталог-источник builtin-скиллов: system-уровень, `trusted: true`.
  * Идёт **первым** в discovery, поэтому не перекрывается project/instance.
  */
@@ -95,21 +106,89 @@ export function buildSkillCreatorMeta(): SkillMeta {
   };
 }
 
+/** Тело встроенного `synth-agents-md` (модель-facing англоязычная инструкция). */
+const SYNTH_AGENTS_MD_BODY = `# AGENTS.md
+
+Create, update and audit \`AGENTS.md\` — repository project instructions that
+Synth loads automatically (AD-069).
+
+## When to use
+- The user runs \`/init\` or \`/${SYNTH_AGENTS_MD_COMMAND}\`.
+- Project instructions need to be created, refreshed or reviewed.
+
+## Steps
+1. Investigate the repository: \`README*\`, manifests, workspace config,
+   build/test/lint/typecheck configuration, CI workflows, existing instruction
+   files (\`AGENTS.md\`, \`CLAUDE.md\`, \`.cursor/rules/\`) and real entrypoints.
+2. Extract only high-signal, repository-specific facts. If docs conflict with
+   config or scripts, trust the executable source.
+3. Ask questions in plain text (one short batch) only when the repository cannot
+   answer something important.
+4. Generate or update \`AGENTS.md\` in the workspace root: short sections and
+   bullets, exact commands, non-obvious architecture, local conventions. If the
+   file already exists, improve it in place and keep proven useful guidance.
+5. Audit: flag stale commands/paths, duplicates and unverified claims; state
+   what could not be verified.
+
+## Principles
+- Every line must answer: "Would the agent get this wrong without it?" If not,
+  remove it.
+- Executable sources of truth beat prose.
+- Compactness beats completeness — reference other files instead of copying.
+
+## Verify
+- Confirm the file exists at \`AGENTS.md\` and is valid Markdown.
+- Confirm commands mentioned in it actually exist in package/CI config.
+- Note that project instructions load only from a trusted workspace.`;
+
+/** `SkillMeta` встроенного `synth-agents-md` (AD-069 §8.2). */
+export function buildSynthAgentsMdMeta(): SkillMeta {
+  return {
+    name: SYNTH_AGENTS_MD_NAME,
+    description: 'Создаёт, обновляет и аудирует AGENTS.md — проектные инструкции для агентов',
+    userInvocable: true,
+    disableModelInvocation: false,
+    invocation: 'both',
+    trigger: 'manual',
+    command: SYNTH_AGENTS_MD_COMMAND,
+    category: 'meta',
+    tags: [SYNTH_AGENTS_MD_NAME, 'onboarding', 'instructions', 'docs'],
+    relatedSkills: [SKILL_CREATOR_NAME],
+    requiresCapabilities: [
+      ToolCapability.FILE_READ,
+      ToolCapability.SEARCH,
+      ToolCapability.FILE_WRITE,
+    ],
+    scope: 'instance',
+    mode: 'any',
+  };
+}
+
 /**
  * Собирает встроенные скиллы. `dir`/`file` — синтетические пути (на ФС нет);
  * `mtimeMs: 0` — builtin вне mtime-инвалидации watcher'а.
  */
 export function buildBuiltinSkills(opts: { dataDir?: string } = {}): DiscoveredSkill[] {
   const root = opts.dataDir ?? '.';
-  const dir = join(root, BUILTIN_SKILLS_DIRNAME, SKILL_CREATOR_NAME);
-  return [{
-    name: SKILL_CREATOR_NAME,
-    meta: buildSkillCreatorMeta(),
-    body: SKILL_CREATOR_BODY,
-    dir,
-    file: join(dir, 'SKILL.md'),
-    source: BUILTIN_SOURCE,
-    trusted: true,
-    mtimeMs: 0,
-  }];
+  const build = (
+    name: string,
+    meta: SkillMeta,
+    body: string,
+  ): DiscoveredSkill => {
+    const dir = join(root, BUILTIN_SKILLS_DIRNAME, name);
+    return {
+      name,
+      meta,
+      body,
+      dir,
+      file: join(dir, 'SKILL.md'),
+      source: BUILTIN_SOURCE,
+      trusted: true,
+      mtimeMs: 0,
+    };
+  };
+  return [
+    build(SKILL_CREATOR_NAME, buildSkillCreatorMeta(), SKILL_CREATOR_BODY),
+    build(SYNTH_AGENTS_MD_NAME, buildSynthAgentsMdMeta(), SYNTH_AGENTS_MD_BODY),
+  ];
 }

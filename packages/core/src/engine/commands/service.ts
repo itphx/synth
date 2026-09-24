@@ -15,7 +15,7 @@ import { resolveCommandRule } from '../permission/evaluator.js';
 import { t as sm } from '../system-messages.js';
 import { CommandRegistry } from './registry.js';
 import { buildCommandSources } from './discovery.js';
-import { isBuiltinCommand, renderCommandsList, renderHelp, renderSkillsList } from './builtin.js';
+import { isBuiltinCommand, renderCommandsList, renderHelp, renderInitPrompt, renderSkillsList } from './builtin.js';
 import { loadBundle, parseBundleFile } from './bundles.js';
 import { renderTemplate } from './template.js';
 import { parseCommandInput, resolveCatalog } from './resolver.js';
@@ -206,6 +206,12 @@ export class CommandService implements CommandRuntime {
         .map((e) => e.summary);
       return { status: 'builtin', name, args, kind: 'builtin', output: renderCommandsList(visible) };
     }
+    if (name === 'init') {
+      // AD-069 §8.1: `/init` генерирует prompt для LLM (status `prompt`), а не
+      // локальный ответ. `isLocalCommandStatus` его не покрывает — CLI не
+      // короткозамыкает, оркестратор инжектит prompt в user-сообщение.
+      return { status: 'prompt', name, args, kind: 'builtin', prompt: renderInitPrompt(args) };
+    }
     // summary
     return { status: 'summarization', name, args, kind: 'builtin' };
   }
@@ -314,7 +320,8 @@ export { parseBundleFile };
 /**
  * AD-046 §7.1: статусы, которые завершаются локальным ответом без LLM.
  * `summarization` сюда НЕ входит — `/summary` должен пройти через оркестратор
- * и запустить реальную суммаризацию (единое поведение CLI/SSE).
+ * и запустить реальную суммаризацию (единое поведение CLI/SSE). `prompt`
+ * (AD-069 §8.1, `/init`) тоже НЕ локальный: prompt уходит в LLM.
  */
 export function isLocalCommandStatus(status: CommandResolveStatus): boolean {
   return status === 'builtin' || status === 'unknown' || status === 'denied' || status === 'unavailable';

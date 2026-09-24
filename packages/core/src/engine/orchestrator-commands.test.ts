@@ -165,6 +165,25 @@ describe('ChatOrchestrator — slash-команды (AD-046 §7)', () => {
     ).toBe(false);
   });
 
+  it('prompt (/init, builtin) → prompt инжектится в user-сообщение, локального ответа нет', async () => {
+    const { after, msg, chunks, events } = await run('/init фокус', {
+      commandRuntime: {
+        list: async () => ({ commands: [], diagnostics: [] }),
+        resolve: async (input) =>
+          input.startsWith('/init')
+            ? { status: 'prompt', name: 'init', args: 'фокус', kind: 'builtin', prompt: 'INIT PROMPT фокус' }
+            : undefined,
+      },
+    });
+    const storedUser = after.messages.find((m) => m.id === msg.id)!;
+    expect(storedUser.content).toBe('INIT PROMPT фокус');
+    expect(storedUser.metadata?.command).toEqual({ name: 'init', kind: 'builtin', args: 'фокус' });
+    // Локальной команды нет: ephemeral assistant-ответ не создаётся.
+    expect(after.messages.some((m) => m.role === MessageRole.ASSISTANT)).toBe(false);
+    expect(chunks.some((c) => c.event === 'stream.done')).toBe(false);
+    expect(events.some((e) => e.type === 'command.invoked' && e.data.command === 'init')).toBe(true);
+  });
+
   it('обычный текст не перехватывается командами', async () => {
     const { events } = await run('привет', {
       commandRuntime: { list: async () => ({ commands: [], diagnostics: [] }), resolve: async () => undefined },

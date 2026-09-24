@@ -56,7 +56,7 @@ describe('/api/v2/commands (AD-046 §9.1)', () => {
     expect(res.status).toBe(200);
     const body: any = await res.json();
     expect(body.commands.map((c: any) => c.name)).toEqual(
-      expect.arrayContaining(['help', 'skills', 'commands', 'summary']),
+      expect.arrayContaining(['help', 'skills', 'commands', 'summary', 'init']),
     );
   });
 
