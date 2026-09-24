@@ -282,8 +282,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/projects` | оба | auth | Список проектов пользователя |
 | POST | `/api/v2/projects` | оба | auth | Создать `{name, workspace?, repos?, plan?}` → 201 |
 | GET | `/api/v2/projects/:id` | оба | auth | Проект |
-| PUT | `/api/v2/projects/:id` | оба | auth | Обновить поля (name, workspace, plan, invariants, …) |
-| DELETE | `/api/v2/projects/:id` | оба | auth | Удалить → 204 |
+| PUT | `/api/v2/projects/:id` | оба | auth / owner·EDITOR·LEAD·ADMIN | Обновить поля (name, description, current_task, invariants, icon, color, repos, plan); смена `workspace` — owner/LEAD/ADMIN |
+| DELETE | `/api/v2/projects/:id` | оба | auth / owner·LEAD·ADMIN | Удалить → 204 |
 | GET | `/api/v2/projects/:id/stats` | backend | auth | Агрегаты токенов/сообщений |
 | GET | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Проектный MCP-скоуп (AD-071 §2.4): `{enabled, defaultOn, knownServers}` |
 | PUT | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Задать `{enabled?, defaultOn?}` (ссылки на реестр по имени) |
@@ -292,7 +292,9 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 
 > `workspace` (AD-075): при `POST`/`PUT` каталог создаётся (`mkdir -p`). Managed: пустой `workspace` → авто-имя
 > `slugify(name)` + суффикс под `workspacesRoot`; абсолютный внутри root нормализуется в относительный; вне root →
-> `403 WORKSPACE_OUTSIDE_ROOT_DENIED`; смена `workspace` — владелец/LEAD/ADMIN, иначе `403 FORBIDDEN`. Core/standalone:
+> `403 WORKSPACE_OUTSIDE_ROOT_DENIED`; смена `workspace` — владелец/LEAD/ADMIN, иначе `403 FORBIDDEN`.
+> RBAC (backend, D5): `PUT` контент (`name`, `description`, `current_task`, `invariants`, `icon`, `color`, `repos`, `plan`) — owner/EDITOR/LEAD/ADMIN; `workspace` — owner/LEAD/ADMIN; `DELETE` — owner/LEAD/ADMIN; иначе `403 FORBIDDEN`.
+> В core ролевых проверок нет (любой аутентифицированный). Core/standalone:
 > абсолютный вне root — `deny` → `403`, `confirm` без `confirmOutsideRoot` → `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
 > Ошибка создания каталога → `422 WORKSPACE_CREATE_FAILED`.
 

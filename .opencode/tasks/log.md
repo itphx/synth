@@ -894,3 +894,11 @@
 - **Известный остаток:** D5 — `PUT /api/v2/projects/:id` проверяет владение/роль только при смене поля `workspace`; остальные поля (`name`, `description`, `current_task`, `invariants`, `icon`, `color`, `plan`, `repos`) мутируются без проверки владения (предсуществовавшая дыра, вне объёма AD-075).
 - **Ветка:** `feat/ad-075-workspace-provisioning`.
 - **Дальше:** закрытие D5 отдельной задачей (или AD-074/AD-076/AD-077).
+
+## 2026-09-24 (продолжение) — D5: горизонтальная авторизация projects — PASS
+- **Задача:** закрыть D5 (известный остаток AD-075) — мутации `PUT/DELETE /api/v2/projects/:id` проверяли владение только при смене `workspace`.
+- **Тип:** bug fix (security, IDOR) · **Результат:** PASS.
+- **Правки:** `packages/backend/src/routes/projects.ts` — хелперы `canManageProject` (owner/LEAD/ADMIN) и `canEditProjectContent` (owner/EDITOR/LEAD/ADMIN); `PUT` — `workspace` owner/LEAD/ADMIN, контентные поля (`name`, `description`, `current_task`, `invariants`, `icon`, `color`, `repos`, `plan`) owner/EDITOR/LEAD/ADMIN; `DELETE` — owner/LEAD/ADMIN; VIEWER/посторонний → `403 FORBIDDEN`. Проверки до мутаций. Тесты `projects.test.ts` (+7 кейсов).
+- **Верификация:** тесты backend — зелёные (по отчёту реализации).
+- **Ветка:** `feat/ad-075-workspace-provisioning`; не закоммичено.
+- **Дальше:** AD-074/AD-076/AD-077.

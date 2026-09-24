@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { createProjectRoutes } from './projects.js';
 import { ProjectStore } from '../storage/project-store.js';
 import type { User } from '@itphx/synth-shared';
+import { ProjectRole } from '@itphx/synth-shared';
 
 const testUser: User = {
   id: 'test-user',
@@ -285,6 +286,8 @@ interface WsMockUser extends User {
 const WS_USERS: Record<string, WsMockUser> = {
   owner: { id: 'owner', username: 'owner', roles: ['USER'] } as WsMockUser,
   outsider: { id: 'outsider', username: 'outsider', roles: ['USER'] } as WsMockUser,
+  editor: { id: 'editor', username: 'editor', roles: ['USER'] } as WsMockUser,
+  viewer: { id: 'viewer', username: 'viewer', roles: ['USER'] } as WsMockUser,
   lead: { id: 'lead', username: 'lead', roles: ['LEAD'] } as WsMockUser,
   admin: { id: 'admin', username: 'admin', roles: ['ADMIN'] } as WsMockUser,
 };
@@ -490,5 +493,137 @@ describe('Project workspace provisioning (AD-075, managed backend)', () => {
     });
     expect(res.status).toBe(403);
     expect((await store.load(project.id))!.workspace).toBe('orig');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D5: горизонтальная авторизация — PUT контента и DELETE
+// (owner/EDITOR/VIEWER/LEAD/ADMIN/посторонний)
+// ---------------------------------------------------------------------------
+
+describe('Project RBAC (D5): контент и удаление', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-proj-rbac-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Проект owner'а с участниками editor/viewer — через store API, без ручного JSON. */
+  async function seedProject(store: ProjectStore, name = 'P') {
+    const project = store.create(name, 'owner');
+    project.members['editor'] = ProjectRole.EDITOR;
+    project.members['viewer'] = ProjectRole.VIEWER;
+    await store.save(project);
+    return project;
+  }
+
+  function put(app: Hono, id: string, user: string, payload: unknown) {
+    return app.request(`/api/v2/projects/${id}`, {
+      method: 'PUT',
+      headers: wsAuth(user),
+      body: JSON.stringify(payload),
+    });
+  }
+
+  it('посторонний USER PUT name/plan/repos → 403, проект не изменён', async () => {
+    const { app, store } = makeWorkspaceApp();
+    const project = await seedProject(store);
+
+    const payloads: unknown[] = [
+      { name: 'Hacked' },
+      { plan: { version: 9, updatedAt: '2026-01-01T00:00:00.000Z', columns: [], items: [] } },
+      { repos: ['evil-repo'] },
+    ];
+    for (const payload of payloads) {
+      const res = await put(app, project.id, 'outsider', payload);
+      expect(res.status, JSON.stringify(payload)).toBe(403);
+      const body: any = await res.json();
+      expect(body.error.code, JSON.stringify(payload)).toBe('FORBIDDEN');
+    }
+
+    const stored = (await store.load(project.id))!;
+    expect(stored.name).toBe('P');
+    expect(stored.repos).toBeUndefined();
+    expect(stored.plan).toEqual(project.plan);
+  });
+
+  it('EDITOR PUT name/plan → 200', async () => {
+    const { app, store } = makeWorkspaceApp();
+    const project = await seedProject(store);
+
+    const nameRes = await put(app, project.id, 'editor', { name: 'Edited by editor' });
+    expect(nameRes.status).toBe(200);
+    expect((await nameRes.json() as any).name).toBe('Edited by editor');
+
+    const plan = { version: 3, updatedAt: '2026-03-01T00:00:00.000Z', columns: [], items: [] };
+    const planRes = await put(app, project.id, 'editor', { plan });
+    expect(planRes.status).toBe(200);
+    expect((await store.load(project.id))!.plan).toEqual(plan);
+  });
+
+  it('EDITOR PUT workspace → 403 (workspace — только owner/LEAD/ADMIN)', async () => {
+    const { app, store } = makeWorkspaceApp();
+    const project = await seedProject(store);
+
+    const res = await put(app, project.id, 'editor', { workspace: 'ws-editor' });
+    expect(res.status).toBe(403);
+    expect((await store.load(project.id))!.workspace).toBeUndefined();
+  });
+
+  it('EDITOR PUT name+workspace → 403, name не меняется (проверка до мутаций)', async () => {
+    const { app, store } = makeWorkspaceApp();
+    const project = await seedProject(store);
+
+    const res = await put(app, project.id, 'editor', { name: 'Should not apply', workspace: 'ws-editor' });
+    expect(res.status).toBe(403);
+    const stored = (await store.load(project.id))!;
+    expect(stored.name).toBe('P');
+    expect(stored.workspace).toBeUndefined();
+  });
+
+  it('VIEWER PUT name → 403, проект не изменён', async () => {
+    const { app, store } = makeWorkspaceApp();
+    const project = await seedProject(store);
+
+    const res = await put(app, project.id, 'viewer', { name: 'Viewer edit' });
+    expect(res.status).toBe(403);
+    expect((await store.load(project.id))!.name).toBe('P');
+  });
+
+  it('owner/LEAD/ADMIN PUT name → 200', async () => {
+    const { app, store } = makeWorkspaceApp();
+    const project = await seedProject(store);
+
+    for (const user of ['owner', 'lead', 'admin']) {
+      const res = await put(app, project.id, user, { name: `by-${user}` });
+      expect(res.status, user).toBe(200);
+      expect((await res.json() as any).name, user).toBe(`by-${user}`);
+    }
+  });
+
+  it('DELETE: посторонний USER/EDITOR/VIEWER → 403 (проект жив), owner/LEAD/ADMIN → 204', async () => {
+    const { app, store } = makeWorkspaceApp();
+    const project = await seedProject(store);
+
+    for (const user of ['outsider', 'editor', 'viewer']) {
+      const res = await app.request(`/api/v2/projects/${project.id}`, {
+        method: 'DELETE',
+        headers: wsAuth(user),
+      });
+      expect(res.status, user).toBe(403);
+      expect(await store.load(project.id), user).not.toBeNull();
+    }
+
+    for (const user of ['owner', 'lead', 'admin']) {
+      const target = await seedProject(store, `Delete-${user}`);
+      const res = await app.request(`/api/v2/projects/${target.id}`, {
+        method: 'DELETE',
+        headers: wsAuth(user),
+      });
+      expect(res.status, user).toBe(204);
+      expect(await store.load(target.id), user).toBeNull();
+    }
   });
 });

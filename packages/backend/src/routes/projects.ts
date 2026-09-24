@@ -55,6 +55,23 @@ export function createProjectRoutes(
     || project.ownerId === userId
     || project.members?.[userId] === ProjectRole.OWNER;
 
+  /** D5: owner / EDITOR / глобальные LEAD/ADMIN — редактирование контента проекта. */
+  const canEditProjectContent = (
+    c: Parameters<typeof kit.isAdmin>[0],
+    project: Project,
+    userId: string,
+  ): boolean =>
+    canManageProject(c, project, userId)
+    || project.members?.[userId] === ProjectRole.EDITOR;
+
+  /**
+   * D5: мутирующие поля контента проекта (всё, кроме `workspace`). Их изменение
+   * требует прав редактора (owner/EDITOR/LEAD/ADMIN), а не просто аутентификации.
+   */
+  const projectContentFields = [
+    'name', 'description', 'current_task', 'invariants', 'icon', 'color', 'repos', 'plan',
+  ] as const;
+
   const knownMcpServers = (): string[] => Object.keys(mcpManager?.getConfig() ?? {});
 
   /** Все `workspace` известных проектов (относительные — как есть) для авто-имени. */
@@ -251,14 +268,20 @@ export function createProjectRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.project', undefined, c) } }, 404);
     }
     const body = await c.req.json().catch(() => ({}));
+    const user = (await kit.getCurrentUser(c))!;
 
-    // AD-075: смена workspace — только владелец проекта / LEAD / ADMIN.
-    // Проверка до любых мутаций: при отказе проект не меняется вовсе.
-    if (body.workspace !== undefined) {
-      const user = (await kit.getCurrentUser(c))!;
-      if (!canManageProject(c, project, user.id)) {
-        return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
-      }
+    // D5: горизонтальная авторизация. Проверки до любых мутаций — при отказе
+    // проект не меняется вовсе.
+    // - смена workspace — только владелец / LEAD / ADMIN (AD-075);
+    // - изменение контента (name/description/…/plan) — владелец / EDITOR / LEAD / ADMIN.
+    if (body.workspace !== undefined && !canManageProject(c, project, user.id)) {
+      return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
+    }
+    if (
+      projectContentFields.some((field) => body[field] !== undefined)
+      && !canEditProjectContent(c, project, user.id)
+    ) {
+      return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
     }
 
     if (body.name !== undefined) project.name = body.name;
@@ -296,6 +319,11 @@ export function createProjectRoutes(
     const project = await store.load(c.req.param('id'));
     if (!project) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.project', undefined, c) } }, 404);
+    }
+    // D5: удаление — только владелец / LEAD / ADMIN (EDITOR/VIEWER/посторонний → 403).
+    const user = (await kit.getCurrentUser(c))!;
+    if (!canManageProject(c, project, user.id)) {
+      return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
     }
     await store.delete(project.id);
     return c.body(null, 204);
