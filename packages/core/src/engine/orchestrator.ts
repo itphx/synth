@@ -1,6 +1,6 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
-import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency } from '@itphx/synth-shared';
+import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
@@ -13,7 +13,8 @@ import type { LLMMessage, CancellationToken, ProviderConfig as CoreProviderConfi
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import { ContextConfig } from './context/config.js';
-import { SystemPromptComposer, type ComposerContext, type ComposerMcpServer, type ComposerMcpServerStatus } from './context/composer.js';
+import { SystemPromptComposer, type ComposerContext, type ComposerInstructions, type ComposerMcpServer, type ComposerMcpServerStatus } from './context/composer.js';
+import { ProjectInstructionsResolver } from './context/instructions.js';
 import type { ComposerSkillsCatalog } from './skills/catalog.js';
 import type { SkillRuntime } from './skills/types.js';
 import type { CommandRuntime } from '@itphx/synth-shared';
@@ -22,6 +23,7 @@ import {
   agentKeyOf,
   buildPromptState,
   computeExpected,
+  isBlockChanged,
   isPrefixUnchanged,
   validateExpected,
   type PromptStateReason,
@@ -58,7 +60,7 @@ import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, MAX_DOOM_LOO
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
 import { getToolTrust } from './security/trust.js';
-import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine } from './security/prompt-injection.js';
+import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type InjectionPolicy } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
 import type { ProtectedPathsPolicy } from './security/protected-paths.js';
 import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, PLACEHOLDER_PATTERN, type SecretPatternStore } from './gateway/index.js';
@@ -202,6 +204,11 @@ export interface OrchestratorOptions {
    * резолвятся (сообщение уходит в LLM как есть).
    */
   commandRuntime?: CommandRuntime;
+  /**
+   * AD-069 Фаза 1: конфигурация проектных инструкций (`AGENTS.md`). Не задана/
+   * `enabled:false` — проектные инструкции не грузятся.
+   */
+  instructionsConfig?: InstructionsConfig;
 }
 
 export interface ProcessMessageResult {
@@ -289,6 +296,10 @@ export class ChatOrchestrator {
   private readonly _skillRuntime: SkillRuntime | null;
   /** AD-046 §7: рантайм `/`-команд (резолвинг до LLM). */
   private readonly _commandRuntime: CommandRuntime | null;
+  /** AD-069 Фаза 1: конфиг проектных инструкций (null — выключено/не задано). */
+  private readonly _instructionsConfig: InstructionsConfig | null;
+  /** AD-069 Фаза 1: резолвер merged chain `AGENTS.md` (null — выключено). */
+  private readonly _instructionsResolver: ProjectInstructionsResolver | null;
   private _providerPool: ProviderPool | null;
   /** Политика защищённых путей (СКВОЗНАЯ проверка файловых тулов + shell) — ленивая загрузка с кэшем. */
   private _protectedPaths: ProtectedPathsPolicy | null = null;
@@ -634,6 +645,16 @@ export class ChatOrchestrator {
     // DictionaryStore и ProviderPool создаём всегда (нужны микро-слою и роутеру)
     const dictionaryStore = new DictionaryStore(options.dataDir || '/var/synth/data');
     this._dictionaryStore = dictionaryStore;
+    // AD-069 Фаза 1: резолвер проектных инструкций (merged chain AGENTS.md).
+    // Threat-scan использует тот же DictionaryStore, что и tool-контент (AD-036).
+    this._instructionsConfig = options.instructionsConfig ?? null;
+    this._instructionsResolver =
+      this._instructionsConfig?.enabled
+        ? new ProjectInstructionsResolver({
+            config: this._instructionsConfig,
+            dictionaryStore: this._dictionaryStore,
+          })
+        : null;
     // Фабрика обёртки для пула: у пула нет сессии, поэтому оборачиваем с пустой
     // картой обфускации (защита от утечки секретов работает, карта не персистится).
     const pool = new ProviderPool(
@@ -917,11 +938,13 @@ export class ChatOrchestrator {
     debugCollector?: DebugCollector;
     /** AD-046 §5: каталог скиллов (stable/volatile-блоки). */
     skillsCatalog?: ComposerSkillsCatalog;
+    /** AD-069 §2.1/§3: проектные инструкции (merged chain AGENTS.md). */
+    instructions?: ComposerInstructions;
   }): ComposerContext {
     const {
       session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
       toolsPolicy, mcpPolicy, tokenRatio, mcpServers, project, toolSelection, debugCollector,
-      skillsCatalog,
+      skillsCatalog, instructions,
     } = args;
     return {
       session,
@@ -951,7 +974,69 @@ export class ChatOrchestrator {
       project,
       debugCollector,
       skillsCatalog,
+      instructions,
     };
+  }
+
+  /**
+   * AD-069 §5.2: политика threat-scan проектных инструкций — та же, что у
+   * tool-контента (AD-036), с учётом runtime-тумблера безопасности.
+   */
+  private _instructionsInjectionPolicy(): { enabled: boolean; mode: InjectionPolicy } {
+    const injection = this._securityConfig.promptInjection;
+    return {
+      enabled: injection?.enabled ?? true,
+      mode: (injection?.mode ?? 'flag') as InjectionPolicy,
+    };
+  }
+
+  /**
+   * AD-069 §2.1/§7: резолвит проектные инструкции для сессии.
+   *
+   * - только при `project.workspace` (AD-040: сессия без проекта инструкции не грузит);
+   * - `session.settings.systemPrompt` override → инструкции не добавляются (как
+   *   каталог скиллов AD-046);
+   * - кап — от окна модели (AD-069 §5.1), окно резолвится как в провайдере.
+   */
+  private async _resolveProjectInstructions(args: {
+    session: Session;
+    project: Project | null;
+    workingDir: string;
+    model?: string;
+    language: string;
+    signal?: AbortSignal;
+  }): Promise<ComposerInstructions | undefined> {
+    const resolver = this._instructionsResolver;
+    if (!resolver) return undefined;
+    // AD-040: без project.workspace проектный контекст недоступен.
+    if (!args.project?.workspace) return undefined;
+    // AD-046 §5/AD-069 §9.2: override заменяет system prompt целиком.
+    if (args.session.settings.systemPrompt?.trim()) return undefined;
+
+    const contextWindow = this._resolveModelContextWindow(
+      args.model || args.session.settings.model || '',
+    );
+
+    let result;
+    try {
+      result = await resolver.resolve({
+        workspace: args.workingDir,
+        contextWindow,
+        language: args.language,
+        projectId: args.session.projectId ?? args.project.id,
+        signal: args.signal,
+        injection: this._instructionsInjectionPolicy(),
+      });
+    } catch (e) {
+      warning('ORCHESTRATOR', `Не удалось загрузить проектные инструкции: ${e instanceof Error ? e.message : String(e)}`);
+      return undefined;
+    }
+    if (!result.content) return undefined;
+
+    const loaded = result.files.filter((file) => !file.blocked);
+    const provenance = loaded.map((file) => file.path).join(', ') || undefined;
+    const status = loaded.some((file) => file.truncated) ? 'truncated' : 'loaded';
+    return { content: result.content, provenance, status };
   }
 
   /**
@@ -1695,6 +1780,14 @@ export class ChatOrchestrator {
       workingDir,
       permissionConfig: session.settings.permission ?? this._permissionConfig,
     });
+    // AD-069 Фаза 1: те же проектные инструкции, что и в запросе (манифест).
+    const projectInstructions = await this._resolveProjectInstructions({
+      session,
+      project,
+      workingDir,
+      model: session.settings.model,
+      language,
+    });
     const ctx: ComposerContext = this._buildComposerContext({
       session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
       toolsPolicy, mcpPolicy, tokenRatio,
@@ -1703,6 +1796,7 @@ export class ChatOrchestrator {
       project,
       toolSelection,
       skillsCatalog,
+      instructions: projectInstructions,
     });
 
     const manifest = await this._composer.manifest(ctx);
@@ -2102,6 +2196,16 @@ export class ChatOrchestrator {
         workingDir,
         permissionConfig: session.settings.permission ?? this._permissionConfig,
       });
+      // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md) —
+      // только при project.workspace и без systemPrompt-override.
+      const projectInstructions = await this._resolveProjectInstructions({
+        session,
+        project: projectForState,
+        workingDir,
+        model: provider.model,
+        language,
+        signal,
+      });
       const composerCtx: ComposerContext = this._buildComposerContext({
         session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
         // AD-071 §2.3: `toolsPolicy` влияет на тир `tools`, `mcpPolicy` — на
@@ -2114,6 +2218,7 @@ export class ChatOrchestrator {
         // AD-070 §2.5: per-message collector доходит до Composer через контекст.
         debugCollector,
         skillsCatalog,
+        instructions: projectInstructions,
       });
       const composed = await this._composer.compose(composerCtx);
       // AD-070 §2.2: в провайдер уходит payload с границей stable-префикса и
@@ -2141,7 +2246,12 @@ export class ChatOrchestrator {
       };
       const expectedCache = computeExpected(prevPromptState, promptStateInput);
       let activePromptState = prevPromptState;
-      if (!prevPromptState || !isPrefixUnchanged(prevPromptState, promptStateInput)) {
+      // AD-069 §11/AD-070 §2.4: блок `instructions` лежит в тире `context`, а
+      // `isPrefixUnchanged` сравнивает только stable-префикс. Поэтому смену
+      // контента инструкций отслеживаем отдельно — иначе promptStates/generation
+      // не инвалидируются при изменении `AGENTS.md`.
+      const instructionsChanged = isBlockChanged(prevPromptState, composed.blocks, 'instructions');
+      if (!prevPromptState || !isPrefixUnchanged(prevPromptState, promptStateInput) || instructionsChanged) {
         const reason: PromptStateReason = hasSystemPromptOverride
           ? 'override'
           : prevPromptState

@@ -12,6 +12,7 @@ import {
   buildPromptState,
   computeExpected,
   hashText,
+  isBlockChanged,
   isPrefixUnchanged,
   validateExpected,
 } from './prompt-state.js';
@@ -87,6 +88,35 @@ describe('isPrefixUnchanged', () => {
   it('false при другом стабильном префиксе', () => {
     const prev = buildPromptState(composed(), null, 'init');
     expect(isPrefixUnchanged(prev, composed('SYS', 'STABLE-НОВЫЙ'))).toBe(false);
+  });
+});
+
+describe('isBlockChanged (AD-069 §11)', () => {
+  const withInstructions = (content: string) => ({
+    system: 'SYS',
+    stablePrefix: 'STABLE',
+    blocks: [block('role', 'STABLE'), block('instructions', content)],
+  });
+
+  it('false без предыдущего состояния (обрабатывается отдельно как init)', () => {
+    expect(isBlockChanged(null, withInstructions('A').blocks, 'instructions')).toBe(false);
+  });
+
+  it('false при неизменном контенте блока (stable-префикс тоже не менялся)', () => {
+    const prev = buildPromptState(withInstructions('A'), null, 'init');
+    expect(isBlockChanged(prev, withInstructions('A').blocks, 'instructions')).toBe(false);
+  });
+
+  it('true при изменении контента блока, даже если stable-префикс прежний', () => {
+    const prev = buildPromptState(withInstructions('A'), null, 'init');
+    // Стабильный префикс не меняется, но context-блок instructions — да.
+    expect(isPrefixUnchanged(prev, withInstructions('B'))).toBe(true);
+    expect(isBlockChanged(prev, withInstructions('B').blocks, 'instructions')).toBe(true);
+  });
+
+  it('true при появлении/исчезновении блока', () => {
+    const prev = buildPromptState(withInstructions('A'), null, 'init');
+    expect(isBlockChanged(prev, composed().blocks, 'instructions')).toBe(true);
   });
 });
 

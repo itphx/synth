@@ -190,6 +190,8 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     gatewayPatternStore: patternStore,
     skillRuntime: skillService,
     commandRuntime: commandService,
+    // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
+    instructionsConfig: options.config.instructions,
   });
 
   // Создаём временную сессию

@@ -56,6 +56,23 @@ describe('defaultConfig', () => {
     });
   });
 
+  it('instructions: enabled, claudeCompat, кап от окна, пустые sources (AD-069)', () => {
+    expect(defaultConfig.instructions.enabled).toBe(true);
+    expect(defaultConfig.instructions.claudeCompat).toBe(true);
+    expect(defaultConfig.instructions.contextCompat).toBe(false);
+    expect(defaultConfig.instructions.maxChars).toBeUndefined();
+    expect(defaultConfig.instructions.windowRatio).toBe(0.06);
+    expect(defaultConfig.instructions.minChars).toBe(20_000);
+    expect(defaultConfig.instructions.maxCharsCeiling).toBe(500_000);
+    expect(defaultConfig.instructions.sources).toEqual([]);
+    expect(defaultConfig.instructions.excludeProjects).toEqual([]);
+    expect(defaultConfig.instructions.allowInstallTreeFallback).toBe(false);
+    expect(defaultConfig.instructions.lazy.enabled).toBe(true);
+    expect(defaultConfig.instructions.lazy.maxAncestors).toBe(5);
+    expect(defaultConfig.instructions.lazy.maxChars).toBe(8_000);
+    expect(defaultConfig.instructions.fetch).toEqual({ timeoutMs: 5_000, cacheTtlSec: 3_600, maxBytes: 262_144 });
+  });
+
   it('core.port == 4300', () => {
     expect(defaultConfig.core.port).toBe(4300);
   });

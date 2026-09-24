@@ -104,6 +104,8 @@ program
       skillsConfig: synth.skills,
       // AD-046 §7: конфигурация slash-команд (paths/bundlesPath/conflict/лимиты).
       commandsConfig: synth.commands,
+      // AD-069 Фаза 1: конфигурация проектных инструкций (AGENTS.md).
+      instructionsConfig: synth.instructions,
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
         ? (synth.remote.auth.apiKey || undefined)

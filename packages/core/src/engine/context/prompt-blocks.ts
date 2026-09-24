@@ -5,7 +5,7 @@
  * будущий `SystemPromptComposer`.
  */
 
-import type { PromptTier } from '@itphx/synth-shared';
+import type { PromptManifestStatus, PromptTier } from '@itphx/synth-shared';
 
 export type { PromptTier };
 
@@ -15,6 +15,11 @@ export interface PromptBlock {
   order: number; // порядок внутри тира
   content: string; // '' — блок не отправляется
   provenance?: string;
+  /**
+   * AD-070 §2.5: явный статус манифеста (например, `truncated` у проектных
+   * инструкций AD-069). Не задан — выводится из `content` (`empty`/`loaded`).
+   */
+  status?: PromptManifestStatus;
 }
 
 const TIER_ORDER: Record<PromptTier, number> = {

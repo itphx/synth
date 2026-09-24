@@ -501,6 +501,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       skillRuntime: skillService,
       // AD-046 §7: резолвинг `/`-команд до LLM.
       commandRuntime: commandService,
+      // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
+      instructionsConfig: backendConfig.synth.instructions,
     });
 
     const processMessage = orchestrator.createProcessMessage();

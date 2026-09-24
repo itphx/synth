@@ -7,7 +7,7 @@ import { join, extname, isAbsolute, normalize, resolve } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig } from '@itphx/synth-shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -89,6 +89,8 @@ export interface StandaloneConfig {
   skillsConfig?: SkillsConfig;
   /** AD-046 §7: конфигурация slash-команд из config.yaml `commands`. */
   commandsConfig?: CommandsConfig;
+  /** AD-069 Фаза 1: конфигурация проектных инструкций из config.yaml `instructions`. */
+  instructionsConfig?: InstructionsConfig;
   /**
    * Дефолтный адрес удалённого backend (гибрид, `serve --connect`/env/конфиг).
    * Нужен для авто-логина (GET /auth/status) и POST /auth/login без поля server.
@@ -810,6 +812,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     skillRuntime: skillService,
     // AD-046 §7: резолвинг `/`-команд до LLM.
     commandRuntime: commandService,
+    // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
+    instructionsConfig: config.instructionsConfig,
   });
 
   const processMessage = orchestrator.createProcessMessage();

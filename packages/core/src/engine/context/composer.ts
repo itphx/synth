@@ -16,6 +16,7 @@ import type {
   Project,
   PromptManifest,
   PromptManifestEntry,
+  PromptManifestStatus,
   PromptTier,
   Session,
   StickyNote,
@@ -42,6 +43,7 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   classification: 'Classification instruction',
   profile: 'User profile',
   'project.info': 'Project info',
+  instructions: 'Project instructions',
   'session.info': 'Session info',
   sticky: 'Sticky notes',
   participants: 'Participants notice',
@@ -93,6 +95,18 @@ export interface ComposerMcpServer {
    * обратной совместимости с прежним значением.
    */
   disabledReason?: McpDisabledReason | 'session';
+}
+
+/**
+ * AD-069 §3.3/§11: результат резолва проектных инструкций для блока
+ * `instructions` (тир `context`, order 15). Резолвит оркестратор (нужны
+ * workspace/модель), Composer только вставляет блок.
+ */
+export interface ComposerInstructions {
+  content: string;
+  provenance?: string;
+  /** Статус манифеста (`truncated`/`loaded`/…); не задан — из `content`. */
+  status?: PromptManifestStatus;
 }
 
 export interface ComposerContext {
@@ -158,6 +172,12 @@ export interface ComposerContext {
    * каталог не добавляется (§5).
    */
   skillsCatalog?: ComposerSkillsCatalog;
+  /**
+   * AD-069 §2.1/§3: проектные инструкции (merged chain `AGENTS.md`), тир
+   * `context`, order 15 (после `profile`, до `project.info`). Не добавляются
+   * при `session.settings.systemPrompt` override (как `skills.catalog`).
+   */
+  instructions?: ComposerInstructions;
   /**
    * AD-071 §2.6: instance-wide отключение инструментов администратором
    * (`tools.disabled`). Непустой список добавляет в `tools.guide` строку про
@@ -256,7 +276,7 @@ export class SystemPromptComposer {
       order: block.order,
       chars: block.content.length,
       estTokens: Math.ceil(block.content.length / ratio),
-      status: block.content === '' ? 'empty' : 'loaded',
+      status: block.status ?? (block.content === '' ? 'empty' : 'loaded'),
       source: 'system',
       ...(block.provenance ? { provenance: block.provenance } : {}),
     }));
@@ -440,6 +460,21 @@ export class SystemPromptComposer {
           provenance: 'skills.catalog.session',
         });
       }
+    }
+
+    // AD-069 §2.1/§3: проектные инструкции (merged chain AGENTS.md) — тир
+    // `context`, order 15 (после `profile`(10), до `project.info`(20)).
+    // При `session.settings.systemPrompt` override не добавляются (как каталог
+    // скиллов): override заменяет систему целиком.
+    if (!override && ctx.instructions?.content) {
+      extraBlocks.push({
+        key: 'instructions',
+        tier: 'context',
+        order: 15,
+        content: ctx.instructions.content,
+        provenance: ctx.instructions.provenance ?? 'instructions',
+        ...(ctx.instructions.status ? { status: ctx.instructions.status } : {}),
+      });
     }
 
     // AD-071 §2.2/§2.3: MCP-блоки всегда volatile — MCP не участвует в

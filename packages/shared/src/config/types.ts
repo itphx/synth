@@ -226,6 +226,77 @@ export const commandsConfigSchema = z.object({
   maxRenderedBytes: z.number().int().min(1).default(200_000),
 });
 
+// --- Проектные инструкции (AD-069) ---
+
+/**
+ * AD-069 §3.4/§11: дополнительный источник проектных инструкций.
+ * `position` задаёт место в порядке: `before` — перед merged chain, `after` —
+ * после. `ttlSec` (только для URL) переопределяет `instructions.fetch.cacheTtlSec`.
+ */
+export const instructionSourceConfigSchema = z.object({
+  kind: z.enum(['path', 'url']),
+  value: z.string(),
+  position: z.enum(['before', 'after']).default('after'),
+  label: z.string().optional(),
+  ttlSec: z.number().int().min(0).optional(),
+});
+
+/**
+ * AD-069 §4: параметры lazy-догрузки подкаталогов (реализация — Фаза 2;
+ * схема заводится в Фазе 1).
+ */
+export const instructionsLazyConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  maxAncestors: z.number().int().min(0).default(5),
+  maxChars: z.number().int().min(1).default(8_000),
+  excludeDirs: z
+    .array(z.string())
+    .default(['node_modules', '.git', 'vendor', 'dist', 'build', '.next', 'coverage', 'tmp', '.cache']),
+});
+
+/**
+ * AD-069 §5.1/§9.1: параметры fetch URL-источников (без фонового таймера —
+ * загрузка при старте + TTL-кэш). Реализация fetch — Фаза 2.
+ */
+export const instructionsFetchConfigSchema = z.object({
+  timeoutMs: z.number().int().min(1).default(5_000),
+  cacheTtlSec: z.number().int().min(0).default(3_600),
+  maxBytes: z.number().int().min(1).default(262_144),
+});
+
+/**
+ * AD-069 §5.1/§9.1: конфигурация проектных инструкций (`AGENTS.md` и совместимые).
+ * Порядок: `sources` с `position: before` → merged chain (`git root → … → cwd`) →
+ * `sources` с `position: after`. Кап — динамический от окна модели.
+ */
+export const instructionsConfigSchema = z.object({
+  /** Глобальный тумблер автоматической загрузки проектных инструкций. */
+  enabled: z.boolean().default(true),
+  /** Читать `CLAUDE.md`, если нет основного кандидата (инвертированный disableClaudeCodePrompt). */
+  claudeCompat: z.boolean().default(true),
+  /** Deprecated `CONTEXT.md` (выключено по умолчанию). */
+  contextCompat: z.boolean().default(false),
+  /** Доля head при обрезке. */
+  headRatio: z.number().min(0).max(1).default(0.7),
+  /** Доля tail при обрезке. */
+  tailRatio: z.number().min(0).max(1).default(0.2),
+  /** Явный cap-override (перебивает расчёт от окна модели). */
+  maxChars: z.number().int().min(1).optional(),
+  /** Доля окна модели для динамического капа. */
+  windowRatio: z.number().min(0).max(1).default(0.06),
+  /** Нижняя граница динамического капа (floor). */
+  minChars: z.number().int().min(1).default(20_000),
+  /** Верхняя граница динамического капа (ceiling). */
+  maxCharsCeiling: z.number().int().min(1).default(500_000),
+  lazy: instructionsLazyConfigSchema.default({}),
+  fetch: instructionsFetchConfigSchema.default({}),
+  sources: z.array(instructionSourceConfigSchema).default([]),
+  /** Проекты (id), где автозагрузка выключена. */
+  excludeProjects: z.array(z.string()).default([]),
+  /** Не грузить инструкции внутри дерева исходников Synth (install-tree guard, Фаза 2). */
+  allowInstallTreeFallback: z.boolean().default(false),
+});
+
 // --- Security (IPI protection) ---
 
 export const promptInjectionConfigSchema = z.object({
@@ -384,6 +455,7 @@ export const synthConfigSchema = z.object({
   tools: toolsConfigSchema.default({}),
   skills: skillsConfigSchema.default({}),
   commands: commandsConfigSchema.default({}),
+  instructions: instructionsConfigSchema.default({}),
   router: routerConfigSchema.default({}),
   remote: remoteConfigSchema.default({}),
   microFirst: microFirstConfigSchema.default({}),
@@ -411,6 +483,10 @@ export type ToolsConfig = z.infer<typeof toolsConfigSchema>;
 export type ToolsDisabledConfig = z.infer<typeof toolsDisabledConfigSchema>;
 export type SkillsConfig = z.infer<typeof skillsConfigSchema>;
 export type CommandsConfig = z.infer<typeof commandsConfigSchema>;
+export type InstructionSourceConfig = z.infer<typeof instructionSourceConfigSchema>;
+export type InstructionsLazyConfig = z.infer<typeof instructionsLazyConfigSchema>;
+export type InstructionsFetchConfig = z.infer<typeof instructionsFetchConfigSchema>;
+export type InstructionsConfig = z.infer<typeof instructionsConfigSchema>;
 export type RouterContentConfig = z.infer<typeof routerContentConfigSchema>;
 export type RouterEscalationConfig = z.infer<typeof routerEscalationConfigSchema>;
 export type RouterCostConfig = z.infer<typeof routerCostConfigSchema>;
