@@ -13,6 +13,7 @@ import { synthApi, type AgentInfo, type EffectiveSkillEntry, type ToolsPolicy } 
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
 import { ModelSelector } from '../chat/ModelSelector'
+import { ProjectInstructions } from './ProjectInstructions'
 import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 import { SelectContent, SelectItem } from '../ui/select'
 import { InfoField as Field, InfoSection as Section, ModelPairSelect, SelectField, SliderField } from '../ui/settings'
@@ -464,6 +465,11 @@ export function SessionSettingsTab() {
 
         <Section title={t('sessionTab.todos.title')}>
           <SessionTodosBlock todos={session.todos} />
+        </Section>
+
+        {/* AD-069 §9.3: прозрачность проектных инструкций (AGENTS.md chain/sources) */}
+        <Section title={t('sessionTab.instructions.title')}>
+          <ProjectInstructions sessionId={session.id} />
         </Section>
 
         <Section title={t('sessionSettings.providerModel')}>

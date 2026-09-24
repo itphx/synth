@@ -5,6 +5,7 @@ import { useSessionsStore } from './sessionsStore'
 import { useUIStore } from './useUIStore'
 import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS } from './permissionStore'
 import { useSkillsStore } from './skillsStore'
+import { useInstructionsStore } from './instructionsStore'
 import type { TransportMode } from './useUIStore'
 import type { StreamDoneMetadata, MessageData, MessageStatus, CostBreakdown } from './chatStore'
 import { synthApi } from '@/lib/api/synthApi'
@@ -415,6 +416,13 @@ export function createDispatcher(): EventDispatcher {
         synthApi.getStickyNotes(sid).then((r) => {
           useChatStore.getState().setStickyNotes(sid, r.notes)
         }).catch(() => {})
+        break
+      }
+
+      // AD-069 §9.3: проектные инструкции загружены (initial/lazy) — обновляем
+      // снимок прозрачности для индикатора в правой панели.
+      case 'context.instructions_loaded': {
+        void useInstructionsStore.getState().load(sid)
         break
       }
 

@@ -408,6 +408,16 @@ export const synthApi = {
     return fetchJSON<PromptInfoResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/prompt`)
   },
 
+  /**
+   * AD-069 §9.3: снимок проектных инструкций сессии (read-only прозрачность).
+   * Сессия без проекта → пустой снимок с диагностикой `no-project`.
+   */
+  async getSessionInstructions(sessionId: string): Promise<InstructionsInfo> {
+    return fetchJSON<InstructionsInfo>(
+      `${BASE_URL}/context/instructions?session_id=${encodeURIComponent(sessionId)}`,
+    )
+  },
+
   /** AD-071 §2.4/§2.6: эффективный MCP-скоуп сессии (включая отключённые с причиной). */
   async getSessionMcpEffective(sessionId: string): Promise<SessionMcpEffectiveResponse> {
     return fetchJSON<SessionMcpEffectiveResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/mcp`)
@@ -1808,4 +1818,60 @@ export interface ProjectSkillsResponse {
 export interface SkillsSettingsResponse {
   disabled: SkillsDisabledRequest
   policy: ToolsPolicy
+}
+
+// --- Проектные инструкции (AD-069 §9.3) ---
+
+/** Статус файла в снимке (совпадает с core `InstructionsDiagnosticStatus`). */
+export type InstructionFileStatus =
+  | 'loaded'
+  | 'truncated'
+  | 'blocked'
+  | 'dedup'
+  | 'skipped'
+  | 'untrusted'
+  | 'skipped-install-tree'
+  | 'excluded'
+  | 'fetch-error'
+
+/** Источник кандидата: merged chain, `config.sources` path или URL. */
+export type InstructionSourceKind = 'chain' | 'path' | 'url'
+
+/** Результат threat-scan (AD-036) по файлу инструкций. */
+export interface InstructionScanInfo {
+  scanned: boolean
+  blocked: boolean
+  suspicious: boolean
+  matches: string[]
+}
+
+/** Файл проектных инструкций в снимке прозрачности (AD-069 §9.3). */
+export interface InstructionFileInfo {
+  /** Путь относительно workspace (`./AGENTS.md`, `../AGENTS.md`) или URL. */
+  path: string
+  kind: InstructionSourceKind
+  label?: string
+  url?: string
+  chars: number
+  truncated: boolean
+  status: InstructionFileStatus
+  scan?: InstructionScanInfo
+}
+
+/** Диагностика снимка проектных инструкций. */
+export interface InstructionDiagnostic {
+  level: 'info' | 'warning' | 'error'
+  code: string
+  message: string
+  path?: string
+  kind?: InstructionSourceKind
+}
+
+/** AD-069 §9.3: ответ GET /api/v2/context/instructions (снимок + id сессии). */
+export interface InstructionsInfo {
+  session_id?: string
+  enabled: boolean
+  cap: { chars: number; source: 'dynamic' | 'override'; contextWindow: number }
+  files: InstructionFileInfo[]
+  diagnostics: InstructionDiagnostic[]
 }
