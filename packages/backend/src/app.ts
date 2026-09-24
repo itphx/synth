@@ -503,6 +503,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       commandRuntime: commandService,
       // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
       instructionsConfig: backendConfig.synth.instructions,
+      // AD-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
+      instructionsTrustedProjectDirs: backendConfig.synth.skills.trustedProjectDirs,
     });
 
     const processMessage = orchestrator.createProcessMessage();

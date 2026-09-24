@@ -136,6 +136,8 @@ describe('ChatOrchestrator — проектные инструкции (AD-069 �
           defaultModel: 'm',
         }) as unknown as import('@itphx/synth-shared').ProviderConfig,
       instructionsConfig: config,
+      // AD-069 Фаза 2a: project-trust гейт — доверяем temp-workspace.
+      instructionsTrustedProjectDirs: [wsDir],
     });
   }
 

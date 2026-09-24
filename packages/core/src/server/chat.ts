@@ -192,6 +192,8 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     commandRuntime: commandService,
     // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
     instructionsConfig: options.config.instructions,
+    // AD-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
+    instructionsTrustedProjectDirs: options.config.skills?.trustedProjectDirs,
   });
 
   // Создаём временную сессию

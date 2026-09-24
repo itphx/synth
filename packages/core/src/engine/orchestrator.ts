@@ -209,6 +209,11 @@ export interface OrchestratorOptions {
    * `enabled:false` — проектные инструкции не грузятся.
    */
   instructionsConfig?: InstructionsConfig;
+  /**
+   * AD-069 Фаза 2a: `config.skills.trustedProjectDirs` — project-trust гейт
+   * инструкций (недоверенный проект виден в диагностике, но не грузится).
+   */
+  instructionsTrustedProjectDirs?: readonly string[];
 }
 
 export interface ProcessMessageResult {
@@ -653,6 +658,8 @@ export class ChatOrchestrator {
         ? new ProjectInstructionsResolver({
             config: this._instructionsConfig,
             dictionaryStore: this._dictionaryStore,
+            dataDir: options.dataDir,
+            trustedProjectDirs: options.instructionsTrustedProjectDirs,
           })
         : null;
     // Фабрика обёртки для пула: у пула нет сессии, поэтому оборачиваем с пустой

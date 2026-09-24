@@ -814,6 +814,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     commandRuntime: commandService,
     // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
     instructionsConfig: config.instructionsConfig,
+    // AD-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
+    instructionsTrustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
   });
 
   const processMessage = orchestrator.createProcessMessage();
