@@ -15,8 +15,9 @@
 
 **Доступность по сборкам** в таблицах ниже: `backend` — только managed-хаб,
 `core` — только standalone, `оба` — обе сборки. У core набор уже: нет
-`context/users/git/audit/logs/gateway/llm/i18n/admin`, зато есть `auth/*` и
-`hybrid/status`.
+`context/users/audit/logs/gateway/llm/i18n/admin`, зато есть `auth/*`,
+`hybrid/status`, а также `/git` и `/ssh-keys` (AD-076; core-фабрики, в backend
+монтируются с RBAC).
 
 ---
 
@@ -93,9 +94,10 @@ In-memory `createRateLimiter(maxRequests, windowMs)`, ключ — `Authorizatio
 { "error": { "code": "NOT_FOUND", "message": "Сессия не найдена" } }
 ```
 
-Исключение — файловые и git-операции **backend**: они отдают
-формат `FsError` `{ "error": { "error": "<message>", "code": "<FsErrorCode>" } }`
-(`packages/backend/src/routes/fs.ts:16`, `git.ts:37`). Core-fs использует стандартный формат.
+Исключение — файловые операции **backend** и git-роуты (core-фабрика, AD-076):
+они отдают формат `FsError` `{ "error": { "error": "<message>", "code": "<FsErrorCode>" } }`
+(`packages/backend/src/routes/fs.ts`, `packages/core/src/server/routes/git.ts`).
+Core-fs использует стандартный формат.
 
 Реальные коды (из кода):
 
@@ -108,6 +110,8 @@ In-memory `createRateLimiter(maxRequests, windowMs)`, ключ — `Authorizatio
 | `CONFLICT` | дубли MCP-сервера, retry-состояние |
 | `ALREADY_EXISTS`, `IS_DIRECTORY`, `DIR_NOT_EMPTY`, `PATH_TRAVERSAL`, `PERMISSION_DENIED` | ФС |
 | `WORKSPACE_OUTSIDE_ROOT_DENIED`, `WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`, `WORKSPACE_CREATE_FAILED`, `WORKSPACE_POLICY_READ_ONLY`, `WORKSPACE_ROOT_NOT_CONFIGURED`, `PROTECTED_PATH_DENIED`, `WORKSPACE_NOT_FOUND`, `WORKSPACE_NOT_SET`, `NOT_A_DIRECTORY` | workspace/ФС (AD-075) |
+| `git.ssh_key_required`, `git.repo_path_invalid`, `git.repo_exists` | git-реестр (AD-076, shared-форма) |
+| `sshkey.not_found`, `sshkey.name_exists`, `sshkey.decrypt_failed`, `sshkey.encryption_unavailable` | SSH-ключи агентов (AD-076) |
 | `PROJECT_NOT_FOUND`, `NOT_AVAILABLE` | сессии/настройки |
 | `RATE_LIMITED`, `QUEUE_FULL` | лимиты и очередь |
 | `INVALID_ACTION`, `INVALID_INDICES` | batch-операции сообщений |
@@ -386,15 +390,43 @@ AD-069 Ф2a (`engine/context/instructions.ts`); `status` — `loaded`/`truncated
 | PUT | `/api/v2/users/:id` | Обновить |
 | DELETE | `/api/v2/users/:id` | Удалить |
 
-### 5.15 Git — `/api/v2/git` (backend)
+### 5.15 Git — `/api/v2/git` (оба, AD-076)
 
-| Метод | Путь | RBAC | Назначение |
+Реестр `project.repos` (несколько репозиториев на проект) и git-операции.
+`init`/`clone` **регистрируют** запись в проекте; `repo_path`/`path` — относительны
+`project.workspace` (containment; абсолютный/`..` → `git.repo_path_invalid`).
+Ошибки — в shared-форме `{ error: { error, code } }`.
+
+| Метод | Путь | RBAC (backend / core) | Назначение |
 |---|---|---|---|
-| POST | `/api/v2/git/scan` | auth | `{projectId}` → `{repos}` |
-| POST | `/api/v2/git/repos/init` | auth | `{projectId, path, defaultBranch?}` → 201 |
-| POST | `/api/v2/git/repos/clone` | auth | `{projectId, path?, url, branch?}` → 201 |
-| GET | `/api/v2/git/log` | auth | `?project_id=&repo_path=&max_count=` |
-| GET | `/api/v2/git/commit` | auth | `?project_id=&repo_path=&hash=` |
+| POST | `/api/v2/git/scan` | auth | `{projectId}` → `{repos}` (git-детект по workspace, до 3 уровней) |
+| POST | `/api/v2/git/repos/init` | write / auth | `{projectId, path, defaultBranch?, name?, sshKeyId?}` → 201 `RepoStatus`; регистрирует запись |
+| POST | `/api/v2/git/repos/clone` | write / auth | `{projectId, url, path?, branch?, name?, sshKeyId?}` → 201 `RepoStatus`; SSH-URL без ключа → 400 `git.ssh_key_required`; занятый путь → 409 `git.repo_exists` |
+| POST | `/api/v2/git/repos/register` | write / auth | `{projectId, path, name?, url?, type?, defaultBranch?, sshKeyId?}` → 200 `GitRepoConfig` (upsert по `id`/`path`) |
+| POST | `/api/v2/git/repos/remove` | write / auth | `{projectId, id?\|path?, deleteLocal?}` → `{removed, deletedLocal}` (удаление локального каталога — `deleteLocal`) |
+| POST | `/api/v2/git/repos/fetch` | write / auth | `{projectId, id?\|path?}` → `{path, lastFetch}`; SSH-URL без ключа → 400 `git.ssh_key_required` |
+| GET | `/api/v2/git/log` | auth | `?project_id=&repo_path=&max_count=` → `{commits}` |
+| GET | `/api/v2/git/commit` | auth | `?project_id=&repo_path=&hash=` → `{commit}` |
+
+RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetch`) — owner/EDITOR/LEAD/ADMIN (`canEditProjectContent`), иначе 403; read (`scan`/`log`/`commit`) — любой аутентифицированный. Core (standalone) — `requireAuth`.
+
+### 5.15.1 SSH-ключи агентов — `/api/v2/ssh-keys`, `/api/v2/agents/:agentId/ssh-keys` (оба, AD-076)
+
+Ответы — только `SSHKeyMeta` (`id`/`name`/`type`/`agentIds`/`createdAt`/`updatedAt`);
+`privateKey`/`passphrase` шифруются at-rest (AES-256-GCM) и **никогда** не отдаются.
+
+| Метод | Путь | RBAC (backend / core) | Назначение |
+|---|---|---|---|
+| GET | `/api/v2/ssh-keys` | auth | Все ключи; `?agentId=` — ключи агента |
+| POST | `/api/v2/ssh-keys` | ADMIN / auth | Создать: `{name, type?, privateKey, passphrase?, agentIds?}` → 201 |
+| GET | `/api/v2/ssh-keys/:id` | auth | Ключ по id |
+| PATCH | `/api/v2/ssh-keys/:id` | ADMIN / auth | Частичное обновление (в т.ч. смена `privateKey`) |
+| DELETE | `/api/v2/ssh-keys/:id` | ADMIN / auth | Удалить ключ целиком → 204 |
+| GET | `/api/v2/agents/:agentId/ssh-keys` | auth | Ключи, привязанные к агенту |
+| POST | `/api/v2/agents/:agentId/ssh-keys` | ADMIN / auth | Создать с привязкой к агенту (объединяет `agentIds`) → 201 |
+| DELETE | `/api/v2/agents/:agentId/ssh-keys/:keyId` | ADMIN / auth | **Отвязать** ключ от агента (ключ не удаляется) |
+
+Коды: `sshkey.not_found` (404), `sshkey.name_exists` (409), `sshkey.decrypt_failed` / `sshkey.encryption_unavailable` (500), `VALIDATION_ERROR` (400). Ключи с `passphrase` принимаются на хранение, но не используются в git-операциях (явная ошибка, см. AD-076). Мастер-ключ — `SYNTH_SECRET_KEY`/`security.secretKey`/`{dataDir}/secrets/master.key`.
 
 ### 5.16 MCP — `/api/v2/mcp`
 

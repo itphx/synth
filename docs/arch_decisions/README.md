@@ -36,6 +36,7 @@
 | AD-071 | MCP-серверы: уровни system/project/session, единый реестр, разделение `tools`/`mcp.tools`, блоки `mcp.servers`/`mcp.status`, политики `tools.policy`/`mcp.policy`, admin-отключение встроенных инструментов | ✅ | [ad-071-mcp-servers-prompt.md](./ad-071-mcp-servers-prompt.md) |
 | AD-072 | Settings UI Kit: единая панель настроек (один скролл, центрирование `max-w-3xl`, контракт черновика, контролы); все разделы и админ-категории мигрированы | ✅ | [ad-072-settings-ui-kit.md](./ad-072-settings-ui-kit.md) |
 | AD-075 | Окружение проекта: рабочий каталог (автосоздание managed, выбор и политика путей для standalone; FS-паритет, RBAC) | ✅ | [ad-075-project-workspace-provisioning.md](./ad-075-project-workspace-provisioning.md) |
+| AD-076 | Реестр git-репозиториев (несколько на проект) и SSH-ключи per-agent (шифрование at-rest, `repo_path`, паритет core↔backend) | ✅ | [ad-076-git-repo-registry-ssh.md](./ad-076-git-repo-registry-ssh.md) |
 
 ## Частично реализованные AD
 
@@ -64,5 +65,4 @@
 | AD-069 | [Проектные инструкции (AGENTS.md) и /init](./ad-069-project-instructions-agents-md.md): discovery, merged chain, lazy-догрузка, обрезка, threat-scan, install-tree guard |
 | AD-073 | [Целостность клиента в гибриде](./ad-073-client-integrity-hybrid.md): клиент недоверенный, enforcement на сервере; сигналы (подписи, DPoP/mTLS) опционально |
 | AD-074 | [Скрытие вместо удаления](./ad-074-soft-delete-retention.md): soft-delete проектов/сессий/сообщений, исключение из LLM-контекста, read-only режим ADMIN/AUDITOR, restore/purge — ADMIN |
-| AD-076 | [Реестр git-репозиториев и доступ (SSH)](./ad-076-git-repo-registry-ssh.md): несколько репозиториев на проект, клон в подкаталог workspace, SSH-ключи per-agent |
 | AD-077 | [Инструментальное окружение исполнения (git/python/rg)](./ad-077-runtime-toolchain.md): хостовые инструменты для dev/standalone, tools-образ + volume для managed |

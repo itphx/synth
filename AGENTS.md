@@ -108,7 +108,7 @@ pnpm clean                  # очистка dist/
 Runtime-данные (сессии, проекты, провайдеры, модели) — в `$SYNTH_DATA_DIR` (env `SYNTH_DATA_DIR` или `storage.dataDir` в config.yaml; дефолт `/var/synth/data`). Провайдеры — JSON в `$SYNTH_DATA_DIR/providers/`, модели — в `$SYNTH_DATA_DIR/models/`; добавить провайдера/модель = создать JSON-файл (или через API). Атомарная запись: `.tmp.{uuid}` → `rename()`. Основные dev-провайдеры (`itphx`, `ollama`) — в [docs/LLM_PROVIDERS.md](./docs/LLM_PROVIDERS.md).
 
 ```text
-$SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ auth/(sessions,states,profiles)
+$SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ auth/(sessions,states,profiles) secrets/(master.key, ssh-keys/)
 ```
 
 ### Аутентификация
@@ -246,6 +246,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 - Резолвинг `_resolveWorkingDir`: `project.workspace` → defaultWorkingDir; каталог проектного workspace создаётся автоматически (`mkdir -p`).
 - Каталог `project.workspace` (AD-075): managed — авто-имя `slugify(name)`+суффикс под `workspacesRoot`, смена workspace — владелец/LEAD/ADMIN; standalone — нормализация/создание + ручной выбор через FS-диалог. Путь вне `workspacesRoot` — по политике `storage.workspaceOutsideRoot` / `/api/v2/settings/workspace-policy` (`confirm` в standalone, `deny` в managed — read-only).
 - Тулы `plan_enter`, `plan_exit`, `get_project_info`, `list_repos` жёстко привязаны к `project.workspace`/сессии — path-параметры не принимают.
+- Git-тулы (AD-076) принимают необязательный `repo_path` — относительный путь внутри `project.workspace` (containment; абсолютный/`..` → `git.repo_path_invalid`); `list_repos` отдаёт записи реестра `project.repos` (`destination`/`name`/`url`/`type`/`sshKeyId`/`lastFetch` + git-детект). SSH-ключи per-agent хранятся зашифрованными (`secrets/ssh-keys/`), мастер-ключ — `SYNTH_SECRET_KEY`/`security.secretKey`/`secrets/master.key`.
 
 | Группа | Тулы |
 |---|---|
@@ -352,7 +353,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-073 | Целостность клиента в гибридном режиме: клиент недоверенный, enforcement на сервере; сигналы целостности (подписи, DPoP/mTLS) — опционально | ⏳ Не реализовано | [ad-073](./docs/arch_decisions/ad-073-client-integrity-hybrid.md) |
 | AD-074 | Скрытие вместо удаления (soft-delete): проекты/сессии/сообщения скрываются, исключаются из LLM-контекста, read-only режим для ADMIN/AUDITOR, restore/purge — ADMIN | ⏳ Не реализовано | [ad-074](./docs/arch_decisions/ad-074-soft-delete-retention.md) |
 | AD-075 | Окружение проекта: рабочий каталог (автосоздание managed / выбор для standalone; политика `workspaceOutsideRoot`; FS-паритет core↔backend) | ✅ Реализовано | [ad-075](./docs/arch_decisions/ad-075-project-workspace-provisioning.md) |
-| AD-076 | Реестр git-репозиториев (несколько на проект) и SSH-ключи per-agent | ⏳ Не реализовано | [ad-076](./docs/arch_decisions/ad-076-git-repo-registry-ssh.md) |
+| AD-076 | Реестр git-репозиториев (несколько на проект) и SSH-ключи per-agent (шифрование at-rest, `repo_path`, паритет core↔backend) | ✅ Реализовано | [ad-076](./docs/arch_decisions/ad-076-git-repo-registry-ssh.md) |
 | AD-077 | Инструментальное окружение исполнения (git/python/rg): хостовые для dev/standalone, tools-образ + volume для managed | ⏳ Не реализовано | [ad-077](./docs/arch_decisions/ad-077-runtime-toolchain.md) |
 
 Правило: реализованные AD переносятся в `./docs/arch_decisions/` (в AGENTS.md остаётся строка таблицы + ссылка).

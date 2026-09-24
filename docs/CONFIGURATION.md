@@ -182,6 +182,7 @@ security:
     mode: "flag"                  # flag | sanitize | block
   protectedPaths:
     enabled: true
+  secretKey: ""                   # AD-076: мастер-ключ секретов at-rest (пусто → файл dataDir/secrets/master.key)
 
 remote:                           # гибридный режим: локальный core + удалённый backend
   enabled: false
@@ -205,6 +206,13 @@ remote:                           # гибридный режим: локаль�
 - `storage.workspacesRoot` — корень каталогов workspace проектов; если не задан — `{dataDir}/workspaces` (`SYNTH_WORKSPACES_ROOT`). Managed-проекты создают workspace внутри него (авто-имя `slugify(name)` + суффикс `-2/-3…`); абсолютный путь внутри root нормализуется в относительный.
 - `storage.defaultWorkspace` — рабочий каталог сессий без проекта; если не задан — `{dataDir}/workspaces/default` (`SYNTH_DEFAULT_WORKSPACE`). Runtime-override — `PUT /api/v2/settings/workspace`.
 - `storage.workspaceOutsideRoot` — политика для абсолютного `project.workspace` вне `workspacesRoot` (`confirm` — подтверждение флагом `confirmOutsideRoot`, `deny` — запрет). Пусто (`''`) — не задано, эффективно `confirm` в standalone; managed-backend жёстко использует `deny`. Env `SYNTH_WORKSPACE_OUTSIDE_ROOT`, runtime — `GET/PUT/DELETE /api/v2/settings/workspace-policy` (managed — read-only).
+
+### Секреты at-rest (`security.secretKey`, AD-076)
+
+- `security.secretKey` — мастер-ключ для шифрования секретов в хранилище (SSH-ключи агентов; AES-256-GCM). Env — `SYNTH_SECRET_KEY`.
+- **Приоритет**: env `SYNTH_SECRET_KEY` > `config.security.secretKey` > файл `{dataDir}/secrets/master.key` (резолвер `resolveSecretKey`).
+- **Форматы** ключа: base64 (ровно 32 байта) либо 64 hex-символа; иначе — ошибка `encryption_unavailable` (без молчаливого обрезания).
+- **Fallback-файл**: если ключ не задан ни env, ни конфигом, core создаёт `{dataDir}/secrets/master.key` при первом запуске (`randomBytes(32)`, каталог `0700`, файл `0600`, атомарная запись). Секреты шифруются at-rest; при смене ключа старые записи становятся нечитаемыми (ротация вне объёма AD-076).
 
 ### Политики инструментов (`tools.policy` / `mcp.policy`)
 

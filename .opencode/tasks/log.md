@@ -926,3 +926,18 @@
 - **Ветка:** `feat/ad-075-workspace-provisioning` (коммиты `58f6934`, `cae2f92`; документация — не закоммичена).
 - **Docs:** `docs/arch_decisions/ad-075-*.md` — §9 + остаточные риски; `docs/API_V2.md` — tool-level RBAC в §5.8.
 - **Дальше:** AD-074/AD-076/AD-077.
+
+## 2026-09-24 (продолжение) — AD-076: реестр git-репозиториев и SSH-ключи per-agent — PASS
+
+- **Задача:** реализовать AD-076 — реестр git-репозиториев (несколько на проект) + SSH-ключи per-agent (шифрование at-rest).
+- **Тип:** feature · **Результат:** PASS (код написан; не закоммичено по указанию).
+- **Shared:** `GitRepoConfig` (`id?`/`name?`/`url?`/`type?`/`path`/`defaultBranch?`/`sshKeyId?`/`lastFetch?`), `normalizeGitRepoConfig`, union `repos` (legacy `string[]`); `SSHKey`/`SSHKeyMeta` (`agentIds: string[]`), `sshKeyCreate/UpdateSchema`; схемы git-роутов (`register`/`remove`/`fetch`, `init`/`clone` с `name?`/`sshKeyId?`); конфиг `security.secretKey` + env `SYNTH_SECRET_KEY` (`resolveSecretKey`); удалено мёртвое `AgentDefinition.sshKeys`; i18n `sshkey.*`/`git.*`/`projectctx.repo_*`.
+- **Core:** `security/crypto.ts` (AES-256-GCM, `enc:v1:`, `resolveMasterKey` → `{dataDir}/secrets/master.key`); `storage/ssh-key-store.ts` (`JsonStore` `secrets/ssh-keys`, секреты шифруются, `reveal()` только для git); `git/git-service.ts` (перенос из backend, `fetchRepo`/`removeLocal`, `simple-git` — зависимость core) и `git/ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`); `server/routes/git.ts` (`scan`/`init`/`clone`/`register`/`remove`/`fetch`/`log`/`commit`, clone/init регистрируют `project.repos`) и `server/routes/ssh-keys.ts` (flat + nested, `DELETE :keyId` = unlink); монтирование + `REMOTE_PROXY_PREFIXES` (`/git`, `/ssh-keys`); тулы — `repo_path` (containment) и SSH в `git_push`/`git_pull` (`git-ssh.ts`), `list_repos` из реестра.
+- **Backend:** удалены локальные `routes/git.ts`/`lib/git-service.ts` (и `simple-git`); `/git` — core-фабрика с `authorizeProject` (`canEditProjectContent`), `/ssh-keys` — core-фабрики с `writeGuard: requireAdmin`.
+- **UI:** Git-вкладка — реестр (destination/type/url/ssh-key/lastFetch), scan→register, clone/init (`name`/`path` + SSH-ключ), fetch/remove (`ConfirmDialog`); секция «SSH-ключи» в категории «Агенты» (CRUD, привязка к агентам); i18n ru/en.
+- **Данные:** `$SYNTH_DATA_DIR/secrets/master.key`, `$SYNTH_DATA_DIR/secrets/ssh-keys/<id>.json`.
+- **Ограничения:** passphrase не поддерживается (явная ошибка); nested `/agents/:id/ssh-keys` в гибриде не проксируется (только flat `/api/v2/ssh-keys`); `plan_write` без tool-RBAC (остаток AD-075); ротация мастер-ключа вне объёма.
+- **Верификация:** typecheck 6/6; lint 0 errors; тесты shared 155 · core 2120 · ui 774 · backend 372. Curl `/git/repos/register|clone`, `/ssh-keys` (маскировка, RBAC 403 USER, nested unlink), браузер — Git-реестр и SSH-ключи.
+- **Ветка:** `feat/ad-075-workspace-provisioning`; не закоммичено.
+- **Docs:** AD-076 статус ✅ + «Реализация»/«Решено»/«Известные ограничения»; `docs/arch_decisions/README.md`; `AGENTS.md` (строка AD-076, `repo_path`, `secrets/`); пакетные `AGENTS.md` core/backend/shared/ui; `docs/API_V2.md` §5.15/§5.15.1; `docs/CONFIGURATION.md` (`security.secretKey`).
+- **Дальше:** AD-074/AD-077 (или закрытие ограничений AD-076).

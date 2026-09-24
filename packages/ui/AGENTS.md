@@ -106,6 +106,11 @@
 - **`/`-автокомплит.** `components/chat/CommandAutocomplete.tsx` + `ChatInput`: источник `GET /api/v2/commands`, навигация ArrowUp/Down/Enter/Tab/Escape, клик, подстановка `/name ` (не отправка), тач-таргеты (AD-044).
 - ⚠️ **Инвариант импортов shared.** Для runtime/value-импортов из `@itphx/synth-shared` использовать **только subpath**: `@itphx/synth-shared/types`, `/schemas`, `/i18n`, `/version`. Value-импорт из **корня** `@itphx/synth-shared` тянет `config/loader` → `node:fs` в браузерный бандл и роняет всё приложение (реальный инцидент commit 2; `import type` из корня безопасен — стирается компилятором). Проверять при добавлении любых констант/функций из shared в UI.
 
+## Git и SSH-ключи (AD-076)
+
+- **Git-вкладка** (`components/panels/LeftPanel.tsx` → `GitTab`, `stores/gitStore.ts`): реестр `project.repos` с `destination`/`type`/`url`/`ssh-key`/`lastFetch`; `scan → register`, `clone`/`init` с полями `name`/`path` и селектором SSH-ключа, `fetch`, `remove` (через `ConfirmDialog`, опц. `deleteLocal`). Методы — `synthApi.*GitRepo*`.
+- **SSH-ключи** (`components/settings/SshKeysSettings.tsx`, встраивается в админ-категорию «Агенты» `admin/AgentsPanel.tsx`): CRUD per-agent ключей, привязка к агентам (`agentIds`), редактирование без обязательной замены ключа. API `synthApi.*SshKey*` отдаёт только `SSHKeyMeta` (без `privateKey`/`passphrase`); ошибки — ключи `sshkey.*`, i18n ru/en.
+
 ## Мобильный / PWA
 
 - Полные конвенции (зоны ≤768 / 769–1199 / ≥1200, дроверы, touch-first, PWA-шелл) — в корневом `AGENTS.md` и [AD-044](../../docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md); здесь не дублируются.

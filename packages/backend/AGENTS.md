@@ -28,12 +28,14 @@
 | `DictionaryStore`, `createDictionaryRoutes` | эндпоинты `/api/v2/dictionaries` |
 | `FileProfileStore` | профили пользователей (seed test-users при debug) |
 | `AuditLogger`, `RateLimiter`, `GatewayProvider`, `SecretPatternStore`, `ProtectedPathsStore` | LLM Gateway (AD-036) |
+| `SSHKeyStore` | SSH-ключи агентов, шифрование at-rest (AD-076) |
+| `createGitRoutes`, `createSshKeyRoutes`, `createAgentSshKeyRoutes` | git-реестр и SSH-ключи (AD-076) |
 
 Локально только:
 
 - `src/app.ts` — фабрика `createBackendApp()`; `src/main.ts` — listen и graceful shutdown.
 - `src/routes/*` — Hono-роутеры; `src/auth/*` — middleware и OIDC; `src/events/hub.ts` — `EventHub`.
-- `src/lib/*` — `app-config` (конфиг), `defaults-store` (умолчания оформления), `git-service`, `i18n`, `workspace-resolver`.
+- `src/lib/*` — `app-config` (конфиг), `defaults-store` (умолчания оформления), `i18n`, `workspace-resolver`.
 - `src/storage/*` — `JsonStore` (providers/models/agents) и `ProjectStore`.
 - `src/middleware/rate-limiter.ts` — единственный middleware пакета.
 - `src/agents/definitions/*.json` — определения агентов (ассеты, копируются в `dist`).
@@ -72,7 +74,9 @@
 | Префикс | Источник |
 |---|---|
 | `/auth` | local `routes/auth.ts` (логин, сессии, профиль, avatar) |
-| `/api/v2/projects`, `/messages`, `/queue`, `/fs`, `/agents`, `/context`, `/users`, `/git`, `/mcp` | local `routes/*` |
+| `/api/v2/projects`, `/messages`, `/queue`, `/fs`, `/agents`, `/context`, `/users`, `/mcp` | local `routes/*` |
+| `/api/v2/git` | core `createGitRoutes` (T4): `authorizeProject` = `canEditProjectContent` (owner/EDITOR/LEAD/ADMIN), read (`scan/log/commit`) — `requireAuth` |
+| `/api/v2/ssh-keys`, `/api/v2/agents/:agentId/ssh-keys` | core `createSshKeyRoutes` / `createAgentSshKeyRoutes`: чтение — `requireAuth`, запись — `requireAdmin` (AD-076) |
 | `/api/v2/sessions` | `routes/sessions.ts` — обёртка над core `createSessionRoutes` + backend-only (MCP-скоуп, secrets, export/import, debug, optimization, notes) |
 | `/api/v2/providers` | `routes/providers.ts` — обёртка над core `createProviderRoutes` + `fetch-icon` |
 | `/api/v2/models` | `routes/models.ts` — обёртка над core `createModelRoutes` + `fetch` |
@@ -85,7 +89,7 @@
 | `/health`, `/api/v2/health` | публичные, без auth |
 | `/api/v2/i18n/current`, `/api/v2/i18n/translations/ru\|en` | inline в `app.ts` |
 
-`/api/v2/{providers,models,sessions}` — тонкие обёртки над core-фабриками: общая логика в core, backend добавляет `requireAdmin`/`requirePermission`, rate limiter и backend-only роуты. Дублировать хендлеры core нельзя.
+`/api/v2/{providers,models,sessions}` — тонкие обёртки над core-фабриками; `/api/v2/{git,ssh-keys}` — прямое монтирование core-фабрик с RBAC в `opts`: общая логика в core, backend добавляет `requireAdmin`/`requirePermission`/`authorizeProject`, rate limiter и backend-only роуты. Дублировать хендлеры core нельзя.
 
 ## Аутентификация
 
