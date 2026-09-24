@@ -6,7 +6,7 @@ import { Toggle } from '@/components/ui/Toggle'
 import { Icon } from '@/components/icon/Icon'
 import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
-import type { FileEntry } from '@itphx/synth-shared/types'
+import type { FileEntry, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared/types'
 
 export interface DirectoryPickerDialogProps {
   open: boolean
@@ -64,6 +64,15 @@ function childPath(base: string, name: string): string {
   return base ? `${base.replace(/\/+$/, '')}/${name}` : name
 }
 
+/** POSIX `dirname`: родитель абсолютного пути (`/a/b` → `/a`, `/a` → `/`, `/` → ''). */
+function parentDir(path: string): string {
+  if (!path || path === '/') return ''
+  const normalized = path.replace(/\/+$/, '')
+  const idx = normalized.lastIndexOf('/')
+  if (idx < 0) return ''
+  return idx === 0 ? '/' : normalized.slice(0, idx)
+}
+
 /** Защищённые сервером пути (если приходят с флагом) не показываем. */
 function isEntryDenied(entry: FileEntry): boolean {
   return (entry as FileEntry & { denied?: boolean }).denied === true
@@ -94,6 +103,22 @@ export function DirectoryPickerDialog({
   const [creating, setCreating] = useState(false)
   const [pendingCreate, setPendingCreate] = useState<string | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [selectConfirmOpen, setSelectConfirmOpen] = useState(false)
+  // AD-075: выход за `workspacesRoot` разрешён только по политике `confirm` и не в read-only.
+  const [outsideRoot, setOutsideRoot] = useState<WorkspaceOutsideRootPolicy>('deny')
+  const [policyReadOnly, setPolicyReadOnly] = useState(false)
+
+  const loadPolicy = useCallback(async () => {
+    try {
+      const policy = await synthApi.getWorkspacePolicy()
+      setOutsideRoot(policy.outsideRoot === 'confirm' ? 'confirm' : 'deny')
+      setPolicyReadOnly(policy.readOnly === true)
+    } catch {
+      // Безопасный дефолт: политику не удалось прочитать — считаем `deny`.
+      setOutsideRoot('deny')
+      setPolicyReadOnly(false)
+    }
+  }, [])
 
   const loadRoot = useCallback(async (hidden: boolean) => {
     setLoading(true)
@@ -136,14 +161,26 @@ export function DirectoryPickerDialog({
       setEntries([])
       setNewFolder('')
       setError(null)
+      void loadPolicy()
       void loadRoot(includeHiddenDefault)
     }
     if (!open) {
       setConfirmOpen(false)
+      setSelectConfirmOpen(false)
       setPendingCreate(null)
     }
     wasOpenRef.current = open
-  }, [open, includeHiddenDefault, loadRoot])
+  }, [open, includeHiddenDefault, loadRoot, loadPolicy])
+
+  const selectablePath = toAbsolute(root, currentPath)
+  const visibleEntries = entries.filter((entry) => !isEntryDenied(entry))
+  // Выход за `workspacesRoot` разрешён политикой `confirm` вне read-only.
+  const canGoOutside = outsideRoot === 'confirm' && !policyReadOnly
+  const parent = parentDir(selectablePath)
+  // `parent === ''` — уже файловая система целиком (`/`) или путь без родителя.
+  const canGoUp = history.length > 0 || (canGoOutside && parent !== '')
+  // Сервер вернул абсолютный `path` → мы вне корня (внутри — относительный/пустой).
+  const isOutsideRoot = currentPath.startsWith('/')
 
   const navigateInto = (entry: FileEntry) => {
     if (isEntryDenied(entry)) return
@@ -152,10 +189,16 @@ export function DirectoryPickerDialog({
   }
 
   const goUp = () => {
-    if (history.length === 0) return
-    const previous = history[history.length - 1]
-    setHistory((h) => h.slice(0, -1))
-    void loadDirectory(previous, includeHidden)
+    // Есть история — обычный «назад».
+    if (history.length > 0) {
+      const previous = history[history.length - 1]
+      setHistory((h) => h.slice(0, -1))
+      void loadDirectory(previous, includeHidden)
+      return
+    }
+    // Истории нет (мы в корне): по политике `confirm` поднимаемся в родителя корня.
+    if (!canGoOutside || parent === '') return
+    void loadDirectory(parent, includeHidden)
   }
 
   const toggleHidden = () => {
@@ -195,11 +238,19 @@ export function DirectoryPickerDialog({
     if (target) void createFolder(true, target)
   }
 
-  const selectablePath = toAbsolute(root, currentPath)
-  const visibleEntries = entries.filter((entry) => !isEntryDenied(entry))
-
   const handleSelectCurrent = () => {
+    // Выбор вне корня — только после явного подтверждения.
+    if (isOutsideRoot) {
+      setSelectConfirmOpen(true)
+      return
+    }
     onSelect(selectablePath)
+    onOpenChange(false)
+  }
+
+  const confirmSelectCurrent = () => {
+    onSelect(selectablePath)
+    setSelectConfirmOpen(false)
     onOpenChange(false)
   }
 
@@ -217,7 +268,7 @@ export function DirectoryPickerDialog({
               variant="ghost"
               size="sm"
               onClick={goUp}
-              disabled={history.length === 0}
+              disabled={!canGoUp}
               title={t('workspace.goUp')}
               aria-label={t('workspace.goUp')}
               data-testid="workspace-go-up"
@@ -240,6 +291,16 @@ export function DirectoryPickerDialog({
               {t('workspace.showHidden')}
             </label>
           </div>
+
+          {isOutsideRoot && (
+            <div
+              className="flex items-center gap-1.5 text-xs text-status-warning"
+              data-testid="workspace-outside-hint"
+            >
+              <Icon name="alert-triangle" className="size-3.5 shrink-0" />
+              {t('workspace.outsideRootHint')}
+            </div>
+          )}
 
           <div
             className="min-h-[12rem] max-h-[45vh] overflow-y-auto rounded-lg border border-border p-1"
@@ -332,6 +393,16 @@ export function DirectoryPickerDialog({
         variant="warning"
         confirmLabel={t('common.create')}
         onConfirm={confirmOutsideCreate}
+      />
+
+      <ConfirmDialog
+        open={selectConfirmOpen}
+        onOpenChange={setSelectConfirmOpen}
+        title={t('workspace.outsideRootSelectTitle')}
+        message={t('workspace.outsideRootSelectMessage', { path: selectablePath })}
+        variant="warning"
+        confirmLabel={t('workspace.select')}
+        onConfirm={confirmSelectCurrent}
       />
     </>
   )

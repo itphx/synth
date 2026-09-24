@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   getWorkspaceRoot: vi.fn(),
   browseWorkspaceRoot: vi.fn(),
   mkdirWorkspaceRoot: vi.fn(),
+  getWorkspacePolicy: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
@@ -93,6 +94,11 @@ beforeEach(() => {
     entries: [entry('nested', 'alpha/nested')],
   })
   mocks.mkdirWorkspaceRoot.mockResolvedValue({ created: true, path: 'alpha/new' })
+  mocks.getWorkspacePolicy.mockResolvedValue({
+    outsideRoot: 'confirm',
+    isOverridden: false,
+    defaults: 'confirm',
+  })
 })
 
 afterEach(async () => {
@@ -204,5 +210,87 @@ describe('DirectoryPickerDialog (AD-075)', () => {
     await act(async () => {})
 
     expect(byTestId('workspace-error')?.textContent).toContain('denied by policy')
+  })
+
+  it('policy confirm: «Вверх» из корня ведёт в родителя и подтверждает выбор вне корня', async () => {
+    mocks.browseWorkspaceRoot.mockResolvedValueOnce({
+      root: '/ws',
+      path: '/',
+      entries: [entry('ws', '/ws')],
+    })
+
+    const { onSelect, onOpenChange } = await render()
+
+    const goUp = byTestId('workspace-go-up') as HTMLButtonElement
+    expect(goUp.disabled).toBe(false)
+
+    await click(goUp)
+    await act(async () => {})
+
+    expect(mocks.browseWorkspaceRoot).toHaveBeenCalledWith('/', false)
+    expect(byTestId('workspace-current-path')?.textContent).toBe('/')
+    expect(byTestId('workspace-outside-hint')).not.toBeNull()
+
+    // Выбор вне корня — только через подтверждение.
+    await click(byTestId('workspace-select-current'))
+    expect(onSelect).not.toHaveBeenCalled()
+
+    const confirmDialog = [...document.body.querySelectorAll('[data-slot="dialog-content"]')].find(
+      (d) => d.textContent?.includes('Select a directory outside the workspace root?'),
+    )
+    expect(confirmDialog).toBeTruthy()
+    const confirmButton = [...confirmDialog!.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Select',
+    )
+    await click(confirmButton)
+    await act(async () => {})
+
+    expect(onSelect).toHaveBeenCalledWith('/')
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('policy deny: «Вверх» из корня задизейблен, внутри корня навигация работает', async () => {
+    mocks.getWorkspacePolicy.mockResolvedValue({
+      outsideRoot: 'deny',
+      isOverridden: false,
+      defaults: 'deny',
+    })
+
+    await render()
+
+    expect((byTestId('workspace-go-up') as HTMLButtonElement).disabled).toBe(true)
+
+    await click(byTestId('workspace-entry-alpha'))
+    await act(async () => {})
+
+    expect(mocks.browseWorkspaceRoot).toHaveBeenCalledWith('alpha', false)
+    expect(byTestId('workspace-current-path')?.textContent).toBe('/ws/alpha')
+  })
+
+  it('ошибка getWorkspacePolicy трактуется как deny: навигация внутри корня работает', async () => {
+    mocks.getWorkspacePolicy.mockRejectedValue(new Error('policy unavailable'))
+
+    await render()
+
+    expect((byTestId('workspace-go-up') as HTMLButtonElement).disabled).toBe(true)
+
+    await click(byTestId('workspace-entry-alpha'))
+    await act(async () => {})
+
+    expect(mocks.browseWorkspaceRoot).toHaveBeenCalledWith('alpha', false)
+    expect(byTestId('workspace-error')).toBeNull()
+  })
+
+  it('policy confirm + readOnly: «Вверх» из корня задизейблен', async () => {
+    mocks.getWorkspacePolicy.mockResolvedValue({
+      outsideRoot: 'confirm',
+      isOverridden: false,
+      defaults: 'confirm',
+      readOnly: true,
+    })
+
+    await render()
+
+    expect((byTestId('workspace-go-up') as HTMLButtonElement).disabled).toBe(true)
   })
 })

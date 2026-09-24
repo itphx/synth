@@ -357,6 +357,8 @@ export interface WorkspacePolicyInfo {
   outsideRoot: WorkspaceOutsideRootPolicy
   isOverridden: boolean
   defaults: WorkspaceOutsideRootPolicy
+  /** Managed-развёртывание: политика задаётся деплоем, менять/обходить нельзя. */
+  readOnly?: boolean
 }
 
 export const synthApi = {
