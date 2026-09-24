@@ -57,6 +57,7 @@ import { PermissionEvaluator, extractPaths } from './permission/evaluator.js';
 import { computeToolAvailability } from './permission/availability.js';
 import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
+import { SSHKeyStore } from '../storage/ssh-key-store.js';
 import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, MAX_DOOM_LOOP_COUNT } from './llm-error.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
@@ -148,6 +149,12 @@ export interface OrchestratorOptions {
   mcpManager?: McpManager;
   routerConfig?: RouterConfig;
   projectStore?: ProjectStoreLike;
+  /**
+   * AD-076 §T6: хранилище SSH-ключей для сетевых git-тулов (`git_push`/`git_pull`).
+   * Не задано — создаётся лениво из `dataDir` (+ env); без `dataDir` — git
+   * использует ambient ssh (реестр/ключи недоступны).
+   */
+  sshKeyStore?: SSHKeyStore;
   defaultWorkingDir?: string;
   /**
    * Корень каталога workspaces: `join(dataDir, 'workspaces')` по умолчанию
@@ -278,6 +285,8 @@ export class ChatOrchestrator {
   private readonly _microPipeline: MicroPipeline | null;
   private readonly _contextConfig: ContextConfig | null;
   private readonly _projectStore: ProjectStoreLike | null;
+  /** AD-076 §T6: хранилище SSH-ключей (сетевые git-тулы); null — без dataDir. */
+  private readonly _sshKeyStore: SSHKeyStore | null;
   private readonly _composer: SystemPromptComposer;
   private readonly _defaultWorkingDir: string;
   private readonly _workspacesRoot: string;
@@ -598,6 +607,11 @@ export class ChatOrchestrator {
     this._routerConfig = options.routerConfig ?? null;
     this._contextConfig = options.contextConfig ?? null;
     this._projectStore = options.projectStore ?? null;
+    // AD-076 §T6: хранилище SSH-ключей для git-тулов. Явный store (app/backend)
+    // приоритетнее; иначе — ленивое создание из dataDir (мастер-ключ — env
+    // SYNTH_SECRET_KEY / файл {dataDir}/secrets/master.key, см. SSHKeyStore).
+    this._sshKeyStore = options.sshKeyStore
+      ?? (options.dataDir ? new SSHKeyStore({ dataDir: options.dataDir, env: process.env }) : null);
     // AD-070 §2.1: единая точка сборки системного промпта (идемпотентно).
     this._composer = new SystemPromptComposer({
       contextBuilder: this._contextBuilder,
@@ -610,7 +624,7 @@ export class ChatOrchestrator {
     this._approvalManager = new PermissionApprovalManager(this._eventBus);
     this._defaultPlanMode = options.defaultPlanMode ?? 'auto';
     this._securityConfig = options.securityConfig
-      ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true } };
+      ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true }, secretKey: '' };
     this._dataDir = options.dataDir || '/var/synth/data';
     this._gatewayPayloadLogPath = options.gatewayPayloadLogPath
       ?? join(options.dataDir || '/var/synth/data', 'audit', 'llm-payloads.jsonl');
@@ -791,7 +805,7 @@ export class ChatOrchestrator {
    */
   setSecurityConfig(config: SecurityConfig | null | undefined): void {
     this._securityConfig = config
-      ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true } };
+      ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true }, secretKey: '' };
   }
 
   /**
@@ -2849,6 +2863,8 @@ export class ChatOrchestrator {
                   sessionManager: this._sessionManager,
                   projectStore: this._projectStore ?? undefined,
                   workspacesRoot: this._workspacesRoot,
+                  // AD-076 §T6: сетевые git-тулы резолвят SSH-ключ по реестру проекта.
+                  sshKeyStore: this._sshKeyStore ?? undefined,
                   eventBus: this._eventBus,
                   contextOptimizer: this._optimizer ?? undefined,
                   // AD-046 §5: тул `skill` получает рантайм через ToolContext.extra

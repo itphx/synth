@@ -1,10 +1,27 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { synthApi } from '@/lib/api/synthApi'
+import type { GitRepoConfigData } from '@/lib/api/synthApi'
 import type { RepoStatus, CommitInfo, CommitDetail } from '@itphx/synth-shared'
 
+/**
+ * AD-076: запись реестра проекта + git-статус, собранные для дерева Git-вкладки.
+ * `path` — относительный путь внутри workspace; `''`/`.` — корень workspace.
+ */
+export interface GitRepoView extends GitRepoConfigData {
+  isRepo?: boolean
+  currentBranch?: string
+  lastCommitAt?: string
+  lastCommitSubject?: string
+}
+
+/** Нормализация пути репозитория для сопоставления scan ↔ реестр. */
+function normRepoPath(path: string): string {
+  return path === '' || path === '.' ? '' : path
+}
+
 interface GitStore {
-  reposByProject: Record<string, RepoStatus[]>
+  reposByProject: Record<string, GitRepoView[]>
   commitsByRepo: Record<string, CommitInfo[]>
   loading: boolean
   error: string | null
@@ -13,10 +30,29 @@ interface GitStore {
   expandedRepos: Set<string>
   showMoreLimits: Record<string, number>
 
-  loadRepos: (projectId: string, repos: { path: string }[]) => Promise<void>
+  loadRepos: (projectId: string, repos: GitRepoConfigData[] | null) => Promise<void>
   scanWorkspace: (projectId: string) => Promise<RepoStatus[] | null>
-  initRepo: (projectId: string, path: string, defaultBranch?: string) => Promise<RepoStatus | null>
-  cloneRepo: (projectId: string, url: string, path: string, branch?: string) => Promise<RepoStatus | null>
+  initRepo: (
+    projectId: string,
+    path: string,
+    defaultBranch?: string,
+    name?: string,
+    sshKeyId?: string,
+  ) => Promise<RepoStatus | null>
+  cloneRepo: (
+    projectId: string,
+    url: string,
+    path?: string,
+    branch?: string,
+    name?: string,
+    sshKeyId?: string,
+  ) => Promise<RepoStatus | null>
+  registerRepo: (
+    projectId: string,
+    entry: { path: string; name?: string; url?: string; type?: 'https' | 'ssh'; defaultBranch?: string; sshKeyId?: string },
+  ) => Promise<GitRepoConfigData | null>
+  removeRepo: (projectId: string, opts: { id?: string; path?: string; deleteLocal?: boolean }) => Promise<boolean>
+  fetchRepo: (projectId: string, opts: { id?: string; path?: string }) => Promise<boolean>
   loadCommitLog: (projectId: string, repoPath: string) => Promise<CommitInfo[] | null>
   loadCommitDetail: (projectId: string, repoPath: string, hash: string) => Promise<CommitDetail | null>
 
@@ -44,36 +80,34 @@ export const useGitStore = create<GitStore>()(
   expandedRepos: new Set<string>(),
   showMoreLimits: {},
 
+  // Собирает отображаемый список реестра, сохраняя git-статус по совпадающему пути.
   loadRepos: async (projectId, repos) => {
-    if (!repos || repos.length === 0) {
-      set((s) => ({
-        reposByProject: { ...s.reposByProject, [projectId]: [] },
-      }))
-      return
-    }
-
-    set((s) => ({
-      loading: true,
-      error: null,
-      reposByProject: {
-        ...s.reposByProject,
-        [projectId]: repos.map((r) => ({
-          path: r.path,
-          isRepo: true,
-        })),
-      },
-    }))
-    set({ loading: false })
+    set((s) => {
+      const prev = s.reposByProject[projectId] ?? []
+      const byPath = new Map(prev.map((r) => [r.path, r]))
+      const list = (repos ?? []) as Array<GitRepoConfigData | string>
+      const next: GitRepoView[] = list.map((raw) => {
+        const entry: GitRepoConfigData = typeof raw === 'string' ? { path: raw } : raw
+        const prevEntry = byPath.get(entry.path)
+        return { ...(prevEntry ?? {}), ...entry, isRepo: true }
+      })
+      return { reposByProject: { ...s.reposByProject, [projectId]: next }, error: null }
+    })
   },
 
   scanWorkspace: async (projectId) => {
     set({ loading: true, error: null })
     try {
       const result = await synthApi.scanGitRepos(projectId)
-      set((s) => ({
-        reposByProject: { ...s.reposByProject, [projectId]: result.repos },
-        loading: false,
-      }))
+      set((s) => {
+        const statusByPath = new Map(result.repos.map((r) => [normRepoPath(r.path), r]))
+        const prev = s.reposByProject[projectId] ?? []
+        const next = prev.map((r) => {
+          const status = statusByPath.get(normRepoPath(r.path))
+          return status ? { ...r, ...status, path: r.path, isRepo: true } : r
+        })
+        return { reposByProject: { ...s.reposByProject, [projectId]: next }, loading: false }
+      })
       return result.repos
     } catch (e) {
       set({ error: (e as Error).message, loading: false })
@@ -81,17 +115,11 @@ export const useGitStore = create<GitStore>()(
     }
   },
 
-  initRepo: async (projectId, path, defaultBranch) => {
+  initRepo: async (projectId, path, defaultBranch, name, sshKeyId) => {
     set({ loading: true, error: null })
     try {
-      const repo = await synthApi.initGitRepo(projectId, path, defaultBranch)
-      set((s) => ({
-        reposByProject: {
-          ...s.reposByProject,
-          [projectId]: [...(s.reposByProject[projectId] || []), repo],
-        },
-        loading: false,
-      }))
+      const repo = await synthApi.initGitRepo(projectId, path, defaultBranch, name, sshKeyId)
+      set({ loading: false })
       return repo
     } catch (e) {
       set({ error: (e as Error).message, loading: false })
@@ -99,21 +127,51 @@ export const useGitStore = create<GitStore>()(
     }
   },
 
-  cloneRepo: async (projectId, url, path, branch) => {
+  cloneRepo: async (projectId, url, path, branch, name, sshKeyId) => {
     set({ loading: true, error: null })
     try {
-      const repo = await synthApi.cloneGitRepo(projectId, url, path, branch)
-      set((s) => ({
-        reposByProject: {
-          ...s.reposByProject,
-          [projectId]: [...(s.reposByProject[projectId] || []), repo],
-        },
-        loading: false,
-      }))
+      const repo = await synthApi.cloneGitRepo(projectId, url, path, branch, name, sshKeyId)
+      set({ loading: false })
       return repo
     } catch (e) {
       set({ error: (e as Error).message, loading: false })
       return null
+    }
+  },
+
+  registerRepo: async (projectId, entry) => {
+    set({ loading: true, error: null })
+    try {
+      const registered = await synthApi.registerGitRepo(projectId, entry)
+      set({ loading: false })
+      return registered
+    } catch (e) {
+      set({ error: (e as Error).message, loading: false })
+      return null
+    }
+  },
+
+  removeRepo: async (projectId, opts) => {
+    set({ loading: true, error: null })
+    try {
+      await synthApi.removeGitRepo(projectId, opts)
+      set({ loading: false })
+      return true
+    } catch (e) {
+      set({ error: (e as Error).message, loading: false })
+      return false
+    }
+  },
+
+  fetchRepo: async (projectId, opts) => {
+    set({ loading: true, error: null })
+    try {
+      await synthApi.fetchGitRepo(projectId, opts)
+      set({ loading: false })
+      return true
+    } catch (e) {
+      set({ error: (e as Error).message, loading: false })
+      return false
     }
   },
 

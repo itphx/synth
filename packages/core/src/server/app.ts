@@ -30,6 +30,7 @@ import { setRemoteTokenProvider, removeRemoteTokenProvider } from '../providers/
 import { JsonStore } from '../storage/json-store.js';
 import { FileProfileStore } from '../storage/profile-store.js';
 import { ProjectStore } from '../storage/project-store.js';
+import { SSHKeyStore } from '../storage/ssh-key-store.js';
 import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy } from '../storage/runtime-settings.js';
 import { createHealthRoutes } from './routes/health.js';
 import { createHybridRoutes } from './routes/hybrid.js';
@@ -41,6 +42,8 @@ import { createProviderRoutes } from './routes/providers.js';
 import { createModelRoutes } from './routes/models.js';
 import { createAgentRoutes } from './routes/agents.js';
 import { createFsRoutes } from './routes/fs.js';
+import { createGitRoutes } from './routes/git.js';
+import { createSshKeyRoutes, createAgentSshKeyRoutes } from './routes/ssh-keys.js';
 import { createQueueRoutes } from './routes/queue.js';
 import { createUpdateRoutes } from './routes/updates.js';
 import { createMessageRoutes } from './routes/messages.js';
@@ -73,6 +76,12 @@ export interface StandaloneConfig {
   defaultPlanMode?: PlanMode;
   /** Секция безопасности (защита от Indirect Prompt Injection) из config.yaml. */
   securityConfig?: SecurityConfig;
+  /**
+   * AD-076: мастер-ключ шифрования секретов at-rest (SSH-ключи). Задан —
+   * приоритетнее env/файла; иначе `SSHKeyStore` использует `SYNTH_SECRET_KEY`
+   * или файл `{dataDir}/secrets/master.key`.
+   */
+  secretKey?: string;
   /** LLM Gateway (AD-036) из config.yaml — глобальный тумблер и конфиг. */
   gatewayConfig?: LLMGatewayConfig;
   /** AD-070 §2.2: политика prompt-cache из config.yaml llm.cache (auto | none). */
@@ -666,6 +675,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     mcpSettingsProvider: () => settingsStore.getMcpSettings(),
   });
   const projectStore = new ProjectStore({ dataDir });
+  // AD-076: SSH-ключи агентов (шифрование at-rest мастер-ключом из dataDir/env).
+  const sshKeyStore = new SSHKeyStore({ dataDir, secretKey: config.secretKey, env: process.env });
   const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
   const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
   const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
@@ -805,6 +816,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     toolRegistry,
     agentRegistry,
     projectStore,
+    // AD-076 §T6: тот же store, что у git-роутов — без дублей инстансов.
+    sshKeyStore,
     defaultWorkingDir,
     workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
     permissionConfig: config.permissionConfig,
@@ -901,6 +914,20 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       getProtectedPathsPolicy: () => protectedPathsStore.getPolicy(),
     },
   ));
+
+  // Git (AD-076): реестр репозиториев, clone/init/fetch/remove, SSH-ключи.
+  // Core — локальный single-user режим: writeGuard не задаём (по умолчанию requireAuth).
+  app.route('/api/v2/git', createGitRoutes(
+    auth,
+    projectStore,
+    config.workspacesRoot ?? join(dataDir, 'workspaces'),
+    { sshKeyStore },
+  ));
+
+  // SSH-ключи агентов (AD-076 §T5): flat CRUD + nested-роуты агента.
+  // Core — локальный single-user режим: guards не задаём (дефолт requireAuth).
+  app.route('/api/v2/ssh-keys', createSshKeyRoutes(auth, sshKeyStore));
+  app.route('/api/v2/agents/:agentId/ssh-keys', createAgentSshKeyRoutes(auth, sshKeyStore));
 
   // Queue
   app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage, () => connection.client));

@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { confirm } from '@/lib/confirm'
 import { useAgentsStore } from '@/stores/agentsStore'
+import { SshKeysSettings } from '../settings/SshKeysSettings'
 import {
   NumberField,
   SettingsActions,
@@ -695,6 +696,9 @@ export const AgentsPanel = () => {
           ))}
         </div>
       )}
+
+      {/* AD-076: реестр SSH-ключей per-agent (в разделе «Агенты») */}
+      <SshKeysSettings />
     </SettingsPanel>
   )
 }

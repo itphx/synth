@@ -109,7 +109,6 @@ export function createAgentRoutes(kit: AuthKit, agentStore: JsonStore<AgentDefin
       topP: body.top_p ?? body.topP ?? existing?.topP,
       topK: body.top_k ?? body.topK ?? existing?.topK,
       reasoningLevel: body.reasoning_level ?? body.reasoningLevel ?? existing?.reasoningLevel ?? builtin?.reasoningLevel,
-      sshKeys: body.ssh_keys ?? body.sshKeys ?? existing?.sshKeys ?? [],
       isOverridden: true,
       icon: body.icon ?? existing?.icon,
       color: body.color ?? existing?.color,

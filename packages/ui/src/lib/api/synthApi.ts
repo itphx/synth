@@ -165,10 +165,44 @@ export type { FileEntry, DirectoryListResult, FileReadResult } from '@itphx/synt
 
 import type { DirectoryListResult, FileReadResult, RepoStatus, CommitInfo, CommitDetail, SessionMode } from '@itphx/synth-shared'
 
+/**
+ * AD-076: запись реестра git-репозиториев проекта. Полная форма
+ * (`GitRepoConfig` из shared); `path` — относительный путь внутри workspace.
+ */
 export interface GitRepoConfigData {
+  id?: string
+  name?: string
+  url?: string
+  type?: 'https' | 'ssh'
+  /** Относительный путь внутри `project.workspace`; `''`/`.` — корень workspace. */
   path: string
   defaultBranch?: string
+  sshKeyId?: string
+  lastFetch?: string
 }
+
+/** AD-076: публичная форма SSH-ключа (секреты `privateKey`/`passphrase` API не отдаёт). */
+export interface SSHKeyMetaData {
+  id: string
+  name: string
+  /** Метка типа ключа, дефолт `'user'`. */
+  type?: string
+  agentIds: string[]
+  createdAt: string
+  updatedAt?: string
+}
+
+/** AD-076: тело создания SSH-ключа (`POST /ssh-keys`). */
+export interface SSHKeyCreateBody {
+  name: string
+  type?: string
+  privateKey: string
+  passphrase?: string
+  agentIds?: string[]
+}
+
+/** AD-076: тело обновления SSH-ключа (partial; без `privateKey` секрет не меняется). */
+export type SSHKeyUpdateBody = Partial<SSHKeyCreateBody>
 
 export interface ProjectStats {
   total_sessions: number
@@ -822,17 +856,63 @@ export const synthApi = {
     })
   },
 
-  async initGitRepo(projectId: string, path: string, defaultBranch?: string): Promise<RepoStatus> {
+  async initGitRepo(
+    projectId: string,
+    path: string,
+    defaultBranch?: string,
+    name?: string,
+    sshKeyId?: string,
+  ): Promise<RepoStatus> {
     return fetchJSON(`${BASE_URL}/git/repos/init`, {
       method: 'POST',
-      body: JSON.stringify({ projectId, path, defaultBranch }),
+      body: JSON.stringify({ projectId, path, defaultBranch, name, sshKeyId }),
     })
   },
 
-  async cloneGitRepo(projectId: string, url: string, path?: string, branch?: string): Promise<RepoStatus> {
+  async cloneGitRepo(
+    projectId: string,
+    url: string,
+    path?: string,
+    branch?: string,
+    name?: string,
+    sshKeyId?: string,
+  ): Promise<RepoStatus> {
     return fetchJSON(`${BASE_URL}/git/repos/clone`, {
       method: 'POST',
-      body: JSON.stringify({ projectId, url, path, branch }),
+      body: JSON.stringify({ projectId, url, path, branch, name, sshKeyId }),
+    })
+  },
+
+  /** AD-076: upsert записи реестра (идемпотентно по `path`). */
+  async registerGitRepo(
+    projectId: string,
+    entry: { path: string; name?: string; url?: string; type?: 'https' | 'ssh'; defaultBranch?: string; sshKeyId?: string },
+  ): Promise<GitRepoConfigData> {
+    return fetchJSON(`${BASE_URL}/git/repos/register`, {
+      method: 'POST',
+      body: JSON.stringify({ projectId, ...entry }),
+    })
+  },
+
+  /** AD-076: удаление записи реестра; `deleteLocal` — удалить и локальные файлы. */
+  async removeGitRepo(
+    projectId: string,
+    opts: { id?: string; path?: string; deleteLocal?: boolean },
+  ): Promise<{ removed: GitRepoConfigData; deletedLocal: boolean }> {
+    return fetchJSON(`${BASE_URL}/git/repos/remove`, {
+      method: 'POST',
+      body: JSON.stringify({ projectId, ...opts }),
+    })
+  },
+
+  /** AD-076: fetch репозитория реестра (обновление `lastFetch`). */
+  async fetchGitRepo(
+    projectId: string,
+    opts: { id?: string; path?: string },
+  ): Promise<{ path: string; lastFetch: string }> {
+    return fetchJSON(`${BASE_URL}/git/repos/fetch`, {
+      method: 'POST',
+      body: JSON.stringify({ projectId, ...opts }),
     })
   },
 
@@ -845,6 +925,54 @@ export const synthApi = {
   async getCommitDetail(projectId: string, repoPath: string, hash: string): Promise<{ commit: CommitDetail }> {
     const params = new URLSearchParams({ project_id: projectId, repo_path: repoPath, hash })
     return fetchJSON(`${BASE_URL}/git/commit?${params.toString()}`)
+  },
+
+  // SSH-ключи (AD-076). Секреты API не возвращает — только SSHKeyMeta.
+  async listSshKeys(agentId?: string): Promise<SSHKeyMetaData[]> {
+    const params = agentId ? `?agentId=${encodeURIComponent(agentId)}` : ''
+    return fetchJSON(`${BASE_URL}/ssh-keys${params}`)
+  },
+
+  /** AD-076: создание ключа (write — ADMIN). */
+  async createSshKey(body: SSHKeyCreateBody): Promise<SSHKeyMetaData> {
+    return fetchJSON(`${BASE_URL}/ssh-keys`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  },
+
+  /** AD-076: частичное обновление; без `privateKey` в теле секрет не меняется. */
+  async updateSshKey(id: string, body: SSHKeyUpdateBody): Promise<SSHKeyMetaData> {
+    return fetchJSON(`${BASE_URL}/ssh-keys/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    })
+  },
+
+  /** AD-076: удаление ключа целиком. */
+  async deleteSshKey(id: string): Promise<void> {
+    return fetchJSON(`${BASE_URL}/ssh-keys/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  /** AD-076 (nested): ключи агента. */
+  async listAgentSshKeys(agentId: string): Promise<SSHKeyMetaData[]> {
+    return fetchJSON(`${BASE_URL}/agents/${encodeURIComponent(agentId)}/ssh-keys`)
+  },
+
+  /** AD-076 (nested): создание ключа с привязкой к агенту. */
+  async createAgentSshKey(agentId: string, body: SSHKeyCreateBody): Promise<SSHKeyMetaData> {
+    return fetchJSON(`${BASE_URL}/agents/${encodeURIComponent(agentId)}/ssh-keys`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  },
+
+  /** AD-076 (nested): отвязка ключа от агента (ключ НЕ удаляется). */
+  async unlinkAgentSshKey(agentId: string, keyId: string): Promise<SSHKeyMetaData> {
+    return fetchJSON(
+      `${BASE_URL}/agents/${encodeURIComponent(agentId)}/ssh-keys/${encodeURIComponent(keyId)}`,
+      { method: 'DELETE' },
+    )
   },
 
   // Агенты

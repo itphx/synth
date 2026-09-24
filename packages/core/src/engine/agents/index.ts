@@ -53,7 +53,6 @@ export function loadSystemAgentDefinitions(): AgentDefinition[] {
       color: def.color,
       contextFile: def.contextFile,
       enabled: true,
-      sshKeys: [],
       isOverridden: false,
       agentMode: normalizeAgentModes(def.agentMode),
       subagentPrompt: def.subagentPrompt,

@@ -93,7 +93,6 @@ export function createAgentRoutes(
       temperature: body.temperature ?? existing?.temperature,
       topP: body.top_p ?? body.topP ?? existing?.topP,
       reasoningLevel: body.reasoning_level ?? body.reasoningLevel ?? existing?.reasoningLevel,
-      sshKeys: body.ssh_keys ?? body.sshKeys ?? existing?.sshKeys ?? [],
       isOverridden: true,
       icon: body.icon ?? existing?.icon,
       color: body.color ?? existing?.color,

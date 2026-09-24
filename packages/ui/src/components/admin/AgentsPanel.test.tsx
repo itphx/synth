@@ -16,6 +16,7 @@ const apiMock = vi.hoisted(() => ({
   getDefaultAgentInfo: vi.fn(async () => ({ defaultAgent: 'assistant', isOverridden: false, defaults: 'assistant' })),
   setDefaultAgent: vi.fn(async (id: string) => ({ defaultAgent: id })),
   resetDefaultAgent: vi.fn(async () => ({ status: 'restored', defaultAgent: 'assistant', isOverridden: false, defaults: 'assistant' })),
+  listSshKeys: vi.fn(async () => []),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: apiMock }))

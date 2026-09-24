@@ -24,7 +24,6 @@ describe('createAgentRegistry', () => {
       displayName: id,
       capabilities: [],
       enabled: true,
-      sshKeys: [],
       isOverridden: true,
       ...extra,
     };

@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { spawn } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -94,6 +94,8 @@ program
       permissionConfig: synth.permission,
       defaultPlanMode: synth.session?.planMode,
       securityConfig: synth.security,
+      // AD-076: мастер-ключ шифрования SSH-ключей (env > config > file в dataDir).
+      secretKey: resolveSecretKey(synth, process.env),
       gatewayConfig: synth.llmGateway,
       llmCachePolicy: synth.llm.cache,
       toolsPolicy: synth.tools.policy,

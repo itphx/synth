@@ -147,6 +147,13 @@ export const ENGINE_MESSAGE_KEYS = [
   'projectctx.repo_not_found',
   'projectctx.repos_none',
   'projectctx.repos_found',
+  'projectctx.repo_destination',
+  'projectctx.repo_name',
+  'projectctx.repo_url',
+  'projectctx.repo_type',
+  'projectctx.repo_default_branch',
+  'projectctx.repo_ssh_key',
+  'projectctx.repo_last_fetch',
   'tool.classified',
   'reference.session_manager_unavailable',
   'reference.session_not_found',
@@ -236,6 +243,14 @@ export const ENGINE_MESSAGE_KEYS = [
   'command.inline_shell_failed',
   'command.inline_shell_truncated',
   'command.inline_shell_unavailable',
+  // --- Git-репозитории и SSH-ключи (AD-076) ---
+  'sshkey.not_found',
+  'sshkey.name_exists',
+  'sshkey.encryption_unavailable',
+  'sshkey.decrypt_failed',
+  'git.ssh_key_required',
+  'git.repo_path_invalid',
+  'git.repo_exists',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -376,6 +391,13 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'projectctx.repo_not_found': ["path"],
   'projectctx.repos_none': ["dir"],
   'projectctx.repos_found': ["dir"],
+  'projectctx.repo_destination': ["dir"],
+  'projectctx.repo_name': ["name"],
+  'projectctx.repo_url': ["url"],
+  'projectctx.repo_type': ["type"],
+  'projectctx.repo_default_branch': ["branch"],
+  'projectctx.repo_ssh_key': ["id"],
+  'projectctx.repo_last_fetch': ["time"],
   'tool.classified': ["category"],
   'reference.session_manager_unavailable': [],
   'reference.session_not_found': ["id"],
@@ -465,6 +487,14 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'command.inline_shell_failed': ["output"],
   'command.inline_shell_truncated': ["limit"],
   'command.inline_shell_unavailable': [],
+  // --- Git-репозитории и SSH-ключи (AD-076) ---
+  'sshkey.not_found': ["id"],
+  'sshkey.name_exists': ["name"],
+  'sshkey.encryption_unavailable': [],
+  'sshkey.decrypt_failed': ["id"],
+  'git.ssh_key_required': ["path"],
+  'git.repo_path_invalid': ["path"],
+  'git.repo_exists': ["path"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

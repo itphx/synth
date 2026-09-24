@@ -24,6 +24,8 @@ export const REMOTE_PROXY_PREFIXES = [
   '/api/v2/llm',
   '/api/v2/providers',
   '/api/v2/models',
+  '/api/v2/git',
+  '/api/v2/ssh-keys',
 ] as const;
 
 const HOP_BY_HOP_HEADERS = new Set([

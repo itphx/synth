@@ -31,6 +31,29 @@ type WorkspaceProvisionResult =
  */
 const planFieldSchema = z.unknown().nullable().optional();
 
+/**
+ * AD-076 §T4: RBAC-хелперы проекта (owner/EDITOR/LEAD/ADMIN). Вынесены фабрикой,
+ * чтобы их переиспользовали git-роуты core-фабрики (`authorizeProject`), а логика
+ * ролей не дублировалась.
+ */
+export function createProjectAccess(kit: AuthKit) {
+  type Ctx = Parameters<typeof kit.isAdmin>[0];
+
+  /** AD-071 §2.4: owner проекта или глобальные LEAD/ADMIN (через AuthKit). */
+  const canManageProject = (c: Ctx, project: Project, userId: string): boolean =>
+    (typeof kit.isAdmin === 'function' && kit.isAdmin(c))
+    || (typeof kit.hasRole === 'function' && kit.hasRole(c, 'LEAD'))
+    || project.ownerId === userId
+    || project.members?.[userId] === ProjectRole.OWNER;
+
+  /** D5: owner / EDITOR / глобальные LEAD/ADMIN — редактирование контента проекта. */
+  const canEditProjectContent = (c: Ctx, project: Project, userId: string): boolean =>
+    canManageProject(c, project, userId)
+    || project.members?.[userId] === ProjectRole.EDITOR;
+
+  return { canManageProject, canEditProjectContent };
+}
+
 export function createProjectRoutes(
   kit: AuthKit,
   store: ProjectStore,
@@ -43,26 +66,7 @@ export function createProjectRoutes(
   const wsResolver = new WorkspaceResolver(workspacesRoot,
     (projectId) => store.load(projectId),
   );
-
-  /** AD-071 §2.4: owner проекта или глобальные LEAD/ADMIN (через AuthKit). */
-  const canManageProject = (
-    c: Parameters<typeof kit.isAdmin>[0],
-    project: Project,
-    userId: string,
-  ): boolean =>
-    (typeof kit.isAdmin === 'function' && kit.isAdmin(c))
-    || (typeof kit.hasRole === 'function' && kit.hasRole(c, 'LEAD'))
-    || project.ownerId === userId
-    || project.members?.[userId] === ProjectRole.OWNER;
-
-  /** D5: owner / EDITOR / глобальные LEAD/ADMIN — редактирование контента проекта. */
-  const canEditProjectContent = (
-    c: Parameters<typeof kit.isAdmin>[0],
-    project: Project,
-    userId: string,
-  ): boolean =>
-    canManageProject(c, project, userId)
-    || project.members?.[userId] === ProjectRole.EDITOR;
+  const { canManageProject, canEditProjectContent } = createProjectAccess(kit);
 
   /**
    * D5: мутирующие поля контента проекта (всё, кроме `workspace`). Их изменение

@@ -125,7 +125,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
   });
 
   async function runSession(
-    securityConfig: SecurityConfig,
+    securityConfig: Omit<SecurityConfig, 'secretKey'>,
     toolCalls: Record<string, unknown>[],
     setup?: (registry: ReturnType<typeof createToolRegistry>) => void,
   ): Promise<void> {
@@ -141,7 +141,8 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
       },
       toolRegistry,
       permissionConfig: { rules: {}, askTimeoutMs: 1000 },
-      securityConfig,
+      // AD-076: secretKey в тестах не важен — добавляем пустой.
+      securityConfig: { ...securityConfig, secretKey: '' },
       defaultWorkingDir: tmpDir,
     });
 

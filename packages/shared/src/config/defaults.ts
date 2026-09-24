@@ -213,5 +213,7 @@ export const defaultConfig: SynthConfig = {
     protectedPaths: {
       enabled: true,
     },
+    // Пусто — core использует файл {dataDir}/secrets/master.key (AD-076).
+    secretKey: '',
   },
 };

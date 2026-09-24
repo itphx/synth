@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
-import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, ensureFirstRun } from './resolve.js';
+import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, ensureFirstRun } from './resolve.js';
 import { defaultConfig } from './defaults.js';
 import type { SynthConfig } from './types.js';
 
@@ -232,5 +232,30 @@ describe('ensureFirstRun (AD-075: нормализация относитель�
     expect(result.dataDir).toBe(dir);
     // ensureDataDir отработал по абсолютизированному пути — подкаталоги в tmp.
     expect(existsSync(join(dir, 'sessions'))).toBe(true);
+  });
+});
+
+describe('resolveSecretKey (AD-076)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('env SYNTH_SECRET_KEY имеет приоритет над config', () => {
+    const c: SynthConfig = { ...cfg, security: { ...cfg.security, secretKey: 'from-config' } };
+    expect(resolveSecretKey(c, { SYNTH_SECRET_KEY: 'from-env' })).toBe('from-env');
+  });
+
+  it('config.security.secretKey используется, если env не задан', () => {
+    const c: SynthConfig = { ...cfg, security: { ...cfg.security, secretKey: 'from-config' } };
+    expect(resolveSecretKey(c, {})).toBe('from-config');
+  });
+
+  it('дефолт — пустая строка', () => {
+    expect(resolveSecretKey(cfg, {})).toBe('');
+  });
+
+  it('НЕ читает реальный process.env, если передан env без переменной', () => {
+    vi.stubEnv('SYNTH_SECRET_KEY', 'should-not-be-used');
+    expect(resolveSecretKey(cfg, {})).toBe('');
   });
 });

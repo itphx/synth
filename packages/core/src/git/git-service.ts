@@ -1,7 +1,22 @@
-import { readdir, mkdir } from 'node:fs/promises';
-import { resolve as pathResolve, relative, join } from 'node:path';
-import { simpleGit, type LogResult } from 'simple-git';
+import { readdir, mkdir, rm } from 'node:fs/promises';
+import { resolve as pathResolve, relative, join, isAbsolute, sep } from 'node:path';
+import { simpleGit, type SimpleGit, type LogResult } from 'simple-git';
 import type { RepoStatus, CommitInfo, CommitDetail, CommitFileInfo } from '@itphx/synth-shared';
+
+/**
+ * AD-076 §T3: git-сервис ядра (перенос из backend `lib/git-service.ts`).
+ * Единая реализация git — в core; backend (T4) переходит на core-фабрику роутов.
+ */
+
+/** Опции git-вызова: дополнительные переменные окружения (например SSH). */
+export interface GitEnvOptions {
+  env?: Record<string, string>;
+}
+
+/** Опции fetch: окружение + конкретный remote (по умолчанию — все). */
+export interface GitFetchOptions extends GitEnvOptions {
+  remote?: string;
+}
 
 function relativeTime(isoDate: string): string {
   const diff = Date.now() - new Date(isoDate).getTime();
@@ -19,36 +34,61 @@ function relativeTime(isoDate: string): string {
   return `${years} г назад`;
 }
 
-function resolveRepoPath(workspaceRoot: string, reposPath: string, repoRelPath: string): string {
-  const repoPath = repoRelPath ? pathResolve(reposPath, repoRelPath) : reposPath;
-  const rel = relative(workspaceRoot, repoPath);
-  if (rel.startsWith('..') || pathResolve(repoPath) !== repoPath) {
+/**
+ * AD-076: резолвит относительный путь репозитория ВНУТРИ абсолютного workspace.
+ * Абсолютный `repoRelPath` либо выход за workspace (`..`) → ошибка
+ * `PATH_TRAVERSAL` (защита от traversal). Пустой `repoRelPath` — сам workspace.
+ */
+export function resolveRepoPath(workspaceAbsPath: string, repoRelPath: string): string {
+  const base = pathResolve(workspaceAbsPath);
+  const repoPath = repoRelPath ? pathResolve(base, repoRelPath) : base;
+  const rel = relative(base, repoPath);
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw { error: 'Путь репозитория выходит за пределы workspace', code: 'PATH_TRAVERSAL' };
   }
   return repoPath;
 }
 
-function deriveRepoName(url: string): string {
+/** Имя репозитория из URL (последний сегмент без `.git`). */
+export function deriveRepoName(url: string): string {
   let name = url.replace(/\/$/, '').split('/').pop() || 'repo';
   name = name.replace(/\.git$/, '');
   return name;
 }
 
+/**
+ * Применяет дополнительные env к simple-git. `simpleGit.env(obj)` ЗАМЕНЯЕТ
+ * окружение процесса, поэтому базовый `process.env` обязательно объединяем.
+ */
+function withEnv(git: SimpleGit, env?: Record<string, string>): SimpleGit {
+  if (!env) return git;
+  const merged: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) merged[key] = value;
+  }
+  return git.env({ ...merged, ...env });
+}
+
 export class GitService {
   constructor(private workspacesRoot: string) {}
 
-  async isRepo(repoPath: string): Promise<boolean> {
+  /** Публичный доступ к проверке containment (для роутов/тестов). */
+  resolveRepoPath(workspaceAbsPath: string, repoRelPath: string): string {
+    return resolveRepoPath(workspaceAbsPath, repoRelPath);
+  }
+
+  async isRepo(repoPath: string, opts?: GitEnvOptions): Promise<boolean> {
     try {
-      return await simpleGit(repoPath).checkIsRepo();
+      return await withEnv(simpleGit(repoPath), opts?.env).checkIsRepo();
     } catch {
       return false;
     }
   }
 
-  async getRepoStatus(repoAbsPath: string): Promise<RepoStatus | null> {
-    if (!(await this.isRepo(repoAbsPath))) return null;
+  async getRepoStatus(repoAbsPath: string, opts?: GitEnvOptions): Promise<RepoStatus | null> {
+    if (!(await this.isRepo(repoAbsPath, opts))) return null;
     try {
-      const g = simpleGit(repoAbsPath);
+      const g = withEnv(simpleGit(repoAbsPath), opts?.env);
       const branch = await g.revparse(['--abbrev-ref', 'HEAD']);
       const log = await g.log({ maxCount: 1 });
       const last = log.latest;
@@ -109,14 +149,19 @@ export class GitService {
     return result;
   }
 
-  async initRepo(wsAbsPath: string, repoRelPath: string, defaultBranch?: string): Promise<RepoStatus> {
-    const repoPath = resolveRepoPath(this.workspacesRoot, wsAbsPath, repoRelPath);
+  async initRepo(
+    wsAbsPath: string,
+    repoRelPath: string,
+    defaultBranch?: string,
+    opts?: GitEnvOptions,
+  ): Promise<RepoStatus> {
+    const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
     try {
       await mkdir(repoPath, { recursive: true });
     } catch {
       // directory might already exist
     }
-    const g = simpleGit(repoPath);
+    const g = withEnv(simpleGit(repoPath), opts?.env);
     if (defaultBranch) {
       await g.init(['--initial-branch', defaultBranch]);
     } else {
@@ -128,26 +173,58 @@ export class GitService {
     };
   }
 
-  async cloneRepo(wsAbsPath: string, repoRelPath: string, url: string, branch?: string): Promise<RepoStatus> {
+  async cloneRepo(
+    wsAbsPath: string,
+    repoRelPath: string,
+    url: string,
+    branch?: string,
+    opts?: GitEnvOptions,
+  ): Promise<RepoStatus> {
     const effectivePath = repoRelPath || deriveRepoName(url);
-    const repoPath = resolveRepoPath(this.workspacesRoot, wsAbsPath, effectivePath);
+    const repoPath = resolveRepoPath(wsAbsPath, effectivePath);
     const parentDir = pathResolve(repoPath, '..');
     try {
       await mkdir(parentDir, { recursive: true });
     } catch {
       // директория может уже существовать
     }
-    await simpleGit().clone(url, repoPath, branch ? { '--branch': branch } : undefined);
+    await withEnv(simpleGit(), opts?.env).clone(url, repoPath, branch ? { '--branch': branch } : undefined);
     return {
       path: effectivePath,
       isRepo: true,
     };
   }
 
-  async getLog(wsAbsPath: string, repoRelPath: string, maxCount = 30): Promise<CommitInfo[]> {
-    const repoPath = resolveRepoPath(this.workspacesRoot, wsAbsPath, repoRelPath);
-    await this.ensureRepo(repoPath);
-    const g = simpleGit(repoPath);
+  /** AD-076: fetch репозитория (при необходимости с SSH-окружением). */
+  async fetchRepo(wsAbsPath: string, repoRelPath: string, opts?: GitFetchOptions): Promise<void> {
+    const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
+    await this.ensureRepo(repoPath, opts);
+    const g = withEnv(simpleGit(repoPath), opts?.env);
+    await (opts?.remote ? g.fetch([opts.remote]) : g.fetch());
+  }
+
+  /**
+   * AD-076: удаляет локальный каталог репозитория. `rm -rf` выполняется ТОЛЬКО
+   * после проверки containment через `resolveRepoPath` (защита от traversal);
+   * корень workspace удалять запрещено.
+   */
+  async removeLocal(wsAbsPath: string, repoRelPath: string): Promise<void> {
+    const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
+    if (repoPath === pathResolve(wsAbsPath)) {
+      throw { error: 'Нельзя удалить корень workspace', code: 'PATH_TRAVERSAL' };
+    }
+    await rm(repoPath, { recursive: true, force: true });
+  }
+
+  async getLog(
+    wsAbsPath: string,
+    repoRelPath: string,
+    maxCount = 30,
+    opts?: GitEnvOptions,
+  ): Promise<CommitInfo[]> {
+    const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
+    await this.ensureRepo(repoPath, opts);
+    const g = withEnv(simpleGit(repoPath), opts?.env);
     const branch = (await g.revparse(['--abbrev-ref', 'HEAD'])).trim();
     const log: LogResult = await g.log({ maxCount });
     return log.all.map((entry) => ({
@@ -163,10 +240,15 @@ export class GitService {
     }));
   }
 
-  async getCommitDetail(wsAbsPath: string, repoRelPath: string, hash: string): Promise<CommitDetail> {
-    const repoPath = resolveRepoPath(this.workspacesRoot, wsAbsPath, repoRelPath);
-    await this.ensureRepo(repoPath);
-    const g = simpleGit(repoPath);
+  async getCommitDetail(
+    wsAbsPath: string,
+    repoRelPath: string,
+    hash: string,
+    opts?: GitEnvOptions,
+  ): Promise<CommitDetail> {
+    const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
+    await this.ensureRepo(repoPath, opts);
+    const g = withEnv(simpleGit(repoPath), opts?.env);
     const branch = (await g.revparse(['--abbrev-ref', 'HEAD'])).trim();
 
     const showRaw = await g.raw(['show', '--format=%H%n%an%n%ae%n%aI%n%s%n%B%n==ENDOFCOMMIT==', '-s', '--no-patch', hash]);
@@ -211,8 +293,8 @@ export class GitService {
     };
   }
 
-  private async ensureRepo(repoPath: string): Promise<void> {
-    if (!(await this.isRepo(repoPath))) {
+  private async ensureRepo(repoPath: string, opts?: GitEnvOptions): Promise<void> {
+    if (!(await this.isRepo(repoPath, opts))) {
       throw { error: 'Директория не является git-репозиторием', code: 'NOT_FOUND' };
     }
   }

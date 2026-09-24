@@ -181,6 +181,13 @@ export const SYSTEM_MESSAGES = {
   'projectctx.repo_not_found': '- {path} (not found or not a git repository)',
   'projectctx.repos_none': 'No git repositories in "{dir}"',
   'projectctx.repos_found': '# Git repositories in {dir}:',
+  'projectctx.repo_destination': '  - Destination: {dir}',
+  'projectctx.repo_name': '  - Name: {name}',
+  'projectctx.repo_url': '  - URL: {url}',
+  'projectctx.repo_type': '  - Type: {type}',
+  'projectctx.repo_default_branch': '  - Default branch: {branch}',
+  'projectctx.repo_ssh_key': '  - SSH key: {id}',
+  'projectctx.repo_last_fetch': '  - Last fetch: {time}',
 
   // --- Классификация ---
   'tool.classified': 'Conversation classified as "{category}"',
@@ -294,6 +301,15 @@ export const SYSTEM_MESSAGES = {
   'command.inline_shell_failed': 'Inline shell command failed: {output}',
   'command.inline_shell_truncated': 'Inline shell output truncated to {limit} bytes',
   'command.inline_shell_unavailable': 'Inline shell is unavailable',
+
+  // --- Git-репозитории и SSH-ключи (AD-076) ---
+  'sshkey.not_found': 'SSH key {id} not found',
+  'sshkey.name_exists': 'SSH key with name "{name}" already exists',
+  'sshkey.encryption_unavailable': 'SSH key encryption is unavailable: secret key is not configured',
+  'sshkey.decrypt_failed': 'Failed to decrypt SSH key {id}',
+  'git.ssh_key_required': 'SSH key is required for repository "{path}"',
+  'git.repo_path_invalid': 'Invalid repository path "{path}" (must be inside the project workspace)',
+  'git.repo_exists': 'Repository already exists at "{path}"',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { MessageRole, GlobalRole, ProjectRole, StatusMessageType } from '../types/index.js';
+import type { GitRepoConfig } from '../types/index.js';
 import { ToolCapability } from '../types/tools.js';
 
 export const messageRoleSchema = z.nativeEnum(MessageRole);
@@ -64,10 +65,37 @@ export const sessionUpdateSchema = z.object({
   settings: sessionSettingsSchema.partial().passthrough().optional(),
 });
 
+/**
+ * AD-076: запись реестра git-репозиториев. `path` обязателен, остальные поля
+ * опциональны; старые формы (`string` / `{ path }`) принимаются через
+ * `normalizeGitRepoConfig` и union в `repos`.
+ */
 export const gitRepoConfigSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().optional(),
+  url: z.string().optional(),
+  type: z.enum(['https', 'ssh']).optional(),
   path: z.string().min(1),
   defaultBranch: z.string().optional(),
+  sshKeyId: z.string().optional(),
+  lastFetch: z.string().optional(),
 });
+
+/**
+ * AD-076: нормализация legacy-значения `repos` к `GitRepoConfig`.
+ * `string` → `{ path }`; объект → прогон через `gitRepoConfigSchema`
+ * (невалидный → `null`). Всё прочее → `null`.
+ */
+export function normalizeGitRepoConfig(raw: unknown): GitRepoConfig | null {
+  if (typeof raw === 'string') {
+    return raw.length > 0 ? { path: raw } : null;
+  }
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const parsed = gitRepoConfigSchema.safeParse(raw);
+    return parsed.success ? parsed.data : null;
+  }
+  return null;
+}
 
 export const projectCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -75,7 +103,7 @@ export const projectCreateSchema = z.object({
   icon: z.string().optional(),
   color: z.string().optional(),
   workspace: z.string().optional(),
-  repos: z.array(gitRepoConfigSchema).optional(),
+  repos: z.array(z.union([z.string(), gitRepoConfigSchema])).optional(),
 });
 
 export const projectUpdateSchema = z.object({
@@ -86,8 +114,20 @@ export const projectUpdateSchema = z.object({
   icon: z.string().optional(),
   color: z.string().optional(),
   workspace: z.string().optional(),
-  repos: z.array(gitRepoConfigSchema).optional(),
+  repos: z.array(z.union([z.string(), gitRepoConfigSchema])).optional(),
 });
+
+/** AD-076: тело создания SSH-ключа (`POST /api/v2/ssh-keys`). */
+export const sshKeyCreateSchema = z.object({
+  name: z.string().min(1).max(200),
+  type: z.string().optional(),
+  privateKey: z.string().min(1),
+  passphrase: z.string().optional(),
+  agentIds: z.array(z.string()).optional(),
+});
+
+/** AD-076: тело обновления SSH-ключа (без id/createdAt). */
+export const sshKeyUpdateSchema = sshKeyCreateSchema.partial();
 
 /**
  * AD-071 §2.4: проектный скоуп MCP (ссылки на реестр по имени).
@@ -186,6 +226,8 @@ export const gitInitBodySchema = z.object({
   projectId: z.string().min(1),
   path: z.string(),
   defaultBranch: z.string().optional(),
+  name: z.string().optional(),
+  sshKeyId: z.string().optional(),
 });
 
 export const gitCloneBodySchema = z.object({
@@ -193,7 +235,46 @@ export const gitCloneBodySchema = z.object({
   url: z.string().min(1),
   path: z.string().optional(),
   branch: z.string().optional(),
+  name: z.string().optional(),
+  sshKeyId: z.string().optional(),
 });
+
+/**
+ * AD-076: тело `POST /api/v2/git/repos/register` — upsert записи реестра
+ * (идемпотентно по `path`). Используется UI для добавления уже существующего
+ * локально репозитория.
+ */
+export const gitReposRegisterBodySchema = z.object({
+  projectId: z.string().min(1),
+  path: z.string().min(1),
+  name: z.string().optional(),
+  url: z.string().optional(),
+  type: z.enum(['https', 'ssh']).optional(),
+  defaultBranch: z.string().optional(),
+  sshKeyId: z.string().optional(),
+});
+
+/**
+ * AD-076: тело `POST /api/v2/git/repos/remove` — удаление записи реестра;
+ * обязателен `id` либо `path`. `deleteLocal` — удалить каталог репозитория.
+ */
+export const gitReposRemoveBodySchema = z
+  .object({
+    projectId: z.string().min(1),
+    id: z.string().optional(),
+    path: z.string().optional(),
+    deleteLocal: z.boolean().optional(),
+  })
+  .refine((v) => Boolean(v.id || v.path), { message: 'Требуется id или path' });
+
+/** AD-076: тело `POST /api/v2/git/repos/fetch` — обязателен `id` либо `path`. */
+export const gitReposFetchBodySchema = z
+  .object({
+    projectId: z.string().min(1),
+    id: z.string().optional(),
+    path: z.string().optional(),
+  })
+  .refine((v) => Boolean(v.id || v.path), { message: 'Требуется id или path' });
 
 export const gitLogQuerySchema = z.object({
   project_id: z.string().min(1),
@@ -279,6 +360,8 @@ export type SessionCreateRequest = z.infer<typeof sessionCreateSchema>;
 export type SessionUpdateRequest = z.infer<typeof sessionUpdateSchema>;
 export type ProjectCreateRequest = z.infer<typeof projectCreateSchema>;
 export type ProjectUpdateRequest = z.infer<typeof projectUpdateSchema>;
+export type SSHKeyCreateRequest = z.infer<typeof sshKeyCreateSchema>;
+export type SSHKeyUpdateRequest = z.infer<typeof sshKeyUpdateSchema>;
 export type PromptRequest = z.infer<typeof promptRequestSchema>;
 export type SpaLoginRequest = z.infer<typeof spaLoginSchema>;
 export type FsListQuery = z.infer<typeof fsListQuerySchema>;
@@ -292,6 +375,9 @@ export type FsWorkspaceMkdirBody = z.infer<typeof fsWorkspaceMkdirBodySchema>;
 export type GitScanBody = z.infer<typeof gitScanBodySchema>;
 export type GitInitBody = z.infer<typeof gitInitBodySchema>;
 export type GitCloneBody = z.infer<typeof gitCloneBodySchema>;
+export type GitReposRegisterBody = z.infer<typeof gitReposRegisterBodySchema>;
+export type GitReposRemoveBody = z.infer<typeof gitReposRemoveBodySchema>;
+export type GitReposFetchBody = z.infer<typeof gitReposFetchBodySchema>;
 export type GitLogQuery = z.infer<typeof gitLogQuerySchema>;
 export type GitCommitQuery = z.infer<typeof gitCommitQuerySchema>;
 

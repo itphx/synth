@@ -5,9 +5,10 @@ import { useProjectsStore } from '@/stores/projectsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useSessionsTreeStore } from '@/stores/useSessionsTreeStore'
 import { useFilesStore } from '@/stores/filesStore'
-import { useGitStore } from '@/stores/gitStore'
+import { useGitStore, type GitRepoView } from '@/stores/gitStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useNotificationStore } from '@/stores/notificationStore'
+import { useNotification } from '@/hooks/useNotification'
 import { useHybridStore, selectIsOffline } from '@/stores/hybridStore'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
@@ -15,8 +16,9 @@ import { useAdaptiveIcons } from '@/hooks/useAdaptiveIcons'
 import { useDevice } from '@/hooks/useDevice'
 import { synthApi } from '@/lib/api/synthApi'
 import type { EntityOrigin, ProjectData } from '@/lib/api/synthApi'
+import type { SSHKeyMeta } from '@itphx/synth-shared'
 import { PROJECT_ICON_MAP, PROJECT_COLOR_MAP } from '@/lib/projectMeta'
-import { formatRelativeTime, parseISODate } from '@/lib/formatDate'
+import { formatDateTime, formatRelativeTime, parseISODate } from '@/lib/formatDate'
 import { TreeNode, TreeChildren, TreeContainer } from '@/components/tree'
 import type { TreeNodeBase, TreeAction } from '@/components/tree'
 import { OriginBadge } from '@/components/ui/OriginBadge'
@@ -1276,8 +1278,31 @@ function FilesTab() {
 
 type AddRepoMode = 'scan' | 'clone' | 'init' | null
 
+/** AD-076: нормализация пути репозитория (корень workspace — `''`/`.`). */
+function normRepoPath(path: string): string {
+  return path === '' || path === '.' ? '' : path
+}
+
+/** Отображаемое назначение (destination) записи реестра. */
+function repoDestination(path: string, rootLabel: string): string {
+  return path === '' || path === '.' ? rootLabel : path
+}
+
+/** Последний сегмент относительного пути (имя репозитория по умолчанию). */
+function basenameOf(path: string): string {
+  const parts = path.replace(/\/+$/, '').split('/')
+  return parts[parts.length - 1] || ''
+}
+
+/** AD-076: клиентская проверка ssh-URL (зеркалит серверный `isSshUrl`). */
+function isSshRepoUrl(url: string): boolean {
+  const v = url.trim()
+  return v.startsWith('git@') || v.startsWith('ssh://')
+}
+
 function GitTab() {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
+  const { notify } = useNotification()
   const projects = useProjectsStore(s => s.projects)
   const loadProjects = useProjectsStore(s => s.loadProjects)
   const reposByProject = useGitStore(s => s.reposByProject)
@@ -1289,6 +1314,11 @@ function GitTab() {
   const toggleProjectExpand = useGitStore(s => s.toggleProjectExpand)
   const toggleRepoExpand = useGitStore(s => s.toggleRepoExpand)
   const initRepo = useGitStore(s => s.initRepo)
+  const cloneRepo = useGitStore(s => s.cloneRepo)
+  const scanWorkspace = useGitStore(s => s.scanWorkspace)
+  const registerRepo = useGitStore(s => s.registerRepo)
+  const removeRepo = useGitStore(s => s.removeRepo)
+  const fetchRepo = useGitStore(s => s.fetchRepo)
   const openTab = useUIStore((s) => s.openTab)
   const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
   const centerTabs = useUIStore((s) => s.centerTabs)
@@ -1301,12 +1331,26 @@ function GitTab() {
   const [cloneUrl, setCloneUrl] = useState('')
   const [clonePath, setClonePath] = useState('')
   const [cloneBranch, setCloneBranch] = useState('')
+  const [cloneName, setCloneName] = useState('')
+  const [cloneSshKeyId, setCloneSshKeyId] = useState('')
   const [initPath, setInitPath] = useState('')
   const [initBranch, setInitBranch] = useState('main')
+  const [initName, setInitName] = useState('')
+  const [sshKeys, setSshKeys] = useState<SSHKeyMeta[]>([])
+  const [removeTarget, setRemoveTarget] = useState<{ projectId: string; repo: GitRepoView } | null>(null)
+  const [deleteLocal, setDeleteLocal] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const projectRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
   useEffect(() => { loadProjects() }, [loadProjects])
+
+  useEffect(() => {
+    let cancelled = false
+    synthApi.listSshKeys()
+      .then((keys) => { if (!cancelled) setSshKeys(keys) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   const workspacedProjects = useMemo(() => projects.filter((p) => p.workspace), [projects])
 
@@ -1392,20 +1436,42 @@ function GitTab() {
     setCloneUrl('')
     setClonePath('')
     setCloneBranch('')
+    setCloneName('')
+    setCloneSshKeyId('')
     setInitPath('')
     setInitBranch('main')
+    setInitName('')
     setActionError(null)
   }
+
+  /** Перечитать реестр проекта после мутации: список проектов + записи gitStore. */
+  const refreshRepos = useCallback(async (projectId: string) => {
+    await loadProjects()
+    const project = useProjectsStore.getState().projects.find((p) => p.id === projectId)
+    await loadRepos(projectId, project?.repos ?? [])
+  }, [loadProjects, loadRepos])
+
+  const storeError = () => useGitStore.getState().error ?? t('common.error')
+
+  const sshKeyLabel = useCallback((id?: string): string | null => {
+    if (!id) return null
+    return sshKeys.find((k) => k.id === id)?.name ?? id
+  }, [sshKeys])
 
   const handleDoScan = async (projectId: string) => {
     setScanning(true)
     setActionError(null)
     try {
-      const result = await synthApi.scanGitRepos(projectId)
-      const known = new Set((reposByProject[projectId] || []).map((r: any) => r.path))
-      setScanResults(result.repos.filter((r: { path: string }) => !known.has(r.path)))
-    } catch {
-      setActionError(t('common.error'))
+      const repos = await scanWorkspace(projectId)
+      if (!repos) {
+        setActionError(storeError())
+        return
+      }
+      const project = projects.find((p) => p.id === projectId)
+      const known = new Set(
+        (project?.repos ?? []).map((r) => normRepoPath(typeof r === 'string' ? r : r.path)),
+      )
+      setScanResults(repos.filter((r) => !known.has(normRepoPath(r.path))))
     } finally {
       setScanning(false)
     }
@@ -1414,36 +1480,95 @@ function GitTab() {
   const handleAddScanned = async (projectId: string) => {
     if (scanSelected.size === 0) return
     const reposToAdd = scanResults?.filter((r) => scanSelected.has(r.path)) ?? []
-    const project = projects.find((p) => p.id === projectId)
-    if (!project) return
-    const currentRepos = (project.repos || []).map((r: any) => (typeof r === 'string' ? r : r.path))
-    const newRepos = reposToAdd.map((r) => (typeof r === 'string' ? r : r.path))
-    await synthApi.updateProject(projectId, { repos: [...currentRepos, ...newRepos] })
-    await loadProjects()
+    if (reposToAdd.length === 0) return
+    setActionError(null)
+    // Бэкенд регистрирует записи по одной (upsert по path) — вызываем последовательно.
+    for (const repo of reposToAdd) {
+      const normalized = normRepoPath(repo.path)
+      const registered = await registerRepo(projectId, {
+        path: normalized === '' ? '.' : repo.path,
+        defaultBranch: repo.currentBranch,
+      })
+      if (!registered) {
+        setActionError(storeError())
+        return
+      }
+    }
+    await refreshRepos(projectId)
     closePopover()
   }
 
   const handleDoClone = async (projectId: string) => {
-    if (!cloneUrl) return
-    setActionError(null)
-    try {
-      await synthApi.cloneGitRepo(projectId, cloneUrl, clonePath || undefined, cloneBranch || undefined)
-      await loadProjects()
-      closePopover()
-    } catch {
-      setActionError(t('common.error'))
+    if (!cloneUrl.trim()) return
+    if (isSshRepoUrl(cloneUrl) && !cloneSshKeyId) {
+      setActionError(t('git.ssh_key_required', { path: cloneName.trim() || clonePath.trim() || t('git.repo') }))
+      return
     }
+    setActionError(null)
+    const repo = await cloneRepo(
+      projectId,
+      cloneUrl.trim(),
+      clonePath.trim() || undefined,
+      cloneBranch.trim() || undefined,
+      cloneName.trim() || undefined,
+      cloneSshKeyId || undefined,
+    )
+    if (!repo) {
+      setActionError(storeError())
+      return
+    }
+    await refreshRepos(projectId)
+    notify({ text: t('git.cloneSuccess'), type: 'success', category: 'system' })
+    closePopover()
   }
 
   const handleDoInit = async (projectId: string) => {
     setActionError(null)
-    try {
-      await initRepo(projectId, initPath || '.', initBranch)
-      await loadProjects()
-      closePopover()
-    } catch {
-      setActionError(t('common.error'))
+    const path = initPath.trim() || '.'
+    const derivedName = path === '.' || path === '' ? '' : basenameOf(path)
+    const repo = await initRepo(
+      projectId,
+      path,
+      initBranch.trim() || undefined,
+      initName.trim() || derivedName || undefined,
+    )
+    if (!repo) {
+      setActionError(storeError())
+      return
     }
+    await refreshRepos(projectId)
+    notify({ text: t('git.initSuccess'), type: 'success', category: 'system' })
+    closePopover()
+  }
+
+  const handleRemoveRepo = async () => {
+    if (!removeTarget) return
+    const { projectId, repo } = removeTarget
+    const ok = await removeRepo(projectId, {
+      id: repo.id,
+      path: repo.id ? undefined : repo.path || undefined,
+      deleteLocal,
+    })
+    if (!ok) {
+      notify({ text: storeError(), type: 'error', category: 'error' })
+      return
+    }
+    await refreshRepos(projectId)
+    setRemoveTarget(null)
+    setDeleteLocal(false)
+  }
+
+  const handleFetchRepo = async (projectId: string, repo: GitRepoView) => {
+    const ok = await fetchRepo(projectId, {
+      id: repo.id,
+      path: repo.id ? undefined : repo.path || undefined,
+    })
+    if (!ok) {
+      notify({ text: storeError(), type: 'error', category: 'error' })
+      return
+    }
+    await refreshRepos(projectId)
+    notify({ text: t('git.fetchSuccess'), type: 'success', category: 'system' })
   }
 
   if (!workspacedProjects.length) {
@@ -1457,7 +1582,8 @@ function GitTab() {
   }
 
   return (
-    <TreeContainer>
+    <>
+      <TreeContainer>
       {workspacedProjects.map((project) => {
         const repos = reposByProject[project.id] || []
         const isExpanded = expandedProjects.has(project.id)
@@ -1515,7 +1641,7 @@ function GitTab() {
                       <button
                         onClick={() => handleDoScan(project.id)}
                         disabled={scanning}
-                        className="w-full flex items-center justify-center gap-1.5 rounded bg-interactive px-3 py-2 text-xs text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
+                        className="w-full flex items-center justify-center gap-1.5 rounded bg-interactive px-3 py-2 min-h-[40px] text-xs text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
                       >
                         <Icon name={scanning ? 'loader-2' : 'git-branch'} className={`size-3.5 ${scanning ? 'animate-spin' : ''}`} />
                         {scanning ? t('common.loading') : t('git.scan')}
@@ -1549,7 +1675,7 @@ function GitTab() {
                         <button
                           onClick={() => handleAddScanned(project.id)}
                           disabled={scanSelected.size === 0}
-                          className="w-full rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                          className="w-full rounded bg-primary px-3 py-2 min-h-[40px] text-xs text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                         >
                           {t('git.addRepo')}
                         </button>
@@ -1572,12 +1698,22 @@ function GitTab() {
                       />
                     </div>
                     <div>
+                      <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.name')}</label>
+                      <input
+                        type="text"
+                        value={cloneName}
+                        onChange={(e) => setCloneName(e.target.value)}
+                        placeholder={t('git.namePlaceholder')}
+                        className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                      />
+                    </div>
+                    <div>
                       <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.path')}</label>
                       <input
                         type="text"
                         value={clonePath}
                         onChange={(e) => setClonePath(e.target.value)}
-                        placeholder={t('common.optional')}
+                        placeholder={t('git.pathHint')}
                         className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
                       />
                     </div>
@@ -1591,10 +1727,29 @@ function GitTab() {
                         className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
                       />
                     </div>
+                    <div>
+                      <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.sshKey')}</label>
+                      <select
+                        value={cloneSshKeyId}
+                        onChange={(e) => setCloneSshKeyId(e.target.value)}
+                        className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none"
+                      >
+                        <option value="">{t('git.sshKeyNone')}</option>
+                        {sshKeys.map((key) => (
+                          <option key={key.id} value={key.id}>{key.name}</option>
+                        ))}
+                      </select>
+                      {isSshRepoUrl(cloneUrl) && !cloneSshKeyId && (
+                        <p className="text-[0.65rem] text-status-warning mt-0.5">{t('git.sshKeyRequiredHint')}</p>
+                      )}
+                      {sshKeys.length === 0 && (
+                        <p className="text-[0.65rem] text-muted-foreground mt-0.5">{t('git.noSshKeys')}</p>
+                      )}
+                    </div>
                     <button
                       onClick={() => handleDoClone(project.id)}
-                      disabled={!cloneUrl}
-                      className="w-full rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                      disabled={!cloneUrl.trim() || (isSshRepoUrl(cloneUrl) && !cloneSshKeyId)}
+                      className="w-full rounded bg-primary px-3 py-2 min-h-[40px] text-xs text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                     >
                       {t('git.cloneRepo')}
                     </button>
@@ -1609,8 +1764,18 @@ function GitTab() {
                         type="text"
                         value={initPath}
                         onChange={(e) => setInitPath(e.target.value)}
-                        placeholder=". (корень)"
+                        placeholder={t('git.pathHint')}
                         autoFocus
+                        className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.name')}</label>
+                      <input
+                        type="text"
+                        value={initName}
+                        onChange={(e) => setInitName(e.target.value)}
+                        placeholder={t('git.namePlaceholder')}
                         className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
                       />
                     </div>
@@ -1626,7 +1791,7 @@ function GitTab() {
                     </div>
                     <button
                       onClick={() => handleDoInit(project.id)}
-                      className="w-full rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 transition-colors"
+                      className="w-full rounded bg-primary px-3 py-2 min-h-[40px] text-xs text-primary-foreground hover:bg-primary/90 transition-colors"
                     >
                       {t('git.initRepo')}
                     </button>
@@ -1642,17 +1807,19 @@ function GitTab() {
             {isExpanded && (
               <TreeChildren indent totalCount={repos.length} emptyText={t('leftPanel.noRepos')}>
                 {repos.length === 0 && <></>}
-                {repos.map((repo: any) => {
-                  const repoName = repo.path || '.'
+                {repos.map((repo) => {
                   const rkey = `${project.id}::${repo.path}`
                   const isRepoExpanded = expandedRepos.has(rkey)
                   const commits = commitsByRepo[rkey] || []
+                  const destination = repoDestination(repo.path, t('git.workspaceRoot'))
+                  const displayName = repo.name || destination
+                  const keyLabel = sshKeyLabel(repo.sshKeyId)
 
                   return (
                     <div key={rkey}>
                       <TreeNode
                         id={`repo:${rkey}`}
-                        label={repoName === '.' ? t('git.workspaceRoot') : repoName}
+                        label={displayName}
                         labelMuted
                         icon="git-repository"
                         isExpanded={isRepoExpanded}
@@ -1663,10 +1830,37 @@ function GitTab() {
                         }}
                         suffix={repo.currentBranch}
                         actions={[
-                          { id: 'refresh', icon: 'refresh', title: t('git.refresh'), onClick: () => loadCommitLog(project.id, repo.path) },
+                          { id: 'fetch', icon: 'refresh', title: t('git.fetchRepo'), onClick: () => handleFetchRepo(project.id, repo) },
+                          { id: 'remove', icon: 'delete-bin', title: t('git.remove'), variant: 'destructive', onClick: () => { setDeleteLocal(false); setRemoveTarget({ projectId: project.id, repo }) } },
                         ]}
                         subtitle={repo.lastCommitSubject?.slice(0, 30)}
                       />
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-2 pb-1 -mt-0.5 text-[0.65rem] text-muted-foreground">
+                        {repo.type && (
+                          <span className="rounded border border-sidebar-border px-1 uppercase tracking-wide" title={t('git.type')}>
+                            {repo.type}
+                          </span>
+                        )}
+                        <span className="min-w-0 truncate" title={destination}>
+                          <span className="opacity-70">{t('git.destination')}:</span>{' '}
+                          <code className="font-mono text-foreground/80">{destination}</code>
+                        </span>
+                        {repo.url && (
+                          <span className="inline-flex min-w-0 items-center gap-0.5" title={repo.url}>
+                            <Icon name="link" className="size-3 shrink-0" />
+                            <span className="truncate">{repo.url}</span>
+                          </span>
+                        )}
+                        {keyLabel && (
+                          <span className="inline-flex items-center gap-0.5">
+                            <Icon name="shield-keyhole" className="size-3" />
+                            {keyLabel}
+                          </span>
+                        )}
+                        {repo.lastFetch && (
+                          <span>{t('git.lastFetch')}: {formatDateTime(repo.lastFetch, locale)}</span>
+                        )}
+                      </div>
                       {isRepoExpanded && (
                         (() => {
                           const isExpanded = commitShowMore[rkey] ?? false
@@ -1717,7 +1911,27 @@ function GitTab() {
           </div>
         )
       })}
-    </TreeContainer>
+      </TreeContainer>
+      <ConfirmDialog
+        open={!!removeTarget}
+        onOpenChange={(open) => { if (!open) { setRemoveTarget(null); setDeleteLocal(false) } }}
+        title={t('git.removeTitle')}
+        message={removeTarget ? t('git.removeConfirm', { path: repoDestination(removeTarget.repo.path, t('git.workspaceRoot')) }) : undefined}
+        confirmLabel={t('git.remove')}
+        variant="danger"
+        onConfirm={handleRemoveRepo}
+      >
+        <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer min-h-[40px]">
+          <input
+            type="checkbox"
+            checked={deleteLocal}
+            onChange={(e) => setDeleteLocal(e.target.checked)}
+            className="size-4"
+          />
+          {t('git.deleteLocal')}
+        </label>
+      </ConfirmDialog>
+    </>
   )
 }
 

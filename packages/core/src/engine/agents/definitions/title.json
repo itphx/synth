@@ -14,6 +14,5 @@
   "contextFile": "title",
   "temperature": 0.3,
   "reasoningLevel": "none",
-  "agentMode": ["system"],
-  "sshKeys": []
+  "agentMode": ["system"]
 }

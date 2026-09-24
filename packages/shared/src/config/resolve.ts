@@ -193,6 +193,18 @@ export function resolveWorkspaceOutsideRootPolicy(
   return '';
 }
 
+/**
+ * AD-076: мастер-ключ шифрования секретов at-rest (SSH-ключи, AES-256-GCM).
+ * Приоритет: env `SYNTH_SECRET_KEY` > `config.security.secretKey` > `''`
+ * (пусто — core использует файл `{dataDir}/secrets/master.key`).
+ */
+export function resolveSecretKey(config: SynthConfig, env?: NodeJS.ProcessEnv): string {
+  const envVal = (env ?? process.env).SYNTH_SECRET_KEY;
+  if (envVal) return envVal;
+  if (config.security.secretKey) return config.security.secretKey;
+  return '';
+}
+
 export async function ensureDataDir(dataDir: string): Promise<void> {
   await mkdir(dataDir, { recursive: true });
   for (const subdir of DATA_SUBDIRS) {

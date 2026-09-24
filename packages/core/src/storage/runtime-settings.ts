@@ -106,6 +106,8 @@ export function mergeSecurityConfig(
     protectedPaths: {
       enabled: runtime.protectedPaths?.enabled ?? base?.protectedPaths?.enabled ?? true,
     },
+    // AD-076: мастер-ключ не относится к runtime-настройкам UI — переносим из config.
+    secretKey: base?.secretKey ?? '',
     askTimeoutMs: runtime.askTimeoutMs
       ?? (base as SecurityConfig & { askTimeoutMs?: number })?.askTimeoutMs
       ?? DEFAULT_ASK_TIMEOUT_MS,

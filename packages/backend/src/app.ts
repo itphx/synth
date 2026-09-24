@@ -35,17 +35,19 @@ import {
   ProjectInstructionsResolver, createInstructionsInfoResolver,
   createContextRoutes as createCoreContextRoutes,
   DEFAULT_AGENT_ID,
+  SSHKeyStore, createGitRoutes,
+  createSshKeyRoutes, createAgentSshKeyRoutes,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
-import { nowISO, ensureDataDir, MessageRole, generateStreamId, SYNTH_VERSION, DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole, resolveDefaultWorkspace } from '@itphx/synth-shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId, SYNTH_VERSION, DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole, resolveDefaultWorkspace, resolveSecretKey } from '@itphx/synth-shared';
 import type { BusEvent } from '@itphx/synth-shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import type { BackendConfig } from './lib/app-config.js';
 import { createAuthMiddleware } from './auth/middleware.js';
 import type { AuthKit } from './auth/middleware.js';
 import { createAuthRoutes } from './routes/auth.js';
-import { createProjectRoutes } from './routes/projects.js';
+import { createProjectRoutes, createProjectAccess } from './routes/projects.js';
 import { createSessionRoutes } from './routes/sessions.js';
 import { createMessageRoutes } from './routes/messages.js';
 import { createQueueRoutes } from './routes/queue.js';
@@ -56,7 +58,6 @@ import { createAgentRoutes } from './routes/agents.js';
 import { createContextRoutes as createContextFileRoutes } from './routes/context.js';
 import { createDebugRoutes } from './routes/debug.js';
 import { createUserRoutes } from './routes/users.js';
-import { createGitRoutes } from './routes/git.js';
 import { createMcpRoutes } from './routes/mcp.js';
 import { createAuditRoutes } from './routes/audit.js';
 import { createLogsRoutes, resolveLogDir } from './routes/logs.js';
@@ -206,6 +207,13 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const fileStore = new FileStore({ dataDir });
     const sessionManager = new SessionManager(fileStore);
     const projectStore = new ProjectStore({ dataDir });
+    // AD-076 §T4: SSH-ключи агентов — core-хранилище поверх общего dataDir.
+    // Мастер-ключ: env `SYNTH_SECRET_KEY` > `config.security.secretKey` > файл dataDir.
+    const sshKeyStore = new SSHKeyStore({
+      dataDir,
+      secretKey: resolveSecretKey(backendConfig.synth),
+      env: process.env,
+    });
     const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
     const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
     const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
@@ -490,6 +498,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       agentRegistry,
       mcpManager,
       projectStore,
+      // AD-076 §T6: тот же store, что у git/ssh-роутов — без дублей инстансов.
+      sshKeyStore,
       workspacesRoot: backendConfig.workspacesRoot,
       // AD-075: без defaultWorkingDir сессия без проекта получала бы
       // {dataDir}/workspaces/default мимо runtime-override settings/workspace.
@@ -566,8 +576,29 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // User admin routes
     app.route('/api/v2/users', createUserRoutes(auth, profilesStore));
 
-    // Git routes
-    app.route('/api/v2/git', createGitRoutes(auth, projectStore, backendConfig.workspacesRoot));
+    // Git routes (AD-076 §T4): core-фабрика + managed RBAC. Write-эндпоинты
+    // (init/clone/register/remove/fetch) требуют прав на изменение контента
+    // проекта (owner/EDITOR/LEAD/ADMIN); read-only (scan/log/commit) — requireAuth.
+    const projectAccess = createProjectAccess(auth);
+    app.route('/api/v2/git', createGitRoutes(auth, projectStore, backendConfig.workspacesRoot, {
+      sshKeyStore,
+      authorizeProject: async (c, projectId) => {
+        const user = await auth.getCurrentUser(c);
+        if (!user) return false;
+        const project = await projectStore.load(projectId);
+        if (!project) return false;
+        return projectAccess.canEditProjectContent(c, project, user.id);
+      },
+    }));
+
+    // SSH-ключи агентов (AD-076 §T5): core-фабрика + managed RBAC.
+    // Ключи — секреты: чтение — requireAuth (глобально), запись — только ADMIN.
+    app.route('/api/v2/ssh-keys', createSshKeyRoutes(auth, sshKeyStore, {
+      writeGuard: auth.requireAdmin,
+    }));
+    app.route('/api/v2/agents/:agentId/ssh-keys', createAgentSshKeyRoutes(auth, sshKeyStore, {
+      writeGuard: auth.requireAdmin,
+    }));
 
     // MCP routes (единый реестр; legacy /servers — адаптеры над ним)
     app.route('/api/v2/mcp', createMcpRoutes(auth, mcpManager, sessionManager, {

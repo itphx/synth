@@ -699,10 +699,43 @@ export interface Session {
 }
 
 // --- Git ---
+/**
+ * AD-076: запись реестра git-репозиториев проекта. Старые данные (`repos` как
+ * `string[]` либо `{ path }`) нормализуются через `normalizeGitRepoConfig`.
+ */
 export interface GitRepoConfig {
+  /** Стабильный id записи реестра (uuid); отсутствует у обнаруженных scan-ом. */
+  id?: string;
+  name?: string;
+  url?: string;
+  type?: 'https' | 'ssh';
+  /** Относительный путь ВНУТРИ project.workspace (допускает вложенность). */
   path: string;
   defaultBranch?: string;
+  sshKeyId?: string;
+  lastFetch?: string;
 }
+
+/**
+ * AD-076: SSH-ключ агента — отдельная сущность реестра (не в
+ * `AgentDefinition`). Секреты `privateKey`/`passphrase` шифруются at-rest
+ * (AES-256-GCM; реализация — в core) и НИКОГДА не отдаются через API.
+ */
+export interface SSHKey {
+  id: string;
+  name: string;
+  /** Метка типа ключа, дефолт `'user'`. */
+  type?: string;
+  privateKey: string;
+  passphrase?: string;
+  /** Привязка к агентам: один ключ может обслуживать несколько агентов. */
+  agentIds: string[];
+  createdAt: string;
+  updatedAt?: string;
+}
+
+/** Публичное представление ключа (без `privateKey`/`passphrase`). */
+export type SSHKeyMeta = Omit<SSHKey, 'privateKey' | 'passphrase'>;
 
 export interface RepoStatus {
   path: string;
@@ -910,7 +943,6 @@ export interface AgentDefinition {
   agentMode?: AgentMode | AgentMode[];
   subagentPrompt?: string;
   maxSteps?: number; // 0 = без ограничений, undefined = default (0 для primary, 15 для subagent)
-  sshKeys: string[];
   isOverridden: boolean;
   icon?: string;
   color?: string;

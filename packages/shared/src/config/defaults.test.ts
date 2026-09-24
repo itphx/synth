@@ -111,4 +111,8 @@ describe('defaultConfig', () => {
   it('summarization.promptFile == SUMMARIZER', () => {
     expect(defaultConfig.summarization.promptFile).toBe('SUMMARIZER');
   });
+
+  it('security.secretKey по умолчанию пуст (AD-076: файл master.key)', () => {
+    expect(defaultConfig.security.secretKey).toBe('');
+  });
 });

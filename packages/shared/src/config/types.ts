@@ -322,6 +322,12 @@ export const protectedPathsConfigSchema = z.object({
 export const securityConfigSchema = z.object({
   promptInjection: promptInjectionConfigSchema.default({}),
   protectedPaths: protectedPathsConfigSchema.default({}),
+  /**
+   * AD-076: мастер-ключ для шифрования секретов at-rest (SSH-ключи, AES-256-GCM).
+   * Приоритет — env `SYNTH_SECRET_KEY` (читать через `resolveSecretKey`).
+   * Пусто — core использует файл `{dataDir}/secrets/master.key`.
+   */
+  secretKey: z.string().default(''),
 });
 
 // --- LLM Gateway (AD-036) ---

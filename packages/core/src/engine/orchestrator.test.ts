@@ -7,6 +7,7 @@ import { ChatOrchestrator } from './orchestrator.js';
 import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { ProjectStore } from '../storage/project-store.js';
+import { SSHKeyStore } from '../storage/ssh-key-store.js';
 import { EventBus } from '../events/bus.js';
 import { ProviderFactory, BaseProvider, resolveSystemPromptText } from '../providers/base.js';
 import { GatewayProvider } from './gateway/gateway-provider.js';
@@ -137,6 +138,26 @@ describe('ChatOrchestrator._resolveWorkingDir', () => {
 
     const orch = makeOrchestrator();
     await expect(resolveDir(orch, session)).resolves.toBe(join(tmpDir, 'workspaces', 'WS1'));
+  });
+
+  it('AD-076 §T6: sshKeyStore создаётся лениво из dataDir', () => {
+    const orch = makeOrchestrator();
+    const store = (orch as unknown as { _sshKeyStore: unknown })._sshKeyStore;
+    expect(store).toBeTruthy();
+  });
+
+  it('AD-076 §T6: явный sshKeyStore не пересоздаётся', () => {
+    const store = new SSHKeyStore({ dataDir: tmpDir, env: process.env });
+    const orch = new ChatOrchestrator({
+      sessionManager,
+      eventBus: new EventBus(),
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: () => null,
+      dataDir: tmpDir,
+      projectStore,
+      sshKeyStore: store,
+    });
+    expect((orch as unknown as { _sshKeyStore: unknown })._sshKeyStore).toBe(store);
   });
 });
 

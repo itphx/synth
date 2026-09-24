@@ -56,9 +56,6 @@ importers:
       js-yaml:
         specifier: ^4.1.1
         version: 4.1.1
-      simple-git:
-        specifier: ^3.36.0
-        version: 3.36.0(supports-color@10.2.2)
       ws:
         specifier: ^8.20.1
         version: 8.20.1
@@ -102,6 +99,9 @@ importers:
       parse5:
         specifier: ^8.0.1
         version: 8.0.1
+      simple-git:
+        specifier: ^3.36.0
+        version: 3.36.0(supports-color@10.2.2)
       ws:
         specifier: ^8.20.1
         version: 8.20.1

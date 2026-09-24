@@ -95,6 +95,33 @@ export type {
 export { FileProfileStore } from './storage/profile-store.js';
 export { JsonStore } from './storage/json-store.js';
 export type { JsonStoreConfig, JsonStoreLike } from './storage/json-store.js';
+// AD-076 §T2: шифрование секретов at-rest и хранилище SSH-ключей.
+export * as crypto from './security/crypto.js';
+export {
+  CryptoError,
+  SecretDecryptionError,
+  isEncrypted,
+  encryptSecret,
+  decryptSecret,
+  resolveMasterKey,
+} from './security/crypto.js';
+export type {
+  CryptoErrorCode,
+  ResolveMasterKeyOptions,
+  MasterKeyResult,
+} from './security/crypto.js';
+export { SSHKeyStore, SSHKeyStoreError } from './storage/ssh-key-store.js';
+export type { SSHKeyStoreConfig, SSHKeyStoreErrorCode } from './storage/ssh-key-store.js';
+// AD-076 §T3: git-сервис ядра, SSH-окружение и фабрика git-роутов.
+export { GitService, resolveRepoPath, deriveRepoName } from './git/git-service.js';
+export type { GitEnvOptions, GitFetchOptions } from './git/git-service.js';
+export { isSshUrl, createSshEnv, SshEnvError } from './git/ssh-env.js';
+export type { CreateSshEnvOptions, SshEnv, SshEnvErrorCode } from './git/ssh-env.js';
+export { createGitRoutes } from './server/routes/git.js';
+export type { GitRoutesAuth, GitProjectStore, GitRoutesOptions } from './server/routes/git.js';
+// AD-076 §T5: SSH-ключи агентов (flat + nested-роуты).
+export { createSshKeyRoutes, createAgentSshKeyRoutes } from './server/routes/ssh-keys.js';
+export type { SshKeyRoutesAuth, SshKeyRoutesOptions } from './server/routes/ssh-keys.js';
 export { ProjectStore } from './storage/project-store.js';
 export type { ProjectStoreConfig, ProjectStoreLike } from './storage/project-store.js';
 export { McpRegistryStore } from './storage/mcp-registry-store.js';
