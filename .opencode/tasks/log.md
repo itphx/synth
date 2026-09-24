@@ -902,3 +902,16 @@
 - **Верификация:** тесты backend — зелёные (по отчёту реализации).
 - **Ветка:** `feat/ad-075-workspace-provisioning`; не закоммичено.
 - **Дальше:** AD-074/AD-076/AD-077.
+
+## 2026-09-24 (продолжение) — AD-075: standalone-скрипт, фикс путей, навигация в диалоге — PASS
+- **Задача:** доработки AD-075 после базовой реализации: (а) D5, (б) фикс относительного `dataDir`/`workspacesRoot`, (в) `scripts/standalone.sh`, (г) навигация за корень в `DirectoryPickerDialog`, (д) ручная браузер-проверка standalone.
+- **Тип:** bug fix + feature (dev-tooling/UI) · **Результат:** PASS.
+- **(а) D5 закрыт:** `PUT/DELETE /api/v2/projects/:id` — горизонтальная авторизация (owner/EDITOR/LEAD/ADMIN для контента; owner/LEAD/ADMIN для `workspace` и delete); коммит `7cebeda` «fix: RBAC на изменение и удаление проектов (D5)».
+- **(б) Фикс путей:** `packages/shared/src/config/resolve.ts` абсолютизирует `dataDir`/`workspacesRoot`/`defaultWorkspace`; core `createFsRoutes` и backend `WorkspaceResolver` нормализуют root — относительный `dataDir` больше не ломает containment (ложный «вне root»).
+- **(в) `scripts/standalone.sh`:** сборка `shared→core→ui→synth`, `pnpm pack` (резолвит `workspace:*`), `npm install` 4 tgz в `tmp/standalone/install`, запуск `SYNTH_DATA_DIR=<data> node_modules/.bin/synth serve --no-auto-profile`; опции `--port/--host/--data-dir/--api-key/--prefix/--no-build/--rebuild-packs/--check/--keep-data/--clean`; логи `tmp/standalone-build.log`, `tmp/standalone.log`; `--check` — smoke (health, create project, workspace-root, workspace-policy).
+- **(г) `DirectoryPickerDialog`:** навигация «Вверх» за корень при политике `confirm` (не read-only), подсказка «Вне рабочего корня», выбор вне корня через ConfirmDialog; i18n ru/en.
+- **(д) Ручная браузер-проверка (Playwright, standalone):** создание папки в корне → 201, каталог появился; «Вверх» за корень при `confirm`; подсказка «Вне рабочего корня»; выбор вне корня через ConfirmDialog → PUT 200, workspace absolute.
+- **Тесты:** shared 132 · core 2046 · ui 754 · backend 361; typecheck/lint зелёные.
+- **Ветка:** `feat/ad-075-workspace-provisioning` (D5 — `7cebeda`; остальное — в рабочем каталоге, не закоммичено).
+- **Docs:** `docs/DEVELOPMENT.md` — раздел `standalone.sh`; `AGENTS.md` — строка в блоке команд; `docs/arch_decisions/ad-075-*.md` — §8.
+- **Дальше:** AD-074/AD-076/AD-077.

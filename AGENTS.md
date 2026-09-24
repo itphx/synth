@@ -73,6 +73,7 @@ tmp/                   # Временные файлы. Использовать
 ```bash
 ./scripts/dev.sh                    # backend (:5000) + UI (:5002)
 ./scripts/dev.sh backend | ui | core | all
+./scripts/standalone.sh             # standalone из собранных npm-пакетов (см. DEVELOPMENT.md)
 
 pnpm install                # установка зависимостей
 pnpm build                  # сборка всех пакетов

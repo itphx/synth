@@ -96,6 +96,13 @@
 ### 7. Тесты
 
 - shared 122, core 2043, backend 350, ui 750; `typecheck` и `lint` (0 errors) — зелёные.
+- По завершении доработок (см. §8): shared 132, core 2046, ui 754, backend 361 — зелёные.
+
+### 8. Standalone-скрипт и доработки
+
+- **`scripts/standalone.sh`** — запуск Synth «как у конечного пользователя» (сборка `shared → core → ui → synth`, `pnpm pack`, установка четырёх `.tgz` в изолированный prefix, `synth serve`), в т.ч. режим `--check` со smoke (`/health`, `POST /projects` + каталог workspace, `/fs/workspace-root`, `/settings/workspace-policy`). Используется для ручной проверки standalone-UI (AD-075).
+- **Навигация за корень в `DirectoryPickerDialog`**: при политике `confirm` (и не read-only) кнопка «Вверх» выходит за `workspacesRoot` с подсказкой «Вне рабочего корня»; выбор каталога вне корня — через отдельное подтверждение (ConfirmDialog), после чего workspace сохраняется как абсолютный.
+- **Фикс абсолютизации путей конфигурации**: `resolve.ts` нормализует `dataDir`/`workspacesRoot`/`defaultWorkspace` к абсолютным путям; core FS (`createFsRoutes`) и backend `WorkspaceResolver` дополнительно нормализуют root — относительный `dataDir` больше не ломает containment-проверки (root оставался относительным, target — абсолютным).
 
 ## Решено (ранее открытые вопросы)
 
