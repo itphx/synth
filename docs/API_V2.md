@@ -17,7 +17,8 @@
 `core` — только standalone, `оба` — обе сборки. У core набор уже: нет
 `context/users/audit/logs/gateway/llm/i18n/admin`, зато есть `auth/*`,
 `hybrid/status`, а также `/git` и `/ssh-keys` (AD-076; core-фабрики, в backend
-монтируются с RBAC).
+монтируются с RBAC). В гибриде на backend проксируются `/git`, flat `/ssh-keys`
+и nested `/agents/:agentId/ssh-keys` (остальные подпути `/agents` — локальны).
 
 ---
 
@@ -111,7 +112,7 @@ Core-fs использует стандартный формат.
 | `ALREADY_EXISTS`, `IS_DIRECTORY`, `DIR_NOT_EMPTY`, `PATH_TRAVERSAL`, `PERMISSION_DENIED` | ФС |
 | `WORKSPACE_OUTSIDE_ROOT_DENIED`, `WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`, `WORKSPACE_CREATE_FAILED`, `WORKSPACE_POLICY_READ_ONLY`, `WORKSPACE_ROOT_NOT_CONFIGURED`, `PROTECTED_PATH_DENIED`, `WORKSPACE_NOT_FOUND`, `WORKSPACE_NOT_SET`, `NOT_A_DIRECTORY` | workspace/ФС (AD-075) |
 | `git.ssh_key_required`, `git.repo_path_invalid`, `git.repo_exists` | git-реестр (AD-076, shared-форма) |
-| `sshkey.not_found`, `sshkey.name_exists`, `sshkey.decrypt_failed`, `sshkey.encryption_unavailable` | SSH-ключи агентов (AD-076) |
+| `sshkey.not_found`, `sshkey.name_exists`, `sshkey.decrypt_failed`, `sshkey.encryption_unavailable`, `sshkey.env_failed` | SSH-ключи агентов (AD-076) |
 | `PROJECT_NOT_FOUND`, `NOT_AVAILABLE` | сессии/настройки |
 | `RATE_LIMITED`, `QUEUE_FULL` | лимиты и очередь |
 | `INVALID_ACTION`, `INVALID_INDICES` | batch-операции сообщений |
@@ -426,7 +427,7 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | POST | `/api/v2/agents/:agentId/ssh-keys` | ADMIN / auth | Создать с привязкой к агенту (объединяет `agentIds`) → 201 |
 | DELETE | `/api/v2/agents/:agentId/ssh-keys/:keyId` | ADMIN / auth | **Отвязать** ключ от агента (ключ не удаляется) |
 
-Коды: `sshkey.not_found` (404), `sshkey.name_exists` (409), `sshkey.decrypt_failed` / `sshkey.encryption_unavailable` (500), `VALIDATION_ERROR` (400). Ключи с `passphrase` принимаются на хранение, но не используются в git-операциях (явная ошибка, см. AD-076). Мастер-ключ — `SYNTH_SECRET_KEY`/`security.secretKey`/`{dataDir}/secrets/master.key`.
+Коды: `sshkey.not_found` (404), `sshkey.name_exists` (409), `sshkey.decrypt_failed` / `sshkey.encryption_unavailable` (500), `sshkey.env_failed` (400, через `VALIDATION_ERROR`), `VALIDATION_ERROR` (400). Ключи с `passphrase` **поддерживаются**: при git-операции `createSshEnv` готовит askpass (`SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE=force`), сбой подготовки → `sshkey.env_failed`. В гибриде nested `/api/v2/agents/:agentId/ssh-keys[/:keyId]` проксируется core на backend (`REMOTE_PROXY_PATTERNS`), как flat `/ssh-keys` и `/git`; прочие подпути `/api/v2/agents` остаются локальными. Мастер-ключ — `SYNTH_SECRET_KEY`/`security.secretKey`/`{dataDir}/secrets/master.key`; ротация — CLI `synth secrets rotate` (не HTTP API).
 
 ### 5.16 MCP — `/api/v2/mcp`
 

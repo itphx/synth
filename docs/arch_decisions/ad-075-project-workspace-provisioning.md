@@ -98,6 +98,7 @@
 - shared 122, core 2043, backend 350, ui 750; `typecheck` и `lint` (0 errors) — зелёные.
 - По завершении доработок (см. §8): shared 132, core 2046, ui 754, backend 361 — зелёные.
 - После закрытия хвостов (см. §9): shared 133, core 2052, ui 754, backend 361 — зелёные (известный флейк `task-resume`).
+- После закрытия остатков `plan_write`/атрибуции и AD-076 (см. §9, AD-076 §8–§10): shared 155, core 2144, ui 774, backend 372 — зелёные.
 
 ### 8. Standalone-скрипт и доработки
 
@@ -105,11 +106,13 @@
 - **Навигация за корень в `DirectoryPickerDialog`**: при политике `confirm` (и не read-only) кнопка «Вверх» выходит за `workspacesRoot` с подсказкой «Вне рабочего корня»; выбор каталога вне корня — через отдельное подтверждение (ConfirmDialog), после чего workspace сохраняется как абсолютный.
 - **Фикс абсолютизации путей конфигурации**: `resolve.ts` нормализует `dataDir`/`workspacesRoot`/`defaultWorkspace` к абсолютным путям; core FS (`createFsRoutes`) и backend `WorkspaceResolver` дополнительно нормализуют root — относительный `dataDir` больше не ломает containment-проверки (root оставался относительным, target — абсолютным).
 
-### 9. CLI-пути и tool-level RBAC
+### 9. CLI-пути, tool-level RBAC и атрибуция сессий
 
 - **Нормализация `--data-dir` на CLI-границах**: `ensureFirstRun` (shared) и все обработчики `options.dataDir`/`options['data-dir']` в `packages/synth/src/cli.ts` и `packages/core/src/main.ts` оборачивают путь в `path.resolve` — относительный `--data-dir` больше не даёт относительный `dataDir`/`workspacesRoot`, containment AD-075 не ломается (тест в `resolve.test.ts`: `ensureFirstRun` relative → absolute).
 - **Tool-level RBAC на запись проектных данных**: новый `packages/core/src/engine/tools/project-access.ts` (`resolveSessionUserId`, `canEditProject`); `project_invariants_write` и `project_log_write` пишут, только если пользователь — `project.ownerId` или `members[userId] ∈ {OWNER, EDITOR}`; иначе — `isError` с ключом `project.write_forbidden`, проект не меняется. Неидентифицируемый контекст (нет `userId` и пустой `ownerId`) разрешён для обратной совместимости.
-- **Решение по `plan_write`**: гейт `canEditProject` намеренно **не** применён (комментарий/TODO в `plan.ts`) — строгая проверка ломает план-воркфлоу (`plan_enter → plan_write → plan_exit`) на синтетических/неатрибутированных сессиях; `project.plan` защищён на уровне HTTP (`PUT /api/v2/projects/:id`). Остаточный риск — в «Известных остатках».
+- **Фикс атрибуции сессий** (`sessions/manager.ts`): `createSession` теперь сохраняет `ownerId: data.ownerId || data.userId || ''` (раньше поле объявлялось, но не проставлялось — сессия теряла владельца); `forkSession` при отсутствии явных опций наследует `userId`/`ownerId` источника (переданные опции переопределяют). Без атрибуции `plan_write` не мог отличить владельца от постороннего.
+- **Tool-level RBAC на `plan_write`**: `plan_write` перед мутацией проверяет `canEditProject(session, project)` → `project.write_forbidden` (тот же гейт, что для `project_log_write`/`project_invariants_write`); `loadSessionProject` вынесен из `project-manage.ts` и переиспользован в `plan.ts`. TODO снят. Чтение (`plan_read`/`plan_list`) намеренно **не** гейтится — доступно в т.ч. VIEWER. Важно: в **core-standalone** `PUT /api/v2/projects/:id` поле `plan` не обрабатывает, поэтому `plan_write` — единственный путь записи плана (в managed/hybrid HTTP-гейт есть).
+- **Тесты** (см. §7): `plan.test.ts` — RBAC-блок (owner/`ownerId`-fallback/EDITOR разрешены; VIEWER и не-участник отклонены; неатрибтированный контекст с пустым `ownerId` разрешён; чтение для VIEWER разрешено); `manager.test.ts` — `createSession` (`ownerId`/fallback/пусто) и `forkSession` (наследование/переопределение).
 
 ## Решено (ранее открытые вопросы)
 
@@ -123,8 +126,10 @@
 - **D5 (горизонтальная авторизация projects) — ✅ реализовано 2026-09-24** (вне объёма AD-075, отдельной задачей; `packages/backend/src/routes/projects.ts`, хелперы `canManageProject`/`canEditProjectContent`; тесты `projects.test.ts`, +7 кейсов). Матрица прав (backend; проверки до мутаций, иначе `403 FORBIDDEN`):
   - `PUT /api/v2/projects/:id`: смена `workspace` — owner / LEAD / ADMIN; изменение контентных полей (`name`, `description`, `current_task`, `invariants`, `icon`, `color`, `repos`, `plan`) — owner / EDITOR / LEAD / ADMIN; VIEWER и посторонний → `403`.
   - `DELETE /api/v2/projects/:id`: только owner / LEAD / ADMIN; EDITOR / VIEWER / посторонний → `403`.
-- **Остаточный риск `plan_write` (TODO AD-075/D5):** изменение плана из чата не проверяет права редактора (см. «Реализация §9»); требуется гарантированная атрибуция сессий (`userId`/`ownerId`) и тесты ролей в `plan.test.ts`, после чего применить тот же гейт, что для `project_log_write`/`project_invariants_write`. До этого `project.plan` защищён только на уровне HTTP.
-- **Ограничение core-инструментов:** глобальные роли LEAD/ADMIN в core недоступны (роли — концерн backend), поэтому их носители не могут изменить `invariants`/`log` через чат (отказ `project.write_forbidden`), но могут через UI/API (backend RBAC).
+- **Остаточный риск `plan_write` (TODO AD-075/D5) — ✅ закрыто 2026-09-24:** `plan_write` гейтится через `canEditProject` (`project.write_forbidden`), `createSession`/`forkSession` фиксируют атрибуцию (`userId`/`ownerId`); см. «Реализация §9».
+  - **(a) Легаси-сессии без бэкфилла:** сессии, созданные до фикса (пустой `ownerId`), при записи в проект с непустым `ownerId` получат `project.write_forbidden`. Бэкфилл существующих сессий не делался — при необходимости владелец может пересоздать/привязать сессию.
+  - **(b) Синтетический кейс `project_create`:** `project_create` из неатрибтированной сессии создаёт проект с `ownerId='local'` (fallback тула), сама сессия остаётся без `userId` → последующий `plan_write` может быть отклонён (нет атрибуции, у проекта есть владелец). В прод-путях сессии всегда атрибутированы (`userId`/`ownerId`), поэтому кейс синтетический.
+- **Ограничение core-инструментов:** глобальные роли LEAD/ADMIN в core недоступны (роли — концерн backend), поэтому их носители не могут изменить `invariants`/`log`/`plan` через чат (отказ `project.write_forbidden`), но могут через UI/API (backend RBAC).
 
 ## Зависимости
 

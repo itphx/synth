@@ -81,16 +81,16 @@ interface GitRepoConfig {
 ### 2. Core: крипто и хранилище ключей
 
 - `security/crypto.ts` — AES-256-GCM; формат токена `enc:v1:<b64 iv(12 Б)>:<b64 authTag(16 Б)>:<b64 ciphertext>`; plaintext без префикса читается как есть (back-compat).
-- `resolveMasterKey` — приоритет `opts.secretKey` → env `SYNTH_SECRET_KEY` → файл `{dataDir}/secrets/master.key`. Материал — base64 (ровно 32 Б) или 64 hex; иначе типизированная ошибка `encryption_unavailable` (молчаливое обрезание недопустимо). Файл создаётся при первом запуске: каталог `0700`, файл `0600`, атомарная запись tmp→rename; кэш промиса на процесс (`clearMasterKeyCache` для тестов).
-- `storage/ssh-key-store.ts` — `SSHKeyStore` поверх `JsonStore` (подкаталог `secrets/ssh-keys`). Секреты шифруются at-rest; `list`/`get`/`listForAgent` возвращают только `SSHKeyMeta`; `reveal(id)` расшифровывает секреты **только для подстановки в git**. `create`/`update` (case-insensitive уникальность имени, частичное обновление без обязательной замены ключа), `delete`, `linkAgent`/`unlinkAgent` (идемпотентно). Типизированные ошибки `SSHKeyStoreError` маппятся в `sshkey.*`.
+- `resolveMasterKey` — приоритет `opts.secretKey` → env `SYNTH_SECRET_KEY` → файл `{dataDir}/secrets/master.key`. Материал — base64 (ровно 32 Б) или 64 hex; иначе типизированная ошибка `encryption_unavailable` (молчаливое обрезание недопустимо). Файл создаётся при первом запуске: каталог `0700`, файл `0600`, атомарная запись tmp→rename; кэш промиса на процесс (`clearMasterKeyCache` для тестов). Для ротации дополнительно экспортированы `masterKeyFilePath()`, `readMasterKeyFile()` (чтение файла **без** генерации) и `decodeMasterKey()`.
+- `storage/ssh-key-store.ts` — `SSHKeyStore` поверх `JsonStore` (подкаталог `secrets/ssh-keys`). Секреты шифруются at-rest; `list`/`get`/`listForAgent` возвращают только `SSHKeyMeta`; `reveal(id)` расшифровывает секреты **только для подстановки в git**. `create`/`update` (case-insensitive уникальность имени, частичное обновление без обязательной замены ключа), `delete`, `linkAgent`/`unlinkAgent` (идемпотентно). Типизированные ошибки `SSHKeyStoreError` маппятся в `sshkey.*`. Для ротации мастера: `listRaw()` (сырые записи с зашифрованными секретами — админский метод, **не** отдаётся через API) и `rotateMasterKey(oldKey, newKey, {dryRun})` с preflight (abort с `preflight_failed`, если поле не расшифровывается ни новым, ни старым ключом), перешифровкой/апгрейдом plaintext и атомарной записью (`skipped`, если запись уже под новым ключом).
 
 ### 3. Core: git-сервис и роуты
 
 - `git/git-service.ts` — перенесён из backend (`simple-git` стал зависимостью core): `cloneRepo`/`initRepo`/`scanWorkspace`/`getRepoStatus`/`getLog`/`getCommitDetail`, плюс AD-076 `fetchRepo` (опц. remote + env) и `removeLocal` (только после проверки containment, корень workspace удалять нельзя). Env-поддержка (`withEnv` объединяет `process.env`, а не заменяет его) для SSH.
-- `git/ssh-env.ts` — `isSshUrl` (`git@`/`ssh://`), `createSshEnv`: temp-файл `0600` в каталоге `0700` (`mkdtemp`), `GIT_SSH_COMMAND="ssh -i <key> -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new"`, идемпотентный `cleanup`. `passphrase` → явная `SshEnvError('passphrase_unsupported')`.
+- `git/ssh-env.ts` — `isSshUrl` (`git@`/`ssh://`), `createSshEnv`: temp-файл `0600` в каталоге `0700` (`mkdtemp`), базовый `GIT_SSH_COMMAND="ssh -i <key> -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"`, идемпотентный `cleanup`. Ключ **без** passphrase → `-o BatchMode=yes` без askpass; ключ **с** passphrase → создаётся askpass-скрипт `0700` и env `SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE=force` (см. §8). Сбой подготовки (FS/permissions) → `SshEnvError('env_failed')`.
 - `server/routes/git.ts` (`createGitRoutes(auth, projectStore, workspacesRoot, opts)`): `POST /scan`, `POST /repos/init|clone|register|remove|fetch`, `GET /log|commit`. `init`/`clone` **регистрируют** запись в `project.repos` (`registerRepo` — upsert по `id`/`path`); `clone` при пустом `path` выводит имя из URL (`deriveRepoName`), обновляет `lastFetch`. `opts`: `sshKeyStore`, `writeGuard` (дефолт — no-op, т.к. `requireAuth` уже навешан), `authorizeProject` (managed RBAC).
 - `server/routes/ssh-keys.ts`: flat `createSshKeyRoutes` (`GET/POST /`, `GET/PATCH/DELETE /:id`) + nested `createAgentSshKeyRoutes` (`GET/POST /agents/:agentId/ssh-keys`, `DELETE /:keyId` = **отвязать**, не удалять). Ответы всегда `SSHKeyMeta` (маскировка по умолчанию), `reveal` в API не вызывается.
-- Монтирование в core (`server/app.ts`): `/api/v2/git` (с `sshKeyStore`), `/api/v2/ssh-keys`, `/api/v2/agents/:agentId/ssh-keys` (guards по умолчанию). `REMOTE_PROXY_PREFIXES` += `/api/v2/git`, `/api/v2/ssh-keys`.
+- Монтирование в core (`server/app.ts`): `/api/v2/git` (с `sshKeyStore`), `/api/v2/ssh-keys`, `/api/v2/agents/:agentId/ssh-keys` (guards по умолчанию). `REMOTE_PROXY_PREFIXES` += `/api/v2/git`, `/api/v2/ssh-keys`; добавлен `REMOTE_PROXY_PATTERNS` = `[/^\/api\/v2\/agents\/[^/]+\/ssh-keys(?:\/|$)/]` — nested GET/POST/DELETE проксируются в гибриде (как flat `/ssh-keys` и `/git`), а прочие подпути `/api/v2/agents` (`/all`, `/:id`, `/:id/enabled`) остаются локальными. `matchesProxyPrefix` учитывает префиксы и паттерны (матчер экспортирован).
 - Публичные экспорты (`src/index.ts`): `SSHKeyStore`/`SSHKeyStoreError`, `createGitRoutes`, `createSshKeyRoutes`/`createAgentSshKeyRoutes`.
 
 ### 4. Core: тулы
@@ -118,10 +118,23 @@ $SYNTH_DATA_DIR/secrets/master.key            # 0600, каталог 0700 (ес�
 $SYNTH_DATA_DIR/secrets/ssh-keys/<id>.json    # SSHKey, секреты зашифрованы enc:v1:
 ```
 
-### 8. Тесты
+### 8. SSH-ключи с passphrase (askpass)
 
-- `typecheck` 6/6, `lint` 0 errors; тесты shared 155 · core 2120 · ui 774 · backend 372.
+- При наличии `passphrase` `createSshEnv` (`git/ssh-env.ts`) создаёт в temp-каталоге `0700` исполняемый askpass-скрипт (`0700`), отдающий passphrase через `base64 -d` (без зависимости от кавычек/спецсимволов); env получает `SSH_ASKPASS` и `SSH_ASKPASS_REQUIRE=force`, а `GIT_SSH_COMMAND` — без `BatchMode=yes`, с `-o NumberOfPasswordPrompts=1` (защита от зависания).
+- Для ключей без passphrase поведение прежнее (`BatchMode=yes`, без askpass). Код ошибки подготовки — `SshEnvErrorCode = 'env_failed'`; наружу отдаётся i18n-ключ `sshkey.env_failed` (`engine/tools/git-ssh.ts`; `server/routes/git.ts` — вместо сырого текста; shared + core `system-messages` en + UI ru/en).
+- **Остаточные риски:** passphrase лежит base64 в temp-файле `0700` на время git-вызова (эквивалент temp-копии ключа; каталог удаляется `cleanup`, при крахе процесса может остаться в `os.tmpdir()`); e2e с реальным sshd не проводился (проверены askpass-скрипт и форма env); askpass зависит от GNU-совместимого `base64 -d`.
+
+### 9. Ротация мастер-ключа (`synth secrets rotate`)
+
+- `security/rotate.ts`: `rotateSecretsMasterKey(opts)` + `MasterKeyRotationError` (коды `master_key_missing`/`key_conflict`/`key_file_read_failed`/`invalid_key`). Старый ключ — из явного материала (`--old-key`/`--old-key-file`) → env `SYNTH_SECRET_KEY`/`config.security.secretKey` → файл `{dataDir}/secrets/master.key` (файла нет → понятная ошибка `master_key_missing`, **не** генерация). Новый ключ — явный либо `randomBytes(32)`. После успеха перезаписывает `master.key` (`0600`, каталог `0700`, tmp→rename) и сбрасывает `clearMasterKeyCache()`. Предупреждает, если эффективный ключ задан через env/config (файл будет проигнорирован при старте).
+- CLI `synth secrets rotate` — в **обоих** CLI (`packages/core/src/main.ts` и публичном `packages/synth/src/cli.ts`): опции `--data-dir --config --old-key --old-key-file --new-key --new-key-file --dry-run --yes`. Без `--yes` (и без `--dry-run`) — отказ с exit 1; exit 1 при ошибке/preflight-abort. Сводка `total/rotated/upgraded/skipped`. Команда не является HTTP API.
+- **Остаточные риски:** в токене нет key-id/версии (при ротации перебор new→old); split-state при падении между записями/до перезаписи `master.key` (повторный прогон идемпотентен); приоритет env/`config.security.secretKey` над файлом — при заданном env/config ключ нужно обновить и там.
+
+### 10. Тесты
+
+- `typecheck` 6/6, `lint` 0 errors; тесты shared 155 · core 2144 · ui 774 · backend 372.
 - Перенесены/добавлены: `crypto.test.ts`, `ssh-key-store.test.ts`, `git-service.test.ts`, `ssh-env.test.ts`, `server/routes/git.test.ts`, `server/routes/ssh-keys.test.ts`, `engine/tools/git-ssh.test.ts`, backend `routes/git.test.ts`/`ssh-keys.test.ts`, UI `GitTab.test.tsx`/`SshKeysSettings.test.tsx`/`synthApi.ssh-keys.test.ts`.
+- Дополнено остатками AD-075/AD-076: `plan.test.ts` (RBAC `plan_write`), `manager.test.ts` (атрибуция `createSession`/`forkSession`), `app.proxy.test.ts` (+4 кейса nested `/agents/:id/ssh-keys`), `ssh-env.test.ts` (askpass), `rotate`/`ssh-key-store` (ротация).
 
 ## Решено (ранее открытые вопросы)
 
@@ -134,10 +147,9 @@ $SYNTH_DATA_DIR/secrets/ssh-keys/<id>.json    # SSHKey, секреты заши�
 
 ## Известные ограничения
 
-- **Ключи с passphrase не поддерживаются**: `ssh` не читает passphrase из окружения, поэтому `createSshEnv` бросает явную ошибку (`passphrase_unsupported`); API-операции с таким ключом → `400`. Тихая деградация аутентификации исключена намеренно.
-- **Nested `/agents/:id/ssh-keys` в гибриде не проксируется**: в `REMOTE_PROXY_PREFIXES` только flat `/api/v2/ssh-keys`; `/api/v2/agents` в гибриде — локальный. Nested-запросы обслуживает локальный core, а не удалённый backend.
-- **`plan_write` без tool-RBAC** — остаток AD-075 (строгий гейт ломает план-воркфлоу на неатрибутированных сессиях).
-- **Ротация мастер-ключа вне объёма**: смена `SYNTH_SECRET_KEY`/`master.key` не перешифровывает существующие записи (старые секреты станут нечитаемыми).
+- **Passphrase (askpass)**: passphrase лежит base64 в temp-файле `0700` на время git-вызова (эквивалент temp-копии ключа); каталог удаляется `cleanup`, но при крахе процесса может остаться в `os.tmpdir()`. E2e с реальным sshd не проводился (проверены askpass-скрипт и форма env). askpass зависит от GNU-совместимого `base64 -d`. Не-dry-run ротация/операции с ключом недоступны при `encryption_unavailable` (секрет не задан).
+- **Ротация мастер-ключа**: в токене нет key-id/версии (при ротации перебор new→old); split-state при падении между записями/до перезаписи `master.key` (повторный прогон идемпотентен); при заданном env/`config.security.secretKey` ключ нужно обновлять и там (файл при старте игнорируется) — команда выводит предупреждение.
+- **Легаси-сессии без атрибуции** (AD-075): запись `plan`/`invariants`/`log` из сессии, созданной до фикса атрибуции, в проект с непустым `ownerId` → `project.write_forbidden`; бэкфилл не делался.
 - В `git`-тулах `repo_path` резолвится в пределах `project.workspace`; `git_push`/`git_pull` подставляют SSH только для репозитория, найденного в реестре (для остальных — ambient `ssh`).
 
 ## Зависимости

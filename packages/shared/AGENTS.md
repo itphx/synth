@@ -36,7 +36,8 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - AD-076: `security.secretKey` (мастер-ключ секретов at-rest; env `SYNTH_SECRET_KEY`,
   резолвер `resolveSecretKey`, пусто — файл `{dataDir}/secrets/master.key`); типы
   `GitRepoConfig` (реестр, `path` обязателен) и `SSHKey`/`SSHKeyMeta` (`agentIds: string[]`),
-  `gitRepoConfigSchema`/`normalizeGitRepoConfig` (legacy `repos`) и `sshKeyCreate/UpdateSchema`.
+  `gitRepoConfigSchema`/`normalizeGitRepoConfig` (legacy `repos`) и `sshKeyCreate/UpdateSchema`;
+  i18n-ключ `sshkey.env_failed` (сбой подготовки SSH-окружения/askpass).
 
 ## i18n-контракт
 

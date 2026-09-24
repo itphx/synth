@@ -42,7 +42,10 @@
 - Секреты at-rest (SSH-ключи, AD-076) — AES-256-GCM (`security/crypto.ts`);
   мастер-ключ — `SYNTH_SECRET_KEY` > `security.secretKey` > файл
   `{dataDir}/secrets/master.key` (`0600`, каталог `0700`, создаётся при первом
-  запуске); секреты не отдаются наружу (`reveal()` — только для git).
+  запуске); секреты не отдаются наружу (`reveal()` — только для git). Ротация
+  мастера — `synth secrets rotate` (`security/rotate.ts` + `SSHKeyStore.rotateMasterKey`,
+  preflight + dry-run); ключи с passphrase — через askpass (`git/ssh-env.ts`),
+  наружу — `sshkey.env_failed`.
 - План — в `project.plan`, todo — в `session.todos`; состояние менять только
   тулами `plan_*`/`todo_*`, не JSON-блоком в ответе модели (AD-039).
 - Ошибки LLM — через `classifyLlmError`/`isLlmErrorRecoverable`
@@ -69,7 +72,7 @@
 
 ## Карта модулей
 
-- `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, …).
+- `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, `secrets rotate`, …).
 - `server/app.ts` — `createStandaloneApp`: Hono, WS, статика UI, provisioning.
 - `server/routes/*` — `health`, `hybrid`, `auth`, `sessions`, `messages`, `projects`,
   `project-transfer`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
@@ -77,11 +80,13 @@
   `skill-scope`, `git`, `ssh-keys`.
 - `server/chat.ts`, `server/proxy.ts`, `server/serialize.ts`,
   `server/connection-watcher.ts` — одиночный чат, проксирование remote, сериализация,
-  watcher подключения.
+  watcher подключения. Проксирование — `REMOTE_PROXY_PREFIXES` (простые префиксы) +
+  `REMOTE_PROXY_PATTERNS` (regex: nested `/api/v2/agents/:id/ssh-keys`; прочие
+  подпути `/agents` — локальны).
 - `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use).
 - `engine/gateway/*` — `GatewayProvider`, guard'ы, обфускация, аудит, rate limit.
 - `engine/router/*` — routing моделей и micro-model слой (AD-034/035).
-- `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов (AD-076).
+- `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (AD-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью.
 - `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация.
 - `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP.
@@ -92,10 +97,13 @@
 - `engine/tools/*` — `ToolRegistry` + встроенные тулы (fs, shell, git, search, web,
   plan, todo, project, task, skill); git-тулы принимают необязательный `repo_path`
   (containment внутри `project.workspace`), SSH-окружение — `engine/tools/git-ssh.ts`
-  (AD-076).
+  (AD-076; ошибки — `sshkey.env_failed`). Запись проектных данных (`project_log_write`/
+  `project_invariants_write`/`plan_write`) гейтится `engine/tools/project-access.ts`
+  (`canEditProject`, AD-075/D5).
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
-  `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`).
+  `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
+  `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`).
 - `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`,
   `RuntimeSettingsStore`, `McpRegistryStore` (единый реестр MCP, AD-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (AD-046), `SSHKeyStore`

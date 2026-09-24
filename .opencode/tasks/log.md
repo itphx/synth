@@ -941,3 +941,16 @@
 - **Ветка:** `feat/ad-075-workspace-provisioning`; не закоммичено.
 - **Docs:** AD-076 статус ✅ + «Реализация»/«Решено»/«Известные ограничения»; `docs/arch_decisions/README.md`; `AGENTS.md` (строка AD-076, `repo_path`, `secrets/`); пакетные `AGENTS.md` core/backend/shared/ui; `docs/API_V2.md` §5.15/§5.15.1; `docs/CONFIGURATION.md` (`security.secretKey`).
 - **Дальше:** AD-074/AD-077 (или закрытие ограничений AD-076).
+
+## 2026-09-24 (продолжение) — закрытие недоделок AD-075/AD-076 (4 фикса) — PASS
+
+- **Задача:** закрыть остаточные ограничения AD-075/AD-076: `plan_write` без tool-RBAC + атрибуция сессий; nested SSH-прокси в гибриде; SSH-ключи с passphrase; ротация мастер-ключа.
+- **Тип:** bug fix + feature (security/git) · **Результат:** PASS (не закоммичено).
+- **1. `plan_write` tool-RBAC + атрибуция сессий:** `sessions/manager.ts` — `createSession` сохраняет `ownerId: data.ownerId || data.userId || ''` (раньше терялся); `forkSession` при отсутствии опций наследует `userId`/`ownerId` источника. `engine/tools/project-manage.ts` — `loadSessionProject` экспортирован и переиспользован; `engine/tools/plan.ts` — `plan_write` перед мутацией проверяет `canEditProject(session, project)` → `project.write_forbidden` (как log/invariants), TODO снят; `plan_read`/`plan_list` не гейтятся. Тесты: `plan.test.ts` (RBAC owner/fallback/EDITOR/VIEWER/не-участник/неатрибтированный/чтение), `manager.test.ts` (createSession/forkSession).
+- **2. nested `/api/v2/agents/:agentId/ssh-keys` проксируется в гибриде:** `server/proxy.ts` — `REMOTE_PROXY_PATTERNS` = `[/^\/api\/v2\/agents\/[^/]+\/ssh-keys(?:\/|$)/]`, `matchesProxyPrefix` учитывает префиксы И паттерны (матчер экспортирован). `/agents`, `/agents/all`, `/agents/:id`, `/agents/:id/enabled` остаются локальными. Тесты `app.proxy.test.ts` (+4).
+- **3. SSH-ключи с passphrase:** `git/ssh-env.ts` — при passphrase создаётся askpass-скрипт `0700` (base64 `base64 -d`), env `SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE=force`, `GIT_SSH_COMMAND` без `BatchMode=yes` и с `-o NumberOfPasswordPrompts=1`; без passphrase — как раньше. `SshEnvErrorCode='env_failed'`; маппинг `sshkey.env_failed` в `engine/tools/git-ssh.ts` и `server/routes/git.ts`; i18n (shared + core en + ui ru/en).
+- **4. Ротация мастер-ключа:** `security/crypto.ts` (`masterKeyFilePath`/`readMasterKeyFile` без генерации/`decodeMasterKey`), `storage/ssh-key-store.ts` (`listRaw`, `rotateMasterKey` с preflight `preflight_failed`), `security/rotate.ts` (`rotateSecretsMasterKey`/`MasterKeyRotationError`); CLI `synth secrets rotate` в обоих CLI (`core/src/main.ts`, `synth/src/cli.ts`; `--data-dir --config --old-key --old-key-file --new-key --new-key-file --dry-run --yes`).
+- **Верификация:** typecheck 6/6; lint 0 errors; тесты shared 155 · core 2144 · ui 774 · backend 372. Smoke CLI: отказ без `--yes`, dry-run без записей, реальная ротация, повторный прогон skipped.
+- **Остаточные риски (задокументированы):** легаси-сессии без бэкфилла атрибуции; синтетический `project_create`+неатрибтированная сессия; passphrase — temp-plaintext/нет sshd e2e/GNU `base64 -d`; ротация — нет key-id/split-state/приоритет env-config.
+- **Docs:** AD-075 (§7/§9/остатки); AD-076 (§2/§3/§8/§9/§10/ограничения); root `AGENTS.md`; `packages/{core,shared,ui,backend}/AGENTS.md`; `docs/API_V2.md`; `docs/CONFIGURATION.md`.
+- **Дальше:** AD-074/AD-077 (или коммит).
