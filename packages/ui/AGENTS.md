@@ -44,6 +44,8 @@
 
 **Новая левая вкладка с тулбаром**: toolbar выбирается по `leftPanelTab` в `App.tsx:140-143` (`ProjectsTabToolbar`/`FilesTabToolbar`/`GitTabToolbar`) — добавить свой `case`, иначе шапка панели останется пустой.
 
+**Контекст-ориентированные вкладки Files/Git.** Обе вкладки строятся как закреплённый блок «Текущий проект» (авто-раскрыт) + сворачиваемые «Другие проекты ({count})»; активный проект — хук `useActiveProject` (`hooks/useActiveProject.ts`: чат → `project_id` сессии, file/commit-таб → `projectId` вкладки). Ключ сворачивания блока «другие» — `OTHER_PROJECTS_COLLAPSE_KEY` (`stores/useUIStore.ts`). Тумблер «Только текущий проект» — `ProjectScopeToggle` (`components/panels/ProjectScopeToggle.tsx`, persist `useUIStore.onlyActiveProject`, disabled без валидного workspace у текущего проекта); в разметке помечен `data-project-scope-toggle`. При включённом тумблере expand/collapse-all действует только на видимые проекты — учитывать это в новых тулбарах.
+
 **Новый раздел настроек**: элемент `CATEGORIES` (`components/settings/SettingsModal.tsx:35`) с `labelKey` + `icon`. Админ-раздел помечается `roles[]` (`:32`); по первому такому элементу рисуется граница (`adminBoundaryIndex`, `:70`). Ключ `labelKey` добавлять в **оба** словаря.
 
 **Новый store**: `create<T>()(...)`, при необходимости `persist` (образец `stores/useUIStore.ts:130-131`). Пользовательские настройки — только через `persist`; runtime-флаги (дроверы, `centralNarrow`, наведение) не персистятся. Селекторы — `useStore(s => s.x)`; в экшенах/вне React — `useStore.getState()`. Подтверждения — `confirm()` (`lib/confirm.ts:9`) + `confirmStore`, не `window.confirm`.
@@ -109,7 +111,7 @@
 ## Git и SSH-ключи (AD-076)
 
 - **Git-вкладка** (`components/panels/LeftPanel.tsx` → `GitTab`, `stores/gitStore.ts`): реестр `project.repos` с `destination`/`type`/`url`/`ssh-key`/`lastFetch`; `scan → register`, `clone`/`init` с полями `name`/`path` и селектором SSH-ключа, `fetch`, `remove` (через `ConfirmDialog`, опц. `deleteLocal`). Методы — `synthApi.*GitRepo*`.
-- **SSH-ключи** (`components/settings/SshKeysSettings.tsx`, встраивается в админ-категорию «Агенты» `admin/AgentsPanel.tsx`): CRUD per-agent ключей, привязка к агентам (`agentIds`), редактирование без обязательной замены ключа. API `synthApi.*SshKey*` отдаёт только `SSHKeyMeta` (без `privateKey`/`passphrase`); ошибки — ключи `sshkey.*` (в т.ч. `sshkey.env_failed`), i18n ru/en. Ключи с `passphrase` поддерживаются (git-операция — через askpass).
+- **SSH-ключи** (`components/settings/SshKeysSettings.tsx`, встраивается в админ-категорию «Агенты» `admin/AgentsPanel.tsx`): CRUD per-agent ключей, привязка к агентам (`agentIds`), редактирование без обязательной замены ключа. Поля «Тип» нет (дублировало имя) — в shared `SSHKey.type?`/`sshKeyCreateSchema.type?` сохранены для обратной совместимости, UI их не задаёт и не показывает. API `synthApi.*SshKey*` отдаёт только `SSHKeyMeta` (без `privateKey`/`passphrase`); ошибки — ключи `sshkey.*` (в т.ч. `sshkey.env_failed`), i18n ru/en. Ключи с `passphrase` поддерживаются (git-операция — через askpass).
 
 ## Мобильный / PWA
 

@@ -86,7 +86,7 @@
 - `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use).
 - `engine/gateway/*` — `GatewayProvider`, guard'ы, обфускация, аудит, rate limit.
 - `engine/router/*` — routing моделей и micro-model слой (AD-034/035).
-- `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (AD-076).
+- `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`) учитывает причину `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, AD-078); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (AD-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью.
 - `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация.
 - `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP.
@@ -99,7 +99,9 @@
   (containment внутри `project.workspace`), SSH-окружение — `engine/tools/git-ssh.ts`
   (AD-076; ошибки — `sshkey.env_failed`). Запись проектных данных (`project_log_write`/
   `project_invariants_write`/`plan_write`) гейтится `engine/tools/project-access.ts`
-  (`canEditProject`, AD-075/D5).
+  (`canEditProject`, AD-075/D5). `engine/tools/runtime-deps.ts` — детект внешних
+  бинарников (`git`/`rg`/`sh`, fail-open, кэш) и карта `TOOL_RUNTIME_DEP`; отсутствие
+  программы даёт `unavailable(dependency)` (AD-078), тулы из реестра не удаляются.
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт

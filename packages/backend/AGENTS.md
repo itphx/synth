@@ -30,6 +30,7 @@
 | `AuditLogger`, `RateLimiter`, `GatewayProvider`, `SecretPatternStore`, `ProtectedPathsStore` | LLM Gateway (AD-036) |
 | `SSHKeyStore` | SSH-ключи агентов, шифрование at-rest (AD-076) |
 | `createGitRoutes`, `createSshKeyRoutes`, `createAgentSshKeyRoutes` | git-реестр и SSH-ключи (AD-076) |
+| `detectRuntimeDeps` | детект внешних бинарников (`git`/`rg`/`sh`) при старте → `runtimeDeps` оркестратора (AD-078) |
 
 Локально только:
 

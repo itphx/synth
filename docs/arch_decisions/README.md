@@ -37,6 +37,7 @@
 | AD-072 | Settings UI Kit: единая панель настроек (один скролл, центрирование `max-w-3xl`, контракт черновика, контролы); все разделы и админ-категории мигрированы | ✅ | [ad-072-settings-ui-kit.md](./ad-072-settings-ui-kit.md) |
 | AD-075 | Окружение проекта: рабочий каталог (автосоздание managed, выбор и политика путей для standalone; FS-паритет, RBAC) | ✅ | [ad-075-project-workspace-provisioning.md](./ad-075-project-workspace-provisioning.md) |
 | AD-076 | Реестр git-репозиториев (несколько на проект) и SSH-ключи per-agent (шифрование at-rest, `repo_path`, паритет core↔backend) | ✅ | [ad-076-git-repo-registry-ssh.md](./ad-076-git-repo-registry-ssh.md) |
+| AD-078 | Авто-отключение инструментов при отсутствии внешней зависимости (детект `git`/`rg`/`sh`, `unavailable(dependency)`, пояснение модели и UI) | ✅ | [ad-078-runtime-dependency-availability.md](./ad-078-runtime-dependency-availability.md) |
 
 ## Частично реализованные AD
 

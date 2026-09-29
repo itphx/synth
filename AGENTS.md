@@ -122,7 +122,7 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ aut
 | Debug | backend | `SYNTH_AUTH_DEBUG=true` | тестовые ключи (ниже) |
 | API Key | backend | прод без OIDC | `SYNTH_API_KEY` → ADMIN |
 | OIDC | backend | прод с Keycloak | JWT + cookie `user_session` |
-| Local | core | `synth serve --api-key` | один ключ → USER |
+| Local | core | `synth serve --api-key` | один ключ → ADMIN (в гибриде — роли с сервера) |
 
 ### Тестовые пользователи (debug)
 
@@ -270,6 +270,8 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 
 Панель «Сессия» в правой панели показывает план (`planContent`) и ToDo (`todos`); обновляется по WS-событиям `plan.approved`/`todos.updated` (полный refresh с сервера).
 
+Вкладки Files/Git левой панели — контекст-ориентированные: закреплённый блок «Текущий проект» (по активному центр-табу — сессия/файл/коммит, хук `useActiveProject`) + сворачиваемые «Другие проекты (N)»; тумблер «Только текущий проект» (`ProjectScopeToggle`, persist `onlyActiveProject`) в шапке тулбара. Подробности — [packages/ui/AGENTS.md](./packages/ui/AGENTS.md).
+
 ### Мобильный адаптив + PWA
 
 Единый адаптивный UI, три зоны: **телефон ≤768px / планшет 769–1199px / десктоп ≥1200px** (десктоп не меняется). Детекция `matchMedia` + классы на `<html>`: `device-phone/tablet/desktop`, `pointer-coarse` (хуки `useDevice()`/`useMediaQuery`, `lib/device.ts`); мобильный CSS гейтится этими классами.
@@ -357,6 +359,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-075 | Окружение проекта: рабочий каталог (автосоздание managed / выбор для standalone; политика `workspaceOutsideRoot`; FS-паритет core↔backend) | ✅ Реализовано | [ad-075](./docs/arch_decisions/ad-075-project-workspace-provisioning.md) |
 | AD-076 | Реестр git-репозиториев (несколько на проект) и SSH-ключи per-agent (шифрование at-rest, `repo_path`, паритет core↔backend) | ✅ Реализовано | [ad-076](./docs/arch_decisions/ad-076-git-repo-registry-ssh.md) |
 | AD-077 | Инструментальное окружение исполнения (git/python/rg): хостовые для dev/standalone, tools-образ + volume для managed | ⏳ Не реализовано | [ad-077](./docs/arch_decisions/ad-077-runtime-toolchain.md) |
+| AD-078 | Авто-отключение инструментов при отсутствии внешней зависимости (детект git/rg/sh, `unavailable(dependency)`, пояснение модели) | ✅ Реализовано | [ad-078](./docs/arch_decisions/ad-078-runtime-dependency-availability.md) |
 
 Правило: реализованные AD переносятся в `./docs/arch_decisions/` (в AGENTS.md остаётся строка таблицы + ссылка).
 
@@ -379,7 +382,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | soft-delete / скрытие / retention / аудит-режим | [AD-074](./docs/arch_decisions/ad-074-soft-delete-retention.md) |
 | workspace / рабочий каталог / окружение проекта | [AD-075](./docs/arch_decisions/ad-075-project-workspace-provisioning.md) |
 | git-репозитории / SSH-ключи | [AD-076](./docs/arch_decisions/ad-076-git-repo-registry-ssh.md) |
-| инструменты / образы / тулчейн | [AD-077](./docs/arch_decisions/ad-077-runtime-toolchain.md) |
+| инструменты / образы / тулчейн | [AD-077](./docs/arch_decisions/ad-077-runtime-toolchain.md), [AD-078](./docs/arch_decisions/ad-078-runtime-dependency-availability.md) |
 | план / todo | [AD-039](./docs/arch_decisions/ad-039-plan-in-project.md) |
 | ошибки LLM / i18n | [AD-041](./docs/arch_decisions/ad-041-llm-error-taxonomy.md) |
 | гибрид | [AD-042](./docs/arch_decisions/ad-042-hybrid-mode.md), [AD-043](./docs/arch_decisions/ad-043-unified-identity-login.md), [AD-045](./docs/arch_decisions/ad-045-hybrid-server-profiles.md), [docs/HYBRID.md](./docs/HYBRID.md), скилл `synth-hybrid` |

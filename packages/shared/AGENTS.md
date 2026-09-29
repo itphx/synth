@@ -44,6 +44,9 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 `src/i18n/index.ts` — словарь-контракт без текста: `ENGINE_MESSAGE_KEYS`,
 `ENGINE_MESSAGE_PARAMS` (плейсхолдеры), `extractParams`; синхронизируется с core
 `engine/system-messages.ts` (en) и ui `lib/i18n/messages/ru.ts` (ru).
+- AD-078: ключи `tool.binary_missing` (`{tool}`/`{binary}`) и
+  `permission.dep_unavailable` (`{binary}`) — тул недоступен, т.к. в окружении нет
+  внешней программы (`git`/`rg`/`sh`).
 
 ## Тесты и сборка
 
