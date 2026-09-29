@@ -340,6 +340,34 @@ describe('LeftPanel — контекст-ориентированный пока
     expect(text).not.toContain('Proj2')
   })
 
+  it('expand/collapse-all в git-тулбаре при onlyActiveProject работают только по видимым проектам', async () => {
+    useUIStore.setState({
+      centerTabs: [{ id: 'c1', type: 'commit-detail', title: 'c', data: { projectId: 'p1', repoPath: '', commitHash: 'h' } }],
+      activeCenterTabId: 'c1',
+      onlyActiveProject: true,
+    })
+    const container = await renderScope('git')
+
+    const queryButton = () => container.querySelector('[title="Expand all"], [title="Collapse all"]') as HTMLButtonElement
+
+    // текущий проект авто-раскрыт → кнопка предлагает свернуть
+    await act(async () => {
+      queryButton().click()
+    })
+    expect(useGitStore.getState().expandedProjects.has('p1')).toBe(false)
+
+    // теперь кнопка «развернуть всё» раскрывает только видимый p1 (проект + репозиторий)
+    await act(async () => {
+      queryButton().click()
+    })
+    const s = useGitStore.getState()
+    expect(s.expandedProjects.has('p1')).toBe(true)
+    expect(s.expandedRepos.has('p1::')).toBe(true)
+    // скрытый p2 остаётся нетронутым
+    expect(s.expandedProjects.has('p2')).toBe(false)
+    expect(s.expandedRepos.has('p2::')).toBe(false)
+  })
+
   it('сессия без проекта в git → плоский список и disabled', async () => {
     mocks.getSessions.mockResolvedValue([{ ...SESSION_S1, project_id: null }])
     useSessionsStore.setState({ sessions: [{ ...SESSION_S1, project_id: null }] as never })

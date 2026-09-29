@@ -13,6 +13,7 @@ export function GitTabToolbar() {
   const expandedRepos = useGitStore(s => s.expandedRepos)
   const toggleProjectExpand = useGitStore(s => s.toggleProjectExpand)
   const toggleRepoExpand = useGitStore(s => s.toggleRepoExpand)
+  const expandAll = useGitStore(s => s.expandAll)
   const collapseAll = useGitStore(s => s.collapseAll)
   const onlyActiveProject = useUIStore(s => s.onlyActiveProject)
   const { projectId: activeProjectId } = useActiveProject()
@@ -26,6 +27,10 @@ export function GitTabToolbar() {
   const hasExpanded =
     visibleProjects.some((p) => expandedProjects.has(p.id)) ||
     [...expandedRepos].some((k) => visibleIds.has(k.split('::')[0]))
+
+  const handleExpand = () => {
+    expandAll(visibleProjects.map((p) => p.id))
+  }
 
   const handleCollapse = () => {
     if (!onlyActiveProject || !activeProjectId) {
@@ -49,7 +54,7 @@ export function GitTabToolbar() {
           if (hasExpanded) {
             handleCollapse()
           } else {
-            document.dispatchEvent(new CustomEvent('synth:git-expand-all'))
+            handleExpand()
           }
         }}
         className={`flex items-center justify-center size-6 rounded transition-colors

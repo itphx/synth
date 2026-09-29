@@ -59,6 +59,7 @@ interface GitStore {
   toggleProjectExpand: (projectId: string) => void
   expandProject: (projectId: string) => void
   toggleRepoExpand: (projectId: string, repoPath: string) => void
+  expandAll: (projectIds: string[]) => void
   collapseAll: () => void
 
   setShowMoreLimit: (key: string, limit: number) => void
@@ -228,6 +229,22 @@ export const useGitStore = create<GitStore>()(
         next.add(key)
       }
       return { expandedRepos: next }
+    })
+  },
+
+  // Раскрывает переданные проекты и все их репозитории (для кнопки «развернуть всё»).
+  // Проекты вне списка (скрытые при onlyActiveProject) не трогает.
+  expandAll: (projectIds) => {
+    set((s) => {
+      const nextProjects = new Set(s.expandedProjects)
+      const nextRepos = new Set(s.expandedRepos)
+      for (const projectId of projectIds) {
+        nextProjects.add(projectId)
+        for (const repo of s.reposByProject[projectId] ?? []) {
+          nextRepos.add(repoKey(projectId, repo.path))
+        }
+      }
+      return { expandedProjects: nextProjects, expandedRepos: nextRepos }
     })
   },
 

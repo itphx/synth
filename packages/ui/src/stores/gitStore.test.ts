@@ -120,6 +120,55 @@ describe('gitStore — реестр репозиториев (AD-076)', () => {
     expect(mocks.cloneGitRepo).toHaveBeenCalledWith('p1', 'git@example.com:app.git', 'app', 'main', 'App', 'k1')
   })
 
+  it('expandAll раскрывает переданные проекты и их репозитории', () => {
+    useGitStore.setState({
+      reposByProject: {
+        p1: [{ path: 'app' }, { path: 'vendor/lib' }],
+        p2: [{ path: '' }],
+      },
+      expandedProjects: new Set<string>(),
+      expandedRepos: new Set<string>(),
+    })
+
+    useGitStore.getState().expandAll(['p1'])
+
+    const s = useGitStore.getState()
+    expect(s.expandedProjects.has('p1')).toBe(true)
+    expect(s.expandedRepos.has('p1::app')).toBe(true)
+    expect(s.expandedRepos.has('p1::vendor/lib')).toBe(true)
+    // проект вне списка остаётся нетронутым
+    expect(s.expandedProjects.has('p2')).toBe(false)
+    expect(s.expandedRepos.has('p2::')).toBe(false)
+  })
+
+  it('expandAll не сворачивает уже раскрытое и не падает без репозиториев', () => {
+    useGitStore.setState({
+      reposByProject: {},
+      expandedProjects: new Set(['p1']),
+      expandedRepos: new Set(['p1::app']),
+    })
+
+    useGitStore.getState().expandAll(['p2'])
+
+    const s = useGitStore.getState()
+    expect(s.expandedProjects.has('p1')).toBe(true)
+    expect(s.expandedRepos.has('p1::app')).toBe(true)
+    expect(s.expandedProjects.has('p2')).toBe(true)
+  })
+
+  it('collapseAll сворачивает все проекты и репозитории', () => {
+    useGitStore.setState({
+      expandedProjects: new Set(['p1', 'p2']),
+      expandedRepos: new Set(['p1::app', 'p2::']),
+    })
+
+    useGitStore.getState().collapseAll()
+
+    const s = useGitStore.getState()
+    expect(s.expandedProjects.size).toBe(0)
+    expect(s.expandedRepos.size).toBe(0)
+  })
+
   it('removeRepo/fetchRepo передают opts (id, deleteLocal)', async () => {
     mocks.removeGitRepo.mockResolvedValue({ removed: { path: 'app' }, deletedLocal: true })
     mocks.fetchGitRepo.mockResolvedValue({ path: 'app', lastFetch: '2026-02-02T00:00:00Z' })
