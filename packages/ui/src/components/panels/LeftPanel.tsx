@@ -1,9 +1,10 @@
 import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react'
-import { useUIStore } from '@/stores/useUIStore'
+import { useUIStore, OTHER_PROJECTS_COLLAPSE_KEY } from '@/stores/useUIStore'
 import { cn } from '@/lib/utils'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useSessionsTreeStore } from '@/stores/useSessionsTreeStore'
+import { useActiveProject } from '@/hooks/useActiveProject'
 import { useFilesStore } from '@/stores/filesStore'
 import { useGitStore, type GitRepoView } from '@/stores/gitStore'
 import { useChatStore } from '@/stores/chatStore'
@@ -66,8 +67,60 @@ function useAutoScroll(targetId: string | null) {
   }, [])
 }
 
-// ---- Projects tab ----
+// ---- Project scope (variant C) — общие блоки для вкладок Files/Git ----
 
+/** Закреплённая шапка блока «Текущий проект». */
+function CurrentProjectHeader({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-1 px-2 pt-1 pb-0.5 text-[0.65rem] font-medium uppercase tracking-wide text-muted-foreground">
+      <Icon name="pushpin" className="size-3 shrink-0" />
+      <span className="truncate">{label}</span>
+    </div>
+  )
+}
+
+/** Инфо-строка фоллбеков «нет проекта / нет workspace». */
+function ScopeHint({ text }: { text: string }) {
+  return (
+    <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground">
+      <Icon name="information" className="size-3.5 shrink-0" />
+      <span className="min-w-0">{text}</span>
+    </div>
+  )
+}
+
+/** Сворачиваемая обёртка «Другие проекты (N)». */
+function OtherProjectsGroup({
+  label,
+  title,
+  collapsed,
+  onToggle,
+  children,
+}: {
+  label: string
+  title?: string
+  collapsed: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <div>
+      <TreeNode
+        id={`group:${OTHER_PROJECTS_COLLAPSE_KEY}`}
+        label={label}
+        icon="folder-3"
+        iconSize="md"
+        isExpanded={!collapsed}
+        hasChildren={true}
+        onToggle={onToggle}
+        title={title}
+      />
+      {!collapsed && children}
+    </div>
+  )
+}
+
+// ---- Projects tab ----
 function ProjectsTab() {
   const { t } = useI18n()
   const projects = useProjectsStore(s => s.projects)
@@ -122,6 +175,9 @@ function ProjectsTab() {
     if (projects.length === 0) return
     const validIds = new Set(projects.map((p) => p.id))
     validIds.add('__none__')
+    // Ключ-обёртка «Другие проекты» (variant C, Files/Git) — не проектный id, но
+    // должен переживать очистку, иначе сворачивание обёртки теряется.
+    validIds.add(OTHER_PROJECTS_COLLAPSE_KEY)
     const next = new Set([...collapsedProjects].filter((id) => validIds.has(id)))
     if (next.size !== collapsedProjects.size) {
       useUIStore.setState({ collapsedProjects: next })
@@ -758,6 +814,11 @@ function FilesTab() {
   const openTab = useUIStore((s) => s.openTab)
   const centerTabs = useUIStore((s) => s.centerTabs)
   const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
+  const onlyActiveProject = useUIStore((s) => s.onlyActiveProject)
+  const collapsedProjects = useUIStore((s) => s.collapsedProjects)
+  const toggleProjectCollapse = useUIStore((s) => s.toggleProjectCollapse)
+  const loadSessions = useSessionsStore((s) => s.loadSessions)
+  const { projectId: activeProjectId, source: activeProjectSource } = useActiveProject()
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [renamingProject, setRenamingProject] = useState<string | null>(null)
@@ -774,9 +835,27 @@ function FilesTab() {
   const pendingDeleteRef = useRef<Set<string>>(new Set())
   const [dragState, setDragState] = useState<{ projectId: string; path: string } | null>(null)
 
-  useEffect(() => { loadProjects() }, [loadProjects])
+  useEffect(() => { loadProjects(); loadSessions() }, [loadProjects, loadSessions])
 
   const workspacedProjects = useMemo(() => projects.filter((p) => p.workspace), [projects])
+
+  // Вариант C: текущий проект — из активного контекста (сессия/файл/коммит).
+  const currentProject = useMemo(
+    () => (activeProjectId ? workspacedProjects.find((p) => p.id === activeProjectId) ?? null : null),
+    [workspacedProjects, activeProjectId],
+  )
+  const otherProjects = useMemo(
+    () => workspacedProjects.filter((p) => p.id !== currentProject?.id),
+    [workspacedProjects, currentProject],
+  )
+  const currentProjectId = currentProject?.id ?? null
+
+  // Закреплённый текущий проект всегда раскрыт (идемпотентный expand, не toggle).
+  useEffect(() => {
+    if (!currentProjectId) return
+    useFilesStore.getState().expandProject(currentProjectId)
+  }, [currentProjectId])
+
 
   const projectDirPaths = useMemo(() => {
     if (!moveTarget) return []
@@ -1128,6 +1207,67 @@ function FilesTab() {
     )
   }
 
+  const renderFilesProject = (project: ProjectData) => {
+    const isExpanded = expandedProjects.has(project.id)
+    const entries = treesByProject[project.id] || []
+
+    return (
+      <div key={project.id}>
+        <TreeNode
+          id={`file-project:${project.id}`}
+          label={project.name}
+          icon={project.icon || 'folder-3'}
+          iconColor={project.color ? PROJECT_COLOR_MAP[project.color] : undefined}
+          iconSize="md"
+          isExpanded={isExpanded}
+          hasChildren={true}
+          badge={<OriginBadge origin={project.origin} />}
+          onToggle={() => toggleProjectExpand(project.id)}
+          onDragOver={isTouch ? undefined : handleFileDragOver}
+          onDrop={isTouch ? undefined : (e) => handleDropOnProject(e, project.id)}
+          actions={[
+            { id: 'upload', icon: 'upload', title: t('file.upload'), onClick: () => handleUpload(project.id) },
+            { id: 'new-folder-root', icon: 'folder-add', title: t('file.newFolder'), onClick: () => setPopover({ type: 'newFolder', projectId: project.id, parentPath: '' }) },
+          ]}
+        />
+        {isExpanded && (
+          <TreeChildren
+            indent
+            totalCount={entries.length}
+            emptyText={t('leftPanel.emptyDirectory')}
+          >
+            <div className="flex items-center gap-1 px-2 py-0.5">
+              <Icon name="folder-3" className="h-3 w-3 shrink-0 text-muted-foreground/50" />
+              <span className="text-[0.6875rem] text-muted-foreground/60 truncate">{project.workspace || ''}</span>
+            </div>
+            {entries.map((entry) => {
+              const node = renderEntry(project.id, entry, 0)
+              const subKey = `${project.id}/${entry.path}`
+              const isDirExpanded = expandedDirs.has(subKey)
+              const subEntries = entry.isDirectory && isDirExpanded
+                ? (treesByProject[subKey] || [])
+                : []
+
+              return (
+                <React.Fragment key={node.id}>
+                  <TreeNode {...node} />
+                  {subEntries.length > 0 && (
+                    <TreeChildren
+                      borderOnHover
+                      totalCount={subEntries.length}
+                    >
+                      {subEntries.map((child) => renderSubtree(project.id, child, 1))}
+                    </TreeChildren>
+                  )}
+                </React.Fragment>
+              )
+            })}
+          </TreeChildren>
+        )}
+      </div>
+    )
+  }
+
   if (workspacedProjects.length === 0) {
     return (
       <TreeContainer>
@@ -1210,66 +1350,34 @@ function FilesTab() {
         </Popover>
       )}
 
-      {workspacedProjects.map((project) => {
-        const isExpanded = expandedProjects.has(project.id)
-        const entries = treesByProject[project.id] || []
-
-        return (
-          <div key={project.id}>
-            <TreeNode
-              id={`file-project:${project.id}`}
-              label={project.name}
-              icon={project.icon || 'folder-3'}
-              iconColor={project.color ? PROJECT_COLOR_MAP[project.color] : undefined}
-              iconSize="md"
-              isExpanded={isExpanded}
-              hasChildren={true}
-              badge={<OriginBadge origin={project.origin} />}
-              onToggle={() => toggleProjectExpand(project.id)}
-              onDragOver={isTouch ? undefined : handleFileDragOver}
-              onDrop={isTouch ? undefined : (e) => handleDropOnProject(e, project.id)}
-              actions={[
-                { id: 'upload', icon: 'upload', title: t('file.upload'), onClick: () => handleUpload(project.id) },
-                { id: 'new-folder-root', icon: 'folder-add', title: t('file.newFolder'), onClick: () => setPopover({ type: 'newFolder', projectId: project.id, parentPath: '' }) },
-              ]}
-            />
-            {isExpanded && (
-              <TreeChildren
-                indent
-                totalCount={entries.length}
-                emptyText={t('leftPanel.emptyDirectory')}
-              >
-                <div className="flex items-center gap-1 px-2 py-0.5">
-                  <Icon name="folder-3" className="h-3 w-3 shrink-0 text-muted-foreground/50" />
-                  <span className="text-[0.6875rem] text-muted-foreground/60 truncate">{project.workspace || ''}</span>
-                </div>
-                {entries.map((entry) => {
-                  const node = renderEntry(project.id, entry, 0)
-                  const subKey = `${project.id}/${entry.path}`
-                  const isDirExpanded = expandedDirs.has(subKey)
-                  const subEntries = entry.isDirectory && isDirExpanded
-                    ? (treesByProject[subKey] || [])
-                    : []
-
-                  return (
-                    <React.Fragment key={node.id}>
-                      <TreeNode {...node} />
-                      {subEntries.length > 0 && (
-                        <TreeChildren
-                          borderOnHover
-                          totalCount={subEntries.length}
-                        >
-                          {subEntries.map((child) => renderSubtree(project.id, child, 1))}
-                        </TreeChildren>
-                      )}
-                    </React.Fragment>
-                  )
-                })}
-              </TreeChildren>
-            )}
-          </div>
-        )
-      })}
+      {!currentProject ? (
+        <>
+          {activeProjectSource === 'session' && !activeProjectId && (
+            <ScopeHint text={t('leftPanel.currentProject.none')} />
+          )}
+          {activeProjectSource !== null && !!activeProjectId && (
+            <ScopeHint text={t('leftPanel.currentProject.noWorkspace')} />
+          )}
+          {workspacedProjects.map(renderFilesProject)}
+        </>
+      ) : (
+        <>
+          <CurrentProjectHeader label={t('leftPanel.currentProject')} />
+          {renderFilesProject(currentProject)}
+          {!onlyActiveProject && otherProjects.length > 0 && (
+            <OtherProjectsGroup
+              label={t('leftPanel.otherProjects', { count: String(otherProjects.length) })}
+              title={collapsedProjects.has(OTHER_PROJECTS_COLLAPSE_KEY)
+                ? t('leftPanel.otherProjects.expand')
+                : t('leftPanel.otherProjects.collapse')}
+              collapsed={collapsedProjects.has(OTHER_PROJECTS_COLLAPSE_KEY)}
+              onToggle={() => toggleProjectCollapse(OTHER_PROJECTS_COLLAPSE_KEY)}
+            >
+              {otherProjects.map(renderFilesProject)}
+            </OtherProjectsGroup>
+          )}
+        </>
+      )}
     </TreeContainer>
   )
 }
@@ -1322,6 +1430,11 @@ function GitTab() {
   const openTab = useUIStore((s) => s.openTab)
   const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
   const centerTabs = useUIStore((s) => s.centerTabs)
+  const onlyActiveProject = useUIStore((s) => s.onlyActiveProject)
+  const collapsedProjects = useUIStore((s) => s.collapsedProjects)
+  const toggleProjectCollapse = useUIStore((s) => s.toggleProjectCollapse)
+  const loadSessions = useSessionsStore((s) => s.loadSessions)
+  const { projectId: activeProjectId, source: activeProjectSource } = useActiveProject()
   const [commitShowMore, setCommitShowMore] = useState<Record<string, boolean>>({})
   const [addRepoProjectId, setAddRepoProjectId] = useState<string | null>(null)
   const [popoverMode, setPopoverMode] = useState<AddRepoMode>(null)
@@ -1342,7 +1455,7 @@ function GitTab() {
   const [actionError, setActionError] = useState<string | null>(null)
   const projectRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
-  useEffect(() => { loadProjects() }, [loadProjects])
+  useEffect(() => { loadProjects(); loadSessions() }, [loadProjects, loadSessions])
 
   useEffect(() => {
     let cancelled = false
@@ -1353,6 +1466,23 @@ function GitTab() {
   }, [])
 
   const workspacedProjects = useMemo(() => projects.filter((p) => p.workspace), [projects])
+
+  // Вариант C: текущий проект — из активного контекста (сессия/файл/коммит).
+  const currentProject = useMemo(
+    () => (activeProjectId ? workspacedProjects.find((p) => p.id === activeProjectId) ?? null : null),
+    [workspacedProjects, activeProjectId],
+  )
+  const otherProjects = useMemo(
+    () => workspacedProjects.filter((p) => p.id !== currentProject?.id),
+    [workspacedProjects, currentProject],
+  )
+  const currentProjectId = currentProject?.id ?? null
+
+  // Закреплённый текущий проект всегда раскрыт (идемпотентный expand, не toggle).
+  useEffect(() => {
+    if (!currentProjectId) return
+    useGitStore.getState().expandProject(currentProjectId)
+  }, [currentProjectId])
 
   useEffect(() => {
     for (const p of workspacedProjects) {
@@ -1571,6 +1701,334 @@ function GitTab() {
     notify({ text: t('git.fetchSuccess'), type: 'success', category: 'system' })
   }
 
+  const renderGitProject = (project: ProjectData) => {
+    const repos = reposByProject[project.id] || []
+    const isExpanded = expandedProjects.has(project.id)
+    const isAddRepoOpen = addRepoProjectId === project.id
+
+    return (
+      <div key={project.id}>
+        <Popover open={isAddRepoOpen} onOpenChange={(open) => { if (!open) closePopover() }}>
+          <div ref={(el) => { projectRefs.current[project.id] = el }} className="relative">
+            <PopoverTrigger asChild>
+              <button className="absolute top-0 right-0 w-0 h-0 opacity-0 pointer-events-none" />
+            </PopoverTrigger>
+            <TreeNode
+              id={`git-project:${project.id}`}
+              label={project.name}
+              icon={project.icon ? PROJECT_ICON_MAP[project.icon] : 'folder-3'}
+              iconColor={project.color ? PROJECT_COLOR_MAP[project.color] : undefined}
+              iconSize="md"
+              isExpanded={isExpanded}
+              hasChildren={repos.length > 0 ? true : undefined}
+              badge={<OriginBadge origin={project.origin} />}
+              onToggle={() => toggleProjectExpand(project.id)}
+              count={repos.length > 0 ? repos.length : undefined}
+              actions={[
+                { id: 'add-repo', icon: 'git-repository', title: t('git.addRepo'), onClick: () => openAddRepo(project.id) },
+              ]}
+            />
+          </div>
+          <PopoverContent side="bottom" align="end" sideOffset={4} className="w-72 p-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex w-full rounded-lg border border-sidebar-border overflow-hidden mb-3">
+              {([
+                { id: 'scan' as const, icon: 'git-branch' as const },
+                { id: 'clone' as const, icon: 'download' as const },
+                { id: 'init' as const, icon: 'add' as const },
+              ]).map((mode) => (
+                <button
+                  key={mode.id}
+                  onClick={(e) => { e.stopPropagation(); setPopoverMode(mode.id); setActionError(null) }}
+                  title={t(`git.${mode.id === 'scan' ? 'scan' : mode.id === 'clone' ? 'cloneRepo' : 'initRepo'}`)}
+                  className={`flex items-center justify-center px-2 py-1 text-xs transition-colors
+                    border-r border-sidebar-border last:border-r-0 flex-1
+                    ${popoverMode === mode.id
+                      ? 'bg-primary/15 text-foreground'
+                      : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'
+                    }`}
+                >
+                  <Icon name={mode.icon} className="size-3.5 shrink-0" />
+                </button>
+              ))}
+            </div>
+
+            {popoverMode === 'scan' && (
+              <div className="space-y-2">
+                {!scanResults ? (
+                  <button
+                    onClick={() => handleDoScan(project.id)}
+                    disabled={scanning}
+                    className="w-full flex items-center justify-center gap-1.5 rounded bg-interactive px-3 py-2 min-h-[40px] text-xs text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
+                  >
+                    <Icon name={scanning ? 'loader-2' : 'git-branch'} className={`size-3.5 ${scanning ? 'animate-spin' : ''}`} />
+                    {scanning ? t('common.loading') : t('git.scan')}
+                  </button>
+                ) : scanResults.length === 0 ? (
+                  <p className="text-xs text-muted-foreground text-center py-2">{t('git.noGitRepos')}</p>
+                ) : (
+                  <>
+                    <p className="text-[0.65rem] text-muted-foreground">{t('git.selectToAdd')}</p>
+                    <div className="max-h-40 overflow-y-auto space-y-0.5">
+                      {scanResults.map((r) => (
+                        <label key={r.path} className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-interactive-hover cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={scanSelected.has(r.path)}
+                            onChange={() => {
+                              const next = new Set(scanSelected)
+                              if (next.has(r.path)) next.delete(r.path)
+                              else next.add(r.path)
+                              setScanSelected(next)
+                            }}
+                            className="size-3.5"
+                          />
+                          <code className="font-mono text-foreground truncate flex-1">{r.path || '.'}</code>
+                          {r.currentBranch && (
+                            <span className="text-[0.65rem] text-muted-foreground">{r.currentBranch}</span>
+                          )}
+                        </label>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => handleAddScanned(project.id)}
+                      disabled={scanSelected.size === 0}
+                      className="w-full rounded bg-primary px-3 py-2 min-h-[40px] text-xs text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      {t('git.addRepo')}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+
+            {popoverMode === 'clone' && (
+              <div className="space-y-2">
+                <div>
+                  <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.url')}</label>
+                  <input
+                    type="text"
+                    value={cloneUrl}
+                    onChange={(e) => setCloneUrl(e.target.value)}
+                    placeholder="https://github.com/..."
+                    autoFocus
+                    className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.name')}</label>
+                  <input
+                    type="text"
+                    value={cloneName}
+                    onChange={(e) => setCloneName(e.target.value)}
+                    placeholder={t('git.namePlaceholder')}
+                    className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.path')}</label>
+                  <input
+                    type="text"
+                    value={clonePath}
+                    onChange={(e) => setClonePath(e.target.value)}
+                    placeholder={t('git.pathHint')}
+                    className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.branch')}</label>
+                  <input
+                    type="text"
+                    value={cloneBranch}
+                    onChange={(e) => setCloneBranch(e.target.value)}
+                    placeholder={t('common.optional')}
+                    className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.sshKey')}</label>
+                  <select
+                    value={cloneSshKeyId}
+                    onChange={(e) => setCloneSshKeyId(e.target.value)}
+                    className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none"
+                  >
+                    <option value="">{t('git.sshKeyNone')}</option>
+                    {sshKeys.map((key) => (
+                      <option key={key.id} value={key.id}>{key.name}</option>
+                    ))}
+                  </select>
+                  {isSshRepoUrl(cloneUrl) && !cloneSshKeyId && (
+                    <p className="text-[0.65rem] text-status-warning mt-0.5">{t('git.sshKeyRequiredHint')}</p>
+                  )}
+                  {sshKeys.length === 0 && (
+                    <p className="text-[0.65rem] text-muted-foreground mt-0.5">{t('git.noSshKeys')}</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleDoClone(project.id)}
+                  disabled={!cloneUrl.trim() || (isSshRepoUrl(cloneUrl) && !cloneSshKeyId)}
+                  className="w-full rounded bg-primary px-3 py-2 min-h-[40px] text-xs text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  {t('git.cloneRepo')}
+                </button>
+              </div>
+            )}
+
+            {popoverMode === 'init' && (
+              <div className="space-y-2">
+                <div>
+                  <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.path')}</label>
+                  <input
+                    type="text"
+                    value={initPath}
+                    onChange={(e) => setInitPath(e.target.value)}
+                    placeholder={t('git.pathHint')}
+                    autoFocus
+                    className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.name')}</label>
+                  <input
+                    type="text"
+                    value={initName}
+                    onChange={(e) => setInitName(e.target.value)}
+                    placeholder={t('git.namePlaceholder')}
+                    className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.defaultBranch')}</label>
+                  <input
+                    type="text"
+                    value={initBranch}
+                    onChange={(e) => setInitBranch(e.target.value)}
+                    placeholder={t('git.branchPlaceholder')}
+                    className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                  />
+                </div>
+                <button
+                  onClick={() => handleDoInit(project.id)}
+                  className="w-full rounded bg-primary px-3 py-2 min-h-[40px] text-xs text-primary-foreground hover:bg-primary/90 transition-colors"
+                >
+                  {t('git.initRepo')}
+                </button>
+              </div>
+            )}
+
+            {actionError && (
+              <p className="text-xs text-destructive mt-2">{actionError}</p>
+            )}
+          </PopoverContent>
+        </Popover>
+
+        {isExpanded && (
+          <TreeChildren indent totalCount={repos.length} emptyText={t('leftPanel.noRepos')}>
+            {repos.length === 0 && <></>}
+            {repos.map((repo) => {
+              const rkey = `${project.id}::${repo.path}`
+              const isRepoExpanded = expandedRepos.has(rkey)
+              const commits = commitsByRepo[rkey] || []
+              const destination = repoDestination(repo.path, t('git.workspaceRoot'))
+              const displayName = repo.name || destination
+              const keyLabel = sshKeyLabel(repo.sshKeyId)
+
+              return (
+                <div key={rkey}>
+                  <TreeNode
+                    id={`repo:${rkey}`}
+                    label={displayName}
+                    labelMuted
+                    icon="git-repository"
+                    isExpanded={isRepoExpanded}
+                    hasChildren={true}
+                    onToggle={() => {
+                      toggleRepoExpand(project.id, repo.path)
+                      if (!isRepoExpanded) loadCommitLog(project.id, repo.path)
+                    }}
+                    suffix={repo.currentBranch}
+                    actions={[
+                      { id: 'fetch', icon: 'refresh', title: t('git.fetchRepo'), onClick: () => handleFetchRepo(project.id, repo) },
+                      { id: 'remove', icon: 'delete-bin', title: t('git.remove'), variant: 'destructive', onClick: () => { setDeleteLocal(false); setRemoveTarget({ projectId: project.id, repo }) } },
+                    ]}
+                    subtitle={repo.lastCommitSubject?.slice(0, 30)}
+                  />
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-2 pb-1 -mt-0.5 text-[0.65rem] text-muted-foreground">
+                    {repo.type && (
+                      <span className="rounded border border-sidebar-border px-1 uppercase tracking-wide" title={t('git.type')}>
+                        {repo.type}
+                      </span>
+                    )}
+                    <span className="min-w-0 truncate" title={destination}>
+                      <span className="opacity-70">{t('git.destination')}:</span>{' '}
+                      <code className="font-mono text-foreground/80">{destination}</code>
+                    </span>
+                    {repo.url && (
+                      <span className="inline-flex min-w-0 items-center gap-0.5" title={repo.url}>
+                        <Icon name="link" className="size-3 shrink-0" />
+                        <span className="truncate">{repo.url}</span>
+                      </span>
+                    )}
+                    {keyLabel && (
+                      <span className="inline-flex items-center gap-0.5">
+                        <Icon name="shield-keyhole" className="size-3" />
+                        {keyLabel}
+                      </span>
+                    )}
+                    {repo.lastFetch && (
+                      <span>{t('git.lastFetch')}: {formatDateTime(repo.lastFetch, locale)}</span>
+                    )}
+                  </div>
+                  {isRepoExpanded && (
+                    (() => {
+                      const isExpanded = commitShowMore[rkey] ?? false
+                      const visibleCommits = isExpanded ? commits : commits.slice(0, MAX_VISIBLE_COMMITS)
+                      const hiddenCount = commits.length - MAX_VISIBLE_COMMITS
+                      return (
+                    <TreeChildren
+                      borderOnHover
+                      totalCount={commits.length}
+                      maxVisible={MAX_VISIBLE_COMMITS}
+                      expanded={isExpanded}
+                      emptyText={t('leftPanel.noCommits')}
+                      emptyIcon="git-commit"
+                      showMoreLabel={t('leftPanel.showMoreCommits', { count: String(hiddenCount) })}
+                      collapseLabel={t('leftPanel.showFewerCommits')}
+                      onShowMore={hiddenCount > 0 ? () => setCommitShowMore(prev => ({ ...prev, [rkey]: true })) : undefined}
+                      onCollapse={() => setCommitShowMore(prev => ({ ...prev, [rkey]: false }))}
+                    >
+                      {visibleCommits.map((commit: any) => {
+                        const commitKey = `${project.id}::${repo.path}::${commit.hash}`
+                        return (
+                        <TreeNode
+                          key={`commit:${commit.hash}`}
+                          id={`commit:${commit.hash}`}
+                          label={commit.subject}
+                          icon="git-commit"
+                          subtitle={`${commit.author} · ${commit.relativeDate}`}
+                          isActive={activeCenterTabId === `commit-${project.id}-${repo.path}-${commit.hash}`}
+                          isTabOpen={commitTabOpenSet.has(commitKey)}
+                          onClick={() => openTab({
+                            id: `commit-${project.id}-${repo.path}-${commit.hash}`,
+                            type: 'commit-detail',
+                            title: commit.subject,
+                            data: { projectId: project.id, repoPath: repo.path, commitHash: commit.hash },
+                          })}
+                        />
+                        )
+                      })}
+                    </TreeChildren>
+                      )
+                    })()
+                  )}
+                </div>
+              )
+            })}
+          </TreeChildren>
+        )}
+      </div>
+    )
+  }
+
   if (!workspacedProjects.length) {
     return (
       <TreeContainer>
@@ -1584,333 +2042,34 @@ function GitTab() {
   return (
     <>
       <TreeContainer>
-      {workspacedProjects.map((project) => {
-        const repos = reposByProject[project.id] || []
-        const isExpanded = expandedProjects.has(project.id)
-        const isAddRepoOpen = addRepoProjectId === project.id
-
-        return (
-          <div key={project.id}>
-            <Popover open={isAddRepoOpen} onOpenChange={(open) => { if (!open) closePopover() }}>
-              <div ref={(el) => { projectRefs.current[project.id] = el }} className="relative">
-                <PopoverTrigger asChild>
-                  <button className="absolute top-0 right-0 w-0 h-0 opacity-0 pointer-events-none" />
-                </PopoverTrigger>
-                <TreeNode
-                  id={`git-project:${project.id}`}
-                  label={project.name}
-                  icon={project.icon ? PROJECT_ICON_MAP[project.icon] : 'folder-3'}
-                  iconColor={project.color ? PROJECT_COLOR_MAP[project.color] : undefined}
-                  iconSize="md"
-                  isExpanded={isExpanded}
-                  hasChildren={repos.length > 0 ? true : undefined}
-                  badge={<OriginBadge origin={project.origin} />}
-                  onToggle={() => toggleProjectExpand(project.id)}
-                  count={repos.length > 0 ? repos.length : undefined}
-                  actions={[
-                    { id: 'add-repo', icon: 'git-repository', title: t('git.addRepo'), onClick: () => openAddRepo(project.id) },
-                  ]}
-                />
-              </div>
-              <PopoverContent side="bottom" align="end" sideOffset={4} className="w-72 p-3" onClick={(e) => e.stopPropagation()}>
-                <div className="flex w-full rounded-lg border border-sidebar-border overflow-hidden mb-3">
-                  {([
-                    { id: 'scan' as const, icon: 'git-branch' as const },
-                    { id: 'clone' as const, icon: 'download' as const },
-                    { id: 'init' as const, icon: 'add' as const },
-                  ]).map((mode) => (
-                    <button
-                      key={mode.id}
-                      onClick={(e) => { e.stopPropagation(); setPopoverMode(mode.id); setActionError(null) }}
-                      title={t(`git.${mode.id === 'scan' ? 'scan' : mode.id === 'clone' ? 'cloneRepo' : 'initRepo'}`)}
-                      className={`flex items-center justify-center px-2 py-1 text-xs transition-colors
-                        border-r border-sidebar-border last:border-r-0 flex-1
-                        ${popoverMode === mode.id
-                          ? 'bg-primary/15 text-foreground'
-                          : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'
-                        }`}
-                    >
-                      <Icon name={mode.icon} className="size-3.5 shrink-0" />
-                    </button>
-                  ))}
-                </div>
-
-                {popoverMode === 'scan' && (
-                  <div className="space-y-2">
-                    {!scanResults ? (
-                      <button
-                        onClick={() => handleDoScan(project.id)}
-                        disabled={scanning}
-                        className="w-full flex items-center justify-center gap-1.5 rounded bg-interactive px-3 py-2 min-h-[40px] text-xs text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
-                      >
-                        <Icon name={scanning ? 'loader-2' : 'git-branch'} className={`size-3.5 ${scanning ? 'animate-spin' : ''}`} />
-                        {scanning ? t('common.loading') : t('git.scan')}
-                      </button>
-                    ) : scanResults.length === 0 ? (
-                      <p className="text-xs text-muted-foreground text-center py-2">{t('git.noGitRepos')}</p>
-                    ) : (
-                      <>
-                        <p className="text-[0.65rem] text-muted-foreground">{t('git.selectToAdd')}</p>
-                        <div className="max-h-40 overflow-y-auto space-y-0.5">
-                          {scanResults.map((r) => (
-                            <label key={r.path} className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-interactive-hover cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={scanSelected.has(r.path)}
-                                onChange={() => {
-                                  const next = new Set(scanSelected)
-                                  if (next.has(r.path)) next.delete(r.path)
-                                  else next.add(r.path)
-                                  setScanSelected(next)
-                                }}
-                                className="size-3.5"
-                              />
-                              <code className="font-mono text-foreground truncate flex-1">{r.path || '.'}</code>
-                              {r.currentBranch && (
-                                <span className="text-[0.65rem] text-muted-foreground">{r.currentBranch}</span>
-                              )}
-                            </label>
-                          ))}
-                        </div>
-                        <button
-                          onClick={() => handleAddScanned(project.id)}
-                          disabled={scanSelected.size === 0}
-                          className="w-full rounded bg-primary px-3 py-2 min-h-[40px] text-xs text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                        >
-                          {t('git.addRepo')}
-                        </button>
-                      </>
-                    )}
-                  </div>
-                )}
-
-                {popoverMode === 'clone' && (
-                  <div className="space-y-2">
-                    <div>
-                      <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.url')}</label>
-                      <input
-                        type="text"
-                        value={cloneUrl}
-                        onChange={(e) => setCloneUrl(e.target.value)}
-                        placeholder="https://github.com/..."
-                        autoFocus
-                        className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.name')}</label>
-                      <input
-                        type="text"
-                        value={cloneName}
-                        onChange={(e) => setCloneName(e.target.value)}
-                        placeholder={t('git.namePlaceholder')}
-                        className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.path')}</label>
-                      <input
-                        type="text"
-                        value={clonePath}
-                        onChange={(e) => setClonePath(e.target.value)}
-                        placeholder={t('git.pathHint')}
-                        className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.branch')}</label>
-                      <input
-                        type="text"
-                        value={cloneBranch}
-                        onChange={(e) => setCloneBranch(e.target.value)}
-                        placeholder={t('common.optional')}
-                        className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.sshKey')}</label>
-                      <select
-                        value={cloneSshKeyId}
-                        onChange={(e) => setCloneSshKeyId(e.target.value)}
-                        className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none"
-                      >
-                        <option value="">{t('git.sshKeyNone')}</option>
-                        {sshKeys.map((key) => (
-                          <option key={key.id} value={key.id}>{key.name}</option>
-                        ))}
-                      </select>
-                      {isSshRepoUrl(cloneUrl) && !cloneSshKeyId && (
-                        <p className="text-[0.65rem] text-status-warning mt-0.5">{t('git.sshKeyRequiredHint')}</p>
-                      )}
-                      {sshKeys.length === 0 && (
-                        <p className="text-[0.65rem] text-muted-foreground mt-0.5">{t('git.noSshKeys')}</p>
-                      )}
-                    </div>
-                    <button
-                      onClick={() => handleDoClone(project.id)}
-                      disabled={!cloneUrl.trim() || (isSshRepoUrl(cloneUrl) && !cloneSshKeyId)}
-                      className="w-full rounded bg-primary px-3 py-2 min-h-[40px] text-xs text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                    >
-                      {t('git.cloneRepo')}
-                    </button>
-                  </div>
-                )}
-
-                {popoverMode === 'init' && (
-                  <div className="space-y-2">
-                    <div>
-                      <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.path')}</label>
-                      <input
-                        type="text"
-                        value={initPath}
-                        onChange={(e) => setInitPath(e.target.value)}
-                        placeholder={t('git.pathHint')}
-                        autoFocus
-                        className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.name')}</label>
-                      <input
-                        type="text"
-                        value={initName}
-                        onChange={(e) => setInitName(e.target.value)}
-                        placeholder={t('git.namePlaceholder')}
-                        className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('git.defaultBranch')}</label>
-                      <input
-                        type="text"
-                        value={initBranch}
-                        onChange={(e) => setInitBranch(e.target.value)}
-                        placeholder={t('git.branchPlaceholder')}
-                        className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
-                      />
-                    </div>
-                    <button
-                      onClick={() => handleDoInit(project.id)}
-                      className="w-full rounded bg-primary px-3 py-2 min-h-[40px] text-xs text-primary-foreground hover:bg-primary/90 transition-colors"
-                    >
-                      {t('git.initRepo')}
-                    </button>
-                  </div>
-                )}
-
-                {actionError && (
-                  <p className="text-xs text-destructive mt-2">{actionError}</p>
-                )}
-              </PopoverContent>
-            </Popover>
-
-            {isExpanded && (
-              <TreeChildren indent totalCount={repos.length} emptyText={t('leftPanel.noRepos')}>
-                {repos.length === 0 && <></>}
-                {repos.map((repo) => {
-                  const rkey = `${project.id}::${repo.path}`
-                  const isRepoExpanded = expandedRepos.has(rkey)
-                  const commits = commitsByRepo[rkey] || []
-                  const destination = repoDestination(repo.path, t('git.workspaceRoot'))
-                  const displayName = repo.name || destination
-                  const keyLabel = sshKeyLabel(repo.sshKeyId)
-
-                  return (
-                    <div key={rkey}>
-                      <TreeNode
-                        id={`repo:${rkey}`}
-                        label={displayName}
-                        labelMuted
-                        icon="git-repository"
-                        isExpanded={isRepoExpanded}
-                        hasChildren={true}
-                        onToggle={() => {
-                          toggleRepoExpand(project.id, repo.path)
-                          if (!isRepoExpanded) loadCommitLog(project.id, repo.path)
-                        }}
-                        suffix={repo.currentBranch}
-                        actions={[
-                          { id: 'fetch', icon: 'refresh', title: t('git.fetchRepo'), onClick: () => handleFetchRepo(project.id, repo) },
-                          { id: 'remove', icon: 'delete-bin', title: t('git.remove'), variant: 'destructive', onClick: () => { setDeleteLocal(false); setRemoveTarget({ projectId: project.id, repo }) } },
-                        ]}
-                        subtitle={repo.lastCommitSubject?.slice(0, 30)}
-                      />
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-2 pb-1 -mt-0.5 text-[0.65rem] text-muted-foreground">
-                        {repo.type && (
-                          <span className="rounded border border-sidebar-border px-1 uppercase tracking-wide" title={t('git.type')}>
-                            {repo.type}
-                          </span>
-                        )}
-                        <span className="min-w-0 truncate" title={destination}>
-                          <span className="opacity-70">{t('git.destination')}:</span>{' '}
-                          <code className="font-mono text-foreground/80">{destination}</code>
-                        </span>
-                        {repo.url && (
-                          <span className="inline-flex min-w-0 items-center gap-0.5" title={repo.url}>
-                            <Icon name="link" className="size-3 shrink-0" />
-                            <span className="truncate">{repo.url}</span>
-                          </span>
-                        )}
-                        {keyLabel && (
-                          <span className="inline-flex items-center gap-0.5">
-                            <Icon name="shield-keyhole" className="size-3" />
-                            {keyLabel}
-                          </span>
-                        )}
-                        {repo.lastFetch && (
-                          <span>{t('git.lastFetch')}: {formatDateTime(repo.lastFetch, locale)}</span>
-                        )}
-                      </div>
-                      {isRepoExpanded && (
-                        (() => {
-                          const isExpanded = commitShowMore[rkey] ?? false
-                          const visibleCommits = isExpanded ? commits : commits.slice(0, MAX_VISIBLE_COMMITS)
-                          const hiddenCount = commits.length - MAX_VISIBLE_COMMITS
-                          return (
-                        <TreeChildren
-                          borderOnHover
-                          totalCount={commits.length}
-                          maxVisible={MAX_VISIBLE_COMMITS}
-                          expanded={isExpanded}
-                          emptyText={t('leftPanel.noCommits')}
-                          emptyIcon="git-commit"
-                          showMoreLabel={t('leftPanel.showMoreCommits', { count: String(hiddenCount) })}
-                          collapseLabel={t('leftPanel.showFewerCommits')}
-                          onShowMore={hiddenCount > 0 ? () => setCommitShowMore(prev => ({ ...prev, [rkey]: true })) : undefined}
-                          onCollapse={() => setCommitShowMore(prev => ({ ...prev, [rkey]: false }))}
-                        >
-                          {visibleCommits.map((commit: any) => {
-                            const commitKey = `${project.id}::${repo.path}::${commit.hash}`
-                            return (
-                            <TreeNode
-                              key={`commit:${commit.hash}`}
-                              id={`commit:${commit.hash}`}
-                              label={commit.subject}
-                              icon="git-commit"
-                              subtitle={`${commit.author} · ${commit.relativeDate}`}
-                              isActive={activeCenterTabId === `commit-${project.id}-${repo.path}-${commit.hash}`}
-                              isTabOpen={commitTabOpenSet.has(commitKey)}
-                              onClick={() => openTab({
-                                id: `commit-${project.id}-${repo.path}-${commit.hash}`,
-                                type: 'commit-detail',
-                                title: commit.subject,
-                                data: { projectId: project.id, repoPath: repo.path, commitHash: commit.hash },
-                              })}
-                            />
-                            )
-                          })}
-                        </TreeChildren>
-                          )
-                        })()
-                      )}
-                    </div>
-                  )
-                })}
-              </TreeChildren>
-            )}
-          </div>
-        )
-      })}
+      {!currentProject ? (
+        <>
+          {activeProjectSource === 'session' && !activeProjectId && (
+            <ScopeHint text={t('leftPanel.currentProject.none')} />
+          )}
+          {activeProjectSource !== null && !!activeProjectId && (
+            <ScopeHint text={t('leftPanel.currentProject.noWorkspace')} />
+          )}
+          {workspacedProjects.map(renderGitProject)}
+        </>
+      ) : (
+        <>
+          <CurrentProjectHeader label={t('leftPanel.currentProject')} />
+          {renderGitProject(currentProject)}
+          {!onlyActiveProject && otherProjects.length > 0 && (
+            <OtherProjectsGroup
+              label={t('leftPanel.otherProjects', { count: String(otherProjects.length) })}
+              title={collapsedProjects.has(OTHER_PROJECTS_COLLAPSE_KEY)
+                ? t('leftPanel.otherProjects.expand')
+                : t('leftPanel.otherProjects.collapse')}
+              collapsed={collapsedProjects.has(OTHER_PROJECTS_COLLAPSE_KEY)}
+              onToggle={() => toggleProjectCollapse(OTHER_PROJECTS_COLLAPSE_KEY)}
+            >
+              {otherProjects.map(renderGitProject)}
+            </OtherProjectsGroup>
+          )}
+        </>
+      )}
       </TreeContainer>
       <ConfirmDialog
         open={!!removeTarget}

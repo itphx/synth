@@ -25,6 +25,9 @@ interface RightPanelState {
   maxWidth: number
 }
 
+/** Ключ-обёртка сворачивания блока «Другие проекты» в левой панели (Files/Git). */
+export const OTHER_PROJECTS_COLLAPSE_KEY = '__others__'
+
 export type CenterTabType = 'chat' | 'file-viewer' | 'file-editor' | 'commit-detail'
 
 export interface CenterTab {
@@ -84,6 +87,10 @@ interface UIStore {
   setRightPanelTab: (tab: string) => void
   collapsedProjects: Set<string>
   toggleProjectCollapse: (projectId: string) => void
+
+  /** Вкладки Files/Git: показывать только проект активного контекста (сессия/файл/коммит). */
+  onlyActiveProject: boolean
+  setOnlyActiveProject: (value: boolean) => void
 
   isSettingsDialogOpen: boolean
   setSettingsDialogOpen: (open: boolean) => void
@@ -226,6 +233,9 @@ export const useUIStore = create<UIStore>()(
           return { collapsedProjects: next }
         }),
 
+      onlyActiveProject: false,
+      setOnlyActiveProject: (value) => set({ onlyActiveProject: value }),
+
       isSettingsDialogOpen: false,
       setSettingsDialogOpen: (open) => set({ isSettingsDialogOpen: open }),
       settingsPage: 'appearance',
@@ -354,6 +364,7 @@ export const useUIStore = create<UIStore>()(
         centerTabs: state.centerTabs,
         activeCenterTabId: state.activeCenterTabId,
         collapsedProjects: [...state.collapsedProjects],
+        onlyActiveProject: state.onlyActiveProject,
       }),
       merge: (persisted, current) => {
         const p = persisted as Record<string, unknown> | undefined
@@ -374,6 +385,7 @@ export const useUIStore = create<UIStore>()(
           centerTabs: (p?.centerTabs as CenterTab[]) ?? current.centerTabs,
           activeCenterTabId: (p?.activeCenterTabId as string | null) ?? current.activeCenterTabId,
           collapsedProjects: new Set(p?.collapsedProjects as string[] ?? []),
+          onlyActiveProject: (p?.onlyActiveProject as boolean) ?? current.onlyActiveProject,
         }
       },
     }

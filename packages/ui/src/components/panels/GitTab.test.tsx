@@ -118,7 +118,7 @@ beforeEach(() => {
     { id: 'k1', name: 'deploy-key', type: 'user', agentIds: [], createdAt: '' },
   ])
 
-  useUIStore.setState({ leftPanelTab: 'git', centerTabs: [], activeCenterTabId: null })
+  useUIStore.setState({ leftPanelTab: 'git', centerTabs: [], activeCenterTabId: null, onlyActiveProject: false })
   useProjectsStore.setState({ projects: [PROJECT] as never, loading: false, error: null })
   useGitStore.setState({
     reposByProject: {},

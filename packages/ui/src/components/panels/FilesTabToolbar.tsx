@@ -2,6 +2,9 @@ import React from 'react'
 import { Icon } from '@/components/icon/Icon'
 import { useFilesStore } from '@/stores/filesStore'
 import { useProjectsStore } from '@/stores/projectsStore'
+import { useUIStore } from '@/stores/useUIStore'
+import { useActiveProject } from '@/hooks/useActiveProject'
+import { ProjectScopeToggle } from '@/components/panels/ProjectScopeToggle'
 import { useI18n } from '@/lib/i18n'
 
 export const FilesTabToolbar: React.FC = () => {
@@ -9,27 +12,35 @@ export const FilesTabToolbar: React.FC = () => {
   const projects = useProjectsStore(s => s.projects)
   const expandedProjects = useFilesStore(s => s.expandedProjects)
   const toggleProjectExpand = useFilesStore(s => s.toggleProjectExpand)
-  const collapseAll = useFilesStore(s => s.collapseAll)
   const showHidden = useFilesStore(s => s.showHidden)
   const toggleShowHidden = useFilesStore(s => s.toggleShowHidden)
   const selectionMode = useFilesStore(s => s.selectionMode)
   const toggleSelectionMode = useFilesStore(s => s.toggleSelectionMode)
+  const onlyActiveProject = useUIStore(s => s.onlyActiveProject)
+  const { projectId: activeProjectId } = useActiveProject()
 
   const workspacedProjects = projects.filter((p) => p.workspace)
-  const allCollapsed = workspacedProjects.every((p) => !expandedProjects.has(p.id))
+  // При включённом «только текущий» expand/collapse-all работают лишь по видимым проектам.
+  const visibleProjects = onlyActiveProject && activeProjectId
+    ? workspacedProjects.filter((p) => p.id === activeProjectId)
+    : workspacedProjects
+  const allCollapsed = visibleProjects.every((p) => !expandedProjects.has(p.id))
 
   const handleToggleAll = () => {
     if (allCollapsed) {
-      workspacedProjects.forEach((p) => {
+      visibleProjects.forEach((p) => {
         if (!expandedProjects.has(p.id)) toggleProjectExpand(p.id)
       })
     } else {
-      collapseAll()
+      visibleProjects.forEach((p) => {
+        if (expandedProjects.has(p.id)) toggleProjectExpand(p.id)
+      })
     }
   }
 
   return (
     <div className="flex items-center gap-0.5 ml-auto">
+      <ProjectScopeToggle />
       <button
         onClick={handleToggleAll}
         className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-interactive-hover hover:text-foreground transition-colors"
