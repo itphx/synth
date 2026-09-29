@@ -71,9 +71,11 @@ pnpm lint
 локальные пути резолвятся от home: dataDir `<home>/data`, config `<home>/config.yaml`,
 profiles `<home>/profiles.json`, credentials `<home>/credentials.json` — поэтому
 standalone **не** подхватывает `lastProfile` из общего `~/.config/synth/profiles.json`.
-host `127.0.0.1`, порт `core.port` (4300), API-ключ авто-генерируется и
+host `127.0.0.1`, порт 4400 (передаётся явно `--port`), API-ключ авто-генерируется и
 сохраняется в `<home>/data/secrets/api-key`. Флаги `--port/--host/--home/--data-dir/--api-key`
 остаются **явными переопределениями** (`--data-dir` приоритетнее `--home`).
+`hybrid.sh` по умолчанию использует `4300`, поэтому standalone (`4400`) и hybrid (`4300`)
+можно поднять одновременно (разные порты и home).
 Нужен для ручной и автоматической проверки
 standalone-UI (в т.ч. диалога выбора рабочего каталога, AD-075), где managed
 показывает read-only, а standalone — политику `confirm`.
@@ -89,7 +91,7 @@ standalone-UI (в т.ч. диалога выбора рабочего катал
 
 | Опция | Назначение |
 |---|---|
-| `--port <port>` | явное переопределение порта (default: `core.port`, `4300`) |
+| `--port <port>` | явное переопределение порта (default: `4400`; `hybrid.sh` — `4300`) |
 | `--host <host>` | явное переопределение адреса прослушивания (default: `127.0.0.1`) |
 | `--home <path>` | AD-079: локальный home-каталог (default: `~/.local/share/synth-standalone`); config/data/profiles/credentials резолвятся от него |
 | `--data-dir <path>` | явное переопределение каталога данных (приоритетнее `--home`) |

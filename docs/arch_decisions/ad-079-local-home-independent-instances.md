@@ -42,8 +42,8 @@
 
 ### Скрипты
 
-- `scripts/standalone.sh` → `--home ~/.local/share/synth-standalone --port <свой>`.
-- `scripts/hybrid.sh` → `--home <свой home> --port <свой>`.
+- `scripts/standalone.sh` → `--home ~/.local/share/synth-standalone --port 4400`.
+- `scripts/hybrid.sh` → `--port 4300`.
 - Логи/сборка — как сейчас.
 
 ## Реализация

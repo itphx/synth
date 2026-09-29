@@ -24,7 +24,7 @@
 #                       не нужен. Для отладки/интеграций доступен через
 #                       --print-api-key.
 #   --print-api-key     показать полный локальный API-ключ в сводке запуска
-#   --port <port>       порт локального core (default 4300)
+#   --port <port>       порт локального core (default 4300; standalone — 4400)
 #   --data-dir <path>   каталог данных локального мира (default ~/.local/share/synth)
 #   --home <path>       локальный home-каталог (AD-079). Если задан — config/data/
 #                       profiles/credentials резолвятся от него (data-dir по
@@ -99,7 +99,7 @@ hybrid.sh — запуск Synth локально в гибридном режи
                       не нужен. Для отладки/интеграций доступен через
                       --print-api-key.
   --print-api-key     показать полный локальный API-ключ в сводке запуска
-  --port <port>       порт локального core (default: 4300)
+  --port <port>       порт локального core (default: 4300; standalone — 4400)
   --data-dir <path>   каталог данных локального мира (default: ~/.local/share/synth)
   --home <path>       локальный home-каталог (AD-079: config/data/profiles/credentials).
                       Без флага сохраняется текущее поведение (XDG/~/.local/share/synth).

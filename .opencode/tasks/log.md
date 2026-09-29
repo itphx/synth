@@ -995,3 +995,12 @@
 - **Верификация (независимо):** `pnpm build` OK; `pnpm typecheck` 6/6; `pnpm test` shared 170 · core 2175 · ui 804 · backend 372; `pnpm lint` 0 errors; smoke `serve --home <tmp> --port 4391` → `/health` 200, созданы `<home>/config.yaml` + `<home>/data/`, `/hybrid/status.knownServers` берёт `<home>/profiles.json` (изоляция подтверждена).
 - **Docs:** AD-079 → ✅ Реализовано (+ раздел «Реализация»); корневой/shared/core AGENTS.md; docs/CONFIGURATION.md, docs/DEVELOPMENT.md.
 - **Дальше:** AD-080 (режимы гибрида) — использует home одного инстанса.
+
+## 2026-09-29 — Порты инстансов: hybrid 4300 / standalone 4400 — PASS
+
+- **Задача:** развести порты скриптов запуска, чтобы standalone и hybrid поднимались одновременно.
+- **Тип:** chore (скрипты+docs) · **Исполнитель:** @fixer · **Результат:** PASS.
+- **Скрипты:** `standalone.sh` — `PORT=4400`, `--port` теперь передаётся ВСЕГДА (как `--home`), `effective_core_port` упрощён до `echo "$PORT"` (убран `config show`); `hybrid.sh` — 4300 (как было), в справке отмечено.
+- **Docs:** `docs/DEVELOPMENT.md` (standalone 4400 + ремарка про одновременный запуск), `docs/arch_decisions/ad-079-...md` (порты скриптов).
+- **Верификация:** `bash -n` OK; `./scripts/standalone.sh --help` → default 4400; smoke `--no-build --check --home /tmp/...` без `--port` → поднялся на `127.0.0.1:4400`, 5/5 `[OK]`, `Результат: OK`; режимы файлов 100755 не менялись.
+- **Дальше:** AD-080.

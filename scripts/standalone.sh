@@ -19,10 +19,11 @@
 # home, поэтому standalone НЕ подхватывает lastProfile из общего
 # ~/.config/synth/profiles.json.
 # Порт/API-ключ берутся из дефолтов standalone (dataDir — <home>/data, host
-# 127.0.0.1, порт 4300, API-ключ генерируется и сохраняется в <home>/data/secrets/api-key).
+# 127.0.0.1, порт 4400, API-ключ генерируется и сохраняется в <home>/data/secrets/api-key).
 #
 # Опции:
-#   --port <port>      явное переопределение порта (иначе — дефолт/конфиг)
+#   --port <port>      порт локального core (default: 4400; hybrid.sh использует
+#                      4300 — разные инстансы можно запускать одновременно)
 #   --host <host>      явное переопределение адреса прослушивания
 #   --home <path>      локальный home-каталог (default: ~/.local/share/synth-standalone).
 #                      AD-079: config/data/profiles/credentials живут внутри home,
@@ -68,9 +69,9 @@ CHECK_BODY="$STANDALONE_TMP/.check-body.json"
 cd "$SYNTH"
 
 # ── Значения по умолчанию ────────────────────────────────────────────────
-# Дефолты соответствуют standalone-режиму npm-пакета; заданные опции —
-# явные переопределения и прокидываются в `serve` только когда заданы.
-PORT="4300"
+# Дефолты соответствуют standalone-режиму npm-пакета; `--home` и `--port`
+# передаются в `serve` всегда, остальные опции — только когда заданы.
+PORT="4400"
 HOST="127.0.0.1"
 HOME_DIR="$HOME/.local/share/synth-standalone"
 DATA_DIR="$HOME_DIR/data"
@@ -100,7 +101,8 @@ AD-079: config/data/profiles/credentials резолвятся от home, поэ�
 не подхватывает lastProfile из общего ~/.config/synth/profiles.json.
 
 Опции:
-  --port <port>      явное переопределение порта
+  --port <port>      порт локального core (default: 4400; hybrid.sh — 4300,
+                     разные инстансы можно запускать одновременно)
   --host <host>      явное переопределение адреса прослушивания
   --home <path>      локальный home-каталог (default: ~/.local/share/synth-standalone)
   --data-dir <path>  явное переопределение каталога данных (приоритетнее --home)
@@ -371,20 +373,9 @@ fi
 [ "$DATA_DIR_SET" = true ] && mkdir -p "$DATA_DIR"
 
 # Эффективный порт заранее — для проверки занятости и ожидания /health.
-# Без явного --port serve берёт порт из конфига/дефолта (core.port).
+# Порт всегда задаётся явно (--port "$PORT" ниже), поэтому эффективный порт = PORT.
 effective_core_port() {
-    if [ "$PORT_SET" = true ]; then
-        echo "$PORT"
-        return
-    fi
-    local json port
-    json=$(env "${ENV_ARGS[@]}" "$SYNTH_BIN" config show 2>/dev/null)
-    port=$(printf '%s' "$json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const c=JSON.parse(s).core;if(c&&Number.isFinite(c.port))process.stdout.write(String(c.port))}catch{}})' 2>/dev/null)
-    if [ -n "$port" ]; then
-        echo "$port"
-    else
-        echo "4300"
-    fi
+    echo "$PORT"
 }
 PORT=$(effective_core_port)
 
@@ -431,15 +422,16 @@ echo "  Запуск: node_modules/.bin/synth serve"
 echo "  Лог:    $RUN_LOG"
 : > "$RUN_LOG"
 
-# Явные переопределения прокидываем в serve только когда они заданы; иначе —
-# ровно как у пользователя npm-пакета (без --host/--port/--data-dir/--api-key).
+# `--home` и `--port` передаются в serve всегда (изоляция инстанса и предсказуемый
+# порт standalone — 4400, независимо от config); остальные флаги — только когда заданы.
 SERVE_ARGS=()
 # AD-079: home всегда передаётся явно (default ~/.local/share/synth-standalone) —
 # env SYNTH_HOME уже очищен выше, флаг гарантирует изоляцию инстанса.
 SERVE_ARGS+=(--home "$HOME_DIR")
+# Порт всегда явный: standalone по умолчанию 4400 (hybrid — 4300).
+SERVE_ARGS+=(--port "$PORT")
 [ "$API_KEY_SET" = true ] && SERVE_ARGS+=(--api-key "$API_KEY")
 [ "$HOST_SET" = true ] && SERVE_ARGS+=(--host "$HOST")
-[ "$PORT_SET" = true ] && SERVE_ARGS+=(--port "$PORT")
 [ "$DATA_DIR_SET" = true ] && SERVE_ARGS+=(--data-dir "$DATA_DIR")
 
 env "${ENV_ARGS[@]}" "$SYNTH_BIN" serve "${SERVE_ARGS[@]}" >>"$RUN_LOG" 2>&1 &
