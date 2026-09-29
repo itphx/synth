@@ -605,6 +605,7 @@ export const dict = {
   'rightPanel.stats.toolUnavailable': 'unavailable',
   'rightPanel.stats.toolUnavailableMode': 'unavailable (mode)',
   'rightPanel.stats.toolUnavailableRole': 'unavailable (role)',
+  'rightPanel.stats.toolUnavailableDependency': 'unavailable (missing dependency)',
   'rightPanel.stats.mcpDisabled': 'disabled',
   'rightPanel.stats.mcpLevel.system': 'system',
   'rightPanel.stats.mcpLevel.project': 'project',

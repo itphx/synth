@@ -92,6 +92,7 @@ function toolAvailabilityLabel(
   if (toolsPolicy === 'available') return t('rightPanel.stats.toolHidden')
   if (tool.reason === 'role') return t('rightPanel.stats.toolUnavailableRole')
   if (tool.reason === 'mode') return t('rightPanel.stats.toolUnavailableMode')
+  if (tool.reason === 'dependency') return t('rightPanel.stats.toolUnavailableDependency')
   return t('rightPanel.stats.toolUnavailable')
 }
 

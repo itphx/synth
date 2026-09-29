@@ -225,6 +225,24 @@ describe('StatsTab — таблицы инструментов и MCP (AD-071 §
     expect(text).toContain('Source')
   })
 
+  it('reason=dependency → отдельная подпись «нет зависимости» (AD-078)', async () => {
+    mocks.getSessionPrompt.mockResolvedValue({
+      ...promptInfo,
+      manifest: { ...promptInfo.manifest, toolsPolicy: 'consistency' },
+      toolsDetail: [
+        ...toolsDetail,
+        { name: 'grep_files', capabilities: ['search'], available: false, reason: 'dependency' as const, source: 'built-in' as const },
+      ],
+    })
+    const container = await renderStats()
+    await expandSection(container, 'Built-in tools')
+    // Строка dependency-тула несёт отдельную подпись, а не generic fallback.
+    const dependencyRow = container.querySelector('[data-testid="stats-tool-grep_files"]')!
+    expect(dependencyRow.textContent).toContain('unavailable (missing dependency)')
+    expect(dependencyRow.textContent).not.toContain('unavailable (mode)')
+    expect(dependencyRow.textContent).not.toContain('unavailable (role)')
+  })
+
   it('в режиме available недоступные инструменты помечены как скрытые', async () => {
     setPromptWithTools('available')
     const container = await renderStats()

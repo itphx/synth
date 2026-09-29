@@ -601,6 +601,7 @@ export const dict = {
   'rightPanel.stats.toolUnavailable': 'недоступен',
   'rightPanel.stats.toolUnavailableMode': 'недоступен (режим)',
   'rightPanel.stats.toolUnavailableRole': 'недоступен (роль)',
+  'rightPanel.stats.toolUnavailableDependency': 'недоступен (нет зависимости)',
   'rightPanel.stats.mcpDisabled': 'отключён',
   'rightPanel.stats.mcpLevel.system': 'системный',
   'rightPanel.stats.mcpLevel.project': 'проектный',
