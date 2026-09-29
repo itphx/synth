@@ -360,6 +360,9 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-076 | Реестр git-репозиториев (несколько на проект) и SSH-ключи per-agent (шифрование at-rest, `repo_path`, паритет core↔backend) | ✅ Реализовано | [ad-076](./docs/arch_decisions/ad-076-git-repo-registry-ssh.md) |
 | AD-077 | Инструментальное окружение исполнения (git/python/rg): хостовые для dev/standalone, tools-образ + volume для managed | ⏳ Не реализовано | [ad-077](./docs/arch_decisions/ad-077-runtime-toolchain.md) |
 | AD-078 | Авто-отключение инструментов при отсутствии внешней зависимости (детект git/rg/sh, `unavailable(dependency)`, пояснение модели) | ✅ Реализовано | [ad-078](./docs/arch_decisions/ad-078-runtime-dependency-availability.md) |
+| AD-079 | Локальный home-каталог (`--home`/`SYNTH_HOME`): плоская раскладка config/data/profiles/credentials, приоритеты путей, независимые инстансы standalone и hybrid | ⏳ Не реализовано | [ad-079](./docs/arch_decisions/ad-079-local-home-independent-instances.md) |
+| AD-080 | Управляемый гибрид: режимы-полюса (режим — параметр запуска, без runtime-переключения), standalone=ADMIN / hybrid=роли сервера, «Установить локально» | ⏳ Не реализовано | [ad-080](./docs/arch_decisions/ad-080-managed-hybrid-modes.md) |
+| AD-081 | Политики гибрида и защита от утечек: серверные политики (forbidden/remote-only/full; publish/fork allow\|deny\|approval), явные эндпоинты переноса, discovery, аудит, панель «Гибрид» | ⏳ Не реализовано | [ad-081](./docs/arch_decisions/ad-081-hybrid-policy-leak-protection.md) |
 
 Правило: реализованные AD переносятся в `./docs/arch_decisions/` (в AGENTS.md остаётся строка таблицы + ссылка).
 
@@ -385,7 +388,8 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | инструменты / образы / тулчейн | [AD-077](./docs/arch_decisions/ad-077-runtime-toolchain.md), [AD-078](./docs/arch_decisions/ad-078-runtime-dependency-availability.md) |
 | план / todo | [AD-039](./docs/arch_decisions/ad-039-plan-in-project.md) |
 | ошибки LLM / i18n | [AD-041](./docs/arch_decisions/ad-041-llm-error-taxonomy.md) |
-| гибрид | [AD-042](./docs/arch_decisions/ad-042-hybrid-mode.md), [AD-043](./docs/arch_decisions/ad-043-unified-identity-login.md), [AD-045](./docs/arch_decisions/ad-045-hybrid-server-profiles.md), [docs/HYBRID.md](./docs/HYBRID.md), скилл `synth-hybrid` |
+| гибрид | [AD-042](./docs/arch_decisions/ad-042-hybrid-mode.md), [AD-043](./docs/arch_decisions/ad-043-unified-identity-login.md), [AD-045](./docs/arch_decisions/ad-045-hybrid-server-profiles.md), [AD-080](./docs/arch_decisions/ad-080-managed-hybrid-modes.md), [AD-081](./docs/arch_decisions/ad-081-hybrid-policy-leak-protection.md), [docs/HYBRID.md](./docs/HYBRID.md), скилл `synth-hybrid` |
+| локальный home / пути / независимые инстансы | [AD-079](./docs/arch_decisions/ad-079-local-home-independent-instances.md), [AD-023](./docs/arch_decisions/ad-023-configuration.md), [AD-045](./docs/arch_decisions/ad-045-hybrid-server-profiles.md) |
 | OIDC / Keycloak / RBAC | [docs/KEYCLOAK.md](./docs/KEYCLOAK.md) |
 | npm / Docker / Helm / релиз | [AD-038](./docs/arch_decisions/ad-038-npm-packages.md), [docs/PUBLISHING.md](./docs/PUBLISHING.md), скиллы `synth-build-publish`, `synth-release` |
 | CI GitVerse | `.gitverse/workflows/*`, скилл `synth-release` |

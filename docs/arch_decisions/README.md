@@ -67,3 +67,6 @@
 | AD-073 | [Целостность клиента в гибриде](./ad-073-client-integrity-hybrid.md): клиент недоверенный, enforcement на сервере; сигналы (подписи, DPoP/mTLS) опционально |
 | AD-074 | [Скрытие вместо удаления](./ad-074-soft-delete-retention.md): soft-delete проектов/сессий/сообщений, исключение из LLM-контекста, read-only режим ADMIN/AUDITOR, restore/purge — ADMIN |
 | AD-077 | [Инструментальное окружение исполнения (git/python/rg)](./ad-077-runtime-toolchain.md): хостовые инструменты для dev/standalone, tools-образ + volume для managed |
+| AD-079 | [Локальный home-каталог (`--home`) и независимые локальные инстансы](./ad-079-local-home-independent-instances.md): `--home`/`SYNTH_HOME`, плоская раскладка (config/data/profiles/credentials), приоритеты путей, независимый запуск standalone и hybrid |
+| AD-080 | [Управляемый гибрид: режимы-полюса, идентичность и установка локально](./ad-080-managed-hybrid-modes.md): режим — параметр запуска, без runtime-переключения, standalone=ADMIN / hybrid=роли сервера, «Установить локально» |
+| AD-081 | [Политики гибрида и защита от утечек](./ad-081-hybrid-policy-leak-protection.md): серверные политики (forbidden/remote-only/full, publish/fork allow|deny|approval), явные эндпоинты переноса, discovery, аудит, панель «Гибрид» |
