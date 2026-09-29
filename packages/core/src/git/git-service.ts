@@ -57,16 +57,55 @@ export function deriveRepoName(url: string): string {
 }
 
 /**
+ * AD-076: не-git ключи, которые simple-git 3.36 блокирует по blocklist
+ * (`@simple-git/argv-parser`, `parseEnv`). Остальные блокируемые ключи —
+ * `GIT_*` (`GIT_EDITOR`, `GIT_PAGER`, `GIT_SSH`, `GIT_SSH_COMMAND`,
+ * `GIT_ASKPASS`, …) — вырезаются по префиксу в `sanitizeGitEnv`.
+ * `allowUnsafeEditor`/`allowUnsafePager` сознательно НЕ включаем.
+ */
+const BLOCKED_ENV_KEYS = new Set(['editor', 'pager', 'prefix', 'ssh_askpass']);
+
+/**
+ * Санитизирует окружение перед передачей в `simpleGit.env()`: вырезает
+ * `git*`-ключи (без учёта регистра) и не-git blocklist (`EDITOR`, `PAGER`,
+ * `PREFIX`, `SSH_ASKPASS`). Иначе `process.env` хоста (например `EDITOR`
+ * из dev-шелла) роняет вызов на blockUnsafeOperationsPlugin.
+ */
+export function sanitizeGitEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    const lower = key.toLowerCase();
+    if (lower.startsWith('git') || BLOCKED_ENV_KEYS.has(lower)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * Опции simple-git, разрешающие ровно те «unsafe»-категории, которые сервис
+ * ставит сам (`GIT_SSH_COMMAND` из расшифрованного SSH-ключа, `SSH_ASKPASS`
+ * для ключей с passphrase). `allowUnsafeEditor`/`allowUnsafePager` не включаем —
+ * соответствующие переменные вырезаются санитайзером.
+ */
+const GIT_UNSAFE_OPTIONS = {
+  unsafe: { allowUnsafeSshCommand: true, allowUnsafeAskPass: true },
+} as const;
+
+/** Создаёт simple-git с разрешёнными SSH/askpass-операциями. */
+function createGit(baseDir?: string): SimpleGit {
+  return baseDir === undefined ? simpleGit(GIT_UNSAFE_OPTIONS) : simpleGit(baseDir, GIT_UNSAFE_OPTIONS);
+}
+
+/**
  * Применяет дополнительные env к simple-git. `simpleGit.env(obj)` ЗАМЕНЯЕТ
- * окружение процесса, поэтому базовый `process.env` обязательно объединяем.
+ * окружение процесса, поэтому базовый `process.env` обязательно объединяем —
+ * но только после санитайза (иначе blocklist simple-git роняет вызов).
+ * `GIT_TERMINAL_PROMPT=0` — неинтерактивность: git не ждёт ввода без askpass.
  */
 function withEnv(git: SimpleGit, env?: Record<string, string>): SimpleGit {
   if (!env) return git;
-  const merged: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) merged[key] = value;
-  }
-  return git.env({ ...merged, ...env });
+  return git.env({ ...sanitizeGitEnv(process.env), GIT_TERMINAL_PROMPT: '0', ...env });
 }
 
 export class GitService {
@@ -79,7 +118,7 @@ export class GitService {
 
   async isRepo(repoPath: string, opts?: GitEnvOptions): Promise<boolean> {
     try {
-      return await withEnv(simpleGit(repoPath), opts?.env).checkIsRepo();
+      return await withEnv(createGit(repoPath), opts?.env).checkIsRepo();
     } catch {
       return false;
     }
@@ -88,7 +127,7 @@ export class GitService {
   async getRepoStatus(repoAbsPath: string, opts?: GitEnvOptions): Promise<RepoStatus | null> {
     if (!(await this.isRepo(repoAbsPath, opts))) return null;
     try {
-      const g = withEnv(simpleGit(repoAbsPath), opts?.env);
+      const g = withEnv(createGit(repoAbsPath), opts?.env);
       const branch = await g.revparse(['--abbrev-ref', 'HEAD']);
       const log = await g.log({ maxCount: 1 });
       const last = log.latest;
@@ -161,7 +200,7 @@ export class GitService {
     } catch {
       // directory might already exist
     }
-    const g = withEnv(simpleGit(repoPath), opts?.env);
+    const g = withEnv(createGit(repoPath), opts?.env);
     if (defaultBranch) {
       await g.init(['--initial-branch', defaultBranch]);
     } else {
@@ -188,7 +227,7 @@ export class GitService {
     } catch {
       // директория может уже существовать
     }
-    await withEnv(simpleGit(), opts?.env).clone(url, repoPath, branch ? { '--branch': branch } : undefined);
+    await withEnv(createGit(), opts?.env).clone(url, repoPath, branch ? { '--branch': branch } : undefined);
     return {
       path: effectivePath,
       isRepo: true,
@@ -199,7 +238,7 @@ export class GitService {
   async fetchRepo(wsAbsPath: string, repoRelPath: string, opts?: GitFetchOptions): Promise<void> {
     const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
     await this.ensureRepo(repoPath, opts);
-    const g = withEnv(simpleGit(repoPath), opts?.env);
+    const g = withEnv(createGit(repoPath), opts?.env);
     await (opts?.remote ? g.fetch([opts.remote]) : g.fetch());
   }
 
@@ -224,7 +263,7 @@ export class GitService {
   ): Promise<CommitInfo[]> {
     const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
     await this.ensureRepo(repoPath, opts);
-    const g = withEnv(simpleGit(repoPath), opts?.env);
+    const g = withEnv(createGit(repoPath), opts?.env);
     const branch = (await g.revparse(['--abbrev-ref', 'HEAD'])).trim();
     const log: LogResult = await g.log({ maxCount });
     return log.all.map((entry) => ({
@@ -248,7 +287,7 @@ export class GitService {
   ): Promise<CommitDetail> {
     const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
     await this.ensureRepo(repoPath, opts);
-    const g = withEnv(simpleGit(repoPath), opts?.env);
+    const g = withEnv(createGit(repoPath), opts?.env);
     const branch = (await g.revparse(['--abbrev-ref', 'HEAD'])).trim();
 
     const showRaw = await g.raw(['show', '--format=%H%n%an%n%ae%n%aI%n%s%n%B%n==ENDOFCOMMIT==', '-s', '--no-patch', hash]);
