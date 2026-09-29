@@ -81,9 +81,15 @@ export SYNTH_PROVIDER_OLLAMA_TYPE=ollama
 synth serve --api-key my-secret-key
 ```
 
-Сервер слушает `http://localhost:4300` (порт можно изменить через `--port` или `SYNTH_CORE_PORT`). UI поставляется вместе с `@itphx/synth-ui` и резолвится автоматически.
+`--api-key` необязателен: если ключ не задан (`--api-key`/`SYNTH_API_KEY`/`core.apiKey`),
+`synth serve` сгенерирует устойчивый локальный ключ, сохранит его в
+`{dataDir}/secrets/api-key` и напечатает полностью при старте — введите его в UI.
 
-Откройте [http://localhost:4300](http://localhost:4300) и введите ключ `my-secret-key`.
+Сервер слушает `http://127.0.0.1:4300` (host — `--host` или `SYNTH_HOST`, по умолчанию
+`127.0.0.1`; порт — `--port` или `SYNTH_CORE_PORT`, по умолчанию `4300`). UI поставляется
+вместе с `@itphx/synth-ui` и резолвится автоматически.
+
+Откройте [http://localhost:4300](http://localhost:4300) и введите API-ключ.
 
 ## 4. CLI-чат
 
@@ -105,7 +111,7 @@ synth
 | Режим | Где | Механизм |
 |-------|-----|----------|
 | API Key | backend (`SYNTH_API_KEY`) | Один ключ → роль ADMIN |
-| API Key | core standalone (`synth serve --api-key`) | Один ключ → роль USER |
+| API Key | core standalone (`synth serve`, `--api-key`/`SYNTH_API_KEY`; иначе авто-ключ `{dataDir}/secrets/api-key`) | Один ключ → роль USER |
 | Debug | backend (`SYNTH_AUTH_DEBUG=true`) | Тестовые пользователи (admin-key-123, user-key-456, lead-key-789, auditor-key-012) |
 | OIDC | backend (Keycloak) | JWT + cookie `user_session` |
 

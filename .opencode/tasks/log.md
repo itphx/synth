@@ -972,3 +972,15 @@
 - **Smoke SSH (gitea):** fetch `.dots`/`trepo` OK; SSH-clone сначала падал `Use of "EDITOR" is not permitted without enabling allowUnsafeEditor` — баг: `git/git-service.ts:withEnv` мержит весь `process.env` + `GIT_SSH_COMMAND`, а simple-git 3.36 блокирует blocklist (`EDITOR`/`PAGER`/`PREFIX`/`SSH_ASKPASS`/любые `git*`) без `unsafe.allowUnsafe*`. Фикс: `sanitizeGitEnv` + `createGit({unsafe:{allowUnsafeSshCommand:true,allowUnsafeAskPass:true}})`, `GIT_TERMINAL_PROMPT=0`. Проверка: `tmp/smoke-ssh.mjs` с `EDITOR=vim PAGER=less GIT_PAGER=cat GIT_SSH=/bin/false` → `CLONE_OK`/`IS_REPO true`. Запущенный dev-backend держит старый core dist — нужен рестарт.
 - **Docs:** новый `docs/arch_decisions/ad-078-runtime-dependency-availability.md` + правки root/package AGENTS.md + `docs/arch_decisions/README.md`.
 - **Дальше:** рестарт dev-серверов для подхвата core-фикса SSH; при желании — e2e через UI.
+
+## 2026-09-29 (продолжение) — standalone «как из npm» + рестарт dev + чистка — PASS
+
+- **Задача:** standalone должен работать как «поставил npm-пакет и запустил бинарник» (все пути/параметры по умолчанию); плюс рестарт dev и чистка временных файлов.
+- **Тип:** feature + chore · **Результат:** PASS (код+скрипт+docs закоммичены).
+- **Баг:** `synth serve` без флагов печатал `API-ключ: (не задан)` → вход в UI невозможен (401); хост по умолчанию `0.0.0.0`; `SYNTH_HOST` игнорировался (commander-дефолт перебивал env).
+- **Фикс:** новый `core/src/auth/local-key.ts` — `resolveOrCreateLocalApiKey` (устойчивый ключ `randomBytes(16).toString('hex')` в `{dataDir}/secrets/api-key`, `0600`/`0700`, идемпотентно); `synth serve` — приоритет `--api-key`/config > `SYNTH_API_KEY` > сохранённый > сгенерировать, печатает ПОЛНЫЙ ключ и путь; host по умолчанию `SYNTH_HOST || '127.0.0.1'`. `scripts/standalone.sh` по умолчанию запускает `serve` без переопределений (очистка `SYNTH_*`), флаги — переопределения, `--clean` только с явным `--data-dir`, эффективные значения парсит из вывода сервера.
+- **Верификация:** typecheck 6/6; lint 0 errors; тесты core 2173 (+4), ui 804, backend 372; независимо: `env -i HOME=<iso> … serve --port 4321` → ключ 32 hex, файл `0600`, `no-key 401 / with-key 200`, host `127.0.0.1`; `HOME=<iso> ./scripts/standalone.sh --no-build --check` → OK.
+- **Dev перезапущен** (`./scripts/dev.sh`, все сервисы 5000/5002/4300 = 200); smoke через API: SSH-clone `.dots` по ключу Synth → `{"path":"smoke-ssh-test","isRepo":true}`, затем `remove` c `deleteLocal` — каталог удалён.
+- **Чистка:** удалены скриншоты и черновики из корня проекта (`*.png`, `dropdown-*.yml`, `state1.yml`, `snap-initial.md`), `.playwright-mcp/`, содержимое `tmp/` (родительского) и `synth/tmp` (оставлены только активные `backend.log`/`ui.log`/`core.log`). `AD-DRAFTS.md`, `rbac-design.md`, `data/`, `ws-default/` сохранены.
+- **Docs:** `docs/DEVELOPMENT.md`, `docs/QUICKSTART.md`, `docs/CONFIGURATION.md`, корневой `AGENTS.md` (дефолты standalone).
+- **Дальше:** при желании — e2e выделенного каталога в standalone-UI (порт 4300 занят dev-core).

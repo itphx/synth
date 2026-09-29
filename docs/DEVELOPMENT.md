@@ -65,31 +65,40 @@ pnpm lint
 Запуск Synth «как у конечного пользователя» — `synth/scripts/standalone.sh`:
 собирает npm-пакеты монорепо (`shared → core → ui → synth`), упаковывает их
 (`pnpm pack`), устанавливает в изолированный prefix (`npm install` четырёх `.tgz`)
-и запускает `synth serve` из установленного `node_modules/.bin/synth`
-(`SYNTH_DATA_DIR=<data> … serve --no-auto-profile`). Нужен для ручной и
-автоматической проверки standalone-UI (в т.ч. диалога выбора рабочего каталога,
-AD-075), где managed показывает read-only, а standalone — политику `confirm`.
+и запускает `synth serve` из установленного `node_modules/.bin/synth`. По умолчанию
+`serve` стартует **без переопределений** (родительское `SYNTH_*`-окружение
+очищается), поэтому эффективные пути/порт/host/ключ — ровно как у пользователя
+npm-пакета: dataDir `~/.local/share/synth`, config `~/.config/synth/config.yaml`,
+host `127.0.0.1`, порт `core.port` (4300), API-ключ авто-генерируется и
+сохраняется в `{dataDir}/secrets/api-key`. Флаги `--port/--host/--data-dir/--api-key`
+остаются **явными переопределениями**. Нужен для ручной и автоматической проверки
+standalone-UI (в т.ч. диалога выбора рабочего каталога, AD-075), где managed
+показывает read-only, а standalone — политику `confirm`.
 
 ```bash
 ./scripts/standalone.sh                 # собрать, установить, запустить (foreground)
 ./scripts/standalone.sh --no-build      # быстрый перезапуск на собранных пакетах
 ./scripts/standalone.sh --check         # полный smoke и выход (CI/автотест)
-./scripts/standalone.sh --clean --port 4310
+./scripts/standalone.sh --clean --data-dir tmp/standalone/data --port 4310
 ```
 
 Опции:
 
 | Опция | Назначение |
 |---|---|
-| `--port <port>` | порт standalone-сервера (default: `SYNTH_CORE_PORT` или `4300`) |
-| `--host <host>` | адрес прослушивания (default: `127.0.0.1`) |
-| `--data-dir <path>` | каталог данных (default: `tmp/standalone/data`) |
-| `--api-key <key>` | API-ключ local auth (default: авто-генерация; печатается в сводке) |
+| `--port <port>` | явное переопределение порта (default: `core.port`, `4300`) |
+| `--host <host>` | явное переопределение адреса прослушивания (default: `127.0.0.1`) |
+| `--data-dir <path>` | явное переопределение каталога данных (default: `~/.local/share/synth`, как у npm-пакета) |
+| `--api-key <key>` | явный API-ключ local auth (по умолчанию — авто-генерация в `{dataDir}/secrets/api-key`; печатается в сводке) |
 | `--prefix <path>` | каталог установки пакетов (default: `tmp/standalone/install`) |
 | `--no-build` | не пересобирать пакеты (использовать уже собранные `dist`) |
 | `--rebuild-packs` | принудительно пересобрать tarball'ы |
 | `--check` | прогнать smoke-проверки и завершиться (код выхода 0/1) |
-| `--keep-data` / `--clean` | не очищать / очистить `--data-dir` (default — `--keep-data`) |
+| `--keep-data` / `--clean` | не очищать / очистить `--data-dir` (default — `--keep-data`); `--clean` допустим **только** с явным `--data-dir` (иначе можно снести `~/.local/share/synth`) |
+
+Эффективные dataDir/ключ/host/port скрипт определяет из вывода сервера (строки
+`данные:`, `API-ключ:`, `Откройте http://`) — при явных опциях они совпадают с
+заданными.
 
 Логи: `tmp/standalone-build.log` — сборка/упаковка/установка, `tmp/standalone.log` — вывод standalone-сервера.
 
@@ -99,7 +108,8 @@ AD-075), где managed показывает read-only, а standalone — пол
 
 **Отличия.** `dev.sh` запускает backend+UI (и core) **из исходников** на фиксированных портах с
 debug-auth; `standalone.sh` ставит **собранные npm-пакеты** в изолированный prefix и запускает
-`synth serve` (один API-ключ, FileStore в `--data-dir`) — ближе к конечному развёртыванию.
+`synth serve` (один API-ключ, FileStore в dataDir) на дефолтах npm-пакета — ближе к конечному
+развёртыванию.
 `hybrid.sh` (`./scripts/hybrid.sh`) поднимает локальный core с подключением к удалённому backend
 (гибридный режим) — см. [HYBRID.md](./HYBRID.md).
 
@@ -135,6 +145,13 @@ node packages/core/dist/main.js serve --api-key "dev-key"
 node packages/core/dist/main.js chat "привет"
 node packages/core/dist/main.js config
 ```
+
+Дефолты `synth serve`: host `127.0.0.1` (учитывается `SYNTH_HOST`), порт `core.port`
+(4300, `SYNTH_CORE_PORT`), dataDir `~/.local/share/synth` (user-режим), config
+`~/.config/synth/config.yaml`. Если `--api-key`/`SYNTH_API_KEY`/`core.apiKey` не
+заданы, генерируется устойчивый локальный ключ (32 hex), сохраняется в
+`{dataDir}/secrets/api-key` (файл `0600`, каталог `0700`) и печатается при старте
+полностью вместе с путём к файлу.
 
 ## Структура проекта
 

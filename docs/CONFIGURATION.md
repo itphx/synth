@@ -15,13 +15,13 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 
 | Переменная | Назначение | По умолчанию |
 |-----------|------------|--------------|
-| `SYNTH_API_KEY` | Ключ для входа в API (backend → роль ADMIN; core standalone → роль USER) | — |
+| `SYNTH_API_KEY` | Ключ для входа в API (backend → роль ADMIN; core standalone → роль USER). Если не задан, `synth serve` генерирует устойчивый локальный ключ в `{dataDir}/secrets/api-key` | — |
 | `SYNTH_DATA_DIR` | Каталог данных (сессии, проекты, провайдеры, модели) | по режиму: `~/.local/share/synth` (user), `./data` (dev), `/var/synth/data` (docker/server) |
 | `SYNTH_WORKSPACES_ROOT` | Корень каталогов workspace проектов (`storage.workspacesRoot`) | `{dataDir}/workspaces` |
 | `SYNTH_DEFAULT_WORKSPACE` | Рабочий каталог по умолчанию (`storage.defaultWorkspace`) | `{dataDir}/workspaces/default` |
 | `SYNTH_WORKSPACE_OUTSIDE_ROOT` | AD-075: политика абсолютного workspace вне `workspacesRoot` (`confirm`/`deny`) | по режиму (standalone — `confirm`, managed — `deny`) |
 | `SYNTH_CONFIG` | Путь к `config.yaml` (приоритетнее каскадного поиска) | каскадный поиск |
-| `SYNTH_HOST` | Адрес прослушивания HTTP-серверов (backend, core, CLI-обёртка) | `0.0.0.0` |
+| `SYNTH_HOST` | Адрес прослушивания HTTP-серверов (backend — `0.0.0.0`; `synth serve` — `127.0.0.1`) | `0.0.0.0` / `127.0.0.1` (serve) |
 | `SYNTH_PORT` | Порт бэкенда | `5000` |
 | `SYNTH_CORE_PORT` | Порт core (и `synth serve`) | `4300` |
 | `SYNTH_RUNNER_PORT` | Порт раннера | `5200` |
@@ -93,7 +93,7 @@ llm:
 
 core:
   port: 4300
-  apiKey: ""
+  apiKey: ""                      # пусто → synth serve генерирует ключ в {dataDir}/secrets/api-key (0600)
 
 runner:
   port: 5200

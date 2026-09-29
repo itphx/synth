@@ -108,7 +108,7 @@ pnpm clean                  # очистка dist/
 Runtime-данные (сессии, проекты, провайдеры, модели) — в `$SYNTH_DATA_DIR` (env `SYNTH_DATA_DIR` или `storage.dataDir` в config.yaml; дефолт `/var/synth/data`). Провайдеры — JSON в `$SYNTH_DATA_DIR/providers/`, модели — в `$SYNTH_DATA_DIR/models/`; добавить провайдера/модель = создать JSON-файл (или через API). Атомарная запись: `.tmp.{uuid}` → `rename()`. Основные dev-провайдеры (`itphx`, `ollama`) — в [docs/LLM_PROVIDERS.md](./docs/LLM_PROVIDERS.md).
 
 ```text
-$SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ auth/(sessions,states,profiles) secrets/(master.key, ssh-keys/)
+$SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ auth/(sessions,states,profiles) secrets/(master.key, api-key, ssh-keys/)
 ```
 
 **Ротация мастер-ключа** секретов at-rest (SSH-ключи агентов, AD-076): `synth secrets rotate` (`--data-dir`, `--config`, `--old-key`/`--old-key-file`, `--new-key`/`--new-key-file`, `--dry-run`, `--yes`). Без `--yes` (и без `--dry-run`) — отказ; при ключе из env/`config.security.secretKey` его нужно обновить и там (файл игнорируется при старте).
@@ -122,7 +122,7 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ aut
 | Debug | backend | `SYNTH_AUTH_DEBUG=true` | тестовые ключи (ниже) |
 | API Key | backend | прод без OIDC | `SYNTH_API_KEY` → ADMIN |
 | OIDC | backend | прод с Keycloak | JWT + cookie `user_session` |
-| Local | core | `synth serve --api-key` | один ключ → ADMIN (в гибриде — роли с сервера) |
+| Local | core | `synth serve` (`--api-key`/`SYNTH_API_KEY`/`core.apiKey`; иначе авто-ключ в `{dataDir}/secrets/api-key`; host `127.0.0.1`) | один ключ → ADMIN (в гибриде — роли с сервера) |
 
 ### Тестовые пользователи (debug)
 
