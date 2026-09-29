@@ -14,16 +14,17 @@
 #   ./scripts/standalone.sh [OPTIONS]
 #
 # По умолчанию поведение ровно как у пользователя npm-пакета, но с изолированным
-# локальным home: `synth serve --home tmp/standalone/home` с очищенным от SYNTH_*
-# окружением. AD-079: config/data/profiles/credentials резолвятся от home, поэтому
-# standalone НЕ подхватывает lastProfile из общего ~/.config/synth/profiles.json.
+# локальным home: `synth serve --home ~/.local/share/synth-standalone` с очищенным
+# от SYNTH_* окружением. AD-079: config/data/profiles/credentials резолвятся от
+# home, поэтому standalone НЕ подхватывает lastProfile из общего
+# ~/.config/synth/profiles.json.
 # Порт/API-ключ берутся из дефолтов standalone (dataDir — <home>/data, host
 # 127.0.0.1, порт 4300, API-ключ генерируется и сохраняется в <home>/data/secrets/api-key).
 #
 # Опции:
 #   --port <port>      явное переопределение порта (иначе — дефолт/конфиг)
 #   --host <host>      явное переопределение адреса прослушивания
-#   --home <path>      локальный home-каталог (default: tmp/standalone/home).
+#   --home <path>      локальный home-каталог (default: ~/.local/share/synth-standalone).
 #                      AD-079: config/data/profiles/credentials живут внутри home,
 #                      что изолирует инстанс от общих ~/.config/synth и ~/.local/share/synth.
 #   --data-dir <path>  явное переопределение каталога данных (приоритетнее --home)
@@ -34,7 +35,8 @@
 #   --check            после запуска прогнать smoke-проверки и завершиться
 #                      (сервер не оставлять; код выхода 0/1)
 #   --keep-data        не очищать --data-dir (поведение по умолчанию)
-#   --clean            очистить --data-dir перед запуском (только с --data-dir)
+#   --clean            очистить --data-dir перед запуском (только с --data-dir;
+#                      для очистки home-данных: --clean --data-dir ~/.local/share/synth-standalone/data)
 #   --help             показать справку и выйти
 #
 # Логи: tmp/standalone-build.log — сборка/упаковка/установка,
@@ -70,8 +72,8 @@ cd "$SYNTH"
 # явные переопределения и прокидываются в `serve` только когда заданы.
 PORT="4300"
 HOST="127.0.0.1"
-HOME_DIR="$STANDALONE_TMP/home"
-DATA_DIR="$STANDALONE_TMP/data"
+HOME_DIR="$HOME/.local/share/synth-standalone"
+DATA_DIR="$HOME_DIR/data"
 API_KEY=""
 PORT_SET=false
 HOST_SET=false
@@ -93,14 +95,14 @@ standalone.sh — запуск Synth в standalone-режиме из собра�
   ./scripts/standalone.sh [OPTIONS]
 
 По умолчанию — ровно как у пользователя npm-пакета, но с изолированным home:
-`synth serve --home tmp/standalone/home` с очищенным от SYNTH_* окружением.
+`synth serve --home ~/.local/share/synth-standalone` с очищенным от SYNTH_* окружением.
 AD-079: config/data/profiles/credentials резолвятся от home, поэтому standalone
 не подхватывает lastProfile из общего ~/.config/synth/profiles.json.
 
 Опции:
   --port <port>      явное переопределение порта
   --host <host>      явное переопределение адреса прослушивания
-  --home <path>      локальный home-каталог (default: tmp/standalone/home)
+  --home <path>      локальный home-каталог (default: ~/.local/share/synth-standalone)
   --data-dir <path>  явное переопределение каталога данных (приоритетнее --home)
   --api-key <key>    явный API-ключ local auth (иначе авто-генерация; печатается)
   --prefix <path>    каталог установки пакетов (default: tmp/standalone/install)
@@ -115,7 +117,7 @@ AD-079: config/data/profiles/credentials резолвятся от home, поэ�
   ./scripts/standalone.sh                 # собрать, установить, запустить (foreground)
   ./scripts/standalone.sh --no-build      # быстрый перезапуск на уже собранных пакетах
   ./scripts/standalone.sh --check         # полный smoke и выход (CI/автотест)
-  ./scripts/standalone.sh --clean --data-dir tmp/standalone/data --port 4310
+  ./scripts/standalone.sh --clean --data-dir ~/.local/share/synth-standalone/data --port 4310
 EOF
 }
 
@@ -432,8 +434,8 @@ echo "  Лог:    $RUN_LOG"
 # Явные переопределения прокидываем в serve только когда они заданы; иначе —
 # ровно как у пользователя npm-пакета (без --host/--port/--data-dir/--api-key).
 SERVE_ARGS=()
-# AD-079: home всегда передаётся явно (default tmp/standalone/home) — env
-# SYNTH_HOME уже очищен выше, флаг гарантирует изоляцию инстанса.
+# AD-079: home всегда передаётся явно (default ~/.local/share/synth-standalone) —
+# env SYNTH_HOME уже очищен выше, флаг гарантирует изоляцию инстанса.
 SERVE_ARGS+=(--home "$HOME_DIR")
 [ "$API_KEY_SET" = true ] && SERVE_ARGS+=(--api-key "$API_KEY")
 [ "$HOST_SET" = true ] && SERVE_ARGS+=(--host "$HOST")

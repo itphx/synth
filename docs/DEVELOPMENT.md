@@ -67,7 +67,7 @@ pnpm lint
 (`pnpm pack`), устанавливает в изолированный prefix (`npm install` четырёх `.tgz`)
 и запускает `synth serve` из установленного `node_modules/.bin/synth`. По умолчанию
 `serve` стартует с изолированным локальным home (AD-079):
-`--home tmp/standalone/home`, родительское `SYNTH_*`-окружение очищается. Все
+`--home ~/.local/share/synth-standalone`, родительское `SYNTH_*`-окружение очищается. Все
 локальные пути резолвятся от home: dataDir `<home>/data`, config `<home>/config.yaml`,
 profiles `<home>/profiles.json`, credentials `<home>/credentials.json` — поэтому
 standalone **не** подхватывает `lastProfile` из общего `~/.config/synth/profiles.json`.
@@ -91,7 +91,7 @@ standalone-UI (в т.ч. диалога выбора рабочего катал
 |---|---|
 | `--port <port>` | явное переопределение порта (default: `core.port`, `4300`) |
 | `--host <host>` | явное переопределение адреса прослушивания (default: `127.0.0.1`) |
-| `--home <path>` | AD-079: локальный home-каталог (default: `tmp/standalone/home`); config/data/profiles/credentials резолвятся от него |
+| `--home <path>` | AD-079: локальный home-каталог (default: `~/.local/share/synth-standalone`); config/data/profiles/credentials резолвятся от него |
 | `--data-dir <path>` | явное переопределение каталога данных (приоритетнее `--home`) |
 | `--api-key <key>` | явный API-ключ local auth (по умолчанию — авто-генерация в `{dataDir}/secrets/api-key`; печатается в сводке) |
 | `--prefix <path>` | каталог установки пакетов (default: `tmp/standalone/install`) |
