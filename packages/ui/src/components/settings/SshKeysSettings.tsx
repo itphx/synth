@@ -20,7 +20,6 @@ interface EditorState {
   mode: EditorMode
   id?: string
   name: string
-  type: string
   privateKey: string
   passphrase: string
   agentIds: string[]
@@ -34,7 +33,6 @@ interface EditorErrors {
 const EMPTY_EDITOR: EditorState = {
   mode: 'create',
   name: '',
-  type: 'user',
   privateKey: '',
   passphrase: '',
   agentIds: [],
@@ -117,7 +115,6 @@ export function SshKeysSettings() {
       mode: 'edit',
       id: key.id,
       name: key.name,
-      type: key.type ?? 'user',
       privateKey: '',
       passphrase: '',
       agentIds: [...key.agentIds],
@@ -163,7 +160,6 @@ export function SshKeysSettings() {
     try {
       const base = {
         name: editor.name.trim(),
-        type: editor.type.trim() || undefined,
         agentIds: editor.agentIds,
       }
       if (editor.mode === 'create') {
@@ -246,25 +242,14 @@ export function SshKeysSettings() {
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <TextField
-                label={t('sshKeys.name')}
-                value={editor.name}
-                onChange={(e) => setEditor((prev) => (prev ? { ...prev, name: e.target.value } : prev))}
-                error={formErrors.name}
-                id="ssh-key-name"
-                data-testid="ssh-key-name"
-              />
-              <TextField
-                label={t('sshKeys.type')}
-                description={t('sshKeys.typeHint')}
-                value={editor.type}
-                onChange={(e) => setEditor((prev) => (prev ? { ...prev, type: e.target.value } : prev))}
-                placeholder="user"
-                id="ssh-key-type"
-                data-testid="ssh-key-type"
-              />
-            </div>
+            <TextField
+              label={t('sshKeys.name')}
+              value={editor.name}
+              onChange={(e) => setEditor((prev) => (prev ? { ...prev, name: e.target.value } : prev))}
+              error={formErrors.name}
+              id="ssh-key-name"
+              data-testid="ssh-key-name"
+            />
 
             <TextArea
               label={t('sshKeys.privateKey')}
@@ -366,11 +351,6 @@ export function SshKeysSettings() {
                   <div className="flex items-center gap-1.5 flex-wrap min-w-0">
                     <Icon name="key" className="size-4 shrink-0 text-muted-foreground" />
                     <span className="text-sm font-medium break-words">{key.name}</span>
-                    {key.type && (
-                      <span className="rounded px-1.5 py-0.5 text-[0.625rem] font-medium bg-muted text-muted-foreground">
-                        {key.type}
-                      </span>
-                    )}
                   </div>
                   <div className="text-xs text-muted-foreground break-words">
                     <span className="font-medium">{t('sshKeys.linkedAgents')}:</span> {linkedAgentsLabel(key)}

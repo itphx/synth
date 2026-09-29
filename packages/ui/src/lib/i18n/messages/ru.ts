@@ -2003,8 +2003,6 @@ export const dict = {
   'sshKeys.description': 'SSH-ключи per-agent для git-операций. Приватные ключи и парольные фразы шифруются at-rest и не отображаются после сохранения.',
   'sshKeys.add': 'Добавить ключ',
   'sshKeys.name': 'Имя',
-  'sshKeys.type': 'Тип',
-  'sshKeys.typeHint': 'Необязательная метка, по умолчанию «user»',
   'sshKeys.privateKey': 'Приватный ключ',
   'sshKeys.passphrase': 'Парольная фраза',
   'sshKeys.agents': 'Агенты',

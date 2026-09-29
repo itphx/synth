@@ -1722,8 +1722,6 @@ export const dict = {
   'sshKeys.description': 'Per-agent SSH keys for git operations. Private keys and passphrases are encrypted at rest and are never shown after saving.',
   'sshKeys.add': 'Add key',
   'sshKeys.name': 'Name',
-  'sshKeys.type': 'Type',
-  'sshKeys.typeHint': 'Optional label, defaults to "user"',
   'sshKeys.privateKey': 'Private key',
   'sshKeys.passphrase': 'Passphrase',
   'sshKeys.agents': 'Agents',

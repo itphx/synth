@@ -130,7 +130,6 @@ describe('SshKeysSettings — CRUD SSH-ключей (AD-076)', () => {
     expect(mocks.createSshKey).toHaveBeenCalledTimes(1)
     expect(mocks.createSshKey).toHaveBeenCalledWith({
       name: 'deploy-key',
-      type: 'user',
       agentIds: ['a1'],
       privateKey: 'KEY-BODY',
       passphrase: undefined,
