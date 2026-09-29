@@ -231,6 +231,8 @@ export type { RuntimeSettings, LlmGatewayRuntimeSettings } from './storage/runti
 export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';
 export { createLocalAuth } from './auth/local.js';
 export type { AuthKit, LocalAuthConfig } from './auth/local.js';
+// Standalone: устойчивый локальный API-ключ ({dataDir}/secrets/api-key).
+export { localApiKeyFilePath, resolveOrCreateLocalApiKey } from './auth/local-key.js';
 export { createSettingsRoutes } from './server/routes/settings.js';
 export type { SettingsRoutesDeps } from './server/routes/settings.js';
 export { createDictionaryRoutes } from './server/routes/dictionaries.js';

@@ -13,18 +13,24 @@
 # Использование:
 #   ./scripts/standalone.sh [OPTIONS]
 #
+# По умолчанию поведение ровно как у пользователя npm-пакета: `synth serve`
+# запускается БЕЗ переопределений, с очищенным от SYNTH_* окружением — пути,
+# порт, host и API-ключ берутся из дефолтов standalone (dataDir
+# ~/.local/share/synth, config ~/.config/synth/config.yaml, host 127.0.0.1,
+# порт 4300, API-ключ генерируется и сохраняется в <dataDir>/secrets/api-key).
+#
 # Опции:
-#   --port <port>      порт standalone-сервера (default: env SYNTH_CORE_PORT или 4300)
-#   --host <host>      адрес прослушивания (default: 127.0.0.1)
-#   --data-dir <path>  каталог данных (default: tmp/standalone/data)
-#   --api-key <key>    API-ключ local auth (default: авто-генерация; печатается)
+#   --port <port>      явное переопределение порта (иначе — дефолт/конфиг)
+#   --host <host>      явное переопределение адреса прослушивания
+#   --data-dir <path>  явное переопределение каталога данных
+#   --api-key <key>    явный API-ключ local auth (иначе — авто-генерация; печатается)
 #   --prefix <path>    каталог установки пакетов (default: tmp/standalone/install)
 #   --no-build         не пересобирать пакеты (использовать уже собранные dist)
 #   --rebuild-packs    принудительно пересобрать tarball'ы
 #   --check            после запуска прогнать smoke-проверки и завершиться
 #                      (сервер не оставлять; код выхода 0/1)
 #   --keep-data        не очищать --data-dir (поведение по умолчанию)
-#   --clean            очистить --data-dir перед запуском
+#   --clean            очистить --data-dir перед запуском (только с --data-dir)
 #   --help             показать справку и выйти
 #
 # Логи: tmp/standalone-build.log — сборка/упаковка/установка,
@@ -56,10 +62,16 @@ CHECK_BODY="$STANDALONE_TMP/.check-body.json"
 cd "$SYNTH"
 
 # ── Значения по умолчанию ────────────────────────────────────────────────
-PORT="${SYNTH_CORE_PORT:-4300}"
+# Дефолты соответствуют standalone-режиму npm-пакета; заданные опции —
+# явные переопределения и прокидываются в `serve` только когда заданы.
+PORT="4300"
 HOST="127.0.0.1"
 DATA_DIR="$STANDALONE_TMP/data"
 API_KEY=""
+PORT_SET=false
+HOST_SET=false
+DATA_DIR_SET=false
+API_KEY_SET=false
 PREFIX="$STANDALONE_TMP/install"
 DO_BUILD=true
 DO_REBUILD_PACKS=false
@@ -74,24 +86,30 @@ standalone.sh — запуск Synth в standalone-режиме из собра�
 Использование:
   ./scripts/standalone.sh [OPTIONS]
 
+По умолчанию — ровно как у пользователя npm-пакета: `synth serve` без
+переопределений, с очищенным от SYNTH_* окружением. Пути/порт/host/ключ
+берутся из дефолтов standalone (dataDir ~/.local/share/synth, config
+~/.config/synth/config.yaml, host 127.0.0.1, порт 4300, ключ авто-генерируется
+и сохраняется в <dataDir>/secrets/api-key).
+
 Опции:
-  --port <port>      порт standalone-сервера (default: env SYNTH_CORE_PORT или 4300)
-  --host <host>      адрес прослушивания (default: 127.0.0.1)
-  --data-dir <path>  каталог данных (default: tmp/standalone/data)
-  --api-key <key>    API-ключ local auth (default: авто-генерация; печатается)
+  --port <port>      явное переопределение порта
+  --host <host>      явное переопределение адреса прослушивания
+  --data-dir <path>  явное переопределение каталога данных
+  --api-key <key>    явный API-ключ local auth (иначе авто-генерация; печатается)
   --prefix <path>    каталог установки пакетов (default: tmp/standalone/install)
   --no-build         не пересобирать пакеты (использовать уже собранные dist)
   --rebuild-packs    принудительно пересобрать tarball'ы
   --check            прогнать smoke-проверки и завершиться (код 0/1)
   --keep-data        не очищать --data-dir (по умолчанию)
-  --clean            очистить --data-dir перед запуском
+  --clean            очистить --data-dir перед запуском (только с --data-dir)
   --help             показать справку и выйти
 
 Примеры:
   ./scripts/standalone.sh                 # собрать, установить, запустить (foreground)
   ./scripts/standalone.sh --no-build      # быстрый перезапуск на уже собранных пакетах
   ./scripts/standalone.sh --check         # полный smoke и выход (CI/автотест)
-  ./scripts/standalone.sh --clean --port 4310
+  ./scripts/standalone.sh --clean --data-dir tmp/standalone/data --port 4310
 EOF
 }
 
@@ -103,19 +121,19 @@ while [ $# -gt 0 ]; do
             ;;
         --port)
             [ $# -ge 2 ] || die "Опция $1 требует значение (см. --help)"
-            PORT="$2"; shift 2
+            PORT="$2"; PORT_SET=true; shift 2
             ;;
         --host)
             [ $# -ge 2 ] || die "Опция $1 требует значение (см. --help)"
-            HOST="$2"; shift 2
+            HOST="$2"; HOST_SET=true; shift 2
             ;;
         --data-dir)
             [ $# -ge 2 ] || die "Опция $1 требует значение (см. --help)"
-            DATA_DIR="$2"; shift 2
+            DATA_DIR="$2"; DATA_DIR_SET=true; shift 2
             ;;
         --api-key)
             [ $# -ge 2 ] || die "Опция $1 требует значение (см. --help)"
-            API_KEY="$2"; shift 2
+            API_KEY="$2"; API_KEY_SET=true; shift 2
             ;;
         --prefix)
             [ $# -ge 2 ] || die "Опция $1 требует значение (см. --help)"
@@ -172,13 +190,25 @@ fi
 
 mkdir -p "$TMP" "$STANDALONE_TMP"
 
-# ── Локальный API-ключ (авто-генерация) ───────────────────────────────────
-if [ -z "$API_KEY" ]; then
-    if command -v openssl &>/dev/null; then
-        API_KEY=$(openssl rand -hex 16)
-    else
-        API_KEY=$(date +%s | sha256sum | head -c 32)
+# ── Окружение как у npm-пакета ────────────────────────────────────────────
+# По умолчанию `serve` запускается БЕЗ переопределений, поэтому убираем все
+# SYNTH_* из окружения дочернего процесса (родительский shell мог их выставить).
+SYNTH_ENV_VARS=(
+    SYNTH_DATA_DIR SYNTH_AUTH_DEBUG SYNTH_CONFIG SYNTH_CORE_PORT SYNTH_API_KEY
+    SYNTH_HOST SYNTH_DEPLOY_MODE SYNTH_SECRET_KEY SYNTH_WORKSPACES_ROOT
+    SYNTH_DEFAULT_WORKSPACE SYNTH_WORKSPACE_OUTSIDE_ROOT SYNTH_PORT
+)
+ENV_ARGS=()
+for _var in "${SYNTH_ENV_VARS[@]}"; do
+    if [ -n "${!_var+x}" ]; then
+        ENV_ARGS+=(-u "$_var")
     fi
+done
+
+# --clean разрешён только при явном --data-dir: иначе можно случайно снести
+# данные пользователя по умолчанию (~/.local/share/synth).
+if [ "$CLEAN_DATA" = true ] && [ "$DATA_DIR_SET" != true ]; then
+    die "--clean допустим только с явным --data-dir (по умолчанию данные лежат вне репозитория)."
 fi
 
 # ── Формирование путей к пакетам/tarball'ам ───────────────────────────────
@@ -326,7 +356,25 @@ if [ "$CLEAN_DATA" = true ]; then
     echo "Очистка data-dir: $DATA_DIR"
     rm -rf "$DATA_DIR"
 fi
-mkdir -p "$DATA_DIR"
+[ "$DATA_DIR_SET" = true ] && mkdir -p "$DATA_DIR"
+
+# Эффективный порт заранее — для проверки занятости и ожидания /health.
+# Без явного --port serve берёт порт из конфига/дефолта (core.port).
+effective_core_port() {
+    if [ "$PORT_SET" = true ]; then
+        echo "$PORT"
+        return
+    fi
+    local json port
+    json=$(env "${ENV_ARGS[@]}" "$SYNTH_BIN" config show 2>/dev/null)
+    port=$(printf '%s' "$json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const c=JSON.parse(s).core;if(c&&Number.isFinite(c.port))process.stdout.write(String(c.port))}catch{}})' 2>/dev/null)
+    if [ -n "$port" ]; then
+        echo "$port"
+    else
+        echo "4300"
+    fi
+}
+PORT=$(effective_core_port)
 
 if command -v fuser &>/dev/null && fuser "$PORT/tcp" >/dev/null 2>&1; then
     die "Порт $PORT занят. Остановите процесс или используйте --port <другой>."
@@ -371,12 +419,15 @@ echo "  Запуск: node_modules/.bin/synth serve"
 echo "  Лог:    $RUN_LOG"
 : > "$RUN_LOG"
 
-SYNTH_DATA_DIR="$DATA_DIR" "$SYNTH_BIN" serve \
-    --host "$HOST" \
-    --port "$PORT" \
-    --api-key "$API_KEY" \
-    --no-auto-profile \
-    >>"$RUN_LOG" 2>&1 &
+# Явные переопределения прокидываем в serve только когда они заданы; иначе —
+# ровно как у пользователя npm-пакета (без --host/--port/--data-dir/--api-key).
+SERVE_ARGS=()
+[ "$API_KEY_SET" = true ] && SERVE_ARGS+=(--api-key "$API_KEY")
+[ "$HOST_SET" = true ] && SERVE_ARGS+=(--host "$HOST")
+[ "$PORT_SET" = true ] && SERVE_ARGS+=(--port "$PORT")
+[ "$DATA_DIR_SET" = true ] && SERVE_ARGS+=(--data-dir "$DATA_DIR")
+
+env "${ENV_ARGS[@]}" "$SYNTH_BIN" serve "${SERVE_ARGS[@]}" >>"$RUN_LOG" 2>&1 &
 SERVER_PID=$!
 SERVER_STARTED=true
 
@@ -403,6 +454,47 @@ if [ "$READY" != true ]; then
     tail -30 "$RUN_LOG"
     exit 1
 fi
+
+# Эффективные значения берём из фактического вывода сервера (RUN_LOG):
+# dataDir — строка `данные:`, ключ — `API-ключ:`, host/port — `Откройте http://`.
+# Если порт/хост заданы явно, распарсенные значения совпадают с ними.
+_parse_effective() {
+    local line hp
+
+    line=$(grep -m1 '^  данные: ' "$RUN_LOG" 2>/dev/null || true)
+    if [ -z "$line" ]; then
+        line=$(grep -m1 '^  data dir: ' "$RUN_LOG" 2>/dev/null || true)
+    fi
+    if [ -n "$line" ]; then
+        DATA_DIR="${line#*: }"
+    fi
+
+    line=$(grep -m1 '^  API-ключ: ' "$RUN_LOG" 2>/dev/null || true)
+    if [ -n "$line" ]; then
+        API_KEY="${line#*API-ключ: }"
+    fi
+
+    line=$(grep -m1 'Откройте http://' "$RUN_LOG" 2>/dev/null || true)
+    if [ -n "$line" ]; then
+        hp="${line#*http://}"
+        hp="${hp%% *}"
+        HOST="${hp%:*}"
+        PORT="${hp##*:}"
+    fi
+}
+_parse_effective
+
+if [ -z "$API_KEY" ]; then
+    echo "  ОШИБКА: не удалось определить API-ключ из вывода сервера. Лог:"
+    tail -30 "$RUN_LOG"
+    exit 1
+fi
+
+# Пересчитываем URL подключения по эффективным host/port (0.0.0.0 → 127.0.0.1).
+CONNECT_HOST="$HOST"
+[ "$CONNECT_HOST" = "0.0.0.0" ] && CONNECT_HOST="127.0.0.1"
+ROOT_URL="http://$CONNECT_HOST:$PORT"
+BASE_URL="$ROOT_URL/api/v2"
 
 echo ""
 echo "  URL:        $ROOT_URL"

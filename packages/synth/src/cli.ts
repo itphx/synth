@@ -6,7 +6,7 @@ import type { SynthConfig } from '@itphx/synth-shared';
 import { createStandaloneApp } from '@itphx/synth-core/server/app.js';
 import { runSingleChat } from '@itphx/synth-core/server/chat.js';
 import { JsonStore } from '@itphx/synth-core/storage/json-store.js';
-import { getLastProfile, ensureProfile } from '@itphx/synth-core';
+import { getLastProfile, ensureProfile, resolveOrCreateLocalApiKey } from '@itphx/synth-core';
 
 const require = createRequire(import.meta.url);
 
@@ -33,7 +33,7 @@ program
   .command('serve')
   .description('Запустить HTTP API сервер')
   .option('--port <number>', 'порт сервера', String(defaultConfig.core.port))
-  .option('--host <host>', 'адрес для прослушивания', '0.0.0.0')
+  .option('--host <host>', 'адрес для прослушивания', process.env.SYNTH_HOST || '127.0.0.1')
   .option('--api-key <key>', 'API-ключ для аутентификации')
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')
@@ -92,7 +92,20 @@ program
     });
 
     const port = resolvePort(synth, 'SYNTH_CORE_PORT', synth.core.port);
-    const apiKey = synth.core.apiKey || process.env.SYNTH_API_KEY || '';
+
+    // Приоритет API-ключа: --api-key/synth.core.apiKey > SYNTH_API_KEY >
+    // сохранённый локальный ключ > сгенерировать и сохранить. Пустой ключ в
+    // standalone-режиме означает невозможность входа в UI (401), поэтому
+    // «npm-пакет + запуск бинарника» обязан получить устойчивый ключ.
+    let apiKey = synth.core.apiKey || process.env.SYNTH_API_KEY || '';
+    let apiKeyPath: string | null = null;
+    let apiKeyCreated = false;
+    if (!apiKey) {
+      const local = await resolveOrCreateLocalApiKey({ dataDir });
+      apiKey = local.key;
+      apiKeyPath = local.path;
+      apiKeyCreated = local.created;
+    }
 
     // UI поставляется как отдельный npm-пакет @itphx/synth-ui → резолвим его dist/.
     // systemPromptsDir не передаём: @itphx/synth-core резолвит свои prompts сам (рядом с package.json).
@@ -176,11 +189,14 @@ program
     process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
     process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
 
-    const host = options.host || process.env.SYNTH_HOST || '0.0.0.0';
+    const host = options.host;
 
     server.listen(port, host, () => {
       console.log(`\n  Откройте http://${host}:${port} в браузере`);
-      console.log(`  API-ключ: ${apiKey ? apiKey.slice(0, 8) + '...' : '(не задан)'}`);
+      console.log(`  API-ключ: ${apiKey}`);
+      if (apiKeyCreated && apiKeyPath) {
+        console.log(`  (сохранён: ${apiKeyPath})`);
+      }
       if (remoteEnabled) {
         console.log(`  Удалённый backend: ${remoteBackendUrl}. Если сервер не подключён — войдите в UI (адрес сервера + логин/пароль).`);
       }
