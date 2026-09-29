@@ -129,10 +129,10 @@ export function createLocalAuth(config: LocalAuthConfig): LocalAuthKit {
   const localUser: User = {
     id: 'local',
     username: 'local',
-    roles: ['USER'],
+    roles: ['ADMIN'],
     preferredLanguage: 'ru',
     createdAt: new Date().toISOString(),
-    teamRole: 'USER',
+    teamRole: 'ADMIN',
     notes: '',
     interviewCompleted: false,
   };

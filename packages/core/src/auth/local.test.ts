@@ -68,7 +68,7 @@ describe('createLocalAuth (server-личность, cookie v2)', () => {
     const localCookie = extractCookieValue(loc.headers.get('Set-Cookie'))!;
     const fromLocal = auth.getCurrentUser(makeContext(`${COOKIE_NAME}=${localCookie}`).c);
     expect(fromLocal?.username).toBe('local');
-    expect(fromLocal?.roles).toEqual(['USER']);
+    expect(fromLocal?.roles).toEqual(['ADMIN']);
   });
 
   it('server-cookie с испорченной подписью отклоняется', () => {

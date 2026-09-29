@@ -659,7 +659,7 @@ describe('auth routes (гибридная runtime-личность, RemoteConnec
       expect(res.status).toBe(200);
       const body = (await res.json()) as { username: string; roles: string[] };
       expect(body.username).toBe('local');
-      expect(body.roles).toEqual(['USER']);
+      expect(body.roles).toEqual(['ADMIN']);
     });
   });
 });
