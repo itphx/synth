@@ -37,6 +37,7 @@ import {
   DEFAULT_AGENT_ID,
   SSHKeyStore, createGitRoutes,
   createSshKeyRoutes, createAgentSshKeyRoutes,
+  detectRuntimeDeps,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
@@ -516,6 +517,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       toolsPolicy,
       mcpPolicy,
       toolsDisabled,
+      // AD-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте.
+      runtimeDeps: await detectRuntimeDeps(),
       // AD-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
       tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
       onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),

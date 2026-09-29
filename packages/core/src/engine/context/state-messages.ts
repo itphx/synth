@@ -19,10 +19,12 @@ import { renderTodosMarkdown } from '../tools/todo.js';
 
 export type StateMessageType = 'mode_change' | 'plan_updated' | 'todos_updated' | 'agent_switch';
 
-/** AD-070 §2.9.1: недоступный тул и причина — режим или роль текущего агента. */
+/** AD-070 §2.9.1: недоступный тул и причина — режим, роль или зависимость окружения. */
 export interface UnavailableTool {
   name: string;
-  reason: 'mode' | 'role';
+  reason: 'mode' | 'role' | 'dependency';
+  /** Для `dependency` — человекочитаемое имя отсутствующей программы. */
+  binary?: string;
 }
 
 /** Обёртка state-сообщения для LLM: role system недопустим в messages. */
@@ -55,7 +57,17 @@ function renderUnavailableTools(tools: UnavailableTool[], language: string): str
   if (tools.length === 0) return '';
   const en = language === 'en';
   const header = en ? '[UNAVAILABLE TOOLS]' : '[НЕДОСТУПНЫЕ ТУЛЫ]';
-  const lines = tools.map(({ name, reason }) => {
+  const lines = tools.map(({ name, reason, binary }) => {
+    if (reason === 'dependency') {
+      const program = binary ?? (en ? 'required program' : 'необходимая программа');
+      const cause = en
+        ? `the required program "${program}" is not installed`
+        : `не установлена программа «${program}»`;
+      const hint = en
+        ? 'install the program or contact the administrator'
+        : 'установите программу или обратитесь к администратору';
+      return `- ${name} — ${cause}: ${hint}`;
+    }
     const cause = reason === 'mode'
       ? (en ? 'unavailable in the current mode' : 'недоступно в текущем режиме')
       : (en ? 'unavailable for the current agent' : 'недоступно для текущего агента');

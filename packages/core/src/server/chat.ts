@@ -6,6 +6,7 @@ import {
   FileStore, SessionManager, EventBus,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
   createToolRegistry, createAgentRegistry, SecretPatternStore,
+  detectRuntimeDeps,
 } from '../index.js';
 import { JsonStore } from '../storage/json-store.js';
 import { FileProfileStore } from '../storage/profile-store.js';
@@ -194,6 +195,8 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     instructionsConfig: options.config.instructions,
     // AD-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
     instructionsTrustedProjectDirs: options.config.skills?.trustedProjectDirs,
+    // AD-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте.
+    runtimeDeps: await detectRuntimeDeps(),
   });
 
   // Создаём временную сессию

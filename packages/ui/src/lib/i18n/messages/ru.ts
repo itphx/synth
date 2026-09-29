@@ -1759,6 +1759,7 @@ export const dict = {
   'tool.shell_error': 'Ошибка: {message}',
   'tool.command_failed_default': 'Команда завершилась с ошибкой',
   'tool.aborted': 'Выполнение прервано пользователем.',
+  'tool.binary_missing': 'Инструмент «{tool}» недоступен: в окружении не установлена программа «{binary}»',
   'tool.classified': 'Диалог классифицирован как «{category}»',
 
   // --- Файлы (fs-write) ---
@@ -1893,6 +1894,7 @@ export const dict = {
   'permission.plan_source_strict': 'strict: план не утверждён',
   'permission.plan_shell_denied': 'режим планирования: shell-команда изменяет состояние',
   'permission.mcp_unavailable': 'MCP-инструмент недоступен в режиме {mode}',
+  'permission.dep_unavailable': 'Инструмент недоступен: в окружении не установлена программа «{binary}»',
   'permission.no_rules': 'нет правил доступа для «{tool}» — разрешено по умолчанию',
   'permission.rule_matched': 'правило «{key}» → {action}',
   'permission.rule_pattern_matched': 'правило «{key}.{pattern}» → {action} (путь: {path})',

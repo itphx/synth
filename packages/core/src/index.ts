@@ -57,6 +57,16 @@ export type { StoredDictionary, DictionaryLanguage } from './engine/router/index
 export type { RoutingRequest, RoutingDecision, ContentCategory, ClassifyRequest, ClassifyResult, QualityCheckInput, QualityCheckResult } from './engine/router/index.js';
 
 export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
+export {
+  detectRuntimeDeps,
+  resetRuntimeDepsCache,
+  isRuntimeDepAvailable,
+  probeBinary,
+  ALL_RUNTIME_DEPS_AVAILABLE,
+  RUNTIME_DEP_BINARY,
+  TOOL_RUNTIME_DEP,
+} from './engine/tools/runtime-deps.js';
+export type { RuntimeDeps, RuntimeDependency } from './engine/tools/runtime-deps.js';
 export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions, normalizeAgentModes, isModeApplicable, DEFAULT_AGENT_ID } from './engine/agents/index.js';
 export { McpClient, McpManager } from './engine/mcp/index.js';
 export type { McpToolDef, McpToolResult } from './engine/mcp/index.js';

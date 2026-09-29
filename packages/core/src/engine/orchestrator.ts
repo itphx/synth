@@ -61,6 +61,12 @@ import { SSHKeyStore } from '../storage/ssh-key-store.js';
 import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, MAX_DOOM_LOOP_COUNT } from './llm-error.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
+import {
+  ALL_RUNTIME_DEPS_AVAILABLE,
+  RUNTIME_DEP_BINARY,
+  TOOL_RUNTIME_DEP,
+  type RuntimeDeps,
+} from './tools/runtime-deps.js';
 import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type InjectionPolicy } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
@@ -196,6 +202,12 @@ export interface OrchestratorOptions {
    */
   toolsDisabled?: ToolsDisabledConfig;
   /**
+   * AD-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) —
+   * детекция `detectRuntimeDeps()`. Не задана — fail-open (все доступны).
+   * Runtime-обновление — `setRuntimeDeps`.
+   */
+  runtimeDeps?: RuntimeDeps;
+  /**
    * AD-071 §2.6: chars-per-token модели из runtime-настроек (калибровка).
    * Не задан/нет значения — дефолт `DEFAULT_CHARS_PER_TOKEN`.
    */
@@ -313,6 +325,8 @@ export class ChatOrchestrator {
   private _mcpPolicy: ToolsPolicy;
   /** AD-071 §2.6: instance-wide отключение инструментов (runtime-изменяемая, admin). */
   private _toolsDisabled: ToolsDisabledConfig;
+  /** AD-070 §2.9.1: доступность внешних программ окружения (runtime-изменяемая). */
+  private _runtimeDeps: RuntimeDeps;
   /** AD-071 §2.6: загрузчик chars-per-token модели (калибровка). */
   private readonly _tokenRatioLoader: ((model: string) => Promise<number | undefined>) | undefined;
   /** AD-071 §2.6: сохранение калибровки chars-per-token после ответа. */
@@ -635,6 +649,8 @@ export class ChatOrchestrator {
     this._mcpPolicy = options.mcpPolicy ?? 'auto';
     // AD-071 §2.6: instance-wide отключение инструментов (admin) + калибровка ratio.
     this._toolsDisabled = options.toolsDisabled ?? { capabilities: [], tools: [] };
+    // AD-070 §2.9.1: зависимости окружения (git/rg/sh) — fail-open по умолчанию.
+    this._runtimeDeps = options.runtimeDeps ?? { ...ALL_RUNTIME_DEPS_AVAILABLE };
     this._tokenRatioLoader = options.tokenRatioLoader;
     this._onTokenRatioCalibrated = options.onTokenRatioCalibrated;
     this._skillRuntime = options.skillRuntime ?? null;
@@ -848,6 +864,15 @@ export class ChatOrchestrator {
   }
 
   /**
+   * AD-070 §2.9.1: live-применение доступности внешних программ окружения
+   * (git/rg/sh). Вызывается один раз при старте (детекция) или при обновлении;
+   * не задано — fail-open (`ALL_RUNTIME_DEPS_AVAILABLE`).
+   */
+  setRuntimeDeps(deps: RuntimeDeps): void {
+    this._runtimeDeps = { ...deps };
+  }
+
+  /**
    * AD-071 §2.6: тул жёстко отключён администратором (`tools.disabled`) — по
    * capability или по имени. `runtime` неотключаем (защита на API + здесь).
    */
@@ -1016,6 +1041,7 @@ export class ChatOrchestrator {
       toolsPolicy,
       mcpPolicy,
       adminDisabled: this._toolsDisabled,
+      envDeps: this._runtimeDeps,
       tokenRatio,
       mcpServers,
       project,
@@ -1139,6 +1165,7 @@ export class ChatOrchestrator {
         shellPolicy: this._getProtectedPaths() ?? undefined,
         protectedPaths: this._getProtectedPaths() ?? undefined,
         protectedPathsEnabled: this._getProtectedPathsEnabled(),
+        runtimeDeps: this._runtimeDeps,
       });
       if (decision.action !== 'allow') {
         this._eventBus.publish(session.id, 'command.inline_shell', {
@@ -1475,6 +1502,7 @@ export class ChatOrchestrator {
       planApproved,
       mcpToolSettings: session.settings.mcpToolSettings,
       agentCapabilities: agentDef?.capabilities,
+      runtimeDeps: this._runtimeDeps,
     };
     return (tool) => computeToolAvailability(tool.name, tool.capabilities, opts).available;
   }
@@ -1598,9 +1626,15 @@ export class ChatOrchestrator {
         planApproved,
         mcpToolSettings: session.settings.mcpToolSettings,
         agentCapabilities: agentDef?.capabilities,
+        runtimeDeps: this._runtimeDeps,
       });
       if (!availability.available && availability.reason) {
-        unavailable.push({ name: tool.name, reason: availability.reason });
+        const dep = availability.reason === 'dependency' ? TOOL_RUNTIME_DEP[tool.name] : undefined;
+        unavailable.push({
+          name: tool.name,
+          reason: availability.reason,
+          ...(dep ? { binary: RUNTIME_DEP_BINARY[dep] } : {}),
+        });
       }
     }
     return unavailable;
@@ -1868,6 +1902,7 @@ export class ChatOrchestrator {
         planApproved,
         mcpToolSettings: session.settings.mcpToolSettings,
         agentCapabilities: agentDef?.capabilities,
+        runtimeDeps: this._runtimeDeps,
       });
       const adminDisabled = this._isAdminDisabled(tool);
       // chars = JSON.stringify LLM-определения (тот же расчёт, что слой `tools`).
@@ -2734,6 +2769,7 @@ export class ChatOrchestrator {
             shellPolicy: this._getProtectedPaths() ?? undefined,
             protectedPaths: this._getProtectedPaths() ?? undefined,
             protectedPathsEnabled: this._getProtectedPathsEnabled(),
+            runtimeDeps: this._runtimeDeps,
           });
 
           // Doom loop detection — только для вызовов, НЕ заблокированных

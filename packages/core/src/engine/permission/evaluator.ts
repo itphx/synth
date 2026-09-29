@@ -4,6 +4,12 @@ import type { PermissionAction, PermissionConfig, PermissionDecision, Permission
 import { resolvePath } from '../tools/path-utils.js';
 import { t as sm } from '../system-messages.js';
 import { computeToolAvailability } from './availability.js';
+import {
+  isRuntimeDepAvailable,
+  RUNTIME_DEP_BINARY,
+  TOOL_RUNTIME_DEP,
+  type RuntimeDeps,
+} from '../tools/runtime-deps.js';
 import { getToolGroups, TOOL_PATH_PARAMS } from './groups.js';
 import { checkShellCommand, isMutatingCommand, tokenizeCommand, matchShellCommandPattern } from '../security/shell-guard.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
@@ -35,6 +41,12 @@ export interface PermissionCheckInput {
    * (`unavailable(role)`), а не жёстко запрещён.
    */
   agentCapabilities?: readonly string[];
+  /**
+   * Доступность внешних программ окружения (git/rg/sh). Не задана — fail-open
+   * (тул доступен). При отсутствии программы тул получает `deny` с
+   * `unavailable(dependency)`.
+   */
+  runtimeDeps?: RuntimeDeps;
 }
 
 /**
@@ -144,7 +156,7 @@ export class PermissionEvaluator {
   }
 
   private _computeDecision(input: PermissionCheckInput): PermissionDecision {
-    const { toolName, params, workingDir, capabilities, sessionMode, planMode, planApproved, mcpToolSettings, shellPolicy, protectedPaths, protectedPathsEnabled } = input;
+    const { toolName, params, workingDir, capabilities, sessionMode, planMode, planApproved, mcpToolSettings, shellPolicy, protectedPaths, protectedPathsEnabled, runtimeDeps } = input;
     const paths = extractPaths(toolName, params, workingDir);
     const isFile = paths.length > 0;
 
@@ -176,6 +188,23 @@ export class PermissionEvaluator {
         action: 'deny',
         reason: sm('permission.plan_shell_denied'),
         matchedRule: 'plan.shell-deny',
+      };
+    }
+
+    // Зависимость окружения: нет внешней программы тула (git/rg/sh). Порядок
+    // role → mode → dependency: сюда доходим, только если роль и режим не
+    // заблокировали. Тул виден модели (набор дефинишенов постоянен), но `deny`
+    // с подсказкой — установить программу (или сообщить администратору).
+    const runtimeDep = TOOL_RUNTIME_DEP[toolName];
+    if (runtimeDep && !isRuntimeDepAvailable(runtimeDeps, runtimeDep)) {
+      const binary = RUNTIME_DEP_BINARY[runtimeDep];
+      return {
+        action: 'deny',
+        reason: sm('permission.dep_unavailable', { binary }),
+        matchedRule: 'dependency.unavailable',
+        unavailable: { reason: 'dependency' },
+        messageId: 'tool-unavailable-dependency',
+        params: { binary },
       };
     }
 

@@ -27,6 +27,7 @@ import type { ContextConfig } from './config.js';
 import { joinPromptBlocks, sortPromptBlocks, type PromptBlock } from './prompt-blocks.js';
 import { formatSkillsCatalogBlock, type ComposerSkillsCatalog } from '../skills/catalog.js';
 import { agentKeyOf } from './prompt-state.js';
+import { RUNTIME_DEP_BINARY, type RuntimeDeps } from '../tools/runtime-deps.js';
 import type { DebugCollector } from '../../debug.js';
 
 /** Эвристика оценки токенов (AD-070 §2.5, открытый вопрос 4 — chars/4). */
@@ -63,6 +64,21 @@ export function hasAdminDisabled(
   disabled?: { capabilities: string[]; tools: string[] },
 ): boolean {
   return !!disabled && (disabled.capabilities.length > 0 || disabled.tools.length > 0);
+}
+
+/** AD-070 §2.9.1: есть ли отсутствующие во внешнем окружении зависимости. */
+export function hasMissingDeps(deps?: RuntimeDeps): boolean {
+  return !!deps && (deps.git === false || deps.rg === false || deps.sh === false);
+}
+
+/** Список отсутствующих программ (`git`, `rg (ripgrep)`, `sh`) для текста промпта. */
+function missingDepsList(deps?: RuntimeDeps): string[] {
+  if (!deps) return [];
+  const out: string[] = [];
+  if (deps.git === false) out.push(RUNTIME_DEP_BINARY.git);
+  if (deps.rg === false) out.push(RUNTIME_DEP_BINARY.rg);
+  if (deps.sh === false) out.push(RUNTIME_DEP_BINARY.sh);
+  return out;
 }
 
 /** AD-071 §2.2: статус MCP-сервера в блоке `mcp.status`. */
@@ -184,6 +200,12 @@ export interface ComposerContext {
    * административные ограничения (даже в режиме `consistency`).
    */
   adminDisabled?: { capabilities: string[]; tools: string[] };
+  /**
+   * AD-070 §2.9.1: доступность внешних программ окружения (git/rg/sh). Непустой
+   * список отсутствующих добавляет в `tools.guide` строку про зависимость
+   * окружения (даже в режиме `consistency`).
+   */
+  envDeps?: RuntimeDeps;
   /**
    * AD-071 §2.6: chars-per-token для оценки `estTokens` (калибровка по usage).
    * Не задан — дефолт 4.
@@ -498,13 +520,19 @@ export class SystemPromptComposer {
       });
     }
 
-    // AD-071 §2.3/§2.6: блок добавляется, если **любая** из политик сужает
-    // состав до доступных (`available` — встроенные и/или MCP) и/или при
-    // наличии instance-wide отключений администратора (`tools.disabled`) —
-    // тогда модель предупреждена об ограничениях даже в `consistency`.
+    // AD-071 §2.3/§2.6 + AD-070 §2.9.1: блок добавляется, если **любая** из
+    // политик сужает состав до доступных (`available` — встроенные и/или MCP),
+    // и/или есть instance-wide отключения администратора (`tools.disabled`),
+    // и/или в окружении отсутствуют программы (`git`/`rg`/`sh`) — тогда модель
+    // предупреждена об ограничениях даже в `consistency`.
     const toolsRestricted = (ctx.toolsPolicy ?? 'consistency') === 'available';
     const mcpRestricted = (ctx.mcpPolicy ?? 'consistency') === 'available';
-    if (toolsRestricted || mcpRestricted || hasAdminDisabled(ctx.adminDisabled)) {
+    if (
+      toolsRestricted
+      || mcpRestricted
+      || hasAdminDisabled(ctx.adminDisabled)
+      || hasMissingDeps(ctx.envDeps)
+    ) {
       extraBlocks.push({
         key: 'tools.guide',
         tier: 'context',
@@ -513,6 +541,7 @@ export class SystemPromptComposer {
           lang,
           { builtin: toolsRestricted, mcp: mcpRestricted },
           ctx.adminDisabled,
+          ctx.envDeps,
         ),
         provenance: 'inline',
       });
@@ -633,9 +662,11 @@ export class SystemPromptComposer {
     lang: string,
     restricted: { builtin: boolean; mcp: boolean },
     adminDisabled?: { capabilities: string[]; tools: string[] },
+    envDeps?: RuntimeDeps,
   ): string {
     const lines: string[] = [];
     const anyRestricted = restricted.builtin || restricted.mcp;
+    const missingDeps = missingDepsList(envDeps);
     if (lang === 'en') {
       if (anyRestricted) {
         const scope = restricted.builtin && restricted.mcp
@@ -652,6 +683,11 @@ export class SystemPromptComposer {
           'Some tools are disabled by the administrator and are not available to any agent; do not try to call them or work around this restriction.',
         );
       }
+      if (missingDeps.length > 0) {
+        lines.push(
+          `Some tools are unavailable because the required program(s) are not installed in the environment: ${missingDeps.join(', ')}. Do not try to call them or work around this restriction; the tools will become available once the program(s) are installed.`,
+        );
+      }
     } else {
       if (anyRestricted) {
         const scope = restricted.builtin && restricted.mcp
@@ -666,6 +702,11 @@ export class SystemPromptComposer {
       if (hasAdminDisabled(adminDisabled)) {
         lines.push(
           'Часть инструментов отключена администратором и недоступна ни одному агенту; не пытайся их вызвать или обойти это ограничение.',
+        );
+      }
+      if (missingDeps.length > 0) {
+        lines.push(
+          `Часть инструментов недоступна: в окружении не установлены программы: ${missingDeps.join(', ')}. Не пытайся их вызвать или обойти это ограничение — они станут доступны после установки программ.`,
         );
       }
     }

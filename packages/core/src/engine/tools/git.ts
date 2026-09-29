@@ -83,6 +83,23 @@ function truncateOutput(output: string): string {
   return output.slice(0, MAX_GIT_OUTPUT) + '\n... (вывод обрезан)';
 }
 
+/** Ошибка запуска процесса из-за отсутствия бинарника в окружении (ENOENT). */
+function isBinaryMissing(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === 'ENOENT';
+}
+
+/**
+ * Fallback, если детекция окружения не сработала, а `git` не установлен:
+ * локализованное `tool.binary_missing` вместо сырой ошибки запуска.
+ */
+function gitBinaryMissingResult(name: string, cwd: string): ToolResult {
+  return {
+    content: sm('tool.binary_missing', { tool: name, binary: 'git' }),
+    isError: true,
+    metadata: { cwd, i18n: i18nMeta('tool.binary_missing', { tool: name, binary: 'git' }) },
+  };
+}
+
 export const gitStatusTool: ToolDefinition = {
   name: 'git_status',
   description: 'Show the working tree status — current branch, staged/unstaged changes, untracked files.',
@@ -111,6 +128,7 @@ export const gitStatusTool: ToolDefinition = {
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
+      if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       return {
         content: `Ошибка git status: ${(err as Error).message}`,
         isError: true,
@@ -156,6 +174,7 @@ export const gitDiffTool: ToolDefinition = {
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
+      if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       return {
         content: `Ошибка git diff: ${(err as Error).message}`,
         isError: true,
@@ -199,6 +218,7 @@ export const gitLogTool: ToolDefinition = {
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
+      if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       return {
         content: `Ошибка git log: ${(err as Error).message}`,
         isError: true,
@@ -244,6 +264,7 @@ export const gitCommitTool: ToolDefinition = {
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
+      if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       return {
         content: `Ошибка git commit: ${(err as Error).message}`,
         isError: true,
@@ -299,6 +320,7 @@ export const gitPushTool: ToolDefinition = {
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
+      if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       return {
         content: `Ошибка git push: ${(err as Error).message}`,
         isError: true,
@@ -356,6 +378,7 @@ export const gitPullTool: ToolDefinition = {
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
+      if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       return {
         content: `Ошибка git pull: ${(err as Error).message}`,
         isError: true,
@@ -404,6 +427,7 @@ export const gitCheckoutTool: ToolDefinition = {
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
+      if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       return {
         content: `Ошибка git checkout: ${(err as Error).message}`,
         isError: true,
@@ -469,6 +493,7 @@ export const gitBranchListTool: ToolDefinition = {
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
+      if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       return {
         content: `Ошибка git branch: ${(err as Error).message}`,
         isError: true,
@@ -516,6 +541,7 @@ export const gitShowTool: ToolDefinition = {
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
+      if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       return {
         content: `Ошибка git show: ${(err as Error).message}`,
         isError: true,
@@ -565,6 +591,7 @@ export const gitBlameTool: ToolDefinition = {
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
+      if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       return {
         content: `Ошибка git blame: ${(err as Error).message}`,
         isError: true,
@@ -656,6 +683,7 @@ export const gitStashTool: ToolDefinition = {
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка git»
       if (isAborted(ctx)) return abortedResult(this.name);
+      if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       return {
         content: `Ошибка git stash: ${(err as Error).message}`,
         isError: true,

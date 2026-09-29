@@ -13,6 +13,7 @@ import {
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
   SecretPatternStore, ProtectedPathsStore, DictionaryStore, DEFAULT_AGENT_ID,
+  detectRuntimeDeps,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart, DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
@@ -830,6 +831,10 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     toolsPolicy: effectiveToolsPolicy,
     mcpPolicy: effectiveMcpPolicy,
     toolsDisabled: effectiveToolsDisabled,
+    // AD-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте,
+    // fail-open при ошибке. Пробинг идёт до сборки оркестратора, чтобы первый
+    // же запрос видел корректную доступность.
+    runtimeDeps: await detectRuntimeDeps(),
     // AD-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
     tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
     onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),

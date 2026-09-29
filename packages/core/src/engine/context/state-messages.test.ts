@@ -248,6 +248,42 @@ describe('state-messages', () => {
     expect(mode!.content).not.toContain('[НЕДОСТУПНЫЕ ТУЛЫ]');
   });
 
+  it('mode_change с dependency-тулом: binary и подсказка про установку', () => {
+    const session = makeSession({ mode: 'act', planMode: 'auto' });
+
+    const { added } = syncStateMessages(session, {
+      contextConfig: makeContextConfig(),
+      language: 'ru',
+      unavailableTools: [{ name: 'git_status', reason: 'dependency', binary: 'git' }],
+    });
+
+    const mode = added.find((m) => m.metadata?.type === 'mode_change');
+    expect(mode).toBeDefined();
+    expect(mode!.content).toContain('[НЕДОСТУПНЫЕ ТУЛЫ]');
+    expect(mode!.content).toContain('git_status');
+    expect(mode!.content).toContain('«git»');
+    expect(mode!.content).toContain('установите программу');
+  });
+
+  it('agent_switch не включает dependency-тулы (только role)', () => {
+    const session = makeSession({ mode: 'act', planMode: 'auto' });
+
+    const { added } = syncStateMessages(session, {
+      contextConfig: makeContextConfig(),
+      language: 'ru',
+      agentRole: 'analyst',
+      unavailableTools: [
+        { name: 'write_file', reason: 'role' },
+        { name: 'git_status', reason: 'dependency', binary: 'git' },
+      ],
+    });
+
+    const agent = added.find((m) => m.metadata?.type === 'agent_switch');
+    expect(agent).toBeDefined();
+    expect(agent!.content).toContain('write_file');
+    expect(agent!.content).not.toContain('git_status');
+  });
+
   it('agent_switch добавляется при заданном agentRole и перечисляет только role-недоступные', () => {
     const session = makeSession({ mode: 'act', planMode: 'auto' });
 

@@ -428,4 +428,43 @@ describe('ChatOrchestrator — tools.policy (AD-071 §2.3)', () => {
     expect(info.manifest.entries.find((e) => e.key === 'tools')!.tier).toBe('context');
     expect(info.manifest.staticPrefixChars).toBeLessThan(info.manifest.totalChars);
   });
+
+  it('available + отсутствие git: git-тулы отфильтрованы, toolsDetail reason=dependency', async () => {
+    orchestrator.setToolsPolicy('available');
+    orchestrator.setRuntimeDeps({ git: false, rg: true, sh: true });
+    const session = await createSession({ mode: 'act' });
+    await runTurn(session.id);
+
+    const names = toolNames();
+    expect(names).toContain('read_file');
+    expect(names).not.toContain('git_status');
+    expect(names).not.toContain('git_diff');
+    expect(names).not.toContain('git_commit');
+
+    const after = (await sessionManager.getSession(session.id))!;
+    const info = await orchestrator.getPromptInfo(after);
+    const git = info.toolsDetail.find((t) => t.name === 'git_status');
+    expect(git).toBeDefined();
+    expect(git!.available).toBe(false);
+    expect(git!.reason).toBe('dependency');
+
+    const read = info.toolsDetail.find((t) => t.name === 'read_file');
+    expect(read!.available).toBe(true);
+    expect(read!.reason).toBeUndefined();
+  });
+
+  it('available + отсутствие rg: grep_files отфильтрован, toolsDetail reason=dependency', async () => {
+    orchestrator.setToolsPolicy('available');
+    orchestrator.setRuntimeDeps({ git: true, rg: false, sh: true });
+    const session = await createSession({ mode: 'act' });
+    await runTurn(session.id);
+
+    expect(toolNames()).not.toContain('grep_files');
+
+    const after = (await sessionManager.getSession(session.id))!;
+    const info = await orchestrator.getPromptInfo(after);
+    const grep = info.toolsDetail.find((t) => t.name === 'grep_files');
+    expect(grep!.available).toBe(false);
+    expect(grep!.reason).toBe('dependency');
+  });
 });

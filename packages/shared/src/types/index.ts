@@ -181,9 +181,10 @@ export interface PromptToolDetail {
   available: boolean;
   /**
    * Причина недоступности: `mode` (переключить режим), `role` (делегировать),
-   * `admin_disabled` (жёстко отключён администратором через `tools.disabled`).
+   * `admin_disabled` (жёстко отключён администратором через `tools.disabled`),
+   * `dependency` (в окружении нет нужной программы — git/rg/sh).
    */
-  reason?: 'mode' | 'role' | 'admin_disabled';
+  reason?: 'mode' | 'role' | 'admin_disabled' | 'dependency';
   /** AD-071 §2.1: источник инструмента (`built-in` — слой `tools`). */
   source: 'built-in';
   /** AD-071 §2.6: длина `JSON.stringify` LLM-определения тула (как слой `tools`). */

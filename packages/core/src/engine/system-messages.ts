@@ -68,6 +68,8 @@ export const SYSTEM_MESSAGES = {
   'tool.shell_error': 'Error: {message}',
   'tool.command_failed_default': 'Command failed',
   'tool.aborted': 'Execution interrupted by the user.',
+  'tool.binary_missing':
+    'Tool "{tool}" is unavailable: the required program "{binary}" is not installed in the environment',
 
   // --- Файлы (fs-write) ---
   'fs.file_written': 'File written: {path} ({lines} lines, {bytes} bytes)',
@@ -205,6 +207,8 @@ export const SYSTEM_MESSAGES = {
   'permission.plan_source_strict': 'strict: plan not approved',
   'permission.plan_shell_denied': 'plan mode: shell command mutates state',
   'permission.mcp_unavailable': 'MCP tool unavailable in {mode} mode',
+  'permission.dep_unavailable':
+    'Tool is unavailable: the required program "{binary}" is not installed in the environment',
   'permission.no_rules': 'no permission rules for "{tool}" — allowed by default',
   'permission.rule_matched': 'rule "{key}" → {action}',
   'permission.rule_pattern_matched': 'rule "{key}.{pattern}" → {action} (path: {path})',
