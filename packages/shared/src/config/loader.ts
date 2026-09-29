@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { load as parseYaml } from 'js-yaml';
 import { synthConfigSchema, type SynthConfig } from './types.js';
 import { defaultConfig } from './defaults.js';
@@ -6,6 +7,8 @@ import { deepMerge } from './merge.js';
 
 export interface LoadConfigOptions {
   configPath?: string;
+  /** AD-079: home-каталог — конфиг резолвится как `<home>/config.yaml`, если path не задан. */
+  home?: string;
   overrides?: Partial<SynthConfig>;
 }
 
@@ -17,10 +20,13 @@ const CONFIG_SEARCH_PATHS = [
 const USER_CONFIG_DIR = '.config/synth';
 const SYSTEM_CONFIG_PATH = '/etc/synth/config.yaml';
 
-function searchPaths(explicitPath?: string): string[] {
+function searchPaths(explicitPath?: string, home?: string): string[] {
   if (explicitPath) return [explicitPath];
+  // AD-079: при заданном home конфиг ищется строго в <home>/config.yaml
+  // (home приоритетнее cwd/XDG-цепочки).
+  if (home) return [join(home, 'config.yaml')];
   const paths: string[] = [];
-  const home = process.env.HOME || process.env.USERPROFILE || '';
+  const homeDir = process.env.HOME || process.env.USERPROFILE || '';
 
   // CWD
   for (const name of CONFIG_SEARCH_PATHS) {
@@ -28,8 +34,8 @@ function searchPaths(explicitPath?: string): string[] {
   }
 
   // ~/.config/synth/config.yaml
-  if (home) {
-    paths.push(`${home}/${USER_CONFIG_DIR}/config.yaml`);
+  if (homeDir) {
+    paths.push(`${homeDir}/${USER_CONFIG_DIR}/config.yaml`);
   }
 
   // /etc/synth/config.yaml
@@ -52,7 +58,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Synth
   // findConfigPath). Без этого dev-запуск backend с cwd=synth/ не читал
   // packages/backend/config.yaml (mcp.servers) и seed реестра был пустым.
   const explicitPath = options.configPath ?? process.env.SYNTH_CONFIG;
-  const paths = searchPaths(explicitPath);
+  const paths = searchPaths(explicitPath, options.home);
 
   let fileConfig: Record<string, unknown> = {};
   for (const path of paths) {

@@ -984,3 +984,14 @@
 - **Чистка:** удалены скриншоты и черновики из корня проекта (`*.png`, `dropdown-*.yml`, `state1.yml`, `snap-initial.md`), `.playwright-mcp/`, содержимое `tmp/` (родительского) и `synth/tmp` (оставлены только активные `backend.log`/`ui.log`/`core.log`). `AD-DRAFTS.md`, `rbac-design.md`, `data/`, `ws-default/` сохранены.
 - **Docs:** `docs/DEVELOPMENT.md`, `docs/QUICKSTART.md`, `docs/CONFIGURATION.md`, корневой `AGENTS.md` (дефолты standalone).
 - **Дальше:** при желании — e2e выделенного каталога в standalone-UI (порт 4300 занят dev-core).
+
+## 2026-09-29 — AD-079: локальный home-каталог (`--home`/`SYNTH_HOME`) — PASS
+
+- **Задача:** реализовать AD-079 «Локальный home-каталог и независимые локальные инстансы» (flat-раскладка config/data/profiles/credentials, приоритеты путей, изоляция standalone/hybrid).
+- **Тип:** feature (CLI + конфиг-резолвинг) · **Исполнитель:** @orchestrator → @fixer (код+тесты), general (docs) · **Результат:** PASS.
+- **Код:** `shared/config/resolve.ts` — `resolveHome`, `resolveProfilesPath`, `resolveCredentialsPath`, home-параметр у `resolveDataDir`/`resolveWorkspacesRoot`/`resolveDefaultWorkspace`/`findConfigPath`/`defaultConfigPath`/`ensureFirstRun`; `shared/config/loader.ts` — `LoadConfigOptions.home`; `core/profiles.ts` — `getProfilesPath(home)`; `core/remote/credentials.ts` — `defaultCredentialsPath(home)`; `core/server/app.ts` — `StandaloneConfig.profilesPath` (getHybridState/rememberServer); CLI (`packages/synth` + `core/src/main.ts`) — флаги `--home`/`--profiles`/`--credentials` на serve/connect/disconnect/project publish|fork/secrets rotate.
+- **Скрипты:** `standalone.sh` — home по умолчанию `tmp/standalone/home` (фикс исходного бага: подхват `lastProfile` из общего `~/.config/synth`); `hybrid.sh` — опция `--home` (без неё прежнее XDG-поведение, чтобы не терять данные пользователя).
+- **Приоритет:** `--data-dir`/`--config`/`--profiles`/`--credentials` (+ env-аналоги) > `--home` > `SYNTH_HOME` > XDG-дефолты; без home поведение не изменилось.
+- **Верификация (независимо):** `pnpm build` OK; `pnpm typecheck` 6/6; `pnpm test` shared 170 · core 2175 · ui 804 · backend 372; `pnpm lint` 0 errors; smoke `serve --home <tmp> --port 4391` → `/health` 200, созданы `<home>/config.yaml` + `<home>/data/`, `/hybrid/status.knownServers` берёт `<home>/profiles.json` (изоляция подтверждена).
+- **Docs:** AD-079 → ✅ Реализовано (+ раздел «Реализация»); корневой/shared/core AGENTS.md; docs/CONFIGURATION.md, docs/DEVELOPMENT.md.
+- **Дальше:** AD-080 (режимы гибрида) — использует home одного инстанса.

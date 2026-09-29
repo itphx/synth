@@ -111,6 +111,8 @@ Runtime-данные (сессии, проекты, провайдеры, мод
 $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ auth/(sessions,states,profiles) secrets/(master.key, api-key, ssh-keys/)
 ```
 
+**Локальный home** (`--home <dir>` / env `SYNTH_HOME`, AD-079) — базовый каталог локального инстанса с плоской раскладкой `<home>/{config.yaml, data/, profiles.json, credentials.json}`. Приоритет путей: явные флаги (`--data-dir`/`--config`/`--profiles`/`--credentials`) > `--home` > `SYNTH_HOME` > XDG-дефолты (`~/.config/synth`, `~/.local/share/synth`). Без home поведение прежнее; разные home → независимые инстансы (standalone и hybrid одновременно) и герметичный тестовый запуск.
+
 **Ротация мастер-ключа** секретов at-rest (SSH-ключи агентов, AD-076): `synth secrets rotate` (`--data-dir`, `--config`, `--old-key`/`--old-key-file`, `--new-key`/`--new-key-file`, `--dry-run`, `--yes`). Без `--yes` (и без `--dry-run`) — отказ; при ключе из env/`config.security.secretKey` его нужно обновить и там (файл игнорируется при старте).
 
 ### Аутентификация
@@ -360,7 +362,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-076 | Реестр git-репозиториев (несколько на проект) и SSH-ключи per-agent (шифрование at-rest, `repo_path`, паритет core↔backend) | ✅ Реализовано | [ad-076](./docs/arch_decisions/ad-076-git-repo-registry-ssh.md) |
 | AD-077 | Инструментальное окружение исполнения (git/python/rg): хостовые для dev/standalone, tools-образ + volume для managed | ⏳ Не реализовано | [ad-077](./docs/arch_decisions/ad-077-runtime-toolchain.md) |
 | AD-078 | Авто-отключение инструментов при отсутствии внешней зависимости (детект git/rg/sh, `unavailable(dependency)`, пояснение модели) | ✅ Реализовано | [ad-078](./docs/arch_decisions/ad-078-runtime-dependency-availability.md) |
-| AD-079 | Локальный home-каталог (`--home`/`SYNTH_HOME`): плоская раскладка config/data/profiles/credentials, приоритеты путей, независимые инстансы standalone и hybrid | ⏳ Не реализовано | [ad-079](./docs/arch_decisions/ad-079-local-home-independent-instances.md) |
+| AD-079 | Локальный home-каталог (`--home`/`SYNTH_HOME`): плоская раскладка config/data/profiles/credentials, приоритеты путей, независимые инстансы standalone и hybrid | ✅ Реализовано | [ad-079](./docs/arch_decisions/ad-079-local-home-independent-instances.md) |
 | AD-080 | Управляемый гибрид: режимы-полюса (режим — параметр запуска, без runtime-переключения), standalone=ADMIN / hybrid=роли сервера, «Установить локально» | ⏳ Не реализовано | [ad-080](./docs/arch_decisions/ad-080-managed-hybrid-modes.md) |
 | AD-081 | Политики гибрида и защита от утечек: серверные политики (forbidden/remote-only/full; publish/fork allow\|deny\|approval), явные эндпоинты переноса, discovery, аудит, панель «Гибрид» | ⏳ Не реализовано | [ad-081](./docs/arch_decisions/ad-081-hybrid-policy-leak-protection.md) |
 

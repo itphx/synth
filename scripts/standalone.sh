@@ -13,16 +13,20 @@
 # Использование:
 #   ./scripts/standalone.sh [OPTIONS]
 #
-# По умолчанию поведение ровно как у пользователя npm-пакета: `synth serve`
-# запускается БЕЗ переопределений, с очищенным от SYNTH_* окружением — пути,
-# порт, host и API-ключ берутся из дефолтов standalone (dataDir
-# ~/.local/share/synth, config ~/.config/synth/config.yaml, host 127.0.0.1,
-# порт 4300, API-ключ генерируется и сохраняется в <dataDir>/secrets/api-key).
+# По умолчанию поведение ровно как у пользователя npm-пакета, но с изолированным
+# локальным home: `synth serve --home tmp/standalone/home` с очищенным от SYNTH_*
+# окружением. AD-079: config/data/profiles/credentials резолвятся от home, поэтому
+# standalone НЕ подхватывает lastProfile из общего ~/.config/synth/profiles.json.
+# Порт/API-ключ берутся из дефолтов standalone (dataDir — <home>/data, host
+# 127.0.0.1, порт 4300, API-ключ генерируется и сохраняется в <home>/data/secrets/api-key).
 #
 # Опции:
 #   --port <port>      явное переопределение порта (иначе — дефолт/конфиг)
 #   --host <host>      явное переопределение адреса прослушивания
-#   --data-dir <path>  явное переопределение каталога данных
+#   --home <path>      локальный home-каталог (default: tmp/standalone/home).
+#                      AD-079: config/data/profiles/credentials живут внутри home,
+#                      что изолирует инстанс от общих ~/.config/synth и ~/.local/share/synth.
+#   --data-dir <path>  явное переопределение каталога данных (приоритетнее --home)
 #   --api-key <key>    явный API-ключ local auth (иначе — авто-генерация; печатается)
 #   --prefix <path>    каталог установки пакетов (default: tmp/standalone/install)
 #   --no-build         не пересобирать пакеты (использовать уже собранные dist)
@@ -66,10 +70,12 @@ cd "$SYNTH"
 # явные переопределения и прокидываются в `serve` только когда заданы.
 PORT="4300"
 HOST="127.0.0.1"
+HOME_DIR="$STANDALONE_TMP/home"
 DATA_DIR="$STANDALONE_TMP/data"
 API_KEY=""
 PORT_SET=false
 HOST_SET=false
+HOME_SET=false
 DATA_DIR_SET=false
 API_KEY_SET=false
 PREFIX="$STANDALONE_TMP/install"
@@ -86,16 +92,16 @@ standalone.sh — запуск Synth в standalone-режиме из собра�
 Использование:
   ./scripts/standalone.sh [OPTIONS]
 
-По умолчанию — ровно как у пользователя npm-пакета: `synth serve` без
-переопределений, с очищенным от SYNTH_* окружением. Пути/порт/host/ключ
-берутся из дефолтов standalone (dataDir ~/.local/share/synth, config
-~/.config/synth/config.yaml, host 127.0.0.1, порт 4300, ключ авто-генерируется
-и сохраняется в <dataDir>/secrets/api-key).
+По умолчанию — ровно как у пользователя npm-пакета, но с изолированным home:
+`synth serve --home tmp/standalone/home` с очищенным от SYNTH_* окружением.
+AD-079: config/data/profiles/credentials резолвятся от home, поэтому standalone
+не подхватывает lastProfile из общего ~/.config/synth/profiles.json.
 
 Опции:
   --port <port>      явное переопределение порта
   --host <host>      явное переопределение адреса прослушивания
-  --data-dir <path>  явное переопределение каталога данных
+  --home <path>      локальный home-каталог (default: tmp/standalone/home)
+  --data-dir <path>  явное переопределение каталога данных (приоритетнее --home)
   --api-key <key>    явный API-ключ local auth (иначе авто-генерация; печатается)
   --prefix <path>    каталог установки пакетов (default: tmp/standalone/install)
   --no-build         не пересобирать пакеты (использовать уже собранные dist)
@@ -126,6 +132,10 @@ while [ $# -gt 0 ]; do
         --host)
             [ $# -ge 2 ] || die "Опция $1 требует значение (см. --help)"
             HOST="$2"; HOST_SET=true; shift 2
+            ;;
+        --home)
+            [ $# -ge 2 ] || die "Опция $1 требует значение (см. --help)"
+            HOME_DIR="$2"; HOME_SET=true; shift 2
             ;;
         --data-dir)
             [ $# -ge 2 ] || die "Опция $1 требует значение (см. --help)"
@@ -196,7 +206,7 @@ mkdir -p "$TMP" "$STANDALONE_TMP"
 SYNTH_ENV_VARS=(
     SYNTH_DATA_DIR SYNTH_AUTH_DEBUG SYNTH_CONFIG SYNTH_CORE_PORT SYNTH_API_KEY
     SYNTH_HOST SYNTH_DEPLOY_MODE SYNTH_SECRET_KEY SYNTH_WORKSPACES_ROOT
-    SYNTH_DEFAULT_WORKSPACE SYNTH_WORKSPACE_OUTSIDE_ROOT SYNTH_PORT
+    SYNTH_DEFAULT_WORKSPACE SYNTH_WORKSPACE_OUTSIDE_ROOT SYNTH_PORT SYNTH_HOME
 )
 ENV_ARGS=()
 for _var in "${SYNTH_ENV_VARS[@]}"; do
@@ -422,6 +432,9 @@ echo "  Лог:    $RUN_LOG"
 # Явные переопределения прокидываем в serve только когда они заданы; иначе —
 # ровно как у пользователя npm-пакета (без --host/--port/--data-dir/--api-key).
 SERVE_ARGS=()
+# AD-079: home всегда передаётся явно (default tmp/standalone/home) — env
+# SYNTH_HOME уже очищен выше, флаг гарантирует изоляцию инстанса.
+SERVE_ARGS+=(--home "$HOME_DIR")
 [ "$API_KEY_SET" = true ] && SERVE_ARGS+=(--api-key "$API_KEY")
 [ "$HOST_SET" = true ] && SERVE_ARGS+=(--host "$HOST")
 [ "$PORT_SET" = true ] && SERVE_ARGS+=(--port "$PORT")
@@ -500,6 +513,7 @@ echo ""
 echo "  URL:        $ROOT_URL"
 echo "  API:        $BASE_URL"
 echo "  API-key:    $API_KEY"
+echo "  home:       $HOME_DIR"
 echo "  data-dir:   $DATA_DIR"
 echo "  prefix:     $PREFIX"
 echo ""

@@ -134,6 +134,11 @@ export interface StandaloneConfig {
   /** Путь к файлу credentials (~/.config/synth/credentials.json по умолчанию). */
   remoteCredentialsPath?: string;
   /**
+   * AD-079: путь к реестру профилей серверов (`<home>/profiles.json` либо XDG).
+   * Если не задан — `getProfilesPath()` (XDG-дефолт).
+   */
+  profilesPath?: string;
+  /**
    * Гибридный режим включён (remote.enabled в config.yaml либо задан OIDC
    * fallback --oidc-issuer/--oidc-client-id), даже если адрес сервера ещё не
    * известен (вводится в UI). Позволяет /auth/status отдать oidc_enabled=true и
@@ -345,9 +350,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   async function getHybridState() {
     const serverConfigured = !!config.defaultBackendUrl;
     // Реестр профилей серверов (для формы входа UI): известные серверы и последний
-    // использованный. Чтение файла ~/.config/synth/profiles.json — безопасно при
-    // отсутствии (пустой список/null).
-    const [knownProfiles, lastProfile] = await Promise.all([listProfiles(), getLastProfile()]);
+    // использованный. AD-079: путь задаётся createStandaloneApp (`<home>/profiles.json`);
+    // при отсутствии файла — пустой список/null.
+    const [knownProfiles, lastProfile] = await Promise.all([
+      listProfiles(config.profilesPath),
+      getLastProfile(config.profilesPath),
+    ]);
     return {
       // Гибрид «включён», когда настроен в конфиге (remote.enabled/--connect/
       // --oidc-issuer), известен адрес сервера или есть runtime-подключение.
@@ -540,7 +548,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
    */
   async function rememberServer(serverUrl: string, username: string): Promise<void> {
     try {
-      await ensureProfile(serverUrl, { username });
+      await ensureProfile(serverUrl, { username }, config.profilesPath);
     } catch {
       // best-effort: мета-реестр не критичен для входа
     }

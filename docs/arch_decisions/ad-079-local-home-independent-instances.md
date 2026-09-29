@@ -1,6 +1,6 @@
 # AD-079: Локальный home-каталог (`--home`) и независимые локальные инстансы
 
-> **Статус:** ⏳ Не реализовано (предложение)
+> **Статус:** ✅ Реализовано
 > **Дата:** 2026-09-29
 > **Источник:** согласовано 2026-09-29 (следствие проблем изоляции standalone/hybrid)
 
@@ -45,6 +45,17 @@
 - `scripts/standalone.sh` → `--home tmp/standalone/home --port <свой>`.
 - `scripts/hybrid.sh` → `--home <свой home> --port <свой>`.
 - Логи/сборка — как сейчас.
+
+## Реализация
+
+- `packages/shared/src/config/resolve.ts`: `resolveHome(explicitHome?, env?)`; home-параметр (`home?`) у `resolveDataDir`, `resolveWorkspacesRoot`, `resolveDefaultWorkspace`, `findConfigPath`, `defaultConfigPath`, `ensureFirstRun`; новые `resolveProfilesPath(home?)` и `resolveCredentialsPath(home?)`.
+- `packages/shared/src/config/loader.ts`: `LoadConfigOptions.home` — при заданном home конфиг читается строго из `<home>/config.yaml`.
+- `packages/core/src/profiles.ts`: `getProfilesPath(home?)` → `resolveProfilesPath`; `packages/core/src/remote/credentials.ts`: `defaultCredentialsPath(home?)` → `resolveCredentialsPath`.
+- `packages/core/src/server/app.ts`: `StandaloneConfig.profilesPath`, используется в `getHybridState`/`rememberServer`.
+- CLI (`packages/synth/src/cli.ts`, `packages/core/src/main.ts`): флаги `--home`/`--profiles`/`--credentials` на `serve`/`connect`/`disconnect`/`project publish|fork`/`secrets rotate`.
+- Скрипты: `scripts/standalone.sh` — home по умолчанию `tmp/standalone/home`; `scripts/hybrid.sh` — опция `--home`, без неё сохранено прежнее XDG-поведение (чтобы не терять существующие данные пользователя).
+
+`docs/CONFIGURATION.md` и `docs/DEVELOPMENT.md` отражают приоритеты путей и флаги.
 
 ## Последствия
 

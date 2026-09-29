@@ -66,9 +66,11 @@
   `POST /api/v2/llm/chat/completions` (`providers/remote.ts`); режим — `remote.llm`
   (`server` | `local` | `auto`).
 - Runtime-подключение: `connectRemote*`/`disconnectRemote` на хэндле
-  `createStandaloneApp`; профили серверов — `profiles.ts`
-  (`~/.config/synth/profiles.json`), credentials — `remote/credentials.ts`
-  (AD-042/045).
+  `createStandaloneApp`; профили серверов — `profiles.ts` (`getProfilesPath(home)` →
+  `<home>/profiles.json`; без home — XDG `~/.config/synth/profiles.json`),
+  credentials — `remote/credentials.ts` (`defaultCredentialsPath(home)`); в
+  `createStandaloneApp` путь задаётся опцией `profilesPath` рядом с
+  `remoteCredentialsPath` (AD-042/045/079).
 
 ## Карта модулей
 

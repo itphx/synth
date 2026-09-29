@@ -3,6 +3,7 @@ import { mkdtemp, rm, stat, access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  getProfilesPath,
   profileIdForUrl,
   loadProfiles,
   listProfiles,
@@ -11,6 +12,12 @@ import {
   ensureProfile,
   removeProfile,
 } from './profiles.js';
+
+describe('getProfilesPath (AD-079)', () => {
+  it('с home → <home>/profiles.json', () => {
+    expect(getProfilesPath('/tmp/synth-home')).toBe(join('/tmp/synth-home', 'profiles.json'));
+  });
+});
 
 describe('profiles', () => {
   let dir: string;

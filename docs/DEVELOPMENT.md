@@ -66,12 +66,15 @@ pnpm lint
 собирает npm-пакеты монорепо (`shared → core → ui → synth`), упаковывает их
 (`pnpm pack`), устанавливает в изолированный prefix (`npm install` четырёх `.tgz`)
 и запускает `synth serve` из установленного `node_modules/.bin/synth`. По умолчанию
-`serve` стартует **без переопределений** (родительское `SYNTH_*`-окружение
-очищается), поэтому эффективные пути/порт/host/ключ — ровно как у пользователя
-npm-пакета: dataDir `~/.local/share/synth`, config `~/.config/synth/config.yaml`,
+`serve` стартует с изолированным локальным home (AD-079):
+`--home tmp/standalone/home`, родительское `SYNTH_*`-окружение очищается. Все
+локальные пути резолвятся от home: dataDir `<home>/data`, config `<home>/config.yaml`,
+profiles `<home>/profiles.json`, credentials `<home>/credentials.json` — поэтому
+standalone **не** подхватывает `lastProfile` из общего `~/.config/synth/profiles.json`.
 host `127.0.0.1`, порт `core.port` (4300), API-ключ авто-генерируется и
-сохраняется в `{dataDir}/secrets/api-key`. Флаги `--port/--host/--data-dir/--api-key`
-остаются **явными переопределениями**. Нужен для ручной и автоматической проверки
+сохраняется в `<home>/data/secrets/api-key`. Флаги `--port/--host/--home/--data-dir/--api-key`
+остаются **явными переопределениями** (`--data-dir` приоритетнее `--home`).
+Нужен для ручной и автоматической проверки
 standalone-UI (в т.ч. диалога выбора рабочего каталога, AD-075), где managed
 показывает read-only, а standalone — политику `confirm`.
 
@@ -88,7 +91,8 @@ standalone-UI (в т.ч. диалога выбора рабочего катал
 |---|---|
 | `--port <port>` | явное переопределение порта (default: `core.port`, `4300`) |
 | `--host <host>` | явное переопределение адреса прослушивания (default: `127.0.0.1`) |
-| `--data-dir <path>` | явное переопределение каталога данных (default: `~/.local/share/synth`, как у npm-пакета) |
+| `--home <path>` | AD-079: локальный home-каталог (default: `tmp/standalone/home`); config/data/profiles/credentials резолвятся от него |
+| `--data-dir <path>` | явное переопределение каталога данных (приоритетнее `--home`) |
 | `--api-key <key>` | явный API-ключ local auth (по умолчанию — авто-генерация в `{dataDir}/secrets/api-key`; печатается в сводке) |
 | `--prefix <path>` | каталог установки пакетов (default: `tmp/standalone/install`) |
 | `--no-build` | не пересобирать пакеты (использовать уже собранные `dist`) |
@@ -111,7 +115,8 @@ debug-auth; `standalone.sh` ставит **собранные npm-пакеты**
 `synth serve` (один API-ключ, FileStore в dataDir) на дефолтах npm-пакета — ближе к конечному
 развёртыванию.
 `hybrid.sh` (`./scripts/hybrid.sh`) поднимает локальный core с подключением к удалённому backend
-(гибридный режим) — см. [HYBRID.md](./HYBRID.md).
+(гибридный режим) — см. [HYBRID.md](./HYBRID.md). Опция `--home <path>` (AD-079) изолирует
+config/data/profiles/credentials; без неё сохраняется текущее поведение (`~/.local/share/synth`).
 
 > Tarball'ы собираются через `pnpm pack` (не `npm pack`): только pnpm резолвит `workspace:*`
 > в реальную версию, иначе `npm install` не может разрешить локальные пакеты.

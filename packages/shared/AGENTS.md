@@ -38,6 +38,11 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `GitRepoConfig` (реестр, `path` обязателен) и `SSHKey`/`SSHKeyMeta` (`agentIds: string[]`),
   `gitRepoConfigSchema`/`normalizeGitRepoConfig` (legacy `repos`) и `sshKeyCreate/UpdateSchema`;
   i18n-ключ `sshkey.env_failed` (сбой подготовки SSH-окружения/askpass).
+- AD-079: `resolveHome(explicitHome?, env?)` (env `SYNTH_HOME`); home-параметр
+  (`home?`) у резолверов путей (`resolveDataDir`, `resolveWorkspacesRoot`,
+  `resolveDefaultWorkspace`, `findConfigPath`, `defaultConfigPath`, `ensureFirstRun`)
+  и новые `resolveProfilesPath`/`resolveCredentialsPath`; `loader.home` — при home
+  конфиг читается строго из `<home>/config.yaml` (без отката к XDG).
 
 ## i18n-контракт
 

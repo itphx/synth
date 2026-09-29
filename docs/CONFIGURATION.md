@@ -8,6 +8,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 
 - **CLI-флаги** передаются в `loadConfig({ overrides })` — самый высокий приоритет (например `--port`, `--api-key`, `--data-dir` у `synth serve`).
 - **Env vars** читаются поверх конфига в точках использования (см. таблицу ниже).
+- **AD-079 (home)**: `--home <dir>` (`SYNTH_HOME`) — базовый каталог локального инстанса. Пути: config `<home>/config.yaml`, dataDir `<home>/data`, profiles `<home>/profiles.json`, credentials `<home>/credentials.json`. Приоритет путей: явные флаги (`--data-dir`/`--config`/`--profiles`/`--credentials`) > `--home` > `SYNTH_HOME` > XDG-дефолты. Без home поведение не меняется.
 - **config.yaml** — файл, найденный каскадным поиском; сливается с дефолтами (`deepMerge`).
 - **Defaults** — схема `synthConfigSchema` в `packages/shared/src/config/types.ts`.
 
@@ -21,6 +22,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_DEFAULT_WORKSPACE` | Рабочий каталог по умолчанию (`storage.defaultWorkspace`) | `{dataDir}/workspaces/default` |
 | `SYNTH_WORKSPACE_OUTSIDE_ROOT` | AD-075: политика абсолютного workspace вне `workspacesRoot` (`confirm`/`deny`) | по режиму (standalone — `confirm`, managed — `deny`) |
 | `SYNTH_CONFIG` | Путь к `config.yaml` (приоритетнее каскадного поиска) | каскадный поиск |
+| `SYNTH_HOME` | AD-079: базовый home-каталог локального инстанса (`--home`): config/data/profiles/credentials резолвятся от него | — |
 | `SYNTH_HOST` | Адрес прослушивания HTTP-серверов (backend — `0.0.0.0`; `synth serve` — `127.0.0.1`) | `0.0.0.0` / `127.0.0.1` (serve) |
 | `SYNTH_PORT` | Порт бэкенда | `5000` |
 | `SYNTH_CORE_PORT` | Порт core (и `synth serve`) | `4300` |
@@ -54,10 +56,11 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 Каскадный поиск (от высшего приоритета к низшему):
 
 1. `--config` CLI-флаг или `SYNTH_CONFIG` env var
-2. `./synth.config.yaml` (CWD)
-3. `./config.yaml` (CWD)
-4. `~/.config/synth/config.yaml` (пользовательский)
-5. `/etc/synth/config.yaml` (системный)
+2. `<home>/config.yaml`, если задан `--home`/`SYNTH_HOME` (AD-079; при отсутствии файла дефолты, без отката к XDG)
+3. `./synth.config.yaml` (CWD)
+4. `./config.yaml` (CWD)
+5. `~/.config/synth/config.yaml` (пользовательский)
+6. `/etc/synth/config.yaml` (системный)
 
 Найденный файл сливается с дефолтами (`deepMerge`), затем применяются CLI-overrides. Реализация: `loadConfig` в `packages/shared/src/config/loader.ts`, `findConfigPath` в `resolve.ts`.
 
@@ -202,7 +205,7 @@ remote:                           # гибридный режим: локаль�
 
 ### Хранилище и рабочий каталог (`storage.*`, AD-075)
 
-- `storage.dataDir` — корень данных (`SYNTH_DATA_DIR`).
+- `storage.dataDir` — корень данных (`SYNTH_DATA_DIR`; при `--home`/`SYNTH_HOME` — `<home>/data`, AD-079).
 - `storage.workspacesRoot` — корень каталогов workspace проектов; если не задан — `{dataDir}/workspaces` (`SYNTH_WORKSPACES_ROOT`). Managed-проекты создают workspace внутри него (авто-имя `slugify(name)` + суффикс `-2/-3…`); абсолютный путь внутри root нормализуется в относительный.
 - `storage.defaultWorkspace` — рабочий каталог сессий без проекта; если не задан — `{dataDir}/workspaces/default` (`SYNTH_DEFAULT_WORKSPACE`). Runtime-override — `PUT /api/v2/settings/workspace`.
 - `storage.workspaceOutsideRoot` — политика для абсолютного `project.workspace` вне `workspacesRoot` (`confirm` — подтверждение флагом `confirmOutsideRoot`, `deny` — запрет). Пусто (`''`) — не задано, эффективно `confirm` в standalone; managed-backend жёстко использует `deny`. Env `SYNTH_WORKSPACE_OUTSIDE_ROOT`, runtime — `GET/PUT/DELETE /api/v2/settings/workspace-policy` (managed — read-only).

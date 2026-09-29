@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
-import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, ensureFirstRun } from './resolve.js';
+import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveHome, defaultConfigPath, findConfigPath, resolveProfilesPath, resolveCredentialsPath, ensureFirstRun } from './resolve.js';
 import { defaultConfig } from './defaults.js';
 import type { SynthConfig } from './types.js';
 
@@ -257,5 +257,143 @@ describe('resolveSecretKey (AD-076)', () => {
   it('НЕ читает реальный process.env, если передан env без переменной', () => {
     vi.stubEnv('SYNTH_SECRET_KEY', 'should-not-be-used');
     expect(resolveSecretKey(cfg, {})).toBe('');
+  });
+});
+
+describe('resolveHome (AD-079)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('явный флаг приоритетнее env.SYNTH_HOME', () => {
+    expect(resolveHome('/flag/home', { SYNTH_HOME: '/env/home' })).toBe(resolvePath('/flag/home'));
+  });
+
+  it('env.SYNTH_HOME используется, если флаг не задан', () => {
+    expect(resolveHome(null, { SYNTH_HOME: '/env/home' })).toBe(resolvePath('/env/home'));
+  });
+
+  it('пусто (нет флага и env) → null', () => {
+    expect(resolveHome(null, {})).toBeNull();
+    expect(resolveHome('', {})).toBeNull();
+  });
+
+  it('относительный флаг → абсолютный', () => {
+    const result = resolveHome('rel/home', {});
+    expect(isAbsolute(result!)).toBe(true);
+    expect(result).toBe(resolvePath('rel/home'));
+  });
+
+  it('НЕ читает реальный process.env, если передан env без SYNTH_HOME', () => {
+    vi.stubEnv('SYNTH_HOME', '/should-not-be-used');
+    expect(resolveHome(null, {})).toBeNull();
+  });
+});
+
+describe('resolveDataDir с home (AD-079)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('home и нет SYNTH_DATA_DIR/config → <home>/data', () => {
+    expect(resolveDataDir(defaultConfig, {}, '/h')).toBe(join('/h', 'data'));
+  });
+
+  it('home через env.SYNTH_HOME → <home>/data', () => {
+    expect(resolveDataDir(defaultConfig, { SYNTH_HOME: '/env/home' }, null)).toBe(
+      join('/env/home', 'data'),
+    );
+  });
+
+  it('SYNTH_DATA_DIR приоритетнее home', () => {
+    expect(resolveDataDir(defaultConfig, { SYNTH_DATA_DIR: '/env/data' }, '/h')).toBe('/env/data');
+  });
+
+  it('config.storage.dataDir приоритетнее home', () => {
+    expect(resolveDataDir(cfg, {}, '/h')).toBe('/test/data');
+  });
+});
+
+describe('defaultConfigPath (AD-079)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('с home → <home>/config.yaml (независимо от mode)', () => {
+    expect(defaultConfigPath('user', '/h')).toBe(join('/h', 'config.yaml'));
+    expect(defaultConfigPath('dev', '/h')).toBe(join('/h', 'config.yaml'));
+  });
+});
+
+describe('findConfigPath (AD-079)', () => {
+  let dir: string | null = null;
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    if (dir) {
+      await rm(dir, { recursive: true, force: true });
+      dir = null;
+    }
+  });
+
+  it('с home: существующий <home>/config.yaml → возвращает путь', async () => {
+    vi.stubEnv('SYNTH_CONFIG', '');
+    dir = await mkdtemp(join(tmpdir(), 'synth-findcfg-'));
+    const configPath = join(dir, 'config.yaml');
+    await writeFile(configPath, 'core: {}\n', 'utf-8');
+    expect(findConfigPath(dir)).toBe(configPath);
+  });
+
+  it('с home: отсутствует <home>/config.yaml → null (без отката к cwd/XDG)', async () => {
+    vi.stubEnv('SYNTH_CONFIG', '');
+    dir = await mkdtemp(join(tmpdir(), 'synth-findcfg-'));
+    expect(findConfigPath(dir)).toBeNull();
+  });
+});
+
+describe('resolveProfilesPath / resolveCredentialsPath (AD-079)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('с home → <home>/profiles.json и <home>/credentials.json', () => {
+    expect(resolveProfilesPath('/h')).toBe(join('/h', 'profiles.json'));
+    expect(resolveCredentialsPath('/h')).toBe(join('/h', 'credentials.json'));
+  });
+
+  it('без home → XDG-дефолт ~/.config/synth/...', () => {
+    vi.stubEnv('SYNTH_HOME', '');
+    vi.stubEnv('HOME', '/home/user');
+    expect(resolveProfilesPath(null)).toBe(join('/home/user', '.config', 'synth', 'profiles.json'));
+    expect(resolveCredentialsPath(null)).toBe(join('/home/user', '.config', 'synth', 'credentials.json'));
+  });
+});
+
+describe('ensureFirstRun с home (AD-079)', () => {
+  let dir: string | null = null;
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    if (dir) {
+      await rm(dir, { recursive: true, force: true });
+      dir = null;
+    }
+  });
+
+  it('dataDir = <home>/data, config = <home>/config.yaml создан', async () => {
+    vi.stubEnv('SYNTH_DEPLOY_MODE', 'dev');
+    vi.stubEnv('SYNTH_DATA_DIR', '');
+    vi.stubEnv('SYNTH_CONFIG', '');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    dir = await mkdtemp(join(tmpdir(), 'synth-home-firstrun-'));
+
+    const result = await ensureFirstRun(undefined, undefined, dir);
+
+    expect(result.dataDir).toBe(join(dir, 'data'));
+    expect(result.configPath).toBe(join(dir, 'config.yaml'));
+    expect(existsSync(join(dir, 'config.yaml'))).toBe(true);
+    expect(existsSync(join(dir, 'data', 'sessions'))).toBe(true);
   });
 });

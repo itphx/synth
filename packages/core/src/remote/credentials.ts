@@ -11,12 +11,12 @@
 //   }
 // }
 // Один файл может хранить credentials для нескольких backend-серверов.
-// По умолчанию путь — ~/.config/synth/credentials.json.
+// По умолчанию путь — ~/.config/synth/credentials.json; AD-079: при
+// `--home`/`SYNTH_HOME` — `<home>/credentials.json`.
 
 import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { homedir } from 'node:os';
-import { atomicWrite } from '@itphx/synth-shared';
+import { dirname } from 'node:path';
+import { atomicWrite, resolveCredentialsPath } from '@itphx/synth-shared';
 import type { RemoteCredentials } from './types.js';
 
 /** Права файла credentials: только владелец (0600). */
@@ -24,9 +24,12 @@ const CREDENTIALS_FILE_MODE = 0o600;
 
 type CredentialsFile = Record<string, RemoteCredentials>;
 
-/** Путь к файлу credentials по умолчанию (~/.config/synth/credentials.json). */
-export function defaultCredentialsPath(): string {
-  return join(homedir(), '.config', 'synth', 'credentials.json');
+/**
+ * Путь к файлу credentials. AD-079: при заданном home — `<home>/credentials.json`,
+ * иначе XDG-дефолт `~/.config/synth/credentials.json`.
+ */
+export function defaultCredentialsPath(home?: string): string {
+  return resolveCredentialsPath(home);
 }
 
 async function readCredentialsFile(path: string): Promise<CredentialsFile> {
