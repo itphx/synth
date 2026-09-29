@@ -34,9 +34,11 @@ import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
 import type { UsagePricing } from '../../providers/usage.js';
 import { serializeMessage, serializeSession } from '../../server/serialize.js';
 import { formatSkillsCatalogBlock } from '../skills/catalog.js';
+import type { RuntimeDeps } from './runtime-deps.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import {
   messageToLLMMessage, publishMessageAdded, resolveSubagentPrompt, runSubagent,
+  buildSubagentUnavailableToolsSection,
   type SubagentRetryConfig, type TaskExtra,
 } from './task.js';
 
@@ -88,6 +90,11 @@ export interface SubagentResumeDeps {
   securityConfig?: SecurityConfig;
   /** Fallback permission (глобальный конфиг), если у дочерней сессии нет своей. */
   permissionConfig?: PermissionConfig;
+  /**
+   * AD-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) —
+   * dependency-гейт в permission-слое resumed-саб-агента и `[НЕДОСТУПНЫЕ ТУЛЫ]`.
+   */
+  runtimeDeps?: RuntimeDeps;
   /** AD-071 §2.1: активные MCP-серверы — дочерняя сессия наследует скоуп родителя. */
   mcpServers?: string[];
   shellPolicy?: ShellPolicy | null;
@@ -259,6 +266,16 @@ export async function runSubagentResume(
       }
     }
 
+    // AD-070 §2.9.1: недоступные по внешней зависимости (git/rg/sh) тулы —
+    // в системный промпт resumed-саб-агента (как state-сообщение родителя).
+    const subagentTools = deps.agentRegistry.getToolsForAgent(agentDef.id, deps.mcpServers);
+    const unavailableSection = buildSubagentUnavailableToolsSection(
+      subagentTools,
+      deps.runtimeDeps,
+      child.settings.language || 'ru',
+    );
+    if (unavailableSection) systemPrompt += `\n\n${unavailableSection}`;
+
     const extra: TaskExtra = {
       provider,
       agentRegistry: deps.agentRegistry,
@@ -275,6 +292,8 @@ export async function runSubagentResume(
       sessionId: child.id,
       callerAgentRole: agentRole,
       permissionConfig: child.settings.permission ?? deps.permissionConfig,
+      // AD-070 §2.9.1: dependency-гейт permission-слоя resumed-саб-агента.
+      runtimeDeps: deps.runtimeDeps,
       securityConfig: deps.securityConfig,
       language: child.settings.language || 'ru',
       shellPolicy: deps.shellPolicy ?? undefined,
@@ -297,7 +316,7 @@ export async function runSubagentResume(
       llmSystemPrompt: systemPrompt,
       initialMessages,
       provider,
-      tools: deps.agentRegistry.getToolsForAgent(agentDef.id, deps.mcpServers),
+      tools: subagentTools,
       childSessionId: child.id,
       parentSessionId: parent.id,
       extra,

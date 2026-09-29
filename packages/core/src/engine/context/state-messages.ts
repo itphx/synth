@@ -53,7 +53,7 @@ export function createStateMessage(type: StateMessageType, content: string): Mes
  * AD-070 §2.9.1: компактная секция недоступных сейчас тулов с причиной и
  * подсказкой. Одна строка на тул; пустой список → '' (секции нет).
  */
-function renderUnavailableTools(tools: UnavailableTool[], language: string): string {
+export function renderUnavailableTools(tools: UnavailableTool[], language: string): string {
   if (tools.length === 0) return '';
   const en = language === 'en';
   const header = en ? '[UNAVAILABLE TOOLS]' : '[НЕДОСТУПНЫЕ ТУЛЫ]';

@@ -2927,6 +2927,10 @@ export class ChatOrchestrator {
                   callId: tcId,
                   toolRegistry: this._toolRegistry,
                   permissionConfig: effectivePermissionConfig,
+                  // AD-070 §2.9.1: доступность внешних программ (git/rg/sh) —
+                  // в permission-слой саб-агента (enforce `dependency`) и его
+                  // `[НЕДОСТУПНЫЕ ТУЛЫ]`.
+                  runtimeDeps: this._runtimeDeps,
                   shellPolicy: this._getProtectedPaths() ?? undefined,
                   protectedPaths: this._getProtectedPaths() ?? undefined,
                   protectedPathsEnabled: this._getProtectedPathsEnabled(),
@@ -3621,6 +3625,8 @@ export class ChatOrchestrator {
       routerConfig: this._routerConfig ?? undefined,
       securityConfig: this._securityConfig,
       permissionConfig: this._permissionConfig,
+      // AD-070 §2.9.1: dependency-гейт и `[НЕДОСТУПНЫЕ ТУЛЫ]` resumed-саб-агента.
+      runtimeDeps: this._runtimeDeps,
       shellPolicy: this._getProtectedPaths() ?? undefined,
       protectedPaths: this._getProtectedPaths() ?? undefined,
       protectedPathsEnabled: this._getProtectedPathsEnabled(),

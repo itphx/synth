@@ -23,7 +23,9 @@ import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { estimatePromptChars } from '../context/token-ratio.js';
+import { renderUnavailableTools, type UnavailableTool } from '../context/state-messages.js';
 import { formatSkillsCatalogBlock } from '../skills/catalog.js';
+import { isRuntimeDepAvailable, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, type RuntimeDeps } from './runtime-deps.js';
 import type { SkillRuntime } from '../skills/types.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
@@ -48,6 +50,12 @@ export interface TaskExtra {
   callerAgentRole?: string;
   /** Permissions родительской сессии (AD-029) — наследуются саб-агентом с deny-дополнениями. */
   permissionConfig?: PermissionConfig;
+  /**
+   * AD-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) родителя.
+   * Передаётся в permission-слой саб-агента (enforce `dependency`) и в секцию
+   * `[НЕДОСТУПНЫЕ ТУЛЫ]` его системного промпта. Не задана — fail-open.
+   */
+  runtimeDeps?: RuntimeDeps;
   /** Секция безопасности (защита от Indirect Prompt Injection) из config.yaml. */
   securityConfig?: SecurityConfig;
   /** Язык сессии (для локализованных сообщений безопасности). */
@@ -116,6 +124,34 @@ export function resolveSubagentPrompt(
     }
   }
   return agentDef.subagentPrompt || '';
+}
+
+/**
+ * AD-070 §2.9.1: секция `[НЕДОСТУПНЫЕ ТУЛЫ]` для системного промпта саб-агента.
+ *
+ * Набор тулов саб-агента постоянен (роль/режим enforce'ит permission-слой), а
+ * недоступность по внешней зависимости (`git`/`rg`/`sh`) сообщается модели здесь —
+ * тем же рендером, что и в state-сообщениях основного агента. Пусто (нет
+ * недоступных) → ''.
+ */
+export function buildSubagentUnavailableToolsSection(
+  tools: ToolForLLM[] | undefined,
+  runtimeDeps: RuntimeDeps | undefined,
+  language: string,
+): string {
+  if (!runtimeDeps || !tools || tools.length === 0) return '';
+  const unavailable: UnavailableTool[] = [];
+  for (const tool of tools) {
+    const dep = TOOL_RUNTIME_DEP[tool.function.name];
+    if (dep && !isRuntimeDepAvailable(runtimeDeps, dep)) {
+      unavailable.push({
+        name: tool.function.name,
+        reason: 'dependency',
+        binary: RUNTIME_DEP_BINARY[dep],
+      });
+    }
+  }
+  return renderUnavailableTools(unavailable, language);
 }
 
 export function messageToLLMMessage(msg: Message): LLMMessage {
@@ -484,6 +520,15 @@ export const taskTool: ToolDefinition = {
         // каталог скиллов не должен ломать запуск саб-агента
       }
     }
+
+    // AD-070 §2.9.1: недоступные по внешней зависимости (git/rg/sh) тулы —
+    // в системный промпт саб-агента, как state-сообщение у основного агента.
+    const unavailableSection = buildSubagentUnavailableToolsSection(
+      tools,
+      extra.runtimeDeps,
+      extra.parentSessionSettings?.language || 'ru',
+    );
+    if (unavailableSection) llmSystemPrompt += `\n\n${unavailableSection}`;
 
     // ─── Выбор провайдера для саб-агента через роутер (AD-034 Фаза 4) ──
     let effectiveProvider = extra.provider;
@@ -1439,6 +1484,8 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           shellPolicy: extra.shellPolicy ?? undefined,
           protectedPaths: extra.protectedPaths ?? undefined,
           protectedPathsEnabled: extra.protectedPathsEnabled,
+          // AD-070 §2.9.1: зависимость окружения (git/rg/sh) — как у родителя.
+          runtimeDeps: extra.runtimeDeps,
         });
 
         if (permissionDecision.action === 'deny') {
