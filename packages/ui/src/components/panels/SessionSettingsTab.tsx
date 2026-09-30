@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { TodoItem, TodoStatus, TodoPriority, McpServerEffective } from '@itphx/synth-shared'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
@@ -20,6 +20,209 @@ import { SelectContent, SelectItem } from '../ui/select'
 import { InfoField as Field, InfoSection as Section, ModelPairSelect, SelectField, SliderField } from '../ui/settings'
 import { PanelTab } from './PanelTab'
 
+/** Задержка автосохранения для инпутов/слайдеров (тумблеры/селекты сохраняются сразу). */
+const AUTOSAVE_DEBOUNCE_MS = 500
+
+/** Поля формы вкладки «Сессия», участвующие в автосохранении. */
+interface SessionFormValues {
+  debugEnabled: boolean
+  toolsPolicy: ToolsPolicy | ''
+  mcpPolicy: ToolsPolicy | ''
+  routingEnabled: boolean
+  routingStrategy: 'auto' | 'content' | 'cost' | 'content+cost'
+  routingContentCodingProvider: string
+  routingContentCodingModel: string
+  routingContentChatProvider: string
+  routingContentChatModel: string
+  routingContentResearchProvider: string
+  routingContentResearchModel: string
+  routingEscalationEnabled: boolean
+  routingEscalationFallbackProvider: string
+  routingEscalationFallbackModel: string
+  routingEscalationMinLength: number
+  routingCostEnabled: boolean
+  routingCostCheapProvider: string
+  routingCostCheapModel: string
+  routingCostMaxTokens: number
+  routingSubagentEnabled: boolean
+  routingSubagentModel: string
+  routingSubagentProvider: string
+  microFirst: boolean
+  microConfidenceThreshold: number
+  embeddingEnabled: boolean
+  embedProvider: string
+  embedModel: string
+  askTimeoutEnabled: boolean
+  askTimeoutSec: string
+}
+
+/** Поля, сохраняемые немедленно: тумблеры и селекты. Инпуты/слайдеры — с debounce. */
+const IMMEDIATE_FORM_KEYS: ReadonlySet<keyof SessionFormValues> = new Set([
+  'debugEnabled',
+  'toolsPolicy',
+  'mcpPolicy',
+  'routingEnabled',
+  'routingStrategy',
+  'routingContentCodingProvider',
+  'routingContentCodingModel',
+  'routingContentChatProvider',
+  'routingContentChatModel',
+  'routingContentResearchProvider',
+  'routingContentResearchModel',
+  'routingEscalationEnabled',
+  'routingEscalationFallbackProvider',
+  'routingEscalationFallbackModel',
+  'routingCostEnabled',
+  'routingCostCheapProvider',
+  'routingCostCheapModel',
+  'routingSubagentEnabled',
+  'routingSubagentModel',
+  'routingSubagentProvider',
+  'microFirst',
+  'embeddingEnabled',
+  'embedProvider',
+  'embedModel',
+  'askTimeoutEnabled',
+])
+
+/**
+ * Нормализация полей таймаута для сравнения «есть ли изменения»: 0 или пустые секунды
+ * означают «таймаут выключен» (askTimeoutMs=0 — без таймаута), поэтому неактивный
+ * тумблер с нулевым вводом приравнивается к выключенному. Тело запроса при этом
+ * строится по «сырым» значениям формы (семантика `askTimeoutMs` не меняется).
+ */
+function normalizeAskTimeout(values: SessionFormValues): SessionFormValues {
+  const active = values.askTimeoutEnabled && (Number(values.askTimeoutSec) || 0) > 0
+  return {
+    ...values,
+    askTimeoutEnabled: active,
+    askTimeoutSec: active ? String(Number(values.askTimeoutSec)) : '',
+  }
+}
+
+/**
+ * Нормализованный слепок формы из настроек сессии: отсутствующие ключи заменяются
+ * дефолтами формы, `askTimeoutMs` — эффективным значением (per-session override или
+ * глобальный дефолт). Используется и для гидратации, и как эталон «нет изменений»
+ * при автосохранении (сравнение `form` ↔ `sessionValues`).
+ */
+function formValuesFromSettings(
+  settings: Record<string, unknown> | undefined,
+  defaultAskTimeoutMs: number,
+): SessionFormValues {
+  const s = settings ?? {}
+  const permCfg = s.permission as { askTimeoutMs?: number } | undefined
+  const effMs = permCfg?.askTimeoutMs !== undefined ? permCfg.askTimeoutMs : defaultAskTimeoutMs
+  const rc = s.routingContent as Record<string, { provider?: string; model?: string }> | undefined
+  const resc = s.routingEscalation as Record<string, unknown> | undefined
+  const rcost = s.routingCost as Record<string, unknown> | undefined
+  const sar = s.subagentRouting as Record<string, unknown> | undefined
+  return {
+    debugEnabled: (s.debugEnabled as boolean | undefined) ?? false,
+    toolsPolicy: (s.toolsPolicy as ToolsPolicy | undefined) ?? '',
+    mcpPolicy: (s.mcpPolicy as ToolsPolicy | undefined) ?? '',
+    routingEnabled: (s.routingEnabled as boolean | undefined) ?? false,
+    routingStrategy: (s.routingStrategy as SessionFormValues['routingStrategy'] | undefined) ?? 'auto',
+    routingContentCodingProvider: rc?.coding?.provider ?? '',
+    routingContentCodingModel: rc?.coding?.model ?? '',
+    routingContentChatProvider: rc?.chat?.provider ?? '',
+    routingContentChatModel: rc?.chat?.model ?? '',
+    routingContentResearchProvider: rc?.research?.provider ?? '',
+    routingContentResearchModel: rc?.research?.model ?? '',
+    routingEscalationEnabled: (resc?.enabled as boolean | undefined) ?? false,
+    routingEscalationFallbackProvider: (resc?.fallbackProvider as string | undefined) ?? '',
+    routingEscalationFallbackModel: (resc?.fallbackModel as string | undefined) ?? '',
+    routingEscalationMinLength: (resc?.minLength as number | undefined) ?? 10,
+    routingCostEnabled: (rcost?.enabled as boolean | undefined) ?? false,
+    routingCostCheapProvider: (rcost?.cheapProvider as string | undefined) ?? '',
+    routingCostCheapModel: (rcost?.cheapModel as string | undefined) ?? '',
+    routingCostMaxTokens: (rcost?.maxCheapTokens as number | undefined) ?? 500,
+    routingSubagentEnabled: (sar?.enabled as boolean | undefined) ?? false,
+    routingSubagentModel: (sar?.model as string | undefined) ?? '',
+    routingSubagentProvider: (sar?.provider as string | undefined) ?? '',
+    microFirst: (s.microFirst as boolean | undefined) ?? false,
+    microConfidenceThreshold: (s.microConfidenceThreshold as number | undefined) ?? 0.8,
+    embeddingEnabled: (s.embeddingEnabled as boolean | undefined) ?? false,
+    embedProvider: (s.embedProvider as string | undefined) ?? '',
+    embedModel: (s.embedModel as string | undefined) ?? '',
+    askTimeoutEnabled: permCfg?.askTimeoutMs !== 0,
+    askTimeoutSec: String(Math.round(effMs / 1000)),
+  }
+}
+
+/**
+ * Тело `PATCH /sessions/:id`, идентичное прежнему `handleSave`: семантика `askTimeout`
+ * сохранена (0 — «без таймаута»; значение, равное глобальному дефолту, не пишем как
+ * override, сессия следует дефолту).
+ */
+function buildSettingsBody(
+  values: SessionFormValues,
+  session: { id: string; settings: Record<string, unknown> },
+  provider: string | null,
+  model: string | null,
+  defaultAskTimeoutMs: number,
+): Record<string, unknown> {
+  const currentPermission = session.settings.permission as Record<string, unknown> | undefined
+  const enteredMs = Math.round((Number(values.askTimeoutSec) || 0) * 1000)
+  let permissionSettings: Record<string, unknown> | undefined
+  if (values.askTimeoutEnabled) {
+    if (enteredMs === defaultAskTimeoutMs) {
+      if (currentPermission && 'askTimeoutMs' in currentPermission) {
+        const rest = { ...currentPermission }
+        delete rest.askTimeoutMs
+        permissionSettings = rest
+      } else {
+        permissionSettings = currentPermission
+      }
+    } else {
+      permissionSettings = { ...(currentPermission ?? {}), askTimeoutMs: enteredMs }
+    }
+  } else {
+    permissionSettings = { ...(currentPermission ?? {}), askTimeoutMs: 0 }
+  }
+
+  return {
+    ...session.settings,
+    provider,
+    model,
+    debugEnabled: values.debugEnabled,
+    routingEnabled: values.routingEnabled,
+    routingStrategy: values.routingStrategy,
+    routingContent: {
+      coding: { provider: values.routingContentCodingProvider, model: values.routingContentCodingModel },
+      chat: { provider: values.routingContentChatProvider, model: values.routingContentChatModel },
+      research: { provider: values.routingContentResearchProvider, model: values.routingContentResearchModel },
+    },
+    routingEscalation: {
+      enabled: values.routingEscalationEnabled,
+      fallbackProvider: values.routingEscalationFallbackProvider,
+      fallbackModel: values.routingEscalationFallbackModel,
+      checks: ['min_length' as const],
+      minLength: values.routingEscalationMinLength,
+    },
+    routingCost: {
+      enabled: values.routingCostEnabled,
+      cheapProvider: values.routingCostCheapProvider,
+      cheapModel: values.routingCostCheapModel,
+      maxCheapTokens: values.routingCostMaxTokens,
+    },
+    subagentRouting: {
+      enabled: values.routingSubagentEnabled,
+      model: values.routingSubagentModel,
+      provider: values.routingSubagentProvider || undefined,
+    },
+    microFirst: values.microFirst,
+    microConfidenceThreshold: values.microConfidenceThreshold,
+    embeddingEnabled: values.embeddingEnabled,
+    embedProvider: values.embedProvider,
+    embedModel: values.embedModel,
+    // AD-071 §2.3: '' → undefined (сессия следует глобальной политике).
+    toolsPolicy: values.toolsPolicy || undefined,
+    mcpPolicy: values.mcpPolicy || undefined,
+    ...(permissionSettings ? { permission: permissionSettings } : {}),
+  }
+}
+
 export function SessionSettingsTab() {
   const { t, locale } = useI18n()
   const { notify } = useNotification()
@@ -36,7 +239,11 @@ export function SessionSettingsTab() {
 
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [debugEnabled, setDebugEnabled] = useState(false)
-  const [saving, setSaving] = useState(false)
+  // Автосохранение: какое поле сохраняется сейчас (для pending-индикации контрола).
+  const [pendingField, setPendingField] = useState<string | null>(null)
+  // Отложенное (debounce) сохранение и его таймер — для best-effort дофлаша.
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingSaveRef = useRef<(() => void) | null>(null)
 
   const [mcpEffective, setMcpEffective] = useState<McpServerEffective[]>([])
   const [mcpLoading, setMcpLoading] = useState(false)
@@ -187,170 +394,200 @@ export function SessionSettingsTab() {
     synthApi.getMcpPolicyInfo().then((r) => setGlobalMcpPolicy(r.policy)).catch(() => {})
   }, [])
 
-  // Синхронизируем локальную форму с сессией только при смене сессии или
-  // глобального дефолта таймаута — иначе любое обновление объекта сессии
-  // (WS-события, сохранение) затирало бы несохранённые правки.
-  const lastSyncedRef = useRef<{ id: string | undefined; defaultMs: number } | null>(null)
+  // «Эпоха» гидратации формы: для какой сессии и какого глобального дефолта таймаута
+  // форма заполнена. Служит и гейтом автосохранения (не сохранять до/во время
+  // гидратации и при смене сессии), и защитой гидратации от лишних прогонов.
+  const hydratedRef = useRef<{ id: string | undefined; defaultMs: number } | null>(null)
 
-  useEffect(() => {
-    if (session && session.settings) {
-      if (
-        lastSyncedRef.current?.id === session.id
-        && lastSyncedRef.current?.defaultMs === defaultAskTimeoutMs
-      ) {
-        return
-      }
-      lastSyncedRef.current = { id: session.id, defaultMs: defaultAskTimeoutMs }
+  // Слепок текущих значений формы и эталон «как в session.settings» (с дефолтами).
+  // Равенство `form` ↔ `sessionValues` означает «изменений нет» — сохранять нечего.
+  const form = useMemo<SessionFormValues>(() => ({
+    debugEnabled,
+    toolsPolicy,
+    mcpPolicy,
+    routingEnabled,
+    routingStrategy,
+    routingContentCodingProvider,
+    routingContentCodingModel,
+    routingContentChatProvider,
+    routingContentChatModel,
+    routingContentResearchProvider,
+    routingContentResearchModel,
+    routingEscalationEnabled,
+    routingEscalationFallbackProvider,
+    routingEscalationFallbackModel,
+    routingEscalationMinLength,
+    routingCostEnabled,
+    routingCostCheapProvider,
+    routingCostCheapModel,
+    routingCostMaxTokens,
+    routingSubagentEnabled,
+    routingSubagentModel,
+    routingSubagentProvider,
+    microFirst,
+    microConfidenceThreshold,
+    embeddingEnabled,
+    embedProvider,
+    embedModel,
+    askTimeoutEnabled,
+    askTimeoutSec,
+  }), [
+    debugEnabled, toolsPolicy, mcpPolicy, routingEnabled, routingStrategy,
+    routingContentCodingProvider, routingContentCodingModel,
+    routingContentChatProvider, routingContentChatModel,
+    routingContentResearchProvider, routingContentResearchModel,
+    routingEscalationEnabled, routingEscalationFallbackProvider, routingEscalationFallbackModel,
+    routingEscalationMinLength, routingCostEnabled, routingCostCheapProvider, routingCostCheapModel,
+    routingCostMaxTokens, routingSubagentEnabled, routingSubagentModel, routingSubagentProvider,
+    microFirst, microConfidenceThreshold, embeddingEnabled, embedProvider, embedModel,
+    askTimeoutEnabled, askTimeoutSec,
+  ])
 
-      const sp = session.settings.provider as string | undefined
-      const sm = session.settings.model as string | undefined
-      const de = session.settings.debugEnabled as boolean | undefined
-      if (sp) setSelectedProvider(sp)
-      if (sm) setSelectedModel(sm)
-      if (de !== undefined) setDebugEnabled(de)
+  const sessionValues = useMemo(
+    () => formValuesFromSettings(session?.settings, defaultAskTimeoutMs),
+    [session?.settings, defaultAskTimeoutMs],
+  )
 
-      // Routing settings
-      const re = session.settings.routingEnabled as boolean | undefined
-      const rs = session.settings.routingStrategy as 'auto' | 'content' | 'cost' | 'content+cost' | undefined
-      const rc = session.settings.routingContent as Record<string, { provider: string; model: string }> | undefined
-      const resc = session.settings.routingEscalation as Record<string, unknown> | undefined
-      const rcost = session.settings.routingCost as Record<string, unknown> | undefined
-      const sar = session.settings.subagentRouting as Record<string, unknown> | undefined
+  const dirtyKeys = useMemo(() => {
+    if (!session) return []
+    const formForCompare = normalizeAskTimeout(form)
+    const sessionForCompare = normalizeAskTimeout(sessionValues)
+    return (Object.keys(formForCompare) as Array<keyof SessionFormValues>)
+      .filter((key) => formForCompare[key] !== sessionForCompare[key])
+  }, [form, sessionValues, session])
 
-      if (re !== undefined) setRoutingEnabled(re)
-      if (rs) setRoutingStrategy(rs)
-      if (rc?.coding?.provider) setRoutingContentCodingProvider(rc.coding.provider)
-      if (rc?.coding?.model) setRoutingContentCodingModel(rc.coding.model)
-      if (rc?.chat?.provider) setRoutingContentChatProvider(rc.chat.provider)
-      if (rc?.chat?.model) setRoutingContentChatModel(rc.chat.model)
-      if (rc?.research?.provider) setRoutingContentResearchProvider(rc.research.provider)
-      if (rc?.research?.model) setRoutingContentResearchModel(rc.research.model)
-      if (resc) {
-        if (resc.enabled !== undefined) setRoutingEscalationEnabled(resc.enabled as boolean)
-        if (resc.fallbackProvider) setRoutingEscalationFallbackProvider(resc.fallbackProvider as string)
-        if (resc.fallbackModel) setRoutingEscalationFallbackModel(resc.fallbackModel as string)
-        if (resc.minLength !== undefined) setRoutingEscalationMinLength(resc.minLength as number)
-      }
-      if (rcost) {
-        if (rcost.enabled !== undefined) setRoutingCostEnabled(rcost.enabled as boolean)
-        if (rcost.cheapProvider) setRoutingCostCheapProvider(rcost.cheapProvider as string)
-        if (rcost.cheapModel) setRoutingCostCheapModel(rcost.cheapModel as string)
-        if (rcost.maxCheapTokens !== undefined) setRoutingCostMaxTokens(rcost.maxCheapTokens as number)
-      }
-      if (sar) {
-        if (sar.enabled !== undefined) setRoutingSubagentEnabled(sar.enabled as boolean)
-        if (sar.model) setRoutingSubagentModel(sar.model as string)
-        if (sar.provider) setRoutingSubagentProvider(sar.provider as string)
-      }
+  // Провайдер/модель берём из стора (как раньше в `handleSave`) — через ref, чтобы
+  // не пересоздавать сохранение на каждое изменение выбора модели.
+  const providerRef = useRef(selectedProviderName)
+  const modelRef = useRef(selectedModelName)
+  const defaultTimeoutRef = useRef(defaultAskTimeoutMs)
+  providerRef.current = selectedProviderName
+  modelRef.current = selectedModelName
+  defaultTimeoutRef.current = defaultAskTimeoutMs
 
-      // Быстрые ответы
-      const mf = session.settings.microFirst as boolean | undefined
-      const mct = session.settings.microConfidenceThreshold as number | undefined
-      if (mf !== undefined) setMicroFirst(mf)
-      if (mct !== undefined) setMicroConfidenceThreshold(mct)
-      // Embedding
-      const ee = session.settings.embeddingEnabled as boolean | undefined
-      const ep = session.settings.embedProvider as string | undefined
-      const em = session.settings.embedModel as string | undefined
-      if (ee !== undefined) setEmbeddingEnabled(ee)
-      if (ep) setEmbedProvider(ep)
-      if (em) setEmbedModel(em)
-      // Таймаут подтверждения: per-session override, иначе глобальный дефолт.
-      // askTimeoutMs === 0 → «таймаут выключен» (toggle off).
-      const permCfg = session.settings.permission as { askTimeoutMs?: number } | undefined
-      const effMs = permCfg?.askTimeoutMs !== undefined ? permCfg.askTimeoutMs : defaultAskTimeoutMs
-      setAskTimeoutEnabled(permCfg?.askTimeoutMs !== 0)
-      setAskTimeoutSec(String(Math.round(effMs / 1000)))
-      // AD-071 §2.3: per-session override политики инструментов ('' = глобальная).
-      setToolsPolicy((session.settings.toolsPolicy as ToolsPolicy | undefined) ?? '')
-      setMcpPolicy((session.settings.mcpPolicy as ToolsPolicy | undefined) ?? '')
+  const runSave = useCallback(async (
+    field: string,
+    values: SessionFormValues,
+    target: { id: string; settings: Record<string, unknown> },
+  ) => {
+    setPendingField(field)
+    try {
+      const body = buildSettingsBody(values, target, providerRef.current, modelRef.current, defaultTimeoutRef.current)
+      const updated = await synthApi.updateSession(target.id, { settings: body })
+      useSessionsStore.getState().upsertSession(updated)
+    } catch {
+      notify({ text: t('sessionSettings.saveError'), type: 'error', category: 'error', sessionId: target.id })
+    } finally {
+      setPendingField(null)
     }
-  }, [session, defaultAskTimeoutMs])
+  }, [notify, t])
+  const runSaveRef = useRef(runSave)
+  runSaveRef.current = runSave
 
-  const handleSave = async () => {
-    if (!sessionId) return
-    if (!session) {
-      notify({ text: t('sessionSettings.notLoaded'), type: 'warning', category: 'error', sessionId: sessionId || undefined })
+  // Автосохранение: тумблеры/селекты — сразу, инпуты/слайдеры — с debounce ~500 мс.
+  // До гидратации формы под текущую сессию/дефолт (hydratedRef) и при отсутствии
+  // реальных отличий от session.settings (dirtyKeys пуст) запрос не шлём.
+  useEffect(() => {
+    if (
+      !sessionId
+      || !session
+      || hydratedRef.current?.id !== session.id
+      || hydratedRef.current?.defaultMs !== defaultAskTimeoutMs
+    ) {
       return
     }
-    setSaving(true)
-    try {
-      // Per-session таймаут подтверждения (askTimeoutMs). ВКЛ: применяется таймаут
-      // из поля (значение, равное глобальному дефолту, не пишем как override —
-      // сессия следует дефолту). ВЫКЛ: askTimeoutMs=0 («без таймаута», ждём ответа
-      // бесконечно) — override пишем всегда.
-      const currentPermission = session.settings.permission as Record<string, unknown> | undefined
-      const enteredMs = Math.round((Number(askTimeoutSec) || 0) * 1000)
-      let permissionSettings: Record<string, unknown> | undefined
-      if (askTimeoutEnabled) {
-        // ВКЛ: применяется таймаут из поля. Значение, равное глобальному дефолту,
-        // не пишем как override (сессия следует дефолту) — как и раньше.
-        if (enteredMs === defaultAskTimeoutMs) {
-          if (currentPermission && 'askTimeoutMs' in currentPermission) {
-            const rest = { ...currentPermission }
-            delete rest.askTimeoutMs
-            permissionSettings = rest
-          } else {
-            permissionSettings = currentPermission
-          }
-        } else {
-          permissionSettings = { ...(currentPermission ?? {}), askTimeoutMs: enteredMs }
-        }
-      } else {
-        // ВЫКЛ: таймаут отключён (0 = «без таймаута»), override пишем всегда.
-        permissionSettings = { ...(currentPermission ?? {}), askTimeoutMs: 0 }
-      }
-
-      const updated = await synthApi.updateSession(sessionId, {
-        settings: {
-          ...(session.settings as Record<string, unknown>),
-          provider: selectedProviderName,
-          model: selectedModelName,
-          debugEnabled: debugEnabled,
-          routingEnabled,
-          routingStrategy,
-          routingContent: {
-            coding: { provider: routingContentCodingProvider, model: routingContentCodingModel },
-            chat: { provider: routingContentChatProvider, model: routingContentChatModel },
-            research: { provider: routingContentResearchProvider, model: routingContentResearchModel },
-          },
-          routingEscalation: {
-            enabled: routingEscalationEnabled,
-            fallbackProvider: routingEscalationFallbackProvider,
-            fallbackModel: routingEscalationFallbackModel,
-            checks: ['min_length' as const],
-            minLength: routingEscalationMinLength,
-          },
-          routingCost: {
-            enabled: routingCostEnabled,
-            cheapProvider: routingCostCheapProvider,
-            cheapModel: routingCostCheapModel,
-            maxCheapTokens: routingCostMaxTokens,
-          },
-          subagentRouting: {
-            enabled: routingSubagentEnabled,
-            model: routingSubagentModel,
-            provider: routingSubagentProvider || undefined,
-          },
-          microFirst,
-          microConfidenceThreshold,
-          embeddingEnabled,
-          embedProvider,
-          embedModel,
-          // AD-071 §2.3: '' → undefined (сессия следует глобальной политике).
-          toolsPolicy: toolsPolicy || undefined,
-          mcpPolicy: mcpPolicy || undefined,
-          ...(permissionSettings ? { permission: permissionSettings } : {}),
-        },
-      })
-      useSessionsStore.getState().upsertSession(updated)
-      notify({ text: t('sessionSettings.saved'), type: 'success', category: 'system', sessionId: sessionId || undefined })
-    } catch {
-      notify({ text: t('sessionSettings.saveError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
-    } finally {
-      setSaving(false)
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current)
+      debounceTimerRef.current = null
     }
-  }
+    pendingSaveRef.current = null
+    if (dirtyKeys.length === 0) return
+
+    const field = dirtyKeys[0]!
+    const target = session
+    const values = form
+    const save = () => {
+      void runSaveRef.current(field, values, target)
+    }
+    if (dirtyKeys.some((key) => IMMEDIATE_FORM_KEYS.has(key))) {
+      save()
+    } else {
+      pendingSaveRef.current = save
+      debounceTimerRef.current = setTimeout(() => {
+        debounceTimerRef.current = null
+        pendingSaveRef.current = null
+        save()
+      }, AUTOSAVE_DEBOUNCE_MS)
+    }
+  }, [dirtyKeys, form, session, sessionId, defaultAskTimeoutMs])
+
+  // Best-effort дофлаш отложенного (debounce) сохранения при размонтировании/смене
+  // сессии, чтобы не потерять последний ввод.
+  useEffect(() => {
+    return () => {
+      const flush = pendingSaveRef.current
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current)
+        debounceTimerRef.current = null
+      }
+      pendingSaveRef.current = null
+      flush?.()
+    }
+  }, [sessionId])
+
+  // Гидратация формы: только при смене сессии или глобального дефолта таймаута — иначе
+  // любое обновление объекта сессии (WS-события, наше же сохранение) затирало бы
+  // несохранённые правки.
+
+  useEffect(() => {
+    if (!session || !session.settings) return
+    if (
+      hydratedRef.current?.id === session.id
+      && hydratedRef.current?.defaultMs === defaultAskTimeoutMs
+    ) {
+      return
+    }
+    hydratedRef.current = { id: session.id, defaultMs: defaultAskTimeoutMs }
+
+    // Провайдер/модель живут в общем сторе — не сбрасываем, если в сессии не заданы.
+    const sp = session.settings.provider as string | undefined
+    const sm = session.settings.model as string | undefined
+    if (sp) setSelectedProvider(sp)
+    if (sm) setSelectedModel(sm)
+
+    // Остальные поля заполняем безусловно (отсутствующие → дефолт), чтобы форма точно
+    // отражала session.settings.
+    const values = formValuesFromSettings(session.settings, defaultAskTimeoutMs)
+    setDebugEnabled(values.debugEnabled)
+    setToolsPolicy(values.toolsPolicy)
+    setMcpPolicy(values.mcpPolicy)
+    setRoutingEnabled(values.routingEnabled)
+    setRoutingStrategy(values.routingStrategy)
+    setRoutingContentCodingProvider(values.routingContentCodingProvider)
+    setRoutingContentCodingModel(values.routingContentCodingModel)
+    setRoutingContentChatProvider(values.routingContentChatProvider)
+    setRoutingContentChatModel(values.routingContentChatModel)
+    setRoutingContentResearchProvider(values.routingContentResearchProvider)
+    setRoutingContentResearchModel(values.routingContentResearchModel)
+    setRoutingEscalationEnabled(values.routingEscalationEnabled)
+    setRoutingEscalationFallbackProvider(values.routingEscalationFallbackProvider)
+    setRoutingEscalationFallbackModel(values.routingEscalationFallbackModel)
+    setRoutingEscalationMinLength(values.routingEscalationMinLength)
+    setRoutingCostEnabled(values.routingCostEnabled)
+    setRoutingCostCheapProvider(values.routingCostCheapProvider)
+    setRoutingCostCheapModel(values.routingCostCheapModel)
+    setRoutingCostMaxTokens(values.routingCostMaxTokens)
+    setRoutingSubagentEnabled(values.routingSubagentEnabled)
+    setRoutingSubagentModel(values.routingSubagentModel)
+    setRoutingSubagentProvider(values.routingSubagentProvider)
+    setMicroFirst(values.microFirst)
+    setMicroConfidenceThreshold(values.microConfidenceThreshold)
+    setEmbeddingEnabled(values.embeddingEnabled)
+    setEmbedProvider(values.embedProvider)
+    setEmbedModel(values.embedModel)
+    setAskTimeoutEnabled(values.askTimeoutEnabled)
+    setAskTimeoutSec(values.askTimeoutSec)
+  }, [session, defaultAskTimeoutMs, setSelectedProvider, setSelectedModel])
 
   const handleClearSession = useCallback(async () => {
     if (!sessionId) return
@@ -472,25 +709,7 @@ export function SessionSettingsTab() {
   }
 
   return (
-    <PanelTab
-      footer={
-        <>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="w-full rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-          >
-            {saving ? t('sessionSettings.saving') : t('common.save')}
-          </button>
-          <button
-            onClick={handleClearSession}
-            className="w-full rounded-lg border border-destructive/30 px-4 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
-          >
-            {t('leftPanel.clearSession')}
-          </button>
-        </>
-      }
-    >
+    <PanelTab>
         <Section title={t('rightPanel.params.session')}>
           <Field label={t('rightPanel.params.name')} value={session.name || t('rightPanel.params.none')} />
           <Field label="ID" value={session.id} mono />
@@ -516,7 +735,18 @@ export function SessionSettingsTab() {
         {/* Таймаут подтверждения (ask) */}
         <Section title={t('sessionSettings.askTimeout')}>
           <label className="flex items-center gap-3 cursor-pointer">
-            <Toggle enabled={askTimeoutEnabled} onToggle={() => setAskTimeoutEnabled(!askTimeoutEnabled)} />
+            <Toggle
+              enabled={askTimeoutEnabled}
+              onToggle={() => {
+                if (!askTimeoutEnabled && (Number(askTimeoutSec) || 0) <= 0) {
+                  // 0 = «без таймаута»: при включении подставляем глобальный дефолт,
+                  // иначе «включено с 0 секунд» эквивалентно выключенному состоянию.
+                  setAskTimeoutSec(String(Math.round(defaultAskTimeoutMs / 1000) || 30))
+                }
+                setAskTimeoutEnabled(!askTimeoutEnabled)
+              }}
+              pending={pendingField === 'askTimeoutEnabled'}
+            />
             <span className="text-xs text-foreground">
               {askTimeoutEnabled ? t('sessionSettings.askTimeoutEnabled') : t('sessionSettings.askTimeoutDisabled')}
             </span>
@@ -580,7 +810,7 @@ export function SessionSettingsTab() {
           }
         >
           <label className="flex items-center gap-3 cursor-pointer">
-            <Toggle enabled={microFirst} onToggle={() => setMicroFirst(!microFirst)} />
+            <Toggle enabled={microFirst} onToggle={() => setMicroFirst(!microFirst)} pending={pendingField === 'microFirst'} />
             <span className="text-xs text-foreground">
               {microFirst ? t('common.enabled') : t('common.disabled')}
             </span>
@@ -605,7 +835,7 @@ export function SessionSettingsTab() {
               {t('sessionSettings.micro.embeddingHint')}
             </div>
             <label className="flex items-center gap-3 cursor-pointer">
-              <Toggle enabled={embeddingEnabled} onToggle={() => setEmbeddingEnabled(!embeddingEnabled)} />
+              <Toggle enabled={embeddingEnabled} onToggle={() => setEmbeddingEnabled(!embeddingEnabled)} pending={pendingField === 'embeddingEnabled'} />
               <span className="text-xs text-foreground">
                 {embeddingEnabled ? t('common.enabled') : t('common.disabled')}
               </span>
@@ -651,7 +881,7 @@ export function SessionSettingsTab() {
           <div className="space-y-3">
             {/* Вкл/Выкл */}
             <label className="flex items-center gap-3 cursor-pointer">
-              <Toggle enabled={routingEnabled} onToggle={() => setRoutingEnabled(!routingEnabled)} />
+              <Toggle enabled={routingEnabled} onToggle={() => setRoutingEnabled(!routingEnabled)} pending={pendingField === 'routingEnabled'} />
               <span className="text-xs text-foreground">
                 {routingEnabled ? t('common.enabled') : t('common.disabled')}
               </span>
@@ -726,7 +956,7 @@ export function SessionSettingsTab() {
                     <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
                       {t('routing.escalation')}
                     </span>
-                    <Toggle enabled={routingEscalationEnabled} onToggle={() => setRoutingEscalationEnabled(!routingEscalationEnabled)} />
+                    <Toggle enabled={routingEscalationEnabled} onToggle={() => setRoutingEscalationEnabled(!routingEscalationEnabled)} pending={pendingField === 'routingEscalationEnabled'} />
                   </div>
                   {routingEscalationEnabled && (
                     <>
@@ -763,7 +993,7 @@ export function SessionSettingsTab() {
                     <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
                       {t('routing.cost')}
                     </span>
-                    <Toggle enabled={routingCostEnabled} onToggle={() => setRoutingCostEnabled(!routingCostEnabled)} />
+                    <Toggle enabled={routingCostEnabled} onToggle={() => setRoutingCostEnabled(!routingCostEnabled)} pending={pendingField === 'routingCostEnabled'} />
                   </div>
                   {routingCostEnabled && (
                     <>
@@ -800,7 +1030,7 @@ export function SessionSettingsTab() {
                     <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
                       {t('routing.subagent')}
                     </span>
-                    <Toggle enabled={routingSubagentEnabled} onToggle={() => setRoutingSubagentEnabled(!routingSubagentEnabled)} />
+                    <Toggle enabled={routingSubagentEnabled} onToggle={() => setRoutingSubagentEnabled(!routingSubagentEnabled)} pending={pendingField === 'routingSubagentEnabled'} />
                   </div>
                   {routingSubagentEnabled && (
                     <SelectField
@@ -836,7 +1066,7 @@ export function SessionSettingsTab() {
 
         <Section title={t('sessionSettings.debug')}>
           <label className="flex items-center gap-3 cursor-pointer">
-            <Toggle enabled={debugEnabled} onToggle={() => setDebugEnabled(!debugEnabled)} />
+            <Toggle enabled={debugEnabled} onToggle={() => setDebugEnabled(!debugEnabled)} pending={pendingField === 'debugEnabled'} />
             <span className="text-xs text-foreground">{debugEnabled ? t('sessionSettings.debugOn') : t('sessionSettings.debugOff')}</span>
           </label>
         </Section>
@@ -992,6 +1222,16 @@ export function SessionSettingsTab() {
             </div>
           </Section>
         )}
+
+        {/* Очистка сессии: вынесена из убранного футера вниз скролла (подтверждение — внутри). */}
+        <div className="border-t border-border pt-4">
+          <button
+            onClick={handleClearSession}
+            className="w-full rounded-lg border border-destructive/30 px-4 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
+          >
+            {t('leftPanel.clearSession')}
+          </button>
+        </div>
 
     </PanelTab>
   )

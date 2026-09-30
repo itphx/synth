@@ -1137,3 +1137,12 @@
 - **Верификация (@orchestrator):** shared build OK; `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — core 2276, backend 341, shared 170, ui 833 PASS.
 - **Живой API (после рестарта backend+core):** `synth-mcp-local` в сессии — `not_default` и **включается** (`enabled:true`); реестровый мастер `enabled:false` → `system_disabled` (live-гейт), возврат `true` → снова включается. Временные проект/сессия/сервер удалены, данные не затронуты.
 - **Не сделано:** коммит (ждёт команды).
+
+## 2026-09-30 13:45 — UI: канон курсора тумблера + автосейв вкладки «Сессия» — PASS
+
+- **Задача:** убрать курсор-«запрет» у тумблеров, единый стиль индикации сохранения; перевести вкладку «Сессия» на автосохранение и убрать кнопки внизу.
+- **Тип:** UX/refactor (ui) · **Исполнитель:** @fixer (2 задачи) + @orchestrator.
+- **Канон Toggle:** обычный — `cursor-pointer`; `pending` (идёт сохранение) — `cursor-progress` + `opacity-60` (`aria-busy`), без атрибута `disabled`; `disabled` (реально недоступно) — `cursor-default` + `opacity-40`, без not-allowed, причина текстом. Зафиксировано в `packages/ui/AGENTS.md`. `ContextTab`: тумблеры окна/суммаризации получили `pending={saving}`.
+- **Автосейв «Сессии»:** убрана кнопка Save и футер; «Очистить сессию» перенесена в конец контента. Единый `buildSettingsBody` (та же логика, включая askTimeout/permission, routing/micro/embedding, policies), слепок значений и `dirtyKeys` (не сохраняет, если не отличается и при гидратации/смене сессии); триггеры: тумблеры/селекты — сразу, инпуты/слайдеры — debounce 500 мс; flush при смене сессии; `pending` только у изменённого контрола; provider/model по-прежнему через `ModelSelector` (без дублей). Удалены неиспользуемые i18n-ключи `sessionSettings.{saved,saving,notLoaded}`.
+- **Верификация (@orchestrator):** `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — shared 170, core 2276, backend 341, ui **841** PASS.
+- **Коммиты:** `2221f76` (канон курсора), ниже — автосейв «Сессии».

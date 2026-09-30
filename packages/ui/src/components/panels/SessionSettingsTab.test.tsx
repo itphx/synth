@@ -133,7 +133,13 @@ beforeEach(() => {
   mocks.getSessionMcpEffective.mockResolvedValue(effective())
   mocks.updateSessionMcp.mockResolvedValue(effective())
   mocks.getSecuritySettings.mockResolvedValue({ askTimeoutMs: 30_000 })
-  mocks.updateSession.mockResolvedValue({})
+  mocks.updateSession.mockImplementation(async (_id: string, data: { settings: Record<string, unknown> }) => ({
+    id: 's1',
+    name: 'S',
+    project_id: null,
+    engine: 'synth',
+    settings: data.settings,
+  }))
   mocks.getProviders.mockResolvedValue({ providers: [], default_provider: null })
   mocks.getModels.mockResolvedValue([])
   mocks.getToolsPolicyInfo.mockResolvedValue({ policy: 'auto', isOverridden: false, defaults: 'auto' })
@@ -388,19 +394,12 @@ describe('SessionSettingsTab — per-session политики инструмен
     expect(mcpTrigger!.textContent).toContain('Global')
     expect(mcpTrigger!.textContent).toContain('Consistency')
 
+    // Селекты автосохраняются сразу — кнопка Save не нужна.
     await selectOption(toolsTrigger!, 'Available only')
     await selectOption(mcpTrigger!, 'Consistency')
 
-    const saveButton = [...container.querySelectorAll('button')].find(
-      (b) => b.textContent === 'Save',
-    ) as HTMLButtonElement
-    await act(async () => {
-      saveButton.click()
-    })
-    await act(async () => {})
-
-    expect(mocks.updateSession).toHaveBeenCalledTimes(1)
-    const settings = mocks.updateSession.mock.calls[0][1].settings
+    expect(mocks.updateSession).toHaveBeenCalled()
+    const settings = mocks.updateSession.mock.calls.at(-1)![1].settings
     expect(settings.toolsPolicy).toBe('available')
     expect(settings.mcpPolicy).toBe('consistency')
   })
@@ -445,5 +444,171 @@ describe('SessionSettingsTab — per-session политики инструмен
     ) as HTMLElement
     expect(toolsTrigger.textContent).toContain('Consistency')
     expect(mcpTrigger.textContent).toContain('Available only')
+  })
+})
+
+describe('SessionSettingsTab — автосохранение настроек', () => {
+  it('тумблер Debug сохраняется сразу, без кнопки Save', async () => {
+    const container = await renderTab()
+    // Кнопки Save в футере больше нет.
+    expect([...container.querySelectorAll('button')].find((b) => b.textContent === 'Save')).toBeUndefined()
+
+    const section = findSection(container, 'Debug')!
+    const toggle = section.querySelector('button[role="switch"]') as HTMLButtonElement
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+
+    await act(async () => {
+      toggle.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.updateSession).toHaveBeenCalledTimes(1)
+    const [sessionId, payload] = mocks.updateSession.mock.calls[0]!
+    expect(sessionId).toBe('s1')
+    expect(payload.settings.debugEnabled).toBe(true)
+  })
+
+  it('инпут таймаута сохраняется с debounce (~500 мс)', async () => {
+    const container = await renderTab()
+    const input = container.querySelector('input[type="number"]') as HTMLInputElement
+    expect(input).toBeTruthy()
+
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(input, '45')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    // Сразу после ввода запроса ещё нет — срабатывает debounce.
+    expect(mocks.updateSession).not.toHaveBeenCalled()
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600))
+    })
+
+    expect(mocks.updateSession).toHaveBeenCalledTimes(1)
+    const body = mocks.updateSession.mock.calls[0]![1].settings
+    expect(body.permission.askTimeoutMs).toBe(45_000)
+  })
+
+  it('при смене сессии дофлашивает отложенное сохранение (best-effort)', async () => {
+    const container = await renderTab()
+    const input = container.querySelector('input[type="number"]') as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(input, '45')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    // Debounce ещё не сработал.
+    expect(mocks.updateSession).not.toHaveBeenCalled()
+
+    // Переключаемся на другую сессию до срабатывания debounce.
+    await act(async () => {
+      useSessionsStore.setState((state) => ({
+        sessions: [
+          ...state.sessions,
+          { id: 's2', name: 'S2', project_id: null, engine: 'synth', settings: { model: 'm2' } },
+        ],
+      }) as never)
+      useUIStore.setState({
+        activeCenterTabId: 'tab-2',
+        centerTabs: [
+          { id: 'tab-1', type: 'chat', title: 'Chat', data: { sessionId: 's1' } },
+          { id: 'tab-2', type: 'chat', title: 'Chat', data: { sessionId: 's2' } },
+        ],
+      })
+    })
+
+    // Несохранённый ввод ушёл в API для прежней сессии.
+    expect(mocks.updateSession).toHaveBeenCalledWith('s1', expect.objectContaining({
+      settings: expect.objectContaining({
+        permission: expect.objectContaining({ askTimeoutMs: 45_000 }),
+      }),
+    }))
+  })
+
+  it('выключение таймаута не порождает повторных запросов', async () => {
+    const container = await renderTab()
+    const toggle = findSection(container, 'Approval timeout')!
+      .querySelector('button[role="switch"]') as HTMLButtonElement
+    await act(async () => {
+      toggle.click()
+    })
+    expect(mocks.updateSession).toHaveBeenCalledTimes(1)
+    expect(mocks.updateSession.mock.calls[0]![1].settings.permission.askTimeoutMs).toBe(0)
+
+    // Дольше debounce: повторных запросов из-за расхождения секунд быть не должно.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600))
+    })
+    expect(mocks.updateSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('включение таймаута из выключенного состояния сохраняется по дефолту', async () => {
+    useSessionsStore.setState({
+      sessions: [
+        {
+          id: 's1',
+          name: 'S',
+          project_id: null,
+          engine: 'synth',
+          settings: { model: 'm', permission: { askTimeoutMs: 0 } },
+        },
+      ],
+    } as never)
+    const container = await renderTab()
+    const toggle = findSection(container, 'Approval timeout')!
+      .querySelector('button[role="switch"]') as HTMLButtonElement
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+
+    await act(async () => {
+      toggle.click()
+    })
+    expect(mocks.updateSession).toHaveBeenCalledTimes(1)
+    // Включение подставляет глобальный дефолт → override не пишем.
+    expect(mocks.updateSession.mock.calls[0]![1].settings.permission?.askTimeoutMs).toBeUndefined()
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600))
+    })
+    expect(mocks.updateSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('во время запроса pending только у изменённого тумблера', async () => {
+    let resolveUpdate!: (value: unknown) => void
+    mocks.updateSession.mockReturnValue(
+      new Promise((resolve) => { resolveUpdate = resolve }),
+    )
+
+    const container = await renderTab()
+    const debugToggle = findSection(container, 'Debug')!
+      .querySelector('button[role="switch"]') as HTMLButtonElement
+    await act(async () => {
+      debugToggle.click()
+    })
+
+    const pendingToggle = findSection(container, 'Debug')!
+      .querySelector('button[role="switch"]') as HTMLButtonElement
+    expect(pendingToggle.disabled).toBe(false)
+    expect(pendingToggle.getAttribute('aria-busy')).toBe('true')
+    expect(pendingToggle.classList.contains('cursor-progress')).toBe(true)
+
+    // Соседний тумблер (таймаут подтверждения) не подсвечивается как pending.
+    const otherToggle = findSection(container, 'Approval timeout')!
+      .querySelector('button[role="switch"]') as HTMLButtonElement
+    expect(otherToggle.getAttribute('aria-busy')).toBeNull()
+
+    await act(async () => {
+      resolveUpdate({ id: 's1', name: 'S', project_id: null, engine: 'synth', settings: { model: 'm', debugEnabled: true } })
+    })
+    expect(
+      findSection(container, 'Debug')!.querySelector('button[role="switch"]')!.getAttribute('aria-busy'),
+    ).toBeNull()
+  })
+
+  it('«Очистить сессию» доступна внизу вкладки (вне футера)', async () => {
+    const container = await renderTab()
+    expect(container.querySelector('[data-testid="panel-tab-footer"]')).toBeNull()
+    const clear = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Clear')
+    expect(clear).toBeTruthy()
   })
 })
