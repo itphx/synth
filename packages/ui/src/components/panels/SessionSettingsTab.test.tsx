@@ -490,6 +490,63 @@ describe('SessionSettingsTab — автосохранение настроек',
     expect(body.permission.askTimeoutMs).toBe(45_000)
   })
 
+  it('пустой permission: {} не пишется при изменении другого поля', async () => {
+    useSessionsStore.setState({
+      sessions: [
+        {
+          id: 's1',
+          name: 'S',
+          project_id: null,
+          engine: 'synth',
+          settings: { model: 'm', permission: {} },
+        },
+      ],
+    } as never)
+    const container = await renderTab()
+    const toggle = findSection(container, 'Debug')!
+      .querySelector('button[role="switch"]') as HTMLButtonElement
+
+    await act(async () => {
+      toggle.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.updateSession).toHaveBeenCalledTimes(1)
+    const settings = mocks.updateSession.mock.calls[0]![1].settings
+    expect(settings.debugEnabled).toBe(true)
+    // «Мусорный» пустой permission не создаётся.
+    expect('permission' in settings).toBe(false)
+  })
+
+  it('непустой askTimeout-override при permission: {} всё ещё пишется', async () => {
+    useSessionsStore.setState({
+      sessions: [
+        {
+          id: 's1',
+          name: 'S',
+          project_id: null,
+          engine: 'synth',
+          settings: { model: 'm', permission: {} },
+        },
+      ],
+    } as never)
+    const container = await renderTab()
+    const input = container.querySelector('input[type="number"]') as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+
+    await act(async () => {
+      setter.call(input, '45')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600))
+    })
+
+    expect(mocks.updateSession).toHaveBeenCalledTimes(1)
+    const body = mocks.updateSession.mock.calls[0]![1].settings
+    expect(body.permission).toEqual({ askTimeoutMs: 45_000 })
+  })
+
   it('при смене сессии дофлашивает отложенное сохранение (best-effort)', async () => {
     const container = await renderTab()
     const input = container.querySelector('input[type="number"]') as HTMLInputElement

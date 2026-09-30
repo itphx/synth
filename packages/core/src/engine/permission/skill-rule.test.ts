@@ -24,6 +24,10 @@ describe('resolveSkillRule (AD-046 §8.1)', () => {
     expect(resolveSkillRule(config({}), 'x')).toBeUndefined();
     expect(resolveSkillRule(undefined, 'x')).toBeUndefined();
   });
+
+  it('конфиг без rules (permission: {}) — трактуется как «нет правил», не бросает', () => {
+    expect(resolveSkillRule({} as PermissionConfig, 'x')).toBeUndefined();
+  });
 });
 
 describe('PermissionEvaluator для тула skill', () => {
@@ -52,6 +56,17 @@ describe('PermissionEvaluator для тула skill', () => {
 
   it('без правил — allow по умолчанию', () => {
     const evaluator = new PermissionEvaluator(config({}));
+    const decision = evaluator.check({
+      toolName: 'skill',
+      params: { name: 'any' },
+      workingDir: '/work',
+      capabilities: ['file_read'],
+    });
+    expect(decision.action).toBe('allow');
+  });
+
+  it('конфиг без rules (permission: {}) — не бросает, allow по умолчанию', () => {
+    const evaluator = new PermissionEvaluator({} as PermissionConfig);
     const decision = evaluator.check({
       toolName: 'skill',
       params: { name: 'any' },

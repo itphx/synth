@@ -121,6 +121,15 @@ export class PermissionEvaluator {
     return this._config;
   }
 
+  /**
+   * Правила конфига, устойчиво к `permission: {}` (пустой объект без `rules`):
+   * настройки сессии могут прийти из JSON без нормализации схемой, поэтому
+   * отсутствующий `rules` трактуется как «нет правил».
+   */
+  private get _rules(): Record<string, PermissionRule> {
+    return this._config.rules ?? {};
+  }
+
   check(input: PermissionCheckInput): PermissionDecision {
     // AD-070 §2.9.1: ролевая недоступность — приоритетнее прочих правил. Тул
     // виден модели (список тулов постоянен), но недоступен текущему агенту;
@@ -283,14 +292,14 @@ export class PermissionEvaluator {
     }
 
     // 1. Правило по конкретному имени тула
-    const toolRule = this._config.rules[toolName];
+    const toolRule = this._rules[toolName];
     if (toolRule !== undefined) {
       const d = this._resolveRule(toolName, toolRule, paths, workingDir);
       if (d) return d;
     }
     // 2. external_directory — только пути вне workingDir
     if (isFile) {
-      const extRule = this._config.rules['external_directory'];
+      const extRule = this._rules['external_directory'];
       if (extRule !== undefined) {
         for (const p of paths) {
           if (isInsideWorkingDir(p, workingDir)) continue;
@@ -302,7 +311,7 @@ export class PermissionEvaluator {
 
     // 3. Групповые правила
     for (const group of getToolGroups(toolName, capabilities)) {
-      const groupRule = this._config.rules[group];
+      const groupRule = this._rules[group];
       if (groupRule === undefined) continue;
       // Для execute_shell правила группы shell матчатся по КОМАНДЕ (префиксы
       // токенов), а не по cwd-пути: "npm install *" → ask, "*" → любая команда.
@@ -316,7 +325,7 @@ export class PermissionEvaluator {
     }
 
     // 4. Глобальный '*'
-    const starRule = this._config.rules['*'];
+    const starRule = this._rules['*'];
     if (starRule !== undefined) {
       const d = this._resolveRule('*', starRule, isFile ? paths : [], workingDir);
       if (d) return d;
@@ -451,7 +460,7 @@ function resolveNamedRule(
   key: string,
   name: string,
 ): PermissionDecision | undefined {
-  const rule = config?.rules[key];
+  const rule = config?.rules?.[key];
   if (rule === undefined) return undefined;
 
   if (typeof rule === 'string') {

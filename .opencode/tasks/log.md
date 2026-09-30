@@ -1146,3 +1146,12 @@
 - **Автосейв «Сессии»:** убрана кнопка Save и футер; «Очистить сессию» перенесена в конец контента. Единый `buildSettingsBody` (та же логика, включая askTimeout/permission, routing/micro/embedding, policies), слепок значений и `dirtyKeys` (не сохраняет, если не отличается и при гидратации/смене сессии); триггеры: тумблеры/селекты — сразу, инпуты/слайдеры — debounce 500 мс; flush при смене сессии; `pending` только у изменённого контрола; provider/model по-прежнему через `ModelSelector` (без дублей). Удалены неиспользуемые i18n-ключи `sessionSettings.{saved,saving,notLoaded}`.
 - **Верификация (@orchestrator):** `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — shared 170, core 2276, backend 341, ui **841** PASS.
 - **Коммиты:** `2221f76` (канон курсора), ниже — автосейв «Сессии».
+
+## 2026-09-30 14:15 — fix: 500 на GET /sessions/:id/skills при permission={} — PASS
+
+- **Задача:** верификация автосейва выявила `GET /sessions/:id/skills` → 500 (сессия с `settings.permission = {}`).
+- **Тип:** bug fix (core + ui) · **Исполнитель:** @fixer + @orchestrator.
+- **Причина:** `resolveNamedRule` (`engine/permission/evaluator.ts`) делал `config?.rules[key]` — опциональная цепочка только на `config`, не на `rules`; при `permission={}` (пустой объект) бросал. Автосейв «Сессии» мог записать пустой `permission: {}`.
+- **Фикс:** `config?.rules?.[key]` + защищённый геттер `_rules` (`_computeDecision`); автосейв не пишет пустой `permission` (исключён из spread, `undefined` при пустом). Тесты evaluator/skill-rule/command-rule/skill-scope (200 вместо 500) и UI (не пишет пустой permission, непустой override пишет).
+- **Верификация:** `shared build`/`core build` OK; `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — shared 170, core **2282**, backend 341, ui **843** PASS. Живой dev: `GET /sessions/mt8b037e…/skills` → 200; backend+core перезапущены.
+- **Коммит:** ниже.

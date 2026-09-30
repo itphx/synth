@@ -781,3 +781,25 @@ describe('PermissionEvaluator — unavailable (AD-070 §2.9.1)', () => {
   });
 });
 
+describe('PermissionEvaluator — устойчивость к permission: {} без rules', () => {
+  it('файловый тул не бросает и получает allow по умолчанию', () => {
+    const d = new PermissionEvaluator({} as PermissionConfig).check({
+      toolName: 'read_file',
+      params: { file_path: 'a.txt' },
+      workingDir: CWD,
+      capabilities: ['file_read'],
+    });
+    expect(d.action).toBe('allow');
+  });
+
+  it('execute_shell не бросает (групповые правила отсутствуют)', () => {
+    const d = new PermissionEvaluator({} as PermissionConfig).check({
+      toolName: 'execute_shell',
+      params: { command: 'ls' },
+      workingDir: CWD,
+      capabilities: ['shell'],
+    });
+    expect(d.action).toBe('allow');
+  });
+});
+

@@ -94,6 +94,19 @@ describe('scope-API скиллов (AD-046 §4.5)', () => {
     expect((await app.request('/api/v2/sessions/nope/skills')).status).toBe(404);
   });
 
+  it('sessions: settings.permission = {} не роняет GET → 200', async () => {
+    const app = makeApp();
+    const session = await sessionManager.createSession({ engine: 'synth' });
+    // Пустой permission без `rules` — как его может записать автосейв UI.
+    session.settings.permission = {} as never;
+    await sessionManager.updateSession(session);
+
+    const get = await app.request(`/api/v2/sessions/${session.id}/skills`);
+    expect(get.status).toBe(200);
+    const body = (await get.json()) as { skills: unknown[] };
+    expect(body.skills).toEqual([]);
+  });
+
   it('projects: GET + PUT enabled/defaultOn', async () => {
     const app = makeApp();
     const project: Project = {

@@ -181,8 +181,20 @@ function buildSettingsBody(
     permissionSettings = { ...(currentPermission ?? {}), askTimeoutMs: 0 }
   }
 
+  // Гигиена автосейва: не пишем пустой `permission: {}` (создаёт «мусорный»
+  // override, маскирующий дефолт). Если в результате не осталось ключей —
+  // ключ `permission` из настроек вовсе опускается, сессия следует дефолту.
+  if (permissionSettings && Object.keys(permissionSettings).length === 0) {
+    permissionSettings = undefined
+  }
+
+  // `permission` пересобирается ниже; исключаем исходное значение из spread,
+  // чтобы пустой объект не «просачивался» через `...session.settings`.
+  const restSettings = { ...session.settings }
+  delete restSettings.permission
+
   return {
-    ...session.settings,
+    ...restSettings,
     provider,
     model,
     debugEnabled: values.debugEnabled,

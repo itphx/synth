@@ -10,6 +10,10 @@ describe('resolveCommandRule (AD-046 §8.1)', () => {
     expect(resolveCommandRule(cfg({}), 'help')).toBeUndefined();
   });
 
+  it('конфиг без rules (permission: {}) — трактуется как «нет правил», не бросает', () => {
+    expect(resolveCommandRule({} as PermissionConfig, 'help')).toBeUndefined();
+  });
+
   it('строковое действие применяется ко всем командам', () => {
     expect(resolveCommandRule(cfg({ command: 'deny' }), 'anything')?.action).toBe('deny');
   });
