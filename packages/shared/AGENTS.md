@@ -49,6 +49,11 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   и новые `resolveProfilesPath`/`resolveCredentialsPath`; `loader.home` — при home
   конфиг читается строго из `<home>/config.yaml` (без отката к XDG).
 
+## Схемы и типы
+
+`src/types/index.ts` + `src/schemas/index.ts` — единые контракты сущностей; схемы `projectCreate/Update`, `sessionCreate/Update`.
+- Канонические ключи иконок/цветов проекта и сессии: `PROJECT_ICON_KEYS` (19) / `PROJECT_COLOR_KEYS` (8) + типы `ProjectIconKey`/`ProjectColorKey` (`types`); схемы `projectIconKeySchema`/`projectColorKeySchema` и хелперы `isProjectIconKey`/`isProjectColorKey` (strict, для записи) и `normalizeIconKey`/`normalizeColorKey` (legacy-алиасы при чтении) (`schemas`). `null`/`undefined` — сброс значения.
+
 ## i18n-контракт
 
 `src/i18n/index.ts` — словарь-контракт без текста: `ENGINE_MESSAGE_KEYS`,

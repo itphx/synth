@@ -276,6 +276,10 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 
 Вкладки Files/Git левой панели — контекст-ориентированные: закреплённый блок «Текущий проект» (по активному центр-табу — сессия/файл/коммит, хук `useActiveProject`) + сворачиваемые «Другие проекты (N)»; тумблер «Только текущий проект» (`ProjectScopeToggle`, persist `onlyActiveProject`) в шапке тулбара. Подробности — [packages/ui/AGENTS.md](./packages/ui/AGENTS.md).
 
+### Иконки и цвета проектов и сессий
+
+Канонические ключи — реестры `PROJECT_ICON_KEYS` (19) / `PROJECT_COLOR_KEYS` (8) в `shared/types`; на записи значения валидируются (невалидное → 400 `VALIDATION_ERROR`), при чтении legacy нормализуется (`normalizeIconKey`/`normalizeColorKey`), `null`/`undefined` — сброс. В UI — общий пикер `EntityIconPicker` (только ключи реестра и палитра CSS-переменных, без загружаемых картинок) и инлайн-вывод `<Icon>` в дереве, табах, шапке и панелях. У закрытых сессий (нет таба и не активны) иконка серая, у открытых — цвет сессии. Подробности — [packages/ui/AGENTS.md](./packages/ui/AGENTS.md).
+
 ### Мобильный адаптив + PWA
 
 Единый адаптивный UI, три зоны: **телефон ≤768px / планшет 769–1199px / десктоп ≥1200px** (десктоп не меняется). Детекция `matchMedia` + классы на `<html>`: `device-phone/tablet/desktop`, `pointer-coarse` (хуки `useDevice()`/`useMediaQuery`, `lib/device.ts`); мобильный CSS гейтится этими классами.
@@ -407,6 +411,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | промпт / prompt-cache / статистика токенов / debug промпта | [AD-070](./docs/arch_decisions/ad-070-system-prompt-composer.md), [AD-036](./docs/arch_decisions/ad-036-llm-gateway.md), [AD-041](./docs/arch_decisions/ad-041-llm-error-taxonomy.md) |
 | MCP / MCP-серверы / инструменты в промпте | [AD-071](./docs/arch_decisions/ad-071-mcp-servers-prompt.md), [AD-029](./docs/arch_decisions/ad-029-granular-permissions.md), [AD-068](./docs/arch_decisions/ad-068-skills-agents-registry.md) |
 | настройки / settings UI kit | [AD-072](./docs/arch_decisions/ad-072-settings-ui-kit.md), [packages/ui/AGENTS.md](./packages/ui/AGENTS.md) |
+| иконки/цвета проекта и сессии | [packages/ui/AGENTS.md](./packages/ui/AGENTS.md), [packages/shared/AGENTS.md](./packages/shared/AGENTS.md) |
 
 ## Документация
 

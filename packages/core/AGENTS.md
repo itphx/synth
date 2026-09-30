@@ -115,7 +115,13 @@
   `project_update`/`project_workspace_set` (`project-manage.ts`) и
   `project_repo_clone|init|add|fetch|remove` (`project-repos.ts`) — проект берётся
   из сессии, смена workspace/регистрация репозиториев сохраняются `ProjectStore.save`
-  и публикуют `project.updated`. Запись проектных данных (`project_log_write`/
+  и публикуют `project.updated`; `project_update` валидирует `icon`/`color` по
+  `PROJECT_ICON_KEYS`/`PROJECT_COLOR_KEYS` (невалидно → ошибка с перечнем ключей).
+  Метаданные `icon`/`color` проекта и сессии — канонические ключи shared:
+  валидация на записи (роуты `projects`/`sessions` → 400 `VALIDATION_ERROR`),
+  нормализация legacy при чтении (`ProjectStore.load`, `FileStore.deserializeSession`,
+  `remote/transfer`); у сессий — сквозной проход (`Session`, `SessionManager.createSession`
+  и fork, `serializeSession`). Запись проектных данных (`project_log_write`/
   `project_invariants_write`/`plan_write`) гейтится `engine/tools/project-access.ts`
   (`canEditProject`, AD-075/D5). `engine/workspace-provision.ts` — общий
   provisioning workspace (нормализация/containment/создание каталога) для

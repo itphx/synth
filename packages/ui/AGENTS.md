@@ -22,13 +22,13 @@
 | `components/chat/` | Чат: сообщения, стриминг, файловые вкладки, tool-рендер, саб-агенты |
 | `components/settings/` + `components/admin/` | Настройки и админ-панели (провайдеры, модели, безопасность, routing) |
 | `components/auth/` | `AuthGate`, логин (в т.ч. гибридный) |
-| `components/ui/` | Примитивы: dialog, popover, select, tooltip, toggle, `SynthLogo` |
+| `components/ui/` | Примитивы: dialog, popover, select, tooltip, toggle, `SynthLogo`, `EntityIconPicker` (пикер иконки/цвета сущностей) |
 | `components/icon/` | `Icon` + реестр `icons.ts` — единственная точка иконок |
 | `components/{tree,projects,logviewer}/` | Деревья, проекты, просмотр логов |
 | `stores/` | Zustand-сторы (см. «Соглашения») |
 | `lib/api/` | HTTP-слой (`synthApi`, `client`) и транспорт (`transport`) |
 | `lib/i18n/` | Провайдер, стор, словари, резолвер ключей |
-| `lib/` | Утилиты, устройство, масштаб UI, форматирование, темы |
+| `lib/` | Утилиты, устройство, масштаб UI, форматирование, темы, `entityIcon` (резолвер иконки/цвета сущностей) |
 | `hooks/`, `contexts/`, `styles/`, `types/` | Хуки, React-контексты, Tailwind + CSS-переменные, локальные типы |
 
 Крупнейшая зона — `components/chat/`; её правки обычно тянут `stores/chatStore.ts` (≈800 строк), `transportStore` и i18n-резолвер.
@@ -61,6 +61,9 @@
 - Панель настроек: один вертикальный скролл (скроллится только тело, шапка — `shrink-0`), `min-w-0`/`break-words` для текста, базовая сетка `grid-cols-1`, центрирование `max-w-3xl`, симметричные паддинги (без `pr-2`); порядок в шапке — `title` (+ `actions`) → `description` → `meta` (счётчики идут **ниже** описания, AD-072); действия (`SettingsActions`) — **в конце содержимого**, не фиксированным футером (у `SettingsPanel` нет footer-пропов). В `SettingsActions` кнопка Reset цветная (`outline-primary`) только когда текущие значения отличаются от дефолтных; при дефолтных (`isDefault`) — серая (`outline-muted`) и неактивна; Save/Cancel активны только при несохранённых изменениях (`dirty`).
 - Иконки — только `<Icon name="..." />` из `components/icon/Icon.tsx` (реестр `icons.ts`). Не тащить svg/`@remixicon` напрямую (единственное исключение — `SynthLogo.tsx`); неизвестное имя не в `iconMap` → `Icon` вернёт `null`.
 - Иконки/подписи инструментов — `lib/toolIcons.ts` (`getToolIcon`, `getToolDisplayName`); новый тул добавлять в `TOOL_ICON_MAP`, а не маппинг inline в компоненте.
+- Иконка/цвет проекта и сессии — только через `lib/entityIcon.ts` (`resolveIconName`/`resolveIconColor`) и общий пикер `components/ui/EntityIconPicker.tsx` (ключи реестра + палитра CSS-переменных, без загружаемых картинок). Реестры ключей и маппинги — `lib/projectMeta.ts` из shared (`PROJECT_ICON_KEYS`/`PROJECT_COLOR_KEYS`); в UI их не дублировать.
+- Пикер вызывается в поповере редактирования проекта (левая панель), диалоге из контекстного меню дерева (проект/сессия) и секциях «Иконка и цвет» правых панелей «Сессия» (`SessionSettingsTab`) и «Проект» (`ProjectTab`) с немедленным сохранением (`usePanelSettingSave`, откат при ошибке). Иконка выводится инлайн (`<Icon>`): дерево, табы, шапка, панели.
+- Резолвер — единственная точка перевода серверного значения (или legacy-алиаса) в имя реестра `Icon`/CSS-переменную; неизвестное даёт `undefined` (компонент подставляет фоллбек). У закрытых сессий (нет таба и не активны) иконка серая (`text-muted-foreground`), у открытых — цвет сессии (без цвета — `text-primary`); у проектов иконка всегда цветная.
 
 ### Чат: упоминания агентов
 - Вызов агента через `@` (`components/chat/ChatInput.tsx`, `splitMessageWithTags`) сохраняет сам тег `@<agentId>` в тексте сообщения (иначе пользователю неясно, почему ответил другой агент); тег одновременно уходит как `agentRole` в `sendMessage`. Не вырезать тег из `part.text`.
