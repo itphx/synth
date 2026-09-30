@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { resolveIconName, resolveIconColor } from './entityIcon'
+import {
+  resolveIconName,
+  resolveIconColor,
+  resolveSessionIconColor,
+  DEFAULT_SESSION_ICON_COLOR,
+} from './entityIcon'
 
 describe('resolveIconName — единый резолвер иконок (AD-075)', () => {
   it('канонические ключи реестра → имя иконки', () => {
@@ -39,5 +44,20 @@ describe('resolveIconColor — единый резолвер цветов (AD-07
     expect(resolveIconColor('chartreuse')).toBeUndefined()
     expect(resolveIconColor(null)).toBeUndefined()
     expect(resolveIconColor(undefined)).toBeUndefined()
+  })
+})
+
+describe('resolveSessionIconColor — дефолт иконки сессии (акцент открытой сессии)', () => {
+  it('заданный канонический ключ → CSS-переменная (как у обычного резолвера)', () => {
+    expect(resolveSessionIconColor('success')).toBe('var(--status-success)')
+    expect(resolveSessionIconColor('blue')).toBe('var(--primary)')
+  })
+
+  it('пустой/неизвестный цвет → дефолтный акцент --primary', () => {
+    expect(DEFAULT_SESSION_ICON_COLOR).toBe('var(--primary)')
+    expect(resolveSessionIconColor(undefined)).toBe('var(--primary)')
+    expect(resolveSessionIconColor(null)).toBe('var(--primary)')
+    expect(resolveSessionIconColor('')).toBe('var(--primary)')
+    expect(resolveSessionIconColor('chartreuse')).toBe('var(--primary)')
   })
 })

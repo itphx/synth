@@ -23,3 +23,17 @@ export function resolveIconColor(value?: string | null): string | undefined {
   const key = normalizeColorKey(value)
   return key ? PROJECT_COLOR_MAP[key] : undefined
 }
+
+/**
+ * Дефолтный цвет иконки сессии без заданного `session.color` — тот же акцент,
+ * что `text-primary` у открытой (активной/в табе) сессии в дереве.
+ */
+export const DEFAULT_SESSION_ICON_COLOR = 'var(--primary)'
+
+/**
+ * Резолвер цвета иконки сессии: канонический ключ → CSS-переменная, иначе
+ * дефолтный акцент открытой сессии (`DEFAULT_SESSION_ICON_COLOR`).
+ */
+export function resolveSessionIconColor(value?: string | null): string {
+  return resolveIconColor(value) ?? DEFAULT_SESSION_ICON_COLOR
+}

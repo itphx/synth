@@ -17,6 +17,8 @@ export interface EntityIconTriggerProps {
   disabled?: boolean
   /** Иконка, если ключ не задан/неизвестен (например, `folder-3`/`chat-new`). */
   fallbackIcon: IconName
+  /** Цвет иконки, если ключ цвета не задан/неизвестен (например, `DEFAULT_SESSION_ICON_COLOR`). */
+  defaultColor?: string
   /** `data-testid` кнопки-триггера (на него опираются тесты панелей). */
   testId: string
   /** Подпись для `aria-label`/`title` (обычно название секции «Иконка и цвет»). */
@@ -36,10 +38,11 @@ export function EntityIconTrigger({
   onColorChange,
   disabled,
   fallbackIcon,
+  defaultColor,
   testId,
   label,
 }: EntityIconTriggerProps) {
-  const cssColor = resolveIconColor(color)
+  const cssColor = resolveIconColor(color) ?? defaultColor
   return (
     <Popover>
       <PopoverTrigger asChild>

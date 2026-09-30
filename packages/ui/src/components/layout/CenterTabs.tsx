@@ -22,7 +22,7 @@ import { useI18n } from '@/lib/i18n'
 import { useUIStore, type CenterTab } from '@/stores/useUIStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
-import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
+import { resolveIconName, resolveSessionIconColor } from '@/lib/entityIcon'
 
 const TAB_ICONS: Record<CenterTab['type'], string> = {
   chat: 'chat-new',
@@ -43,7 +43,11 @@ function useTabIcon(tab: CenterTab): { icon: string; color?: string } {
   )
   const resolved = resolveIconName(session?.icon)
   const fallback = session?.session_origin === 'subagent' ? 'cpu' : TAB_ICONS[tab.type]
-  return { icon: resolved ?? fallback, color: resolveIconColor(session?.color) }
+  return {
+    icon: resolved ?? fallback,
+    // Сессионный таб по умолчанию — акцент открытой сессии; остальные табы без цвета.
+    color: tab.type === 'chat' ? resolveSessionIconColor(session?.color) : undefined,
+  }
 }
 
 const TAB_CONTENT_FLOOR = 160

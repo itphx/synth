@@ -95,4 +95,31 @@ describe('EntityIconTrigger', () => {
     expect(iconButton.disabled).toBe(true)
     expect(colorButton.disabled).toBe(true)
   })
+
+  describe('defaultColor — цвет иконки при незаданном color', () => {
+    it('без color и defaultColor inline-стиль не задаётся (нейтрально)', async () => {
+      const container = await render({ color: null })
+      const svg = container.querySelector('[data-testid="entity-icon-color-trigger"] svg') as SVGElement
+      expect(svg).not.toBeNull()
+      expect(svg.style.color).toBe('')
+    })
+
+    it('defaultColor применяется, когда color пуст', async () => {
+      const container = await render({ color: null, defaultColor: 'var(--primary)' })
+      const svg = container.querySelector('[data-testid="entity-icon-color-trigger"] svg') as SVGElement
+      expect(svg.style.color).toBe('var(--primary)')
+    })
+
+    it('заданный color перекрывает defaultColor', async () => {
+      const container = await render({ color: 'success', defaultColor: 'var(--primary)' })
+      const svg = container.querySelector('[data-testid="entity-icon-color-trigger"] svg') as SVGElement
+      expect(svg.style.color).toBe('var(--status-success)')
+    })
+
+    it('неизвестный color → defaultColor', async () => {
+      const container = await render({ color: 'chartreuse', defaultColor: 'var(--primary)' })
+      const svg = container.querySelector('[data-testid="entity-icon-color-trigger"] svg') as SVGElement
+      expect(svg.style.color).toBe('var(--primary)')
+    })
+  })
 })

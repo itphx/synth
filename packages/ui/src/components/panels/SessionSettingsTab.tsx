@@ -11,6 +11,7 @@ import { synthApi, type AgentInfo, type EffectiveSkillEntry, type ToolsPolicy } 
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
 import { EntityIconTrigger } from '@/components/ui/EntityIconTrigger'
+import { DEFAULT_SESSION_ICON_COLOR } from '@/lib/entityIcon'
 import { ModelSelector } from '../chat/ModelSelector'
 import { ProjectInstructions } from './ProjectInstructions'
 import { ExpandableListRow, RowBadge } from './ExpandableListRow'
@@ -754,6 +755,7 @@ export function SessionSettingsTab() {
                   onColorChange={handleSessionColorChange}
                   disabled={isPending('sessionIcon') || isPending('sessionColor')}
                   fallbackIcon={session.session_origin === 'subagent' ? 'cpu' : 'chat-new'}
+                  defaultColor={DEFAULT_SESSION_ICON_COLOR}
                   testId="session-icon-color-trigger"
                   label={t('leftPanel.iconColor')}
                 />

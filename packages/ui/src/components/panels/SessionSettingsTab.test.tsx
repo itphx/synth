@@ -782,6 +782,31 @@ describe('SessionSettingsTab — иконка в строке «Имя» (AD-075
     await act(async () => { none.click() })
     expect(mocks.updateSession).toHaveBeenLastCalledWith('s1', { color: null })
   })
+
+  it('при пустом session.color иконка рендерится акцентом --primary', async () => {
+    const container = await renderTab()
+    const svg = container.querySelector('[data-testid="session-icon-color-trigger"] svg') as SVGElement
+    expect(svg).not.toBeNull()
+    expect(svg.style.color).toBe('var(--primary)')
+  })
+
+  it('заданный session.color определяет цвет иконки', async () => {
+    useSessionsStore.setState({
+      sessions: [
+        {
+          id: 's1',
+          name: 'S',
+          project_id: null,
+          engine: 'synth',
+          color: 'success',
+          settings: { model: 'm' },
+        },
+      ],
+    } as never)
+    const container = await renderTab()
+    const svg = container.querySelector('[data-testid="session-icon-color-trigger"] svg') as SVGElement
+    expect(svg.style.color).toBe('var(--status-success)')
+  })
 })
 
 describe('SessionSettingsTab — StrictMode: монтирование не запускает автосохранение', () => {
