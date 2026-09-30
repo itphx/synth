@@ -115,6 +115,28 @@ async function renderTab(): Promise<HTMLElement> {
   return container
 }
 
+/** Как `renderTab`, но под `StrictMode` (двойной прогон эффектов на монтировании). */
+async function renderTabStrict(): Promise<HTMLElement> {
+  useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  roots.push({ root, container })
+  await act(async () => {
+    root.render(
+      <React.StrictMode>
+        <I18nProvider>
+          <TooltipProvider>
+            <SessionSettingsTab />
+          </TooltipProvider>
+        </I18nProvider>
+      </React.StrictMode>,
+    )
+  })
+  await act(async () => {})
+  return container
+}
+
 /** Открывает Base UI select и кликает опцию по подписи (опции рендерятся в portal). */
 async function selectOption(trigger: HTMLElement, label: string): Promise<void> {
   await act(async () => {
@@ -747,5 +769,52 @@ describe('SessionSettingsTab — иконка и цвет сессии (AD-075)'
     const none = container.querySelector('[data-testid="entity-color-none"]') as HTMLButtonElement
     await act(async () => { none.click() })
     expect(mocks.updateSession).toHaveBeenLastCalledWith('s1', { color: null })
+  })
+})
+
+describe('SessionSettingsTab — StrictMode: монтирование не запускает автосохранение', () => {
+  // Сессия с не-дефолтными настройками: до фикса двойной прогон эффектов в StrictMode
+  // видел «устаревшую» (дефолтную) форму vs session.settings и сохранял её.
+  beforeEach(() => {
+    useSessionsStore.setState({
+      sessions: [
+        {
+          id: 's1',
+          name: 'S',
+          project_id: null,
+          engine: 'synth',
+          settings: { model: 'm', debugEnabled: true, toolsPolicy: 'auto', microFirst: true },
+        },
+      ],
+    } as never)
+  })
+
+  it('монтирование вкладки без действий не вызывает updateSession и не шлёт panel.saved', async () => {
+    await renderTabStrict()
+    // С запасом перекрываем debounce-окно автосейва.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600))
+    })
+    expect(mocks.updateSession).not.toHaveBeenCalled()
+    const successCalls = mocks.notify.mock.calls.filter(
+      (call) => (call[0] as { type?: string })?.type === 'success',
+    )
+    expect(successCalls).toHaveLength(0)
+  })
+
+  it('реальное изменение пользователем по-прежнему автосохраняется', async () => {
+    const container = await renderTabStrict()
+    const toggle = findSection(container, 'Debug')!
+      .querySelector('button[role="switch"]') as HTMLButtonElement
+    // Гидратация подтянула session.settings (debugEnabled: true).
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+
+    await act(async () => {
+      toggle.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.updateSession).toHaveBeenCalledTimes(1)
+    expect(mocks.updateSession.mock.calls[0]![1].settings.debugEnabled).toBe(false)
   })
 })

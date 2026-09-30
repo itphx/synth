@@ -410,9 +410,13 @@ export function SessionSettingsTab() {
   }, [])
 
   // «Эпоха» гидратации формы: для какой сессии и какого глобального дефолта таймаута
-  // форма заполнена. Служит и гейтом автосохранения (не сохранять до/во время
-  // гидратации и при смене сессии), и защитой гидратации от лишних прогонов.
+  // форма заполнена. Ref защищает гидратацию от лишних прогонов (ставится синхронно),
+  // а одноимённый state — гейт автосохранения: он фиксируется только вместе с
+  // закоммиченными значениями формы. В StrictMode эффекты монтируются дважды, и без
+  // разделения ref/state автосохранение во втором прогоне увидело бы устаревшую
+  // (дефолтную) форму и записало её в сессию (регрессия: ложные `panel.saved`).
   const hydratedRef = useRef<{ id: string | undefined; defaultMs: number } | null>(null)
+  const [hydrated, setHydrated] = useState<{ id: string | undefined; defaultMs: number } | null>(null)
 
   // Слепок текущих значений формы и эталон «как в session.settings» (с дефолтами).
   // Равенство `form` ↔ `sessionValues` означает «изменений нет» — сохранять нечего.
@@ -538,14 +542,14 @@ export function SessionSettingsTab() {
   runSaveRef.current = runSave
 
   // Автосохранение: тумблеры/селекты — сразу, инпуты/слайдеры — с debounce ~500 мс.
-  // До гидратации формы под текущую сессию/дефолт (hydratedRef) и при отсутствии
+  // До гидратации формы под текущую сессию/дефолт (hydrated) и при отсутствии
   // реальных отличий от session.settings (dirtyKeys пуст) запрос не шлём.
   useEffect(() => {
     if (
       !sessionId
       || !session
-      || hydratedRef.current?.id !== session.id
-      || hydratedRef.current?.defaultMs !== defaultAskTimeoutMs
+      || hydrated?.id !== session.id
+      || hydrated.defaultMs !== defaultAskTimeoutMs
     ) {
       return
     }
@@ -572,7 +576,7 @@ export function SessionSettingsTab() {
         save()
       }, AUTOSAVE_DEBOUNCE_MS)
     }
-  }, [dirtyKeys, form, session, sessionId, defaultAskTimeoutMs])
+  }, [dirtyKeys, form, session, sessionId, defaultAskTimeoutMs, hydrated])
 
   // Best-effort дофлаш отложенного (debounce) сохранения при размонтировании/смене
   // сессии, чтобы не потерять последний ввод.
@@ -611,6 +615,9 @@ export function SessionSettingsTab() {
     // Остальные поля заполняем безусловно (отсутствующие → дефолт), чтобы форма точно
     // отражала session.settings.
     applyFormValues(formValuesFromSettings(session.settings, defaultAskTimeoutMs))
+    // Публикуем гидратацию как state — гейт автосохранения зафиксируется вместе с
+    // закоммиченными значениями формы (см. комментарий у `hydrated`).
+    setHydrated({ id: session.id, defaultMs: defaultAskTimeoutMs })
   }, [session, defaultAskTimeoutMs, setSelectedProvider, setSelectedModel, applyFormValues])
 
   // Сессионные одобрения (AD-029): allow-правила, добавленные при «Разрешить в сессии».

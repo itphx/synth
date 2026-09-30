@@ -325,17 +325,21 @@ function ProjectsTab() {
     const isForwardTarget = forwardMode.active && !isForwardSource
     // Offline-деградация: remote-сессии недоступны — приглушаем и помечаем тултипом.
     const isOfflineRemote = isOffline && session.origin === 'remote'
+    const isTabOpen = sessionTabOpenSet.has(session.id)
+    const isActive = activeCenterTabId === `chat-${session.id}`
     return {
       id: `session:${session.id}`,
       label: session.name || session.id,
       depth,
       icon: resolveIconName(session.icon) ?? (isSubagent ? 'cpu' : 'chat-new'),
-      iconColor: resolveIconColor(session.color),
+      // Кастомный цвет иконки — только у «открытой» сессии (активный таб или открытый
+      // в фоне). У закрытой — undefined, чтобы работал класс TreeNode (серая иконка).
+      iconColor: (isTabOpen || isActive) ? resolveIconColor(session.color) : undefined,
       subtitle: formatRelativeTime(session.updated_at),
       badge: <OriginBadge origin={session.origin} />,
       isSelected: selectedIds.has(session.id),
-      isTabOpen: sessionTabOpenSet.has(session.id),
-      isActive: activeCenterTabId === `chat-${session.id}`,
+      isTabOpen,
+      isActive,
       selectionMode,
       status: getSessionStatus(session.id),
       unreadCount: sessionUnread[session.id] || 0,

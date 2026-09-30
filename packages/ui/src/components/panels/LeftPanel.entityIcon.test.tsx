@@ -52,6 +52,7 @@ import { dict as enDict } from '@/lib/i18n/messages/en'
 import { LeftPanel } from './LeftPanel'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
+import { useNotificationStore } from '@/stores/notificationStore'
 import { useUIStore } from '@/stores/useUIStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -63,6 +64,11 @@ function svgHasColor(node: Element, color: string): boolean {
   return [...node.querySelectorAll('svg')].some(
     (el) => (el as SVGElement).style.color.includes(color),
   )
+}
+
+/** Есть ли среди svg узла класс (для проверки подсветки hasUnread). */
+function svgClassHas(node: Element, cls: string): boolean {
+  return [...node.querySelectorAll('svg')].some((el) => el.classList.contains(cls))
 }
 
 const P1 = {
@@ -171,6 +177,40 @@ describe('LeftPanel — иконка/цвет проектов и сессий (
     expect(node).not.toBeNull()
     expect(node!.querySelector('svg')).not.toBeNull()
     expect(svgHasColor(node!, 'var(--primary)')).toBe(true)
+  })
+
+  it('закрытая сессия (нет таба) — иконка серая, без кастомного цвета (регрессия)', async () => {
+    // Сессия не открыта: ни активного, ни фонового таба.
+    useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
+    const container = await render('projects')
+    const node = container.querySelector('[data-tree-node="session:s1"]')
+    expect(node).not.toBeNull()
+    // inline-цвета нет → класс TreeNode даёт muted-foreground (не перебит).
+    expect(svgHasColor(node!, 'var(--primary)')).toBe(false)
+  })
+
+  it('сессия с открытым фоновым табом сохраняет кастомный цвет иконки', async () => {
+    useUIStore.setState({
+      centerTabs: [
+        { id: 'chat-s1', type: 'chat', title: 'Sess', data: { sessionId: 's1' } },
+        { id: 'chat-s2', type: 'chat', title: 'Other', data: { sessionId: 's2' } },
+      ],
+      activeCenterTabId: 'chat-s2',
+    })
+    const container = await render('projects')
+    const node = container.querySelector('[data-tree-node="session:s1"]')
+    expect(svgHasColor(node!, 'var(--primary)')).toBe(true)
+  })
+
+  it('закрытая сессия с непрочитанным сохраняет оранжевую подсветку иконки', async () => {
+    useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
+    useNotificationStore.setState({ sessionUnread: { s1: 1 } })
+    const container = await render('projects')
+    const node = container.querySelector('[data-tree-node="session:s1"]')
+    expect(node!.querySelector('svg')).not.toBeNull()
+    // hasUnread работает, т.к. inline-стиль цвета не выставлен.
+    expect(svgClassHas(node!, 'text-orange-400')).toBe(true)
+    useNotificationStore.setState({ sessionUnread: {} })
   })
 
   it('сессия без иконки → фоллбек chat-new', async () => {
