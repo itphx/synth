@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "tsx src/main.ts",
     "start": "node dist/main.js",
-    "build": "tsc && mkdir -p dist/agents && cp -r src/agents/definitions dist/agents/definitions",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/agents && cp -r src/agents/definitions dist/agents/definitions",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "test": "vitest run",

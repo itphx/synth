@@ -51,7 +51,7 @@
   "scripts": {
     "dev": "tsx src/main.ts",
     "start": "node dist/main.js",
-    "build": "tsc && cp -r prompts/. dist/prompts/ && cp -r dictionaries/. dist/dictionaries/ && cp -r definitions/. dist/definitions/ && mkdir -p dist/engine/agents/definitions && cp src/engine/agents/definitions/*.json dist/engine/agents/definitions/",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -r prompts/. dist/prompts/ && cp -r dictionaries/. dist/dictionaries/ && cp -r definitions/. dist/definitions/ && mkdir -p dist/engine/agents/definitions && cp src/engine/agents/definitions/*.json dist/engine/agents/definitions/",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "test": "vitest run",
