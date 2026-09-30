@@ -11,7 +11,7 @@ import type {
 } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
-import type { ProjectStore } from '../../storage/project-store.js';
+import type { ProjectStoreContract } from '../../storage/project-store.js';
 import { provisionWorkspace } from '../workspace-provision.js';
 import { isAborted, abortedResult } from './abort.js';
 import { canEditProject } from './project-access.js';
@@ -19,7 +19,7 @@ import { t as sm, i18n as i18nMeta, type SystemMessageKey } from '../system-mess
 
 export interface ProjectManageExtra {
   sessionManager?: SessionManager;
-  projectStore?: ProjectStore;
+  projectStore?: ProjectStoreContract;
   sessionId?: string;
   eventBus?: EventBus;
   /** AD-075: корень managed-workspace для резолва относительного `workspace`. */
@@ -71,7 +71,7 @@ function workspaceErrorResult(code: string, message: string) {
  */
 export async function attachSessionToProject(
   sessionManager: SessionManager,
-  projectStore: ProjectStore,
+  projectStore: ProjectStoreContract,
   eventBus: EventBus | undefined,
   sessionId: string,
   projectId: string,

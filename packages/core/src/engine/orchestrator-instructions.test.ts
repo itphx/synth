@@ -18,7 +18,7 @@ import { EventBus } from '../events/bus.js';
 import { createToolRegistry } from './tools/index.js';
 import { ProviderFactory, BaseProvider } from '../providers/base.js';
 import type { ContextBuilder } from './context/builder.js';
-import type { ProjectStoreLike } from './orchestrator.js';
+import type { ProjectStoreLike } from '../storage/project-store.js';
 import { generateId, MessageRole, nowISO, makeTextPart } from '@itphx/synth-shared';
 
 class InstrProvider extends BaseProvider {

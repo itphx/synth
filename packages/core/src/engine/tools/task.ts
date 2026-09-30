@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
-import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, ToolForLLM, ToolContext, TokenUsage } from '@itphx/synth-shared';
+import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, ToolForLLM, ToolContext, TokenUsage, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
 import type { AgentRegistry } from '../agents/registry.js';
 import { normalizeAgentModes } from '../agents/normalize.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
@@ -27,6 +27,9 @@ import { renderUnavailableTools, type UnavailableTool } from '../context/state-m
 import { formatSkillsCatalogBlock } from '../skills/catalog.js';
 import { isRuntimeDepAvailable, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, type RuntimeDeps } from './runtime-deps.js';
 import type { SkillRuntime, SkillScopeOptions } from '../skills/types.js';
+import type { ProjectStoreLike } from '../../storage/project-store.js';
+import type { SSHKeyStore } from '../../storage/ssh-key-store.js';
+import type { GitService } from '../../git/git-service.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 export interface TaskExtra {
@@ -83,6 +86,19 @@ export interface TaskExtra {
   skillRuntime?: SkillRuntime;
   /** AD-046 §4.5: scope-гейты скиллов родительского контекста. */
   skillScope?: SkillScopeOptions;
+  /**
+   * AD-075/AD-076: проектные зависимости для тулов саб-агента (управление
+   * проектом, workspace, реестр репозиториев, SSH-окружение сетевых git-тулов).
+   * Обычный путь передаёт их целиком; resume-путь — из `SubagentResumeDeps`.
+   * Контейнер гарантирует только чтение (`load`); в рантайме оркестратор передаёт
+   * полный `ProjectStore`, а проектные тулы объявляют свой контракт сами.
+   */
+  projectStore?: ProjectStoreLike;
+  workspacesRoot?: string;
+  sshKeyStore?: SSHKeyStore;
+  gitService?: GitService;
+  workspaceManaged?: boolean;
+  getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;
 }
 
 type ContextMode = 'none' | 'inherit' | 'summary' | 'last_n';

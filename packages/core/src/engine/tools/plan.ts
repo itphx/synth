@@ -10,7 +10,7 @@ import type {
 } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
-import type { ProjectStore } from '../../storage/project-store.js';
+import type { ProjectStoreContract } from '../../storage/project-store.js';
 import { isAborted, abortedResult } from './abort.js';
 import { canEditProject } from './project-access.js';
 import { loadSessionProject } from './project-manage.js';
@@ -20,7 +20,7 @@ export interface PlanToolExtra {
   sessionManager?: SessionManager;
   eventBus?: EventBus;
   sessionId?: string;
-  projectStore?: ProjectStore;
+  projectStore?: ProjectStoreContract;
 }
 
 const DEFAULT_COLUMNS: PlanColumn[] = [
@@ -50,7 +50,7 @@ function getPlan(project: Project): ProjectPlan {
  * Сохраняет изменённый план: инкрементирует version, обновляет updatedAt
  * плана и проекта, пишет через projectStore.
  */
-async function savePlan(projectStore: ProjectStore, project: Project, plan: ProjectPlan): Promise<void> {
+async function savePlan(projectStore: ProjectStoreContract, project: Project, plan: ProjectPlan): Promise<void> {
   plan.updatedAt = nowISO();
   plan.version += 1;
   project.plan = plan;

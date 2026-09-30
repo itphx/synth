@@ -13,7 +13,7 @@ import type {
   RepoStatus,
 } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
-import type { ProjectStore } from '../../storage/project-store.js';
+import type { ProjectStoreContract } from '../../storage/project-store.js';
 import type { EventBus } from '../../events/bus.js';
 import type { SSHKeyStore } from '../../storage/ssh-key-store.js';
 import { GitService, deriveRepoName } from '../../git/git-service.js';
@@ -32,7 +32,7 @@ import { t as sm, i18n as i18nMeta, type SystemMessageKey } from '../system-mess
 
 interface ProjectReposExtra {
   sessionManager?: SessionManager;
-  projectStore?: ProjectStore;
+  projectStore?: ProjectStoreContract;
   sessionId?: string;
   eventBus?: EventBus;
   /** AD-075: корень managed-workspace для резолва относительного `workspace`. */
@@ -70,7 +70,7 @@ function toolExecError(tool: string, err: unknown): ToolResult {
 
 type LoadedContext =
   | { ok: false; error: ToolResult }
-  | { ok: true; extra: ProjectReposExtra; store: ProjectStore; session: Session | null; project: Project; wsAbs: string; git: GitService };
+  | { ok: true; extra: ProjectReposExtra; store: ProjectStoreContract; session: Session | null; project: Project; wsAbs: string; git: GitService };
 
 /**
  * Общий преамбул: зависимости, проект сессии, права и абсолютный workspace.
@@ -105,7 +105,7 @@ function normalizeRepos(project: Project): GitRepoConfig[] {
 
 /** Upsert записи реестра (по `id` либо `path`), сохранение проекта (как HTTP-роут). */
 async function registerRepo(
-  store: ProjectStore,
+  store: ProjectStoreContract,
   project: Project,
   input: {
     id?: string;

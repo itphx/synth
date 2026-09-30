@@ -2,7 +2,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { Project, ToolContext } from '@itphx/synth-shared';
 import { normalizeGitRepoConfig } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
-import type { ProjectStore } from '../../storage/project-store.js';
+import type { ProjectStoreLike } from '../../storage/project-store.js';
 import type { SSHKeyStore } from '../../storage/ssh-key-store.js';
 import { SSHKeyStoreError } from '../../storage/ssh-key-store.js';
 import { createSshEnv, SshEnvError } from '../../git/ssh-env.js';
@@ -19,7 +19,7 @@ import { createSshEnv, SshEnvError } from '../../git/ssh-env.js';
 
 interface GitSshExtra {
   sessionManager?: SessionManager;
-  projectStore?: ProjectStore;
+  projectStore?: ProjectStoreLike;
   sessionId?: string;
   sshKeyStore?: SSHKeyStore;
   workspacesRoot?: string;

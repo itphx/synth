@@ -19,7 +19,7 @@
  * (acquireLock + currentStream) выполняет оркестратор (startSubagentResume),
  * поэтому повторный resume и abort через POST /sessions/:id/abort работают.
  */
-import type { Message, Session, RouterConfig, PermissionConfig, SecurityConfig, EventType } from '@itphx/synth-shared';
+import type { Message, Session, RouterConfig, PermissionConfig, SecurityConfig, EventType, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
 import type { BaseProvider } from '../../providers/base.js';
 import type { SessionManager } from '../../sessions/manager.js';
@@ -35,6 +35,9 @@ import type { UsagePricing } from '../../providers/usage.js';
 import { serializeMessage, serializeSession } from '../../server/serialize.js';
 import { formatSkillsCatalogBlock } from '../skills/catalog.js';
 import type { RuntimeDeps } from './runtime-deps.js';
+import type { ProjectStoreLike } from '../../storage/project-store.js';
+import type { SSHKeyStore } from '../../storage/ssh-key-store.js';
+import type { GitService } from '../../git/git-service.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import {
   messageToLLMMessage, publishMessageAdded, resolveSubagentPrompt, runSubagent,
@@ -106,6 +109,18 @@ export interface SubagentResumeDeps {
   skillRuntime?: import('../skills/types.js').SkillRuntime;
   /** AD-046 §4.5: scope-гейты скиллов родительского контекста. */
   skillScope?: import('../skills/types.js').SkillScopeOptions;
+  /**
+   * AD-075/AD-076: проектные зависимости resumed-саб-агента — прокидываются в
+   * `TaskExtra`, чтобы проектные и сетевые git-тулы работали и после resume.
+   * Контейнер гарантирует только чтение (`load`); в рантайме оркестратор передаёт
+   * полный `ProjectStore`.
+   */
+  projectStore?: ProjectStoreLike;
+  workspacesRoot?: string;
+  sshKeyStore?: SSHKeyStore;
+  gitService?: GitService;
+  workspaceManaged?: boolean;
+  getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;
   /**
    * AD-069 §7: уже резолвленные проектные инструкции resumed-саб-агента
    * (резолвит оркестратор; в ребёнке повторного резолва нет).
@@ -309,6 +324,15 @@ export async function runSubagentResume(
       // AD-046 §5: тул `skill` у resumed-саб-агента (тот же рантайм).
       skillRuntime: deps.skillRuntime,
       skillScope: deps.skillScope,
+      // AD-075/AD-076: проектные зависимости — проектные и сетевые git-тулы
+      // доступны resumed-саб-агенту (иначе projectStore/workspacesRoot/sshKeyStore
+      // отсутствуют и гейт `canEditProject`/SSH-окружение деградируют).
+      projectStore: deps.projectStore,
+      workspacesRoot: deps.workspacesRoot,
+      sshKeyStore: deps.sshKeyStore,
+      gitService: deps.gitService,
+      workspaceManaged: deps.workspaceManaged,
+      getWorkspaceOutsideRootPolicy: deps.getWorkspaceOutsideRootPolicy,
       retry,
     };
 

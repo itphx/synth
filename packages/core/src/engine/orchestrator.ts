@@ -58,6 +58,7 @@ import { computeToolAvailability } from './permission/availability.js';
 import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { SSHKeyStore } from '../storage/ssh-key-store.js';
+import type { ProjectStoreLike } from '../storage/project-store.js';
 import { GitService } from '../git/git-service.js';
 import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, MAX_DOOM_LOOP_COUNT } from './llm-error.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
@@ -130,16 +131,6 @@ export interface ModelPricing {
   cacheWritePrice?: number;
   /** Валюта цен модели; отсутствует → USD (обратная совместимость). */
   currency?: Currency;
-}
-
-/**
- * Минимальный контракт project store, который использует оркестратор (AD-014):
- * только загрузка проекта для резолва project.workspace. Позволяет передавать
- * реализации из разных пакетов (backend/core ProjectStore) без структурной
- * зависимости от конкретного класса.
- */
-export interface ProjectStoreLike {
-  load(id: string): Promise<Project | null>;
 }
 
 export interface OrchestratorOptions {
@@ -3705,6 +3696,14 @@ export class ChatOrchestrator {
       modelPriceLoader: this._modelPriceLoader ?? undefined,
       // AD-046 §5: каталог скиллов resumed-саб-агенту + тул `skill`.
       skillRuntime: this._skillRuntime ?? undefined,
+      // AD-075/AD-076: проектные зависимости resumed-саб-агента — те же, что у
+      // обычного пути `task` (проектные тулы, workspace-политика, SSH-окружение).
+      projectStore: this._projectStore ?? undefined,
+      workspacesRoot: this._workspacesRoot,
+      sshKeyStore: this._sshKeyStore ?? undefined,
+      gitService: this._gitService,
+      workspaceManaged: this._workspaceManaged,
+      getWorkspaceOutsideRootPolicy: this._getWorkspaceOutsideRootPolicy ?? undefined,
       // AD-069 §7: резолвим проектные инструкции для ребёнка в оркестраторе
       // (в самом resume повторного резолва нет).
       getProjectInstructions: async (child, parent, workingDir) => {

@@ -4,14 +4,14 @@ import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition, ToolContext, Project, GitRepoConfig } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
-import type { ProjectStore } from '../../storage/project-store.js';
+import type { ProjectStoreLike } from '../../storage/project-store.js';
 import { runGit } from './git.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm } from '../system-messages.js';
 
 interface ProjectContextExtra {
   sessionManager?: SessionManager;
-  projectStore?: ProjectStore;
+  projectStore?: ProjectStoreLike;
   sessionId?: string;
   /** Корень каталога workspaces для резолва относительного project.workspace (AD-014). */
   workspacesRoot?: string;

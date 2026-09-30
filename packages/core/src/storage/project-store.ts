@@ -127,3 +127,10 @@ export class ProjectStore {
     return project;
   }
 }
+
+/**
+ * Структурный контракт полного хранилища проектов (чтение + запись) — для тулов
+ * и provisioning, которым нужны `save`/`create`/`list`, а не только `load`.
+ * Не привязан к классу (у него приватные поля), совместим с реализациями других пакетов.
+ */
+export type ProjectStoreContract = Pick<ProjectStore, 'load' | 'save' | 'create' | 'list'>;

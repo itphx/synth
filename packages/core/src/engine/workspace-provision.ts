@@ -2,7 +2,7 @@ import { mkdir, readdir } from 'node:fs/promises';
 import { isAbsolute, normalize, relative, resolve } from 'node:path';
 import type { WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
 import { slugifyWorkspaceName, uniqueWorkspaceName } from '@itphx/synth-shared';
-import type { ProjectStore } from '../storage/project-store.js';
+import type { ProjectStoreContract } from '../storage/project-store.js';
 
 /**
  * AD-075: provisioning рабочего каталога проекта — общая логика HTTP-роутов и
@@ -177,7 +177,7 @@ export async function collectExistingRootDirs(root: string): Promise<string[]> {
  *   поэтому два параллельных POST не получат один workspace.
  */
 export async function provisionManagedWorkspace(
-  store: ProjectStore,
+  store: ProjectStoreContract,
   root: string,
   name: string,
   rawWorkspace: unknown,
@@ -230,7 +230,7 @@ export async function provisionManagedWorkspace(
  * standalone (нормализация + политика confirm/deny). `undefined` — workspace не задан.
  */
 export async function provisionWorkspace(
-  store: ProjectStore,
+  store: ProjectStoreContract,
   name: string,
   rawWorkspace: unknown,
   confirmOutsideRoot: unknown,
