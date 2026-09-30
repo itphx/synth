@@ -28,13 +28,16 @@
 | `DictionaryStore`, `createDictionaryRoutes` | эндпоинты `/api/v2/dictionaries` |
 | `FileProfileStore` | профили пользователей (seed test-users при debug) |
 | `AuditLogger`, `RateLimiter`, `GatewayProvider`, `SecretPatternStore`, `ProtectedPathsStore` | LLM Gateway (AD-036) |
+| `SSHKeyStore` | SSH-ключи агентов, шифрование at-rest (AD-076) |
+| `createGitRoutes`, `createSshKeyRoutes`, `createAgentSshKeyRoutes` | git-реестр и SSH-ключи (AD-076) |
+| `createFsRoutes`, `resolveProjectWorkspace` | FS-роуты, project-aware workspace (AD-075) |
+| `detectRuntimeDeps` | детект внешних бинарников (`git`/`rg`/`sh`) при старте → `runtimeDeps` оркестратора (AD-078) |
 
 Локально только:
 
 - `src/app.ts` — фабрика `createBackendApp()`; `src/main.ts` — listen и graceful shutdown.
 - `src/routes/*` — Hono-роутеры; `src/auth/*` — middleware и OIDC; `src/events/hub.ts` — `EventHub`.
-- `src/lib/*` — `app-config` (конфиг), `defaults-store` (умолчания оформления), `git-service`, `i18n`, `workspace-resolver`.
-- `src/storage/*` — `JsonStore` (providers/models/agents) и `ProjectStore`.
+- `src/lib/*` — `app-config` (конфиг), `defaults-store` (умолчания оформления), `i18n`.
 - `src/middleware/rate-limiter.ts` — единственный middleware пакета.
 - `src/agents/definitions/*.json` — определения агентов (ассеты, копируются в `dist`).
 
@@ -47,10 +50,11 @@
 - возвращает handle: `app`, `config`, `auth`, `eventBus`, `eventHub`, `sessionManager`, `projectStore`, `orchestrator`, `queueManager`, `settingsStore`, `listen`;
 - `listen(port = 0)` поднимает HTTP-сервер и `/ws/events`, возвращает фактический порт (0 — эфемерный для тестов).
 
-**Хранилище (локальные обёртки, AD-005):**
+**Хранилище (core-классы, AD-005):**
 
-- `JsonStore<T>` — `<dataDir>/<subdir>/<key>.json`; атомарная запись через shared `atomicWrite` (tmp → rename) + per-key `AsyncLock`; ключ проверяется от `..` и `\`.
-- `ProjectStore` — `<dataDir>/projects/<id>.json`; один `AsyncLock` на все проекты; `create()` инициализирует план, лог и владельца.
+- `JsonStore<T>` (из `@itphx/synth-core`) — `<dataDir>/<subdir>/<key>.json`; атомарная запись через shared `atomicWrite` (tmp → rename) + per-key `AsyncLock`; ключ проверяется от `..` и `\`; `list()` собирает вложенные ключи (`provider/model`).
+- `ProjectStore` (из `@itphx/synth-core`) — `<dataDir>/projects/<id>.json`; один `AsyncLock` на все проекты; `create()` инициализирует план, лог и владельца.
+- Своих копий хранилищ в backend нет — используются core-классы (единый источник истины).
 - Прямой доступ роутеров к `$SYNTH_DATA_DIR` в обход stores запрещён.
 
 ## Правила эндпоинта
@@ -62,7 +66,7 @@
 - Формат ошибки — `{ error: { code, message } }`; встречающиеся коды: `VALIDATION_ERROR`, `NOT_FOUND`, `UNAUTHORIZED`, `FORBIDDEN`, `BAD_REQUEST`, `RATE_LIMITED`, `INTERNAL_ERROR`. Исключение: FS и git отдают shared-форму `{ error: { error, code } }` (`FsError`).
 - Общий 404 — `app.notFound` в `src/app.ts`; тексты — через `t()`.
 - Rate limiter (`createRateLimiter(max, windowMs)`; in-memory, ключ — `Authorization` или `x-forwarded-for`) вешается на публичные мутации: `prompt`, `spa-login`, `providers/:name/test`, `models/fetch`, LLM-прокси.
-- Вход валидируется Zod-схемами из `@itphx/synth-shared` (образец — `src/routes/fs.ts`).
+- Вход валидируется Zod-схемами из `@itphx/synth-shared` (образец — `src/routes/models.ts`).
 - Порядок регистрации важен: статические сегменты объявляй раньше параметрических (в `routes/agents.ts` `/all` зарегистрирован до `/:id`).
 - Часть admin-роутов живёт в `src/main.ts`, а не в `app.ts` (`POST /admin/shutdown`, заглушка `GET /admin/sessions/blocked`), т.к. требует server/graceful shutdown.
 - CORS — динамический: explicit `SYNTH_CORS_ORIGIN` → белый список `synth.server.allowedOrigins` → разрешить всё.
@@ -72,10 +76,17 @@
 | Префикс | Источник |
 |---|---|
 | `/auth` | local `routes/auth.ts` (логин, сессии, профиль, avatar) |
-| `/api/v2/projects`, `/messages`, `/queue`, `/fs`, `/agents`, `/context`, `/users`, `/git`, `/mcp` | local `routes/*` |
+| `/api/v2/projects` | `routes/projects.ts` — обёртка над core `createProjectRoutes` (RBAC-хуки owner/EDITOR/LEAD/ADMIN, managed-provisioning, `/stats`, `/:id/mcp`) + `createProjectAccess` для git-роутов |
+| `/api/v2/messages`, `/queue` | `routes/{messages,queue}.ts` — обёртки над core `createMessageRoutes`/`createQueueRoutes` (i18n, `onMessagesChanged` = `recalc-can-summarize`) |
+| `/api/v2/agents` | `routes/agents.ts` — обёртка над core `createAgentRoutes` (guards: `GET /` = `requireAuth`, `/all`+мутации = `requireAdmin`) |
+| `/api/v2/mcp` | core `createMcpRoutes` (`/probe`) + backend `routes/mcp-registry.ts` (legacy `/servers*`, `/session/:id`, `/registry*`, AD-071) |
+| `/api/v2/context`, `/users` | local `routes/*` |
+| `/api/v2/fs` | core `createFsRoutes` (AD-075): managed opts — `requireProjectId`, `deny`, `getProjectWorkspace` (`resolveProjectWorkspace`, strict) |
+| `/api/v2/git` | core `createGitRoutes` (T4): `authorizeProject` = `canEditProjectContent` (owner/EDITOR/LEAD/ADMIN), read (`scan/log/commit`) — `requireAuth` |
+| `/api/v2/ssh-keys`, `/api/v2/agents/:agentId/ssh-keys` | core `createSshKeyRoutes` / `createAgentSshKeyRoutes`: чтение — `requireAuth`, запись — `requireAdmin` (AD-076). В гибриде nested-путь проксируется core на backend (`REMOTE_PROXY_PATTERNS`) |
 | `/api/v2/sessions` | `routes/sessions.ts` — обёртка над core `createSessionRoutes` + backend-only (MCP-скоуп, secrets, export/import, debug, optimization, notes) |
 | `/api/v2/providers` | `routes/providers.ts` — обёртка над core `createProviderRoutes` + `fetch-icon` |
-| `/api/v2/models` | `routes/models.ts` — обёртка над core `createModelRoutes` + `fetch` |
+| `/api/v2/models` | `routes/models.ts` — обёртка над core `createModelRoutes` (RBAC + rate limit на `fetch`) |
 | `/api/v2/settings` | core `createSettingsRoutes` |
 | `/api/v2/dictionaries` | core `createDictionaryRoutes` (writeGuard = `requireAdmin`) |
 | `/api/v2/audit`, `/logs`, `/gateway` | local (LLM Gateway: аудит, логи, regex-паттерны) |
@@ -85,7 +96,7 @@
 | `/health`, `/api/v2/health` | публичные, без auth |
 | `/api/v2/i18n/current`, `/api/v2/i18n/translations/ru\|en` | inline в `app.ts` |
 
-`/api/v2/{providers,models,sessions}` — тонкие обёртки над core-фабриками: общая логика в core, backend добавляет `requireAdmin`/`requirePermission`, rate limiter и backend-only роуты. Дублировать хендлеры core нельзя.
+`/api/v2/{providers,models,sessions,projects,messages,queue,agents}` — тонкие обёртки над core-фабриками; `/api/v2/{fs,git,ssh-keys,settings,dictionaries}` — прямое монтирование core-фабрик с RBAC/спецификой в `opts`: общая логика в core, backend добавляет `requireAdmin`/`requirePermission`/`authorizeProject`, rate limiter и backend-only роуты (например, `models/fetch` — rate limit, `providers/fetch-icon`, `mcp-registry`). Дублировать хендлеры core нельзя.
 
 ## Аутентификация
 
@@ -136,7 +147,7 @@
 - Не держать состояние сессий в памяти backend — источник истины на диске через core.
 - Не редактировать `packages/backend/config.yaml` ради настроек, кроме MCP: остальной конфиг идёт через `loadBackendConfig`.
 - Не добавлять роут в обход `createXxxRoutes` + `app.route(...)` — иначе он потеряется при переиспользовании core-фабрик.
-- Не дублировать хендлеры core-роутов в backend: `providers`/`models`/`sessions`/`settings`/`dictionaries` — тонкие обёртки над core-фабриками, здесь остаются только RBAC, rate limit и backend-only роуты.
+- Не дублировать хендлеры core-роутов в backend: `providers`/`models`/`sessions`/`projects`/`messages`/`queue`/`agents`/`fs`/`settings`/`dictionaries` — тонкие обёртки над core-фабриками, здесь остаются только RBAC, rate limit, i18n (`messages`), хуки и backend-only роуты.
 
 ## Куда смотреть
 

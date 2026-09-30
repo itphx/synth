@@ -743,5 +743,63 @@ describe('PermissionEvaluator — unavailable (AD-070 §2.9.1)', () => {
     });
     expect(d.action).toBe('allow');
   });
+
+  it('git-тул при отсутствии git в окружении → deny с unavailable(dependency) и messageId', () => {
+    const d = evalWith({
+      toolName: 'git_status',
+      params: {},
+      capabilities: ['git_read'],
+      runtimeDeps: { git: false, rg: true, sh: true },
+    });
+    expect(d.action).toBe('deny');
+    expect(d.unavailable).toEqual({ reason: 'dependency' });
+    expect(d.messageId).toBe('tool-unavailable-dependency');
+    expect(d.matchedRule).toBe('dependency.unavailable');
+    expect(d.params).toEqual({ binary: 'git' });
+  });
+
+  it('execute_shell при отсутствии sh → deny с unavailable(dependency)', () => {
+    const d = evalWith({
+      toolName: 'execute_shell',
+      params: { command: 'ls' },
+      capabilities: ['shell'],
+      runtimeDeps: { git: true, rg: true, sh: false },
+    });
+    expect(d.action).toBe('deny');
+    expect(d.unavailable).toEqual({ reason: 'dependency' });
+    expect(d.messageId).toBe('tool-unavailable-dependency');
+  });
+
+  it('runtimeDeps не задан → dependency не блокирует (fail-open)', () => {
+    const d = evalWith({
+      toolName: 'git_status',
+      params: {},
+      capabilities: ['git_read'],
+    });
+    expect(d.action).toBe('allow');
+    expect(d.unavailable).toBeUndefined();
+  });
+});
+
+describe('PermissionEvaluator — устойчивость к permission: {} без rules', () => {
+  it('файловый тул не бросает и получает allow по умолчанию', () => {
+    const d = new PermissionEvaluator({} as PermissionConfig).check({
+      toolName: 'read_file',
+      params: { file_path: 'a.txt' },
+      workingDir: CWD,
+      capabilities: ['file_read'],
+    });
+    expect(d.action).toBe('allow');
+  });
+
+  it('execute_shell не бросает (групповые правила отсутствуют)', () => {
+    const d = new PermissionEvaluator({} as PermissionConfig).check({
+      toolName: 'execute_shell',
+      params: { command: 'ls' },
+      workingDir: CWD,
+      capabilities: ['shell'],
+    });
+    expect(d.action).toBe('allow');
+  });
 });
 

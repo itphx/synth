@@ -19,7 +19,7 @@
  * (acquireLock + currentStream) выполняет оркестратор (startSubagentResume),
  * поэтому повторный resume и abort через POST /sessions/:id/abort работают.
  */
-import type { Message, Session, RouterConfig, PermissionConfig, SecurityConfig, EventType } from '@itphx/synth-shared';
+import type { Message, Session, RouterConfig, PermissionConfig, SecurityConfig, EventType, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
 import type { BaseProvider } from '../../providers/base.js';
 import type { SessionManager } from '../../sessions/manager.js';
@@ -33,9 +33,15 @@ import type { ShellPolicy } from '../security/shell-guard.js';
 import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
 import type { UsagePricing } from '../../providers/usage.js';
 import { serializeMessage, serializeSession } from '../../server/serialize.js';
+import { formatSkillsCatalogBlock } from '../skills/catalog.js';
+import type { RuntimeDeps } from './runtime-deps.js';
+import type { ProjectStoreLike } from '../../storage/project-store.js';
+import type { SSHKeyStore } from '../../storage/ssh-key-store.js';
+import type { GitService } from '../../git/git-service.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import {
   messageToLLMMessage, publishMessageAdded, resolveSubagentPrompt, runSubagent,
+  buildSubagentUnavailableToolsSection,
   type SubagentRetryConfig, type TaskExtra,
 } from './task.js';
 
@@ -87,6 +93,11 @@ export interface SubagentResumeDeps {
   securityConfig?: SecurityConfig;
   /** Fallback permission (глобальный конфиг), если у дочерней сессии нет своей. */
   permissionConfig?: PermissionConfig;
+  /**
+   * AD-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) —
+   * dependency-гейт в permission-слое resumed-саб-агента и `[НЕДОСТУПНЫЕ ТУЛЫ]`.
+   */
+  runtimeDeps?: RuntimeDeps;
   /** AD-071 §2.1: активные MCP-серверы — дочерняя сессия наследует скоуп родителя. */
   mcpServers?: string[];
   shellPolicy?: ShellPolicy | null;
@@ -94,6 +105,27 @@ export interface SubagentResumeDeps {
   protectedPathsEnabled?: boolean;
   /** AD-070: цены моделей для live-стоимости resumed-саб-агента (как в `task`). */
   modelPriceLoader?: (model: string) => UsagePricing | null;
+  /** AD-046 §5: рантайм скиллов — каталог resumed-саб-агенту (binding родителя). */
+  skillRuntime?: import('../skills/types.js').SkillRuntime;
+  /** AD-046 §4.5: scope-гейты скиллов родительского контекста. */
+  skillScope?: import('../skills/types.js').SkillScopeOptions;
+  /**
+   * AD-075/AD-076: проектные зависимости resumed-саб-агента — прокидываются в
+   * `TaskExtra`, чтобы проектные и сетевые git-тулы работали и после resume.
+   * Контейнер гарантирует только чтение (`load`); в рантайме оркестратор передаёт
+   * полный `ProjectStore`.
+   */
+  projectStore?: ProjectStoreLike;
+  workspacesRoot?: string;
+  sshKeyStore?: SSHKeyStore;
+  gitService?: GitService;
+  workspaceManaged?: boolean;
+  getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;
+  /**
+   * AD-069 §7: уже резолвленные проектные инструкции resumed-саб-агента
+   * (резолвит оркестратор; в ребёнке повторного резолва нет).
+   */
+  getProjectInstructions?: (child: Session, parent: Session, workingDir: string) => Promise<string | undefined>;
   /** Резолв провайдера дочерней сессии (gateway/роутер оркестратора). */
   getProvider: (child: Session) => BaseProvider | null;
   /** Рабочий каталог дочерней сессии. */
@@ -208,12 +240,59 @@ export async function runSubagentResume(
       .filter((m) => !m.hidden && !m.disabled)
       .map(messageToLLMMessage);
 
-    const systemPrompt = resolveSubagentPrompt(
+    let systemPrompt = resolveSubagentPrompt(
       agentDef,
       agentRole,
       child.settings.language,
       deps.contextConfig?.systemPromptsDir,
     );
+
+    // AD-046 §5/§6.2: каталог скиллов resumed-саб-агенту. Binding — родителя,
+    // capabilities — самого resumed-агента (executor).
+    if (deps.skillRuntime) {
+      try {
+        const parentAgentRole = parent.settings.agentRole;
+        const parentAgent = parentAgentRole ? deps.agentRegistry.get(parentAgentRole) : undefined;
+        const lang = child.settings.language || 'ru';
+        const catalog = await deps.skillRuntime.buildCatalog({
+          projectWorkspace: workingDir,
+          agent: { id: parentAgentRole, groups: parentAgent?.groups },
+          capabilities: agentDef.capabilities,
+          permissionConfig: child.settings.permission ?? deps.permissionConfig,
+          sessionEnabled: child.settings.skills,
+          sessionDisabled: child.settings.skillsDisabled,
+          ...(deps.skillScope ?? {}),
+        });
+        const skillsBlock = [
+          formatSkillsCatalogBlock(catalog.stable, lang, 'stable'),
+          formatSkillsCatalogBlock(catalog.session, lang, 'session'),
+        ].filter((b) => b.length > 0).join('\n\n');
+        if (skillsBlock) systemPrompt += `\n\n${skillsBlock}`;
+      } catch {
+        // каталог скиллов не должен ломать resume
+      }
+    }
+
+    // AD-069 §7/§9.2: проектные инструкции resumed-саб-агента. Не добавляются
+    // при `session.settings.systemPrompt` override (как основная сессия).
+    if (deps.getProjectInstructions && !child.settings.systemPrompt?.trim()) {
+      try {
+        const instructions = await deps.getProjectInstructions(child, parent, workingDir);
+        if (instructions) systemPrompt += `\n\n${instructions}`;
+      } catch {
+        // резолв инструкций не должен ломать resume
+      }
+    }
+
+    // AD-070 §2.9.1: недоступные по внешней зависимости (git/rg/sh) тулы —
+    // в системный промпт resumed-саб-агента (как state-сообщение родителя).
+    const subagentTools = deps.agentRegistry.getToolsForAgent(agentDef.id, deps.mcpServers);
+    const unavailableSection = buildSubagentUnavailableToolsSection(
+      subagentTools,
+      deps.runtimeDeps,
+      child.settings.language || 'ru',
+    );
+    if (unavailableSection) systemPrompt += `\n\n${unavailableSection}`;
 
     const extra: TaskExtra = {
       provider,
@@ -231,6 +310,8 @@ export async function runSubagentResume(
       sessionId: child.id,
       callerAgentRole: agentRole,
       permissionConfig: child.settings.permission ?? deps.permissionConfig,
+      // AD-070 §2.9.1: dependency-гейт permission-слоя resumed-саб-агента.
+      runtimeDeps: deps.runtimeDeps,
       securityConfig: deps.securityConfig,
       language: child.settings.language || 'ru',
       shellPolicy: deps.shellPolicy ?? undefined,
@@ -240,6 +321,18 @@ export async function runSubagentResume(
       mcpServers: deps.mcpServers,
       // AD-070: live-стоимость resumed-саб-агента тем же загрузчиком цен.
       modelPriceLoader: deps.modelPriceLoader,
+      // AD-046 §5: тул `skill` у resumed-саб-агента (тот же рантайм).
+      skillRuntime: deps.skillRuntime,
+      skillScope: deps.skillScope,
+      // AD-075/AD-076: проектные зависимости — проектные и сетевые git-тулы
+      // доступны resumed-саб-агенту (иначе projectStore/workspacesRoot/sshKeyStore
+      // отсутствуют и гейт `canEditProject`/SSH-окружение деградируют).
+      projectStore: deps.projectStore,
+      workspacesRoot: deps.workspacesRoot,
+      sshKeyStore: deps.sshKeyStore,
+      gitService: deps.gitService,
+      workspaceManaged: deps.workspaceManaged,
+      getWorkspaceOutsideRootPolicy: deps.getWorkspaceOutsideRootPolicy,
       retry,
     };
 
@@ -251,7 +344,7 @@ export async function runSubagentResume(
       llmSystemPrompt: systemPrompt,
       initialMessages,
       provider,
-      tools: deps.agentRegistry.getToolsForAgent(agentDef.id, deps.mcpServers),
+      tools: subagentTools,
       childSessionId: child.id,
       parentSessionId: parent.id,
       extra,

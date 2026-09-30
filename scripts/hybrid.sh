@@ -24,8 +24,11 @@
 #                       не нужен. Для отладки/интеграций доступен через
 #                       --print-api-key.
 #   --print-api-key     показать полный локальный API-ключ в сводке запуска
-#   --port <port>       порт локального core (default 4300)
+#   --port <port>       порт локального core (default 4300; standalone — 4400)
 #   --data-dir <path>   каталог данных локального мира (default ~/.local/share/synth)
+#   --home <path>       локальный home-каталог (AD-079). Если задан — config/data/
+#                       profiles/credentials резолвятся от него (data-dir по
+#                       умолчанию не подставляется, чтобы home им управлял).
 #   --no-build          не пересобирать пакеты
 #   --build             принудительная полная пересборка (shared+core+ui+synth)
 #   --help              справка
@@ -64,7 +67,13 @@ TOKEN=""
 API_KEY=""
 PRINT_API_KEY=false   # показывать полный ключ в сводке запуска (--print-api-key)
 PORT="4300"
-DATA_DIR="${DATA_DIR:-$HOME/.local/share/synth}"
+HOME_DIR=""           # AD-079: --home (пусто — текущее XDG-поведение)
+DATA_DIR_SET=false    # задан ли data-dir явно (флагом или env)
+if [ -n "${DATA_DIR:-}" ]; then
+    DATA_DIR_SET=true
+else
+    DATA_DIR="$HOME/.local/share/synth"
+fi
 DO_BUILD="default"   # default | full | none
 
 # ── Разбор аргументов ─────────────────────────────────────────────────────
@@ -90,8 +99,10 @@ hybrid.sh — запуск Synth локально в гибридном режи
                       не нужен. Для отладки/интеграций доступен через
                       --print-api-key.
   --print-api-key     показать полный локальный API-ключ в сводке запуска
-  --port <port>       порт локального core (default: 4300)
+  --port <port>       порт локального core (default: 4300; standalone — 4400)
   --data-dir <path>   каталог данных локального мира (default: ~/.local/share/synth)
+  --home <path>       локальный home-каталог (AD-079: config/data/profiles/credentials).
+                      Без флага сохраняется текущее поведение (XDG/~/.local/share/synth).
   --no-build          не пересобирать пакеты
   --build             принудительная полная пересборка (shared+core+ui+synth)
   --help              показать справку и выйти
@@ -136,7 +147,11 @@ while [ $# -gt 0 ]; do
             ;;
         --data-dir)
             [ $# -ge 2 ] || die "Опция $1 требует значение (см. --help)"
-            DATA_DIR="$2"; shift 2
+            DATA_DIR="$2"; DATA_DIR_SET=true; shift 2
+            ;;
+        --home)
+            [ $# -ge 2 ] || die "Опция $1 требует значение (см. --help)"
+            HOME_DIR="$2"; shift 2
             ;;
         --no-build)
             DO_BUILD="none"; shift
@@ -276,7 +291,12 @@ else
     echo "  Вход в UI:         адрес сервера + логин/пароль"
 fi
 echo "  Локальный порт:    $PORT"
-echo "  Локальный data:    $DATA_DIR"
+if [ -n "$HOME_DIR" ] && [ "$DATA_DIR_SET" != true ]; then
+    echo "  Локальный home:    $HOME_DIR"
+    echo "  Локальный data:    $HOME_DIR/data"
+else
+    echo "  Локальный data:    $DATA_DIR"
+fi
 if [ "$PRINT_API_KEY" = true ]; then
     echo "  Локальный API-key: $API_KEY"
 else
@@ -311,8 +331,15 @@ CLI_ARGS=(serve
     --oidc-client-id "$CLIENT_ID"
     --port "$PORT"
     --api-key "$API_KEY"
-    --data-dir "$DATA_DIR"
 )
+# AD-079: при заданном --home дефолтный --data-dir не подставляем — home сам
+# задаёт <home>/data (явный --data-dir/env по-прежнему приоритетнее).
+if [ -n "$HOME_DIR" ]; then
+    CLI_ARGS+=(--home "$HOME_DIR")
+fi
+if [ "$DATA_DIR_SET" = true ] || [ -z "$HOME_DIR" ]; then
+    CLI_ARGS+=(--data-dir "$DATA_DIR")
+fi
 if [ -n "$SERVER_URL" ]; then
     CLI_ARGS+=(--connect "$SERVER_URL")
 fi
@@ -329,7 +356,11 @@ trap - INT TERM
 
 echo ""
 echo "Готово. Локальный core остановлен."
-echo "  Кэш credentials: ~/.config/synth/credentials.json"
+if [ -n "$HOME_DIR" ]; then
+    echo "  Кэш credentials: $HOME_DIR/credentials.json"
+else
+    echo "  Кэш credentials: ~/.config/synth/credentials.json"
+fi
 if [ -n "$SERVER_URL" ]; then
     echo "  Отключиться от backend: node \"$CLI\" disconnect --backend \"$SERVER_URL\""
 fi

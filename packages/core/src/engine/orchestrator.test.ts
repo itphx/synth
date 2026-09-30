@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
@@ -7,6 +7,7 @@ import { ChatOrchestrator } from './orchestrator.js';
 import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { ProjectStore } from '../storage/project-store.js';
+import { SSHKeyStore } from '../storage/ssh-key-store.js';
 import { EventBus } from '../events/bus.js';
 import { ProviderFactory, BaseProvider, resolveSystemPromptText } from '../providers/base.js';
 import { GatewayProvider } from './gateway/gateway-provider.js';
@@ -110,6 +111,18 @@ describe('ChatOrchestrator._resolveWorkingDir', () => {
     await expect(resolveDir(orch, session)).resolves.toBe(absWs);
   });
 
+  it('создаёт каталог проектного workspace (AD-075)', async () => {
+    const wsRoot = join(tmpDir, 'ws-root-create');
+    const project = projectStore.create('P5', 'u1', { workspace: 'make-me' });
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({ projectId: project.id, title: 'S' });
+
+    const orch = makeOrchestrator({ workspacesRoot: wsRoot });
+    const dir = await resolveDir(orch, session);
+    expect(dir).toBe(resolve(wsRoot, 'make-me'));
+    expect((await stat(dir)).isDirectory()).toBe(true);
+  });
+
   it('без проекта/workspace возвращает defaultWorkingDir', async () => {
     const def = join(tmpDir, 'def-ws');
     const session = await sessionManager.createSession({ title: 'S' });
@@ -125,6 +138,26 @@ describe('ChatOrchestrator._resolveWorkingDir', () => {
 
     const orch = makeOrchestrator();
     await expect(resolveDir(orch, session)).resolves.toBe(join(tmpDir, 'workspaces', 'WS1'));
+  });
+
+  it('AD-076 §T6: sshKeyStore создаётся лениво из dataDir', () => {
+    const orch = makeOrchestrator();
+    const store = (orch as unknown as { _sshKeyStore: unknown })._sshKeyStore;
+    expect(store).toBeTruthy();
+  });
+
+  it('AD-076 §T6: явный sshKeyStore не пересоздаётся', () => {
+    const store = new SSHKeyStore({ dataDir: tmpDir, env: process.env });
+    const orch = new ChatOrchestrator({
+      sessionManager,
+      eventBus: new EventBus(),
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: () => null,
+      dataDir: tmpDir,
+      projectStore,
+      sshKeyStore: store,
+    });
+    expect((orch as unknown as { _sshKeyStore: unknown })._sshKeyStore).toBe(store);
   });
 });
 
@@ -456,6 +489,143 @@ describe('ChatOrchestrator — персистентность tool-chain (Вар
     expect(llm[1]!.content).toBe('привет');
     expect(llm[2]!.role).toBe('assistant');
     expect(llm[2]!.content).toBe('ответ');
+  });
+});
+
+describe('ChatOrchestrator._sessionMessagesToLlm — агенты и tool-chain', () => {
+  function makeMsg(overrides: Partial<Message> & Pick<Message, 'role'>): Message {
+    return {
+      id: generateId(),
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(overrides.content ?? '')],
+      content: '',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      ...overrides,
+    };
+  }
+
+  function makeToolCall(id: string, name = 'read_file'): Record<string, unknown> {
+    return { id, type: 'function', function: { name, arguments: '{}' } };
+  }
+
+  /** Ни один `tool` в выдаче не должен ссылаться на отсутствующий `tool_use`. */
+  function expectNoOrphanTool(messages: LLMMessage[]): void {
+    const callIds = new Set<string>();
+    for (const m of messages) {
+      if (m.role !== 'assistant' || !m.toolUse) continue;
+      for (const tc of m.toolUse) {
+        const id = (tc as { id?: string }).id;
+        if (id) callIds.add(id);
+      }
+    }
+    for (const m of messages) {
+      if (m.role !== 'tool') continue;
+      expect(m.toolCallId).toBeDefined();
+      expect(callIds.has(m.toolCallId!)).toBe(true);
+    }
+  }
+
+  it('смешанные агенты: tool-chain чужого агента сохраняется с атрибуцией, сирот нет', () => {
+    const messages: Message[] = [
+      makeMsg({ role: MessageRole.USER, content: 'Прочитай файл', author: 'user' }),
+      makeMsg({
+        role: MessageRole.ASSISTANT,
+        content: 'Читаю файл',
+        agentRole: 'agentA',
+        toolCalls: [makeToolCall('call_1')],
+      }),
+      makeMsg({
+        role: MessageRole.TOOL,
+        content: 'содержимое файла',
+        agentRole: 'agentA',
+        toolCallId: 'call_1',
+      }),
+      makeMsg({ role: MessageRole.ASSISTANT, content: 'Готово', agentRole: 'developer' }),
+    ];
+
+    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'developer', 'user');
+
+    expect(llm.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
+
+    const assistantA = llm[1]!;
+    expect(assistantA.toolUse).toHaveLength(1);
+    expect((assistantA.toolUse![0] as { id?: string }).id).toBe('call_1');
+    expect(assistantA.content).toBe('[agentA]: Читаю файл');
+    expect(assistantA.reasoning).toBeUndefined();
+
+    const toolResult = llm[2]!;
+    expect(toolResult.toolCallId).toBe('call_1');
+    expect(toolResult.content).toBe('содержимое файла');
+
+    expectNoOrphanTool(llm);
+  });
+
+  it('assistant без agentRole при заданном currentAgentRole — «свой» (assistant, не user)', () => {
+    const messages: Message[] = [
+      makeMsg({
+        role: MessageRole.ASSISTANT,
+        content: 'ответ',
+        toolCalls: [makeToolCall('call_own')],
+      }),
+      makeMsg({ role: MessageRole.TOOL, content: 'результат', toolCallId: 'call_own' }),
+    ];
+
+    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'developer', 'user');
+
+    expect(llm[0]!.role).toBe('assistant');
+    expect(llm[0]!.content).toBe('ответ');
+    expect(llm[0]!.toolUse).toHaveLength(1);
+    expect(llm[1]!.role).toBe('tool');
+    expect(llm[1]!.toolCallId).toBe('call_own');
+    expectNoOrphanTool(llm);
+  });
+
+  it('assistant без toolCalls и без agentRole — «свой» (assistant, не user)', () => {
+    const messages: Message[] = [
+      makeMsg({ role: MessageRole.ASSISTANT, content: 'легаси-ответ' }),
+    ];
+    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'developer', 'user');
+    expect(llm[0]!.role).toBe('assistant');
+    expect(llm[0]!.content).toBe('легаси-ответ');
+  });
+
+  it('скрытый assistant(toolCalls) + tool-результат → результат user-текстом, role tool нет', () => {
+    const messages: Message[] = [
+      makeMsg({
+        role: MessageRole.ASSISTANT,
+        content: '',
+        agentRole: 'developer',
+        toolCalls: [makeToolCall('call_hidden')],
+        disabled: true,
+      }),
+      makeMsg({
+        role: MessageRole.TOOL,
+        content: 'результат',
+        agentRole: 'developer',
+        toolCallId: 'call_hidden',
+      }),
+    ];
+
+    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'developer', 'user');
+
+    expect(llm.some((m) => m.role === 'tool')).toBe(false);
+    expect(llm).toHaveLength(1);
+    expect(llm[0]!.role).toBe('user');
+    expect(llm[0]!.content).toBe('[developer]: результат');
+    expectNoOrphanTool(llm);
+  });
+
+  it('tool без toolCallId → user-текст, без осиротевшей роли tool', () => {
+    const messages: Message[] = [
+      makeMsg({ role: MessageRole.TOOL, content: 'без id', agentRole: 'developer' }),
+    ];
+    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'developer', 'user');
+    expect(llm[0]!.role).toBe('user');
+    expect(llm[0]!.toolCallId).toBeUndefined();
   });
 });
 

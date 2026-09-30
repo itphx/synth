@@ -24,11 +24,19 @@
 - Публичные точки входа: `createStandaloneApp()` (`server/app.ts`),
   `createToolRegistry()` (`engine/tools/index.ts`), `createAgentRegistry()`
   (`engine/agents/index.ts`), `FileStore`/`JsonStore`/`ProjectStore`/
-  `FileProfileStore`/`RuntimeSettingsStore` (`storage/*`), `ChatOrchestrator`
+  `FileProfileStore`/`RuntimeSettingsStore`/`SSHKeyStore` (`storage/*`), `ChatOrchestrator`
   (`engine/orchestrator.ts`), `SessionManager` (`sessions/manager.ts`),
   `QueueProcessorManager` (`queue/processor.ts`), `EventBus` (`events/bus.ts`).
 - Движок stateless: история и состояние — на бэкенде; движок получает историю +
   новое сообщение + контекст (AD-022).
+- История для LLM формируется только через `ChatOrchestrator._sessionMessagesToLlm`
+  (`engine/orchestrator.ts`): сообщения чужого агента (иной `agentRole`; пустой
+  `agentRole` — «своё») отдаются как текст с атрибуцией `[agentRole]:`/`{author}:`,
+  но tool-chain сохраняется структурно — assistant с `toolCalls` остаётся ролью
+  `assistant` + `toolUse`, `tool`-результаты идут парными по `toolCallId`.
+  Осиротевших `tool`-сообщений (без предшествующего `tool_calls`) в выдаче быть не
+  должно: это ломает OpenAI-совместимые API и Anthropic (`tool_result` требует
+  парный `tool_use`).
 - Любой LLM-вызов — через `GatewayProvider`
   (`engine/gateway/gateway-provider.ts`: guard, обфускация, rate limit, аудит);
   провайдера напрямую не дёргать (AD-036).
@@ -39,6 +47,13 @@
   tmp→rename, AD-005); писать в `$SYNTH_DATA_DIR` в обход API/FileStore нельзя.
 - Конфиг — через `@itphx/synth-shared/config` (AD-023); приоритет
   CLI-флаги > `SYNTH_*` env > config.yaml > defaults.
+- Секреты at-rest (SSH-ключи, AD-076) — AES-256-GCM (`security/crypto.ts`);
+  мастер-ключ — `SYNTH_SECRET_KEY` > `security.secretKey` > файл
+  `{dataDir}/secrets/master.key` (`0600`, каталог `0700`, создаётся при первом
+  запуске); секреты не отдаются наружу (`reveal()` — только для git). Ротация
+  мастера — `synth secrets rotate` (`security/rotate.ts` + `SSHKeyStore.rotateMasterKey`,
+  preflight + dry-run); ключи с passphrase — через askpass (`git/ssh-env.ts`),
+  наружу — `sshkey.env_failed`.
 - План — в `project.plan`, todo — в `session.todos`; состояние менять только
   тулами `plan_*`/`todo_*`, не JSON-блоком в ответе модели (AD-039).
 - Ошибки LLM — через `classifyLlmError`/`isLlmErrorRecoverable`
@@ -59,32 +74,70 @@
   `POST /api/v2/llm/chat/completions` (`providers/remote.ts`); режим — `remote.llm`
   (`server` | `local` | `auto`).
 - Runtime-подключение: `connectRemote*`/`disconnectRemote` на хэндле
-  `createStandaloneApp`; профили серверов — `profiles.ts`
-  (`~/.config/synth/profiles.json`), credentials — `remote/credentials.ts`
-  (AD-042/045).
+  `createStandaloneApp`; профили серверов — `profiles.ts` (`getProfilesPath(home)` →
+  `<home>/profiles.json`; без home — XDG `~/.config/synth/profiles.json`),
+  credentials — `remote/credentials.ts` (`defaultCredentialsPath(home)`); в
+  `createStandaloneApp` путь задаётся опцией `profilesPath` рядом с
+  `remoteCredentialsPath` (AD-042/045/079).
 
 ## Карта модулей
 
-- `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, …).
+- `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, `secrets rotate`, …).
 - `server/app.ts` — `createStandaloneApp`: Hono, WS, статика UI, provisioning.
 - `server/routes/*` — `health`, `hybrid`, `auth`, `sessions`, `messages`, `projects`,
   `project-transfer`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
-  `settings`, `dictionaries`, `mcp`.
+  `settings`, `dictionaries`, `mcp`, `skills`, `commands`, `skill-bundles`,
+  `skill-scope`, `git`, `ssh-keys`.
 - `server/chat.ts`, `server/proxy.ts`, `server/serialize.ts`,
   `server/connection-watcher.ts` — одиночный чат, проксирование remote, сериализация,
-  watcher подключения.
+  watcher подключения. Проксирование — `REMOTE_PROXY_PREFIXES` (простые префиксы) +
+  `REMOTE_PROXY_PATTERNS` (regex: nested `/api/v2/agents/:id/ssh-keys`; прочие
+  подпути `/agents` — локальны).
+- `server/fs-workspace.ts` — резолв workspace проекта для FS-роутов
+  (`resolveProjectWorkspace`, AD-075) и детект бинарных файлов (`isTextFile`).
 - `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use).
 - `engine/gateway/*` — `GatewayProvider`, guard'ы, обфускация, аудит, rate limit.
 - `engine/router/*` — routing моделей и micro-model слой (AD-034/035).
-- `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths.
+- `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`) учитывает причину `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, AD-078); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (AD-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью.
 - `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация.
 - `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP.
+- `engine/skills/*` — discovery/реестр/каталог/загрузка/CRUD скиллов (AD-046 Фаза 1);
+  гейты уровней (system/project/session) — `scope.ts` (`resolveSkillAvailability`),
+  сид новых проектов — `seed.ts` (мастер `disabled` + `disabledForNewProjects`).
+- `engine/commands/*` — slash-команды и bundles (AD-046 §7): `parser`/`template`/
+  `discovery`/`registry`/`bundles`/`builtin`/`resolver`/`service`; резолвинг в core
+  до LLM, событие `command.invoked`.
 - `engine/tools/*` — `ToolRegistry` + встроенные тулы (fs, shell, git, search, web,
-  plan, todo, project, task).
+  plan, todo, project, task, skill); git-тулы принимают необязательный `repo_path`
+  (containment внутри `project.workspace`), SSH-окружение — `engine/tools/git-ssh.ts`
+  (AD-076; ошибки — `sshkey.env_failed`). Тулы управления проектом:
+  `project_update`/`project_workspace_set` (`project-manage.ts`) и
+  `project_repo_clone|init|add|fetch|remove` (`project-repos.ts`) — проект берётся
+  из сессии, смена workspace/регистрация репозиториев сохраняются `ProjectStore.save`
+  и публикуют `project.updated`; `project_update` валидирует `icon`/`color` по
+  `PROJECT_ICON_KEYS`/`PROJECT_COLOR_KEYS` (невалидно → ошибка с перечнем ключей).
+  Метаданные `icon`/`color` проекта и сессии — канонические ключи shared:
+  валидация на записи (роуты `projects`/`sessions` → 400 `VALIDATION_ERROR`),
+  нормализация legacy при чтении (`ProjectStore.load`, `FileStore.deserializeSession`,
+  `remote/transfer`); у сессий — сквозной проход (`Session`, `SessionManager.createSession`
+  и fork, `serializeSession`). Запись проектных данных (`project_log_write`/
+  `project_invariants_write`/`plan_write`) гейтится `engine/tools/project-access.ts`
+  (`canEditProject`, AD-075/D5). `engine/workspace-provision.ts` — общий
+  provisioning workspace (нормализация/containment/создание каталога) для
+  HTTP-роутов и тулов (AD-075). `engine/tools/runtime-deps.ts` — детект внешних
+  бинарников (`git`/`rg`/`sh`, fail-open, кэш) и карта `TOOL_RUNTIME_DEP`; отсутствие
+  программы даёт `unavailable(dependency)` (AD-078), тулы из реестра не удаляются.
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
+- `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
+  `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
+  `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`).
 - `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`,
-  `RuntimeSettingsStore`, `McpRegistryStore` (единый реестр MCP, AD-071).
+  `RuntimeSettingsStore`, `McpRegistryStore` (единый реестр MCP, AD-071),
+  `SkillStore`, `CommandStore`, `SkillBundleStore` (AD-046), `SSHKeyStore`
+  (`secrets/ssh-keys`, шифрование at-rest, AD-076); `migrations.ts` — идемпотентная
+  разовая миграция снапшотов `mcpDefaultOn`/`skillsDefaultOn` (маркер
+  `session-scope-snapshots-v1`).
 - `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`.
 - `remote/*` — клиент, сессии, credentials, device-flow, transfer, aggregate, event-bridge.
 - `providers/*` — `ProviderFactory`, `BaseProvider`, OpenAI/Anthropic/Ollama/Remote.
@@ -111,7 +164,9 @@
   хуки. Гибридные ветки активны только при переданном optional-dep
   (`getRemoteClient`). Публичные типы — в `src/index.ts`. Существующие фабрики:
   `createSettingsRoutes`, `createDictionaryRoutes`, `createProviderRoutes`,
-  `createModelRoutes`, `createSessionRoutes`.
+  `createModelRoutes`, `createSessionRoutes`, `createGitRoutes`,
+  `createSshKeyRoutes`, `createAgentSshKeyRoutes`, `createFsRoutes` (project-aware
+  FS: плоский root / workspace проекта через `getProjectWorkspace`, AD-075).
 
 ## MCP
 
@@ -125,7 +180,12 @@
 - HTTP: `POST /api/v2/mcp/probe` (`server/routes/mcp.ts`); доступность MCP по
   режимам — `GET/PUT /api/v2/settings/mcp`. Отдельного `/mcp/session/:id` в core нет.
 - Единый реестр серверов — `McpRegistryStore` (AD-071): уровни system/project/session,
-  скоуп — `engine/mcp/scope.ts`, сетевой доступ — `engine/mcp/network-policy.ts`
+  per-item резолвинг эффективного набора — `engine/mcp/scope.ts`
+  (`enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`,
+  причины `system_disabled`/`project_disabled`/`session_optout`/`not_default`;
+  мастер `enabled` (только реестр) и проектный `enabled` — live hard-gate (в т.ч. для
+  системных), дефолты — snapshot `mcpDefaultOn`; `config.enabled` — лишь сид реестра,
+  не гейт), сетевой доступ — `engine/mcp/network-policy.ts`
   (на старте применяется `mergeMcpNetworkPolicy(config, runtime)`).
 
 ## Тесты и запуск

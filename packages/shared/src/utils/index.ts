@@ -116,6 +116,10 @@ export function getForkedTitle(title?: string, existingTitles?: string[]): strin
 
 export { globMatch } from './glob.js';
 
+// --- Workspace (AD-075) ---
+
+export { slugifyWorkspaceName, uniqueWorkspaceName, MAX_WORKSPACE_SLUG_LENGTH } from './workspace.js';
+
 // --- Part helpers ---
 
 import type { Part, PartType } from '../types/index.js';

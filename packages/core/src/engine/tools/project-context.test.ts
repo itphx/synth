@@ -202,6 +202,42 @@ describe('project-context tools', () => {
     expect(result.metadata?.projectWorkspace).toBe(wsDir);
   });
 
+  it('list_repos: отдаёт метаданные реестра (destination/url/type/sshKeyId/defaultBranch/lastFetch)', async () => {
+    const subrepo = join(tmpDir, 'registry-repo');
+    await mkdir(subrepo, { recursive: true });
+    await initGitRepo(subrepo);
+    const project = projectStore.create('Registry', 'u1', {
+      workspace: tmpDir,
+      repos: [{
+        path: 'registry-repo',
+        name: 'my-repo',
+        url: 'git@example.com:org/repo.git',
+        type: 'ssh',
+        defaultBranch: 'main',
+        sshKeyId: 'key-1',
+        lastFetch: '2026-01-01T00:00:00.000Z',
+      }],
+    });
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({ projectId: project.id, title: 'S' });
+
+    const result = await listReposTool.execute({}, makeCtx({
+      sessionId: session.id,
+      extra: { sessionManager, projectStore, sessionId: session.id },
+    }));
+
+    expect(result.content).toContain('# Repositories of project Registry:');
+    expect(result.content).toContain(`- Destination: ${subrepo}`);
+    expect(result.content).toContain('- Name: my-repo');
+    expect(result.content).toContain('- URL: git@example.com:org/repo.git');
+    expect(result.content).toContain('- Type: ssh');
+    expect(result.content).toContain('- Default branch: main');
+    expect(result.content).toContain('- SSH key: key-1');
+    expect(result.content).toContain('- Last fetch: 2026-01-01T00:00:00.000Z');
+    expect(result.content).toContain('- Branch:');
+    expect(result.content).toContain('- Last commit:');
+  });
+
   it('list_repos: сканирует project.workspace, когда в проекте нет настроенных repos', async () => {
     const wsDir = await mkdtemp(join(tmpdir(), 'synth-project-ws-'));
     await initGitRepo(wsDir);

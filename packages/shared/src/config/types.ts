@@ -4,10 +4,14 @@ import { createToolsDisabledSchema } from '../schemas/index.js';
 import {
   TOOLS_POLICIES,
   MCP_NETWORK_POLICY_MODES,
+  COMMAND_CONFLICT_MODES,
   DEFAULT_MCP_PRIVATE_CIDRS,
   DEFAULT_MCP_NETWORK_POLICY,
   DEFAULT_LLM_GATEWAY_RATE_LIMIT,
+  ToolCapability,
 } from '../types/index.js';
+
+const toolCapabilityValues = Object.values(ToolCapability) as [ToolCapability, ...ToolCapability[]];
 
 // --- SynthConfig: единый конфиг для всех компонентов ---
 
@@ -23,6 +27,12 @@ export const storageConfigSchema = z.object({
   workspacesRoot: z.string().default(''),
   /** Рабочий каталог по умолчанию для сессий без проекта. Резолвится от dataDir: {dataDir}/workspaces/default. */
   defaultWorkspace: z.string().default(''),
+  /**
+   * AD-075: политика для абсолютного `project.workspace` вне `workspacesRoot`
+   * (`confirm` — подтверждение, `deny` — запрет). `''` — не задано (эффективно
+   * `confirm`), читать через `resolveWorkspaceOutsideRootPolicy`.
+   */
+  workspaceOutsideRoot: z.enum(['confirm', 'deny']).or(z.literal('')).default(''),
 });
 
 export const authConfigSchema = z.object({
@@ -126,7 +136,16 @@ export const mcpServerConfigSchema = z.object({
   env: z.record(z.string(), z.string()).optional(),
   url: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
+  /**
+   * Сид системного мастер-флага записи реестра при первичном создании из config
+   * (`seedFromConfig`); в резолвинге/подключении не участвует — после создания
+   * мастер-флаг живёт только в `McpRegistryEntry.enabled`.
+   */
   enabled: z.boolean().optional(),
+  /**
+   * Сид «включён по умолчанию для НОВЫХ ПРОЕКТОВ» (`project.enabled`/
+   * `project.defaultOn`), снимок на момент создания проекта.
+   */
   enabledByDefault: z.boolean().optional(),
   timeout: z.number().int().min(1).optional(),
   connectTimeout: z.number().int().min(1).optional(),
@@ -172,6 +191,127 @@ export const toolsConfigSchema = z.object({
   disabled: toolsDisabledConfigSchema.default({}),
 });
 
+// --- Скиллы (AD-046) ---
+
+/**
+ * AD-046 §4.2/§4.4/§7.4: конфигурация механизма скиллов.
+ * `paths` — дополнительные пользовательские каталоги; `trustedProjectDirs` —
+ * доверенные проектные каталоги (бинарный trust); `inlineShell` — выключатель
+ * `!`cmd`` в шаблонных командах (по умолчанию выключено).
+ *
+ * `urls` — внешние удалённые каталоги (opencode-совместимый `index.json`):
+ * **только read-only индексация** — скачиваются в `{dataDir}/skills-cache/urls`,
+ * видны в реестре/диагностике, но `trusted: false` (в каталог для модели не
+ * попадают, тело не грузится). Установка/доверие/подписи/`lock.json` — AD-068.
+ *
+ * Внешние локальные каталоги совместимости (`.opencode`, `.claude`, `.agents`,
+ * `~/.config/opencode`) подключаются как read-only discovery в core (AD-046 §4.2).
+ */
+export const skillsConfigSchema = z.object({
+  paths: z.array(z.string()).default([]),
+  /** AD-046 §4.2/§4.3: удалённые каталоги — read-only индексация (`trusted: false`). */
+  urls: z.array(z.string()).default([]),
+  trustedProjectDirs: z.array(z.string()).default([]),
+  inlineShell: z.boolean().default(false),
+  /**
+   * AD-046 §3.2/§12: именованные группы тулов → capabilities. Используется
+   * для экспансии `metadata.synth.requires_toolsets` в проверку доступности
+   * скилла (union с `requires_capabilities`).
+   */
+  toolsets: z.record(z.string(), z.array(z.enum(toolCapabilityValues))).default({}),
+});
+
+// --- Slash-команды (AD-046 §7) ---
+
+/**
+ * AD-046 §7/§9.4: конфигурация slash-команд. `paths` — дополнительные каталоги
+ * шаблонных `.md`-команд; `bundlesPath` — подкаталог `{dataDir}` для YAML-бандлов;
+ * `conflict` — режим разрешения конфликтов имён (см. resolver).
+ */
+export const commandsConfigSchema = z.object({
+  paths: z.array(z.string()).default([]),
+  bundlesPath: z.string().default('skill-bundles'),
+  conflict: z
+    .object({
+      mode: z.enum(COMMAND_CONFLICT_MODES).default('bundle-wins'),
+      namespacePrefix: z.boolean().default(false),
+    })
+    .default({}),
+  maxArgumentsLength: z.number().int().min(1).default(10_000),
+  maxRenderedBytes: z.number().int().min(1).default(200_000),
+});
+
+// --- Проектные инструкции (AD-069) ---
+
+/**
+ * AD-069 §3.4/§11: дополнительный источник проектных инструкций.
+ * `position` задаёт место в порядке: `before` — перед merged chain, `after` —
+ * после. `ttlSec` (только для URL) переопределяет `instructions.fetch.cacheTtlSec`.
+ */
+export const instructionSourceConfigSchema = z.object({
+  kind: z.enum(['path', 'url']),
+  value: z.string(),
+  position: z.enum(['before', 'after']).default('after'),
+  label: z.string().optional(),
+  ttlSec: z.number().int().min(0).optional(),
+});
+
+/**
+ * AD-069 §4: параметры lazy-догрузки подкаталогов (реализация — Фаза 2;
+ * схема заводится в Фазе 1).
+ */
+export const instructionsLazyConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  maxAncestors: z.number().int().min(0).default(5),
+  maxChars: z.number().int().min(1).default(8_000),
+  excludeDirs: z
+    .array(z.string())
+    .default(['node_modules', '.git', 'vendor', 'dist', 'build', '.next', 'coverage', 'tmp', '.cache']),
+});
+
+/**
+ * AD-069 §5.1/§9.1: параметры fetch URL-источников (без фонового таймера —
+ * загрузка при старте + TTL-кэш). Реализация fetch — Фаза 2.
+ */
+export const instructionsFetchConfigSchema = z.object({
+  timeoutMs: z.number().int().min(1).default(5_000),
+  cacheTtlSec: z.number().int().min(0).default(3_600),
+  maxBytes: z.number().int().min(1).default(262_144),
+});
+
+/**
+ * AD-069 §5.1/§9.1: конфигурация проектных инструкций (`AGENTS.md` и совместимые).
+ * Порядок: `sources` с `position: before` → merged chain (`git root → … → cwd`) →
+ * `sources` с `position: after`. Кап — динамический от окна модели.
+ */
+export const instructionsConfigSchema = z.object({
+  /** Глобальный тумблер автоматической загрузки проектных инструкций. */
+  enabled: z.boolean().default(true),
+  /** Читать `CLAUDE.md`, если нет основного кандидата (инвертированный disableClaudeCodePrompt). */
+  claudeCompat: z.boolean().default(true),
+  /** Deprecated `CONTEXT.md` (выключено по умолчанию). */
+  contextCompat: z.boolean().default(false),
+  /** Доля head при обрезке. */
+  headRatio: z.number().min(0).max(1).default(0.7),
+  /** Доля tail при обрезке. */
+  tailRatio: z.number().min(0).max(1).default(0.2),
+  /** Явный cap-override (перебивает расчёт от окна модели). */
+  maxChars: z.number().int().min(1).optional(),
+  /** Доля окна модели для динамического капа. */
+  windowRatio: z.number().min(0).max(1).default(0.06),
+  /** Нижняя граница динамического капа (floor). */
+  minChars: z.number().int().min(1).default(20_000),
+  /** Верхняя граница динамического капа (ceiling). */
+  maxCharsCeiling: z.number().int().min(1).default(500_000),
+  lazy: instructionsLazyConfigSchema.default({}),
+  fetch: instructionsFetchConfigSchema.default({}),
+  sources: z.array(instructionSourceConfigSchema).default([]),
+  /** Проекты (id), где автозагрузка выключена. */
+  excludeProjects: z.array(z.string()).default([]),
+  /** Не грузить инструкции внутри дерева исходников Synth (install-tree guard, Фаза 2). */
+  allowInstallTreeFallback: z.boolean().default(false),
+});
+
 // --- Security (IPI protection) ---
 
 export const promptInjectionConfigSchema = z.object({
@@ -191,6 +331,12 @@ export const protectedPathsConfigSchema = z.object({
 export const securityConfigSchema = z.object({
   promptInjection: promptInjectionConfigSchema.default({}),
   protectedPaths: protectedPathsConfigSchema.default({}),
+  /**
+   * AD-076: мастер-ключ для шифрования секретов at-rest (SSH-ключи, AES-256-GCM).
+   * Приоритет — env `SYNTH_SECRET_KEY` (читать через `resolveSecretKey`).
+   * Пусто — core использует файл `{dataDir}/secrets/master.key`.
+   */
+  secretKey: z.string().default(''),
 });
 
 // --- LLM Gateway (AD-036) ---
@@ -328,6 +474,9 @@ export const synthConfigSchema = z.object({
   summarization: summarizationConfigSchema.default({}),
   mcp: mcpConfigSchema.default({}),
   tools: toolsConfigSchema.default({}),
+  skills: skillsConfigSchema.default({}),
+  commands: commandsConfigSchema.default({}),
+  instructions: instructionsConfigSchema.default({}),
   router: routerConfigSchema.default({}),
   remote: remoteConfigSchema.default({}),
   microFirst: microFirstConfigSchema.default({}),
@@ -353,6 +502,12 @@ export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
 export type McpConfig = z.infer<typeof mcpConfigSchema>;
 export type ToolsConfig = z.infer<typeof toolsConfigSchema>;
 export type ToolsDisabledConfig = z.infer<typeof toolsDisabledConfigSchema>;
+export type SkillsConfig = z.infer<typeof skillsConfigSchema>;
+export type CommandsConfig = z.infer<typeof commandsConfigSchema>;
+export type InstructionSourceConfig = z.infer<typeof instructionSourceConfigSchema>;
+export type InstructionsLazyConfig = z.infer<typeof instructionsLazyConfigSchema>;
+export type InstructionsFetchConfig = z.infer<typeof instructionsFetchConfigSchema>;
+export type InstructionsConfig = z.infer<typeof instructionsConfigSchema>;
 export type RouterContentConfig = z.infer<typeof routerContentConfigSchema>;
 export type RouterEscalationConfig = z.infer<typeof routerEscalationConfigSchema>;
 export type RouterCostConfig = z.infer<typeof routerCostConfigSchema>;

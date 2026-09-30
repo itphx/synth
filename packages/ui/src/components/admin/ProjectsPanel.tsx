@@ -11,6 +11,7 @@ import {
   SettingsSection,
   TextField,
 } from '../ui/settings'
+import { WorkspacePolicySection } from './WorkspacePolicySection'
 
 export const ProjectsPanel = () => {
   const { t } = useI18n()
@@ -137,6 +138,8 @@ export const ProjectsPanel = () => {
         </p>
         {error && <p className="text-xs text-status-error min-w-0 break-words">{error}</p>}
       </SettingsSection>
+
+      <WorkspacePolicySection />
 
       {showCreate && (
         <SettingsSection title={t('admin.projects.new')}>

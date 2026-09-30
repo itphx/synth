@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
-import { cn } from '@/lib/utils'
-import { synthApi } from '@/lib/api/synthApi'
+import { cn, resolveColor } from '@/lib/utils'
+import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
 import { useI18n } from '@/lib/i18n'
 import { MarkdownContent } from './MarkdownContent'
 
@@ -186,19 +186,76 @@ interface SecretPlainTextProps {
   content: string
   secrets?: Record<string, string>
   sessionId?: string
+  /** Реестр агентов — для подсветки `@`-упоминаний в пользовательском сообщении. */
+  agents?: AgentInfo[]
 }
 
-/** Plain-text контент (сообщения пользователя) с плейсхолдерами секретов. */
-export function SecretPlainText({ content, secrets, sessionId }: SecretPlainTextProps) {
+/** Токен упоминания агента в тексте: `@<agentId>`. */
+export const MENTION_REGEX = /@(\w+)/g
+
+export interface MentionSegment {
+  type: 'text' | 'mention'
+  value: string
+  agent?: AgentInfo
+}
+
+/**
+ * Разбивает текст на сегменты «обычный текст» / «упоминание агента».
+ * Упоминанием считается только `@<id>` известного агента; неизвестные токены
+ * остаются обычным текстом — сообщение не ломается.
+ */
+export function splitMentions(text: string, agents: AgentInfo[]): MentionSegment[] {
+  if (!text || agents.length === 0) return [{ type: 'text', value: text }]
+  const segments: MentionSegment[] = []
+  let lastIndex = 0
+  MENTION_REGEX.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = MENTION_REGEX.exec(text)) !== null) {
+    const agent = agents.find((a) => a.id === match![1])
+    if (!agent) continue
+    if (match.index > lastIndex) {
+      segments.push({ type: 'text', value: text.slice(lastIndex, match.index) })
+    }
+    segments.push({ type: 'mention', value: match[0], agent })
+    lastIndex = match.index + match[0].length
+  }
+  if (lastIndex < text.length) {
+    segments.push({ type: 'text', value: text.slice(lastIndex) })
+  }
+  return segments.length > 0 ? segments : [{ type: 'text', value: text }]
+}
+
+/** Инлайн-подсветка `@`-упоминаний цветом иконки/агента. */
+function renderMentions(text: string, agents: AgentInfo[], keyBase: string) {
+  return splitMentions(text, agents).map((seg, i) =>
+    seg.type === 'mention' && seg.agent ? (
+      <span
+        key={`${keyBase}-${i}`}
+        data-mention={seg.agent.id}
+        className="font-medium"
+        style={{ color: resolveColor(seg.agent.color) }}
+      >
+        {seg.value}
+      </span>
+    ) : (
+      <span key={`${keyBase}-${i}`}>{seg.value}</span>
+    ),
+  )
+}
+
+/** Plain-text контент (сообщения пользователя): плейсхолдеры секретов + подсветка `@`-упоминаний. */
+export function SecretPlainText({ content, secrets, sessionId, agents = [] }: SecretPlainTextProps) {
   const segments = splitBySecretPlaceholders(content)
-  if (segments.length === 1 && segments[0]!.type === 'text') {
+  if (agents.length === 0 && segments.length === 1 && segments[0]!.type === 'text') {
     return <p className="text-sm whitespace-pre-wrap">{content}</p>
   }
   return (
     <p className="text-sm whitespace-pre-wrap">
       {segments.map((seg, i) =>
         seg.type === 'text' ? (
-          <span key={i}>{seg.value}</span>
+          <span key={i}>
+            {agents.length === 0 ? seg.value : renderMentions(seg.value, agents, `t${i}`)}
+          </span>
         ) : (
           <SecretPlaceholder
             key={i}

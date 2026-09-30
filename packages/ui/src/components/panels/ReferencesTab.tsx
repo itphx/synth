@@ -4,6 +4,7 @@ import { Icon } from '@/components/icon/Icon'
 import { synthApi } from '@/lib/api/synthApi'
 import { useChatStore } from '@/stores/chatStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { PanelTab } from './PanelTab'
 
 interface Reference {
   sessionId: string
@@ -86,20 +87,27 @@ export function ReferencesTab({ sessionId }: ReferencesTabProps) {
   }
 
   if (loading) {
-    return <div className="p-4 text-xs text-muted-foreground text-center">...</div>
+    return (
+      <PanelTab>
+        <div className="flex items-center justify-center h-full text-xs text-muted-foreground">...</div>
+      </PanelTab>
+    )
   }
 
   if (refs.length === 0) {
     return (
-      <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
-        <Icon name="link" className="h-6 w-6 text-muted-foreground" />
-        <p className="text-xs text-muted-foreground">{t('reference.empty')}</p>
-      </div>
+      <PanelTab>
+        <div className="flex flex-col items-center justify-center h-full gap-2 text-center">
+          <Icon name="link" className="h-6 w-6 text-muted-foreground" />
+          <p className="text-xs text-muted-foreground">{t('reference.empty')}</p>
+        </div>
+      </PanelTab>
     )
   }
 
   return (
-    <div className="flex flex-col gap-1 p-2">
+    <PanelTab>
+      <div className="flex flex-col gap-1.5">
       {refs.map((ref) => {
         const name =
           ref.label || sessionNames[ref.sessionId] || shortId(ref.sessionId)
@@ -137,6 +145,7 @@ export function ReferencesTab({ sessionId }: ReferencesTabProps) {
           </div>
         )
       })}
-    </div>
+      </div>
+    </PanelTab>
   )
 }

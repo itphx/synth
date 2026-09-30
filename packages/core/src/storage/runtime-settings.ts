@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig } from '@itphx/synth-shared';
+import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 
@@ -41,6 +41,17 @@ export interface RuntimeSettings {
   mcpPolicy?: ToolsPolicy;
   /** AD-071 §2.6: instance-wide отключение инструментов (админка). */
   toolsDisabled?: ToolsDisabledConfig;
+  /** AD-046 §4.5: instance-wide отключение скиллов группами/точечно (админка). */
+  skillsDisabled?: SkillsDisabledRequest;
+  /**
+   * AD-046 §4.5: сид для НОВЫХ проектов — скиллы, отключённые по умолчанию
+   * (снимок при создании проекта).
+   */
+  skillsDisabledForNewProjects?: SkillsDisabledRequest;
+  /** AD-046 §4.5: глобальная политика включения скиллов (админка). */
+  skillsPolicy?: ToolsPolicy;
+  /** Разовые идемпотентные миграции: имя → `true` (выполнено). */
+  migrations?: Record<string, boolean>;
   /** AD-071 §2.3.1: runtime-политика сетевого доступа пользовательских HTTP MCP. */
   mcpNetworkPolicy?: McpNetworkPolicy;
   /**
@@ -50,6 +61,11 @@ export interface RuntimeSettings {
   tokenRatios?: Record<string, number>;
   /** Агент по умолчанию (админка «Агенты»); отсутствие — `DEFAULT_AGENT_ID`. */
   defaultAgent?: string;
+  /**
+   * AD-075: политика для абсолютного workspace вне `workspacesRoot`
+   * (`confirm` | `deny`); отсутствие — значение из config.yaml/env.
+   */
+  workspacePolicy?: WorkspaceOutsideRootPolicy;
 }
 
 /**
@@ -97,6 +113,8 @@ export function mergeSecurityConfig(
     protectedPaths: {
       enabled: runtime.protectedPaths?.enabled ?? base?.protectedPaths?.enabled ?? true,
     },
+    // AD-076: мастер-ключ не относится к runtime-настройкам UI — переносим из config.
+    secretKey: base?.secretKey ?? '',
     askTimeoutMs: runtime.askTimeoutMs
       ?? (base as SecurityConfig & { askTimeoutMs?: number })?.askTimeoutMs
       ?? DEFAULT_ASK_TIMEOUT_MS,
@@ -274,6 +292,73 @@ export class RuntimeSettingsStore {
     });
   }
 
+  /** AD-046 §4.5: instance-wide отключение скиллов (админка). */
+  async getSkillsDisabled(): Promise<SkillsDisabledRequest | undefined> {
+    const settings = await this.load();
+    return settings.skillsDisabled;
+  }
+
+  async setSkillsDisabled(config: SkillsDisabledRequest): Promise<void> {
+    await this._update((current) => ({ ...current, skillsDisabled: config }));
+  }
+
+  async clearSkillsDisabled(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.skillsDisabled;
+      return next;
+    });
+  }
+
+  /** AD-046 §4.5: сид «отключено по умолчанию» для новых проектов. */
+  async getSkillsDisabledForNewProjects(): Promise<SkillsDisabledRequest | undefined> {
+    const settings = await this.load();
+    return settings.skillsDisabledForNewProjects;
+  }
+
+  async setSkillsDisabledForNewProjects(config: SkillsDisabledRequest): Promise<void> {
+    await this._update((current) => ({ ...current, skillsDisabledForNewProjects: config }));
+  }
+
+  async clearSkillsDisabledForNewProjects(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.skillsDisabledForNewProjects;
+      return next;
+    });
+  }
+
+  /** Разовые идемпотентные миграции: маркер выполненной миграции. */
+  async getMigrationMarker(name: string): Promise<boolean> {
+    const settings = await this.load();
+    return settings.migrations?.[name] === true;
+  }
+
+  async setMigrationMarker(name: string): Promise<void> {
+    await this._update((current) => ({
+      ...current,
+      migrations: { ...(current.migrations ?? {}), [name]: true },
+    }));
+  }
+
+  /** AD-046 §4.5: глобальная политика включения скиллов (админка). */
+  async getSkillsPolicy(): Promise<ToolsPolicy | undefined> {
+    const settings = await this.load();
+    return settings.skillsPolicy;
+  }
+
+  async setSkillsPolicy(policy: ToolsPolicy): Promise<void> {
+    await this._update((current) => ({ ...current, skillsPolicy: policy }));
+  }
+
+  async clearSkillsPolicy(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.skillsPolicy;
+      return next;
+    });
+  }
+
   /** AD-071 §2.6: chars-per-token модели (undefined — калибровки нет). */
   async getTokenRatio(model: string): Promise<number | undefined> {
     const settings = await this.load();
@@ -325,6 +410,24 @@ export class RuntimeSettingsStore {
     await this._update((current) => {
       const next = { ...current };
       delete next.defaultAgent;
+      return next;
+    });
+  }
+
+  /** AD-075: runtime-политика workspace вне root (админка), undefined — не задана. */
+  async getWorkspacePolicy(): Promise<WorkspaceOutsideRootPolicy | undefined> {
+    const settings = await this.load();
+    return settings.workspacePolicy;
+  }
+
+  async setWorkspacePolicy(policy: WorkspaceOutsideRootPolicy): Promise<void> {
+    await this._update((current) => ({ ...current, workspacePolicy: policy }));
+  }
+
+  async clearWorkspacePolicy(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.workspacePolicy;
       return next;
     });
   }

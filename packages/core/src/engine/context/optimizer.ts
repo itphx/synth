@@ -101,7 +101,7 @@ export class ContextOptimizer {
         return this._getMessagesForStickyNotes(session);
       default:
         return session.messages.filter(
-          (m) => !m.disabled && !m.hidden && m.role !== MessageRole.INFO,
+          (m) => !m.disabled && !m.hidden && !m.ephemeral && m.role !== MessageRole.INFO,
         );
     }
   }
@@ -426,11 +426,11 @@ export class ContextOptimizer {
   // ====================================================================
 
   private _getAllActiveMessages(session: Session): Message[] {
-    return session.messages.filter((m) => !m.disabled && !m.hidden && m.role !== 'summary' && m.role !== 'info');
+    return session.messages.filter((m) => !m.disabled && !m.hidden && !m.ephemeral && m.role !== 'summary' && m.role !== 'info');
   }
 
   private _getActiveUserMessages(messages: Message[]): Message[] {
-    return messages.filter((m) => m.role === MessageRole.USER && !m.disabled && !m.hidden);
+    return messages.filter((m) => m.role === MessageRole.USER && !m.disabled && !m.hidden && !m.ephemeral);
   }
 
   private _estimateMessageTokens(msg: Message): number {
@@ -519,7 +519,7 @@ export class ContextOptimizer {
     for (let i = startIdx; i < messages.length; i++) {
       const msg = messages[i]!;
       if (msg.pinned) continue; // никогда не суммаризируем pinned
-      if (msg.disabled || msg.hidden) continue;
+      if (msg.disabled || msg.hidden || msg.ephemeral) continue;
       if (msg.role === MessageRole.USER || msg.role === MessageRole.ASSISTANT) {
         result.push(msg);
       }
@@ -539,8 +539,8 @@ export class ContextOptimizer {
 
   private _getMessagesForSlidingWindow(session: Session): Message[] {
     const allActive = this._getAllActiveMessages(session);
-    const pinnedActive = session.messages.filter((m) => m.pinned && !m.disabled && !m.hidden);
-    const summaryActive = session.messages.filter((m) => m.role === MessageRole.SUMMARY && !m.disabled && !m.hidden);
+    const pinnedActive = session.messages.filter((m) => m.pinned && !m.disabled && !m.hidden && !m.ephemeral);
+    const summaryActive = session.messages.filter((m) => m.role === MessageRole.SUMMARY && !m.disabled && !m.hidden && !m.ephemeral);
     const mode = session.settings.slidingWindowMode;
 
     let windowMessages: Message[];
@@ -575,7 +575,7 @@ export class ContextOptimizer {
     const startIdx = lastSummaryIdx >= 0 ? lastSummaryIdx + 1 : 0;
     for (let i = startIdx; i < session.messages.length; i++) {
       const msg = session.messages[i]!;
-      if (msg.disabled || msg.hidden) continue;
+      if (msg.disabled || msg.hidden || msg.ephemeral) continue;
       if (msg.role === MessageRole.INFO) continue;
       result.push(msg);
     }
@@ -586,7 +586,7 @@ export class ContextOptimizer {
   private _getMessagesForStickyNotes(session: Session): Message[] {
     const active = this._getAllActiveMessages(session);
     const limit = 6;
-    const summaryActive = session.messages.filter((m) => m.role === MessageRole.SUMMARY && !m.disabled && !m.hidden);
+    const summaryActive = session.messages.filter((m) => m.role === MessageRole.SUMMARY && !m.disabled && !m.hidden && !m.ephemeral);
 
     if (active.length <= limit) return [...active, ...summaryActive];
 
@@ -650,7 +650,7 @@ export class ContextOptimizer {
     const lastSummaryIdx = this._findLastSummaryIndex(session.messages);
     const startIdx = lastSummaryIdx >= 0 ? lastSummaryIdx + 1 : 0;
     const activeSinceLast = session.messages.slice(startIdx)
-      .filter((m) => !m.disabled && !m.hidden && m.role !== MessageRole.INFO && m.role !== MessageRole.SUMMARY);
+      .filter((m) => !m.disabled && !m.hidden && !m.ephemeral && m.role !== MessageRole.INFO && m.role !== MessageRole.SUMMARY);
 
     return activeSinceLast.length >= 3;
   }

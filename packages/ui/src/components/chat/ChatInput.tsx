@@ -6,11 +6,13 @@ import { useDevice } from '@/hooks/useDevice'
 import { useChatStore } from '@/stores/chatStore'
 import { confirm } from '@/lib/confirm'
 import { MentionPopup } from './MentionPopup'
+import { CommandAutocomplete } from './CommandAutocomplete'
 import { ModelSelector } from './ModelSelector'
 import { AgentModeSelector } from './AgentModeSelector'
 import { PlanActModeToggle } from './PlanActModeToggle'
 import { ReasoningLevelSelector } from './ReasoningLevelSelector'
 import type { AgentInfo } from '@/lib/api/synthApi'
+import type { CommandSummary } from '@itphx/synth-shared'
 
 interface ChatInputProps {
   sessionId: string
@@ -24,7 +26,7 @@ interface ChatInputProps {
   onToggleExpand?: () => void
 }
 
-interface TagPart {
+export interface TagPart {
   text: string
   agentRole: string
 }
@@ -33,7 +35,16 @@ const TAG_REGEX = /@(\w+)/g
 const MAX_TAGS = 3
 const CHAT_INPUT_RADIUS = 'var(--radius-xl)'
 
-function splitMessageWithTags(message: string, agents: AgentInfo[]): TagPart[] | null {
+/**
+ * Собирает текст части сообщения для конкретного агента, СОХРАНЯЯ сам тег
+ * `@<agentId>` (иначе пользователь не видит, к кому обращался), и текст до
+ * первого тега (commonPrefix), если он был.
+ */
+function buildTaggedText(prefix: string, tag: string, segmentText: string): string {
+  return [prefix, `@${tag}`, segmentText].filter(Boolean).join(' ')
+}
+
+export function splitMessageWithTags(message: string, agents: AgentInfo[]): TagPart[] | null {
   const tagsWithPositions: { tag: string; start: number; end: number }[] = []
   let match: RegExpExecArray | null
 
@@ -84,10 +95,10 @@ function splitMessageWithTags(message: string, agents: AgentInfo[]): TagPart[] |
         for (let k = i; k <= groupEnd; k++) {
           const agent = agents.find((a) => a.id === tagsWithPositions[k].tag && a.enabled)
           if (agent) {
-            const fullMessage = commonPrefix
-              ? `${commonPrefix} ${segmentText}`
-              : segmentText
-            parts.push({ text: fullMessage, agentRole: tagsWithPositions[k].tag })
+            parts.push({
+              text: buildTaggedText(commonPrefix, tagsWithPositions[k].tag, segmentText),
+              agentRole: tagsWithPositions[k].tag,
+            })
           }
         }
         i = groupEnd + 1
@@ -102,10 +113,10 @@ function splitMessageWithTags(message: string, agents: AgentInfo[]): TagPart[] |
     const agent = agents.find((a) => a.id === currentTag.tag && a.enabled)
 
     if (agent) {
-      const fullMessage = commonPrefix
-        ? `${commonPrefix} ${segmentText}`
-        : segmentText
-      parts.push({ text: fullMessage, agentRole: currentTag.tag })
+      parts.push({
+        text: buildTaggedText(commonPrefix, currentTag.tag, segmentText),
+        agentRole: currentTag.tag,
+      })
     }
 
     i++
@@ -136,8 +147,14 @@ export function ChatInput({
     query: string
     start: number
     end: number
-    position: { top: number; left: number }
+    position: { left: number }
   } | null>(null)
+  // AD-046 §9.3: `/`-автокомплит команд (триггер — ввод начинается с `/`).
+  const [commandState, setCommandState] = useState<{
+    query: string
+    position: { left: number }
+  } | null>(null)
+  const [commandMatches, setCommandMatches] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const valueRef = useRef(value)
   valueRef.current = value
@@ -177,20 +194,38 @@ export function ChatInput({
     const mentionMatch = textBeforeCursor.match(/@(\S*)$/)
 
     if (mentionMatch && mentionMatch.index !== undefined) {
-      const textarea = textareaRef.current
-      if (textarea) {
-        const rect = textarea.getBoundingClientRect()
-        setMentionState({
-          query: mentionMatch[1],
-          start: mentionMatch.index,
-          end: cursorPos,
-          position: { top: rect.height + 8, left: 0 },
-        })
-      }
+      setMentionState({
+        query: mentionMatch[1],
+        start: mentionMatch.index,
+        end: cursorPos,
+        position: { left: 0 },
+      })
     } else {
       setMentionState(null)
     }
+
+    // AD-046 §9.3: `/`-команда — ввод начинается с `/`, первый токен без пробелов.
+    const commandMatch = /^\/(\S*)$/.exec(newValue)
+    if (commandMatch) {
+      setCommandState({
+        query: commandMatch[1],
+        position: { left: 0 },
+      })
+    } else {
+      setCommandState(null)
+    }
   }
+
+  const handleSelectCommand = useCallback((command: CommandSummary) => {
+    setValue(`/${command.name} `)
+    setCommandState(null)
+    setCommandMatches(0)
+    textareaRef.current?.focus()
+  }, [])
+
+  const handleCommandMatches = useCallback((count: number) => {
+    setCommandMatches(count)
+  }, [])
 
   const handleSelectMention = (agentId: string) => {
     if (!mentionState || !textareaRef.current) return
@@ -213,12 +248,11 @@ export function ChatInput({
         const tagName = match[1]
         const agent = agents.find((a) => a.id === tagName && a.enabled)
         if (agent) {
-          const rect = el.getBoundingClientRect()
           setMentionState({
             query: tagName,
             start: match.index,
             end: match.index + match[0].length,
-            position: { top: rect.height + 8, left: 0 },
+            position: { left: 0 },
           })
         }
         return
@@ -242,6 +276,8 @@ export function ChatInput({
     }
 
     setValue('')
+    setCommandState(null)
+    setCommandMatches(0)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -271,6 +307,8 @@ export function ChatInput({
     }
 
     setValue('')
+    setCommandState(null)
+    setCommandMatches(0)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -289,6 +327,8 @@ export function ChatInput({
     if (!text) return
     onCreateNote(text)
     setValue('')
+    setCommandState(null)
+    setCommandMatches(0)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -305,6 +345,23 @@ export function ChatInput({
         return
       }
       return
+    }
+
+    // AD-046 §9.3: пока открыт непустой список команд — навигация/выбор у
+    // CommandAutocomplete, сообщение не отправляется.
+    if (commandState) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setCommandState(null)
+        return
+      }
+      if (
+        commandMatches > 0
+        && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === 'Tab')
+      ) {
+        e.preventDefault()
+        return
+      }
     }
 
     if (e.key === 'Escape') {
@@ -372,6 +429,16 @@ export function ChatInput({
               position={mentionState.position}
               onSelect={handleSelectMention}
               onClose={() => setMentionState(null)}
+            />
+          )}
+
+          {commandState && (
+            <CommandAutocomplete
+              query={commandState.query}
+              position={commandState.position}
+              onSelect={handleSelectCommand}
+              onClose={() => setCommandState(null)}
+              onMatchesChange={handleCommandMatches}
             />
           )}
         </div>

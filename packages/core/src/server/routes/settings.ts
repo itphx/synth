@@ -3,8 +3,8 @@ import type { AuthKit } from '../../auth/local.js';
 import type { RuntimeSettingsStore, LlmGatewayRuntimeSettings, SecurityRuntimeSettings } from '../../storage/runtime-settings.js';
 import type { ProtectedPathsStore } from '../../engine/security/protected-paths-store.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
-import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig } from '@itphx/synth-shared';
-import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, ToolCapability } from '@itphx/synth-shared';
+import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
+import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../../engine/permission/derive.js';
 import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
 
@@ -90,6 +90,20 @@ export interface SettingsRoutesDeps {
   fallbackDefaultAgent?: string;
   /** Вызывается после успешного PUT /default-agent (live-применение). */
   onDefaultAgentChange?: (id: string) => void | Promise<void>;
+  /**
+   * AD-075: дефолт политики для абсолютного workspace вне `workspacesRoot`
+   * (config.yaml/env), если runtime-настройка не задана. По умолчанию — `confirm`.
+   */
+  fallbackWorkspaceOutsideRootPolicy?: WorkspaceOutsideRootPolicy;
+  /** Вызывается после успешного PUT /workspace-policy (live-применение в роутах проектов). */
+  onWorkspacePolicyChange?: (policy: WorkspaceOutsideRootPolicy) => void | Promise<void>;
+  /**
+   * AD-075: managed-развёртывание — политика вне `workspacesRoot` задаётся
+   * развёртыванием (`fallbackWorkspaceOutsideRootPolicy: 'deny'`). При `true`
+   * GET отдаёт fallback без override + `readOnly: true`, а PUT/DELETE → 403
+   * `WORKSPACE_POLICY_READ_ONLY`. Standalone (по умолчанию `false`) не меняется.
+   */
+  workspacePolicyReadOnly?: boolean;
 }
 
 /** AD-071 §2.3: валидна ли политика включения инструментов. */
@@ -571,6 +585,61 @@ export function createSettingsRoutes(
     await deps.settingsStore.clearDefaultAgent();
     await deps.onDefaultAgentChange?.(fallback);
     return c.json({ status: 'restored', defaultAgent: fallback, isOverridden: false, defaults: fallback });
+  });
+
+  /**
+   * AD-075: GET/PUT/DELETE /api/v2/settings/workspace-policy — политика для
+   * абсолютного `project.workspace` вне `workspacesRoot` (`confirm` | `deny`).
+   * Runtime-значение ({dataDir}/settings.json) приоритетнее config.yaml/env;
+   * на managed-развёртывании (`workspacePolicyReadOnly: true`) — строго
+   * read-only: эффективно всегда `deny` (enforcement — backend).
+   */
+  app.get('/workspace-policy', auth.requireAuth, async (c) => {
+    const defaults = deps.fallbackWorkspaceOutsideRootPolicy ?? 'confirm';
+    if (deps.workspacePolicyReadOnly) {
+      // Managed: эффективная политика всегда fallback (enforcement — развёртывание).
+      return c.json({ outsideRoot: defaults, isOverridden: false, defaults, readOnly: true });
+    }
+    const runtime = await deps.settingsStore.getWorkspacePolicy();
+    return c.json({ outsideRoot: runtime ?? defaults, isOverridden: runtime !== undefined, defaults });
+  });
+
+  app.put('/workspace-policy', auth.requireAuth, async (c) => {
+    if (deps.workspacePolicyReadOnly) {
+      return c.json({
+        error: {
+          code: 'WORKSPACE_POLICY_READ_ONLY',
+          message: 'Политика путей вне корня workspace задаётся развёртыванием (managed) и не может быть изменена',
+        },
+      }, 403);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = workspacePolicySchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'outsideRoot: ожидается "confirm" | "deny"' },
+      }, 400);
+    }
+
+    await deps.settingsStore.setWorkspacePolicy(parsed.data.outsideRoot);
+    // Live-применение — роуты проектов читают политику без рестарта.
+    await deps.onWorkspacePolicyChange?.(parsed.data.outsideRoot);
+    return c.json({ outsideRoot: parsed.data.outsideRoot });
+  });
+
+  app.delete('/workspace-policy', auth.requireAuth, async (c) => {
+    if (deps.workspacePolicyReadOnly) {
+      return c.json({
+        error: {
+          code: 'WORKSPACE_POLICY_READ_ONLY',
+          message: 'Политика путей вне корня workspace задаётся развёртыванием (managed) и не может быть изменена',
+        },
+      }, 403);
+    }
+    const defaults = deps.fallbackWorkspaceOutsideRootPolicy ?? 'confirm';
+    await deps.settingsStore.clearWorkspacePolicy();
+    await deps.onWorkspacePolicyChange?.(defaults);
+    return c.json({ status: 'restored', outsideRoot: defaults, isOverridden: false, defaults });
   });
 
   /**

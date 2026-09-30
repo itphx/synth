@@ -12,6 +12,7 @@ export const defaultConfig: SynthConfig = {
     dataDir: '/var/synth/data',
     workspacesRoot: '',
     defaultWorkspace: '',
+    workspaceOutsideRoot: '',
   },
   auth: {
     debugMode: false,
@@ -94,6 +95,47 @@ export const defaultConfig: SynthConfig = {
       tools: [],
     },
   },
+  skills: {
+    paths: [],
+    urls: [],
+    trustedProjectDirs: [],
+    inlineShell: false,
+    toolsets: {},
+  },
+  commands: {
+    paths: [],
+    bundlesPath: 'skill-bundles',
+    conflict: {
+      mode: 'bundle-wins',
+      namespacePrefix: false,
+    },
+    maxArgumentsLength: 10_000,
+    maxRenderedBytes: 200_000,
+  },
+  instructions: {
+    enabled: true,
+    claudeCompat: true,
+    contextCompat: false,
+    headRatio: 0.7,
+    tailRatio: 0.2,
+    windowRatio: 0.06,
+    minChars: 20_000,
+    maxCharsCeiling: 500_000,
+    lazy: {
+      enabled: true,
+      maxAncestors: 5,
+      maxChars: 8_000,
+      excludeDirs: ['node_modules', '.git', 'vendor', 'dist', 'build', '.next', 'coverage', 'tmp', '.cache'],
+    },
+    fetch: {
+      timeoutMs: 5_000,
+      cacheTtlSec: 3_600,
+      maxBytes: 262_144,
+    },
+    sources: [],
+    excludeProjects: [],
+    allowInstallTreeFallback: false,
+  },
   router: {
     enabled: true,
     strategy: 'auto',
@@ -171,5 +213,7 @@ export const defaultConfig: SynthConfig = {
     protectedPaths: {
       enabled: true,
     },
+    // Пусто — core использует файл {dataDir}/secrets/master.key (AD-076).
+    secretKey: '',
   },
 };

@@ -721,6 +721,58 @@ describe('taskTool — context modes', () => {
     expect(capturedSystemMsg).not.toContain('[PARENT NOTES]');
     expect(capturedSystemMsg).not.toContain('Секретные заметки');
   });
+
+  // ─── AD-069 Фаза 2b: проектные инструкции в промпте саб-агента ──────
+
+  async function captureSubagentSystem(
+    params: Record<string, unknown>,
+    extraOverrides: Record<string, unknown> = {},
+  ): Promise<string> {
+    const parent = await createParentWithMessages();
+    let captured = '';
+    const provider = {
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: unknown, systemPrompt: string) {
+        captured = systemPrompt || '';
+        yield { isFinal: true, content: 'OK', toolCalls: [] };
+      }),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+    await taskTool.execute(
+      { description: 'test', prompt: 'hello', subagent_type: 'explore', ...params },
+      {
+        ...baseCtx,
+        extra: {
+          provider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          projectInstructions: '[PROJECT INSTRUCTIONS]\nCHAIN-RULES\n[END PROJECT INSTRUCTIONS]',
+          ...extraOverrides,
+        },
+      },
+    );
+    return captured;
+  }
+
+  it('AD-069: резолвнутые проектные инструкции попадают в system prompt саб-агента', async () => {
+    const system = await captureSubagentSystem({});
+    expect(system).toContain('[PROJECT INSTRUCTIONS]');
+    expect(system).toContain('CHAIN-RULES');
+  });
+
+  it('AD-069: skip_context_files=true — проектные инструкции не добавляются', async () => {
+    const system = await captureSubagentSystem({ skip_context_files: true });
+    expect(system).not.toContain('CHAIN-RULES');
+  });
+
+  it('AD-069: systemPrompt override родителя — проектные инструкции не добавляются', async () => {
+    const system = await captureSubagentSystem({}, {
+      parentSessionSettings: { systemPrompt: 'MY-OVERRIDE' },
+    });
+    expect(system).not.toContain('CHAIN-RULES');
+  });
 });
 
 /** Провайдер саб-агента: первый вызов — write_file, второй — текст. */
@@ -1052,6 +1104,149 @@ describe('taskTool × shellPolicy саб-агента (B3/B5)', () => {
     expect(names).toContain('write_file');
     expect(names).toContain('git_commit');
     expect(names).toContain('read_file');
+  });
+});
+
+describe('taskTool × runtimeDeps саб-агента (AD-070 §2.9.1)', () => {
+  let store: FileStore;
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-task-deps-'));
+    store = new FileStore({ dataDir: tmpDir });
+    sessionManager = new SessionManager(store);
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Реестр саб-агента с реальным набором встроенных тулов (постоянный). */
+  function makeFullToolAgentRegistry(toolRegistry: ReturnType<typeof createToolRegistry>) {
+    return {
+      ...makeMockAgentRegistry(),
+      getToolsForAgent: () => toolRegistry.toLLMFormat(),
+    } as unknown as MockAgentRegistry;
+  }
+
+  it('git=false: git-тул саб-агента denied с reason dependency + [НЕДОСТУПНЫЕ ТУЛЫ] в промпте', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const toolRegistry = createToolRegistry();
+
+    let capturedSystem: unknown;
+    let calls = 0;
+    const provider = {
+      chatAsync: vi.fn().mockImplementation(async function* (
+        _messages: unknown,
+        systemPrompt: unknown,
+      ) {
+        capturedSystem = systemPrompt;
+        calls++;
+        if (calls === 1) {
+          yield {
+            content: '',
+            isFinal: true,
+            toolCalls: [{
+              id: 'g1',
+              function: { name: 'git_status', arguments: JSON.stringify({}) },
+            }],
+          };
+          return;
+        }
+        yield { content: 'готово', isFinal: true, toolCalls: [] };
+      }),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+
+    const result = await taskTool.execute(
+      { description: 'test', prompt: 'git status', subagent_type: 'explore' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeFullToolAgentRegistry(toolRegistry),
+          toolRegistry,
+          runtimeDeps: { git: false, rg: true, sh: true },
+        },
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+
+    // permission-слой: dependency deny (тул не исполнен)
+    const childId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childId))!;
+    const toolMsg = child.messages.find((m) => m.role === MessageRole.TOOL);
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg!.content).toContain('Permission denied');
+    expect(toolMsg!.content).toContain('git');
+    expect(toolMsg!.content).toContain('not installed');
+
+    // системный промпт саб-агента: секция недоступных тулов (как у родителя)
+    expect(String(capturedSystem)).toContain('[НЕДОСТУПНЫЕ ТУЛЫ]');
+    expect(String(capturedSystem)).toContain('git_status');
+  });
+
+  it('git/rg/sh доступны: секции [НЕДОСТУПНЫЕ ТУЛЫ] в промпте нет, git-тул исполняется', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const toolRegistry = createToolRegistry();
+
+    let capturedSystem: unknown;
+    let calls = 0;
+    const provider = {
+      chatAsync: vi.fn().mockImplementation(async function* (
+        _messages: unknown,
+        systemPrompt: unknown,
+      ) {
+        capturedSystem = systemPrompt;
+        calls++;
+        if (calls === 1) {
+          yield {
+            content: '',
+            isFinal: true,
+            toolCalls: [{
+              id: 'g1',
+              function: { name: 'read_file', arguments: JSON.stringify({ file_path: 'nonexistent.txt' }) },
+            }],
+          };
+          return;
+        }
+        yield { content: 'готово', isFinal: true, toolCalls: [] };
+      }),
+      model: 'test-model',
+      name: 'test-provider',
+    };
+
+    await taskTool.execute(
+      { description: 'test', prompt: 'read', subagent_type: 'explore' },
+      {
+        sessionId: parent.id,
+        messageId: 'm1',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider,
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeFullToolAgentRegistry(toolRegistry),
+          toolRegistry,
+          runtimeDeps: { git: true, rg: true, sh: true },
+        },
+      },
+    );
+
+    expect(String(capturedSystem)).not.toContain('[НЕДОСТУПНЫЕ ТУЛЫ]');
   });
 });
 

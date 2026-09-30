@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
-import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, ToolForLLM, ToolContext, TokenUsage } from '@itphx/synth-shared';
+import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, ToolForLLM, ToolContext, TokenUsage, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
 import type { AgentRegistry } from '../agents/registry.js';
 import { normalizeAgentModes } from '../agents/normalize.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
@@ -23,6 +23,13 @@ import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { estimatePromptChars } from '../context/token-ratio.js';
+import { renderUnavailableTools, type UnavailableTool } from '../context/state-messages.js';
+import { formatSkillsCatalogBlock } from '../skills/catalog.js';
+import { isRuntimeDepAvailable, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, type RuntimeDeps } from './runtime-deps.js';
+import type { SkillRuntime, SkillScopeOptions } from '../skills/types.js';
+import type { ProjectStoreLike } from '../../storage/project-store.js';
+import type { SSHKeyStore } from '../../storage/ssh-key-store.js';
+import type { GitService } from '../../git/git-service.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 export interface TaskExtra {
@@ -46,6 +53,12 @@ export interface TaskExtra {
   callerAgentRole?: string;
   /** Permissions родительской сессии (AD-029) — наследуются саб-агентом с deny-дополнениями. */
   permissionConfig?: PermissionConfig;
+  /**
+   * AD-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) родителя.
+   * Передаётся в permission-слой саб-агента (enforce `dependency`) и в секцию
+   * `[НЕДОСТУПНЫЕ ТУЛЫ]` его системного промпта. Не задана — fail-open.
+   */
+  runtimeDeps?: RuntimeDeps;
   /** Секция безопасности (защита от Indirect Prompt Injection) из config.yaml. */
   securityConfig?: SecurityConfig;
   /** Язык сессии (для локализованных сообщений безопасности). */
@@ -60,6 +73,32 @@ export interface TaskExtra {
   retry?: SubagentRetryConfig;
   /** AD-070: цены моделей для live-стоимости саб-агента (как в оркестраторе). */
   modelPriceLoader?: (model: string) => UsagePricing | null;
+  /**
+   * AD-069 §7: уже резолвленные оркестратором проектные инструкции
+   * (`[PROJECT INSTRUCTIONS] …`) — добавляются в конец базового промпта
+   * саб-агента. Не резолвятся повторно в ребёнке.
+   */
+  projectInstructions?: string;
+  /**
+   * AD-046 §5/§6.2: рантайм скиллов — каталог саб-агенту (binding родителя) и
+   * тул `skill` (тот же объект уходит в ToolContext.extra).
+   */
+  skillRuntime?: SkillRuntime;
+  /** AD-046 §4.5: scope-гейты скиллов родительского контекста. */
+  skillScope?: SkillScopeOptions;
+  /**
+   * AD-075/AD-076: проектные зависимости для тулов саб-агента (управление
+   * проектом, workspace, реестр репозиториев, SSH-окружение сетевых git-тулов).
+   * Обычный путь передаёт их целиком; resume-путь — из `SubagentResumeDeps`.
+   * Контейнер гарантирует только чтение (`load`); в рантайме оркестратор передаёт
+   * полный `ProjectStore`, а проектные тулы объявляют свой контракт сами.
+   */
+  projectStore?: ProjectStoreLike;
+  workspacesRoot?: string;
+  sshKeyStore?: SSHKeyStore;
+  gitService?: GitService;
+  workspaceManaged?: boolean;
+  getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;
 }
 
 type ContextMode = 'none' | 'inherit' | 'summary' | 'last_n';
@@ -103,6 +142,34 @@ export function resolveSubagentPrompt(
     }
   }
   return agentDef.subagentPrompt || '';
+}
+
+/**
+ * AD-070 §2.9.1: секция `[НЕДОСТУПНЫЕ ТУЛЫ]` для системного промпта саб-агента.
+ *
+ * Набор тулов саб-агента постоянен (роль/режим enforce'ит permission-слой), а
+ * недоступность по внешней зависимости (`git`/`rg`/`sh`) сообщается модели здесь —
+ * тем же рендером, что и в state-сообщениях основного агента. Пусто (нет
+ * недоступных) → ''.
+ */
+export function buildSubagentUnavailableToolsSection(
+  tools: ToolForLLM[] | undefined,
+  runtimeDeps: RuntimeDeps | undefined,
+  language: string,
+): string {
+  if (!runtimeDeps || !tools || tools.length === 0) return '';
+  const unavailable: UnavailableTool[] = [];
+  for (const tool of tools) {
+    const dep = TOOL_RUNTIME_DEP[tool.function.name];
+    if (dep && !isRuntimeDepAvailable(runtimeDeps, dep)) {
+      unavailable.push({
+        name: tool.function.name,
+        reason: 'dependency',
+        binary: RUNTIME_DEP_BINARY[dep],
+      });
+    }
+  }
+  return renderUnavailableTools(unavailable, language);
 }
 
 export function messageToLLMMessage(msg: Message): LLMMessage {
@@ -162,6 +229,7 @@ export const taskTool: ToolDefinition = {
     'Launch a new agent to handle complex, multistep tasks autonomously. '
     + 'Available subagent types: "general" (full tool access), "explore" (read-only code exploration). '
     + 'Use for tasks that require multiple tool calls. '
+    + 'Set skip_context_files=true to omit project instruction files (AGENTS.md) from the subagent prompt. '
     + 'IMPORTANT: You must NOT ask the user to use the task tool — use it yourself proactively.',
   parameters: z.object({
     description: z.string().describe('A short (3-5 words) description of the task'),
@@ -178,6 +246,8 @@ export const taskTool: ToolDefinition = {
       .describe('Override provider for the subagent'),
     routing_strategy: z.enum(['auto', 'content', 'cost', 'none']).optional()
       .describe('Routing strategy for the subagent (default: inherit from parent)'),
+    skip_context_files: z.boolean().optional()
+      .describe('Do not include project instruction files (AGENTS.md) in the subagent prompt. Default: false'),
   }),
   capabilities: [ToolCapability.TASK],
   async execute(args, ctx) {
@@ -195,6 +265,7 @@ export const taskTool: ToolDefinition = {
       model?: string;
       provider?: string;
       routing_strategy?: 'auto' | 'content' | 'cost' | 'none';
+      skip_context_files?: boolean;
     };
     const extra = ctx.extra as TaskExtra | undefined;
 
@@ -376,7 +447,7 @@ export const taskTool: ToolDefinition = {
     }
 
     // ─── Сборка LLM-сообщений ────────────────────────────────────────
-    const llmSystemPrompt = (() => {
+    let llmSystemPrompt = (() => {
       let prompt = systemPrompt;
 
       // Заметки родительской сессии — передаём во всех режимах с контекстом
@@ -432,6 +503,51 @@ export const taskTool: ToolDefinition = {
 
       return prompt;
     })();
+
+    // AD-069 §7/§9.2: уже резолвленные проектные инструкции — в конец базового
+    // промпта. Не добавляются при `skip_context_files=true` и при
+    // `session.settings.systemPrompt` override дочерней сессии (как основная).
+    const skipContextFiles = params.skip_context_files === true
+      || Boolean(extra.parentSessionSettings?.systemPrompt?.trim());
+    if (!skipContextFiles && extra.projectInstructions) {
+      llmSystemPrompt += `\n\n${extra.projectInstructions}`;
+    }
+
+    // AD-046 §5/§6.2: каталог скиллов саб-агенту. Binding — родителя
+    // (fixed decision Фазы 1), capabilities — самого саб-агента (executor).
+    if (extra.skillRuntime) {
+      try {
+        const parentAgent = extra.callerAgentRole
+          ? extra.agentRegistry.get(extra.callerAgentRole)
+          : undefined;
+        const lang = extra.parentSessionSettings?.language || 'ru';
+        const catalog = await extra.skillRuntime.buildCatalog({
+          projectWorkspace: ctx.workingDir,
+          agent: { id: extra.callerAgentRole, groups: parentAgent?.groups },
+          capabilities: agentDef.capabilities,
+          permissionConfig: extra.permissionConfig,
+          sessionEnabled: extra.parentSessionSettings?.skills,
+          sessionDisabled: extra.parentSessionSettings?.skillsDisabled,
+          ...(extra.skillScope ?? {}),
+        });
+        const skillsBlock = [
+          formatSkillsCatalogBlock(catalog.stable, lang, 'stable'),
+          formatSkillsCatalogBlock(catalog.session, lang, 'session'),
+        ].filter((b) => b.length > 0).join('\n\n');
+        if (skillsBlock) llmSystemPrompt += `\n\n${skillsBlock}`;
+      } catch {
+        // каталог скиллов не должен ломать запуск саб-агента
+      }
+    }
+
+    // AD-070 §2.9.1: недоступные по внешней зависимости (git/rg/sh) тулы —
+    // в системный промпт саб-агента, как state-сообщение у основного агента.
+    const unavailableSection = buildSubagentUnavailableToolsSection(
+      tools,
+      extra.runtimeDeps,
+      extra.parentSessionSettings?.language || 'ru',
+    );
+    if (unavailableSection) llmSystemPrompt += `\n\n${unavailableSection}`;
 
     // ─── Выбор провайдера для саб-агента через роутер (AD-034 Фаза 4) ──
     let effectiveProvider = extra.provider;
@@ -1387,6 +1503,8 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           shellPolicy: extra.shellPolicy ?? undefined,
           protectedPaths: extra.protectedPaths ?? undefined,
           protectedPathsEnabled: extra.protectedPathsEnabled,
+          // AD-070 §2.9.1: зависимость окружения (git/rg/sh) — как у родителя.
+          runtimeDeps: extra.runtimeDeps,
         });
 
         if (permissionDecision.action === 'deny') {

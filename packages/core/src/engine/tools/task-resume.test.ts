@@ -15,8 +15,11 @@ import { BaseProvider, ProviderFactory } from '../../providers/base.js';
 import type { CancellationToken, LLMMessage } from '../../providers/base.js';
 import type { ContextBuilder } from '../context/builder.js';
 import type { AgentRegistry } from '../agents/registry.js';
+import type { SSHKeyStore } from '../../storage/ssh-key-store.js';
+import type { GitService } from '../../git/git-service.js';
+import { z } from 'zod';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { Message, ProviderConfig } from '@itphx/synth-shared';
+import type { Message, ProviderConfig, ToolContext, ToolDefinition } from '@itphx/synth-shared';
 
 // ─────────────────────────────────────────────────────────────────────
 // B1: Retry саб-агента при ошибках провайдера (taskTool)
@@ -443,9 +446,14 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     const p = (await sessionManager.getSession(parent))!;
     const resumeResultMsg = p.messages.find((m) => m.metadata?.type === 'subagent_resumed_result')!;
     expect(resumeResultMsg.metadata!.resume_status).toBe('aborted');
+    // Очистка currentStream/блокировки выполняется в .finally() после записи
+    // итога в родителя — ждём её (не читаем синхронно: гонка под нагрузкой).
+    await vi.waitFor(async () => {
+      const s = await sessionManager.getSession(child);
+      expect(s!.currentStream).toBeUndefined();
+    }, { timeout: 5000 });
     const s = (await sessionManager.getSession(child))!;
     expect(s.status.blocked).toBeFalsy();
-    expect(s.currentStream).toBeUndefined();
   });
 
   it('runSubagentResume напрямую: провайдер недоступен → failed, ошибка записана в родителя', async () => {
@@ -504,8 +512,70 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     expect(captured.some((m) => m.role === 'assistant' && m.content === 'начал анализ...')).toBe(true);
   });
 
-  it('AD-071 §2.1 + AD-070: resume наследует MCP-скоуп и modelPriceLoader', async () => {
+  it('AD-069: getProjectInstructions добавляет проектные инструкции в system prompt resume', async () => {
     const { parent, child } = await createInterruptedChild();
+    let capturedSystem = '';
+    const provider = {
+      model: 'm',
+      name: 'mockres',
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: unknown, systemPrompt: string) {
+        capturedSystem = systemPrompt;
+        yield { isFinal: true, content: 'ok', toolCalls: [] };
+      }),
+    };
+
+    await runSubagentResume(
+      {
+        sessionManager,
+        eventBus,
+        agentRegistry: makeMockAgentRegistry(),
+        getProjectInstructions: async () => '[PROJECT INSTRUCTIONS]\nRESUME-RULES\n[END PROJECT INSTRUCTIONS]',
+        getProvider: () => provider as never,
+        getWorkingDir: async () => tmpDir,
+      },
+      { child: (await sessionManager.getSession(child))!, parent: (await sessionManager.getSession(parent))!, streamId: 'st-instr', abortSignal: new AbortController().signal },
+    );
+
+    expect(capturedSystem).toContain('RESUME-RULES');
+  });
+
+  it('AD-069: systemPrompt override ребёнка — getProjectInstructions не применяется', async () => {
+    const { parent, child } = await createInterruptedChild();
+    await sessionManager.withLock(child, async (s) => {
+      s.settings.systemPrompt = 'CHILD-OVERRIDE';
+      await sessionManager.saveSession(s);
+    });
+    let capturedSystem = '';
+    const provider = {
+      model: 'm',
+      name: 'mockres',
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: unknown, systemPrompt: string) {
+        capturedSystem = systemPrompt;
+        yield { isFinal: true, content: 'ok', toolCalls: [] };
+      }),
+    };
+    let resolverCalled = false;
+
+    await runSubagentResume(
+      {
+        sessionManager,
+        eventBus,
+        agentRegistry: makeMockAgentRegistry(),
+        getProjectInstructions: async () => {
+          resolverCalled = true;
+          return '[PROJECT INSTRUCTIONS]\nRESUME-RULES\n[END PROJECT INSTRUCTIONS]';
+        },
+        getProvider: () => provider as never,
+        getWorkingDir: async () => tmpDir,
+      },
+      { child: (await sessionManager.getSession(child))!, parent: (await sessionManager.getSession(parent))!, streamId: 'st-ovr', abortSignal: new AbortController().signal },
+    );
+
+    expect(resolverCalled).toBe(false);
+    expect(capturedSystem).not.toContain('RESUME-RULES');
+  });
+
+  it('AD-071 §2.1 + AD-070: resume наследует MCP-скоуп и modelPriceLoader', async () => {    const { parent, child } = await createInterruptedChild();
     let capturedMcp: string[] | undefined;
     const registry = {
       get: (id: string) => (id === 'explore'
@@ -551,5 +621,86 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
 
     expect(capturedMcp).toEqual(['srvA']);
     expect(loadedModels.length).toBeGreaterThan(0);
+  });
+
+  it('AD-075/AD-076: проектные зависимости прокидываются в tool-extra resumed-саб-агента', async () => {
+    const { parent, child } = await createInterruptedChild();
+
+    // Probe-тул: фиксирует проектную часть ctx.extra, которую видит саб-агент.
+    const seen: Record<string, unknown> = {};
+    const probeTool: ToolDefinition = {
+      name: 'probe_project_extra',
+      description: 'probe',
+      parameters: z.object({}),
+      capabilities: [],
+      execute: async (_args: unknown, ctx: ToolContext) => {
+        const extra = (ctx.extra ?? {}) as Record<string, unknown>;
+        seen.projectStore = extra.projectStore;
+        seen.workspacesRoot = extra.workspacesRoot;
+        seen.sshKeyStore = extra.sshKeyStore;
+        seen.gitService = extra.gitService;
+        seen.workspaceManaged = extra.workspaceManaged;
+        seen.getWorkspaceOutsideRootPolicy = extra.getWorkspaceOutsideRootPolicy;
+        return { content: 'probe-ok' };
+      },
+    };
+    const toolRegistry = createToolRegistry();
+    toolRegistry.register(probeTool);
+
+    const projectStoreMock = { load: async () => null };
+    const sshKeyStoreMock = {} as unknown as SSHKeyStore;
+    const gitServiceMock = {} as unknown as GitService;
+
+    let calls = 0;
+    const provider = {
+      model: 'm',
+      name: 'mockres',
+      chatAsync: vi.fn().mockImplementation(async function* () {
+        calls++;
+        if (calls === 1) {
+          yield {
+            isFinal: false,
+            content: '',
+            toolCalls: [{
+              id: 'probe_1',
+              type: 'function',
+              function: { name: 'probe_project_extra', arguments: '{}' },
+            }],
+          };
+        } else {
+          yield { isFinal: true, content: 'done', toolCalls: [] };
+        }
+      }),
+    };
+
+    await runSubagentResume(
+      {
+        sessionManager,
+        eventBus,
+        agentRegistry: makeMockAgentRegistry(),
+        toolRegistry,
+        projectStore: projectStoreMock,
+        workspacesRoot: '/ws-root',
+        sshKeyStore: sshKeyStoreMock,
+        gitService: gitServiceMock,
+        workspaceManaged: true,
+        getWorkspaceOutsideRootPolicy: () => 'deny',
+        getProvider: () => provider as never,
+        getWorkingDir: async () => tmpDir,
+      },
+      {
+        child: (await sessionManager.getSession(child))!,
+        parent: (await sessionManager.getSession(parent))!,
+        streamId: 'st-extra',
+        abortSignal: new AbortController().signal,
+      },
+    );
+
+    expect(seen.projectStore).toBe(projectStoreMock);
+    expect(seen.workspacesRoot).toBe('/ws-root');
+    expect(seen.sshKeyStore).toBe(sshKeyStoreMock);
+    expect(seen.gitService).toBe(gitServiceMock);
+    expect(seen.workspaceManaged).toBe(true);
+    expect((seen.getWorkspaceOutsideRootPolicy as () => string)()).toBe('deny');
   });
 });

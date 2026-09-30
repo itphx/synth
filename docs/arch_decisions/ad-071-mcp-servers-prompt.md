@@ -5,6 +5,7 @@
 > **Реализация:** Ф1 — слои `tools`/`mcp.tools` и per-session выборка (фикс кросс-сессионной утечки); Ф2 — блоки `mcp.servers`/`mcp.status` (`description` + `instructions`); Ф3 — политики `tools.policy`/`mcp.policy` (`consistency`/`available`/`auto`, дефолт `auto` + per-session override); Ф4 — единый PostgreSQL-ready реестр MCP, уровни `system`/`project`/`session`, RBAC, сетевой доступ; Ф5 — таблицы «Встроенные инструменты»/«MCP» и UI управления (сессия/проект/админка).
 > **Дополнение (2026-09-20):** §2.6, §2.8, §2.9 — вкладки правой панели, оценка/калибровка токенов инструментов, admin-отключение встроенных инструментов (`tools.disabled`), разделение настроек MCP на пользовательские и админские (Ф6).
 > **Дополнение (2026-09-21):** §2.3 — политика разделена на две независимые: `tools.policy` (только встроенные, default `auto`) и `mcp.policy` (только MCP, default `auto`); MCP-блоки (`mcp.servers`/`mcp.tools`/`mcp.status`) — **всегда `volatile`**; порядок `tools → mcp.servers → mcp.tools → mcp.status`.
+> **Дополнение (2026-09-30):** §2.2/§2.4/§2.5 — единая per-item модель включения: `McpRegistryEntry.enabled` (мастер hard-gate), `enabledByDefault` = «дефолт для НОВЫХ проектов», `project.enabled` — hard-gate (в т.ч. для системных серверов), дефолты — snapshot (`session.settings.mcpDefaultOn`), причина `system_disabled`; ту же модель переиспользуют скиллы (AD-046 §4.5).
 > **Парные документы:**
 > - [AD-070](./ad-070-system-prompt-composer.md) «SystemPromptComposer» — тиры `stable`/`context`/`volatile`, манифест промпта, CachePolicy; AD-071 добавляет слои `mcp.tools`/`mcp.servers` и уточняет правило «tools всегда `stable`»;
 > - [AD-029](./ad-029-granular-permissions.md) «Гранулярные permissions» — `mcpToolSettings` (доступность MCP-тулов по режимам plan/act) сохраняется и учитывается политикой включения;
@@ -56,7 +57,7 @@
 - статус: `connected` / `error` / `disabled` / `circuit-open`;
 - уровень: `system` / `project` / `session`.
 
-**Показываются все серверы, включая неактивные.** Отключённый сервер присутствует в блоке и в списках с пометкой `disabled` и причиной (opt-out в сессии, выключен в проекте, нет `enabledByDefault`), а не исчезает из выдачи.
+**Показываются все серверы, включая неактивные.** Отключённый сервер присутствует в блоке и в списках с пометкой `disabled` и причиной, а не исчезает из выдачи. Причины (приоритет, §2.4): `system_disabled` (мастер-флаг реестра), `project_disabled` (не разрешён проектом), `session_optout`, `not_default` (нет в снапшоте сессии и не включён явно).
 
 **Тир блока не зависит от политики (§2.3):** `mcp.servers`, `mcp.tools` и `mcp.status` — **всегда `volatile`** и не входят в `staticPrefixChars`. MCP динамичен (серверы включаются/выключаются, статус меняется), поэтому в prompt-cache не участвует. Порядок блоков в запросе/манифесте: встроенные `tools` → `mcp.servers` → `mcp.tools` → `mcp.status` (MCP-регион не идёт выше «Инструментов»).
 
@@ -88,14 +89,17 @@
 
 ### 2.4. Уровни и скоуп MCP
 
-| Уровень | Кто управляет | Скоуп | По умолчанию |
+| Уровень | Кто управляет | Скоуп | Hard-gate (`enabled`) и дефолт |
 |---|---|---|---|
-| **System** | admin (instance) | все сессии и проекты | включён, если admin выставил `enabledByDefault`; пользователь может **отключить в своей сессии** |
-| **Project** | owner/lead | все сессии проекта | включается owner/lead «по умолчанию для проекта»; пользователь может отключить в сессии |
-| **Session** | пользователь | одна сессия | личные/разовые серверы |
+| **System** | admin (instance) | все сессии и проекты | мастер-флаг `enabled` реестра (дефолт `true`): `false` → сервер недоступен нигде и никогда (включая старые сессии/проекты); `enabledByDefault` — «включать в новых проектах» (сид) |
+| **Project** | owner/lead | все сессии проекта | `project.mcp.enabled[]` — hard-gate (не разрешённый сервер недоступен и в старых сессиях проекта); `project.mcp.defaultOn[]` — сид «по умолчанию для новых сессий» |
+| **Session** | пользователь | одна сессия | один тумблер: `mcpServers` (вкл) / `mcpDisabledServers` (opt-out, включая системные); личные/разовые серверы; снапшот дефолта — `settings.mcpDefaultOn` |
 
 - **Merge:** `system ∪ project ∪ session`; при конфликте имён приоритет `system > project > session` (жёстко, без переименования/алиасов).
-- **Хранение:** instance-серверы — конфиг инстанса; проектные — `Project.mcp` (новое поле); сессионные — `session.settings.mcpServers` (существующее).
+- **Резолвинг (per-item):** `enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`, где `systemOn` — мастер-флаг (реестровый `enabled`), `projectOn` — имя в `project.mcp.enabled` (гейт не задан, если нет `project.mcp`), `sessionOff` — явный opt-out, `snapshotOn`/`sessionOn` — имя в `settings.mcpDefaultOn`/`mcpServers`. `config.enabled` в резолвинге **не участвует** — это лишь сид записи реестра при первичном создании (`seedFromConfig`). Дефолт — **opt-in (off)**. Причина (приоритет): `system_disabled` → `project_disabled` → `session_optout` → `not_default`. Единый резолвер — `resolveMcpScope` (`engine/mcp/scope.ts`).
+- **Live vs snapshot:** мастер-флаг и проектный гейт — **live hard-gate** (действуют и для старых сессий, включая системные серверы); дефолты (`enabledByDefault`, `project.defaultOn`, `mcpDefaultOn`) — **snapshot** (смена дефолта не влияет на созданные проекты/сессии).
+- **Проектный гейт — для всех серверов:** `project.mcp.enabled` применяется и к системным (`origin: 'instance'`) записям (раньше системные проект не гейтил).
+- **Хранение:** instance-серверы — единый реестр (+ config); проектные — `Project.mcp`; сессионные — `session.settings.mcpServers`/`mcpDisabledServers` (+ снапшот `mcpDefaultOn`).
 - **RBAC:** owner/lead могут включать/выключать серверы на уровне проекта и сессии; пользователь — только на уровне сессии (включая opt-out системных).
 - **Отключённые не исчезают:** сервер остаётся в списке с пометкой `disabled` и причиной (см. §2.2).
 
@@ -105,8 +109,11 @@
 - **`stdio`-серверы:** добавляет **только admin** на уровне инстанса (RCE-риск); admin же выставляет `enabledByDefault`.
 - **Включение по умолчанию для проекта:** только owner/lead (человеческий гейт для пользовательских серверов).
 - **Единый реестр.** Один реестр MCP-серверов (не разделяем на instance/пользовательский); instance- и пользовательские записи различаются полем `origin`. Логическая модель сразу проектируется под будущую миграцию на PostgreSQL (по образцу AD-032): плоские записи со стабильным `id`, `schemaVersion`, timestamps, без вложенных структур, которые нельзя разложить в таблицы.
-- **Схема записи:** `McpRegistryEntry { schemaVersion, id, name, config, origin: 'instance' | 'user', author: { userId, username } | null, trust: 'builtin' | 'community', enabledByDefault: boolean, createdAt, updatedAt }`. Проект ссылается на записи (`Project.mcp = { enabled: string[]; defaultOn: string[] }`), сессия — через явные overrides.
-- **Разрешение эффективного набора для сессии:** `(instance.defaultOn ∪ project.defaultOn ∪ session.enabled) − session.disabled`; конфликт имён — по приоритету (§2.4).
+- **Схема записи:** `McpRegistryEntry { schemaVersion, id, name, config, origin: 'instance' | 'user', author: { userId, username } | null, trust: 'builtin' | 'community', enabled: boolean, enabledByDefault: boolean, createdAt, updatedAt }`.
+  - `enabled` (дефолт `true`) — системный мастер-флаг (hard-gate): `false` → сервер недоступен нигде и никогда (включая старые сессии/проекты).
+  - `enabledByDefault` — переосмыслено: «включать по умолчанию в НОВЫХ проектах» (сид `project.mcp.enabled`/`defaultOn` при создании проекта); снимок — на созданные проекты/сессии не влияет. Config `mcp.servers[name].enabled` — только сид системного мастера при первичном создании записи из config (`seedFromConfig`); после создания мастер-флаг живёт в реестре и редактируется там, `config.enabled` в резолвинге не участвует.
+  - Проект ссылается на записи (`Project.mcp = { enabled: string[]; defaultOn: string[] }`), сессия — через явные overrides.
+- **Разрешение эффективного набора для сессии:** per-item `enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`; `snapshotOn` — `session.settings.mcpDefaultOn` (снимок `project.defaultOn`/системного `enabledByDefault` на момент создания). Динамический `project.defaultOn` в формуле не участвует (дефолты — snapshot, §2.4). Конфликт имён — по приоритету (§2.4).
 - **Хранение сейчас:** `FileStore` (JSON + атомарная запись, AD-005) в `$SYNTH_DATA_DIR`; instance-дефолты (`enabledByDefault`) могут дублироваться в config.yaml. Миграция на PostgreSQL — отдельная задача (ср. AD-032), модель к ней готова.
 - **Провенанс:** кто добавил/включил/выключил и когда — в аудит (AD-036-совместимо).
 

@@ -2,8 +2,12 @@ import { create } from 'zustand'
 import { TransportClient, type WSEvent, type TransportKind } from '@/lib/api/transport'
 import { useChatStore } from './chatStore'
 import { useSessionsStore } from './sessionsStore'
+import { useProjectsStore } from './projectsStore'
+import { useGitStore } from './gitStore'
 import { useUIStore } from './useUIStore'
 import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS } from './permissionStore'
+import { useSkillsStore } from './skillsStore'
+import { useInstructionsStore } from './instructionsStore'
 import type { TransportMode } from './useUIStore'
 import type { StreamDoneMetadata, MessageData, MessageStatus, CostBreakdown } from './chatStore'
 import { synthApi } from '@/lib/api/synthApi'
@@ -250,6 +254,7 @@ export function createDispatcher(): EventDispatcher {
           usage: mapUsage(payload.usage),
           debug_info: payload.debug_info as Record<string, unknown> | undefined,
           message_index: payload.message_index as number | undefined,
+          message_id: payload.message_id as string | undefined,
           cancelled: payload.cancelled as boolean | undefined,
           pending_count: payload.pending_count as number | undefined,
           status: payload.status as MessageStatus | undefined,
@@ -416,6 +421,13 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
+      // AD-069 §9.3: проектные инструкции загружены (initial/lazy) — обновляем
+      // снимок прозрачности для индикатора в правой панели.
+      case 'context.instructions_loaded': {
+        void useInstructionsStore.getState().load(sid)
+        break
+      }
+
       case 'session.updated': {
         const patch = payload as Record<string, unknown>
         useSessionsStore.setState((s) => ({
@@ -438,6 +450,18 @@ export function createDispatcher(): EventDispatcher {
       case 'plan.approved':
       case 'plan.updated': {
         refreshSessionFromApi(sid)
+        break
+      }
+
+      // Проект изменён тулами (project_update/workspace_set/repo_*): перечитываем
+      // список проектов с сервера и синхронизируем Git-вкладку (AD-076).
+      case 'project.updated': {
+        const projectId = payload.project_id as string | undefined
+        useProjectsStore.getState().loadProjects().then(() => {
+          if (!projectId) return
+          const project = useProjectsStore.getState().projects.find((p) => p.id === projectId)
+          if (project) void useGitStore.getState().loadRepos(projectId, project.repos ?? null)
+        }).catch(() => {})
         break
       }
 
@@ -681,6 +705,30 @@ export function createDispatcher(): EventDispatcher {
             qa_reason: payload.qa_reason as string | undefined,
           })
         }
+        break
+      }
+
+      // AD-046 §8.2: вызовы скиллов/команд — счётчики и последний вызов (часть b).
+      case 'skill.invoked': {
+        useSkillsStore.getState().recordSkillInvoked({
+          sessionId: sid,
+          name: String(payload.name ?? ''),
+          source: payload.source === 'model' ? 'model' : 'user',
+          scope: typeof payload.scope === 'string' ? payload.scope : undefined,
+          agent: typeof payload.agent === 'string' ? payload.agent : undefined,
+          timestamp: typeof payload.timestamp === 'string' ? payload.timestamp : undefined,
+        })
+        break
+      }
+
+      case 'command.invoked': {
+        useSkillsStore.getState().recordCommandInvoked({
+          sessionId: sid,
+          command: String(payload.command ?? ''),
+          args: typeof payload.args === 'string' ? payload.args : undefined,
+          actor: payload.actor === 'cli' ? 'cli' : 'user',
+          timestamp: typeof payload.timestamp === 'string' ? payload.timestamp : undefined,
+        })
         break
       }
     }

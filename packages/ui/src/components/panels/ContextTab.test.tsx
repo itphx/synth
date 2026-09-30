@@ -5,6 +5,7 @@ import React from 'react'
 
 const mocks = vi.hoisted(() => ({
   getOptimization: vi.fn(),
+  updateOptimization: vi.fn(),
   notify: vi.fn(),
 }))
 
@@ -56,6 +57,13 @@ const OPTIMIZATION = {
   summarization_tail_messages: 3,
 }
 
+/** Установить значение контролируемого input так, как это делает React. */
+function setNativeValue(el: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  setter?.call(el, value)
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
 async function renderContext(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
@@ -75,6 +83,7 @@ async function renderContext(): Promise<HTMLElement> {
 
 beforeEach(() => {
   mocks.getOptimization.mockResolvedValue(OPTIMIZATION)
+  mocks.updateOptimization.mockResolvedValue({})
 
   useUIStore.setState({
     activeCenterTabId: 'tab-1',
@@ -98,8 +107,121 @@ describe('ContextTab — базовая отрисовка', () => {
   it('рендерит блоки оптимизации контекста и не содержит MCP-таблицы', async () => {
     const container = await renderContext()
     expect(container.querySelector('[data-testid="context-mcp-list"]')).toBeNull()
+    // Отдельной кнопки Save нет — сохранение идёт по контролам (см. ниже).
+    expect(container.querySelector('[data-testid="panel-tab-footer"]')).toBeNull()
     expect(container.textContent).toContain(enDict['rightPanel.context.optimization.sticky_notes'])
     expect(container.textContent).toContain(enDict['rightPanel.context.optimization.sliding_window'])
     expect(container.textContent).toContain(enDict['rightPanel.context.optimization.summarization'])
+  })
+
+  it('тумблеры сохраняют сразу: во время сохранения — pending-индикация без «запрета»', async () => {
+    let resolveUpdate: (value: unknown) => void = () => {}
+    mocks.updateOptimization.mockImplementation(
+      () => new Promise((resolve) => { resolveUpdate = resolve }),
+    )
+    const container = await renderContext()
+
+    const switchAt = (i: number) =>
+      container.querySelectorAll<HTMLButtonElement>('button[role="switch"]')[i]
+    expect(container.querySelectorAll('button[role="switch"]')).toHaveLength(2)
+
+    await act(async () => {
+      switchAt(0).click()
+    })
+
+    const pending = switchAt(0)
+    expect(pending.disabled).toBe(false)
+    expect(pending.getAttribute('aria-busy')).toBe('true')
+    expect(pending.classList.contains('cursor-progress')).toBe(true)
+    expect(container.querySelectorAll('button[role="switch"]')[1].getAttribute('aria-busy')).toBe('true')
+
+    await act(async () => {
+      resolveUpdate({})
+    })
+    expect(switchAt(0).getAttribute('aria-busy')).toBeNull()
+    expect(switchAt(0).classList.contains('cursor-progress')).toBe(false)
+    // Тумблер сохраняет сразу: режим улетает на сервер без отдельной кнопки Save.
+    expect(mocks.updateOptimization).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ context_optimization: 'sliding_window' }),
+    )
+  })
+
+  it('изменение числа сохраняется сразу (без кнопки Save)', async () => {
+    const container = await renderContext()
+    const input = container.querySelector<HTMLInputElement>('input[type="number"]')
+    expect(input).not.toBeNull()
+    expect(input!.disabled).toBe(false)
+
+    await act(async () => {
+      setNativeValue(input!, '15')
+    })
+
+    expect(mocks.updateOptimization).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ sliding_window_message_limit: 15 }),
+    )
+  })
+
+  it('при ошибке сохранения числа значение откатывается к прежнему', async () => {
+    mocks.updateOptimization.mockRejectedValueOnce(new Error('boom'))
+    const container = await renderContext()
+    const input = container.querySelector<HTMLInputElement>('input[type="number"]')!
+    expect(input.value).toBe('10')
+
+    await act(async () => {
+      setNativeValue(input, '15')
+    })
+    await act(async () => {})
+
+    // Оптимистичное значение откатано к серверному.
+    expect(container.querySelector<HTMLInputElement>('input[type="number"]')!.value).toBe('10')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: enDict['panel.saveError'], type: 'error' }),
+    )
+  })
+
+  it('при ошибке сохранения радио выбор откатывается к прежнему', async () => {
+    mocks.updateOptimization.mockRejectedValueOnce(new Error('boom'))
+    const container = await renderContext()
+    // Радио-кнопки: [0] окно/сообщения, [1] окно/токены, [2] суммаризация/сообщения, [3] суммаризация/токены.
+    const radios = () =>
+      container.querySelectorAll<HTMLButtonElement>('button[data-compact].rounded-full')
+    expect(radios()).toHaveLength(4)
+    expect(radios()[0].className).toContain('bg-primary')
+    expect(radios()[1].className).not.toContain('bg-primary')
+
+    await act(async () => {
+      radios()[1].click()
+    })
+    await act(async () => {})
+
+    // Выбор «токены» откатан к «сообщениям».
+    expect(radios()[0].className).toContain('bg-primary')
+    expect(radios()[1].className).not.toContain('bg-primary')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: enDict['panel.saveError'], type: 'error' }),
+    )
+  })
+
+  it('при ошибке сохранения тумблеры откатываются к серверному состоянию', async () => {
+    mocks.updateOptimization.mockRejectedValueOnce(new Error('boom'))
+    const container = await renderContext()
+    const switchAt = (i: number) =>
+      container.querySelectorAll<HTMLButtonElement>('button[role="switch"]')[i]
+    expect(switchAt(0).getAttribute('aria-checked')).toBe('false')
+    expect(switchAt(1).getAttribute('aria-checked')).toBe('false')
+
+    await act(async () => {
+      switchAt(0).click()
+    })
+    await act(async () => {})
+
+    // Оптимистичное включение откатано; соседний тумблер не «залип» выключенным/включённым.
+    expect(switchAt(0).getAttribute('aria-checked')).toBe('false')
+    expect(switchAt(1).getAttribute('aria-checked')).toBe('false')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: enDict['panel.saveError'], type: 'error' }),
+    )
   })
 })

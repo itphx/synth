@@ -22,13 +22,13 @@
 | `components/chat/` | Чат: сообщения, стриминг, файловые вкладки, tool-рендер, саб-агенты |
 | `components/settings/` + `components/admin/` | Настройки и админ-панели (провайдеры, модели, безопасность, routing) |
 | `components/auth/` | `AuthGate`, логин (в т.ч. гибридный) |
-| `components/ui/` | Примитивы: dialog, popover, select, tooltip, toggle, `SynthLogo` |
+| `components/ui/` | Примитивы: dialog, popover, select, tooltip, toggle, `SynthLogo`, `EntityIconPicker` (пикер иконки/цвета сущностей), `EntityIconTrigger` (иконка + пикер в поповере) |
 | `components/icon/` | `Icon` + реестр `icons.ts` — единственная точка иконок |
 | `components/{tree,projects,logviewer}/` | Деревья, проекты, просмотр логов |
 | `stores/` | Zustand-сторы (см. «Соглашения») |
 | `lib/api/` | HTTP-слой (`synthApi`, `client`) и транспорт (`transport`) |
 | `lib/i18n/` | Провайдер, стор, словари, резолвер ключей |
-| `lib/` | Утилиты, устройство, масштаб UI, форматирование, темы |
+| `lib/` | Утилиты, устройство, масштаб UI, форматирование, темы, `entityIcon` (резолвер иконки/цвета сущностей) |
 | `hooks/`, `contexts/`, `styles/`, `types/` | Хуки, React-контексты, Tailwind + CSS-переменные, локальные типы |
 
 Крупнейшая зона — `components/chat/`; её правки обычно тянут `stores/chatStore.ts` (≈800 строк), `transportStore` и i18n-резолвер.
@@ -44,6 +44,8 @@
 
 **Новая левая вкладка с тулбаром**: toolbar выбирается по `leftPanelTab` в `App.tsx:140-143` (`ProjectsTabToolbar`/`FilesTabToolbar`/`GitTabToolbar`) — добавить свой `case`, иначе шапка панели останется пустой.
 
+**Контекст-ориентированные вкладки Files/Git.** Обе вкладки строятся как закреплённый блок «Текущий проект» (авто-раскрыт) + сворачиваемые «Другие проекты ({count})»; активный проект — хук `useActiveProject` (`hooks/useActiveProject.ts`: чат → `project_id` сессии, file/commit-таб → `projectId` вкладки). Ключ сворачивания блока «другие» — `OTHER_PROJECTS_COLLAPSE_KEY` (`stores/useUIStore.ts`). Тумблер «Только текущий проект» — `ProjectScopeToggle` (`components/panels/ProjectScopeToggle.tsx`, persist `useUIStore.onlyActiveProject`, disabled без валидного workspace у текущего проекта); в разметке помечен `data-project-scope-toggle`. При включённом тумблере expand/collapse-all действует только на видимые проекты — учитывать это в новых тулбарах.
+
 **Новый раздел настроек**: элемент `CATEGORIES` (`components/settings/SettingsModal.tsx:35`) с `labelKey` + `icon`. Админ-раздел помечается `roles[]` (`:32`); по первому такому элементу рисуется граница (`adminBoundaryIndex`, `:70`). Ключ `labelKey` добавлять в **оба** словаря.
 
 **Новый store**: `create<T>()(...)`, при необходимости `persist` (образец `stores/useUIStore.ts:130-131`). Пользовательские настройки — только через `persist`; runtime-флаги (дроверы, `centralNarrow`, наведение) не персистятся. Селекторы — `useStore(s => s.x)`; в экшенах/вне React — `useStore.getState()`. Подтверждения — `confirm()` (`lib/confirm.ts:9`) + `confirmStore`, не `window.confirm`.
@@ -54,15 +56,30 @@
 
 ### Примитивы и иконки
 - UI-примитивы — в `components/ui/`. Barrel `components/ui/index.ts` намеренно частичный (только `SynthLogo`, `ContextMenu`, `Popover`); остальное импортируется прямыми путями — это норма, не «чинить» реэкспортами.
+- Тумблер (`components/ui/Toggle.tsx`) — единый канон курсора: обычный — `cursor-pointer`; `pending` (идёт сохранение, сохраняем сразу) — `cursor-progress` + лёгкое затемнение, без атрибута `disabled`; `disabled` (реально недоступно: system/project, нет прав) — `cursor-default` + `opacity-40` **без** `cursor-not-allowed`, причина показывается текстом рядом. Зафиксировано в `Toggle.test.tsx`.
 - Коллекция настроек — `components/ui/settings/` (`SettingsPanel`/`Section`/`Field`/`Row`/`Actions`, контролы `TextField`/`NumberField`/`SliderField`/`TextArea`/`SelectField`/`ToggleField`/`ListField`/`SegmentedControl`/`Tabs`, хук `useSettingsDraft`) — обязательный стандарт (AD-072). Все разделы настроек и админ-категории мигрированы; legacy `components/settings/settings-layout.tsx` (`SettingsPage`/`SettingsCard`) удалён — новых импортов оттуда быть не должно.
 - Панель настроек: один вертикальный скролл (скроллится только тело, шапка — `shrink-0`), `min-w-0`/`break-words` для текста, базовая сетка `grid-cols-1`, центрирование `max-w-3xl`, симметричные паддинги (без `pr-2`); порядок в шапке — `title` (+ `actions`) → `description` → `meta` (счётчики идут **ниже** описания, AD-072); действия (`SettingsActions`) — **в конце содержимого**, не фиксированным футером (у `SettingsPanel` нет footer-пропов). В `SettingsActions` кнопка Reset цветная (`outline-primary`) только когда текущие значения отличаются от дефолтных; при дефолтных (`isDefault`) — серая (`outline-muted`) и неактивна; Save/Cancel активны только при несохранённых изменениях (`dirty`).
 - Иконки — только `<Icon name="..." />` из `components/icon/Icon.tsx` (реестр `icons.ts`). Не тащить svg/`@remixicon` напрямую (единственное исключение — `SynthLogo.tsx`); неизвестное имя не в `iconMap` → `Icon` вернёт `null`.
 - Иконки/подписи инструментов — `lib/toolIcons.ts` (`getToolIcon`, `getToolDisplayName`); новый тул добавлять в `TOOL_ICON_MAP`, а не маппинг inline в компоненте.
+- Иконка/цвет проекта и сессии — только через `lib/entityIcon.ts` (`resolveIconName`/`resolveIconColor`) и общий пикер `components/ui/EntityIconPicker.tsx` (ключи реестра + палитра CSS-переменных, без загружаемых картинок). Реестры ключей и маппинги — `lib/projectMeta.ts` из shared (`PROJECT_ICON_KEYS`/`PROJECT_COLOR_KEYS`); в UI их не дублировать.
+- Пикер вызывается в поповере редактирования проекта (левая панель), диалоге из контекстного меню дерева (проект/сессия) и по клику на иконку в строке «Имя» верхней секции панелей «Сессия» (`SessionSettingsTab`) и «Проект» (`ProjectTab`) через `components/ui/EntityIconTrigger.tsx` (иконка + `Popover` с пикером) с немедленным сохранением (`usePanelSettingSave`, откат при ошибке). Иконка выводится инлайн (`<Icon>`): дерево, табы, шапка, панели.
+- Резолвер — единственная точка перевода серверного значения (или legacy-алиаса) в имя реестра `Icon`/CSS-переменную; неизвестное даёт `undefined` (компонент подставляет фоллбек). У закрытых сессий (нет таба и не активны) иконка серая (`text-muted-foreground`), у открытых — цвет сессии (без цвета — `text-primary`); у проектов иконка всегда цветная. Дефолтный цвет иконки сессии — `--primary` (акцент открытой сессии; `resolveSessionIconColor`/`DEFAULT_SESSION_ICON_COLOR`), в панели «Сессия» и табе сессии — тоже `--primary`, у проекта дефолт остаётся нейтральным.
+
+### Чат: упоминания агентов
+- Вызов агента через `@` (`components/chat/ChatInput.tsx`, `splitMessageWithTags`) сохраняет сам тег `@<agentId>` в тексте сообщения (иначе пользователю неясно, почему ответил другой агент); тег одновременно уходит как `agentRole` в `sendMessage`. Не вырезать тег из `part.text`.
+- В пользовательских сообщениях `@<agentId>` известных агентов подсвечивается цветом агента (`AgentInfo.color` через `resolveColor`) — `components/chat/SecretPlaceholder.tsx` (`SecretPlainText`), реестр из `agentsStore`. Неизвестный агент или пустой реестр → обычный текст, без поломки вёрстки и переносов.
+
+### Сохранение немедленных настроек панели
+- Немедленное сохранение настройки правой панели (тумблер, селект, автосейв поля) — только через общий хук `usePanelSettingSave` (`hooks/usePanelSettingSave.ts`): `run({ key, run, onSuccess, onError, errorKey })`.
+- Шаблон элемента: `pending` контрола по `isPending(key)` → единый success-тост `panel.saved` → при ошибке единый error-тост `panel.saveError` и **откат** контрола/формы к актуальному серверному состоянию. «Залипающих» оптимистичных значений быть не должно (`onError`/`onSuccess` возвращают состояние; для форм — `applyFormValues(formValuesFromSettings(...))`).
+- `pending` — по конкретному контролу/сущности (`isPending(\`mcp:${name}\`)`), а не «всё сразу»; во время запроса контрол `pending`, но не `disabled` (повторы гасит обработчик через `isPending`).
+- Повторные success-тосты подавляются окном троттлинга (`throttleMs`, по умолчанию ~1.5 с); error-тосты показываются всегда. Спец-ошибки (403 forbidden, 409 confirm-required) — через `errorKey` (строка или функция от ошибки) либо `silentError` + собственный тост. Общие формулировки — ключи `panel.saved`/`panel.saveError` (не плодить доменные синонимы).
 
 ### Стили
 - Tailwind + `cn()` (`lib/utils.ts:4`). Условные классы — через `cn`, не конкатенацию строк.
 - Цвета — только CSS-переменные (`var(--primary)`, `text-foreground`), не hex/oklch-литералы в разметке; темизация — `ThemeSystemProvider` + `styles/design-system.css`.
 - Типографика — `SEMANTIC_TYPOGRAPHY` (`lib/typography.ts:1`), обязана совпадать с CSS-переменными `styles/design-system.css` (комментарий `must match SEMANTIC_TYPOGRAPHY`, `:15`). Расхождение — молчаливая деградация размеров.
+- Вкладки правой панели строятся только через `PanelTab` (`components/panels/PanelTab.tsx`): скролл — внутри вкладки (`p-3`, `space-y-4` между секциями), футер с действиями — через проп `footer` (фиксирован, не скроллится), внешний скролл в `RightPanel` отключён. Внутри секции ритм задаёт родитель (`InfoSection` — 8px); ad-hoc `mt-*`/`mb-*` для вертикальных интервалов не использовать.
 
 ### Zustand
 - `create<T>()(...)` — курринг обязателен для типов; импорт `{ create } from 'zustand'`.
@@ -96,6 +113,21 @@
 - Персистить runtime-состояние и несериализуемые значения (`Set`, `Map`) без конвертации.
 - Плодить второй транспорт, API-клиент или «глобальный стор на всё».
 - Реэкспортировать в barrel `components/ui/index.ts` всё подряд — он намеренно частичный.
+
+## Скиллы и команды (AD-046)
+
+- **Store/API.** `stores/skillsStore.ts` — реестр скиллов + деталь, команды, bundles, instance-настройки (disabled/policy + дефолты), CRUD, загрузка/ошибки, счётчики вызовов. Методы `synthApi`: skills (`getSkills/getSkill/createSkill/updateSkill/deleteSkill/getSkillFiles/getSkillFile/putSkillFile/deleteSkillFile/reloadSkills`), `getCommands`, CRUD `/skill-bundles`, scope (`getSessionSkills/updateSessionSkills/getSessionSkillsEffective`, `getProjectSkills/updateProjectSkills`, `getSkillsSettings/updateSkillsSettings/resetSkillsSettings`).
+- **Настройки** (`components/settings/`): user-раздел «Скиллы» (`SkillsUserSettings`) — просмотр реестра/тела `SKILL.md`/supporting-файлов, недоверенные — только метаданные + бейдж, без CRUD; admin «Скиллы» (`SkillsAdminSettings` + `SkillEditorForm`) — CRUD `SKILL.md`+файлы, две оси гейтов (мастер `disabled` + `disabledForNewProjects`), policy; admin «Команды» (`CommandsSettings`) — список команд (kind/scope/available + диагностика `shadowed`/`collision`) и CRUD bundles. Категории `skills` (user) и `skillsAdmin`, `commands` (ADMIN) — в `CATEGORIES` (`SettingsModal.tsx`).
+- **Правая панель.** Тумблеры скиллов по образцу MCP: `SessionSettingsTab` (`getSessionSkills`/`updateSessionSkills { name, enabled }`, тумблер заблокирован при `disabledReason` `system`/`project`) и `ProjectTab` (`ProjectSkillsBlock`, «Доступен» = hard-gate проекта / «Включён по умолчанию» = сид новых сессий, гейт owner/LEAD/admin, 403 — аккуратным уведомлением).
+- **Двумерная модель вкл/выкл (скиллы и MCP).** Единая семантика: **система** — мастер `disabled`/`enabled` (выкл → недоступно нигде) + дефолт для новых проектов (`disabledForNewProjects` у скиллов, `enabledByDefault` у MCP); **проект** — `enabled` (hard-gate: выкл → недоступно в сессиях проекта, включая старые) + `defaultOn` (сид новых сессий); **сессия** — один тумблер «включён здесь». База — opt-in. Причины в эффективных списках: скиллы `session`/`system`/`project`, MCP `system_disabled`/`project_disabled`/`session_optout`/`not_default`. `StatsTab` показывает и причины, и источник (`stable`/`session`/`project`).
+- **Статистика.** `StatsTab` — секция «Скиллы» (scope/уровень, available, enabled сессии, unavailableReason, trusted, вклад токенов, source; размеры `skills.catalog`/`skills.catalog.session` из `manifest.entries`) и «Команды» — счётчики `skill.invoked`/`command.invoked` из `skillsStore`. События обрабатываются в `transportStore` (не открывать свой транспорт, AD-024).
+- **`/`-автокомплит.** `components/chat/CommandAutocomplete.tsx` + `ChatInput`: источник `GET /api/v2/commands`, навигация ArrowUp/Down/Enter/Tab/Escape, клик, подстановка `/name ` (не отправка), тач-таргеты (AD-044).
+- ⚠️ **Инвариант импортов shared.** Для runtime/value-импортов из `@itphx/synth-shared` использовать **только subpath**: `@itphx/synth-shared/types`, `/schemas`, `/i18n`, `/version`. Value-импорт из **корня** `@itphx/synth-shared` тянет `config/loader` → `node:fs` в браузерный бандл и роняет всё приложение (реальный инцидент commit 2; `import type` из корня безопасен — стирается компилятором). Проверять при добавлении любых констант/функций из shared в UI.
+
+## Git и SSH-ключи (AD-076)
+
+- **Git-вкладка** (`components/panels/LeftPanel.tsx` → `GitTab`, `stores/gitStore.ts`): реестр `project.repos` с `destination`/`type`/`url`/`ssh-key`/`lastFetch`; `scan → register`, `clone`/`init` с полями `name`/`path` и селектором SSH-ключа, `fetch`, `remove` (через `ConfirmDialog`, опц. `deleteLocal`). Методы — `synthApi.*GitRepo*`.
+- **SSH-ключи** (`components/settings/SshKeysSettings.tsx`, встраивается в админ-категорию «Агенты» `admin/AgentsPanel.tsx`): CRUD per-agent ключей, привязка к агентам (`agentIds`), редактирование без обязательной замены ключа. Поля «Тип» нет (дублировало имя) — в shared `SSHKey.type?`/`sshKeyCreateSchema.type?` сохранены для обратной совместимости, UI их не задаёт и не показывает. API `synthApi.*SshKey*` отдаёт только `SSHKeyMeta` (без `privateKey`/`passphrase`); ошибки — ключи `sshkey.*` (в т.ч. `sshkey.env_failed`), i18n ru/en. Ключи с `passphrase` поддерживаются (git-операция — через askpass).
 
 ## Мобильный / PWA
 

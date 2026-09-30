@@ -11,7 +11,8 @@
 // фейковыми провайдерами без OIDC.
 
 import { createServer, IncomingMessage } from 'node:http';
-import { join } from 'node:path';
+import { mkdir } from 'node:fs/promises';
+import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { Readable } from 'node:stream';
 import { Hono } from 'hono';
@@ -28,29 +29,38 @@ import {
   SecretPatternStore,
   RateLimiter,
   DictionaryStore, createDictionaryRoutes,
+  SkillService, createSkillRoutes,
+  resolveProjectSkillSeed, migrateSessionScopeSnapshots,
+  CommandService, createCommandRoutes, createSkillBundleRoutes, SkillBundleStore,
+  createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes,
+  ProjectInstructionsResolver, createInstructionsInfoResolver,
+  createContextRoutes as createCoreContextRoutes,
   DEFAULT_AGENT_ID,
+  SSHKeyStore, createGitRoutes,
+  createSshKeyRoutes, createAgentSshKeyRoutes,
+  createFsRoutes, resolveProjectWorkspace,
+  detectRuntimeDeps,
+  syncProvidersFromEnv,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
-import { nowISO, ensureDataDir, MessageRole, generateStreamId, SYNTH_VERSION, DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId, SYNTH_VERSION, DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole, resolveDefaultWorkspace, resolveSecretKey } from '@itphx/synth-shared';
 import type { BusEvent } from '@itphx/synth-shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import type { BackendConfig } from './lib/app-config.js';
 import { createAuthMiddleware } from './auth/middleware.js';
 import type { AuthKit } from './auth/middleware.js';
 import { createAuthRoutes } from './routes/auth.js';
-import { createProjectRoutes } from './routes/projects.js';
+import { createProjectRoutes, createProjectAccess } from './routes/projects.js';
 import { createSessionRoutes } from './routes/sessions.js';
 import { createMessageRoutes } from './routes/messages.js';
 import { createQueueRoutes } from './routes/queue.js';
-import { createFsRoutes } from './routes/fs.js';
 import { createProviderRoutes } from './routes/providers.js';
 import { createModelRoutes } from './routes/models.js';
 import { createAgentRoutes } from './routes/agents.js';
-import { createContextRoutes } from './routes/context.js';
+import { createContextRoutes as createContextFileRoutes } from './routes/context.js';
 import { createDebugRoutes } from './routes/debug.js';
 import { createUserRoutes } from './routes/users.js';
-import { createGitRoutes } from './routes/git.js';
 import { createMcpRoutes } from './routes/mcp.js';
 import { createAuditRoutes } from './routes/audit.js';
 import { createLogsRoutes, resolveLogDir } from './routes/logs.js';
@@ -59,8 +69,8 @@ import { createLlmRoutes } from './routes/llm.js';
 import { createRateLimiter } from './middleware/rate-limiter.js';
 import { DefaultsStore } from './lib/defaults-store.js';
 import { t, getTranslations } from './lib/i18n.js';
-import { ProjectStore } from './storage/project-store.js';
-import { JsonStore } from './storage/json-store.js';
+import { ProjectStore } from '@itphx/synth-core';
+import { JsonStore } from '@itphx/synth-core';
 import { EventHub } from './events/hub.js';
 import type { EventClient } from './events/hub.js';
 
@@ -198,8 +208,25 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const dataDir = backendConfig.dataDir;
     await ensureDataDir(dataDir);
     const fileStore = new FileStore({ dataDir });
-    const sessionManager = new SessionManager(fileStore);
     const projectStore = new ProjectStore({ dataDir });
+    const sessionManager = new SessionManager(fileStore, {
+      projectStore,
+      // AD-071 §2.4 / AD-046 §4.5: системные дефолты для сессий без проекта.
+      systemDefaultsProvider: async () => ({
+        mcpDefaultOn: await mcpRegistryStore.toDefaultServers(),
+        skillsDefaultOn: (await resolveProjectSkillSeed(
+          skillService,
+          await settingsStore.getSkillsDisabledForNewProjects(),
+        )).enabled,
+      }),
+    });
+    // AD-076 §T4: SSH-ключи агентов — core-хранилище поверх общего dataDir.
+    // Мастер-ключ: env `SYNTH_SECRET_KEY` > `config.security.secretKey` > файл dataDir.
+    const sshKeyStore = new SSHKeyStore({
+      dataDir,
+      secretKey: resolveSecretKey(backendConfig.synth),
+      env: process.env,
+    });
     const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
     const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
     const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
@@ -211,6 +238,12 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
 
     // Runtime-настройки (AD-005): workspace/mcp из {dataDir}/settings.json (переживают рестарт)
     const settingsStore = new RuntimeSettingsStore({ dataDir });
+    // AD-075: дефолтный рабочий каталог — runtime-override `settings/workspace`
+    // приоритетнее config/env (`resolveDefaultWorkspace`), каталог создаётся
+    // заранее (как в core `server/app.ts`), чтобы инструменты не падали.
+    const runtimeWorkspace = await settingsStore.getWorkspace();
+    const defaultWorkingDir = runtimeWorkspace ?? resolveDefaultWorkspace(backendConfig.synth);
+    await mkdir(defaultWorkingDir, { recursive: true });
     // Агент по умолчанию (админка «Агенты»): runtime-настройка поверх DEFAULT_AGENT_ID.
     const getDefaultAgentId = async (): Promise<string> =>
       (await settingsStore.getDefaultAgent()) ?? DEFAULT_AGENT_ID;
@@ -231,6 +264,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     mcpManager.setServerTrusts(mcpMaps.trusts);
     mcpManager.setServerAuthors(mcpMaps.authors);
     mcpManager.setDefaultServers(mcpMaps.defaults);
+    // AD-071 §2.4: системный мастер-флаг серверов (реестр `enabled`).
+    mcpManager.setServerSystemEnabled(mcpMaps.systemEnabled);
     // AD-071 §2.3.1: политика сетевого доступа HTTP-серверов (SSRF/egress).
     // Runtime-настройка из админки (settings.json) приоритетнее config.yaml и
     // переживает рестарт; храним в изменяемой переменной, чтобы registry-роуты
@@ -273,72 +308,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       return providerCache.get(name) ?? null;
     };
 
-    // AD-038: синхронизация провайдеров/моделей из переменных окружения (аналог core).
-    // Вызывается ПОСЛЕ создания providerStore/modelStore, но ДО заполнения кэшей,
-    // чтобы env-провайдеры попали в providerCache/modelCache.
-    async function syncProvidersFromEnv(
-      providerStore: JsonStore<ProviderConfig>,
-      modelStore: JsonStore<ModelConfig>,
-    ): Promise<void> {
-      const providerPattern = /^SYNTH_PROVIDER_([A-Z][A-Z0-9_]*?)_(API_KEY|URL|MODEL|TYPE)$/;
-      const providers: Map<string, Partial<ProviderConfig> & { model?: string }> = new Map();
-
-      for (const [key, value] of Object.entries(process.env)) {
-        const match = key.match(providerPattern);
-        if (!match || !value) continue;
-
-        const [, rawName, field] = match;
-        if (!rawName) continue;
-        const name = rawName.toLowerCase().replace(/_/g, '-');
-
-        if (!providers.has(name)) {
-          providers.set(name, { name, type: 'openai' });
-        }
-
-        const p = providers.get(name)!;
-        switch (field) {
-          case 'API_KEY': p.apiKey = value; break;
-          case 'URL': p.baseUrl = value; break;
-          case 'MODEL': p.model = value; break;
-          case 'TYPE': p.type = value; break;
-        }
-      }
-
-      for (const [name, envConfig] of providers) {
-        const existing = await providerStore.load(name);
-        const provider: ProviderConfig = {
-          name,
-          type: envConfig.type || existing?.type || 'openai',
-          baseUrl: envConfig.baseUrl || existing?.baseUrl,
-          apiKey: envConfig.apiKey || existing?.apiKey,
-          defaultModel: envConfig.model || existing?.defaultModel,
-          timeout: existing?.timeout ?? 120,
-          enabled: true,
-          icon: existing?.icon ?? '',
-        };
-        await providerStore.save(name, provider);
-
-        // Если указана модель — создаём её
-        if (envConfig.model) {
-          const modelId = `${name}/${envConfig.model}`;
-          const existingModel = await modelStore.load(modelId);
-          if (!existingModel) {
-            await modelStore.save(modelId, {
-              id: modelId,
-              name: envConfig.model,
-              provider: name,
-              description: '',
-              enabled: true,
-              isDefault: true,
-            });
-          }
-        }
-
-        console.log(`  [env] провайдер: ${name} (${provider.type})${provider.baseUrl ? ` → ${provider.baseUrl}` : ''}`);
-      }
-    }
-
-    // Синхронизация провайдеров из окружения перед заполнением кэшей
+    // AD-038: синхронизация провайдеров/моделей из переменных окружения (общая
+    // core-реализация). Вызывается ПОСЛЕ создания providerStore/modelStore, но ДО
+    // заполнения кэшей, чтобы env-провайдеры попали в providerCache/modelCache.
     await syncProvidersFromEnv(providerStore, modelStore);
 
     // Кеш провайдеров (заполняется при старте)
@@ -428,11 +400,45 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const runtimeToolsDisabled = await settingsStore.getToolsDisabled();
     const toolsDisabled: ToolsDisabledConfig =
       runtimeToolsDisabled ?? backendConfig.synth.tools.disabled ?? { capabilities: [], tools: [] };
+    // AD-046 §4.5: runtime-отключение скиллов (админка) — hard-gate системного уровня.
+    const skillsDisabled = (await settingsStore.getSkillsDisabled())
+      ?? { categories: [], groups: [], skills: [] };
     const protectedPathsStore = new ProtectedPathsStore({ dataDir });
 
     // Orchestrator
     const toolRegistry = createToolRegistry();
     const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
+
+    // AD-046: сервис скиллов (discovery + instance-запись + каталог промпта).
+    const skillService = new SkillService({
+      dataDir,
+      configPaths: backendConfig.synth.skills.paths,
+      urls: backendConfig.synth.skills.urls,
+      trustedProjectDirs: backendConfig.synth.skills.trustedProjectDirs,
+      toolsets: backendConfig.synth.skills.toolsets,
+    });
+
+    // AD-046 §7: slash-команды и bundles (mirror core).
+    const bundleStore = new SkillBundleStore({
+      dataDir,
+      bundlesPath: backendConfig.synth.commands.bundlesPath,
+    });
+    const commandService = new CommandService({
+      config: {
+        dataDir,
+        commandsPaths: backendConfig.synth.commands.paths,
+        bundlesPath: backendConfig.synth.commands.bundlesPath,
+        conflict: backendConfig.synth.commands.conflict,
+        maxArgumentsLength: backendConfig.synth.commands.maxArgumentsLength,
+        maxRenderedBytes: backendConfig.synth.commands.maxRenderedBytes,
+        toolsets: backendConfig.synth.skills.toolsets,
+        trustedProjectDirs: backendConfig.synth.skills.trustedProjectDirs,
+        inlineShell: backendConfig.synth.skills.inlineShell ?? false,
+      },
+      skillRuntime: skillService,
+      skillSource: skillService,
+      bundleStore,
+    });
 
     const orchestrator = new ChatOrchestrator({
       sessionManager,
@@ -447,7 +453,14 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       agentRegistry,
       mcpManager,
       projectStore,
+      // AD-076 §T6: тот же store, что у git/ssh-роутов — без дублей инстансов.
+      sshKeyStore,
       workspacesRoot: backendConfig.workspacesRoot,
+      // AD-075: backend — managed-режим, workspace вне workspacesRoot запрещён.
+      workspaceManaged: true,
+      // AD-075: без defaultWorkingDir сессия без проекта получала бы
+      // {dataDir}/workspaces/default мимо runtime-override settings/workspace.
+      defaultWorkingDir,
       routerConfig: backendConfig.synth.router,
       permissionConfig: backendConfig.synth.permission,
       defaultPlanMode: backendConfig.synth.session.planMode,
@@ -460,12 +473,38 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       toolsPolicy,
       mcpPolicy,
       toolsDisabled,
+      // AD-046 §4.5: системный hard-gate скиллов (runtime-настройка).
+      skillsDisabled,
+      // AD-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте.
+      runtimeDeps: await detectRuntimeDeps(),
       // AD-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
       tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
       onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
+      // AD-046 §5: каталог скиллов в промпт + тул `skill`.
+      skillRuntime: skillService,
+      // AD-046 §7: резолвинг `/`-команд до LLM.
+      commandRuntime: commandService,
+      // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
+      instructionsConfig: backendConfig.synth.instructions,
+      // AD-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
+      instructionsTrustedProjectDirs: backendConfig.synth.skills.trustedProjectDirs,
     });
 
     const processMessage = orchestrator.createProcessMessage();
+
+    // AD-071 §2.4 / AD-046 §4.5: разовая миграция снапшотов скоупа существующих сессий.
+    await migrateSessionScopeSnapshots({
+      sessionManager,
+      projectStore,
+      settingsStore,
+      resolveSystemDefaults: async () => ({
+        mcpDefaultOn: await mcpRegistryStore.toDefaultServers(),
+        skillsDefaultOn: (await resolveProjectSkillSeed(
+          skillService,
+          await settingsStore.getSkillsDisabledForNewProjects(),
+        )).enabled,
+      }),
+    }).catch(() => 0);
 
     // EventHub — центральный диспетчер подписок
     const eventHub = new EventHub(eventBus, sessionManager);
@@ -483,7 +522,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.get('/api/v2/i18n/translations/en', (c) => c.json(getTranslations('en')));
 
     // Projects routes
-    app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, backendConfig.workspacesRoot, mcpManager));
+    app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, backendConfig.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore));
 
     // Sessions routes
     app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore, profilesStore, getDefaultAgentId));
@@ -494,8 +533,18 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Queue routes
     app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage));
 
-    // FS routes
-    app.route('/api/v2/fs', createFsRoutes(auth, projectStore, backendConfig.workspacesRoot));
+    // FS routes (AD-075): core-фабрика, managed поверх workspace проекта.
+    app.route('/api/v2/fs', createFsRoutes(auth, backendConfig.workspacesRoot, undefined, {
+      requireProjectId: true,
+      getOutsideRootPolicy: () => 'deny',
+      getProtectedPathsPolicy: () => protectedPathsStore.getPolicy(),
+      getProjectWorkspace: (projectId) => resolveProjectWorkspace(projectId, {
+        workspacesRoot: backendConfig.workspacesRoot,
+        getProject: (id) => projectStore.load(id),
+        outsideRootPolicy: () => 'deny',
+        strict: true,
+      }),
+    }));
 
     // Providers routes
     app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache));
@@ -504,22 +553,118 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, modelCache, providerCache));
 
     // Agents routes
-    app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, sessionManager, agentRegistry, getDefaultAgentId));
+    app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId));
 
-    // Context routes
-    app.route('/api/v2/context', createContextRoutes(auth, contextConfig));
+    // Context routes (глобальные identity-файлы; админ-мутации)
+    app.route('/api/v2/context', createContextFileRoutes(auth, contextConfig));
 
     // User admin routes
     app.route('/api/v2/users', createUserRoutes(auth, profilesStore));
 
-    // Git routes
-    app.route('/api/v2/git', createGitRoutes(auth, projectStore, backendConfig.workspacesRoot));
+    // Git routes (AD-076 §T4): core-фабрика + managed RBAC. Write-эндпоинты
+    // (init/clone/register/remove/fetch) требуют прав на изменение контента
+    // проекта (owner/EDITOR/LEAD/ADMIN); read-only (scan/log/commit) — requireAuth.
+    const projectAccess = createProjectAccess(auth);
+    app.route('/api/v2/git', createGitRoutes(auth, projectStore, backendConfig.workspacesRoot, {
+      sshKeyStore,
+      authorizeProject: async (c, projectId) => {
+        const user = await auth.getCurrentUser(c);
+        if (!user) return false;
+        const project = await projectStore.load(projectId);
+        if (!project) return false;
+        return projectAccess.canEditProjectContent(c, project, user.id);
+      },
+    }));
+
+    // SSH-ключи агентов (AD-076 §T5): core-фабрика + managed RBAC.
+    // Ключи — секреты: чтение — requireAuth (глобально), запись — только ADMIN.
+    app.route('/api/v2/ssh-keys', createSshKeyRoutes(auth, sshKeyStore, {
+      writeGuard: auth.requireAdmin,
+    }));
+    app.route('/api/v2/agents/:agentId/ssh-keys', createAgentSshKeyRoutes(auth, sshKeyStore, {
+      writeGuard: auth.requireAdmin,
+    }));
 
     // MCP routes (единый реестр; legacy /servers — адаптеры над ним)
     app.route('/api/v2/mcp', createMcpRoutes(auth, mcpManager, sessionManager, {
       registry: mcpRegistryStore,
       networkPolicy: effectiveNetworkPolicy,
       getNetworkPolicy: () => effectiveNetworkPolicy,
+    }));
+
+    // Скиллы (AD-046 §9.1/§9.2): core-фабрика + RBAC ADMIN на запись.
+    app.route('/api/v2/skills', createSkillRoutes(auth as unknown as CoreAuthKit, {
+      skillService,
+      resolveProjectWorkspace: async (projectId) => {
+        const project = await projectStore.load(projectId);
+        if (!project?.workspace) return undefined;
+        return isAbsolute(project.workspace)
+          ? normalize(project.workspace)
+          : resolve(backendConfig.workspacesRoot, project.workspace);
+      },
+    }, { writeGuard: auth.requireAdmin }));
+
+    // AD-046 §7/§9.1: команды и bundles (mirror core, мутации — ADMIN).
+    app.route('/api/v2/commands', createCommandRoutes(auth as unknown as CoreAuthKit, {
+      commandService,
+      resolveProjectWorkspace: async (projectId) => {
+        const project = await projectStore.load(projectId);
+        if (!project?.workspace) return undefined;
+        return isAbsolute(project.workspace)
+          ? normalize(project.workspace)
+          : resolve(backendConfig.workspacesRoot, project.workspace);
+      },
+    }));
+    app.route('/api/v2/skill-bundles', createSkillBundleRoutes(auth as unknown as CoreAuthKit, {
+      bundleStore,
+      validateSkills: async (names) => {
+        const missing: string[] = [];
+        for (const name of names) {
+          if (!(await skillService.get(name))) missing.push(name);
+        }
+        return missing;
+      },
+    }, { writeGuard: auth.requireAdmin }));
+
+    // AD-046 §4.5: scope-API скиллов. Доступ к сессии — владелец|ADMIN
+    // (canAccess, как в session-роутах); проект — owner/LEAD/ADMIN.
+    const resolveSkillWorkspace = async (projectId: string): Promise<string | undefined> => {
+      const project = await projectStore.load(projectId);
+      if (!project?.workspace) return undefined;
+      return isAbsolute(project.workspace)
+        ? normalize(project.workspace)
+        : resolve(backendConfig.workspacesRoot, project.workspace);
+    };
+    app.route('/api/v2/sessions', createSessionSkillScopeRoutes(auth as unknown as CoreAuthKit, {
+      sessionManager, skillService, settingsStore, projectStore,
+      permissionConfig: backendConfig.synth.permission,
+      resolveProjectWorkspace: resolveSkillWorkspace,
+    }, {
+      writeGuard: auth.requireAuth,
+      resolveUserId: async (c) => (await auth.getCurrentUser(c as never))?.id ?? '',
+      canAccess: (session, c, userId) =>
+        (session.ownerId ?? session.userId) === userId
+        || auth.isAdmin(c as never),
+    }));
+    app.route('/api/v2/projects', createProjectSkillScopeRoutes(auth as unknown as CoreAuthKit, {
+      sessionManager, skillService, settingsStore, projectStore,
+      permissionConfig: backendConfig.synth.permission,
+      resolveProjectWorkspace: resolveSkillWorkspace,
+    }, {
+      // AD-046 §4.5: проектным уровнем управляют owner/LEAD/ADMIN — как в
+      // project-MCP (`canManageProjectMcp`), поэтому writeGuard не requireAdmin;
+      // владение проверяет canAccessProject (403 не-членам, 404 — нет проекта).
+      writeGuard: auth.requireAuth,
+      resolveUserId: async (c) => (await auth.getCurrentUser(c as never))?.id ?? '',
+      canAccessProject: (project, c, userId) =>
+        auth.isAdmin(c as never)
+        || auth.hasRole(c as never, 'LEAD')
+        || project.ownerId === userId
+        || project.members?.[userId] === ProjectRole.OWNER,
+    }));
+    app.route('/api/v2/settings', createSkillSettingsRoutes(auth as unknown as CoreAuthKit, { settingsStore }, {
+      writeGuard: auth.requireAdmin,
+      onSkillsDisabledChange: (disabled) => orchestrator.setSkillsDisabled(disabled),
     }));
 
     // LLM Gateway audit routes (AD-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные
@@ -563,7 +708,12 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Settings routes (runtime-настройки для UI: workspace + mcp; переиспользуем core-реализацию)
     app.route('/api/v2/settings', createSettingsRoutes(auth as unknown as CoreAuthKit, {
       settingsStore,
-      fallbackWorkspace: join(dataDir, 'workspaces', 'default'),
+      fallbackWorkspace: defaultWorkingDir,
+      // AD-075: managed-развёртывание — политика вне `workspacesRoot` всегда `deny`
+      // (enforcement — в `routes/projects.ts`); строго read-only: GET отдаёт
+      // fallback + readOnly, PUT/DELETE → 403 WORKSPACE_POLICY_READ_ONLY.
+      fallbackWorkspaceOutsideRootPolicy: 'deny',
+      workspacePolicyReadOnly: true,
       // Агент по умолчанию при первом развёртывании (config.yaml не задаёт — DEFAULT_AGENT_ID).
       fallbackDefaultAgent: DEFAULT_AGENT_ID,
       // AD-072 Ф2: дефолты из config.yaml (без runtime) — для GET/DELETE-сброса к умолчанию.
@@ -627,6 +777,38 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       dictionaryStore,
       { writeGuard: auth.requireAdmin },
     ));
+
+    // AD-069 §9.3: прозрачность проектных инструкций — core-фабрика (резолвер не
+    // дублируется). RBAC: сессия — владелец|ADMIN (canAccess, как в session-роутах);
+    // проект — owner/LEAD/ADMIN (canAccessProject, как в project-скиллах).
+    const instructionsInfoResolver = createInstructionsInfoResolver(
+      new ProjectInstructionsResolver({
+        config: backendConfig.synth.instructions,
+        dictionaryStore,
+        dataDir,
+        trustedProjectDirs: backendConfig.synth.skills.trustedProjectDirs,
+      }),
+      backendConfig.synth.instructions,
+    );
+    app.route('/api/v2/context', createCoreContextRoutes(auth as unknown as CoreAuthKit, {
+      resolveInstructions: instructionsInfoResolver,
+      sessionManager,
+      projectStore,
+      resolveProjectWorkspace: resolveSkillWorkspace,
+      resolveContextWindow: (session) => {
+        const model = session?.settings.model;
+        return model ? modelWindowLoader(model) || undefined : undefined;
+      },
+      resolveUserId: async (c) => (await auth.getCurrentUser(c as never))?.id ?? '',
+      canAccess: (session, c, userId) =>
+        (session.ownerId ?? session.userId) === userId
+        || auth.isAdmin(c as never),
+      canAccessProject: (project, c, userId) =>
+        auth.isAdmin(c as never)
+        || auth.hasRole(c as never, 'LEAD')
+        || project.ownerId === userId
+        || project.members?.[userId] === ProjectRole.OWNER,
+    }));
 
     // Глобальный SSE-хаб для всех сессий пользователя
     app.get('/api/v2/events', auth.requireAuth, async (c) => {

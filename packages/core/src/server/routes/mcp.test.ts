@@ -80,6 +80,20 @@ describe('MCP API Routes (probe)', () => {
     expect(body.error.code).toBe('VALIDATION_ERROR');
   });
 
+  it('POST /probe без McpManager → 500 INTERNAL_ERROR', async () => {
+    const app = new Hono();
+    app.route('/api/v2/mcp', createMcpRoutes(createMockAuth(), { mcpManager: null }));
+
+    const res = await app.request('/api/v2/mcp/probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'github' }),
+    });
+    expect(res.status).toBe(500);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('INTERNAL_ERROR');
+  });
+
   it('POST /probe при ошибке подключения → 500 MCP_CONNECT_ERROR', async () => {
     const probeServer = vi.fn().mockRejectedValue(new Error('connection refused'));
     const mcpManager = createMockMcpManager({

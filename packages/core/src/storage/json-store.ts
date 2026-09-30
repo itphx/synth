@@ -75,6 +75,12 @@ export class JsonStore<T> {
     }
   }
 
+  /**
+   * Удаляет запись и освобождает её из карты блокировок: иначе `_locks` рос бы
+   * на каждом удалённом ключе, а повторный `save` после `delete` создал бы новый
+   * lock. Ключ валидируется в `_filePath` (path traversal / `\` → ошибка);
+   * отсутствие файла ошибкой не считается.
+   */
   async delete(key: string): Promise<void> {
     const path = this._filePath(key);
     const lock = this._getLock(key);
@@ -84,29 +90,51 @@ export class JsonStore<T> {
       await unlink(path).catch(() => {});
     } finally {
       lock.release();
+      this._locks.delete(key);
     }
   }
 
+  /**
+   * Запись существует, только если её можно прочитать как валидный JSON
+   * (`load() !== null`). Битый/недописанный файл (оборвавшаяся атомарная
+   * запись) существующим не считается — вызывающий код сможет его перезаписать.
+   */
   async exists(key: string): Promise<boolean> {
     const val = await this.load(key);
     return val !== null;
   }
 
+  /**
+   * Собирает все записи, включая вложенные ключи в подкаталогах: ключ модели
+   * имеет вид `provider/model` → файл `models/<provider>/<model>.json`.
+   * Ключ вычисляется относительно корня subdir, чтобы последующий `load()`
+   * нашёл запись. Не-`.json` файлы (в т.ч. временные `.tmp.*` атомарной записи)
+   * игнорируются.
+   */
   async list(): Promise<T[]> {
-    const dir = this._dir();
-    let files: string[];
-    try {
-      files = await readdir(dir);
-    } catch {
-      return [];
-    }
+    const items: T[] = [];
+    await this._collectItems(this._dir(), items);
+    return items;
+  }
 
-    const results: T[] = [];
-    for (const file of files) {
-      if (!file.endsWith('.json')) continue;
-      const item = await this.load(file.replace('.json', ''));
-      if (item) results.push(item);
+  private async _collectItems(dir: string, items: T[]): Promise<void> {
+    let entries: string[];
+    try {
+      entries = await readdir(dir);
+    } catch {
+      return;
     }
-    return results;
+    for (const entry of entries) {
+      const full = join(dir, entry);
+      if (entry.endsWith('.json')) {
+        const key = full
+          .slice(this._dir().length + 1)
+          .replace(/\.json$/, '');
+        const item = await this.load(key);
+        if (item) items.push(item);
+      } else {
+        await this._collectItems(full, items);
+      }
+    }
   }
 }

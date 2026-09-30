@@ -4,6 +4,7 @@ import { cn, resolveColor, userColor } from '@/lib/utils'
 import { useChatStore, selectLiveSubagentUsage } from '@/stores/chatStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useAgentsStore } from '@/stores/agentsStore'
+import { useSkillsStore } from '@/stores/skillsStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
@@ -11,8 +12,9 @@ import { Icon } from '@/components/icon/Icon'
 import { cacheHitPct, cacheHitRate, formatCost, formatCostMap, formatDuration, formatTokens, formatTps, DEFAULT_CHARS_PER_TOKEN } from '@/lib/formatStats'
 import { buildUsageSegments } from '@/lib/statsSegments'
 import { readMessageSubagents } from '@/lib/subagentStats'
-import type { ProjectStats, ModelGroup, PromptInfoResponse, SessionMcpEffectiveResponse } from '@/lib/api/synthApi'
+import type { ProjectStats, ModelGroup, PromptInfoResponse, SessionMcpEffectiveResponse, SessionSkillsResponse, EffectiveSkillEntry } from '@/lib/api/synthApi'
 import type { PromptToolDetail, McpServerEffective } from '@itphx/synth-shared'
+import { PanelTab } from './PanelTab'
 
 /** Фолбэк контекстного окна, если у модели не задано своё. */
 const DEFAULT_CONTEXT_WINDOW = 200_000
@@ -91,6 +93,7 @@ function toolAvailabilityLabel(
   if (toolsPolicy === 'available') return t('rightPanel.stats.toolHidden')
   if (tool.reason === 'role') return t('rightPanel.stats.toolUnavailableRole')
   if (tool.reason === 'mode') return t('rightPanel.stats.toolUnavailableMode')
+  if (tool.reason === 'dependency') return t('rightPanel.stats.toolUnavailableDependency')
   return t('rightPanel.stats.toolUnavailable')
 }
 
@@ -100,6 +103,44 @@ function mcpAvailabilityLabel(server: McpServerEffective, t: (key: string) => st
   if (!server.reason) return t('rightPanel.stats.mcpDisabled')
   const reason = t(`rightPanel.stats.mcpReason.${server.reason}`)
   return `${t('rightPanel.stats.mcpDisabled')} · ${reason}`
+}
+
+/** AD-046 §9.3: подпись доступности скилла (capability-aware). */
+function skillAvailabilityLabel(skill: EffectiveSkillEntry, t: (key: string) => string): string {
+  return skill.available ? t('rightPanel.stats.toolAvailable') : t('rightPanel.stats.toolUnavailable')
+}
+
+/** AD-046 §9.3: подпись «включён в сессии» (disabled + причина). */
+function skillEnabledLabel(skill: EffectiveSkillEntry, t: (key: string) => string): string {
+  if (!skill.disabled) return t('rightPanel.stats.skillEnabled')
+  if (!skill.disabledReason) return t('rightPanel.stats.mcpDisabled')
+  return `${t('rightPanel.stats.mcpDisabled')} · ${t(`rightPanel.stats.skillDisabledReason.${skill.disabledReason}`)}`
+}
+
+/**
+ * AD-046 §9.3: источник записи скилла — `session` (включён/выключен в сессии),
+ * `project` (гейт проекта) или `stable` (системный каталог промпта).
+ */
+function skillSourceLabel(skill: EffectiveSkillEntry, t: (key: string) => string): string {
+  if (skill.level === 'session' || skill.disabledReason === 'session') {
+    return t('rightPanel.stats.skillSource.session')
+  }
+  if (skill.disabledReason === 'project') return t('rightPanel.stats.skillSource.project')
+  return t('rightPanel.stats.skillSource.stable')
+}
+
+/**
+ * AD-046 §9.3: локальная оценка вклада скилла в каталог промпта —
+ * строка `name` + `description`. `~` — оценка, ratio берётся из манифеста.
+ */
+function skillTokenEstimate(
+  skill: EffectiveSkillEntry,
+  ratio: number | undefined,
+  format: (v: number) => string,
+): string {
+  const chars = skill.name.length + skill.description.length
+  const est = Math.ceil(chars / (ratio ?? DEFAULT_CHARS_PER_TOKEN))
+  return `~${format(est)}`
 }
 
 /**
@@ -154,12 +195,22 @@ export const StatsTab: React.FC = () => {
   const [modelGroups, setModelGroups] = useState<ModelGroup[]>([])
   const [promptInfo, setPromptInfo] = useState<PromptInfoResponse | null>(null)
   const [mcpEffective, setMcpEffective] = useState<SessionMcpEffectiveResponse | null>(null)
+  const [skillsEffective, setSkillsEffective] = useState<SessionSkillsResponse | null>(null)
   const [sessionStats, setSessionStats] = useState<SessionStats | null>(null)
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [historyExpanded, setHistoryExpanded] = useState(false)
   // AD-071 §2.6: таблицы инструментов и MCP свёрнуты по умолчанию (как промпт/история).
   const [toolsExpanded, setToolsExpanded] = useState(false)
   const [mcpExpanded, setMcpExpanded] = useState(false)
+  // AD-046 §9.3: таблица скиллов и счётчики команд.
+  const [skillsExpanded, setSkillsExpanded] = useState(false)
+  const [commandsExpanded, setCommandsExpanded] = useState(false)
+
+  // AD-046 §8.2: счётчики вызовов из событий skill.invoked / command.invoked.
+  const skillInvocationCounts = useSkillsStore((s) => s.skillInvocationCounts)
+  const commandInvocationCounts = useSkillsStore((s) => s.commandInvocationCounts)
+  const lastSkillInvocation = useSkillsStore((s) => s.lastSkillInvocation)
+  const lastCommandInvocation = useSkillsStore((s) => s.lastCommandInvocation)
 
   const toolsDisabledTick = useUIStore((s) => s.toolsDisabledTick)
 
@@ -304,6 +355,20 @@ export const StatsTab: React.FC = () => {
     return () => { cancelled = true }
   }, [activeSessionId, lastAssistantMsg?.id, streamFinishTick, toolsDisabledTick])
 
+  // AD-046 §4.5/§9.3: эффективный per-session скоуп скиллов для таблицы «Скиллы».
+  useEffect(() => {
+    if (!activeSessionId) {
+      setSkillsEffective(null)
+      return
+    }
+    let cancelled = false
+    Promise.resolve()
+      .then(() => synthApi.getSessionSkills(activeSessionId))
+      .then((info) => { if (!cancelled) setSkillsEffective(info) })
+      .catch(() => { if (!cancelled) setSkillsEffective(null) })
+    return () => { cancelled = true }
+  }, [activeSessionId, lastAssistantMsg?.id, streamFinishTick, toolsDisabledTick])
+
   // AD-070 §2.6: статистика по агентам/авторам. Тот же триггер, что и у промпта.
   useEffect(() => {
     if (!activeSessionId) {
@@ -327,6 +392,22 @@ export const StatsTab: React.FC = () => {
   const visibleTools = toolsDetail.filter((tool) => !tool.adminDisabled)
   const toolsPolicy = promptInfo?.manifest.toolsPolicy
   const mcpServers = mcpEffective?.servers ?? []
+
+  // AD-046 §9.3: скиллы сессии + блочные размеры каталога из манифеста.
+  const skillsList = skillsEffective?.skills ?? []
+  const skillsCatalogEntries = promptEntries.filter(
+    (entry) => entry.key === 'skills.catalog' || entry.key === 'skills.catalog.session',
+  )
+  const skillsCatalogTokens = skillsCatalogEntries.reduce((sum, entry) => sum + entry.estTokens, 0)
+  const manifestRatio = promptInfo?.manifest.ratio
+
+  // AD-046 §8.2: счётчики вызовов команд/скиллов из стора.
+  const commandCounterRows = Object.entries(commandInvocationCounts).sort((a, b) => b[1] - a[1])
+  const skillCounterRows = Object.entries(skillInvocationCounts).sort((a, b) => b[1] - a[1])
+  const hasInvocations = commandCounterRows.length > 0
+    || skillCounterRows.length > 0
+    || lastCommandInvocation !== null
+    || lastSkillInvocation !== null
 
   const hasLastMsgUsage = !!displayUsage && Object.keys(displayUsage).length > 0
   const hasSubagents = !!sessionStats?.agents.some((a) => a.subagent_sessions > 0)
@@ -394,13 +475,13 @@ export const StatsTab: React.FC = () => {
   else addCost(sessionCostMap, liveSubagent?.costUsd, liveSubagent?.costCurrency)
 
   return (
-    <div className="flex flex-col gap-4 p-3">
+    <PanelTab>
       {hasLastMsgUsage && (
         <Section title={t('rightPanel.stats.lastAnswer')}>
           {activeStream && (liveSegments.length > 0 || displayModel) && (
             <div
               data-testid="stats-live"
-              className="mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[0.6875rem] text-muted-foreground tabular-nums"
+              className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[0.6875rem] text-muted-foreground tabular-nums"
             >
               <span className="inline-flex items-center gap-1 text-primary">
                 <span className="size-1.5 rounded-full bg-primary animate-pulse" />
@@ -415,8 +496,8 @@ export const StatsTab: React.FC = () => {
               ))}
             </div>
           )}
-          <div className="mb-2">
-            <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>{t('rightPanel.stats.contextWindow')}</span>
               <span className="tabular-nums">
                 {fmt(displayInputTokens)} / {fmt(contextWindowMax)} ({Math.round(windowPercent)}%)
@@ -429,7 +510,7 @@ export const StatsTab: React.FC = () => {
               />
             </div>
             {isContextNearLimit && (
-              <div className="mt-1 text-[0.6875rem] text-destructive">
+              <div className="text-[0.6875rem] text-destructive">
                 {t('rightPanel.stats.contextNearLimit')}
               </div>
             )}
@@ -464,8 +545,8 @@ export const StatsTab: React.FC = () => {
           </div>
 
           {hasLastSubagents && (
-            <div className="mt-3 border-t border-border/40 pt-3">
-              <div className="mb-1 flex items-center gap-1.5 text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="border-t border-border/40 pt-3 space-y-1">
+              <div className="flex items-center gap-1.5 text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
                 <Icon name="user-3" className="size-3 shrink-0" />
                 <span>{t('rightPanel.stats.subagentsTitle')}</span>
               </div>
@@ -478,7 +559,7 @@ export const StatsTab: React.FC = () => {
                   <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCostMap(lastSubagents!.cost_by_currency, lastSubagents!.cost_usd)} />
                 </div>
               </div>
-              <div className="mt-1 text-[0.6875rem] text-muted-foreground">
+              <div className="text-[0.6875rem] text-muted-foreground">
                 {t('rightPanel.stats.subagentsNote')}
               </div>
             </div>
@@ -547,7 +628,7 @@ export const StatsTab: React.FC = () => {
       <Section title={t('rightPanel.stats.promptComposition')}>
         {promptInfo ? (
           <>
-            <div className="mb-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
               <StatCell
                 icon="database-2"
                 color="text-amber-400"
@@ -571,7 +652,7 @@ export const StatsTab: React.FC = () => {
             </div>
             <ExpandToggle expanded={promptExpanded} onToggle={() => setPromptExpanded((v) => !v)} />
             {promptExpanded && (
-              <div className="mt-2 overflow-x-auto">
+              <div className="overflow-x-auto">
                 <table className="w-full text-[0.6875rem]">
                   <thead>
                     <tr className="text-muted-foreground">
@@ -625,7 +706,7 @@ export const StatsTab: React.FC = () => {
             <>
               <ExpandToggle expanded={toolsExpanded} onToggle={() => setToolsExpanded((v) => !v)} />
               {toolsExpanded && (
-                <div className="mt-2 overflow-x-auto" data-testid="stats-builtin-tools">
+                <div className="overflow-x-auto" data-testid="stats-builtin-tools">
                   <table className="w-full text-[0.6875rem]">
                     <thead>
                       <tr className="text-muted-foreground">
@@ -678,7 +759,7 @@ export const StatsTab: React.FC = () => {
           <>
             <ExpandToggle expanded={mcpExpanded} onToggle={() => setMcpExpanded((v) => !v)} />
             {mcpExpanded && (
-              <div className="mt-2 overflow-x-auto" data-testid="stats-mcp-servers">
+              <div className="overflow-x-auto" data-testid="stats-mcp-servers">
                 <table className="w-full text-[0.6875rem]">
                   <thead>
                     <tr className="text-muted-foreground">
@@ -752,9 +833,136 @@ export const StatsTab: React.FC = () => {
         )}
       </Section>
 
+      {/* AD-046 §4.5/§9.3: скиллы — имя/scope-уровень/доступность/включение/
+          причина/trust/вклад в каталог/источник. Включая отключённые (disabled + причина). */}
+      <Section title={t('rightPanel.stats.skills')}>
+        {skillsList.length > 0 ? (
+          <>
+            <ExpandToggle expanded={skillsExpanded} onToggle={() => setSkillsExpanded((v) => !v)} />
+            {skillsExpanded && (
+              <div className="overflow-x-auto space-y-1" data-testid="stats-skills">
+                <table className="w-full text-[0.6875rem]">
+                  <thead>
+                    <tr className="text-muted-foreground">
+                      <th className="px-2 py-0.5 text-left font-medium first:pl-0">{t('rightPanel.stats.colSkill')}</th>
+                      <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colLevel')}</th>
+                      <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colAvailable')}</th>
+                      <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colEnabled')}</th>
+                      <th className="px-2 py-0.5 text-left font-medium">{t('rightPanel.stats.colUnavailable')}</th>
+                      <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.colTrusted')}</th>
+                      <th className="px-2 py-0.5 text-center font-medium">{t('rightPanel.stats.promptColTokens')}</th>
+                      <th className="px-2 py-0.5 text-left font-medium last:pr-0">{t('rightPanel.stats.colSource')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {skillsList.map((skill: EffectiveSkillEntry) => (
+                      <tr
+                        key={skill.name}
+                        data-testid={`stats-skill-${skill.name}`}
+                        className={cn('border-t border-border/30', !skill.enabled && 'text-muted-foreground/60')}
+                      >
+                        <td className="px-2 py-0.5 text-left max-w-[8rem] truncate first:pl-0" title={skill.name}>{skill.name}</td>
+                        <td className="px-2 py-0.5 text-center">
+                          {t(`skills.scope.${skill.scope}`)} / {t(`skills.level.${skill.level}`)}
+                        </td>
+                        <td className="px-2 py-0.5 text-center">{skillAvailabilityLabel(skill, t)}</td>
+                        <td className="px-2 py-0.5 text-center">{skillEnabledLabel(skill, t)}</td>
+                        <td className="px-2 py-0.5 text-left">{skill.unavailableReason ?? '\u2014'}</td>
+                        <td className="px-2 py-0.5 text-center">
+                          {skill.trusted ? t('rightPanel.stats.trusted') : t('skills.untrusted')}
+                        </td>
+                        <td
+                          className="px-2 py-0.5 text-center tabular-nums"
+                          title={t('rightPanel.stats.skillTokenEstimate', {
+                            tokens: Math.ceil((skill.name.length + skill.description.length) / (manifestRatio ?? DEFAULT_CHARS_PER_TOKEN)),
+                            chars: skill.name.length + skill.description.length,
+                            ratio: manifestRatio ?? DEFAULT_CHARS_PER_TOKEN,
+                          })}
+                        >
+                          {skillTokenEstimate(skill, manifestRatio, fmt)}
+                        </td>
+                        <td className="px-2 py-0.5 text-left last:pr-0">
+                          {skillSourceLabel(skill, t)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {skillsCatalogEntries.length > 0 && (
+                  <div className="text-[0.625rem] text-muted-foreground/60">
+                    {t('rightPanel.stats.skillsCatalogTokens', { tokens: fmt(skillsCatalogTokens) })}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="text-xs text-muted-foreground italic">{t('rightPanel.stats.noData')}</div>
+        )}
+      </Section>
+
+      {/* AD-046 §8.2/§9.3: счётчики вызовов команд и скиллов из событий. */}
+      <Section title={t('rightPanel.stats.commands')}>
+        {hasInvocations ? (
+          <>
+            <ExpandToggle expanded={commandsExpanded} onToggle={() => setCommandsExpanded((v) => !v)} />
+            {commandsExpanded && (
+              <div className="space-y-2" data-testid="stats-invocations">
+                {lastCommandInvocation && (
+                  <div className="text-xs" data-testid="stats-last-command">
+                    {t('rightPanel.stats.lastCommand')}:{' '}
+                    <span className="font-mono">/{lastCommandInvocation.command}</span>
+                    {lastCommandInvocation.actor ? ` · ${lastCommandInvocation.actor}` : ''}
+                  </div>
+                )}
+                {lastSkillInvocation && (
+                  <div className="text-xs" data-testid="stats-last-skill">
+                    {t('rightPanel.stats.lastSkill')}:{' '}
+                    <span className="font-mono">{lastSkillInvocation.name}</span>
+                    {lastSkillInvocation.source ? ` · ${lastSkillInvocation.source}` : ''}
+                  </div>
+                )}
+                {commandCounterRows.length > 0 && (
+                  <div data-testid="stats-command-invocations">
+                    <div className="text-[0.625rem] uppercase tracking-wide text-muted-foreground">
+                      {t('rightPanel.stats.commandsCounters')}
+                    </div>
+                    <ul className="mt-0.5 space-y-0.5">
+                      {commandCounterRows.map(([name, count]) => (
+                        <li key={name} className="flex items-center justify-between gap-2 text-xs">
+                          <span className="font-mono truncate">/{name}</span>
+                          <span className="tabular-nums text-muted-foreground">{fmt(count)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {skillCounterRows.length > 0 && (
+                  <div data-testid="stats-skill-invocations">
+                    <div className="text-[0.625rem] uppercase tracking-wide text-muted-foreground">
+                      {t('rightPanel.stats.skillsCounters')}
+                    </div>
+                    <ul className="mt-0.5 space-y-0.5">
+                      {skillCounterRows.map(([name, count]) => (
+                        <li key={name} className="flex items-center justify-between gap-2 text-xs">
+                          <span className="font-mono truncate">{name}</span>
+                          <span className="tabular-nums text-muted-foreground">{fmt(count)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="text-xs text-muted-foreground italic">{t('rightPanel.stats.noInvocations')}</div>
+        )}
+      </Section>
+
       {promptInfo && (
         <Section title={t('rightPanel.stats.history')}>
-          <div className="mb-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
             <StatCell
               icon="chat-new"
               color="text-blue-400"
@@ -778,7 +986,7 @@ export const StatsTab: React.FC = () => {
           </div>
           <ExpandToggle expanded={historyExpanded} onToggle={() => setHistoryExpanded((v) => !v)} />
           {historyExpanded && (
-            <div className="mt-2 overflow-x-auto">
+            <div className="overflow-x-auto space-y-2">
               <table className="w-full text-[0.6875rem]">
                 <thead>
                   <tr className="text-muted-foreground">
@@ -799,7 +1007,7 @@ export const StatsTab: React.FC = () => {
                   ))}
                 </tbody>
               </table>
-              <div className="mt-2 space-y-0.5 text-[0.6875rem] text-muted-foreground">
+              <div className="space-y-0.5 text-[0.6875rem] text-muted-foreground">
                 <div className="flex items-center justify-between gap-2">
                   <span>{t('rightPanel.stats.historyExcluded')}</span>
                   <span className="tabular-nums">
@@ -888,7 +1096,7 @@ export const StatsTab: React.FC = () => {
           {(hasLiveStream || hasLiveSubagents) && (
             <div
               data-testid="stats-agents-live"
-              className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-t border-border/40 pt-2 text-[0.6875rem] text-muted-foreground tabular-nums"
+              className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-t border-border/40 pt-2 text-[0.6875rem] text-muted-foreground tabular-nums"
             >
               <span className="inline-flex items-center gap-1 text-primary">
                 <span className="size-1.5 rounded-full bg-primary animate-pulse" />
@@ -974,7 +1182,7 @@ export const StatsTab: React.FC = () => {
           </div>
         )}
       </Section>
-    </div>
+    </PanelTab>
   )
 }
 
@@ -994,7 +1202,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h4 className="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wide">
         {title}
       </h4>
-      {children}
+      <div className="space-y-2">{children}</div>
     </div>
   )
 }

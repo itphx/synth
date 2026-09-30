@@ -18,11 +18,19 @@ describe('messageVisibility', () => {
     }
   })
 
+  it('скрывает user-сообщение системной команды (metadata.commandPrompt === true)', () => {
+    expect(isVisibleMessage({ metadata: { commandPrompt: true } })).toBe(false)
+    // Признак не относится к state-сообщениям.
+    expect(isStateMessage({ metadata: { commandPrompt: true } })).toBe(false)
+  })
+
   it('пропускает обычные сообщения', () => {
     expect(isVisibleMessage({ metadata: undefined })).toBe(true)
     expect(isVisibleMessage({ metadata: null })).toBe(true)
     expect(isVisibleMessage({ metadata: {} })).toBe(true)
     expect(isVisibleMessage({ metadata: { tool_chain: false } })).toBe(true)
+    expect(isVisibleMessage({ metadata: { commandPrompt: false } })).toBe(true)
+    expect(isVisibleMessage({ metadata: { command: true } })).toBe(true)
     expect(isVisibleMessage({ metadata: { type: 'unknown_type' } })).toBe(true)
   })
 })

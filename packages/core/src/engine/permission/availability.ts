@@ -1,11 +1,12 @@
 /**
  * AD-070 §2.9.1: единая ось доступности тулов (`ToolAccess`).
  *
- * Список tool-дефинишенов постоянен (не фильтруется по режиму/роли), а
+ * Список tool-дефинишенов постоянен (не фильтруется по режиму/роли/окружению), а
  * доступность конкретного тула вычисляется здесь и передаётся permission-слою
- * как эффект `unavailable(mode | role)`:
+ * как эффект `unavailable(mode | role | dependency)`:
  *  - `mode` — тул откроется, если пользователь переключит режим (plan/act/yolo);
- *  - `role` — тул недоступен текущему агенту, но доступен другому (делегировать).
+ *  - `role` — тул недоступен текущему агенту, но доступен другому (делегировать);
+ *  - `dependency` — в окружении нет нужного бинарника (git/rg/sh).
  *
  * `allow`/`ask`/`deny` — прежние эффекты AD-029; `deny` — жёсткий запрет без
  * подсказок о переключении/делегировании.
@@ -14,8 +15,9 @@
 import { ToolCapability } from '@itphx/synth-shared';
 import type { McpServerToolSettings, PlanMode, SessionMode } from '@itphx/synth-shared';
 import { getMcpToolAvailability, isPlanBlockedTool, isPlanRestricted } from './evaluator.js';
+import { isRuntimeDepAvailable, TOOL_RUNTIME_DEP, type RuntimeDeps } from '../tools/runtime-deps.js';
 
-export type ToolUnavailableReason = 'mode' | 'role';
+export type ToolUnavailableReason = 'mode' | 'role' | 'dependency';
 
 export interface ToolAvailability {
   available: boolean;
@@ -28,6 +30,8 @@ export interface ToolAvailabilityOptions {
   planApproved?: boolean;
   mcpToolSettings?: Record<string, McpServerToolSettings>;
   agentCapabilities?: readonly string[];
+  /** Доступность внешних программ окружения (git/rg/sh). Не задана — fail-open. */
+  runtimeDeps?: RuntimeDeps;
 }
 
 /**
@@ -39,7 +43,8 @@ export interface ToolAvailabilityOptions {
  *     определить принадлежность).
  *  2. mode — plan-рестрикция write/edit/git-write (AD-025) либо MCP-тул,
  *     выключенный в текущем режиме настройками сессии.
- *  3. иначе — доступен.
+ *  3. dependency — в окружении нет внешней программы тула (`TOOL_RUNTIME_DEP`).
+ *  4. иначе — доступен.
  */
 export function computeToolAvailability(
   toolName: string,
@@ -73,6 +78,12 @@ export function computeToolAvailability(
     }
   }
 
-  // 3. Доступен.
+  // 3. Зависимость окружения: нет внешней программы тула (git/rg/sh).
+  const dep = TOOL_RUNTIME_DEP[toolName];
+  if (dep && !isRuntimeDepAvailable(opts.runtimeDeps, dep)) {
+    return { available: false, reason: 'dependency' };
+  }
+
+  // 4. Доступен.
   return { available: true };
 }

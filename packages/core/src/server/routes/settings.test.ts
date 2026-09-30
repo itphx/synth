@@ -1207,3 +1207,108 @@ async function settingsLoad(tmpDir: string): Promise<{ workspace?: string; mcpSe
   const raw = await readFile(join(tmpDir, 'settings.json'), 'utf-8');
   return JSON.parse(raw);
 }
+
+describe('Settings API Routes (workspace-policy, AD-075)', () => {
+  let tmpDir: string;
+  const FALLBACK = '/default/ws';
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-settings-wsp-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('GET: дефолт confirm при отсутствии runtime/конфига', async () => {
+    const { app } = createTestApp(tmpDir, FALLBACK);
+    const body: any = await (await app.request('/api/v2/settings/workspace-policy')).json();
+    expect(body).toEqual({ outsideRoot: 'confirm', isOverridden: false, defaults: 'confirm' });
+  });
+
+  it('PUT: сохраняет политику и live-применяет её', async () => {
+    const app = new Hono();
+    const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    const onWorkspacePolicyChange = vi.fn(async (_p: string) => {});
+    app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+      settingsStore,
+      fallbackWorkspace: FALLBACK,
+      fallbackWorkspaceOutsideRootPolicy: 'confirm',
+      onWorkspacePolicyChange,
+    }));
+
+    const put = await app.request('/api/v2/settings/workspace-policy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outsideRoot: 'deny' }),
+    });
+    expect(put.status).toBe(200);
+    expect(await put.json()).toEqual({ outsideRoot: 'deny' });
+    expect(onWorkspacePolicyChange).toHaveBeenCalledWith('deny');
+    expect(await settingsStore.getWorkspacePolicy()).toBe('deny');
+
+    const get: any = await (await app.request('/api/v2/settings/workspace-policy')).json();
+    expect(get).toEqual({ outsideRoot: 'deny', isOverridden: true, defaults: 'confirm' });
+  });
+
+  it('PUT: невалидное значение отклоняется (400)', async () => {
+    const { app } = createTestApp(tmpDir, FALLBACK);
+    const res = await app.request('/api/v2/settings/workspace-policy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outsideRoot: 'allow' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('DELETE: сбрасывает к fallback', async () => {
+    const app = new Hono();
+    const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+      settingsStore,
+      fallbackWorkspace: FALLBACK,
+      fallbackWorkspaceOutsideRootPolicy: 'deny',
+    }));
+    await app.request('/api/v2/settings/workspace-policy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outsideRoot: 'confirm' }),
+    });
+    const body: any = await (await app.request('/api/v2/settings/workspace-policy', { method: 'DELETE' })).json();
+    expect(body).toEqual({ status: 'restored', outsideRoot: 'deny', isOverridden: false, defaults: 'deny' });
+    expect(await settingsStore.getWorkspacePolicy()).toBeUndefined();
+  });
+
+  it('workspacePolicyReadOnly: GET отдаёт fallback + readOnly, PUT/DELETE → 403', async () => {
+    const app = new Hono();
+    const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    const onWorkspacePolicyChange = vi.fn(async (_p: string) => {});
+    app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+      settingsStore,
+      fallbackWorkspace: FALLBACK,
+      fallbackWorkspaceOutsideRootPolicy: 'deny',
+      workspacePolicyReadOnly: true,
+      onWorkspacePolicyChange,
+    }));
+
+    const get = await app.request('/api/v2/settings/workspace-policy');
+    expect(get.status).toBe(200);
+    expect(await get.json()).toEqual({
+      outsideRoot: 'deny', isOverridden: false, defaults: 'deny', readOnly: true,
+    });
+
+    const put = await app.request('/api/v2/settings/workspace-policy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outsideRoot: 'confirm' }),
+    });
+    expect(put.status).toBe(403);
+    expect(((await put.json()) as any).error.code).toBe('WORKSPACE_POLICY_READ_ONLY');
+    expect(onWorkspacePolicyChange).not.toHaveBeenCalled();
+    expect(await settingsStore.getWorkspacePolicy()).toBeUndefined();
+
+    const del = await app.request('/api/v2/settings/workspace-policy', { method: 'DELETE' });
+    expect(del.status).toBe(403);
+    expect(((await del.json()) as any).error.code).toBe('WORKSPACE_POLICY_READ_ONLY');
+  });
+});

@@ -84,4 +84,57 @@ describe('computeToolAvailability (AD-070 §2.9.1)', () => {
       }),
     ).toEqual({ available: false, reason: 'role' });
   });
+
+  it('dependency: git-тул при отсутствии git → unavailable(dependency)', () => {
+    expect(
+      computeToolAvailability('git_status', ['git_read'], {
+        runtimeDeps: { git: false, rg: true, sh: true },
+      }),
+    ).toEqual({ available: false, reason: 'dependency' });
+  });
+
+  it('dependency: grep_files при отсутствии rg, execute_shell при отсутствии sh', () => {
+    expect(
+      computeToolAvailability('grep_files', ['file_read'], {
+        runtimeDeps: { git: true, rg: false, sh: true },
+      }),
+    ).toEqual({ available: false, reason: 'dependency' });
+    expect(
+      computeToolAvailability('execute_shell', ['shell'], {
+        runtimeDeps: { git: true, rg: true, sh: false },
+      }),
+    ).toEqual({ available: false, reason: 'dependency' });
+  });
+
+  it('dependency не влияет на тулы без внешней программы', () => {
+    expect(
+      computeToolAvailability('read_file', ['file_read'], {
+        runtimeDeps: { git: false, rg: false, sh: false },
+      }),
+    ).toEqual({ available: true });
+  });
+
+  it('runtimeDeps не задан → доступно (fail-open)', () => {
+    expect(computeToolAvailability('git_status', ['git_read'], {})).toEqual({ available: true });
+  });
+
+  it('mode приоритетнее dependency (plan-рестрикция git_write)', () => {
+    expect(
+      computeToolAvailability('git_commit', ['git_write'], {
+        sessionMode: 'plan',
+        planMode: 'auto',
+        planApproved: false,
+        runtimeDeps: { git: false, rg: true, sh: true },
+      }),
+    ).toEqual({ available: false, reason: 'mode' });
+  });
+
+  it('role приоритетнее dependency (ролевая проверка первой)', () => {
+    expect(
+      computeToolAvailability('git_status', ['git_read'], {
+        agentCapabilities: ['file_read'],
+        runtimeDeps: { git: false, rg: true, sh: true },
+      }),
+    ).toEqual({ available: false, reason: 'role' });
+  });
 });

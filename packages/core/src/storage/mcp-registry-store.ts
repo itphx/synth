@@ -13,6 +13,9 @@ export interface AddMcpRegistryEntryInput {
   origin: McpRegistryOrigin;
   author?: McpRegistryAuthor | null;
   trust?: McpRegistryTrust;
+  /** Системный мастер-флаг (дефолт `true`). */
+  enabled?: boolean;
+  /** Сид «включён по умолчанию для новых проектов». */
   enabledByDefault?: boolean;
   /** Явный id (для миграций/детерминированного сида); иначе генерируется. */
   id?: string;
@@ -21,6 +24,8 @@ export interface AddMcpRegistryEntryInput {
 export interface UpdateMcpRegistryEntryInput {
   name?: string;
   config?: McpServerConfig;
+  /** Системный мастер-флаг. */
+  enabled?: boolean;
   enabledByDefault?: boolean;
   trust?: McpRegistryTrust;
   origin?: McpRegistryOrigin;
@@ -60,7 +65,12 @@ export class McpRegistryStore {
       }
       return {
         schemaVersion: parsed.schemaVersion ?? MCP_REGISTRY_SCHEMA_VERSION,
-        entries: parsed.entries,
+        // AD-071 §2.4: нормализация legacy-записей (без `enabled` — мастер включён).
+        entries: parsed.entries.map((e) => ({
+          ...e,
+          enabled: e.enabled !== false,
+          enabledByDefault: e.enabledByDefault === true,
+        })),
       };
     } catch {
       return { schemaVersion: MCP_REGISTRY_SCHEMA_VERSION, entries: [] };
@@ -110,6 +120,7 @@ export class McpRegistryStore {
         origin: input.origin,
         author: input.author ?? null,
         trust: input.trust ?? (input.origin === 'instance' ? 'builtin' : 'community'),
+        enabled: input.enabled ?? true,
         enabledByDefault: input.enabledByDefault ?? input.config.enabledByDefault ?? false,
         createdAt: now,
         updatedAt: now,
@@ -140,6 +151,7 @@ export class McpRegistryStore {
         config: patch.config ?? current.config,
         origin: patch.origin ?? current.origin,
         trust: patch.trust ?? current.trust,
+        enabled: patch.enabled ?? current.enabled,
         enabledByDefault: patch.enabledByDefault ?? current.enabledByDefault,
         schemaVersion: MCP_REGISTRY_SCHEMA_VERSION,
         updatedAt: nowISO(),
@@ -186,6 +198,7 @@ export class McpRegistryStore {
           origin: 'instance',
           author: null,
           trust: 'builtin',
+          enabled: config.enabled !== false,
           enabledByDefault: config.enabledByDefault ?? false,
           createdAt: now,
           updatedAt: now,
@@ -259,6 +272,7 @@ export class McpRegistryStore {
     origins: Record<string, McpRegistryOrigin>;
     trusts: Record<string, McpRegistryTrust>;
     authors: Record<string, McpRegistryAuthor>;
+    systemEnabled: Record<string, boolean>;
     defaults: string[];
   }> {
     const entries = await this.list();
@@ -266,14 +280,16 @@ export class McpRegistryStore {
     const origins: Record<string, McpRegistryOrigin> = {};
     const trusts: Record<string, McpRegistryTrust> = {};
     const authors: Record<string, McpRegistryAuthor> = {};
+    const systemEnabled: Record<string, boolean> = {};
     const defaults: string[] = [];
     for (const entry of entries) {
       servers[entry.name] = entry.config;
       origins[entry.name] = entry.origin;
       trusts[entry.name] = entry.trust;
+      systemEnabled[entry.name] = entry.enabled !== false;
       if (entry.author) authors[entry.name] = entry.author;
       if (entry.origin === 'instance' && entry.enabledByDefault) defaults.push(entry.name);
     }
-    return { servers, origins, trusts, authors, defaults };
+    return { servers, origins, trusts, authors, systemEnabled, defaults };
   }
 }

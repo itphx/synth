@@ -10,6 +10,7 @@ import { SessionSettingsTab } from './SessionSettingsTab'
 import { ProjectTab } from './ProjectTab'
 import { ReferencesTab } from './ReferencesTab'
 import { SecretsTab } from './SecretsTab'
+import { PanelTab } from './PanelTab'
 
 // AD-071: верхний ряд правой панели — «Сессия», «Проект», «Контекст», «Статистика».
 export const RIGHT_TABS = [
@@ -81,27 +82,33 @@ export const RightPanel: React.FC = () => {
           {secondRow.map(renderTab)}
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 min-h-0">
         {rightPanelTab === 'stats' && <StatsTab />}
         {rightPanelTab === 'params' && <SessionSettingsTab />}
         {rightPanelTab === 'project' && <ProjectTab />}
         {rightPanelTab === 'context' && <ContextTab />}
         {rightPanelTab === 'references' && sessionId && <ReferencesTab sessionId={sessionId} />}
         {rightPanelTab === 'references' && !sessionId && (
-          <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-            {t('reference.empty')}
-          </div>
+          <PanelTab>
+            <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+              {t('reference.empty')}
+            </div>
+          </PanelTab>
         )}
         {rightPanelTab === 'secrets' && canViewSecrets && sessionId && <SecretsTab sessionId={sessionId} />}
         {rightPanelTab === 'secrets' && canViewSecrets && !sessionId && (
-          <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-            {t('reference.empty')}
-          </div>
+          <PanelTab>
+            <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+              {t('reference.empty')}
+            </div>
+          </PanelTab>
         )}
         {rightPanelTab === 'scheduler' && (
-          <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-            {t('rightPanel.scheduler.placeholder')}
-          </div>
+          <PanelTab>
+            <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+              {t('rightPanel.scheduler.placeholder')}
+            </div>
+          </PanelTab>
         )}
       </div>
     </div>

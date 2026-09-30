@@ -1,6 +1,6 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig } from '@itphx/synth-shared'
-import type { ToolsPolicy } from '@itphx/synth-shared/types'
+import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig, SkillSummary, SkillDetail, SkillDiagnostic, SkillLevel, SkillScope, CommandSummary, CommandDiagnostic, SkillBundle, SkillsDisabledRequest } from '@itphx/synth-shared'
+import type { ToolsPolicy, WorkspaceOutsideRootPolicy, FileEntry } from '@itphx/synth-shared/types'
 
 // Реэкспорт общих контрактов (AD-071): без локальных дублей.
 export type { McpServerConfig, ToolsPolicy }
@@ -20,13 +20,45 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Request failed' }))
     const msg = error.detail || error.error?.error || error.error?.message || `HTTP ${response.status}`
-    throw Object.assign(new Error(msg), { status: response.status })
+    // `code` (AD-075) нужен вызывающему, чтобы отличать 409-подтверждение от прочих 409/403.
+    const code = error.error?.code
+    throw Object.assign(new Error(msg), { status: response.status, code })
   }
   if (response.status === 204) return undefined as T
   return response.json()
 }
 
+/** Кодирует относительный путь supporting-файла, сохраняя разделители `/`. */
+function encodeFilePath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/')
+}
+
 export type EntityOrigin = 'local' | 'remote'
+
+/** AD-075: тело создания проекта; `confirmOutsideRoot` — согласие на путь вне `workspacesRoot`. */
+export interface CreateProjectBody {
+  name: string
+  description?: string
+  icon?: string | null
+  color?: string | null
+  workspace?: string | null
+  repos?: GitRepoConfigData[] | null
+  origin?: EntityOrigin
+  confirmOutsideRoot?: boolean
+}
+
+/** AD-075: тело обновления проекта; `confirmOutsideRoot` — согласие на путь вне `workspacesRoot`. */
+export interface UpdateProjectBody {
+  name?: string
+  description?: string
+  current_task?: string
+  invariants?: string
+  icon?: string | null
+  color?: string | null
+  workspace?: string | null
+  repos?: GitRepoConfigData[] | null
+  confirmOutsideRoot?: boolean
+}
 
 export interface ProjectData {
   id: string
@@ -75,6 +107,10 @@ export interface SessionData {
   user_id: string | null
   owner_id: string | null
   project_id: string | null
+  /** Канонический ключ иконки сессии (PROJECT_ICON_KEYS) или null. */
+  icon?: string | null
+  /** Канонический ключ цвета сессии (PROJECT_COLOR_KEYS) или null. */
+  color?: string | null
   engine: string
   messages: Array<{
     index: number
@@ -133,10 +169,44 @@ export type { FileEntry, DirectoryListResult, FileReadResult } from '@itphx/synt
 
 import type { DirectoryListResult, FileReadResult, RepoStatus, CommitInfo, CommitDetail, SessionMode } from '@itphx/synth-shared'
 
+/**
+ * AD-076: запись реестра git-репозиториев проекта. Полная форма
+ * (`GitRepoConfig` из shared); `path` — относительный путь внутри workspace.
+ */
 export interface GitRepoConfigData {
+  id?: string
+  name?: string
+  url?: string
+  type?: 'https' | 'ssh'
+  /** Относительный путь внутри `project.workspace`; `''`/`.` — корень workspace. */
   path: string
   defaultBranch?: string
+  sshKeyId?: string
+  lastFetch?: string
 }
+
+/** AD-076: публичная форма SSH-ключа (секреты `privateKey`/`passphrase` API не отдаёт). */
+export interface SSHKeyMetaData {
+  id: string
+  name: string
+  /** Метка типа ключа, дефолт `'user'`. */
+  type?: string
+  agentIds: string[]
+  createdAt: string
+  updatedAt?: string
+}
+
+/** AD-076: тело создания SSH-ключа (`POST /ssh-keys`). */
+export interface SSHKeyCreateBody {
+  name: string
+  type?: string
+  privateKey: string
+  passphrase?: string
+  agentIds?: string[]
+}
+
+/** AD-076: тело обновления SSH-ключа (partial; без `privateKey` секрет не меняется). */
+export type SSHKeyUpdateBody = Partial<SSHKeyCreateBody>
 
 export interface ProjectStats {
   total_sessions: number
@@ -298,6 +368,37 @@ export interface ModelGroup {
   models: ModelInfo[]
 }
 
+// --- Workspace root: выбор/создание каталога (AD-075) ---
+
+/** AD-075: ответ `GET /fs/workspace-root` — корень workspace (`workspacesRoot`) и его подкаталоги. */
+export interface WorkspaceRootResponse {
+  root: string
+  entries: FileEntry[]
+}
+
+/** AD-075: ответ `GET /fs/workspace-root/browse` — навигация по каталогам. */
+export interface WorkspaceBrowseResponse {
+  root: string
+  /** Канонический путь сервера: относительный внутри root, абсолютный — вне. */
+  path: string
+  entries: FileEntry[]
+}
+
+/** AD-075: результат `POST /fs/workspace-root/mkdir`. */
+export interface WorkspaceMkdirResult {
+  created: boolean
+  path: string
+}
+
+/** AD-075: политика абсолютных путей вне `workspacesRoot` (runtime override + defaults). */
+export interface WorkspacePolicyInfo {
+  outsideRoot: WorkspaceOutsideRootPolicy
+  isOverridden: boolean
+  defaults: WorkspaceOutsideRootPolicy
+  /** Managed-развёртывание: политика задаётся деплоем, менять/обходить нельзя. */
+  readOnly?: boolean
+}
+
 export const synthApi = {
   async fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
     return fetchJSON<T>(url, options)
@@ -312,30 +413,14 @@ export const synthApi = {
     return fetchJSON<ProjectData>(`${BASE_URL}/projects/${encodeURIComponent(id)}`)
   },
 
-  async createProject(data: {
-    name: string
-    description?: string
-    icon?: string | null
-    color?: string | null
-    workspace?: string | null
-    origin?: EntityOrigin
-  }): Promise<ProjectData> {
+  async createProject(data: CreateProjectBody): Promise<ProjectData> {
     return fetchJSON<ProjectData>(`${BASE_URL}/projects`, {
       method: 'POST',
       body: JSON.stringify(data),
     })
   },
 
-  async updateProject(id: string, data: {
-    name?: string
-    description?: string
-    current_task?: string
-    invariants?: string
-    icon?: string | null
-    color?: string | null
-    workspace?: string | null
-    repos?: GitRepoConfigData[] | null
-  }): Promise<ProjectData> {
+  async updateProject(id: string, data: UpdateProjectBody): Promise<ProjectData> {
     return fetchJSON<ProjectData>(`${BASE_URL}/projects/${encodeURIComponent(id)}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -403,6 +488,16 @@ export const synthApi = {
     return fetchJSON<PromptInfoResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/prompt`)
   },
 
+  /**
+   * AD-069 §9.3: снимок проектных инструкций сессии (read-only прозрачность).
+   * Сессия без проекта → пустой снимок с диагностикой `no-project`.
+   */
+  async getSessionInstructions(sessionId: string): Promise<InstructionsInfo> {
+    return fetchJSON<InstructionsInfo>(
+      `${BASE_URL}/context/instructions?session_id=${encodeURIComponent(sessionId)}`,
+    )
+  },
+
   /** AD-071 §2.4/§2.6: эффективный MCP-скоуп сессии (включая отключённые с причиной). */
   async getSessionMcpEffective(sessionId: string): Promise<SessionMcpEffectiveResponse> {
     return fetchJSON<SessionMcpEffectiveResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/mcp`)
@@ -429,6 +524,8 @@ export const synthApi = {
 
   async createSession(data: {
     name?: string
+    icon?: string | null
+    color?: string | null
     project_id?: string | null
     engine?: string
     settings?: Record<string, unknown>
@@ -443,6 +540,8 @@ export const synthApi = {
   // move/rename объединены в PATCH (API v2)
   async updateSession(sessionId: string, data: {
     name?: string
+    icon?: string | null
+    color?: string | null
     project_id?: string | null
     engine?: string
     settings?: Record<string, unknown>
@@ -696,6 +795,56 @@ export const synthApi = {
     })
   },
 
+  // --- Корень workspace: выбор/создание каталога (AD-075) ---
+  /** GET /fs/workspace-root — корень `workspacesRoot` и его подкаталоги. */
+  async getWorkspaceRoot(includeHidden = false): Promise<WorkspaceRootResponse> {
+    const qs = includeHidden ? '?includeHidden=true' : ''
+    return fetchJSON<WorkspaceRootResponse>(`${BASE_URL}/fs/workspace-root${qs}`)
+  },
+
+  /** GET /fs/workspace-root/browse — навигация по каталогам (вне root — по политике). */
+  async browseWorkspaceRoot(path = '', includeHidden = false): Promise<WorkspaceBrowseResponse> {
+    const params = new URLSearchParams()
+    if (path) params.set('path', path)
+    if (includeHidden) params.set('includeHidden', 'true')
+    const qs = params.toString()
+    return fetchJSON<WorkspaceBrowseResponse>(`${BASE_URL}/fs/workspace-root/browse${qs ? `?${qs}` : ''}`)
+  },
+
+  /**
+   * POST /fs/workspace-root/mkdir — создание каталога.
+   * `confirmOutsideRoot` — явное подтверждение создания вне `workspacesRoot`
+   * (без него сервер отвечает 409 `WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`).
+   */
+  async mkdirWorkspaceRoot(path: string, confirmOutsideRoot = false): Promise<WorkspaceMkdirResult> {
+    return fetchJSON<WorkspaceMkdirResult>(`${BASE_URL}/fs/workspace-root/mkdir`, {
+      method: 'POST',
+      body: JSON.stringify(confirmOutsideRoot ? { path, confirmOutsideRoot: true } : { path }),
+    })
+  },
+
+  /** GET /settings/workspace-policy — политика путей вне `workspacesRoot`. */
+  async getWorkspacePolicy(): Promise<WorkspacePolicyInfo> {
+    return fetchJSON<WorkspacePolicyInfo>(`${BASE_URL}/settings/workspace-policy`)
+  },
+
+  /** PUT /settings/workspace-policy — сохранить политику (live-применение). */
+  async setWorkspacePolicy(
+    policy: { outsideRoot: WorkspaceOutsideRootPolicy },
+  ): Promise<{ outsideRoot: WorkspaceOutsideRootPolicy }> {
+    return fetchJSON<{ outsideRoot: WorkspaceOutsideRootPolicy }>(`${BASE_URL}/settings/workspace-policy`, {
+      method: 'PUT',
+      body: JSON.stringify(policy),
+    })
+  },
+
+  /** DELETE /settings/workspace-policy — сброс к config/env-дефолту. */
+  async clearWorkspacePolicy(): Promise<WorkspacePolicyInfo & { status: string }> {
+    return fetchJSON<WorkspacePolicyInfo & { status: string }>(`${BASE_URL}/settings/workspace-policy`, {
+      method: 'DELETE',
+    })
+  },
+
   async moveEntry(
     projectId: string,
     sourcePath: string,
@@ -715,17 +864,63 @@ export const synthApi = {
     })
   },
 
-  async initGitRepo(projectId: string, path: string, defaultBranch?: string): Promise<RepoStatus> {
+  async initGitRepo(
+    projectId: string,
+    path: string,
+    defaultBranch?: string,
+    name?: string,
+    sshKeyId?: string,
+  ): Promise<RepoStatus> {
     return fetchJSON(`${BASE_URL}/git/repos/init`, {
       method: 'POST',
-      body: JSON.stringify({ projectId, path, defaultBranch }),
+      body: JSON.stringify({ projectId, path, defaultBranch, name, sshKeyId }),
     })
   },
 
-  async cloneGitRepo(projectId: string, url: string, path?: string, branch?: string): Promise<RepoStatus> {
+  async cloneGitRepo(
+    projectId: string,
+    url: string,
+    path?: string,
+    branch?: string,
+    name?: string,
+    sshKeyId?: string,
+  ): Promise<RepoStatus> {
     return fetchJSON(`${BASE_URL}/git/repos/clone`, {
       method: 'POST',
-      body: JSON.stringify({ projectId, url, path, branch }),
+      body: JSON.stringify({ projectId, url, path, branch, name, sshKeyId }),
+    })
+  },
+
+  /** AD-076: upsert записи реестра (идемпотентно по `path`). */
+  async registerGitRepo(
+    projectId: string,
+    entry: { path: string; name?: string; url?: string; type?: 'https' | 'ssh'; defaultBranch?: string; sshKeyId?: string },
+  ): Promise<GitRepoConfigData> {
+    return fetchJSON(`${BASE_URL}/git/repos/register`, {
+      method: 'POST',
+      body: JSON.stringify({ projectId, ...entry }),
+    })
+  },
+
+  /** AD-076: удаление записи реестра; `deleteLocal` — удалить и локальные файлы. */
+  async removeGitRepo(
+    projectId: string,
+    opts: { id?: string; path?: string; deleteLocal?: boolean },
+  ): Promise<{ removed: GitRepoConfigData; deletedLocal: boolean }> {
+    return fetchJSON(`${BASE_URL}/git/repos/remove`, {
+      method: 'POST',
+      body: JSON.stringify({ projectId, ...opts }),
+    })
+  },
+
+  /** AD-076: fetch репозитория реестра (обновление `lastFetch`). */
+  async fetchGitRepo(
+    projectId: string,
+    opts: { id?: string; path?: string },
+  ): Promise<{ path: string; lastFetch: string }> {
+    return fetchJSON(`${BASE_URL}/git/repos/fetch`, {
+      method: 'POST',
+      body: JSON.stringify({ projectId, ...opts }),
     })
   },
 
@@ -738,6 +933,54 @@ export const synthApi = {
   async getCommitDetail(projectId: string, repoPath: string, hash: string): Promise<{ commit: CommitDetail }> {
     const params = new URLSearchParams({ project_id: projectId, repo_path: repoPath, hash })
     return fetchJSON(`${BASE_URL}/git/commit?${params.toString()}`)
+  },
+
+  // SSH-ключи (AD-076). Секреты API не возвращает — только SSHKeyMeta.
+  async listSshKeys(agentId?: string): Promise<SSHKeyMetaData[]> {
+    const params = agentId ? `?agentId=${encodeURIComponent(agentId)}` : ''
+    return fetchJSON(`${BASE_URL}/ssh-keys${params}`)
+  },
+
+  /** AD-076: создание ключа (write — ADMIN). */
+  async createSshKey(body: SSHKeyCreateBody): Promise<SSHKeyMetaData> {
+    return fetchJSON(`${BASE_URL}/ssh-keys`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  },
+
+  /** AD-076: частичное обновление; без `privateKey` в теле секрет не меняется. */
+  async updateSshKey(id: string, body: SSHKeyUpdateBody): Promise<SSHKeyMetaData> {
+    return fetchJSON(`${BASE_URL}/ssh-keys/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    })
+  },
+
+  /** AD-076: удаление ключа целиком. */
+  async deleteSshKey(id: string): Promise<void> {
+    return fetchJSON(`${BASE_URL}/ssh-keys/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  /** AD-076 (nested): ключи агента. */
+  async listAgentSshKeys(agentId: string): Promise<SSHKeyMetaData[]> {
+    return fetchJSON(`${BASE_URL}/agents/${encodeURIComponent(agentId)}/ssh-keys`)
+  },
+
+  /** AD-076 (nested): создание ключа с привязкой к агенту. */
+  async createAgentSshKey(agentId: string, body: SSHKeyCreateBody): Promise<SSHKeyMetaData> {
+    return fetchJSON(`${BASE_URL}/agents/${encodeURIComponent(agentId)}/ssh-keys`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  },
+
+  /** AD-076 (nested): отвязка ключа от агента (ключ НЕ удаляется). */
+  async unlinkAgentSshKey(agentId: string, keyId: string): Promise<SSHKeyMetaData> {
+    return fetchJSON(
+      `${BASE_URL}/agents/${encodeURIComponent(agentId)}/ssh-keys/${encodeURIComponent(keyId)}`,
+      { method: 'DELETE' },
+    )
   },
 
   // Агенты
@@ -1210,6 +1453,189 @@ export const synthApi = {
     }).then((r) => r.mcpPolicy)
   },
 
+  // --- Скиллы (AD-046 §9.1) ---
+  /** GET /skills — реестр скиллов; `diagnostics` добавляет discovery-диагностику. */
+  async getSkills(params?: { projectId?: string; diagnostics?: boolean }): Promise<SkillsListResponse> {
+    const q = new URLSearchParams()
+    if (params?.projectId) q.set('project_id', params.projectId)
+    if (params?.diagnostics) q.set('diagnostics', '1')
+    const qs = q.toString()
+    return fetchJSON<SkillsListResponse>(`${BASE_URL}/skills${qs ? `?${qs}` : ''}`)
+  },
+
+  /** GET /skills/:name — деталь скилла (тело + supporting-файлы; для недоверенных тело пустое). */
+  async getSkill(name: string, opts?: { projectId?: string }): Promise<SkillDetail> {
+    const q = opts?.projectId ? `?project_id=${encodeURIComponent(opts.projectId)}` : ''
+    return fetchJSON<SkillDetail>(`${BASE_URL}/skills/${encodeURIComponent(name)}${q}`)
+  },
+
+  /** POST /skills — создание instance-скилла. */
+  async createSkill(input: {
+    name: string
+    description: string
+    body?: string
+    files?: Record<string, string>
+  }): Promise<SkillDetail> {
+    return fetchJSON<SkillDetail>(`${BASE_URL}/skills`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  /** PATCH /skills/:name — правка description/body/metadata instance-скилла. */
+  async updateSkill(
+    name: string,
+    patch: { description?: string; body?: string; metadata?: Record<string, unknown> },
+  ): Promise<SkillDetail> {
+    return fetchJSON<SkillDetail>(`${BASE_URL}/skills/${encodeURIComponent(name)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    })
+  },
+
+  /** DELETE /skills/:name — удаление instance-скилла. */
+  async deleteSkill(name: string): Promise<void> {
+    await fetchJSON<{ status: string }>(`${BASE_URL}/skills/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  /** GET /skills/:name/files — список supporting-файлов. */
+  async getSkillFiles(name: string): Promise<SkillFilesResponse> {
+    return fetchJSON<SkillFilesResponse>(`${BASE_URL}/skills/${encodeURIComponent(name)}/files`)
+  },
+
+  /** GET /skills/:name/files/* — содержимое supporting-файла. */
+  async getSkillFile(name: string, path: string): Promise<SkillFileResponse> {
+    return fetchJSON<SkillFileResponse>(`${BASE_URL}/skills/${encodeURIComponent(name)}/files/${encodeFilePath(path)}`)
+  },
+
+  /** PUT /skills/:name/files/* — запись supporting-файла (instance). */
+  async putSkillFile(name: string, path: string, content: string): Promise<{ name: string; path: string }> {
+    return fetchJSON<{ name: string; path: string }>(
+      `${BASE_URL}/skills/${encodeURIComponent(name)}/files/${encodeFilePath(path)}`,
+      { method: 'PUT', body: JSON.stringify({ content }) },
+    )
+  },
+
+  /** DELETE /skills/:name/files/* — удаление supporting-файла (instance). */
+  async deleteSkillFile(name: string, path: string): Promise<void> {
+    await fetchJSON<{ status: string }>(
+      `${BASE_URL}/skills/${encodeURIComponent(name)}/files/${encodeFilePath(path)}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  /** POST /skills/reload — принудительный ре-скан реестра (AD-046 §8.3). */
+  async reloadSkills(): Promise<void> {
+    await fetchJSON<{ status: string }>(`${BASE_URL}/skills/reload`, { method: 'POST' })
+  },
+
+  // --- Slash-команды (AD-046 §7/§9.1) ---
+  /** GET /commands — встроенные + шаблонные + скиллы + bundles; `diagnostics` — shadowed/collision. */
+  async getCommands(params?: { projectId?: string; diagnostics?: boolean }): Promise<CommandsListResponse> {
+    const q = new URLSearchParams()
+    if (params?.projectId) q.set('project_id', params.projectId)
+    if (params?.diagnostics) q.set('diagnostics', '1')
+    const qs = q.toString()
+    return fetchJSON<CommandsListResponse>(`${BASE_URL}/commands${qs ? `?${qs}` : ''}`)
+  },
+
+  // --- Bundles (AD-046 §7.3) ---
+  /** GET /skill-bundles — список YAML-групп скиллов. */
+  async getSkillBundles(): Promise<SkillBundlesResponse> {
+    return fetchJSON<SkillBundlesResponse>(`${BASE_URL}/skill-bundles`)
+  },
+
+  /** GET /skill-bundles/:name — один bundle. */
+  async getSkillBundle(name: string): Promise<SkillBundle> {
+    return fetchJSON<SkillBundle>(`${BASE_URL}/skill-bundles/${encodeURIComponent(name)}`)
+  },
+
+  /** POST /skill-bundles — создание bundle. */
+  async createSkillBundle(input: SkillBundle): Promise<SkillBundle> {
+    return fetchJSON<SkillBundle>(`${BASE_URL}/skill-bundles`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  /** PATCH /skill-bundles/:name — правка bundle. */
+  async updateSkillBundle(name: string, input: Omit<SkillBundle, 'name'>): Promise<SkillBundle> {
+    return fetchJSON<SkillBundle>(`${BASE_URL}/skill-bundles/${encodeURIComponent(name)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ ...input, name }),
+    })
+  },
+
+  /** DELETE /skill-bundles/:name — удаление bundle. */
+  async deleteSkillBundle(name: string): Promise<void> {
+    await fetchJSON<{ status: string }>(`${BASE_URL}/skill-bundles/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  // --- Scope-API скиллов (AD-046 §4.5, аналог MCP) ---
+  /** GET /sessions/:id/skills — эффективный per-session набор (включая отключённые с причиной). */
+  async getSessionSkills(sessionId: string): Promise<SessionSkillsResponse> {
+    return fetchJSON<SessionSkillsResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/skills`)
+  },
+
+  /** GET /sessions/:id/skills/effective — синоним `getSessionSkills` (как у MCP). */
+  async getSessionSkillsEffective(sessionId: string): Promise<SessionSkillsResponse> {
+    return fetchJSON<SessionSkillsResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/skills/effective`)
+  },
+
+  /** PUT /sessions/:id/skills — точечный toggle `{ name, enabled }` либо замена списков. */
+  async updateSessionSkills(
+    sessionId: string,
+    body: { name?: string; enabled?: boolean; skills?: string[]; skillsDisabled?: string[] },
+  ): Promise<SessionSkillsResponse> {
+    return fetchJSON<SessionSkillsResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/skills`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+  },
+
+  /** GET /projects/:id/skills — проектный скоуп скиллов (owner/lead). */
+  async getProjectSkills(projectId: string): Promise<ProjectSkillsResponse> {
+    return fetchJSON<ProjectSkillsResponse>(`${BASE_URL}/projects/${encodeURIComponent(projectId)}/skills`)
+  },
+
+  /** PUT /projects/:id/skills — проектный скоуп (owner/lead). */
+  async updateProjectSkills(
+    projectId: string,
+    body: { enabled?: string[]; defaultOn?: string[] },
+  ): Promise<ProjectSkillsResponse> {
+    return fetchJSON<ProjectSkillsResponse>(`${BASE_URL}/projects/${encodeURIComponent(projectId)}/skills`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+  },
+
+  // --- Скиллы: instance-wide настройки (AD-046 §4.5) ---
+  /** GET /settings/skills — мастер-гейт, сид новых проектов и политика. */
+  async getSkillsSettings(): Promise<SkillsSettingsResponse> {
+    return fetchJSON<SkillsSettingsResponse>(`${BASE_URL}/settings/skills`)
+  },
+
+  /** PUT /settings/skills — сохранить мастер-гейт, сид новых проектов и (опционально) политику. */
+  async updateSkillsSettings(input: {
+    disabled: SkillsDisabledRequest
+    disabledForNewProjects?: SkillsDisabledRequest
+    policy?: ToolsPolicy
+  }): Promise<SkillsSettingsResponse> {
+    return fetchJSON<SkillsSettingsResponse>(`${BASE_URL}/settings/skills`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    })
+  },
+
+  /** DELETE /settings/skills — сброс к дефолту. */
+  async resetSkillsSettings(): Promise<void> {
+    await fetchJSON<{ status: string }>(`${BASE_URL}/settings/skills`, { method: 'DELETE' })
+  },
+
   // --- Инструменты: instance-wide отключение (AD-071 §2.6) ---
   /** GET /settings/tools-disabled — жёстко отключённые admin'ом capability и тулы. */
   async getToolsDisabledInfo(): Promise<{
@@ -1496,6 +1922,8 @@ export interface McpSettingsPayload {
 export interface McpRegistryAddInput {
   name: string
   config: McpServerConfig
+  /** Системный мастер-флаг (hard-gate): `false` — сервер недоступен нигде. */
+  enabled?: boolean
   enabledByDefault?: boolean
   origin?: 'instance' | 'user'
 }
@@ -1504,6 +1932,8 @@ export interface McpRegistryAddInput {
 export interface McpRegistryUpdateInput {
   name?: string
   config?: McpServerConfig
+  /** Системный мастер-флаг (hard-gate). */
+  enabled?: boolean
   enabledByDefault?: boolean
 }
 
@@ -1548,4 +1978,136 @@ export interface DictionaryEntry {
 /** Словарь классификации с действующим содержимым (YAML) — ответ GET/PUT/DELETE элемента. */
 export interface DictionaryDetail extends DictionaryEntry {
   content: string
+}
+
+// --- Скиллы и slash-команды (AD-046) ---
+
+/** AD-046 §9.1: ответ GET /api/v2/skills. */
+export interface SkillsListResponse {
+  skills: SkillSummary[]
+  workspace?: string
+  diagnostics?: SkillDiagnostic[]
+}
+
+/** AD-046 §9.1: список supporting-файлов скилла. */
+export interface SkillFilesResponse {
+  name: string
+  files: string[]
+}
+
+/** AD-046 §9.1: содержимое supporting-файла скилла. */
+export interface SkillFileResponse {
+  name: string
+  path: string
+  content: string
+}
+
+/** AD-046 §7/§9.1: ответ GET /api/v2/commands. */
+export interface CommandsListResponse {
+  commands: CommandSummary[]
+  workspace?: string
+  diagnostics?: CommandDiagnostic[]
+}
+
+/** AD-046 §7.3: ответ GET /api/v2/skill-bundles. */
+export interface SkillBundlesResponse {
+  bundles: SkillBundle[]
+}
+
+/**
+ * AD-046 §4.5: эффективная запись скилла в сессии/проекте (уровень, trust,
+ * доступность, включён/отключён с причиной).
+ */
+export interface EffectiveSkillEntry {
+  name: string
+  description: string
+  level: SkillLevel
+  scope: SkillScope
+  trusted: boolean
+  available: boolean
+  unavailableReason?: string
+  enabled: boolean
+  disabled: boolean
+  disabledReason?: 'session' | 'system' | 'project'
+}
+
+/** AD-046 §4.5: ответ GET/PUT /api/v2/sessions/:id/skills. */
+export interface SessionSkillsResponse {
+  session_id: string
+  skills: EffectiveSkillEntry[]
+  enabled: string[]
+  disabled: string[]
+}
+
+/** AD-046 §4.5: ответ GET/PUT /api/v2/projects/:id/skills. */
+export interface ProjectSkillsResponse {
+  project_id: string
+  skills: EffectiveSkillEntry[]
+  enabled: string[]
+  defaultOn: string[]
+}
+
+/** AD-046 §4.5: ответ GET/PUT /api/v2/settings/skills. */
+export interface SkillsSettingsResponse {
+  /** Мастер-гейт: скиллы, недоступные нигде. */
+  disabled: SkillsDisabledRequest
+  /** Сид новых проектов: что не включать по умолчанию. */
+  disabledForNewProjects: SkillsDisabledRequest
+  policy: ToolsPolicy
+}
+
+// --- Проектные инструкции (AD-069 §9.3) ---
+
+/** Статус файла в снимке (совпадает с core `InstructionsDiagnosticStatus`). */
+export type InstructionFileStatus =
+  | 'loaded'
+  | 'truncated'
+  | 'blocked'
+  | 'dedup'
+  | 'skipped'
+  | 'untrusted'
+  | 'skipped-install-tree'
+  | 'excluded'
+  | 'fetch-error'
+
+/** Источник кандидата: merged chain, `config.sources` path или URL. */
+export type InstructionSourceKind = 'chain' | 'path' | 'url'
+
+/** Результат threat-scan (AD-036) по файлу инструкций. */
+export interface InstructionScanInfo {
+  scanned: boolean
+  blocked: boolean
+  suspicious: boolean
+  matches: string[]
+}
+
+/** Файл проектных инструкций в снимке прозрачности (AD-069 §9.3). */
+export interface InstructionFileInfo {
+  /** Путь относительно workspace (`./AGENTS.md`, `../AGENTS.md`) или URL. */
+  path: string
+  kind: InstructionSourceKind
+  label?: string
+  url?: string
+  chars: number
+  truncated: boolean
+  status: InstructionFileStatus
+  scan?: InstructionScanInfo
+}
+
+/** Диагностика снимка проектных инструкций. */
+export interface InstructionDiagnostic {
+  level: 'info' | 'warning' | 'error'
+  code: string
+  message: string
+  path?: string
+  kind?: InstructionSourceKind
+}
+
+/** AD-069 §9.3: ответ GET /api/v2/context/instructions (снимок + id сессии). */
+export interface InstructionsInfo {
+  session_id?: string
+  enabled: boolean
+  cap: { chars: number; source: 'dynamic' | 'override'; contextWindow: number }
+  files: InstructionFileInfo[]
+  diagnostics: InstructionDiagnostic[]
 }

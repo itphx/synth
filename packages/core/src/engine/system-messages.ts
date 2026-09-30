@@ -68,6 +68,8 @@ export const SYSTEM_MESSAGES = {
   'tool.shell_error': 'Error: {message}',
   'tool.command_failed_default': 'Command failed',
   'tool.aborted': 'Execution interrupted by the user.',
+  'tool.binary_missing':
+    'Tool "{tool}" is unavailable: the required program "{binary}" is not installed in the environment',
 
   // --- Файлы (fs-write) ---
   'fs.file_written': 'File written: {path} ({lines} lines, {bytes} bytes)',
@@ -144,6 +146,7 @@ export const SYSTEM_MESSAGES = {
   'project.session_read_error': 'Error: failed to read the session',
   'project.session_not_found': 'Error: session not found',
   'project.save_error': 'Error saving the project: {error}',
+  'project.workspace_create_error': 'Error creating project workspace: {error}',
   'project.created': 'Project "{name}" created and attached to the session.\n{json}',
   'project.read_error': 'Error: failed to read the project',
   'project.not_found': 'Project {id} not found',
@@ -157,6 +160,23 @@ export const SYSTEM_MESSAGES = {
   'project.invariants_empty': 'Invariants are not set',
   'project.invariants_saved': 'Project invariants saved.',
   'project.invariants_save_error': 'Error saving the invariants: {error}',
+  'project.write_forbidden': 'Error: you do not have permission to modify this project (owner or editor role required)',
+  'project.updated': 'Project updated.',
+  'project.updated_ok': 'Project "{name}" updated.',
+  'project.invalid_icon': 'Invalid icon "{value}". Allowed values: {allowed}.',
+  'project.invalid_color': 'Invalid color "{value}". Allowed values: {allowed}.',
+  'project.no_project': 'No project: this action is available only within a project',
+  'project.workspace_set': 'Project working directory set: {dir}',
+  'project.workspace_invalid': 'Error: invalid project working directory',
+  'project.workspace_denied': 'Error: working directory outside the allowed root is denied by policy',
+  'project.workspace_confirm_required': 'Error: working directory outside the allowed root requires confirmation',
+  'project.workspace_missing': 'Error: project working directory is not set',
+  'project.repo_cloned': 'Repository cloned: {path}',
+  'project.repo_initialized': 'Repository initialized: {path}',
+  'project.repo_registered': 'Repository registered: {path}',
+  'project.repo_fetched': 'Repository updated (fetch): {path}',
+  'project.repo_removed': 'Repository removed from the project registry: {path}',
+  'project.repo_not_found': 'Error: repository not found in the project registry: {path}',
 
   // --- Контекст проекта (get_project_info / list_repos) ---
   'projectctx.info_title': '# Project: {name}',
@@ -179,6 +199,13 @@ export const SYSTEM_MESSAGES = {
   'projectctx.repo_not_found': '- {path} (not found or not a git repository)',
   'projectctx.repos_none': 'No git repositories in "{dir}"',
   'projectctx.repos_found': '# Git repositories in {dir}:',
+  'projectctx.repo_destination': '  - Destination: {dir}',
+  'projectctx.repo_name': '  - Name: {name}',
+  'projectctx.repo_url': '  - URL: {url}',
+  'projectctx.repo_type': '  - Type: {type}',
+  'projectctx.repo_default_branch': '  - Default branch: {branch}',
+  'projectctx.repo_ssh_key': '  - SSH key: {id}',
+  'projectctx.repo_last_fetch': '  - Last fetch: {time}',
 
   // --- Классификация ---
   'tool.classified': 'Conversation classified as "{category}"',
@@ -196,6 +223,8 @@ export const SYSTEM_MESSAGES = {
   'permission.plan_source_strict': 'strict: plan not approved',
   'permission.plan_shell_denied': 'plan mode: shell command mutates state',
   'permission.mcp_unavailable': 'MCP tool unavailable in {mode} mode',
+  'permission.dep_unavailable':
+    'Tool is unavailable: the required program "{binary}" is not installed in the environment',
   'permission.no_rules': 'no permission rules for "{tool}" — allowed by default',
   'permission.rule_matched': 'rule "{key}" → {action}',
   'permission.rule_pattern_matched': 'rule "{key}.{pattern}" → {action} (path: {path})',
@@ -268,6 +297,41 @@ export const SYSTEM_MESSAGES = {
   'micro.intent.debug': "Looks like a debugging task. Describe the error or attach the log — we'll figure it out.",
   'micro.intent.fix': "Got it, a bug fix is needed. Show me the problematic code — we'll find the cause.",
   'micro.intent.test': "Got it, tests are needed. Specify the function or module — I'll write the tests.",
+
+  // --- Скиллы (AD-046) ---
+  'skill.args_error': 'Skill argument error: {issues}',
+  'skill.not_found': 'Skill "{name}" not found',
+  'skill.untrusted': 'Skill "{name}" belongs to an untrusted project and cannot be loaded',
+  'skill.delegation': 'The skill "{name}" requires capabilities: {capabilities}; agent "{agent}" does not have them. Call `task` with an agent that supports these capabilities.',
+  'skill.file_not_found': 'Supporting file "{path}" not found in the skill directory',
+  'skill.scope_disabled': 'Skill "{name}" is disabled ({reason}) and cannot be loaded',
+
+  // --- Slash-команды (AD-046 §7) ---
+  'command.unknown': 'Unknown command: /{name}',
+  'command.denied': 'Command /{name} is denied by permission rules',
+  'command.unavailable': 'Command /{name} is unavailable: missing capabilities {capabilities}',
+  'command.help': 'Available commands: /help, /skills, /commands, /summary, /init. Type /<skill-or-bundle> to load it. Any other text goes to the model.',
+  'command.list_empty': 'No commands available',
+  'command.skills_empty': 'No skills available',
+  'command.summary_enqueued': 'Summarization started',
+  'command.summary_unavailable': 'Not enough active messages to summarize',
+
+  // --- Inline shell (AD-046 §7.4) ---
+  'command.inline_shell_disabled': 'Inline shell is disabled',
+  'command.inline_shell_denied': 'Inline shell command "!`{command}`" denied: {reason}',
+  'command.inline_shell_failed': 'Inline shell command failed: {output}',
+  'command.inline_shell_truncated': 'Inline shell output truncated to {limit} bytes',
+  'command.inline_shell_unavailable': 'Inline shell is unavailable',
+
+  // --- Git-репозитории и SSH-ключи (AD-076) ---
+  'sshkey.not_found': 'SSH key {id} not found',
+  'sshkey.name_exists': 'SSH key with name "{name}" already exists',
+  'sshkey.encryption_unavailable': 'SSH key encryption is unavailable: secret key is not configured',
+  'sshkey.decrypt_failed': 'Failed to decrypt SSH key {id}',
+  'sshkey.env_failed': 'Failed to prepare SSH environment (temporary key or askpass)',
+  'git.ssh_key_required': 'SSH key is required for repository "{path}"',
+  'git.repo_path_invalid': 'Invalid repository path "{path}" (must be inside the project workspace)',
+  'git.repo_exists': 'Repository already exists at "{path}"',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

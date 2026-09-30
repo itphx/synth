@@ -39,10 +39,20 @@ const GIT_TOOLS = new Set([
   'git_show',
   'git_blame',
   'git_stash',
+  'project_repo_clone',
+  'project_repo_init',
+  'project_repo_fetch',
 ]);
 
 /** Проектные тулы — доверенные (структура проекта). */
-const PROJECT_TOOLS = new Set(['get_project_info', 'list_repos']);
+const PROJECT_TOOLS = new Set([
+  'get_project_info',
+  'list_repos',
+  'project_update',
+  'project_workspace_set',
+  'project_repo_add',
+  'project_repo_remove',
+]);
 
 /** Файловые тулы: trust определяется положением пути относительно workingDir. */
 const FILE_TOOLS: Record<string, string> = {

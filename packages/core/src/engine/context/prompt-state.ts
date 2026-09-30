@@ -75,6 +75,20 @@ export function isPrefixUnchanged(
   );
 }
 
+/**
+ * AD-069 §11 / AD-070 §2.4: изменился ли контент конкретного блока
+ * (например, `instructions`) относительно сохранённого состояния. Нужно, чтобы
+ * инвалидировать `promptStates` при смене проектных инструкций: блок лежит в
+ * тире `context`, а `isPrefixUnchanged` смотрит только на `stablePrefix`.
+ */
+export function isBlockChanged(prev: PromptState | null, blocks: PromptBlock[], key: string): boolean {
+  if (!prev) return false;
+  const current = blocks.find((block) => block.key === key);
+  const currentHash = current ? hashText(current.content) : null;
+  const prevHash = prev?.blocks.find((block) => block.key === key)?.hash ?? null;
+  return currentHash !== prevHash;
+}
+
 /** Предсказание cache hit по сохранённому состоянию. */
 export function computeExpected(
   prev: PromptState | null,

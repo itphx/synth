@@ -1,13 +1,52 @@
 import { Hono } from 'hono';
-import type { AuthKit } from '../../auth/local.js';
-import { JsonStore } from '../../storage/json-store.js';
+import type { Context } from 'hono';
+import type { createMiddleware } from 'hono/factory';
 import type { AgentDefinition } from '@itphx/synth-shared';
-import { loadSystemAgentDefinitions, normalizeAgentModes, DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
+import type { JsonStore } from '../../storage/json-store.js';
+import {
+  loadSystemAgentDefinitions,
+  normalizeAgentModes,
+  DEFAULT_AGENT_ID,
+} from '../../engine/agents/index.js';
 import type { AgentRegistry } from '../../engine/agents/index.js';
+
+/** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
+type Middleware = ReturnType<typeof createMiddleware>;
+
+/** Минимальный auth-контракт фабрики: в core и backend общий (структурно). */
+export interface AgentRoutesAuth {
+  requireAuth: Middleware;
+}
+
+/** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
+export interface AgentRouteMessages {
+  idRequired: (c: Context) => string;
+  invalidAgentId: (c: Context) => string;
+  agentNotFound: (c: Context) => string;
+  agentOverrideNotFound: (c: Context) => string;
+}
+
+export interface AgentRoutesOptions {
+  /** Guard для POST /, DELETE /:id, PATCH /:id/enabled (backend — requireAdmin, core — requireAuth). */
+  writeGuard?: Middleware;
+  /** Guard для GET /all (backend — requireAdmin, core — requireAuth). */
+  allGuard?: Middleware;
+  /** Guard для GET /:id (backend — requireAdmin, core — requireAuth). */
+  detailGuard?: Middleware;
+  /** Переопределение сообщений (backend — i18n). */
+  messages?: Partial<AgentRouteMessages>;
+}
+
+const DEFAULT_MESSAGES: AgentRouteMessages = {
+  idRequired: () => 'ID обязателен',
+  invalidAgentId: () => 'ID агента может содержать только латиницу, цифры, дефис и подчёркивание',
+  agentNotFound: () => 'Агент не найден',
+  agentOverrideNotFound: () => 'Override не найден',
+};
 
 const AGENT_ID_REGEX = /^[a-z0-9_-]+$/;
 
-const AGENT_FIELDS = (a: AgentDefinition) => ({
+const AGENT_FIELDS = (a: AgentDefinition, isBuiltin: boolean) => ({
   id: a.id,
   display_name: a.displayName,
   capabilities: a.capabilities,
@@ -24,18 +63,27 @@ const AGENT_FIELDS = (a: AgentDefinition) => ({
   model: a.model || null,
   reasoning_level: a.reasoningLevel ?? null,
   context_file: a.contextFile || null,
-  is_builtin: true,
+  is_builtin: isBuiltin,
   is_overridden: a.isOverridden,
 });
 
 export function createAgentRoutes(
-  auth: AuthKit,
+  auth: AgentRoutesAuth,
   agentStore: JsonStore<AgentDefinition>,
   agentRegistry?: AgentRegistry,
   getDefaultAgentId?: () => string | Promise<string>,
+  opts?: AgentRoutesOptions,
 ): Hono {
   const app = new Hono();
   const BUILTIN_AGENTS = loadSystemAgentDefinitions();
+  const BUILTIN_IDS = new Set(BUILTIN_AGENTS.map((a) => a.id));
+
+  const writeGuard = opts?.writeGuard ?? auth.requireAuth;
+  const allGuard = opts?.allGuard ?? auth.requireAuth;
+  const detailGuard = opts?.detailGuard ?? auth.requireAuth;
+  const messages: AgentRouteMessages = { ...DEFAULT_MESSAGES, ...opts?.messages };
+
+  const fields = (a: AgentDefinition) => AGENT_FIELDS(a, BUILTIN_IDS.has(a.id));
 
   async function resolveAgents(): Promise<AgentDefinition[]> {
     const overrides = await agentStore.list();
@@ -45,7 +93,7 @@ export function createAgentRoutes(
     });
 
     for (const o of overrides) {
-      if (!BUILTIN_AGENTS.find((b) => b.id === o.id)) {
+      if (!BUILTIN_IDS.has(o.id)) {
         agents.push({ ...o, isOverridden: true });
       }
     }
@@ -53,9 +101,9 @@ export function createAgentRoutes(
   }
 
   // Все агенты (для админки) — регистрируем до /:id-подобных маршрутов
-  app.get('/all', auth.requireAuth, async (c) => {
+  app.get('/all', allGuard, async (c) => {
     return c.json({
-      agents: (await resolveAgents()).map(AGENT_FIELDS),
+      agents: (await resolveAgents()).map(fields),
       default_agent: (await getDefaultAgentId?.()) ?? DEFAULT_AGENT_ID,
     });
   });
@@ -66,39 +114,42 @@ export function createAgentRoutes(
       .filter((a) => normalizeAgentModes(a.agentMode).includes('primary'));
 
     return c.json({
-      agents: agents.map(AGENT_FIELDS),
+      agents: agents.map(fields),
       default_agent: (await getDefaultAgentId?.()) ?? DEFAULT_AGENT_ID,
     });
   });
 
-  app.post('/', auth.requireAuth, async (c) => {
+  // Создать/обновить агента (custom или override builtin)
+  app.post('/', writeGuard, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const id = body.id?.trim();
     if (!id) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'ID обязателен' } }, 400);
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.idRequired(c) } }, 400);
     }
     if (!AGENT_ID_REGEX.test(id)) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'ID агента может содержать только латиницу, цифры, дефис и подчёркивание' } }, 400);
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.invalidAgentId(c) } }, 400);
     }
 
+    const builtin = BUILTIN_AGENTS.find((a) => a.id === id);
     const existing = await agentStore.load(id);
+
     const agent: AgentDefinition = {
       id,
-      displayName: body.display_name ?? body.displayName ?? existing?.displayName ?? id,
+      displayName: body.display_name ?? body.displayName ?? existing?.displayName ?? builtin?.displayName ?? id,
       contextFile: body.context_file ?? body.contextFile ?? existing?.contextFile,
-      capabilities: body.capabilities ?? existing?.capabilities ?? [],
-      enabled: body.enabled ?? existing?.enabled ?? true,
+      capabilities: body.capabilities ?? existing?.capabilities ?? builtin?.capabilities ?? [],
+      enabled: body.enabled ?? existing?.enabled ?? builtin?.enabled ?? true,
       provider: body.provider ?? existing?.provider,
       model: body.model ?? existing?.model,
       temperature: body.temperature ?? existing?.temperature,
       topP: body.top_p ?? body.topP ?? existing?.topP,
-      reasoningLevel: body.reasoning_level ?? body.reasoningLevel ?? existing?.reasoningLevel,
-      sshKeys: body.ssh_keys ?? body.sshKeys ?? existing?.sshKeys ?? [],
+      topK: body.top_k ?? body.topK ?? existing?.topK,
+      reasoningLevel: body.reasoning_level ?? body.reasoningLevel ?? existing?.reasoningLevel ?? builtin?.reasoningLevel,
       isOverridden: true,
       icon: body.icon ?? existing?.icon,
       color: body.color ?? existing?.color,
       description: body.description ?? existing?.description,
-      agentMode: normalizeAgentModes(body.agent_mode ?? body.agentMode ?? existing?.agentMode),
+      agentMode: normalizeAgentModes(body.agent_mode ?? body.agentMode ?? existing?.agentMode ?? builtin?.agentMode),
       subagentPrompt: body.subagent_prompt ?? body.subagentPrompt ?? existing?.subagentPrompt,
       maxSteps: body.max_steps ?? body.maxSteps ?? existing?.maxSteps,
     };
@@ -107,19 +158,61 @@ export function createAgentRoutes(
     return c.json(agent, existing ? 200 : 201);
   });
 
-  app.delete('/:id', auth.requireAuth, async (c) => {
+  // Получить агента (override/builtin)
+  app.get('/:id', detailGuard, async (c) => {
     const id = c.req.param('id');
-    if (!(await agentStore.exists(id))) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Агент не найден' } }, 404);
-    }
-    await agentStore.delete(id);
+    const override = await agentStore.load(id);
     const builtin = BUILTIN_AGENTS.find((a) => a.id === id);
-    if (builtin) {
-      agentRegistry?.register(builtin);
-    } else {
-      agentRegistry?.unregister(id);
+    if (!override && !builtin) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.agentNotFound(c) } }, 404);
     }
-    return c.json({ status: 'deleted' });
+    const agent = override ? { ...builtin, ...override } : builtin;
+    return c.json(agent);
+  });
+
+  // Удалить custom / сбросить built-in (override)
+  app.delete('/:id', writeGuard, async (c) => {
+    const id = c.req.param('id');
+    const isBuiltin = BUILTIN_IDS.has(id);
+    const exists = await agentStore.exists(id);
+
+    if (isBuiltin) {
+      if (exists) {
+        await agentStore.delete(id);
+        const builtin = BUILTIN_AGENTS.find((a) => a.id === id);
+        if (builtin) agentRegistry?.register(builtin);
+        return c.json({ status: 'reset' });
+      }
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.agentOverrideNotFound(c) } }, 404);
+    }
+
+    if (exists) {
+      await agentStore.delete(id);
+      agentRegistry?.unregister(id);
+      return c.json({ status: 'deleted' });
+    }
+    return c.json({ error: { code: 'NOT_FOUND', message: messages.agentNotFound(c) } }, 404);
+  });
+
+  // Переключить enabled (override builtin или custom)
+  app.patch('/:id/enabled', writeGuard, async (c) => {
+    const id = c.req.param('id');
+    const body = await c.req.json().catch(() => ({}));
+    const enabled = body.enabled ?? true;
+
+    const builtin = BUILTIN_AGENTS.find((a) => a.id === id);
+    const existing = await agentStore.load(id);
+
+    if (!builtin && !existing) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.agentNotFound(c) } }, 404);
+    }
+
+    const agent: AgentDefinition = existing
+      ? { ...existing, enabled }
+      : { ...builtin!, enabled, isOverridden: true };
+    await agentStore.save(id, agent);
+    agentRegistry?.register(agent);
+    return c.json({ id, enabled });
   });
 
   return app;

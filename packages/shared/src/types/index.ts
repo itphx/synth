@@ -181,9 +181,10 @@ export interface PromptToolDetail {
   available: boolean;
   /**
    * Причина недоступности: `mode` (переключить режим), `role` (делегировать),
-   * `admin_disabled` (жёстко отключён администратором через `tools.disabled`).
+   * `admin_disabled` (жёстко отключён администратором через `tools.disabled`),
+   * `dependency` (в окружении нет нужной программы — git/rg/sh).
    */
-  reason?: 'mode' | 'role' | 'admin_disabled';
+  reason?: 'mode' | 'role' | 'admin_disabled' | 'dependency';
   /** AD-071 §2.1: источник инструмента (`built-in` — слой `tools`). */
   source: 'built-in';
   /** AD-071 §2.6: длина `JSON.stringify` LLM-определения тула (как слой `tools`). */
@@ -320,6 +321,11 @@ export interface Message {
   disabled: boolean;
   pinned: boolean;
   hidden: boolean;
+  /**
+   * AD-046 §7.1: сообщение локальной `/`-команды (builtin-ответ) — видно в
+   * истории, но исключается из LLM-контекста.
+   */
+  ephemeral?: boolean;
   debugData?: Record<string, unknown>;
   model?: string;
   provider?: string;
@@ -393,6 +399,16 @@ export interface McpRegistryEntry {
   origin: McpRegistryOrigin;
   author: McpRegistryAuthor | null;
   trust: McpRegistryTrust;
+  /**
+   * Системный мастер-флаг (hard-gate): `false` — сервер недоступен НИГДЕ и НИКОГДА
+   * (в т.ч. в старых сессиях). Дефолт `true`.
+   */
+  enabled: boolean;
+  /**
+   * Переосмыслено: «включён по умолчанию для НОВЫХ ПРОЕКТОВ» — сид
+   * `project.mcp.enabled`/`project.mcp.defaultOn` при создании проекта. Снимок:
+   * изменение не влияет на ранее созданные проекты/сессии.
+   */
   enabledByDefault: boolean;
   createdAt: string;
   updatedAt: string;
@@ -436,16 +452,19 @@ export type McpServerLevel = (typeof MCP_SERVER_LEVELS)[number];
 
 /**
  * AD-071 §2.2: почему сервер отключён в эффективном наборе сессии:
- * - `config` — выключен в конфиге записи (`config.enabled === false`);
+ * - `system_disabled` — выключен системным мастер-флагом (`McpRegistryEntry.enabled === false`);
+ * - `project_disabled` — не разрешён проектом (`project.enabled` — hard-gate);
  * - `session_optout` — явный opt-out в сессии (`mcpDisabledServers`);
- * - `project_disabled` — проектный сервер не включён в проекте (`project.defaultOn`);
- * - `not_default` — нет `enabledByDefault` и не включён явно.
+ * - `not_default` — нет в снапшоте сессии (`mcpDefaultOn`) и не включён явно.
+ *
+ * Причина `config` отсутствует: `McpServerConfig.enabled` — только сид записи
+ * реестра (`seedFromConfig`), в резолвинге/подключении не участвует.
  */
 export const MCP_DISABLED_REASONS = [
-  'session_optout',
+  'system_disabled',
   'project_disabled',
+  'session_optout',
   'not_default',
-  'config',
 ] as const;
 export type McpDisabledReason = (typeof MCP_DISABLED_REASONS)[number];
 
@@ -514,9 +533,15 @@ export interface SessionSettings {
   mcpServers?: string[];
   /**
    * AD-071 §2.4: явные opt-out серверы сессии (включая системные). Вычитаются
-   * из эффективного набора (`(instance.defaultOn ∪ project.defaultOn ∪ enabled) − disabled`).
+   * из эффективного набора (`(seed ∪ enabled) − disabled`).
    */
   mcpDisabledServers?: string[];
+  /**
+   * AD-071 §2.4: СНАПШОТ MCP-серверов «по умолчанию» на момент создания сессии
+   * (снимок `project.defaultOn` либо системного дефолта `enabledByDefault`).
+   * Изменение дефолта проекта/системы не влияет на существующие сессии.
+   */
+  mcpDefaultOn?: string[];
   contextOptimization: 'none' | 'sliding_window' | 'summarization' | 'sticky_notes';
   slidingWindowMode: 'messages' | 'tokens';
   slidingWindowMessageLimit: number;
@@ -590,6 +615,17 @@ export interface SessionSettings {
   // === Plan/Act (AD-025, AD-028) ===
   /** Строгость цикла Plan→Build: auto — модель сама решает, strict — план обязателен, off — планирование отключено. */
   planMode?: PlanMode;
+  // === Скиллы (AD-046 §4.5) ===
+  /** AD-046: явно включённые в сессии имена скиллов (session level, volatile-каталог). */
+  skills?: string[];
+  /** AD-046: opt-out сессии — имена, категории или группы скиллов (volatile-каталог). */
+  skillsDisabled?: string[];
+  /**
+   * AD-046: СНАПШОТ скиллов «по умолчанию» на момент создания сессии (снимок
+   * `project.skills.defaultOn` либо системного дефолта). Изменение дефолта
+   * проекта/системы не влияет на существующие сессии.
+   */
+  skillsDefaultOn?: string[];
   // === LLM Gateway (AD-036) ===
   /** Per-session override LLM Gateway (AD-036). */
   llmGateway?: { enabled?: boolean };
@@ -638,6 +674,10 @@ export interface SessionReference {
 export interface Session {
   id: string;
   title?: string;
+  /** Канонический ключ иконки (PROJECT_ICON_KEYS); legacy-значения → undefined. */
+  icon?: string;
+  /** Канонический ключ цвета (PROJECT_COLOR_KEYS); legacy-значения нормализуются. */
+  color?: string;
   sessionOrigin: SessionOrigin;
   parentId?: string;
   branchPoint?: string;
@@ -689,10 +729,43 @@ export interface Session {
 }
 
 // --- Git ---
+/**
+ * AD-076: запись реестра git-репозиториев проекта. Старые данные (`repos` как
+ * `string[]` либо `{ path }`) нормализуются через `normalizeGitRepoConfig`.
+ */
 export interface GitRepoConfig {
+  /** Стабильный id записи реестра (uuid); отсутствует у обнаруженных scan-ом. */
+  id?: string;
+  name?: string;
+  url?: string;
+  type?: 'https' | 'ssh';
+  /** Относительный путь ВНУТРИ project.workspace (допускает вложенность). */
   path: string;
   defaultBranch?: string;
+  sshKeyId?: string;
+  lastFetch?: string;
 }
+
+/**
+ * AD-076: SSH-ключ агента — отдельная сущность реестра (не в
+ * `AgentDefinition`). Секреты `privateKey`/`passphrase` шифруются at-rest
+ * (AES-256-GCM; реализация — в core) и НИКОГДА не отдаются через API.
+ */
+export interface SSHKey {
+  id: string;
+  name: string;
+  /** Метка типа ключа, дефолт `'user'`. */
+  type?: string;
+  privateKey: string;
+  passphrase?: string;
+  /** Привязка к агентам: один ключ может обслуживать несколько агентов. */
+  agentIds: string[];
+  createdAt: string;
+  updatedAt?: string;
+}
+
+/** Публичное представление ключа (без `privateKey`/`passphrase`). */
+export type SSHKeyMeta = Omit<SSHKey, 'privateKey' | 'passphrase'>;
 
 export interface RepoStatus {
   path: string;
@@ -744,12 +817,50 @@ export interface ProjectLogEntry {
 
 /**
  * AD-071 §2.4/§2.5: проектный скоуп MCP — ссылки на записи единого реестра по
- * имени. `enabled` — доступные проекту серверы (гейт owner/lead),
- * `defaultOn` — включённые по умолчанию для всех сессий проекта.
+ * имени.
+ * - `enabled` — hard-gate: серверы, разрешённые проекту. Не разрешённый сервер
+ *   недоступен ни в одной сессии проекта (в т.ч. старой). Пустой массив — «всё
+ *   выключено» (opt-in); отсутствие `project.mcp` — гейт не задан (legacy).
+ * - `defaultOn` — сид «по умолчанию для новых сессий»: снапшот `mcpDefaultOn`
+ *   при создании сессии. Изменение не влияет на ранее созданные сессии.
  */
 export interface ProjectMcpSettings {
   enabled: string[];
   defaultOn: string[];
+}
+
+/**
+ * AD-046 §4.5: проектный скоуп скиллов (owner/lead) — аналог `ProjectMcpSettings`.
+ * - `enabled` — hard-gate: доступные проекту скиллы. Пустой массив — «всё
+ *   выключено» (opt-in); отсутствие `project.skills` — гейт не задан (legacy).
+ * - `defaultOn` — сид «по умолчанию для новых сессий»: снапшот
+ *   `skillsDefaultOn` при создании сессии.
+ */
+export interface ProjectSkillSettings {
+  enabled: string[];
+  defaultOn: string[];
+}
+
+/**
+ * AD-075: политика для абсолютного `project.workspace` вне `workspacesRoot`.
+ * - `confirm` — путь разрешён только с явным подтверждением (`confirmOutsideRoot`);
+ * - `deny` — путь запрещён (managed-развёртывание: жёстко).
+ *
+ * Значение `''` (пустая строка) в конфиге означает «не задано» — эффективной
+ * политикой тогда считается `confirm` (резолвер `resolveWorkspaceOutsideRootPolicy`).
+ */
+export type WorkspaceOutsideRootPolicy = 'confirm' | 'deny';
+
+/**
+ * AD-075: ответ `GET /api/v2/settings/workspace-policy`.
+ * `readOnly` (additive) — managed-развёртывание: политика задаётся развёртыванием,
+ * `PUT`/`DELETE` возвращают 403 `WORKSPACE_POLICY_READ_ONLY`.
+ */
+export interface WorkspacePolicyInfo {
+  outsideRoot: WorkspaceOutsideRootPolicy;
+  isOverridden: boolean;
+  defaults: WorkspaceOutsideRootPolicy;
+  readOnly?: boolean;
 }
 
 export interface Project {
@@ -766,6 +877,8 @@ export interface Project {
   repos?: GitRepoConfig[];
   /** AD-071 §2.4: проектный скоуп MCP (owner/lead). */
   mcp?: ProjectMcpSettings;
+  /** AD-046 §4.5: проектный скоуп скиллов (owner/lead). */
+  skills?: ProjectSkillSettings;
   statusMessages: StatusMessage[];
   /** Kanban-план проекта (AD-039). Владеет проектом, а не сессией. */
   plan?: ProjectPlan;
@@ -774,6 +887,66 @@ export interface Project {
   createdAt: string;
   updatedAt: string;
 }
+
+/**
+ * Канонические ключи иконок проектов и сессий (единый список для server и UI).
+ * Значения — только ключи реестра (загружаемые картинки не поддерживаются).
+ */
+export const PROJECT_ICON_KEYS = [
+  'code',
+  'terminal',
+  'rocket',
+  'flask',
+  'gamepad',
+  'briefcase',
+  'home',
+  'globe',
+  'leaf',
+  'shield',
+  'palette',
+  'server',
+  'phone',
+  'database',
+  'lightbulb',
+  'music',
+  'camera',
+  'book',
+  'heart',
+  'folder',
+  'chat',
+  'cpu',
+  'file',
+  'file-code',
+  'docs',
+  'task',
+  'todo',
+  'bug',
+  'robot',
+  'brain',
+  'git',
+  'repo',
+  'test',
+  'chart',
+  'star',
+  'image',
+  'calendar',
+] as const;
+
+export type ProjectIconKey = (typeof PROJECT_ICON_KEYS)[number];
+
+/** Канонические ключи цветов проектов и сессий (единый список для server и UI). */
+export const PROJECT_COLOR_KEYS = [
+  'keyword',
+  'string',
+  'number',
+  'type',
+  'comment',
+  'error',
+  'primary',
+  'success',
+] as const;
+
+export type ProjectColorKey = (typeof PROJECT_COLOR_KEYS)[number];
 
 // --- Plan (AD-039) ---
 export interface PlanColumn {
@@ -866,11 +1039,16 @@ export interface AgentDefinition {
   agentMode?: AgentMode | AgentMode[];
   subagentPrompt?: string;
   maxSteps?: number; // 0 = без ограничений, undefined = default (0 для primary, 15 для subagent)
-  sshKeys: string[];
   isOverridden: boolean;
   icon?: string;
   color?: string;
   description?: string;
+  /**
+   * AD-046 §6.2: группы агентов для привязки скиллов
+   * (`metadata.synth.groups`). Пусто/не задано — скилл с непустым `groups`
+   * не привязан к агенту.
+   */
+  groups?: string[];
 }
 
 // --- Currency ---
@@ -1064,6 +1242,7 @@ export type EventType =
   | 'session.reference.removed'
   | 'session.messages.merged'
   | 'session.moved'
+  | 'project.updated'
   | 'message.added'
   | 'message.updated'
   | 'child.message.added'
@@ -1090,6 +1269,7 @@ export type EventType =
   | 'context.sticky_note_added'
   | 'context.sticky_note_updated'
   | 'context.sticky_note_deleted'
+  | 'context.instructions_loaded'
   | 'tool_call.started'
   | 'tool_call.result'
   | 'tool_call.loop'
@@ -1104,6 +1284,9 @@ export type EventType =
   | 'session.routing_category'
   | 'plan.approved'
   | 'todos.updated'
+  | 'skill.invoked'
+  | 'command.invoked'
+  | 'command.inline_shell'
   | 'error';
 
 export interface BusEvent {
@@ -1125,6 +1308,8 @@ export enum FsErrorCode {
   PERMISSION_DENIED = 'PERMISSION_DENIED',
   ALREADY_EXISTS = 'ALREADY_EXISTS',
   DIR_NOT_EMPTY = 'DIR_NOT_EMPTY',
+  /** AD-075: путь вне `workspacesRoot` запрещён политикой (managed). */
+  WORKSPACE_OUTSIDE_ROOT_DENIED = 'WORKSPACE_OUTSIDE_ROOT_DENIED',
 }
 
 export interface FileEntry {
@@ -1167,3 +1352,7 @@ export interface FsError {
 export * from './tools.js';
 // Permission types (AD-029) — re-exported from permission.ts
 export * from './permission.js';
+// Skill types (AD-046) — re-exported from skills.ts
+export * from './skills.js';
+// Slash-команды и bundles (AD-046 §7) — re-exported from commands.ts
+export * from './commands.js';

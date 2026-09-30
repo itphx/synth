@@ -17,6 +17,8 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
     id: session.id,
     origin: 'local' as const,
     name: session.title || null,
+    icon: session.icon || null,
+    color: session.color || null,
     parent_id: session.parentId || null,
     branch_point: session.branchPoint || null,
     plan_approved: session.planApproved ?? false,
@@ -97,6 +99,8 @@ export function serializeMessage(msg: Message, index: number) {
     disabled: msg.disabled,
     pinned: msg.pinned,
     hidden: msg.hidden,
+    /** AD-046 §7.1: локальный ответ `/`-команды — вне LLM-контекста. */
+    ephemeral: msg.ephemeral ?? false,
     agent_role: msg.agentRole || null,
     model: msg.model || null,
     provider: msg.provider || null,

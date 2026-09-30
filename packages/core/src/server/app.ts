@@ -3,16 +3,17 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { Readable } from 'node:stream';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
-import { join, extname } from 'node:path';
+import { join, extname, isAbsolute, normalize, resolve } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy } from '@itphx/synth-shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
   SecretPatternStore, ProtectedPathsStore, DictionaryStore, DEFAULT_AGENT_ID,
+  detectRuntimeDeps,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart, DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
@@ -28,9 +29,12 @@ import { isRemoteRef, toLocalId } from '../remote/aggregate.js';
 import { ConnectionWatcher } from './connection-watcher.js';
 import { setRemoteTokenProvider, removeRemoteTokenProvider } from '../providers/remote.js';
 import { JsonStore } from '../storage/json-store.js';
+import { syncProvidersFromEnv } from '../providers/sync-from-env.js';
 import { FileProfileStore } from '../storage/profile-store.js';
 import { ProjectStore } from '../storage/project-store.js';
+import { SSHKeyStore } from '../storage/ssh-key-store.js';
 import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy } from '../storage/runtime-settings.js';
+import { migrateSessionScopeSnapshots } from '../storage/migrations.js';
 import { createHealthRoutes } from './routes/health.js';
 import { createHybridRoutes } from './routes/hybrid.js';
 import { createAuthRoutes } from './routes/auth.js';
@@ -41,12 +45,25 @@ import { createProviderRoutes } from './routes/providers.js';
 import { createModelRoutes } from './routes/models.js';
 import { createAgentRoutes } from './routes/agents.js';
 import { createFsRoutes } from './routes/fs.js';
+import { resolveProjectWorkspace } from './fs-workspace.js';
+import { createGitRoutes } from './routes/git.js';
+import { createSshKeyRoutes, createAgentSshKeyRoutes } from './routes/ssh-keys.js';
 import { createQueueRoutes } from './routes/queue.js';
 import { createUpdateRoutes } from './routes/updates.js';
 import { createMessageRoutes } from './routes/messages.js';
 import { createSettingsRoutes } from './routes/settings.js';
 import { createDictionaryRoutes } from './routes/dictionaries.js';
 import { createMcpRoutes } from './routes/mcp.js';
+import { createSkillRoutes } from './routes/skills.js';
+import { createContextRoutes } from './routes/context.js';
+import { ProjectInstructionsResolver, createInstructionsInfoResolver } from '../engine/context/instructions.js';
+import { SkillService } from '../engine/skills/service.js';
+import { resolveProjectSkillSeed } from '../engine/skills/seed.js';
+import { createCommandRoutes } from './routes/commands.js';
+import { createSkillBundleRoutes } from './routes/skill-bundles.js';
+import { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './routes/skill-scope.js';
+import { CommandService } from '../engine/commands/service.js';
+import { SkillBundleStore } from '../storage/skill-bundle-store.js';
 import { createRemoteProxyMiddleware } from './proxy.js';
 
 export interface StandaloneConfig {
@@ -64,6 +81,12 @@ export interface StandaloneConfig {
   defaultPlanMode?: PlanMode;
   /** Секция безопасности (защита от Indirect Prompt Injection) из config.yaml. */
   securityConfig?: SecurityConfig;
+  /**
+   * AD-076: мастер-ключ шифрования секретов at-rest (SSH-ключи). Задан —
+   * приоритетнее env/файла; иначе `SSHKeyStore` использует `SYNTH_SECRET_KEY`
+   * или файл `{dataDir}/secrets/master.key`.
+   */
+  secretKey?: string;
   /** LLM Gateway (AD-036) из config.yaml — глобальный тумблер и конфиг. */
   gatewayConfig?: LLMGatewayConfig;
   /** AD-070 §2.2: политика prompt-cache из config.yaml llm.cache (auto | none). */
@@ -74,10 +97,21 @@ export interface StandaloneConfig {
   mcpPolicy?: ToolsPolicy;
   /** AD-071 §2.6: instance-wide отключение инструментов из config.yaml tools.disabled. */
   toolsDisabled?: ToolsDisabledConfig;
+  /**
+   * AD-075: политика для абсолютного workspace вне `workspacesRoot` из
+   * config.yaml/env (`confirm` | `deny`). Runtime-override — settings/workspace-policy.
+   */
+  workspaceOutsideRootPolicy?: WorkspaceOutsideRootPolicy;
   /** Конфигурация MCP-серверов из config.yaml mcp.servers (для probe и загрузки тулов). */
   mcpServers?: Record<string, McpServerConfig>;
   /** AD-071 §2.3.1: политика сетевого доступа HTTP MCP из config.yaml mcp.networkPolicy. */
   mcpNetworkPolicy?: McpNetworkPolicy;
+  /** AD-046: конфигурация скиллов из config.yaml `skills` (paths/trustedProjectDirs/inlineShell). */
+  skillsConfig?: SkillsConfig;
+  /** AD-046 §7: конфигурация slash-команд из config.yaml `commands`. */
+  commandsConfig?: CommandsConfig;
+  /** AD-069 Фаза 1: конфигурация проектных инструкций из config.yaml `instructions`. */
+  instructionsConfig?: InstructionsConfig;
   /**
    * Дефолтный адрес удалённого backend (гибрид, `serve --connect`/env/конфиг).
    * Нужен для авто-логина (GET /auth/status) и POST /auth/login без поля server.
@@ -103,6 +137,11 @@ export interface StandaloneConfig {
   remoteTimeoutMs?: number;
   /** Путь к файлу credentials (~/.config/synth/credentials.json по умолчанию). */
   remoteCredentialsPath?: string;
+  /**
+   * AD-079: путь к реестру профилей серверов (`<home>/profiles.json` либо XDG).
+   * Если не задан — `getProfilesPath()` (XDG-дефолт).
+   */
+  profilesPath?: string;
   /**
    * Гибридный режим включён (remote.enabled в config.yaml либо задан OIDC
    * fallback --oidc-issuer/--oidc-client-id), даже если адрес сервера ещё не
@@ -169,68 +208,6 @@ function serveStatic(uiDistPath: string) {
       return null;
     }
   };
-}
-
-async function syncProvidersFromEnv(
-  providerStore: JsonStore<ProviderConfig>,
-  modelStore: JsonStore<ModelConfig>,
-): Promise<void> {
-  const providerPattern = /^SYNTH_PROVIDER_([A-Z][A-Z0-9_]*?)_(API_KEY|URL|MODEL|TYPE)$/;
-  const providers: Map<string, Partial<ProviderConfig> & { model?: string }> = new Map();
-
-  for (const [key, value] of Object.entries(process.env)) {
-    const match = key.match(providerPattern);
-    if (!match || !value) continue;
-
-    const [, rawName, field] = match;
-    if (!rawName) continue;
-    const name = rawName.toLowerCase().replace(/_/g, '-');
-
-    if (!providers.has(name)) {
-      providers.set(name, { name, type: 'openai' });
-    }
-
-    const p = providers.get(name)!;
-    switch (field) {
-      case 'API_KEY': p.apiKey = value; break;
-      case 'URL': p.baseUrl = value; break;
-      case 'MODEL': p.model = value; break;
-      case 'TYPE': p.type = value; break;
-    }
-  }
-
-  for (const [name, envConfig] of providers) {
-    const existing = await providerStore.load(name);
-    const provider: ProviderConfig = {
-      name,
-      type: envConfig.type || existing?.type || 'openai',
-      baseUrl: envConfig.baseUrl || existing?.baseUrl,
-      apiKey: envConfig.apiKey || existing?.apiKey,
-      defaultModel: envConfig.model || existing?.defaultModel,
-      timeout: existing?.timeout ?? 120,
-      enabled: true,
-      icon: existing?.icon ?? '',
-    };
-    await providerStore.save(name, provider);
-
-    // Если указана модель — создаём её
-    if (envConfig.model) {
-      const modelId = `${name}/${envConfig.model}`;
-      const existingModel = await modelStore.load(modelId);
-      if (!existingModel) {
-        await modelStore.save(modelId, {
-          id: modelId,
-          name: envConfig.model,
-          provider: name,
-          description: '',
-          enabled: true,
-          isDefault: true,
-        });
-      }
-    }
-
-    console.log(`  [env] провайдер: ${name} (${provider.type})${provider.baseUrl ? ` → ${provider.baseUrl}` : ''}`);
-  }
 }
 
 /** Описание одного remote-зеркала серверного провайдера для инъекции в кэши. */
@@ -315,9 +292,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   async function getHybridState() {
     const serverConfigured = !!config.defaultBackendUrl;
     // Реестр профилей серверов (для формы входа UI): известные серверы и последний
-    // использованный. Чтение файла ~/.config/synth/profiles.json — безопасно при
-    // отсутствии (пустой список/null).
-    const [knownProfiles, lastProfile] = await Promise.all([listProfiles(), getLastProfile()]);
+    // использованный. AD-079: путь задаётся createStandaloneApp (`<home>/profiles.json`);
+    // при отсутствии файла — пустой список/null.
+    const [knownProfiles, lastProfile] = await Promise.all([
+      listProfiles(config.profilesPath),
+      getLastProfile(config.profilesPath),
+    ]);
     return {
       // Гибрид «включён», когда настроен в конфиге (remote.enabled/--connect/
       // --oidc-issuer), известен адрес сервера или есть runtime-подключение.
@@ -510,7 +490,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
    */
   async function rememberServer(serverUrl: string, username: string): Promise<void> {
     try {
-      await ensureProfile(serverUrl, { username });
+      await ensureProfile(serverUrl, { username }, config.profilesPath);
     } catch {
       // best-effort: мета-реестр не критичен для входа
     }
@@ -629,6 +609,14 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const runtimeToolsDisabled = await settingsStore.getToolsDisabled();
   const effectiveToolsDisabled: ToolsDisabledConfig =
     runtimeToolsDisabled ?? config.toolsDisabled ?? { capabilities: [], tools: [] };
+  // AD-046 §4.5: runtime-отключение скиллов (админка) — hard-gate системного уровня.
+  const effectiveSkillsDisabled = (await settingsStore.getSkillsDisabled())
+    ?? { categories: [], groups: [], skills: [] };
+
+  // AD-075: политика workspace вне root. config/env — дефолт; runtime-override
+  // (settings.json) применяется при старте и live через PUT /settings/workspace-policy.
+  let effectiveWorkspaceOutsideRootPolicy: WorkspaceOutsideRootPolicy =
+    (await settingsStore.getWorkspacePolicy()) ?? config.workspaceOutsideRootPolicy ?? 'confirm';
 
   // AD-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
   const patternStore = new SecretPatternStore({ dataDir });
@@ -637,10 +625,23 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const protectedPathsStore = new ProtectedPathsStore({ dataDir });
 
   const fileStore = new FileStore({ dataDir });
+  const projectStore = new ProjectStore({ dataDir });
   const sessionManager = new SessionManager(fileStore, {
     mcpSettingsProvider: () => settingsStore.getMcpSettings(),
+    projectStore,
+    // AD-071 §2.4 / AD-046 §4.5: системные дефолты для сессий без проекта.
+    systemDefaultsProvider: async () => ({
+      mcpDefaultOn: Object.entries(config.mcpServers ?? {})
+        .filter(([, cfg]) => cfg.enabledByDefault === true)
+        .map(([name]) => name),
+      skillsDefaultOn: (await resolveProjectSkillSeed(
+        skillService,
+        await settingsStore.getSkillsDisabledForNewProjects(),
+      )).enabled,
+    }),
   });
-  const projectStore = new ProjectStore({ dataDir });
+  // AD-076: SSH-ключи агентов (шифрование at-rest мастер-ключом из dataDir/env).
+  const sshKeyStore = new SSHKeyStore({ dataDir, secretKey: config.secretKey, env: process.env });
   const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
   const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
   const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
@@ -733,6 +734,57 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const toolRegistry = createToolRegistry();
   const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
+  // AD-046: сервис скиллов — discovery (instance/project/config.paths) + запись
+  // instance-дерева + каталог в промпт и тул `skill`.
+  const skillService = new SkillService({
+    dataDir,
+    configPaths: config.skillsConfig?.paths,
+    urls: config.skillsConfig?.urls,
+    trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
+    toolsets: config.skillsConfig?.toolsets,
+  });
+
+  // AD-046 §4.2/§4.3: read-only индексация skills.urls — фоном, старт не блокируем.
+  void skillService.refreshRemote().catch(() => {});
+
+  // AD-071 §2.4 / AD-046 §4.5: разовая миграция снапшотов скоупа существующих сессий.
+  await migrateSessionScopeSnapshots({
+    sessionManager,
+    projectStore,
+    settingsStore,
+    resolveSystemDefaults: async () => ({
+      mcpDefaultOn: Object.entries(config.mcpServers ?? {})
+        .filter(([, cfg]) => cfg.enabledByDefault === true)
+        .map(([name]) => name),
+      skillsDefaultOn: (await resolveProjectSkillSeed(
+        skillService,
+        await settingsStore.getSkillsDisabledForNewProjects(),
+      )).enabled,
+    }),
+  }).catch(() => 0);
+
+  // AD-046 §7: slash-команды и bundles — единый резолвинг в core (UI/CLI/гибрид).
+  const bundleStore = new SkillBundleStore({
+    dataDir,
+    bundlesPath: config.commandsConfig?.bundlesPath,
+  });
+  const commandService = new CommandService({
+    config: {
+      dataDir,
+      commandsPaths: config.commandsConfig?.paths ?? [],
+      bundlesPath: config.commandsConfig?.bundlesPath ?? 'skill-bundles',
+      conflict: config.commandsConfig?.conflict ?? { mode: 'bundle-wins', namespacePrefix: false },
+      maxArgumentsLength: config.commandsConfig?.maxArgumentsLength ?? 10_000,
+      maxRenderedBytes: config.commandsConfig?.maxRenderedBytes ?? 200_000,
+      toolsets: config.skillsConfig?.toolsets ?? {},
+      trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
+      inlineShell: config.skillsConfig?.inlineShell ?? false,
+    },
+    skillRuntime: skillService,
+    skillSource: skillService,
+    bundleStore,
+  });
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -745,8 +797,13 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     toolRegistry,
     agentRegistry,
     projectStore,
+    // AD-076 §T6: тот же store, что у git-роутов — без дублей инстансов.
+    sshKeyStore,
     defaultWorkingDir,
     workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
+    // AD-075: тулы проекта (workspace) читают live-политику вне root.
+    getWorkspaceOutsideRootPolicy: async () =>
+      (await settingsStore.getWorkspacePolicy()) ?? config.workspaceOutsideRootPolicy ?? 'confirm',
     permissionConfig: config.permissionConfig,
     defaultPlanMode: config.defaultPlanMode,
     securityConfig: effectiveSecurityConfig,
@@ -757,9 +814,23 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     toolsPolicy: effectiveToolsPolicy,
     mcpPolicy: effectiveMcpPolicy,
     toolsDisabled: effectiveToolsDisabled,
+    // AD-046 §4.5: системный hard-gate скиллов (runtime-настройка).
+    skillsDisabled: effectiveSkillsDisabled,
+    // AD-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте,
+    // fail-open при ошибке. Пробинг идёт до сборки оркестратора, чтобы первый
+    // же запрос видел корректную доступность.
+    runtimeDeps: await detectRuntimeDeps(),
     // AD-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
     tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
     onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
+    // AD-046 §5: каталог скиллов в промпт + тул `skill`.
+    skillRuntime: skillService,
+    // AD-046 §7: резолвинг `/`-команд до LLM.
+    commandRuntime: commandService,
+    // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
+    instructionsConfig: config.instructionsConfig,
+    // AD-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
+    instructionsTrustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
   });
 
   const processMessage = orchestrator.createProcessMessage();
@@ -785,7 +856,24 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   ));
 
   // Projects
-  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, () => connection.client));
+  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, () => connection.client, {
+    // AD-075: автосоздание/нормализация workspace локальных проектов.
+    getWorkspacesRoot: () => config.workspacesRoot ?? join(dataDir, 'workspaces'),
+    getOutsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
+    // AD-071 §2.4 / AD-046 §4.5: сид скоупа нового проекта (снимок дефолтов).
+    getProjectSeeds: async () => {
+      const defaultMcpServers = Object.entries(config.mcpServers ?? {})
+        .filter(([, cfg]) => cfg.enabledByDefault === true)
+        .map(([name]) => name);
+      return {
+        mcp: { enabled: [...defaultMcpServers], defaultOn: [...defaultMcpServers] },
+        skills: await resolveProjectSkillSeed(
+          skillService,
+          await settingsStore.getSkillsDisabledForNewProjects(),
+        ),
+      };
+    },
+  }));
 
   // Перенос проектов между мирами (гибрид, UI publish/fork): те же пути, что у
   // project-роутов (:id/publish, :id/fork-local — без конфликта с :id). Работает
@@ -819,8 +907,37 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // Agents
   app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId));
 
-  // FS
-  app.route('/api/v2/fs', createFsRoutes(auth, config.workspacesRoot, () => connection.client));
+  // FS (AD-075: гарантированный корень workspace + мягкая политика путей вне root)
+  // project-aware: с `project_id` база — workspace проекта (fallback на root/default).
+  app.route('/api/v2/fs', createFsRoutes(
+    auth,
+    config.workspacesRoot ?? join(dataDir, 'workspaces'),
+    () => connection.client,
+    {
+      getOutsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
+      getProtectedPathsPolicy: () => protectedPathsStore.getPolicy(),
+      getProjectWorkspace: (projectId) => resolveProjectWorkspace(projectId, {
+        workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
+        getProject: (id) => projectStore.load(id),
+        outsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
+        strict: false,
+      }),
+    },
+  ));
+
+  // Git (AD-076): реестр репозиториев, clone/init/fetch/remove, SSH-ключи.
+  // Core — локальный single-user режим: writeGuard не задаём (по умолчанию requireAuth).
+  app.route('/api/v2/git', createGitRoutes(
+    auth,
+    projectStore,
+    config.workspacesRoot ?? join(dataDir, 'workspaces'),
+    { sshKeyStore },
+  ));
+
+  // SSH-ключи агентов (AD-076 §T5): flat CRUD + nested-роуты агента.
+  // Core — локальный single-user режим: guards не задаём (дефолт requireAuth).
+  app.route('/api/v2/ssh-keys', createSshKeyRoutes(auth, sshKeyStore));
+  app.route('/api/v2/agents/:agentId/ssh-keys', createAgentSshKeyRoutes(auth, sshKeyStore));
 
   // Queue
   app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage, () => connection.client));
@@ -835,6 +952,10 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   app.route('/api/v2/settings', createSettingsRoutes(auth, {
     settingsStore,
     fallbackWorkspace: defaultWorkingDir,
+    // AD-075: дефолт политики workspace вне root (config/env) для GET/DELETE-сброса.
+    fallbackWorkspaceOutsideRootPolicy: config.workspaceOutsideRootPolicy ?? 'confirm',
+    /** AD-075: live-применение политики без рестарта (роуты проектов читают её на каждом запросе). */
+    onWorkspacePolicyChange: (policy) => { effectiveWorkspaceOutsideRootPolicy = policy; },
     // Агент по умолчанию при первом развёртывании (config.yaml не задаёт — DEFAULT_AGENT_ID).
     fallbackDefaultAgent: DEFAULT_AGENT_ID,
     // AD-072 Ф2: дефолты из config.yaml (без runtime) — для GET/DELETE-сброса к умолчанию.
@@ -901,6 +1022,86 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   // MCP (probe подключения к серверу)
   app.route('/api/v2/mcp', createMcpRoutes(auth, { mcpManager }));
+
+  // Скиллы (AD-046 §9.1): реестр + instance CRUD + supporting-файлы + reload.
+  app.route('/api/v2/skills', createSkillRoutes(auth, {
+    skillService,
+    resolveProjectWorkspace: async (projectId) => {
+      const project = await projectStore.load(projectId);
+      if (!project?.workspace) return undefined;
+      const root = config.workspacesRoot ?? join(dataDir, 'workspaces');
+      return isAbsolute(project.workspace) ? normalize(project.workspace) : resolve(root, project.workspace);
+    },
+  }));
+
+  // AD-046 §9.1: список команд (встроенные + шаблонные + скиллы + bundles).
+  app.route('/api/v2/commands', createCommandRoutes(auth, {
+    commandService,
+    resolveProjectWorkspace: async (projectId) => {
+      const project = await projectStore.load(projectId);
+      if (!project?.workspace) return undefined;
+      const root = config.workspacesRoot ?? join(dataDir, 'workspaces');
+      return isAbsolute(project.workspace) ? normalize(project.workspace) : resolve(root, project.workspace);
+    },
+  }));
+
+  // AD-046 §9.1: bundles (instance-хранилище YAML-групп скиллов).
+  app.route('/api/v2/skill-bundles', createSkillBundleRoutes(auth, {
+    bundleStore,
+    validateSkills: async (names) => {
+      const missing: string[] = [];
+      for (const name of names) {
+        if (!(await skillService.get(name))) missing.push(name);
+      }
+      return missing;
+    },
+  }));
+
+  // AD-046 §4.5: scope-API скиллов (сессии/проекты/настройки, аналог MCP).
+  const resolveSkillWorkspace = async (projectId: string): Promise<string | undefined> => {
+    const project = await projectStore.load(projectId);
+    if (!project?.workspace) return undefined;
+    const root = config.workspacesRoot ?? join(dataDir, 'workspaces');
+    return isAbsolute(project.workspace) ? normalize(project.workspace) : resolve(root, project.workspace);
+  };
+  app.route('/api/v2/sessions', createSessionSkillScopeRoutes(auth, {
+    sessionManager, skillService, settingsStore, projectStore,
+    permissionConfig: config.permissionConfig,
+    resolveProjectWorkspace: resolveSkillWorkspace,
+  }));
+  app.route('/api/v2/projects', createProjectSkillScopeRoutes(auth, {
+    sessionManager, skillService, settingsStore, projectStore,
+    permissionConfig: config.permissionConfig,
+    resolveProjectWorkspace: resolveSkillWorkspace,
+  }));
+  app.route('/api/v2/settings', createSkillSettingsRoutes(auth, { settingsStore }, {
+    onSkillsDisabledChange: (disabled) => orchestrator.setSkillsDisabled(disabled),
+  }));
+
+  // AD-069 §9.3: read-only прозрачность проектных инструкций (session/project scope).
+  // Резолвер — тот же core-модуль, что у оркестратора (Фаза 1/2a); доступ —
+  // владелец|ADMIN по сессии, owner/LEAD/ADMIN по проекту.
+  if (config.instructionsConfig) {
+    const instructionsInfoResolver = createInstructionsInfoResolver(
+      new ProjectInstructionsResolver({
+        config: config.instructionsConfig,
+        dictionaryStore,
+        dataDir,
+        trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
+      }),
+      config.instructionsConfig,
+    );
+    app.route('/api/v2/context', createContextRoutes(auth, {
+      resolveInstructions: instructionsInfoResolver,
+      sessionManager,
+      projectStore,
+      resolveProjectWorkspace: resolveSkillWorkspace,
+      resolveContextWindow: (session) => {
+        const model = session?.settings.model;
+        return model ? modelWindowLoader(model) || undefined : undefined;
+      },
+    }));
+  }
 
   // Глобальный SSE-хаб
   app.get('/api/v2/events', async (c) => {

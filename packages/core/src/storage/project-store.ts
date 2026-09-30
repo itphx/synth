@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Project, GitRepoConfig } from '@itphx/synth-shared';
-import { ProjectRole, generateId, nowISO, AsyncLock, atomicWrite } from '@itphx/synth-shared';
+import type { Project, GitRepoConfig, ProjectMcpSettings, ProjectSkillSettings } from '@itphx/synth-shared';
+import { ProjectRole, generateId, nowISO, AsyncLock, atomicWrite, normalizeIconKey, normalizeColorKey } from '@itphx/synth-shared';
 
 export interface ProjectStoreConfig {
   dataDir: string;
@@ -33,7 +33,12 @@ export class ProjectStore {
     const path = this._projectPath(id);
     try {
       const data = await readFile(path, 'utf-8');
-      return JSON.parse(data) as Project;
+      const project = JSON.parse(data) as Project;
+      // Нормализация метаданных при чтении (legacy → undefined/канонический ключ),
+      // чтобы в памяти всегда были канонические значения (AD-иконки/цвета проектов).
+      project.icon = normalizeIconKey(project.icon);
+      project.color = normalizeColorKey(project.color);
+      return project;
     } catch {
       return null;
     }
@@ -92,7 +97,7 @@ export class ProjectStore {
     );
   }
 
-  create(name: string, ownerId: string, data?: { description?: string; icon?: string; color?: string; workspace?: string; repos?: GitRepoConfig[] }): Project {
+  create(name: string, ownerId: string, data?: { description?: string; icon?: string; color?: string; workspace?: string; repos?: GitRepoConfig[]; mcp?: ProjectMcpSettings; skills?: ProjectSkillSettings }): Project {
     const project: Project = {
       id: generateId(),
       name,
@@ -105,6 +110,9 @@ export class ProjectStore {
       color: data?.color,
       workspace: data?.workspace,
       repos: data?.repos,
+      // AD-071 §2.4 / AD-046 §4.5: сид скоупа новых проектов (снимок системных дефолтов).
+      ...(data?.mcp ? { mcp: data.mcp } : {}),
+      ...(data?.skills ? { skills: data.skills } : {}),
       statusMessages: [],
       plan: {
         version: 1,
@@ -124,3 +132,10 @@ export class ProjectStore {
     return project;
   }
 }
+
+/**
+ * Структурный контракт полного хранилища проектов (чтение + запись) — для тулов
+ * и provisioning, которым нужны `save`/`create`/`list`, а не только `load`.
+ * Не привязан к классу (у него приватные поля), совместим с реализациями других пакетов.
+ */
+export type ProjectStoreContract = Pick<ProjectStore, 'load' | 'save' | 'create' | 'list'>;

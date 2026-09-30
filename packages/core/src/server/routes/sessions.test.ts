@@ -459,3 +459,98 @@ describe('Session API Routes (PATCH mode)', () => {
     });
   });
 });
+
+describe('Session API Routes (icon/color)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-meta-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('POST сохраняет валидные icon/color и отдаёт их в DTO', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const res = await app.request('/api/v2/sessions', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'S', icon: 'rocket', color: 'primary' }),
+    });
+    expect(res.status).toBe(201);
+    const body: any = await res.json();
+    expect(body.icon).toBe('rocket');
+    expect(body.color).toBe('primary');
+    const stored = await sessionManager.getSession(body.id);
+    expect(stored?.icon).toBe('rocket');
+    expect(stored?.color).toBe('primary');
+  });
+
+  it('POST невалидный icon → 400 VALIDATION_ERROR с перечнем ключей', async () => {
+    const { app } = createTestApp(tmpDir);
+    const res = await app.request('/api/v2/sessions', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'S', icon: '🚀' }),
+    });
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toContain('code');
+  });
+
+  it('PATCH обновляет icon/color', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    const res = await app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ icon: 'heart', color: 'error' }),
+    });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.icon).toBe('heart');
+    expect(body.color).toBe('error');
+    const reloaded = await sessionManager.getSession(session.id);
+    expect(reloaded?.icon).toBe('heart');
+    expect(reloaded?.color).toBe('error');
+  });
+
+  it('PATCH невалидный color (алиас red при записи не принимается) → 400, значение не меняется', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local', color: 'primary' });
+    const res = await app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ color: 'red' }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+    expect((await sessionManager.getSession(session.id))?.color).toBe('primary');
+  });
+
+  it('PATCH null сбрасывает icon/color', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const session = await sessionManager.createSession({
+      title: 'S', userId: 'local', icon: 'rocket', color: 'success',
+    });
+    const res = await app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ icon: null, color: null }),
+    });
+    expect(res.status).toBe(200);
+    const reloaded = await sessionManager.getSession(session.id);
+    expect(reloaded?.icon).toBeUndefined();
+    expect(reloaded?.color).toBeUndefined();
+    const body: any = await res.json();
+    expect(body.icon).toBeNull();
+    expect(body.color).toBeNull();
+  });
+
+  it('GET отдаёт null для сессии без icon/color', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    const res = await app.request(`/api/v2/sessions/${session.id}`);
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.icon).toBeNull();
+    expect(body.color).toBeNull();
+  });
+});

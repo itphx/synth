@@ -205,4 +205,113 @@ describe('createStandaloneApp: прокси серверных роутов (run
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
   });
+
+  it('nested GET /api/v2/agents/:id/ssh-keys форвардится (Bearer, ответ/заголовки как есть)', async () => {
+    const fetchRouter = apiKeyFetchRouter(() => jsonResponse(
+      [{ id: 'k1', name: 'deploy-key' }],
+      200,
+      { 'x-upstream': 'yes' },
+    ));
+    vi.stubGlobal('fetch', fetchRouter);
+
+    const { dir, handle } = await makeHybridApp();
+    const { app } = handle;
+    try {
+      const res = await app.request('/api/v2/agents/a1/ssh-keys', {
+        headers: { Authorization: 'Bearer test-key' },
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('x-upstream')).toBe('yes');
+      expect(await res.json()).toEqual([{ id: 'k1', name: 'deploy-key' }]);
+
+      const call = fetchRouter.mock.calls.find(([u]) => String(u).includes('/api/v2/agents/a1/ssh-keys'))!;
+      expect(call).toBeDefined();
+      const [url, init] = call;
+      expect(url).toBe(`${BACKEND_URL}/api/v2/agents/a1/ssh-keys`);
+      expect(init!.method).toBe('GET');
+      expect((init!.headers as Record<string, string>).Authorization).toBe(`Bearer ${API_KEY}`);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('nested POST и DELETE /api/v2/agents/:id/ssh-keys тоже форвардятся', async () => {
+    const fetchRouter = apiKeyFetchRouter(() => jsonResponse({ ok: true }));
+    vi.stubGlobal('fetch', fetchRouter);
+
+    const { dir, handle } = await makeHybridApp();
+    const { app } = handle;
+    try {
+      await app.request('/api/v2/agents/a1/ssh-keys', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer test-key', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'k', privateKey: 'KEY' }),
+      });
+      await app.request('/api/v2/agents/a1/ssh-keys/k1', {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer test-key' },
+      });
+
+      const postCall = fetchRouter.mock.calls.find(
+        ([u, init]) => String(u).includes('/api/v2/agents/a1/ssh-keys') && init?.method === 'POST',
+      )!;
+      expect(postCall).toBeDefined();
+      expect(postCall[0]).toBe(`${BACKEND_URL}/api/v2/agents/a1/ssh-keys`);
+      expect((postCall[1]!.headers as Record<string, string>).Authorization).toBe(`Bearer ${API_KEY}`);
+
+      const deleteCall = fetchRouter.mock.calls.find(
+        ([u, init]) => String(u).includes('/api/v2/agents/a1/ssh-keys/k1') && init?.method === 'DELETE',
+      )!;
+      expect(deleteCall).toBeDefined();
+      expect(deleteCall[0]).toBe(`${BACKEND_URL}/api/v2/agents/a1/ssh-keys/k1`);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('/api/v2/agents остаётся локальным при наличии remote-подключения (не форвардится)', async () => {
+    const fetchRouter = apiKeyFetchRouter(() => jsonResponse({ ok: true }));
+    vi.stubGlobal('fetch', fetchRouter);
+
+    const { dir, handle } = await makeHybridApp();
+    const { app } = handle;
+    try {
+      const res = await app.request('/api/v2/agents', {
+        headers: { Authorization: 'Bearer test-key' },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { agents: unknown[] };
+      expect(Array.isArray(body.agents)).toBe(true);
+
+      const forwarded = fetchRouter.mock.calls.filter(([u]) => {
+        try {
+          return new URL(String(u)).pathname.startsWith('/api/v2/agents');
+        } catch {
+          return false;
+        }
+      });
+      expect(forwarded).toHaveLength(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('без подключения → nested ssh-keys обслуживается локально (прокси не перехватывает)', async () => {
+    const fetchRouter = apiKeyFetchRouter(() => jsonResponse({ ok: true }));
+    vi.stubGlobal('fetch', fetchRouter);
+
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-proxy-local-nested-'));
+    try {
+      const { app } = await createStandaloneApp({ port: 0, dataDir: dir, apiKey: 'test-key' });
+
+      const res = await app.request('/api/v2/agents/a1/ssh-keys', {
+        headers: { Authorization: 'Bearer test-key' },
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual([]);
+      expect(fetchRouter).not.toHaveBeenCalled();
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
 });

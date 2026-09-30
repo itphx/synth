@@ -1,3 +1,4 @@
+import React from 'react'
 import { Icon } from '@/components/icon/Icon'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { useI18n } from '@/lib/i18n'
@@ -10,6 +11,8 @@ export interface ConfirmDialogProps {
   onOpenChange: (open: boolean) => void
   title: string
   message?: string
+  /** Дополнительное содержимое между сообщением и кнопками (например, чекбокс). */
+  children?: React.ReactNode
   confirmLabel?: string
   cancelLabel?: string
   variant?: ConfirmVariant
@@ -28,6 +31,7 @@ export function ConfirmDialog({
   onOpenChange,
   title,
   message,
+  children,
   confirmLabel,
   cancelLabel,
   variant = 'default',
@@ -51,6 +55,7 @@ export function ConfirmDialog({
               )}
             </div>
           </div>
+          {children && <div className="mb-4">{children}</div>}
           <div className="flex justify-end gap-3">
             <button
               onClick={() => onOpenChange(false)}

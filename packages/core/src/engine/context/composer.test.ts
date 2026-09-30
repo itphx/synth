@@ -789,4 +789,67 @@ describe('SystemPromptComposer', () => {
     expect(Array.isArray(parts!.blocks)).toBe(true);
     expect(typeof parts!.systemChars).toBe('number');
   });
+
+  describe('instructions (AD-069)', () => {
+    const instructions = {
+      content: '[PROJECT INSTRUCTIONS]\n--- from ./AGENTS.md (10 chars) ---\nCORE-RULES\n[END PROJECT INSTRUCTIONS]',
+      provenance: './AGENTS.md',
+    };
+
+    it('блок в тире context, order 15 — после profile, до project.info', async () => {
+      const composer = makeComposer();
+      const session = makeSession({ projectId: 'p1' });
+
+      const { system, stablePrefix, blocks } = await composer.compose(
+        makeCtx(session, { instructions }),
+      );
+
+      const block = blocks.find((b) => b.key === 'instructions');
+      expect(block).toBeDefined();
+      expect(block!.tier).toBe('context');
+      expect(block!.order).toBe(15);
+      expect(system).toContain('CORE-RULES');
+      // Тир context не попадает в stable-префикс.
+      expect(stablePrefix).not.toContain('CORE-RULES');
+
+      const sorted = sortPromptBlocks(blocks);
+      const iProfile = sorted.findIndex((b) => b.key === 'profile');
+      const iInstr = sorted.findIndex((b) => b.key === 'instructions');
+      const iProject = sorted.findIndex((b) => b.key === 'project.info');
+      expect(iProfile).toBeGreaterThanOrEqual(0);
+      expect(iInstr).toBeGreaterThan(iProfile);
+      expect(iProject).toBeGreaterThan(iInstr);
+    });
+
+    it('manifest: label/status/provenance блока instructions', async () => {
+      const composer = makeComposer();
+      const session = makeSession({ projectId: 'p1' });
+
+      const manifest = await composer.manifest(
+        makeCtx(session, { instructions: { ...instructions, status: 'truncated' } }),
+      );
+
+      const entry = manifest.entries.find((e) => e.key === 'instructions');
+      expect(entry).toBeDefined();
+      expect(entry!.label).toBe('Project instructions');
+      expect(entry!.tier).toBe('context');
+      expect(entry!.status).toBe('truncated');
+      expect(entry!.provenance).toBe('./AGENTS.md');
+      expect(entry!.chars).toBeGreaterThan(0);
+
+      // Без instructions блока нет.
+      const without = await composer.manifest(makeCtx(session));
+      expect(without.entries.find((e) => e.key === 'instructions')).toBeUndefined();
+    });
+
+    it('systemPrompt override: блок instructions не добавляется', async () => {
+      const composer = makeComposer();
+      const session = makeSession({ settings: { systemPrompt: 'OVERRIDE' } });
+
+      const { system } = await composer.compose(makeCtx(session, { instructions }));
+
+      expect(system).toContain('OVERRIDE');
+      expect(system).not.toContain('CORE-RULES');
+    });
+  });
 });

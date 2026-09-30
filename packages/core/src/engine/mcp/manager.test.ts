@@ -111,6 +111,18 @@ describe('McpManager', () => {
     expect(cfg?.command).toBe('node');
   });
 
+  it('AD-071 §2.4: isServerSystemEnabled — мастер только из реестра, config.enabled не гейт', () => {
+    // config.enabled=false — лишь сид записи реестра; без карты реестра сервер включён.
+    manager.setConfig({ 'cfg-off': { ...makeStdioConfig('cfg-off'), enabled: false } });
+    expect(manager.isServerSystemEnabled('cfg-off')).toBe(true);
+    expect(manager.isServerSystemEnabled('unknown')).toBe(true);
+
+    // Карта реестра — единственный источник мастер-флага.
+    manager.setServerSystemEnabled({ 'cfg-off': false });
+    expect(manager.isServerSystemEnabled('cfg-off')).toBe(false);
+    expect(manager.isServerSystemEnabled('unknown')).toBe(true);
+  });
+
   it('getConfiguredServers возвращает список серверов', () => {
     const servers = manager.getConfiguredServers();
     expect(servers).toHaveLength(1);

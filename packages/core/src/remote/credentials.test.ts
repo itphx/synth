@@ -2,8 +2,14 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, stat, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadCredentials, saveCredentials, clearCredentials } from './credentials.js';
+import { loadCredentials, saveCredentials, clearCredentials, defaultCredentialsPath } from './credentials.js';
 import type { RemoteCredentials } from './types.js';
+
+describe('defaultCredentialsPath (AD-079)', () => {
+  it('с home → <home>/credentials.json', () => {
+    expect(defaultCredentialsPath('/tmp/synth-home')).toBe(join('/tmp/synth-home', 'credentials.json'));
+  });
+});
 
 describe('credentials', () => {
   let dir: string;

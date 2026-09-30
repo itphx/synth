@@ -2,16 +2,16 @@ import { readdir, access } from 'node:fs/promises';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
-import type { ToolDefinition, ToolContext, Project } from '@itphx/synth-shared';
+import type { ToolDefinition, ToolContext, Project, GitRepoConfig } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
-import type { ProjectStore } from '../../storage/project-store.js';
+import type { ProjectStoreLike } from '../../storage/project-store.js';
 import { runGit } from './git.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm } from '../system-messages.js';
 
 interface ProjectContextExtra {
   sessionManager?: SessionManager;
-  projectStore?: ProjectStore;
+  projectStore?: ProjectStoreLike;
   sessionId?: string;
   /** Корень каталога workspaces для резолва относительного project.workspace (AD-014). */
   workspacesRoot?: string;
@@ -136,12 +136,39 @@ async function loadProject(ctx: ToolContext): Promise<Project | undefined> {
   }
 }
 
-function formatRepo(repo: RepoInfo, label?: string): string {
-  const lines = [`- ${label ?? repo.path}`];
+/** Строки git-детекта репозитория (без заголовка `- path`). */
+function repoDetailLines(repo: RepoInfo): string[] {
+  const lines: string[] = [];
   if (repo.branch) lines.push(sm('projectctx.repo_branch', { branch: repo.branch }));
   if (repo.remoteUrl) lines.push(sm('projectctx.repo_remote', { url: repo.remoteUrl }));
   lines.push(sm('projectctx.repo_state', { state: repo.hasChanges ? sm('projectctx.repo_state_dirty') : sm('projectctx.repo_state_clean') }));
   if (repo.lastCommit) lines.push(sm('projectctx.repo_last_commit', { commit: repo.lastCommit }));
+  return lines;
+}
+
+function formatRepo(repo: RepoInfo, label?: string): string {
+  return [`- ${label ?? repo.path}`, ...repoDetailLines(repo)].join('\n');
+}
+
+/**
+ * AD-076 §T6: строка записи реестра `project.repos` — относительный `path`,
+ * абсолютный `destination` и метаданные (`name`/`url`/`type`/`defaultBranch`/
+ * `sshKeyId`/`lastFetch`) плюс git-детект (`currentBranch`/`lastCommit`).
+ */
+function formatRegistryRepo(cfg: GitRepoConfig, destination: string, repo: RepoInfo | null): string {
+  const lines: string[] = [`- ${cfg.path}`];
+  lines.push(sm('projectctx.repo_destination', { dir: destination }));
+  if (cfg.name) lines.push(sm('projectctx.repo_name', { name: cfg.name }));
+  if (cfg.url) lines.push(sm('projectctx.repo_url', { url: cfg.url }));
+  if (cfg.type) lines.push(sm('projectctx.repo_type', { type: cfg.type }));
+  if (cfg.defaultBranch) lines.push(sm('projectctx.repo_default_branch', { branch: cfg.defaultBranch }));
+  if (cfg.sshKeyId) lines.push(sm('projectctx.repo_ssh_key', { id: cfg.sshKeyId }));
+  if (cfg.lastFetch) lines.push(sm('projectctx.repo_last_fetch', { time: cfg.lastFetch }));
+  if (repo) {
+    lines.push(...repoDetailLines(repo));
+  } else {
+    lines.push(sm('projectctx.repo_not_found', { path: destination }));
+  }
   return lines.join('\n');
 }
 
@@ -227,14 +254,11 @@ export const listReposTool: ToolDefinition = {
       parts.push(sm('projectctx.repos_title', { name: project.name }));
       for (const repoCfg of project.repos) {
         // Относительные пути репозиториев резолвим относительно рабочего
-        // каталога проекта, чтобы git-детект искал в правильном месте.
-        const repoPath = resolveRepoPath(repoCfg.path, projectDir);
-        const repo = await detectRepoInfo(repoPath, ctx.abortSignal);
-        if (repo) {
-          parts.push(formatRepo(repo, repoPath));
-        } else {
-          parts.push(sm('projectctx.repo_not_found', { path: repoPath }));
-        }
+        // каталога проекта: `destination` — абсолютный путь внутри workspace,
+        // git-детект ищет в правильном месте (AD-076).
+        const destination = resolveRepoPath(repoCfg.path, projectDir);
+        const repo = await detectRepoInfo(destination, ctx.abortSignal);
+        parts.push(formatRegistryRepo(repoCfg, destination, repo));
       }
     } else {
       const repos = await findReposInDir(projectDir, ctx.abortSignal);

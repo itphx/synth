@@ -17,6 +17,7 @@ import { GlobalTransportIndicator } from './GlobalTransportIndicator'
 import { HybridStatusIndicator } from './HybridStatusIndicator'
 import { PwaInstallButton } from './PwaInstallButton'
 import { useDevice } from '@/hooks/useDevice'
+import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
 
 interface HeaderProps {
   onSettingsClick: () => void
@@ -46,11 +47,13 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
 
   const activeTab = centerTabs.find((tab) => tab.id === activeCenterTabId)
 
-  const headerTitle = useMemo(() => {
-    if (!activeTab?.data.projectId) return 'Synth'
-    const project = projects.find((p) => p.id === activeTab.data.projectId)
-    return project?.name || 'Synth'
-  }, [activeTab, projects])
+  const headerProject = useMemo(
+    () => (activeTab?.data.projectId ? projects.find((p) => p.id === activeTab.data.projectId) : undefined),
+    [activeTab, projects],
+  )
+  const headerTitle = headerProject?.name || 'Synth'
+  const headerIcon = resolveIconName(headerProject?.icon) ?? (headerProject ? 'folder-3' : undefined)
+  const headerIconColor = resolveIconColor(headerProject?.color)
 
   const isChatTab = activeTab?.type === 'chat'
   const isFileViewer = activeTab?.type === 'file-viewer'
@@ -318,8 +321,11 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
         >
           <Icon name="layout-left" className="h-5 w-5" />
         </button>
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
-          {headerTitle}
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-semibold text-foreground">
+          {headerIcon && (
+            <Icon name={headerIcon} className="size-4 shrink-0" style={headerIconColor ? { color: headerIconColor } : undefined} />
+          )}
+          <span className="truncate">{headerTitle}</span>
         </span>
         <div className="flex shrink-0 items-center gap-0.5">
           <GlobalTransportIndicator />
@@ -373,7 +379,12 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
           </button>
         )}
 
-        <span className="font-semibold text-foreground shrink-0">{headerTitle}</span>
+        <span className="flex items-center gap-1.5 font-semibold text-foreground shrink-0">
+          {headerIcon && (
+            <Icon name={headerIcon} className="size-4 shrink-0" style={headerIconColor ? { color: headerIconColor } : undefined} />
+          )}
+          {headerTitle}
+        </span>
 
         {/* Chat context — always visible */}
         {isChatTab && (

@@ -1,10 +1,34 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import type { AuthKit } from '../../auth/local.js';
+import type { createMiddleware } from 'hono/factory';
 import type { SessionManager, QueueProcessorManager, ChatOrchestrator, EventBus } from '../../index.js';
 import { generateStreamId, MessageRole } from '@itphx/synth-shared';
 import { isRemoteRef, toLocalId, remoteErrorToHttp } from '../../remote/aggregate.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
+
+/** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
+type Middleware = ReturnType<typeof createMiddleware>;
+
+/** Минимальный auth-контракт фабрики: в core и backend общий (структурно). */
+export interface QueueRoutesAuth {
+  requireAuth: Middleware;
+}
+
+/** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
+export interface QueueRouteMessages {
+  sessionNotFound: (c: Context) => string;
+  messageNotFoundIndex: (c: Context) => string;
+}
+
+export interface QueueRoutesOptions {
+  /** Переопределение сообщений (backend — i18n). */
+  messages?: Partial<QueueRouteMessages>;
+}
+
+const DEFAULT_MESSAGES: QueueRouteMessages = {
+  sessionNotFound: () => 'Сессия не найдена',
+  messageNotFoundIndex: () => 'Сообщение не найдено по индексу',
+};
 
 /** Преобразовать RemoteError в HTTP-ответ API v2; не-RemoteError → undefined (пробросить дальше). */
 function mapRemoteError(c: Context, err: unknown): Response | undefined {
@@ -22,15 +46,17 @@ function remoteUnavailable(c: Context): Response | undefined {
 }
 
 export function createQueueRoutes(
-  auth: AuthKit,
+  auth: QueueRoutesAuth,
   sessionManager: SessionManager,
   queueManager: QueueProcessorManager,
   eventBus: EventBus,
   processMessage: ReturnType<ChatOrchestrator['createProcessMessage']>,
   getRemoteClient?: () => RemoteBackendClient | null,
+  opts?: QueueRoutesOptions,
 ): Hono {
   const app = new Hono();
   const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
+  const messages: QueueRouteMessages = { ...DEFAULT_MESSAGES, ...opts?.messages };
 
   app.post('/:sessionId/clear', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
@@ -73,11 +99,11 @@ export function createQueueRoutes(
 
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
 
     if (index !== undefined && !isNaN(index) && !session.pendingMessages[index]) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сообщение не найдено по индексу' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFoundIndex(c) } }, 404);
     }
 
     // Активный стрим (не отменённый) продолжает обрабатываться — его user-сообщение
@@ -151,7 +177,7 @@ export function createQueueRoutes(
     }
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
 
     if (session.pendingMessages.length === 0) {

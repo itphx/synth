@@ -16,6 +16,7 @@ import type {
   Project,
   PromptManifest,
   PromptManifestEntry,
+  PromptManifestStatus,
   PromptTier,
   Session,
   StickyNote,
@@ -24,7 +25,9 @@ import type {
 import type { ContextBuilder } from './builder.js';
 import type { ContextConfig } from './config.js';
 import { joinPromptBlocks, sortPromptBlocks, type PromptBlock } from './prompt-blocks.js';
+import { formatSkillsCatalogBlock, type ComposerSkillsCatalog } from '../skills/catalog.js';
 import { agentKeyOf } from './prompt-state.js';
+import { RUNTIME_DEP_BINARY, type RuntimeDeps } from '../tools/runtime-deps.js';
 import type { DebugCollector } from '../../debug.js';
 
 /** Эвристика оценки токенов (AD-070 §2.5, открытый вопрос 4 — chars/4). */
@@ -41,6 +44,7 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   classification: 'Classification instruction',
   profile: 'User profile',
   'project.info': 'Project info',
+  instructions: 'Project instructions',
   'session.info': 'Session info',
   sticky: 'Sticky notes',
   participants: 'Participants notice',
@@ -51,6 +55,8 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   'mcp.tools': 'MCP tools',
   'mcp.servers': 'MCP servers',
   'mcp.status': 'MCP status',
+  'skills.catalog': 'Skills catalog',
+  'skills.catalog.session': 'Session skills',
 };
 
 /** AD-071 §2.6: есть ли непустые административные отключения инструментов. */
@@ -58,6 +64,21 @@ export function hasAdminDisabled(
   disabled?: { capabilities: string[]; tools: string[] },
 ): boolean {
   return !!disabled && (disabled.capabilities.length > 0 || disabled.tools.length > 0);
+}
+
+/** AD-070 §2.9.1: есть ли отсутствующие во внешнем окружении зависимости. */
+export function hasMissingDeps(deps?: RuntimeDeps): boolean {
+  return !!deps && (deps.git === false || deps.rg === false || deps.sh === false);
+}
+
+/** Список отсутствующих программ (`git`, `rg (ripgrep)`, `sh`) для текста промпта. */
+function missingDepsList(deps?: RuntimeDeps): string[] {
+  if (!deps) return [];
+  const out: string[] = [];
+  if (deps.git === false) out.push(RUNTIME_DEP_BINARY.git);
+  if (deps.rg === false) out.push(RUNTIME_DEP_BINARY.rg);
+  if (deps.sh === false) out.push(RUNTIME_DEP_BINARY.sh);
+  return out;
 }
 
 /** AD-071 §2.2: статус MCP-сервера в блоке `mcp.status`. */
@@ -90,6 +111,18 @@ export interface ComposerMcpServer {
    * обратной совместимости с прежним значением.
    */
   disabledReason?: McpDisabledReason | 'session';
+}
+
+/**
+ * AD-069 §3.3/§11: результат резолва проектных инструкций для блока
+ * `instructions` (тир `context`, order 15). Резолвит оркестратор (нужны
+ * workspace/модель), Composer только вставляет блок.
+ */
+export interface ComposerInstructions {
+  content: string;
+  provenance?: string;
+  /** Статус манифеста (`truncated`/`loaded`/…); не задан — из `content`. */
+  status?: PromptManifestStatus;
 }
 
 export interface ComposerContext {
@@ -149,11 +182,30 @@ export interface ComposerContext {
    */
   mcpServers?: ComposerMcpServer[];
   /**
+   * AD-046 §4.5/§5: каталог скиллов — `stable` (system/project, доступные) и
+   * `session` (session enable/disable + маркеры `unavailable`). Тело скиллов в
+   * промпт не попадает (progressive disclosure). При `systemPrompt`-override
+   * каталог не добавляется (§5).
+   */
+  skillsCatalog?: ComposerSkillsCatalog;
+  /**
+   * AD-069 §2.1/§3: проектные инструкции (merged chain `AGENTS.md`), тир
+   * `context`, order 15 (после `profile`, до `project.info`). Не добавляются
+   * при `session.settings.systemPrompt` override (как `skills.catalog`).
+   */
+  instructions?: ComposerInstructions;
+  /**
    * AD-071 §2.6: instance-wide отключение инструментов администратором
    * (`tools.disabled`). Непустой список добавляет в `tools.guide` строку про
    * административные ограничения (даже в режиме `consistency`).
    */
   adminDisabled?: { capabilities: string[]; tools: string[] };
+  /**
+   * AD-070 §2.9.1: доступность внешних программ окружения (git/rg/sh). Непустой
+   * список отсутствующих добавляет в `tools.guide` строку про зависимость
+   * окружения (даже в режиме `consistency`).
+   */
+  envDeps?: RuntimeDeps;
   /**
    * AD-071 §2.6: chars-per-token для оценки `estTokens` (калибровка по usage).
    * Не задан — дефолт 4.
@@ -246,7 +298,7 @@ export class SystemPromptComposer {
       order: block.order,
       chars: block.content.length,
       estTokens: Math.ceil(block.content.length / ratio),
-      status: block.content === '' ? 'empty' : 'loaded',
+      status: block.status ?? (block.content === '' ? 'empty' : 'loaded'),
       source: 'system',
       ...(block.provenance ? { provenance: block.provenance } : {}),
     }));
@@ -405,6 +457,48 @@ export class SystemPromptComposer {
       provenance: 'prompts/system/MODE_POLICY',
     });
 
+    // AD-046 §5: каталог скиллов — только name + краткое description
+    // (progressive disclosure). `stable` — system/project-скиллы (константа
+    // сессии), `session` — session enable/disable и маркеры `unavailable`.
+    // При `session.settings.systemPrompt` override каталог не добавляется.
+    if (!override && ctx.skillsCatalog) {
+      const skillsStable = formatSkillsCatalogBlock(ctx.skillsCatalog.stable, lang, 'stable');
+      if (skillsStable) {
+        extraBlocks.push({
+          key: 'skills.catalog',
+          tier: 'stable',
+          order: 35,
+          content: skillsStable,
+          provenance: 'skills.catalog',
+        });
+      }
+      const skillsSession = formatSkillsCatalogBlock(ctx.skillsCatalog.session, lang, 'session');
+      if (skillsSession) {
+        extraBlocks.push({
+          key: 'skills.catalog.session',
+          tier: 'volatile',
+          order: 55,
+          content: skillsSession,
+          provenance: 'skills.catalog.session',
+        });
+      }
+    }
+
+    // AD-069 §2.1/§3: проектные инструкции (merged chain AGENTS.md) — тир
+    // `context`, order 15 (после `profile`(10), до `project.info`(20)).
+    // При `session.settings.systemPrompt` override не добавляются (как каталог
+    // скиллов): override заменяет систему целиком.
+    if (!override && ctx.instructions?.content) {
+      extraBlocks.push({
+        key: 'instructions',
+        tier: 'context',
+        order: 15,
+        content: ctx.instructions.content,
+        provenance: ctx.instructions.provenance ?? 'instructions',
+        ...(ctx.instructions.status ? { status: ctx.instructions.status } : {}),
+      });
+    }
+
     // AD-071 §2.2/§2.3: MCP-блоки всегда volatile — MCP не участвует в
     // prompt-cache (состав динамичен: серверы включаются/выключаются, статус
     // меняется), поэтому ни `mcp.servers`, ни `mcp.status` не должны попадать
@@ -426,13 +520,19 @@ export class SystemPromptComposer {
       });
     }
 
-    // AD-071 §2.3/§2.6: блок добавляется, если **любая** из политик сужает
-    // состав до доступных (`available` — встроенные и/или MCP) и/или при
-    // наличии instance-wide отключений администратора (`tools.disabled`) —
-    // тогда модель предупреждена об ограничениях даже в `consistency`.
+    // AD-071 §2.3/§2.6 + AD-070 §2.9.1: блок добавляется, если **любая** из
+    // политик сужает состав до доступных (`available` — встроенные и/или MCP),
+    // и/или есть instance-wide отключения администратора (`tools.disabled`),
+    // и/или в окружении отсутствуют программы (`git`/`rg`/`sh`) — тогда модель
+    // предупреждена об ограничениях даже в `consistency`.
     const toolsRestricted = (ctx.toolsPolicy ?? 'consistency') === 'available';
     const mcpRestricted = (ctx.mcpPolicy ?? 'consistency') === 'available';
-    if (toolsRestricted || mcpRestricted || hasAdminDisabled(ctx.adminDisabled)) {
+    if (
+      toolsRestricted
+      || mcpRestricted
+      || hasAdminDisabled(ctx.adminDisabled)
+      || hasMissingDeps(ctx.envDeps)
+    ) {
       extraBlocks.push({
         key: 'tools.guide',
         tier: 'context',
@@ -441,6 +541,7 @@ export class SystemPromptComposer {
           lang,
           { builtin: toolsRestricted, mcp: mcpRestricted },
           ctx.adminDisabled,
+          ctx.envDeps,
         ),
         provenance: 'inline',
       });
@@ -515,12 +616,12 @@ export class SystemPromptComposer {
   /**
    * AD-071 §2.2: volatile-блок `mcp.status` — статус подключения по каждому
    * серверу (`connected`/`error`/`disabled`/`circuit-open`). Для `disabled`
-   * добавляется причина (выключен в конфиге / не включён в сессии).
+   * добавляется причина (opt-out сессии / не разрешён проектом / не включён
+   * по умолчанию).
    */
   private _buildMcpStatusBlock(servers: ComposerMcpServer[], lang: string): string {
     const en = lang === 'en';
     const reasonText = (reason: ComposerMcpServer['disabledReason']): string => {
-      if (reason === 'config') return en ? 'disabled in config' : 'отключён в конфиге';
       if (reason === 'session') return en ? 'not enabled in session' : 'не включён в сессии';
       if (reason === 'session_optout') {
         return en ? 'disabled in session (opt-out)' : 'отключён в сессии (opt-out)';
@@ -561,9 +662,11 @@ export class SystemPromptComposer {
     lang: string,
     restricted: { builtin: boolean; mcp: boolean },
     adminDisabled?: { capabilities: string[]; tools: string[] },
+    envDeps?: RuntimeDeps,
   ): string {
     const lines: string[] = [];
     const anyRestricted = restricted.builtin || restricted.mcp;
+    const missingDeps = missingDepsList(envDeps);
     if (lang === 'en') {
       if (anyRestricted) {
         const scope = restricted.builtin && restricted.mcp
@@ -580,6 +683,11 @@ export class SystemPromptComposer {
           'Some tools are disabled by the administrator and are not available to any agent; do not try to call them or work around this restriction.',
         );
       }
+      if (missingDeps.length > 0) {
+        lines.push(
+          `Some tools are unavailable because the required program(s) are not installed in the environment: ${missingDeps.join(', ')}. Do not try to call them or work around this restriction; the tools will become available once the program(s) are installed.`,
+        );
+      }
     } else {
       if (anyRestricted) {
         const scope = restricted.builtin && restricted.mcp
@@ -594,6 +702,11 @@ export class SystemPromptComposer {
       if (hasAdminDisabled(adminDisabled)) {
         lines.push(
           'Часть инструментов отключена администратором и недоступна ни одному агенту; не пытайся их вызвать или обойти это ограничение.',
+        );
+      }
+      if (missingDeps.length > 0) {
+        lines.push(
+          `Часть инструментов недоступна: в окружении не установлены программы: ${missingDeps.join(', ')}. Не пытайся их вызвать или обойти это ограничение — они станут доступны после установки программ.`,
         );
       }
     }

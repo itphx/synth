@@ -4,8 +4,9 @@
 // известных серверов, предзаполнение адреса, последний использованный сервер).
 // У сервера НЕТ отдельного каталога данных: локальные данные всех серверов лежат
 // в ЕДИНОМ dataDir процесса, credentials — в едином мульти-серверном файле
-// (~/.config/synth/credentials.json). Сам реестр — файл
-// ~/.config/synth/profiles.json (права 0600, атомарная запись, как credentials):
+// (~/.config/synth/profiles.json; AD-079: при `--home`/`SYNTH_HOME` —
+// `<home>/profiles.json`). Сам реестр — файл
+// profiles.json (права 0600, атомарная запись, как credentials):
 // {
 //   "version": 1,
 //   "lastProfileId": "synth-k3s-itphx-loc",
@@ -18,10 +19,9 @@
 // Путь к реестру можно переопределить (для тестов и --config).
 
 import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { homedir } from 'node:os';
+import { dirname } from 'node:path';
 import { createHash } from 'node:crypto';
-import { atomicWrite } from '@itphx/synth-shared';
+import { atomicWrite, resolveProfilesPath } from '@itphx/synth-shared';
 
 /** Версия формата файла реестра профилей. */
 const PROFILES_VERSION = 1;
@@ -55,9 +55,12 @@ function normalizeUrl(url: string): string {
   return url.trim().replace(/\/+$/, '');
 }
 
-/** Путь к файлу реестра профилей по умолчанию (~/.config/synth/profiles.json). */
-export function getProfilesPath(): string {
-  return join(homedir(), '.config', 'synth', 'profiles.json');
+/**
+ * Путь к файлу реестра профилей. AD-079: при заданном home — `<home>/profiles.json`,
+ * иначе XDG-дефолт `~/.config/synth/profiles.json`.
+ */
+export function getProfilesPath(home?: string): string {
+  return resolveProfilesPath(home);
 }
 
 /** Slug hostname для профиля: точки → дефисы, в нижнем регистре. */

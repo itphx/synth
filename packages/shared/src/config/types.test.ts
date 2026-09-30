@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema } from './types.js';
+import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 describe('mcpServerConfigSchema (AD-071 §2.2)', () => {
@@ -71,5 +71,94 @@ describe('toolsConfigSchema (AD-071 §2.3)', () => {
 
   it('отклоняет неизвестную политику', () => {
     expect(toolsConfigSchema.safeParse({ policy: 'all' }).success).toBe(false);
+  });
+});
+
+describe('skillsConfigSchema (AD-046)', () => {
+  it('дефолты: пустые списки, inlineShell=false', () => {
+    const parsed = skillsConfigSchema.parse({});
+    expect(parsed.paths).toEqual([]);
+    expect(parsed.urls).toEqual([]);
+    expect(parsed.trustedProjectDirs).toEqual([]);
+    expect(parsed.inlineShell).toBe(false);
+  });
+
+  it('принимает paths/urls/trustedProjectDirs/inlineShell', () => {
+    const parsed = skillsConfigSchema.parse({
+      paths: ['~/my-skills'],
+      urls: ['https://example.com/skills'],
+      trustedProjectDirs: ['/work/proj'],
+      inlineShell: true,
+    });
+    expect(parsed.paths).toEqual(['~/my-skills']);
+    expect(parsed.urls).toEqual(['https://example.com/skills']);
+    expect(parsed.trustedProjectDirs).toEqual(['/work/proj']);
+    expect(parsed.inlineShell).toBe(true);
+  });
+
+  it('urls: не-строковые значения отклоняются', () => {
+    expect(skillsConfigSchema.safeParse({ urls: [42] }).success).toBe(false);
+  });
+});
+
+describe('instructionsConfigSchema (AD-069)', () => {
+  it('дефолты: enabled/claudeCompat, кап от окна, пустые sources/excludeProjects', () => {
+    const parsed = instructionsConfigSchema.parse({});
+    expect(parsed.enabled).toBe(true);
+    expect(parsed.claudeCompat).toBe(true);
+    expect(parsed.contextCompat).toBe(false);
+    expect(parsed.headRatio).toBe(0.7);
+    expect(parsed.tailRatio).toBe(0.2);
+    expect(parsed.maxChars).toBeUndefined();
+    expect(parsed.windowRatio).toBe(0.06);
+    expect(parsed.minChars).toBe(20_000);
+    expect(parsed.maxCharsCeiling).toBe(500_000);
+    expect(parsed.sources).toEqual([]);
+    expect(parsed.excludeProjects).toEqual([]);
+    expect(parsed.allowInstallTreeFallback).toBe(false);
+  });
+
+  it('дефолты lazy и fetch (AD-069 §4/§5.1)', () => {
+    const parsed = instructionsConfigSchema.parse({});
+    expect(parsed.lazy).toEqual({
+      enabled: true,
+      maxAncestors: 5,
+      maxChars: 8_000,
+      excludeDirs: ['node_modules', '.git', 'vendor', 'dist', 'build', '.next', 'coverage', 'tmp', '.cache'],
+    });
+    expect(parsed.fetch).toEqual({ timeoutMs: 5_000, cacheTtlSec: 3_600, maxBytes: 262_144 });
+  });
+
+  it('источник: position по умолчанию after, kind path|url, ttlSec опционален', () => {
+    const parsed = instructionSourceConfigSchema.parse({ kind: 'url', value: 'https://x/AGENTS.md' });
+    expect(parsed.position).toBe('after');
+    expect(parsed.ttlSec).toBeUndefined();
+    expect(
+      instructionSourceConfigSchema.parse({
+        kind: 'path',
+        value: './extra.md',
+        position: 'before',
+        label: 'extra',
+        ttlSec: 60,
+      }).position,
+    ).toBe('before');
+  });
+
+  it('источник: неизвестный kind/position отклоняются', () => {
+    expect(instructionSourceConfigSchema.safeParse({ kind: 'ftp', value: 'x' }).success).toBe(false);
+    expect(
+      instructionSourceConfigSchema.safeParse({ kind: 'path', value: 'x', position: 'middle' }).success,
+    ).toBe(false);
+  });
+
+  it('принимает maxChars-override и excludeProjects', () => {
+    const parsed = instructionsConfigSchema.parse({
+      maxChars: 40_000,
+      excludeProjects: ['remote:p1'],
+      sources: [{ kind: 'url', value: 'https://example.com/AGENTS.md' }],
+    });
+    expect(parsed.maxChars).toBe(40_000);
+    expect(parsed.excludeProjects).toEqual(['remote:p1']);
+    expect(parsed.sources).toHaveLength(1);
   });
 });

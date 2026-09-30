@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAgentRoutes } from './agents.js';
-import { JsonStore } from '../storage/json-store.js';
+import { JsonStore } from '@itphx/synth-core';
 import type { AgentDefinition } from '@itphx/synth-shared';
 import { AgentRegistry, DEFAULT_AGENT_ID } from '@itphx/synth-core';
 
@@ -26,7 +26,7 @@ let store: JsonStore<AgentDefinition>;
 function createTestApp(agentRegistry?: AgentRegistry, getDefaultAgentId?: () => string | Promise<string>) {
   const app = new Hono();
   const kit = createMockKit();
-  const routes = createAgentRoutes(kit as any, store, undefined, agentRegistry, getDefaultAgentId);
+  const routes = createAgentRoutes(kit as any, store, agentRegistry, getDefaultAgentId);
   app.route('/api/v2/agents', routes);
   return app;
 }

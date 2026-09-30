@@ -8,7 +8,7 @@ import { FileStore } from '../../storage/file-store.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import { EventBus } from '../../events/bus.js';
 import type { ToolContext } from '@itphx/synth-shared';
-import { generateId } from '@itphx/synth-shared';
+import { generateId, ProjectRole } from '@itphx/synth-shared';
 
 async function exists(file: string): Promise<boolean> {
   try {
@@ -146,7 +146,9 @@ describe('plan_read / plan_list / plan_write', () => {
     projectId = project.id;
     await projectStore.save(project);
 
-    const session = await sessionManager.createSession({ title: 'Plan rw' });
+    // AD-075/D5: plan_write проверяет права — сессия должна быть атрибутирована
+    // владельцем проекта.
+    const session = await sessionManager.createSession({ title: 'Plan rw', userId: 'u1' });
     sessionId = session.id;
     await sessionManager.withLock(sessionId, async (s) => {
       s.projectId = projectId;
@@ -255,5 +257,131 @@ describe('plan_read / plan_list / plan_write', () => {
     const result = await planWriteTool.execute({ action: 'create_item', title: 'x' }, makeCtx());
     expect(result.isError).toBe(true);
     expect(result.content).toContain('project');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AD-075/D5: доступ к записи плана — owner/EDITOR разрешены, VIEWER/посторонний
+// нет, неатрибутированный синтетический контекст — back-compat; чтение не гейтится.
+// ---------------------------------------------------------------------------
+describe('plan_write: RBAC (AD-075/D5)', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+  let eventBus: EventBus;
+  let sessionId: string;
+  let projectId: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-plan-rbac-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+    eventBus = new EventBus();
+
+    const project = projectStore.create('RBAC Plan', 'owner');
+    project.members['editor'] = ProjectRole.EDITOR;
+    project.members['viewer'] = ProjectRole.VIEWER;
+    await projectStore.save(project);
+    projectId = project.id;
+
+    const session = await sessionManager.createSession({ title: 'RBAC' });
+    sessionId = session.id;
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Привязывает сессию к проекту с заданной атрибуцией (userId/ownerId). */
+  async function bindSession(userId?: string, ownerId?: string, targetProjectId = projectId): Promise<void> {
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.projectId = targetProjectId;
+      s.userId = userId;
+      s.ownerId = ownerId;
+      await sessionManager.saveSession(s);
+    });
+  }
+
+  function makeCtx(): ToolContext {
+    return {
+      sessionId,
+      messageId: generateId(),
+      abortSignal: new AbortController().signal,
+      workingDir: tmpDir,
+      extra: { sessionManager, projectStore, sessionId, eventBus },
+    };
+  }
+
+  it('owner (session.userId === project.ownerId) пишет план', async () => {
+    await bindSession('owner');
+
+    const result = await planWriteTool.execute({ action: 'create_item', title: 'Шаг 1' }, makeCtx());
+    expect(result.isError).toBeUndefined();
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.plan?.items).toHaveLength(1);
+  });
+
+  it('session.ownerId используется как fallback к userId', async () => {
+    await bindSession(undefined, 'owner');
+
+    const result = await planWriteTool.execute({ action: 'create_item', title: 'Шаг 1' }, makeCtx());
+    expect(result.isError).toBeUndefined();
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.plan?.items).toHaveLength(1);
+  });
+
+  it('EDITOR пишет план', async () => {
+    await bindSession('editor');
+
+    const result = await planWriteTool.execute({ action: 'create_item', title: 'Шаг 1' }, makeCtx());
+    expect(result.isError).toBeUndefined();
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.plan?.items).toHaveLength(1);
+  });
+
+  it('VIEWER — отказ, план не изменён', async () => {
+    await bindSession('viewer');
+
+    const result = await planWriteTool.execute({ action: 'create_item', title: 'нельзя' }, makeCtx());
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.i18n).toEqual({ key: 'project.write_forbidden' });
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.plan?.items ?? []).toHaveLength(0);
+  });
+
+  it('не-участник — отказ, план не изменён', async () => {
+    await bindSession('outsider');
+
+    const result = await planWriteTool.execute({ action: 'create_item', title: 'нельзя' }, makeCtx());
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.i18n).toEqual({ key: 'project.write_forbidden' });
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.plan?.items ?? []).toHaveLength(0);
+  });
+
+  it('неидентифицируемый контекст (нет userId, ownerId пуст) — разрешено', async () => {
+    const bare = projectStore.create('Bare', '');
+    await projectStore.save(bare);
+    await bindSession(undefined, undefined, bare.id);
+
+    const result = await planWriteTool.execute({ action: 'create_item', title: 'можно' }, makeCtx());
+    expect(result.isError).toBeUndefined();
+
+    const stored = (await projectStore.load(bare.id))!;
+    expect(stored.plan?.items).toHaveLength(1);
+  });
+
+  it('plan_read и plan_list доступны VIEWER (чтение не гейтится)', async () => {
+    await bindSession('viewer');
+
+    const read = await planReadTool.execute({}, makeCtx());
+    expect(read.isError).toBeUndefined();
+    const list = await planListTool.execute({}, makeCtx());
+    expect(list.isError).toBeUndefined();
   });
 });

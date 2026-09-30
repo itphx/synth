@@ -72,6 +72,18 @@ export const executeShellTool: ToolDefinition = {
         return abortedResult(this.name, partial || undefined);
       }
 
+      // Fallback, если детекция окружения не сработала, а `sh` не установлен.
+      if ((execError as { code?: unknown }).code === 'ENOENT') {
+        return {
+          content: sm('tool.binary_missing', { tool: this.name, binary: 'sh' }),
+          isError: true,
+          metadata: {
+            command: params.command,
+            i18n: i18nMeta('tool.binary_missing', { tool: this.name, binary: 'sh' }),
+          },
+        };
+      }
+
       let output = '';
       if (execError.stdout) output += execError.stdout;
       if (execError.stderr) output += (output ? '\n--- stderr ---\n' : '') + execError.stderr;

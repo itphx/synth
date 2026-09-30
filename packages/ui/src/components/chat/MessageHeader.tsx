@@ -16,6 +16,11 @@ interface MessageHeaderProps {
   onOriginClick?: () => void
   /** true — вместо времени показать индикатор обработки (три прыгающие точки) */
   processing?: boolean
+  /**
+   * AD-046 §7.1: рендерить только мета-часть (модель/качество/время) — для
+   * шапки `Notice` (сводка/отладка), без бейджей автора/агента/Summary.
+   */
+  metaOnly?: boolean
 }
 
 function resolveAuthor(): string {
@@ -23,7 +28,7 @@ function resolveAuthor(): string {
   return profile?.display_name || user?.username || ''
 }
 
-function MessageHeaderInner({ message, isSubagent, onOriginClick, processing }: MessageHeaderProps) {
+function MessageHeaderInner({ message, isSubagent, onOriginClick, processing, metaOnly }: MessageHeaderProps) {
   const time = message.timestamp || message.created_at
   const formatted = time
     ? new Date(time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
@@ -87,6 +92,28 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick, processing }: 
     </span>
   )
 
+  const modelBadge = !isUser && message.model && (
+    <span className="inline-flex items-center gap-0.5 rounded-sm px-1.5 py-0.5">
+      <ProviderIcon icon={providerIcon} baseUrl={providerUrl} size={12} className="shrink-0" />
+      <span>{message.model}</span>
+    </span>
+  )
+
+  const qaBadge = message.qa_pass !== undefined && (
+    <QualityBadge qa_pass={message.qa_pass} qa_reason={message.qa_reason} />
+  )
+
+  // AD-046 §7.1: мета шапки Notice (сводка/отладка) — только модель/качество/время.
+  if (metaOnly) {
+    return (
+      <div className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground/70">
+        {modelBadge}
+        {qaBadge}
+        {formatted && <span className="tabular-nums">{formatted}</span>}
+      </div>
+    )
+  }
+
   return (
     <div className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground/70 -mt-1 mb-2">
       {userBadge}
@@ -99,16 +126,9 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick, processing }: 
         </span>
       )}
 
-      {!isUser && message.model && (
-        <span className="inline-flex items-center gap-0.5 rounded-sm px-1.5 py-0.5">
-          <ProviderIcon icon={providerIcon} baseUrl={providerUrl} size={12} className="shrink-0" />
-          <span>{message.model}</span>
-        </span>
-      )}
+      {modelBadge}
 
-      {message.qa_pass !== undefined && (
-        <QualityBadge qa_pass={message.qa_pass} qa_reason={message.qa_reason} />
-      )}
+      {qaBadge}
 
       {formatted || processing || message.origin === 'merged' || message.origin === 'crosspost' ? (
         <span className="ml-auto inline-flex items-center gap-1">

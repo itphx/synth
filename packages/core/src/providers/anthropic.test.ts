@@ -6,8 +6,10 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AnthropicProvider } from './anthropic.js';
+import { ChatOrchestrator } from '../engine/orchestrator.js';
 import type { LLMMessage, SystemPromptPayload } from './base.js';
 import type { LLMChunk } from '@itphx/synth-shared';
+import { generateId, makeTextPart, MessageRole, nowISO, type Message } from '@itphx/synth-shared';
 
 const baseParams = {
   url: 'http://api.anthropic.test/v1/messages',
@@ -393,6 +395,53 @@ describe('AnthropicProvider — форматирование tool_use/tool_resul
     expect(inputs[0]).toEqual({ query: 'x' });
     expect(inputs[1]).toEqual({ query: 'y' });
     expect(inputs[2]).toEqual({});
+  });
+});
+
+describe('AnthropicProvider — пары tool_use/tool_result из _sessionMessagesToLlm (регресс агентов)', () => {
+  const provider = new AnthropicProvider(baseParams) as unknown as AnthropicPrivate;
+
+  function makeMsg(overrides: Partial<Message> & Pick<Message, 'role'>): Message {
+    return {
+      id: generateId(),
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(overrides.content ?? '')],
+      content: '',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      ...overrides,
+    };
+  }
+
+  it('смена агента: у каждого tool_result есть парный tool_use, осиротевших нет', () => {
+    const messages: Message[] = [
+      makeMsg({ role: MessageRole.USER, content: 'Прочитай файл', author: 'user' }),
+      makeMsg({
+        role: MessageRole.ASSISTANT,
+        content: 'Читаю файл',
+        agentRole: 'agentA',
+        toolCalls: [{ id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{}' } }],
+      }),
+      makeMsg({ role: MessageRole.TOOL, content: 'содержимое', agentRole: 'agentA', toolCallId: 'call_1' }),
+      makeMsg({ role: MessageRole.ASSISTANT, content: 'Готово', agentRole: 'developer' }),
+    ];
+
+    const llm = ChatOrchestrator._sessionMessagesToLlm(messages, 'developer', 'user');
+    const formatted = provider._formatMessages(llm);
+
+    const allParts = formatted.flatMap((m) => m.content as Array<Record<string, unknown>>);
+    const toolUseIds = new Set(
+      allParts.filter((p) => p.type === 'tool_use').map((p) => p.id),
+    );
+    const toolResults = allParts.filter((p) => p.type === 'tool_result');
+
+    expect(toolResults).toHaveLength(1);
+    for (const tr of toolResults) {
+      expect(toolUseIds.has(tr.tool_use_id as string)).toBe(true);
+    }
   });
 });
 

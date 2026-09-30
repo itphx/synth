@@ -23,7 +23,7 @@ const storage = vi.hoisted(() => {
   return ls
 })
 
-import { useUIStore, type CenterTab } from './useUIStore'
+import { useUIStore, OTHER_PROJECTS_COLLAPSE_KEY, type CenterTab } from './useUIStore'
 
 const tab = (id: string, title = id): CenterTab => ({
   id,
@@ -64,5 +64,46 @@ describe('useUIStore.openTab', () => {
     expect(s.activeCenterTabId).toBe('chat-1')
     expect(s.mobileLeftOpen).toBe(false)
     expect(s.mobileRightOpen).toBe(true)
+  })
+})
+
+describe('useUIStore.onlyActiveProject (variant C)', () => {
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ onlyActiveProject: false })
+  })
+
+  it('OTHER_PROJECTS_COLLAPSE_KEY экспортируется', () => {
+    expect(OTHER_PROJECTS_COLLAPSE_KEY).toBe('__others__')
+  })
+
+  it('setOnlyActiveProject меняет значение', () => {
+    useUIStore.getState().setOnlyActiveProject(true)
+    expect(useUIStore.getState().onlyActiveProject).toBe(true)
+    useUIStore.getState().setOnlyActiveProject(false)
+    expect(useUIStore.getState().onlyActiveProject).toBe(false)
+  })
+
+  it('partialize включает onlyActiveProject', () => {
+    useUIStore.setState({ onlyActiveProject: true })
+    const partialize = useUIStore.persist.getOptions().partialize
+    expect(partialize).toBeTypeOf('function')
+    const persisted = partialize!(useUIStore.getState()) as Record<string, unknown>
+    expect(persisted.onlyActiveProject).toBe(true)
+  })
+
+  it('persist: значение переживает rehydrate', async () => {
+    useUIStore.setState({ onlyActiveProject: true })
+    await useUIStore.persist.rehydrate()
+    expect(useUIStore.getState().onlyActiveProject).toBe(true)
+  })
+
+  it('merge старого persisted без поля → false (аддитивность)', async () => {
+    useUIStore.setState({ onlyActiveProject: false })
+    storage.clear()
+    storage.setItem('synth-ui-settings', JSON.stringify({ state: { leftPanelTab: 'files' }, version: 0 }))
+    await useUIStore.persist.rehydrate()
+    expect(useUIStore.getState().onlyActiveProject).toBe(false)
+    expect(useUIStore.getState().leftPanelTab).toBe('files')
   })
 })

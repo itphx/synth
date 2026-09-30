@@ -6,6 +6,7 @@
 
 import { readdir, readFile, stat, mkdir, writeFile } from 'node:fs/promises';
 import { join, dirname, basename, isAbsolute, normalize, resolve } from 'node:path';
+import { slugifyWorkspaceName, normalizeIconKey, normalizeColorKey } from '@itphx/synth-shared';
 import type { Project, Session, Message, SessionSettings } from '@itphx/synth-shared';
 import type { DirectoryListResult } from '@itphx/synth-shared';
 import type { ProjectStore } from '../storage/project-store.js';
@@ -15,16 +16,12 @@ import type { RemoteBackendClient } from './client.js';
 /** Каталоги, исключаемые из прямой синхронизации файлов. */
 export const EXCLUDED_DIRS = new Set(['node_modules', '.git', '.synth']);
 
-/** Преобразовать имя проекта в безопасное относительное имя workspace. */
-export function slugify(name: string): string {
-  const slug = (name || 'project')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/gi, '-')
-    .replace(/^-+|-+$/g, '')
-    .replace(/-+/g, '-');
-  return slug || 'project';
-}
+/**
+ * Преобразовать имя проекта в безопасное относительное имя workspace.
+ * AD-075: единая реализация — `slugifyWorkspaceName` (shared); имя сохранено
+ * для обратной совместимости публичного экспорта `remote/index.ts`.
+ */
+export const slugify = slugifyWorkspaceName;
 
 /** Резолв локального каталога workspace проекта (абсолютный — как есть, относительный — относительно workspacesRoot). */
 export function resolveLocalWorkspace(
@@ -416,8 +413,8 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
 
   const localProject = localProjectStore.create(name, 'local', {
     description: typeof remote.description === 'string' ? remote.description : '',
-    icon: typeof remote.icon === 'string' && remote.icon ? remote.icon : undefined,
-    color: typeof remote.color === 'string' && remote.color ? remote.color : undefined,
+    icon: normalizeIconKey(remote.icon),
+    color: normalizeColorKey(remote.color),
     workspace: workspaceRel,
     repos: Array.isArray(remote.repos) ? (remote.repos as Project['repos']) : undefined,
   });
@@ -478,6 +475,8 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
 
       const session = await localSessionManager.createSession({
         title: typeof exportData.title === 'string' ? exportData.title : undefined,
+        icon: normalizeIconKey(exportData.icon),
+        color: normalizeColorKey(exportData.color),
         projectId: localProject.id,
         engine: typeof exportData.engine === 'string'
           ? (exportData.engine as Session['engine'])

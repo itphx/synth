@@ -819,3 +819,467 @@
 - **Коммит (локально, без push):** `8e4b8da7` `ci(release): приложить cli.js к релизу (download-artifact synth-bundle)`.
 - **Осталось:** end-to-end проверить на следующем релизе (0.7.4 или штатном); body существующего релиза экшен не обновляет (для будущих тегов — проверить/при необходимости добавить шаг обновления тела).
 
+## 2026-09-23 (продолжение) — AD-046 Фаза 1: скиллы и core-тул `skill` — PASS
+- **Задача:** реализовать AD-046 «Скиллы и slash-команды», Фаза 1 (ядро). Решение пользователя: объём — только Фаза 1; внешние источники только instance/project/config.paths; каталог саб-агентов — по binding родителя; реализация «одним заходом»; ветка `feat/ad-046-skills-phase-1`.
+- **Тип:** feature · **Исполнитель:** @explore (investigate) → @fixer ×3 → @tester ×2 (verify) · **Результат:** PASS.
+- **Отклонения от исходного AD-046 (согласованы):** (1) толерантный frontmatter-парсер в `shared` на уже имеющемся `js-yaml` (в core его нет; новых зависимостей не добавляли); (2) ленивая mtime-инвалидация + `POST /api/v2/skills/reload` вместо FS-watch; (3) отдельного `tools.skill` нет — отключение через `tools.disabled` (AD-071); (4) каталог двумя блоками `skills.catalog` (stable, order 35) + `skills.catalog.session` (volatile, order 55), при override `session.settings.systemPrompt` не добавляется; (5) саб-агентам каталог приклеен к `llmSystemPrompt` (`task.ts`/`task-resume.ts`) по binding родителя, без рефактора на Composer.
+- **Состав:** shared — `types/skills.ts`, `skills/frontmatter.ts`, схемы, `skillsConfigSchema` (+дефолты/env), i18n, `EventType` + `skill.invoked`/`command.invoked`, `SessionSettings.skills*`, `AgentDefinition.groups?`; core — `engine/skills/{types,scope,trust,parser,discovery,watcher,registry,catalog,loader,service}.ts`, `storage/skill-store.ts`, `engine/tools/skill.ts`, интеграция в `composer.ts`/`orchestrator.ts`/`task.ts`/`task-resume.ts`/`permission/{evaluator,derive}.ts`/`events`, `server/routes/skills.ts` + монтирование, backend RBAC ADMIN на запись; docs — `API_V2.md` (§5.17), `AGENTS.md`, `ad-046` (статус + блок отклонений).
+- **Верификация:** `typecheck` 6/6; `lint` 0 errors; `test` — **2807 тестов, 0 падений** (shared 102 · core 1766 · ui 626 · backend 313). Runtime: 401 без токена, CRUD/`files`/`reload` ок, скилл попадает в манифест `skills.catalog`, reload у `developer` → 403. **Найден и исправлен дефект (medium):** `GET/PATCH/DELETE /skills/:name` с невалидным именем → 500; guard `isValidSkillName` во всех 7 `:name`-роутах → 404, +15 регрессионных тестов; round 2 верификации — PASS.
+- **Ветка/коммит:** `feat/ad-046-skills-phase-1`; коммит `2db826b3` (после согласования правок AGENTS.md). master не пушился (локально опережает origin на 2 коммита).
+- **Дальше:** Фаза 2 (резолвер `/`-команд, bundles, CLI/UI-автокомплит), затем AD-069 (проектные инструкции). Открытые вопросы §14(2,4,5,7) AD-046 (requires_toolsets, приоритет bundle vs builtin, UI недоверенных, `allowed-tools`) — решить в Фазе 2/3.
+
+## 2026-09-23 (продолжение) — AD-046 Фаза 2, commit 1: slash-команды в core — PASS
+- **Задача:** Фаза 2 «Команды и bundles», часть 1 (core + API + CLI, без UI). Решения пользователя: builtins `/help` (статика), `/skills`, `/commands`, `/summary`; `/compact` и `/review` отложены; конфликт имён — настройка (`bundle-wins` default / `conservative` / `namespace`); `allowed-tools` advisory; `requires_toolsets` через конфиг; permission-ключ `rules.command`; результаты локальных команд видимы, но `ephemeral` (исключены из LLM-контекста); UI — отдельным commit 2.
+- **Тип:** feature · **Исполнитель:** @explore (investigate) → @fixer ×4 → @tester ×3 · **Результат:** PASS.
+- **Состав:** shared — `types/commands.ts`, `Message.ephemeral`, `commandsConfigSchema` (`paths`, `bundlesPath`, `conflict`, лимиты), `skillsConfigSchema.toolsets`, Zod-схемы, i18n `command.*`; core — `engine/commands/{types,parser,template,discovery,registry,bundles,builtin,resolver,service}.ts`, `storage/skill-bundle-store.ts`, ранний резолвинг в `_processMessage` до LLM, `_publishLocalCompletion` (`stream.chunk`/`stream.done`), `command.invoked`, `ephemeral`-фильтры в оптимизаторе, `pathToFileURL`/`<file>…</file>` (фикс Фазы 1); API — `routes/{commands,skill-bundles,skill-scope}.ts` (sessions/projects/settings skills + effective), монтирование core/backend; CLI — `/`-команды через `runSingleChat` без LLM.
+- **Верификация:** typecheck 6/6; lint 0 errors; тесты shared 103 · core **1831** (136 файлов) · ui 626 · backend **318**. Runtime: SSE закрывается для `/help` (`stream.chunk`+`stream.done`), `/commands`,`/skills`,`/nope` — локально без LLM; `ephemeral` в API и не в контексте; bundle CRUD (201/200/400/409/delete); scope-API + RBAC; конфликт-режимы (unit).
+- **Найденные и исправленные дефекты:** (1) HIGH — SSE не закрывался для локальных команд (`text`/`done` вместо `stream.*`); (2) medium-high IDOR — `sessions/:id/skills` без проверки доступа (чужой USER правил сессию) → `canAccess` 403; (3) project-skills PUT только ADMIN → выровнено с MCP (owner/LEAD/admin); (4) мёртвый код/ключи, `ephemeral` не сериализовался, CLI `/summary` не запускал суммаризацию.
+- **Коммит:** `d520c1f2` (61 файл, +4010/−50). Ветка `feat/ad-046-skills-phase-1`. master и ветка не пушились.
+- **Дальше:** commit 2 — UI (настройки user/admin по аналогии с MCP, тумблеры на вкладках «Сессия»/«Проект», секции статистики, `/`-автокомплит), затем AD-069.
+## 2026-09-23 (продолжение) — AD-046 Фаза 2, commit 2 (UI): скиллы/команды в интерфейсе — PASS
+- **Задача:** UI-слой Фазы 2 — настройки пользователя/админа (по аналогии с MCP), тумблеры скиллов в правой панели, таблицы статистики, `/`-автокомплит. Решения: пользователь не создаёт скиллы (просмотр + session-вкл/выкл); `/compact`/`/review` вне объёма; счётчики из live-событий.
+- **Тип:** feature (UI) · **Исполнитель:** @fixer ×3 (настройки/стор → панели/статистика/автокомплит → фикс импорта + docs) → верификация @orchestrator (Playwright) · **Результат:** PASS.
+- **Состав:** `synthApi` (skills/commands/bundles/scope), `stores/skillsStore.ts` + события в `transportStore`, `components/settings/{SkillsUserSettings,SkillsAdminSettings,SkillEditorForm,CommandsSettings}.tsx`, категории `settings.category.{skills,skillsAdmin,commands}` в `SettingsModal`; правая панель — секция скиллов в `SessionSettingsTab` и `ProjectSkillsBlock` в `ProjectTab`; `StatsTab` — секции «Скиллы»/«Команды»; `components/chat/CommandAutocomplete.tsx` + интеграция в `ChatInput`; i18n ru/en. +12 тест-файлов (66 тестов), ui 692.
+- **Инцидент и фикс (важно):** два **value-импорта** констант из корня `@itphx/synth-shared` (`CommandsSettings`, `SkillsAdminSettings`) протянули `shared/config/loader` (node:fs) в браузерный бандл → приложение не рендерилось. Переведены на subpath `@itphx/synth-shared/schemas`. Правило зафиксировано в `packages/ui/AGENTS.md`: runtime-импорты shared — только через subpath (`/types`, `/schemas`, `/i18n`, `/version`); `import type` из корня безопасен.
+- **Верификация (Playwright, :5002, admin):** чистовая загрузка — 0 ошибок консоли; настройки — user «Скиллы» (просмотр, «доступных нет»), admin «Скиллы» (создание `qa-ui-skill` → 1 скилл, «Изменить/Удалить», system enable/disable, политика `auto`), admin «Команды» (5 команд: `/commands`,`/help`,`/qa-ui-skill`,`/skills`,`/summary`; bundles); «Сессия» — секция скиллов с тумблером, «Проект» — два тумблера на скилл, «Статистика» — секции СКИЛЛЫ/КОМАНДЫ; `/`-автокомплит — kind-бейджи, выбор вставляет `/help `. Тестовый скилл удалён; dev-стек :5000/:5002/:4300 работает.
+- **Коммиты:** `6331be2` — `feat(ui): AD-046 Фаза 2 — UI скиллов/команд…` (29 файлов, +5067/−13); ранее `d520c1f` — commit 1 (core+API+CLI). Ветка `feat/ad-046-skills-phase-1`, master/ветка не пушились. Документация: корневой `AGENTS.md` (AD-046 — Фаза 1+2 ✅, остаток Фаза 3), `packages/ui/AGENTS.md`, `docs/arch_decisions/ad-046-*.md`.
+- **Дальше:** Фаза 3 AD-046 (inline shell opt-in, `skill-creator`, `skills.urls`/удалённые каталоги, backend-админка каталога/AD-068); AD-069 (проектные инструкции) — зависит от AD-046.
+## 2026-09-23 (продолжение) — fix: ответы системных команд в UI — PASS
+- **Задача:** ответ на локальную системную команду (`/help`, `/skills`, `/commands`, `/summary`-нотис) отображался как ответ агента. Решения пользователя: inline system-блок (A), объединять команду+вывод, оставить только «Копировать», `/summary` — нотис + обычный SUMMARY, отдельный коммит.
+- **Тип:** bug fix (UI/core) · **Исполнитель:** @fixer ×2 → верификация @orchestrator (Playwright) · **Результат:** PASS.
+- **Причина:** `_finishLocalCommand` создавал ответ как обычное `assistant`-сообщение с `agentRole` и `metadata.command:true`, но UI не использовал признак → рендерил бейдж агента/статистику; user-команда не помечалась. Плюс `stream.done` локальной команды не нёс `message_index/message_id` → fallback `finishStream` давал assistant тот же index, что user → React key-warnings и дубли; `addMessage` не дедуплицировал.
+- **Правки core:** `_finishLocalCommand` — `model/provider='command'`, `metadata { command:true, commandName, commandArgs }` (и `i18nKey` для `/summary`), метаданные едут в `stream.done`; user-команда помечается `metadata.commandPrompt=true`; `stream.done` несёт `message_index`/`message_id`; повторный `message.added` user-команды с `commandPrompt` (скрытие live-пузыря). Ветка template/skill/bundle не тронута.
+- **Правки UI:** новый `components/chat/CommandMessage.tsx` — нейтральный system-блок (`> /name args`, вывод, только «Копировать», без бейджа агента/статистики/retry); `ChatMessage` — ветка `metadata.command`; `messageVisibility` — скрывает `commandPrompt`; `chatStore.addMessage` — upsert по index/id, `finishStream` — index из события + защита от коллизии; `transportStore` — `message_id`; i18n `chat.command.*`.
+- **Верификация (Playwright, :5002):** live-отправка `/help` — 0 user-пузырей, 1 командный блок, **0 console errors** (до фикса — 5 key-warnings на отправку); после перезагрузки — user-команда скрыта, блок на месте, консоль чистая; в блоке только «Копировать», бейджа агента нет. Тесты: shared 103 · core 1833 · ui 705 · backend 318 — зелёные; typecheck 6/6; lint 0 errors.
+- **Коммит:** `a1b29ce` `fix(ui): ответы системных команд — system-блок, скрытие команды, устранение дублей`. Ветка `feat/ad-046-skills-phase-1`.
+- **Дальше:** Фаза 3 AD-046 (inline shell, skill-creator, skills.urls, AD-068) или AD-069.
+## 2026-09-23 (продолжение) — refactor: единый Notice для служебных сообщений — PASS
+- **Задача:** привести служебные сообщения к единому виду: общий компонент, блок по центру (текст слева), шапка (иконка+подпись), кнопка «Копировать»; ревизия command/summary/debug/error/info. Решения пользователя: вариант B (общий `Notice`), ревизия всех, у команды — только copy, у summary/debug сохранить существующие действия.
+- **Тип:** refactor (UI) · **Исполнитель:** @fixer → верификация @orchestrator (Playwright) · **Результат:** PASS.
+- **Семейство до правки:** `summary`/`debug`/`error`/`info` — центрированы, но разной разметкой (`MessageHeader`/без шапки); `command` — свой лево-ориентированный `CommandMessage`; `state`/`tool_chain` — скрыты.
+- **Правки:** новый `components/chat/Notice.tsx` (варианты command/summary/debug/error/info; центрированный wrapper, box `max-w-[85%] text-left`, шапка иконка+label+meta, футер «Копировать» + доп. actions; hover/touch); `CommandMessage` переведён на `Notice` (сохранены `commandHeader`, `SecretMarkdown`, resolveI18n, секреты); `ChatMessage` — summary/debug/error/info через `Notice`, reasoning/tool/subagent-блоки переданы children, сохранён `SessionReferenceCard` и `selectionMode`; `MessageHeader` — аддитивный `metaOnly`; `MessageActions` — `embedded`/`showCopy`; `Icon` — `information`; i18n `chat.notice.*`.
+- **Без потерь:** summary/debug — meta модель/время(+quality) и полные `MessageActions`; info — `text-xs` и `SessionReferenceCard`; error/info — copy. Осознанно: у notice `disabled` → `opacity-50`; в meta сводки/отладки нет origin/agent-бейджей.
+- **Верификация:** ui-тесты **90 файлов / 723** (+18); shared 103, core 1833, backend 318 — зелёные; typecheck 6/6; lint 0 errors. Playwright: командный блок `> /help` центрирован (`items-center`), консоль 0 ошибок. Вариант info покрыт юнит-тестами (в дереве UI сессию не нашёл).
+- **Коммит:** `c27da02` `refactor(ui): единый Notice для служебных сообщений (command/summary/debug/error/info)`.
+- **Дальше:** Фаза 3 AD-046 (inline shell, skill-creator, skills.urls, AD-068) или AD-069.
+## 2026-09-24 — AD-046 Фаза 3 (inline shell, skills.urls, skill-creator) — PASS
+- **Задача:** закрыть автономную часть Фазы 3 AD-046. Решения пользователя: `skill-creator` — встроенный скилл-инструкция; `skills.urls` — read-only индексация; install/trust — AD-068.
+- **Тип:** feature/security · **Исполнитель:** @fixer ×4 → верификация @orchestrator (tests + API + dev-restart) · **Результат:** PASS.
+- **3.1 `536f51c` — security:** trust-гейт проектных `.synth/commands/*.md` (был пробел: команды грузились без `skills.trustedProjectDirs`). `CommandOrigin/Source/TemplateCommand.trusted`, диагностика `untrusted`, кэш учитывает trust, недоверенные не попадают в каталог/резолвер/`/`-автокомплит`; проброс `trustedProjectDirs` в core app/chat/backend.
+- **3.2 `2fc2f5c` — inline shell:** `skills.inlineShell` (по умолчанию off) сквозь `CommandRuntimeConfig`; `renderTemplate` подставляет `` !`cmd` `` (regex по токену, лимит 50 KB, диагностики); раннер строит оркестратор: `PermissionEvaluator.check({toolName:'execute_shell',…})`, **allow-only** (`deny`/`ask` → отказ без интерактива), helper `engine/commands/inline-shell.ts` (timeout 30 c, maxBuffer, abort); аудит-событие `command.inline_shell`; i18n.
+- **3.3 `738fd4d` — skills.urls/внешние каталоги:** конфиг `skills.urls`; discovery внешних read-only (`opencode/.claude/.agents`, `~/.config/opencode`) с trust по правилам; `engine/skills/remote.ts` — fetch `index.json`+`SKILL.md` в `{dataDir}/skills-cache/urls/<hash>` (SSRF-guard: http/https, блок private/loopback/ULA, ручные редиректы с проверкой каждого хопа, timeout 5 c, лимиты 1 MB/200/50 KB, атомарная запись). Url-скиллы — **`trusted:false`** (видны в реестре, не в каталоге модели) до AD-068.
+- **3.4 `0bd94b5` — skill-creator:** builtin-скилл (`instance/system`, trusted) как TS-константа (`engine/skills/builtin.ts`), инжектится первым в `SkillRegistry.list` (не перекрывается проектом); `metadata.synth.command: skill-creator`, `requires_capabilities: [file_read,file_write]`; EN-инструкция по созданию проектного скилла в `.synth/skills/<name>/SKILL.md`; виден в `/skills`, каталоге и как `/skill-creator`.
+- **Verify:** shared 104 · core 1914 · ui 723 · backend 318 — зелёные; typecheck 6/6; lint 0 errors. Live (dev-restart all, пересборка core): `GET /api/v2/skills` содержит `skill-creator` (instance/system, trusted, userInvocable); `GET /api/v2/commands` содержит `skill-creator` (kind skill). Замечание: API-листинг `/commands` без capabilities помечает capability-гейтнутые скиллы `available:false` (в сессии с `assistant` доступен) — pre-existing пробел роутов, кандидат в тех.долг.
+- **Docs:** `docs/CONFIGURATION.md` — раздел «Скиллы (`skills.*`)»; `AGENTS.md` — строка AD-046; статус в AD-046.
+- **Дальше:** AD-069 (инструкции AGENTS.md + `/init`), bump generation при смене инструкций.
+## 2026-09-24 — AD-069 Проектные инструкции (AGENTS.md) и /init — PASS
+- **Задача:** реализовать AD-069 полностью (Ф1–Ф3). Решения пользователя: `config.instructions.sources` — список с `position: before|after`; URL — fetch при старте + TTL-кэш без таймера; кап динамический от окна модели; глобальные файлы не читать (identity-тир уже покрывает); generation bump при смене инструкций; все 3 фазы.
+- **Тип:** feature · **Исполнитель:** @fixer ×6 → верификация @orchestrator (tests + API + Playwright) · **Результат:** PASS.
+- **Ф1 `cf5faf1`:** shared-схема `instructions`; `engine/context/instructions.ts` (git root→cwd merged chain, приоритет файлов, sha256-дедуп, head/tail-обрезка, threat-scan AD-036, provenance, динамический кап `clamp(ratio*окно,20k,500k)`, окно через `_resolveModelContextWindow`, fallback 128k); блок `instructions` в composer (context order 15, не при override); generation bump (per-agent promptStates, `isBlockChanged`).
+- **Ф2a `13c6a08`:** `config.instructions.sources` (path/glob/`~/`/abs, before/after), URL fetch+TTL-кэш `{dataDir}/instructions-cache`, общие SSRF-хелперы вынесены в `engine/net/fetch.ts` (переиспользованы `skills/remote.ts`), project-trust гейт, install-tree guard, excludeProjects, расширенная диагностика статусов.
+- **Ф2b `999dce6`:** прокидка инструкций в саб-агенты (`task.ts`/`task-resume.ts`, флаг `skip_context_files`), `lazy-instructions.ts` (по file/shell-тулам, ≤5 предков, границы workspace, excludeDirs, дедуп loaded+sha256, один раз на сообщение, кап 8k, threat-scan, маркер `[Subdirectory context discovered: …]`), событие `context.instructions_loaded`.
+- **Ф2c-API `26afdbf`:** `GET /api/v2/context/instructions?session_id|project_id`, RBAC (владелец|ADMIN; owner/LEAD/ADMIN), `no-project`, cap/status/scan; backend-роут identity переименован в `createContextFileRoutes`.
+- **Ф2c-UI `eb98850`:** `instructionsStore` + `synthApi.getSessionInstructions`, секция «Проектные инструкции» в панели «Сессия» (сводка/список/статусы/скан), реактивность по WS-событию, i18n ru/en, мобильный адаптив.
+- **Ф3 `7fbd552`:** новый статус команды `prompt` (не локальный → CLI не короткозамыкает); builtin `/init` (промпт AD-069 §8.1, без несуществующего тула `question`, `$ARGUMENTS`); builtin-скилл `synth-agents-md` (capability-aware, команда `/agents-md` — во избежание конфликта с builtin `/init`).
+- **Verify:** shared 110 · core 2010 · ui 730 · backend 318 — зелёные; typecheck 6/6; lint 0 errors. Live (пересборка + dev-restart): `GET /commands` → `init` (builtin, available), `GET /skills` → `synth-agents-md`; `GET /context/instructions` → динамический cap 60000 для окна 1M, `no-project` для сессии без проекта; UI: секция «Проектные инструкции» отображается, 0 console errors.
+- **Docs:** AD-069 статус ✅ (с отклонениями), `AGENTS.md` строка AD-069, `docs/CONFIGURATION.md` — раздел `instructions.*` + список builtin-команд.
+- **Примечание:** project-trust по умолчанию пуст — проектные инструкции (как и проектные скиллы AD-046) грузятся только после добавления каталога в `skills.trustedProjectDirs`.
+
+## 2026-09-24 (продолжение) — AD-075: автосоздание/выбор рабочего каталога проекта — PASS
+- **Задача:** реализовать AD-075 (окружение проекта: рабочий каталог) — managed автосоздание, standalone ручной выбор, политика путей вне корня.
+- **Тип:** feature · **Результат:** PASS (код написан; не закоммичено по указанию).
+- **Состав:** shared — `storage.workspaceOutsideRoot` (+ env `SYNTH_WORKSPACE_OUTSIDE_ROOT`, резолвер `resolveWorkspaceOutsideRootPolicy`), типы/схемы, `utils/workspace.ts` (`slugifyWorkspaceName`/`uniqueWorkspaceName`), i18n; backend — `lib/workspace-resolver.ts` (нормализация managed), `routes/projects.ts` (авто-имя, `mkdir -p`, RBAC смены workspace), `routes/fs.ts` (`workspace-root*`), `app.ts` (runtime-override `settings/workspace` + `defaultWorkingDir` в оркестратор); core — `engine/orchestrator.ts` (`_resolveWorkingDir` mkdir), `engine/tools/project-manage.ts` (`project_create` mkdir), `server/routes/projects.ts` (нормализация/политика/`confirmOutsideRoot`), `server/routes/fs.ts` (`workspace-root*`), `server/routes/settings.ts` (`workspace-policy`, managed read-only), `storage/runtime-settings.ts`; ui — `DirectoryPickerDialog`, `WorkspacePolicySection`, read-only managed, обработка 409→подтверждение→повтор, i18n ru/en.
+- **Поведение:** managed `workspace` автосоздаётся (`mkdir -p`); относительный — внутри `workspacesRoot`, абсолютный внутри root нормализуется в относительный, вне root → `403 WORKSPACE_OUTSIDE_ROOT_DENIED`; пустой → авто-имя `slugify(name)` + суффикс `-2/-3…` (атомарный `mkdir`); 422 «каталог не найден» убран; политика вне root `confirm`/`deny` (`storage.workspaceOutsideRoot` / `/settings/workspace-policy`, standalone — `confirm`, managed — `deny` read-only).
+- **Верификация:** typecheck 6/6; lint 0 errors; тесты shared 122 · core 2043 · backend 350 · ui 750 — зелёные.
+- **Известный остаток:** D5 — `PUT /api/v2/projects/:id` проверяет владение/роль только при смене поля `workspace`; остальные поля (`name`, `description`, `current_task`, `invariants`, `icon`, `color`, `plan`, `repos`) мутируются без проверки владения (предсуществовавшая дыра, вне объёма AD-075).
+- **Ветка:** `feat/ad-075-workspace-provisioning`.
+- **Дальше:** закрытие D5 отдельной задачей (или AD-074/AD-076/AD-077).
+
+## 2026-09-24 (продолжение) — D5: горизонтальная авторизация projects — PASS
+- **Задача:** закрыть D5 (известный остаток AD-075) — мутации `PUT/DELETE /api/v2/projects/:id` проверяли владение только при смене `workspace`.
+- **Тип:** bug fix (security, IDOR) · **Результат:** PASS.
+- **Правки:** `packages/backend/src/routes/projects.ts` — хелперы `canManageProject` (owner/LEAD/ADMIN) и `canEditProjectContent` (owner/EDITOR/LEAD/ADMIN); `PUT` — `workspace` owner/LEAD/ADMIN, контентные поля (`name`, `description`, `current_task`, `invariants`, `icon`, `color`, `repos`, `plan`) owner/EDITOR/LEAD/ADMIN; `DELETE` — owner/LEAD/ADMIN; VIEWER/посторонний → `403 FORBIDDEN`. Проверки до мутаций. Тесты `projects.test.ts` (+7 кейсов).
+- **Верификация:** тесты backend — зелёные (по отчёту реализации).
+- **Ветка:** `feat/ad-075-workspace-provisioning`; не закоммичено.
+- **Дальше:** AD-074/AD-076/AD-077.
+
+## 2026-09-24 (продолжение) — AD-075: standalone-скрипт, фикс путей, навигация в диалоге — PASS
+- **Задача:** доработки AD-075 после базовой реализации: (а) D5, (б) фикс относительного `dataDir`/`workspacesRoot`, (в) `scripts/standalone.sh`, (г) навигация за корень в `DirectoryPickerDialog`, (д) ручная браузер-проверка standalone.
+- **Тип:** bug fix + feature (dev-tooling/UI) · **Результат:** PASS.
+- **(а) D5 закрыт:** `PUT/DELETE /api/v2/projects/:id` — горизонтальная авторизация (owner/EDITOR/LEAD/ADMIN для контента; owner/LEAD/ADMIN для `workspace` и delete); коммит `7cebeda` «fix: RBAC на изменение и удаление проектов (D5)».
+- **(б) Фикс путей:** `packages/shared/src/config/resolve.ts` абсолютизирует `dataDir`/`workspacesRoot`/`defaultWorkspace`; core `createFsRoutes` и backend `WorkspaceResolver` нормализуют root — относительный `dataDir` больше не ломает containment (ложный «вне root»).
+- **(в) `scripts/standalone.sh`:** сборка `shared→core→ui→synth`, `pnpm pack` (резолвит `workspace:*`), `npm install` 4 tgz в `tmp/standalone/install`, запуск `SYNTH_DATA_DIR=<data> node_modules/.bin/synth serve --no-auto-profile`; опции `--port/--host/--data-dir/--api-key/--prefix/--no-build/--rebuild-packs/--check/--keep-data/--clean`; логи `tmp/standalone-build.log`, `tmp/standalone.log`; `--check` — smoke (health, create project, workspace-root, workspace-policy).
+- **(г) `DirectoryPickerDialog`:** навигация «Вверх» за корень при политике `confirm` (не read-only), подсказка «Вне рабочего корня», выбор вне корня через ConfirmDialog; i18n ru/en.
+- **(д) Ручная браузер-проверка (Playwright, standalone):** создание папки в корне → 201, каталог появился; «Вверх» за корень при `confirm`; подсказка «Вне рабочего корня»; выбор вне корня через ConfirmDialog → PUT 200, workspace absolute.
+- **Тесты:** shared 132 · core 2046 · ui 754 · backend 361; typecheck/lint зелёные.
+- **Ветка:** `feat/ad-075-workspace-provisioning` (D5 — `7cebeda`; остальное — в рабочем каталоге, не закоммичено).
+- **Docs:** `docs/DEVELOPMENT.md` — раздел `standalone.sh`; `AGENTS.md` — строка в блоке команд; `docs/arch_decisions/ad-075-*.md` — §8.
+- **Дальше:** AD-074/AD-076/AD-077.
+
+## 2026-09-24 (продолжение) — AD-075: закрытие хвостов (CLI data-dir, tool-level RBAC) — PASS
+- **Задача:** закрыть два остаточных хвоста AD-075: относительный `--data-dir` и отсутствие проверки прав при записи проектных данных из core-тулов.
+- **Тип:** bug fix (security/paths) · **Результат:** PASS.
+- **`58f6934` — нормализация `--data-dir` на CLI-границах:** `ensureFirstRun` (shared) и все обработчики `options.dataDir`/`options['data-dir']` в `packages/synth/src/cli.ts` и `packages/core/src/main.ts` оборачивают путь в `path.resolve` → относительный `--data-dir` больше не даёт относительный `dataDir`/`workspacesRoot`, containment AD-075 не ломается. Тест в `resolve.test.ts` (`ensureFirstRun` relative → absolute).
+- **`cae2f92` — RBAC на запись проектных данных из core-тулов:** новый `packages/core/src/engine/tools/project-access.ts` (`resolveSessionUserId`, `canEditProject`); `project_invariants_write`/`project_log_write` пишут только при owner/EDITOR (`project.ownerId` или `members[userId] ∈ {OWNER, EDITOR}`), иначе — `isError` `project.write_forbidden`, проект не меняется. Неидентифицируемый контекст (нет `userId` и пустой `ownerId`) — back-compat разрешён. `plan_write` намеренно не гейтится (комментарий/TODO в `plan.ts`) — строгий гейт ломает план-воркфлоу на неатрибутированных сессиях; остаточный риск зафиксирован.
+- **Ограничение:** глобальные LEAD/ADMIN в core недоступны (роли — backend) — их носители не изменят `invariants`/`log` через чат, но могут через UI/API.
+- **Тесты:** shared 133 · core 2052 · ui 754 · backend 361; typecheck/lint зелёные. Известный флейк — `task-resume`.
+- **Ветка:** `feat/ad-075-workspace-provisioning` (коммиты `58f6934`, `cae2f92`; документация — не закоммичена).
+- **Docs:** `docs/arch_decisions/ad-075-*.md` — §9 + остаточные риски; `docs/API_V2.md` — tool-level RBAC в §5.8.
+- **Дальше:** AD-074/AD-076/AD-077.
+
+## 2026-09-24 (продолжение) — AD-076: реестр git-репозиториев и SSH-ключи per-agent — PASS
+
+- **Задача:** реализовать AD-076 — реестр git-репозиториев (несколько на проект) + SSH-ключи per-agent (шифрование at-rest).
+- **Тип:** feature · **Результат:** PASS (код написан; не закоммичено по указанию).
+- **Shared:** `GitRepoConfig` (`id?`/`name?`/`url?`/`type?`/`path`/`defaultBranch?`/`sshKeyId?`/`lastFetch?`), `normalizeGitRepoConfig`, union `repos` (legacy `string[]`); `SSHKey`/`SSHKeyMeta` (`agentIds: string[]`), `sshKeyCreate/UpdateSchema`; схемы git-роутов (`register`/`remove`/`fetch`, `init`/`clone` с `name?`/`sshKeyId?`); конфиг `security.secretKey` + env `SYNTH_SECRET_KEY` (`resolveSecretKey`); удалено мёртвое `AgentDefinition.sshKeys`; i18n `sshkey.*`/`git.*`/`projectctx.repo_*`.
+- **Core:** `security/crypto.ts` (AES-256-GCM, `enc:v1:`, `resolveMasterKey` → `{dataDir}/secrets/master.key`); `storage/ssh-key-store.ts` (`JsonStore` `secrets/ssh-keys`, секреты шифруются, `reveal()` только для git); `git/git-service.ts` (перенос из backend, `fetchRepo`/`removeLocal`, `simple-git` — зависимость core) и `git/ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`); `server/routes/git.ts` (`scan`/`init`/`clone`/`register`/`remove`/`fetch`/`log`/`commit`, clone/init регистрируют `project.repos`) и `server/routes/ssh-keys.ts` (flat + nested, `DELETE :keyId` = unlink); монтирование + `REMOTE_PROXY_PREFIXES` (`/git`, `/ssh-keys`); тулы — `repo_path` (containment) и SSH в `git_push`/`git_pull` (`git-ssh.ts`), `list_repos` из реестра.
+- **Backend:** удалены локальные `routes/git.ts`/`lib/git-service.ts` (и `simple-git`); `/git` — core-фабрика с `authorizeProject` (`canEditProjectContent`), `/ssh-keys` — core-фабрики с `writeGuard: requireAdmin`.
+- **UI:** Git-вкладка — реестр (destination/type/url/ssh-key/lastFetch), scan→register, clone/init (`name`/`path` + SSH-ключ), fetch/remove (`ConfirmDialog`); секция «SSH-ключи» в категории «Агенты» (CRUD, привязка к агентам); i18n ru/en.
+- **Данные:** `$SYNTH_DATA_DIR/secrets/master.key`, `$SYNTH_DATA_DIR/secrets/ssh-keys/<id>.json`.
+- **Ограничения:** passphrase не поддерживается (явная ошибка); nested `/agents/:id/ssh-keys` в гибриде не проксируется (только flat `/api/v2/ssh-keys`); `plan_write` без tool-RBAC (остаток AD-075); ротация мастер-ключа вне объёма.
+- **Верификация:** typecheck 6/6; lint 0 errors; тесты shared 155 · core 2120 · ui 774 · backend 372. Curl `/git/repos/register|clone`, `/ssh-keys` (маскировка, RBAC 403 USER, nested unlink), браузер — Git-реестр и SSH-ключи.
+- **Ветка:** `feat/ad-075-workspace-provisioning`; не закоммичено.
+- **Docs:** AD-076 статус ✅ + «Реализация»/«Решено»/«Известные ограничения»; `docs/arch_decisions/README.md`; `AGENTS.md` (строка AD-076, `repo_path`, `secrets/`); пакетные `AGENTS.md` core/backend/shared/ui; `docs/API_V2.md` §5.15/§5.15.1; `docs/CONFIGURATION.md` (`security.secretKey`).
+- **Дальше:** AD-074/AD-077 (или закрытие ограничений AD-076).
+
+## 2026-09-24 (продолжение) — закрытие недоделок AD-075/AD-076 (4 фикса) — PASS
+
+- **Задача:** закрыть остаточные ограничения AD-075/AD-076: `plan_write` без tool-RBAC + атрибуция сессий; nested SSH-прокси в гибриде; SSH-ключи с passphrase; ротация мастер-ключа.
+- **Тип:** bug fix + feature (security/git) · **Результат:** PASS (не закоммичено).
+- **1. `plan_write` tool-RBAC + атрибуция сессий:** `sessions/manager.ts` — `createSession` сохраняет `ownerId: data.ownerId || data.userId || ''` (раньше терялся); `forkSession` при отсутствии опций наследует `userId`/`ownerId` источника. `engine/tools/project-manage.ts` — `loadSessionProject` экспортирован и переиспользован; `engine/tools/plan.ts` — `plan_write` перед мутацией проверяет `canEditProject(session, project)` → `project.write_forbidden` (как log/invariants), TODO снят; `plan_read`/`plan_list` не гейтятся. Тесты: `plan.test.ts` (RBAC owner/fallback/EDITOR/VIEWER/не-участник/неатрибтированный/чтение), `manager.test.ts` (createSession/forkSession).
+- **2. nested `/api/v2/agents/:agentId/ssh-keys` проксируется в гибриде:** `server/proxy.ts` — `REMOTE_PROXY_PATTERNS` = `[/^\/api\/v2\/agents\/[^/]+\/ssh-keys(?:\/|$)/]`, `matchesProxyPrefix` учитывает префиксы И паттерны (матчер экспортирован). `/agents`, `/agents/all`, `/agents/:id`, `/agents/:id/enabled` остаются локальными. Тесты `app.proxy.test.ts` (+4).
+- **3. SSH-ключи с passphrase:** `git/ssh-env.ts` — при passphrase создаётся askpass-скрипт `0700` (base64 `base64 -d`), env `SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE=force`, `GIT_SSH_COMMAND` без `BatchMode=yes` и с `-o NumberOfPasswordPrompts=1`; без passphrase — как раньше. `SshEnvErrorCode='env_failed'`; маппинг `sshkey.env_failed` в `engine/tools/git-ssh.ts` и `server/routes/git.ts`; i18n (shared + core en + ui ru/en).
+- **4. Ротация мастер-ключа:** `security/crypto.ts` (`masterKeyFilePath`/`readMasterKeyFile` без генерации/`decodeMasterKey`), `storage/ssh-key-store.ts` (`listRaw`, `rotateMasterKey` с preflight `preflight_failed`), `security/rotate.ts` (`rotateSecretsMasterKey`/`MasterKeyRotationError`); CLI `synth secrets rotate` в обоих CLI (`core/src/main.ts`, `synth/src/cli.ts`; `--data-dir --config --old-key --old-key-file --new-key --new-key-file --dry-run --yes`).
+- **Верификация:** typecheck 6/6; lint 0 errors; тесты shared 155 · core 2144 · ui 774 · backend 372. Smoke CLI: отказ без `--yes`, dry-run без записей, реальная ротация, повторный прогон skipped.
+- **Остаточные риски (задокументированы):** легаси-сессии без бэкфилла атрибуции; синтетический `project_create`+неатрибтированная сессия; passphrase — temp-plaintext/нет sshd e2e/GNU `base64 -d`; ротация — нет key-id/split-state/приоритет env-config.
+- **Docs:** AD-075 (§7/§9/остатки); AD-076 (§2/§3/§8/§9/§10/ограничения); root `AGENTS.md`; `packages/{core,shared,ui,backend}/AGENTS.md`; `docs/API_V2.md`; `docs/CONFIGURATION.md`.
+- **Дальше:** AD-074/AD-077 (или коммит).
+
+## 2026-09-29 — Левая панель (context C), standalone ADMIN, env-доступность тулов, SSH «Тип» — PASS (не закоммичено)
+
+- **Задача:** пакет из 5 пунктов: левая панель (workspace/git), выбор каталога в dev, standalone-админ, git-тулы без git, поле «Тип» SSH.
+- **Тип:** feature + bug fix · **Результат:** PASS (код; не закоммичено — по инварианту 13).
+- **#3 standalone ADMIN:** `core/src/auth/local.ts` — `localUser.roles = ['ADMIN']`, `teamRole = 'ADMIN'`; гибридный вход (cookie `kind:'server'`) не затронут. Обновлены `local.test.ts`, `server/routes/auth.test.ts`. core 2144 tests.
+- **#5 SSH «Тип»:** убран из `SshKeysSettings.tsx` (EditorState/EMPTY_EDITOR/openEdit/payload/TextField/бейдж) + i18n `sshKeys.type`/`typeHint` (en/ru) + тест; shared-схема `SSHKey.type?`/`sshKeyCreateSchema.type?` оставлена для back-compat.
+- **#4 env-доступность тулов:** новый `core/src/engine/tools/runtime-deps.ts` (git/rg/sh; пробинг `--version`, fail-open при не-ENOENT, кэш, `resetRuntimeDepsCache`); причина `'dependency'` в `availability.ts`/`evaluator.ts`/`PermissionDecision.unavailable`/`PromptToolDetail`; `ChatOrchestrator.runtimeDeps` + `setRuntimeDeps`, прокинут в availability/collectUnavailable/composer/toolsDetail/permission-check; детекция `await detectRuntimeDeps()` в core `server/app.ts`, `server/chat.ts`, backend `app.ts` (до создания оркестратора); сообщение модели — `state-messages.ts` + `composer.ts` (`tools.guide`), security-промпты `prompts/security/tool-unavailable-dependency.{ru,en}.md`; i18n `tool.binary_missing`, `permission.dep_unavailable`; защитные ENOENT-ошибки в `git.ts`/`shell.ts` (grep_files не трогали — уже был `search.rg_not_installed`). Не реализовано: UI-подпись `reason='dependency'` в StatsTab (generic fallback), runtimeDeps для саб-агентов (`task.ts`).
+- **#2 не менялось** (решение пользователя): `dev.sh` = backend `managed`, ручной выбор каталога — только в standalone.
+- **#1 левая панель (вариант C):** новый хук `hooks/useActiveProject.ts`; `ProjectScopeToggle` в `FilesTabToolbar`/`GitTabToolbar`; `onlyActiveProject` (persist) + `OTHER_PROJECTS_COLLAPSE_KEY='__others__'` в `useUIStore.ts`; в Files/Git — закреплённый «Текущий проект» (авто-раскрыт) + сворачиваемые «Другие проекты (N)», extract `renderFilesProject`/`renderGitProject`, `loadSessions()` подключён, фоллбеки (сессия без проекта / проект без workspace / нет контекста → плоский список, тумблер disabled).
+- **Верификация:** typecheck 6/6; lint 0 errors (warnings предсуществующие); тесты shared 155 · core 2165 · ui 799 · backend 372; Vite HMR без ошибок; браузер (dev UI :5002, admin-key-123) — Git/Files: закреплённый «Тестовый проект» + «Другие проекты (12)», тумблер фильтрует до одного проекта.
+- **Известное:** предсуществующий флак параллельных timing-тестов (`task-resume`/`orchestrator`); нерабочий expand-all в `GitTabToolbar` (`synth:git-expand-all` без слушателя) — вне задачи; `LeftPanel.tsx` большой diff из-за переноса тела рендера.
+- **Скриншоты:** `tmp/leftpanel-git.png`, `tmp/leftpanel-git-only.png`, `tmp/leftpanel-files.png`.
+- **Коммиты (ветка `feat/ad-075-workspace-provisioning`):** `8b6e647` (standalone ADMIN), `12be420` (SSH «Тип»), `8ef2eba` (env-доступность), `24d42d9` (левая панель).
+- **Хвосты (закрыты):** рабочий expand-all в Git (`gitStore.expandAll` + тулбар без CustomEvent); подпись `dependency` в StatsTab (i18n `rightPanel.stats.toolUnavailableDependency`); `runtimeDeps` в permission-слое саб-агентов (`task.ts`/`task-resume.ts`/`orchestrator.ts`, `renderUnavailableTools` экспортирован, секция `[НЕДОСТУПНЫЕ ТУЛЫ]` для сабагента).
+- **Smoke SSH (gitea):** fetch `.dots`/`trepo` OK; SSH-clone сначала падал `Use of "EDITOR" is not permitted without enabling allowUnsafeEditor` — баг: `git/git-service.ts:withEnv` мержит весь `process.env` + `GIT_SSH_COMMAND`, а simple-git 3.36 блокирует blocklist (`EDITOR`/`PAGER`/`PREFIX`/`SSH_ASKPASS`/любые `git*`) без `unsafe.allowUnsafe*`. Фикс: `sanitizeGitEnv` + `createGit({unsafe:{allowUnsafeSshCommand:true,allowUnsafeAskPass:true}})`, `GIT_TERMINAL_PROMPT=0`. Проверка: `tmp/smoke-ssh.mjs` с `EDITOR=vim PAGER=less GIT_PAGER=cat GIT_SSH=/bin/false` → `CLONE_OK`/`IS_REPO true`. Запущенный dev-backend держит старый core dist — нужен рестарт.
+- **Docs:** новый `docs/arch_decisions/ad-078-runtime-dependency-availability.md` + правки root/package AGENTS.md + `docs/arch_decisions/README.md`.
+- **Дальше:** рестарт dev-серверов для подхвата core-фикса SSH; при желании — e2e через UI.
+
+## 2026-09-29 (продолжение) — standalone «как из npm» + рестарт dev + чистка — PASS
+
+- **Задача:** standalone должен работать как «поставил npm-пакет и запустил бинарник» (все пути/параметры по умолчанию); плюс рестарт dev и чистка временных файлов.
+- **Тип:** feature + chore · **Результат:** PASS (код+скрипт+docs закоммичены).
+- **Баг:** `synth serve` без флагов печатал `API-ключ: (не задан)` → вход в UI невозможен (401); хост по умолчанию `0.0.0.0`; `SYNTH_HOST` игнорировался (commander-дефолт перебивал env).
+- **Фикс:** новый `core/src/auth/local-key.ts` — `resolveOrCreateLocalApiKey` (устойчивый ключ `randomBytes(16).toString('hex')` в `{dataDir}/secrets/api-key`, `0600`/`0700`, идемпотентно); `synth serve` — приоритет `--api-key`/config > `SYNTH_API_KEY` > сохранённый > сгенерировать, печатает ПОЛНЫЙ ключ и путь; host по умолчанию `SYNTH_HOST || '127.0.0.1'`. `scripts/standalone.sh` по умолчанию запускает `serve` без переопределений (очистка `SYNTH_*`), флаги — переопределения, `--clean` только с явным `--data-dir`, эффективные значения парсит из вывода сервера.
+- **Верификация:** typecheck 6/6; lint 0 errors; тесты core 2173 (+4), ui 804, backend 372; независимо: `env -i HOME=<iso> … serve --port 4321` → ключ 32 hex, файл `0600`, `no-key 401 / with-key 200`, host `127.0.0.1`; `HOME=<iso> ./scripts/standalone.sh --no-build --check` → OK.
+- **Dev перезапущен** (`./scripts/dev.sh`, все сервисы 5000/5002/4300 = 200); smoke через API: SSH-clone `.dots` по ключу Synth → `{"path":"smoke-ssh-test","isRepo":true}`, затем `remove` c `deleteLocal` — каталог удалён.
+- **Чистка:** удалены скриншоты и черновики из корня проекта (`*.png`, `dropdown-*.yml`, `state1.yml`, `snap-initial.md`), `.playwright-mcp/`, содержимое `tmp/` (родительского) и `synth/tmp` (оставлены только активные `backend.log`/`ui.log`/`core.log`). `AD-DRAFTS.md`, `rbac-design.md`, `data/`, `ws-default/` сохранены.
+- **Docs:** `docs/DEVELOPMENT.md`, `docs/QUICKSTART.md`, `docs/CONFIGURATION.md`, корневой `AGENTS.md` (дефолты standalone).
+- **Дальше:** при желании — e2e выделенного каталога в standalone-UI (порт 4300 занят dev-core).
+
+## 2026-09-29 — AD-079: локальный home-каталог (`--home`/`SYNTH_HOME`) — PASS
+
+- **Задача:** реализовать AD-079 «Локальный home-каталог и независимые локальные инстансы» (flat-раскладка config/data/profiles/credentials, приоритеты путей, изоляция standalone/hybrid).
+- **Тип:** feature (CLI + конфиг-резолвинг) · **Исполнитель:** @orchestrator → @fixer (код+тесты), general (docs) · **Результат:** PASS.
+- **Код:** `shared/config/resolve.ts` — `resolveHome`, `resolveProfilesPath`, `resolveCredentialsPath`, home-параметр у `resolveDataDir`/`resolveWorkspacesRoot`/`resolveDefaultWorkspace`/`findConfigPath`/`defaultConfigPath`/`ensureFirstRun`; `shared/config/loader.ts` — `LoadConfigOptions.home`; `core/profiles.ts` — `getProfilesPath(home)`; `core/remote/credentials.ts` — `defaultCredentialsPath(home)`; `core/server/app.ts` — `StandaloneConfig.profilesPath` (getHybridState/rememberServer); CLI (`packages/synth` + `core/src/main.ts`) — флаги `--home`/`--profiles`/`--credentials` на serve/connect/disconnect/project publish|fork/secrets rotate.
+- **Скрипты:** `standalone.sh` — home по умолчанию `~/.local/share/synth-standalone` (по решению пользователя; фикс исходного бага: подхват `lastProfile` из общего `~/.config/synth`); `hybrid.sh` — опция `--home` (без неё прежнее XDG-поведение, чтобы не терять данные пользователя).
+- **Приоритет:** `--data-dir`/`--config`/`--profiles`/`--credentials` (+ env-аналоги) > `--home` > `SYNTH_HOME` > XDG-дефолты; без home поведение не изменилось.
+- **Верификация (независимо):** `pnpm build` OK; `pnpm typecheck` 6/6; `pnpm test` shared 170 · core 2175 · ui 804 · backend 372; `pnpm lint` 0 errors; smoke `serve --home <tmp> --port 4391` → `/health` 200, созданы `<home>/config.yaml` + `<home>/data/`, `/hybrid/status.knownServers` берёт `<home>/profiles.json` (изоляция подтверждена).
+- **Docs:** AD-079 → ✅ Реализовано (+ раздел «Реализация»); корневой/shared/core AGENTS.md; docs/CONFIGURATION.md, docs/DEVELOPMENT.md.
+- **Дальше:** AD-080 (режимы гибрида) — использует home одного инстанса.
+
+## 2026-09-29 — Порты инстансов: hybrid 4300 / standalone 4400 — PASS
+
+- **Задача:** развести порты скриптов запуска, чтобы standalone и hybrid поднимались одновременно.
+- **Тип:** chore (скрипты+docs) · **Исполнитель:** @fixer · **Результат:** PASS.
+- **Скрипты:** `standalone.sh` — `PORT=4400`, `--port` теперь передаётся ВСЕГДА (как `--home`), `effective_core_port` упрощён до `echo "$PORT"` (убран `config show`); `hybrid.sh` — 4300 (как было), в справке отмечено.
+- **Docs:** `docs/DEVELOPMENT.md` (standalone 4400 + ремарка про одновременный запуск), `docs/arch_decisions/ad-079-...md` (порты скриптов).
+- **Верификация:** `bash -n` OK; `./scripts/standalone.sh --help` → default 4400; smoke `--no-build --check --home /tmp/...` без `--port` → поднялся на `127.0.0.1:4400`, 5/5 `[OK]`, `Результат: OK`; режимы файлов 100755 не менялись.
+- **Дальше:** AD-080.
+
+## 2026-09-30 00:15 — Баг: standalone `POST /api/v2/models/fetch` → 404 «Маршрут не найден» — PASS
+
+- **Задача:** в standalone добавили ollama-провайдера, тест проходит (модели видны), но «Синхронизировать модели» падает `Маршрут не найден: POST /api/v2/models/fetch`.
+- **Тип:** bug fix (роутинг) · **Исполнитель:** @fixer (фикс+тесты), @orchestrator (приёмка) · **Результат:** PASS.
+- **Первопричина:** логика `POST /fetch` жила только в backend-обёртке `packages/backend/src/routes/models.ts`, в core-фабрике `createModelRoutes` роута не было — standalone (core) не видел эндпоинт (UI вызывает его в обоих режимах). Нарушение инварианта «общая логика роутов — в core-фабриках, backend монтирует + RBAC/rate-limit/i18n».
+- **Фикс:** `POST /fetch` перенесён в core-фабрику `createModelRoutes` 1:1 (фильтр `?provider=`, `enabled!==false`, `ProviderFactory.create`+`listModelsDetailed`, обогащение окна/`maxOutputTokens`/цен/`currency`, защита ручных цен, синхронизация `modelCache`); новые опции `fetchGuard`/`fetchMiddleware`/`messages.fetchError`. Backend стал тонкой обёрткой (`fetchGuard: kit.requireAdmin`, `fetchMiddleware: [createRateLimiter(3, 120_000)]`, i18n), ~200 строк дубля удалено.
+- **Файлы:** `packages/core/src/server/routes/models.ts`, новый `packages/core/src/server/routes/models.fetch.test.ts` (5 тестов), `packages/backend/src/routes/models.ts`, `docs/API_V2.md`, `packages/backend/AGENTS.md`.
+- **Верификация:** `pnpm build` OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — независимо перепроверено core 2180 PASS, backend 372 PASS (5/5 новых). Standalone curl (`dev.sh core`, :4300, `SYNTH_API_KEY`): без auth 401; `POST /models/fetch?provider=ollama` → 200 `{"fetched":9,...}` — не 404.
+- **Не сделано:** коммит (по инварианту 13 — только по явной просьбе). Опционально — визуальная проверка кнопки синхронизации в UI.
+- **Побочное (вне рамок):** `dev.sh core` запускает `core/dist/main.js serve` напрямую и не вызывает `resolveOrCreateLocalApiKey` — dev-core стартует с пустым ключом (лечится `SYNTH_API_KEY`). Кандидат в отдельную задачу.
+
+## 2026-09-30 00:25 — Баг: после синхронизации модели не появляются в списке (standalone) — PASS
+
+- **Задача:** по кнопке «Синхронизировать модели» сообщение «Синхронизировано N моделей», но модели в списке отсутствуют.
+- **Тип:** bug fix (хранилище) · **Исполнитель:** @fixer (фикс+тесты), @orchestrator (приёмка) · **Результат:** PASS.
+- **Первопричина:** расхождение реализаций `JsonStore.list()` core ↔ backend. Модели сохраняются с полным id `provider/model` → файл `models/<provider>/<model>.json`. Backend `list()` рекурсивный (`_collectItems`), а core `list()` читал только `.json` **верхнего уровня** и подкаталоги игнорировал → `GET /api/v2/models` в standalone не видел ни одной модели (`data/models` содержит только подкаталоги провайдеров). Баг латентный, выявился на кнопке синхронизации (не регрессия предыдущего фикса).
+- **Фикс:** `packages/core/src/storage/json-store.ts` — `list()` сделан рекурсивным (по образцу backend, ключ вычисляется относительно корня subdir), + doc-комментарий о необходимости синхронизации с backend. Backend-класс не объединяли (отличаются `delete`/`exists`) — только doc. `load/save/delete/exists` и `JsonStoreLike<T>` не тронуты.
+- **Файлы:** `packages/core/src/storage/json-store.ts`, новый `packages/core/src/storage/json-store.test.ts` (10 кейсов: вложенные/плоские/несколько подкаталогов, игнор `.tmp.*`/не-json/битого json, пустой каталог, traversal), `packages/backend/src/storage/json-store.ts` (doc).
+- **Верификация:** `pnpm build` OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — независимо перепроверено core **2190 PASS**, backend **372 PASS**. E2E standalone (`dev.sh core` :4300): `GET /models?provider=ollama` → 9 моделей (было бы 0 до фикса), `POST /models/fetch?provider=ollama` → `{fetched:9,...}`, после — те же 9 моделей (`deepseek-coder-v2:16b`, `deepseek-r1:14b`, …). Плоские хранилища (`providers`, `agents`) не затронуты.
+- **Не сделано:** коммит (инвариант 13). UI визуально не проверялся (API-доказательство есть).
+- **Побочное (вне рамок):** `dev.sh core` не создаёт авто-ключ (`main.ts` берёт `config || env || ''`) — расходится с формулировкой корневого AGENTS.md про `{dataDir}/secrets/api-key`; кандидат в отдельную задачу.
+
+## 2026-09-30 01:30 — Полный рефакторинг: устранение дублирования core↔backend — PASS
+
+- **Задача:** устранить системное дублирование функционала между `@itphx/synth-core` и `@itphx/synth-backend`; цель — работающие managed/hybrid/standalone без дублей (по ранее принятым AD: AD-005/017/071/075/076). Заказчик: полный рефакторинг.
+- **Тип:** refactoring (крупный, поэтапный) · **Исполнитель:** @orchestrator → @researcher (инвентаризация) + @fixer (этапы A–D) · **Результат:** PASS.
+- **Первопричина/контекст:** рефакторинг на «тонкие обёртки над core-фабриками» был остановлен на полпути; `JsonStore`/`ProjectStore` и 6+ роутов существовали в двух разошедшихся копиях (именно расхождение `JsonStore.list()` дало баг с моделями `provider/model`).
+
+### Этапы (все PASS)
+- **A — хранилища:** backend импортирует `JsonStore`/`ProjectStore` из core; копии удалены (`backend/src/storage/*`), выровнены `exists()` (`load()!==null`) и `delete()` (чистка `_locks`), удалён мёртвый `ProjectStore.stats()`.
+- **B — общие хелперы:** `syncProvidersFromEnv` вынесен в core (`core/src/providers/sync-from-env.ts`), backend переиспользует.
+- **C1 — messages/queue:** backend-копии заменены обёртками над core-фабриками; `opts.messages` (i18n) + `opts.onMessagesChanged` (backend `recalc-can-summarize`); устранена гонка (без `await`), ликвидирован англ. литерал.
+- **C2 — agents/mcp:** core `createAgentRoutes` расширен до надмножества backend (`writeGuard`/`allGuard`/`detailGuard`, `GET /:id`, `PATCH /:id/enabled`, `topK`, builtin-fallback, честный `is_builtin`); core `createMcpRoutes` — `/probe` (+`MCP_CONNECT_ERROR`), backend-only legacy/registry вынесены в `backend/src/routes/mcp-registry.ts`.
+- **D1 — projects:** core `createProjectRoutes` — надмножество (RBAC-хуки `canManage`/`canEditContent`, `getCurrentUserId`, `messages`, `autoProvisionWorkspace`, `getMcpServers`→`/:id/mcp`, `sessionManager`→`/:id/stats`, `plan`); backend — обёртка (+`createProjectAccess` для git).
+- **D2 — fs:** core `createFsRoutes` стал project-aware (AD-075): `getProjectWorkspace` (+`resolveProjectWorkspace`, `isTextFile` в `core/src/server/fs-workspace.ts`), `requireProjectId`, единая `FsError`-форма, `move`/`mkdir` 201/409, upload/download/maxDepth; удалены `backend/src/routes/fs.ts` и `backend/src/lib/workspace-resolver.ts` (+тесты, покрытие перенесено в core).
+- **Docs:** обновлены корневой `AGENTS.md`, `packages/core/AGENTS.md`, `packages/backend/AGENTS.md` (таблица монтирования), `docs/API_V2.md`.
+
+### Верификация (независимо, @orchestrator)
+- `pnpm build` OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors.
+- `pnpm test`: core **2250**, ui **804**, backend **341**, shared 170, runner — нет тестов. Все PASS.
+- **Managed** (`dev.sh backend`, debug-auth): projects CRUD/RBAC/`stats`/`mcp`, project-aware FS (write/read/mkdir 201/409/traversal 403/no project_id 400), `models/fetch?provider=ollama` → `fetched:9`, `agents/all` admin 200 / developer 403, `mcp/registry` 200.
+- **Standalone** (`standalone.sh`): provider+`models/fetch` → `fetched:14`, project-aware FS + fallback на root, `workspace-root`, agents.
+- **Hybrid** (core `serve --connect` к локальному backend): `/hybrid/status` connected, агрегация проектов (`remote:`), **remote-ветки FS** (`fs`/`fs/read` проекта backend через hybrid) — 7/7 PASS.
+- **LLM e2e (standalone):** сессия + prompt на модели `tobestyledintro/qwen3.8-9b-distill:latest` (ollama `http://omn.itphx.loc:11434`) → assistant ответил «Привет».
+- **Не сделано:** коммит (инвариант 13 — только по явной просьбе). Скрипты smoke — в `tmp/` (не коммитятся).
+- **Остаточное (вне scope):** `dev.sh core` без авто-ключа; core-тест remote-веток FS с моком `RemoteBackendClient` (покрыто e2e hybrid, юнита нет).
+
+## 2026-09-30 02:20 — Релиз 0.8.0 + деплой на test — PASS
+
+- **Задача:** бампнуть версию до 0.8.0, закоммитить, собрать, задеплоить на test (по явной просьбе пользователя).
+- **Тип:** release + deploy · **Исполнитель:** @devops (скиллы `synth-release`/`synth-build-publish`/`synth-k3s-deploy`) · **Результат:** PASS.
+- **Bump:** `./scripts/version-bump.sh 0.8.0` — `version.ts` + 6× `package.json` + `charts/synth/Chart.yaml` (0.7.3 → 0.8.0).
+- **Коммиты `synth/` (ветка `feat/ad-075-workspace-provisioning`, запушена):** `f25e556` refactor (устранение дублирования core↔backend), `35759ee` `chore(release): 0.8.0`. Тег `v0.8.0` и npm-публикация **не** делались (релизный workflow preprod/prod вне задачи).
+- **Docker:** собраны из исходников и запушены в `git.itphx.ru`: `synth-backend:0.8.0` (298 MB), `synth-ui:0.8.0` (116 MB); версия внутри образа проверена.
+- **`synth-deploy` (main):** `values.yaml` image tags → 0.8.0, `helm lint`/`template` OK, коммит `96032d1` запушен → Fleet раскатал.
+- **Верификация (независимо, @orchestrator):** `https://synth.k3s.itphx.loc/api/v2/health` → `{"status":"healthy","version":"0.8.0"}`; UI `/` → 200; `kubectl -n synth get deploy` — образы `:0.8.0`; поды backend/ui `1/1 Running`, RESTARTS 0; оба репозитория clean.
+- **Осталось:** preprod/prod не трогались (нужен тег/`workflow_dispatch` или публикация Helm-чарта — отдельной задачей).
+
+## 2026-09-30 09:07 — UI: кнопка «Удалить» под сообщением (нормальный цвет + красный hover) — PASS
+
+- **Задача:** в ряду кнопок в нижней части ответа кнопка «Удалить» всегда выглядела ярче остальных; требовалось в обычном состоянии — как остальные, при наведении — красная подсветка.
+- **Тип:** bug fix (UI, стили) · **Исполнитель:** @fixer · **Результат:** PASS.
+- **Причина:** `packages/ui/src/components/chat/MessageActions.tsx` (`ActionBtn`, ветка `danger`) не задавала базовый цвет текста, в отличие от обычной ветки (`text-muted-foreground`) → кнопка наследовала яркий цвет контейнера. `danger` используется только у Delete.
+- **Правка (1 строка):** `'hover:bg-destructive/10 hover:text-destructive'` → `'text-muted-foreground hover:bg-destructive/10 hover:text-destructive'`.
+- **Верификация (@orchestrator):** `git status` — изменён ровно 1 файл; `pnpm --filter @itphx/synth-ui typecheck` OK; `lint` 0 errors (30 pre-existing warnings, ни одного в MessageActions.tsx); `test` 804/804 PASS (в т.ч. `MessageActions.test.tsx` 4/4).
+- **Не сделано:** коммит (инвариант 13 — только по явной просьбе), визуальная проверка в браузере (`dev.sh`) не запускалась.
+
+## 2026-09-30 09:50 — UI: унификация MCP/Скиллов в правой панели + перенос «Плана» — PASS
+
+- **Задача:** (1) описания скиллов — под скрывающийся блок; (2) «План» выше «Рабочего каталога»; (3) MCP и Скиллы — единый вид между «Сессией» и «Проектом»; (4) MCP и Скиллы похожи между собой (одинаковые переключатели, кат).
+- **Тип:** refactor (UI) · **Исполнитель:** @fixer · **Результат:** PASS.
+- **Согласованные развилки:** правки только во вкладке «Проект» для порядка секций; единая визуальная оболочка без смены семантики (Сессия — 1 тумблер, Проект — 2); под катом: у скиллов — описание (добавлено и в «Сессию»), у MCP — статус/systemHint; общий hint секции остаётся видимым внизу; кат — кнопка у каждого элемента.
+- **Файлы:** новый `components/panels/ExpandableListRow.tsx` (`ExpandableListRow` + `RowBadge`, 4 тона); `ProjectTab.tsx` (порядок секций, MCP/Skills на примитиве); `SessionSettingsTab.tsx` (MCP/Skills на примитиве, подпись «Включён» у тумблеров); `i18n/messages/{ru,en}.ts` (`sessionSettings.{mcp,skills}.toggleLabel`); тесты: новый `ExpandableListRow.test.tsx` + обновления 4 существующих.
+- **Верификация (@orchestrator):** `typecheck` OK; `lint` 0 errors (30 pre-existing warnings, в изменённых файлах — 0); `test` **103 файла / 811 тестов PASS**.
+- **Визуально (dev :5002, браузер, admin/debug):** «Проект» — порядок ПРОЕКТ → ПЛАН ПРОЕКТА → РАБОЧИЙ КАТАЛОГ → ИНВАРИАНТЫ → MCP → СКИЛЛЫ; «Сессия» — MCP/Скиллы с бейджами, подписью «Включён» и тумблером, кат раскрывает описание/статус, hint остаётся видимым. Скриншоты: `tmp/right-panel-project-top.png`, `tmp/right-panel-project.png`, `tmp/right-panel-session.png` (не коммитятся).
+- **Не сделано:** коммит (инвариант 13). Предложено обновление `packages/ui/AGENTS.md` (примитив строки + порядок секций) — ждёт согласования.
+
+## 2026-09-30 10:30 — UI: единый каркас и ритм вкладок правой панели (PanelTab) — PASS
+
+- **Задача:** разные вертикальные интервалы вкладок правой панели; нужен универсальный вариант как в «Проекте»; проверить остальные вкладки и унифицировать стили.
+- **Тип:** refactor (UI) · **Исполнитель:** @fixer · **Результат:** PASS.
+- **Согласовано:** канон — ритм вкладки «Проект» (корень `p-3`, между секциями 16px, внутри секции 8px, компактные списки `gap-1.5`); единый внутренний скролл во всех вкладках; объём — все вкладки правой панели; закрепление — компонент-обёртка + строка в `packages/ui/AGENTS.md`.
+- **Было (замер):** паддинги 12/16/8, шаги 16/12/4, скролл то внутренний, то внешний; в `StatsTab` 14 `mt-*`/6 `mb-*`.
+- **Стало:** новый `components/panels/PanelTab.tsx` (тело `flex-1 min-h-0 overflow-y-auto p-3 space-y-4` + фиксированный футер `shrink-0 border-t p-3 space-y-2`); `RightPanel` без внешнего `overflow-y-auto`; на `PanelTab` переведены «Сессия», «Проект», «Контекст», «Статистика», «Ссылки», «Безопасность», пустые состояния и «Шедулер»; вычищены ad-hoc `mt-*`/`mb-*` (Сессия `mb-2`/`mt-2`, Контекст `SectionHeader pt-1 pb-0`, Проект `mb-1`, Статистика 14 `mt-*`/6 `mb-*` → `space-y-*`/`gap-*`).
+- **Файлы:** `PanelTab.tsx` (+тест, новый), `RightPanel.tsx`, `SessionSettingsTab.tsx`, `ProjectTab.tsx`, `ContextTab.tsx`, `StatsTab.tsx`, `ReferencesTab.tsx`, `SecretsTab.tsx`, `packages/ui/AGENTS.md`.
+- **Верификация (@orchestrator):** `typecheck` OK; `lint` 0 errors (30 pre-existing warnings, в изменённых файлах — 0); `test` **104 файла / 814 тестов PASS** (в т.ч. новый `PanelTab.test.tsx`).
+- **Визуально (dev :5002, admin):** замерено по всем вкладкам — паддинг 12px, интервал между секциями 16px, заголовок↔контент 8px, внешний скролл панели нигде не скроллится (нет двойных скроллбаров), футеры «Сессия»/«Контекст» фиксированы. Мобильный дровер (390×844, `device-phone`): тело скроллится, футер прижат к низу (749–844). Скриншоты: `tmp/panel-session.png`, `tmp/panel-stats.png`, `tmp/panel-mobile-drawer-session.png`.
+- **Не сделано:** коммит (ждёт команды). Вне scope: левая панель и админка; `mt-0.5`-компенсации и `mb-2` у заголовков карточек оставлены осознанно.
+
+## 2026-09-30 11:00 — UI: автокомплит `/`-команд — ширина, перенос, скролл, зазор над композером — PASS
+
+- **Задача:** окно выбора команд не ограничено по ширине (длинные описания уезжают и обрезаются), описания не переносятся, нет ограничения высоты/скролла, окно примыкает к полю ввода.
+- **Тип:** bug fix (UI) · **Исполнитель:** @fixer · **Результат:** PASS.
+- **`CommandAutocomplete.tsx`:** корень — `flex flex-col overflow-hidden … max-h-[min(24rem,60vh)]`, ширина `32rem` + `maxWidth: 100%` (не шире композера); список — `flex-1 min-h-0 overflow-y-auto` (шапка и подсказка по клавишам больше не обрезаются, скроллится только список); описание — `whitespace-normal break-words` вместо `truncate`.
+- **Зазор над полем ввода:** JS-замер `textarea.getBoundingClientRect().height` в обработчике `input` недостоверен (DOM ещё не устоялся: замерено 47–60px при итоговых 20px), поэтому позиционирование переведено на CSS: `bottom: calc(100% + 17px)` = 9px до рамки композера (border 1 + py-2 8) + 8px зазора. Применено и к `MentionPopup`; из `ChatInput` удалены константы/замеры высоты, пропс `position` сужен до `{ left }`.
+- **Верификация (@orchestrator):** `typecheck` OK; `lint` 0 errors (30 pre-existing warnings вне изменённых файлов, в них — 0); `test` **104 файла / 817 тестов PASS**.
+- **Визуально/замерами (dev :5002):** зазор 8px при textarea 1 строке и при 200px (многострочный); ширина: 213px при узком композере (231), 512px = ровно 32rem при широком (551) — без горизонтального переполнения; высота ограничена 384px, список скроллится, подсказка клавиш видна; длинное описание `/developer-documentation` переносится. Для `@`-упоминаний зазор тот же (8px). Скриншоты: `tmp/autocomplete-wide.png`, `tmp/autocomplete-fixed.png`.
+- **Замечание инфраструктуры:** Vite иногда отдаёт устаревший transform после правок через симлинк `~/dev/Synth/synth` → устаревший модуль; лечится `touch` файла (сделано), HMR после этого корректный.
+- **Не сделано:** коммит (ждёт команды). Опция на обсуждение: ограничить длину описания (`line-clamp-3`) — сейчас очень длинное описание занимает почти всю высоту списка.
+
+## 2026-09-30 11:20 — UI: переформулированы подписи MCP/скиллов и политик в правой панели — PASS
+
+- **Задача:** убрать жаргон «opt-out» и длинные подписи; лаконичные формулировки в одном стиле; опция «Как в глобальной» → «Глобальная (<актуальное значение>)»; подпись «Глобальная политика задаётся администратором».
+- **Тип:** UI-тексты + небольшой фикс логики · **Исполнитель:** @fixer · **Результат:** PASS.
+- **Согласовано с пользователем:** сессия — «Включение/отключение на уровне сессии. Переопределяет настройки проекта.» (MCP и скиллы); проект — «Состояние для новых сессий по умолчанию.» (MCP и скиллы); в селекте сессии — короткие имена значений, подпись «Политика для этой сессии. Глобальная политика задаётся администратором.».
+- **Ключи i18n (ru+en):** `sessionSettings.{mcp,skills}.hint`, `projectTab.{mcp,skills}.hint`; новые `policy.short.{consistency,available,auto}`, `toolsPolicy.inheritUnknown`/`mcpPolicy.inheritUnknown`; изменены `toolsPolicy.inherit`/`mcpPolicy.inherit` («Глобальная ({policy})») и `*.sessionHelp`. Длинные подписи админских карточек (`*.consistency|available|auto|help`) не тронуты.
+- **Логика (`SessionSettingsTab.tsx`):** добавлены `globalToolsPolicy`/`globalMcpPolicy` (`ToolsPolicy | null`) и запросы `getToolsPolicyInfo()`/`getMcpPolicyInfo()` (доступны любому авторизованному — проверено: 200 для admin и developer); хелпер `inheritLabel()` даёт «Глобальная (<короткое имя>)», при ошибке — фоллбек «Глобальная» (без скобки). Ошибка запроса не блокирует рендер и не показывает уведомлений.
+- **Верификация (@orchestrator):** `typecheck` OK; `lint` 0 errors (30 pre-existing warnings вне изменённых файлов); `test` **104 файла / 818 тестов PASS**.
+- **Визуально (dev :5002, ru):** оба селекта политик — «Глобальная (По провайдеру)» (глобальное значение `auto`), список опций — «Согласованность / Только доступные / По провайдеру»; подписи под селектами — «Политика для этой сессии. Глобальная политика задаётся администратором.» (×2); подсказки секций — новые формулировки (×2 в «Сессии», ×2 в «Проекте»). Скриншот: `tmp/labels-policy-open.png`.
+- **Замечание:** из подсказки скиллов убрана оговорка «скиллы, отключённые администратором, включить здесь нельзя» (сократили по решению пользователя) — тумблер для таких скиллов остаётся disabled, но текстового пояснения рядом больше нет.
+- **Не сделано:** коммит (ждёт команды).
+
+## 2026-09-30 12:30 — Скиллы/MCP: единая модель вкл/выкл (система/проект/сессия) — PASS
+
+- **Задача:** баг — в «Тестовом проекте» скиллы отключены, но в новой сессии включены; навести порядок и унифицировать логику с MCP.
+- **Тип:** bug fix + refactor (shared/core/backend/ui/docs) · **Исполнитель:** @fixer + @tester.
+- **Согласованная модель (per-item):** система — `enabled` (hard-gate: выкл → недоступно нигде) + `defaultForNewProjects` (сид новых проектов); проект — `enabled` (hard-gate, бьёт и по старым сессиям) + `defaultOn` (сид новых сессий); сессия — один тумблер. Дефолты — snapshot, гейты — live; база opt-in. Legacy: гейт активен только при наличии `project.skills`/`project.mcp`.
+- **Реализация:** `resolveMcpScope`/`resolveSkillScope` (формула `systemOn && projectOn && configOn && !sessionOff && (snapshotOn || sessionOn)`), снапшот-поля `SessionSettings.skillsDefaultOn`/`mcpDefaultOn`, `McpRegistryEntry.enabled`, `/settings/skills.disabledForNewProjects`, seeding при создании проекта/сессии, идемпотентная миграция `session-scope-snapshots-v1`, тул `skill` уважает scope (`skill.scope_disabled`); UI — админка «две оси», «Проект» — 2 тумблера и для системных, «Сессия» — блокировка по system/project, «Статистика» — источник `project`.
+- **Верификация (@orchestrator):** shared build OK; `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — core 2275, backend 341, shared 170, ui 825 PASS. (Флейк `core/src/server/app.remote.test.ts` по таймауту 5с в параллельном прогоне — не регрессия, отдельно зелёный.)
+- **Ручная проверка (dev :5000/:5002, проект `mpfc00f0-1-hnu5bb93`):** проект `skills={enabled:[],defaultOn:[]}` → скиллы недоступны и в новой, и в старой сессии, `skills.catalog` в промпте отсутствует; легаси-проект без настройки — скиллы включены; добавление скилла в проект → появляется в каталоге новой сессии; MCP — новый флаг `enabled`, причина `config`. Скриншоты `tmp/qa-*.png`. Данные проекта возвращены в исходное состояние, тестовые сессии удалены.
+- **Docs:** уточнены AD-046 §4.5, AD-071 §2.2/2.4/2.5, `docs/API_V2.md`, `packages/{core,shared,ui}/AGENTS.md`, корневой `AGENTS.md` (новый AD не создавался).
+- **Не сделано:** коммит (инвариант 13 — ждёт команды).
+
+## 2026-09-30 13:10 — Скиллы/MCP: фиксы курсора и MCP config-гейта — PASS
+
+- **Задача:** (1) визуальный баг — при тумблере скилла/MCP в сессии курсор становился «запрет»; (2) project-allowed MCP нельзя включить в сессии.
+- **Тип:** bug fix (ui + core/shared/docs) · **Исполнитель:** @fixer (2 параллельно) + @orchestrator.
+- **Баг 1 — причина:** `Toggle` получал `disabled` на время in-flight (`skillToggling`/`mcpToggling`), а класс `disabled:cursor-not-allowed` давал курсор-запрет; «занят» и «недоступен» были смешаны. **Фикс:** `Toggle` получил проп `pending` (aria-busy + `opacity-60 cursor-progress`, без атрибута `disabled`); в `SessionSettingsTab` in-flight → `pending`, `disabled` — только при причине system/project; в `ProjectTab` транзиентный `disabled={saving}` → `pending`. Добавлены тесты `Toggle.test.tsx`, обновлены тесты сессии. Аудит прочих `cursor-not-allowed`: остальные — реально недоступные (нет прав/workspace/выключено), корректны; кандидат на follow-up — `PlanActModeToggle` (busy + недоступность смешаны).
+- **Баг 2 — причина:** реестровый мастер `synth-mcp-local.enabled=true`, но `entry.config.enabled=false` из config.yaml работал **вторым** hard-gate (`configEnabled`) → причина `config`, сервер выключен навсегда. **Фикс:** убран `configEnabled`/причина `config`; системный мастер — только `McpRegistryEntry.enabled`; `McpServerConfig.enabled` — лишь сид (`seedFromConfig`); `McpManager.isServerSystemEnabled` fallback → `true`; обновлены shared-типы, i18n, тесты, AD-071/API_V2/AGENTS.
+- **Верификация (@orchestrator):** shared build OK; `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — core 2276, backend 341, shared 170, ui 833 PASS.
+- **Живой API (после рестарта backend+core):** `synth-mcp-local` в сессии — `not_default` и **включается** (`enabled:true`); реестровый мастер `enabled:false` → `system_disabled` (live-гейт), возврат `true` → снова включается. Временные проект/сессия/сервер удалены, данные не затронуты.
+- **Не сделано:** коммит (ждёт команды).
+
+## 2026-09-30 13:45 — UI: канон курсора тумблера + автосейв вкладки «Сессия» — PASS
+
+- **Задача:** убрать курсор-«запрет» у тумблеров, единый стиль индикации сохранения; перевести вкладку «Сессия» на автосохранение и убрать кнопки внизу.
+- **Тип:** UX/refactor (ui) · **Исполнитель:** @fixer (2 задачи) + @orchestrator.
+- **Канон Toggle:** обычный — `cursor-pointer`; `pending` (идёт сохранение) — `cursor-progress` + `opacity-60` (`aria-busy`), без атрибута `disabled`; `disabled` (реально недоступно) — `cursor-default` + `opacity-40`, без not-allowed, причина текстом. Зафиксировано в `packages/ui/AGENTS.md`. `ContextTab`: тумблеры окна/суммаризации получили `pending={saving}`.
+- **Автосейв «Сессии»:** убрана кнопка Save и футер; «Очистить сессию» перенесена в конец контента. Единый `buildSettingsBody` (та же логика, включая askTimeout/permission, routing/micro/embedding, policies), слепок значений и `dirtyKeys` (не сохраняет, если не отличается и при гидратации/смене сессии); триггеры: тумблеры/селекты — сразу, инпуты/слайдеры — debounce 500 мс; flush при смене сессии; `pending` только у изменённого контрола; provider/model по-прежнему через `ModelSelector` (без дублей). Удалены неиспользуемые i18n-ключи `sessionSettings.{saved,saving,notLoaded}`.
+- **Верификация (@orchestrator):** `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — shared 170, core 2276, backend 341, ui **841** PASS.
+- **Коммиты:** `2221f76` (канон курсора), ниже — автосейв «Сессии».
+
+## 2026-09-30 14:15 — fix: 500 на GET /sessions/:id/skills при permission={} — PASS
+
+- **Задача:** верификация автосейва выявила `GET /sessions/:id/skills` → 500 (сессия с `settings.permission = {}`).
+- **Тип:** bug fix (core + ui) · **Исполнитель:** @fixer + @orchestrator.
+- **Причина:** `resolveNamedRule` (`engine/permission/evaluator.ts`) делал `config?.rules[key]` — опциональная цепочка только на `config`, не на `rules`; при `permission={}` (пустой объект) бросал. Автосейв «Сессии» мог записать пустой `permission: {}`.
+- **Фикс:** `config?.rules?.[key]` + защищённый геттер `_rules` (`_computeDecision`); автосейв не пишет пустой `permission` (исключён из spread, `undefined` при пустом). Тесты evaluator/skill-rule/command-rule/skill-scope (200 вместо 500) и UI (не пишет пустой permission, непустой override пишет).
+- **Верификация:** `shared build`/`core build` OK; `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — shared 170, core **2282**, backend 341, ui **843** PASS. Живой dev: `GET /sessions/mt8b037e…/skills` → 200; backend+core перезапущены.
+- **Коммит:** ниже.
+
+## 2026-09-30 14:40 — UI: единый шаблон сохранения настроек правой панели — PASS
+
+- **Задача:** success/error-уведомления для всех немедленных сохранений правой панели + откат UI при ошибке; единый шаблон.
+- **Тип:** UX/refactor (ui) · **Исполнитель:** @fixer + @orchestrator.
+- **Решения пользователя:** уведомлять при всех немедленных сохранениях; единый текст; троттлинг success-тостов; общий шаблон.
+- **Реализация:** новый хук `hooks/usePanelSettingSave.ts` (`run({key, run, onSuccess, onError, errorKey, silentError})`, `isPending(key)`, `pendingKeys`): pending по контролу → throttled success-тост (1500 мс) → при ошибке всегда error-тост + `onError` для отката; спец-ошибки через `errorKey`/`silentError`. Переведены `ContextTab` (откат тумблеров при ошибке), `ProjectTab` (MCP/скиллы — pending по элементу, success/error, 403 — спец-текст; workspace/invariants — единый текст, 409 — диалог), `SessionSettingsTab` (скиллы/MCP + автосейв с откатом формы к серверному состоянию). i18n: `panel.saved`/`panel.saveError`. Доменные ключи удалены. Зафиксировано в `packages/ui/AGENTS.md` («Сохранение немедленных настроек панели»).
+- **Также:** убрана кнопка «Очистить сессию» из панели «Сессия» (коммит `d885564`; очистка остаётся в левой панели и шапке).
+- **Верификация:** `typecheck` OK; `lint` 0 errors; тесты — shared 170, core 2282, backend 341, ui **853** PASS. Живой UI: тост «Настройки сохранены» при переключении в «Контексте» и автосейве «Сессии»; состояния восстановлены.
+- **Замечание:** при проверке всплыл известный баг Vite (stale-transform через симлинк) — «useNotification is not defined» до `touch` файлов; к коду не относится.
+
+## 2026-09-30 15:00 — UI: убрана кнопка «Сохранить» на вкладке «Контекст» — PASS
+
+- **Задача:** кнопка Save во вкладке «Контекст» избыточна после перехода на автосейв — убрать.
+- **Тип:** UX/refactor (ui) · **Исполнитель:** @fixer + @orchestrator.
+- **Сделано:** удалён footer/Save у `PanelTab` (режим выводится из тумблеров, все контролы уже автосохраняются). Вскрыт и исправлен латентный баг: `onChange`/`onSelect` вызывали `handleSave(mode)` с устаревшим значением из замыкания (`setState` асинхронна) — теперь изменённое значение передаётся явным `overrides`. Добавлен откат чисел/радио при ошибке (завершение шаблона — без «залипания»). Удалён неиспользуемый ключ `rightPanel.context.saving`.
+- **Верификация:** `typecheck` OK; `lint` 0 errors; тесты — shared 170, core 2282, backend 341, ui **856** PASS.
+- **Коммит:** ниже.
+
+## 2026-09-30 15:31 — feat: инструменты управления проектом (workspace + git-репозитории) — PASS
+
+- **Задача:** агенту не хватало тулов управления проектом: смена/настройка рабочего каталога, создание/регистрация/fetch/удаление git-репозиториев проекта.
+- **Тип:** feature (core + shared + ui + docs) · **Исполнитель:** @fixer + @orchestrator.
+- **Решения пользователя:** объём «всё сразу» (репозитории + workspace + правка проекта); отдельные гранулярные тулы; `remove` без `deleteLocal`; закрыть обход политики в `project_create` общим резолвером; RBAC в чате — `canEditProject` (owner/EDITOR).
+- **Реализация:** новый `engine/workspace-provision.ts` (нормализация/containment/создание каталога; используется HTTP-роутом `projects.ts` и тулами), `engine/tools/project-repos.ts` (`project_repo_clone|init|add|fetch|remove`), `project_update`/`project_workspace_set` в `project-manage.ts`; SSH-хелпер `resolveSshEnvById` в `git-ssh.ts` (переиспользован `routes/git.ts`); `project_create` переведён на общий provisioning (обход `workspaceOutsideRoot`/`../` закрыт, workspace нормализуется); `gitService`/`workspaceManaged`/live-политика прокинуты в extra тулов; новое событие `project.updated` (EventType + `transportStore` → рефетч проектов и Git-вкладки); 14 i18n-ключей синхронно (shared/core en/ui ru+en); группы permissions (RUNTIME/GIT_WRITE) и trust (PROJECT_TOOLS/GIT_TOOLS).
+- **Верификация (@orchestrator):** `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — shared 170, core **2298**, backend 341, ui **856** PASS; регресс `projects.test.ts`/`git.test.ts` без правок. Изменён существующий кейс `project_create` с абсолютным workspace вне root — он кодировал закрываемую дыру.
+- **Замечание:** extra resumed-саб-агента (`task-resume.ts`) не содержит `projectStore`/`workspacesRoot`/`gitService` — проектные тулы там недоступны (не регрессия, поведение было и раньше; кандидат в отдельную задачу). `resolveSshEnv` при ошибке расшифровки ключа теперь отдаёт 404 `sshkey.not_found` вместо 500 (унификация с `resolveRepoGitEnv`).
+- **Коммит:** `aefede7` — feat(core): инструменты управления проектом — workspace и git-репозитории.
+
+## 2026-09-30 16:05 — fix: resumed-сабагенты без проектных зависимостей + AD-доки — PASS
+
+- **Задача:** закрыть найденный при верификации предыдущей фичи дефект (у resumed-сабагентов недоступны проектные/git-тулы) и синхронизировать документацию AD-075/AD-076.
+- **Тип:** bug fix (core) + docs · **Исполнитель:** @fixer + @orchestrator.
+- **Причина:** `runSubagentResume` (`engine/tools/task-resume.ts`) собирал `extra` без `projectStore`/`workspacesRoot`/`sshKeyStore`/`gitService`/`workspaceManaged`/`getWorkspaceOutsideRootPolicy` (обычный путь `task` передаёт extra родителя целиком). Следствия: гейт `canEditProject` и `loadSessionProject` деградировали (проектные тулы), `resolveRepoGitEnv` не находил SSH-окружение.
+- **Фикс:** 6 опциональных полей в `TaskExtra` (`task.ts`) и `SubagentResumeDeps` (`task-resume.ts`) + прокидка в `extra`; `_subagentResumeDeps()` (`orchestrator.ts`) заполняет их из приватных полей. Тест `task-resume.test.ts` — probe-тул читает `ctx.extra` у resumed-сабагента (RED до фикса, GREEN после).
+- **Документация:** AD-075 §3 (общий `engine/workspace-provision.ts`), §9 (гейт `canEditProject` для новых тулов), «Известные остатки» (`LEAD/ADMIN` — расширен список полей); AD-076 §4 (тулы реестра, `resolveSshEnvById`, resume-зависимости), «Решено» (регистрация clone/init из чата); строки индекса AD-075/AD-076 в корневом `AGENTS.md`.
+- **Верификация (@orchestrator):** `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — shared 170, core **2299**, ui 856, backend 341 PASS.
+- **Замечание:** в `_subagentResumeDeps()` приведение `this._projectStore as ProjectStore | null` (в оркестраторе поле типизировано минимальным `ProjectStoreLike`); в рантайме — полноценный `ProjectStore`. `registerRepo` в `project-repos.ts` продублирован из `routes/git.ts` (кандидат в общий хелпер).
+- **Коммит:** ниже.
+
+## 2026-09-30 16:20 — refactor: структурные контракты ProjectStore вместо номинального каста — PASS
+
+- **Задача:** убрать `this._projectStore as ProjectStore` в `_subagentResumeDeps()` и дублированный `ProjectStoreLike` в оркестраторе; типизировать зависимости тулов по факту использования.
+- **Тип:** refactor (core, типы; поведение не менялось) · **Исполнитель:** @fixer + @orchestrator.
+- **Мотивация:** каст превращал ошибку компиляции в рантайм-ошибку (`store.save is not a function`), если в оркестратор попадёт реализация без write-методов; для хранилищ в проекте уже есть паттерн структурных контрактов (`ProjectStoreLike`), плюс его дубль в `orchestrator.ts`.
+- **Сделано:** `ProjectStoreContract = Pick<ProjectStore, 'load'|'save'|'create'|'list'>` в `storage/project-store.ts`; дубль `ProjectStoreLike` удалён (импорт общий), каст убран; `TaskExtra`/`SubagentResumeDeps.projectStore` → `ProjectStoreLike`; `project-manage`/`project-repos`/`plan`/`workspace-provision` → `ProjectStoreContract`; `git-ssh`/`project-context` → `ProjectStoreLike` (только `load`); тесты (`orchestrator-instructions`, probe-кейс `task-resume`) без кастов.
+- **Верификация (@orchestrator):** `pnpm typecheck` OK; `pnpm lint` 0 errors (в изменённых файлах предупреждений нет); тесты — shared 170, core 2299, ui 856, backend 341 PASS; `grep 'as ProjectStore'` в core — 0.
+- **Коммит:** ниже.
+
+## 2026-09-30 16:40 — Релиз 0.8.1 + деплой на test — PASS
+
+- **Задача:** бампнуть версию до 0.8.1, выкатить на test (по явной просьбе пользователя).
+- **Тип:** release + deploy · **Исполнитель:** @devops (скиллы `synth-release`/`synth-build-publish`/`synth-k3s-deploy`) · **Результат:** PASS.
+- **Решения пользователя:** незакоммиченная фича «тулы проекта» закоммичена в соседней сессии (`aefede7`, `5820947`); ветку `feat/ad-075-workspace-provisioning` в origin **не пушить**; тег и npm-публикацию не создавать.
+- **Bump:** `./scripts/version-bump.sh 0.8.1` — `version.ts` + 6× `package.json` + `charts/synth/Chart.yaml` (0.8.0 → 0.8.1).
+- **Проверки:** `pnpm install --frozen-lockfile` OK; shared/core build OK; `pnpm typecheck` OK; `pnpm lint` 0 errors. Полный `pnpm test` не гонялся (изменение только метаданных версии; фича верифицирована сегодня).
+- **Коммит `synth/`:** `dcdb1e0` `chore(release): 0.8.1` — **локально, не запушен** (origin ветки на `efc0c6f`, локально впереди на 21).
+- **Docker:** собраны из исходников и запушены в `git.itphx.ru`: `synth-backend:0.8.1` (299 MB, digest `4816645f3a36…`), `synth-ui:0.8.1` (116 MB, digest `a455c05dd642…`); версия внутри образа (`SYNTH_VERSION = '0.8.1'`) проверена. Логи — `tmp/docker-build-{backend,ui}-0.8.1.log`.
+- **`synth-deploy` (main):** `values.yaml` tags → 0.8.1, `helm lint`/`template` OK, коммит `9c37c89` запушен (`96032d1..9c37c89`) → Fleet раскатал.
+- **Верификация (@orchestrator, независимо):** `https://synth.k3s.itphx.loc/api/v2/health` → `{"status":"healthy","version":"0.8.1"}`; UI `/` → 200; deploy-образы `:0.8.1`; поды backend/ui `1/1 Running`, RESTARTS 0.
+- **Осталось:** ветка `synth` не запушена (по решению пользователя); тег `v0.8.1`, npm-публикация и preprod/prod — не трогались.
+
+## 2026-09-30 17:30 — fix: осиротевшие tool-сообщения при смене агента + `@`-упоминание в сообщении — PASS
+
+- **Задача:** разобрать, почему в dev-сессии `munsf0tn-11-exlznc7t` («Тестовый проект 2 / Смена иконки проекта») работа агента «постоянно внезапно прерывается».
+- **Тип:** bug fix + UX (core + ui) · **Исполнитель:** @fixer ×2 (параллельно, core и ui) + @orchestrator.
+- **Диагноз (Investigate):** «прерывание» — закрытие хода движком, когда модель вернула ответ без tool_call (`orchestrator.ts:2753`, по дизайну); модель `routerai/qwen/qwen3.7-flash` трижды написала анонс вызова без самого вызова (api_response без tool_calls, usage 225/4096 — не обрезка). Тот же паттерн у `itphx/deepseek-v4-flash` (сессии `mry091yg`, `mrut0quu`) — слабый function-calling «flash»-моделей, не баг движка.
+- **Найден и исправлен реальный дефект:** `ChatOrchestrator._sessionMessagesToLlm` при смене активного агента конвертировала assistant прошлого агента в `user` без `tool_calls`, а его `tool`-результаты оставляла ролью `tool` → осиротевшие `tool`-сообщения (нарушение контракта OpenAI; гарантированный `invalid_request_error` у Anthropic — `providers/anthropic.ts:423-431`). По данным `data/sessions` — 40 из 286 сессий; воспроизводилось и без смены агента (assistant без `agentRole`).
+- **Решение (согласовано с пользователем):** сохранять структуру tool-chain — assistant с `toolCalls` (свой ИЛИ чужой агент) остаётся `role: assistant` + `toolUse`, чужому в content добавляется `[agentRole]: `; `tool`-результаты остаются `role: tool`; `agentRole === undefined` ⇒ «своё» сообщение (легаси/сабагент); defensive pairing — `tool` без предшествующего `tool_calls` (скрытый/disabled assistant, нет id) отдаётся user-текстом; reasoning чужого агента не прокидывается. Затронут `_sessionMessagesToLlm` (`orchestrator.ts`).
+- **UI-баг (по просьбе пользователя):** `@pm` вырезался из текста (`splitMessageWithTags`, `ChatInput.tsx`) — теперь тег сохраняется в `part.text`; упоминания подсвечиваются цветом агента (`AgentInfo.color`) в plain-text сообщениях пользователя (`SecretPlaceholder.tsx` → `SecretPlainText`, передача агентов из `ChatMessage.tsx`).
+- **Файлы:** `packages/core/src/engine/orchestrator.ts` (+`.test.ts`), `packages/core/src/providers/anthropic.test.ts`; `packages/ui/src/components/chat/{ChatInput.tsx, ChatInput.autocomplete.test.tsx, ChatMessage.tsx, SecretPlaceholder.tsx, SecretPlaceholder.mentions.test.tsx}`.
+- **Верификация (@orchestrator, независимо):** `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — core **2305**, ui **866** PASS. Прогон `_sessionMessagesToLlm` на реальных данных `munsf0tn`: 7 assistant-вызовов, **0 осиротевших `tool`**, 3 сообщения прошлого агента с префиксом `[assistant]:`. Регресс-доказательство @fixer: новые тесты падают на старом коде (stash) и зелёные после фикса. Живой UI/браузерная проверка не проводилась (dev-сервер пользователя не перезапускался).
+- **Осталось:** коммит (ждёт команды); документация — решение об атрибуции чужого tool-chain не закреплено в `AGENTS.md`/AD (требует согласования).
+
+## 2026-09-30 18:39 — feat: иконка и цвет проектов и сессий — PASS
+
+- **Задача:** «Тестовый проект 2 / Смена иконки проекта 2»: агент (через тул `project_update`) поставил иконку `🚀`; в дереве она не отображалась; у пользователя пропала возможность менять иконку/цвет. По итогам обсуждения scope расширен: пикер для проектов И сессий, вызов кнопкой из правых панелей «Сессия»/«Проект», инлайн-иконка в имени (дерево/табы/шапки).
+- **Тип:** feature (shared+core+backend+ui) + 2 bug fix · **Исполнитель:** @fixer ×4 (core/backend, UI, фикс теста, фикс регрессий/доки) + @orchestrator.
+- **Диагноз:** UI мапил `PROJECT_ICON_MAP['🚀']` → `undefined` → `Icon` рендерил `null` (плюс баг «сырого ключа» на вкладке Files); пикер иконки/цвета был потерян при рефакторинге `891abf9` (удалён `ProjectsTab.tsx`); у `Session` полей `icon/color` не было вовсе; тул/роуты принимали любую строку без валидации.
+- **Решения пользователя:** только ключи реестра (загружаемые картинки — отменены); `icon/color` остаются в туле `project_update` (с валидацией); всё одним PR; инлайн-иконка везде; агентского тула для сессий не добавлять.
+- **Сделано (shared/core/backend):** канонические `PROJECT_ICON_KEYS`/`PROJECT_COLOR_KEYS` + `isProject*Key`/`normalize*Key` (legacy-алиасы); enum-валидация в схемах проекта/сессии и роутах (400 `VALIDATION_ERROR`), нормализация legacy при чтении; у сессий `icon/color` сквозным проходом (тип, схемы, `SessionManager.createSession`/fork, `FileStore`, `serializeSession`, роуты POST/PATCH, backend-import, hybrid-transfer); i18n-ключи `project.invalid_icon/color`.
+- **Сделано (ui):** `lib/entityIcon.ts` (резолвер), `components/ui/EntityIconPicker.tsx` (19 ключей + 8 цветов + сброс); пикер в поповере проекта, диалоге из контекстного меню дерева и секциях правых панелей (немедленное сохранение через `usePanelSettingSave`); инлайн-иконка в дереве/табах/шапке/панелях.
+- **Регрессии от пользователя (починены):** (1) цвет иконки сессии — у закрытых сессий снова серый, у открытых цвет сессии; причина — inline `style` перебивал класс открытости в `TreeNode`; (2) ложные тосты `panel.saved` при переключении вкладок Сессия/Проект — предсуществующий баг: под React StrictMode автосохранение формы `SessionSettingsTab` срабатывало при монтировании без изменений; гейт переведён с ref на state `hydrated`.
+- **Верификация (@orchestrator, независимо):** shared build OK; `pnpm build` OK; `pnpm typecheck` OK; `pnpm lint` 0 errors; `pnpm test` — shared 176, core 2320, ui 888, backend 341 (3725) PASS; наблюдался флейк `task-resume.test.ts` (1 из прогонов, 3 повторных полных прогона core — PASS).
+- **Документация:** корневой `AGENTS.md` (UI-конвенции + триггеры), `packages/ui/AGENTS.md`, `packages/shared/AGENTS.md`, `packages/core/AGENTS.md`.
+- **Коммиты (ветка `feat/entity-icons`, локально, не запушена):** `799b79b` feat, `8add065` fix регрессий, `e4e01a9` docs.
+- **Осталось:** визуальная проверка пользователем; push/PR — по команде (origin не трогали).
+
+
+## 2026-09-30 19:00 — refactor(ui): иконка в строке «Имя» правых панелей — PASS
+
+- **Задача:** упростить настройку иконки/цвета на вкладках правой панели «Сессия»/«Проект» (по просьбе пользователя).
+- **Тип:** refactor (ui) · **Исполнитель:** @fixer + @orchestrator.
+- **Сделано:** убраны отдельные секции «Иконка и цвет»; новый `components/ui/EntityIconTrigger.tsx` (иконка-кнопка → Popover с `EntityIconPicker`); `InfoField` получил `valueNode?: ReactNode`; в строке «Имя» верхней секции обеих панелей — иконка (фоллбек `folder-3` / `chat-new`|`cpu`) слева от имени, клик открывает пикер; сохранение/откат без изменений.
+- **Верификация (@orchestrator, независимо):** `pnpm typecheck` OK; `pnpm lint` 0 errors; `pnpm test` — shared 176, core 2320, ui 893, backend 341 (3730) PASS.
+- **Документация:** `packages/ui/AGENTS.md` (карта + формулировка про строку «Имя»).
+- **Коммит:** ниже (ветка `feat/entity-icons`, локально).
+
+## 2026-09-30 19:40 — fix(ui): дефолтный цвет иконки сессии = акцент открытой сессии — PASS
+
+- **Задача:** нестыковка: при пустом `session.color` иконка сессии в правой панели/табах нейтральная, а в дереве у открытой — `text-primary`.
+- **Тип:** bug fix (ui) · **Исполнитель:** @fixer + @orchestrator.
+- **Сделано:** в `lib/entityIcon.ts` — `DEFAULT_SESSION_ICON_COLOR = 'var(--primary)'` и `resolveSessionIconColor()`; `EntityIconTrigger` — проп `defaultColor`; панель «Сессия» и табы сессии используют дефолт `--primary`; проект и дерево не менялись (в дереве открытая/закрытая логика прежняя).
+- **Верификация (@orchestrator, независимо):** `pnpm typecheck` OK; `pnpm lint` 0 errors; `pnpm test` — shared 176, core 2320, ui 905, backend 341 (3742) PASS.
+- **Документация:** `packages/ui/AGENTS.md` (дефолтный цвет иконки сессии).
+- **Коммит:** ниже (ветка `feat/entity-icons`, локально).
+
+## 2026-09-30 20:10 — feat(ui): расширение реестра иконок (+18) — PASS
+
+- **Задача:** пополнить коллекцию иконок проекта/сессии, добавить в т.ч. дефолтные (`folder-3`/`chat-new`/`cpu`).
+- **Тип:** feature (shared + ui) · **Исполнитель:** @fixer + @orchestrator.
+- **Сделано:** `PROJECT_ICON_KEYS` 19 → 37 (+18: folder, chat, cpu, file, file-code, docs, task, todo, bug, robot, brain, git, repo, test, chart, star, image, calendar); UI-реестр `ICON_META`/`PROJECT_ICONS` синхронизирован по составу и порядку; новые тесты-инварианты (совпадение shared↔UI, уникальность, валидность `IconName`, наличие дефолтных ключей).
+- **Верификация (@orchestrator, независимо):** `pnpm typecheck` OK; `pnpm lint` 0 errors; `pnpm test` — shared 177, core 2320, ui 910, backend 341 (3748) PASS.
+- **Документация:** корневой `AGENTS.md` и `packages/shared/AGENTS.md` (число ключей 19→37).
+- **Коммит:** ниже (ветка `feat/entity-icons`, локально).
+
+## 2026-09-30 19:47 — Релиз 0.8.2 + деплой на test — PASS
+
+- **Задача:** «заново»: бампнуть версию и выкатить на test (ветка сменилась на `feat/entity-icons` — фича иконок/цветов проектов и сессий).
+- **Тип:** release + deploy · **Исполнитель:** @devops (скиллы `synth-release`/`synth-build-publish`/`synth-k3s-deploy`) · **Результат:** PASS.
+- **Решения пользователя:** сохраняем политику прошлого выката — ветку `synth` в origin **не пушить**; тег и npm-публикацию не создавать.
+- **Bump:** `./scripts/version-bump.sh 0.8.2` — `version.ts` + 6× `package.json` + `charts/synth/Chart.yaml` (0.8.1 → 0.8.2).
+- **Проверки:** `pnpm install --frozen-lockfile` OK; shared/core build OK; `pnpm typecheck` OK; `pnpm lint` 0 errors. Полный `pnpm test` не гонялся (изменение только метаданных версии; фича верифицирована в ветке: 3748 PASS).
+- **Коммит `synth/`:** `02599e0` `chore(release): 0.8.2` — **локально, не запушен** (ветка `feat/entity-icons`, upstream нет).
+- **Docker:** собраны из исходников и запушены в `git.itphx.ru`: `synth-backend:0.8.2` (299 MB, digest `ddbe5128e87a…`), `synth-ui:0.8.2` (116 MB, digest `1e0db0bb7d4d…`); версия внутри (`SYNTH_VERSION = '0.8.2'`) проверена. Логи — `tmp/docker-build-{backend,ui}-0.8.2.log`.
+- **`synth-deploy` (main):** `values.yaml` tags → 0.8.2, `helm lint`/`template` OK, коммит `5fc988a` запушен (`9c37c89..5fc988a`) → Fleet раскатал.
+- **Верификация (@orchestrator, независимо):** `https://synth.k3s.itphx.loc/api/v2/health` → `{"status":"healthy","version":"0.8.2"}`; UI `/` → 200; deploy-образы `:0.8.2`; поды backend/ui `1/1 Running`, RESTARTS 0.
+- **Осталось:** ветка `synth` не запушена (по решению пользователя); тег `v0.8.2`, npm-публикация и preprod/prod — не трогались.

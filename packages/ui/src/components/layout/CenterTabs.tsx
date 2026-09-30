@@ -21,12 +21,33 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore, type CenterTab } from '@/stores/useUIStore'
 import { useProjectsStore } from '@/stores/projectsStore'
+import { useSessionsStore } from '@/stores/sessionsStore'
+import { resolveIconName, resolveSessionIconColor } from '@/lib/entityIcon'
 
 const TAB_ICONS: Record<CenterTab['type'], string> = {
   chat: 'chat-new',
   'file-viewer': 'file-3',
   'file-editor': 'edit-2',
   'commit-detail': 'git-commit',
+}
+
+/**
+ * Иконка/цвет таба. Для чата берём сессию из стора (иконка/цвет сессии,
+ * AD-075); иначе — статическая иконка типа таба (fallback).
+ */
+function useTabIcon(tab: CenterTab): { icon: string; color?: string } {
+  const session = useSessionsStore((s) =>
+    tab.type === 'chat' && tab.data?.sessionId
+      ? s.sessions.find((ses) => ses.id === tab.data.sessionId)
+      : undefined,
+  )
+  const resolved = resolveIconName(session?.icon)
+  const fallback = session?.session_origin === 'subagent' ? 'cpu' : TAB_ICONS[tab.type]
+  return {
+    icon: resolved ?? fallback,
+    // Сессионный таб по умолчанию — акцент открытой сессии; остальные табы без цвета.
+    color: tab.type === 'chat' ? resolveSessionIconColor(session?.color) : undefined,
+  }
 }
 
 const TAB_CONTENT_FLOOR = 160
@@ -68,6 +89,7 @@ function SortableTab({
   onClose: (id: string) => void
 }) {
   const setActiveCenterTab = useUIStore((s) => s.setActiveCenterTab)
+  const { icon, color } = useTabIcon(tab)
   const { t } = useI18n()
   const {
     attributes,
@@ -133,7 +155,7 @@ function SortableTab({
             }
           }}
         >
-          <Icon name={TAB_ICONS[tab.type]} className="size-4 shrink-0" />
+          <Icon name={icon} className="size-4 shrink-0" style={color ? { color } : undefined} />
           <span className="text-xs font-medium truncate">{tab.title}</span>
           <button
             className="ml-0.5 rounded-sm p-0.5 opacity-0 group-hover:opacity-100 hover:bg-interactive-hover transition-opacity shrink-0"
@@ -155,12 +177,13 @@ function SortableTab({
 }
 
 function DraggingTabOverlay({ tab }: { tab: CenterTab }) {
+  const { icon, color } = useTabIcon(tab)
   return (
     <div
       className="flex shrink-0 items-center gap-1.5 rounded-t-md px-3 py-1.5 bg-card text-foreground border-x border-t border-border shadow-lg opacity-90"
       style={{ maxWidth: TAB_MAX_WIDTH }}
     >
-      <Icon name={TAB_ICONS[tab.type]} className="size-4 shrink-0" />
+      <Icon name={icon} className="size-4 shrink-0" style={color ? { color } : undefined} />
       <span className="text-xs font-medium truncate">{tab.title}</span>
       <Icon name="close" className="size-3 ml-0.5" />
     </div>

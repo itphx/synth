@@ -1,12 +1,12 @@
 import { Command } from 'commander';
 import { createRequire } from 'node:module';
-import { join, dirname } from 'node:path';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@itphx/synth-shared';
+import { join, dirname, resolve } from 'node:path';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveSecretKey, resolveHome, resolveProfilesPath, resolveCredentialsPath, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { createStandaloneApp } from '@itphx/synth-core/server/app.js';
 import { runSingleChat } from '@itphx/synth-core/server/chat.js';
 import { JsonStore } from '@itphx/synth-core/storage/json-store.js';
-import { getLastProfile, ensureProfile } from '@itphx/synth-core';
+import { getLastProfile, ensureProfile, resolveOrCreateLocalApiKey } from '@itphx/synth-core';
 
 const require = createRequire(import.meta.url);
 
@@ -33,10 +33,13 @@ program
   .command('serve')
   .description('Запустить HTTP API сервер')
   .option('--port <number>', 'порт сервера', String(defaultConfig.core.port))
-  .option('--host <host>', 'адрес для прослушивания', '0.0.0.0')
+  .option('--host <host>', 'адрес для прослушивания', process.env.SYNTH_HOST || '127.0.0.1')
   .option('--api-key <key>', 'API-ключ для аутентификации')
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')
+  .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+  .option('--profiles <path>', 'путь к реестру профилей серверов (переопределяет home)')
+  .option('--credentials <path>', 'путь к файлу credentials (переопределяет home)')
   .option('--connect <url>', 'URL удалённого backend (гибридный режим)')
   .option('--no-auto-profile', 'не подключаться автоматически к последнему профилю (нейтральный запуск)')
   .option('--oidc-issuer <url>', 'OIDC issuer — fallback дискавери для входа в UI (гибридный режим)')
@@ -46,11 +49,18 @@ program
     // Единый каталог данных локального мира — НЕ зависит от удалённого сервера.
     // Профили серверов (profiles.json) остаются мета-реестром для UX (известные
     // серверы/lastServer), все runtime-данные лежат в одном dataDir.
+    // AD-079: `--home`/`SYNTH_HOME` задаёт плоскую раскладку (config/data/profiles/credentials),
+    // изолируя инстанс от общих XDG-путей.
+    const home = resolveHome(options.home);
     const firstRun = await ensureFirstRun(
       options.dataDir || undefined,
       options.config || undefined,
+      home,
     );
     const dataDir = firstRun.dataDir;
+
+    // AD-079: реестр профилей — home-относительный, с точечным --profiles.
+    const profilesPath = options.profiles || resolveProfilesPath(home);
 
     // Источник адреса для тихого авто-входа (defaultBackendUrl):
     //   1. явный --connect url;
@@ -58,11 +68,11 @@ program
     //   3. иначе — нейтральный запуск: адрес вводится в форме входа UI.
     let startupBackendUrl: string | null = options.connect ?? null;
     if (!startupBackendUrl && options.autoProfile) {
-      startupBackendUrl = (await getLastProfile())?.url ?? null;
+      startupBackendUrl = (await getLastProfile(profilesPath))?.url ?? null;
     }
     // При явном --connect согласуем реестр (lastUsedAt/lastProfileId) — best-effort.
     if (options.connect) {
-      await ensureProfile(options.connect).catch(() => {});
+      await ensureProfile(options.connect, {}, profilesPath).catch(() => {});
     }
 
     const overrides: Partial<SynthConfig> = {
@@ -70,7 +80,7 @@ program
         port: parseInt(options.port, 10),
         apiKey: options.apiKey,
       },
-      storage: { dataDir, workspacesRoot: '', defaultWorkspace: '' },
+      storage: { dataDir, workspacesRoot: '', defaultWorkspace: '', workspaceOutsideRoot: '' },
     };
     if (startupBackendUrl) {
       // deepMerge на рантайме сольёт частичную секцию remote с defaultConfig; тип требует полный RemoteConfig.
@@ -88,11 +98,25 @@ program
 
     const synth = await loadConfig({
       configPath: options.config,
+      home: home ?? undefined,
       overrides,
     });
 
     const port = resolvePort(synth, 'SYNTH_CORE_PORT', synth.core.port);
-    const apiKey = synth.core.apiKey || process.env.SYNTH_API_KEY || '';
+
+    // Приоритет API-ключа: --api-key/synth.core.apiKey > SYNTH_API_KEY >
+    // сохранённый локальный ключ > сгенерировать и сохранить. Пустой ключ в
+    // standalone-режиме означает невозможность входа в UI (401), поэтому
+    // «npm-пакет + запуск бинарника» обязан получить устойчивый ключ.
+    let apiKey = synth.core.apiKey || process.env.SYNTH_API_KEY || '';
+    let apiKeyPath: string | null = null;
+    let apiKeyCreated = false;
+    if (!apiKey) {
+      const local = await resolveOrCreateLocalApiKey({ dataDir });
+      apiKey = local.key;
+      apiKeyPath = local.path;
+      apiKeyCreated = local.created;
+    }
 
     // UI поставляется как отдельный npm-пакет @itphx/synth-ui → резолвим его dist/.
     // systemPromptsDir не передаём: @itphx/synth-core резолвит свои prompts сам (рядом с package.json).
@@ -122,12 +146,17 @@ program
     // адреса это гибрид — адрес вводится в UI (поле «Адрес сервера»).
     const hybridEnabled = synth.remote.enabled || oidcFallbackGiven;
 
+    // AD-079: путь credentials — явный --credentials > config (remote.credentialsPath) >
+    // home-относительный (<home>/credentials.json); без home — XDG-дефолт.
+    const credentialsPath =
+      options.credentials || synth.remote.credentialsPath || (home ? resolveCredentialsPath(home) : undefined);
+
     const appHandle = await createStandaloneApp({
       port,
       dataDir,
       apiKey,
-      workspacesRoot: resolveWorkspacesRoot(synth),
-      defaultWorkingDir: resolveDefaultWorkspace(synth),
+      workspacesRoot: resolveWorkspacesRoot(synth, undefined, home),
+      defaultWorkingDir: resolveDefaultWorkspace(synth, undefined, home),
       uiDistPath,
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
@@ -138,14 +167,15 @@ program
         ? {
             issuer: remoteIssuer || undefined,
             clientId: remoteClientId || undefined,
-            // credentials — единый мульти-серверный файл (глобальный default /
-            // synth.remote.credentialsPath), не профильный.
-            credentialsPath: synth.remote.credentialsPath || undefined,
+            // credentials — единый мульти-серверный файл (--credentials /
+            // synth.remote.credentialsPath / home-относительный), не профильный.
+            credentialsPath,
           }
         : undefined,
       remoteLlm: synth.remote.llm,
       remoteTimeoutMs: synth.remote.timeoutMs,
-      remoteCredentialsPath: synth.remote.credentialsPath || undefined,
+      remoteCredentialsPath: credentialsPath,
+      profilesPath,
     });
     const { server, wss } = appHandle;
 
@@ -176,11 +206,14 @@ program
     process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
     process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
 
-    const host = options.host || process.env.SYNTH_HOST || '0.0.0.0';
+    const host = options.host;
 
     server.listen(port, host, () => {
       console.log(`\n  Откройте http://${host}:${port} в браузере`);
-      console.log(`  API-ключ: ${apiKey ? apiKey.slice(0, 8) + '...' : '(не задан)'}`);
+      console.log(`  API-ключ: ${apiKey}`);
+      if (apiKeyCreated && apiKeyPath) {
+        console.log(`  (сохранён: ${apiKeyPath})`);
+      }
       if (remoteEnabled) {
         console.log(`  Удалённый backend: ${remoteBackendUrl}. Если сервер не подключён — войдите в UI (адрес сервера + логин/пароль).`);
       }
@@ -226,8 +259,13 @@ program
   .option('--oidc-client-id <id>', 'OIDC client_id для device flow')
   .option('--token <key>', 'API-ключ для аутентификации')
   .option('--config <path>', 'путь к config.yaml')
+  .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+  .option('--credentials <path>', 'путь к файлу credentials (переопределяет home)')
   .action(async (options) => {
-    const synth = await loadConfig({ configPath: options.config });
+    const home = resolveHome(options.home);
+    const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+    const credentialsPath =
+      options.credentials || synth.remote.credentialsPath || (home ? resolveCredentialsPath(home) : undefined);
     const { RemoteSession } = await import('@itphx/synth-core/remote');
 
     const session = await RemoteSession.ensureAuthenticated(
@@ -237,7 +275,7 @@ program
         apiKey: options.token ?? '',
         issuer: options.oidcIssuer ?? synth.remote.auth.issuer,
         clientId: options.oidcClientId ?? synth.remote.auth.clientId,
-        credentialsPath: synth.remote.credentialsPath || undefined,
+        credentialsPath,
         timeoutMs: synth.remote.timeoutMs,
       },
       async (info) => {
@@ -260,21 +298,28 @@ program
   .description('Отключиться от удалённого backend (удалить сохранённые credentials)')
   .requiredOption('--backend <url>', 'URL удалённого backend')
   .option('--config <path>', 'путь к config.yaml')
+  .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+  .option('--credentials <path>', 'путь к файлу credentials (переопределяет home)')
   .action(async (options) => {
-    const synth = await loadConfig({ configPath: options.config });
+    const home = resolveHome(options.home);
+    const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+    const credentialsPath =
+      options.credentials || synth.remote.credentialsPath || (home ? resolveCredentialsPath(home) : undefined);
     const { clearCredentials } = await import('@itphx/synth-core/remote');
-    await clearCredentials(options.backend, synth.remote.credentialsPath || undefined);
+    await clearCredentials(options.backend, credentialsPath);
     console.log(`Отключено: ${options.backend} (credentials удалены)`);
   });
 
 /** Общая аутентификация к удалённому backend для команд publish/fork. */
-async function ensureRemoteSession(options: Record<string, unknown>, synth: SynthConfig) {
+async function ensureRemoteSession(options: Record<string, unknown>, synth: SynthConfig, home?: string | null) {
   const { RemoteSession } = await import('@itphx/synth-core/remote');
   const backendUrl = (options.remote as string | undefined) || synth.remote.backendUrl;
   if (!backendUrl) {
     console.error('Ошибка: не указан URL удалённого backend. Используйте --remote <url> или remote.backendUrl в config.yaml.');
     process.exit(1);
   }
+  const credentialsPath =
+    (options.credentials as string | undefined) || synth.remote.credentialsPath || (home ? resolveCredentialsPath(home) : undefined);
   const session = await RemoteSession.ensureAuthenticated(
     {
       backendUrl,
@@ -282,7 +327,7 @@ async function ensureRemoteSession(options: Record<string, unknown>, synth: Synt
       apiKey: (options.token as string | undefined) || synth.remote.auth.apiKey || '',
       issuer: (options.oidcIssuer as string | undefined) || synth.remote.auth.issuer,
       clientId: (options.oidcClientId as string | undefined) || synth.remote.auth.clientId,
-      credentialsPath: synth.remote.credentialsPath || undefined,
+      credentialsPath,
       timeoutMs: synth.remote.timeoutMs,
     },
     async (info) => {
@@ -308,12 +353,15 @@ projectCmd
   .option('--no-sessions', 'не переносить сессии')
   .option('--config <path>', 'путь к config.yaml')
   .option('--data-dir <path>', 'каталог данных')
+  .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+  .option('--credentials <path>', 'путь к файлу credentials (переопределяет home)')
   .option('--oidc-issuer <url>', 'OIDC issuer для device flow')
   .option('--oidc-client-id <id>', 'OIDC client_id для device flow')
   .option('--token <key>', 'API-ключ для аутентификации')
   .action(async (projectId, options) => {
-    const synth = await loadConfig({ configPath: options.config });
-    const dataDir = (options.dataDir as string | undefined) || resolveDataDir(synth);
+    const home = resolveHome(options.home);
+    const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+    const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
     await ensureDataDir(dataDir);
 
     const { FileStore, SessionManager, ProjectStore } = await import('@itphx/synth-core');
@@ -330,15 +378,15 @@ projectCmd
     const includeSessions = !options.noSessions;
     // При явном --data-dir workspaces лежат рядом ({dataDir}/workspaces),
     // иначе — из конфига (resolveWorkspacesRoot/resolveDefaultWorkspace).
-    const workspacesRoot = options.dataDir ? join(dataDir, 'workspaces') : resolveWorkspacesRoot(synth);
-    const defaultWorkingDir = options.dataDir ? join(dataDir, 'workspaces', 'default') : resolveDefaultWorkspace(synth);
+    const workspacesRoot = options.dataDir ? join(dataDir, 'workspaces') : resolveWorkspacesRoot(synth, undefined, home);
+    const defaultWorkingDir = options.dataDir ? join(dataDir, 'workspaces', 'default') : resolveDefaultWorkspace(synth, undefined, home);
     const localProjectDir = resolveLocalWorkspace(
       project,
       workspacesRoot,
       defaultWorkingDir,
     );
 
-    const session = await ensureRemoteSession(options, synth);
+    const session = await ensureRemoteSession(options, synth, home);
     const remoteClient = session.getClient();
 
     const localSessions = includeSessions
@@ -373,18 +421,21 @@ projectCmd
   .option('--no-sessions', 'не переносить сессии')
   .option('--config <path>', 'путь к config.yaml')
   .option('--data-dir <path>', 'каталог данных')
+  .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+  .option('--credentials <path>', 'путь к файлу credentials (переопределяет home)')
   .option('--oidc-issuer <url>', 'OIDC issuer для device flow')
   .option('--oidc-client-id <id>', 'OIDC client_id для device flow')
   .option('--token <key>', 'API-ключ для аутентификации')
   .action(async (remoteProjectId, options) => {
-    const synth = await loadConfig({ configPath: options.config });
-    const dataDir = (options.dataDir as string | undefined) || resolveDataDir(synth);
+    const home = resolveHome(options.home);
+    const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+    const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
     await ensureDataDir(dataDir);
 
     const { FileStore, SessionManager, ProjectStore } = await import('@itphx/synth-core');
     const { forkProjectToLocal } = await import('@itphx/synth-core/remote');
 
-    const session = await ensureRemoteSession(options, synth);
+    const session = await ensureRemoteSession(options, synth, home);
     const remoteClient = session.getClient();
 
     console.log(`Fork проекта ${remoteProjectId} ← ${session.backendUrl}`);
@@ -395,7 +446,7 @@ projectCmd
       localSessionManager: new SessionManager(new FileStore({ dataDir })),
       includeFiles: !options.noFiles,
       includeSessions: !options.noSessions,
-      localWorkspacesRoot: options.dataDir ? join(dataDir, 'workspaces') : resolveWorkspacesRoot(synth),
+      localWorkspacesRoot: options.dataDir ? join(dataDir, 'workspaces') : resolveWorkspacesRoot(synth, undefined, home),
       localName: (options.localName as string | undefined) || undefined,
       log: (msg) => console.log(msg),
     });
@@ -463,7 +514,7 @@ providerCmd
   .option('--data-dir <path>', 'каталог данных')
   .action(async (options) => {
     const synth = await loadConfig({});
-    const dataDir = options.dataDir || resolveDataDir(synth);
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
     const store = new JsonStore<{
@@ -492,7 +543,7 @@ providerCmd
   .option('--data-dir <path>', 'каталог данных')
   .action(async (options) => {
     const synth = await loadConfig({});
-    const dataDir = options.dataDir || resolveDataDir(synth);
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
     const store = new JsonStore<{
@@ -515,7 +566,7 @@ providerCmd
   .option('--data-dir <path>', 'каталог данных')
   .action(async (name, options) => {
     const synth = await loadConfig({});
-    const dataDir = options.dataDir || resolveDataDir(synth);
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
     const store = new JsonStore<unknown>({ dataDir, subdir: 'providers' });
@@ -544,7 +595,7 @@ program
   .option('--data-dir <path>', 'каталог данных')
   .action(async (options) => {
     const synth = await loadConfig({ configPath: options.config });
-    const dataDir = options.dataDir || resolveDataDir(synth);
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
     const logPath = synth.llmGateway.audit.logPath || join(dataDir, 'audit', 'llm-gateway.jsonl');
@@ -588,6 +639,62 @@ program
       );
     }
   });
+
+program
+  .command('secrets')
+  .description('Управление секретами шифрования (AD-076)')
+  .addCommand(
+    new Command('rotate')
+      .description('Перешифровать SSH-ключи новым мастер-ключом (one-shot)')
+      .option('--data-dir <path>', 'каталог данных')
+      .option('--config <path>', 'путь к config.yaml')
+      .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+      .option('--old-key <key>', 'явный старый мастер-ключ (base64 32Б / hex 64)')
+      .option('--old-key-file <path>', 'файл со старым мастер-ключом')
+      .option('--new-key <key>', 'явный новый мастер-ключ (по умолчанию — сгенерировать)')
+      .option('--new-key-file <path>', 'файл с новым мастер-ключом')
+      .option('--dry-run', 'предпросмотр без записи')
+      .option('--yes', 'подтвердить необратимую операцию (обязательно без --dry-run)')
+      .action(async (options) => {
+        const home = resolveHome(options.home);
+        const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+        const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
+        const dryRun = !!options.dryRun;
+
+        if (!dryRun && !options.yes) {
+          console.error(
+            'Ошибка: ротация мастер-ключа необратима. Повторите с --yes либо используйте --dry-run для предпросмотра.',
+          );
+          process.exit(1);
+        }
+
+        try {
+          const { rotateSecretsMasterKey } = await import('@itphx/synth-core');
+          const result = await rotateSecretsMasterKey({
+            dataDir,
+            oldKey: options.oldKey,
+            oldKeyFile: options.oldKeyFile,
+            newKey: options.newKey,
+            newKeyFile: options.newKeyFile,
+            secretKey: resolveSecretKey(synth, process.env),
+            env: process.env,
+            dryRun,
+          });
+
+          console.log(`${dryRun ? '[dry-run] ' : ''}Ротация мастер-ключа SSH-ключей (${dataDir})`);
+          console.log(`  всего записей: ${result.total}`);
+          console.log(`  перешифровано: ${result.rotated}`);
+          console.log(`  апгрейд plaintext: ${result.upgraded}`);
+          console.log(`  пропущено (уже новый ключ): ${result.skipped}`);
+          if (result.ids.length > 0) console.log(`  id: ${result.ids.join(', ')}`);
+          for (const warning of result.warnings) console.warn(`  Предупреждение: ${warning}`);
+          if (dryRun) console.log('  (dry-run: изменения не записаны)');
+        } catch (err) {
+          console.error(`Ошибка ротации: ${err instanceof Error ? err.message : String(err)}`);
+          process.exit(1);
+        }
+      }),
+  );
 
 program.action(async () => {
   await startRepl({});

@@ -10,7 +10,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createProjectRoutes } from './projects.js';
-import { ProjectStore } from '../storage/project-store.js';
+import { ProjectStore } from '@itphx/synth-core';
 import { ProjectRole, type User } from '@itphx/synth-shared';
 
 interface MockUser extends User {

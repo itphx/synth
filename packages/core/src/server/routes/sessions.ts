@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer } from '../../index.js';
-import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema, createResolveAuthorName } from '@itphx/synth-shared';
+import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema, createResolveAuthorName, PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS, isProjectIconKey, isProjectColorKey } from '@itphx/synth-shared';
 import type { Message, Session } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
@@ -87,6 +87,11 @@ const DEFAULT_MESSAGES: SessionRouteMessages = {
   contentRequired: () => 'Контент обязателен',
   queueFull: (_c: Context, max: number) => `Очередь сообщений заполнена (макс. ${max})`,
 };
+
+/** Сообщение о недопустимом значении метаданных с перечнем допустимых ключей. */
+function invalidMetaMessage(label: 'icon' | 'color', value: unknown, allowed: readonly string[]): string {
+  return `Недопустимое значение ${label}: "${String(value)}". Допустимые: ${allowed.join(', ')}`;
+}
 
 /**
  * Hono не принимает spread массива middleware в app.post (перегрузки — фиксированные
@@ -228,8 +233,23 @@ export function createSessionRoutes(
     }
 
     const owner = await resolveOwner(c);
+
+    // Метаданные (icon/color): только канонические ключи; null/undefined — сброс.
+    if (body.icon !== undefined && body.icon !== null && !isProjectIconKey(body.icon)) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: invalidMetaMessage('icon', body.icon, PROJECT_ICON_KEYS) },
+      }, 400);
+    }
+    if (body.color !== undefined && body.color !== null && !isProjectColorKey(body.color)) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: invalidMetaMessage('color', body.color, PROJECT_COLOR_KEYS) },
+      }, 400);
+    }
+
     const session = await sessionManager.createSession({
       title: body.name || body.title || undefined,
+      icon: body.icon ?? undefined,
+      color: body.color ?? undefined,
       projectId: body.project_id || body.projectId || undefined,
       engine: body.engine || 'synth',
       parentId: body.parent_id || body.parentId || undefined,
@@ -237,8 +257,8 @@ export function createSessionRoutes(
       settings: { ...body.settings, agentRole: body.settings?.agentRole ?? await resolveDefaultAgent() },
       userId: owner,
     });
-    // SessionManager.createSession объявляет ownerId, но не проставляет его —
-    // выставляем явно, иначе serializeSession отдаёт owner_id: null (регресс core).
+    // AD-075/D5: createSession сам проставляет ownerId из userId; выставляем
+    // явно для совместимости и чтобы serializeSession отдавал owner_id.
     session.ownerId = owner;
     await sessionManager.updateSession(session);
     // Хук подписки EventHub вызываем ДО publish: EventBus не буферизует события,
@@ -341,6 +361,8 @@ export function createSessionRoutes(
       }
     }
     if (body.engine !== undefined) session.engine = body.engine;
+    if (body.icon !== undefined) session.icon = parsed.data.icon ?? undefined;
+    if (body.color !== undefined) session.color = parsed.data.color ?? undefined;
     if (body.mode !== undefined) {
       if (!SESSION_MODES.includes(body.mode)) {
         return c.json({

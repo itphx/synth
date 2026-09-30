@@ -4,6 +4,12 @@ import type { PermissionAction, PermissionConfig, PermissionDecision, Permission
 import { resolvePath } from '../tools/path-utils.js';
 import { t as sm } from '../system-messages.js';
 import { computeToolAvailability } from './availability.js';
+import {
+  isRuntimeDepAvailable,
+  RUNTIME_DEP_BINARY,
+  TOOL_RUNTIME_DEP,
+  type RuntimeDeps,
+} from '../tools/runtime-deps.js';
 import { getToolGroups, TOOL_PATH_PARAMS } from './groups.js';
 import { checkShellCommand, isMutatingCommand, tokenizeCommand, matchShellCommandPattern } from '../security/shell-guard.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
@@ -35,6 +41,12 @@ export interface PermissionCheckInput {
    * (`unavailable(role)`), а не жёстко запрещён.
    */
   agentCapabilities?: readonly string[];
+  /**
+   * Доступность внешних программ окружения (git/rg/sh). Не задана — fail-open
+   * (тул доступен). При отсутствии программы тул получает `deny` с
+   * `unavailable(dependency)`.
+   */
+  runtimeDeps?: RuntimeDeps;
 }
 
 /**
@@ -109,6 +121,15 @@ export class PermissionEvaluator {
     return this._config;
   }
 
+  /**
+   * Правила конфига, устойчиво к `permission: {}` (пустой объект без `rules`):
+   * настройки сессии могут прийти из JSON без нормализации схемой, поэтому
+   * отсутствующий `rules` трактуется как «нет правил».
+   */
+  private get _rules(): Record<string, PermissionRule> {
+    return this._config.rules ?? {};
+  }
+
   check(input: PermissionCheckInput): PermissionDecision {
     // AD-070 §2.9.1: ролевая недоступность — приоритетнее прочих правил. Тул
     // виден модели (список тулов постоянен), но недоступен текущему агенту;
@@ -144,7 +165,7 @@ export class PermissionEvaluator {
   }
 
   private _computeDecision(input: PermissionCheckInput): PermissionDecision {
-    const { toolName, params, workingDir, capabilities, sessionMode, planMode, planApproved, mcpToolSettings, shellPolicy, protectedPaths, protectedPathsEnabled } = input;
+    const { toolName, params, workingDir, capabilities, sessionMode, planMode, planApproved, mcpToolSettings, shellPolicy, protectedPaths, protectedPathsEnabled, runtimeDeps } = input;
     const paths = extractPaths(toolName, params, workingDir);
     const isFile = paths.length > 0;
 
@@ -176,6 +197,23 @@ export class PermissionEvaluator {
         action: 'deny',
         reason: sm('permission.plan_shell_denied'),
         matchedRule: 'plan.shell-deny',
+      };
+    }
+
+    // Зависимость окружения: нет внешней программы тула (git/rg/sh). Порядок
+    // role → mode → dependency: сюда доходим, только если роль и режим не
+    // заблокировали. Тул виден модели (набор дефинишенов постоянен), но `deny`
+    // с подсказкой — установить программу (или сообщить администратору).
+    const runtimeDep = TOOL_RUNTIME_DEP[toolName];
+    if (runtimeDep && !isRuntimeDepAvailable(runtimeDeps, runtimeDep)) {
+      const binary = RUNTIME_DEP_BINARY[runtimeDep];
+      return {
+        action: 'deny',
+        reason: sm('permission.dep_unavailable', { binary }),
+        matchedRule: 'dependency.unavailable',
+        unavailable: { reason: 'dependency' },
+        messageId: 'tool-unavailable-dependency',
+        params: { binary },
       };
     }
 
@@ -246,16 +284,22 @@ export class PermissionEvaluator {
       }
     }
 
+    // AD-046 §8.1: per-skill permissions — правило `skill` (строка или glob по
+    // имени скилла). `deny` скрывает скилл из каталога; `ask` спрашивает.
+    if (toolName === 'skill' && typeof params.name === 'string' && params.name.trim() !== '') {
+      const skillDecision = resolveSkillRule(this._config, params.name);
+      if (skillDecision) return skillDecision;
+    }
+
     // 1. Правило по конкретному имени тула
-    const toolRule = this._config.rules[toolName];
+    const toolRule = this._rules[toolName];
     if (toolRule !== undefined) {
       const d = this._resolveRule(toolName, toolRule, paths, workingDir);
       if (d) return d;
     }
-
     // 2. external_directory — только пути вне workingDir
     if (isFile) {
-      const extRule = this._config.rules['external_directory'];
+      const extRule = this._rules['external_directory'];
       if (extRule !== undefined) {
         for (const p of paths) {
           if (isInsideWorkingDir(p, workingDir)) continue;
@@ -267,7 +311,7 @@ export class PermissionEvaluator {
 
     // 3. Групповые правила
     for (const group of getToolGroups(toolName, capabilities)) {
-      const groupRule = this._config.rules[group];
+      const groupRule = this._rules[group];
       if (groupRule === undefined) continue;
       // Для execute_shell правила группы shell матчатся по КОМАНДЕ (префиксы
       // токенов), а не по cwd-пути: "npm install *" → ask, "*" → любая команда.
@@ -281,7 +325,7 @@ export class PermissionEvaluator {
     }
 
     // 4. Глобальный '*'
-    const starRule = this._config.rules['*'];
+    const starRule = this._rules['*'];
     if (starRule !== undefined) {
       const d = this._resolveRule('*', starRule, isFile ? paths : [], workingDir);
       if (d) return d;
@@ -404,6 +448,76 @@ export function matchPathPattern(pattern: string, absolutePath: string, workingD
     if (globMatch(pattern, rel)) return true;
   }
   return false;
+}
+
+/**
+ * AD-046 §8.1: именованные правила `permission.rules.<key>` — строка (действие
+ * для всех) либо объект glob-паттернов по имени. Общий резолвер для скиллов
+ * (`skill`) и команд (`command`).
+ */
+function resolveNamedRule(
+  config: PermissionConfig | undefined,
+  key: string,
+  name: string,
+): PermissionDecision | undefined {
+  const rule = config?.rules?.[key];
+  if (rule === undefined) return undefined;
+
+  if (typeof rule === 'string') {
+    return {
+      action: rule,
+      reason: sm('permission.rule_matched', { key, action: rule }),
+      matchedRule: key,
+    };
+  }
+
+  let starAction: PermissionAction | undefined;
+  for (const [pattern, action] of Object.entries(rule)) {
+    if (pattern === '*') {
+      starAction = action;
+      continue;
+    }
+    if (globMatch(pattern, name)) {
+      return {
+        action,
+        reason: sm('permission.rule_pattern_matched', { key, pattern, action, path: name }),
+        matchedRule: `${key}.${pattern}`,
+      };
+    }
+  }
+  if (starAction) {
+    return {
+      action: starAction,
+      reason: sm('permission.rule_prefix_matched', { key, action: starAction }),
+      matchedRule: `${key}.*`,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * AD-046 §8.1: per-skill permissions. Правило — `permission.rules.skill`:
+ * строка (действие для всех скиллов) либо объект glob-паттернов по имени
+ * скилла. `deny` скрывает скилл из каталога (в отличие от capability-unavailable,
+ * где скилл виден); наследуется саб-агентами (derive.ts).
+ */
+export function resolveSkillRule(
+  config: PermissionConfig | undefined,
+  skillName: string,
+): PermissionDecision | undefined {
+  return resolveNamedRule(config, 'skill', skillName);
+}
+
+/**
+ * AD-046 §8.1: per-command permissions. Правило — `permission.rules.command`:
+ * строка либо объект glob-паттернов по имени команды. `deny` скрывает команду
+ * из `/commands` и блокирует резолвинг; наследуется саб-агентами (derive.ts).
+ */
+export function resolveCommandRule(
+  config: PermissionConfig | undefined,
+  commandName: string,
+): PermissionDecision | undefined {
+  return resolveNamedRule(config, 'command', commandName);
 }
 
 export function isInsideWorkingDir(p: string, workingDir: string): boolean {

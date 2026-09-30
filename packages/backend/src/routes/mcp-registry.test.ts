@@ -52,6 +52,7 @@ function createMockMcpManager() {
     setServerTrusts: vi.fn(),
     setServerAuthors: vi.fn(),
     setDefaultServers: vi.fn(),
+    setServerSystemEnabled: vi.fn(),
     disconnectServer: vi.fn(async () => {}),
     getConfiguredServers: vi.fn(() => []),
   };

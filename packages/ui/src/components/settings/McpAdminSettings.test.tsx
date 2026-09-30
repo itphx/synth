@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   getMcpToolSettings: vi.fn(),
   getMcpNetworkPolicyInfo: vi.fn(),
   getMcpPolicyInfo: vi.fn(),
+  updateMcpRegistryEntry: vi.fn(),
   saveMcpToolSettings: vi.fn(),
   saveMcpNetworkPolicy: vi.fn(),
   saveMcpPolicy: vi.fn(),
@@ -41,6 +42,7 @@ const ENTRY_SYS = {
   origin: 'instance',
   author: null,
   trust: 'builtin',
+  enabled: true,
   enabledByDefault: true,
   createdAt: '',
   updatedAt: '',
@@ -74,6 +76,10 @@ beforeEach(() => {
   mocks.saveMcpToolSettings.mockResolvedValue({ servers: {} })
   mocks.saveMcpNetworkPolicy.mockImplementation(async (p: unknown) => p)
   mocks.getMcpPolicyInfo.mockResolvedValue({ policy: 'auto', isOverridden: false, defaults: 'auto' })
+  mocks.updateMcpRegistryEntry.mockImplementation(async (_id: string, patch: unknown) => ({
+    ...ENTRY_SYS,
+    ...(patch as object),
+  }))
   mocks.saveMcpPolicy.mockImplementation(async (p: unknown) => p)
   mocks.resetMcpSettings.mockResolvedValue({ servers: {} })
   mocks.resetMcpNetworkPolicy.mockResolvedValue({ mode: 'deny', list: [] })
@@ -137,5 +143,31 @@ describe('McpAdminSettings — только MCP (AD-071 §2.5/§2.6)', () => {
     expect(container.querySelector('[data-testid="mcp-availability-cancel"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="mcp-availability-reset"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="mcp-policy-reset"]')).not.toBeNull()
+  })
+
+  it('реестр: мастер enabled и enabledByDefault — независимые тумблеры', async () => {
+    const container = await renderSettings()
+    const row = container.querySelector('[data-testid="mcp-registry-sys"]')!
+    const toggles = row.querySelectorAll('button[role="switch"]')
+    expect(toggles).toHaveLength(2)
+    expect((toggles[0] as HTMLButtonElement).getAttribute('aria-checked')).toBe('true')
+    expect((toggles[1] as HTMLButtonElement).getAttribute('aria-checked')).toBe('true')
+
+    await act(async () => {
+      ;(toggles[0] as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+    expect(mocks.updateMcpRegistryEntry).toHaveBeenCalledWith('e-sys', { enabled: false })
+    mocks.updateMcpRegistryEntry.mockClear()
+
+    // Второй тумблер — дефолт для новых проектов; после перерисовки берём заново.
+    const defaultToggle = container.querySelectorAll(
+      '[data-testid="mcp-registry-sys"] button[role="switch"]',
+    )[1] as HTMLButtonElement
+    await act(async () => {
+      defaultToggle.click()
+    })
+    await act(async () => {})
+    expect(mocks.updateMcpRegistryEntry).toHaveBeenCalledWith('e-sys', { enabledByDefault: false })
   })
 })

@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { nowISO, ToolCapability } from '@itphx/synth-shared';
 import type {
   ToolDefinition,
-  ToolContext,
   Project,
   ProjectPlan,
   PlanColumn,
@@ -11,15 +10,17 @@ import type {
 } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
-import type { ProjectStore } from '../../storage/project-store.js';
+import type { ProjectStoreContract } from '../../storage/project-store.js';
 import { isAborted, abortedResult } from './abort.js';
+import { canEditProject } from './project-access.js';
+import { loadSessionProject } from './project-manage.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 export interface PlanToolExtra {
   sessionManager?: SessionManager;
   eventBus?: EventBus;
   sessionId?: string;
-  projectStore?: ProjectStore;
+  projectStore?: ProjectStoreContract;
 }
 
 const DEFAULT_COLUMNS: PlanColumn[] = [
@@ -49,7 +50,7 @@ function getPlan(project: Project): ProjectPlan {
  * Сохраняет изменённый план: инкрементирует version, обновляет updatedAt
  * плана и проекта, пишет через projectStore.
  */
-async function savePlan(projectStore: ProjectStore, project: Project, plan: ProjectPlan): Promise<void> {
+async function savePlan(projectStore: ProjectStoreContract, project: Project, plan: ProjectPlan): Promise<void> {
   plan.updatedAt = nowISO();
   plan.version += 1;
   project.plan = plan;
@@ -95,21 +96,6 @@ export function renderPlanMarkdown(plan: ProjectPlan): string {
     }
   }
   return lines.join('\n');
-}
-
-/** Возвращает проект сессии по session.projectId (null — если проекта нет). */
-async function getProjectForSession(ctx: ToolContext): Promise<Project | null> {
-  const extra = ctx.extra as PlanToolExtra | undefined;
-  if (!extra?.projectStore) return null;
-  const sessionId = ctx.sessionId || extra.sessionId;
-  if (!sessionId || !extra.sessionManager) return null;
-  try {
-    const session = await extra.sessionManager.getSession(sessionId);
-    if (!session?.projectId) return null;
-    return await extra.projectStore.load(session.projectId);
-  } catch {
-    return null;
-  }
 }
 
 async function updateSessionMode(
@@ -217,7 +203,7 @@ export const planReadTool: ToolDefinition = {
   async execute(_args, ctx) {
     // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
     if (isAborted(ctx)) return abortedResult(this.name);
-    const project = await getProjectForSession(ctx);
+    const { project } = await loadSessionProject(ctx);
     if (!project) {
       return { content: sm('plan.no_project_read'), metadata: { i18n: i18nMeta('plan.no_project_read') } };
     }
@@ -236,7 +222,7 @@ export const planListTool: ToolDefinition = {
   async execute(_args, ctx) {
     // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
     if (isAborted(ctx)) return abortedResult(this.name);
-    const project = await getProjectForSession(ctx);
+    const { project } = await loadSessionProject(ctx);
     if (!project) {
       return {
         content: sm('plan.no_project_read'),
@@ -366,6 +352,15 @@ function applyPlanWrite(plan: ProjectPlan, params: PlanWriteInput): { error?: st
   }
 }
 
+/**
+ * plan_write.
+ *
+ * AD-075/D5: запись плана — проектные данные, поэтому применяется тот же гейт
+ * `canEditProject` (владелец/редактор), что и к `project_log_write`/
+ * `project_invariants_write`. `project.plan` в HTTP-RBAC отнесён к контентным
+ * полям (`PUT /api/v2/projects/:id`); в core-standalone `plan_write` — основной
+ * путь записи плана.
+ */
 export const planWriteTool: ToolDefinition = {
   name: 'plan_write',
   description:
@@ -390,9 +385,17 @@ export const planWriteTool: ToolDefinition = {
       return { content: sm('plan.project_store_unavailable'), isError: true, metadata: { i18n: i18nMeta('plan.project_store_unavailable') } };
     }
 
-    const project = await getProjectForSession(ctx);
+    const { session, project } = await loadSessionProject(ctx);
     if (!project) {
       return { content: sm('plan.no_project'), isError: true, metadata: { i18n: i18nMeta('plan.no_project') } };
+    }
+    // AD-075/D5: менять план вправе только владелец/редактор (до мутации).
+    if (!canEditProject(session, project)) {
+      return {
+        content: sm('project.write_forbidden'),
+        isError: true,
+        metadata: { i18n: i18nMeta('project.write_forbidden') },
+      };
     }
     const plan = getPlan(project);
 

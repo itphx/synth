@@ -8,6 +8,9 @@ export const EMPTY_MCP_CONFIG: McpServerConfig = { type: 'http' }
 export interface McpRegistryEditorInput {
   name: string
   config: McpServerConfig
+  /** Системный мастер-флаг (hard-gate). */
+  enabled?: boolean
+  /** Включён по умолчанию для новых проектов (сид). */
   enabledByDefault?: boolean
 }
 
@@ -40,6 +43,7 @@ export function useMcpRegistryEditor({
   const [editing, setEditing] = useState<string | null>(null)
   const [formName, setFormName] = useState('')
   const [formConfig, setFormConfig] = useState<McpServerConfig>(EMPTY_MCP_CONFIG)
+  const [formEnabled, setFormEnabled] = useState(true)
   const [formDefault, setFormDefault] = useState(false)
   const [savingForm, setSavingForm] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<McpRegistryEntry | null>(null)
@@ -52,6 +56,7 @@ export function useMcpRegistryEditor({
     setEditing('__new__')
     setFormName('')
     setFormConfig(EMPTY_MCP_CONFIG)
+    setFormEnabled(true)
     setFormDefault(false)
     onOpen?.()
   }
@@ -60,6 +65,7 @@ export function useMcpRegistryEditor({
     setEditing(entry.id)
     setFormName(entry.name)
     setFormConfig({ ...entry.config })
+    setFormEnabled(entry.enabled !== false)
     setFormDefault(entry.enabledByDefault)
     onOpen?.()
   }
@@ -76,6 +82,7 @@ export function useMcpRegistryEditor({
       const input: McpRegistryEditorInput = {
         name: formName.trim(),
         config: formConfig,
+        enabled: formEnabled,
         enabledByDefault: formDefault,
       }
       if (editing === '__new__') {
@@ -107,6 +114,8 @@ export function useMcpRegistryEditor({
     setFormName,
     formConfig,
     setFormConfig,
+    formEnabled,
+    setFormEnabled,
     formDefault,
     setFormDefault,
     savingForm,

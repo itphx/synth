@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createModelRoutes } from './models.js';
-import { JsonStore } from '../storage/json-store.js';
+import { JsonStore } from '@itphx/synth-core';
 import { ProviderFactory } from '@itphx/synth-core';
 import type { ModelConfig, ProviderConfig } from '@itphx/synth-shared';
 

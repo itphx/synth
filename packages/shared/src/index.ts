@@ -17,6 +17,7 @@ export * from './interfaces/index.js';
 export * from './schemas/index.js';
 export * from './protocols/index.js';
 export * from './utils/index.js';
+export * from './skills/frontmatter.js';
 export { SYNTH_VERSION } from './version.js';
 export * from './model-metadata.js';
 
@@ -39,6 +40,16 @@ export {
   type McpConfig,
   type ToolsDisabledConfig,
   toolsDisabledConfigSchema,
+  type SkillsConfig,
+  skillsConfigSchema,
+  type CommandsConfig,
+  commandsConfigSchema,
+  type InstructionsConfig,
+  type InstructionsLazyConfig,
+  type InstructionsFetchConfig,
+  type InstructionSourceConfig,
+  instructionsConfigSchema,
+  instructionSourceConfigSchema,
   type RouterConfig,
   type RouterContentConfig,
   type RouterEscalationConfig,
@@ -54,5 +65,5 @@ export {
   type LLMGatewayAuditConfig,
 } from './config/index.js';
 export { defaultConfig, loadConfig } from './config/index.js';
-export { resolveDataDir, resolvePort, resolveWorkspacesRoot, resolveDefaultWorkspace, ensureDataDir, createDefaultConfig, resolveDeployMode, findConfigPath, defaultConfigPath, ensureConfigFile, ensureFirstRun } from './config/index.js';
+export { resolveDataDir, resolvePort, resolveWorkspacesRoot, resolveDefaultWorkspace, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveHome, resolveProfilesPath, resolveCredentialsPath, ensureDataDir, createDefaultConfig, resolveDeployMode, findConfigPath, defaultConfigPath, ensureConfigFile, ensureFirstRun } from './config/index.js';
 export type { DeployMode } from './config/index.js';

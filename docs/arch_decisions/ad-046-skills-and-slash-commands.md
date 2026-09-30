@@ -1,8 +1,86 @@
 # AD-046: Скиллы и slash-команды
 
-> **Статус:** ⏳ Не реализовано (проект)
+> **Статус:** ✅ Фаза 1 реализована; ✅ Фаза 2 реализована (commit 1 — core+API+CLI: команды/bundles/scope-API; commit 2 — UI: настройки/панели/статистика//-автокомплит); ✅ Фаза 3 — trust-гейт проектных команд, inline shell за флагом, внешние локальные каталоги (read-only discovery), `skills.urls` (read-only индексация, `trusted: false`), встроенный мета-скилл `skill-creator` (builtin-скилл-инструкция); ⏳ остаток — install/trust/подписи/`lock.json` и backend-админка каталога (AD-068)
 > **Дата:** 2026-09-17
+> **Реализация:** Фаза 1 — 2026-09-23 (механизм скиллов; отклонения — в разделе «Реализовано в Фазе 1»); Фаза 2 — 2026-09-23 (commit 1 — core/API/CLI, commit 2 — UI; отклонения — в соответствующих разделах); Фаза 3 (часть) — 2026-09-24 (внешние каталоги + `skills.urls` read-only; `skill-creator` как builtin-скилл)
 > **Парный документ:** [AD-068](./ad-068-skills-agents-registry.md) «Реестр и каталог скиллов и агентов» — контент-платформа, реестр, доверие и распространение
+> **Дополнение (2026-09-30):** §4.5 — единая per-item модель включения (мастер hard-gate + дефолт новых проектов на уровне систем; hard-gate + дефолт новых сессий на уровне проекта; один тумблер в сессии), снапшот-поля `skillsDefaultOn`, миграция `migrateSessionScopeSnapshots`; та же модель у MCP (AD-071 §2.4).
+
+---
+
+## Реализовано в Фазе 1 (2026-09-23)
+
+Реализовано ядро механизма скиллов в `@itphx/synth-core` + контракты в `@itphx/synth-shared`.
+Зафиксированные при реализации отклонения от исходного проекта:
+
+| # | Исходный проект | Фактически | Причина |
+|---|---|---|---|
+| 1 | Frontmatter-парсер «в core» | Хелпер `parseFrontmatter`/`stringifyFrontmatter` в `packages/shared/src/skills/frontmatter.ts` на уже имеющемся `js-yaml` | В core `js-yaml` нет; новую зависимость не ставим (инвариант 13). Толерантность к неизвестным ключам/невалидному YAML — возвращает `issues`, не throw |
+| 2 | FS-watch инвалидация кэша | Ленивая проверка mtime/size при обращении к реестру (`SkillWatcher`) + принудительный `POST /api/v2/skills/reload` | `fs.watch`/chokidar не добавляем (инвариант 13); ре-скан по mtime закрывает пробел opencode и защищает от инъекций через `git pull` |
+| 3 | `tools.skill: false` (глобальный тумблер) | Отдельного `tools.skill` нет: тул `skill` (capability `file_read`) отключается существующим `tools.disabled` (AD-071 §2.9) + per-session контекстом | Не дублировать механизм; AD-071 уже даёт instance-wide отключение |
+| 4 | Каталог — один блок | Два блока AD-070: `skills.catalog` (**stable** — system/project, доступные) и `skills.catalog.session` (**volatile** — session enable/disable + маркеры `unavailable`) | Тиры AD-070 §2.1/§4.5: стабильная часть не инвалидирует prompt-cache |
+| 5 | Саб-агенты — через Composer | Каталог приклеивается к `llmSystemPrompt` в `engine/tools/task.ts`/`task-resume.ts`; binding — **родителя**, capabilities — саб-агента | Рефактор саб-агентов на Composer — вне Фазы 1 (см. §12/§13) |
+| 6 | Внешние каталоги `.opencode`/`.claude`/`.agents`/`~/.config/opencode`, `skills.urls` | Подключены в Фазе 3 (часть, 2026-09-24) как **read-only discovery/индексация**: внешние локальные каталоги в проекте наследуют project-trust, `~/.config/opencode` — trusted; `skills.urls` кэшируются в `{dataDir}/skills-cache/urls/<sha1(url)[:16]>` с `trusted: false` (в каталог для модели не попадают, тело не грузится) | Фаза 1 ограничивалась instance/project/`config.skills.paths`; установка/доверие/подписи/`lock.json` — AD-068 |
+
+**Состав Фазы 1:**
+- Формат `SKILL.md`: толерантный YAML-frontmatter (неизвестные ключи → `meta.extra`), валидация `name` (1–64, `^[a-z0-9]+(-[a-z0-9]+)*$`, совпадает с каталогом) и `description` (1–1024), поля §3.2 включая `metadata.synth.*`.
+- Discovery: `{dataDir}/skills` (instance, level `system`), `{project.workspace}/.synth/skills` (project, level `project`), `config.skills.paths`; приоритет `project > instance > config.paths`, first-wins, `shadowed`-диагностика; недоверенные проектные скиллы видны, но не грузятся (`skills.trustedProjectDirs`).
+- Каталог в промпт основной сессии (Composer) и саб-агентам; capability-aware `unavailable` + делегирование через `task`; binding `metadata.synth.agents`/`groups`.
+- Core-тул `skill({name, file_path?})`: `<skill_content>` + base directory + ≤10 supporting-файлов; обрезка 50 KB / 2000 строк локально.
+- Per-skill permissions (`permission.rules.skill`: строка или glob-паттерны по имени); `deny` скрывает скилл из каталога; наследование саб-агентами.
+- Событие `skill.invoked`; тип `command.invoked` зарезервирован (Фаза 2).
+- API: `GET/POST /api/v2/skills`, `GET/PATCH/DELETE /api/v2/skills/:name`, `GET/PUT/DELETE /api/v2/skills/:name/files/*`, `POST /api/v2/skills/reload`; instance-запись — через `SkillService`/`SkillStore` (атомарная запись tmp→rename).
+- i18n-ключи `skill.*` (AD-041): `shared/i18n`, core `system-messages.ts`, UI `ru.ts`.
+
+---
+
+## Реализовано в Фазе 2 — commit 1 (core + API + CLI, без UI)
+
+Реализованы slash-команды и bundles в `@itphx/synth-core` + контракты в `@itphx/synth-shared`. Отклонения/решения:
+
+| # | Решение | Фактически |
+|---|---|---|
+| 1 | `/compact`, `/review` | Отложены (не реализованы в Фазе 2) |
+| 2 | `allowed-tools` | Advisory: только метаданные frontmatter, в права не транслируется |
+| 3 | `/summary` | Ручной триггер суммаризации: оркестратор вызывает `_handleSummarization` напрямую (в оркестраторе нет queueManager для enqueue SYSTEM) |
+| 4 | `namespace` | bare — `builtin > skill`; бандл-скиллы как `<bundle>:<skill>` только при конфликте имени с builtin; префиксы `template:` не вводятся |
+| 5 | Локальные команды | user+assistant сообщения builtin-ответов помечаются `Message.ephemeral` и исключаются из LLM-контекста (оптимизатор) |
+| 6 | `requires_toolsets` | Экспансия через `config.skills.toolsets` (`scope.ts`), union с `requires_capabilities` |
+| 7 | Счётчики/метрики | Из событий `command.invoked`/`skill.invoked` (отдельного хранилища нет) |
+| 8 | Исправления Фазы 1 | `<skill_files>` → `<file>путь</file>`; base dir — `pathToFileURL(dir).href` |
+
+**Состав Фазы 2 (commit 1):**
+- `engine/commands/{parser,template,discovery,registry,bundles,builtin,resolver,service}.ts`, `storage/command-store.ts`, `storage/skill-bundle-store.ts`.
+- Ранний резолвинг в `orchestrator.ts` (до micro-first/LLM); `command.invoked`; `skill.invoked` для skill/bundle.
+- Permission `permission.rules.command` (allow/deny/ask + glob); наследование саб-агентами; `deny` скрывает из `/commands`.
+- Core API: `GET /api/v2/commands`, CRUD `/api/v2/skill-bundles`, scope `/sessions|projects|settings/skills`.
+- CLI: `/`-строки идут через единый путь `runSingleChat` → core-резолвер; локальные команды не требуют настроенного провайдера.
+- Конфиг: `commands.*`, `skills.toolsets`. Bundles — YAML `{dataDir}/{commands.bundlesPath}/<name>.yaml`.
+- UI (настройки/автокомплит/панели) — **не входит** в commit 1.
+
+---
+
+## Реализовано в Фазе 2 — commit 2 (UI)
+
+UI-слой скиллов/команд поверх core-API Фазы 2 (commit 1). Пользователь свои скиллы не создаёт: user-раздел — просмотр; CRUD — только ADMIN.
+
+**Resolver (core, commit 1, для контекста UI):** `/`-команды резолвятся в core до LLM единообразно для UI/CLI/гибрида. Builtins `/help` (статика), `/skills`, `/commands`, `/summary`; шаблонные `.md` (`$ARGUMENTS`/`@file`); bundles; событие `command.invoked`; builtin-ответы — `Message.ephemeral`. Scope-API `/sessions|projects|settings/skills`; project-запись — owner/LEAD/admin (по аналогии с MCP, AD-071 §2.4).
+
+**Состав UI:**
+- **API-клиент** (`packages/ui/src/lib/api/synthApi.ts`): skills (`getSkills/getSkill/createSkill/updateSkill/deleteSkill/getSkillFiles/getSkillFile/putSkillFile/deleteSkillFile/reloadSkills`), commands (`getCommands`), bundles (CRUD `/skill-bundles`), scope (`getSessionSkills/updateSessionSkills/getSessionSkillsEffective`, `getProjectSkills/updateProjectSkills`, `getSkillsSettings/updateSkillsSettings/resetSkillsSettings`).
+- **Стор** `stores/skillsStore.ts`: реестр + деталь, commands, bundles, instance-настройки (disabled/policy + дефолты), CRUD-экшены, загрузка/ошибки; счётчики `skillInvocationCounts`/`commandInvocationCounts` и последний вызов.
+- **События**: `transportStore` слушает `skill.invoked`/`command.invoked` (AD-046 §8.2) и пишет в `skillsStore`.
+- **Настройки** (`components/settings/`): user «Скиллы» (`SkillsUserSettings` — просмотр реестра/тела/supporting-файлов; недоверенные — только метаданные + бейдж; reload); admin «Скиллы» (`SkillsAdminSettings` + `SkillEditorForm` — CRUD `SKILL.md`+файлы, две оси: мастер-отключение `disabled` и дефолт новых проектов `disabledForNewProjects`, группами и точечно, policy); admin «Команды» (`CommandsSettings` — список команд с kind/scope/available + диагностика `shadowed`/`collision`, CRUD bundles). Категории `skills` (user) и `skillsAdmin`, `commands` (ADMIN) в `SettingsModal`.
+- **Правая панель**: тумблеры скиллов в сессии (`SessionSettingsTab` — `getSessionSkills`/`updateSessionSkills { name, enabled }`) и проектный скоуп (`ProjectTab` — `ProjectSkillsBlock`, «Доступен»/«Включён по умолчанию») — по образцу MCP.
+- **Статистика** (`StatsTab`): секция «Скиллы» (имя, scope/уровень, available, enabled сессии с причиной, unavailableReason, trusted, вклад токенов/оценка, source stable/session; блочные размеры `skills.catalog`/`skills.catalog.session` из манифеста); секция «Команды» — счётчики и последние вызовы из `skillsStore`.
+- **`/`-автокомплит** (`components/chat/CommandAutocomplete.tsx` + интеграция в `ChatInput`): источник `GET /api/v2/commands`; kind/scope/description/`argument-hint`, бейдж `unavailable`; клавиатура ArrowUp/Down/Enter/Tab/Escape, клик, закрытие outside; подстановка `/name ` (не отправка); тач-таргеты по AD-044.
+
+**Отклонения/решения UI-слоя:**
+- Счётчики статистики — из live-событий `skill.invoked`/`command.invoked` в рамках жизни UI (персистентного хранилища нет; соответствует решению commit 1).
+- `/compact`/`/review` — по-прежнему отложены; `allowed-tools` — advisory (см. commit 1).
+- Runtime-импорты из `@itphx/synth-shared` в UI — только через subpath (`/types`, `/schemas`, `/i18n`, `/version`); value-импорт из корня тянет `config/loader` (`node:fs`) в браузерный бандл (инцидент commit 2, `import type` из корня безопасен).
+
+---
 
 **Решение:** ввести в Synth механизм **скиллов** (папка с `SKILL.md` + supporting-файлы) и **slash-команд** (встроенные, шаблонные и скиллы-как-команды). Скиллы — это переиспользуемые инструкции/процедуры, которые:
 1. попадают в системный промпт **только каталогом** (`name` + краткое `description`) — progressive disclosure;
@@ -191,7 +269,9 @@ metadata:
 
 Внешние источники — **только discovery** (совместимость), изменять их через Synth API нельзя.
 
-Локальные каталоги агентов-совместимости (`.opencode/skills`, `.claude/skills`, `.agents/skills`, `~/.config/opencode/skills`) — read-only discovery **механизма** (AD-046). **Удалённые каталоги-реестры** (github/well-known/url/skills.sh и т.п.) — предмет [AD-068](./ad-068-skills-agents-registry.md): по умолчанию **выключены**, пользователю/админу лишь предлагается список проверенных источников, включение — явное действие.
+Локальные каталоги агентов-совместимости (`.opencode/skills`, `.opencode/skill`, `.claude/skills`, `.agents/skills`, `~/.config/opencode/skills`) — read-only discovery **механизма** (AD-046), реализовано. Каталоги в `project.workspace` наследуют project-trust (§4.4), `~/.config/opencode/skills` — trusted.
+
+`skills.urls` — **только read-only индексация**: opencode-совместимый `index.json` и `<base>/<path||name>/SKILL.md` скачиваются в `{dataDir}/skills-cache/urls/<sha1(url)[:16]>` (атомарная запись tmp→rename, AD-005), видны в реестре/диагностике, но `trusted: false`: в каталог для модели не попадают, тело не грузится. Сеть — только `http(s)`, SSRF-guard (loopback/private/link-local/ULA/`*.local`, проверка каждого редиректа). Ошибки — диагностикой (`remote`/`read-error`), старый кэш не затирается. **Установка/доверие/подписи/`lock.json` — AD-068** (здесь не реализуются); **удалённые каталоги-реестры** (github/well-known/skills.sh и т.п.) — тоже AD-068, по умолчанию включение явное.
 
 ### 4.3. Приоритет
 
@@ -229,21 +309,29 @@ tools:
 
 ### 4.5. Уровни и включение скиллов (модель AD-071)
 
-Скиллы используют ту же модель уровней и включения, что и MCP ([AD-071](./ad-071-mcp-servers-prompt.md) §2.4/§2.9), не дублируя её.
+Скиллы используют ту же per-item модель уровней и включения, что и MCP ([AD-071](./ad-071-mcp-servers-prompt.md) §2.2/§2.4/§2.5), не дублируя её. Ниже — специфика скиллов.
 
-**Уровни** (уточняют scope §4.1):
+**Уровни** (уточняют scope §4.1). У каждого уровня — до двух осей: hard-gate (`enabled`) и дефолт (сид):
 
-| Уровень | Кто управляет | Скоуп | По умолчанию |
+| Уровень | Кто управляет | Hard-gate (`enabled`) | Дефолт (сид) |
 |---|---|---|---|
-| **System** | admin (instance) | все сессии и проекты | включён; пользователь может отключить в своей сессии |
-| **Project** | owner/lead | все сессии проекта | включается owner/lead «по умолчанию для проекта» |
-| **Session** | пользователь | одна сессия | личные/разовые скиллы |
+| **System** | admin (instance) | `disabled {categories,groups,skills}` в `/settings/skills` — скилл недоступен НИГДЕ (включая старые сессии/проекты) | `disabledForNewProjects {categories,groups,skills}` — что НЕ включать в сид новых проектов |
+| **Project** | owner/lead | `project.skills.enabled[]` — недоступен ни в одной сессии проекта (в т.ч. старой); пустой массив — «всё выключено» (opt-in); нет `project.skills` — гейт не задан (legacy) | `project.skills.defaultOn[]` — «включён по умолчанию для новых сессий» |
+| **Session** | пользователь | один тумблер: `skills` (вкл) / `skillsDisabled` (opt-out, включая системные) | снапшот `skillsDefaultOn` — снимок `project.defaultOn` (или системного дефолта) на момент создания сессии; задаётся при создании, пользователь не редактирует |
 
 Merge — `system ∪ project ∪ session`; при конфликте имён приоритет `system > project > session` (жёстко). `metadata.synth.scope` (`instance`/`project`, §3.2) — декларативная подсказка; фактический уровень задаёт источник/реестр.
 
-**Реестр и источник.** Запись скилла несёт уровень и происхождение (`system`/`project`/`session`, `builtin`/`installed`/…); trust — по [AD-068](./ad-068-skills-agents-registry.md). Отключённый скилл **не исчезает** из реестра и диагностики: помечается `disabled` с причиной (уровень, opt-out), по аналогии с MCP (§2.4 AD-071).
+**Резолвинг (per-item).** `enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`, где `systemOn` — не сработал системный hard-gate (имя/категория/группа), `projectOn` — имя в `project.skills.enabled` (или гейт не задан), `sessionOff` — сработал `skillsDisabled`, `snapshotOn`/`sessionOn` — имя в `skillsDefaultOn`/`skills`. Дефолт — **opt-in (off)**: без сида/явного включения скилл неактивен, но виден в реестре/диагностике с причиной. Причина (приоритет): `system` → `project` → `session`. Единый резолвер — `resolveSkillAvailability` (`engine/skills/scope.ts`): каталог, scope-API и тул `skill`.
 
-**Включение/отключение.** Enable/disable на уровне `system` (admin, instance-wide), `project` (owner/lead) и `session` (пользователь). Отключать можно **группами** (`metadata.synth.category` / `metadata.synth.groups`) и **отдельными** скиллами (`name`); семантика — как у `tools.disabled` (AD-071 §2.9): union групп и точечных имён, а механизм (резолвинг `/`-команд, core-тул `skill`) неотключаем. Per-skill permissions AD-029 (`deny` скрывает) остаются отдельным механизмом.
+**Live vs snapshot.** Системное и проектное отключение — **live hard-gate** (отключённый скилл пропадает и из старых сессий проекта). Дефолты (`disabledForNewProjects`, `project.defaultOn`, снапшот сессии) — **snapshot**: смена дефолта не влияет на созданные проекты/сессии.
+
+**Legacy-совместимость.** `project.skills` отсутствует → проектный гейт не применяется (каталог как раньше). `session.settings.skillsDefaultOn === undefined` → сессия legacy-режима (скиллы без снапшота доступны как прежде).
+
+**Сид и миграция.** При создании проекта `enabled`/`defaultOn` сидятся из системных дефолтов (`disabledForNewProjects`); при создании сессии — снапшот из `project.defaultOn`/системного дефолта. Существующие сессии материализуются идемпотентной разовой миграцией `migrateSessionScopeSnapshots` (маркер `session-scope-snapshots-v1` в runtime settings).
+
+**Реестр и источник.** Запись скилла несёт уровень и происхождение (`system`/`project`/`session`, `builtin`/`installed`/…); trust — по [AD-068](./ad-068-skills-agents-registry.md). Отключённый скилл **не исчезает** из реестра и диагностики: помечается `disabled` с причиной (уровень/opt-out). Отключать можно **группами** (`metadata.synth.category` / `metadata.synth.groups`) и **отдельными** скиллами (`name`); семантика — как у `tools.disabled` (AD-071 §2.9): union групп и точечных имён, а механизм (резолвинг `/`-команд, core-тул `skill`) неотключаем. Per-skill permissions AD-029 (`deny` скрывает) — отдельный механизм.
+
+**Тул `skill`.** Уважает scope: `skill({name})` для недоступного скилла возвращает не тело, а ошибку с i18n-ключом `skill.scope_disabled` (`{name}`, `{reason}`).
 
 **Представление в промпте.** Каталог скиллов — отдельный слой промпта с тирами AD-070:
 - **стабильная часть** — скиллы, включённые на уровне `system`/`project` (состав константен на сессию) → `stable`, не инвалидирует кэш;
@@ -441,31 +529,43 @@ instruction: |
 
 Скаффолдер `SKILL.md`: генерирует frontmatter, **обязательно** запрашивает требуемые тулы/capabilities и создаёт структуру supporting-файлов. Референсы: `innokod/.opencode/skills/skill-creator`, `mattpocock/writing-great-skills`.
 
+**Реализация (builtin-скилл-инструкция, 2026-09-24).** В отличие от исходного проекта, `skill-creator` не является core-тулом записи и не сидится на ФС: это **builtin-скилл**, объявленный в коде (`packages/core/src/engine/skills/builtin.ts`) как TS-константа — без нового asset-каталога и дублирования ассетов (AD-038). Агент создаёт **проектные** скиллы существующими file-тулами в `{project.workspace}/.synth/skills/<name>/SKILL.md`; instance-скиллы — только через ADMIN API/UI (`POST /api/v2/skills`), в обход ФС.
+
+- `BUILTIN_SOURCE` — синтетический `SkillSource` (`scope: 'instance'`, `level: 'system'`, `origin: 'instance'`, `trusted: true`); `dir` — маркер `.builtin`, на ФС не читается.
+- `buildBuiltinSkills({ dataDir })` → `DiscoveredSkill[]` с `name: 'skill-creator'`, meta (`userInvocable: true`, `disableModelInvocation: false`, `command: 'skill-creator'`, `requiresCapabilities: [file_read, file_write]`), телом-инструкцией (EN), `trusted: true`, `mtimeMs: 0`.
+- `SkillRegistryOptions.builtin` подмешивает builtin **первым** entry в `list()` (до источников с ФС) → system-приоритет, не перекрывается project/instance (`shadowed`-диагностика для одноимённых). `reload()` builtin не трогает.
+- `SkillService` передаёт builtin в реестр; скилл виден в `GET /api/v2/skills`/каталоге, грузится core-тулом `skill` и резолвится как `/skill-creator` (skill-команда).
+
 ---
 
 ## 10. Точки интеграции в коде
 
-| Файл | Строки / сущность | Что менять |
-|---|---|---|
-| `packages/core/src/engine/context/builder.ts` | 42–132 (`buildSystemPrompt`) | Секция каталога скиллов в системный промпт |
-| `packages/core/src/engine/context/config.ts` | 321–351 (`getRolePrompt`) | Согласовать роль-промпты и поставку каталога/секции |
-| `packages/core/src/engine/orchestrator.ts` | 798–836 | Вставка каталога после plan/session-context; учёт override `session.settings.systemPrompt`; резолвинг `/`-команд до LLM |
-| `packages/core/src/engine/orchestrator.ts` | 1135 (`tool_call.started`) | Публикация `skill.invoked` / `command.invoked` |
-| `packages/core/src/engine/tools/task.ts` | 84, 219–228 (`resolveSubagentPrompt`) | Каталог для саб-агентов + capability-aware фильтр binding |
-| `packages/core/src/engine/tools/task-resume.ts` | 206 (`resolveSubagentPrompt`) | То же для ветки resume |
-| `packages/core/src/engine/agents/registry.ts` | 53–61 (`getToolsForAgent`) | Доступность тула `skill` по capabilities агента |
-| `packages/core/src/engine/tools/index.ts` | Реестр тулов | Регистрация core-тула `skill` |
-| `packages/core/src/engine/permission/evaluator.ts`, `derive.ts` | — | Per-skill permissions, наследование саб-агентами |
-| `packages/core/src/events/bus.ts` | — | Типы событий `skill.invoked` / `command.invoked` |
-| `packages/shared/src/types/tools.ts` | 3–16 (`ToolCapability`) | Метаданные capabilities/toolsets для `requires_*` |
-| `packages/shared/src/types/index.ts` | 120–195 (`SessionSettings`) | Сессионные настройки `tools.skill` / `skills.*` |
-| `@itphx/synth-shared/config` (AD-023) | — | Секции `skills.paths|urls|trustedProjectDirs|inlineShell`, `tools.skill` |
-| `packages/core/src/server/routes/` | — | Роуты `/api/v2/skills`, `/commands`, `/skill-bundles` |
-| `packages/backend/src/routes/` | — | Админка instance-скиллов (RBAC `ADMIN`) |
-| `packages/ui/src/` | — | Портал архивных сторов/автокомплита на API v2 |
-| `packages/synth/src/cli.ts` | 596 (`startRepl`) | Перехват `/`-команд в REPL |
+Фактические пути после Фазы 1 (✅ — реализовано, ⏳ — Фаза 2/3):
 
-**Новые модули core:** `engine/skills/` (discovery, parser, registry, loader, trust), `engine/commands/` (resolver, builtin, template, bundles), `engine/tools/skill.ts`.
+| Файл | Сущность | Статус |
+|---|---|---|
+| `packages/shared/src/types/skills.ts` | `SkillMeta/Summary/Detail/Diagnostic`, invocation/scope/level, capability-требования | ✅ |
+| `packages/shared/src/skills/frontmatter.ts` | Толерантный `parseFrontmatter` + `stringifyFrontmatter` (js-yaml в shared) | ✅ |
+| `packages/shared/src/types/index.ts` | `EventType` + `skill.invoked`/`command.invoked`; `SessionSettings.skills\|skillsDisabled`; `AgentDefinition.groups?` | ✅ |
+| `packages/shared/src/schemas/index.ts` | Zod-схемы create/update/files/session-override | ✅ |
+| `packages/shared/src/config/types.ts`, `defaults.ts` | Секция `skills.paths\|trustedProjectDirs\|inlineShell` (`skills.urls` — Фаза 3) | ✅ |
+| `packages/shared/src/i18n/index.ts` | Ключи `skill.*` (AD-041) | ✅ |
+| `packages/core/src/engine/skills/{types,scope,trust,parser,discovery,watcher,registry,catalog,loader,service}.ts` | Discovery/реестр/каталог/загрузка/CRUD-сервис | ✅ |
+| `packages/core/src/storage/skill-store.ts` | Instance-дерево `{dataDir}/skills/<name>/`, атомарная запись tmp→rename (AD-005) | ✅ |
+| `packages/core/src/engine/tools/skill.ts`, `engine/tools/index.ts` | Core-тул `skill` + регистрация в `ALL_BUILTIN_TOOLS` | ✅ |
+| `packages/core/src/engine/context/composer.ts` | Блоки `skills.catalog` (stable) и `skills.catalog.session` (volatile) + labels; каталог не добавляется при `session.settings.systemPrompt` override | ✅ |
+| `packages/core/src/engine/orchestrator.ts` | `_collectSkillsCatalog` в `getPromptInfo`/`_processMessage`; `ToolContext.extra.skillRuntime`; публикация `skill.invoked` рядом с `tool_call.started` | ✅ |
+| `packages/core/src/engine/tools/task.ts`, `task-resume.ts` | Каталог саб-агентам — приклейка к `llmSystemPrompt` (binding родителя, capabilities саб-агента) | ✅ |
+| `packages/core/src/engine/permission/evaluator.ts` (`resolveSkillRule`), `derive.ts` | Per-skill allow/deny/ask + glob; наследование саб-агентами | ✅ |
+| `packages/core/src/server/routes/skills.ts`, `server/app.ts` | `/api/v2/skills[/:name]`, `/files/*`, `/reload` | ✅ |
+| `packages/backend/src/app.ts` | Переиспользование core-фабрики + RBAC `ADMIN` на запись, `SkillService` в оркестраторе | ✅ |
+| ~~`engine/context/builder.ts` (`buildSystemPrompt`)~~ | Каталог теперь в `SystemPromptComposer` (AD-070), а не в builder | заменено |
+| `packages/core/src/engine/commands/` (resolver/builtin/template), `/skill-bundles` | Slash-команды и bundles | ⏳ Фаза 2 |
+| `packages/ui/src/` (сторы/автокомплит), `packages/synth/src/cli.ts` (`startRepl`) | UI-слой и перехват `/` в REPL | ⏳ Фаза 2 |
+| `engine/skills/builtin.ts` — builtin `skill-creator` (`BUILTIN_SOURCE`, `buildBuiltinSkills`) + `registry.ts` (`builtin`) | Встроенный мета-скилл-инструкция | ✅ Фаза 3 (часть) |
+| `engine/skills` — `skills.urls`, inline shell | Расширения | ⏳ Фаза 3 (inline shell) |
+
+**Новые модули core Фазы 1:** `engine/skills/` (discovery, parser, registry, catalog, loader, service, watcher, scope, trust), `storage/skill-store.ts`, `engine/tools/skill.ts`. Модуль `engine/commands/` (resolver, builtin, template, bundles) — Фаза 2 (не создан).
 
 ---
 
@@ -506,9 +606,9 @@ instruction: |
 
 ### Фаза 3 — расширения
 
-- `skills.paths`/`skills.urls` (удалённые каталоги).
+- `skills.paths`/`skills.urls` (удалённые каталоги) — ✅ (часть, read-only).
+- Встроенный `skill-creator` — ✅ (builtin-скилл-инструкция, §9.5).
 - Inline shell (opt-in, через `execute_shell` + AD-029).
-- Встроенный `skill-creator`.
 - Backend-админка (RBAC) и стык с каталогом AD-068.
 
 ### Тесты (Vitest)
@@ -524,6 +624,7 @@ instruction: |
 | Команды | встроенные, шаблонные `$ARGUMENTS`/`@file`, приоритет bundle > skill |
 | Bundles | парсинг YAML, `/bundle-name` грузит N скиллов |
 | Inline shell | выключено по умолчанию; при включении — только `execute_shell` + permissions |
+| Builtin `skill-creator` | виден в реестре/каталоге, trusted, `load()` отдаёт тело, `/skill-creator` резолвится, не перекрывается project/instance |
 | Права/события | `deny` скрывает, `ask` спрашивает, наследование; `skill.invoked`/`command.invoked` |
 
 ---

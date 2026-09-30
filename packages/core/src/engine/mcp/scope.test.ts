@@ -1,9 +1,10 @@
 /**
  * AD-071 §2.4: разрешение эффективного набора MCP-серверов.
  *
- * Формула: `(instance.defaultOn ∪ project.defaultOn ∪ session.enabled) − session.disabled`,
- * уровень — по приоритету `system > project > session`, отключённые не исчезают
- * и получают причину (AD-071 §2.2).
+ * Модель per-item: системный мастер (`systemEnabled`) → проектный hard-gate
+ * (`project.enabled`) → сессионный opt-out → снапшот (`session.defaultOn`)
+ * или явное включение (`session.enabled`). Уровень — по приоритету
+ * `system > project > session`, отключённые не исчезают и получают причину.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -16,8 +17,7 @@ function server(
   return {
     name,
     origin: opts.origin ?? 'instance',
-    enabledByDefault: opts.enabledByDefault ?? false,
-    configEnabled: opts.configEnabled ?? true,
+    systemEnabled: opts.systemEnabled ?? true,
   };
 }
 
@@ -29,143 +29,108 @@ function byName(
 }
 
 describe('resolveMcpScope (AD-071 §2.4)', () => {
-  it('instance.defaultOn: системный сервер включён по умолчанию', () => {
-    const result = resolveMcpScope(
-      [server('sys', { origin: 'instance', enabledByDefault: true })],
-      null,
-      {},
-    );
-    expect(byName(result, 'sys')).toMatchObject({
-      level: 'system',
-      enabled: true,
-      origin: 'instance',
-    });
+  it('сид сессии (defaultOn) включает системный сервер', () => {
+    const result = resolveMcpScope([server('sys')], null, { defaultOn: ['sys'] });
+    expect(byName(result, 'sys')).toMatchObject({ level: 'system', enabled: true, origin: 'instance' });
     expect(byName(result, 'sys').reason).toBeUndefined();
   });
 
-  it('системный сервер без enabledByDefault → disabled/not_default', () => {
+  it('системный сервер без сида/включения → disabled/not_default', () => {
     const result = resolveMcpScope([server('sys')], null, {});
-    expect(byName(result, 'sys')).toMatchObject({
-      level: 'system',
-      enabled: false,
-      reason: 'not_default',
-    });
+    expect(byName(result, 'sys')).toMatchObject({ level: 'system', enabled: false, reason: 'not_default' });
   });
 
-  it('project.defaultOn: пользовательский сервер → level=project, enabled', () => {
+  it('systemEnabled=false → disabled/system_disabled (жёстко, даже при session.enabled)', () => {
+    const result = resolveMcpScope(
+      [server('sys', { systemEnabled: false })],
+      null,
+      { enabled: ['sys'] },
+    );
+    expect(byName(result, 'sys')).toMatchObject({ enabled: false, reason: 'system_disabled' });
+  });
+
+  it('project.enabled (hard-gate) + session.defaultOn → level=project, enabled', () => {
+    const result = resolveMcpScope(
+      [server('community', { origin: 'user' })],
+      { enabled: ['community'], defaultOn: [] },
+      { defaultOn: ['community'] },
+    );
+    expect(byName(result, 'community')).toMatchObject({ level: 'project', enabled: true, origin: 'user' });
+  });
+
+  it('project.defaultOn НЕ читается при резолвинге (только snapshot сессии)', () => {
     const result = resolveMcpScope(
       [server('community', { origin: 'user' })],
       { enabled: ['community'], defaultOn: ['community'] },
       {},
     );
-    expect(byName(result, 'community')).toMatchObject({
-      level: 'project',
-      enabled: true,
-      origin: 'user',
-    });
+    // Проект разрешает сервер, но сессия его не засеяла/не включила → off.
+    expect(byName(result, 'community')).toMatchObject({ level: 'project', enabled: false, reason: 'not_default' });
   });
 
-  it('session.enabled: пользовательский сервер → level=session, enabled', () => {
+  it('project.enabled=[] (явный off) блокирует и session.enabled → project_disabled', () => {
+    const result = resolveMcpScope(
+      [server('community', { origin: 'user' })],
+      { enabled: [], defaultOn: [] },
+      { enabled: ['community'], defaultOn: ['community'] },
+    );
+    expect(byName(result, 'community')).toMatchObject({ enabled: false, reason: 'project_disabled' });
+  });
+
+  it('project без настроек (undefined) — гейт не задан, session.enabled работает', () => {
     const result = resolveMcpScope(
       [server('personal', { origin: 'user' })],
       null,
       { enabled: ['personal'] },
     );
-    expect(byName(result, 'personal')).toMatchObject({
-      level: 'session',
-      enabled: true,
-    });
+    expect(byName(result, 'personal')).toMatchObject({ level: 'session', enabled: true });
   });
 
-  it('приоритет имён system > project > session: origin=instance всегда system', () => {
+  it('origin=instance всегда level=system', () => {
     const result = resolveMcpScope(
-      [server('shared', { origin: 'instance', enabledByDefault: true })],
-      { enabled: ['shared'], defaultOn: ['shared'] },
+      [server('shared', { origin: 'instance' })],
+      { enabled: ['shared'], defaultOn: [] },
       { enabled: ['shared'] },
     );
     expect(byName(result, 'shared').level).toBe('system');
   });
 
-  it('приоритет project > session для пользовательского сервера', () => {
+  it('opt-out сессии сильнее сида/включения → session_optout', () => {
     const result = resolveMcpScope(
-      [server('community', { origin: 'user' })],
-      { enabled: ['community'], defaultOn: [] },
-      { enabled: ['community'] },
-    );
-    // Уровень определяется проектом (enabled), несмотря на session.enabled.
-    expect(byName(result, 'community')).toMatchObject({
-      level: 'project',
-      enabled: true,
-    });
-  });
-
-  it('opt-out системного сервера: enabled=false, reason=session_optout', () => {
-    const result = resolveMcpScope(
-      [server('sys', { origin: 'instance', enabledByDefault: true })],
+      [server('sys')],
       null,
-      { disabled: ['sys'] },
+      { defaultOn: ['sys'], enabled: ['sys'], disabled: ['sys'] },
     );
-    expect(byName(result, 'sys')).toMatchObject({
-      level: 'system',
-      enabled: false,
-      reason: 'session_optout',
-    });
+    expect(byName(result, 'sys')).toMatchObject({ enabled: false, reason: 'session_optout' });
   });
 
-  it('opt-out сильнее project.defaultOn', () => {
-    const result = resolveMcpScope(
-      [server('community', { origin: 'user' })],
-      { enabled: ['community'], defaultOn: ['community'] },
-      { disabled: ['community'] },
-    );
-    expect(byName(result, 'community')).toMatchObject({
-      level: 'project',
-      enabled: false,
-      reason: 'session_optout',
-    });
+  it('config.enabled=false без мастер-гейта не блокирует (сид, не гейт)', () => {
+    // config.enabled — только сид записи реестра; в резолвинге не участвует.
+    // Мастер (реестр) включён, проект не ограничивает → решает сессия.
+    const off = resolveMcpScope([server('sys')], null, {});
+    expect(byName(off, 'sys')).toMatchObject({ enabled: false, reason: 'not_default' });
+
+    const on = resolveMcpScope([server('sys')], null, { enabled: ['sys'] });
+    expect(byName(on, 'sys')).toMatchObject({ enabled: true });
+    expect(byName(on, 'sys').reason).toBeUndefined();
   });
 
-  it('config.enabled=false → disabled/config (приоритет над session_optout)', () => {
+  it('приоритет причин: system_disabled > project_disabled', () => {
     const result = resolveMcpScope(
-      [server('sys', { origin: 'instance', enabledByDefault: true, configEnabled: false })],
-      null,
-      { disabled: ['sys'] },
-    );
-    expect(byName(result, 'sys')).toMatchObject({
-      enabled: false,
-      reason: 'config',
-    });
-  });
-
-  it('проектный сервер в enabled, но не в defaultOn → disabled/project_disabled', () => {
-    const result = resolveMcpScope(
-      [server('community', { origin: 'user' })],
-      { enabled: ['community'], defaultOn: [] },
+      [server('x', { origin: 'user', systemEnabled: false })],
+      { enabled: [], defaultOn: [] },
       {},
     );
-    expect(byName(result, 'community')).toMatchObject({
-      level: 'project',
-      enabled: false,
-      reason: 'project_disabled',
-    });
+    expect(byName(result, 'x').reason).toBe('system_disabled');
   });
 
   it('отключённые серверы не исчезают из выдачи', () => {
     const result = resolveMcpScope(
-      [server('sys', { enabledByDefault: true }), server('community', { origin: 'user' })],
+      [server('sys'), server('community', { origin: 'user' })],
       null,
       {},
     );
     expect(result).toHaveLength(2);
     expect(result.map((d) => d.name).sort()).toEqual(['community', 'sys']);
-  });
-
-  it('project.defaultOn включает системный сервер (уровень остаётся system)', () => {
-    const result = resolveMcpScope(
-      [server('sys', { origin: 'instance', enabledByDefault: false })],
-      { enabled: [], defaultOn: ['sys'] },
-      {},
-    );
-    expect(byName(result, 'sys')).toMatchObject({ level: 'system', enabled: true });
   });
 });

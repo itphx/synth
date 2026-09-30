@@ -1,5 +1,9 @@
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { resolveDataDir, resolvePort, resolveDefaultWorkspace } from './resolve.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
+import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveHome, defaultConfigPath, findConfigPath, resolveProfilesPath, resolveCredentialsPath, ensureFirstRun } from './resolve.js';
 import { defaultConfig } from './defaults.js';
 import type { SynthConfig } from './types.js';
 
@@ -30,6 +34,20 @@ describe('resolveDataDir', () => {
   it('приоритет process.env.SYNTH_DATA_DIR если env не передан', () => {
     vi.stubEnv('SYNTH_DATA_DIR', '/from/process');
     expect(resolveDataDir(cfg)).toBe('/from/process');
+  });
+
+  it('регрессия (AD-075): относительный env.SYNTH_DATA_DIR → абсолютный', () => {
+    const env = { SYNTH_DATA_DIR: 'rel/data' };
+    const result = resolveDataDir(cfg, env);
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/data'));
+  });
+
+  it('регрессия (AD-075): относительный config.storage.dataDir → абсолютный', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, dataDir: 'rel/cfg-data' } };
+    const result = resolveDataDir(c, {});
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/cfg-data'));
   });
 });
 
@@ -93,8 +111,289 @@ describe('resolveDefaultWorkspace', () => {
     vi.stubEnv('SYNTH_DEFAULT_WORKSPACE', '/should-not-be-used');
     expect(resolveDefaultWorkspace(cfg, {})).toBe('/test/data/workspaces/default');
   });
+
+  it('регрессия (AD-075): относительный env.SYNTH_DEFAULT_WORKSPACE → абсолютный', () => {
+    const result = resolveDefaultWorkspace(cfg, { SYNTH_DEFAULT_WORKSPACE: 'rel/def' });
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/def'));
+  });
+
+  it('регрессия (AD-075): относительный config.storage.defaultWorkspace → абсолютный', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, defaultWorkspace: 'rel/cfg-def' } };
+    const result = resolveDefaultWorkspace(c, {});
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/cfg-def'));
+  });
+
+  it('регрессия (AD-075): относительный env.SYNTH_DATA_DIR → абсолютный default', () => {
+    const result = resolveDefaultWorkspace(cfg, { SYNTH_DATA_DIR: 'rel/data' });
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/data/workspaces/default'));
+  });
+});
+
+describe('resolveWorkspacesRoot (AD-075: регрессия относительных путей)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('абсолютный env.SYNTH_WORKSPACES_ROOT → как есть', () => {
+    expect(resolveWorkspacesRoot(cfg, { SYNTH_WORKSPACES_ROOT: '/abs/ws' })).toBe('/abs/ws');
+  });
+
+  it('относительный env.SYNTH_WORKSPACES_ROOT → абсолютный', () => {
+    const result = resolveWorkspacesRoot(cfg, { SYNTH_WORKSPACES_ROOT: 'rel/ws' });
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/ws'));
+  });
+
+  it('относительный config.storage.workspacesRoot → абсолютный', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, workspacesRoot: 'rel/cfg-ws' } };
+    const result = resolveWorkspacesRoot(c, {});
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/cfg-ws'));
+  });
+
+  it('относительный env.SYNTH_DATA_DIR → абсолютный fallback', () => {
+    const result = resolveWorkspacesRoot(cfg, { SYNTH_DATA_DIR: 'rel/data' });
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/data/workspaces'));
+  });
+
+  it('относительный config.storage.dataDir → абсолютный fallback', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, dataDir: 'rel/cfg-data' } };
+    const result = resolveWorkspacesRoot(c, {});
+    expect(isAbsolute(result)).toBe(true);
+    expect(result).toBe(resolvePath('rel/cfg-data/workspaces'));
+  });
+});
+
+describe('resolveWorkspaceOutsideRootPolicy (AD-075)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('env.SYNTH_WORKSPACE_OUTSIDE_ROOT приоритетнее config', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, workspaceOutsideRoot: 'deny' } };
+    expect(resolveWorkspaceOutsideRootPolicy(c, { SYNTH_WORKSPACE_OUTSIDE_ROOT: 'confirm' })).toBe('confirm');
+  });
+
+  it('config.storage.workspaceOutsideRoot используется, если env не задан', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, workspaceOutsideRoot: 'deny' } };
+    expect(resolveWorkspaceOutsideRootPolicy(c, {})).toBe('deny');
+  });
+
+  it('невалидное env-значение игнорируется → config', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, workspaceOutsideRoot: 'deny' } };
+    expect(resolveWorkspaceOutsideRootPolicy(c, { SYNTH_WORKSPACE_OUTSIDE_ROOT: 'allow' })).toBe('deny');
+  });
+
+  it('дефолт — пустая строка', () => {
+    expect(resolveWorkspaceOutsideRootPolicy(cfg, {})).toBe('');
+  });
+
+  it('не читает реальный process.env, если передан env без переменной', () => {
+    vi.stubEnv('SYNTH_WORKSPACE_OUTSIDE_ROOT', 'deny');
+    expect(resolveWorkspaceOutsideRootPolicy(cfg, {})).toBe('');
+  });
 });
 
 // Функциональные тесты для ensureDataDir и createDefaultConfig
 // require доступа к реальной ФС, поэтому используют настоящие mkdir/writeFile
 // или оставлены интеграционными (ручной запуск с tmp).
+
+describe('ensureFirstRun (AD-075: нормализация относительного --data-dir)', () => {
+  let dir: string | null = null;
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    if (dir) {
+      await rm(dir, { recursive: true, force: true });
+      dir = null;
+    }
+  });
+
+  it('относительный dataDirOverride → абсолютный dataDir (запись в tmp)', async () => {
+    vi.stubEnv('SYNTH_DEPLOY_MODE', 'dev');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    dir = await mkdtemp(join(tmpdir(), 'synth-firstrun-'));
+    // Относительный путь, лексически указывающий на временный каталог,
+    // чтобы ensureDataDir не создавал подкаталоги в рабочем/домашнем каталоге.
+    const dataDirOverride = relative(process.cwd(), dir);
+    const configPathOverride = join(dir, 'config.yaml');
+
+    const result = await ensureFirstRun(dataDirOverride, configPathOverride);
+
+    expect(isAbsolute(dataDirOverride)).toBe(false);
+    expect(isAbsolute(result.dataDir)).toBe(true);
+    expect(result.dataDir).toBe(resolvePath(dataDirOverride));
+    expect(result.dataDir).toBe(dir);
+    // ensureDataDir отработал по абсолютизированному пути — подкаталоги в tmp.
+    expect(existsSync(join(dir, 'sessions'))).toBe(true);
+  });
+});
+
+describe('resolveSecretKey (AD-076)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('env SYNTH_SECRET_KEY имеет приоритет над config', () => {
+    const c: SynthConfig = { ...cfg, security: { ...cfg.security, secretKey: 'from-config' } };
+    expect(resolveSecretKey(c, { SYNTH_SECRET_KEY: 'from-env' })).toBe('from-env');
+  });
+
+  it('config.security.secretKey используется, если env не задан', () => {
+    const c: SynthConfig = { ...cfg, security: { ...cfg.security, secretKey: 'from-config' } };
+    expect(resolveSecretKey(c, {})).toBe('from-config');
+  });
+
+  it('дефолт — пустая строка', () => {
+    expect(resolveSecretKey(cfg, {})).toBe('');
+  });
+
+  it('НЕ читает реальный process.env, если передан env без переменной', () => {
+    vi.stubEnv('SYNTH_SECRET_KEY', 'should-not-be-used');
+    expect(resolveSecretKey(cfg, {})).toBe('');
+  });
+});
+
+describe('resolveHome (AD-079)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('явный флаг приоритетнее env.SYNTH_HOME', () => {
+    expect(resolveHome('/flag/home', { SYNTH_HOME: '/env/home' })).toBe(resolvePath('/flag/home'));
+  });
+
+  it('env.SYNTH_HOME используется, если флаг не задан', () => {
+    expect(resolveHome(null, { SYNTH_HOME: '/env/home' })).toBe(resolvePath('/env/home'));
+  });
+
+  it('пусто (нет флага и env) → null', () => {
+    expect(resolveHome(null, {})).toBeNull();
+    expect(resolveHome('', {})).toBeNull();
+  });
+
+  it('относительный флаг → абсолютный', () => {
+    const result = resolveHome('rel/home', {});
+    expect(isAbsolute(result!)).toBe(true);
+    expect(result).toBe(resolvePath('rel/home'));
+  });
+
+  it('НЕ читает реальный process.env, если передан env без SYNTH_HOME', () => {
+    vi.stubEnv('SYNTH_HOME', '/should-not-be-used');
+    expect(resolveHome(null, {})).toBeNull();
+  });
+});
+
+describe('resolveDataDir с home (AD-079)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('home и нет SYNTH_DATA_DIR/config → <home>/data', () => {
+    expect(resolveDataDir(defaultConfig, {}, '/h')).toBe(join('/h', 'data'));
+  });
+
+  it('home через env.SYNTH_HOME → <home>/data', () => {
+    expect(resolveDataDir(defaultConfig, { SYNTH_HOME: '/env/home' }, null)).toBe(
+      join('/env/home', 'data'),
+    );
+  });
+
+  it('SYNTH_DATA_DIR приоритетнее home', () => {
+    expect(resolveDataDir(defaultConfig, { SYNTH_DATA_DIR: '/env/data' }, '/h')).toBe('/env/data');
+  });
+
+  it('config.storage.dataDir приоритетнее home', () => {
+    expect(resolveDataDir(cfg, {}, '/h')).toBe('/test/data');
+  });
+});
+
+describe('defaultConfigPath (AD-079)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('с home → <home>/config.yaml (независимо от mode)', () => {
+    expect(defaultConfigPath('user', '/h')).toBe(join('/h', 'config.yaml'));
+    expect(defaultConfigPath('dev', '/h')).toBe(join('/h', 'config.yaml'));
+  });
+});
+
+describe('findConfigPath (AD-079)', () => {
+  let dir: string | null = null;
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    if (dir) {
+      await rm(dir, { recursive: true, force: true });
+      dir = null;
+    }
+  });
+
+  it('с home: существующий <home>/config.yaml → возвращает путь', async () => {
+    vi.stubEnv('SYNTH_CONFIG', '');
+    dir = await mkdtemp(join(tmpdir(), 'synth-findcfg-'));
+    const configPath = join(dir, 'config.yaml');
+    await writeFile(configPath, 'core: {}\n', 'utf-8');
+    expect(findConfigPath(dir)).toBe(configPath);
+  });
+
+  it('с home: отсутствует <home>/config.yaml → null (без отката к cwd/XDG)', async () => {
+    vi.stubEnv('SYNTH_CONFIG', '');
+    dir = await mkdtemp(join(tmpdir(), 'synth-findcfg-'));
+    expect(findConfigPath(dir)).toBeNull();
+  });
+});
+
+describe('resolveProfilesPath / resolveCredentialsPath (AD-079)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('с home → <home>/profiles.json и <home>/credentials.json', () => {
+    expect(resolveProfilesPath('/h')).toBe(join('/h', 'profiles.json'));
+    expect(resolveCredentialsPath('/h')).toBe(join('/h', 'credentials.json'));
+  });
+
+  it('без home → XDG-дефолт ~/.config/synth/...', () => {
+    vi.stubEnv('SYNTH_HOME', '');
+    vi.stubEnv('HOME', '/home/user');
+    expect(resolveProfilesPath(null)).toBe(join('/home/user', '.config', 'synth', 'profiles.json'));
+    expect(resolveCredentialsPath(null)).toBe(join('/home/user', '.config', 'synth', 'credentials.json'));
+  });
+});
+
+describe('ensureFirstRun с home (AD-079)', () => {
+  let dir: string | null = null;
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    if (dir) {
+      await rm(dir, { recursive: true, force: true });
+      dir = null;
+    }
+  });
+
+  it('dataDir = <home>/data, config = <home>/config.yaml создан', async () => {
+    vi.stubEnv('SYNTH_DEPLOY_MODE', 'dev');
+    vi.stubEnv('SYNTH_DATA_DIR', '');
+    vi.stubEnv('SYNTH_CONFIG', '');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    dir = await mkdtemp(join(tmpdir(), 'synth-home-firstrun-'));
+
+    const result = await ensureFirstRun(undefined, undefined, dir);
+
+    expect(result.dataDir).toBe(join(dir, 'data'));
+    expect(result.configPath).toBe(join(dir, 'config.yaml'));
+    expect(existsSync(join(dir, 'config.yaml'))).toBe(true);
+    expect(existsSync(join(dir, 'data', 'sessions'))).toBe(true);
+  });
+});

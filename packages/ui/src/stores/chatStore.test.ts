@@ -494,3 +494,108 @@ describe('chatStore: liveSubagentUsageBySession (AD-070 §2.6)', () => {
     expect(selectLiveSubagentUsage('other')(useChatStore.getState())).toBeUndefined()
   })
 })
+
+/** Минимальный MessageData-каркас для upsert/finishStream-тестов. */
+function cmdMessage(partial: Partial<MessageData>): MessageData {
+  return {
+    index: 0,
+    role: 'user',
+    content: '',
+    disabled: false,
+    pinned: false,
+    hidden: false,
+    created_at: '2026-09-19T00:00:00Z',
+    ...partial,
+  }
+}
+
+describe('chatStore: addMessage upsert (AD-046 §7.1)', () => {
+  it('повторный message.added по тому же index не дублирует, объединяет metadata', () => {
+    const store = useChatStore.getState()
+    store.addMessage('s1', cmdMessage({ index: 0, role: 'user', content: '/help', metadata: { stream_id: 'st1' } }))
+    // Повторная публикация (обновление user-команды) — upsert, не копия.
+    store.addMessage('s1', cmdMessage({ index: 0, role: 'user', content: '/help', metadata: { commandPrompt: true } }))
+
+    const msgs = useChatStore.getState().messagesBySession['s1']!
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]!.metadata).toMatchObject({ stream_id: 'st1', commandPrompt: true })
+    // created_at сохраняется — ключ списка стабилен.
+    expect(msgs[0]!.created_at).toBe('2026-09-19T00:00:00Z')
+  })
+
+  it('находит существующее по id, когда index не задан', () => {
+    const store = useChatStore.getState()
+    store.addMessage('s1', cmdMessage({ index: undefined as unknown as number, id: 'm1', role: 'assistant', content: 'полный ответ' }))
+    store.addMessage('s1', cmdMessage({ index: undefined as unknown as number, id: 'm1', role: 'assistant', content: '', metadata: { command: true } }))
+
+    const msgs = useChatStore.getState().messagesBySession['s1']!
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]!.content).toBe('полный ответ')
+    expect(msgs[0]!.metadata?.command).toBe(true)
+  })
+})
+
+describe('chatStore: finishStream ответа локальной команды (AD-046 §7.1)', () => {
+  it('использует message_index/message_id из stream.done, не сталкивается с user-командой', () => {
+    const store = useChatStore.getState()
+    // live message.added user-команды (metadata без commandPrompt)
+    store.addMessage('s1', cmdMessage({ index: 0, role: 'user', content: '/help', metadata: { stream_id: 'st1' } }))
+    // upsert-обновление user-команды
+    store.addMessage('s1', cmdMessage({ index: 0, role: 'user', content: '/help', metadata: { commandPrompt: true } }))
+    store.startStream('s1', 'st1', null)
+    store.finishStream('s1', 'st1', {
+      content: 'HELP TEXT',
+      message_index: 1,
+      message_id: 'asst-1',
+      model: 'command',
+      provider: 'command',
+      metadata: { command: true, commandName: 'help', commandArgs: '' },
+    })
+
+    const msgs = useChatStore.getState().messagesBySession['s1']!
+    expect(msgs).toHaveLength(2)
+    expect(msgs.map((m) => m.index)).toEqual([0, 1])
+    expect(new Set(msgs.map((m) => m.index)).size).toBe(2)
+    const asst = msgs.find((m) => m.role === 'assistant')!
+    expect(asst.id).toBe('asst-1')
+    expect(asst.metadata).toMatchObject({ command: true, commandName: 'help' })
+    // user-команда не перезатёрта ответом.
+    expect(msgs.find((m) => m.role === 'user')!.content).toBe('/help')
+  })
+
+  it('без message_index fallback = следующий index (регресс: раньше +0 совпадал с user)', () => {
+    const store = useChatStore.getState()
+    store.addMessage('s1', cmdMessage({ index: 0, role: 'user', content: '/help', metadata: {} }))
+    store.startStream('s1', 'st1', null)
+    store.finishStream('s1', 'st1', { content: 'OUT' })
+
+    const msgs = useChatStore.getState().messagesBySession['s1']!
+    expect(msgs).toHaveLength(2)
+    expect(msgs.map((m) => m.index)).toEqual([0, 1])
+    expect(msgs.find((m) => m.role === 'user')!.content).toBe('/help')
+  })
+
+  it('коллизия message_index с user-сообщением → ответ уходит на свободный index', () => {
+    const store = useChatStore.getState()
+    store.addMessage('s1', cmdMessage({ index: 5, role: 'user', content: '/help', metadata: {} }))
+    store.startStream('s1', 'st1', null)
+    // «Битый» core прислал index, занятый user-командой.
+    store.finishStream('s1', 'st1', { content: 'OUT', message_index: 5 })
+
+    const msgs = useChatStore.getState().messagesBySession['s1']!
+    expect(msgs).toHaveLength(2)
+    expect(new Set(msgs.map((m) => m.index)).size).toBe(2)
+    expect(msgs.find((m) => m.role === 'user')!.content).toBe('/help')
+  })
+
+  it('без StreamState коллизия с user-сообщением тоже не занимает его index', () => {
+    const store = useChatStore.getState()
+    store.addMessage('s1', cmdMessage({ index: 0, role: 'user', content: '/help', metadata: {} }))
+    store.finishStream('s1', 'missing', { content: 'OUT', message_index: 0 })
+
+    const msgs = useChatStore.getState().messagesBySession['s1']!
+    expect(msgs).toHaveLength(2)
+    expect(new Set(msgs.map((m) => m.index)).size).toBe(2)
+    expect(msgs.find((m) => m.role === 'user')!.content).toBe('/help')
+  })
+})

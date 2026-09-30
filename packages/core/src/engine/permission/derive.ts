@@ -12,6 +12,10 @@ export function emptyPermissionConfig(): PermissionConfig {
  * question/plan_enter/plan_exit/task. Правила по конкретным именам тулов имеют
  * приоритет над групповыми и '*', поэтому deny здесь переопределяет любые allow
  * из родительского конфига.
+ *
+ * AD-046 §8.1: правила `skill` (per-skill allow/deny/ask + glob) наследуются
+ * саб-агентом автоматически вместе с остальными правилами родителя — собственный
+ * `skill`-deny саб-агенту не добавляется (скиллы делегируются через `task`).
  */
 export function deriveSubagentPermission(parentConfig?: PermissionConfig): PermissionConfig {
   const rules: Record<string, PermissionRule> = {

@@ -25,6 +25,11 @@ interface SessionsStore {
   forkSession: (sessionId: string, options?: { message_id?: string; message_index?: number; title?: string }) => Promise<SessionData | null>
   moveSession: (sessionId: string, projectId: string | null) => Promise<SessionData | null>
   renameSession: (sessionId: string, newName: string) => Promise<SessionData | null>
+  /** Обновить иконку/цвет сессии (PATCH /sessions/:id); `null` — сброс. */
+  updateSessionMeta: (
+    sessionId: string,
+    meta: { icon?: string | null; color?: string | null },
+  ) => Promise<SessionData | null>
   deleteSession: (sessionId: string) => Promise<boolean>
   setSessionMode: (sessionId: string, mode: SessionMode) => Promise<SessionData>
   upsertSession: (session: SessionData) => void
@@ -106,6 +111,21 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
           sessions: s.sessions.map((sess) => (sess.id === sessionId ? updated : sess)),
         }))
       }
+      return updated
+    } catch (e) {
+      set({ error: (e as Error).message })
+      return null
+    }
+  },
+
+  // Иконка/цвет сессии (PATCH): локально применяем сразу — дерево/табы
+  // обновляются мгновенно, не дожидаясь события session.updated.
+  updateSessionMeta: async (sessionId, meta) => {
+    try {
+      const updated = await synthApi.updateSession(sessionId, meta)
+      set((s) => ({
+        sessions: s.sessions.map((sess) => (sess.id === sessionId ? { ...sess, ...updated } : sess)),
+      }))
       return updated
     } catch (e) {
       set({ error: (e as Error).message })

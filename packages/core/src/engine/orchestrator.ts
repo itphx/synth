@@ -1,6 +1,6 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
-import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency } from '@itphx/synth-shared';
+import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
@@ -13,12 +13,18 @@ import type { LLMMessage, CancellationToken, ProviderConfig as CoreProviderConfi
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import { ContextConfig } from './context/config.js';
-import { SystemPromptComposer, type ComposerContext, type ComposerMcpServer, type ComposerMcpServerStatus } from './context/composer.js';
+import { SystemPromptComposer, type ComposerContext, type ComposerInstructions, type ComposerMcpServer, type ComposerMcpServerStatus } from './context/composer.js';
+import { ProjectInstructionsResolver, type InstructionsFileInfo } from './context/instructions.js';
+import { LazyInstructionsLoader } from './context/lazy-instructions.js';
+import type { ComposerSkillsCatalog } from './skills/catalog.js';
+import type { SkillRuntime, SkillScopeOptions } from './skills/types.js';
+import type { CommandRuntime } from '@itphx/synth-shared';
 import { calibrateCharsPerToken, estimateTokens, estimatePromptChars, DEFAULT_CHARS_PER_TOKEN } from './context/token-ratio.js';
 import {
   agentKeyOf,
   buildPromptState,
   computeExpected,
+  isBlockChanged,
   isPrefixUnchanged,
   validateExpected,
   type PromptStateReason,
@@ -51,15 +57,26 @@ import { PermissionEvaluator, extractPaths } from './permission/evaluator.js';
 import { computeToolAvailability } from './permission/availability.js';
 import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
+import { SSHKeyStore } from '../storage/ssh-key-store.js';
+import type { ProjectStoreLike } from '../storage/project-store.js';
+import { GitService } from '../git/git-service.js';
 import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, MAX_DOOM_LOOP_COUNT } from './llm-error.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
+import {
+  ALL_RUNTIME_DEPS_AVAILABLE,
+  RUNTIME_DEP_BINARY,
+  TOOL_RUNTIME_DEP,
+  type RuntimeDeps,
+} from './tools/runtime-deps.js';
 import { getToolTrust } from './security/trust.js';
-import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine } from './security/prompt-injection.js';
+import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type InjectionPolicy } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
 import type { ProtectedPathsPolicy } from './security/protected-paths.js';
 import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, PLACEHOLDER_PATTERN, type SecretPatternStore } from './gateway/index.js';
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
+import { runInlineShell } from './commands/inline-shell.js';
+import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
 
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
 /** AD-070: окно троттлинга live-события `stream.usage` (~300 мс). */
@@ -116,16 +133,6 @@ export interface ModelPricing {
   currency?: Currency;
 }
 
-/**
- * Минимальный контракт project store, который использует оркестратор (AD-014):
- * только загрузка проекта для резолва project.workspace. Позволяет передавать
- * реализации из разных пакетов (backend/core ProjectStore) без структурной
- * зависимости от конкретного класса.
- */
-export interface ProjectStoreLike {
-  load(id: string): Promise<Project | null>;
-}
-
 export interface OrchestratorOptions {
   sessionManager: SessionManager;
   eventBus: EventBus;
@@ -140,6 +147,12 @@ export interface OrchestratorOptions {
   mcpManager?: McpManager;
   routerConfig?: RouterConfig;
   projectStore?: ProjectStoreLike;
+  /**
+   * AD-076 §T6: хранилище SSH-ключей для сетевых git-тулов (`git_push`/`git_pull`).
+   * Не задано — создаётся лениво из `dataDir` (+ env); без `dataDir` — git
+   * использует ambient ssh (реестр/ключи недоступны).
+   */
+  sshKeyStore?: SSHKeyStore;
   defaultWorkingDir?: string;
   /**
    * Корень каталога workspaces: `join(dataDir, 'workspaces')` по умолчанию
@@ -147,6 +160,21 @@ export interface OrchestratorOptions {
    * относительно этого корня (AD-014).
    */
   workspacesRoot?: string;
+  /**
+   * AD-075/AD-076: git-сервис для тулов управления репозиториями проекта.
+   * Не задан — создаётся лениво из `workspacesRoot`.
+   */
+  gitService?: GitService;
+  /**
+   * AD-075: managed-режим проекта (backend): включает строгую проверку явного
+   * workspace (deny вне root) в тулах проекта.
+   */
+  workspaceManaged?: boolean;
+  /**
+   * AD-075: политика абсолютного workspace вне `workspacesRoot` для тулов проекта.
+   * Не задана — `confirm`.
+   */
+  getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;
   /** Глобальная секция permission из config.yaml (AD-029). */
   permissionConfig?: PermissionConfig;
   /** Строгость цикла Plan→Build по умолчанию из config.yaml session.planMode (AD-028). */
@@ -181,12 +209,43 @@ export interface OrchestratorOptions {
    */
   toolsDisabled?: ToolsDisabledConfig;
   /**
+   * AD-046 §4.5: системный hard-gate скиллов (категории/группы/имена) из
+   * runtime-настроек. Runtime-обновление — `setSkillsDisabled`.
+   */
+  skillsDisabled?: SkillsDisabledRequest;
+  /**
+   * AD-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) —
+   * детекция `detectRuntimeDeps()`. Не задана — fail-open (все доступны).
+   * Runtime-обновление — `setRuntimeDeps`.
+   */
+  runtimeDeps?: RuntimeDeps;
+  /**
    * AD-071 §2.6: chars-per-token модели из runtime-настроек (калибровка).
    * Не задан/нет значения — дефолт `DEFAULT_CHARS_PER_TOKEN`.
    */
   tokenRatioLoader?: (model: string) => Promise<number | undefined>;
   /** AD-071 §2.6: сохранение откалиброванного chars-per-token после ответа. */
   onTokenRatioCalibrated?: (model: string, ratio: number) => void | Promise<void>;
+  /**
+   * AD-046 §5: рантайм скиллов (SkillService) — каталог в промпт и тул `skill`.
+   * Не задан — скиллы не участвуют в промпте/тулах.
+   */
+  skillRuntime?: SkillRuntime;
+  /**
+   * AD-046 §7: рантайм `/`-команд (CommandService). Не задан — `/`-команды не
+   * резолвятся (сообщение уходит в LLM как есть).
+   */
+  commandRuntime?: CommandRuntime;
+  /**
+   * AD-069 Фаза 1: конфигурация проектных инструкций (`AGENTS.md`). Не задана/
+   * `enabled:false` — проектные инструкции не грузятся.
+   */
+  instructionsConfig?: InstructionsConfig;
+  /**
+   * AD-069 Фаза 2a: `config.skills.trustedProjectDirs` — project-trust гейт
+   * инструкций (недоверенный проект виден в диагностике, но не грузится).
+   */
+  instructionsTrustedProjectDirs?: readonly string[];
 }
 
 export interface ProcessMessageResult {
@@ -195,9 +254,19 @@ export interface ProcessMessageResult {
   canRetry?: boolean;
 }
 
+/**
+ * AD-069 §2.1/§7: результат резолва проектных инструкций для текущего хода —
+ * composer-блок, «сырой» контент (для саб-агентов) и провенанс файлов (для
+ * события `context.instructions_loaded` и seed lazy-реестра).
+ */
+interface ResolvedProjectInstructions {
+  instructions: ComposerInstructions;
+  content: string;
+  files: InstructionsFileInfo[];
+}
+
 /** AD-070 §2.5: read-only диагностика промпта для `GET /sessions/:id/prompt`. */
-export interface PromptDiagnostics {
-  manifest: PromptManifest;
+export interface PromptDiagnostics {  manifest: PromptManifest;
   /** AD-070 §2.5: состав слоя истории (`messages`), зеркалит реальную отправку. */
   history: PromptHistoryInfo;
   /** Состояние промпта активного агента (null, если ещё не собирался). */
@@ -240,6 +309,13 @@ export class ChatOrchestrator {
   private readonly _microPipeline: MicroPipeline | null;
   private readonly _contextConfig: ContextConfig | null;
   private readonly _projectStore: ProjectStoreLike | null;
+  /** AD-076 §T6: хранилище SSH-ключей (сетевые git-тулы); null — без dataDir. */
+  private readonly _sshKeyStore: SSHKeyStore | null;
+  private readonly _gitService: GitService;
+  private readonly _workspaceManaged: boolean;
+  private readonly _getWorkspaceOutsideRootPolicy:
+    | (() => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>)
+    | null;
   private readonly _composer: SystemPromptComposer;
   private readonly _defaultWorkingDir: string;
   private readonly _workspacesRoot: string;
@@ -266,10 +342,24 @@ export class ChatOrchestrator {
   private _mcpPolicy: ToolsPolicy;
   /** AD-071 §2.6: instance-wide отключение инструментов (runtime-изменяемая, admin). */
   private _toolsDisabled: ToolsDisabledConfig;
+  /** AD-046 §4.5: системный hard-gate скиллов (runtime-изменяемая, admin). */
+  private _skillsDisabled: SkillsDisabledRequest;
+  /** AD-070 §2.9.1: доступность внешних программ окружения (runtime-изменяемая). */
+  private _runtimeDeps: RuntimeDeps;
   /** AD-071 §2.6: загрузчик chars-per-token модели (калибровка). */
   private readonly _tokenRatioLoader: ((model: string) => Promise<number | undefined>) | undefined;
   /** AD-071 §2.6: сохранение калибровки chars-per-token после ответа. */
   private readonly _onTokenRatioCalibrated: ((model: string, ratio: number) => void | Promise<void>) | undefined;
+  /** AD-046 §5: рантайм скиллов (каталог промпта + тул `skill`). */
+  private readonly _skillRuntime: SkillRuntime | null;
+  /** AD-046 §7: рантайм `/`-команд (резолвинг до LLM). */
+  private readonly _commandRuntime: CommandRuntime | null;
+  /** AD-069 Фаза 1: конфиг проектных инструкций (null — выключено/не задано). */
+  private readonly _instructionsConfig: InstructionsConfig | null;
+  /** AD-069 Фаза 1: резолвер merged chain `AGENTS.md` (null — выключено). */
+  private readonly _instructionsResolver: ProjectInstructionsResolver | null;
+  /** AD-069 Фаза 2b: lazy-догрузка вложенных инструкций в tool result. */
+  private readonly _lazyInstructions: LazyInstructionsLoader | null;
   private _providerPool: ProviderPool | null;
   /** Политика защищённых путей (СКВОЗНАЯ проверка файловых тулов + shell) — ленивая загрузка с кэшем. */
   private _protectedPaths: ProtectedPathsPolicy | null = null;
@@ -550,6 +640,11 @@ export class ChatOrchestrator {
     this._routerConfig = options.routerConfig ?? null;
     this._contextConfig = options.contextConfig ?? null;
     this._projectStore = options.projectStore ?? null;
+    // AD-076 §T6: хранилище SSH-ключей для git-тулов. Явный store (app/backend)
+    // приоритетнее; иначе — ленивое создание из dataDir (мастер-ключ — env
+    // SYNTH_SECRET_KEY / файл {dataDir}/secrets/master.key, см. SSHKeyStore).
+    this._sshKeyStore = options.sshKeyStore
+      ?? (options.dataDir ? new SSHKeyStore({ dataDir: options.dataDir, env: process.env }) : null);
     // AD-070 §2.1: единая точка сборки системного промпта (идемпотентно).
     this._composer = new SystemPromptComposer({
       contextBuilder: this._contextBuilder,
@@ -558,11 +653,16 @@ export class ChatOrchestrator {
     });
     this._defaultWorkingDir = options.defaultWorkingDir ?? join(options.dataDir || '/var/synth/data', 'workspaces', 'default');
     this._workspacesRoot = options.workspacesRoot ?? join(options.dataDir || '/var/synth/data', 'workspaces');
+    // AD-075/AD-076: git-сервис и режим/политика workspace для тулов управления
+    // проектом. gitService по умолчанию — над тем же workspacesRoot.
+    this._gitService = options.gitService ?? new GitService(this._workspacesRoot);
+    this._workspaceManaged = options.workspaceManaged === true;
+    this._getWorkspaceOutsideRootPolicy = options.getWorkspaceOutsideRootPolicy ?? null;
     this._permissionConfig = options.permissionConfig ?? emptyPermissionConfig();
     this._approvalManager = new PermissionApprovalManager(this._eventBus);
     this._defaultPlanMode = options.defaultPlanMode ?? 'auto';
     this._securityConfig = options.securityConfig
-      ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true } };
+      ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true }, secretKey: '' };
     this._dataDir = options.dataDir || '/var/synth/data';
     this._gatewayPayloadLogPath = options.gatewayPayloadLogPath
       ?? join(options.dataDir || '/var/synth/data', 'audit', 'llm-payloads.jsonl');
@@ -573,8 +673,13 @@ export class ChatOrchestrator {
     this._mcpPolicy = options.mcpPolicy ?? 'auto';
     // AD-071 §2.6: instance-wide отключение инструментов (admin) + калибровка ratio.
     this._toolsDisabled = options.toolsDisabled ?? { capabilities: [], tools: [] };
+    this._skillsDisabled = options.skillsDisabled ?? { categories: [], groups: [], skills: [] };
+    // AD-070 §2.9.1: зависимости окружения (git/rg/sh) — fail-open по умолчанию.
+    this._runtimeDeps = options.runtimeDeps ?? { ...ALL_RUNTIME_DEPS_AVAILABLE };
     this._tokenRatioLoader = options.tokenRatioLoader;
     this._onTokenRatioCalibrated = options.onTokenRatioCalibrated;
+    this._skillRuntime = options.skillRuntime ?? null;
+    this._commandRuntime = options.commandRuntime ?? null;
 
     // AD-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
     // ObfuscationMapStore живёт в сессии, RateLimiter и AuditLogger — общие.
@@ -613,6 +718,31 @@ export class ChatOrchestrator {
     // DictionaryStore и ProviderPool создаём всегда (нужны микро-слою и роутеру)
     const dictionaryStore = new DictionaryStore(options.dataDir || '/var/synth/data');
     this._dictionaryStore = dictionaryStore;
+    // AD-069 Фаза 1: резолвер проектных инструкций (merged chain AGENTS.md).
+    // Threat-scan использует тот же DictionaryStore, что и tool-контент (AD-036).
+    this._instructionsConfig = options.instructionsConfig ?? null;
+    this._instructionsResolver =
+      this._instructionsConfig?.enabled
+        ? new ProjectInstructionsResolver({
+            config: this._instructionsConfig,
+            dictionaryStore: this._dictionaryStore,
+            dataDir: options.dataDir,
+            trustedProjectDirs: options.instructionsTrustedProjectDirs,
+          })
+        : null;
+    // AD-069 Фаза 2b: lazy-загрузчик подкаталогов (те же словарь/политики, что
+    // у резолвера; состояние `loaded`/`claims` — per-session).
+    this._lazyInstructions =
+      this._instructionsConfig?.enabled
+        ? new LazyInstructionsLoader({
+            config: this._instructionsConfig.lazy,
+            claudeCompat: this._instructionsConfig.claudeCompat,
+            contextCompat: this._instructionsConfig.contextCompat,
+            headRatio: this._instructionsConfig.headRatio,
+            tailRatio: this._instructionsConfig.tailRatio,
+            dictionaryStore: this._dictionaryStore,
+          })
+        : null;
     // Фабрика обёртки для пула: у пула нет сессии, поэтому оборачиваем с пустой
     // картой обфускации (защита от утечки секретов работает, карта не персистится).
     const pool = new ProviderPool(
@@ -716,7 +846,7 @@ export class ChatOrchestrator {
    */
   setSecurityConfig(config: SecurityConfig | null | undefined): void {
     this._securityConfig = config
-      ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true } };
+      ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true }, secretKey: '' };
   }
 
   /**
@@ -756,6 +886,27 @@ export class ChatOrchestrator {
       capabilities: [...(config.capabilities ?? [])],
       tools: [...(config.tools ?? [])],
     };
+  }
+
+  /**
+   * AD-046 §4.5: live-применение системного hard-gate скиллов (runtime-настройка).
+   * Отключённые скиллы не попадают в каталог промпта и не грузятся тулом `skill`.
+   */
+  setSkillsDisabled(config: SkillsDisabledRequest): void {
+    this._skillsDisabled = {
+      categories: [...(config.categories ?? [])],
+      groups: [...(config.groups ?? [])],
+      skills: [...(config.skills ?? [])],
+    };
+  }
+
+  /**
+   * AD-070 §2.9.1: live-применение доступности внешних программ окружения
+   * (git/rg/sh). Вызывается один раз при старте (детекция) или при обновлении;
+   * не задано — fail-open (`ALL_RUNTIME_DEPS_AVAILABLE`).
+   */
+  setRuntimeDeps(deps: RuntimeDeps): void {
+    this._runtimeDeps = { ...deps };
   }
 
   /**
@@ -894,10 +1045,15 @@ export class ChatOrchestrator {
     project?: Project | null;
     toolSelection?: ReturnType<ToolRegistry['selectForSession']>;
     debugCollector?: DebugCollector;
+    /** AD-046 §5: каталог скиллов (stable/volatile-блоки). */
+    skillsCatalog?: ComposerSkillsCatalog;
+    /** AD-069 §2.1/§3: проектные инструкции (merged chain AGENTS.md). */
+    instructions?: ComposerInstructions;
   }): ComposerContext {
     const {
       session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
       toolsPolicy, mcpPolicy, tokenRatio, mcpServers, project, toolSelection, debugCollector,
+      skillsCatalog, instructions,
     } = args;
     return {
       session,
@@ -922,10 +1078,412 @@ export class ChatOrchestrator {
       toolsPolicy,
       mcpPolicy,
       adminDisabled: this._toolsDisabled,
+      envDeps: this._runtimeDeps,
       tokenRatio,
       mcpServers,
       project,
       debugCollector,
+      skillsCatalog,
+      instructions,
+    };
+  }
+
+  /**
+   * AD-069 §5.2: политика threat-scan проектных инструкций — та же, что у
+   * tool-контента (AD-036), с учётом runtime-тумблера безопасности.
+   */
+  private _instructionsInjectionPolicy(): { enabled: boolean; mode: InjectionPolicy } {
+    const injection = this._securityConfig.promptInjection;
+    return {
+      enabled: injection?.enabled ?? true,
+      mode: (injection?.mode ?? 'flag') as InjectionPolicy,
+    };
+  }
+
+  /**
+   * AD-069 §2.1/§7: резолвит проектные инструкции для сессии.
+   *
+   * - только при `project.workspace` (AD-040: сессия без проекта инструкции не грузит);
+   * - `session.settings.systemPrompt` override → инструкции не добавляются (как
+   *   каталог скиллов AD-046);
+   * - кап — от окна модели (AD-069 §5.1), окно резолвится как в провайдере.
+   */
+  private async _resolveProjectInstructions(args: {
+    session: Session;
+    project: Project | null;
+    workingDir: string;
+    model?: string;
+    language: string;
+    signal?: AbortSignal;
+  }): Promise<ResolvedProjectInstructions | undefined> {
+    const resolver = this._instructionsResolver;
+    if (!resolver) return undefined;
+    // AD-040: без project.workspace проектный контекст недоступен.
+    if (!args.project?.workspace) return undefined;
+    // AD-046 §5/AD-069 §9.2: override заменяет system prompt целиком.
+    if (args.session.settings.systemPrompt?.trim()) return undefined;
+
+    const contextWindow = this._resolveModelContextWindow(
+      args.model || args.session.settings.model || '',
+    );
+
+    let result;
+    try {
+      result = await resolver.resolve({
+        workspace: args.workingDir,
+        contextWindow,
+        language: args.language,
+        projectId: args.session.projectId ?? args.project.id,
+        signal: args.signal,
+        injection: this._instructionsInjectionPolicy(),
+      });
+    } catch (e) {
+      warning('ORCHESTRATOR', `Не удалось загрузить проектные инструкции: ${e instanceof Error ? e.message : String(e)}`);
+      return undefined;
+    }
+    if (!result.content) return undefined;
+
+    const loaded = result.files.filter((file) => !file.blocked);
+    const provenance = loaded.map((file) => file.path).join(', ') || undefined;
+    const status = loaded.some((file) => file.truncated) ? 'truncated' : 'loaded';
+    return {
+      instructions: { content: result.content, provenance, status },
+      content: result.content,
+      files: result.files,
+    };
+  }
+
+  /**
+   * AD-046 §7: раннее разрешение `/`-команды до micro-first/LLM.
+   *
+   * - builtin/unknown/denied/unavailable — локальный ответ (user+assistant
+   *   помечаются `ephemeral`, исключаются из LLM-контекста), ранний возврат;
+   * - template/skill/bundle — рендер подставляется в пользовательское сообщение
+   *   как явный контекст, управление возвращается обычному пути (LLM);
+   * - `/summary` — прямая ручная суммаризация; `null` — не команда.
+   */
+  private async _handleCommand(args: {
+    session: Session;
+    message: Message;
+    signal: AbortSignal;
+    publishChunk: (event: string, data: Record<string, unknown>) => void;
+    debugCollector: DebugCollector;
+    streamId: string;
+    effectiveAgentRole: string | undefined;
+    workingDir: string;
+    /** AD-046 §7.4: evaluator для inline shell — тот же, что в tool-loop. */
+    permissionEvaluator: PermissionEvaluator;
+    sessionMode: SessionMode;
+    planMode: PlanMode;
+    planApproved: boolean;
+    attempt?: number;
+  }): Promise<ProcessMessageResult | null> {
+    if (!this._commandRuntime) return null;
+    const { session, message, signal, publishChunk, debugCollector, streamId, effectiveAgentRole, workingDir, permissionEvaluator, sessionMode, planMode, planApproved, attempt } = args;
+    const input = (message.content ?? '').trim();
+    if (!input.startsWith('/')) return null;
+
+    const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
+    const permissionConfig = session.settings.permission ?? this._permissionConfig;
+
+    // AD-046 §7.4: inline shell `` !`cmd` `` исполняется только через
+    // PermissionEvaluator (AD-029) — как обычный `execute_shell`. allow —
+    // исполняем; deny/ask — отказ БЕЗ интерактива: inline shell не поднимает
+    // диалог одобрения, а молчаливый auto-approve `ask` был бы обходом прав.
+    // Аудит — событие `command.inline_shell` (рядом с `command.invoked`).
+    const runShell = async (command: string): Promise<{ output: string; isError: boolean }> => {
+      const decision = permissionEvaluator.check({
+        toolName: 'execute_shell',
+        params: { command },
+        workingDir,
+        sessionMode,
+        planMode,
+        planApproved,
+        shellPolicy: this._getProtectedPaths() ?? undefined,
+        protectedPaths: this._getProtectedPaths() ?? undefined,
+        protectedPathsEnabled: this._getProtectedPathsEnabled(),
+        runtimeDeps: this._runtimeDeps,
+      });
+      if (decision.action !== 'allow') {
+        this._eventBus.publish(session.id, 'command.inline_shell', {
+          session_id: session.id,
+          command,
+          denied: true,
+          reason: decision.reason,
+        });
+        return {
+          output: sm('command.inline_shell_denied', { command, reason: decision.reason }),
+          isError: true,
+        };
+      }
+      const exec = await runInlineShell({ command, workingDir, abortSignal: signal });
+      this._eventBus.publish(session.id, 'command.inline_shell', {
+        session_id: session.id,
+        command,
+        exitCode: exec.exitCode,
+        truncated: Buffer.byteLength(exec.output, 'utf-8') > TEMPLATE_SHELL_MAX_BYTES,
+        ...(exec.isError ? { failed: true } : {}),
+      });
+      return { output: exec.output, isError: exec.isError };
+    };
+
+    let result;
+    try {
+      result = await this._commandRuntime.resolve(input, {
+        projectWorkspace: workingDir,
+        capabilities: agentDef?.capabilities,
+        agent: { id: effectiveAgentRole, groups: agentDef?.groups },
+        sessionEnabled: session.settings.skills,
+        sessionDisabled: session.settings.skillsDisabled,
+        permissionConfig,
+        runShell,
+      });
+    } catch {
+      return null;
+    }
+    if (!result) return null;
+
+    this._eventBus.publish(session.id, 'command.invoked', {
+      session_id: session.id,
+      command: result.name,
+      args: result.args,
+      actor: message.source === 'cli' ? 'cli' : 'user',
+    });
+
+    // `/summary` — ручная суммаризация (как routes/sessions.ts).
+    if (result.status === 'summarization') {
+      if (!this._optimizer || !this._optimizer.canSummarize(session)) {
+        return this._finishLocalCommand(
+          session,
+          message,
+          publishChunk,
+          sm('command.summary_unavailable'),
+          streamId,
+          { name: result.name, args: result.args, i18nKey: 'command.summary_unavailable' },
+        );
+      }
+      const sysMsg: Message = {
+        id: generateId(),
+        role: MessageRole.SYSTEM,
+        seq: 0,
+        origin: 'local',
+        parts: [{ id: generateId(), type: 'text', data: '' }],
+        content: '',
+        createdAt: nowISO(),
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        metadata: { type: 'summarization_request', reason: 'manual', stream_id: streamId },
+      };
+      return this._handleSummarization(session, sysMsg, signal, publishChunk, debugCollector, streamId, attempt);
+    }
+
+    // template/skill/bundle: инжектируем рендер в пользовательское сообщение.
+    if (result.prompt !== undefined) {
+      message.content = result.prompt;
+      message.parts = [makeTextPart(result.prompt)];
+      message.metadata = {
+        ...(message.metadata ?? {}),
+        command: { name: result.name, kind: result.kind, args: result.args },
+      };
+      const idx = session.messages.findIndex((m) => m.id === message.id);
+      if (idx >= 0) session.messages[idx] = { ...session.messages[idx]!, ...message };
+      await this._sessionManager.updateSession(session).catch(() => {});
+      for (const skillName of result.skills ?? []) {
+        this._eventBus.publish(session.id, 'skill.invoked', {
+          session_id: session.id,
+          name: skillName,
+          source: 'user',
+          ...(effectiveAgentRole ? { agent: effectiveAgentRole } : {}),
+          ...(result.kind === 'bundle' ? { bundle: result.name } : {}),
+        });
+      }
+      return null;
+    }
+
+    return this._finishLocalCommand(session, message, publishChunk, result.output ?? '', streamId, {
+      name: result.name,
+      args: result.args,
+    });
+  }
+
+  /**
+   * AD-046 §7.1: завершение локального ответа (builtin/команда/micro-first) теми
+   * же событиями, что обычный стрим — `stream.chunk` + `stream.done`, иначе
+   * SSE-цикл `POST /sessions/:id/prompt` не закрывается (ждёт `stream.done`).
+   */
+  private _publishLocalCompletion(
+    publishChunk: (event: string, data: Record<string, unknown>) => void,
+    streamId: string,
+    content: string,
+    opts?: {
+      model?: string;
+      provider?: string;
+      usage?: TokenUsage;
+      durationMs?: number;
+      metadata?: Record<string, unknown>;
+      /** AD-046 §7.1: index/id сохранённого assistant-сообщения — UI не плодит копии. */
+      messageIndex?: number;
+      messageId?: string;
+    },
+  ): void {
+    publishChunk('stream.chunk', {
+      stream_id: streamId,
+      content,
+      is_final: true,
+      ...(opts?.model ? { model: opts.model } : {}),
+      ...(opts?.provider ? { provider: opts.provider } : {}),
+    });
+    publishChunk('stream.done', {
+      stream_id: streamId,
+      content,
+      pending_count: 0,
+      model: opts?.model ?? 'command',
+      provider: opts?.provider ?? 'command',
+      ...(opts?.messageIndex !== undefined ? { message_index: opts.messageIndex } : {}),
+      ...(opts?.messageId ? { message_id: opts.messageId } : {}),
+      ...(opts?.usage ? { usage: opts.usage } : {}),
+      ...(opts?.durationMs !== undefined ? { duration_ms: opts.durationMs } : {}),
+      ...(opts?.metadata ? { metadata: opts.metadata } : {}),
+    });
+  }
+
+  /**
+   * Локальный ответ команды: user сообщение — `ephemeral`, ассистент — `ephemeral`.
+   *
+   * `command` (AD-046 §7.1) — имя/аргументы системной (builtin) команды: уходят в
+   * `metadata` ассистента, чтобы UI отрисовал нейтральный system-блок, а не ответ
+   * агента (бейдж/статистику). `model`/`provider` = `command` — тот же признак для
+   * live-стрима. Для `/summary`-нотиса (недоступна суммаризация) передаётся
+   * `{ name: 'summary' }`.
+   */
+  private async _finishLocalCommand(
+    session: Session,
+    userMessage: Message,
+    publishChunk: (event: string, data: Record<string, unknown>) => void,
+    output: string,
+    streamId: string,
+    command?: { name: string; args?: string; i18nKey?: string },
+  ): Promise<ProcessMessageResult> {
+    // Признак команды для UI — и в сохранённом assistant-сообщении, и в
+    // `stream.done.metadata`: локальный ответ приходит в UI через stream.done
+    // (без `message.added`), поэтому без metadata оптимистичное сообщение
+    // отрисовалось бы как ответ агента.
+    const commandMetadata: Record<string, unknown> = {
+      command: true,
+      ...(command ? { commandName: command.name, commandArgs: command.args ?? '' } : {}),
+      // AD-041: строки движка локализуются в UI по `metadata.i18n`.
+      ...(command?.i18nKey ? { i18n: i18nMeta(command.i18nKey) } : {}),
+    };
+
+    const assistant: Message = {
+      id: generateId(),
+      role: MessageRole.ASSISTANT,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(output)],
+      content: output,
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      ephemeral: true,
+      model: 'command',
+      provider: 'command',
+      agentRole: userMessage.agentRole || session.settings.agentRole,
+      metadata: commandMetadata,
+    };
+
+    // Помечаем пользовательское сообщение эфемерным и командным (`commandPrompt` —
+    // UI не рисует отдельный user-пузырь: команда объединена с выводом) и сохраняем
+    // ДО addMessage, иначе updateSession(session) перезапишет сессию без только что
+    // добавленного ответа. Существующие metadata не затираем.
+    userMessage.ephemeral = true;
+    userMessage.metadata = { ...(userMessage.metadata ?? {}), commandPrompt: true };
+    const idx = session.messages.findIndex((m) => m.id === userMessage.id);
+    if (idx >= 0) {
+      session.messages[idx] = {
+        ...session.messages[idx]!,
+        ephemeral: true,
+        metadata: userMessage.metadata,
+      };
+    }
+    await this._sessionManager.updateSession(session).catch(() => {});
+
+    // Сохраняем ответ и только потом публикуем завершение: нужны реальные
+    // `message_index`/`message_id`, иначе UI в `finishStream` вычислит index
+    // fallback'ом и столкнётся с user-командой (дубли ключей в списке).
+    const updated = await this._sessionManager.addMessage(session.id, assistant);
+    const messageIndex = updated ? updated.messages.length - 1 : undefined;
+    const userIndex = updated
+      ? updated.messages.findIndex((m) => m.id === userMessage.id)
+      : -1;
+
+    // Обновляем user-команду в UI (upsert по index в `chatStore.addMessage`):
+    // live `message.added` из процессора нёс metadata без `commandPrompt`,
+    // поэтому без повторной публикации пузырь команды оставался видимым.
+    if (userIndex >= 0) {
+      this._eventBus.publish(session.id, 'message.added', {
+        message_index: userIndex,
+        role: userMessage.role,
+        content: userMessage.content ?? '',
+        author: userMessage.author,
+        agent_role: userMessage.agentRole,
+        metadata: userMessage.metadata,
+      });
+    }
+
+    this._publishLocalCompletion(publishChunk, streamId, output, {
+      model: 'command',
+      provider: 'command',
+      metadata: commandMetadata,
+      messageIndex,
+      messageId: assistant.id,
+    });
+    return {};
+  }
+
+  /**
+   * AD-046 §5: каталог скиллов для промпта (аналог `_collectComposerMcpServers`).
+   * Учитывает project-trust, binding агента, capability-aware и permission-deny
+   * (`deny` скрывает). Ошибка discovery не должна ломать ход — возвращаем
+   * `undefined` (блоки не добавляются).
+   */
+  private async _collectSkillsCatalog(args: {
+    session: Session;
+    agentDef: AgentDefinition | undefined;
+    effectiveAgentRole: string | undefined;
+    workingDir: string;
+    permissionConfig: PermissionConfig;
+    project?: Project | null;
+  }): Promise<ComposerSkillsCatalog | undefined> {
+    if (!this._skillRuntime) return undefined;
+    const { session, agentDef, effectiveAgentRole, workingDir, permissionConfig, project } = args;
+    try {
+      return await this._skillRuntime.buildCatalog({
+        projectWorkspace: workingDir,
+        agent: { id: effectiveAgentRole, groups: agentDef?.groups },
+        capabilities: agentDef?.capabilities,
+        permissionConfig,
+        ...this._skillScopeFor(session, project ?? null),
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * AD-046 §4.5: scope-гейты скиллов сессии (система/проект/сессия) — единый
+   * объект для каталога промпта и тула `skill` (в т.ч. у саб-агентов).
+   */
+  private _skillScopeFor(session: Session, project: Project | null): SkillScopeOptions {
+    return {
+      // Проект без `skills` — гейт не задан (legacy, доступно всё).
+      projectEnabled: project?.skills ? project.skills.enabled : undefined,
+      defaultOn: session.settings.skillsDefaultOn,
+      systemDisabled: this._skillsDisabled,
+      sessionEnabled: session.settings.skills,
+      sessionDisabled: session.settings.skillsDisabled,
     };
   }
 
@@ -996,6 +1554,7 @@ export class ChatOrchestrator {
       planApproved,
       mcpToolSettings: session.settings.mcpToolSettings,
       agentCapabilities: agentDef?.capabilities,
+      runtimeDeps: this._runtimeDeps,
     };
     return (tool) => computeToolAvailability(tool.name, tool.capabilities, opts).available;
   }
@@ -1064,9 +1623,13 @@ export class ChatOrchestrator {
     if (resolved?.workspace) {
       // Абсолютный workspace — как есть (normalize); относительный —
       // резолвим относительно workspacesRoot (AD-014).
-      return isAbsolute(resolved.workspace)
+      const dir = isAbsolute(resolved.workspace)
         ? normalize(resolved.workspace)
         : resolve(this._workspacesRoot, resolved.workspace);
+      // AD-075: каталог проектного workspace гарантированно создаётся к моменту
+      // работы инструмента (как и для дефолтного ниже).
+      await mkdir(dir, { recursive: true }).catch(() => {});
+      return dir;
     }
     const dir = this._defaultWorkingDir;
     await mkdir(dir, { recursive: true }).catch(() => {});
@@ -1115,9 +1678,15 @@ export class ChatOrchestrator {
         planApproved,
         mcpToolSettings: session.settings.mcpToolSettings,
         agentCapabilities: agentDef?.capabilities,
+        runtimeDeps: this._runtimeDeps,
       });
       if (!availability.available && availability.reason) {
-        unavailable.push({ name: tool.name, reason: availability.reason });
+        const dep = availability.reason === 'dependency' ? TOOL_RUNTIME_DEP[tool.name] : undefined;
+        unavailable.push({
+          name: tool.name,
+          reason: availability.reason,
+          ...(dep ? { binary: RUNTIME_DEP_BINARY[dep] } : {}),
+        });
       }
     }
     return unavailable;
@@ -1134,24 +1703,26 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.4: решения по эффективному набору MCP — `(instance.defaultOn ∪
-   * project.defaultOn ∪ session.enabled) − session.disabled`, уровень по
-   * приоритету `system > project > session`. Чистый резолвинг — I/O только
-   * загрузка проекта (передаётся снаружи, чтобы не читать дважды).
+   * AD-071 §2.4: решения по эффективному набору MCP. Модель per-item:
+   * системный мастер (`systemEnabled`) → проектный hard-gate (`project.enabled`)
+   * → сессионный opt-out → снапшот/явное включение. Системный мастер — только
+   * реестровое `enabled` (`config.enabled` — сид, не гейт). Уровень по приоритету
+   * `system > project > session`. Чистый резолвинг — I/O только загрузка проекта
+   * (передаётся снаружи, чтобы не читать дважды).
    */
   private _resolveMcpDecisions(session: Session, project: Project | null): McpScopeDecision[] {
     const manager = this._mcpManager;
     if (!manager) return [];
     const config = manager.getConfig();
-    const servers = Object.entries(config).map(([name, cfg]) => ({
+    const servers = Object.keys(config).map((name) => ({
       name,
       origin: manager.getServerOrigin(name),
-      enabledByDefault: manager.isDefaultServer(name),
-      configEnabled: cfg.enabled !== false,
+      systemEnabled: manager.isServerSystemEnabled(name),
     }));
     return resolveMcpScope(servers, project?.mcp, {
       enabled: session.settings.mcpServers,
       disabled: session.settings.mcpDisabledServers,
+      defaultOn: session.settings.mcpDefaultOn,
     });
   }
 
@@ -1344,6 +1915,23 @@ export class ChatOrchestrator {
     // AD-070 §2.5 + AD-071 §2.1/§2.3: манифест отражает реальные слои запроса —
     // `tools` (встроенные) и `mcp.tools` (MCP сессии); тир `tools` зависит от
     // `tools.policy`, MCP-блоки всегда volatile.
+    // AD-046 §5: каталог скиллов — тем же путём, что и в запросе.
+    const skillsCatalog = await this._collectSkillsCatalog({
+      session,
+      agentDef,
+      effectiveAgentRole,
+      workingDir,
+      permissionConfig: session.settings.permission ?? this._permissionConfig,
+      project,
+    });
+    // AD-069 Фаза 1: те же проектные инструкции, что и в запросе (манифест).
+    const projectInstructions = await this._resolveProjectInstructions({
+      session,
+      project,
+      workingDir,
+      model: session.settings.model,
+      language,
+    });
     const ctx: ComposerContext = this._buildComposerContext({
       session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
       toolsPolicy, mcpPolicy, tokenRatio,
@@ -1351,6 +1939,8 @@ export class ChatOrchestrator {
       mcpServers: this._collectComposerMcpServers(mcpDecisions),
       project,
       toolSelection,
+      skillsCatalog,
+      instructions: projectInstructions?.instructions,
     });
 
     const manifest = await this._composer.manifest(ctx);
@@ -1367,6 +1957,7 @@ export class ChatOrchestrator {
         planApproved,
         mcpToolSettings: session.settings.mcpToolSettings,
         agentCapabilities: agentDef?.capabilities,
+        runtimeDeps: this._runtimeDeps,
       });
       const adminDisabled = this._isAdminDisabled(tool);
       // chars = JSON.stringify LLM-определения (тот же расчёт, что слой `tools`).
@@ -1548,6 +2139,17 @@ export class ChatOrchestrator {
       return this._handleDebugSystemMessage(session, message, signal, publishChunk, debugCollector, streamId, effectiveReasoningLevel, attempt);
     }
 
+    // --- AD-046 §7: резолвинг `/`-команд в core, до LLM ---
+    if (message.role === MessageRole.USER && (message.content ?? '').trimStart().startsWith('/')) {
+      const commandResult = await this._handleCommand({
+        session, message, signal, publishChunk, debugCollector, streamId,
+        effectiveAgentRole, workingDir, attempt,
+        permissionEvaluator, sessionMode, planMode, planApproved,
+      });
+      if (commandResult) return commandResult;
+      // prompt-команда (template/skill/bundle): сообщение заменено, идём в LLM.
+    }
+
     // --- AD-035: Micro-first — пробуем ответить без LLM ---
     if (this._microPipeline && session.settings.microFirst) {
       const microResult = await this._microPipeline.handle({
@@ -1567,8 +2169,12 @@ export class ChatOrchestrator {
           totalTokens: (microResult.microResult.usage?.inputTokens ?? 0) + (microResult.microResult.usage?.outputTokens ?? 0),
         };
 
-        publishChunk('text', { content: finalContent });
-        publishChunk('done', { stopped: true });
+        this._publishLocalCompletion(publishChunk, streamId, finalContent, {
+          model: finalModel,
+          provider: 'micro',
+          usage: finalUsage,
+          durationMs: Date.now() - streamStartedAt,
+        });
 
         // Сохраняем сообщение ассистента
         const microMetadata: Record<string, unknown> = {
@@ -1612,7 +2218,7 @@ export class ChatOrchestrator {
         session.totalTokens += finalUsage.totalTokens;
 
         // Авто-тайтл если это первое сообщение
-        if (session.messages.filter((m) => m.role === MessageRole.USER).length <= 1) {
+        if (session.messages.filter((m) => m.role === MessageRole.USER && !m.ephemeral).length <= 1) {
           try {
             session.title = sm('session.dialog_title', { id: session.id.slice(0, 8) });
             await this._sessionManager.saveSession(session);
@@ -1727,6 +2333,47 @@ export class ChatOrchestrator {
       // Composer'ом. `session.settings.systemPrompt` override, classification/
       // gateway/plan-guide/mode-policy/session-context — внутри compose.
       // Режим/план/todo — уже в state-сообщениях истории (выше), не в system.
+      // AD-046 §5: каталог скиллов — stable/volatile-блоки (deny скрывает).
+      const skillsCatalog = await this._collectSkillsCatalog({
+        session,
+        agentDef,
+        effectiveAgentRole,
+        workingDir,
+        permissionConfig: session.settings.permission ?? this._permissionConfig,
+        project: projectForState,
+      });
+      // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md) —
+      // только при project.workspace и без systemPrompt-override.
+      const projectInstructions = await this._resolveProjectInstructions({
+        session,
+        project: projectForState,
+        workingDir,
+        model: provider.model,
+        language,
+        signal,
+      });
+      // AD-069 §9.3: прозрачность — событие о загруженных проектных инструкциях.
+      // Публикуется только в реальном ходе (manifest/getPromptInfo — read-only).
+      if (projectInstructions && projectInstructions.files.length > 0) {
+        this._eventBus.publish(session.id, 'context.instructions_loaded', {
+          session_id: session.id,
+          source: 'initial',
+          agent: effectiveAgentRole,
+          files: projectInstructions.files.map((file) => ({
+            path: file.path,
+            chars: file.chars,
+            truncated: file.truncated,
+            scanned: file.scanned,
+            blocked: file.blocked,
+          })),
+        });
+        // AD-069 §4.3.5: merged-chain уже в system prompt — seed lazy-реестра,
+        // чтобы lazy не дублировал эти файлы в tool result.
+        this._lazyInstructions?.seed(
+          session.id,
+          projectInstructions.files.filter((file) => file.kind === 'chain').map((file) => file.path),
+        );
+      }
       const composerCtx: ComposerContext = this._buildComposerContext({
         session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
         // AD-071 §2.3: `toolsPolicy` влияет на тир `tools`, `mcpPolicy` — на
@@ -1738,6 +2385,8 @@ export class ChatOrchestrator {
         project: projectForState,
         // AD-070 §2.5: per-message collector доходит до Composer через контекст.
         debugCollector,
+        skillsCatalog,
+        instructions: projectInstructions?.instructions,
       });
       const composed = await this._composer.compose(composerCtx);
       // AD-070 §2.2: в провайдер уходит payload с границей stable-префикса и
@@ -1765,7 +2414,12 @@ export class ChatOrchestrator {
       };
       const expectedCache = computeExpected(prevPromptState, promptStateInput);
       let activePromptState = prevPromptState;
-      if (!prevPromptState || !isPrefixUnchanged(prevPromptState, promptStateInput)) {
+      // AD-069 §11/AD-070 §2.4: блок `instructions` лежит в тире `context`, а
+      // `isPrefixUnchanged` сравнивает только stable-префикс. Поэтому смену
+      // контента инструкций отслеживаем отдельно — иначе promptStates/generation
+      // не инвалидируются при изменении `AGENTS.md`.
+      const instructionsChanged = isBlockChanged(prevPromptState, composed.blocks, 'instructions');
+      if (!prevPromptState || !isPrefixUnchanged(prevPromptState, promptStateInput) || instructionsChanged) {
         const reason: PromptStateReason = hasSystemPromptOverride
           ? 'override'
           : prevPromptState
@@ -2171,6 +2825,7 @@ export class ChatOrchestrator {
             shellPolicy: this._getProtectedPaths() ?? undefined,
             protectedPaths: this._getProtectedPaths() ?? undefined,
             protectedPathsEnabled: this._getProtectedPathsEnabled(),
+            runtimeDeps: this._runtimeDeps,
           });
 
           // Doom loop detection — только для вызовов, НЕ заблокированных
@@ -2208,6 +2863,22 @@ export class ChatOrchestrator {
             arguments: toolArgs,
             iteration: toolIteration,
           });
+
+          // AD-046 §8.2: `skill.invoked` — рядом с `tool_call.started`
+          // (аудит/метрики/UI-подсветка).
+          if (toolName === 'skill' && typeof toolArgs.name === 'string') {
+            const skillName = toolArgs.name;
+            const skillEntry = skillsCatalog?.stable.find((e) => e.name === skillName)
+              ?? skillsCatalog?.session.find((e) => e.name === skillName);
+            this._eventBus.publish(session.id, 'skill.invoked', {
+              session_id: session.id,
+              name: skillName,
+              source: 'model',
+              ...(skillEntry?.scope ? { scope: skillEntry.scope } : {}),
+              ...(effectiveAgentRole ? { agent: effectiveAgentRole } : {}),
+              ...(typeof toolArgs.file_path === 'string' ? { file_path: toolArgs.file_path } : {}),
+            });
+          }
 
           let executeTool = permissionDecision.action === 'allow';
           let deniedReason: string | undefined;
@@ -2284,8 +2955,22 @@ export class ChatOrchestrator {
                   sessionManager: this._sessionManager,
                   projectStore: this._projectStore ?? undefined,
                   workspacesRoot: this._workspacesRoot,
+                  // AD-075/AD-076: тулы управления проектом (workspace, репозитории).
+                  gitService: this._gitService,
+                  workspaceManaged: this._workspaceManaged,
+                  getWorkspaceOutsideRootPolicy: this._getWorkspaceOutsideRootPolicy ?? undefined,
+                  // AD-076 §T6: сетевые git-тулы резолвят SSH-ключ по реестру проекта.
+                  sshKeyStore: this._sshKeyStore ?? undefined,
                   eventBus: this._eventBus,
                   contextOptimizer: this._optimizer ?? undefined,
+                  // AD-046 §5: тул `skill` получает рантайм через ToolContext.extra
+                  // (в ToolContext нет dataDir); саб-агенты — тот же объект.
+                  skillRuntime: this._skillRuntime ?? undefined,
+                  // AD-046 §4.5: scope-гейты скиллов (система/проект/сессия).
+                  skillScope: this._skillScopeFor(session, projectForState),
+                  // AD-069 §7: уже резолвленные проектные инструкции — в extra,
+                  // чтобы `task`/`task-resume` не резолвили их повторно в ребёнке.
+                  projectInstructions: projectInstructions?.content,
                   callerAgentRole: effectiveAgentRole,
                   parentSessionSettings: session.settings,
                   // AD-071 §2.1: саб-агент наследует MCP-скоуп родителя.
@@ -2304,6 +2989,10 @@ export class ChatOrchestrator {
                   callId: tcId,
                   toolRegistry: this._toolRegistry,
                   permissionConfig: effectivePermissionConfig,
+                  // AD-070 §2.9.1: доступность внешних программ (git/rg/sh) —
+                  // в permission-слой саб-агента (enforce `dependency`) и его
+                  // `[НЕДОСТУПНЫЕ ТУЛЫ]`.
+                  runtimeDeps: this._runtimeDeps,
                   shellPolicy: this._getProtectedPaths() ?? undefined,
                   protectedPaths: this._getProtectedPaths() ?? undefined,
                   protectedPathsEnabled: this._getProtectedPathsEnabled(),
@@ -2401,6 +3090,44 @@ export class ChatOrchestrator {
                   },
                 };
               }
+            }
+          }
+
+          // AD-069 §4: lazy-догрузка вложенных проектных инструкций в результат
+          // file/shell-тула. Контент инструкций сканируется внутри загрузчика
+          // (AD-036) и вставляется ПОСЛЕ IPI-обёртки базового tool-контента —
+          // сам базовый контент под обёрткой, скан не обходится.
+          if (!toolResult.isError && this._lazyInstructions) {
+            try {
+              const lazy = await this._lazyInstructions.resolve({
+                sessionId: session.id,
+                messageId: streamId,
+                toolName,
+                toolArgs,
+                toolResultMetadata: toolResult.metadata,
+                workspace: workingDir,
+                language,
+                injection: this._instructionsInjectionPolicy(),
+              });
+              if (lazy.block) {
+                toolResult = {
+                  ...toolResult,
+                  content: `${toolResult.content}\n\n${lazy.block}`,
+                  metadata: {
+                    ...toolResult.metadata,
+                    instructions_loaded: lazy.files.filter((f) => !f.blocked).map((f) => f.path),
+                  },
+                };
+                this._eventBus.publish(session.id, 'context.instructions_loaded', {
+                  session_id: session.id,
+                  source: 'lazy',
+                  tool: toolName,
+                  agent: effectiveAgentRole,
+                  files: lazy.files,
+                });
+              }
+            } catch (e) {
+              warning('ORCHESTRATOR', `Lazy-инструкции не загружены: ${e instanceof Error ? e.message : String(e)}`);
             }
           }
 
@@ -2735,7 +3462,7 @@ export class ChatOrchestrator {
       // 8.5. Auto-rename session on first exchange
       if (updatedSession) {
         const userMsgCount = updatedSession.messages.filter(
-          (m) => m.role === MessageRole.USER && !m.metadata?.synthetic,
+          (m) => m.role === MessageRole.USER && !m.metadata?.synthetic && !m.ephemeral,
         ).length;
         if (userMsgCount === 1) {
           const titleAgentDef = this._agentRegistry?.get('title');
@@ -2960,11 +3687,44 @@ export class ChatOrchestrator {
       routerConfig: this._routerConfig ?? undefined,
       securityConfig: this._securityConfig,
       permissionConfig: this._permissionConfig,
+      // AD-070 §2.9.1: dependency-гейт и `[НЕДОСТУПНЫЕ ТУЛЫ]` resumed-саб-агента.
+      runtimeDeps: this._runtimeDeps,
       shellPolicy: this._getProtectedPaths() ?? undefined,
       protectedPaths: this._getProtectedPaths() ?? undefined,
       protectedPathsEnabled: this._getProtectedPathsEnabled(),
       // AD-070: live-стоимость resumed-саб-агента тем же загрузчиком цен.
       modelPriceLoader: this._modelPriceLoader ?? undefined,
+      // AD-046 §5: каталог скиллов resumed-саб-агенту + тул `skill`.
+      skillRuntime: this._skillRuntime ?? undefined,
+      // AD-075/AD-076: проектные зависимости resumed-саб-агента — те же, что у
+      // обычного пути `task` (проектные тулы, workspace-политика, SSH-окружение).
+      projectStore: this._projectStore ?? undefined,
+      workspacesRoot: this._workspacesRoot,
+      sshKeyStore: this._sshKeyStore ?? undefined,
+      gitService: this._gitService,
+      workspaceManaged: this._workspaceManaged,
+      getWorkspaceOutsideRootPolicy: this._getWorkspaceOutsideRootPolicy ?? undefined,
+      // AD-069 §7: резолвим проектные инструкции для ребёнка в оркестраторе
+      // (в самом resume повторного резолва нет).
+      getProjectInstructions: async (child, parent, workingDir) => {
+        if (!parent.projectId) return undefined;
+        let project: Project | null = null;
+        if (this._projectStore) {
+          try {
+            project = await this._projectStore.load(parent.projectId);
+          } catch {
+            project = null;
+          }
+        }
+        const resolved = await this._resolveProjectInstructions({
+          session: child,
+          project,
+          workingDir,
+          model: child.settings.model,
+          language: child.settings.language || 'ru',
+        });
+        return resolved?.content;
+      },
       getProvider: (child) => this._getProvider(child.settings.provider || '', child, child.settings.reasoningLevel),
       getWorkingDir: (child) => this._resolveWorkingDir(child),
     };
@@ -3412,6 +4172,20 @@ export class ChatOrchestrator {
   ): LLMMessage[] {
     const result: LLMMessage[] = [];
 
+    // Defensive pairing (фикс «осиротевших» tool): id вызовов, для которых уже
+    // выдан assistant с tool_use. Tool-результат валиден только после своего
+    // вызова в этой же выдаче; всё остальное (disabled/hidden assistant, или
+    // результат без вызова) уходит user-текстом — `tool` без `tool_calls`
+    // ломает OpenAI-совместимые API и Anthropic.
+    const emittedToolCallIds = new Set<string>();
+
+    // Атрибуция чужого сообщения: `[agent]: ` / `{author}: ` / `[anonymous]: `.
+    const withAttribution = (m: Message): string => {
+      if (m.agentRole) return `[${m.agentRole}]: ${m.content}`;
+      if (m.author) return `{${m.author}}: ${m.content}`;
+      return `[anonymous]: ${m.content}`;
+    };
+
     for (const msg of messages) {
       if (msg.disabled || msg.hidden) continue;
 
@@ -3436,26 +4210,45 @@ export class ChatOrchestrator {
         continue;
       }
 
-      const isOwnMessage =
-        role === MessageRole.TOOL ||
-        (role === MessageRole.ASSISTANT && msg.agentRole === currentAgentRole) ||
-        (role === MessageRole.USER && msg.author === currentAuthor);
+      // Сообщение считается «своим», если agentRole не задан (легаси/сабагент —
+      // иначе такие assistant порождали бы сирот) или совпадает с активным
+      // агентом. User — по автору.
+      const isOwnAssistant =
+        role === MessageRole.ASSISTANT &&
+        (msg.agentRole === undefined || msg.agentRole === currentAgentRole);
+      const isOwnUser = role === MessageRole.USER && msg.author === currentAuthor;
+      const hasToolCalls =
+        role === MessageRole.ASSISTANT && !!msg.toolCalls && msg.toolCalls.length > 0;
+      // Tool-результат валиден только в паре с уже выданным assistant(tool_use).
+      // Осиротевший результат отдаём user-текстом: `tool` без `tool_calls`
+      // ломает OpenAI-совместимые API и Anthropic (`invalid_request_error`:
+      // на каждый `tool_result` нужен `tool_use`).
+      const isPairedTool =
+        role === MessageRole.TOOL && !!msg.toolCallId && emittedToolCallIds.has(msg.toolCallId);
 
       let content: string;
       let llmRole: string;
+      let toolUse: Record<string, unknown>[] | undefined;
 
-      if (isOwnMessage) {
+      if (hasToolCalls) {
+        // Assistant с tool_calls — своего ИЛИ чужого агента — сохраняет
+        // структуру вызова (role assistant + toolUse), чтобы парные
+        // tool-результаты не осиротели. Чужому агенту добавляем текстовый
+        // префикс атрибуции (при пустом content достаточно одних tool_calls).
+        llmRole = MessageRole.ASSISTANT;
+        toolUse = msg.toolCalls;
+        for (const tc of msg.toolCalls ?? []) {
+          if (typeof tc.id === 'string') emittedToolCallIds.add(tc.id);
+        }
+        content = isOwnAssistant || !msg.content
+          ? msg.content
+          : `[${msg.agentRole}]: ${msg.content}`;
+      } else if (isOwnAssistant || isOwnUser || isPairedTool) {
         content = msg.content;
         llmRole = role;
       } else {
         llmRole = 'user';
-        if (msg.agentRole) {
-          content = `[${msg.agentRole}]: ${msg.content}`;
-        } else if (msg.author) {
-          content = `{${msg.author}}: ${msg.content}`;
-        } else {
-          content = `[anonymous]: ${msg.content}`;
-        }
+        content = withAttribution(msg);
       }
 
       result.push({
@@ -3466,9 +4259,10 @@ export class ChatOrchestrator {
         disabled: false,
         pinned: false,
         branchId: '',
-        toolUse: isOwnMessage ? msg.toolCalls : undefined,
-        toolCallId: isOwnMessage ? msg.toolCallId : undefined,
-        reasoning: isOwnMessage && llmRole === MessageRole.ASSISTANT ? msg.reasoning : undefined,
+        toolUse,
+        toolCallId: isPairedTool ? msg.toolCallId : undefined,
+        // Reasoning чужого агента не прокидываем; у tool-сообщений его нет.
+        reasoning: isOwnAssistant ? msg.reasoning : undefined,
         agentRole: msg.agentRole,
       });
     }

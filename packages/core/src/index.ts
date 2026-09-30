@@ -24,6 +24,7 @@ export {
   RateLimitError,
 } from './providers/index.js';
 export type { LLMMessage, CancellationToken, ProviderConfig } from './providers/index.js';
+export { syncProvidersFromEnv } from './providers/sync-from-env.js';
 
 export {
   debug,
@@ -57,6 +58,16 @@ export type { StoredDictionary, DictionaryLanguage } from './engine/router/index
 export type { RoutingRequest, RoutingDecision, ContentCategory, ClassifyRequest, ClassifyResult, QualityCheckInput, QualityCheckResult } from './engine/router/index.js';
 
 export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
+export {
+  detectRuntimeDeps,
+  resetRuntimeDepsCache,
+  isRuntimeDepAvailable,
+  probeBinary,
+  ALL_RUNTIME_DEPS_AVAILABLE,
+  RUNTIME_DEP_BINARY,
+  TOOL_RUNTIME_DEP,
+} from './engine/tools/runtime-deps.js';
+export type { RuntimeDeps, RuntimeDependency } from './engine/tools/runtime-deps.js';
 export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions, normalizeAgentModes, isModeApplicable, DEFAULT_AGENT_ID } from './engine/agents/index.js';
 export { McpClient, McpManager } from './engine/mcp/index.js';
 export type { McpToolDef, McpToolResult } from './engine/mcp/index.js';
@@ -95,6 +106,59 @@ export type {
 export { FileProfileStore } from './storage/profile-store.js';
 export { JsonStore } from './storage/json-store.js';
 export type { JsonStoreConfig, JsonStoreLike } from './storage/json-store.js';
+// AD-076 §T2: шифрование секретов at-rest и хранилище SSH-ключей.
+export * as crypto from './security/crypto.js';
+export {
+  CryptoError,
+  SecretDecryptionError,
+  isEncrypted,
+  encryptSecret,
+  decryptSecret,
+  resolveMasterKey,
+} from './security/crypto.js';
+export type {
+  CryptoErrorCode,
+  ResolveMasterKeyOptions,
+  MasterKeyResult,
+} from './security/crypto.js';
+export { SSHKeyStore, SSHKeyStoreError } from './storage/ssh-key-store.js';
+export type {
+  SSHKeyStoreConfig,
+  SSHKeyStoreErrorCode,
+  RotateMasterKeyOptions,
+  RotateMasterKeyResult,
+} from './storage/ssh-key-store.js';
+// AD-076: one-shot ротация мастер-ключа секретов (SSH-ключи).
+export { rotateSecretsMasterKey, MasterKeyRotationError } from './security/rotate.js';
+export type {
+  RotateSecretsMasterKeyOptions,
+  RotateSecretsMasterKeyResult,
+  MasterKeyRotationErrorCode,
+  MasterKeySource,
+} from './security/rotate.js';
+// AD-076 §T3: git-сервис ядра, SSH-окружение и фабрика git-роутов.
+export { GitService, resolveRepoPath, deriveRepoName } from './git/git-service.js';
+export type { GitEnvOptions, GitFetchOptions } from './git/git-service.js';
+export { isSshUrl, createSshEnv, SshEnvError } from './git/ssh-env.js';
+export type { CreateSshEnvOptions, SshEnv, SshEnvErrorCode } from './git/ssh-env.js';
+export { createGitRoutes } from './server/routes/git.js';
+export type { GitRoutesAuth, GitProjectStore, GitRoutesOptions } from './server/routes/git.js';
+// AD-014/AD-017/AD-075: единая фабрика проектов (standalone и managed через opts).
+export { createProjectRoutes } from './server/routes/projects.js';
+export type {
+  ProjectRoutesAuth,
+  ProjectRoutesOptions,
+  ProjectRouteMessages,
+  ProjectStatsSource,
+} from './server/routes/projects.js';
+// AD-075: единая project-aware фабрика FS-роутов (standalone + managed через opts).
+export { createFsRoutes } from './server/routes/fs.js';
+export type { FsRoutesOptions, FsRoutesAuth } from './server/routes/fs.js';
+export { resolveProjectWorkspace, isTextFile } from './server/fs-workspace.js';
+export type { ResolveProjectWorkspaceOptions } from './server/fs-workspace.js';
+// AD-076 §T5: SSH-ключи агентов (flat + nested-роуты).
+export { createSshKeyRoutes, createAgentSshKeyRoutes } from './server/routes/ssh-keys.js';
+export type { SshKeyRoutesAuth, SshKeyRoutesOptions } from './server/routes/ssh-keys.js';
 export { ProjectStore } from './storage/project-store.js';
 export type { ProjectStoreConfig, ProjectStoreLike } from './storage/project-store.js';
 export { McpRegistryStore } from './storage/mcp-registry-store.js';
@@ -103,11 +167,90 @@ export type {
   AddMcpRegistryEntryInput,
   UpdateMcpRegistryEntryInput,
 } from './storage/mcp-registry-store.js';
+// AD-046: скиллы (реестр/discovery/каталог/instance-запись/роуты).
+export { SkillService } from './engine/skills/service.js';
+export type { SkillServiceOptions, SkillListOptions } from './engine/skills/service.js';
+export { SkillRegistry } from './engine/skills/registry.js';
+export type { SkillRegistryOptions } from './engine/skills/registry.js';
+export { buildSkillSources, scanSkillSource, mergeSkillScans } from './engine/skills/discovery.js';
+export { buildSkillCatalog, formatSkillsCatalogBlock, toSkillSummary } from './engine/skills/catalog.js';
+export type { ComposerSkillEntry, ComposerSkillsCatalog, BuildSkillCatalogOptions } from './engine/skills/catalog.js';
+export { parseSkillFile } from './engine/skills/parser.js';
+export { SkillWatcher } from './engine/skills/watcher.js';
+export type {
+  SkillSource,
+  DiscoveredSkill,
+  SkillScanResult,
+  SkillCatalogOptions,
+  SkillScopeOptions,
+  LoadedSkill,
+  SkillRuntime,
+  SkillOrigin,
+} from './engine/skills/types.js';
+export { resolveProjectSkillSeed, resolveProjectMcpSeed } from './engine/skills/seed.js';
+export { migrateSessionScopeSnapshots, SESSION_SCOPE_SNAPSHOT_MIGRATION } from './storage/migrations.js';
+export type { SessionScopeMigrationDeps } from './storage/migrations.js';
+export { SkillStore } from './storage/skill-store.js';
+export type { SkillStoreConfig, CreateSkillInput, UpdateSkillMarkdownInput } from './storage/skill-store.js';
+export { createSkillRoutes } from './server/routes/skills.js';
+export type { SkillRoutesDeps, SkillRoutesOptions, SkillRoutesMessages } from './server/routes/skills.js';
+// AD-069 §9.3: прозрачность проектных инструкций (резолвер снимка + API-роут).
+export {
+  ProjectInstructionsResolver,
+  buildInstructionsInfo,
+  createInstructionsInfoResolver,
+} from './engine/context/instructions.js';
+export type {
+  InstructionsInfo,
+  InstructionsInfoQuery,
+  InstructionsInfoResolver,
+  InstructionsReportDiagnostic,
+  InstructionsReportFile,
+  InstructionsReportLevel,
+} from './engine/context/instructions.js';
+export { createContextRoutes } from './server/routes/context.js';
+export type {
+  ContextRoutesOptions,
+  ContextRoutesMessages,
+  ContextProjectStore,
+} from './server/routes/context.js';
+// AD-046 §7: slash-команды и bundles.
+export { CommandService } from './engine/commands/service.js';
+export type { CommandServiceOptions, CommandSkillSource } from './engine/commands/service.js';
+export { CommandRegistry } from './engine/commands/registry.js';
+export { buildCommandSources, scanCommandSource, mergeCommandScans } from './engine/commands/discovery.js';
+export { parseCommandFile } from './engine/commands/parser.js';
+export { renderTemplate } from './engine/commands/template.js';
+export { parseBundleFile, loadBundle } from './engine/commands/bundles.js';
+export { parseCommandInput, resolveCatalog } from './engine/commands/resolver.js';
+export { BUILTIN_COMMANDS, isBuiltinCommand, renderHelp, renderSkillsList, renderCommandsList } from './engine/commands/builtin.js';
+export type {
+  TemplateCommand,
+  CommandSource,
+  CommandScanResult,
+  CommandConflictConfig,
+  CommandRuntimeConfig,
+  CommandContext,
+  CommandSkillEntry,
+  CommandCatalog,
+  CommandEntry,
+  LoadedBundle,
+} from './engine/commands/types.js';
+export { SkillBundleStore } from './storage/skill-bundle-store.js';
+export type { SkillBundleStoreConfig } from './storage/skill-bundle-store.js';
+export { createCommandRoutes } from './server/routes/commands.js';
+export type { CommandRoutesDeps, CommandRoutesOptions, CommandRoutesMessages } from './server/routes/commands.js';
+export { createSkillBundleRoutes } from './server/routes/skill-bundles.js';
+export type { SkillBundleRoutesDeps, SkillBundleRoutesOptions, SkillBundleRoutesMessages } from './server/routes/skill-bundles.js';
+export { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './server/routes/skill-scope.js';
+export type { SkillScopeRoutesDeps, SkillScopeRoutesOptions } from './server/routes/skill-scope.js';
 export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy } from './storage/runtime-settings.js';
 export type { RuntimeSettings, LlmGatewayRuntimeSettings } from './storage/runtime-settings.js';
 export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';
 export { createLocalAuth } from './auth/local.js';
 export type { AuthKit, LocalAuthConfig } from './auth/local.js';
+// Standalone: устойчивый локальный API-ключ ({dataDir}/secrets/api-key).
+export { localApiKeyFilePath, resolveOrCreateLocalApiKey } from './auth/local-key.js';
 export { createSettingsRoutes } from './server/routes/settings.js';
 export type { SettingsRoutesDeps } from './server/routes/settings.js';
 export { createDictionaryRoutes } from './server/routes/dictionaries.js';
@@ -116,6 +259,14 @@ export { createProviderRoutes } from './server/routes/providers.js';
 export type { ProviderRoutesAuth, ProviderRoutesOptions, ProviderRouteMessages } from './server/routes/providers.js';
 export { createModelRoutes } from './server/routes/models.js';
 export type { ModelRoutesAuth, ModelRoutesOptions, ModelRouteMessages } from './server/routes/models.js';
+export { createAgentRoutes } from './server/routes/agents.js';
+export type { AgentRoutesAuth, AgentRoutesOptions, AgentRouteMessages } from './server/routes/agents.js';
+export { createMcpRoutes } from './server/routes/mcp.js';
+export type { McpRoutesAuth, McpRoutesDeps, McpRouteMessages } from './server/routes/mcp.js';
+export { createMessageRoutes } from './server/routes/messages.js';
+export type { MessageRoutesAuth, MessageRoutesOptions, MessageRouteMessages } from './server/routes/messages.js';
+export { createQueueRoutes } from './server/routes/queue.js';
+export type { QueueRoutesAuth, QueueRoutesOptions, QueueRouteMessages } from './server/routes/queue.js';
 export { createSessionRoutes } from './server/routes/sessions.js';
 export type { SessionRoutesAuth, SessionRoutesDeps, SessionRoutesOptions, SessionRouteMessages } from './server/routes/sessions.js';
 export { createStandaloneApp } from './server/app.js';
