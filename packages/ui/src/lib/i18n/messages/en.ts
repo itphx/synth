@@ -761,7 +761,6 @@ export const dict = {
   'rightPanel.context.checkTriggers': 'Check triggers',
   'rightPanel.context.hint.slidingWindow': 'Messages outside the window will be disabled automatically. Pinned messages are never disabled.',
   'rightPanel.context.hint.summarization': 'When a trigger fires, a banner will appear before the next message. Summarization compresses old messages into a summary. Head and tail N messages remain uncompressed in context.',
-  'rightPanel.context.saving': 'Saving...',
   'rightPanel.context.summarizing': 'Summarizing...',
   'rightPanel.context.summarized': 'Summarization complete',
   'rightPanel.context.summarizeError': 'Summarization error',

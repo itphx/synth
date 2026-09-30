@@ -57,6 +57,13 @@ const OPTIMIZATION = {
   summarization_tail_messages: 3,
 }
 
+/** Установить значение контролируемого input так, как это делает React. */
+function setNativeValue(el: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  setter?.call(el, value)
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
 async function renderContext(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
@@ -100,6 +107,8 @@ describe('ContextTab — базовая отрисовка', () => {
   it('рендерит блоки оптимизации контекста и не содержит MCP-таблицы', async () => {
     const container = await renderContext()
     expect(container.querySelector('[data-testid="context-mcp-list"]')).toBeNull()
+    // Отдельной кнопки Save нет — сохранение идёт по контролам (см. ниже).
+    expect(container.querySelector('[data-testid="panel-tab-footer"]')).toBeNull()
     expect(container.textContent).toContain(enDict['rightPanel.context.optimization.sticky_notes'])
     expect(container.textContent).toContain(enDict['rightPanel.context.optimization.sliding_window'])
     expect(container.textContent).toContain(enDict['rightPanel.context.optimization.summarization'])
@@ -131,6 +140,68 @@ describe('ContextTab — базовая отрисовка', () => {
     })
     expect(switchAt(0).getAttribute('aria-busy')).toBeNull()
     expect(switchAt(0).classList.contains('cursor-progress')).toBe(false)
+    // Тумблер сохраняет сразу: режим улетает на сервер без отдельной кнопки Save.
+    expect(mocks.updateOptimization).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ context_optimization: 'sliding_window' }),
+    )
+  })
+
+  it('изменение числа сохраняется сразу (без кнопки Save)', async () => {
+    const container = await renderContext()
+    const input = container.querySelector<HTMLInputElement>('input[type="number"]')
+    expect(input).not.toBeNull()
+    expect(input!.disabled).toBe(false)
+
+    await act(async () => {
+      setNativeValue(input!, '15')
+    })
+
+    expect(mocks.updateOptimization).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ sliding_window_message_limit: 15 }),
+    )
+  })
+
+  it('при ошибке сохранения числа значение откатывается к прежнему', async () => {
+    mocks.updateOptimization.mockRejectedValueOnce(new Error('boom'))
+    const container = await renderContext()
+    const input = container.querySelector<HTMLInputElement>('input[type="number"]')!
+    expect(input.value).toBe('10')
+
+    await act(async () => {
+      setNativeValue(input, '15')
+    })
+    await act(async () => {})
+
+    // Оптимистичное значение откатано к серверному.
+    expect(container.querySelector<HTMLInputElement>('input[type="number"]')!.value).toBe('10')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: enDict['panel.saveError'], type: 'error' }),
+    )
+  })
+
+  it('при ошибке сохранения радио выбор откатывается к прежнему', async () => {
+    mocks.updateOptimization.mockRejectedValueOnce(new Error('boom'))
+    const container = await renderContext()
+    // Радио-кнопки: [0] окно/сообщения, [1] окно/токены, [2] суммаризация/сообщения, [3] суммаризация/токены.
+    const radios = () =>
+      container.querySelectorAll<HTMLButtonElement>('button[data-compact].rounded-full')
+    expect(radios()).toHaveLength(4)
+    expect(radios()[0].className).toContain('bg-primary')
+    expect(radios()[1].className).not.toContain('bg-primary')
+
+    await act(async () => {
+      radios()[1].click()
+    })
+    await act(async () => {})
+
+    // Выбор «токены» откатан к «сообщениям».
+    expect(radios()[0].className).toContain('bg-primary')
+    expect(radios()[1].className).not.toContain('bg-primary')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: enDict['panel.saveError'], type: 'error' }),
+    )
   })
 
   it('при ошибке сохранения тумблеры откатываются к серверному состоянию', async () => {

@@ -757,7 +757,6 @@ export const dict = {
   'rightPanel.context.checkTriggers': 'Проверить триггеры',
   'rightPanel.context.hint.slidingWindow': 'Сообщения за пределами окна будут отключены автоматически. Закреплённые сообщения не отключаются.',
   'rightPanel.context.hint.summarization': 'При срабатывании триггера перед следующим сообщением появится баннер. Суммаризация сжимает старые сообщения в резюме. Начальные и конечные N сообщений не сжимаются — попадают в контекст как есть.',
-  'rightPanel.context.saving': 'Сохранение...',
   'rightPanel.context.summarizing': 'Суммаризация...',
   'rightPanel.context.summarized': 'Суммаризация выполнена',
   'rightPanel.context.summarizeError': 'Ошибка суммаризации',

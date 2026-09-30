@@ -13,6 +13,21 @@ import { PanelTab } from './PanelTab'
 /** Ключ pending для всей секции оптимизации контекста (сохраняется одним запросом). */
 const CONTEXT_SAVE_KEY = 'context.optimization'
 
+/**
+ * Значения, изменённые в текущем обработчике: `setState` асинхронна, поэтому без
+ * явного переопределения в запрос уходит предыдущее значение (лаг на одно изменение).
+ */
+type ContextOverrides = Partial<{
+  swMode: 'messages' | 'tokens'
+  swMessageLimit: number
+  swTokenThreshold: number
+  sumMode: 'messages' | 'tokens'
+  afterN: number
+  tokenThreshold: number
+  headMessages: number
+  tailMessages: number
+}>
+
 export function ContextTab() {
   const { t } = useI18n()
   const { notify } = useNotification()
@@ -58,21 +73,21 @@ export function ContextTab() {
 
   const mode = sumEnabled ? 'summarization' : windowEnabled ? 'sliding_window' : 'none'
 
-  const handleSave = async (newMode: string, rollback?: () => void) => {
+  const handleSave = async (newMode: string, overrides: ContextOverrides = {}, rollback?: () => void) => {
     if (!sessionId) return
     await run({
       key: CONTEXT_SAVE_KEY,
       run: () => synthApi.updateOptimization(sessionId, {
         context_optimization: newMode,
-        sliding_window_mode: swMode,
-        sliding_window_message_limit: swMessageLimit,
-        sliding_window_token_threshold: swTokenThreshold,
+        sliding_window_mode: overrides.swMode ?? swMode,
+        sliding_window_message_limit: overrides.swMessageLimit ?? swMessageLimit,
+        sliding_window_token_threshold: overrides.swTokenThreshold ?? swTokenThreshold,
         summarization_enabled: true,
-        summarization_trigger_mode: sumMode,
-        summarize_after_n: afterN,
-        summarize_token_threshold: tokenThreshold,
-        summarization_head_messages: headMessages,
-        summarization_tail_messages: tailMessages,
+        summarization_trigger_mode: overrides.sumMode ?? sumMode,
+        summarize_after_n: overrides.afterN ?? afterN,
+        summarize_token_threshold: overrides.tokenThreshold ?? tokenThreshold,
+        summarization_head_messages: overrides.headMessages ?? headMessages,
+        summarization_tail_messages: overrides.tailMessages ?? tailMessages,
       }),
       onSuccess: (result) => {
         useSessionsStore.setState((s) => ({
@@ -93,7 +108,7 @@ export function ContextTab() {
     setWindowEnabled(next)
     if (next) setSumEnabled(false)
     const newMode = next ? 'sliding_window' : sumEnabled ? 'summarization' : 'none'
-    await handleSave(newMode, () => {
+    await handleSave(newMode, {}, () => {
       setWindowEnabled(prevWindow)
       setSumEnabled(prevSum)
     })
@@ -107,7 +122,7 @@ export function ContextTab() {
     setSumEnabled(next)
     if (next) setWindowEnabled(false)
     const newMode = next ? 'summarization' : windowEnabled ? 'sliding_window' : 'none'
-    await handleSave(newMode, () => {
+    await handleSave(newMode, {}, () => {
       setWindowEnabled(prevWindow)
       setSumEnabled(prevSum)
     })
@@ -144,125 +159,155 @@ export function ContextTab() {
   }
 
   return (
-    <PanelTab
-      footer={
-        <button
-          onClick={() => handleSave(mode)}
-          disabled={isPending(CONTEXT_SAVE_KEY)}
-          className="w-full rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-        >
-          {isPending(CONTEXT_SAVE_KEY) ? t('rightPanel.context.saving') : t('common.save')}
-        </button>
-      }
-    >
-        {/* Заметки — alwaysOpen */}
-        <Block title={t('rightPanel.context.optimization.sticky_notes')}>
-          {stickyNotes.length === 0 ? (
-            <p className="text-xs text-muted-foreground">{t('rightPanel.context.noStickyNotes')}</p>
-          ) : (
-            stickyNotes.map((note) => (
-              <div key={note.id} className="flex items-center gap-2 rounded bg-interactive py-1">
-                <span className={`flex-1 text-xs truncate ${note.disabled ? 'text-muted-foreground line-through' : 'text-foreground'}`} title={note.content}>
-                  {note.content}
-                </span>
-                <button
-                  onClick={() => handleNoteToggle(note.id, !note.disabled)}
-                  className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
-                  title={note.disabled ? 'Включить' : 'Отключить'}
-                >
-                  <Icon name={note.disabled ? 'eye-off' : 'eye'} className="size-3" />
-                </button>
-                <button
-                  onClick={() => handleNoteDelete(note.id)}
-                  className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-destructive"
-                  title="Удалить"
-                >
-                  <Icon name="close" className="size-3" />
-                </button>
-              </div>
-            ))
-          )}
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            {t('rightPanel.context.hint.stickyNotes')}
-          </p>
-        </Block>
+    <PanelTab>
+      {/* Заметки — alwaysOpen */}
+      <Block title={t('rightPanel.context.optimization.sticky_notes')}>
+        {stickyNotes.length === 0 ? (
+          <p className="text-xs text-muted-foreground">{t('rightPanel.context.noStickyNotes')}</p>
+        ) : (
+          stickyNotes.map((note) => (
+            <div key={note.id} className="flex items-center gap-2 rounded bg-interactive py-1">
+              <span className={`flex-1 text-xs truncate ${note.disabled ? 'text-muted-foreground line-through' : 'text-foreground'}`} title={note.content}>
+                {note.content}
+              </span>
+              <button
+                onClick={() => handleNoteToggle(note.id, !note.disabled)}
+                className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                title={note.disabled ? 'Включить' : 'Отключить'}
+              >
+                <Icon name={note.disabled ? 'eye-off' : 'eye'} className="size-3" />
+              </button>
+              <button
+                onClick={() => handleNoteDelete(note.id)}
+                className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-destructive"
+                title="Удалить"
+              >
+                <Icon name="close" className="size-3" />
+              </button>
+            </div>
+          ))
+        )}
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          {t('rightPanel.context.hint.stickyNotes')}
+        </p>
+      </Block>
 
-        {/* Скользящее окно */}
-        <Block
-          title={t('rightPanel.context.optimization.sliding_window')}
-          enabled={windowEnabled}
-          onToggle={toggleWindow}
-          pending={isPending(CONTEXT_SAVE_KEY)}
-        >
-          <SectionHeader label={t('rightPanel.context.sectionWindowSize')} />
-          <RadioSetting
-            label={t('rightPanel.context.windowMessages')}
-            value={swMessageLimit}
-            onChange={(v) => { setSwMessageLimit(v); handleSave(mode) }}
-            min={1}
-            max={200}
-            selected={swMode === 'messages'}
-            onSelect={() => { setSwMode('messages'); handleSave(mode) }}
-          />
-          <RadioSetting
-            label={t('rightPanel.context.windowTokens')}
-            value={swTokenThreshold}
-            onChange={(v) => { setSwTokenThreshold(v); handleSave(mode) }}
-            min={10}
-            max={100}
-            selected={swMode === 'tokens'}
-            onSelect={() => { setSwMode('tokens'); handleSave(mode) }}
-          />
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            {t('rightPanel.context.hint.slidingWindow')}
-          </p>
-        </Block>
+      {/* Скользящее окно */}
+      <Block
+        title={t('rightPanel.context.optimization.sliding_window')}
+        enabled={windowEnabled}
+        onToggle={toggleWindow}
+        pending={isPending(CONTEXT_SAVE_KEY)}
+      >
+        <SectionHeader label={t('rightPanel.context.sectionWindowSize')} />
+        <RadioSetting
+          label={t('rightPanel.context.windowMessages')}
+          value={swMessageLimit}
+          onChange={(v) => {
+            const prev = swMessageLimit
+            setSwMessageLimit(v)
+            handleSave(mode, { swMessageLimit: v }, () => setSwMessageLimit(prev))
+          }}
+          min={1}
+          max={200}
+          selected={swMode === 'messages'}
+          onSelect={() => {
+            const prev = swMode
+            setSwMode('messages')
+            handleSave(mode, { swMode: 'messages' }, () => setSwMode(prev))
+          }}
+        />
+        <RadioSetting
+          label={t('rightPanel.context.windowTokens')}
+          value={swTokenThreshold}
+          onChange={(v) => {
+            const prev = swTokenThreshold
+            setSwTokenThreshold(v)
+            handleSave(mode, { swTokenThreshold: v }, () => setSwTokenThreshold(prev))
+          }}
+          min={10}
+          max={100}
+          selected={swMode === 'tokens'}
+          onSelect={() => {
+            const prev = swMode
+            setSwMode('tokens')
+            handleSave(mode, { swMode: 'tokens' }, () => setSwMode(prev))
+          }}
+        />
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          {t('rightPanel.context.hint.slidingWindow')}
+        </p>
+      </Block>
 
-        {/* Суммаризация */}
-        <Block
-          title={t('rightPanel.context.optimization.summarization')}
-          enabled={sumEnabled}
-          onToggle={toggleSum}
-          pending={isPending(CONTEXT_SAVE_KEY)}
-        >
-          <SectionHeader label={t('rightPanel.context.triggersGroup')} />
-          <RadioSetting
-            label={t('rightPanel.context.afterN')}
-            value={afterN}
-            onChange={(v) => { setAfterN(v); handleSave(mode) }}
-            min={1}
-            max={200}
-            selected={sumMode === 'messages'}
-            onSelect={() => { setSumMode('messages'); handleSave(mode) }}
-          />
-          <RadioSetting
-            label={t('rightPanel.context.tokenThreshold')}
-            value={tokenThreshold}
-            onChange={(v) => { setTokenThreshold(v); handleSave(mode) }}
-            min={10}
-            max={100}
-            selected={sumMode === 'tokens'}
-            onSelect={() => { setSumMode('tokens'); handleSave(mode) }}
-          />
-          <SectionHeader label={t('rightPanel.context.compressionGroup')} />
-          <NumberSetting
-            label={t('rightPanel.context.headMessages')}
-            value={headMessages}
-            onChange={(v) => { setHeadMessages(v); handleSave(mode) }}
-            min={1}
-            max={20}
-          />
-          <NumberSetting
-            label={t('rightPanel.context.tailMessages')}
-            value={tailMessages}
-            onChange={(v) => { setTailMessages(v); handleSave(mode) }}
-            min={1}
-            max={20}
-          />
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            {t('rightPanel.context.hint.summarization')}
-          </p>
-        </Block>
+      {/* Суммаризация */}
+      <Block
+        title={t('rightPanel.context.optimization.summarization')}
+        enabled={sumEnabled}
+        onToggle={toggleSum}
+        pending={isPending(CONTEXT_SAVE_KEY)}
+      >
+        <SectionHeader label={t('rightPanel.context.triggersGroup')} />
+        <RadioSetting
+          label={t('rightPanel.context.afterN')}
+          value={afterN}
+          onChange={(v) => {
+            const prev = afterN
+            setAfterN(v)
+            handleSave(mode, { afterN: v }, () => setAfterN(prev))
+          }}
+          min={1}
+          max={200}
+          selected={sumMode === 'messages'}
+          onSelect={() => {
+            const prev = sumMode
+            setSumMode('messages')
+            handleSave(mode, { sumMode: 'messages' }, () => setSumMode(prev))
+          }}
+        />
+        <RadioSetting
+          label={t('rightPanel.context.tokenThreshold')}
+          value={tokenThreshold}
+          onChange={(v) => {
+            const prev = tokenThreshold
+            setTokenThreshold(v)
+            handleSave(mode, { tokenThreshold: v }, () => setTokenThreshold(prev))
+          }}
+          min={10}
+          max={100}
+          selected={sumMode === 'tokens'}
+          onSelect={() => {
+            const prev = sumMode
+            setSumMode('tokens')
+            handleSave(mode, { sumMode: 'tokens' }, () => setSumMode(prev))
+          }}
+        />
+        <SectionHeader label={t('rightPanel.context.compressionGroup')} />
+        <NumberSetting
+          label={t('rightPanel.context.headMessages')}
+          value={headMessages}
+          onChange={(v) => {
+            const prev = headMessages
+            setHeadMessages(v)
+            handleSave(mode, { headMessages: v }, () => setHeadMessages(prev))
+          }}
+          min={1}
+          max={20}
+        />
+        <NumberSetting
+          label={t('rightPanel.context.tailMessages')}
+          value={tailMessages}
+          onChange={(v) => {
+            const prev = tailMessages
+            setTailMessages(v)
+            handleSave(mode, { tailMessages: v }, () => setTailMessages(prev))
+          }}
+          min={1}
+          max={20}
+        />
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          {t('rightPanel.context.hint.summarization')}
+        </p>
+      </Block>
     </PanelTab>
   )
 }
