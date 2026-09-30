@@ -4,10 +4,14 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useNotification } from '@/hooks/useNotification'
+import { usePanelSettingSave } from '@/hooks/usePanelSettingSave'
 import { synthApi } from '@/lib/api/synthApi'
 import { Toggle } from '../ui/Toggle'
 import { Icon } from '../icon/Icon'
 import { PanelTab } from './PanelTab'
+
+/** Ключ pending для всей секции оптимизации контекста (сохраняется одним запросом). */
+const CONTEXT_SAVE_KEY = 'context.optimization'
 
 export function ContextTab() {
   const { t } = useI18n()
@@ -20,6 +24,7 @@ export function ContextTab() {
   const activeTab = centerTabs.find((t) => t.id === activeTabId)
   const sessionId = activeTab?.data?.sessionId
   const stickyNotes = sessionId ? stickyNotesBySession[sessionId] || [] : []
+  const { run, isPending } = usePanelSettingSave({ sessionId })
 
   const [windowEnabled, setWindowEnabled] = useState(false)
   const [sumEnabled, setSumEnabled] = useState(false)
@@ -31,7 +36,6 @@ export function ContextTab() {
   const [tokenThreshold, setTokenThreshold] = useState(50)
   const [headMessages, setHeadMessages] = useState(2)
   const [tailMessages, setTailMessages] = useState(3)
-  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (!sessionId) return
@@ -54,11 +58,11 @@ export function ContextTab() {
 
   const mode = sumEnabled ? 'summarization' : windowEnabled ? 'sliding_window' : 'none'
 
-  const handleSave = async (newMode: string) => {
+  const handleSave = async (newMode: string, rollback?: () => void) => {
     if (!sessionId) return
-    setSaving(true)
-    try {
-      const result = await synthApi.updateOptimization(sessionId, {
+    await run({
+      key: CONTEXT_SAVE_KEY,
+      run: () => synthApi.updateOptimization(sessionId, {
         context_optimization: newMode,
         sliding_window_mode: swMode,
         sliding_window_message_limit: swMessageLimit,
@@ -69,36 +73,44 @@ export function ContextTab() {
         summarize_token_threshold: tokenThreshold,
         summarization_head_messages: headMessages,
         summarization_tail_messages: tailMessages,
-      })
-      useSessionsStore.setState((s) => ({
-        sessions: s.sessions.map((sess) =>
-          sess.id === sessionId ? { ...sess, ...result } : sess,
-        ),
-      }))
-      notify({ text: t('rightPanel.context.saved'), type: 'success', category: 'system', sessionId })
-    } catch {
-      notify({ text: t('rightPanel.context.saveError'), type: 'error', category: 'error', sessionId })
-    } finally {
-      setSaving(false)
-    }
+      }),
+      onSuccess: (result) => {
+        useSessionsStore.setState((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sess.id === sessionId ? { ...sess, ...result } : sess,
+          ),
+        }))
+      },
+      onError: () => rollback?.(),
+    })
   }
 
   const toggleWindow = async () => {
     if (!sessionId) return
+    const prevWindow = windowEnabled
+    const prevSum = sumEnabled
     const next = !windowEnabled
     setWindowEnabled(next)
     if (next) setSumEnabled(false)
     const newMode = next ? 'sliding_window' : sumEnabled ? 'summarization' : 'none'
-    await handleSave(newMode)
+    await handleSave(newMode, () => {
+      setWindowEnabled(prevWindow)
+      setSumEnabled(prevSum)
+    })
   }
 
   const toggleSum = async () => {
     if (!sessionId) return
+    const prevWindow = windowEnabled
+    const prevSum = sumEnabled
     const next = !sumEnabled
     setSumEnabled(next)
     if (next) setWindowEnabled(false)
     const newMode = next ? 'summarization' : windowEnabled ? 'sliding_window' : 'none'
-    await handleSave(newMode)
+    await handleSave(newMode, () => {
+      setWindowEnabled(prevWindow)
+      setSumEnabled(prevSum)
+    })
   }
 
   const handleNoteDelete = async (noteId: string) => {
@@ -136,10 +148,10 @@ export function ContextTab() {
       footer={
         <button
           onClick={() => handleSave(mode)}
-          disabled={saving}
+          disabled={isPending(CONTEXT_SAVE_KEY)}
           className="w-full rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
         >
-          {saving ? t('rightPanel.context.saving') : t('common.save')}
+          {isPending(CONTEXT_SAVE_KEY) ? t('rightPanel.context.saving') : t('common.save')}
         </button>
       }
     >
@@ -180,7 +192,7 @@ export function ContextTab() {
           title={t('rightPanel.context.optimization.sliding_window')}
           enabled={windowEnabled}
           onToggle={toggleWindow}
-          pending={saving}
+          pending={isPending(CONTEXT_SAVE_KEY)}
         >
           <SectionHeader label={t('rightPanel.context.sectionWindowSize')} />
           <RadioSetting
@@ -211,7 +223,7 @@ export function ContextTab() {
           title={t('rightPanel.context.optimization.summarization')}
           enabled={sumEnabled}
           onToggle={toggleSum}
-          pending={saving}
+          pending={isPending(CONTEXT_SAVE_KEY)}
         >
           <SectionHeader label={t('rightPanel.context.triggersGroup')} />
           <RadioSetting

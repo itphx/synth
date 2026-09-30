@@ -62,6 +62,12 @@
 - Иконки — только `<Icon name="..." />` из `components/icon/Icon.tsx` (реестр `icons.ts`). Не тащить svg/`@remixicon` напрямую (единственное исключение — `SynthLogo.tsx`); неизвестное имя не в `iconMap` → `Icon` вернёт `null`.
 - Иконки/подписи инструментов — `lib/toolIcons.ts` (`getToolIcon`, `getToolDisplayName`); новый тул добавлять в `TOOL_ICON_MAP`, а не маппинг inline в компоненте.
 
+### Сохранение немедленных настроек панели
+- Немедленное сохранение настройки правой панели (тумблер, селект, автосейв поля) — только через общий хук `usePanelSettingSave` (`hooks/usePanelSettingSave.ts`): `run({ key, run, onSuccess, onError, errorKey })`.
+- Шаблон элемента: `pending` контрола по `isPending(key)` → единый success-тост `panel.saved` → при ошибке единый error-тост `panel.saveError` и **откат** контрола/формы к актуальному серверному состоянию. «Залипающих» оптимистичных значений быть не должно (`onError`/`onSuccess` возвращают состояние; для форм — `applyFormValues(formValuesFromSettings(...))`).
+- `pending` — по конкретному контролу/сущности (`isPending(\`mcp:${name}\`)`), а не «всё сразу»; во время запроса контрол `pending`, но не `disabled` (повторы гасит обработчик через `isPending`).
+- Повторные success-тосты подавляются окном троттлинга (`throttleMs`, по умолчанию ~1.5 с); error-тосты показываются всегда. Спец-ошибки (403 forbidden, 409 confirm-required) — через `errorKey` (строка или функция от ошибки) либо `silentError` + собственный тост. Общие формулировки — ключи `panel.saved`/`panel.saveError` (не плодить доменные синонимы).
+
 ### Стили
 - Tailwind + `cn()` (`lib/utils.ts:4`). Условные классы — через `cn`, не конкатенацию строк.
 - Цвета — только CSS-переменные (`var(--primary)`, `text-foreground`), не hex/oklch-литералы в разметке; темизация — `ThemeSystemProvider` + `styles/design-system.css`.

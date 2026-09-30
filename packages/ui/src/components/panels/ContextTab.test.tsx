@@ -132,4 +132,25 @@ describe('ContextTab — базовая отрисовка', () => {
     expect(switchAt(0).getAttribute('aria-busy')).toBeNull()
     expect(switchAt(0).classList.contains('cursor-progress')).toBe(false)
   })
+
+  it('при ошибке сохранения тумблеры откатываются к серверному состоянию', async () => {
+    mocks.updateOptimization.mockRejectedValueOnce(new Error('boom'))
+    const container = await renderContext()
+    const switchAt = (i: number) =>
+      container.querySelectorAll<HTMLButtonElement>('button[role="switch"]')[i]
+    expect(switchAt(0).getAttribute('aria-checked')).toBe('false')
+    expect(switchAt(1).getAttribute('aria-checked')).toBe('false')
+
+    await act(async () => {
+      switchAt(0).click()
+    })
+    await act(async () => {})
+
+    // Оптимистичное включение откатано; соседний тумблер не «залип» выключенным/включённым.
+    expect(switchAt(0).getAttribute('aria-checked')).toBe('false')
+    expect(switchAt(1).getAttribute('aria-checked')).toBe('false')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: enDict['panel.saveError'], type: 'error' }),
+    )
+  })
 })

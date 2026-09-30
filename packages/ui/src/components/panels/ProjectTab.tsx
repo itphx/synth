@@ -5,6 +5,7 @@ import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useNotification } from '@/hooks/useNotification'
+import { usePanelSettingSave } from '@/hooks/usePanelSettingSave'
 import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type ProjectData, type ProjectMcpResponse, type ProjectSkillsResponse, type EffectiveSkillEntry } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
@@ -30,13 +31,11 @@ export function ProjectTab() {
   const [project, setProject] = useState<ProjectData | null>(null)
   const [loading, setLoading] = useState(false)
   const [workspaceDraft, setWorkspaceDraft] = useState('')
-  const [saving, setSaving] = useState(false)
   // AD-075: выбор каталога через FS-диалог + подтверждение пути вне workspacesRoot.
   const [pickerOpen, setPickerOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pendingWorkspace, setPendingWorkspace] = useState<string | null>(null)
   const [invariantsDraft, setInvariantsDraft] = useState('')
-  const [invariantsSaving, setInvariantsSaving] = useState(false)
 
   // AD-071 §2.4: проектный MCP-скоуп (owner/lead/admin)
   const user = useAuthStore((s) => s.user)
@@ -44,14 +43,14 @@ export function ProjectTab() {
   const deployment = useAuthStore((s) => s.deployment)
   const [projectMcp, setProjectMcp] = useState<ProjectMcpResponse | null>(null)
   const [mcpRegistry, setMcpRegistry] = useState<McpRegistryEntry[]>([])
-  const [mcpSaving, setMcpSaving] = useState(false)
 
   // AD-046 §4.5: проектный скоуп скиллов (owner/lead/admin)
   const [projectSkills, setProjectSkills] = useState<ProjectSkillsResponse | null>(null)
-  const [skillsSaving, setSkillsSaving] = useState(false)
 
   const projectId = session?.project_id ?? null
   const projects = useProjectsStore((s) => s.projects)
+
+  const { run, isPending } = usePanelSettingSave({ sessionId: sessionId || undefined })
 
   const canManageMcp = !!user && (
     user.roles?.includes('ADMIN')
@@ -96,7 +95,9 @@ export function ProjectTab() {
   }, [projectId, canManageMcp])
 
   const handleToggleProjectMcp = async (name: string, kind: 'enabled' | 'defaultOn') => {
-    if (!projectId || !projectMcp || mcpSaving) return
+    if (!projectId || !projectMcp) return
+    const key = `mcp:${name}`
+    if (isPending(key)) return
     const enabled = new Set(projectMcp.enabled)
     const defaultOn = new Set(projectMcp.defaultOn)
     if (kind === 'enabled') {
@@ -112,23 +113,21 @@ export function ProjectTab() {
       defaultOn.add(name)
       enabled.add(name)
     }
-    setMcpSaving(true)
-    try {
-      const updated = await synthApi.updateProjectMcp(projectId, {
+    await run({
+      key,
+      run: () => synthApi.updateProjectMcp(projectId, {
         enabled: [...enabled],
         defaultOn: [...defaultOn],
-      })
-      setProjectMcp(updated)
-    } catch {
-      notify({ text: t('projectTab.mcp.saveError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
-    } finally {
-      setMcpSaving(false)
-    }
+      }),
+      onSuccess: (updated) => setProjectMcp(updated),
+    })
   }
 
   /** AD-046 §4.5: проектный скоуп скиллов — «Доступен»/«Включён по умолчанию». */
   const handleToggleProjectSkill = async (name: string, kind: 'enabled' | 'defaultOn') => {
-    if (!projectId || !projectSkills || skillsSaving) return
+    if (!projectId || !projectSkills) return
+    const key = `skill:${name}`
+    if (isPending(key)) return
     const enabled = new Set(projectSkills.enabled)
     const defaultOn = new Set(projectSkills.defaultOn)
     if (kind === 'enabled') {
@@ -144,24 +143,19 @@ export function ProjectTab() {
       defaultOn.add(name)
       enabled.add(name)
     }
-    setSkillsSaving(true)
-    try {
-      const updated = await synthApi.updateProjectSkills(projectId, {
+    await run({
+      key,
+      run: () => synthApi.updateProjectSkills(projectId, {
         enabled: [...enabled],
         defaultOn: [...defaultOn],
-      })
-      setProjectSkills(updated)
-    } catch (err) {
-      const status = (err as { status?: number })?.status
-      notify({
-        text: status === 403 ? t('projectTab.skills.forbidden') : t('projectTab.skills.saveError'),
-        type: 'error',
-        category: 'error',
-        sessionId: sessionId || undefined,
-      })
-    } finally {
-      setSkillsSaving(false)
-    }
+      }),
+      onSuccess: (updated) => setProjectSkills(updated),
+      errorKey: (err) => (
+        (err as { status?: number })?.status === 403
+          ? 'projectTab.skills.forbidden'
+          : 'panel.saveError'
+      ),
+    })
   }
 
   useEffect(() => {
@@ -294,29 +288,31 @@ export function ProjectTab() {
    */
   const performSaveWorkspace = async (path: string, confirmOutsideRoot = false) => {
     if (!project) return
-    setSaving(true)
-    try {
-      const updated = await synthApi.updateProject(project.id, { workspace: path, confirmOutsideRoot })
-      setProject(updated)
-      setWorkspaceDraft(updated.workspace || '')
-      useProjectsStore.getState().updateProjectInList(updated)
-      notify({ text: t('projectTab.workspace.saved'), type: 'success', category: 'system', sessionId: sessionId || undefined })
-    } catch (err) {
-      const e = err as { status?: number; code?: string }
-      if (!confirmOutsideRoot && e?.code === 'WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED') {
-        setPendingWorkspace(path)
-        setConfirmOpen(true)
-        return
-      }
-      if (e?.status === 403 || e?.code === 'WORKSPACE_OUTSIDE_ROOT_DENIED') {
-        notify({ text: t('workspace.error.denied'), type: 'error', category: 'error', sessionId: sessionId || undefined })
-        return
-      }
-      const msg = err instanceof Error ? err.message : String(err)
-      notify({ text: `${t('projectTab.workspace.saveError')}: ${msg}`, type: 'error', category: 'error', sessionId: sessionId || undefined })
-    } finally {
-      setSaving(false)
-    }
+    await run({
+      key: 'workspace',
+      run: () => synthApi.updateProject(project.id, { workspace: path, confirmOutsideRoot }),
+      onSuccess: (updated) => {
+        setProject(updated)
+        setWorkspaceDraft(updated.workspace || '')
+        useProjectsStore.getState().updateProjectInList(updated)
+      },
+      // Спец-ошибки (409 confirm-required, 403 deny) обрабатываем сами — без общего тоста.
+      silentError: true,
+      onError: (err) => {
+        const e = err as { status?: number; code?: string }
+        if (!confirmOutsideRoot && e?.code === 'WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED') {
+          setPendingWorkspace(path)
+          setConfirmOpen(true)
+          return
+        }
+        if (e?.status === 403 || e?.code === 'WORKSPACE_OUTSIDE_ROOT_DENIED') {
+          notify({ text: t('workspace.error.denied'), type: 'error', category: 'error', sessionId: sessionId || undefined })
+          return
+        }
+        const msg = err instanceof Error ? err.message : String(err)
+        notify({ text: `${t('panel.saveError')}: ${msg}`, type: 'error', category: 'error', sessionId: sessionId || undefined })
+      },
+    })
   }
 
   const handleSaveWorkspace = async () => {
@@ -337,19 +333,20 @@ export function ProjectTab() {
 
   const handleSaveInvariants = async () => {
     if (!project) return
-    setInvariantsSaving(true)
-    try {
-      const updated = await synthApi.updateProject(project.id, { invariants: invariantsDraft })
-      setProject(updated)
-      setInvariantsDraft(updated.invariants || '')
-      useProjectsStore.getState().updateProjectInList(updated)
-      notify({ text: t('projectTab.invariants.saved'), type: 'success', category: 'system', sessionId: sessionId || undefined })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      notify({ text: `${t('common.saveError')}: ${msg}`, type: 'error', category: 'error', sessionId: sessionId || undefined })
-    } finally {
-      setInvariantsSaving(false)
-    }
+    await run({
+      key: 'invariants',
+      run: () => synthApi.updateProject(project.id, { invariants: invariantsDraft }),
+      onSuccess: (updated) => {
+        setProject(updated)
+        setInvariantsDraft(updated.invariants || '')
+        useProjectsStore.getState().updateProjectInList(updated)
+      },
+      silentError: true,
+      onError: (err) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        notify({ text: `${t('panel.saveError')}: ${msg}`, type: 'error', category: 'error', sessionId: sessionId || undefined })
+      },
+    })
   }
 
   return (
@@ -390,11 +387,11 @@ export function ProjectTab() {
           {!workspaceReadOnly && (
             <button
               onClick={handleSaveWorkspace}
-              disabled={saving}
+              disabled={isPending('workspace')}
               className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
               data-testid="project-workspace-save"
             >
-              {saving ? t('projectTab.workspace.saving') : t('projectTab.workspace.save')}
+              {isPending('workspace') ? t('projectTab.workspace.saving') : t('projectTab.workspace.save')}
             </button>
           )}
         </div>
@@ -438,10 +435,10 @@ export function ProjectTab() {
             <div className="text-[0.625rem] text-muted-foreground/60">{t('projectTab.invariants.hint')}</div>
             <button
               onClick={handleSaveInvariants}
-              disabled={invariantsSaving}
+              disabled={isPending('invariants')}
               className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
             >
-              {invariantsSaving ? t('projectTab.invariants.saving') : t('projectTab.invariants.save')}
+              {isPending('invariants') ? t('projectTab.invariants.saving') : t('projectTab.invariants.save')}
             </button>
           </div>
         </div>
@@ -453,6 +450,7 @@ export function ProjectTab() {
             mcp={projectMcp}
             registry={mcpRegistry}
             onToggle={handleToggleProjectMcp}
+            isPending={(name) => isPending(`mcp:${name}`)}
           />
         </Section>
       )}
@@ -461,7 +459,7 @@ export function ProjectTab() {
         <Section title={t('projectTab.skills.title')}>
           <ProjectSkillsBlock
             skills={projectSkills}
-            saving={skillsSaving}
+            isPending={(name) => isPending(`skill:${name}`)}
             onToggle={handleToggleProjectSkill}
           />
         </Section>
@@ -479,10 +477,12 @@ function ProjectMcpBlock({
   mcp,
   registry,
   onToggle,
+  isPending,
 }: {
   mcp: ProjectMcpResponse | null
   registry: McpRegistryEntry[]
   onToggle: (name: string, kind: 'enabled' | 'defaultOn') => void
+  isPending: (name: string) => boolean
 }) {
   const { t } = useI18n()
 
@@ -521,6 +521,7 @@ function ProjectMcpBlock({
                   <Toggle
                     enabled={enabled}
                     onToggle={() => onToggle(name, 'enabled')}
+                    pending={isPending(name)}
                     ariaLabel={`${name}: ${t('projectTab.mcp.available')}`}
                   />
                 </label>
@@ -529,6 +530,7 @@ function ProjectMcpBlock({
                   <Toggle
                     enabled={defaultOn}
                     onToggle={() => onToggle(name, 'defaultOn')}
+                    pending={isPending(name)}
                     ariaLabel={`${name}: ${t('projectTab.mcp.defaultOn')}`}
                   />
                 </label>
@@ -546,11 +548,11 @@ function ProjectMcpBlock({
 /** AD-046 §4.5: проектный скоуп скиллов — «Доступен» и «Включён по умолчанию». */
 function ProjectSkillsBlock({
   skills,
-  saving,
+  isPending,
   onToggle,
 }: {
   skills: ProjectSkillsResponse | null
-  saving: boolean
+  isPending: (name: string) => boolean
   onToggle: (name: string, kind: 'enabled' | 'defaultOn') => void
 }) {
   const { t } = useI18n()
@@ -590,7 +592,7 @@ function ProjectSkillsBlock({
                   <Toggle
                     enabled={enabled}
                     onToggle={() => onToggle(skill.name, 'enabled')}
-                    pending={saving}
+                    pending={isPending(skill.name)}
                     ariaLabel={`${skill.name}: ${t('projectTab.skills.available')}`}
                   />
                 </label>
@@ -599,7 +601,7 @@ function ProjectSkillsBlock({
                   <Toggle
                     enabled={defaultOn}
                     onToggle={() => onToggle(skill.name, 'defaultOn')}
-                    pending={saving}
+                    pending={isPending(skill.name)}
                     ariaLabel={`${skill.name}: ${t('projectTab.skills.defaultOn')}`}
                   />
                 </label>

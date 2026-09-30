@@ -1155,3 +1155,13 @@
 - **Фикс:** `config?.rules?.[key]` + защищённый геттер `_rules` (`_computeDecision`); автосейв не пишет пустой `permission` (исключён из spread, `undefined` при пустом). Тесты evaluator/skill-rule/command-rule/skill-scope (200 вместо 500) и UI (не пишет пустой permission, непустой override пишет).
 - **Верификация:** `shared build`/`core build` OK; `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — shared 170, core **2282**, backend 341, ui **843** PASS. Живой dev: `GET /sessions/mt8b037e…/skills` → 200; backend+core перезапущены.
 - **Коммит:** ниже.
+
+## 2026-09-30 14:40 — UI: единый шаблон сохранения настроек правой панели — PASS
+
+- **Задача:** success/error-уведомления для всех немедленных сохранений правой панели + откат UI при ошибке; единый шаблон.
+- **Тип:** UX/refactor (ui) · **Исполнитель:** @fixer + @orchestrator.
+- **Решения пользователя:** уведомлять при всех немедленных сохранениях; единый текст; троттлинг success-тостов; общий шаблон.
+- **Реализация:** новый хук `hooks/usePanelSettingSave.ts` (`run({key, run, onSuccess, onError, errorKey, silentError})`, `isPending(key)`, `pendingKeys`): pending по контролу → throttled success-тост (1500 мс) → при ошибке всегда error-тост + `onError` для отката; спец-ошибки через `errorKey`/`silentError`. Переведены `ContextTab` (откат тумблеров при ошибке), `ProjectTab` (MCP/скиллы — pending по элементу, success/error, 403 — спец-текст; workspace/invariants — единый текст, 409 — диалог), `SessionSettingsTab` (скиллы/MCP + автосейв с откатом формы к серверному состоянию). i18n: `panel.saved`/`panel.saveError`. Доменные ключи удалены. Зафиксировано в `packages/ui/AGENTS.md` («Сохранение немедленных настроек панели»).
+- **Также:** убрана кнопка «Очистить сессию» из панели «Сессия» (коммит `d885564`; очистка остаётся в левой панели и шапке).
+- **Верификация:** `typecheck` OK; `lint` 0 errors; тесты — shared 170, core 2282, backend 341, ui **853** PASS. Живой UI: тост «Настройки сохранены» при переключении в «Контексте» и автосейве «Сессии»; состояния восстановлены.
+- **Замечание:** при проверке всплыл известный баг Vite (stale-transform через симлинк) — «useNotification is not defined» до `touch` файлов; к коду не относится.

@@ -171,6 +171,21 @@ describe('ProjectTab — проектный MCP-скоуп (AD-071 §2.4)', () =
     expect((updated.querySelectorAll('button[role="switch"]')[1] as HTMLButtonElement).getAttribute('aria-checked')).toBe('true')
   })
 
+  it('переключение скоупа даёт единый success-тост', async () => {
+    const container = await renderTab()
+    const srvRow = container.querySelector('[data-testid="project-mcp-srvB"]')!
+    const defaultToggle = srvRow.querySelectorAll('button[role="switch"]')[1] as HTMLButtonElement
+
+    await act(async () => {
+      defaultToggle.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: enDict['panel.saved'], type: 'success' }),
+    )
+  })
+
   it('editor/viewer не видит секцию управления', async () => {
     useAuthStore.setState({ user: { id: 'u2', username: 'viewer', roles: [] } as never })
     mocks.getProject.mockResolvedValue({ ...PROJECT, members: { u1: 'owner', u2: 'viewer' } })

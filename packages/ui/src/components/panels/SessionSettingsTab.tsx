@@ -5,7 +5,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useProvidersStore } from '@/stores/providersStore'
-import { useNotification } from '@/hooks/useNotification'
+import { usePanelSettingSave } from '@/hooks/usePanelSettingSave'
 import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type AgentInfo, type EffectiveSkillEntry, type ToolsPolicy } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
@@ -235,7 +235,6 @@ function buildSettingsBody(
 
 export function SessionSettingsTab() {
   const { t, locale } = useI18n()
-  const { notify } = useNotification()
   const sessions = useSessionsStore(s => s.sessions)
   const selectedProviderName = useProvidersStore(s => s.selectedProviderName)
   const selectedModelName = useProvidersStore(s => s.selectedModelName)
@@ -249,20 +248,16 @@ export function SessionSettingsTab() {
 
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [debugEnabled, setDebugEnabled] = useState(false)
-  // Автосохранение: какое поле сохраняется сейчас (для pending-индикации контрола).
-  const [pendingField, setPendingField] = useState<string | null>(null)
   // Отложенное (debounce) сохранение и его таймер — для best-effort дофлаша.
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingSaveRef = useRef<(() => void) | null>(null)
 
   const [mcpEffective, setMcpEffective] = useState<McpServerEffective[]>([])
   const [mcpLoading, setMcpLoading] = useState(false)
-  const [mcpToggling, setMcpToggling] = useState<string | null>(null)
 
   // AD-046 §4.5: per-session скиллы (вкл/выкл), аналог MCP-скоупа
   const [sessionSkills, setSessionSkills] = useState<EffectiveSkillEntry[]>([])
   const [skillsLoading, setSkillsLoading] = useState(false)
-  const [skillToggling, setSkillToggling] = useState<string | null>(null)
 
   // AD-071 §2.3: per-session override политики инструментов ('' = следовать глобальной)
   const [toolsPolicy, setToolsPolicy] = useState<ToolsPolicy | ''>('')
@@ -318,6 +313,13 @@ export function SessionSettingsTab() {
   const session = sessions.find((s) => s.id === sessionId)
   const projects = useProjectsStore(s => s.projects)
   const projectName = projects.find(p => p.id === session?.project_id)?.name
+
+  const { run, isPending } = usePanelSettingSave({ sessionId })
+  /** Pending конкретного поля формы (проп `Toggle.pending`). */
+  const isFieldPending = useCallback(
+    (field: string) => isPending(`autosave:${field}`),
+    [isPending],
+  )
 
   // Догружаем проект в стор, если его там нет (имя нужно для отображения).
   useEffect(() => {
@@ -475,22 +477,60 @@ export function SessionSettingsTab() {
   modelRef.current = selectedModelName
   defaultTimeoutRef.current = defaultAskTimeoutMs
 
+  /** Применить значения формы (гидратация при смене сессии и откат при ошибке автосохранения). */
+  const applyFormValues = useCallback((values: SessionFormValues) => {
+    setDebugEnabled(values.debugEnabled)
+    setToolsPolicy(values.toolsPolicy)
+    setMcpPolicy(values.mcpPolicy)
+    setRoutingEnabled(values.routingEnabled)
+    setRoutingStrategy(values.routingStrategy)
+    setRoutingContentCodingProvider(values.routingContentCodingProvider)
+    setRoutingContentCodingModel(values.routingContentCodingModel)
+    setRoutingContentChatProvider(values.routingContentChatProvider)
+    setRoutingContentChatModel(values.routingContentChatModel)
+    setRoutingContentResearchProvider(values.routingContentResearchProvider)
+    setRoutingContentResearchModel(values.routingContentResearchModel)
+    setRoutingEscalationEnabled(values.routingEscalationEnabled)
+    setRoutingEscalationFallbackProvider(values.routingEscalationFallbackProvider)
+    setRoutingEscalationFallbackModel(values.routingEscalationFallbackModel)
+    setRoutingEscalationMinLength(values.routingEscalationMinLength)
+    setRoutingCostEnabled(values.routingCostEnabled)
+    setRoutingCostCheapProvider(values.routingCostCheapProvider)
+    setRoutingCostCheapModel(values.routingCostCheapModel)
+    setRoutingCostMaxTokens(values.routingCostMaxTokens)
+    setRoutingSubagentEnabled(values.routingSubagentEnabled)
+    setRoutingSubagentModel(values.routingSubagentModel)
+    setRoutingSubagentProvider(values.routingSubagentProvider)
+    setMicroFirst(values.microFirst)
+    setMicroConfidenceThreshold(values.microConfidenceThreshold)
+    setEmbeddingEnabled(values.embeddingEnabled)
+    setEmbedProvider(values.embedProvider)
+    setEmbedModel(values.embedModel)
+    setAskTimeoutEnabled(values.askTimeoutEnabled)
+    setAskTimeoutSec(values.askTimeoutSec)
+  }, [])
+
   const runSave = useCallback(async (
     field: string,
     values: SessionFormValues,
     target: { id: string; settings: Record<string, unknown> },
   ) => {
-    setPendingField(field)
-    try {
-      const body = buildSettingsBody(values, target, providerRef.current, modelRef.current, defaultTimeoutRef.current)
-      const updated = await synthApi.updateSession(target.id, { settings: body })
-      useSessionsStore.getState().upsertSession(updated)
-    } catch {
-      notify({ text: t('sessionSettings.saveError'), type: 'error', category: 'error', sessionId: target.id })
-    } finally {
-      setPendingField(null)
-    }
-  }, [notify, t])
+    await run({
+      key: `autosave:${field}`,
+      run: async () => {
+        const body = buildSettingsBody(values, target, providerRef.current, modelRef.current, defaultTimeoutRef.current)
+        return synthApi.updateSession(target.id, { settings: body })
+      },
+      onSuccess: (updated) => {
+        useSessionsStore.getState().upsertSession(updated)
+      },
+      onError: () => {
+        // Ошибка сохранения: форма возвращается к последнему серверному состоянию —
+        // никаких «залипших» оптимистичных значений.
+        applyFormValues(formValuesFromSettings(target.settings, defaultTimeoutRef.current))
+      },
+    })
+  }, [run, applyFormValues])
   const runSaveRef = useRef(runSave)
   runSaveRef.current = runSave
 
@@ -567,37 +607,8 @@ export function SessionSettingsTab() {
 
     // Остальные поля заполняем безусловно (отсутствующие → дефолт), чтобы форма точно
     // отражала session.settings.
-    const values = formValuesFromSettings(session.settings, defaultAskTimeoutMs)
-    setDebugEnabled(values.debugEnabled)
-    setToolsPolicy(values.toolsPolicy)
-    setMcpPolicy(values.mcpPolicy)
-    setRoutingEnabled(values.routingEnabled)
-    setRoutingStrategy(values.routingStrategy)
-    setRoutingContentCodingProvider(values.routingContentCodingProvider)
-    setRoutingContentCodingModel(values.routingContentCodingModel)
-    setRoutingContentChatProvider(values.routingContentChatProvider)
-    setRoutingContentChatModel(values.routingContentChatModel)
-    setRoutingContentResearchProvider(values.routingContentResearchProvider)
-    setRoutingContentResearchModel(values.routingContentResearchModel)
-    setRoutingEscalationEnabled(values.routingEscalationEnabled)
-    setRoutingEscalationFallbackProvider(values.routingEscalationFallbackProvider)
-    setRoutingEscalationFallbackModel(values.routingEscalationFallbackModel)
-    setRoutingEscalationMinLength(values.routingEscalationMinLength)
-    setRoutingCostEnabled(values.routingCostEnabled)
-    setRoutingCostCheapProvider(values.routingCostCheapProvider)
-    setRoutingCostCheapModel(values.routingCostCheapModel)
-    setRoutingCostMaxTokens(values.routingCostMaxTokens)
-    setRoutingSubagentEnabled(values.routingSubagentEnabled)
-    setRoutingSubagentModel(values.routingSubagentModel)
-    setRoutingSubagentProvider(values.routingSubagentProvider)
-    setMicroFirst(values.microFirst)
-    setMicroConfidenceThreshold(values.microConfidenceThreshold)
-    setEmbeddingEnabled(values.embeddingEnabled)
-    setEmbedProvider(values.embedProvider)
-    setEmbedModel(values.embedModel)
-    setAskTimeoutEnabled(values.askTimeoutEnabled)
-    setAskTimeoutSec(values.askTimeoutSec)
-  }, [session, defaultAskTimeoutMs, setSelectedProvider, setSelectedModel])
+    applyFormValues(formValuesFromSettings(session.settings, defaultAskTimeoutMs))
+  }, [session, defaultAskTimeoutMs, setSelectedProvider, setSelectedModel, applyFormValues])
 
   // Сессионные одобрения (AD-029): allow-правила, добавленные при «Разрешить в сессии».
   // Правило может быть строкой ('allow' — весь тул) или объектом { путь: 'allow' }
@@ -617,52 +628,52 @@ export function SessionSettingsTab() {
 
   /** AD-071 §2.4: точечный toggle MCP-сервера в сессии (в т.ч. opt-out системного). */
   const handleToggleMcp = async (server: McpServerEffective) => {
-    if (!sessionId || mcpToggling) return
-    setMcpToggling(server.name)
-    try {
-      const r = await synthApi.updateSessionMcp(sessionId, { name: server.name, enabled: !server.enabled })
-      setMcpEffective(r.servers)
-      const current = useSessionsStore.getState().sessions.find((s) => s.id === sessionId)
-      if (current) {
-        useSessionsStore.getState().upsertSession({
-          ...current,
-          settings: {
-            ...(current.settings as Record<string, unknown>),
-            mcpServers: r.mcpServers,
-            mcpDisabledServers: r.mcpDisabledServers,
-          },
-        } as typeof current)
-      }
-    } catch {
-      notify({ text: t('sessionSettings.mcp.toggleError'), type: 'error', category: 'error', sessionId })
-    } finally {
-      setMcpToggling(null)
-    }
+    if (!sessionId) return
+    const key = `mcp:${server.name}`
+    if (isPending(key)) return
+    await run({
+      key,
+      run: () => synthApi.updateSessionMcp(sessionId, { name: server.name, enabled: !server.enabled }),
+      onSuccess: (r) => {
+        setMcpEffective(r.servers)
+        const current = useSessionsStore.getState().sessions.find((s) => s.id === sessionId)
+        if (current) {
+          useSessionsStore.getState().upsertSession({
+            ...current,
+            settings: {
+              ...(current.settings as Record<string, unknown>),
+              mcpServers: r.mcpServers,
+              mcpDisabledServers: r.mcpDisabledServers,
+            },
+          } as typeof current)
+        }
+      },
+    })
   }
 
   /** AD-046 §4.5: точечный toggle скилла в сессии (`{ name, enabled }`). */
   const handleToggleSkill = async (skill: EffectiveSkillEntry) => {
-    if (!sessionId || skillToggling) return
-    setSkillToggling(skill.name)
-    try {
-      const r = await synthApi.updateSessionSkills(sessionId, { name: skill.name, enabled: !skill.enabled })
-      setSessionSkills(r.skills)
-      const current = useSessionsStore.getState().sessions.find((s) => s.id === sessionId)
-      if (current) {
-        useSessionsStore.getState().upsertSession({
-          ...current,
-          settings: {
-            ...(current.settings as Record<string, unknown>),
-            skills: r.enabled,
-            skillsDisabled: r.disabled,
-          },
-        } as typeof current)
-      }
-    } catch {
-      notify({ text: t('sessionSettings.skills.toggleError'), type: 'error', category: 'error', sessionId })
-    } finally {
-      setSkillToggling(null)
-    }
+    if (!sessionId) return
+    const key = `skill:${skill.name}`
+    if (isPending(key)) return
+    await run({
+      key,
+      run: () => synthApi.updateSessionSkills(sessionId, { name: skill.name, enabled: !skill.enabled }),
+      onSuccess: (r) => {
+        setSessionSkills(r.skills)
+        const current = useSessionsStore.getState().sessions.find((s) => s.id === sessionId)
+        if (current) {
+          useSessionsStore.getState().upsertSession({
+            ...current,
+            settings: {
+              ...(current.settings as Record<string, unknown>),
+              skills: r.enabled,
+              skillsDisabled: r.disabled,
+            },
+          } as typeof current)
+        }
+      },
+    })
   }
 
   const handleRemoveAllowRule = async (rule: { tool: string; path?: string }) => {
@@ -677,14 +688,13 @@ export function SessionSettingsTab() {
       delete rules[rule.tool]
     }
     const nextPermission = { ...(sessionPermission ?? {}), rules }
-    try {
-      const updated = await synthApi.updateSession(sessionId, {
+    await run({
+      key: `permission:${rule.tool}:${rule.path ?? ''}`,
+      run: () => synthApi.updateSession(sessionId, {
         settings: { ...session.settings, permission: nextPermission },
-      })
-      useSessionsStore.getState().upsertSession(updated)
-    } catch {
-      notify({ text: t('sessionSettings.saveError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
-    }
+      }),
+      onSuccess: (updated) => useSessionsStore.getState().upsertSession(updated),
+    })
   }
 
   /** AD-071 §2.3: метка наследования — «Глобальная (<короткое имя>)», фоллбек — «Глобальная». */
@@ -740,7 +750,7 @@ export function SessionSettingsTab() {
                 }
                 setAskTimeoutEnabled(!askTimeoutEnabled)
               }}
-              pending={pendingField === 'askTimeoutEnabled'}
+              pending={isFieldPending('askTimeoutEnabled')}
             />
             <span className="text-xs text-foreground">
               {askTimeoutEnabled ? t('sessionSettings.askTimeoutEnabled') : t('sessionSettings.askTimeoutDisabled')}
@@ -805,7 +815,7 @@ export function SessionSettingsTab() {
           }
         >
           <label className="flex items-center gap-3 cursor-pointer">
-            <Toggle enabled={microFirst} onToggle={() => setMicroFirst(!microFirst)} pending={pendingField === 'microFirst'} />
+            <Toggle enabled={microFirst} onToggle={() => setMicroFirst(!microFirst)} pending={isFieldPending('microFirst')} />
             <span className="text-xs text-foreground">
               {microFirst ? t('common.enabled') : t('common.disabled')}
             </span>
@@ -830,7 +840,7 @@ export function SessionSettingsTab() {
               {t('sessionSettings.micro.embeddingHint')}
             </div>
             <label className="flex items-center gap-3 cursor-pointer">
-              <Toggle enabled={embeddingEnabled} onToggle={() => setEmbeddingEnabled(!embeddingEnabled)} pending={pendingField === 'embeddingEnabled'} />
+              <Toggle enabled={embeddingEnabled} onToggle={() => setEmbeddingEnabled(!embeddingEnabled)} pending={isFieldPending('embeddingEnabled')} />
               <span className="text-xs text-foreground">
                 {embeddingEnabled ? t('common.enabled') : t('common.disabled')}
               </span>
@@ -876,7 +886,7 @@ export function SessionSettingsTab() {
           <div className="space-y-3">
             {/* Вкл/Выкл */}
             <label className="flex items-center gap-3 cursor-pointer">
-              <Toggle enabled={routingEnabled} onToggle={() => setRoutingEnabled(!routingEnabled)} pending={pendingField === 'routingEnabled'} />
+              <Toggle enabled={routingEnabled} onToggle={() => setRoutingEnabled(!routingEnabled)} pending={isFieldPending('routingEnabled')} />
               <span className="text-xs text-foreground">
                 {routingEnabled ? t('common.enabled') : t('common.disabled')}
               </span>
@@ -951,7 +961,7 @@ export function SessionSettingsTab() {
                     <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
                       {t('routing.escalation')}
                     </span>
-                    <Toggle enabled={routingEscalationEnabled} onToggle={() => setRoutingEscalationEnabled(!routingEscalationEnabled)} pending={pendingField === 'routingEscalationEnabled'} />
+                    <Toggle enabled={routingEscalationEnabled} onToggle={() => setRoutingEscalationEnabled(!routingEscalationEnabled)} pending={isFieldPending('routingEscalationEnabled')} />
                   </div>
                   {routingEscalationEnabled && (
                     <>
@@ -988,7 +998,7 @@ export function SessionSettingsTab() {
                     <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
                       {t('routing.cost')}
                     </span>
-                    <Toggle enabled={routingCostEnabled} onToggle={() => setRoutingCostEnabled(!routingCostEnabled)} pending={pendingField === 'routingCostEnabled'} />
+                    <Toggle enabled={routingCostEnabled} onToggle={() => setRoutingCostEnabled(!routingCostEnabled)} pending={isFieldPending('routingCostEnabled')} />
                   </div>
                   {routingCostEnabled && (
                     <>
@@ -1025,7 +1035,7 @@ export function SessionSettingsTab() {
                     <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
                       {t('routing.subagent')}
                     </span>
-                    <Toggle enabled={routingSubagentEnabled} onToggle={() => setRoutingSubagentEnabled(!routingSubagentEnabled)} pending={pendingField === 'routingSubagentEnabled'} />
+                    <Toggle enabled={routingSubagentEnabled} onToggle={() => setRoutingSubagentEnabled(!routingSubagentEnabled)} pending={isFieldPending('routingSubagentEnabled')} />
                   </div>
                   {routingSubagentEnabled && (
                     <SelectField
@@ -1061,7 +1071,7 @@ export function SessionSettingsTab() {
 
         <Section title={t('sessionSettings.debug')}>
           <label className="flex items-center gap-3 cursor-pointer">
-            <Toggle enabled={debugEnabled} onToggle={() => setDebugEnabled(!debugEnabled)} pending={pendingField === 'debugEnabled'} />
+            <Toggle enabled={debugEnabled} onToggle={() => setDebugEnabled(!debugEnabled)} pending={isFieldPending('debugEnabled')} />
             <span className="text-xs text-foreground">{debugEnabled ? t('sessionSettings.debugOn') : t('sessionSettings.debugOff')}</span>
           </label>
         </Section>
@@ -1087,7 +1097,7 @@ export function SessionSettingsTab() {
                           enabled={srv.enabled}
                           onToggle={() => handleToggleMcp(srv)}
                           disabled={srv.reason === 'system_disabled' || srv.reason === 'project_disabled'}
-                          pending={mcpToggling === srv.name}
+                          pending={isPending(`mcp:${srv.name}`)}
                           ariaLabel={srv.enabled ? t('mcp.disable') : t('mcp.enable')}
                         />
                       </label>
@@ -1131,7 +1141,7 @@ export function SessionSettingsTab() {
                           enabled={skill.enabled}
                           onToggle={() => handleToggleSkill(skill)}
                           disabled={skill.disabledReason === 'system' || skill.disabledReason === 'project'}
-                          pending={skillToggling === skill.name}
+                          pending={isPending(`skill:${skill.name}`)}
                           ariaLabel={skill.enabled ? t('sessionSettings.skills.disable') : t('sessionSettings.skills.enable')}
                         />
                       </label>

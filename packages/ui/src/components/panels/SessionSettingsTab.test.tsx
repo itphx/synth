@@ -34,11 +34,12 @@ const mocks = vi.hoisted(() => ({
   getModels: vi.fn(),
   getToolsPolicyInfo: vi.fn(),
   getMcpPolicyInfo: vi.fn(),
+  notify: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
 vi.mock('@/hooks/useNotification', () => ({
-  useNotification: () => ({ notify: vi.fn() }),
+  useNotification: () => ({ notify: mocks.notify }),
 }))
 vi.mock('../chat/ModelSelector', () => ({
   ModelSelector: () => React.createElement('div', { 'data-testid': 'model-selector' }),
@@ -658,5 +659,48 @@ describe('SessionSettingsTab — автосохранение настроек',
     expect(
       findSection(container, 'Debug')!.querySelector('button[role="switch"]')!.getAttribute('aria-busy'),
     ).toBeNull()
+  })
+
+  it('успешный автосейв даёт единый success-тост, повторный в окне — троттлится', async () => {
+    const container = await renderTab()
+    const debugToggle = findSection(container, 'Debug')!
+      .querySelector('button[role="switch"]') as HTMLButtonElement
+    const microToggle = findSection(container, 'Quick answers')!
+      .querySelector('button[role="switch"]') as HTMLButtonElement
+
+    await act(async () => {
+      debugToggle.click()
+    })
+    await act(async () => {})
+    await act(async () => {
+      microToggle.click()
+    })
+    await act(async () => {})
+
+    const successCalls = mocks.notify.mock.calls.filter(
+      (call) => (call[0] as { type?: string })?.type === 'success',
+    )
+    expect(successCalls).toHaveLength(1)
+    expect(successCalls[0]![0]).toMatchObject({ text: enDict['panel.saved'] })
+  })
+
+  it('при ошибке автосейва форма откатывается к серверному состоянию', async () => {
+    mocks.updateSession.mockRejectedValueOnce(new Error('boom'))
+    const container = await renderTab()
+    const debugToggle = findSection(container, 'Debug')!
+      .querySelector('button[role="switch"]') as HTMLButtonElement
+    expect(debugToggle.getAttribute('aria-checked')).toBe('false')
+
+    await act(async () => {
+      debugToggle.click()
+    })
+    await act(async () => {})
+
+    const after = findSection(container, 'Debug')!
+      .querySelector('button[role="switch"]') as HTMLButtonElement
+    expect(after.getAttribute('aria-checked')).toBe('false')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: enDict['panel.saveError'], type: 'error' }),
+    )
   })
 })
