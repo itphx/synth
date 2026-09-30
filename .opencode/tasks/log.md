@@ -1203,3 +1203,16 @@
 - **Сделано:** `ProjectStoreContract = Pick<ProjectStore, 'load'|'save'|'create'|'list'>` в `storage/project-store.ts`; дубль `ProjectStoreLike` удалён (импорт общий), каст убран; `TaskExtra`/`SubagentResumeDeps.projectStore` → `ProjectStoreLike`; `project-manage`/`project-repos`/`plan`/`workspace-provision` → `ProjectStoreContract`; `git-ssh`/`project-context` → `ProjectStoreLike` (только `load`); тесты (`orchestrator-instructions`, probe-кейс `task-resume`) без кастов.
 - **Верификация (@orchestrator):** `pnpm typecheck` OK; `pnpm lint` 0 errors (в изменённых файлах предупреждений нет); тесты — shared 170, core 2299, ui 856, backend 341 PASS; `grep 'as ProjectStore'` в core — 0.
 - **Коммит:** ниже.
+
+## 2026-09-30 16:40 — Релиз 0.8.1 + деплой на test — PASS
+
+- **Задача:** бампнуть версию до 0.8.1, выкатить на test (по явной просьбе пользователя).
+- **Тип:** release + deploy · **Исполнитель:** @devops (скиллы `synth-release`/`synth-build-publish`/`synth-k3s-deploy`) · **Результат:** PASS.
+- **Решения пользователя:** незакоммиченная фича «тулы проекта» закоммичена в соседней сессии (`aefede7`, `5820947`); ветку `feat/ad-075-workspace-provisioning` в origin **не пушить**; тег и npm-публикацию не создавать.
+- **Bump:** `./scripts/version-bump.sh 0.8.1` — `version.ts` + 6× `package.json` + `charts/synth/Chart.yaml` (0.8.0 → 0.8.1).
+- **Проверки:** `pnpm install --frozen-lockfile` OK; shared/core build OK; `pnpm typecheck` OK; `pnpm lint` 0 errors. Полный `pnpm test` не гонялся (изменение только метаданных версии; фича верифицирована сегодня).
+- **Коммит `synth/`:** `dcdb1e0` `chore(release): 0.8.1` — **локально, не запушен** (origin ветки на `efc0c6f`, локально впереди на 21).
+- **Docker:** собраны из исходников и запушены в `git.itphx.ru`: `synth-backend:0.8.1` (299 MB, digest `4816645f3a36…`), `synth-ui:0.8.1` (116 MB, digest `a455c05dd642…`); версия внутри образа (`SYNTH_VERSION = '0.8.1'`) проверена. Логи — `tmp/docker-build-{backend,ui}-0.8.1.log`.
+- **`synth-deploy` (main):** `values.yaml` tags → 0.8.1, `helm lint`/`template` OK, коммит `9c37c89` запушен (`96032d1..9c37c89`) → Fleet раскатал.
+- **Верификация (@orchestrator, независимо):** `https://synth.k3s.itphx.loc/api/v2/health` → `{"status":"healthy","version":"0.8.1"}`; UI `/` → 200; deploy-образы `:0.8.1`; поды backend/ui `1/1 Running`, RESTARTS 0.
+- **Осталось:** ветка `synth` не запушена (по решению пользователя); тег `v0.8.1`, npm-публикация и preprod/prod — не трогались.
