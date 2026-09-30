@@ -366,11 +366,12 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-074 | Скрытие вместо удаления (soft-delete): проекты/сессии/сообщения скрываются, исключаются из LLM-контекста, read-only режим для ADMIN/AUDITOR, restore/purge — ADMIN | ⏳ Не реализовано | [ad-074](./docs/arch_decisions/ad-074-soft-delete-retention.md) |
 | AD-075 | Окружение проекта: рабочий каталог (автосоздание managed / выбор для standalone; политика `workspaceOutsideRoot`; FS-паритет core↔backend); тулы `project_workspace_set`/`project_update`, общий `engine/workspace-provision.ts` | ✅ Реализовано | [ad-075](./docs/arch_decisions/ad-075-project-workspace-provisioning.md) |
 | AD-076 | Реестр git-репозиториев (несколько на проект) и SSH-ключи per-agent (шифрование at-rest, `repo_path`, паритет core↔backend); тулы `project_repo_clone\|init\|add\|fetch\|remove` | ✅ Реализовано | [ad-076](./docs/arch_decisions/ad-076-git-repo-registry-ssh.md) |
-| AD-077 | Инструментальное окружение исполнения (git/python/rg): хостовые для dev/standalone, tools-образ + volume для managed | ⏳ Не реализовано | [ad-077](./docs/arch_decisions/ad-077-runtime-toolchain.md) |
+| AD-077 | Инструментальное окружение исполнения: managed — thin backend + сервис-executor (общий volume для workspace; S3 — целевое хранилище); реализуется после AD-032 (PostgreSQL) | ⏳ Не реализовано | [ad-077](./docs/arch_decisions/ad-077-runtime-toolchain.md) |
 | AD-078 | Авто-отключение инструментов при отсутствии внешней зависимости (детект git/rg/sh, `unavailable(dependency)`, пояснение модели) | ✅ Реализовано | [ad-078](./docs/arch_decisions/ad-078-runtime-dependency-availability.md) |
 | AD-079 | Локальный home-каталог (`--home`/`SYNTH_HOME`): плоская раскладка config/data/profiles/credentials, приоритеты путей, независимые инстансы standalone и hybrid | ✅ Реализовано | [ad-079](./docs/arch_decisions/ad-079-local-home-independent-instances.md) |
 | AD-080 | Управляемый гибрид: режимы-полюса (режим — параметр запуска, без runtime-переключения), standalone=ADMIN / hybrid=роли сервера, «Установить локально» | ⏳ Не реализовано | [ad-080](./docs/arch_decisions/ad-080-managed-hybrid-modes.md) |
 | AD-081 | Политики гибрида и защита от утечек: серверные политики (forbidden/remote-only/full; publish/fork allow\|deny\|approval), явные эндпоинты переноса, discovery, аудит, панель «Гибрид» | ⏳ Не реализовано | [ad-081](./docs/arch_decisions/ad-081-hybrid-policy-leak-protection.md) |
+| AD-082 | Flavor-образы с toolchain (`slim`/`core`/`dev`/`devops`/`browser`/`full`; alpine + debian) для local containerized и managed single-instance (промежуточный шаг до AD-077) | ⏳ Не реализовано | [ad-082](./docs/arch_decisions/ad-082-full-images-deployment.md) |
 
 Правило: реализованные AD переносятся в `./docs/arch_decisions/` (в AGENTS.md остаётся строка таблицы + ссылка).
 
@@ -393,7 +394,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | soft-delete / скрытие / retention / аудит-режим | [AD-074](./docs/arch_decisions/ad-074-soft-delete-retention.md) |
 | workspace / рабочий каталог / окружение проекта | [AD-075](./docs/arch_decisions/ad-075-project-workspace-provisioning.md) |
 | git-репозитории / SSH-ключи | [AD-076](./docs/arch_decisions/ad-076-git-repo-registry-ssh.md) |
-| инструменты / образы / тулчейн | [AD-077](./docs/arch_decisions/ad-077-runtime-toolchain.md), [AD-078](./docs/arch_decisions/ad-078-runtime-dependency-availability.md) |
+| инструменты / образы / тулчейн / executor | [AD-077](./docs/arch_decisions/ad-077-runtime-toolchain.md), [AD-078](./docs/arch_decisions/ad-078-runtime-dependency-availability.md), [AD-082](./docs/arch_decisions/ad-082-full-images-deployment.md) |
 | план / todo | [AD-039](./docs/arch_decisions/ad-039-plan-in-project.md) |
 | ошибки LLM / i18n | [AD-041](./docs/arch_decisions/ad-041-llm-error-taxonomy.md) |
 | гибрид | [AD-042](./docs/arch_decisions/ad-042-hybrid-mode.md), [AD-043](./docs/arch_decisions/ad-043-unified-identity-login.md), [AD-045](./docs/arch_decisions/ad-045-hybrid-server-profiles.md), [AD-080](./docs/arch_decisions/ad-080-managed-hybrid-modes.md), [AD-081](./docs/arch_decisions/ad-081-hybrid-policy-leak-protection.md), [docs/HYBRID.md](./docs/HYBRID.md), скилл `synth-hybrid` |

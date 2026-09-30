@@ -66,7 +66,8 @@
 | AD-069 | [Проектные инструкции (AGENTS.md) и /init](./ad-069-project-instructions-agents-md.md): discovery, merged chain, lazy-догрузка, обрезка, threat-scan, install-tree guard |
 | AD-073 | [Целостность клиента в гибриде](./ad-073-client-integrity-hybrid.md): клиент недоверенный, enforcement на сервере; сигналы (подписи, DPoP/mTLS) опционально |
 | AD-074 | [Скрытие вместо удаления](./ad-074-soft-delete-retention.md): soft-delete проектов/сессий/сообщений, исключение из LLM-контекста, read-only режим ADMIN/AUDITOR, restore/purge — ADMIN |
-| AD-077 | [Инструментальное окружение исполнения (git/python/rg)](./ad-077-runtime-toolchain.md): хостовые инструменты для dev/standalone, tools-образ + volume для managed |
+| AD-077 | [Инструментальное окружение исполнения (toolchain и executor)](./ad-077-runtime-toolchain.md): thin backend + сервис-executor, общий volume для workspace, S3; реализуется после AD-032 (PostgreSQL) |
 | AD-079 | [Локальный home-каталог (`--home`) и независимые локальные инстансы](./ad-079-local-home-independent-instances.md): `--home`/`SYNTH_HOME`, плоская раскладка (config/data/profiles/credentials), приоритеты путей, независимый запуск standalone и hybrid |
 | AD-080 | [Управляемый гибрид: режимы-полюса, идентичность и установка локально](./ad-080-managed-hybrid-modes.md): режим — параметр запуска, без runtime-переключения, standalone=ADMIN / hybrid=роли сервера, «Установить локально» |
 | AD-081 | [Политики гибрида и защита от утечек](./ad-081-hybrid-policy-leak-protection.md): серверные политики (forbidden/remote-only/full, publish/fork allow|deny|approval), явные эндпоинты переноса, discovery, аудит, панель «Гибрид» |
+| AD-082 | [Flavor-образы с toolchain](./ad-082-full-images-deployment.md): `slim`/`core`/`dev`/`devops`/`browser`/`full` (alpine + debian) для local containerized и managed single-instance |
