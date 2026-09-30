@@ -225,3 +225,64 @@ describe('SessionSettingsTab — скиллы сессии (AD-046 §4.5)', () =
     expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ type: 'error' }))
   })
 })
+
+describe('SessionSettingsTab — тумблер скилла: pending vs disabled', () => {
+  it('во время in-flight запроса тумблер не disabled и помечен aria-busy', async () => {
+    let resolveUpdate!: (value: unknown) => void
+    mocks.updateSessionSkills.mockReturnValue(
+      new Promise((resolve) => { resolveUpdate = resolve }),
+    )
+
+    const container = await renderTab()
+    const toggle = container.querySelector(
+      '[data-testid="session-skill-db-migration"] button[role="switch"]',
+    ) as HTMLButtonElement
+
+    await act(async () => {
+      toggle.click()
+    })
+
+    const pendingToggle = container.querySelector(
+      '[data-testid="session-skill-db-migration"] button[role="switch"]',
+    ) as HTMLButtonElement
+    expect(pendingToggle.disabled).toBe(false)
+    expect(pendingToggle.getAttribute('aria-busy')).toBe('true')
+    expect(pendingToggle.classList.contains('cursor-progress')).toBe(true)
+
+    // Повторный клик во время запроса не порождает второй вызов (гасит обработчик).
+    await act(async () => {
+      pendingToggle.click()
+    })
+    expect(mocks.updateSessionSkills).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveUpdate(skillsEffective())
+    })
+    expect(
+      container.querySelector('[data-testid="session-skill-db-migration"] button[role="switch"]')!
+        .getAttribute('aria-busy'),
+    ).toBeNull()
+  })
+
+  it('при disabledReason system/project — реально disabled, без aria-busy', async () => {
+    mocks.getSessionSkills.mockResolvedValue(skillsEffective({
+      skills: [
+        { name: 'sys', description: '', level: 'system', scope: 'instance', trusted: true, available: true, enabled: false, disabled: true, disabledReason: 'system' },
+        { name: 'prj', description: '', level: 'project', scope: 'project', trusted: true, available: true, enabled: false, disabled: true, disabledReason: 'project' },
+      ],
+    }))
+
+    const container = await renderTab()
+    const sysToggle = container.querySelector(
+      '[data-testid="session-skill-sys"] button[role="switch"]',
+    ) as HTMLButtonElement
+    const prjToggle = container.querySelector(
+      '[data-testid="session-skill-prj"] button[role="switch"]',
+    ) as HTMLButtonElement
+
+    expect(sysToggle.disabled).toBe(true)
+    expect(prjToggle.disabled).toBe(true)
+    expect(sysToggle.getAttribute('aria-busy')).toBeNull()
+    expect(prjToggle.getAttribute('aria-busy')).toBeNull()
+  })
+})

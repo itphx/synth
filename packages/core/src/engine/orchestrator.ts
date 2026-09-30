@@ -1688,19 +1688,19 @@ export class ChatOrchestrator {
   /**
    * AD-071 §2.4: решения по эффективному набору MCP. Модель per-item:
    * системный мастер (`systemEnabled`) → проектный hard-gate (`project.enabled`)
-   * → config → сессионный opt-out → снапшот/явное включение. Уровень по
-   * приоритету `system > project > session`. Чистый резолвинг — I/O только
-   * загрузка проекта (передаётся снаружи, чтобы не читать дважды).
+   * → сессионный opt-out → снапшот/явное включение. Системный мастер — только
+   * реестровое `enabled` (`config.enabled` — сид, не гейт). Уровень по приоритету
+   * `system > project > session`. Чистый резолвинг — I/O только загрузка проекта
+   * (передаётся снаружи, чтобы не читать дважды).
    */
   private _resolveMcpDecisions(session: Session, project: Project | null): McpScopeDecision[] {
     const manager = this._mcpManager;
     if (!manager) return [];
     const config = manager.getConfig();
-    const servers = Object.entries(config).map(([name, cfg]) => ({
+    const servers = Object.keys(config).map((name) => ({
       name,
       origin: manager.getServerOrigin(name),
       systemEnabled: manager.isServerSystemEnabled(name),
-      configEnabled: cfg.enabled !== false,
     }));
     return resolveMcpScope(servers, project?.mcp, {
       enabled: session.settings.mcpServers,

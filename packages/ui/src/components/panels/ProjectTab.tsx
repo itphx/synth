@@ -590,7 +590,7 @@ function ProjectSkillsBlock({
                   <Toggle
                     enabled={enabled}
                     onToggle={() => onToggle(skill.name, 'enabled')}
-                    disabled={saving}
+                    pending={saving}
                     ariaLabel={`${skill.name}: ${t('projectTab.skills.available')}`}
                   />
                 </label>
@@ -599,7 +599,7 @@ function ProjectSkillsBlock({
                   <Toggle
                     enabled={defaultOn}
                     onToggle={() => onToggle(skill.name, 'defaultOn')}
-                    disabled={saving}
+                    pending={saving}
                     ariaLabel={`${skill.name}: ${t('projectTab.skills.defaultOn')}`}
                   />
                 </label>

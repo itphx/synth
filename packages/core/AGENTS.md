@@ -161,10 +161,11 @@
   режимам — `GET/PUT /api/v2/settings/mcp`. Отдельного `/mcp/session/:id` в core нет.
 - Единый реестр серверов — `McpRegistryStore` (AD-071): уровни system/project/session,
   per-item резолвинг эффективного набора — `engine/mcp/scope.ts`
-  (`enabled = systemOn && projectOn && configOn && !sessionOff && (snapshotOn || sessionOn)`,
-  причины `system_disabled`/`project_disabled`/`config`/`session_optout`/`not_default`;
-  мастер `enabled` и проектный `enabled` — live hard-gate (в т.ч. для системных),
-  дефолты — snapshot `mcpDefaultOn`), сетевой доступ — `engine/mcp/network-policy.ts`
+  (`enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`,
+  причины `system_disabled`/`project_disabled`/`session_optout`/`not_default`;
+  мастер `enabled` (только реестр) и проектный `enabled` — live hard-gate (в т.ч. для
+  системных), дефолты — snapshot `mcpDefaultOn`; `config.enabled` — лишь сид реестра,
+  не гейт), сетевой доступ — `engine/mcp/network-policy.ts`
   (на старте применяется `mergeMcpNetworkPolicy(config, runtime)`).
 
 ## Тесты и запуск

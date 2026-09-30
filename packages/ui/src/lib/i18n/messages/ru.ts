@@ -623,7 +623,6 @@ export const dict = {
   'rightPanel.stats.mcpReason.project_disabled': 'выключен в проекте',
   'rightPanel.stats.mcpReason.system_disabled': 'выключен администратором',
   'rightPanel.stats.mcpReason.not_default': 'не включён по умолчанию',
-  'rightPanel.stats.mcpReason.config': 'выключен в конфиге',
   'rightPanel.stats.tokenEstimate': 'Оценка токенов: ~{tokens} (символов {chars}, ratio {ratio})',
   // AD-070 §2.5: слой истории (messages) — состав отправляемых сообщений
   'rightPanel.stats.history': 'История',

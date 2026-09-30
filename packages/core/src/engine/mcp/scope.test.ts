@@ -2,7 +2,7 @@
  * AD-071 §2.4: разрешение эффективного набора MCP-серверов.
  *
  * Модель per-item: системный мастер (`systemEnabled`) → проектный hard-gate
- * (`project.enabled`) → config → сессионный opt-out → снапшот (`session.defaultOn`)
+ * (`project.enabled`) → сессионный opt-out → снапшот (`session.defaultOn`)
  * или явное включение (`session.enabled`). Уровень — по приоритету
  * `system > project > session`, отключённые не исчезают и получают причину.
  */
@@ -18,7 +18,6 @@ function server(
     name,
     origin: opts.origin ?? 'instance',
     systemEnabled: opts.systemEnabled ?? true,
-    configEnabled: opts.configEnabled ?? true,
   };
 }
 
@@ -105,18 +104,20 @@ describe('resolveMcpScope (AD-071 §2.4)', () => {
     expect(byName(result, 'sys')).toMatchObject({ enabled: false, reason: 'session_optout' });
   });
 
-  it('config.enabled=false → disabled/config (приоритет над session_optout)', () => {
-    const result = resolveMcpScope(
-      [server('sys', { configEnabled: false })],
-      null,
-      { defaultOn: ['sys'], disabled: ['sys'] },
-    );
-    expect(byName(result, 'sys')).toMatchObject({ enabled: false, reason: 'config' });
+  it('config.enabled=false без мастер-гейта не блокирует (сид, не гейт)', () => {
+    // config.enabled — только сид записи реестра; в резолвинге не участвует.
+    // Мастер (реестр) включён, проект не ограничивает → решает сессия.
+    const off = resolveMcpScope([server('sys')], null, {});
+    expect(byName(off, 'sys')).toMatchObject({ enabled: false, reason: 'not_default' });
+
+    const on = resolveMcpScope([server('sys')], null, { enabled: ['sys'] });
+    expect(byName(on, 'sys')).toMatchObject({ enabled: true });
+    expect(byName(on, 'sys').reason).toBeUndefined();
   });
 
-  it('приоритет причин: system_disabled > project_disabled > config', () => {
+  it('приоритет причин: system_disabled > project_disabled', () => {
     const result = resolveMcpScope(
-      [server('x', { origin: 'user', systemEnabled: false, configEnabled: false })],
+      [server('x', { origin: 'user', systemEnabled: false })],
       { enabled: [], defaultOn: [] },
       {},
     );

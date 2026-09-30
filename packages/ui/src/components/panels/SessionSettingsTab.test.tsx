@@ -308,6 +308,69 @@ describe('SessionSettingsTab — MCP-скоуп сессии (AD-071 §2.4)', ()
   })
 })
 
+describe('SessionSettingsTab — тумблер MCP: pending vs disabled', () => {
+  it('во время in-flight запроса тумблер не disabled и помечен aria-busy', async () => {
+    let resolveUpdate!: (value: unknown) => void
+    mocks.updateSessionMcp.mockReturnValue(
+      new Promise((resolve) => { resolveUpdate = resolve }),
+    )
+
+    const container = await renderTab()
+    const toggle = container.querySelector(
+      '[data-testid="session-mcp-sys"] button[role="switch"]',
+    ) as HTMLButtonElement
+
+    await act(async () => {
+      toggle.click()
+    })
+
+    const pendingToggle = container.querySelector(
+      '[data-testid="session-mcp-sys"] button[role="switch"]',
+    ) as HTMLButtonElement
+    expect(pendingToggle.disabled).toBe(false)
+    expect(pendingToggle.getAttribute('aria-busy')).toBe('true')
+    expect(pendingToggle.classList.contains('cursor-progress')).toBe(true)
+
+    // Повторный клик во время запроса не порождает второй вызов (гасит обработчик).
+    await act(async () => {
+      pendingToggle.click()
+    })
+    expect(mocks.updateSessionMcp).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveUpdate(effective())
+    })
+    expect(
+      container.querySelector('[data-testid="session-mcp-sys"] button[role="switch"]')!
+        .getAttribute('aria-busy'),
+    ).toBeNull()
+  })
+
+  it('при reason system_disabled/project_disabled — реально disabled, без aria-busy', async () => {
+    mocks.getSessionMcpEffective.mockResolvedValue(effective({
+      servers: [
+        { name: 'sys', level: 'system', enabled: false, reason: 'system_disabled', status: 'disabled', origin: 'instance', trust: 'builtin', tools: [] },
+        { name: 'proj', level: 'project', enabled: false, reason: 'project_disabled', status: 'disabled', origin: 'user', trust: 'community', tools: [] },
+      ],
+      enabled: [],
+      disabled: ['sys', 'proj'],
+    }))
+
+    const container = await renderTab()
+    const sysToggle = container.querySelector(
+      '[data-testid="session-mcp-sys"] button[role="switch"]',
+    ) as HTMLButtonElement
+    const projToggle = container.querySelector(
+      '[data-testid="session-mcp-proj"] button[role="switch"]',
+    ) as HTMLButtonElement
+
+    expect(sysToggle.disabled).toBe(true)
+    expect(projToggle.disabled).toBe(true)
+    expect(sysToggle.getAttribute('aria-busy')).toBeNull()
+    expect(projToggle.getAttribute('aria-busy')).toBeNull()
+  })
+})
+
 describe('SessionSettingsTab — per-session политики инструментов (AD-071 §2.3)', () => {
   it('переопределяет обе политики (встроенные + MCP) и сохраняет их', async () => {
     const container = await renderTab()

@@ -454,14 +454,15 @@ export type McpServerLevel = (typeof MCP_SERVER_LEVELS)[number];
  * AD-071 §2.2: почему сервер отключён в эффективном наборе сессии:
  * - `system_disabled` — выключен системным мастер-флагом (`McpRegistryEntry.enabled === false`);
  * - `project_disabled` — не разрешён проектом (`project.enabled` — hard-gate);
- * - `config` — выключен в конфиге записи (`config.enabled === false`);
  * - `session_optout` — явный opt-out в сессии (`mcpDisabledServers`);
  * - `not_default` — нет в снапшоте сессии (`mcpDefaultOn`) и не включён явно.
+ *
+ * Причина `config` отсутствует: `McpServerConfig.enabled` — только сид записи
+ * реестра (`seedFromConfig`), в резолвинге/подключении не участвует.
  */
 export const MCP_DISABLED_REASONS = [
   'system_disabled',
   'project_disabled',
-  'config',
   'session_optout',
   'not_default',
 ] as const;

@@ -136,7 +136,11 @@ export const mcpServerConfigSchema = z.object({
   env: z.record(z.string(), z.string()).optional(),
   url: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
-  /** Config-дефолт системного мастер-флага (`false` — сервер выключен). */
+  /**
+   * Сид системного мастер-флага записи реестра при первичном создании из config
+   * (`seedFromConfig`); в резолвинге/подключении не участвует — после создания
+   * мастер-флаг живёт только в `McpRegistryEntry.enabled`.
+   */
   enabled: z.boolean().optional(),
   /**
    * Сид «включён по умолчанию для НОВЫХ ПРОЕКТОВ» (`project.enabled`/

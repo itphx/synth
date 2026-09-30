@@ -2,9 +2,11 @@
  * AD-071 §2.4/§2.5: разрешение эффективного набора MCP-серверов сессии.
  *
  * Модель per-item: системный мастер (`systemEnabled`) → проектный hard-gate
- * (`project.enabled`) → config (`configEnabled`) → сессионный opt-out
- * (`session.disabled`) → сид (`session.defaultOn`, снапшот) или явное включение
- * (`session.enabled`).
+ * (`project.enabled`) → сессионный opt-out (`session.disabled`) → сид
+ * (`session.defaultOn`, снапшот) или явное включение (`session.enabled`).
+ *
+ * Системный мастер — только реестровое `McpRegistryEntry.enabled`; `config.enabled`
+ * в резолвинге не участвует (лишь сид записи реестра при первичном создании).
  *
  * Уровень сервера: `instance`-origin → `system`; иначе если разрешён проектом →
  * `project`; иначе `session`. Отключённые серверы не исчезают: возвращается
@@ -25,12 +27,10 @@ export interface McpScopeServer {
   name: string;
   origin: McpRegistryOrigin;
   /**
-   * Системный мастер-флаг (hard-gate): `false` — недоступен нигде. Из реестра
-   * (`enabled`) либо config (`config.enabled !== false`).
+   * Системный мастер-флаг (hard-gate): `false` — недоступен нигде. Источник —
+   * только реестровое `McpRegistryEntry.enabled` (`config.enabled` — сид, не гейт).
    */
   systemEnabled: boolean;
-  /** `config.enabled !== false`. */
-  configEnabled: boolean;
 }
 
 /** Вход: сессионные overrides/снапшот. */
@@ -72,17 +72,15 @@ export function resolveMcpScope(
     const level: McpServerLevel = isSystem ? 'system' : inProject ? 'project' : 'session';
 
     const systemOn = server.systemEnabled;
-    const configOn = server.configEnabled;
     const sessionOff = sessionDisabled.has(name);
     const seedOn = sessionDefaultOn.has(name);
     const sessionOn = sessionEnabled.has(name);
-    const enabled = systemOn && projectOn && configOn && !sessionOff && (seedOn || sessionOn);
+    const enabled = systemOn && projectOn && !sessionOff && (seedOn || sessionOn);
 
     let reason: McpDisabledReason | undefined;
     if (!enabled) {
       if (!systemOn) reason = 'system_disabled';
       else if (!projectOn) reason = 'project_disabled';
-      else if (!configOn) reason = 'config';
       else if (sessionOff) reason = 'session_optout';
       else reason = 'not_default';
     }

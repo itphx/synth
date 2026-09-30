@@ -616,12 +616,12 @@ export class SystemPromptComposer {
   /**
    * AD-071 §2.2: volatile-блок `mcp.status` — статус подключения по каждому
    * серверу (`connected`/`error`/`disabled`/`circuit-open`). Для `disabled`
-   * добавляется причина (выключен в конфиге / не включён в сессии).
+   * добавляется причина (opt-out сессии / не разрешён проектом / не включён
+   * по умолчанию).
    */
   private _buildMcpStatusBlock(servers: ComposerMcpServer[], lang: string): string {
     const en = lang === 'en';
     const reasonText = (reason: ComposerMcpServer['disabledReason']): string => {
-      if (reason === 'config') return en ? 'disabled in config' : 'отключён в конфиге';
       if (reason === 'session') return en ? 'not enabled in session' : 'не включён в сессии';
       if (reason === 'session_optout') {
         return en ? 'disabled in session (opt-out)' : 'отключён в сессии (opt-out)';

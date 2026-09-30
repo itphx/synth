@@ -1127,3 +1127,13 @@
 - **Ручная проверка (dev :5000/:5002, проект `mpfc00f0-1-hnu5bb93`):** проект `skills={enabled:[],defaultOn:[]}` → скиллы недоступны и в новой, и в старой сессии, `skills.catalog` в промпте отсутствует; легаси-проект без настройки — скиллы включены; добавление скилла в проект → появляется в каталоге новой сессии; MCP — новый флаг `enabled`, причина `config`. Скриншоты `tmp/qa-*.png`. Данные проекта возвращены в исходное состояние, тестовые сессии удалены.
 - **Docs:** уточнены AD-046 §4.5, AD-071 §2.2/2.4/2.5, `docs/API_V2.md`, `packages/{core,shared,ui}/AGENTS.md`, корневой `AGENTS.md` (новый AD не создавался).
 - **Не сделано:** коммит (инвариант 13 — ждёт команды).
+
+## 2026-09-30 13:10 — Скиллы/MCP: фиксы курсора и MCP config-гейта — PASS
+
+- **Задача:** (1) визуальный баг — при тумблере скилла/MCP в сессии курсор становился «запрет»; (2) project-allowed MCP нельзя включить в сессии.
+- **Тип:** bug fix (ui + core/shared/docs) · **Исполнитель:** @fixer (2 параллельно) + @orchestrator.
+- **Баг 1 — причина:** `Toggle` получал `disabled` на время in-flight (`skillToggling`/`mcpToggling`), а класс `disabled:cursor-not-allowed` давал курсор-запрет; «занят» и «недоступен» были смешаны. **Фикс:** `Toggle` получил проп `pending` (aria-busy + `opacity-60 cursor-progress`, без атрибута `disabled`); в `SessionSettingsTab` in-flight → `pending`, `disabled` — только при причине system/project; в `ProjectTab` транзиентный `disabled={saving}` → `pending`. Добавлены тесты `Toggle.test.tsx`, обновлены тесты сессии. Аудит прочих `cursor-not-allowed`: остальные — реально недоступные (нет прав/workspace/выключено), корректны; кандидат на follow-up — `PlanActModeToggle` (busy + недоступность смешаны).
+- **Баг 2 — причина:** реестровый мастер `synth-mcp-local.enabled=true`, но `entry.config.enabled=false` из config.yaml работал **вторым** hard-gate (`configEnabled`) → причина `config`, сервер выключен навсегда. **Фикс:** убран `configEnabled`/причина `config`; системный мастер — только `McpRegistryEntry.enabled`; `McpServerConfig.enabled` — лишь сид (`seedFromConfig`); `McpManager.isServerSystemEnabled` fallback → `true`; обновлены shared-типы, i18n, тесты, AD-071/API_V2/AGENTS.
+- **Верификация (@orchestrator):** shared build OK; `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — core 2276, backend 341, shared 170, ui 833 PASS.
+- **Живой API (после рестарта backend+core):** `synth-mcp-local` в сессии — `not_default` и **включается** (`enabled:true`); реестровый мастер `enabled:false` → `system_disabled` (live-гейт), возврат `true` → снова включается. Временные проект/сессия/сервер удалены, данные не затронуты.
+- **Не сделано:** коммит (ждёт команды).

@@ -627,7 +627,6 @@ export const dict = {
   'rightPanel.stats.mcpReason.project_disabled': 'project disabled',
   'rightPanel.stats.mcpReason.system_disabled': 'disabled by administrator',
   'rightPanel.stats.mcpReason.not_default': 'not default',
-  'rightPanel.stats.mcpReason.config': 'config',
   'rightPanel.stats.tokenEstimate': 'Estimated tokens: ~{tokens} (chars {chars}, ratio {ratio})',
   // AD-070 §2.5: history layer (messages) — composition of sent messages
   'rightPanel.stats.history': 'History',

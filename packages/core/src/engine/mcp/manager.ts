@@ -38,7 +38,7 @@ export class McpManager {
   private _defaultServers: Set<string> | null = null;
   /**
    * AD-071 §2.4: системный мастер-флаг серверов (реестр `enabled`). `null` — не
-   * задан, деривируется из `config.enabled !== false`.
+   * задан (реестр не подключён); `config.enabled` — лишь сид записи реестра, не гейт.
    */
   private _serverSystemEnabled: Map<string, boolean> | null = null;
 
@@ -98,16 +98,16 @@ export class McpManager {
   }
 
   /**
-   * AD-071 §2.4: системный мастер-флаг сервера (реестр `enabled`). Не задан —
-   * дефолт из config (`enabled !== false`, т.е. включён).
+   * AD-071 §2.4: системный мастер-флаг сервера — только реестровое `enabled`.
+   * Не задан (реестр не подключён) — считаем сервер включённым; `config.enabled`
+   * — лишь сид записи реестра (`seedFromConfig`), не гейт.
    */
   setServerSystemEnabled(states: Record<string, boolean>): void {
     this._serverSystemEnabled = new Map(Object.entries(states));
   }
 
   isServerSystemEnabled(name: string): boolean {
-    if (this._serverSystemEnabled) return this._serverSystemEnabled.get(name) ?? true;
-    return this._config[name]?.enabled !== false;
+    return this._serverSystemEnabled?.get(name) ?? true;
   }
 
   /**
