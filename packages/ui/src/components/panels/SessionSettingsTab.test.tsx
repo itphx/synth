@@ -34,6 +34,8 @@ const mocks = vi.hoisted(() => ({
   getSessionMessages: vi.fn(),
   getProviders: vi.fn(),
   getModels: vi.fn(),
+  getToolsPolicyInfo: vi.fn(),
+  getMcpPolicyInfo: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
@@ -134,6 +136,8 @@ beforeEach(() => {
   mocks.updateSession.mockResolvedValue({})
   mocks.getProviders.mockResolvedValue({ providers: [], default_provider: null })
   mocks.getModels.mockResolvedValue([])
+  mocks.getToolsPolicyInfo.mockResolvedValue({ policy: 'auto', isOverridden: false, defaults: 'auto' })
+  mocks.getMcpPolicyInfo.mockResolvedValue({ policy: 'consistency', isOverridden: false, defaults: 'consistency' })
 
   useUIStore.setState({
     activeCenterTabId: 'tab-1',
@@ -315,12 +319,14 @@ describe('SessionSettingsTab — per-session политики инструмен
     ) as HTMLElement | null
     expect(toolsTrigger).not.toBeNull()
     expect(mcpTrigger).not.toBeNull()
-    // «Follow global» — дефолт (пусто).
-    expect(toolsTrigger!.textContent).toContain('Follow global')
-    expect(mcpTrigger!.textContent).toContain('Follow global')
+    // Наследование: «Глобальная (<короткое имя глобальной политики>)».
+    expect(toolsTrigger!.textContent).toContain('Global')
+    expect(toolsTrigger!.textContent).toContain('By provider')
+    expect(mcpTrigger!.textContent).toContain('Global')
+    expect(mcpTrigger!.textContent).toContain('Consistency')
 
-    await selectOption(toolsTrigger!, 'available')
-    await selectOption(mcpTrigger!, 'consistency')
+    await selectOption(toolsTrigger!, 'Available only')
+    await selectOption(mcpTrigger!, 'Consistency')
 
     const saveButton = [...container.querySelectorAll('button')].find(
       (b) => b.textContent === 'Save',
@@ -334,6 +340,24 @@ describe('SessionSettingsTab — per-session политики инструмен
     const settings = mocks.updateSession.mock.calls[0][1].settings
     expect(settings.toolsPolicy).toBe('available')
     expect(settings.mcpPolicy).toBe('consistency')
+  })
+
+  it('при ошибке запроса глобальных политик показывает фоллбек «Global»', async () => {
+    mocks.getToolsPolicyInfo.mockRejectedValue(new Error('boom'))
+    mocks.getMcpPolicyInfo.mockRejectedValue(new Error('boom'))
+    const container = await renderTab()
+
+    const toolsTrigger = container.querySelector(
+      '[role="combobox"][aria-label="Global built-in tools policy"]',
+    ) as HTMLElement
+    const mcpTrigger = container.querySelector(
+      '[role="combobox"][aria-label="Global MCP policy"]',
+    ) as HTMLElement
+    expect(toolsTrigger.textContent).toContain('Global')
+    expect(mcpTrigger.textContent).toContain('Global')
+    // Без скобки со значением — только фоллбек-метка.
+    expect(toolsTrigger.textContent).not.toContain('(')
+    expect(mcpTrigger.textContent).not.toContain('(')
   })
 
   it('подтягивает per-session переопределения обеих политик', async () => {
@@ -356,7 +380,7 @@ describe('SessionSettingsTab — per-session политики инструмен
     const mcpTrigger = container.querySelector(
       '[role="combobox"][aria-label="Global MCP policy"]',
     ) as HTMLElement
-    expect(toolsTrigger.textContent).toContain('consistency')
-    expect(mcpTrigger.textContent).toContain('available')
+    expect(toolsTrigger.textContent).toContain('Consistency')
+    expect(mcpTrigger.textContent).toContain('Available only')
   })
 })

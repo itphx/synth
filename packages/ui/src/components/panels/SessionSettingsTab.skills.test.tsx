@@ -33,6 +33,8 @@ const mocks = vi.hoisted(() => ({
   updateSession: vi.fn(),
   getProviders: vi.fn(),
   getModels: vi.fn(),
+  getToolsPolicyInfo: vi.fn(),
+  getMcpPolicyInfo: vi.fn(),
   notify: vi.fn(),
 }))
 
@@ -98,6 +100,8 @@ beforeEach(() => {
   mocks.updateSession.mockResolvedValue({})
   mocks.getProviders.mockResolvedValue({ providers: [], default_provider: null })
   mocks.getModels.mockResolvedValue([])
+  mocks.getToolsPolicyInfo.mockResolvedValue({ policy: 'auto', isOverridden: false, defaults: 'auto' })
+  mocks.getMcpPolicyInfo.mockResolvedValue({ policy: 'consistency', isOverridden: false, defaults: 'consistency' })
 
   useUIStore.setState({
     activeCenterTabId: 'tab-1',

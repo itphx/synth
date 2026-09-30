@@ -50,6 +50,9 @@ export function SessionSettingsTab() {
   // AD-071 §2.3: per-session override политики инструментов ('' = следовать глобальной)
   const [toolsPolicy, setToolsPolicy] = useState<ToolsPolicy | ''>('')
   const [mcpPolicy, setMcpPolicy] = useState<ToolsPolicy | ''>('')
+  // Актуальные глобальные политики — для метки наследования «Глобальная (<политика>)».
+  const [globalToolsPolicy, setGlobalToolsPolicy] = useState<ToolsPolicy | null>(null)
+  const [globalMcpPolicy, setGlobalMcpPolicy] = useState<ToolsPolicy | null>(null)
 
   // Роутинг (AD-034)
   const [routingEnabled, setRoutingEnabled] = useState(false)
@@ -175,6 +178,13 @@ export function SessionSettingsTab() {
     synthApi.getSecuritySettings()
       .then((s) => setDefaultAskTimeoutMs(s.askTimeoutMs ?? 30_000))
       .catch(() => {})
+  }, [])
+
+  // Актуальное глобальное значение политик — только для метки наследования.
+  // Ошибка запроса не блокирует рендер: остаёмся на фоллбеке «Глобальная».
+  useEffect(() => {
+    synthApi.getToolsPolicyInfo().then((r) => setGlobalToolsPolicy(r.policy)).catch(() => {})
+    synthApi.getMcpPolicyInfo().then((r) => setGlobalMcpPolicy(r.policy)).catch(() => {})
   }, [])
 
   // Синхронизируем локальную форму с сессией только при смене сессии или
@@ -444,6 +454,12 @@ export function SessionSettingsTab() {
       notify({ text: t('sessionSettings.saveError'), type: 'error', category: 'error', sessionId: sessionId || undefined })
     }
   }
+
+  /** AD-071 §2.3: метка наследования — «Глобальная (<короткое имя>)», фоллбек — «Глобальная». */
+  const inheritLabel = (prefix: 'toolsPolicy' | 'mcpPolicy', value: ToolsPolicy | null) =>
+    value
+      ? t(`${prefix}.inherit`, { policy: t(`policy.short.${value}`) })
+      : t(`${prefix}.inheritUnknown`)
 
   if (!session) {
     return (
@@ -920,17 +936,17 @@ export function SessionSettingsTab() {
               onValueChange={(v) => setToolsPolicy(v as ToolsPolicy | '')}
               ariaLabel={t('toolsPolicy.label')}
               items={[
-                { value: '', label: t('toolsPolicy.inherit') },
-                { value: 'consistency', label: t('toolsPolicy.consistency') },
-                { value: 'available', label: t('toolsPolicy.available') },
-                { value: 'auto', label: t('toolsPolicy.auto') },
+                { value: '', label: inheritLabel('toolsPolicy', globalToolsPolicy) },
+                { value: 'consistency', label: t('policy.short.consistency') },
+                { value: 'available', label: t('policy.short.available') },
+                { value: 'auto', label: t('policy.short.auto') },
               ]}
             >
               <SelectContent>
-                <SelectItem value="">{t('toolsPolicy.inherit')}</SelectItem>
-                <SelectItem value="consistency">{t('toolsPolicy.consistency')}</SelectItem>
-                <SelectItem value="available">{t('toolsPolicy.available')}</SelectItem>
-                <SelectItem value="auto">{t('toolsPolicy.auto')}</SelectItem>
+                <SelectItem value="">{inheritLabel('toolsPolicy', globalToolsPolicy)}</SelectItem>
+                <SelectItem value="consistency">{t('policy.short.consistency')}</SelectItem>
+                <SelectItem value="available">{t('policy.short.available')}</SelectItem>
+                <SelectItem value="auto">{t('policy.short.auto')}</SelectItem>
               </SelectContent>
             </SelectField>
             <p className="text-[0.625rem] text-muted-foreground/60">{t('toolsPolicy.sessionHelp')}</p>
@@ -944,17 +960,17 @@ export function SessionSettingsTab() {
               onValueChange={(v) => setMcpPolicy(v as ToolsPolicy | '')}
               ariaLabel={t('mcpPolicy.label')}
               items={[
-                { value: '', label: t('mcpPolicy.inherit') },
-                { value: 'consistency', label: t('mcpPolicy.consistency') },
-                { value: 'available', label: t('mcpPolicy.available') },
-                { value: 'auto', label: t('mcpPolicy.auto') },
+                { value: '', label: inheritLabel('mcpPolicy', globalMcpPolicy) },
+                { value: 'consistency', label: t('policy.short.consistency') },
+                { value: 'available', label: t('policy.short.available') },
+                { value: 'auto', label: t('policy.short.auto') },
               ]}
             >
               <SelectContent>
-                <SelectItem value="">{t('mcpPolicy.inherit')}</SelectItem>
-                <SelectItem value="consistency">{t('mcpPolicy.consistency')}</SelectItem>
-                <SelectItem value="available">{t('mcpPolicy.available')}</SelectItem>
-                <SelectItem value="auto">{t('mcpPolicy.auto')}</SelectItem>
+                <SelectItem value="">{inheritLabel('mcpPolicy', globalMcpPolicy)}</SelectItem>
+                <SelectItem value="consistency">{t('policy.short.consistency')}</SelectItem>
+                <SelectItem value="available">{t('policy.short.available')}</SelectItem>
+                <SelectItem value="auto">{t('policy.short.auto')}</SelectItem>
               </SelectContent>
             </SelectField>
             <p className="text-[0.625rem] text-muted-foreground/60">{t('mcpPolicy.sessionHelp')}</p>
