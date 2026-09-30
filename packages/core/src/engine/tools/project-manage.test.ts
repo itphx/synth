@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { projectCreateTool, projectAttachTool, projectLogWriteTool, projectLogReadTool, projectInvariantsReadTool, projectInvariantsWriteTool } from './project-manage.js';
+import { projectCreateTool, projectAttachTool, projectUpdateTool, projectWorkspaceSetTool, projectLogWriteTool, projectLogReadTool, projectInvariantsReadTool, projectInvariantsWriteTool } from './project-manage.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { ProjectStore } from '../../storage/project-store.js';
@@ -63,12 +63,15 @@ describe('project_create / project_attach', () => {
       if (e.type === 'session.moved') moved = e.data as Record<string, unknown>;
     });
 
-    const absWs = join(tmpDir, 'abs-ws');
+    // Абсолютный путь внутри workspacesRoot нормализуется в относительный
+    // (AD-075: provisioning общий с HTTP-роутом — политика/containment соблюдены).
+    const absWs = join(tmpDir, 'workspaces', 'abs-ws');
     const result = await projectCreateTool.execute({ name: 'P', workspace: absWs }, makeCtx());
     expect(result.isError).toBeUndefined();
     expect(result.metadata?.name).toBe('P');
-    expect(result.metadata?.workspace).toBe(absWs);
+    expect(result.metadata?.workspace).toBe('abs-ws');
     expect(result.metadata?.id).toBeTruthy();
+    expect((await stat(absWs)).isDirectory()).toBe(true);
 
     expect(moved).toBeTruthy();
     expect(moved?.session_id).toBe(sessionId);
@@ -374,5 +377,195 @@ describe('project_log / project_invariants: RBAC (AD-075/D5)', () => {
     const stored = (await projectStore.load(bare.id))!;
     expect(stored.log).toHaveLength(1);
     expect(stored.invariants).toBe('можно');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// project_update / project_workspace_set (AD-075/D5/D8)
+// ---------------------------------------------------------------------------
+describe('project_update', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+  let eventBus: EventBus;
+  let sessionId: string;
+  let projectId: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-project-update-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+    eventBus = new EventBus();
+
+    const project = projectStore.create('Old name', 'u1');
+    await projectStore.save(project);
+    projectId = project.id;
+
+    const session = await sessionManager.createSession({ title: 'Update' });
+    sessionId = session.id;
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.projectId = projectId;
+      s.ownerId = 'u1';
+      await sessionManager.saveSession(s);
+    });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(): ToolContext {
+    return {
+      sessionId,
+      messageId: generateId(),
+      abortSignal: new AbortController().signal,
+      workingDir: tmpDir,
+      extra: { sessionManager, projectStore, sessionId, eventBus, workspacesRoot: join(tmpDir, 'workspaces') },
+    };
+  }
+
+  it('обновляет переданные поля и публикует project.updated', async () => {
+    let updated: Record<string, unknown> | undefined;
+    eventBus.subscribe(sessionId, (e) => {
+      if (e.type === 'project.updated') updated = e.data as Record<string, unknown>;
+    });
+
+    const result = await projectUpdateTool.execute({ name: 'New name', description: 'desc' }, makeCtx());
+    expect(result.isError).toBeUndefined();
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.name).toBe('New name');
+    expect(stored.description).toBe('desc');
+    expect(stored.updatedAt).toBeTruthy();
+    expect(updated?.project_id).toBe(projectId);
+  });
+
+  it('без проекта — ошибка project.no_project', async () => {
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.projectId = undefined;
+      await sessionManager.saveSession(s);
+    });
+
+    const result = await projectUpdateTool.execute({ name: 'X' }, makeCtx());
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.i18n).toEqual({ key: 'project.no_project' });
+  });
+
+  it('не владелец/редактор — project.write_forbidden, проект не изменён', async () => {
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.ownerId = 'outsider';
+      await sessionManager.saveSession(s);
+    });
+
+    const result = await projectUpdateTool.execute({ name: 'Hacked' }, makeCtx());
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.i18n).toEqual({ key: 'project.write_forbidden' });
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.name).toBe('Old name');
+  });
+});
+
+describe('project_workspace_set', () => {
+  let tmpDir: string;
+  let workspacesRoot: string;
+  let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+  let eventBus: EventBus;
+  let sessionId: string;
+  let projectId: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-project-ws-'));
+    workspacesRoot = join(tmpDir, 'workspaces');
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+    eventBus = new EventBus();
+
+    const project = projectStore.create('WS Project', 'u1');
+    await projectStore.save(project);
+    projectId = project.id;
+
+    const session = await sessionManager.createSession({ title: 'Workspace' });
+    sessionId = session.id;
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.projectId = projectId;
+      s.ownerId = 'u1';
+      await sessionManager.saveSession(s);
+    });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(overrides: Record<string, unknown> = {}): ToolContext {
+    return {
+      sessionId,
+      messageId: generateId(),
+      abortSignal: new AbortController().signal,
+      workingDir: tmpDir,
+      extra: {
+        sessionManager,
+        projectStore,
+        sessionId,
+        eventBus,
+        workspacesRoot,
+        getWorkspaceOutsideRootPolicy: () => 'confirm',
+        ...overrides,
+      },
+    };
+  }
+
+  it('относительный путь: создаёт каталог, сохраняет workspace, публикует событие', async () => {
+    let updated: Record<string, unknown> | undefined;
+    eventBus.subscribe(sessionId, (e) => {
+      if (e.type === 'project.updated') updated = e.data as Record<string, unknown>;
+    });
+
+    const result = await projectWorkspaceSetTool.execute({ workspace: 'ws-new' }, makeCtx());
+    expect(result.isError).toBeUndefined();
+    expect((await stat(join(workspacesRoot, 'ws-new'))).isDirectory()).toBe(true);
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.workspace).toBe('ws-new');
+    expect(stored.updatedAt).toBeTruthy();
+    expect(updated?.project_id).toBe(projectId);
+  });
+
+  it('managed: абсолютный путь вне root → project.workspace_denied', async () => {
+    const result = await projectWorkspaceSetTool.execute(
+      { workspace: join(tmpDir, 'outside-ws') },
+      makeCtx({ workspaceManaged: true }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.i18n).toEqual({ key: 'project.workspace_denied' });
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.workspace).toBeUndefined();
+  });
+
+  it('standalone: абсолютный путь вне root без подтверждения → project.workspace_confirm_required', async () => {
+    const result = await projectWorkspaceSetTool.execute({ workspace: join(tmpDir, 'outside-ws') }, makeCtx());
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.i18n).toEqual({ key: 'project.workspace_confirm_required' });
+  });
+
+  it('standalone: confirmOutsideRoot=true разрешает абсолютный путь вне root', async () => {
+    const outside = join(tmpDir, 'outside-ws');
+    const result = await projectWorkspaceSetTool.execute(
+      { workspace: outside, confirmOutsideRoot: true },
+      makeCtx(),
+    );
+    expect(result.isError).toBeUndefined();
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.workspace).toBe(outside);
+  });
+
+  it('пустой workspace → project.workspace_invalid', async () => {
+    const result = await projectWorkspaceSetTool.execute({ workspace: '   ' }, makeCtx());
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.i18n).toEqual({ key: 'project.workspace_invalid' });
   });
 });

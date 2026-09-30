@@ -103,9 +103,15 @@
 - `engine/tools/*` — `ToolRegistry` + встроенные тулы (fs, shell, git, search, web,
   plan, todo, project, task, skill); git-тулы принимают необязательный `repo_path`
   (containment внутри `project.workspace`), SSH-окружение — `engine/tools/git-ssh.ts`
-  (AD-076; ошибки — `sshkey.env_failed`). Запись проектных данных (`project_log_write`/
+  (AD-076; ошибки — `sshkey.env_failed`). Тулы управления проектом:
+  `project_update`/`project_workspace_set` (`project-manage.ts`) и
+  `project_repo_clone|init|add|fetch|remove` (`project-repos.ts`) — проект берётся
+  из сессии, смена workspace/регистрация репозиториев сохраняются `ProjectStore.save`
+  и публикуют `project.updated`. Запись проектных данных (`project_log_write`/
   `project_invariants_write`/`plan_write`) гейтится `engine/tools/project-access.ts`
-  (`canEditProject`, AD-075/D5). `engine/tools/runtime-deps.ts` — детект внешних
+  (`canEditProject`, AD-075/D5). `engine/workspace-provision.ts` — общий
+  provisioning workspace (нормализация/containment/создание каталога) для
+  HTTP-роутов и тулов (AD-075). `engine/tools/runtime-deps.ts` — детект внешних
   бинарников (`git`/`rg`/`sh`, fail-open, кэш) и карта `TOOL_RUNTIME_DEP`; отсутствие
   программы даёт `unavailable(dependency)` (AD-078), тулы из реестра не удаляются.
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.

@@ -1,6 +1,6 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
-import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig } from '@itphx/synth-shared';
+import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
@@ -58,6 +58,7 @@ import { computeToolAvailability } from './permission/availability.js';
 import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { SSHKeyStore } from '../storage/ssh-key-store.js';
+import { GitService } from '../git/git-service.js';
 import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, MAX_DOOM_LOOP_COUNT } from './llm-error.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
@@ -168,6 +169,21 @@ export interface OrchestratorOptions {
    * относительно этого корня (AD-014).
    */
   workspacesRoot?: string;
+  /**
+   * AD-075/AD-076: git-сервис для тулов управления репозиториями проекта.
+   * Не задан — создаётся лениво из `workspacesRoot`.
+   */
+  gitService?: GitService;
+  /**
+   * AD-075: managed-режим проекта (backend): включает строгую проверку явного
+   * workspace (deny вне root) в тулах проекта.
+   */
+  workspaceManaged?: boolean;
+  /**
+   * AD-075: политика абсолютного workspace вне `workspacesRoot` для тулов проекта.
+   * Не задана — `confirm`.
+   */
+  getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;
   /** Глобальная секция permission из config.yaml (AD-029). */
   permissionConfig?: PermissionConfig;
   /** Строгость цикла Plan→Build по умолчанию из config.yaml session.planMode (AD-028). */
@@ -304,6 +320,11 @@ export class ChatOrchestrator {
   private readonly _projectStore: ProjectStoreLike | null;
   /** AD-076 §T6: хранилище SSH-ключей (сетевые git-тулы); null — без dataDir. */
   private readonly _sshKeyStore: SSHKeyStore | null;
+  private readonly _gitService: GitService;
+  private readonly _workspaceManaged: boolean;
+  private readonly _getWorkspaceOutsideRootPolicy:
+    | (() => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>)
+    | null;
   private readonly _composer: SystemPromptComposer;
   private readonly _defaultWorkingDir: string;
   private readonly _workspacesRoot: string;
@@ -641,6 +662,11 @@ export class ChatOrchestrator {
     });
     this._defaultWorkingDir = options.defaultWorkingDir ?? join(options.dataDir || '/var/synth/data', 'workspaces', 'default');
     this._workspacesRoot = options.workspacesRoot ?? join(options.dataDir || '/var/synth/data', 'workspaces');
+    // AD-075/AD-076: git-сервис и режим/политика workspace для тулов управления
+    // проектом. gitService по умолчанию — над тем же workspacesRoot.
+    this._gitService = options.gitService ?? new GitService(this._workspacesRoot);
+    this._workspaceManaged = options.workspaceManaged === true;
+    this._getWorkspaceOutsideRootPolicy = options.getWorkspaceOutsideRootPolicy ?? null;
     this._permissionConfig = options.permissionConfig ?? emptyPermissionConfig();
     this._approvalManager = new PermissionApprovalManager(this._eventBus);
     this._defaultPlanMode = options.defaultPlanMode ?? 'auto';
@@ -2938,6 +2964,10 @@ export class ChatOrchestrator {
                   sessionManager: this._sessionManager,
                   projectStore: this._projectStore ?? undefined,
                   workspacesRoot: this._workspacesRoot,
+                  // AD-075/AD-076: тулы управления проектом (workspace, репозитории).
+                  gitService: this._gitService,
+                  workspaceManaged: this._workspaceManaged,
+                  getWorkspaceOutsideRootPolicy: this._getWorkspaceOutsideRootPolicy ?? undefined,
                   // AD-076 §T6: сетевые git-тулы резолвят SSH-ключ по реестру проекта.
                   sshKeyStore: this._sshKeyStore ?? undefined,
                   eventBus: this._eventBus,

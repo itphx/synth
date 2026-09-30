@@ -801,6 +801,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     sshKeyStore,
     defaultWorkingDir,
     workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
+    // AD-075: тулы проекта (workspace) читают live-политику вне root.
+    getWorkspaceOutsideRootPolicy: async () =>
+      (await settingsStore.getWorkspacePolicy()) ?? config.workspaceOutsideRootPolicy ?? 'confirm',
     permissionConfig: config.permissionConfig,
     defaultPlanMode: config.defaultPlanMode,
     securityConfig: effectiveSecurityConfig,

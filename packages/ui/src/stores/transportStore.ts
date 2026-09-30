@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { TransportClient, type WSEvent, type TransportKind } from '@/lib/api/transport'
 import { useChatStore } from './chatStore'
 import { useSessionsStore } from './sessionsStore'
+import { useProjectsStore } from './projectsStore'
+import { useGitStore } from './gitStore'
 import { useUIStore } from './useUIStore'
 import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS } from './permissionStore'
 import { useSkillsStore } from './skillsStore'
@@ -448,6 +450,18 @@ export function createDispatcher(): EventDispatcher {
       case 'plan.approved':
       case 'plan.updated': {
         refreshSessionFromApi(sid)
+        break
+      }
+
+      // Проект изменён тулами (project_update/workspace_set/repo_*): перечитываем
+      // список проектов с сервера и синхронизируем Git-вкладку (AD-076).
+      case 'project.updated': {
+        const projectId = payload.project_id as string | undefined
+        useProjectsStore.getState().loadProjects().then(() => {
+          if (!projectId) return
+          const project = useProjectsStore.getState().projects.find((p) => p.id === projectId)
+          if (project) void useGitStore.getState().loadRepos(projectId, project.repos ?? null)
+        }).catch(() => {})
         break
       }
 

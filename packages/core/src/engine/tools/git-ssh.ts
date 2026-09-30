@@ -38,6 +38,50 @@ export interface RepoGitEnvResult {
 
 const noopCleanup = async (): Promise<void> => {};
 
+/** Результат подготовки SSH-окружения по явному `sshKeyId` (AD-076). */
+export interface SshEnvByIdResult {
+  /** Дополнительные переменные окружения git (GIT_SSH_COMMAND); пусто — ambient ssh. */
+  env?: Record<string, string>;
+  /** Идемпотентная очистка временного ключа; no-op, если окружение не создавалось. */
+  cleanup: () => Promise<void>;
+  /** i18n-ключ ошибки (`sshkey.not_found` / `sshkey.env_failed`). */
+  error?: string;
+  /** Параметры подстановки для `error`. */
+  errorParams?: Record<string, string>;
+}
+
+/**
+ * AD-076: SSH-окружение по явному `sshKeyId` (без привязки к реестру проекта).
+ * Общий хелпер HTTP-роутов (`/api/v2/git`) и тулов управления репозиториями:
+ * нет ключа/не расшифрован → `sshkey.not_found`; сбой подготовки → `sshkey.env_failed`.
+ */
+export async function resolveSshEnvById(
+  sshKeyStore: SSHKeyStore | undefined,
+  sshKeyId?: string,
+): Promise<SshEnvByIdResult> {
+  if (!sshKeyId) return { cleanup: noopCleanup };
+
+  let revealed: { privateKey: string; passphrase?: string } | null = null;
+  try {
+    revealed = sshKeyStore ? await sshKeyStore.reveal(sshKeyId) : null;
+  } catch {
+    return { cleanup: noopCleanup, error: 'sshkey.not_found', errorParams: { id: sshKeyId } };
+  }
+  if (!revealed) {
+    return { cleanup: noopCleanup, error: 'sshkey.not_found', errorParams: { id: sshKeyId } };
+  }
+
+  try {
+    const ssh = await createSshEnv(revealed);
+    return { env: ssh.env, cleanup: ssh.cleanup };
+  } catch (err) {
+    if (err instanceof SshEnvError) {
+      return { cleanup: noopCleanup, error: 'sshkey.env_failed' };
+    }
+    throw err;
+  }
+}
+
 /** POSIX-нормализация относительного пути (`''`/`.` → `.`, убираем `./` и хвостовые `/`). */
 function normalizeRelPath(value: string): string {
   const posix = value.replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/+$/, '');

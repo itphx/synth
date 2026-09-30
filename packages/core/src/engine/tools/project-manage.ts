@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
-import { isAbsolute, normalize, resolve } from 'node:path';
 import { z } from 'zod';
 import { nowISO, ToolCapability } from '@itphx/synth-shared';
 import type {
@@ -9,13 +7,15 @@ import type {
   Project,
   ProjectLogEntry,
   Session,
+  WorkspaceOutsideRootPolicy,
 } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { EventBus } from '../../events/bus.js';
 import type { ProjectStore } from '../../storage/project-store.js';
+import { provisionWorkspace } from '../workspace-provision.js';
 import { isAborted, abortedResult } from './abort.js';
 import { canEditProject } from './project-access.js';
-import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { t as sm, i18n as i18nMeta, type SystemMessageKey } from '../system-messages.js';
 
 export interface ProjectManageExtra {
   sessionManager?: SessionManager;
@@ -24,6 +24,10 @@ export interface ProjectManageExtra {
   eventBus?: EventBus;
   /** AD-075: корень managed-workspace для резолва относительного `workspace`. */
   workspacesRoot?: string;
+  /** AD-075: managed-режим (backend) — строгая проверка пути workspace. */
+  workspaceManaged?: boolean;
+  /** AD-075: политика абсолютного workspace вне `workspacesRoot`. */
+  getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;
 }
 
 /** Извлекает зависимости для project_create / project_attach из ctx.extra. */
@@ -31,14 +35,34 @@ export function getSessionExtra(ctx: ToolContext): ProjectManageExtra {
   return (ctx.extra ?? {}) as ProjectManageExtra;
 }
 
-/**
- * AD-075: абсолютный каталог workspace проекта. Абсолютный путь — как есть
- * (normalize), относительный — относительно `workspacesRoot`.
- */
-function resolveWorkspaceDir(workspace: string, workspacesRoot?: string): string {
-  return isAbsolute(workspace)
-    ? normalize(workspace)
-    : resolve(workspacesRoot || process.cwd(), workspace);
+/** Резолв политики workspace вне root (дефолт — `confirm`). */
+async function resolveOutsideRootPolicy(extra: ProjectManageExtra): Promise<WorkspaceOutsideRootPolicy> {
+  return (await extra.getWorkspaceOutsideRootPolicy?.()) ?? 'confirm';
+}
+
+/** i18n-ключ ошибки provisioning workspace по коду результата. */
+function workspaceErrorKey(code: string): SystemMessageKey {
+  switch (code) {
+    case 'WORKSPACE_OUTSIDE_ROOT_DENIED':
+      return 'project.workspace_denied';
+    case 'WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED':
+      return 'project.workspace_confirm_required';
+    case 'WORKSPACE_CREATE_FAILED':
+      return 'project.workspace_create_error';
+    default:
+      return 'project.workspace_invalid';
+  }
+}
+
+/** Единый isError-результат ошибки provisioning workspace (с i18n-метаданными). */
+function workspaceErrorResult(code: string, message: string) {
+  const key = workspaceErrorKey(code);
+  const params = key === 'project.workspace_create_error' ? { error: message } : undefined;
+  return {
+    content: sm(key, params),
+    isError: true as const,
+    metadata: { i18n: i18nMeta(key, params) },
+  };
 }
 
 /**
@@ -147,21 +171,24 @@ export const projectCreateTool: ToolDefinition = {
 
     const ownerId = session.ownerId || session.userId || 'local';
 
-    // AD-075: каталог workspace создаётся до сохранения проекта.
-    if (params.workspace) {
-      try {
-        await mkdir(resolveWorkspaceDir(params.workspace, extra.workspacesRoot), { recursive: true });
-      } catch (err) {
-        return {
-          content: sm('project.workspace_create_error', { error: err instanceof Error ? err.message : String(err) }),
-          isError: true,
-        };
-      }
+    // AD-075: нормализация + создание каталога workspace через общий provisioning
+    // (та же политика/containment, что у HTTP-роута — обход политики закрыт).
+    const resolved = await provisionWorkspace(
+      extra.projectStore,
+      params.name,
+      params.workspace,
+      undefined,
+      extra.workspacesRoot,
+      await resolveOutsideRootPolicy(extra),
+      extra.workspaceManaged === true,
+    );
+    if (!resolved.ok) {
+      return workspaceErrorResult(resolved.code, resolved.message);
     }
 
     const project = extra.projectStore.create(params.name, ownerId, {
       description: params.description,
-      workspace: params.workspace,
+      workspace: resolved.workspace,
     });
 
     try {
@@ -235,6 +262,157 @@ export const projectAttachTool: ToolDefinition = {
     return {
       content: sm('project.attached', { name: project.name }),
       metadata: { id: project.id, name: project.name },
+    };
+  },
+};
+
+const projectUpdateSchema = z.object({
+  name: z.string().min(1).optional().describe('New project name'),
+  description: z.string().optional().describe('New project description'),
+  icon: z.string().optional().describe('Project icon'),
+  color: z.string().optional().describe('Project color'),
+});
+
+export const projectUpdateTool: ToolDefinition = {
+  name: 'project_update',
+  description:
+    'Update the current project of the session (name, description, icon, color). '
+    + 'Only the provided fields are changed. Requires write access to the project.',
+  parameters: projectUpdateSchema,
+  capabilities: [ToolCapability.RUNTIME],
+  async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: argError(this.name, parsed.error.issues), isError: true };
+    }
+    const params = parsed.data as { name?: string; description?: string; icon?: string; color?: string };
+
+    const extra = getSessionExtra(ctx);
+    if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
+      return missingDepsError(this.name);
+    }
+
+    const { session, project } = await loadSessionProject(ctx);
+    if (!project) {
+      return { content: sm('project.no_project'), isError: true, metadata: { i18n: i18nMeta('project.no_project') } };
+    }
+    // AD-075/D5: менять проект вправе только владелец/редактор (до мутации).
+    if (!canEditProject(session, project)) {
+      return {
+        content: sm('project.write_forbidden'),
+        isError: true,
+        metadata: { i18n: i18nMeta('project.write_forbidden') },
+      };
+    }
+
+    if (params.name !== undefined) project.name = params.name;
+    if (params.description !== undefined) project.description = params.description;
+    if (params.icon !== undefined) project.icon = params.icon;
+    if (params.color !== undefined) project.color = params.color;
+    project.updatedAt = nowISO();
+
+    try {
+      await extra.projectStore.save(project);
+    } catch (err) {
+      return {
+        content: sm('project.save_error', { error: err instanceof Error ? err.message : String(err) }),
+        isError: true,
+      };
+    }
+
+    const sessionId = ctx.sessionId || extra.sessionId;
+    extra.eventBus?.publish(sessionId, 'project.updated', { project_id: project.id });
+
+    return {
+      content: sm('project.updated_ok', { name: project.name }),
+      metadata: { id: project.id, name: project.name, i18n: i18nMeta('project.updated_ok', { name: project.name }) },
+    };
+  },
+};
+
+const projectWorkspaceSetSchema = z.object({
+  workspace: z.string().min(1).describe('Project workspace path'),
+  confirmOutsideRoot: z.boolean().optional().describe('Confirm a workspace outside the allowed root'),
+});
+
+export const projectWorkspaceSetTool: ToolDefinition = {
+  name: 'project_workspace_set',
+  description:
+    'Set the working directory (workspace) of the current project. '
+    + 'The directory is created if missing. Paths outside the allowed root may be denied or require confirmation. '
+    + 'Requires write access to the project.',
+  parameters: projectWorkspaceSetSchema,
+  capabilities: [ToolCapability.RUNTIME],
+  async execute(args, ctx) {
+    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
+    if (isAborted(ctx)) return abortedResult(this.name);
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) {
+      return { content: argError(this.name, parsed.error.issues), isError: true };
+    }
+    const params = parsed.data as { workspace: string; confirmOutsideRoot?: boolean };
+
+    const extra = getSessionExtra(ctx);
+    if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
+      return missingDepsError(this.name);
+    }
+
+    const { session, project } = await loadSessionProject(ctx);
+    if (!project) {
+      return { content: sm('project.no_project'), isError: true, metadata: { i18n: i18nMeta('project.no_project') } };
+    }
+    // AD-075/D5: смена workspace вправе только владелец/редактор (до мутации).
+    if (!canEditProject(session, project)) {
+      return {
+        content: sm('project.write_forbidden'),
+        isError: true,
+        metadata: { i18n: i18nMeta('project.write_forbidden') },
+      };
+    }
+
+    // Очистку workspace тулом не поддерживаем: пустая строка — ошибка.
+    if (!params.workspace.trim()) {
+      return {
+        content: sm('project.workspace_invalid'),
+        isError: true,
+        metadata: { i18n: i18nMeta('project.workspace_invalid') },
+      };
+    }
+
+    const resolved = await provisionWorkspace(
+      extra.projectStore,
+      project.name,
+      params.workspace,
+      params.confirmOutsideRoot,
+      extra.workspacesRoot,
+      await resolveOutsideRootPolicy(extra),
+      extra.workspaceManaged === true,
+    );
+    if (!resolved.ok) {
+      return workspaceErrorResult(resolved.code, resolved.message);
+    }
+
+    project.workspace = resolved.workspace;
+    project.updatedAt = nowISO();
+
+    try {
+      await extra.projectStore.save(project);
+    } catch (err) {
+      return {
+        content: sm('project.save_error', { error: err instanceof Error ? err.message : String(err) }),
+        isError: true,
+      };
+    }
+
+    const sessionId = ctx.sessionId || extra.sessionId;
+    extra.eventBus?.publish(sessionId, 'project.updated', { project_id: project.id });
+
+    const dir = resolved.dir ?? resolved.workspace ?? '';
+    return {
+      content: sm('project.workspace_set', { dir }),
+      metadata: { workspace: resolved.workspace ?? null, dir, i18n: i18nMeta('project.workspace_set', { dir }) },
     };
   },
 };

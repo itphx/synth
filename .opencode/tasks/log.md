@@ -1173,3 +1173,13 @@
 - **Сделано:** удалён footer/Save у `PanelTab` (режим выводится из тумблеров, все контролы уже автосохраняются). Вскрыт и исправлен латентный баг: `onChange`/`onSelect` вызывали `handleSave(mode)` с устаревшим значением из замыкания (`setState` асинхронна) — теперь изменённое значение передаётся явным `overrides`. Добавлен откат чисел/радио при ошибке (завершение шаблона — без «залипания»). Удалён неиспользуемый ключ `rightPanel.context.saving`.
 - **Верификация:** `typecheck` OK; `lint` 0 errors; тесты — shared 170, core 2282, backend 341, ui **856** PASS.
 - **Коммит:** ниже.
+
+## 2026-09-30 15:31 — feat: инструменты управления проектом (workspace + git-репозитории) — PASS
+
+- **Задача:** агенту не хватало тулов управления проектом: смена/настройка рабочего каталога, создание/регистрация/fetch/удаление git-репозиториев проекта.
+- **Тип:** feature (core + shared + ui + docs) · **Исполнитель:** @fixer + @orchestrator.
+- **Решения пользователя:** объём «всё сразу» (репозитории + workspace + правка проекта); отдельные гранулярные тулы; `remove` без `deleteLocal`; закрыть обход политики в `project_create` общим резолвером; RBAC в чате — `canEditProject` (owner/EDITOR).
+- **Реализация:** новый `engine/workspace-provision.ts` (нормализация/containment/создание каталога; используется HTTP-роутом `projects.ts` и тулами), `engine/tools/project-repos.ts` (`project_repo_clone|init|add|fetch|remove`), `project_update`/`project_workspace_set` в `project-manage.ts`; SSH-хелпер `resolveSshEnvById` в `git-ssh.ts` (переиспользован `routes/git.ts`); `project_create` переведён на общий provisioning (обход `workspaceOutsideRoot`/`../` закрыт, workspace нормализуется); `gitService`/`workspaceManaged`/live-политика прокинуты в extra тулов; новое событие `project.updated` (EventType + `transportStore` → рефетч проектов и Git-вкладки); 14 i18n-ключей синхронно (shared/core en/ui ru+en); группы permissions (RUNTIME/GIT_WRITE) и trust (PROJECT_TOOLS/GIT_TOOLS).
+- **Верификация (@orchestrator):** `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — shared 170, core **2298**, backend 341, ui **856** PASS; регресс `projects.test.ts`/`git.test.ts` без правок. Изменён существующий кейс `project_create` с абсолютным workspace вне root — он кодировал закрываемую дыру.
+- **Замечание:** extra resumed-саб-агента (`task-resume.ts`) не содержит `projectStore`/`workspacesRoot`/`gitService` — проектные тулы там недоступны (не регрессия, поведение было и раньше; кандидат в отдельную задачу). `resolveSshEnv` при ошибке расшифровки ключа теперь отдаёт 404 `sshkey.not_found` вместо 500 (унификация с `resolveRepoGitEnv`).
+- **Коммит:** не коммичено (по запросу пользователя).

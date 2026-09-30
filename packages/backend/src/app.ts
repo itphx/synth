@@ -456,6 +456,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       // AD-076 §T6: тот же store, что у git/ssh-роутов — без дублей инстансов.
       sshKeyStore,
       workspacesRoot: backendConfig.workspacesRoot,
+      // AD-075: backend — managed-режим, workspace вне workspacesRoot запрещён.
+      workspaceManaged: true,
       // AD-075: без defaultWorkingDir сессия без проекта получала бы
       // {dataDir}/workspaces/default мимо runtime-override settings/workspace.
       defaultWorkingDir,

@@ -1178,6 +1178,7 @@ export type EventType =
   | 'session.reference.removed'
   | 'session.messages.merged'
   | 'session.moved'
+  | 'project.updated'
   | 'message.added'
   | 'message.updated'
   | 'child.message.added'

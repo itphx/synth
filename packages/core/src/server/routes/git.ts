@@ -19,7 +19,8 @@ import {
   gitCommitQuerySchema,
 } from '@itphx/synth-shared';
 import { GitService, deriveRepoName, resolveRepoPath } from '../../git/git-service.js';
-import { isSshUrl, createSshEnv, SshEnvError } from '../../git/ssh-env.js';
+import { isSshUrl } from '../../git/ssh-env.js';
+import { resolveSshEnvById } from '../../engine/tools/git-ssh.js';
 import type { SSHKeyStore } from '../../storage/ssh-key-store.js';
 
 /**
@@ -172,21 +173,15 @@ export function createGitRoutes(
   async function resolveSshEnv(
     sshKeyId?: string,
   ): Promise<{ env?: Record<string, string>; cleanup?: () => Promise<void> }> {
-    if (!sshKeyId) return {};
-    const revealed = opts.sshKeyStore ? await opts.sshKeyStore.reveal(sshKeyId) : null;
-    if (!revealed) {
+    const res = await resolveSshEnvById(opts.sshKeyStore, sshKeyId);
+    if (res.error === 'sshkey.env_failed') {
+      // AD-041: наружу — i18n-ключ, не сырой текст ошибки.
+      throw { error: 'sshkey.env_failed', code: 'VALIDATION_ERROR' } satisfies RouteError;
+    }
+    if (res.error) {
       throw { error: `SSH-ключ ${sshKeyId} не найден`, code: 'sshkey.not_found' } satisfies RouteError;
     }
-    try {
-      const ssh = await createSshEnv(revealed);
-      return { env: ssh.env, cleanup: ssh.cleanup };
-    } catch (err) {
-      if (err instanceof SshEnvError) {
-        // AD-041: наружу — i18n-ключ, не сырой текст ошибки.
-        throw { error: 'sshkey.env_failed', code: 'VALIDATION_ERROR' } satisfies RouteError;
-      }
-      throw err;
-    }
+    return { env: res.env, cleanup: res.cleanup };
   }
 
   /** Upsert записи реестра (по `id` либо `path`), сохранение проекта. */
