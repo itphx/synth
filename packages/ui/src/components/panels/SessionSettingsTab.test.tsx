@@ -734,7 +734,7 @@ describe('SessionSettingsTab — автосохранение настроек',
   })
 })
 
-describe('SessionSettingsTab — иконка и цвет сессии (AD-075)', () => {
+describe('SessionSettingsTab — иконка в строке «Имя» (AD-075)', () => {
   beforeEach(() => {
     // Сохраняем settings сессии при PATCH icon/color (иначе рендер упадёт на
     // «settings.permission» — мок возвращает только переданные поля).
@@ -747,6 +747,18 @@ describe('SessionSettingsTab — иконка и цвет сессии (AD-075)'
       icon: data.icon ?? null,
       color: data.color ?? null,
     }))
+  })
+
+  it('триггер иконки встроен в строку «Имя» секции «Сессия», отдельной секции нет', async () => {
+    const container = await renderTab()
+    const section = findSection(container, 'Session')!
+    const nameLabel = [...section.querySelectorAll('span')].find((s) => s.textContent === 'Name')
+    expect(nameLabel, 'поле Name').toBeTruthy()
+    expect(
+      nameLabel!.parentElement!.querySelector('[data-testid="session-icon-color-trigger"]'),
+      'триггер иконки в строке «Имя»',
+    ).not.toBeNull()
+    expect(findSection(container, 'Icon & color'), 'отдельная секция «Иконка и цвет»').toBeUndefined()
   })
 
   it('клик по ключу иконки сохраняет канонический ключ через updateSession', async () => {

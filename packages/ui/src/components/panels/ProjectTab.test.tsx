@@ -335,7 +335,27 @@ describe('ProjectTab — порядок секций', () => {
   })
 })
 
-describe('ProjectTab — иконка и цвет проекта (AD-075)', () => {
+describe('ProjectTab — иконка в строке «Имя» (AD-075)', () => {
+  const findFieldRow = (container: HTMLElement, label: string): HTMLElement | undefined => {
+    const labelSpan = [...container.querySelectorAll('span')].find((s) => s.textContent === label)
+    return labelSpan?.parentElement as HTMLElement | undefined
+  }
+
+  it('триггер иконки встроен в строку «Имя» верхней секции, отдельной секции нет', async () => {
+    const container = await renderTab()
+    const nameRow = findFieldRow(container, 'Name')
+    expect(nameRow, 'строка «Имя»').toBeTruthy()
+    expect(
+      nameRow!.querySelector('[data-testid="project-icon-color-trigger"]'),
+      'триггер иконки в строке «Имя»',
+    ).not.toBeNull()
+
+    const iconColorSection = [...container.querySelectorAll('div')].find(
+      (d) => d.firstElementChild?.textContent?.trim() === 'Icon & color',
+    )
+    expect(iconColorSection, 'отдельная секция «Иконка и цвет»').toBeUndefined()
+  })
+
   it('клик по ключу иконки сохраняет канонический ключ через updateProject', async () => {
     const container = await renderTab()
     expect(container.querySelector('[data-testid="project-icon-color-trigger"]')).not.toBeNull()

@@ -10,9 +10,7 @@ import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type AgentInfo, type EffectiveSkillEntry, type ToolsPolicy } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
-import { EntityIconPicker } from '@/components/ui/EntityIconPicker'
-import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
-import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
+import { EntityIconTrigger } from '@/components/ui/EntityIconTrigger'
 import { ModelSelector } from '../chat/ModelSelector'
 import { ProjectInstructions } from './ProjectInstructions'
 import { ExpandableListRow, RowBadge } from './ExpandableListRow'
@@ -745,41 +743,29 @@ export function SessionSettingsTab() {
   return (
     <PanelTab>
         <Section title={t('rightPanel.params.session')}>
-          <Field label={t('rightPanel.params.name')} value={session.name || t('rightPanel.params.none')} />
+          <Field
+            label={t('rightPanel.params.name')}
+            valueNode={
+              <span className="inline-flex min-w-0 items-center justify-end gap-1.5 align-middle">
+                <EntityIconTrigger
+                  icon={session.icon}
+                  color={session.color}
+                  onIconChange={handleSessionIconChange}
+                  onColorChange={handleSessionColorChange}
+                  disabled={isPending('sessionIcon') || isPending('sessionColor')}
+                  fallbackIcon={session.session_origin === 'subagent' ? 'cpu' : 'chat-new'}
+                  testId="session-icon-color-trigger"
+                  label={t('leftPanel.iconColor')}
+                />
+                <span className="min-w-0 break-words">{session.name || t('rightPanel.params.none')}</span>
+              </span>
+            }
+          />
           <Field label="ID" value={session.id} mono />
           <Field label={t('rightPanel.params.project')} value={projectName || session.project_id || t('rightPanel.params.none')} />
           <Field label={t('rightPanel.params.creator')} value={session.user_id || session.owner_id || t('rightPanel.params.none')} />
           <Field label={t('rightPanel.params.created')} value={formatDateTime(session.created_at, locale)} />
           <Field label={t('rightPanel.params.engine')} value={session.engine} />
-        </Section>
-
-        <Section title={t('leftPanel.iconColor')}>
-          <Popover>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                data-testid="session-icon-color-trigger"
-                className="flex w-full items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs text-foreground hover:bg-interactive-hover transition-colors"
-              >
-                <Icon
-                  name={resolveIconName(session.icon) ?? (session.session_origin === 'subagent' ? 'cpu' : 'chat-new')}
-                  className="size-4 shrink-0"
-                  style={resolveIconColor(session.color) ? { color: resolveIconColor(session.color) } : undefined}
-                />
-                <span className="min-w-0 flex-1 truncate text-left">{session.name || session.id}</span>
-                <Icon name="palette" className="size-3.5 shrink-0 text-muted-foreground" />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent side="bottom" align="start" className="w-72 p-3">
-              <EntityIconPicker
-                icon={session.icon}
-                color={session.color}
-                onIconChange={handleSessionIconChange}
-                onColorChange={handleSessionColorChange}
-                disabled={isPending('sessionIcon') || isPending('sessionColor')}
-              />
-            </PopoverContent>
-          </Popover>
         </Section>
 
         <Section title={t('sessionTab.todos.title')}>
