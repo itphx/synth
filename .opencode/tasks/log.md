@@ -1252,3 +1252,12 @@
 - **Верификация (@orchestrator, независимо):** `pnpm typecheck` OK; `pnpm lint` 0 errors; `pnpm test` — shared 176, core 2320, ui 893, backend 341 (3730) PASS.
 - **Документация:** `packages/ui/AGENTS.md` (карта + формулировка про строку «Имя»).
 - **Коммит:** ниже (ветка `feat/entity-icons`, локально).
+
+## 2026-09-30 19:40 — fix(ui): дефолтный цвет иконки сессии = акцент открытой сессии — PASS
+
+- **Задача:** нестыковка: при пустом `session.color` иконка сессии в правой панели/табах нейтральная, а в дереве у открытой — `text-primary`.
+- **Тип:** bug fix (ui) · **Исполнитель:** @fixer + @orchestrator.
+- **Сделано:** в `lib/entityIcon.ts` — `DEFAULT_SESSION_ICON_COLOR = 'var(--primary)'` и `resolveSessionIconColor()`; `EntityIconTrigger` — проп `defaultColor`; панель «Сессия» и табы сессии используют дефолт `--primary`; проект и дерево не менялись (в дереве открытая/закрытая логика прежняя).
+- **Верификация (@orchestrator, независимо):** `pnpm typecheck` OK; `pnpm lint` 0 errors; `pnpm test` — shared 176, core 2320, ui 905, backend 341 (3742) PASS.
+- **Документация:** `packages/ui/AGENTS.md` (дефолтный цвет иконки сессии).
+- **Коммит:** ниже (ветка `feat/entity-icons`, локально).
