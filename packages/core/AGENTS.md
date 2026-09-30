@@ -29,6 +29,14 @@
   `QueueProcessorManager` (`queue/processor.ts`), `EventBus` (`events/bus.ts`).
 - Движок stateless: история и состояние — на бэкенде; движок получает историю +
   новое сообщение + контекст (AD-022).
+- История для LLM формируется только через `ChatOrchestrator._sessionMessagesToLlm`
+  (`engine/orchestrator.ts`): сообщения чужого агента (иной `agentRole`; пустой
+  `agentRole` — «своё») отдаются как текст с атрибуцией `[agentRole]:`/`{author}:`,
+  но tool-chain сохраняется структурно — assistant с `toolCalls` остаётся ролью
+  `assistant` + `toolUse`, `tool`-результаты идут парными по `toolCallId`.
+  Осиротевших `tool`-сообщений (без предшествующего `tool_calls`) в выдаче быть не
+  должно: это ломает OpenAI-совместимые API и Anthropic (`tool_result` требует
+  парный `tool_use`).
 - Любой LLM-вызов — через `GatewayProvider`
   (`engine/gateway/gateway-provider.ts`: guard, обфускация, rate limit, аудит);
   провайдера напрямую не дёргать (AD-036).

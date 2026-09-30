@@ -4172,6 +4172,20 @@ export class ChatOrchestrator {
   ): LLMMessage[] {
     const result: LLMMessage[] = [];
 
+    // Defensive pairing (фикс «осиротевших» tool): id вызовов, для которых уже
+    // выдан assistant с tool_use. Tool-результат валиден только после своего
+    // вызова в этой же выдаче; всё остальное (disabled/hidden assistant, или
+    // результат без вызова) уходит user-текстом — `tool` без `tool_calls`
+    // ломает OpenAI-совместимые API и Anthropic.
+    const emittedToolCallIds = new Set<string>();
+
+    // Атрибуция чужого сообщения: `[agent]: ` / `{author}: ` / `[anonymous]: `.
+    const withAttribution = (m: Message): string => {
+      if (m.agentRole) return `[${m.agentRole}]: ${m.content}`;
+      if (m.author) return `{${m.author}}: ${m.content}`;
+      return `[anonymous]: ${m.content}`;
+    };
+
     for (const msg of messages) {
       if (msg.disabled || msg.hidden) continue;
 
@@ -4196,26 +4210,45 @@ export class ChatOrchestrator {
         continue;
       }
 
-      const isOwnMessage =
-        role === MessageRole.TOOL ||
-        (role === MessageRole.ASSISTANT && msg.agentRole === currentAgentRole) ||
-        (role === MessageRole.USER && msg.author === currentAuthor);
+      // Сообщение считается «своим», если agentRole не задан (легаси/сабагент —
+      // иначе такие assistant порождали бы сирот) или совпадает с активным
+      // агентом. User — по автору.
+      const isOwnAssistant =
+        role === MessageRole.ASSISTANT &&
+        (msg.agentRole === undefined || msg.agentRole === currentAgentRole);
+      const isOwnUser = role === MessageRole.USER && msg.author === currentAuthor;
+      const hasToolCalls =
+        role === MessageRole.ASSISTANT && !!msg.toolCalls && msg.toolCalls.length > 0;
+      // Tool-результат валиден только в паре с уже выданным assistant(tool_use).
+      // Осиротевший результат отдаём user-текстом: `tool` без `tool_calls`
+      // ломает OpenAI-совместимые API и Anthropic (`invalid_request_error`:
+      // на каждый `tool_result` нужен `tool_use`).
+      const isPairedTool =
+        role === MessageRole.TOOL && !!msg.toolCallId && emittedToolCallIds.has(msg.toolCallId);
 
       let content: string;
       let llmRole: string;
+      let toolUse: Record<string, unknown>[] | undefined;
 
-      if (isOwnMessage) {
+      if (hasToolCalls) {
+        // Assistant с tool_calls — своего ИЛИ чужого агента — сохраняет
+        // структуру вызова (role assistant + toolUse), чтобы парные
+        // tool-результаты не осиротели. Чужому агенту добавляем текстовый
+        // префикс атрибуции (при пустом content достаточно одних tool_calls).
+        llmRole = MessageRole.ASSISTANT;
+        toolUse = msg.toolCalls;
+        for (const tc of msg.toolCalls ?? []) {
+          if (typeof tc.id === 'string') emittedToolCallIds.add(tc.id);
+        }
+        content = isOwnAssistant || !msg.content
+          ? msg.content
+          : `[${msg.agentRole}]: ${msg.content}`;
+      } else if (isOwnAssistant || isOwnUser || isPairedTool) {
         content = msg.content;
         llmRole = role;
       } else {
         llmRole = 'user';
-        if (msg.agentRole) {
-          content = `[${msg.agentRole}]: ${msg.content}`;
-        } else if (msg.author) {
-          content = `{${msg.author}}: ${msg.content}`;
-        } else {
-          content = `[anonymous]: ${msg.content}`;
-        }
+        content = withAttribution(msg);
       }
 
       result.push({
@@ -4226,9 +4259,10 @@ export class ChatOrchestrator {
         disabled: false,
         pinned: false,
         branchId: '',
-        toolUse: isOwnMessage ? msg.toolCalls : undefined,
-        toolCallId: isOwnMessage ? msg.toolCallId : undefined,
-        reasoning: isOwnMessage && llmRole === MessageRole.ASSISTANT ? msg.reasoning : undefined,
+        toolUse,
+        toolCallId: isPairedTool ? msg.toolCallId : undefined,
+        // Reasoning чужого агента не прокидываем; у tool-сообщений его нет.
+        reasoning: isOwnAssistant ? msg.reasoning : undefined,
         agentRole: msg.agentRole,
       });
     }
