@@ -8,12 +8,19 @@ import { Icon } from '../icon/Icon'
 export interface CommandAutocompleteProps {
   /** Текст после ведущего `/` (без него). */
   query: string
-  position: { top: number; left: number }
+  position: { left: number }
   onSelect: (command: CommandSummary) => void
   onClose: () => void
   /** Число совпавших команд — родителю, чтобы не перехватывать Enter при пустом списке. */
   onMatchesChange?: (count: number) => void
 }
+
+/**
+ * Подъём поповера над якорем: 9px до рамки композера (border 1px + py-2 8px)
+ * + 8px зазора. Позиционируем в CSS, а не по замеру высоты textarea: высота
+ * внутри обработчика input измеряется недостоверно (DOM ещё не устоялся).
+ */
+const POPUP_LIFT = 'calc(100% + 17px)'
 
 const KIND_BADGE: Record<string, string> = {
   builtin: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
@@ -128,8 +135,8 @@ export function CommandAutocomplete({
     <div
       ref={ref}
       data-testid="command-autocomplete"
-      className="absolute z-50 max-h-72 overflow-hidden rounded-lg border border-border bg-popover shadow-lg"
-      style={{ bottom: position.top, left: position.left, minWidth: '16rem' }}
+      className="absolute z-50 flex flex-col overflow-hidden rounded-lg border border-border bg-popover shadow-lg max-h-[min(24rem,60vh)]"
+      style={{ bottom: POPUP_LIFT, left: position.left, width: '32rem', maxWidth: '100%' }}
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div className="border-b border-border/50 px-3 py-1.5 text-[0.625rem] uppercase tracking-wide text-muted-foreground/60">
@@ -143,7 +150,7 @@ export function CommandAutocomplete({
           {t('chat.commandAutocomplete.empty')}
         </div>
       ) : (
-        <div className="max-h-64 overflow-y-auto p-1" role="list">
+        <div className="flex-1 min-h-0 overflow-y-auto p-1" role="list">
           {filtered.map((command, idx) => (
             <button
               key={`${command.kind}-${command.name}`}
@@ -182,7 +189,7 @@ export function CommandAutocomplete({
                   )}
                 </span>
                 {command.description && (
-                  <span className="mt-0.5 block truncate text-[0.6875rem] text-muted-foreground">
+                  <span className="mt-0.5 block whitespace-normal break-words text-[0.6875rem] text-muted-foreground">
                     {command.description}
                   </span>
                 )}

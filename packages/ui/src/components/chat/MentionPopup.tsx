@@ -7,10 +7,17 @@ import type { AgentInfo } from '@/lib/api/synthApi'
 interface MentionPopupProps {
   query: string
   agents: AgentInfo[]
-  position: { top: number; left: number }
+  position: { left: number }
   onSelect: (agentId: string) => void
   onClose: () => void
 }
+
+/**
+ * Подъём поповера над якорем: 9px до рамки композера (border 1px + py-2 8px)
+ * + 8px зазора. Позиционируем в CSS, а не по замеру высоты textarea: высота
+ * внутри обработчика input измеряется недостоверно (DOM ещё не устоялся).
+ */
+const POPUP_LIFT = 'calc(100% + 17px)'
 
 export function MentionPopup({ query, agents, position, onSelect, onClose }: MentionPopupProps) {
   const { t } = useI18n()
@@ -80,7 +87,7 @@ export function MentionPopup({ query, agents, position, onSelect, onClose }: Men
     <div
       ref={ref}
       className="absolute z-50 rounded-lg border border-border bg-popover shadow-lg overflow-hidden"
-      style={{ bottom: position.top, left: position.left, minWidth: '12.5rem' }}
+      style={{ bottom: POPUP_LIFT, left: position.left, minWidth: '12.5rem' }}
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div className="px-3 py-1.5 border-b border-border/50 text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">

@@ -44,7 +44,7 @@ async function renderPopup(opts: {
       <I18nProvider>
         <CommandAutocomplete
           query={opts.query ?? ''}
-          position={{ top: 40, left: 0 }}
+          position={{ left: 0 }}
           onSelect={onSelect as unknown as (command: CommandSummary) => void}
           onClose={onClose as unknown as () => void}
           onMatchesChange={onMatchesChange as unknown as (count: number) => void}
@@ -146,5 +146,49 @@ describe('CommandAutocomplete — `/`-автокомплит (AD-046 §9.3)', ()
       document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
     })
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('корень ограничен по ширине и высоте, список скроллится', async () => {
+    const { container } = await renderPopup()
+    const root = container.querySelector('[data-testid="command-autocomplete"]') as HTMLElement
+    expect(root).not.toBeNull()
+    expect(root.className).toContain('flex-col')
+    expect(root.className).toContain('overflow-hidden')
+    expect(root.className).toContain('max-h-[min(24rem,60vh)]')
+    expect(root.style.width).toBe('32rem')
+    expect(root.style.maxWidth).toBe('100%')
+    expect(root.style.minWidth).toBe('')
+
+    const list = container.querySelector('[role="list"]') as HTMLElement
+    expect(list).not.toBeNull()
+    expect(list.className).toContain('overflow-y-auto')
+    expect(list.className).toContain('flex-1')
+    expect(list.className).toContain('min-h-0')
+  })
+
+  it('длинное описание переносится, а не обрезается', async () => {
+    mocks.getCommands.mockResolvedValue({
+      commands: [
+        {
+          name: 'developer-documentation',
+          kind: 'skill',
+          description:
+            'Create, restructure or maintain accurate developer documentation for software, tools, automations, packages, APIs, SDKs, CLIs and installations.',
+          available: true,
+        },
+      ],
+      diagnostics: [],
+    })
+    const { container } = await renderPopup({ query: 'developer' })
+    const item = container.querySelector(
+      '[data-testid="command-autocomplete-item-developer-documentation"]',
+    ) as HTMLElement
+    expect(item).not.toBeNull()
+    const description = Array.from(item.querySelectorAll('span')).find((el) =>
+      el.textContent?.startsWith('Create, restructure'),
+    ) as HTMLElement
+    expect(description).toBeTruthy()
+    expect(description.className).toContain('break-words')
+    expect(description.className).not.toContain('truncate')
   })
 })

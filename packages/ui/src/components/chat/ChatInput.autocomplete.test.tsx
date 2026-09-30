@@ -135,4 +135,19 @@ describe('ChatInput — `/`-автокомплит (AD-046 §9.3)', () => {
 
     expect(mocks.onSend).toHaveBeenCalledWith('/help')
   })
+
+  it('поповер имеет фиксированный зазор над рамкой композера (не зависит от высоты textarea)', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '/he')
+    })
+    await act(async () => {})
+
+    const popup = container.querySelector('[data-testid="command-autocomplete"]') as HTMLElement
+    expect(popup).not.toBeNull()
+    // CSS-позиционирование от якоря: 9px до рамки композера + 8px зазора.
+    expect(popup.style.bottom).toBe('calc(100% + 17px)')
+  })
 })

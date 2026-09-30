@@ -138,12 +138,12 @@ export function ChatInput({
     query: string
     start: number
     end: number
-    position: { top: number; left: number }
+    position: { left: number }
   } | null>(null)
   // AD-046 §9.3: `/`-автокомплит команд (триггер — ввод начинается с `/`).
   const [commandState, setCommandState] = useState<{
     query: string
-    position: { top: number; left: number }
+    position: { left: number }
   } | null>(null)
   const [commandMatches, setCommandMatches] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -185,16 +185,12 @@ export function ChatInput({
     const mentionMatch = textBeforeCursor.match(/@(\S*)$/)
 
     if (mentionMatch && mentionMatch.index !== undefined) {
-      const textarea = textareaRef.current
-      if (textarea) {
-        const rect = textarea.getBoundingClientRect()
-        setMentionState({
-          query: mentionMatch[1],
-          start: mentionMatch.index,
-          end: cursorPos,
-          position: { top: rect.height + 8, left: 0 },
-        })
-      }
+      setMentionState({
+        query: mentionMatch[1],
+        start: mentionMatch.index,
+        end: cursorPos,
+        position: { left: 0 },
+      })
     } else {
       setMentionState(null)
     }
@@ -202,10 +198,9 @@ export function ChatInput({
     // AD-046 §9.3: `/`-команда — ввод начинается с `/`, первый токен без пробелов.
     const commandMatch = /^\/(\S*)$/.exec(newValue)
     if (commandMatch) {
-      const rect = textareaRef.current?.getBoundingClientRect()
       setCommandState({
         query: commandMatch[1],
-        position: { top: (rect?.height ?? 0) + 8, left: 0 },
+        position: { left: 0 },
       })
     } else {
       setCommandState(null)
@@ -244,12 +239,11 @@ export function ChatInput({
         const tagName = match[1]
         const agent = agents.find((a) => a.id === tagName && a.enabled)
         if (agent) {
-          const rect = el.getBoundingClientRect()
           setMentionState({
             query: tagName,
             start: match.index,
             end: match.index + match[0].length,
-            position: { top: rect.height + 8, left: 0 },
+            position: { left: 0 },
           })
         }
         return
