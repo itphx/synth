@@ -123,7 +123,7 @@ const ActionBtn = forwardRef<
       title={title}
       className={`inline-flex items-center justify-center rounded p-1 transition-colors ${
         danger
-          ? 'hover:bg-destructive/10 hover:text-destructive'
+          ? 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
           : active
             ? 'text-primary bg-primary/10'
             : 'text-muted-foreground hover:text-foreground hover:bg-interactive-hover'
