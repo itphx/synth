@@ -99,6 +99,9 @@ interface GitRepoConfig {
 - Необязательный `repo_path` во **всех** git-тулах: `resolveRepoCwd` резолвит путь относительно `project.workspace` с containment (абсолютный/`..` → ошибка `git.repo_path_invalid`); legacy `path` сохранён.
 - `engine/tools/git-ssh.ts` — `resolveRepoGitEnv(ctx, cwd)`: по cwd находит запись `project.repos` и при заданном `sshKeyId` готовит `GIT_SSH_COMMAND`; инъекция в `git_push`/`git_pull` (errors — i18n-ключи `sshkey.*`). Оркестратор прокидывает `sshKeyStore`/`workspacesRoot` в `extra`.
 - `list_repos` отдаёт записи реестра (`projectctx.repo_*`: `destination`/`name`/`url`/`type`/`defaultBranch`/`sshKeyId`/`lastFetch` + git-детект), иначе — скан workspace (legacy).
+- Тулы управления реестром: `project_repo_clone`/`project_repo_init` (клон/init + регистрация записи), `project_repo_add` (регистрация существующего каталога, без сети), `project_repo_fetch` (fetch + `lastFetch`), `project_repo_remove` (снятие из реестра, локальный каталог не удаляется). Проект берётся из сессии, containment — `GitService.resolveRepoPath`, изменения сохраняются `ProjectStore.save` и публикуются событием `project.updated`.
+- `resolveSshEnvById(sshKeyStore, sshKeyId)` (`engine/tools/git-ssh.ts`) — SSH-окружение по явному ключу; общий хелпер HTTP-роутов (`/api/v2/git`) и тулов клона/fetch.
+- Resumed-саб-агенты (`task-resume.ts`) получают в tool-extra те же проектные зависимости (`projectStore`/`workspacesRoot`/`sshKeyStore`/`gitService`) — проектные и сетевые git-тулы доступны и после resume.
 
 ### 5. Backend
 
@@ -142,6 +145,7 @@ $SYNTH_DATA_DIR/secrets/ssh-keys/<id>.json    # SSHKey, секреты заши�
 - **Где хранить ключи/формат** — `{dataDir}/secrets/ssh-keys/`, отдельный `SSHKeyStore` поверх `JsonStore` (AD-005), а не `AgentDefinition`. Ключ привязан к нескольким агентам через `agentIds: string[]`.
 - **Доставка ключа** — temp-файл `0600` в `0700`-каталоге + `GIT_SSH_COMMAND`; персистентный ключ — env `SYNTH_SECRET_KEY` / `config.security.secretKey` / файл `{dataDir}/secrets/master.key`.
 - **Выбор репозитория** — параметр `repo_path` во всех git-тулах (containment внутри `project.workspace`); `list_repos` читает реестр.
+- **Регистрация репозиториев из чата** — `project_repo_clone`/`project_repo_init` из тулов регистрируют запись в `project.repos` так же, как HTTP-роут (`registerRepo` + `ProjectStore.save`, событие `project.updated`).
 - **Шифрование** — AES-256-GCM (`enc:v1:`), не machine-id.
 - **Автоиндексация** — не реализована: scan остаётся явным действием; неучтённые репозитории добавляются через `POST /git/repos/register`.
 

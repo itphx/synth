@@ -1183,3 +1183,23 @@
 - **Верификация (@orchestrator):** `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — shared 170, core **2298**, backend 341, ui **856** PASS; регресс `projects.test.ts`/`git.test.ts` без правок. Изменён существующий кейс `project_create` с абсолютным workspace вне root — он кодировал закрываемую дыру.
 - **Замечание:** extra resumed-саб-агента (`task-resume.ts`) не содержит `projectStore`/`workspacesRoot`/`gitService` — проектные тулы там недоступны (не регрессия, поведение было и раньше; кандидат в отдельную задачу). `resolveSshEnv` при ошибке расшифровки ключа теперь отдаёт 404 `sshkey.not_found` вместо 500 (унификация с `resolveRepoGitEnv`).
 - **Коммит:** `aefede7` — feat(core): инструменты управления проектом — workspace и git-репозитории.
+
+## 2026-09-30 16:05 — fix: resumed-сабагенты без проектных зависимостей + AD-доки — PASS
+
+- **Задача:** закрыть найденный при верификации предыдущей фичи дефект (у resumed-сабагентов недоступны проектные/git-тулы) и синхронизировать документацию AD-075/AD-076.
+- **Тип:** bug fix (core) + docs · **Исполнитель:** @fixer + @orchestrator.
+- **Причина:** `runSubagentResume` (`engine/tools/task-resume.ts`) собирал `extra` без `projectStore`/`workspacesRoot`/`sshKeyStore`/`gitService`/`workspaceManaged`/`getWorkspaceOutsideRootPolicy` (обычный путь `task` передаёт extra родителя целиком). Следствия: гейт `canEditProject` и `loadSessionProject` деградировали (проектные тулы), `resolveRepoGitEnv` не находил SSH-окружение.
+- **Фикс:** 6 опциональных полей в `TaskExtra` (`task.ts`) и `SubagentResumeDeps` (`task-resume.ts`) + прокидка в `extra`; `_subagentResumeDeps()` (`orchestrator.ts`) заполняет их из приватных полей. Тест `task-resume.test.ts` — probe-тул читает `ctx.extra` у resumed-сабагента (RED до фикса, GREEN после).
+- **Документация:** AD-075 §3 (общий `engine/workspace-provision.ts`), §9 (гейт `canEditProject` для новых тулов), «Известные остатки» (`LEAD/ADMIN` — расширен список полей); AD-076 §4 (тулы реестра, `resolveSshEnvById`, resume-зависимости), «Решено» (регистрация clone/init из чата); строки индекса AD-075/AD-076 в корневом `AGENTS.md`.
+- **Верификация (@orchestrator):** `pnpm typecheck` OK; `pnpm lint` 0 errors; тесты — shared 170, core **2299**, ui 856, backend 341 PASS.
+- **Замечание:** в `_subagentResumeDeps()` приведение `this._projectStore as ProjectStore | null` (в оркестраторе поле типизировано минимальным `ProjectStoreLike`); в рантайме — полноценный `ProjectStore`. `registerRepo` в `project-repos.ts` продублирован из `routes/git.ts` (кандидат в общий хелпер).
+- **Коммит:** ниже.
+
+## 2026-09-30 16:20 — refactor: структурные контракты ProjectStore вместо номинального каста — PASS
+
+- **Задача:** убрать `this._projectStore as ProjectStore` в `_subagentResumeDeps()` и дублированный `ProjectStoreLike` в оркестраторе; типизировать зависимости тулов по факту использования.
+- **Тип:** refactor (core, типы; поведение не менялось) · **Исполнитель:** @fixer + @orchestrator.
+- **Мотивация:** каст превращал ошибку компиляции в рантайм-ошибку (`store.save is not a function`), если в оркестратор попадёт реализация без write-методов; для хранилищ в проекте уже есть паттерн структурных контрактов (`ProjectStoreLike`), плюс его дубль в `orchestrator.ts`.
+- **Сделано:** `ProjectStoreContract = Pick<ProjectStore, 'load'|'save'|'create'|'list'>` в `storage/project-store.ts`; дубль `ProjectStoreLike` удалён (импорт общий), каст убран; `TaskExtra`/`SubagentResumeDeps.projectStore` → `ProjectStoreLike`; `project-manage`/`project-repos`/`plan`/`workspace-provision` → `ProjectStoreContract`; `git-ssh`/`project-context` → `ProjectStoreLike` (только `load`); тесты (`orchestrator-instructions`, probe-кейс `task-resume`) без кастов.
+- **Верификация (@orchestrator):** `pnpm typecheck` OK; `pnpm lint` 0 errors (в изменённых файлах предупреждений нет); тесты — shared 170, core 2299, ui 856, backend 341 PASS; `grep 'as ProjectStore'` в core — 0.
+- **Коммит:** ниже.
