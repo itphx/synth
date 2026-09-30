@@ -17,6 +17,8 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
     id: session.id,
     origin: 'local' as const,
     name: session.title || null,
+    icon: session.icon || null,
+    color: session.color || null,
     parent_id: session.parentId || null,
     branch_point: session.branchPoint || null,
     plan_approved: session.planApproved ?? false,

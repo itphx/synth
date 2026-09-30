@@ -6,7 +6,14 @@ import {
   projectUpdateSchema,
   sshKeyCreateSchema,
   sshKeyUpdateSchema,
+  sessionCreateSchema,
+  sessionUpdateSchema,
+  normalizeIconKey,
+  normalizeColorKey,
+  isProjectIconKey,
+  isProjectColorKey,
 } from './index.js';
+import { PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS } from '../types/index.js';
 
 describe('normalizeGitRepoConfig (AD-076)', () => {
   it('строка → { path }', () => {
@@ -118,5 +125,60 @@ describe('sshKeyCreateSchema (AD-076)', () => {
       expect('id' in parsed.data).toBe(false);
       expect('createdAt' in parsed.data).toBe(false);
     }
+  });
+});
+
+describe('иконки/цвета проектов и сессий', () => {
+  it('канонические списки непустые, уникальные и без дублей', () => {
+    expect(PROJECT_ICON_KEYS.length).toBe(19);
+    expect(PROJECT_COLOR_KEYS.length).toBe(8);
+    expect(new Set(PROJECT_ICON_KEYS).size).toBe(PROJECT_ICON_KEYS.length);
+    expect(new Set(PROJECT_COLOR_KEYS).size).toBe(PROJECT_COLOR_KEYS.length);
+  });
+
+  it('isProjectIconKey/isProjectColorKey: только канонические ключи', () => {
+    expect(isProjectIconKey('rocket')).toBe(true);
+    expect(isProjectIconKey('🚀')).toBe(false);
+    expect(isProjectIconKey(42)).toBe(false);
+    expect(isProjectColorKey('primary')).toBe(true);
+    expect(isProjectColorKey('blue')).toBe(false);
+    expect(isProjectColorKey(null)).toBe(false);
+  });
+
+  it('normalizeIconKey: канонический ключ → как есть, всё прочее → undefined', () => {
+    expect(normalizeIconKey('code')).toBe('code');
+    expect(normalizeIconKey('🚀')).toBeUndefined();
+    expect(normalizeIconKey('')).toBeUndefined();
+    expect(normalizeIconKey(undefined)).toBeUndefined();
+    expect(normalizeIconKey(null)).toBeUndefined();
+  });
+
+  it('normalizeColorKey: канонические ключи + legacy-алиасы, прочее → undefined', () => {
+    expect(normalizeColorKey('success')).toBe('success');
+    expect(normalizeColorKey('blue')).toBe('primary');
+    expect(normalizeColorKey('red')).toBe('error');
+    expect(normalizeColorKey('green')).toBe('success');
+    expect(normalizeColorKey('--primary')).toBe('primary');
+    expect(normalizeColorKey('--status-info')).toBe('primary');
+    expect(normalizeColorKey('--syntax-keyword')).toBe('keyword');
+    expect(normalizeColorKey('weird')).toBeUndefined();
+    expect(normalizeColorKey('🚀')).toBeUndefined();
+  });
+
+  it('projectCreate/UpdateSchema: enum-валидация icon/color, null — сброс', () => {
+    expect(projectCreateSchema.safeParse({ name: 'p', icon: 'rocket', color: 'primary' }).success).toBe(true);
+    expect(projectCreateSchema.safeParse({ name: 'p', icon: '🚀' }).success).toBe(false);
+    expect(projectCreateSchema.safeParse({ name: 'p', color: 'blue' }).success).toBe(false);
+    expect(projectCreateSchema.safeParse({ name: 'p', icon: null, color: null }).success).toBe(true);
+    expect(projectUpdateSchema.safeParse({ icon: 'heart' }).success).toBe(true);
+    expect(projectUpdateSchema.safeParse({ color: 'nope' }).success).toBe(false);
+  });
+
+  it('sessionCreate/UpdateSchema: icon/color с той же валидацией', () => {
+    expect(sessionCreateSchema.safeParse({ icon: 'server', color: 'type' }).success).toBe(true);
+    expect(sessionCreateSchema.safeParse({ icon: 'x' }).success).toBe(false);
+    expect(sessionUpdateSchema.safeParse({ color: 'error' }).success).toBe(true);
+    expect(sessionUpdateSchema.safeParse({ color: 'red' }).success).toBe(false);
+    expect(sessionUpdateSchema.safeParse({ icon: null, color: null }).success).toBe(true);
   });
 });

@@ -18,7 +18,8 @@ import { useDevice } from '@/hooks/useDevice'
 import { synthApi } from '@/lib/api/synthApi'
 import type { EntityOrigin, ProjectData } from '@/lib/api/synthApi'
 import type { SSHKeyMeta } from '@itphx/synth-shared'
-import { PROJECT_ICON_MAP, PROJECT_COLOR_MAP } from '@/lib/projectMeta'
+import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
+import { EntityIconPicker } from '@/components/ui/EntityIconPicker'
 import { formatDateTime, formatRelativeTime, parseISODate } from '@/lib/formatDate'
 import { TreeNode, TreeChildren, TreeContainer } from '@/components/tree'
 import type { TreeNodeBase, TreeAction } from '@/components/tree'
@@ -57,9 +58,16 @@ function useAutoScroll(targetId: string | null) {
     const id = pendingRef.current
     if (!id) return
     const timer = setTimeout(() => {
-      const el = document.querySelector(`[data-tree-node="${CSS.escape(id)}"]`)
+      // Безопасность окружения: в jsdom/SSR и после teardown jsdom глобальные
+      // `CSS`/`document` и `Element.scrollIntoView` могут отсутствовать —
+      // тихо выходим, наблюдаемое поведение в браузере не меняется.
+      if (typeof document === 'undefined') return
+      const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(id) : id
+      const el = document.querySelector(`[data-tree-node="${escaped}"]`)
       if (el) {
-        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        if (typeof el.scrollIntoView === 'function') {
+          el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        }
         pendingRef.current = null
       }
     }, 80)
@@ -132,6 +140,7 @@ function ProjectsTab() {
   const forkSession = useSessionsStore(s => s.forkSession)
   const deleteSession = useSessionsStore(s => s.deleteSession)
   const moveSession = useSessionsStore(s => s.moveSession)
+  const { notify } = useNotification()
   const { isTouch } = useDevice()
   const collapsedProjects = useUIStore((s) => s.collapsedProjects)
   const toggleProjectCollapse = useUIStore((s) => s.toggleProjectCollapse)
@@ -161,6 +170,39 @@ function ProjectsTab() {
   // Гибрид: перенос проектов между мирами — проект, для которого открыт диалог.
   const [publishTarget, setPublishTarget] = useState<ProjectData | null>(null)
   const [forkTarget, setForkTarget] = useState<ProjectData | null>(null)
+  // Единый пикер «Иконка и цвет» для проекта/сессии (контекстное меню дерева).
+  const [iconColorTarget, setIconColorTarget] = useState<{
+    kind: 'session' | 'project'
+    id: string
+    name: string
+    icon: string | null
+    color: string | null
+  } | null>(null)
+  const [iconDraft, setIconDraft] = useState<string | null>(null)
+  const [colorDraft, setColorDraft] = useState<string | null>(null)
+
+  const openIconColor = (target: NonNullable<typeof iconColorTarget>) => {
+    setIconColorTarget(target)
+    setIconDraft(target.icon)
+    setColorDraft(target.color)
+  }
+
+  // Немедленное сохранение иконки/цвета из диалога дерева. Оптимистично меняем
+  // драфт, а при ошибке откатываемся к актуальному серверному значению.
+  const persistIconColor = async (icon: string | null, color: string | null) => {
+    const target = iconColorTarget
+    if (!target) return
+    const ok = target.kind === 'session'
+      ? await useSessionsStore.getState().updateSessionMeta(target.id, { icon, color })
+      : await useProjectsStore.getState().updateProject(target.id, { icon, color })
+    if (ok) {
+      setIconColorTarget({ ...target, icon: icon ?? null, color: color ?? null })
+    } else {
+      notify({ text: t('panel.saveError'), type: 'error', category: 'error' })
+      setIconDraft(target.icon)
+      setColorDraft(target.color)
+    }
+  }
 
   // Switch to Projects tab when forward mode activates
   useEffect(() => {
@@ -287,7 +329,8 @@ function ProjectsTab() {
       id: `session:${session.id}`,
       label: session.name || session.id,
       depth,
-      icon: isSubagent ? 'cpu' : 'chat-new',
+      icon: resolveIconName(session.icon) ?? (isSubagent ? 'cpu' : 'chat-new'),
+      iconColor: resolveIconColor(session.color),
       subtitle: formatRelativeTime(session.updated_at),
       badge: <OriginBadge origin={session.origin} />,
       isSelected: selectedIds.has(session.id),
@@ -323,6 +366,13 @@ function ProjectsTab() {
       title: isOfflineRemote ? t('hybrid.unavailableNode') : undefined,
       contextItems: [
         { label: t('leftPanel.rename'), icon: 'pencil-ai', onClick: () => { setRenamingId(session.id); setRenameValue(session.name || session.id) } },
+        { label: t('leftPanel.iconColor'), icon: 'palette', onClick: () => openIconColor({
+          kind: 'session',
+          id: session.id,
+          name: session.name || session.id,
+          icon: session.icon ?? null,
+          color: session.color ?? null,
+        }) },
         { label: t('leftPanel.forkSession'), icon: 'git-branch', onClick: async () => {
           const result = await forkSession(session.id)
           if (result) {
@@ -561,12 +611,41 @@ function ProjectsTab() {
                 className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none"
               />
             </div>
+            <EntityIconPicker
+              icon={editingProject.icon}
+              color={editingProject.color}
+              onIconChange={(icon) => setEditingProject((prev: any) => ({ ...prev, icon }))}
+              onColorChange={(color) => setEditingProject((prev: any) => ({ ...prev, color }))}
+            />
             <div className="flex gap-2">
               <button onClick={handleProjectSave} className="flex-1 rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 transition-colors">{t('project.save')}</button>
               <button onClick={() => setEditingProject(null)} className="flex-1 rounded bg-interactive px-3 py-1.5 text-xs text-foreground hover:bg-interactive-hover transition-colors">{t('common.cancel')}</button>
             </div>
           </PopoverContent>
         </Popover>
+      )}
+
+      {iconColorTarget && (
+        <Dialog open={!!iconColorTarget} onOpenChange={(open) => { if (!open) setIconColorTarget(null) }}>
+          <DialogContent className="max-w-sm p-4 gap-3" showCloseButton={true} data-testid="entity-icon-dialog">
+            <h3 className="text-sm font-semibold">{t('leftPanel.iconColor')}</h3>
+            <p className="truncate text-xs text-muted-foreground">{iconColorTarget.name}</p>
+            <EntityIconPicker
+              icon={iconDraft}
+              color={colorDraft}
+              onIconChange={(icon) => { setIconDraft(icon); void persistIconColor(icon, colorDraft) }}
+              onColorChange={(color) => { setColorDraft(color); void persistIconColor(iconDraft, color) }}
+            />
+            <div className="flex justify-end">
+              <button
+                onClick={() => setIconColorTarget(null)}
+                className="rounded bg-interactive px-3 py-1.5 text-xs text-foreground hover:bg-interactive-hover transition-colors"
+              >
+                {t('common.close')}
+              </button>
+            </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       <GroupNode
@@ -605,6 +684,13 @@ function ProjectsTab() {
             : null
         const projectContextItems: any[] = [
           { label: t('leftPanel.editProject'), icon: 'settings-3' as const, onClick: () => { setEditingProject({ ...project }) } },
+          { label: t('leftPanel.iconColor'), icon: 'palette' as const, onClick: () => openIconColor({
+            kind: 'project',
+            id: project.id,
+            name: project.name,
+            icon: project.icon ?? null,
+            color: project.color ?? null,
+          }) },
         ]
         if (transferItem) {
           projectContextItems.push('separator' as const, transferItem)
@@ -628,8 +714,8 @@ function ProjectsTab() {
             key={project.id}
             id={project.id}
             label={project.name}
-            icon={project.icon ? PROJECT_ICON_MAP[project.icon] : 'folder-3'}
-            iconColor={project.color ? PROJECT_COLOR_MAP[project.color] : undefined}
+            icon={resolveIconName(project.icon) ?? 'folder-3'}
+            iconColor={resolveIconColor(project.color)}
             isCollapsed={isCollapsed}
             onToggle={() => toggleProjectCollapse(project.id)}
             sessions={sessionsByProject[project.id] || []}
@@ -1216,8 +1302,8 @@ function FilesTab() {
         <TreeNode
           id={`file-project:${project.id}`}
           label={project.name}
-          icon={project.icon || 'folder-3'}
-          iconColor={project.color ? PROJECT_COLOR_MAP[project.color] : undefined}
+          icon={resolveIconName(project.icon) ?? 'folder-3'}
+          iconColor={resolveIconColor(project.color)}
           iconSize="md"
           isExpanded={isExpanded}
           hasChildren={true}
@@ -1716,8 +1802,8 @@ function GitTab() {
             <TreeNode
               id={`git-project:${project.id}`}
               label={project.name}
-              icon={project.icon ? PROJECT_ICON_MAP[project.icon] : 'folder-3'}
-              iconColor={project.color ? PROJECT_COLOR_MAP[project.color] : undefined}
+              icon={resolveIconName(project.icon) ?? 'folder-3'}
+              iconColor={resolveIconColor(project.color)}
               iconSize="md"
               isExpanded={isExpanded}
               hasChildren={repos.length > 0 ? true : undefined}

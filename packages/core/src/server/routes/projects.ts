@@ -3,7 +3,13 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { Project, Session, WorkspaceOutsideRootPolicy, ProjectMcpSettings, ProjectSkillSettings } from '@itphx/synth-shared';
-import { projectMcpUpdateSchema } from '@itphx/synth-shared';
+import {
+  projectMcpUpdateSchema,
+  PROJECT_ICON_KEYS,
+  PROJECT_COLOR_KEYS,
+  isProjectIconKey,
+  isProjectColorKey,
+} from '@itphx/synth-shared';
 import type { ProjectStore } from '../../storage/project-store.js';
 import { provisionWorkspace, resolveWorkspaceForLocalProject } from '../../engine/workspace-provision.js';
 import { serializeProject } from '../serialize.js';
@@ -94,6 +100,11 @@ const projectContentFields = [
   'name', 'description', 'current_task', 'invariants', 'icon', 'color', 'repos', 'plan',
 ] as const;
 
+/** Сообщение о недопустимом значении метаданных с перечнем допустимых ключей. */
+function invalidMetaMessage(label: 'icon' | 'color', value: unknown, allowed: readonly string[]): string {
+  return `Недопустимое значение ${label}: "${String(value)}". Допустимые: ${allowed.join(', ')}`;
+}
+
 /** Преобразовать RemoteError в HTTP-ответ API v2; не-RemoteError → undefined (пробросить дальше). */
 function mapRemoteError(c: Context, err: unknown): Response | undefined {
   const http = remoteErrorToHttp(err);
@@ -181,6 +192,18 @@ export function createProjectRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.nameRequired(c) } }, 400);
     }
 
+    // Метаданные (icon/color): только канонические ключи; null/undefined — сброс.
+    if (body.icon !== undefined && body.icon !== null && !isProjectIconKey(body.icon)) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: invalidMetaMessage('icon', body.icon, PROJECT_ICON_KEYS) },
+      }, 400);
+    }
+    if (body.color !== undefined && body.color !== null && !isProjectColorKey(body.color)) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: invalidMetaMessage('color', body.color, PROJECT_COLOR_KEYS) },
+      }, 400);
+    }
+
     // AD-075: нормализация + создание каталога workspace (managed — авто-имя).
     const resolved = await provisionWorkspace(
       store,
@@ -200,8 +223,8 @@ export function createProjectRoutes(
 
     const project = store.create(name, await currentUserId(c), {
       description: body.description,
-      icon: body.icon,
-      color: body.color,
+      icon: body.icon ?? undefined,
+      color: body.color ?? undefined,
       workspace: resolved.workspace,
       repos: body.repos || undefined,
       ...(seeds ? { mcp: seeds.mcp, skills: seeds.skills } : {}),
@@ -328,12 +351,24 @@ export function createProjectRoutes(
       return jsonForbidden(c);
     }
 
+    // Метаданные (icon/color): только канонические ключи; null/undefined — сброс.
+    if (body.icon !== undefined && body.icon !== null && !isProjectIconKey(body.icon)) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: invalidMetaMessage('icon', body.icon, PROJECT_ICON_KEYS) },
+      }, 400);
+    }
+    if (body.color !== undefined && body.color !== null && !isProjectColorKey(body.color)) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: invalidMetaMessage('color', body.color, PROJECT_COLOR_KEYS) },
+      }, 400);
+    }
+
     if (body.name !== undefined) project.name = body.name;
     if (body.description !== undefined) project.description = body.description;
     if (body.current_task !== undefined) project.currentTask = body.current_task;
     if (body.invariants !== undefined) project.invariants = body.invariants;
-    if (body.icon !== undefined) project.icon = body.icon;
-    if (body.color !== undefined) project.color = body.color;
+    if (body.icon !== undefined) project.icon = body.icon ?? undefined;
+    if (body.color !== undefined) project.color = body.color ?? undefined;
     if (body.workspace !== undefined) {
       if (managed) {
         if (typeof body.workspace === 'string' && body.workspace.trim()) {

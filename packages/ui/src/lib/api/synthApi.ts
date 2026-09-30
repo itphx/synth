@@ -107,6 +107,10 @@ export interface SessionData {
   user_id: string | null
   owner_id: string | null
   project_id: string | null
+  /** Канонический ключ иконки сессии (PROJECT_ICON_KEYS) или null. */
+  icon?: string | null
+  /** Канонический ключ цвета сессии (PROJECT_COLOR_KEYS) или null. */
+  color?: string | null
   engine: string
   messages: Array<{
     index: number
@@ -520,6 +524,8 @@ export const synthApi = {
 
   async createSession(data: {
     name?: string
+    icon?: string | null
+    color?: string | null
     project_id?: string | null
     engine?: string
     settings?: Record<string, unknown>
@@ -534,6 +540,8 @@ export const synthApi = {
   // move/rename объединены в PATCH (API v2)
   async updateSession(sessionId: string, data: {
     name?: string
+    icon?: string | null
+    color?: string | null
     project_id?: string | null
     engine?: string
     settings?: Record<string, unknown>

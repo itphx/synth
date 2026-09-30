@@ -6,7 +6,7 @@
 
 import { readdir, readFile, stat, mkdir, writeFile } from 'node:fs/promises';
 import { join, dirname, basename, isAbsolute, normalize, resolve } from 'node:path';
-import { slugifyWorkspaceName } from '@itphx/synth-shared';
+import { slugifyWorkspaceName, normalizeIconKey, normalizeColorKey } from '@itphx/synth-shared';
 import type { Project, Session, Message, SessionSettings } from '@itphx/synth-shared';
 import type { DirectoryListResult } from '@itphx/synth-shared';
 import type { ProjectStore } from '../storage/project-store.js';
@@ -413,8 +413,8 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
 
   const localProject = localProjectStore.create(name, 'local', {
     description: typeof remote.description === 'string' ? remote.description : '',
-    icon: typeof remote.icon === 'string' && remote.icon ? remote.icon : undefined,
-    color: typeof remote.color === 'string' && remote.color ? remote.color : undefined,
+    icon: normalizeIconKey(remote.icon),
+    color: normalizeColorKey(remote.color),
     workspace: workspaceRel,
     repos: Array.isArray(remote.repos) ? (remote.repos as Project['repos']) : undefined,
   });
@@ -475,6 +475,8 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
 
       const session = await localSessionManager.createSession({
         title: typeof exportData.title === 'string' ? exportData.title : undefined,
+        icon: normalizeIconKey(exportData.icon),
+        color: normalizeColorKey(exportData.color),
         projectId: localProject.id,
         engine: typeof exportData.engine === 'string'
           ? (exportData.engine as Session['engine'])

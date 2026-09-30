@@ -39,6 +39,13 @@ vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
 vi.mock('@/hooks/useNotification', () => ({
   useNotification: () => ({ notify: mocks.notify }),
 }))
+// Пикер живёт в Popover: для теста логики сохранения раскрываем содержимое.
+vi.mock('@/components/ui/popover', async () => {
+  const ReactMod = await import('react')
+  const Passthrough = ({ children }: { children?: React.ReactNode }) =>
+    ReactMod.createElement(ReactMod.Fragment, null, children)
+  return { Popover: Passthrough, PopoverTrigger: Passthrough, PopoverContent: Passthrough }
+})
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
@@ -325,5 +332,26 @@ describe('ProjectTab — порядок секций', () => {
     expect(
       plan!.compareDocumentPosition(workspace!) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
+  })
+})
+
+describe('ProjectTab — иконка и цвет проекта (AD-075)', () => {
+  it('клик по ключу иконки сохраняет канонический ключ через updateProject', async () => {
+    const container = await renderTab()
+    expect(container.querySelector('[data-testid="project-icon-color-trigger"]')).not.toBeNull()
+
+    const iconBtn = container.querySelector('[data-testid="entity-icon-rocket"]') as HTMLButtonElement
+    expect(iconBtn).toBeTruthy()
+    await act(async () => { iconBtn.click() })
+
+    expect(mocks.updateProject).toHaveBeenCalledWith('p1', { icon: 'rocket' })
+  })
+
+  it('сброс цвета отправляет null', async () => {
+    const container = await renderTab()
+    const none = container.querySelector('[data-testid="entity-color-none"]') as HTMLButtonElement
+    expect(none).toBeTruthy()
+    await act(async () => { none.click() })
+    expect(mocks.updateProject).toHaveBeenCalledWith('p1', { color: null })
   })
 })

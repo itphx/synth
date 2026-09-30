@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir, unlink, access, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import type { Session, Message, SessionStatus, SessionSettings, Part, SessionOrigin, SessionReference, PromptState, PromptMeta } from '@itphx/synth-shared';
-import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts } from '@itphx/synth-shared';
+import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts, normalizeIconKey, normalizeColorKey } from '@itphx/synth-shared';
 
 export interface StorageConfig {
   dataDir: string;
@@ -64,6 +64,8 @@ interface SerializedSessionReference {
 interface SerializedSession {
   id: string;
   title?: string;
+  icon?: string;
+  color?: string;
   parent_id?: string;
   branch_point?: string;
   plan_approved?: boolean;
@@ -249,6 +251,8 @@ function serializeSession(session: Session): SerializedSession {
   return {
     id: session.id,
     title: session.title,
+    icon: session.icon,
+    color: session.color,
     parent_id: session.parentId,
     branch_point: session.branchPoint,
     plan_approved: session.planApproved,
@@ -317,6 +321,8 @@ function deserializeSession(data: SerializedSession): Session {
   return {
     id: data.id,
     title: data.title,
+    icon: normalizeIconKey(data.icon),
+    color: normalizeColorKey(data.color),
     parentId: data.parent_id,
     branchPoint: data.branch_point,
     planApproved: data.plan_approved,

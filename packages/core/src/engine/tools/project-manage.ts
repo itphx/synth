@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { nowISO, ToolCapability } from '@itphx/synth-shared';
+import { nowISO, ToolCapability, PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS, isProjectIconKey, isProjectColorKey } from '@itphx/synth-shared';
 import type {
   ToolDefinition,
   ToolContext,
@@ -269,9 +269,25 @@ export const projectAttachTool: ToolDefinition = {
 const projectUpdateSchema = z.object({
   name: z.string().min(1).optional().describe('New project name'),
   description: z.string().optional().describe('New project description'),
-  icon: z.string().optional().describe('Project icon'),
-  color: z.string().optional().describe('Project color'),
+  icon: z.enum(PROJECT_ICON_KEYS).nullable().optional()
+    .describe(`Project icon key. Allowed: ${PROJECT_ICON_KEYS.join(', ')}`),
+  color: z.enum(PROJECT_COLOR_KEYS).nullable().optional()
+    .describe(`Project color key. Allowed: ${PROJECT_COLOR_KEYS.join(', ')}`),
 });
+
+/** Понятная ошибка невалидного значения метаданных проекта (i18n + допустимые ключи). */
+function invalidMetaResult(
+  key: 'project.invalid_icon' | 'project.invalid_color',
+  value: unknown,
+  allowed: readonly string[],
+) {
+  const params = { value: String(value), allowed: allowed.join(', ') };
+  return {
+    content: sm(key, params),
+    isError: true as const,
+    metadata: { i18n: i18nMeta(key, params) },
+  };
+}
 
 export const projectUpdateTool: ToolDefinition = {
   name: 'project_update',
@@ -283,11 +299,21 @@ export const projectUpdateTool: ToolDefinition = {
   async execute(args, ctx) {
     // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
     if (isAborted(ctx)) return abortedResult(this.name);
+
+    // Понятное сообщение с перечнем допустимых ключей (до общего argError схемы).
+    const rawArgs = (args ?? {}) as Record<string, unknown>;
+    if (rawArgs.icon !== undefined && rawArgs.icon !== null && !isProjectIconKey(rawArgs.icon)) {
+      return invalidMetaResult('project.invalid_icon', rawArgs.icon, PROJECT_ICON_KEYS);
+    }
+    if (rawArgs.color !== undefined && rawArgs.color !== null && !isProjectColorKey(rawArgs.color)) {
+      return invalidMetaResult('project.invalid_color', rawArgs.color, PROJECT_COLOR_KEYS);
+    }
+
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) {
       return { content: argError(this.name, parsed.error.issues), isError: true };
     }
-    const params = parsed.data as { name?: string; description?: string; icon?: string; color?: string };
+    const params = parsed.data as { name?: string; description?: string; icon?: string | null; color?: string | null };
 
     const extra = getSessionExtra(ctx);
     if (!extra.sessionManager || !extra.projectStore || !extra.sessionId) {
@@ -309,8 +335,8 @@ export const projectUpdateTool: ToolDefinition = {
 
     if (params.name !== undefined) project.name = params.name;
     if (params.description !== undefined) project.description = params.description;
-    if (params.icon !== undefined) project.icon = params.icon;
-    if (params.color !== undefined) project.color = params.color;
+    if (params.icon !== undefined) project.icon = params.icon ?? undefined;
+    if (params.color !== undefined) project.color = params.color ?? undefined;
     project.updatedAt = nowISO();
 
     try {

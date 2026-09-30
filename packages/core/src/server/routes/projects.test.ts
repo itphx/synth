@@ -486,3 +486,85 @@ describe('Project API Routes (opts: RBAC / stats / MCP / managed)', () => {
     });
   });
 });
+
+describe('Project API Routes (icon/color)', () => {
+  let tmpDir: string;
+  let store: ProjectStore;
+  let app: Hono;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-projects-meta-'));
+    store = new ProjectStore({ dataDir: tmpDir });
+    app = new Hono();
+    app.route('/api/v2/projects', createProjectRoutes(createMockAuth(), store));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('POST сохраняет валидные icon/color', async () => {
+    const res = await app.request('/api/v2/projects', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'P', icon: 'rocket', color: 'primary' }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { id: string; icon: string | null; color: string | null };
+    expect(body.icon).toBe('rocket');
+    expect(body.color).toBe('primary');
+    expect((await store.load(body.id))!.icon).toBe('rocket');
+  });
+
+  it('POST невалидный icon → 400 VALIDATION_ERROR с перечнем допустимых ключей', async () => {
+    const res = await app.request('/api/v2/projects', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'P', icon: '🚀' }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toContain('code');
+  });
+
+  it('POST невалидный color (алиас blue при записи не принимается) → 400', async () => {
+    const res = await app.request('/api/v2/projects', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'P', color: 'blue' }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('PUT обновляет icon/color и сбрасывает через null', async () => {
+    const project = store.create('P', 'local', { icon: 'rocket', color: 'primary' });
+    await store.save(project);
+
+    const put = await app.request(`/api/v2/projects/${project.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ icon: 'heart', color: 'error' }),
+    });
+    expect(put.status).toBe(200);
+    const body = (await put.json()) as { icon: string | null; color: string | null };
+    expect(body.icon).toBe('heart');
+    expect(body.color).toBe('error');
+
+    const reset = await app.request(`/api/v2/projects/${project.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ icon: null }),
+    });
+    expect(reset.status).toBe(200);
+    expect((await store.load(project.id))!.icon).toBeUndefined();
+  });
+
+  it('PUT невалидный color → 400, проект не меняется', async () => {
+    const project = store.create('P', 'local', { color: 'primary' });
+    await store.save(project);
+    const res = await app.request(`/api/v2/projects/${project.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ color: 'magenta' }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+    expect((await store.load(project.id))!.color).toBe('primary');
+  });
+});

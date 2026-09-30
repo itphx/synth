@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import type { Project, GitRepoConfig, ProjectMcpSettings, ProjectSkillSettings } from '@itphx/synth-shared';
-import { ProjectRole, generateId, nowISO, AsyncLock, atomicWrite } from '@itphx/synth-shared';
+import { ProjectRole, generateId, nowISO, AsyncLock, atomicWrite, normalizeIconKey, normalizeColorKey } from '@itphx/synth-shared';
 
 export interface ProjectStoreConfig {
   dataDir: string;
@@ -33,7 +33,12 @@ export class ProjectStore {
     const path = this._projectPath(id);
     try {
       const data = await readFile(path, 'utf-8');
-      return JSON.parse(data) as Project;
+      const project = JSON.parse(data) as Project;
+      // Нормализация метаданных при чтении (legacy → undefined/канонический ключ),
+      // чтобы в памяти всегда были канонические значения (AD-иконки/цвета проектов).
+      project.icon = normalizeIconKey(project.icon);
+      project.color = normalizeColorKey(project.color);
+      return project;
     } catch {
       return null;
     }

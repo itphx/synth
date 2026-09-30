@@ -10,6 +10,8 @@ import {
   generateStreamId,
   nowISO,
   sessionMcpUpdateSchema,
+  normalizeIconKey,
+  normalizeColorKey,
 } from '@itphx/synth-shared';
 import type { Message, Session, SessionSettings } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
@@ -208,6 +210,9 @@ export function createSessionRoutes(
     session.mode = (body.mode ?? undefined) as Session['mode'];
     session.planApproved = body.plan_approved ?? body.planApproved ?? false;
     session.branchPoint = body.branch_point ?? body.branchPoint;
+    // Метаданные сессии (иконка/цвет) — нормализуем legacy при импорте.
+    session.icon = normalizeIconKey(body.icon);
+    session.color = normalizeColorKey(body.color);
     session.obfuscationMap = (body.obfuscation_map ?? body.obfuscationMap) as Session['obfuscationMap'];
     session.createdAt = typeof (body.created_at ?? body.createdAt) === 'string'
       ? (body.created_at ?? body.createdAt)

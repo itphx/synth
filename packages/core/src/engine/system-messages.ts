@@ -163,6 +163,8 @@ export const SYSTEM_MESSAGES = {
   'project.write_forbidden': 'Error: you do not have permission to modify this project (owner or editor role required)',
   'project.updated': 'Project updated.',
   'project.updated_ok': 'Project "{name}" updated.',
+  'project.invalid_icon': 'Invalid icon "{value}". Allowed values: {allowed}.',
+  'project.invalid_color': 'Invalid color "{value}". Allowed values: {allowed}.',
   'project.no_project': 'No project: this action is available only within a project',
   'project.workspace_set': 'Project working directory set: {dir}',
   'project.workspace_invalid': 'Error: invalid project working directory',

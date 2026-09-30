@@ -63,11 +63,13 @@ export class SessionManager {
     return this.store.load(sessionId);
   }
 
-  async createSession(data: { title?: string; projectId?: string; engine?: string; parentId?: string; sessionOrigin?: SessionOrigin; settings?: Partial<SessionSettings>; userId?: string; ownerId?: string } = {}): Promise<Session> {
+  async createSession(data: { title?: string; icon?: string; color?: string; projectId?: string; engine?: string; parentId?: string; sessionOrigin?: SessionOrigin; settings?: Partial<SessionSettings>; userId?: string; ownerId?: string } = {}): Promise<Session> {
     const mcpToolSettings = await this._resolveMcpToolSettings(data.settings?.mcpToolSettings);
     const session: Session = {
       id: generateId(),
       title: data.title || sm('session.default_title'),
+      icon: data.icon,
+      color: data.color,
       sessionOrigin: data.sessionOrigin || 'user',
       parentId: data.parentId,
       userId: data.userId || '',
@@ -564,6 +566,8 @@ export class SessionManager {
 
       const forked = await this.createSession({
         title: forkedTitle,
+        icon: source.icon,
+        color: source.color,
         projectId: source.projectId,
         engine: source.engine,
         sessionOrigin: 'fork' as SessionOrigin,

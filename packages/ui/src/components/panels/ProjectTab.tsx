@@ -10,6 +10,9 @@ import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type ProjectData, type ProjectMcpResponse, type ProjectSkillsResponse, type EffectiveSkillEntry } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '@/components/ui/Toggle'
+import { EntityIconPicker } from '@/components/ui/EntityIconPicker'
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
+import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
 import { InfoField as Field, InfoSection as Section } from '@/components/ui/settings'
 import { DirectoryPickerDialog } from '@/components/ui/DirectoryPickerDialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -349,6 +352,34 @@ export function ProjectTab() {
     })
   }
 
+  const handleIconChange = async (icon: string | null) => {
+    if (!project) return
+    const prevIcon = project.icon
+    await run({
+      key: 'icon',
+      run: () => synthApi.updateProject(project.id, { icon }),
+      onSuccess: (updated) => {
+        setProject(updated)
+        useProjectsStore.getState().updateProjectInList(updated)
+      },
+      onError: () => setProject((p) => (p ? { ...p, icon: prevIcon } : p)),
+    })
+  }
+
+  const handleColorChange = async (color: string | null) => {
+    if (!project) return
+    const prevColor = project.color
+    await run({
+      key: 'color',
+      run: () => synthApi.updateProject(project.id, { color }),
+      onSuccess: (updated) => {
+        setProject(updated)
+        useProjectsStore.getState().updateProjectInList(updated)
+      },
+      onError: () => setProject((p) => (p ? { ...p, color: prevColor } : p)),
+    })
+  }
+
   return (
     <PanelTab>
       <Section title={t('rightPanel.tab.project')}>
@@ -358,6 +389,35 @@ export function ProjectTab() {
           <Field label={t('projectTab.info.creator')} value={project?.owner_id || '—'} />
           <Field label={t('projectTab.info.created')} value={formatDateTime(project?.created_at, locale)} />
         </div>
+      </Section>
+
+      <Section title={t('leftPanel.iconColor')}>
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              data-testid="project-icon-color-trigger"
+              className="flex w-full items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs text-foreground hover:bg-interactive-hover transition-colors"
+            >
+              <Icon
+                name={resolveIconName(project?.icon) ?? 'folder-3'}
+                className="size-4 shrink-0"
+                style={resolveIconColor(project?.color) ? { color: resolveIconColor(project?.color) } : undefined}
+              />
+              <span className="min-w-0 flex-1 truncate text-left">{project?.name || '—'}</span>
+              <Icon name="palette" className="size-3.5 shrink-0 text-muted-foreground" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent side="bottom" align="start" className="w-72 p-3">
+            <EntityIconPicker
+              icon={project?.icon}
+              color={project?.color}
+              onIconChange={handleIconChange}
+              onColorChange={handleColorChange}
+              disabled={isPending('icon') || isPending('color')}
+            />
+          </PopoverContent>
+        </Popover>
       </Section>
 
       <PlanSection project={project} />

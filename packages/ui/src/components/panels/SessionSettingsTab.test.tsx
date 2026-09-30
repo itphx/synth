@@ -44,6 +44,13 @@ vi.mock('@/hooks/useNotification', () => ({
 vi.mock('../chat/ModelSelector', () => ({
   ModelSelector: () => React.createElement('div', { 'data-testid': 'model-selector' }),
 }))
+// Пикер живёт в Popover: для теста логики сохранения раскрываем содержимое.
+vi.mock('@/components/ui/popover', async () => {
+  const ReactMod = await import('react')
+  const Passthrough = ({ children }: { children?: React.ReactNode }) =>
+    ReactMod.createElement(ReactMod.Fragment, null, children)
+  return { Popover: Passthrough, PopoverTrigger: Passthrough, PopoverContent: Passthrough }
+})
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
@@ -702,5 +709,43 @@ describe('SessionSettingsTab — автосохранение настроек',
     expect(mocks.notify).toHaveBeenCalledWith(
       expect.objectContaining({ text: enDict['panel.saveError'], type: 'error' }),
     )
+  })
+})
+
+describe('SessionSettingsTab — иконка и цвет сессии (AD-075)', () => {
+  beforeEach(() => {
+    // Сохраняем settings сессии при PATCH icon/color (иначе рендер упадёт на
+    // «settings.permission» — мок возвращает только переданные поля).
+    mocks.updateSession.mockImplementation(async (_id: string, data: { settings?: Record<string, unknown>; icon?: string | null; color?: string | null }) => ({
+      id: 's1',
+      name: 'S',
+      project_id: null,
+      engine: 'synth',
+      settings: { model: 'm', ...(data.settings ?? {}) },
+      icon: data.icon ?? null,
+      color: data.color ?? null,
+    }))
+  })
+
+  it('клик по ключу иконки сохраняет канонический ключ через updateSession', async () => {
+    const container = await renderTab()
+    expect(container.querySelector('[data-testid="session-icon-color-trigger"]')).not.toBeNull()
+
+    const iconBtn = container.querySelector('[data-testid="entity-icon-rocket"]') as HTMLButtonElement
+    expect(iconBtn).toBeTruthy()
+    await act(async () => { iconBtn.click() })
+
+    expect(mocks.updateSession).toHaveBeenCalledWith('s1', { icon: 'rocket' })
+  })
+
+  it('выбор и сброс цвета уходят ключом и null', async () => {
+    const container = await renderTab()
+    const colorBtn = container.querySelector('[data-testid="entity-color-primary"]') as HTMLButtonElement
+    await act(async () => { colorBtn.click() })
+    expect(mocks.updateSession).toHaveBeenCalledWith('s1', { color: 'primary' })
+
+    const none = container.querySelector('[data-testid="entity-color-none"]') as HTMLButtonElement
+    await act(async () => { none.click() })
+    expect(mocks.updateSession).toHaveBeenLastCalledWith('s1', { color: null })
   })
 })

@@ -1,12 +1,72 @@
 import { z } from 'zod';
-import { MessageRole, GlobalRole, ProjectRole, StatusMessageType } from '../types/index.js';
-import type { GitRepoConfig } from '../types/index.js';
+import {
+  MessageRole,
+  GlobalRole,
+  ProjectRole,
+  StatusMessageType,
+  PROJECT_ICON_KEYS,
+  PROJECT_COLOR_KEYS,
+} from '../types/index.js';
+import type { GitRepoConfig, ProjectIconKey, ProjectColorKey } from '../types/index.js';
 import { ToolCapability } from '../types/tools.js';
 
 export const messageRoleSchema = z.nativeEnum(MessageRole);
 export const globalRoleSchema = z.nativeEnum(GlobalRole);
 export const projectRoleSchema = z.nativeEnum(ProjectRole);
 export const statusMessageTypeSchema = z.nativeEnum(StatusMessageType);
+
+/** Zod-схемы канонических ключей иконок/цветов (единые для project и session). */
+export const projectIconKeySchema = z.enum(PROJECT_ICON_KEYS);
+export const projectColorKeySchema = z.enum(PROJECT_COLOR_KEYS);
+
+/**
+ * Legacy-алиасы цветов (нормализация при ЧТЕНИИ, не при записи):
+ * `blue→primary`, `red→error`, `green→success`, а также CSS-переменные
+ * `--primary`/`--status-info`/`--syntax-*`, которыми пользуются агенты.
+ * `--status-info` отдельного ключа не имеет — трактуем как `primary`.
+ */
+const COLOR_KEY_ALIASES: Record<string, ProjectColorKey> = {
+  blue: 'primary',
+  red: 'error',
+  green: 'success',
+  '--primary': 'primary',
+  '--status-info': 'primary',
+  '--syntax-keyword': 'keyword',
+  '--syntax-string': 'string',
+  '--syntax-number': 'number',
+  '--syntax-type': 'type',
+  '--syntax-comment': 'comment',
+  '--status-error': 'error',
+  '--status-success': 'success',
+};
+
+/** true, если значение — канонический ключ иконки (без алиасов; для записи). */
+export function isProjectIconKey(value: unknown): value is ProjectIconKey {
+  return typeof value === 'string' && (PROJECT_ICON_KEYS as readonly string[]).includes(value);
+}
+
+/** true, если значение — канонический ключ цвета (без алиасов; для записи). */
+export function isProjectColorKey(value: unknown): value is ProjectColorKey {
+  return typeof value === 'string' && (PROJECT_COLOR_KEYS as readonly string[]).includes(value);
+}
+
+/**
+ * Нормализация иконки при ЧТЕНИИ. Канонический ключ → как есть; всё прочее
+ * (эмодзи/произвольные строки) → `undefined`.
+ */
+export function normalizeIconKey(value: unknown): ProjectIconKey | undefined {
+  return isProjectIconKey(value) ? value : undefined;
+}
+
+/**
+ * Нормализация цвета при ЧТЕНИИ: канонический ключ или legacy-алиас → ключ
+ * палитры; всё прочее → `undefined`.
+ */
+export function normalizeColorKey(value: unknown): ProjectColorKey | undefined {
+  if (typeof value !== 'string') return undefined;
+  const canonical = COLOR_KEY_ALIASES[value] ?? value;
+  return isProjectColorKey(canonical) ? canonical : undefined;
+}
 
 export const tokenUsageSchema = z.object({
   inputTokens: z.number().int().min(0),
@@ -50,6 +110,8 @@ export const sessionSettingsSchema = z.object({
 export const sessionCreateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   title: z.string().min(1).max(200).optional(),
+  icon: projectIconKeySchema.optional().nullable(),
+  color: projectColorKeySchema.optional().nullable(),
   projectId: z.string().optional(),
   engine: z.enum(['synth', 'opencode', 'cline']).default('synth'),
   settings: sessionSettingsSchema.optional(),
@@ -57,6 +119,8 @@ export const sessionCreateSchema = z.object({
 
 export const sessionUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
+  icon: projectIconKeySchema.optional().nullable(),
+  color: projectColorKeySchema.optional().nullable(),
   projectId: z.string().optional(),
   engine: z.enum(['synth', 'opencode', 'cline']).optional(),
   // passthrough: настройки сессии содержат поля вне sessionSettingsSchema
@@ -100,8 +164,8 @@ export function normalizeGitRepoConfig(raw: unknown): GitRepoConfig | null {
 export const projectCreateSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().default(''),
-  icon: z.string().optional(),
-  color: z.string().optional(),
+  icon: projectIconKeySchema.optional().nullable(),
+  color: projectColorKeySchema.optional().nullable(),
   workspace: z.string().optional(),
   repos: z.array(z.union([z.string(), gitRepoConfigSchema])).optional(),
 });
@@ -111,8 +175,8 @@ export const projectUpdateSchema = z.object({
   description: z.string().optional(),
   currentTask: z.string().optional(),
   invariants: z.string().optional(),
-  icon: z.string().optional(),
-  color: z.string().optional(),
+  icon: projectIconKeySchema.optional().nullable(),
+  color: projectColorKeySchema.optional().nullable(),
   workspace: z.string().optional(),
   repos: z.array(z.union([z.string(), gitRepoConfigSchema])).optional(),
 });

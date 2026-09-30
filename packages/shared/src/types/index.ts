@@ -674,6 +674,10 @@ export interface SessionReference {
 export interface Session {
   id: string;
   title?: string;
+  /** Канонический ключ иконки (PROJECT_ICON_KEYS); legacy-значения → undefined. */
+  icon?: string;
+  /** Канонический ключ цвета (PROJECT_COLOR_KEYS); legacy-значения нормализуются. */
+  color?: string;
   sessionOrigin: SessionOrigin;
   parentId?: string;
   branchPoint?: string;
@@ -883,6 +887,48 @@ export interface Project {
   createdAt: string;
   updatedAt: string;
 }
+
+/**
+ * Канонические ключи иконок проектов и сессий (единый список для server и UI).
+ * Значения — только ключи реестра (загружаемые картинки не поддерживаются).
+ */
+export const PROJECT_ICON_KEYS = [
+  'code',
+  'terminal',
+  'rocket',
+  'flask',
+  'gamepad',
+  'briefcase',
+  'home',
+  'globe',
+  'leaf',
+  'shield',
+  'palette',
+  'server',
+  'phone',
+  'database',
+  'lightbulb',
+  'music',
+  'camera',
+  'book',
+  'heart',
+] as const;
+
+export type ProjectIconKey = (typeof PROJECT_ICON_KEYS)[number];
+
+/** Канонические ключи цветов проектов и сессий (единый список для server и UI). */
+export const PROJECT_COLOR_KEYS = [
+  'keyword',
+  'string',
+  'number',
+  'type',
+  'comment',
+  'error',
+  'primary',
+  'success',
+] as const;
+
+export type ProjectColorKey = (typeof PROJECT_COLOR_KEYS)[number];
 
 // --- Plan (AD-039) ---
 export interface PlanColumn {

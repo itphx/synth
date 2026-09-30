@@ -464,6 +464,37 @@ describe('project_update', () => {
     const stored = (await projectStore.load(projectId))!;
     expect(stored.name).toBe('Old name');
   });
+
+  it('обновляет валидные icon/color', async () => {
+    const result = await projectUpdateTool.execute({ icon: 'rocket', color: 'primary' }, makeCtx());
+    expect(result.isError).toBeUndefined();
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.icon).toBe('rocket');
+    expect(stored.color).toBe('primary');
+  });
+
+  it('невалидный icon → project.invalid_icon с перечнем ключей, проект не изменён', async () => {
+    const result = await projectUpdateTool.execute({ icon: '🚀' }, makeCtx());
+    expect(result.isError).toBe(true);
+    const meta = result.metadata as { i18n?: { key: string; params?: Record<string, string> } } | undefined;
+    expect(meta?.i18n).toMatchObject({ key: 'project.invalid_icon' });
+    expect(meta?.i18n?.params?.allowed).toContain('rocket');
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.icon).toBeUndefined();
+  });
+
+  it('невалидный color → project.invalid_color с перечнем ключей, проект не изменён', async () => {
+    const result = await projectUpdateTool.execute({ color: 'blue' }, makeCtx());
+    expect(result.isError).toBe(true);
+    const meta = result.metadata as { i18n?: { key: string; params?: Record<string, string> } } | undefined;
+    expect(meta?.i18n).toMatchObject({ key: 'project.invalid_color' });
+    expect(meta?.i18n?.params?.allowed).toContain('primary');
+
+    const stored = (await projectStore.load(projectId))!;
+    expect(stored.color).toBeUndefined();
+  });
 });
 
 describe('project_workspace_set', () => {

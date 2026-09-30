@@ -10,6 +10,9 @@ import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type AgentInfo, type EffectiveSkillEntry, type ToolsPolicy } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
+import { EntityIconPicker } from '@/components/ui/EntityIconPicker'
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
+import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
 import { ModelSelector } from '../chat/ModelSelector'
 import { ProjectInstructions } from './ProjectInstructions'
 import { ExpandableListRow, RowBadge } from './ExpandableListRow'
@@ -698,6 +701,25 @@ export function SessionSettingsTab() {
   }
 
   /** AD-071 §2.3: метка наследования — «Глобальная (<короткое имя>)», фоллбек — «Глобальная». */
+  /** AD-075: иконка/цвет сессии (немедленное сохранение через PATCH). */
+  const handleSessionIconChange = async (icon: string | null) => {
+    if (!sessionId) return
+    await run({
+      key: 'sessionIcon',
+      run: () => synthApi.updateSession(sessionId, { icon }),
+      onSuccess: (updated) => useSessionsStore.getState().upsertSession(updated),
+    })
+  }
+
+  const handleSessionColorChange = async (color: string | null) => {
+    if (!sessionId) return
+    await run({
+      key: 'sessionColor',
+      run: () => synthApi.updateSession(sessionId, { color }),
+      onSuccess: (updated) => useSessionsStore.getState().upsertSession(updated),
+    })
+  }
+
   const inheritLabel = (prefix: 'toolsPolicy' | 'mcpPolicy', value: ToolsPolicy | null) =>
     value
       ? t(`${prefix}.inherit`, { policy: t(`policy.short.${value}`) })
@@ -722,6 +744,35 @@ export function SessionSettingsTab() {
           <Field label={t('rightPanel.params.creator')} value={session.user_id || session.owner_id || t('rightPanel.params.none')} />
           <Field label={t('rightPanel.params.created')} value={formatDateTime(session.created_at, locale)} />
           <Field label={t('rightPanel.params.engine')} value={session.engine} />
+        </Section>
+
+        <Section title={t('leftPanel.iconColor')}>
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                data-testid="session-icon-color-trigger"
+                className="flex w-full items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs text-foreground hover:bg-interactive-hover transition-colors"
+              >
+                <Icon
+                  name={resolveIconName(session.icon) ?? (session.session_origin === 'subagent' ? 'cpu' : 'chat-new')}
+                  className="size-4 shrink-0"
+                  style={resolveIconColor(session.color) ? { color: resolveIconColor(session.color) } : undefined}
+                />
+                <span className="min-w-0 flex-1 truncate text-left">{session.name || session.id}</span>
+                <Icon name="palette" className="size-3.5 shrink-0 text-muted-foreground" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent side="bottom" align="start" className="w-72 p-3">
+              <EntityIconPicker
+                icon={session.icon}
+                color={session.color}
+                onIconChange={handleSessionIconChange}
+                onColorChange={handleSessionColorChange}
+                disabled={isPending('sessionIcon') || isPending('sessionColor')}
+              />
+            </PopoverContent>
+          </Popover>
         </Section>
 
         <Section title={t('sessionTab.todos.title')}>
