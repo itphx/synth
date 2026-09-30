@@ -20,7 +20,8 @@ vi.mock('./ReasoningLevelSelector', () => ({ ReasoningLevelSelector: () => null 
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
-import { ChatInput } from './ChatInput'
+import { ChatInput, splitMessageWithTags } from './ChatInput'
+import type { AgentInfo } from '@/lib/api/synthApi'
 import { useChatStore } from '@/stores/chatStore'
 import { useSkillsStore } from '@/stores/skillsStore'
 
@@ -149,5 +150,54 @@ describe('ChatInput — `/`-автокомплит (AD-046 §9.3)', () => {
     expect(popup).not.toBeNull()
     // CSS-позиционирование от якоря: 9px до рамки композера + 8px зазора.
     expect(popup.style.bottom).toBe('calc(100% + 17px)')
+  })
+})
+
+function makeAgent(id: string, color: string | null = null): AgentInfo {
+  return {
+    id,
+    display_name: id,
+    capabilities: [],
+    enabled: true,
+    icon: null,
+    color,
+    description: null,
+    available: true,
+    mode: 'simple',
+    agent_mode: null,
+    subagent_prompt: null,
+    max_steps: null,
+    provider: null,
+    model: null,
+    context_file: null,
+    is_builtin: true,
+    is_overridden: false,
+  }
+}
+
+describe('ChatInput — splitMessageWithTags: `@`-тег сохраняется в тексте', () => {
+  const agents = [makeAgent('pm'), makeAgent('dev')]
+
+  it('одиночный тег: `@pm` остаётся в тексте части', () => {
+    expect(splitMessageWithTags('@pm сделай X', agents)).toEqual([
+      { text: '@pm сделай X', agentRole: 'pm' },
+    ])
+  })
+
+  it('группа подряд идущих тегов: каждый текст содержит свой тег', () => {
+    expect(splitMessageWithTags('@pm @dev сделай X', agents)).toEqual([
+      { text: '@pm сделай X', agentRole: 'pm' },
+      { text: '@dev сделай X', agentRole: 'dev' },
+    ])
+  })
+
+  it('текст до первого тега (commonPrefix) сохраняется вместе с тегом', () => {
+    expect(splitMessageWithTags('привет @pm сделай X', agents)).toEqual([
+      { text: 'привет @pm сделай X', agentRole: 'pm' },
+    ])
+  })
+
+  it('неизвестный тег не распознаётся — возврат null (сообщение уходит как есть)', () => {
+    expect(splitMessageWithTags('@nobody сделай X', agents)).toBeNull()
   })
 })

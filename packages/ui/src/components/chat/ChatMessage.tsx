@@ -13,6 +13,7 @@ import { CommandMessage } from './CommandMessage'
 import { Notice, type NoticeVariant } from './Notice'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/chatStore'
+import { useAgentsStore } from '@/stores/agentsStore'
 import { useI18n, useResolveI18n } from '@/lib/i18n'
 import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
 import { synthApi } from '@/lib/api/synthApi'
@@ -120,6 +121,8 @@ function ChatMessageInner({
   const resolveI18nText = useResolveI18n()
   const { t } = useI18n()
   const i18nMeta = message.metadata?.i18n
+  // Реестр агентов — подсветка `@`-упоминаний в сообщениях пользователя.
+  const agents = useAgentsStore((s) => s.agents)
   const activeTab = useUIStore((s) => s.centerTabs.find((t) => t.id === s.activeCenterTabId))
   const sessionId = (activeTab?.data?.sessionId as string) || undefined
   // Отладка открыта глобально (chatStore) — подсветить кнопку только у того
@@ -432,7 +435,7 @@ function ChatMessageInner({
 
         {displayContent && (
           isUser ? (
-            <SecretPlainText content={displayContent} secrets={secrets} sessionId={sessionId} />
+            <SecretPlainText content={displayContent} secrets={secrets} sessionId={sessionId} agents={agents} />
           ) : isInfo && (message.metadata as Record<string, unknown>)?.type === 'session_reference' ? (
             <SessionReferenceCard
               sessionId={String((message.metadata as Record<string, unknown>)?.session_id || '')}

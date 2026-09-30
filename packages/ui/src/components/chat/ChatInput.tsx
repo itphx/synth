@@ -26,7 +26,7 @@ interface ChatInputProps {
   onToggleExpand?: () => void
 }
 
-interface TagPart {
+export interface TagPart {
   text: string
   agentRole: string
 }
@@ -35,7 +35,16 @@ const TAG_REGEX = /@(\w+)/g
 const MAX_TAGS = 3
 const CHAT_INPUT_RADIUS = 'var(--radius-xl)'
 
-function splitMessageWithTags(message: string, agents: AgentInfo[]): TagPart[] | null {
+/**
+ * Собирает текст части сообщения для конкретного агента, СОХРАНЯЯ сам тег
+ * `@<agentId>` (иначе пользователь не видит, к кому обращался), и текст до
+ * первого тега (commonPrefix), если он был.
+ */
+function buildTaggedText(prefix: string, tag: string, segmentText: string): string {
+  return [prefix, `@${tag}`, segmentText].filter(Boolean).join(' ')
+}
+
+export function splitMessageWithTags(message: string, agents: AgentInfo[]): TagPart[] | null {
   const tagsWithPositions: { tag: string; start: number; end: number }[] = []
   let match: RegExpExecArray | null
 
@@ -86,10 +95,10 @@ function splitMessageWithTags(message: string, agents: AgentInfo[]): TagPart[] |
         for (let k = i; k <= groupEnd; k++) {
           const agent = agents.find((a) => a.id === tagsWithPositions[k].tag && a.enabled)
           if (agent) {
-            const fullMessage = commonPrefix
-              ? `${commonPrefix} ${segmentText}`
-              : segmentText
-            parts.push({ text: fullMessage, agentRole: tagsWithPositions[k].tag })
+            parts.push({
+              text: buildTaggedText(commonPrefix, tagsWithPositions[k].tag, segmentText),
+              agentRole: tagsWithPositions[k].tag,
+            })
           }
         }
         i = groupEnd + 1
@@ -104,10 +113,10 @@ function splitMessageWithTags(message: string, agents: AgentInfo[]): TagPart[] |
     const agent = agents.find((a) => a.id === currentTag.tag && a.enabled)
 
     if (agent) {
-      const fullMessage = commonPrefix
-        ? `${commonPrefix} ${segmentText}`
-        : segmentText
-      parts.push({ text: fullMessage, agentRole: currentTag.tag })
+      parts.push({
+        text: buildTaggedText(commonPrefix, currentTag.tag, segmentText),
+        agentRole: currentTag.tag,
+      })
     }
 
     i++
