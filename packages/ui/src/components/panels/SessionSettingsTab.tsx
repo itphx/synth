@@ -4,10 +4,8 @@ import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
-import { useChatStore } from '@/stores/chatStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useNotification } from '@/hooks/useNotification'
-import { confirm } from '@/lib/confirm'
 import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type AgentInfo, type EffectiveSkillEntry, type ToolsPolicy } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
@@ -600,21 +598,6 @@ export function SessionSettingsTab() {
     setAskTimeoutEnabled(values.askTimeoutEnabled)
     setAskTimeoutSec(values.askTimeoutSec)
   }, [session, defaultAskTimeoutMs, setSelectedProvider, setSelectedModel])
-
-  const handleClearSession = useCallback(async () => {
-    if (!sessionId) return
-    const ok = await confirm({ title: t('leftPanel.confirmClearSession'), variant: 'warning' })
-    if (!ok) return
-    try {
-      await synthApi.clearSession(sessionId)
-      useChatStore.getState().clearSession(sessionId)
-      const result = await synthApi.getSessionMessages(sessionId)
-      useChatStore.getState().setMessages(sessionId, result.messages)
-      notify({ text: t('chat.session.cleared'), type: 'success', category: 'queue', sessionId })
-    } catch {
-      notify({ text: t('chat.error.clearSession'), type: 'error', category: 'error', sessionId })
-    }
-  }, [sessionId, notify, t])
 
   // Сессионные одобрения (AD-029): allow-правила, добавленные при «Разрешить в сессии».
   // Правило может быть строкой ('allow' — весь тул) или объектом { путь: 'allow' }
@@ -1234,16 +1217,6 @@ export function SessionSettingsTab() {
             </div>
           </Section>
         )}
-
-        {/* Очистка сессии: вынесена из убранного футера вниз скролла (подтверждение — внутри). */}
-        <div className="border-t border-border pt-4">
-          <button
-            onClick={handleClearSession}
-            className="w-full rounded-lg border border-destructive/30 px-4 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
-          >
-            {t('leftPanel.clearSession')}
-          </button>
-        </div>
 
     </PanelTab>
   )

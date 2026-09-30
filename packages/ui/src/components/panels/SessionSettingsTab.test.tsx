@@ -30,8 +30,6 @@ const mocks = vi.hoisted(() => ({
   updateSessionMcp: vi.fn(),
   getSecuritySettings: vi.fn(),
   updateSession: vi.fn(),
-  clearSession: vi.fn(),
-  getSessionMessages: vi.fn(),
   getProviders: vi.fn(),
   getModels: vi.fn(),
   getToolsPolicyInfo: vi.fn(),
@@ -660,12 +658,5 @@ describe('SessionSettingsTab — автосохранение настроек',
     expect(
       findSection(container, 'Debug')!.querySelector('button[role="switch"]')!.getAttribute('aria-busy'),
     ).toBeNull()
-  })
-
-  it('«Очистить сессию» доступна внизу вкладки (вне футера)', async () => {
-    const container = await renderTab()
-    expect(container.querySelector('[data-testid="panel-tab-footer"]')).toBeNull()
-    const clear = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Clear')
-    expect(clear).toBeTruthy()
   })
 })
