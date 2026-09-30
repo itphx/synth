@@ -1261,3 +1261,12 @@
 - **Верификация (@orchestrator, независимо):** `pnpm typecheck` OK; `pnpm lint` 0 errors; `pnpm test` — shared 176, core 2320, ui 905, backend 341 (3742) PASS.
 - **Документация:** `packages/ui/AGENTS.md` (дефолтный цвет иконки сессии).
 - **Коммит:** ниже (ветка `feat/entity-icons`, локально).
+
+## 2026-09-30 20:10 — feat(ui): расширение реестра иконок (+18) — PASS
+
+- **Задача:** пополнить коллекцию иконок проекта/сессии, добавить в т.ч. дефолтные (`folder-3`/`chat-new`/`cpu`).
+- **Тип:** feature (shared + ui) · **Исполнитель:** @fixer + @orchestrator.
+- **Сделано:** `PROJECT_ICON_KEYS` 19 → 37 (+18: folder, chat, cpu, file, file-code, docs, task, todo, bug, robot, brain, git, repo, test, chart, star, image, calendar); UI-реестр `ICON_META`/`PROJECT_ICONS` синхронизирован по составу и порядку; новые тесты-инварианты (совпадение shared↔UI, уникальность, валидность `IconName`, наличие дефолтных ключей).
+- **Верификация (@orchestrator, независимо):** `pnpm typecheck` OK; `pnpm lint` 0 errors; `pnpm test` — shared 177, core 2320, ui 910, backend 341 (3748) PASS.
+- **Документация:** корневой `AGENTS.md` и `packages/shared/AGENTS.md` (число ключей 19→37).
+- **Коммит:** ниже (ветка `feat/entity-icons`, локально).
