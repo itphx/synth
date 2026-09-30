@@ -18,6 +18,7 @@ import { ExpandableListRow, RowBadge } from './ExpandableListRow'
 import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 import { SelectContent, SelectItem } from '../ui/select'
 import { InfoField as Field, InfoSection as Section, ModelPairSelect, SelectField, SliderField } from '../ui/settings'
+import { PanelTab } from './PanelTab'
 
 export function SessionSettingsTab() {
   const { t, locale } = useI18n()
@@ -446,15 +447,34 @@ export function SessionSettingsTab() {
 
   if (!session) {
     return (
-      <div className="p-4 text-sm text-muted-foreground">
-        {t('rightPanel.params.noSessions')}
-      </div>
+      <PanelTab>
+        <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
+          {t('rightPanel.params.noSessions')}
+        </div>
+      </PanelTab>
     )
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+    <PanelTab
+      footer={
+        <>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="w-full rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
+          >
+            {saving ? t('sessionSettings.saving') : t('common.save')}
+          </button>
+          <button
+            onClick={handleClearSession}
+            className="w-full rounded-lg border border-destructive/30 px-4 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
+          >
+            {t('leftPanel.clearSession')}
+          </button>
+        </>
+      }
+    >
         <Section title={t('rightPanel.params.session')}>
           <Field label={t('rightPanel.params.name')} value={session.name || t('rightPanel.params.none')} />
           <Field label="ID" value={session.id} mono />
@@ -565,7 +585,7 @@ export function SessionSettingsTab() {
         {/* Embedding */}
         {microFirst && (
           <Section title={t('sessionSettings.micro.embedding')}>
-            <div className="text-[0.625rem] text-muted-foreground/60 mb-2">
+            <div className="text-[0.625rem] text-muted-foreground/60">
               {t('sessionSettings.micro.embeddingHint')}
             </div>
             <label className="flex items-center gap-3 cursor-pointer">
@@ -575,7 +595,7 @@ export function SessionSettingsTab() {
               </span>
             </label>
             {embeddingEnabled && (
-              <div className="mt-2">
+              <div>
                 <ModelPairSelect
                   variant="compact"
                   filterOptions
@@ -953,24 +973,8 @@ export function SessionSettingsTab() {
             </div>
           </Section>
         )}
-      </div>
 
-      <div className="shrink-0 border-t border-border p-4 space-y-2">
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="w-full rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-        >
-          {saving ? t('sessionSettings.saving') : t('common.save')}
-        </button>
-        <button
-          onClick={handleClearSession}
-          className="w-full rounded-lg border border-destructive/30 px-4 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
-        >
-          {t('leftPanel.clearSession')}
-        </button>
-      </div>
-    </div>
+    </PanelTab>
   )
 }
 

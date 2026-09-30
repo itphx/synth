@@ -14,6 +14,7 @@ import { buildUsageSegments } from '@/lib/statsSegments'
 import { readMessageSubagents } from '@/lib/subagentStats'
 import type { ProjectStats, ModelGroup, PromptInfoResponse, SessionMcpEffectiveResponse, SessionSkillsResponse, EffectiveSkillEntry } from '@/lib/api/synthApi'
 import type { PromptToolDetail, McpServerEffective } from '@itphx/synth-shared'
+import { PanelTab } from './PanelTab'
 
 /** Фолбэк контекстного окна, если у модели не задано своё. */
 const DEFAULT_CONTEXT_WINDOW = 200_000
@@ -462,13 +463,13 @@ export const StatsTab: React.FC = () => {
   else addCost(sessionCostMap, liveSubagent?.costUsd, liveSubagent?.costCurrency)
 
   return (
-    <div className="flex flex-col gap-4 p-3">
+    <PanelTab>
       {hasLastMsgUsage && (
         <Section title={t('rightPanel.stats.lastAnswer')}>
           {activeStream && (liveSegments.length > 0 || displayModel) && (
             <div
               data-testid="stats-live"
-              className="mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[0.6875rem] text-muted-foreground tabular-nums"
+              className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[0.6875rem] text-muted-foreground tabular-nums"
             >
               <span className="inline-flex items-center gap-1 text-primary">
                 <span className="size-1.5 rounded-full bg-primary animate-pulse" />
@@ -483,8 +484,8 @@ export const StatsTab: React.FC = () => {
               ))}
             </div>
           )}
-          <div className="mb-2">
-            <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>{t('rightPanel.stats.contextWindow')}</span>
               <span className="tabular-nums">
                 {fmt(displayInputTokens)} / {fmt(contextWindowMax)} ({Math.round(windowPercent)}%)
@@ -497,7 +498,7 @@ export const StatsTab: React.FC = () => {
               />
             </div>
             {isContextNearLimit && (
-              <div className="mt-1 text-[0.6875rem] text-destructive">
+              <div className="text-[0.6875rem] text-destructive">
                 {t('rightPanel.stats.contextNearLimit')}
               </div>
             )}
@@ -532,8 +533,8 @@ export const StatsTab: React.FC = () => {
           </div>
 
           {hasLastSubagents && (
-            <div className="mt-3 border-t border-border/40 pt-3">
-              <div className="mb-1 flex items-center gap-1.5 text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="border-t border-border/40 pt-3 space-y-1">
+              <div className="flex items-center gap-1.5 text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
                 <Icon name="user-3" className="size-3 shrink-0" />
                 <span>{t('rightPanel.stats.subagentsTitle')}</span>
               </div>
@@ -546,7 +547,7 @@ export const StatsTab: React.FC = () => {
                   <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCostMap(lastSubagents!.cost_by_currency, lastSubagents!.cost_usd)} />
                 </div>
               </div>
-              <div className="mt-1 text-[0.6875rem] text-muted-foreground">
+              <div className="text-[0.6875rem] text-muted-foreground">
                 {t('rightPanel.stats.subagentsNote')}
               </div>
             </div>
@@ -615,7 +616,7 @@ export const StatsTab: React.FC = () => {
       <Section title={t('rightPanel.stats.promptComposition')}>
         {promptInfo ? (
           <>
-            <div className="mb-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
               <StatCell
                 icon="database-2"
                 color="text-amber-400"
@@ -639,7 +640,7 @@ export const StatsTab: React.FC = () => {
             </div>
             <ExpandToggle expanded={promptExpanded} onToggle={() => setPromptExpanded((v) => !v)} />
             {promptExpanded && (
-              <div className="mt-2 overflow-x-auto">
+              <div className="overflow-x-auto">
                 <table className="w-full text-[0.6875rem]">
                   <thead>
                     <tr className="text-muted-foreground">
@@ -693,7 +694,7 @@ export const StatsTab: React.FC = () => {
             <>
               <ExpandToggle expanded={toolsExpanded} onToggle={() => setToolsExpanded((v) => !v)} />
               {toolsExpanded && (
-                <div className="mt-2 overflow-x-auto" data-testid="stats-builtin-tools">
+                <div className="overflow-x-auto" data-testid="stats-builtin-tools">
                   <table className="w-full text-[0.6875rem]">
                     <thead>
                       <tr className="text-muted-foreground">
@@ -746,7 +747,7 @@ export const StatsTab: React.FC = () => {
           <>
             <ExpandToggle expanded={mcpExpanded} onToggle={() => setMcpExpanded((v) => !v)} />
             {mcpExpanded && (
-              <div className="mt-2 overflow-x-auto" data-testid="stats-mcp-servers">
+              <div className="overflow-x-auto" data-testid="stats-mcp-servers">
                 <table className="w-full text-[0.6875rem]">
                   <thead>
                     <tr className="text-muted-foreground">
@@ -827,7 +828,7 @@ export const StatsTab: React.FC = () => {
           <>
             <ExpandToggle expanded={skillsExpanded} onToggle={() => setSkillsExpanded((v) => !v)} />
             {skillsExpanded && (
-              <div className="mt-2 overflow-x-auto" data-testid="stats-skills">
+              <div className="overflow-x-auto space-y-1" data-testid="stats-skills">
                 <table className="w-full text-[0.6875rem]">
                   <thead>
                     <tr className="text-muted-foreground">
@@ -878,7 +879,7 @@ export const StatsTab: React.FC = () => {
                   </tbody>
                 </table>
                 {skillsCatalogEntries.length > 0 && (
-                  <div className="mt-1 text-[0.625rem] text-muted-foreground/60">
+                  <div className="text-[0.625rem] text-muted-foreground/60">
                     {t('rightPanel.stats.skillsCatalogTokens', { tokens: fmt(skillsCatalogTokens) })}
                   </div>
                 )}
@@ -896,7 +897,7 @@ export const StatsTab: React.FC = () => {
           <>
             <ExpandToggle expanded={commandsExpanded} onToggle={() => setCommandsExpanded((v) => !v)} />
             {commandsExpanded && (
-              <div className="mt-2 space-y-2" data-testid="stats-invocations">
+              <div className="space-y-2" data-testid="stats-invocations">
                 {lastCommandInvocation && (
                   <div className="text-xs" data-testid="stats-last-command">
                     {t('rightPanel.stats.lastCommand')}:{' '}
@@ -951,7 +952,7 @@ export const StatsTab: React.FC = () => {
 
       {promptInfo && (
         <Section title={t('rightPanel.stats.history')}>
-          <div className="mb-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
             <StatCell
               icon="chat-new"
               color="text-blue-400"
@@ -975,7 +976,7 @@ export const StatsTab: React.FC = () => {
           </div>
           <ExpandToggle expanded={historyExpanded} onToggle={() => setHistoryExpanded((v) => !v)} />
           {historyExpanded && (
-            <div className="mt-2 overflow-x-auto">
+            <div className="overflow-x-auto space-y-2">
               <table className="w-full text-[0.6875rem]">
                 <thead>
                   <tr className="text-muted-foreground">
@@ -996,7 +997,7 @@ export const StatsTab: React.FC = () => {
                   ))}
                 </tbody>
               </table>
-              <div className="mt-2 space-y-0.5 text-[0.6875rem] text-muted-foreground">
+              <div className="space-y-0.5 text-[0.6875rem] text-muted-foreground">
                 <div className="flex items-center justify-between gap-2">
                   <span>{t('rightPanel.stats.historyExcluded')}</span>
                   <span className="tabular-nums">
@@ -1085,7 +1086,7 @@ export const StatsTab: React.FC = () => {
           {(hasLiveStream || hasLiveSubagents) && (
             <div
               data-testid="stats-agents-live"
-              className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-t border-border/40 pt-2 text-[0.6875rem] text-muted-foreground tabular-nums"
+              className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-t border-border/40 pt-2 text-[0.6875rem] text-muted-foreground tabular-nums"
             >
               <span className="inline-flex items-center gap-1 text-primary">
                 <span className="size-1.5 rounded-full bg-primary animate-pulse" />
@@ -1171,7 +1172,7 @@ export const StatsTab: React.FC = () => {
           </div>
         )}
       </Section>
-    </div>
+    </PanelTab>
   )
 }
 
@@ -1191,7 +1192,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h4 className="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wide">
         {title}
       </h4>
-      {children}
+      <div className="space-y-2">{children}</div>
     </div>
   )
 }

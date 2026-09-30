@@ -7,6 +7,7 @@ import { useNotification } from '@/hooks/useNotification'
 import { synthApi } from '@/lib/api/synthApi'
 import { Toggle } from '../ui/Toggle'
 import { Icon } from '../icon/Icon'
+import { PanelTab } from './PanelTab'
 
 export function ContextTab() {
   const { t } = useI18n()
@@ -122,15 +123,26 @@ export function ContextTab() {
 
   if (!sessionId) {
     return (
-      <div className="p-4 text-sm text-muted-foreground">
-        {t('rightPanel.context.notLoaded')}
-      </div>
+      <PanelTab>
+        <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
+          {t('rightPanel.context.notLoaded')}
+        </div>
+      </PanelTab>
     )
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+    <PanelTab
+      footer={
+        <button
+          onClick={() => handleSave(mode)}
+          disabled={saving}
+          className="w-full rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
+        >
+          {saving ? t('rightPanel.context.saving') : t('common.save')}
+        </button>
+      }
+    >
         {/* Заметки — alwaysOpen */}
         <Block title={t('rightPanel.context.optimization.sticky_notes')}>
           {stickyNotes.length === 0 ? (
@@ -237,24 +249,13 @@ export function ContextTab() {
             {t('rightPanel.context.hint.summarization')}
           </p>
         </Block>
-      </div>
-
-      <div className="shrink-0 border-t border-border p-4 space-y-2">
-        <button
-          onClick={() => handleSave(mode)}
-          disabled={saving}
-          className="w-full rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-        >
-          {saving ? t('rightPanel.context.saving') : t('common.save')}
-        </button>
-      </div>
-    </div>
+    </PanelTab>
   )
 }
 
 function SectionHeader({ label }: { label: string }) {
   return (
-    <div className="pt-1 pb-0">
+    <div>
       <span className="text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground/60">{label}</span>
     </div>
   )

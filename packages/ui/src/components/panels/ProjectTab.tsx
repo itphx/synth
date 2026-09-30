@@ -14,6 +14,7 @@ import { DirectoryPickerDialog } from '@/components/ui/DirectoryPickerDialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { CreateProjectPopover } from '@/components/panels/CreateProjectPopover'
 import { ExpandableListRow, RowBadge } from '@/components/panels/ExpandableListRow'
+import { PanelTab } from './PanelTab'
 import type { ProjectPlan, McpRegistryEntry } from '@itphx/synth-shared'
 
 export function ProjectTab() {
@@ -206,9 +207,11 @@ export function ProjectTab() {
 
   if (!session) {
     return (
-      <div className="p-4 text-sm text-muted-foreground">
-        {t('rightPanel.params.noSessions')}
-      </div>
+      <PanelTab>
+        <div className="text-sm text-muted-foreground">
+          {t('rightPanel.params.noSessions')}
+        </div>
+      </PanelTab>
     )
   }
 
@@ -225,7 +228,7 @@ export function ProjectTab() {
     }
 
     return (
-      <div className="p-4 space-y-4">
+      <PanelTab>
         <Section title={t('rightPanel.tab.project')}>
           <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center space-y-3">
             <div className="text-xs text-muted-foreground">{t('projectTab.noProject.title')}</div>
@@ -267,13 +270,15 @@ export function ProjectTab() {
           </div>
         </Section>
         <PlanSection project={project} />
-      </div>
+      </PanelTab>
     )
   }
 
   if (loading && !project) {
     return (
-      <div className="p-4 text-sm text-muted-foreground">{t('projectTab.loading')}</div>
+      <PanelTab>
+        <div className="text-sm text-muted-foreground">{t('projectTab.loading')}</div>
+      </PanelTab>
     )
   }
 
@@ -348,7 +353,7 @@ export function ProjectTab() {
   }
 
   return (
-    <div className="flex flex-col gap-4 p-3">
+    <PanelTab>
       <Section title={t('rightPanel.tab.project')}>
         <div className="space-y-1.5">
           <Field label={t('projectTab.info.name')} value={project?.name || '—'} />
@@ -465,7 +470,7 @@ export function ProjectTab() {
       <Section title={t('projectTab.log.title')}>
         <ProjectLogBlock project={project} />
       </Section>
-    </div>
+    </PanelTab>
   )
 }
 
@@ -674,8 +679,8 @@ function ProjectPlanBlock({ plan }: { plan: ProjectPlan | null }) {
               .filter((i) => i.columnId === col.id)
               .sort((a, b) => a.order - b.order)
             return (
-              <div key={col.id}>
-                <div className="mb-1 flex items-center gap-1.5 text-[0.625rem] text-muted-foreground/80">
+              <div key={col.id} className="space-y-1">
+                <div className="flex items-center gap-1.5 text-[0.625rem] text-muted-foreground/80">
                   <span className="font-medium">{col.name}</span>
                   <span className="text-muted-foreground/50">({colItems.length})</span>
                 </div>

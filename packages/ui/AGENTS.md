@@ -65,6 +65,7 @@
 - Tailwind + `cn()` (`lib/utils.ts:4`). Условные классы — через `cn`, не конкатенацию строк.
 - Цвета — только CSS-переменные (`var(--primary)`, `text-foreground`), не hex/oklch-литералы в разметке; темизация — `ThemeSystemProvider` + `styles/design-system.css`.
 - Типографика — `SEMANTIC_TYPOGRAPHY` (`lib/typography.ts:1`), обязана совпадать с CSS-переменными `styles/design-system.css` (комментарий `must match SEMANTIC_TYPOGRAPHY`, `:15`). Расхождение — молчаливая деградация размеров.
+- Вкладки правой панели строятся только через `PanelTab` (`components/panels/PanelTab.tsx`): скролл — внутри вкладки (`p-3`, `space-y-4` между секциями), футер с действиями — через проп `footer` (фиксирован, не скроллится), внешний скролл в `RightPanel` отключён. Внутри секции ритм задаёт родитель (`InfoSection` — 8px); ad-hoc `mt-*`/`mb-*` для вертикальных интервалов не использовать.
 
 ### Zustand
 - `create<T>()(...)` — курринг обязателен для типов; импорт `{ create } from 'zustand'`.

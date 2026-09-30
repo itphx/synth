@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '@/components/icon/Icon'
 import { synthApi } from '@/lib/api/synthApi'
+import { PanelTab } from './PanelTab'
 
 interface SecretsTabProps {
   sessionId: string
@@ -41,51 +42,59 @@ export function SecretsTab({ sessionId }: SecretsTabProps) {
   }, [sessionId])
 
   if (loading) {
-    return <div className="p-4 text-xs text-muted-foreground text-center">...</div>
+    return (
+      <PanelTab>
+        <div className="flex items-center justify-center h-full text-xs text-muted-foreground">...</div>
+      </PanelTab>
+    )
   }
 
   const entries = Object.entries(secrets)
 
   if (entries.length === 0) {
     return (
-      <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
-        <Icon name="shield-keyhole" className="h-6 w-6 text-muted-foreground" />
-        <p className="text-xs text-muted-foreground">Секретов в этой сессии нет</p>
-      </div>
+      <PanelTab>
+        <div className="flex flex-col items-center justify-center h-full gap-2 text-center">
+          <Icon name="shield-keyhole" className="h-6 w-6 text-muted-foreground" />
+          <p className="text-xs text-muted-foreground">Секретов в этой сессии нет</p>
+        </div>
+      </PanelTab>
     )
   }
 
   return (
-    <div className="p-2">
-      <div className="flex items-center justify-between px-1 pb-2">
-        <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
-          Карта обфускации
-        </span>
-        <button
-          onClick={() => setRevealed(!revealed)}
-          className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
-        >
-          <Icon name={revealed ? 'eye-off' : 'eye'} className="size-3" />
-          {revealed ? 'Скрыть значения' : 'Показать значения'}
-        </button>
-      </div>
-      <div className="space-y-1">
-        {entries.map(([placeholder, value]) => (
-          <div
-            key={placeholder}
-            className="flex items-start justify-between gap-2 rounded-lg border border-border/50 bg-card px-2 py-1.5 text-xs"
+    <PanelTab>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
+            Карта обфускации
+          </span>
+          <button
+            onClick={() => setRevealed(!revealed)}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[0.6875rem] text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
           >
-            <span className="font-mono text-[0.6875rem] text-foreground shrink-0">{placeholder}</span>
-            <span
-              className={`font-mono text-[0.6875rem] break-all text-right ${
-                revealed ? 'text-foreground' : 'text-muted-foreground'
-              }`}
+            <Icon name={revealed ? 'eye-off' : 'eye'} className="size-3" />
+            {revealed ? 'Скрыть значения' : 'Показать значения'}
+          </button>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          {entries.map(([placeholder, value]) => (
+            <div
+              key={placeholder}
+              className="flex items-start justify-between gap-2 rounded-lg border border-border/50 bg-card px-2 py-1.5 text-xs"
             >
-              {revealed ? value : maskValue(value)}
-            </span>
-          </div>
-        ))}
+              <span className="font-mono text-[0.6875rem] text-foreground shrink-0">{placeholder}</span>
+              <span
+                className={`font-mono text-[0.6875rem] break-all text-right ${
+                  revealed ? 'text-foreground' : 'text-muted-foreground'
+                }`}
+              >
+                {revealed ? value : maskValue(value)}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+    </PanelTab>
   )
 }
