@@ -1270,3 +1270,16 @@
 - **Верификация (@orchestrator, независимо):** `pnpm typecheck` OK; `pnpm lint` 0 errors; `pnpm test` — shared 177, core 2320, ui 910, backend 341 (3748) PASS.
 - **Документация:** корневой `AGENTS.md` и `packages/shared/AGENTS.md` (число ключей 19→37).
 - **Коммит:** ниже (ветка `feat/entity-icons`, локально).
+
+## 2026-09-30 19:47 — Релиз 0.8.2 + деплой на test — PASS
+
+- **Задача:** «заново»: бампнуть версию и выкатить на test (ветка сменилась на `feat/entity-icons` — фича иконок/цветов проектов и сессий).
+- **Тип:** release + deploy · **Исполнитель:** @devops (скиллы `synth-release`/`synth-build-publish`/`synth-k3s-deploy`) · **Результат:** PASS.
+- **Решения пользователя:** сохраняем политику прошлого выката — ветку `synth` в origin **не пушить**; тег и npm-публикацию не создавать.
+- **Bump:** `./scripts/version-bump.sh 0.8.2` — `version.ts` + 6× `package.json` + `charts/synth/Chart.yaml` (0.8.1 → 0.8.2).
+- **Проверки:** `pnpm install --frozen-lockfile` OK; shared/core build OK; `pnpm typecheck` OK; `pnpm lint` 0 errors. Полный `pnpm test` не гонялся (изменение только метаданных версии; фича верифицирована в ветке: 3748 PASS).
+- **Коммит `synth/`:** `02599e0` `chore(release): 0.8.2` — **локально, не запушен** (ветка `feat/entity-icons`, upstream нет).
+- **Docker:** собраны из исходников и запушены в `git.itphx.ru`: `synth-backend:0.8.2` (299 MB, digest `ddbe5128e87a…`), `synth-ui:0.8.2` (116 MB, digest `1e0db0bb7d4d…`); версия внутри (`SYNTH_VERSION = '0.8.2'`) проверена. Логи — `tmp/docker-build-{backend,ui}-0.8.2.log`.
+- **`synth-deploy` (main):** `values.yaml` tags → 0.8.2, `helm lint`/`template` OK, коммит `5fc988a` запушен (`9c37c89..5fc988a`) → Fleet раскатал.
+- **Верификация (@orchestrator, независимо):** `https://synth.k3s.itphx.loc/api/v2/health` → `{"status":"healthy","version":"0.8.2"}`; UI `/` → 200; deploy-образы `:0.8.2`; поды backend/ui `1/1 Running`, RESTARTS 0.
+- **Осталось:** ветка `synth` не запушена (по решению пользователя); тег `v0.8.2`, npm-публикация и preprod/prod — не трогались.
