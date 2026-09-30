@@ -1062,3 +1062,22 @@
 - **`synth-deploy` (main):** `values.yaml` image tags → 0.8.0, `helm lint`/`template` OK, коммит `96032d1` запушен → Fleet раскатал.
 - **Верификация (независимо, @orchestrator):** `https://synth.k3s.itphx.loc/api/v2/health` → `{"status":"healthy","version":"0.8.0"}`; UI `/` → 200; `kubectl -n synth get deploy` — образы `:0.8.0`; поды backend/ui `1/1 Running`, RESTARTS 0; оба репозитория clean.
 - **Осталось:** preprod/prod не трогались (нужен тег/`workflow_dispatch` или публикация Helm-чарта — отдельной задачей).
+
+## 2026-09-30 09:07 — UI: кнопка «Удалить» под сообщением (нормальный цвет + красный hover) — PASS
+
+- **Задача:** в ряду кнопок в нижней части ответа кнопка «Удалить» всегда выглядела ярче остальных; требовалось в обычном состоянии — как остальные, при наведении — красная подсветка.
+- **Тип:** bug fix (UI, стили) · **Исполнитель:** @fixer · **Результат:** PASS.
+- **Причина:** `packages/ui/src/components/chat/MessageActions.tsx` (`ActionBtn`, ветка `danger`) не задавала базовый цвет текста, в отличие от обычной ветки (`text-muted-foreground`) → кнопка наследовала яркий цвет контейнера. `danger` используется только у Delete.
+- **Правка (1 строка):** `'hover:bg-destructive/10 hover:text-destructive'` → `'text-muted-foreground hover:bg-destructive/10 hover:text-destructive'`.
+- **Верификация (@orchestrator):** `git status` — изменён ровно 1 файл; `pnpm --filter @itphx/synth-ui typecheck` OK; `lint` 0 errors (30 pre-existing warnings, ни одного в MessageActions.tsx); `test` 804/804 PASS (в т.ч. `MessageActions.test.tsx` 4/4).
+- **Не сделано:** коммит (инвариант 13 — только по явной просьбе), визуальная проверка в браузере (`dev.sh`) не запускалась.
+
+## 2026-09-30 09:50 — UI: унификация MCP/Скиллов в правой панели + перенос «Плана» — PASS
+
+- **Задача:** (1) описания скиллов — под скрывающийся блок; (2) «План» выше «Рабочего каталога»; (3) MCP и Скиллы — единый вид между «Сессией» и «Проектом»; (4) MCP и Скиллы похожи между собой (одинаковые переключатели, кат).
+- **Тип:** refactor (UI) · **Исполнитель:** @fixer · **Результат:** PASS.
+- **Согласованные развилки:** правки только во вкладке «Проект» для порядка секций; единая визуальная оболочка без смены семантики (Сессия — 1 тумблер, Проект — 2); под катом: у скиллов — описание (добавлено и в «Сессию»), у MCP — статус/systemHint; общий hint секции остаётся видимым внизу; кат — кнопка у каждого элемента.
+- **Файлы:** новый `components/panels/ExpandableListRow.tsx` (`ExpandableListRow` + `RowBadge`, 4 тона); `ProjectTab.tsx` (порядок секций, MCP/Skills на примитиве); `SessionSettingsTab.tsx` (MCP/Skills на примитиве, подпись «Включён» у тумблеров); `i18n/messages/{ru,en}.ts` (`sessionSettings.{mcp,skills}.toggleLabel`); тесты: новый `ExpandableListRow.test.tsx` + обновления 4 существующих.
+- **Верификация (@orchestrator):** `typecheck` OK; `lint` 0 errors (30 pre-existing warnings, в изменённых файлах — 0); `test` **103 файла / 811 тестов PASS**.
+- **Визуально (dev :5002, браузер, admin/debug):** «Проект» — порядок ПРОЕКТ → ПЛАН ПРОЕКТА → РАБОЧИЙ КАТАЛОГ → ИНВАРИАНТЫ → MCP → СКИЛЛЫ; «Сессия» — MCP/Скиллы с бейджами, подписью «Включён» и тумблером, кат раскрывает описание/статус, hint остаётся видимым. Скриншоты: `tmp/right-panel-project-top.png`, `tmp/right-panel-project.png`, `tmp/right-panel-session.png` (не коммитятся).
+- **Не сделано:** коммит (инвариант 13). Предложено обновление `packages/ui/AGENTS.md` (примитив строки + порядок секций) — ждёт согласования.
